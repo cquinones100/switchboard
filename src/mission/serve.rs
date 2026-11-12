@@ -37,6 +37,7 @@ use super::answer::{self, AnswerBox, Press};
 use super::ask::Ask;
 use super::busy::Busy;
 use super::choices::{self, Choice, Ctx, Do};
+use super::inbox_board;
 use super::remind;
 use super::views::{self, Scope, View, ViewId};
 use super::{After, Focus, Jump, Mission, MissionEvent, Snapshot, Spot};
@@ -79,6 +80,17 @@ const BOXED_SPIN_MS: i64 = 500;
 /// they are read again.
 const CALENDAR_NOTES_EVERY: Duration = Duration::from_secs(5 * 60);
 
+/// The Inbox board's rows whose photos are asked for: this many around
+/// the chosen one, more than a screen shows, so the rows a scroll
+/// brings in have theirs.
+const INBOX_PHOTOS: usize = 40;
+/// How long after a ticket was asked for the Inbox asks for it again
+/// while its copy is older than its notification, or the read failed.
+const INBOX_TICKET_AGAIN: Duration = Duration::from_secs(60);
+/// How long a ticket read for the Inbox stands before it is read again as
+/// it is chosen, the copy shown meanwhile.
+const INBOX_TICKET_EVERY: Duration = Duration::from_secs(5 * 60);
+
 /// Mission control's keys, for `?` (render.js's `HELP.mission`), and its
 /// Keys view.
 pub(super) const KEYS: &[(&str, &str)] = &[
@@ -116,6 +128,10 @@ pub(super) const KEYS: &[(&str, &str)] = &[
         "Notifications: go to it (its menu's first choice; on a folded day, show it), its whole menu, put it out of the sidebar",
     ),
     ("1-7", "Notifications: show one kind (1 all)"),
+    (
+        "↵ o x M-l i",
+        "Inbox with UX 2.0: its menu, marking it read; go to the tab working on its ticket; dismiss it here, unread in Linear; its ticket in Linear; on a narrow screen, its ticket in the list's place (i or esc back)",
+    ),
     ("s", "Resources view: sort the tabs by CPU or by memory"),
     ("/", "filter the cards and rows (↵ keep, esc clear)"),
     ("1-9", "choose that tab"),
@@ -568,6 +584,171 @@ impl Server {
         });
     }
 
+    /// What the Inbox board in front draws beyond its items: the photos of
+    /// who acted and of who wrote the comments it shows, those loaded; the
+    /// commits naming its tickets; and the chosen notification's ticket,
+    /// read off the task when there is no copy yet, the notification is
+    /// newer than the copy, or the copy was read five minutes ago.
+    fn inbox_extras(&mut self, m: &mut Mission) {
+        let Some(view) = m.current().filter(|v| inbox_board::shown(m, v)) else {
+            return;
+        };
+        let actors: Vec<_> = view
+            .data
+            .items
+            .iter()
+            .skip(
+                usize::try_from(m.cursor)
+                    .unwrap_or(0)
+                    .saturating_sub(INBOX_PHOTOS / 2),
+            )
+            .take(INBOX_PHOTOS)
+            .filter_map(inbox_board::actor_of)
+            .collect();
+        m.snap.inbox_links = self.sources.inbox_links().clone();
+        let item = m.chosen_item().cloned();
+        let mut people = actors;
+        let Some(item) = item else {
+            self.inbox_photos(m, people);
+            return;
+        };
+        let ticket = inbox_board::ticket_of(&item).to_string();
+        let held = self.mission.inbox_tickets.get(&ticket).cloned();
+        if let Some(t) = &held {
+            people.extend(inbox_board::people(t, &item));
+        }
+        self.inbox_photos(m, people);
+        if ticket.is_empty() {
+            return;
+        }
+        let updated = held
+            .as_ref()
+            .and_then(|t| crate::sources::ms_of(t.get("updatedAt").and_then(Value::as_str)));
+        let stale = match (&held, updated) {
+            (None, _) => true,
+            (Some(t), _) if t.get("error").is_some() => true,
+            (Some(_), Some(at)) => item.time.is_some_and(|t| t > at),
+            (Some(_), None) => true,
+        };
+        let asked_lately = self
+            .mission
+            .inbox_asked
+            .get(&ticket)
+            .is_some_and(|at| at.elapsed() < INBOX_TICKET_AGAIN);
+        // A copy stands only so long: the ticket may have changed since
+        // with nothing new in the Inbox to say so.
+        let read_long_ago = self
+            .mission
+            .inbox_asked
+            .get(&ticket)
+            .is_none_or(|at| at.elapsed() >= INBOX_TICKET_EVERY);
+        // Paused while you're away, as the lookups are, the copy shown.
+        if ((stale && !asked_lately) || read_long_ago) && !self.away() {
+            self.read_inbox_ticket(ticket);
+        }
+        m.snap.inbox_ticket = held;
+    }
+
+    fn inbox_photos(&mut self, m: &mut Mission, people: Vec<crate::photos::Who>) {
+        for who in people {
+            if let Some(photo) = self.photo(&who) {
+                m.snap.photos.insert(who, photo);
+            }
+        }
+    }
+
+    /// Reads an Inbox ticket off the task, one at a time: its cache file
+    /// first (the ticket view's), shown at once, then Linear, whose answer
+    /// is kept in the cache file too.
+    fn read_inbox_ticket(&mut self, ticket: String) {
+        if self.mission.inbox_ticket_busy || tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        self.mission.inbox_ticket_busy = true;
+        self.mission
+            .inbox_asked
+            .insert(ticket.clone(), Instant::now());
+        let cached = !self.mission.inbox_tickets.contains_key(&ticket);
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let file = crate::views::ticket::cache_file(&ticket);
+            if cached {
+                let read = file.clone();
+                let copy = tokio::task::spawn_blocking(move || util::read_json(read))
+                    .await
+                    .ok()
+                    .flatten();
+                if copy.is_some() {
+                    let _ = tx.send(Event::Mission(MissionEvent::InboxTicket {
+                        ticket: ticket.clone(),
+                        value: copy,
+                        last: false,
+                    }));
+                }
+            }
+            let value = match crate::views::ticket::fetch(&ticket).await {
+                Ok(issue) => {
+                    let text = util::json_compact(&issue);
+                    let _ = tokio::task::spawn_blocking(move || {
+                        if let Some(dir) = file.parent() {
+                            let _ = std::fs::create_dir_all(dir);
+                        }
+                        util::write_atomic(&file, text)
+                    })
+                    .await;
+                    issue
+                }
+                Err(why) => serde_json::json!({ "error": why }),
+            };
+            let _ = tx.send(Event::Mission(MissionEvent::InboxTicket {
+                ticket,
+                value: Some(value),
+                last: true,
+            }));
+        });
+    }
+
+    /// Enter on the Inbox board: the Tickets board's menu for its ticket,
+    /// with no "Mark it read", since closing the menu marks it read in
+    /// Linear, whatever was picked; it leaves the view once Linear answers.
+    fn inbox_enter(&mut self, client: ClientId, item: Item) {
+        let list: Vec<Choice> = self
+            .item_choices(&ViewId::Inbox, &item, &[])
+            .into_iter()
+            .filter(|c| !matches!(c.act, Do::MarkRead(_)))
+            .collect();
+        let id = crate::sources::inbox::notification_of(&item).to_string();
+        let options: Vec<MenuOption> = list
+            .iter()
+            .map(|c| MenuOption::new(c.label.clone()))
+            .collect();
+        let menu = Menu::new(item.title.clone(), options);
+        self.choose(client, menu, move |server, client, chose| {
+            server.inbox_mark_read(id);
+            if let Some(c) = chose.and_then(|i| list.into_iter().nth(i)) {
+                if let Some(at) = server.clients.get_mut(&client) {
+                    at.options_taken = at.options_taken.wrapping_add(1);
+                }
+                server.mission_pick(client, c, None, None);
+            }
+        });
+    }
+
+    /// Marks an Inbox notification read in Linear in the background.
+    fn inbox_mark_read(&mut self, id: String) {
+        if tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let error = crate::sources::inbox::mark_read(&id)
+                .await
+                .err()
+                .map(|e| first_line(&e));
+            let _ = tx.send(Event::Mission(MissionEvent::InboxRead { id, error }));
+        });
+    }
+
     /// Puts together what a client's mission control shows, and does what
     /// bringing a view to the front does.
     fn mission_prepare(&mut self, client: ClientId) {
@@ -757,6 +938,8 @@ impl Server {
             photos: Default::default(),
             calendar_next: None,
             calendar_notes: Vec::new(),
+            inbox_ticket: None,
+            inbox_links: Default::default(),
         };
         m.size = (cols - left, rows);
         m.left = left;
@@ -782,6 +965,7 @@ impl Server {
             m.focus = on_calendar(&m).then_some(Focus::Item);
         }
         self.calendar_extras(&mut m);
+        self.inbox_extras(&mut m);
         m.taken_at = Some(self.mission.changes);
         // The view brought to the front: counted, and its source told.
         let now_view = m.current().map(|v| (v.id.clone(), base_title(v)));
@@ -1256,6 +1440,39 @@ impl Server {
                     self.mission_redraw();
                 }
             }
+            MissionEvent::InboxTicket {
+                ticket,
+                value,
+                last,
+            } => {
+                if last {
+                    self.mission.inbox_ticket_busy = false;
+                    // A notification chosen meanwhile, whose read waited on
+                    // this one, is asked for as the snapshot is taken again.
+                    self.mission_changed();
+                    self.mission_redraw();
+                }
+                // A failed read keeps the copy it had, but not an earlier
+                // failure, which the latest replaces.
+                let failed = value.as_ref().is_some_and(|v| v.get("error").is_some());
+                let kept = failed
+                    && self
+                        .mission
+                        .inbox_tickets
+                        .get(&ticket)
+                        .is_some_and(|t| t.get("error").is_none());
+                if let Some(value) = value.filter(|_| !kept)
+                    && self.mission.inbox_tickets.get(&ticket) != Some(&value)
+                {
+                    self.mission.inbox_tickets.insert(ticket, value);
+                    self.mission_changed();
+                    self.mission_redraw();
+                }
+            }
+            MissionEvent::InboxRead { id, error } => match error {
+                None => self.inbox_dropped(&id),
+                Some(why) => self.say(None, &format!("Couldn't mark it read in Linear: {why}")),
+            },
             MissionEvent::CalendarNotes(id, lines) => {
                 self.mission.calendar_notes_busy = false;
                 let changed = self
@@ -1549,7 +1766,7 @@ impl Server {
             }
             None => {}
         }
-        if keys_board_key(m, k) {
+        if keys_board_key(m, k) || self.inbox_key(client, m, k) {
             return;
         }
         match calendar_key(m, k) {
@@ -1707,6 +1924,56 @@ impl Server {
             }
             _ => {}
         }
+    }
+
+    /// The Inbox board's own keys: Enter its menu, marking it read; `o` to
+    /// the tab working on its ticket; `x` dismissing it, here alone; M-l
+    /// its ticket in Linear; on a screen too narrow for the ticket beside,
+    /// `i` showing it in the list's place, and `i` or Esc back. True when
+    /// it took the key.
+    fn inbox_key(&mut self, client: ClientId, m: &mut Mission, k: Key) -> bool {
+        if !m.current().is_some_and(|v| inbox_board::shown(m, v)) {
+            return false;
+        }
+        let Some(item) = m.chosen_item().cloned() else {
+            return false;
+        };
+        let none = plain(&k);
+        let narrow = !inbox_board::beside(m.size.0 as usize);
+        let ticket = inbox_board::ticket_of(&item).to_string();
+        match k.code {
+            KeyCode::Enter => self.inbox_enter(client, item),
+            KeyCode::Char('o') if none => {
+                let tabs = if m.snap.all_tabs.is_empty() {
+                    &m.snap.tabs
+                } else {
+                    &m.snap.all_tabs
+                };
+                match choices::tab_naming(tabs, &ticket) {
+                    Some(t) => self.mission_go(client, t.id),
+                    None => self.say(Some(client), &format!("No tab works on {ticket}.")),
+                }
+            }
+            KeyCode::Char('x') if none => {
+                self.notice_dismiss("inbox", &item);
+                self.mission_changed();
+                m.note = Some(format!("Dismissed {ticket}: it stays unread in Linear."));
+            }
+            KeyCode::Char('l') if k.mods == Mods::ALT => {
+                let url = item.data["url"].as_str().unwrap_or("").to_string();
+                if url.is_empty() {
+                    return false;
+                }
+                self.mission_do(client, Do::Open(url), "Opening it in Linear");
+            }
+            KeyCode::Char('i') if none && narrow => {
+                m.inbox_pane = !m.inbox_pane;
+                m.side = None;
+            }
+            KeyCode::Esc if narrow && m.inbox_pane => m.inbox_pane = false,
+            _ => return false,
+        }
+        true
     }
 
     /// `h` and `l` in the Calendar: the day before or after the one shown,
@@ -2796,16 +3063,20 @@ impl Server {
         });
     }
 
+    /// A notification marked read in Linear: off the Inbox at once, read
+    /// in the history, and the Inbox asked again.
+    fn inbox_dropped(&mut self, id: &str) {
+        self.notice_history_mark("inbox", id, Sidebar::Read, true);
+        self.led_to("inbox", id, None, "marked read in Linear");
+        self.sources.drop_inbox_item(id);
+        self.inbox_notices();
+        self.refresh_sources(Some(crate::sources::INBOX));
+    }
+
     /// What a busy option leaves the server to do once it has answered.
     fn mission_after(&mut self, client: ClientId, after: After) {
         match after {
-            After::DropInbox(id) => {
-                self.notice_history_mark("inbox", &id, Sidebar::Read, true);
-                self.led_to("inbox", &id, None, "marked read in Linear");
-                self.sources.drop_inbox_item(&id);
-                self.inbox_notices();
-                self.refresh_sources(Some(crate::sources::INBOX));
-            }
+            After::DropInbox(id) => self.inbox_dropped(&id),
             After::Worktrees => self.mission_worktrees(true),
             After::Calendar => self.calendar_reread(),
             After::Tickets => {
@@ -3870,9 +4141,10 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
             // A key on the footer is pressed as typed, the focus kept for it.
             if let Spot::Key(key) = spot {
                 m.hover = None;
-                // A Calendar keycap acts on its event: a filter being typed
-                // is kept, done typing, rather than given the key.
-                if on_calendar(m)
+                // A Calendar keycap acts on its event, and the Inbox ticket's
+                // tab line on its notification: a filter being typed is kept,
+                // done typing, rather than given the key.
+                if (on_calendar(m) || m.current().is_some_and(|v| inbox_board::shown(m, v)))
                     && let Some(f) = m.filter.as_mut()
                 {
                     f.typing = false;
@@ -4239,6 +4511,10 @@ fn only_moves(m: &Mission, key: Key) -> bool {
     // The Calendar's chosen event brings its photos and notes, and h and
     // l move a day, so it takes its snapshot again.
     if m.current().is_some_and(|v| v.id == ViewId::Calendar) {
+        return false;
+    }
+    // So does the Inbox's chosen notification, with its ticket.
+    if m.current().is_some_and(|v| inbox_board::shown(m, v)) {
         return false;
     }
     let none = plain(&k);

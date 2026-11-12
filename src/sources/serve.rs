@@ -38,6 +38,9 @@ use crate::{paths, settings, util};
 /// How long a directory's repository is kept before its config is read again.
 const REPO_KEPT: Duration = Duration::from_secs(60);
 
+/// How long the Inbox's commits stand while its tickets stay the same.
+const LINKS_EVERY: Duration = Duration::from_secs(10 * 60);
+
 /// A lookup's answer, from its task.
 pub enum Answer {
     Merges(anyhow::Result<Vec<(PrKey, PrFacts)>>),
@@ -54,6 +57,8 @@ pub enum Answer {
     },
     Tickets(anyhow::Result<Vec<Value>>),
     Inbox(anyhow::Result<Vec<Value>>),
+    /// The newest commit naming each of the Inbox's tickets (`inbox::links`).
+    InboxLinks(HashMap<String, inbox::Commit>),
     Landing(Read),
 }
 
@@ -84,6 +89,12 @@ pub(super) struct Kept {
     ticket_issues: Option<Vec<Value>>,
     tabs_seen: TabsSeen,
     landing_busy: bool,
+    /// The Inbox's commits, the tickets they were looked for, when, and
+    /// whether a look is under way.
+    pub(super) inbox_links: HashMap<String, inbox::Commit>,
+    inbox_links_for: Vec<String>,
+    inbox_links_at: Option<Instant>,
+    inbox_links_busy: bool,
 }
 
 impl Kept {
@@ -235,12 +246,21 @@ impl Server {
                 let view = self.sources.views.entry(INBOX).or_default();
                 match result {
                     Ok(nodes) => {
-                        view.items = inbox::inbox_from(&nodes, util::now_ms());
+                        // Those dismissed leave the view as they leave the
+                        // notifications.
+                        let items = inbox::inbox_from(&nodes, util::now_ms());
+                        view.items = inbox::notices(&paths::state_dir(), &items);
                         setup::answered(view);
                     }
                     Err(e) => setup::failed(view, &e, "your Linear inbox"),
                 }
                 self.inbox_notices();
+                self.inbox_links_ask(&tabs);
+            }
+            Answer::InboxLinks(found) => {
+                self.sources.kept.inbox_links_busy = false;
+                self.sources.kept.inbox_links = found;
+                self.mission_changed();
             }
             Answer::Landing(read) => {
                 self.sources.kept.landing_busy = false;
@@ -329,11 +349,60 @@ impl Server {
         self.pr_notices();
     }
 
-    /// Dismisses an Inbox item from the notifications, here alone: it stays
-    /// in the Inbox view and unread in Linear.
+    /// Dismisses an Inbox item, here alone: it leaves the notifications and
+    /// the Inbox view, and stays unread in Linear.
     pub fn inbox_dismiss(&mut self, item: &Item) {
         inbox::dismiss(&paths::state_dir(), item);
+        self.sources.drop_inbox_item(inbox::notification_of(item));
         self.inbox_notices();
+    }
+
+    /// Looks, off the task, for the newest commit naming each of the
+    /// Inbox's tickets in the tabs' repositories, when the tickets have
+    /// changed since the last look or `LINKS_EVERY` has passed; local git
+    /// alone, and never in a contributor's PR checked out for review.
+    fn inbox_links_ask(&mut self, tabs: &[TabInfo]) {
+        let mut tickets: Vec<String> = self
+            .sources
+            .views
+            .get(INBOX)
+            .map(|v| {
+                v.items
+                    .iter()
+                    .filter_map(|i| i.data["ticket"].as_str())
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        tickets.sort();
+        tickets.dedup();
+        let kept = &mut self.sources.kept;
+        let fresh = kept.inbox_links_for == tickets
+            && kept
+                .inbox_links_at
+                .is_some_and(|at| at.elapsed() < LINKS_EVERY);
+        if kept.inbox_links_busy || fresh || tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        kept.inbox_links_busy = true;
+        kept.inbox_links_at = Some(Instant::now());
+        kept.inbox_links_for = tickets.clone();
+        let mut clones: Vec<PathBuf> = tabs
+            .iter()
+            .filter_map(|t| t.path.clone())
+            .filter(|p| !crate::trust::in_review_dir(p))
+            .collect();
+        let tx = self.tx.clone();
+        tokio::task::spawn_blocking(move || {
+            for c in &mut clones {
+                *c = crate::tabs::git::main_clone(c);
+            }
+            clones.sort();
+            clones.dedup();
+            let found = inbox::links(&clones, &tickets);
+            let _ = tx.send(Event::Sources(Answer::InboxLinks(found)));
+        });
     }
 
     /// Gives today's todo note what a view last read, as the daemon handed

@@ -434,13 +434,30 @@ pub fn ticket_json(t: &Ticket) -> Value {
         "children": { "nodes": [] },
         "relations": { "nodes": [] },
         "attachments": { "nodes": [] },
-        "comments": { "nodes": [{
-            "id": format!("comment-{}", t.number), "body": "Looks good to start on.",
-            "createdAt": ago(t.hours_ago + 1), "parent": null,
-            "user": { "id": "user-maya", "name": "Maya" }, "botActor": null
-        }] },
+        "comments": { "nodes": comments_of(t) },
         "team": { "key": "ABC", "states": { "nodes": [{ "id": "state-done", "name": "Done", "position": 1 }] } },
     })
+}
+
+/// A demo ticket's comments: Maya's, and the Inbox's comment on it
+/// when it has one, so its board shows that comment marked new.
+fn comments_of(t: &Ticket) -> Vec<Value> {
+    let mut out = vec![json!({
+        "id": format!("comment-{}", t.number), "body": "Looks good to start on.",
+        "createdAt": ago(t.hours_ago + 1), "parent": null,
+        "user": { "id": "user-maya", "name": "Maya" }, "botActor": null
+    })];
+    let ticket = format!("ABC-{}", t.number);
+    for n in inbox() {
+        if n["issue"]["identifier"] == ticket.as_str() && n["comment"].is_object() {
+            out.push(json!({
+                "id": n["comment"]["id"], "body": n["comment"]["body"],
+                "createdAt": n["createdAt"], "parent": null,
+                "user": n["actor"], "botActor": null
+            }));
+        }
+    }
+    out
 }
 
 fn graphql_error(message: &str) -> Reply {
@@ -639,14 +656,14 @@ pub fn inbox() -> Vec<Value> {
     };
     vec![
         json!({ "id": "note-1", "type": "issueCommentMention", "createdAt": ago_minutes(25),
-                "readAt": null, "archivedAt": null, "snoozedUntilAt": null, "actor": { "name": "Priya" },
-                "issue": issue(15), "comment": { "body": "@alex can the toggle default to the system setting?", "url": "https://linear.app/acme/issue/ABC-15#comment-1" } }),
+                "readAt": null, "archivedAt": null, "snoozedUntilAt": null, "actor": { "id": "user-priya", "name": "Priya" },
+                "issue": issue(15), "comment": { "id": "comment-15-1", "body": "@alex can the toggle default to the system setting?", "url": "https://linear.app/acme/issue/ABC-15#comment-1" } }),
         json!({ "id": "note-2", "type": "issueAssignedToYou", "createdAt": ago_minutes(90),
-                "readAt": null, "archivedAt": null, "snoozedUntilAt": null, "actor": { "name": "Maya" },
+                "readAt": null, "archivedAt": null, "snoozedUntilAt": null, "actor": { "id": "user-maya", "name": "Maya" },
                 "issue": issue(20), "comment": null }),
         json!({ "id": "note-3", "type": "issueNewComment", "createdAt": ago(5),
-                "readAt": null, "archivedAt": null, "snoozedUntilAt": null, "actor": { "name": "Sam" },
-                "issue": issue(18), "comment": { "body": "Added a section on API keys, take a look when you can.", "url": "https://linear.app/acme/issue/ABC-18#comment-2" } }),
+                "readAt": null, "archivedAt": null, "snoozedUntilAt": null, "actor": { "id": "user-sam", "name": "Sam" },
+                "issue": issue(18), "comment": { "id": "comment-18-2", "body": "Added a section on API keys, take a look when you can.", "url": "https://linear.app/acme/issue/ABC-18#comment-2" } }),
     ]
 }
 

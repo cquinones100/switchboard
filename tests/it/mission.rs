@@ -1015,3 +1015,102 @@ fn a_key_found_with_a_question_mark_is_not_pressed_and_enter_shows_it_in_the_lis
         tabs(l)[1]["panes"].as_array().is_some_and(|p| p.len() == 2)
     });
 }
+
+/// With UX 2.0 the Inbox is a board: each notification by who acted, the
+/// chosen one in its ticket beside the list with its own comment marked
+/// new; `o` with no tab on its ticket says so, `x` takes it out of the
+/// view, and Enter offers the Tickets board's menu without "Mark it
+/// read", marking it read in Linear as the menu closes.
+#[test]
+fn with_ux2_the_inbox_shows_each_in_its_ticket_and_o_x_and_enter_act_on_it() {
+    use common::http::{Fake, Reply};
+    let at = |minutes: i64| {
+        (jiff::Timestamp::now() - jiff::SignedDuration::from_mins(minutes)).to_string()
+    };
+    let (ben, ana) = (at(10), at(20));
+    // What Linear was told is read, which it then leaves out.
+    let read = std::sync::Mutex::new(Vec::<String>::new());
+    let linear = Fake::linear("test-key", move |request| {
+        let query = request.query();
+        let answer = if query.contains("notificationUpdate") {
+            let id = request.json()["variables"]["id"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            read.lock().unwrap().push(id);
+            json!({ "data": { "notificationUpdate": { "success": true } } })
+        } else if query.contains("notifications(") {
+            let issue = |n: u32, title: &str| json!({ "identifier": format!("ABC-{n}"), "title": title, "url": format!("https://linear.app/acme/issue/ABC-{n}") });
+            json!({ "data": { "notifications": { "nodes": [
+                { "id": "n1", "type": "issueNewComment", "createdAt": ben, "actor": { "id": "u-ben", "name": "Ben" },
+                  "issue": issue(7, "Hold the landing lock"),
+                  "comment": { "id": "c-2", "body": "the new one", "url": "https://linear.app/acme/issue/ABC-7#c-2" } },
+                { "id": "n2", "type": "issueAssignedToYou", "createdAt": ana, "actor": { "id": "u-ana", "name": "Ana" },
+                  "readAt": read.lock().unwrap().contains(&"n2".to_string()).then(|| ana.clone()),
+                  "issue": issue(8, "Count the requests"), "comment": null },
+            ] } } })
+        } else if query.contains("issue(id") {
+            let id = request.json()["variables"]["id"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            json!({ "data": { "issue": {
+                "identifier": id, "title": "A ticket", "url": "https://linear.app/acme/issue/x",
+                "updatedAt": jiff::Timestamp::now().to_string(), "state": { "name": "In Progress", "type": "started" },
+                "priorityLabel": "High", "description": "What it is about.",
+                "comments": { "nodes": [
+                    { "id": "c-1", "body": "an earlier thought", "createdAt": at(30), "user": { "id": "u-kai", "name": "Kai" } },
+                    { "id": "c-2", "body": "the new one", "createdAt": at(10), "user": { "id": "u-ben", "name": "Ben" } },
+                ] }
+            } } })
+        } else {
+            return None;
+        };
+        Some(Reply::json(200, answer))
+    });
+    let server = TestServer::start_with_env(&[
+        ("LINEAR_API_KEY", "test-key"),
+        ("SWITCHBOARD_LINEAR_API", &linear.graphql_url()),
+    ]);
+    settings(
+        &server,
+        json!({"ux2": true, "linear": true, "view_inbox": true, "photos": false}),
+    );
+    let mut client = server.attach(170, 40);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("vinbox\r");
+    client.wait_text("Ben commented");
+    client.wait_text("an earlier thought");
+    client.wait_text("Ben  10m ago");
+    client.type_text("o");
+    client.wait_text("No tab works on ABC-7.");
+    client.type_text("q");
+    client.type_text("x");
+    client.wait_for("ABC-7 out of the view", |s| {
+        !s.join("\n").contains("Ben commented") && s.join("\n").contains("assigned to you by Ana")
+    });
+    client.type_text("\r");
+    let menu = client.wait_text("Start work on it in a new tab");
+    assert!(
+        !menu.join("\n").contains("Mark it read"),
+        "{}",
+        menu.join("\n")
+    );
+    client.type_text("\x1b");
+    client.wait_for("ABC-8 marked read and out of the view", |s| {
+        !s.join("\n").contains("assigned to you by Ana")
+    });
+    assert!(
+        linear.seen().iter().any(
+            |r| r.query().contains("notificationUpdate") && r.json()["variables"]["id"] == "n2"
+        ),
+        "marked read in Linear"
+    );
+    assert!(
+        !linear.seen().iter().any(
+            |r| r.query().contains("notificationUpdate") && r.json()["variables"]["id"] == "n1"
+        ),
+        "a dismissed one stays unread in Linear"
+    );
+}

@@ -559,7 +559,7 @@ pub async fn fetch(id: &str) -> Result<Value, String> {
         .ok_or_else(|| format!("Linear has no ticket {id}."))
 }
 
-fn cache_file(id: &str) -> std::path::PathBuf {
+pub(crate) fn cache_file(id: &str) -> std::path::PathBuf {
     paths::cache_dir()
         .join("ticket-view")
         .join(format!("{id}.json"))

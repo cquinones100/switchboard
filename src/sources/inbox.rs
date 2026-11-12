@@ -4,9 +4,13 @@
 //! yours, and a ticket newly assigned to you. Status changes and the like,
 //! most of Linear's inbox, are left out, and so are those read, archived or
 //! snoozed. Each one also goes in the sidebar's notifications (the server's
-//! `notices` under "inbox"), until it is dismissed there, which is kept
-//! here alone (`dismiss`). Enter offers what the Tickets board does with
-//! its ticket, and marks the notification read in Linear (`mark_read`).
+//! `notices` under "inbox"), until it is dismissed there or in the view,
+//! which is kept here alone (`dismiss`) and takes it out of both. Enter
+//! offers what the Tickets board does with its ticket, and marks the
+//! notification read in Linear (`mark_read`). Each keeps who acted, by
+//! their Linear ID for their photo, its kind and its comment's ID, for
+//! UX 2.0's board (src/mission/inbox_board.rs), which also shows the
+//! newest commit naming its ticket (`links`, local git alone).
 
 use std::path::{Path, PathBuf};
 
@@ -16,8 +20,8 @@ use super::{ms_of, text};
 use crate::integrations::linear;
 use crate::items::{Item, State, Target};
 
-const QUERY: &str = "query { notifications(first: 100) { nodes { id type createdAt readAt archivedAt snoozedUntilAt actor { name } \
-  ... on IssueNotification { issue { identifier title url } comment { body url } } } } }";
+const QUERY: &str = "query { notifications(first: 100) { nodes { id type createdAt readAt archivedAt snoozedUntilAt actor { id name } \
+  ... on IssueNotification { issue { identifier title url } comment { id body url } } } } }";
 
 fn kind_words(kind: &str) -> Option<&'static str> {
     Some(match kind {
@@ -27,6 +31,16 @@ fn kind_words(kind: &str) -> Option<&'static str> {
         "issueAssignedToYou" => "assigned it to you",
         _ => return None,
     })
+}
+
+/// What kind of news a notification is, as the board marks it: a ticket
+/// that needs you (assigned to you), a comment, or a mention.
+fn kind_of(kind: &str) -> &'static str {
+    match kind {
+        "issueAssignedToYou" => "needs",
+        "issueNewComment" => "comment",
+        _ => "mention",
+    }
 }
 
 /// The notifications as the view lists them.
@@ -80,7 +94,15 @@ pub fn inbox_from(nodes: &[Value], now_ms: i64) -> Vec<Item> {
                 State::Attention
             })
             .target(Target::Url(url.to_string()))
-            .data(json!({ "ticket": ticket, "notification": text(n, "/id"), "url": url }));
+            .data(json!({
+                "ticket": ticket,
+                "notification": text(n, "/id"),
+                "url": url,
+                "actor": actor,
+                "actor_id": text(n, "/actor/id"),
+                "kind": kind_of(kind),
+                "comment": text(n, "/comment/id"),
+            }));
             item.time = ms_of(n.get("createdAt").and_then(Value::as_str));
             item
         })
@@ -157,9 +179,126 @@ pub fn notices(state: &Path, items: &[Item]) -> Vec<Item> {
         .collect()
 }
 
+/// The newest commit on a repository's default branch that names a
+/// ticket, for the board's "From your work": its short hash, subject, when
+/// (seconds), and the files it touches.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Commit {
+    pub hash: String,
+    pub subject: String,
+    pub at: i64,
+    pub files: Vec<String>,
+}
+
+/// The newest commit naming each ticket, across the repositories at
+/// `clones` (the tabs' main clones), from local git alone: nothing is
+/// fetched, so a commit lands here once a fetch or a landing has brought
+/// it. A ticket no commit names is left out.
+pub fn links(clones: &[PathBuf], tickets: &[String]) -> std::collections::HashMap<String, Commit> {
+    let mut out = std::collections::HashMap::new();
+    for ticket in tickets {
+        let newest = clones
+            .iter()
+            .filter_map(|c| commit_naming(c, ticket))
+            .max_by_key(|c| c.at);
+        if let Some(commit) = newest {
+            out.insert(ticket.clone(), commit);
+        }
+    }
+    out
+}
+
+/// The newest commit on `clone`'s default branch (origin's copy of it
+/// when there is one) whose message names `ticket`, whatever its case.
+fn commit_naming(clone: &Path, ticket: &str) -> Option<Commit> {
+    let common = [clone.join(".git"), clone.to_path_buf()]
+        .into_iter()
+        .find(|d| d.join("HEAD").is_file())?;
+    let branch = crate::tabs::git::default_branch(&common)?;
+    // ABC-13 mustn't find ABC-138, nor xABC-13.
+    let grep = format!("--grep=(^|[^A-Za-z0-9]){}([^0-9]|$)", regex::escape(ticket));
+    let log = |rev: &str| {
+        crate::diff::git::git(
+            clone,
+            &[
+                "log",
+                "-1",
+                "-i",
+                "-E",
+                &grep,
+                "--format=%h%x09%ct%x09%s",
+                rev,
+                "--",
+            ],
+        )
+        .ok()
+    };
+    let line = log(&format!("origin/{branch}")).or_else(|| log(&branch))?;
+    let mut parts = line.trim_end().splitn(3, '\t');
+    let hash = parts.next().filter(|h| !h.is_empty())?.to_string();
+    let at = parts.next()?.parse().ok()?;
+    let subject = parts.next().unwrap_or("").to_string();
+    let files = crate::diff::git::git(clone, &["show", "--name-only", "--format=", &hash])
+        .map(|out| {
+            out.lines()
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(Commit {
+        hash,
+        subject,
+        at,
+        files,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_newest_commit_naming_a_ticket_with_the_files_it_touches() {
+        use crate::tabs::git::tests::{Scratch, git, repo};
+        let dir = Scratch::new("inbox-links");
+        let clone = dir.0.join("repo");
+        if !repo(&clone) {
+            return;
+        }
+        std::fs::write(clone.join("a.rs"), "a").unwrap();
+        assert!(git(&clone, &["add", "a.rs"]));
+        assert!(git(&clone, &["commit", "-q", "-m", "Start abc-138's lock"]));
+        std::fs::write(clone.join("land_lock.rs"), "b").unwrap();
+        assert!(git(&clone, &["add", "land_lock.rs"]));
+        assert!(git(
+            &clone,
+            &["commit", "-q", "-m", "Finish the lock (ABC-138)"]
+        ));
+        assert!(git(
+            &clone,
+            &["commit", "-q", "--allow-empty", "-m", "ABC-1380 other"]
+        ));
+        assert!(git(
+            &clone,
+            &[
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "xABC-138 another team"
+            ]
+        ));
+        let found = links(
+            std::slice::from_ref(&clone),
+            &["ABC-138".to_string(), "ABC-9".to_string()],
+        );
+        let commit = &found["ABC-138"];
+        assert_eq!(commit.subject, "Finish the lock (ABC-138)");
+        assert_eq!(commit.files, vec!["land_lock.rs".to_string()]);
+        assert!(!commit.hash.is_empty());
+        assert!(!found.contains_key("ABC-9"), "no commit names it");
+    }
 
     #[test]
     fn an_item_dismissed_leaves_the_notifications_and_the_meetings_stay_in_the_file() {
@@ -193,9 +332,9 @@ mod tests {
         let issue = json!({ "identifier": "AB-1", "title": "Do it", "url": "https://linear.app/x/issue/AB-1" });
         let nodes = vec![
             json!({ "id": "1", "type": "issueStatusChanged", "createdAt": "2026-10-28T10:00:00Z", "actor": { "name": "Ada" }, "issue": issue }),
-            json!({ "id": "2", "type": "issueAssignedToYou", "createdAt": "2026-10-28T11:00:00Z", "actor": { "name": "Ada" }, "issue": issue }),
-            json!({ "id": "3", "type": "issueCommentMention", "createdAt": "2026-10-28T12:00:00Z", "actor": { "name": "Lin" }, "issue": issue,
-                    "comment": { "body": "can you\nlook", "url": "https://linear.app/x/issue/AB-1#comment-1" } }),
+            json!({ "id": "2", "type": "issueAssignedToYou", "createdAt": "2026-10-28T11:00:00Z", "actor": { "id": "u-ada", "name": "Ada" }, "issue": issue }),
+            json!({ "id": "3", "type": "issueCommentMention", "createdAt": "2026-10-28T12:00:00Z", "actor": { "id": "u-lin", "name": "Lin" }, "issue": issue,
+                    "comment": { "id": "c-1", "body": "can you\nlook", "url": "https://linear.app/x/issue/AB-1#comment-1" } }),
             json!({ "id": "4", "type": "issueMention", "createdAt": "2026-10-28T13:00:00Z", "readAt": "2026-10-28T13:05:00Z", "actor": { "name": "Bo" }, "issue": issue }),
             json!({ "id": "5", "type": "issueNewComment", "createdAt": "2026-10-28T14:00:00Z", "snoozedUntilAt": "2999-01-01T00:00:00Z", "actor": { "name": "Cy" }, "issue": issue }),
         ];
@@ -228,5 +367,10 @@ mod tests {
         );
         assert_eq!(items[0].data["ticket"], "AB-1");
         assert_eq!(items[0].data["notification"], "3");
+        assert_eq!(items[0].data["actor_id"], "u-lin");
+        assert_eq!(items[0].data["kind"], "mention");
+        assert_eq!(items[0].data["comment"], "c-1");
+        assert_eq!(items[1].data["actor"], "Ada");
+        assert_eq!(items[1].data["kind"], "needs");
     }
 }

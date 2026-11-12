@@ -428,6 +428,11 @@ fn names(tab: &TabModel, pattern: &str) -> bool {
         .is_ok_and(|re| re.is_match(&tab.name))
 }
 
+/// The tab working on a ticket: the first whose name names it.
+pub fn tab_naming<'a>(tabs: &'a [TabModel], ticket: &str) -> Option<&'a TabModel> {
+    tabs.iter().find(|t| names(t, &regex::escape(ticket)))
+}
+
 fn text<'a>(v: &'a Value, pointer: &str) -> &'a str {
     v.pointer(pointer).and_then(Value::as_str).unwrap_or("")
 }
@@ -508,7 +513,7 @@ pub fn board_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
     }
     let ticket = text(&item.data, "/ticket").to_string();
     if TICKET_ID.is_match(&ticket) {
-        if let Some(t) = ctx.tabs.iter().find(|t| names(t, &regex::escape(&ticket))) {
+        if let Some(t) = tab_naming(ctx.tabs, &ticket) {
             out.push(choice(
                 't',
                 format!("Go to tab {}, where it is open", t.index),

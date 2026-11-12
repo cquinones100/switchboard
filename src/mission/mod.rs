@@ -10,7 +10,8 @@
 //! view by name, `/` to filter, `?` for its keys, Esc and q to close, M-w
 //! closing it whatever is open over it, `r` for a plugin's view, and a
 //! few views' own (the Calendar's `o` join and `y` `n` `m` reply, its `h`
-//! `l` a day back or forward).
+//! `l` a day back or forward, the Inbox's `o` go to the tab, `x` dismiss,
+//! M-l in Linear and `i` its ticket).
 //! Everything that acts on what is chosen is in the menu Enter opens on it,
 //! a box over the view; an option that takes a moment shows a box with a
 //! spinner until it is done. A click takes what it lands on, the wheel
@@ -34,6 +35,8 @@
 //! - `calendar`: the Calendar view drawn as a day, hours down the side,
 //!   the chosen event beside it with who is going as photos.
 //! - `history`: the Notifications view as a history by day.
+//! - `inbox_board`: with UX 2.0, the Inbox as a board: the notifications
+//!   by day with who acted's photos, the chosen one in its ticket beside.
 //! - `choices`: what the menu Enter opens offers, as data.
 //! - `answer`: answering a tab's prompt, as the Slack relay does.
 //! - `ask`: a line to type in a box.
@@ -58,6 +61,7 @@ pub mod choices;
 pub mod diagrams;
 pub mod find_key;
 pub mod history;
+pub mod inbox_board;
 pub mod keymap;
 pub mod keys_board;
 pub mod remind;
@@ -199,6 +203,11 @@ pub struct Snapshot {
     /// The note items that name the Calendar's chosen event, or what it
     /// names, once read (`calendar::notes_naming`).
     pub calendar_notes: Vec<calendar::NoteLine>,
+    /// The Inbox's chosen notification's ticket as last read, or
+    /// `{"error": why}`; `None` until it is (`inbox_board`).
+    pub inbox_ticket: Option<serde_json::Value>,
+    /// The newest commit naming each of the Inbox's tickets.
+    pub inbox_links: HashMap<String, crate::sources::inbox::Commit>,
 }
 
 impl Default for Snapshot {
@@ -229,6 +238,8 @@ impl Default for Snapshot {
             photos: HashMap::new(),
             calendar_next: None,
             calendar_notes: Vec::new(),
+            inbox_ticket: None,
+            inbox_links: HashMap::new(),
         }
     }
 }
@@ -323,6 +334,9 @@ pub struct Mission {
     /// once another is chosen (a filter, a day, a view), the focus goes
     /// back to the item rather than press its key on the new one.
     pub keycap_for: Option<String>,
+    /// On a screen too narrow for the Inbox's ticket beside its list, `i`
+    /// shows it in the list's place until `i` or Esc.
+    pub inbox_pane: bool,
 }
 
 impl Mission {
@@ -358,6 +372,7 @@ impl Mission {
             resources_sort: resources_board::Sort::default(),
             calendar_day: None,
             keycap_for: None,
+            inbox_pane: false,
         }
     }
 
@@ -643,6 +658,16 @@ pub enum MissionEvent {
     Worktrees(HashMap<PathBuf, Vec<Worktree>>, HashMap<PathBuf, String>),
     /// A worktree's branch counted for the Work map's chosen row.
     Counted(PathBuf, views::Counts),
+    /// An Inbox ticket read, from its cache file or Linear, or why it
+    /// couldn't be (`{"error": why}`); `last` once the read is over.
+    InboxTicket {
+        ticket: String,
+        value: Option<serde_json::Value>,
+        last: bool,
+    },
+    /// An Inbox notification marked read in Linear as its menu closed, or
+    /// why it couldn't be.
+    InboxRead { id: String, error: Option<String> },
     /// The note items that name a Calendar event, by its item's id.
     CalendarNotes(String, Vec<calendar::NoteLine>),
     /// The worktrees no tab is in, from wherever they are known; `None`
@@ -693,6 +718,11 @@ pub struct MissionState {
     /// a time.
     pub(crate) calendar_notes: HashMap<String, (Instant, Vec<calendar::NoteLine>)>,
     pub(crate) calendar_notes_busy: bool,
+    /// The Inbox's tickets as last read, and when each was last asked
+    /// for; one read at a time.
+    pub(crate) inbox_tickets: HashMap<String, serde_json::Value>,
+    pub(crate) inbox_asked: HashMap<String, Instant>,
+    pub(crate) inbox_ticket_busy: bool,
     /// What a key does once the mission control it was pressed in is back
     /// in its overlay, for what goes to another view or closes it (Enter
     /// on a notification), which acts on the overlay itself.

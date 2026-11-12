@@ -1438,8 +1438,8 @@ pub struct Picture {
 /// The pane beside a board: its lines, and the diagrams placed over them,
 /// each by its place among the lines.
 #[derive(Clone, Debug, Default)]
-struct About {
-    lines: Vec<Vec<Span<'static>>>,
+pub(super) struct About {
+    pub(super) lines: Vec<Vec<Span<'static>>>,
     pictures: Vec<Picture>,
 }
 
@@ -1507,7 +1507,7 @@ pub fn description_beside(m: &Mission) -> Option<(&str, &'static str)> {
 /// picture takes at the pane's width, blank for the frame to place it
 /// over, however tall, since the pane cuts it as it cuts the text; one not
 /// ready, and every one without `images`, is its text drawing.
-fn markdown_lines(
+pub(super) fn markdown_lines(
     text: &str,
     place: &str,
     cols: usize,
@@ -3400,7 +3400,7 @@ fn ci_about(item: &Item, chosen: usize, side_w: usize, theme: &Theme) -> About {
 }
 
 /// The spans lit under the mouse, on the panel's surface.
-fn lit(spans: Vec<Span<'static>>, theme: &Theme) -> Vec<Span<'static>> {
+pub(super) fn lit(spans: Vec<Span<'static>>, theme: &Theme) -> Vec<Span<'static>> {
     spans
         .into_iter()
         .map(|s| {
@@ -3800,6 +3800,25 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
             ("↵", "actions"),
             ("/", "filter"),
         ]),
+        ViewId::Inbox if super::inbox_board::shown(m, view) => {
+            let ticket = if super::inbox_board::beside(m.size.0 as usize) {
+                &[][..]
+            } else if m.inbox_pane {
+                &[("i", "back to the list")][..]
+            } else {
+                &[("i", "its ticket")][..]
+            };
+            let mut first = vec![
+                ("jk", "move"),
+                ("↵", "menu, marks read"),
+                ("o", "go to its tab"),
+                ("x", "dismiss"),
+                ("M-l", "in Linear"),
+            ];
+            first.extend_from_slice(ticket);
+            first.push(("/", "filter"));
+            with(&first)
+        }
         ViewId::Notifications if m.snap.notice_counts.is_some() => with(&[
             ("jk", "move"),
             ("↵", "go to it"),
@@ -4521,6 +4540,8 @@ pub fn drawn(
                 && cols >= super::usage_board::BOARD_AT
                 && super::usage_board::board(v, m, cols, rows, &mut lines, &mut hits, &mut meters)
             {
+            } else if super::inbox_board::shown(m, v) {
+                super::inbox_board::board(v, cols, rows, m, &mut lines, &mut hits, &mut meters);
             } else if keys_board_shown(m, v, cols) {
                 super::keys_board::board(v, cols, rows, m, &mut lines, &mut hits, &mut meters);
             } else if v.id == ViewId::Calendar && super::calendar::is_day(v) {
@@ -4571,6 +4592,7 @@ pub fn drawn(
             if snap.rules.ux2
                 && view.is_some_and(|v| {
                     matches!(v.id, ViewId::Ci | ViewId::WorkMap | ViewId::Resources)
+                        || super::inbox_board::shown(m, v)
                         || (v.id == ViewId::Usage && cols >= super::usage_board::BOARD_AT)
                         || (v.id == ViewId::Settings && cols >= super::settings_board::BOARD_AT)
                         || keys_board_shown(m, v, cols)
@@ -4647,6 +4669,8 @@ mod tests {
             photos: Default::default(),
             calendar_next: None,
             calendar_notes: Vec::new(),
+            inbox_ticket: None,
+            inbox_links: Default::default(),
         };
         m
     }

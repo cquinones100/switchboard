@@ -222,6 +222,12 @@ impl Sources {
         mainci::failing_line(&self.main_ci)
     }
 
+    /// The newest commit naming each of the Inbox's tickets, as the last
+    /// look found them.
+    pub fn inbox_links(&self) -> &std::collections::HashMap<String, inbox::Commit> {
+        &self.kept.inbox_links
+    }
+
     /// Takes a notification off the Inbox at once, once its menu has marked
     /// it read in Linear (`inbox::mark_read`).
     pub fn drop_inbox_item(&mut self, notification: &str) {
