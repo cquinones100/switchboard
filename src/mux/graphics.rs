@@ -211,6 +211,14 @@ pub fn speaks_kitty(term: &str) -> bool {
     term.contains("ghostty") || term.contains("kitty")
 }
 
+/// Whether a terminal gets sixel or may once it answers DA1: one that does,
+/// or, chosen by the terminal, Windows Terminal (`apps_want_sixel`), whose
+/// answer comes a moment after it attaches, by when a view may already have
+/// given a picture again, which would otherwise be dropped.
+pub fn may_get_sixel(term: &str) -> bool {
+    for_panes(term) == Protocol::Sixel || (!speaks_kitty(term) && apps_want_sixel(term, chosen()))
+}
+
 /// Whether a terminal's picture cells are blanked rather than sent as the
 /// placeholder's box: one known never to draw kitty's pictures (Windows
 /// Terminal) that doesn't get sixel either, as one from before 1.22, which

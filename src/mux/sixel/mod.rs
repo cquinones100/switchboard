@@ -528,12 +528,13 @@ impl Server {
             return;
         }
         // A picture given inline is kept only where sixel may draw it:
-        // with sixel chosen, or a terminal attached that gets it.
+        // with sixel chosen, or a terminal attached that gets it or may
+        // (Windows Terminal before its answer to DA1 is in).
         let inline = graphics::chosen() == graphics::Chosen::Sixel
             || self
                 .clients
                 .values()
-                .any(|c| graphics::for_panes(&c.term) == Protocol::Sixel);
+                .any(|c| graphics::may_get_sixel(&c.term));
         for command in &commands {
             let Some(c) = kitty::parse(command) else {
                 continue;
