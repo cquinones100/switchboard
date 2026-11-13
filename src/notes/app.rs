@@ -221,11 +221,7 @@ impl Options {
                 .any(|s| s.key == "ux2" && s.value == serde_json::Value::Bool(true)),
             item_chips: on("notes_item_chips"),
             scroll_bars: on("scroll_bars"),
-            caps: crate::ui::kit::caps(&format!(
-                "{} {}",
-                std::env::var("TERM").unwrap_or_default(),
-                std::env::var("TERM_PROGRAM").unwrap_or_default()
-            )),
+            caps: crate::mux::graphics::apps_round_ends(),
             ..Options::default()
         }
     }

@@ -291,6 +291,25 @@ fn draw_at_once(key: &Key, raster: &Draw) -> Option<Made> {
     Some(draw(key, Some(Arc::new(fitted)), None))
 }
 
+/// A rounded end of kit's objects as drawn: the left one or not, its
+/// color, and the cell's size in pixels.
+type End = (bool, [u8; 3], (u16, u16));
+
+/// One rounded end as sixel, a cell of `cell` pixels, a whole number of
+/// bands tall (`draw`), the rest of the cell clear.
+fn end_sixel(left: bool, color: [u8; 3], cell: (u16, u16)) -> Option<Arc<[u8]>> {
+    let pm = crate::ui::images::raster_end(left, color, cell);
+    let picture = encode::own_colours(&crate::ui::images::rgba(&pm))?;
+    let (w, h) = (cell.0.max(1) as u32, cell.1.max(1) as u32);
+    let fitted = Fitted {
+        picture,
+        at: (0, 0),
+        size: (w, h),
+    };
+    let height = if h >= 6 { h / 6 * 6 } else { h };
+    Some(encode::encode(&fitted, (0, 0, w, height)).into())
+}
+
 /// Whether a picture is small enough to draw on the server's task: one of
 /// the server's own of no more than `AT_ONCE_PIXELS`.
 fn small(fit: &Fit) -> bool {
@@ -403,11 +422,13 @@ pub struct Sixel {
     /// The server's drawings found to have more colours than a palette
     /// holds, drawn off the task from then on rather than rastered on it.
     many_colours: HashSet<Fit>,
+    /// Each rounded end drawn (which, its color and the cell), as sixel.
+    ends: HashMap<End, Arc<[u8]>>,
     /// Transmissions counted, newest highest.
     serial: u64,
-    /// Whether sixel was chosen when last looked, so a change draws every
-    /// screen again whole.
-    pub on: bool,
+    /// What "Image protocol" chose when last looked, so a change draws
+    /// every screen again whole.
+    pub chosen: graphics::Chosen,
 }
 
 impl Default for Sixel {
@@ -423,8 +444,9 @@ impl Default for Sixel {
             failed: HashSet::new(),
             failed_pieces: HashSet::new(),
             many_colours: HashSet::new(),
+            ends: HashMap::new(),
             serial: 0,
-            on: false,
+            chosen: graphics::Chosen::Auto,
         }
     }
 }
@@ -433,7 +455,7 @@ impl Sixel {
     /// As a server starts, with the setting as it is.
     pub fn new() -> Sixel {
         Sixel {
-            on: graphics::sixel_chosen(),
+            chosen: graphics::chosen(),
             ..Sixel::default()
         }
     }
@@ -505,6 +527,13 @@ impl Server {
         if commands.is_empty() {
             return;
         }
+        // A picture given inline is kept only where sixel may draw it:
+        // with sixel chosen, or a terminal attached that gets it.
+        let inline = graphics::chosen() == graphics::Chosen::Sixel
+            || self
+                .clients
+                .values()
+                .any(|c| graphics::for_panes(&c.term) == Protocol::Sixel);
         for command in &commands {
             let Some(c) = kitty::parse(command) else {
                 continue;
@@ -512,7 +541,7 @@ impl Server {
             self.sixel.serial += 1;
             let serial = self.sixel.serial;
             let images = self.sixel.images.entry(pane).or_default();
-            images.apply(&c, serial, graphics::sixel_chosen());
+            images.apply(&c, serial, inline);
             if images.is_empty() {
                 self.sixel.images.remove(&pane);
             }
@@ -564,6 +593,7 @@ impl Server {
         let Some(drawn) = drawn else {
             return;
         };
+        self.draw_ends(frame);
         // The server's images, by id, where this frame draws them as sixel.
         let by_sixel = frame
             .graphics
@@ -656,6 +686,59 @@ impl Server {
                     }
                 }
                 make => self.draw_piece(key, make),
+            }
+        }
+    }
+
+    /// The rounded ends of kit's objects in a frame for a terminal that
+    /// gets sixel (src/mux/graphics.rs's `Ends::Pictures`), wherever they
+    /// are (the server's drawing, an app's in its pane): each half circle's
+    /// cell left a space on its own background and the half circle drawn
+    /// over it as sixel in its color, which, a few colors and a cell big,
+    /// is drawn on the task and kept; one on the frame's last row, where a
+    /// sixel would scroll the screen, a space of its color.
+    fn draw_ends(&mut self, frame: &mut Frame) {
+        use crate::ui::kit::{CAP_LEFT, CAP_RIGHT};
+        let cell = self.picture_cell();
+        let area = frame.buf.area;
+        let last = area.bottom().saturating_sub(1);
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                let c = &mut frame.buf[(x, y)];
+                let left = match c.symbol() {
+                    s if s == CAP_LEFT => true,
+                    s if s == CAP_RIGHT => false,
+                    _ => continue,
+                };
+                let fill = c.fg;
+                c.set_symbol(" ");
+                c.fg = ratatui::style::Color::Reset;
+                if y == last {
+                    c.bg = fill;
+                    continue;
+                }
+                let color = crate::ui::images::rgb(fill);
+                let at = (left, color, cell);
+                let sixel = match self.sixel.ends.get(&at) {
+                    Some(sixel) => sixel.clone(),
+                    None => {
+                        let Some(sixel) = end_sixel(left, color, cell) else {
+                            continue;
+                        };
+                        if self.sixel.ends.len() >= 256 {
+                            self.sixel.ends.clear();
+                        }
+                        self.sixel.ends.insert(at, sixel.clone());
+                        sixel
+                    }
+                };
+                let mut h = std::hash::DefaultHasher::new();
+                ("end", at).hash(&mut h);
+                frame.pictures.push(Placed {
+                    area: Rect::new(x, y, 1, 1),
+                    key: h.finish(),
+                    sixel,
+                });
             }
         }
     }
@@ -830,11 +913,11 @@ impl Server {
     pub(super) fn sixel_tick(&mut self) {
         let panes = &self.panes;
         self.sixel.images.retain(|pane, _| panes.contains_key(pane));
-        let on = graphics::sixel_chosen();
-        if on == self.sixel.on {
+        let chosen = graphics::chosen();
+        if chosen == self.sixel.chosen {
             return;
         }
-        self.sixel.on = on;
+        self.sixel.chosen = chosen;
         for c in self.clients.values_mut() {
             c.screen.invalidate();
             c.dirty = true;
@@ -925,6 +1008,20 @@ mod tests {
         );
         assert_ne!(key.number(), other.number());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_rounded_end_is_one_cell_of_sixel_in_its_color() {
+        let sixel = end_sixel(true, [0, 0, 255], (10, 20)).unwrap();
+        let (w, h, pixels) = encode::tests::decode(&sixel);
+        assert_eq!((w, h), (10, 18), "a cell, whole bands");
+        assert!(pixels.iter().flatten().all(|p| *p == [0, 0, 255]));
+        assert_eq!(pixels[0], None, "its far corner clear");
+        assert_eq!(
+            pixels[9 * 10 + 9],
+            Some([0, 0, 255]),
+            "solid at its flat side"
+        );
     }
 
     #[test]

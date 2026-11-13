@@ -730,7 +730,7 @@ impl Server {
             let caps = self
                 .clients
                 .get(&client)
-                .is_some_and(|c| crate::ui::kit::caps(&c.term));
+                .is_some_and(|c| crate::mux::graphics::round_ends(&c.term));
             let previews = notes
                 .iter()
                 .map(|n| n.preview.clone())

@@ -1183,7 +1183,7 @@ impl Server {
             caps: self
                 .clients
                 .get(&client)
-                .is_some_and(|c| crate::ui::kit::caps(&c.term)),
+                .is_some_and(|c| crate::mux::graphics::round_ends(&c.term)),
             cell: self
                 .clients
                 .get(&client)
@@ -3816,7 +3816,7 @@ impl Server {
         let caps = self
             .clients
             .get(&client)
-            .is_some_and(|c| crate::ui::kit::caps(&c.term));
+            .is_some_and(|c| crate::mux::graphics::round_ends(&c.term));
         self.open(
             client,
             Box::new(super::find_key::FindKey::new(lookup, caps)),

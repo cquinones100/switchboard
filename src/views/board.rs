@@ -116,19 +116,13 @@ impl Look {
     /// The look of the terminal the pane is in: the multiplexer's panes
     /// keep the terminal the workspace started in as `TERM_PROGRAM`.
     pub fn here() -> Look {
-        let term = format!(
-            "{} {}",
-            std::env::var("TERM").unwrap_or_default(),
-            std::env::var("TERM_PROGRAM").unwrap_or_default()
-        )
-        .to_lowercase();
         Look {
             theme: if crate::status::theme::light() {
                 Theme::LIGHT
             } else {
                 Theme::DARK
             },
-            caps: kit::caps(&term),
+            caps: crate::mux::graphics::apps_round_ends(),
         }
     }
 }

@@ -168,19 +168,9 @@ pub fn attach(session: Option<String>) -> Result<ExitCode> {
     let (signals, signal_pipe) =
         Signals::install().context("couldn't set up the signal handlers")?;
     let size = measure(libc::STDOUT_FILENO);
-    // What the terminal is, by `TERM` and `TERM_PROGRAM` both, since Ghostty
-    // run with `TERM=xterm-256color` names itself only in the second, and
-    // `COLORTERM`, which says whether it draws truecolor.
-    let term = format!(
-        "{} {} {}",
-        std::env::var("TERM").unwrap_or_default(),
-        std::env::var("TERM_PROGRAM").unwrap_or_default(),
-        std::env::var("COLORTERM").unwrap_or_default()
-    )
-    .trim()
-    .to_string();
+    let term = attaching_as(|name| std::env::var(name).ok());
     let keys = crate::settings::is_on("extended_keys");
-    POINTER.store(crate::ui::pointer::takes(&term), Ordering::Relaxed);
+    POINTER.store(super::graphics::pointer_shapes(&term), Ordering::Relaxed);
     let terminal = Terminal::enter(libc::STDIN_FILENO, libc::STDOUT_FILENO, keys)
         .context("couldn't set up the terminal")?;
     let hello = ClientMsg::Attach {
@@ -367,6 +357,31 @@ fn is_tty(fd: RawFd) -> bool {
 /// won't say (or says zero, as some do before their window is drawn).
 fn window_size(fd: RawFd) -> (u16, u16) {
     size_of(fd).unwrap_or(DEFAULT_SIZE)
+}
+
+/// What a terminal says it is as it attaches, which src/mux/graphics.rs
+/// decides by: its `TERM` and `TERM_PROGRAM` both, since Ghostty run with
+/// `TERM=xterm-256color` names itself only in the second, its `COLORTERM`,
+/// which says whether it draws truecolor, and `WindowsTerminal` where
+/// `WT_SESSION` is set, since Windows Terminal says nothing of itself in
+/// the others (`var` reads a variable).
+pub fn attaching_as(var: impl Fn(&str) -> Option<String>) -> String {
+    let get = |name: &str| var(name).unwrap_or_default();
+    let windows_terminal = if get("WT_SESSION").is_empty() {
+        ""
+    } else {
+        super::graphics::WINDOWS_TERMINAL
+    };
+    format!(
+        "{} {} {} {}",
+        get("TERM"),
+        get("TERM_PROGRAM"),
+        get("COLORTERM"),
+        windows_terminal
+    )
+    .split_whitespace()
+    .collect::<Vec<_>>()
+    .join(" ")
 }
 
 /// The size in cells, as `window_size`, with the window's pixels, 0 when
@@ -645,6 +660,38 @@ unsafe fn errno_location() -> *mut libc::c_int {
 mod tests {
     use super::*;
     use crate::mux::socket::testing::TempDir;
+
+    #[test]
+    fn a_terminal_says_what_it_is_windows_terminal_by_its_session() {
+        let vars = |set: &'static [(&str, &str)]| {
+            move |name: &str| {
+                set.iter()
+                    .find(|(n, _)| *n == name)
+                    .map(|(_, v)| v.to_string())
+            }
+        };
+        assert_eq!(
+            attaching_as(vars(&[("TERM", "xterm-256color"), ("WT_SESSION", "1b2c")])),
+            "xterm-256color WindowsTerminal"
+        );
+        assert_eq!(
+            attaching_as(vars(&[
+                ("TERM", "xterm-256color"),
+                ("TERM_PROGRAM", "ghostty"),
+                ("COLORTERM", "truecolor"),
+            ])),
+            "xterm-256color ghostty truecolor"
+        );
+        assert_eq!(
+            attaching_as(vars(&[("TERM", "xterm-256color"), ("WT_SESSION", "")])),
+            "xterm-256color",
+            "an empty session says nothing"
+        );
+        assert!(crate::mux::graphics::truecolor(&attaching_as(vars(&[(
+            "WT_SESSION",
+            "1b2c"
+        )]))));
+    }
     use std::io::Cursor;
     use std::os::fd::FromRawFd;
     use std::os::unix::net::UnixListener;

@@ -42,6 +42,22 @@
 //! pictures their own way, and a reader of the screen that takes kitty's
 //! (`switchboard headless`) still does with sixel chosen.
 //!
+//! Everything else drawn one way for one terminal and another for the rest
+//! is decided here too, so a terminal without a feature gets a stand-in
+//! rather than whatever a caller assumed: the rounded ends of kit's objects
+//! (a chip, a keycap, a cell, an input), the half circles U+E0B6 and
+//! U+E0B4, as the glyphs where the terminal draws them itself (Ghostty),
+//! as sixel pictures of them for a terminal that gets sixel (the frame's
+//! glyphs read back and drawn as pictures once it is drawn, as its images
+//! are, src/mux/sixel), and as a space of the object's fill elsewhere
+//! (`ends`); the mouse pointer's shapes, sent only to a terminal that takes
+//! them (`pointer_shapes`); and the canvas's truecolor, for a terminal that
+//! draws it, Windows Terminal among them by the word its client adds when
+//! `WT_SESSION` is set, else the 256-color palette (`truecolor`). Callers
+//! ask these and never read a terminal's name; tests/it/graphics.rs fails
+//! on any file that does, outside those that say what a terminal is (the
+//! client, the headless reader) or set one up.
+//!
 //! Nothing else writes kitty's graphics commands or a sixel: this module
 //! writes the one, src/mux/sixel/encode.rs the other, and
 //! tests/it/graphics.rs fails on any other file in src/ whose source writes
@@ -114,16 +130,56 @@ impl Graphics {
     }
 }
 
-/// Whether pictures are drawn as sixel (Settings' `image_protocol`), from
-/// the settings as the server last read them.
-pub fn sixel_chosen() -> bool {
-    crate::settings::cached("image_protocol").is_some_and(|v| v == "sixel")
+/// What Settings' "Image protocol" (`image_protocol`) chooses.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Chosen {
+    /// By the terminal: kitty's protocol where it speaks it, sixel for
+    /// Windows Terminal, which draws sixel and not kitty's, neither
+    /// elsewhere.
+    #[default]
+    Auto,
+    /// Kitty's protocol where the terminal speaks it, neither elsewhere.
+    Kitty,
+    /// Sixel for every terminal that doesn't speak kitty's protocol.
+    Sixel,
+}
+
+fn chosen_of(value: Option<serde_json::Value>) -> Chosen {
+    match value.as_ref().and_then(|v| v.as_str()) {
+        Some("kitty") => Chosen::Kitty,
+        Some("sixel") => Chosen::Sixel,
+        _ => Chosen::Auto,
+    }
+}
+
+/// What is chosen, from the settings as the server last read them.
+pub fn chosen() -> Chosen {
+    chosen_of(crate::settings::cached("image_protocol"))
 }
 
 /// The same from the settings file as it is now, for a program that reads
 /// them once (Notes, the views).
-pub fn sixel_chosen_now() -> bool {
-    crate::settings::setting("image_protocol").is_some_and(|v| v == "sixel")
+pub fn chosen_now() -> Chosen {
+    chosen_of(crate::settings::setting("image_protocol"))
+}
+
+/// Whether a terminal that doesn't speak kitty's protocol gets sixel: with
+/// sixel chosen, or, chosen by the terminal, Windows Terminal.
+fn wants_sixel(term: &str, chosen: Chosen) -> bool {
+    match chosen {
+        Chosen::Sixel => true,
+        Chosen::Auto => term
+            .to_lowercase()
+            .contains(&WINDOWS_TERMINAL.to_lowercase()),
+        Chosen::Kitty => false,
+    }
+}
+
+/// What the terminal an app runs in says it is, as a client attaching from
+/// it would (src/mux/client.rs's `attaching_as`); in a pane, the workspace's
+/// terminal's `TERM_PROGRAM` and `WT_SESSION`, which the panes keep.
+fn this_terminal() -> String {
+    super::client::attaching_as(|name| std::env::var(name).ok())
 }
 
 /// Whether a terminal, by its `TERM` or `TERM_PROGRAM`, speaks kitty's
@@ -133,11 +189,13 @@ pub fn speaks_kitty(term: &str) -> bool {
     term.contains("ghostty") || term.contains("kitty")
 }
 
-/// How pictures reach a terminal that says it is `term` (its `TERM`): by
-/// kitty's protocol where it speaks it, whatever is chosen; else as sixel
-/// while that is chosen; else neither.
+/// How pictures reach a terminal that says it is `term` (what it attached
+/// as): by kitty's protocol where it speaks it, whatever is chosen; else as
+/// sixel where that is chosen (`Chosen::Sixel`) or the terminal is Windows
+/// Terminal and it is chosen by the terminal (`Chosen::Auto`, the
+/// default); else neither.
 pub fn for_terminal(term: &str) -> Option<Protocol> {
-    way(speaks_kitty(term), sixel_chosen())
+    way(speaks_kitty(term), wants_sixel(term, chosen()))
 }
 
 /// The way for a terminal that speaks kitty's protocol or not, with sixel
@@ -175,15 +233,92 @@ pub fn for_server(term: &str) -> Option<Protocol> {
 /// Whether an app in a pane (Notes, the views) draws its pictures: the
 /// terminal it runs in speaks kitty's protocol (Ghostty or kitty, by
 /// `$TERM` or `$TERM_PROGRAM`; the multiplexer's panes keep the terminal
-/// the workspace started in as `TERM_PROGRAM`), or, inside the workspace
-/// with sixel chosen, the server draws them as sixel where their
-/// placeholders are, whatever the terminal is called.
+/// the workspace started in as `TERM_PROGRAM`), or, inside the workspace,
+/// the server draws them as sixel where their placeholders are (sixel
+/// chosen, or Windows Terminal with it chosen by the terminal).
 pub fn apps_draw() -> bool {
-    speaks_kitty(&format!(
-        "{} {}",
-        std::env::var("TERM").unwrap_or_default(),
-        std::env::var("TERM_PROGRAM").unwrap_or_default()
-    )) || (super::socket::in_pane() && sixel_chosen_now())
+    let term = this_terminal();
+    speaks_kitty(&term) || (super::socket::in_pane() && wants_sixel(&term, chosen_now()))
+}
+
+/// The word a client adds to what it attaches as when it runs in Windows
+/// Terminal (`WT_SESSION` set), whose `TERM` says only `xterm-256color`.
+pub const WINDOWS_TERMINAL: &str = "WindowsTerminal";
+
+/// Whether a terminal draws truecolor, so the dark theme is drawn in the
+/// UX 2.0 canvas's colors for it (src/status/theme.rs): it says so
+/// (`COLORTERM`'s `truecolor` or `24bit`), or it is Ghostty, kitty or
+/// Windows Terminal, which always do; else the 256-color palette.
+pub fn truecolor(term: &str) -> bool {
+    let term = term.to_lowercase();
+    let windows_terminal = WINDOWS_TERMINAL.to_lowercase();
+    ["truecolor", "24bit", "ghostty", "kitty", &windows_terminal]
+        .iter()
+        .any(|w| term.contains(w))
+}
+
+/// Whether a terminal takes the mouse pointer's shapes (`OSC 22 ; <name>
+/// ST`, src/ui/pointer.rs): Ghostty and kitty do; any other is never sent
+/// one, its pointer left as it is.
+pub fn pointer_shapes(term: &str) -> bool {
+    let term = term.to_lowercase();
+    term.contains("ghostty") || term.contains("kitty")
+}
+
+/// How the rounded ends of kit's objects (src/ui/kit.rs: a chip, a keycap,
+/// a cell, an input), the half circles U+E0B6 and U+E0B4, reach a terminal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ends {
+    /// The glyphs, which the terminal draws itself, never from a font that
+    /// may not have them: Ghostty.
+    Glyphs,
+    /// Sixel pictures of the half circles, drawn by the server where the
+    /// frame's glyphs are once it is drawn (src/mux/sixel): a terminal that
+    /// gets sixel.
+    Pictures,
+    /// A space of the object's fill, square, the object keeping its width:
+    /// any other.
+    Spaces,
+}
+
+/// How the rounded ends reach a terminal that says it is `term`.
+pub fn ends(term: &str) -> Ends {
+    ends_way(
+        term.to_lowercase().contains("ghostty"),
+        for_panes(term) == Protocol::Sixel,
+    )
+}
+
+/// The way for a terminal that draws the half circles itself or not, and
+/// that gets sixel or not.
+fn ends_way(draws_them: bool, sixel: bool) -> Ends {
+    if draws_them {
+        Ends::Glyphs
+    } else if sixel {
+        Ends::Pictures
+    } else {
+        Ends::Spaces
+    }
+}
+
+/// Whether the drawing for a terminal writes the half circles (kit's
+/// `caps`): where it draws them itself, and where they become pictures;
+/// elsewhere kit writes a space of the fill.
+pub fn round_ends(term: &str) -> bool {
+    ends(term) != Ends::Spaces
+}
+
+/// The same for an app in a pane (Notes, the views), which draws into a
+/// terminal of its own: by the terminal it runs in (`$TERM` and
+/// `$TERM_PROGRAM`, the panes keeping the workspace's in the second), or,
+/// in the workspace with sixel chosen, whose server draws its half circles
+/// as pictures, whatever the terminal is called.
+pub fn apps_round_ends() -> bool {
+    let term = this_terminal();
+    ends_way(
+        term.to_lowercase().contains("ghostty"),
+        super::socket::in_pane() && !speaks_kitty(&term) && wants_sixel(&term, chosen_now()),
+    ) != Ends::Spaces
 }
 
 impl Server {
@@ -375,6 +510,52 @@ mod tests {
         );
         assert_eq!(way(false, true), Some(Protocol::Sixel), "Windows Terminal");
         assert_eq!(way(false, false), None);
+    }
+
+    #[test]
+    fn truecolor_pointer_shapes_and_round_ends_follow_the_terminal() {
+        for term in [
+            "xterm-256color  truecolor",
+            "xterm-256color  24bit",
+            "xterm-ghostty",
+            "xterm-kitty",
+            "xterm-256color  WindowsTerminal",
+        ] {
+            assert!(truecolor(term), "{term}");
+        }
+        assert!(!truecolor("xterm-256color Apple_Terminal"));
+        assert!(!truecolor(""));
+        for term in [
+            "xterm-ghostty",
+            "xterm-256color ghostty truecolor",
+            "xterm-kitty",
+        ] {
+            assert!(pointer_shapes(term), "{term}");
+        }
+        for term in [
+            "xterm-256color WindowsTerminal",
+            "xterm-256color Apple_Terminal",
+            "screen-256color",
+        ] {
+            assert!(!pointer_shapes(term), "{term}");
+        }
+        assert_eq!(ends_way(true, false), Ends::Glyphs);
+        assert_eq!(ends_way(true, true), Ends::Glyphs, "Ghostty with sixel");
+        assert_eq!(ends_way(false, true), Ends::Pictures, "Windows Terminal");
+        assert_eq!(ends_way(false, false), Ends::Spaces);
+    }
+
+    #[test]
+    fn chosen_by_the_terminal_windows_terminal_gets_sixel() {
+        let wt = "xterm-256color WindowsTerminal";
+        assert!(wants_sixel(wt, Chosen::Auto));
+        assert!(!wants_sixel("xterm-256color", Chosen::Auto));
+        assert!(!wants_sixel(wt, Chosen::Kitty));
+        assert!(wants_sixel("xterm-256color", Chosen::Sixel));
+        assert_eq!(chosen_of(None), Chosen::Auto);
+        assert_eq!(chosen_of(Some("auto".into())), Chosen::Auto);
+        assert_eq!(chosen_of(Some("kitty".into())), Chosen::Kitty);
+        assert_eq!(chosen_of(Some("sixel".into())), Chosen::Sixel);
     }
 
     #[test]

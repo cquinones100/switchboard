@@ -525,6 +525,7 @@ const KEPT: &[&str] = &[
     "COLORTERM",
     "TERM_PROGRAM",
     "TERM_PROGRAM_VERSION",
+    "WT_SESSION",
     "LANG",
     "LC_ALL",
     "LC_CTYPE",

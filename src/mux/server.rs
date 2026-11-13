@@ -85,7 +85,9 @@ pub enum Event {
         session: Option<String>,
         cols: u16,
         rows: u16,
-        /// What the terminal says it is (its `TERM`, `TERM_PROGRAM` and `COLORTERM`).
+        /// What the terminal says it is (its `TERM`, `TERM_PROGRAM` and
+        /// `COLORTERM`, and `WindowsTerminal` in Windows Terminal,
+        /// `client::attaching_as`).
         term: String,
         /// Where the terminal's `switchboard` ran: a session made for it
         /// starts there.
@@ -357,7 +359,9 @@ pub struct Client {
     pub cols: u16,
     pub rows: u16,
     /// What its terminal says it is, as it attached (`TERM`,
-    /// `TERM_PROGRAM` and `COLORTERM`).
+    /// `TERM_PROGRAM` and `COLORTERM`, and `WindowsTerminal` in Windows
+    /// Terminal, `client::attaching_as`), by which src/mux/graphics.rs
+    /// decides how anything terminal-dependent is drawn for it.
     pub term: String,
     parser: Parser,
     prefix: bool,
@@ -392,16 +396,17 @@ pub struct Client {
 
 impl Client {
     /// Whether the mouse pointer's shape follows what is under it in this
-    /// client's terminal (src/ui/pointer.rs): Ghostty or kitty, with the
-    /// `hover_highlight` setting on.
+    /// client's terminal (src/ui/pointer.rs): one that takes the shapes
+    /// (src/mux/graphics.rs), with the `hover_highlight` setting on.
     pub fn takes_pointer(&self) -> bool {
-        crate::ui::pointer::takes(&self.term) && crate::settings::is_on("hover_highlight")
+        super::graphics::pointer_shapes(&self.term) && crate::settings::is_on("hover_highlight")
     }
 
     /// Whether its terminal draws truecolor, so the dark theme is drawn in
-    /// the canvas's colors for it (src/status/theme.rs).
+    /// the canvas's colors for it (src/status/theme.rs), as
+    /// src/mux/graphics.rs says.
     pub fn truecolor(&self) -> bool {
-        crate::status::theme::draws_truecolor(&self.term)
+        super::graphics::truecolor(&self.term)
     }
 
     /// Tells its terminal's client to end with `message`, putting the
@@ -414,7 +419,7 @@ impl Client {
             let put_back = crate::status::theme::PUT_COLORS_BACK.to_vec();
             let _ = self.tx.send(ServerMsg::Output(put_back));
         }
-        if crate::ui::pointer::takes(&self.term) {
+        if super::graphics::pointer_shapes(&self.term) {
             let beam = crate::ui::pointer::Pointer::Text.osc();
             let _ = self.tx.send(ServerMsg::Output(beam));
         }
@@ -3753,7 +3758,7 @@ impl Server {
                 &header,
                 c.header_hover,
                 palette,
-                crate::ui::kit::caps(&c.term),
+                super::graphics::round_ends(&c.term),
                 c.overlays
                     .layers
                     .iter()

@@ -372,6 +372,21 @@ pub fn raster_meter(
     pm
 }
 
+/// One rounded end of kit's objects, one cell: the half circle U+E0B6
+/// (`left`, round on its left and flat on its right, against the object)
+/// or U+E0B4 in `color`, the rest of the cell clear, for a terminal that
+/// draws neither the glyphs nor a font's (src/mux/graphics.rs's
+/// `Ends::Pictures`).
+pub fn raster_end(left: bool, color: [u8; 3], cell: Cell) -> Pixmap {
+    let (w, h) = (cell.0.max(1) as f32, cell.1.max(1) as f32);
+    let mut pm = canvas(w as u32, h as u32);
+    let x = if left { 0.0 } else { -w };
+    if let Some(oval) = SkRect::from_xywh(x, 0.0, 2.0 * w, h) {
+        fill(&mut pm, PathBuilder::from_oval(oval), color, 1.0);
+    }
+    pm
+}
+
 /// How many columns a switch takes.
 pub const SWITCH_COLS: u16 = 4;
 
@@ -1740,6 +1755,22 @@ mod tests {
 
     fn red() -> Color {
         Color::Indexed(196)
+    }
+
+    #[test]
+    fn a_rounded_end_is_its_half_circle_against_the_object() {
+        let red = [220, 50, 50];
+        let alpha = |pm: &Pixmap, x: u32, y: u32| pm.pixel(x, y).unwrap().alpha();
+        let left = raster_end(true, red, (10, 20));
+        assert_eq!((left.width(), left.height()), (10, 20));
+        assert_eq!(alpha(&left, 9, 10), 255, "solid against the object");
+        assert_eq!(alpha(&left, 0, 0), 0, "clear at its far corner");
+        assert_eq!(alpha(&left, 1, 10), 255, "round out to its edge");
+        let right = raster_end(false, red, (10, 20));
+        assert_eq!(alpha(&right, 0, 10), 255);
+        assert_eq!(alpha(&right, 9, 0), 0);
+        let c = right.pixel(0, 10).unwrap().demultiply();
+        assert_eq!([c.red(), c.green(), c.blue()], red);
     }
 
     #[test]

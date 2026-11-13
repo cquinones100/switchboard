@@ -1,9 +1,11 @@
 //! The mouse pointer's shape, which says what a click would do: a hand over
 //! anything a click presses, a resizing arrow over a line between panes, an
 //! arrow over the rest of Switchboard's own drawing, and the terminal's text
-//! beam over a pane. Ghostty and kitty take `OSC 22 ; <name> ST` with a CSS
-//! cursor name; other terminals don't, and are never sent it. New with the
-//! port: the tmux version left the pointer as the terminal had it.
+//! beam over a pane, as `OSC 22 ; <name> ST` with a CSS cursor name, sent
+//! only to a terminal src/mux/graphics.rs says takes it
+//! (`pointer_shapes`: Ghostty and kitty); any other is never sent one, its
+//! pointer left as it is. New with the port: the tmux version left the
+//! pointer as the terminal had it.
 //!
 //! Each part says what is under the mouse from where it last drew (a box's
 //! `Drawn`, mission control's hits, the sidebar's rows); the server sends a
@@ -54,13 +56,6 @@ impl Pointer {
     }
 }
 
-/// Whether a terminal, by what it attached as (`TERM`, `TERM_PROGRAM` and
-/// `COLORTERM`), takes `OSC 22`.
-pub fn takes(term: &str) -> bool {
-    let term = term.to_lowercase();
-    term.contains("ghostty") || term.contains("kitty")
-}
-
 impl Drawn {
     /// The shape over a cell of a box: a hand on its close button and on a
     /// line a click means something on (while clicks are on), the arrow
@@ -93,15 +88,6 @@ mod tests {
         assert_eq!(Pointer::border(true).name(), "ew-resize");
         assert_eq!(Pointer::border(false).name(), "ns-resize");
         assert_eq!(Pointer::Arrow.name(), "default");
-    }
-
-    #[test]
-    fn only_ghostty_and_kitty_take_it() {
-        assert!(takes("xterm-ghostty"));
-        assert!(takes("xterm-256color ghostty truecolor"));
-        assert!(takes("xterm-kitty"));
-        assert!(!takes("xterm-256color Apple_Terminal"));
-        assert!(!takes("screen-256color"));
     }
 
     #[test]

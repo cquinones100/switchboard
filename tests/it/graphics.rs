@@ -377,3 +377,180 @@ fn with_sixel_a_picture_a_view_gives_inline_is_drawn_as_sixel_over_its_cells() {
     }
     assert!(!kitty_sent(&client.raw), "nothing of kitty's passed on");
 }
+
+/// Whether a client was sent either of the rounded ends' half circles as
+/// glyphs.
+fn half_circles_sent(raw: &[u8]) -> bool {
+    common::sent(raw, "\u{E0B6}".as_bytes()) || common::sent(raw, "\u{E0B4}".as_bytes())
+}
+
+/// The one-cell sixels a client was sent on screen line `line`, for a cell
+/// of 13 by 25 pixels (24, whole bands).
+fn ends_on(raw: &[u8], line: usize) -> usize {
+    common::sixels(raw)
+        .iter()
+        .filter(|((l, _), size)| *l == line && *size == (13, 24))
+        .count()
+}
+
+#[test]
+fn with_sixel_the_pills_rounded_ends_are_one_cell_sixels_and_ghostty_keeps_its_glyphs() {
+    let (server, mut client) = sixel_server(140, 30);
+    // UX 2.0's header, its keycaps rounded at both ends, on line 2.
+    let deadline = common::deadline(std::time::Duration::from_secs(10));
+    while ends_on(&client.raw, 2) < 4 {
+        client.screen();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no rounded ends drawn as sixel on the header: {:?}",
+            common::sixels(&client.raw)
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(!half_circles_sent(&client.raw), "no half circle as a glyph");
+    // Ghostty draws the glyphs itself, whatever is chosen.
+    let mut ghostty = server.attach_as("xterm-ghostty", 140, 30);
+    ghostty.wait_for("the header", |s| s[2].contains("Claude"));
+    let deadline = common::deadline(std::time::Duration::from_secs(10));
+    while !half_circles_sent(&ghostty.raw) {
+        ghostty.screen();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no glyphs for Ghostty"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(ends_on(&ghostty.raw, 2), 0, "and no sixel");
+}
+
+#[test]
+fn by_default_windows_terminal_gets_sixel_and_the_canvas_colors_and_another_neither() {
+    // No image protocol chosen: by the terminal.
+    let server = TestServer::start_with_settings(
+        r#"{"ux2": true, "notifications": false, "tips": false, "sidebar": false}"#,
+    );
+    let mut wt = server.attach_as("xterm-256color WindowsTerminal", 140, 30);
+    wt.wait_for("the header", |s| s[2].contains("M-c Claude"));
+    wt.wait_sent("Windows Terminal asked for its sixel cell", b"\x1b[16t");
+    wt.send(b"\x1b[6;25;13t");
+    let deadline = common::deadline(std::time::Duration::from_secs(10));
+    while ends_on(&wt.raw, 2) < 4 {
+        wt.screen();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no rounded ends as sixel for Windows Terminal: {:?}",
+            common::sixels(&wt.raw)
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // The canvas's own colors, in truecolor.
+    assert!(common::sent(&wt.raw, b"38;2;"), "truecolor");
+    assert!(!kitty_sent(&wt.raw) && !half_circles_sent(&wt.raw));
+    // A terminal that says nothing of itself: neither sixel nor glyphs,
+    // nor a question about its cell, and the 256 colors.
+    let mut plain = server.attach_as("xterm-256color", 140, 30);
+    plain.wait_for("the header", |s| s[2].contains("M-c Claude"));
+    assert!(!common::sent(&plain.raw, b"\x1b[16t"));
+    assert!(common::sixels(&plain.raw).is_empty());
+    assert!(!half_circles_sent(&plain.raw) && !common::sent(&plain.raw, b"38;2;"));
+}
+
+/// The files in src/ that may read a terminal by its name or the variables
+/// that say what it is, and why: the one place that decides how anything
+/// is drawn for a terminal, and those that say what a terminal is, pass
+/// its variables on, or set one up.
+const NAMES_ALLOWED: &[(&str, &str)] = &[
+    (
+        "src/mux/graphics.rs",
+        "decides how anything is drawn for a terminal",
+    ),
+    (
+        "src/mux/client.rs",
+        "says what its terminal is as it attaches",
+    ),
+    ("src/ui/headless.rs", "attaches as Ghostty and says so"),
+    (
+        "src/mux/pane.rs",
+        "tells the panes' programs they draw truecolor",
+    ),
+    (
+        "src/demo/mod.rs",
+        "keeps the terminal's variables for the demo",
+    ),
+    (
+        "src/cmd/try_sealed.rs",
+        "passes the terminal's variables into the sandbox",
+    ),
+    (
+        "src/setup/terminal.rs",
+        "sets up Ghostty's own configuration",
+    ),
+    (
+        "src/setup/leftovers.rs",
+        "tidies Ghostty's own configuration",
+    ),
+];
+
+/// What a file's code reads a terminal by: its name in a test of a string
+/// (`contains("ghostty")`, `== "kitty"`), the words that say it draws
+/// truecolor, or the variables a terminal sets to say what it is.
+fn terminal_names(code: &str) -> Vec<String> {
+    let patterns = [
+        r#"(contains\(|==)\s*"(ghostty|kitty|truecolor|24bit)"#,
+        r#""(truecolor|24bit)""#,
+        r#""(TERM_PROGRAM|COLORTERM|WT_SESSION|LC_TERMINAL)""#,
+    ];
+    patterns
+        .iter()
+        .filter_map(|p| regex::Regex::new(p).unwrap().find(code))
+        .map(|m| m.as_str().to_string())
+        .collect()
+}
+
+#[test]
+fn only_the_pipeline_decides_by_what_a_terminal_is() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    rust_files(&root.join("src"), &mut files);
+    files.sort();
+    let mut test_files = HashSet::new();
+    let code: Vec<(String, String)> = files
+        .iter()
+        .map(|f| {
+            let text = fs::read_to_string(f).unwrap();
+            let name = f.strip_prefix(root).unwrap().to_string_lossy().into_owned();
+            (name, without_tests(f, &text, &mut test_files))
+        })
+        .collect();
+    let allowed: Vec<&str> = NAMES_ALLOWED.iter().map(|(f, _)| *f).collect();
+    let offending: Vec<String> = code
+        .iter()
+        .filter(|(name, _)| !test_files.contains(&root.join(name)))
+        .filter(|(name, _)| !allowed.contains(&name.as_str()))
+        .filter_map(|(name, code)| {
+            let found = terminal_names(code);
+            (!found.is_empty()).then(|| {
+                format!(
+                    "{name} reads a terminal by {}; ask src/mux/graphics.rs (`for_server`, \
+                     `ends`, `truecolor`, `pointer_shapes`, ...) instead",
+                    found.join(", ")
+                )
+            })
+        })
+        .collect();
+    assert!(offending.is_empty(), "{}", offending.join("\n"));
+    for (file, why) in NAMES_ALLOWED {
+        let (_, code) = code
+            .iter()
+            .find(|(name, _)| name == file)
+            .unwrap_or_else(|| panic!("{file} ({why}) is gone"));
+        assert!(
+            !terminal_names(code).is_empty(),
+            "{file} ({why}) no longer does"
+        );
+    }
+    // And the checks themselves are the pipeline's alone.
+    assert!(terminal_names(r#"term.contains("ghostty")"#).len() == 1);
+    assert!(terminal_names(r#"std::env::var("WT_SESSION")"#).len() == 1);
+    assert!(terminal_names(r#"let name = "my ghostty notes";"#).is_empty());
+}
