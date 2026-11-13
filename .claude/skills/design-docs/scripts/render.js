@@ -288,7 +288,7 @@ function sync(projectDir, docsDir) {
   const canvas = JSON.parse(fs.readFileSync(path.join(projectDir, 'canvas.json'), 'utf8'));
   const boards = Object.entries(canvas.boards).filter(([, b]) => b.page === 'design').map(([file, b]) => {
     const number = (b.title.match(/^(\w+)\. /) || [])[1] || '';
-    return { file, number, title: b.title.replace(/^\w+\. /, ''), page: `${number ? number + '-' : ''}${slugOf(file)}.html` };
+    return { file, number, title: b.title.replace(/^\w+\. /, ''), page: `${number || slugOf(file)}.html` };
   });
   const sources = Object.fromEntries(boards.map((b) => [b.file, fs.readFileSync(path.join(projectDir, b.file), 'utf8')]));
 
@@ -444,9 +444,9 @@ function selfTest() {
   const fixtures = path.join(__dirname, 'fixtures');
   const grid = toHtml(fs.readFileSync(path.join(fixtures, 'grid.dc.html'), 'utf8'));
   // The grid board as the site shows it, beside the sidebar, which must not move its rows off its meters either.
-  const fixtureBoards = [{ number: '1', title: 'Grid', page: '1-grid.html' }, { number: '2', title: 'Slack', page: '2-slack.html' }];
-  const gridInSite = toHtml(fs.readFileSync(path.join(fixtures, 'grid.dc.html'), 'utf8'), undefined, { title: '1. Grid', links: {}, nav: { groups: [{ label: 'Fixtures', about: '', boards: fixtureBoards }], current: '1-grid.html' } });
-  check(gridInSite.includes('class="sb-item sb-on" href="1-grid.html" aria-current="page"') && /href="2-slack.html"[^>]*>next ›/.test(gridInSite), 'site page: the sidebar marks its own board, and next leads to the one after');
+  const fixtureBoards = [{ number: '1', title: 'Grid', page: '1.html' }, { number: '2', title: 'Slack', page: '2.html' }];
+  const gridInSite = toHtml(fs.readFileSync(path.join(fixtures, 'grid.dc.html'), 'utf8'), undefined, { title: '1. Grid', links: {}, nav: { groups: [{ label: 'Fixtures', about: '', boards: fixtureBoards }], current: '1.html' } });
+  check(gridInSite.includes('class="sb-item sb-on" href="1.html" aria-current="page"') && /href="2.html"[^>]*>next ›/.test(gridInSite), 'site page: the sidebar marks its own board, and next leads to the one after');
   const slack = toHtml(fs.readFileSync(path.join(fixtures, 'slack.dc.html'), 'utf8'));
   check(!/>\s*\n\s*</.test(grid.slice(grid.indexOf('<body>'))), 'grid page: no line breaks between its tags');
   check(/<\/b> 9:40 AM/.test(slack), 'slack page: its spaces between tags kept');
@@ -458,7 +458,7 @@ function selfTest() {
   try {
     const run = spawnSync(process.execPath, [__filename, 'sync', fixtures, synced], { encoding: 'utf8' });
     const written = fs.readdirSync(synced).sort();
-    check(run.status === 0 && JSON.stringify(written) === JSON.stringify(['2-slack.html', 'README.md', 'index.html']) && fs.readFileSync(path.join(synced, 'README.md'), 'utf8').includes(`(${SITE}2-slack.html)`), `sync: pages from the sources: ${JSON.stringify(written)} ${run.stderr.trim()}`);
+    check(run.status === 0 && JSON.stringify(written) === JSON.stringify(['2.html', 'README.md', 'index.html']) && fs.readFileSync(path.join(synced, 'README.md'), 'utf8').includes(`(${SITE}2.html)`), `sync: pages from the sources: ${JSON.stringify(written)} ${run.stderr.trim()}`);
     // A source no page draws is published with the others, so it is checked too.
     const stray = fs.mkdtempSync(path.join(os.tmpdir(), 'design-docs-stray-'));
     for (const file of fs.readdirSync(fixtures)) fs.copyFileSync(path.join(fixtures, file), path.join(stray, file));
