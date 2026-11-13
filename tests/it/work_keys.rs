@@ -549,7 +549,9 @@ fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_
             Reply::json(
                 200,
                 json!({"data": {"repository": {"pullRequests": {"nodes": [
-                    pr(7, "Add a theme", true, "someone"),
+                    // Its author wrote the title: a control character in
+                    // it shows nowhere, the picker or the tab's name.
+                    pr(7, "Add a\u{7} theme", true, "someone"),
                     pr(8, "Our own branch", false, "acme"),
                 ]}}}}),
             )
@@ -677,7 +679,7 @@ fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_
     let all = tabs(&server);
     assert_eq!(all.len(), before + 1);
     let tab = all.last().unwrap();
-    assert_eq!(tab["options"]["@tab_name"], "Review PR");
+    assert_eq!(tab["options"]["@tab_name"], "Review PR Add a theme");
     assert_eq!(tab["current"], true, "in front, as a tab you asked for");
 
     // The tab is about the PR's worktree, checked out untrusted.
@@ -694,7 +696,7 @@ fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_
     wait("the tab to carry its PR", || {
         tabs(&server)
             .iter()
-            .any(|t| t["id"] == id.as_str() && t["label"] == "#7 Review PR")
+            .any(|t| t["id"] == id.as_str() && t["label"] == "#7 Review PR Add a theme")
     });
     let tab = tabs(&server)
         .into_iter()
@@ -708,7 +710,7 @@ fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_
     std::fs::set_permissions(&bin, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     server.ok(&["select-tab", "-t", &id]);
     client.wait_for("the review tab in front", |s| {
-        s.iter().any(|l| l.contains("#7 Review PR"))
+        s.iter().any(|l| l.contains("#7 Review PR Add a theme"))
     });
     server.ok(&["press", "lazygit"]);
     client.wait_text("so lazygit isn't opened there");

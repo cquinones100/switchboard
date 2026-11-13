@@ -809,19 +809,20 @@ impl Server {
                 };
                 // Its author wrote the title, which may hold what a
                 // terminal acts on: shown without control characters.
+                let titles: Vec<(u64, String)> = prs
+                    .iter()
+                    .map(|p| {
+                        let title = p.pr.title.chars().filter(|c| !c.is_control()).collect();
+                        (p.pr.number, title)
+                    })
+                    .collect();
                 let items = prs
                     .iter()
-                    .map(|p| PickItem {
-                        text: format!(
-                            "#{} {}",
-                            p.pr.number,
-                            p.pr.title
-                                .chars()
-                                .filter(|c| !c.is_control())
-                                .collect::<String>()
-                        ),
+                    .zip(&titles)
+                    .map(|(p, (number, title))| PickItem {
+                        text: format!("#{number} {title}"),
                         tags: format!("@{}", p.author),
-                        value: p.pr.number.to_string(),
+                        value: number.to_string(),
                         ..PickItem::default()
                     })
                     .collect();
@@ -845,7 +846,11 @@ impl Server {
                         );
                         return;
                     };
-                    server.review_tab(client, repo, number);
+                    let title = titles
+                        .into_iter()
+                        .find(|(n, _)| *n == number)
+                        .map(|(_, title)| title);
+                    server.review_tab(client, repo, number, title);
                 });
             },
         );
@@ -856,8 +861,10 @@ impl Server {
     /// with `/review-pr <number>` in the main clone `repo`, nothing of the
     /// worktree's loaded, while the tab is about the worktree (`TAB_DIR`):
     /// named, colored and given its PR from it, and M-v, M-m and M-d there
-    /// show the PR's.
-    fn review_tab(&mut self, client: ClientId, repo: PathBuf, number: u64) {
+    /// show the PR's. It is named "Review PR" and the PR's `title` from the
+    /// list it was picked from, without control characters; a number typed
+    /// that isn't in the list has no title, so just "Review PR".
+    fn review_tab(&mut self, client: ClientId, repo: PathBuf, number: u64, title: Option<String>) {
         self.say(
             Some(client),
             &format!("Checking out PR #{number} to review…"),
@@ -888,7 +895,11 @@ impl Server {
                 if let Some(tab) = server.work_tab(client, &repo, command, Opened::Front)
                     && let Some(t) = server.tabs.get_mut(&tab)
                 {
-                    t.opts.insert("@tab_name".into(), "Review PR".to_string());
+                    let name = match title.as_deref().map(str::trim) {
+                        Some(title) if !title.is_empty() => format!("Review PR {title}"),
+                        _ => "Review PR".to_string(),
+                    };
+                    t.opts.insert("@tab_name".into(), name);
                     t.opts.insert(
                         crate::mux::server::TAB_DIR.into(),
                         worktree.to_string_lossy().into_owned(),
