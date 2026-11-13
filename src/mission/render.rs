@@ -3010,13 +3010,30 @@ fn list(
         .map(|(_, w)| w + 2)
         .sum();
     widths[1] = 10.max(widths[1].min(cols.saturating_sub(12 + others)));
+    // A row with a value beside its label (a setting, a file of yours, the
+    // Slack relay view's rows): the labels as wide as the widest, and the
+    // values too (up to 40), never under 13 so Settings' stay where they were.
+    fn valued(i: &Item) -> Option<&str> {
+        i.data.get("value").and_then(serde_json::Value::as_str)
+    }
     let label_width = shown
         .iter()
-        .filter(|(_, i)| i.data.get("setting").is_some() || i.data.get("own").is_some())
+        .filter(|(_, i)| {
+            i.data.get("setting").is_some() || i.data.get("own").is_some() || valued(i).is_some()
+        })
         .map(|(_, i)| width(&i.title))
         .max()
         .unwrap_or(0)
-        .min(32);
+        // Whole up to 40 (the relay view's longest), never past half the row.
+        .min(40)
+        .min(cols / 2);
+    let value_width = shown
+        .iter()
+        .filter_map(|(_, i)| valued(i))
+        .map(width)
+        .max()
+        .unwrap_or(0)
+        .clamp(13, 40);
     // Keys (the Keys view) line up as the key, what it does, then its tags,
     // the key column as wide as the widest key, so none is cut.
     let key_width = shown
@@ -3107,7 +3124,7 @@ fn list(
             };
             row.put(text::pad(&item.title, label_width), name)
                 .put("  ", Style::new())
-                .put(text::pad(value, 13), value_style)
+                .put(text::pad(value, value_width), value_style)
                 .put(" ", Style::new());
             if snap.rules.ux2 && item.data["changed"] == true {
                 row.spans
@@ -5558,6 +5575,7 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool, resizes: bool) -> Vec<(
             &[("/", "search every category")],
         ),
         ViewId::Settings => with_acts(&[("jk", "move")], "its choices", VIEW, &[("/", "search")]),
+        ViewId::Relay => with_acts(&[("jk", "move")], "its choices", VIEW, &[("/", "search")]),
         ViewId::Keys if keys_board_shown(m, view, m.laid().0 as usize) => with_acts(
             &[("hl", "group"), ("jk", "key")],
             ACTS,
@@ -6429,6 +6447,8 @@ pub(super) fn body(
                 && v.id == ViewId::Settings
                 && cols >= super::settings_board::BOARD_AT
                 && v.loaded;
+            let relay_shown =
+                snap.rules.ux2 && v.id == ViewId::Relay && cols >= super::relay_board::BOARD_AT;
             let resources_shown = snap.rules.ux2
                 && v.id == ViewId::Resources
                 && cols >= super::resources_board::BOARD_AT
@@ -6438,6 +6458,8 @@ pub(super) fn body(
                 pictures = pilot_board(v, cols, rows, m, lines, hits, meters);
             } else if settings_shown {
                 super::settings_board::board(v, m, cols, rows, lines, hits, meters);
+            } else if relay_shown {
+                super::relay_board::board(v, m, cols, rows, lines, hits);
             } else if resources_shown {
                 super::resources_board::board(v, cols, rows, m, lines, hits, meters);
             } else if ci_shown {
@@ -8114,6 +8136,28 @@ mod tests {
         assert!(t[0].contains("‹ "), "{:?}", t[0]);
         let last = hits.iter().find(|h| h.spot == Spot::View(5)).unwrap();
         assert!(last.x1 < 60, "{last:?}");
+    }
+
+    #[test]
+    fn the_slack_relay_views_plain_list_shows_its_labels_and_whole_counts() {
+        let items = super::super::relay_board::items(&[], None);
+        let mut m = mission(
+            Vec::new(),
+            vec![list_view(ViewId::Relay, "Slack relay", items)],
+        );
+        m.view = 1;
+        let text = texts(&screen(&m, 160, 30).0).join("\n");
+        assert!(text.contains("Not running"), "{text}");
+        assert!(
+            text.contains("0 sent by itself, 0 notified you today"),
+            "{text}"
+        );
+        assert!(text.contains("Finished turns"), "{text}");
+        assert!(
+            text.contains("Failed commits, pushes and pull requests"),
+            "{text}"
+        );
+        assert!(text.contains("Thread only, 0 today"), "{text}");
     }
 
     #[test]

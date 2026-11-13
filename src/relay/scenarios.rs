@@ -1909,6 +1909,7 @@ fn while_youre_at_the_computer_threads_get_everything_and_only_the_main_dms_line
         &rig.cx,
         &t,
         "a push failed: rejected",
+        super::sending::Kind::Failures,
         true,
     ))
     .unwrap();
@@ -1916,6 +1917,7 @@ fn while_youre_at_the_computer_threads_get_everything_and_only_the_main_dms_line
         &rig.cx,
         &t,
         "pushed `feature`",
+        super::sending::Kind::Milestones,
         false,
     ))
     .unwrap();
@@ -1944,6 +1946,7 @@ fn while_youre_at_the_computer_threads_get_everything_and_only_the_main_dms_line
         &rig.cx,
         &t,
         "a push failed again",
+        super::sending::Kind::Failures,
         true,
     ))
     .unwrap();
@@ -4454,4 +4457,251 @@ fn opening_a_tabs_screen_starts_its_thread_and_links_it() {
     assert_eq!(rig.posts().len(), 1, "no second header");
     assert_eq!(rig.calls("views.update").len(), 1, "no redraw needed");
     assert_eq!(link(&rig.calls("views.open")[1]["view"]), Some(url));
+}
+
+// ── What reaches you (src/relay/sending.rs) ─────────────────────────────────
+
+/// A rig whose settings are `pairs`, changed later through what it gives.
+fn rig_with(
+    pairs: &[(&str, Value)],
+) -> (
+    Rig,
+    std::rc::Rc<std::cell::RefCell<std::collections::HashMap<String, Value>>>,
+) {
+    let mut rig = Rig::new();
+    let settings = std::rc::Rc::new(std::cell::RefCell::new(
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect::<std::collections::HashMap<_, _>>(),
+    ));
+    let read = settings.clone();
+    std::rc::Rc::get_mut(&mut rig.cx).unwrap().settings =
+        Box::new(move |k| read.borrow().get(k).cloned());
+    (rig, settings)
+}
+
+fn alert_now(rig: &Rig) {
+    let tabs = tabs::claude_tabs(&rig.cx);
+    rig.block_on(alerts::alert_tabs(&rig.cx, &tabs, &[]));
+}
+
+#[test]
+fn a_finished_turn_turned_off_posts_nothing_even_once_turned_back_on() {
+    let (rig, settings) = rig_with(&[("relay_send_finished", json!("off"))]);
+    let (tab, _) = rig.claude_tab("work");
+    rig.set_state(&tab, "done", "100");
+    alert_now(&rig);
+    assert!(rig.posts().is_empty());
+    settings
+        .borrow_mut()
+        .insert("relay_send_finished".into(), json!("thread"));
+    alert_now(&rig);
+    assert!(rig.posts().is_empty(), "the turn counted as reported");
+    let sent = std::fs::read_dir(rig.cx.paths.state_dir.join("sent"));
+    assert!(sent.is_err(), "nothing recorded as sent");
+}
+
+#[test]
+fn a_prompt_set_to_its_thread_posts_no_line_in_the_main_dm() {
+    let (rig, _) = rig_with(&[("relay_send_prompts", json!("thread"))]);
+    let (tab, _) = rig.claude_tab("work");
+    rig.set_state(&tab, "waiting", "100");
+    alert_now(&rig);
+    let posts = rig.posts();
+    assert_eq!(posts.len(), 2, "the thread and the alert in it");
+    assert!(posts[1].body.contains("is **waiting on you**"));
+    assert!(posts.iter().all(|p| !p.broadcast));
+    // Recorded as sent, not notified.
+    let day = util::ymd(&util::local_now());
+    let text =
+        std::fs::read_to_string(super::sending::sent_file(&rig.cx.paths.state_dir, &day)).unwrap();
+    let sent = super::sending::read_sent(&text);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].kind, super::sending::Kind::Prompts);
+    assert!(!sent[0].notified);
+}
+
+#[test]
+fn a_finished_turn_set_to_notify_gets_a_line_in_the_main_dm() {
+    let (rig, _) = rig_with(&[("relay_send_finished", json!("notify"))]);
+    let (tab, _) = rig.claude_tab("work");
+    let index = rig.index_of(&tab);
+    rig.set_state(&tab, "done", "100");
+    alert_now(&rig);
+    let posts = rig.posts();
+    assert_eq!(posts.len(), 3);
+    assert!(posts[2].broadcast);
+    assert_eq!(
+        posts[2].body,
+        format!("🤖 **Tab {index}, work** has finished.")
+    );
+}
+
+#[test]
+fn an_autopilot_tab_under_landings_posts_its_waits_but_not_its_turns() {
+    let (rig, _) = rig_with(&[("relay_send_autopilot", json!("landings"))]);
+    let (pilot, _) = rig.claude_tab("pilot");
+    rig.set_autopilot(&pilot);
+    let (mine, _) = rig.claude_tab("mine");
+    rig.set_state(&pilot, "done", "100");
+    rig.set_state(&mine, "done", "100");
+    alert_now(&rig);
+    let finished: Vec<_> = rig
+        .posts()
+        .into_iter()
+        .filter(|p| p.body.contains("has finished"))
+        .collect();
+    assert_eq!(finished.len(), 1);
+    assert!(finished[0].body.contains("mine"));
+    rig.set_state(&pilot, "waiting", "200");
+    alert_now(&rig);
+    assert!(
+        rig.posts()
+            .iter()
+            .any(|p| p.broadcast && p.body.contains("pilot** is **waiting on you**."))
+    );
+}
+
+#[test]
+fn an_answer_to_your_message_reaches_you_with_finished_turns_off() {
+    let (rig, _) = rig_with(&[("relay_send_finished", json!("off"))]);
+    let (tab, _) = rig.claude_tab("work");
+    let index = rig.index_of(&tab);
+    let transcript = rig.transcript(&tab, "asked", &[
+        json!({ "type": "user", "message": { "content": "deploy it" } }),
+        json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "Deployed." }] } }),
+    ]);
+    rig.events(&[
+        json!({ "event": "done", "time": util::now_secs(), "transcript_path": transcript }),
+    ]);
+    rig.cx
+        .state
+        .borrow_mut()
+        .following
+        .insert(tab.clone(), follow(None, index, "deploy it"));
+    ticks(&rig);
+    let posts = rig.posts();
+    assert_eq!(posts.len(), 1);
+    assert!(posts[0].body.contains("Deployed."));
+}
+
+#[test]
+fn a_notice_turned_off_is_refused_and_its_sender_told() {
+    let (rig, _) = rig_with(&[("relay_send_notices", json!("off"))]);
+    let dir = rig.cx.paths.outbox_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    let id = format!("{}-1-abc", util::now_ms());
+    std::fs::write(
+        dir.join(format!("{id}.json")),
+        json!({ "from": "oncall", "text": "disk full" }).to_string(),
+    )
+    .unwrap();
+    rig.block_on(super::outbox::deliver_outbox(&rig.cx));
+    assert!(rig.posts().is_empty());
+    let why = std::fs::read_to_string(dir.join(format!("{id}.failed"))).unwrap();
+    assert!(why.contains("relay_send_notices"), "{why}");
+}
+
+#[test]
+fn a_full_context_is_warned_of_with_finished_turns_off() {
+    let (rig, _) = rig_with(&[("relay_send_finished", json!("off"))]);
+    let (tab, _) = rig.claude_tab("work");
+    rig.transcript(
+        &tab,
+        "full",
+        &[json!({ "type": "user", "message": { "content": "go" } })],
+    );
+    let context = rig.cx.paths.context_dirs[0].join("full");
+    std::fs::create_dir_all(context.parent().unwrap()).unwrap();
+    std::fs::write(&context, "93\tOpus").unwrap();
+    rig.set_state(&tab, "done", "100");
+    alert_now(&rig);
+    let posts = rig.posts();
+    assert!(posts.iter().all(|p| !p.body.contains("has finished")));
+    assert!(
+        posts
+            .iter()
+            .any(|p| p.body.contains("has used **93%** of its context")),
+        "{posts:?}"
+    );
+    let warnings = |rig: &Rig| {
+        rig.posts()
+            .iter()
+            .filter(|p| p.body.contains("of its context. Compact"))
+            .count()
+    };
+    // Compacted below it, then full again: warned again.
+    std::fs::write(&context, "40\tOpus").unwrap();
+    rig.set_state(&tab, "done", "200");
+    alert_now(&rig);
+    std::fs::write(&context, "91\tOpus").unwrap();
+    rig.set_state(&tab, "done", "300");
+    alert_now(&rig);
+    assert_eq!(warnings(&rig), 2);
+}
+
+#[test]
+fn a_full_context_not_warned_of_is_no_backlog_once_turned_on() {
+    let (rig, settings) = rig_with(&[
+        ("relay_send_finished", json!("off")),
+        ("relay_send_context", json!("off")),
+    ]);
+    let (tab, _) = rig.claude_tab("work");
+    rig.transcript(
+        &tab,
+        "full",
+        &[json!({ "type": "user", "message": { "content": "go" } })],
+    );
+    let context = rig.cx.paths.context_dirs[0].join("full");
+    std::fs::create_dir_all(context.parent().unwrap()).unwrap();
+    std::fs::write(&context, "93\tOpus").unwrap();
+    rig.set_state(&tab, "done", "100");
+    alert_now(&rig);
+    assert!(rig.posts().is_empty());
+    settings
+        .borrow_mut()
+        .insert("relay_send_context".into(), json!("thread"));
+    rig.set_state(&tab, "done", "200");
+    alert_now(&rig);
+    assert!(rig.posts().is_empty(), "{:?}", rig.posts());
+}
+
+#[test]
+fn a_held_line_is_sent_as_its_kind_says_when_it_goes_out_and_counted_then() {
+    let (rig, settings) = rig_with(&[]);
+    rig.at_computer();
+    let (tab, _) = rig.claude_tab("work");
+    rig.set_state(&tab, "waiting", "100");
+    alert_now(&rig);
+    let day = util::ymd(&util::local_now());
+    let file = super::sending::sent_file(&rig.cx.paths.state_dir, &day);
+    let notified = || {
+        super::sending::read_sent(&std::fs::read_to_string(&file).unwrap_or_default())
+            .iter()
+            .filter(|s| s.notified)
+            .count()
+    };
+    // Held while you're at the computer: sent, not yet notified.
+    assert_eq!(rig.cx.presence.held.borrow().len(), 1);
+    assert_eq!(notified(), 0);
+    // Turned to the thread alone meanwhile: the held line goes nowhere.
+    settings
+        .borrow_mut()
+        .insert("relay_send_prompts".into(), json!("thread"));
+    rig.set_reading(Some(super::presence::AWAY_AFTER_MS), Some(false));
+    rig.block_on(super::presence::flush(&rig.cx));
+    assert!(rig.posts().iter().all(|p| !p.broadcast));
+    assert_eq!(notified(), 0);
+    // Left to notify, it is counted once posted.
+    settings
+        .borrow_mut()
+        .insert("relay_send_prompts".into(), json!("notify"));
+    rig.at_computer();
+    rig.set_state(&tab, "waiting", "200");
+    alert_now(&rig);
+    rig.set_reading(Some(super::presence::AWAY_AFTER_MS), Some(false));
+    rig.block_on(super::presence::flush(&rig.cx));
+    assert!(rig.posts().iter().any(|p| p.broadcast));
+    assert_eq!(notified(), 1);
 }

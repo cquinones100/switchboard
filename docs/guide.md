@@ -765,6 +765,10 @@ With UX 2.0 on, the view is drawn as board 21: at the left a column of sections 
 
 Slack's search names no files and no reply counts, so both come from reading the thread: with UX 2.0 on, each look reads, through the connector's read-thread tool, the threads its messages are replies in that have something newer than what is kept, at most eight a look (`/slack-updates` reads them too and passes them to its save), and choosing a message whose thread isn't kept reads it then, the pane saying "Reading the thread…" meanwhile. They are kept in `~/.local/state/switchboard/slack-threads.json` while their messages are in the view. The chosen thread's pictures and videos are read once each, through the connector's read-file tool (10 MB at most), and kept for a week in `~/.cache/switchboard/slack-files/`. Settings' "Slack threads and pictures" (`slack_threads`) turned off reads none of it, and the view lists the messages alone.
 
+### The Slack relay view
+
+Mission control's Slack relay view (board 53, in the Day group after Slack) chooses which of the Slack relay's messages reach you. Its top line says whether the relay is running, in which tab and for how long (from the tab the server holds, never a process), how many messages it sent today by itself and how many notified you (answers to what you sent a tab from Slack aren't counted), with Start or Stop. Below are the three presets, the one the settings match lit (none, "Custom", when they match none); a row for each kind of message with today's count, a switch of Notify, Thread and Off, and a "changed" chip where it differs from its default, the chosen row opening to its whole description, today's count by tab (an autopilot tab named so) and its default; then autopilot's tabs and quiet hours. Enter or Space opens a row's menu (its other choices, a preset applied, the relay started, stopped or gone to), and a click on a switch's part sets it at once; each change is said and taken up with the relay's next message. Without UX 2.0, or narrower than 80 columns, the rows are a plain list. "What reaches you" under the Slack relay says what each choice does. Settings' "Slack relay" (`view_relay`).
+
 ### Meeting notes
 
 With Settings' "Meeting notes" (`meeting_notes`) on, each meeting of yours that Fathom recorded becomes a note, `Meetings/<title> <date>.md`, with its summary, its action items (yours first) and its transcript, its timestamps linking back to the recording. Fathom is reached through Claude's Fathom connector, a headless Haiku allowed one call at a time: a look every 30 minutes from 7am to 9pm, and every five minutes for the half hour after a meeting on your calendar ends, then a summary and a transcript for each new meeting. A meeting is yours when you recorded it or were invited, by your Fathom email or your git name. One whose summary isn't ready yet is tried again on the next look.
@@ -1748,6 +1752,8 @@ switchboard slack-relay stop      stop it
 switchboard slack-relay status    whether it runs, its process and its tab
 switchboard slack-relay notify [--from <name>] [<text>]
                                   post a notice in the DM, from <text> or stdin
+switchboard slack-relay sends <needs-me|everything|quiet>
+                                  choose what reaches you by a preset, and say what changed
 ```
 
 It needs the workspace's server running, and works from anywhere that server can be reached (a Claude job, ssh): a new tab goes in the session you used last. The tab runs `switchboard slack-relay run`, which starts the relay again if it crashes, inside an interactive shell so your shell's setup puts `claude` on the PATH for its Haiku calls. Stopping the relay on purpose (M-p, `slack-relay stop`, `stop` in the DM, Ctrl-C) closes its tab once it has said so in the DM; when it crashes past its restarts or refuses to start, the tab is left at that shell with the error, and `M-S` starts the relay there again. Settings' "Close the relay's tab when it stops" (`relay_close_tab`) off leaves the tab at its shell however the relay ends; a tab opened before the setting existed keeps the old way until the relay is next started. It also needs Switchboard's hooks for Claude Code, since that is how it hears what each session does: as a plugin, only the sessions in the workspace's panes run them, so the relay hears of those alone; with Settings' "Load Switchboard as a plugin" off, every session runs them from your `~/.claude/settings.json`, one in a terminal of its own too.
@@ -1760,7 +1766,7 @@ When it starts, the relay says so in the DM with buttons for what you would othe
 
 Each Claude tab's thread is started the first time there is something to say about it, or when you open its screen from the Home tab, and holds everything about that tab: its finished turns, its waits, its milestones, notes that it may be stuck, and the answers to what you sent. The thread starts with a header naming the tab, its state and since when (🔴 waiting on you, 🔵 working, ✅ finished, ⚪ idle), and Progress, Skill, Rename and Close buttons. The header is edited whenever the tab is renamed or its state changes, so Slack's list of threads shows how every tab stands. Once the tab closes, or starts another Claude session, the header says its session has ended and offers **Delete thread**. A thread belongs to its tab for as long as the tab is open, and a new tab gets a new one.
 
-The main DM gets one-line notices for what needs you or went wrong: a tab waiting on you, a dialog, a tab that may be stuck, a failed commit, push or pull request. Each is posted in the tab's thread and also sent to the conversation, so tapping it opens the thread. A notice for a prompt carries the prompt's option buttons, so you can answer from the notice itself. A finished turn gets no notice, since it is already in the thread.
+The main DM gets one-line notices for what needs you or went wrong: a tab waiting on you, a dialog, a tab that may be stuck, a failed commit, push or pull request. Each is posted in the tab's thread and also sent to the conversation, so tapping it opens the thread. A notice for a prompt carries the prompt's option buttons, so you can answer from the notice itself. By default a finished turn gets no notice, since it is already in the thread; which kinds get a notice, go to the thread alone or aren't sent at all is yours to choose ("What reaches you", below).
 
 A tab can hold other panes beside Claude. The relay keeps each tab to its own Claude pane: the first one it sees in the tab (or the one `new:` started) is recorded on the tab and stays its pane while the tab is open, through `/clear` or Claude being started again in it. While that pane isn't running Claude, another Claude pane in the tab stands in.
 
@@ -1775,6 +1781,31 @@ What it posts by itself:
 - **Crashes.** A relay that crashes is started again after a wait that grows each time (2 seconds, then 10, 30, 60 and 120), and posts that it restarted and why. After five crashes in ten minutes it posts that it is down and gives up.
 
 Everything it posts is standard Markdown, the way Claude writes, so headings, **bold**, links, lists, tables and code show as they do in the terminal. An answer longer than one Slack message goes out as several.
+
+### What reaches you
+
+Each kind of message the relay posts by itself has a setting in Settings' "Slack relay" category, and a row in mission control's Slack relay view: Notify me (the tab's thread and a line in the main DM, which is what Slack notifies you for), Thread only (the thread alone, which Slack doesn't notify you for), or Don't send. The tab's thread keeps a record only of what is sent. The first message sent about a tab starts its thread, whose header is a message in the DM of its own, once per tab, whatever its kind says.
+
+| Kind | Setting | Default |
+| --- | --- | --- |
+| Prompts and questions | `relay_send_prompts` | Notify me (no Don't send: only Slack may be there to answer one) |
+| Dialogs before a session starts | `relay_send_dialogs` | Notify me (no Don't send) |
+| Finished turns | `relay_send_finished` | Thread only |
+| Tabs that may be stuck | `relay_send_stuck` | Notify me |
+| Commits, pushes and pull requests | `relay_send_milestones` | Thread only |
+| Failed commits, pushes and pull requests | `relay_send_failures` | Notify me |
+| Full context | `relay_send_context` | Thread only |
+| Notices from other programs (`slack-relay notify`) | `relay_send_notices` | Notify me (no Thread only: a notice is a message of its own; Don't send refuses it, and `notify` exits 1 saying so) |
+
+A kind turned off still counts as reported, so turning it back on doesn't post what happened meanwhile. The settings are read as each message goes out, so a change takes effect with the next one, the relay running or not.
+
+Three presets set them all at once, from the view or as `switchboard slack-relay sends <preset>`, which prints what it changed: **Only what needs me** (`needs-me`: prompts, dialogs, stuck tabs, failures and notices notify, the rest isn't sent, and autopilot's tabs send only landings and failures), **Everything** (`everything`: every kind notifies) and **Quiet** (`quiet`: everything goes to its thread alone, notices still notifying). `switchboard setting relay_send_<kind> <notify|thread|off>` sets one kind, and `switchboard setting relay_send_<kind>` reads it; Claude in the workspace's panes may run both without asking.
+
+**Autopilot's tabs.** "Autopilot's tabs" (`relay_send_autopilot`) at Landings and failures only sends a tab autopilot opened only its prompts, dialogs and failed commits, pushes and pull requests, each as its kind says, leaving out its finished turns, stuck notes, milestones and full context; at Like any tab (the default) it follows the kinds.
+
+**Quiet hours.** With "Quiet hours" (`relay_quiet_hours`, off at first) on, between "Quiet hours from" and "Quiet hours to" (`relay_quiet_from`, `relay_quiet_to`, 10pm to 7am at first) by the computer's clock, a kind set to Notify me goes to its thread alone, but for prompts and dialogs while "Prompts notify in quiet hours" (`relay_quiet_prompts`) is on, and for notices.
+
+What always reaches you: offline and crash messages, which say the relay can't reach you, and the answer to a message you sent a tab from Slack, posted where you sent it whatever the settings say.
 
 ### What you can send it
 
@@ -2115,6 +2146,7 @@ Mission control's Settings view (`M-p`, then "Settings: turn the workspace's opt
 | Notifications hand off to a tab (`notice_to_tab`) | on | Every notification's menu, and the Slack, Inbox, Calendar and Autopilot views' and a failing default branch's in the CI view, offers Send it to a tab, which pastes its words and link into the Claude of a tab you pick without sending, and Open a tab for it, which starts a tab with Claude told about it (a failing default branch's in its repository's main clone, told to fix it). Off, the menus keep their own choices only |
 | Work map (`view_work_map`) | on | Mission control's Work map: every piece of work in your tabs' repositories (M-j and M-o open it whatever this says) |
 | Calendar (`view_calendar`) | on | Mission control's Calendar view: today from the day /today last saved |
+| Slack relay (`view_relay`) | on | Mission control's Slack relay view: whether the relay is running, what it sent today, and which kinds of message reach you and how, with presets |
 | Slack (`view_slack`) | on | Mission control's Slack view: your mentions, DMs, thread replies and chosen channels from the last day, as /slack-updates saved them |
 | Closed tabs (`view_closed`) | on | Mission control's Closed view: the tabs closed last, to reopen |
 | Sessions (`view_sessions`) | on | Mission control's Sessions view: each Claude session's context, model and age |
@@ -2237,6 +2269,16 @@ With UX 2.0 on, this category is named "Tabs and header".
 | Setting | Default | What it does |
 |---|---|---|
 | Close the relay's tab when it stops (`relay_close_tab`) | on | Stopping the Slack relay, from M-p, `slack-relay stop`, `stop` in its DM or Ctrl-C in its tab, closes its tab; a crash or a start it refuses keeps the tab at a shell with the error. Off, the tab stays at a shell whenever the relay ends |
+| Prompts and questions (`relay_send_prompts`) | Notify me | Where a prompt, question or wait goes: Notify me (its thread and a line in the main DM) or Thread only |
+| Dialogs before a session starts (`relay_send_dialogs`) | Notify me | Where a dialog before a session starts goes: Notify me or Thread only |
+| Finished turns (`relay_send_finished`) | Thread only | Where each turn's last message goes: Notify me, Thread only or Don't send |
+| Tabs that may be stuck (`relay_send_stuck`) | Notify me | Where a note that a tab may be stuck goes: Notify me, Thread only or Don't send |
+| Commits, pushes and pull requests (`relay_send_milestones`) | Thread only | Where each commit, push and pull request goes: Notify me, Thread only or Don't send |
+| Failed commits, pushes and pull requests (`relay_send_failures`) | Notify me | Where a failed one goes: Notify me, Thread only or Don't send |
+| Full context (`relay_send_context`) | Thread only | Where a tab past 90% of its context is said: Notify me, Thread only or Don't send |
+| Notices from other programs (`relay_send_notices`) | Notify me | What `slack-relay notify` sends: Notify me, or Don't send, which tells the sender it wasn't sent |
+| Autopilot's tabs (`relay_send_autopilot`) | Like any tab | Like any tab, or Landings and failures only: a tab autopilot opened gets only its prompts, dialogs and failures |
+| Quiet hours (`relay_quiet_hours`) | off | Between Quiet hours from and to (`relay_quiet_from`, `relay_quiet_to`, 10pm and 7am), what would notify goes to its thread only, but for prompts and dialogs while Prompts notify in quiet hours (`relay_quiet_prompts`, on) is on |
 | Haiku summaries (`haiku_summaries`) | on | One line on what each tab is doing in the relay's Home tab and progress, each a paid Haiku call |
 
 ## Commands for scripts

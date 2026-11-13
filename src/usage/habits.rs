@@ -265,6 +265,7 @@ pub const VIEWS: &[View] = &[
     view("Work map", "view_work_map"),
     view("Calendar", "view_calendar"),
     view("Slack", "view_slack"),
+    view("Slack relay", "view_relay"),
     view("Closed", "view_closed"),
     view("Routines", "routines"),
     service_view("PRs", "pr_board", "github"),

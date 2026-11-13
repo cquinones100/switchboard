@@ -1,4 +1,4 @@
-//! `switchboard slack-relay [start|stop|status|run|relay|notify]`
+//! `switchboard slack-relay [start|stop|status|run|relay|notify|sends]`
 //! (bin/slack-relay and lib/slack-relay/cli.js).
 //!
 //! ```text
@@ -13,6 +13,10 @@
 //!                          as the app, so Slack notifies you, through the
 //!                          running relay; exits 0 once it is posted, 1 if
 //!                          it wasn't (see outbox.rs)
+//! slack-relay sends <needs-me|everything|quiet>
+//!                          write the settings of one of the Slack relay
+//!                          view's presets, which choose what reaches you,
+//!                          and print what changed (see sending.rs)
 //! ```
 //!
 //! `start` and `stop` take `--say`, for M-S and the palette: what goes
@@ -228,16 +232,43 @@ pub fn main(args: Vec<String>) -> ExitCode {
                 }
             }
         }
+        "sends" => {
+            let slugs = super::sending::Preset::ALL.map(|p| p.slug()).join(", ");
+            let Some(preset) = args.get(1).and_then(|a| super::sending::Preset::of_slug(a)) else {
+                eprintln!(
+                    "Usage: switchboard slack-relay sends <{}>",
+                    slugs.replace(", ", "|")
+                );
+                return ExitCode::from(2);
+            };
+            match super::sending::apply(preset) {
+                Ok(changed) if changed.is_empty() => {
+                    println!("{}: nothing to change", preset.label());
+                    ExitCode::SUCCESS
+                }
+                Ok(changed) => {
+                    println!("{}:", preset.label());
+                    for (label, words) in changed {
+                        println!("  {label}: {words}");
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         "-h" | "--help" | "help" => {
             println!(
-                "Usage: switchboard slack-relay [start|stop|status|run|notify [--from <name>] [<text>]]"
+                "Usage: switchboard slack-relay [start|stop|status|run|notify [--from <name>] [<text>]|sends <needs-me|everything|quiet>]"
             );
             ExitCode::SUCCESS
         }
         // Said in the relay's log too, as bin/slack-relay's `fail` did.
         other => super::log::fail(
             &paths,
-            &format!("unknown command \"{other}\"; use start, stop, status, run or notify"),
+            &format!("unknown command \"{other}\"; use start, stop, status, run, notify or sends"),
             1,
         ),
     }

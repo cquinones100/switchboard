@@ -138,6 +138,15 @@ pub async fn deliver_outbox(cx: &Relay) {
             .unwrap_or("notice")
             .to_string();
         let text = notice.get("text").map(util::js_string).unwrap_or_default();
+        // Turned off, the sender hears it wasn't sent.
+        let send = super::sending::send_now(cx, super::sending::Kind::Notices, false);
+        if send == super::sending::Send::Off {
+            let why =
+                "not sent: Settings' \"Notices from other programs\" (relay_send_notices) is off";
+            let _ = util::write_private(answer(&dir, id, ".failed"), why, false);
+            cx.log(&format!("a notice from {from} {why}"));
+            continue;
+        }
         let posted: Result<String> = async {
             let parts = chunks(&format!("🔔 **{from}**\n{text}"));
             let ts = post_one(cx, &parts[0], None, false, &[]).await?;
@@ -150,6 +159,18 @@ pub async fn deliver_outbox(cx: &Relay) {
         match posted {
             Ok(ts) => {
                 let _ = util::write_private(answer(&dir, id, ".sent"), ts, false);
+                // A notice is a message of its own, sent and notifying.
+                for notified in [false, true] {
+                    super::sending::record(
+                        cx,
+                        &super::sending::Sent {
+                            kind: super::sending::Kind::Notices,
+                            tab: None,
+                            autopilot: false,
+                            notified,
+                        },
+                    );
+                }
                 cx.log(&format!("posted a notice from {from}"));
             }
             Err(e) => {

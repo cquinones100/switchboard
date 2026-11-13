@@ -52,6 +52,8 @@ pub enum ViewId {
     /// Every tab's reminder on a month (src/mission/reminders.rs).
     Reminders,
     Slack,
+    /// Which of the Slack relay's messages reach you (src/mission/relay_board.rs).
+    Relay,
     Closed,
     Prs,
     Ci,
@@ -110,6 +112,7 @@ impl View {
             ViewId::Calendar => "calendar",
             ViewId::Reminders => "reminders",
             ViewId::Slack => "slack",
+            ViewId::Relay => "relay",
             ViewId::Closed => "closed",
             ViewId::Prs => "prs",
             ViewId::Ci => "ci",
@@ -139,12 +142,13 @@ impl View {
 /// view added to `ViewId` is one pick away once it is in `BUILT_IN`.
 impl ViewId {
     /// Every view but the plugins', in mission control's order.
-    pub const BUILT_IN: [ViewId; 18] = [
+    pub const BUILT_IN: [ViewId; 19] = [
         ViewId::Notifications,
         ViewId::WorkMap,
         ViewId::Calendar,
         ViewId::Reminders,
         ViewId::Slack,
+        ViewId::Relay,
         ViewId::Closed,
         ViewId::Prs,
         ViewId::Ci,
@@ -169,6 +173,7 @@ impl ViewId {
             ViewId::Calendar => "Calendar",
             ViewId::Reminders => "Reminders",
             ViewId::Slack => "Slack",
+            ViewId::Relay => "Slack relay",
             ViewId::Closed => "Closed",
             ViewId::Prs => "PRs",
             ViewId::Ci => "CI",
@@ -221,6 +226,7 @@ impl ViewId {
             ViewId::Calendar => "today's meetings",
             ViewId::Reminders => "every tab's reminder, by when it comes due",
             ViewId::Slack => "what is new for you on Slack",
+            ViewId::Relay => "which of the Slack relay's messages reach you, and how",
             ViewId::Closed => "the tabs closed last, to reopen",
             ViewId::Prs => "your pull requests by where they stand",
             ViewId::Ci => "your pull requests failing, running and passing",
@@ -258,6 +264,9 @@ impl ViewId {
             }
             ViewId::Slack => {
                 "From the last day: direct messages and mentions first, then replies in your threads and the channels in slack-updates.json. Enter opens one in Slack or a tab for its thread. Settings' \"Slack\" (view_slack)."
+            }
+            ViewId::Relay => {
+                "Whether the relay runs and what it sent today, then each kind of message it sends (prompts, finished turns, stuck tabs, commits and pushes, failures, full context, notices) with where it goes: Notify, Thread only or Off, three presets, autopilot's tabs and quiet hours. Settings' \"Slack relay\" (view_relay)."
             }
             ViewId::Closed => {
                 "Newest first, one per Claude conversation. Enter reopens it where it was, with its name and its Claude resumed, or a shell when it had none. The newest 200 outlive a restart. Settings' \"Closed tabs\" (view_closed)."
@@ -313,6 +322,7 @@ impl ViewId {
             ViewId::Calendar => &["mission", "calendar"],
             ViewId::Reminders => &["mission", "remind", "tabs"],
             ViewId::Slack => &["mission", "slack"],
+            ViewId::Relay => &["mission", "slack", "settings"],
             ViewId::Closed => &["mission", "tabs"],
             ViewId::Prs => &["mission", "github", "pr"],
             ViewId::Ci => &["mission", "github", "ci"],
@@ -368,8 +378,9 @@ fn place(id: &ViewId) -> (Group, u8) {
         ViewId::Calendar => (Group::Day, 0),
         ViewId::Reminders => (Group::Day, 1),
         ViewId::Slack => (Group::Day, 2),
-        ViewId::Inbox => (Group::Day, 3),
-        ViewId::Notifications => (Group::Day, 4),
+        ViewId::Relay => (Group::Day, 3),
+        ViewId::Inbox => (Group::Day, 4),
+        ViewId::Notifications => (Group::Day, 5),
         ViewId::Usage => (Group::System, 0),
         ViewId::Resources => (Group::System, 1),
         ViewId::Settings => (Group::System, 2),
@@ -448,6 +459,7 @@ pub fn grouped(id: &ViewId) -> bool {
     matches!(
         id,
         ViewId::Settings
+            | ViewId::Relay
             | ViewId::Keys
             | ViewId::Landing
             | ViewId::Autopilot
@@ -2018,5 +2030,12 @@ mod tests {
                 v.title
             );
         }
+    }
+
+    #[test]
+    fn the_slack_relay_view_goes_with_its_setting() {
+        assert!(ViewId::Relay.shows_with(|_| true));
+        assert!(!ViewId::Relay.shows_with(|k| k != "view_relay"));
+        assert_eq!(ViewId::Relay.slug(), "slack-relay");
     }
 }

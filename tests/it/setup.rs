@@ -1489,6 +1489,16 @@ fn claude_context_gives_an_interactive_session_switchboard_s_instructions_and_a_
         allowed.contains(r#""Bash(switchboard diff-story)""#),
         "diff-story runs without asking"
     );
+    // What reaches you from the Slack relay is changed without asking, as
+    // the instructions say to change it.
+    assert!(
+        allowed.contains(r#""Bash(switchboard setting relay_*)""#)
+            && allowed.contains(r#""Bash(switchboard slack-relay sends *)""#)
+    );
+    assert!(
+        part.contains("switchboard setting relay_send_<kind>")
+            && part.contains("switchboard slack-relay sends")
+    );
     let start = r#"{"session_id":"s1","hook_event_name":"SessionStart","source":"startup"}"#;
 
     let out = run(Some("cli"), start);

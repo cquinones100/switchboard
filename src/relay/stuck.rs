@@ -14,6 +14,7 @@ use super::alerts::notify;
 use super::buttons::stuck_buttons;
 use super::homes::home_of;
 use super::post::{PostOpts, post};
+use super::sending::{self, Kind, Send, Sent};
 use super::state::Target;
 use super::summaries::tab_facts;
 use super::tabs::{self, Tab, label, lasted};
@@ -60,6 +61,11 @@ pub async fn stuck_tabs(cx: &Cx, tabs: &[Tab]) {
         }
         cx.state.borrow_mut().stuck.insert(tab.id.clone(), last_at);
         cx.save();
+        // Noted either way, so turning the kind back on posts no old stall.
+        let send = sending::send_now(cx, Kind::Stuck, tab.autopilot);
+        if send == Send::Off {
+            continue;
+        }
         let idle = lasted(now - last_at.max(began));
         let lastly = if facts.activity.is_empty() {
             String::new()
@@ -89,6 +95,17 @@ pub async fn stuck_tabs(cx: &Cx, tabs: &[Tab]) {
             );
             let note = post(cx, &body, home.as_deref(), PostOpts::buttons(stuck_buttons(tab))).await?;
             cx.state.borrow_mut().alerts.insert(note, target.clone());
+            let sent = Sent {
+                kind: Kind::Stuck,
+                tab: Some((tab.index, tab.name.clone())),
+                autopilot: tab.autopilot,
+                notified: false,
+            };
+            sending::record(cx, &sent);
+            if send == Send::Thread {
+                cx.log(&format!("stuck: {name}"));
+                return Ok(());
+            }
             // The note is in the thread at once; the line in the main DM,
             // which notifies you, waits while you're at the computer.
             notify(
@@ -99,6 +116,7 @@ pub async fn stuck_tabs(cx: &Cx, tabs: &[Tab]) {
                 Vec::new(),
                 "wait",
                 Box::new(|_| true),
+                sent,
             )
             .await?;
             cx.log(&format!("stuck: {name}"));

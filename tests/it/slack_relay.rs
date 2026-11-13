@@ -468,3 +468,78 @@ fn the_relays_tab_closes_when_it_stops_on_purpose_and_stays_otherwise() {
     assert!(open_tabs().contains(&kept), "the setting off keeps the tab");
     server.ok(&["kill-tab", "-t", &kept]);
 }
+
+/// `switchboard <args>` in a home of its own, with no server: a command
+/// that only writes settings.
+fn in_home(home: &Path, args: &[&str]) -> (i32, String, String) {
+    let out = Command::new(common::BIN)
+        .args(args)
+        .env("HOME", home)
+        .env(
+            "SWITCHBOARD_STATE_DIR",
+            home.join(".local/state/switchboard"),
+        )
+        .env_remove("SWITCHBOARD")
+        .env_remove("SWITCHBOARD_PANE")
+        .env_remove("SWITCHBOARD_SETTINGS")
+        .env_remove("TMUX")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn sends_writes_a_presets_settings_and_setting_changes_one_kind() {
+    let home = common::TempDir::new("sb-sends");
+    common::write_settings(home.path(), json!({}));
+    let file = home.path().join(".config/switchboard/settings.json");
+    let read =
+        || -> Value { serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap() };
+
+    // An unknown preset writes nothing.
+    let before = read();
+    let (code, _, err) = in_home(home.path(), &["slack-relay", "sends", "loud"]);
+    assert_eq!(code, 2);
+    assert!(err.contains("needs-me|everything|quiet"), "{err}");
+    assert_eq!(read(), before);
+
+    let (code, out, err) = in_home(home.path(), &["slack-relay", "sends", "needs-me"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.starts_with("Only what needs me:\n"), "{out}");
+    assert!(out.contains("  Finished turns: Don't send\n"), "{out}");
+    assert!(
+        out.contains("  Autopilot's tabs: Landings and failures only\n"),
+        "{out}"
+    );
+    // What already matched isn't said.
+    assert!(!out.contains("Prompts and questions"), "{out}");
+    let written = read();
+    assert_eq!(written["relay_send_finished"], "off");
+    assert_eq!(written["relay_send_milestones"], "off");
+    assert_eq!(written["relay_send_autopilot"], "landings");
+    // A default stays out of the file.
+    assert!(written.get("relay_send_prompts").is_none());
+
+    let (code, out, _) = in_home(home.path(), &["slack-relay", "sends", "needs-me"]);
+    assert_eq!(
+        (code, out.as_str()),
+        (0, "Only what needs me: nothing to change\n")
+    );
+
+    // One kind by `switchboard setting`, which the relay reads back.
+    let (code, _, err) = in_home(home.path(), &["setting", "relay_send_finished", "notify"]);
+    assert_eq!(code, 0, "{err}");
+    let written = read();
+    let settings = |k: &str| written.get(k).cloned();
+    use switchboard::relay::sending::{Kind, Send, send_as};
+    assert_eq!(send_as(&settings, Kind::Finished, false, 12), Send::Notify);
+    assert_eq!(send_as(&settings, Kind::Finished, true, 12), Send::Off);
+    // A prompt can't be turned off.
+    let (code, _, _) = in_home(home.path(), &["setting", "relay_send_prompts", "off"]);
+    assert_ne!(code, 0);
+}

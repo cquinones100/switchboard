@@ -57,6 +57,8 @@
 //! - `resources_board`: with UX 2.0, the Resources view as a board: the
 //!   whole computer, each tab's figures and sparklines, the chosen one's
 //!   process tree.
+//! - `relay_board`: the Slack relay view (board 53): which of the relay's
+//!   messages reach you, a choice switch a kind, the presets.
 //! - `settings_board`: with UX 2.0, the Settings view as a board: the
 //!   categories and your files at the left, the category in front's
 //!   options with their switches beside them.
@@ -77,6 +79,7 @@ pub mod history;
 pub mod inbox_board;
 pub mod keymap;
 pub mod keys_board;
+pub mod relay_board;
 pub mod remind;
 pub mod remind_box;
 pub mod reminders;
@@ -161,6 +164,9 @@ pub enum Spot {
     /// A category of the Settings board, by the place of its first row,
     /// which a click chooses without changing it.
     Category(isize),
+    /// Part `n` of a row's choice switch (the Slack relay view), which a
+    /// click sets at once.
+    Part(isize, usize),
     /// A row chosen by a click elsewhere (a group in the Keys board's
     /// panel, a key of its keyboard), which a second click never presses.
     Choose(isize),
@@ -1282,6 +1288,9 @@ pub struct MissionState {
     pub(crate) revived_busy: bool,
     /// Your own files' Settings rows, read at most every few seconds.
     pub(crate) own: Option<(Instant, Vec<Item>)>,
+    /// What the Slack relay sent today, and whether it is set up (its
+    /// slack-relay.json naming its owner), read at most every few seconds.
+    pub(crate) relay_sent: Option<(Instant, Vec<crate::relay::sending::Sent>, bool)>,
     /// When each repository's landing was last worked out from Settings.
     pub(crate) landing_asked: HashMap<String, Instant>,
     /// The diagrams of the descriptions beside the boards, asked for and

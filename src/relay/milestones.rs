@@ -18,6 +18,7 @@ use super::Cx;
 use super::alerts::notify;
 use super::homes::home_of;
 use super::post::{PostOpts, post};
+use super::sending::{self, Kind, Send, Sent};
 use super::state::Target;
 use super::tabs::{Tab, label};
 
@@ -108,6 +109,19 @@ static NOTHING_RAN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?m)^PreToolUse:\S+ hook error|doesn't want to proceed|^\(eval\):\d+: (?:unmatched|parse error)|^(?:zsh|bash|sh): (?:-c: )?(?:line \d+: )?(?:syntax error|parse error)").expect("a regex")
 });
 
+/// The ways `milestone_line` begins a failure's line.
+const FAILURES: [&str; 3] = [
+    "a commit failed: ",
+    "a push failed: ",
+    "opening a PR failed: ",
+];
+
+/// Whether a line `milestone_line` gave says a milestone failed, by how it
+/// begins, never by what a commit's subject or a branch's name holds.
+pub fn is_failure(line: &str) -> bool {
+    FAILURES.iter().any(|f| line.starts_with(f))
+}
+
 /// What a milestone's result says, as a line, or nothing worth saying.
 pub fn milestone_line(kind: &str, output: &str, failed: bool) -> Option<String> {
     static COMMIT: LazyLock<Regex> = LazyLock::new(|| {
@@ -129,7 +143,7 @@ pub fn milestone_line(kind: &str, output: &str, failed: bool) -> Option<String> 
     match kind {
         "commit" => match COMMIT.captures(output) {
             Some(c) => Some(format!("committed `{}` {} on `{}`", &c[2], &c[3], &c[1])),
-            None => failed.then(|| format!("a commit failed: {last_line}")),
+            None => failed.then(|| format!("{}{last_line}", FAILURES[0])),
         },
         "push" => {
             // A push into a local repository (a test's throwaway one) is no
@@ -145,7 +159,7 @@ pub fn milestone_line(kind: &str, output: &str, failed: bool) -> Option<String> 
                 return None;
             }
             if failed {
-                return Some(format!("a push failed: {last_line}"));
+                return Some(format!("{}{last_line}", FAILURES[1]));
             }
             to.as_ref()?;
             Some(match BRANCH.captures(output) {
@@ -155,7 +169,7 @@ pub fn milestone_line(kind: &str, output: &str, failed: bool) -> Option<String> 
         }
         "pr" => match PR.captures(output) {
             Some(c) => Some(format!("opened [PR #{}]({})", &c[1], &c[0])),
-            None => failed.then(|| format!("opening a PR failed: {last_line}")),
+            None => failed.then(|| format!("{}{last_line}", FAILURES[2])),
         },
         _ => None,
     }
@@ -178,7 +192,15 @@ pub struct Memory {
 /// to the main DM, which notifies you: while you're away, as the same
 /// message; while you're at the computer, as a line that waits until you're
 /// away.
-pub async fn ping(cx: &Cx, tab: &Tab, line: &str, broadcast: bool) -> anyhow::Result<()> {
+/// Each message is counted as sent, and as notifying once its line in the
+/// main DM is posted.
+pub async fn ping(
+    cx: &Cx,
+    tab: &Tab,
+    line: &str,
+    kind: Kind,
+    broadcast: bool,
+) -> anyhow::Result<()> {
     let home = home_of(cx, tab).await?;
     let target = Target {
         window: tab.id.clone(),
@@ -202,7 +224,22 @@ pub async fn ping(cx: &Cx, tab: &Tab, line: &str, broadcast: bool) -> anyhow::Re
     .await?;
     cx.state.borrow_mut().alerts.insert(ts, target.clone());
     cx.save();
-    if broadcast && !away {
+    let sent = Sent {
+        kind,
+        tab: Some((tab.index, tab.name.clone())),
+        autopilot: tab.autopilot,
+        notified: false,
+    };
+    sending::record(cx, &sent);
+    if broadcast && away {
+        sending::record(
+            cx,
+            &Sent {
+                notified: true,
+                ..sent
+            },
+        );
+    } else if broadcast {
         notify(
             cx,
             text,
@@ -211,6 +248,7 @@ pub async fn ping(cx: &Cx, tab: &Tab, line: &str, broadcast: bool) -> anyhow::Re
             Vec::new(),
             "wait",
             Box::new(|_| true),
+            sent,
         )
         .await?;
     }
@@ -252,10 +290,19 @@ pub async fn milestones(cx: &Cx, tabs: &[Tab]) {
             }
             read_new(seen, size)
         };
-        // Failures also show in the main DM; progress stays in the tab's
-        // thread.
+        // A failure is a kind of its own, which notifies by default;
+        // progress stays in the tab's thread.
         for line in lines {
-            if let Err(e) = ping(cx, tab, &line, line.contains("failed")).await {
+            let kind = if is_failure(&line) {
+                Kind::Failures
+            } else {
+                Kind::Milestones
+            };
+            let send = sending::send_now(cx, kind, tab.autopilot);
+            if send == Send::Off {
+                continue;
+            }
+            if let Err(e) = ping(cx, tab, &line, kind, send == Send::Notify).await {
                 cx.log(&format!("ping failed: {e}"));
             }
         }
@@ -388,6 +435,14 @@ mod tests {
             ["push"],
             "what follows a heredoc is commands again"
         );
+    }
+
+    #[test]
+    fn a_commit_whose_subject_says_failed_is_no_failure() {
+        let line = milestone_line("commit", "[main abc1234] Fix failed login\n", false).unwrap();
+        assert!(!is_failure(&line), "{line}");
+        let line = milestone_line("push", "! [rejected] main -> main", true).unwrap();
+        assert!(is_failure(&line), "{line}");
     }
 
     #[test]

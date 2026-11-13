@@ -46,6 +46,10 @@ When I name one of these, I mean what Switchboard shows me:
 - The PR view (`M-v`) and the ticket view (`M-i`): the tab's PR description and its Linear ticket.
 - Notes (`M-e`): see "# Notes".
 
+# The Slack relay
+
+When I ask to change which of the Slack relay's messages reach me, or which notify me, change its settings rather than its code: `switchboard setting relay_send_<kind> <notify|thread|off>` for a kind (`prompts`, `dialogs`, `finished`, `stuck`, `milestones`, `failures`, `context`, `notices`; prompts and dialogs can't be off, notices can't be thread), `switchboard setting relay_send_autopilot <same|landings>` for autopilot's tabs, `switchboard setting relay_quiet_hours on` with `relay_quiet_from` and `relay_quiet_to` (an hour, 0 to 23) and `relay_quiet_prompts` for quiet hours, or `switchboard slack-relay sends <needs-me|everything|quiet>` for a preset, which prints what it changed. `switchboard setting relay_send_<kind>` alone reads one. A change takes effect with the next message, the relay running or not. An answer to a message I sent a tab from Slack always reaches me, whatever they say. Mission control's Slack relay view shows the same choices.
+
 # Skills
 
 - When a skill exists both in the repository (`.claude/skills/<name>/`, in the worktree or its main clone) and as my personal one or Switchboard's (`/switchboard:<name>`), use the repository's: read its SKILL.md and follow it instead. `switchboard skill-path <name>` prints which copy to follow (the repository's, else Switchboard's own: my personal copy of it, else the plugin's, never a skill of mine that only shares its name), and a skill handing off to another reads the file it prints.

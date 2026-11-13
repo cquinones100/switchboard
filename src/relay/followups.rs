@@ -116,37 +116,87 @@ pub fn context_footer(context: Option<&Context>) -> String {
 pub const CONTEXT_WARN: i64 = 90;
 const CONTEXT_WARNED_KEEP: usize = 50;
 
-pub async fn warn_context(cx: &Relay, tab: &Tab, context: Option<&Context>, thread: Option<&str>) {
-    let Some(context) = context else {
+pub async fn warn_context(cx: &Cx, tab: &Tab, context: Option<&Context>, thread: Option<&str>) {
+    if let Some(context) = context.filter(|c| context_due(cx, c)) {
+        post_context_warning(cx, tab, context, thread).await;
+    }
+}
+
+/// Whether a session's context is due a warning: past `CONTEXT_WARN` and
+/// not warned of since it last dropped below, noted as warned of now; one
+/// below it is forgotten, so it is warned of again once full again. Kept
+/// whatever is sent, so a turn or a warning not sent still keeps it.
+pub fn context_due(cx: &Relay, context: &Context) -> bool {
+    let mut state = cx.state.borrow_mut();
+    let warned = &mut state.context_warned;
+    if context.percent < CONTEXT_WARN {
+        warned.shift_remove(&context.session);
+        return false;
+    }
+    if warned.contains_key(&context.session) {
+        return false;
+    }
+    warned.insert(context.session.clone(), util::now_ms());
+    warned.sort_by(|_, a, _, b| b.cmp(a));
+    warned.truncate(CONTEXT_WARNED_KEEP);
+    true
+}
+
+/// A full context said in the tab's thread, and in the main DM, as its
+/// kind says; turned off, nothing, the warning counted as given.
+pub async fn post_context_warning(cx: &Cx, tab: &Tab, context: &Context, thread: Option<&str>) {
+    use super::sending::{self, Kind, Send, Sent};
+    let send = sending::send_now(cx, Kind::Context, tab.autopilot);
+    if send == Send::Off {
         return;
-    };
-    {
-        let mut state = cx.state.borrow_mut();
-        let warned = &mut state.context_warned;
-        if context.percent < CONTEXT_WARN {
-            warned.shift_remove(&context.session);
-            return;
-        }
-        if warned.contains_key(&context.session) {
-            return;
-        }
-        warned.insert(context.session.clone(), util::now_ms());
-        warned.sort_by(|_, a, _, b| b.cmp(a));
-        warned.truncate(CONTEXT_WARNED_KEEP);
     }
     let body = format!(
         "🤖 **Tab {}, {}** has used **{}%** of its context. Compact it before it runs out.",
         tab.index, tab.name, context.percent
     );
-    if let Err(e) = post(
+    let posted = post(
         cx,
         &body,
         thread,
         PostOpts::buttons(vec![compact_button(tab)]),
     )
-    .await
-    {
+    .await;
+    if let Err(e) = posted {
         cx.log(&format!("context warning failed: {e}"));
+        return;
+    }
+    let sent = Sent {
+        kind: Kind::Context,
+        tab: Some((tab.index, tab.name.clone())),
+        autopilot: tab.autopilot,
+        notified: false,
+    };
+    sending::record(cx, &sent);
+    if send == Send::Notify {
+        let target = Target {
+            window: tab.id.clone(),
+            index: tab.index,
+            name: tab.name.clone(),
+            thread: thread.map(str::to_string),
+        };
+        let line = format!(
+            "🤖 **Tab {}, {}** has used **{}%** of its context.",
+            tab.index, tab.name, context.percent
+        );
+        let sent = super::alerts::notify(
+            cx,
+            line,
+            thread.map(str::to_string),
+            target,
+            Vec::new(),
+            "wait",
+            Box::new(|_| true),
+            sent,
+        )
+        .await;
+        if let Err(e) = sent {
+            cx.log(&format!("context notice failed: {e}"));
+        }
     }
 }
 

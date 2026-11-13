@@ -161,6 +161,15 @@ pub enum Do {
     /// A Settings row changed: an on/off flipped, a choice to the next, a
     /// file of yours or a repository's landing typed or picked.
     Change(Box<Item>),
+    /// A Slack relay setting set to one of its values (the Slack relay
+    /// view), with the value's words for what is said.
+    RelaySet {
+        key: String,
+        value: serde_json::Value,
+        label: String,
+    },
+    /// One of the Slack relay view's presets applied.
+    RelayPreset(crate::relay::sending::Preset),
     /// A file opened in your editor in a tab of its own.
     EditFile {
         dir: PathBuf,
@@ -1207,7 +1216,7 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
             }
         }
         // A setting's are the server's, which reads the settings file.
-        ViewId::Settings => {}
+        ViewId::Settings | ViewId::Relay => {}
         _ => out = target_choices(item, ctx),
     }
     out

@@ -532,6 +532,12 @@ impl Rig {
         w.remind_at = Some(at);
     }
 
+    pub fn set_autopilot(&self, tab: &str) {
+        let mut windows = self.mux.windows.borrow_mut();
+        let (w, _) = windows.iter_mut().find(|(w, _)| w.id == tab).unwrap();
+        w.autopilot = true;
+    }
+
     pub fn set_loop(&self, tab: &str) {
         let mut windows = self.mux.windows.borrow_mut();
         let (w, _) = windows.iter_mut().find(|(w, _)| w.id == tab).unwrap();

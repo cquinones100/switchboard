@@ -80,6 +80,8 @@ pub struct Window {
     pub relay: bool,
     /// A tab looping a skill (`@loop_tab`), whose every tick ends a turn.
     pub loop_tab: bool,
+    /// A tab autopilot opened (`@autopilot`), not since made yours.
+    pub autopilot: bool,
     /// The pane the relay recorded as its Claude (`@claude_pane`).
     pub recorded: Option<String>,
     /// Its stage in the sidebar, or `None` from a server too old to say.
@@ -364,6 +366,10 @@ pub fn windows_of(list: &Value) -> Vec<Window> {
                 focused: shown && tab.get("current") == Some(&Value::Bool(true)),
                 relay: opt("@slack_relay").as_deref() == Some("1"),
                 loop_tab: opt("@loop_tab").as_deref() == Some("1"),
+                autopilot: opt("@autopilot")
+                    .and_then(|v| v.trim().parse::<f64>().ok())
+                    .is_some_and(|n| n != 0.0)
+                    && opt("@autopilot_yours").is_none(),
                 recorded: opt("@claude_pane"),
                 stage: tab
                     .get("stage")

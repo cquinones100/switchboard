@@ -15,6 +15,7 @@ use super::buttons::{dialog_buttons, option_buttons, turn_buttons};
 use super::followups::{Event, context_footer, warn_context};
 use super::homes::{close_home, home_of};
 use super::post::{Button, PostOpts, offer_choice, post, settle_choice};
+use super::sending::{self, Kind, Send, Sent};
 use super::state::Target;
 use super::tabs::{self, Tab, label};
 use super::{Cx, Relay};
@@ -38,6 +39,10 @@ pub const PROMPT_GONE: &str = "This prompt is no longer showing.";
 /// prompt carries the prompt's buttons, so it can be answered from the
 /// notice itself, as long as the prompt is still showing when the notice
 /// goes out (`still`), since it may have waited for you to step away.
+/// `sent` is what the line is about: as it goes out, its kind's setting
+/// is read again (it may have changed, or quiet hours begun, while it was
+/// held), and it is counted as notifying only once it is posted.
+#[allow(clippy::too_many_arguments)]
 pub async fn notify(
     cx: &Cx,
     text: String,
@@ -46,9 +51,17 @@ pub async fn notify(
     buttons: Vec<Button>,
     kind: &'static str,
     still: Box<dyn Fn(&Relay) -> bool>,
+    sent: Sent,
 ) -> anyhow::Result<()> {
     let cx2 = cx.clone();
     let send: LocalBoxFuture<'static, anyhow::Result<()>> = Box::pin(async move {
+        if sending::send_now(&cx2, sent.kind, sent.autopilot) != Send::Notify {
+            cx2.log(&format!(
+                "a held line not sent: relay_send_{} no longer notifies",
+                sent.kind.name()
+            ));
+            return Ok(());
+        }
         let live = !buttons.is_empty() && still(&cx2);
         let ts = post(
             &cx2,
@@ -66,6 +79,13 @@ pub async fn notify(
             offer_choice(&cx2, &window, kind, &ts, &text);
         }
         cx2.save();
+        sending::record(
+            &cx2,
+            &Sent {
+                notified: true,
+                ..sent
+            },
+        );
         Ok(())
     });
     super::presence::deliver(cx, send).await
@@ -212,6 +232,48 @@ async fn alert(cx: &Cx, due: Due) {
             .insert(tab.id.clone(), at.parse().unwrap_or(0));
     }
     let waiting = tab.state == "waiting";
+    // Where its kind goes; one turned off still counts as reported.
+    let kind = if waiting {
+        Kind::Prompts
+    } else {
+        Kind::Finished
+    };
+    let send = sending::send_now(cx, kind, tab.autopilot);
+    if send == Send::Off {
+        cx.log(&format!(
+            "alert: {} {} not sent (relay_send_{})",
+            label(tab.index, &tab.name),
+            tab.state,
+            kind.name()
+        ));
+        // A full context is a kind of its own, warned of whatever the turn.
+        if !waiting {
+            let transcript = due.transcript.clone().or_else(|| tab.transcript.clone());
+            // Its bookkeeping kept whatever is sent, and a thread made
+            // only for a warning that goes out.
+            let context = tabs::context_of(&cx.paths, transcript.as_deref())
+                .filter(|c| super::followups::context_due(cx, c));
+            if let Some(context) = context
+                && sending::send_now(cx, Kind::Context, tab.autopilot) != Send::Off
+            {
+                match home_of(cx, tab).await {
+                    Ok(home) => {
+                        super::followups::post_context_warning(cx, tab, &context, home.as_deref())
+                            .await
+                    }
+                    // No thread to warn in: warned of on a later turn.
+                    Err(e) => {
+                        cx.state
+                            .borrow_mut()
+                            .context_warned
+                            .shift_remove(&context.session);
+                        cx.log(&format!("context warning failed: {e}"));
+                    }
+                }
+            }
+        }
+        return;
+    }
     let what = if waiting {
         "is **waiting on you**"
     } else {
@@ -281,9 +343,15 @@ async fn alert(cx: &Cx, due: Due) {
         let under = home.clone().unwrap_or_else(|| ts.clone());
         super::files::share_media(cx, transcript.as_deref(), &under).await;
         warn_context(cx, tab, context.as_ref(), Some(&under)).await;
-        // A tab waiting on you also gets a line in the main DM; one that has
-        // finished doesn't, since its turn is already in its thread.
-        if waiting {
+        let sent = Sent {
+            kind,
+            tab: Some((tab.index, tab.name.clone())),
+            autopilot: tab.autopilot,
+            notified: false,
+        };
+        sending::record(cx, &sent);
+        // The line in the main DM, which notifies you, as its kind says.
+        if send == Send::Notify {
             let (id, since) = (tab.id.clone(), tab.since.clone());
             let still: Box<dyn Fn(&Relay) -> bool> = Box::new(move |cx: &Relay| {
                 tabs::tab(cx, &id).is_some_and(|t| t.state == "waiting" && t.since == since)
@@ -300,6 +368,7 @@ async fn alert(cx: &Cx, due: Due) {
                 },
                 "wait",
                 still,
+                sent,
             )
             .await?;
         }
@@ -413,7 +482,16 @@ async fn dialogs(cx: &Cx, tabs: &[Tab]) {
             .await?;
             cx.state.borrow_mut().alerts.insert(ts.clone(), target.clone());
             offer_choice(cx, &tab.id, "dialog", &ts, &text);
+            let send = sending::send_now(cx, Kind::Dialogs, tab.autopilot);
+            let sent = Sent {
+                kind: Kind::Dialogs,
+                tab: Some((tab.index, tab.name.clone())),
+                autopilot: tab.autopilot,
+                notified: false,
+            };
+            sending::record(cx, &sent);
             let (id, wanted) = (tab.id.clone(), key.clone());
+            if send == Send::Notify {
             notify(
                 cx,
                 format!(
@@ -425,8 +503,10 @@ async fn dialogs(cx: &Cx, tabs: &[Tab]) {
                 dialog_buttons(tab, &dialog),
                 "dialog",
                 Box::new(move |cx: &Relay| cx.state.borrow().reported.get(&id) == Some(&wanted)),
+                sent,
             )
             .await?;
+            }
             cx.log(&format!("alert: {} dialog", label(tab.index, &tab.name)));
             Ok(())
         }

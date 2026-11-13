@@ -9,7 +9,9 @@
 //! `board_card` (a board's card, as tall as what it holds) and the `board`
 //! they make (board 0c, "The kit's board": columns of cards, the PRs,
 //! Tickets and Autopilot boards' one look), a box's
-//! `option`, the `pane` beside a list, an `input`, a calendar's `event`,
+//! `option`, a `choice_switch` (board 0b: one of two or three, as the
+//! Slack relay view sets where each kind of message goes), the `pane`
+//! beside a list, an `input`, a calendar's `event`,
 //! a two-row bar's `bar_name`, the key `hints` of every footer and bar
 //! (the key in the accent, what it does dim, two spaces between), a
 //! log's line that says why it failed, `marked`; a person's `avatar`
@@ -620,6 +622,76 @@ pub fn button(
         inner.push(Span::styled(format!(" {n}"), ink(tone)));
     }
     rounded(inner, fill, caps)
+}
+
+/// A choice switch (board 0b): one of two or three, its parts side by
+/// side on the neutral tint between its ends, the chosen one dark and bold
+/// on the accent as mission control's bar lights its group, the one under
+/// the mouse (`lit`) bright. `slots` are the parts' widths, which a row
+/// with fewer parts than its neighbors keeps (an empty slot left on the
+/// tint), so the switches line up. Gives the spans and each part's first
+/// column and width, counted from the switch's start, for its clicks.
+pub fn choice_switch(
+    parts: &[&str],
+    chosen: Option<usize>,
+    lit: Option<usize>,
+    slots: &[usize],
+    caps: bool,
+    theme: &Theme,
+) -> (Vec<Span<'static>>, Vec<(usize, usize)>) {
+    let tint = Tone::Accent.tint(theme);
+    let on = accent(theme);
+    let mut inner: Vec<Span<'static>> = Vec::new();
+    let mut places = Vec::new();
+    let mut x = 1;
+    let count = parts.len().max(slots.len());
+    for i in 0..count {
+        let text = parts.get(i).copied().unwrap_or("");
+        let w = slots.get(i).copied().unwrap_or(0).max(width(text) + 2);
+        if text.is_empty() {
+            inner.push(Span::styled(" ".repeat(w), Style::new().bg(tint)));
+            x += w;
+            continue;
+        }
+        let padded = format!(" {text}{}", " ".repeat(w - width(text) - 1));
+        let span = if chosen == Some(i) {
+            Span::styled(
+                padded,
+                Style::new()
+                    .fg(on_color(theme))
+                    .bg(on)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else if lit == Some(i) {
+            Span::styled(padded, Style::new().fg(theme.bright).bg(tint))
+        } else {
+            Span::styled(padded, Tone::Dim.style(theme).bg(tint))
+        };
+        inner.push(span);
+        places.push((x, w));
+        x += w;
+    }
+    // Its parts keep their own fills, the chosen one's the accent.
+    let (l, r) = ends(tint, caps);
+    let mut out = vec![l];
+    out.extend(inner);
+    out.push(r);
+    (out, places)
+}
+
+/// The widest of each slot among rows of parts, for `choice_switch`.
+pub fn switch_slots<'a>(rows: impl IntoIterator<Item = &'a [&'a str]>) -> Vec<usize> {
+    let mut slots: Vec<usize> = Vec::new();
+    for parts in rows {
+        for (i, p) in parts.iter().enumerate() {
+            let w = width(p) + 2;
+            match slots.get_mut(i) {
+                Some(s) => *s = (*s).max(w),
+                None => slots.push(w),
+            }
+        }
+    }
+    slots
 }
 
 /// A meter of `cells` cells, as many filled as `used` percent reaches

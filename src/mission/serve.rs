@@ -1469,6 +1469,20 @@ impl Server {
             let loaded = views::loaded(&d);
             out.push(view(ViewId::Slack, "Slack", d, loaded));
         }
+        if on("view_relay") {
+            let (sent, set_up) = self.mission_relay_sent();
+            let running = self.relay_running();
+            let mut items = super::relay_board::items(&sent, running.as_ref());
+            if !set_up && running.is_none() {
+                super::relay_board::not_set_up(&mut items);
+            }
+            let data = ViewData {
+                items,
+                at: Some(1),
+                ..ViewData::default()
+            };
+            out.push(view(ViewId::Relay, "Slack relay", data, true));
+        }
         if on("view_closed") {
             let d = self.usage_view(ViewKind::Closed);
             out.push(view(ViewId::Closed, "Closed", d, true));
@@ -1572,6 +1586,150 @@ impl Server {
         items.extend(crate::usage::own::own_items(&crate::usage::own::own_dir()));
         self.mission.own = Some((Instant::now(), items.clone()));
         items
+    }
+
+    /// What the Slack relay sent today (src/relay/sending.rs), read again at
+    /// most every `OWN_EVERY`: a small file, a line a message.
+    fn mission_relay_sent(&mut self) -> (Vec<crate::relay::sending::Sent>, bool) {
+        if let Some((at, sent, set_up)) = &self.mission.relay_sent
+            && at.elapsed() < OWN_EVERY
+        {
+            return (sent.clone(), *set_up);
+        }
+        let paths = crate::relay::Paths::current();
+        let day = util::ymd(&util::local_now());
+        let text =
+            std::fs::read_to_string(crate::relay::sending::sent_file(&paths.state_dir, &day))
+                .unwrap_or_default();
+        let sent = crate::relay::sending::read_sent(&text);
+        let set_up = crate::relay::slack::load_owner(&paths).is_some();
+        self.mission.relay_sent = Some((Instant::now(), sent.clone(), set_up));
+        (sent, set_up)
+    }
+
+    /// The Slack relay's tab, as the server holds it (marked
+    /// `@slack_relay`), with its number and how long it has been open.
+    fn relay_running(&self) -> Option<super::relay_board::Running> {
+        let (id, tab) = self
+            .tabs
+            .iter()
+            .find(|(_, t)| t.opts.get("@slack_relay").map(String::as_str) == Some("1"))?;
+        Some(super::relay_board::Running {
+            tab: self.tab_number(*id),
+            age: crate::tabs::age(&tab.opts, util::now_secs()),
+        })
+    }
+
+    /// The relay's tab, for its row's menu.
+    fn relay_tab(&self) -> Option<TabId> {
+        self.tabs
+            .iter()
+            .find(|(_, t)| t.opts.get("@slack_relay").map(String::as_str) == Some("1"))
+            .map(|(id, _)| *id)
+    }
+
+    /// A Slack relay view row's menu: a setting's other values, a preset
+    /// applied, or the relay started, stopped or gone to.
+    fn relay_choices(&self, item: &Item) -> Vec<Choice> {
+        use super::relay_board;
+        let mut out = Vec::new();
+        if item.id == relay_board::STATUS {
+            match self.relay_tab() {
+                Some(tab) => {
+                    out.push(Choice {
+                        key: 'g',
+                        label: "Go to its tab".into(),
+                        act: Do::GoTo(tab),
+                    });
+                    out.push(Choice {
+                        key: 's',
+                        label: "Stop the relay".into(),
+                        act: Do::Press(crate::mux::keys::Action::StopSlackRelay),
+                    });
+                }
+                None => out.push(Choice {
+                    key: 's',
+                    label: "Start the relay".into(),
+                    act: Do::Press(crate::mux::keys::Action::SlackRelay),
+                }),
+            }
+            return out;
+        }
+        if let Some(preset) = relay_board::preset_of(item) {
+            out.push(Choice {
+                key: 'a',
+                label: format!("Use {}", preset.label()),
+                act: Do::RelayPreset(preset),
+            });
+            return out;
+        }
+        let Some(key) = relay_board::setting_of(item) else {
+            return out;
+        };
+        let keys = "123456789abcdefghijklmnopqrstuvwxyz";
+        for (n, (value, label, _)) in relay_board::parts(item).into_iter().enumerate() {
+            if value == item.data["raw"] {
+                continue;
+            }
+            out.push(Choice {
+                key: keys.chars().nth(n).unwrap_or(' '),
+                label: label.clone(),
+                act: Do::RelaySet {
+                    key: key.to_string(),
+                    value,
+                    label,
+                },
+            });
+        }
+        out
+    }
+
+    /// A Slack relay setting written, taken up at once and said.
+    fn relay_set(&mut self, client: ClientId, key: &str, value: Value, label: &str) {
+        if let Err(e) = settings::write_setting(key, value) {
+            self.say(Some(client), &format!("Couldn't save it: {e}"));
+            return;
+        }
+        let name = settings::reload_settings()
+            .into_iter()
+            .find(|o| o.key == key)
+            .map_or_else(|| key.to_string(), |o| o.label);
+        self.mission.relay_sent = None;
+        self.mission_prepare(client);
+        self.mission_redraw();
+        self.say(Some(client), &format!("{name}: {label}"));
+    }
+
+    /// A preset's settings written, and which it changed said.
+    fn relay_preset(&mut self, client: ClientId, preset: crate::relay::sending::Preset) {
+        let said = match crate::relay::sending::apply(preset) {
+            Ok(changed) if changed.is_empty() => format!("{}: nothing to change", preset.label()),
+            Ok(changed) => format!(
+                "{}: {}",
+                preset.label(),
+                changed
+                    .iter()
+                    .map(|(label, words)| format!("{label} {words}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Err(e) => format!("Couldn't save it: {e}"),
+        };
+        settings::reload_settings();
+        self.mission_prepare(client);
+        self.mission_redraw();
+        self.say(Some(client), &said);
+    }
+
+    /// A click on part `n` of the chosen row's switch: set at once.
+    fn relay_part(&mut self, client: ClientId, n: usize) {
+        let part = self
+            .mission_mut(client)
+            .and_then(|m| m.chosen_item().cloned())
+            .and_then(|item| super::relay_board::part_value(&item, n));
+        if let Some((key, value, label)) = part {
+            self.relay_set(client, &key, value, &label);
+        }
     }
 
     // ── The Work map's sources ──────────────────────────────────────────────
@@ -2208,7 +2366,8 @@ impl Server {
         // Space changes a setting, as Enter does.
         if k.code == KeyCode::Char(' ')
             && plain(&k)
-            && m.current().is_some_and(|v| v.id == ViewId::Settings)
+            && m.current()
+                .is_some_and(|v| matches!(v.id, ViewId::Settings | ViewId::Relay))
         {
             k = Key::new(KeyCode::Enter, Mods::NONE);
         }
@@ -2791,6 +2950,7 @@ impl Server {
                 self.mission_dirty(client);
             }
             Then::SlackPlay => self.slack_play_now(client, None),
+            Then::Part(n) => self.relay_part(client, n),
         }
     }
 
@@ -3107,6 +3267,9 @@ impl Server {
         };
         if *view == ViewId::Settings {
             return self.setting_choices(item);
+        }
+        if *view == ViewId::Relay {
+            return self.relay_choices(item);
         }
         let mut list = choices::item_choices(view, item, shown, &ctx);
         // A message with a picture or video in its thread plays it, in the
@@ -4199,6 +4362,8 @@ impl Server {
                 self.put_mission(client, m);
                 self.mission_redraw();
             }
+            Do::RelaySet { key, value, label } => self.relay_set(client, &key, value, &label),
+            Do::RelayPreset(preset) => self.relay_preset(client, preset),
             Do::Change(item) => {
                 let Some(mut m) = self.take_mission(client) else {
                     return;
@@ -4977,6 +5142,19 @@ impl Server {
         } else if item.data.get("own").is_some() || item.data.get("repo_setting").is_some() {
             out.push(change("Change it".into()));
         }
+        // The relay's choices of what reaches you lead to its own view.
+        let relay_kind = item
+            .data
+            .get("setting")
+            .and_then(Value::as_str)
+            .is_some_and(|k| k.starts_with("relay_send_") || k.starts_with("relay_quiet"));
+        if relay_kind && settings::is_on("view_relay") {
+            out.push(Choice {
+                key: 'v',
+                label: "Open the Slack relay view".into(),
+                act: Do::OpenView(ViewId::Relay.slug()),
+            });
+        }
         let (dir, file) = settings_file_of(Some(item));
         out.push(Choice {
             key: 'e',
@@ -5517,6 +5695,8 @@ enum Then {
     Prepare,
     /// A picture in a Slack thread clicked: shown.
     SlackPlay,
+    /// Part `n` of the chosen row's switch clicked: set.
+    Part(usize),
 }
 
 /// What a count with no upstream watches: the repository's config file.
@@ -5778,9 +5958,11 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                 Spot::Side(_) | Spot::PaneBar { .. } => Some(Pane::Beside),
                 Spot::Category(_) => Some(Pane::Panel),
                 Spot::Choose(_) if slack_sections_at(m, mouse.col) => Some(Pane::Panel),
-                Spot::Index(_) | Spot::Menu(_) | Spot::Check(..) | Spot::Choose(_) => {
-                    Some(Pane::List)
-                }
+                Spot::Index(_)
+                | Spot::Menu(_)
+                | Spot::Part(..)
+                | Spot::Check(..)
+                | Spot::Choose(_) => Some(Pane::List),
                 _ => None,
             };
             if let Some(pane) = pane {
@@ -5838,6 +6020,13 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                     }
                     m.cursor = i;
                     Then::Enter
+                }
+                Spot::Part(i, n) => {
+                    if let Some(f) = m.filter.as_mut() {
+                        f.typing = false;
+                    }
+                    m.cursor = i;
+                    Then::Part(n)
                 }
                 Spot::Index(i) => {
                     m.cursor = i;
@@ -5909,7 +6098,7 @@ fn right_press(m: &mut Mission, mouse: Mouse, hit: Option<Spot>) -> Then {
     let on_bar = bar_ends.is_some_and(|y| mouse.row <= y);
     let on_footer = mouse.row + 1 >= rows;
     let chosen = match hit {
-        Some(Spot::Index(i) | Spot::Menu(i) | Spot::Choose(i)) => {
+        Some(Spot::Index(i) | Spot::Menu(i) | Spot::Part(i, _) | Spot::Choose(i)) => {
             // The list takes the focus, so the Enter that opens its menu
             // reaches it rather than a focused pane.
             m.pane = Some((m.view, Pane::List));

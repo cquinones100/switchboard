@@ -463,6 +463,13 @@
     "default": true
   },
   {
+    "key": "view_relay",
+    "category": "Mission control",
+    "label": "Slack relay",
+    "description": "Mission control's Slack relay view: whether the relay is running, what it sent today, and which kinds of message reach you and how, with presets. Off, the view is gone and the relay's settings stay in Settings",
+    "default": true
+  },
+  {
     "key": "view_closed",
     "category": "Mission control",
     "label": "Closed tabs",
@@ -1158,5 +1165,402 @@
     "label": "Reminder tabs on the Slack Home",
     "description": "Lists the tabs under the sidebar's Reminders on the Slack app's Home too, each saying when it reminds you. Off, they are left out until their reminder comes due, and the Home says how many",
     "default": false
+  },
+  {
+    "key": "relay_send_prompts",
+    "category": "Slack relay",
+    "label": "Prompts and questions",
+    "description": "A permission prompt, a question or a wait, with buttons that answer it. Notify me puts it in the tab's thread with a line in the main DM, which is what Slack notifies you for; Thread only puts it in the thread alone. It can't be turned off, since only Slack may be there to answer it. The tab's thread keeps a record only of what is sent.",
+    "choices": [
+      {
+        "value": "notify",
+        "label": "Notify me"
+      },
+      {
+        "value": "thread",
+        "label": "Thread only"
+      }
+    ],
+    "default": "notify"
+  },
+  {
+    "key": "relay_send_dialogs",
+    "category": "Slack relay",
+    "label": "Dialogs before a session starts",
+    "description": "A trust or sign-in dialog Claude Code shows before its session starts. Notify me puts it in the tab's thread with a line in the main DM; Thread only in the thread alone. It can't be turned off, since only Slack may be there to answer it. The tab's thread keeps a record only of what is sent.",
+    "choices": [
+      {
+        "value": "notify",
+        "label": "Notify me"
+      },
+      {
+        "value": "thread",
+        "label": "Thread only"
+      }
+    ],
+    "default": "notify"
+  },
+  {
+    "key": "relay_send_finished",
+    "category": "Slack relay",
+    "label": "Finished turns",
+    "description": "Claude's last message of each turn. Notify me puts it in the tab's thread with a line in the main DM; Thread only in the thread alone; Don't send leaves it in the tab. A turn that answers a message you sent the tab from Slack always reaches you where you asked, whatever this says. The tab's thread keeps a record only of what is sent.",
+    "choices": [
+      {
+        "value": "notify",
+        "label": "Notify me"
+      },
+      {
+        "value": "thread",
+        "label": "Thread only"
+      },
+      {
+        "value": "off",
+        "label": "Don't send"
+      }
+    ],
+    "default": "thread"
+  },
+  {
+    "key": "relay_send_stuck",
+    "category": "Slack relay",
+    "label": "Tabs that may be stuck",
+    "description": "A tab marked working that has gone quiet. Notify me puts it in the tab's thread with a line in the main DM; Thread only in the thread alone; Don't send leaves it unsaid. The tab's thread keeps a record only of what is sent.",
+    "choices": [
+      {
+        "value": "notify",
+        "label": "Notify me"
+      },
+      {
+        "value": "thread",
+        "label": "Thread only"
+      },
+      {
+        "value": "off",
+        "label": "Don't send"
+      }
+    ],
+    "default": "notify"
+  },
+  {
+    "key": "relay_send_milestones",
+    "category": "Slack relay",
+    "label": "Commits, pushes and pull requests",
+    "description": "Each commit, push and pull request a tab makes. Notify me puts it in the tab's thread with a line in the main DM; Thread only in the thread alone; Don't send leaves it unsaid. The tab's thread keeps a record only of what is sent.",
+    "choices": [
+      {
+        "value": "notify",
+        "label": "Notify me"
+      },
+      {
+        "value": "thread",
+        "label": "Thread only"
+      },
+      {
+        "value": "off",
+        "label": "Don't send"
+      }
+    ],
+    "default": "thread"
+  },
+  {
+    "key": "relay_send_failures",
+    "category": "Slack relay",
+    "label": "Failed commits, pushes and pull requests",
+    "description": "A commit, push or pull request that failed, with the reason. Notify me puts it in the tab's thread with a line in the main DM; Thread only in the thread alone; Don't send leaves it unsaid. The tab's thread keeps a record only of what is sent.",
+    "choices": [
+      {
+        "value": "notify",
+        "label": "Notify me"
+      },
+      {
+        "value": "thread",
+        "label": "Thread only"
+      },
+      {
+        "value": "off",
+        "label": "Don't send"
+      }
+    ],
+    "default": "notify"
+  },
+  {
+    "key": "relay_send_context",
+    "category": "Slack relay",
+    "label": "Full context",
+    "description": "A tab past 90% of its context, with a button to compact it. Notify me puts it in the tab's thread with a line in the main DM; Thread only in the thread alone; Don't send leaves it unsaid. The tab's thread keeps a record only of what is sent.",
+    "choices": [
+      {
+        "value": "notify",
+        "label": "Notify me"
+      },
+      {
+        "value": "thread",
+        "label": "Thread only"
+      },
+      {
+        "value": "off",
+        "label": "Don't send"
+      }
+    ],
+    "default": "thread"
+  },
+  {
+    "key": "relay_send_notices",
+    "category": "Slack relay",
+    "label": "Notices from other programs",
+    "description": "What `switchboard slack-relay notify` sends, such as a landing or an on-call alert, as a message of its own in the main DM, which Slack notifies you for. Don't send refuses them, and the program that sent one is told it wasn't sent",
+    "choices": [
+      {
+        "value": "notify",
+        "label": "Notify me"
+      },
+      {
+        "value": "off",
+        "label": "Don't send"
+      }
+    ],
+    "default": "notify"
+  },
+  {
+    "key": "relay_send_autopilot",
+    "category": "Slack relay",
+    "label": "Autopilot's tabs",
+    "description": "What the relay sends about a tab autopilot opened. Like any tab follows the settings above; Landings and failures only sends only its prompts, dialogs and failed commits, pushes and pull requests, each as its own setting says, and leaves out its finished turns, stuck notes, commits, pushes, pull requests and full context",
+    "choices": [
+      {
+        "value": "same",
+        "label": "Like any tab"
+      },
+      {
+        "value": "landings",
+        "label": "Landings and failures only"
+      }
+    ],
+    "default": "same"
+  },
+  {
+    "key": "relay_quiet_hours",
+    "category": "Slack relay",
+    "label": "Quiet hours",
+    "description": "Between Quiet hours from and to, by this computer's clock, what would notify you goes to its tab's thread only, but for prompts and dialogs while \"Prompts notify in quiet hours\" is on. Offline and crash messages, and answers to what you sent from Slack, still notify. Off, the relay notifies at any hour",
+    "default": false
+  },
+  {
+    "key": "relay_quiet_from",
+    "category": "Slack relay",
+    "label": "Quiet hours from",
+    "description": "When quiet hours start each day, while Quiet hours is on",
+    "choices": [
+      {
+        "value": "0",
+        "label": "12am"
+      },
+      {
+        "value": "1",
+        "label": "1am"
+      },
+      {
+        "value": "2",
+        "label": "2am"
+      },
+      {
+        "value": "3",
+        "label": "3am"
+      },
+      {
+        "value": "4",
+        "label": "4am"
+      },
+      {
+        "value": "5",
+        "label": "5am"
+      },
+      {
+        "value": "6",
+        "label": "6am"
+      },
+      {
+        "value": "7",
+        "label": "7am"
+      },
+      {
+        "value": "8",
+        "label": "8am"
+      },
+      {
+        "value": "9",
+        "label": "9am"
+      },
+      {
+        "value": "10",
+        "label": "10am"
+      },
+      {
+        "value": "11",
+        "label": "11am"
+      },
+      {
+        "value": "12",
+        "label": "12pm"
+      },
+      {
+        "value": "13",
+        "label": "1pm"
+      },
+      {
+        "value": "14",
+        "label": "2pm"
+      },
+      {
+        "value": "15",
+        "label": "3pm"
+      },
+      {
+        "value": "16",
+        "label": "4pm"
+      },
+      {
+        "value": "17",
+        "label": "5pm"
+      },
+      {
+        "value": "18",
+        "label": "6pm"
+      },
+      {
+        "value": "19",
+        "label": "7pm"
+      },
+      {
+        "value": "20",
+        "label": "8pm"
+      },
+      {
+        "value": "21",
+        "label": "9pm"
+      },
+      {
+        "value": "22",
+        "label": "10pm"
+      },
+      {
+        "value": "23",
+        "label": "11pm"
+      }
+    ],
+    "default": "22"
+  },
+  {
+    "key": "relay_quiet_to",
+    "category": "Slack relay",
+    "label": "Quiet hours to",
+    "description": "When quiet hours end each day, while Quiet hours is on",
+    "choices": [
+      {
+        "value": "0",
+        "label": "12am"
+      },
+      {
+        "value": "1",
+        "label": "1am"
+      },
+      {
+        "value": "2",
+        "label": "2am"
+      },
+      {
+        "value": "3",
+        "label": "3am"
+      },
+      {
+        "value": "4",
+        "label": "4am"
+      },
+      {
+        "value": "5",
+        "label": "5am"
+      },
+      {
+        "value": "6",
+        "label": "6am"
+      },
+      {
+        "value": "7",
+        "label": "7am"
+      },
+      {
+        "value": "8",
+        "label": "8am"
+      },
+      {
+        "value": "9",
+        "label": "9am"
+      },
+      {
+        "value": "10",
+        "label": "10am"
+      },
+      {
+        "value": "11",
+        "label": "11am"
+      },
+      {
+        "value": "12",
+        "label": "12pm"
+      },
+      {
+        "value": "13",
+        "label": "1pm"
+      },
+      {
+        "value": "14",
+        "label": "2pm"
+      },
+      {
+        "value": "15",
+        "label": "3pm"
+      },
+      {
+        "value": "16",
+        "label": "4pm"
+      },
+      {
+        "value": "17",
+        "label": "5pm"
+      },
+      {
+        "value": "18",
+        "label": "6pm"
+      },
+      {
+        "value": "19",
+        "label": "7pm"
+      },
+      {
+        "value": "20",
+        "label": "8pm"
+      },
+      {
+        "value": "21",
+        "label": "9pm"
+      },
+      {
+        "value": "22",
+        "label": "10pm"
+      },
+      {
+        "value": "23",
+        "label": "11pm"
+      }
+    ],
+    "default": "7"
+  },
+  {
+    "key": "relay_quiet_prompts",
+    "category": "Slack relay",
+    "label": "Prompts notify in quiet hours",
+    "description": "Prompts, questions and dialogs still notify you during quiet hours. Off, during quiet hours they go to their tab's thread alone, with no line in the main DM, as the other kinds do",
+    "default": true
   }
 ]

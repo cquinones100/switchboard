@@ -44,6 +44,7 @@
 //! - `cleanup`: deleting closed tabs' threads.
 //! - `offline`: the note Slack sends when the computer has gone quiet.
 //! - `outbox`: `slack-relay notify`, notices other programs post.
+//! - `sending`: which of its messages reach you, and how, by the settings.
 //! - `run`, `lifecycle`, `cli`: starting, keeping it running, stopping.
 //! - `serve`: the server's side: M-S and stopping it from the palette.
 //!
@@ -77,6 +78,7 @@ pub mod quickreplies;
 pub mod read;
 pub mod run;
 pub mod screens;
+pub mod sending;
 pub mod serve;
 pub mod skills;
 pub mod slack;

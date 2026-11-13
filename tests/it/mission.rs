@@ -31,6 +31,7 @@ fn settings(server: &TestServer, extra: Value) {
         "view_work_map": false,
         "view_calendar": false,
         "view_slack": false,
+        "view_relay": false,
         "view_closed": false,
         "view_sessions": false,
         "view_resources": false,
@@ -2472,4 +2473,105 @@ fn on_a_wide_screen_one_view_is_capped_against_the_sidebar_and_its_side_takes_no
     client.send(b"\x1b[<0;340;10M\x1b[<0;340;10m");
     std::thread::sleep(Duration::from_millis(300) * common::patience());
     assert_eq!(client.screen().join("\n"), before);
+}
+
+/// The settings file as written, once `pred` holds of it.
+fn wait_saved(server: &TestServer, what: &str, pred: impl Fn(&Value) -> bool) -> Value {
+    let file = server.home.join(".config/switchboard/settings.json");
+    let deadline = common::deadline(Duration::from_secs(10));
+    loop {
+        let saved: Value =
+            serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap_or_default();
+        if pred(&saved) {
+            return saved;
+        }
+        assert!(Instant::now() < deadline, "{what} not written: {saved}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn with_ux2_the_slack_relay_view_sets_what_reaches_you() {
+    let server = TestServer::start();
+    settings(&server, json!({ "ux2": true, "view_relay": true }));
+    let mut client = server.attach(140, 40);
+    client.wait_text("$");
+    client.wait_text("M-c Claude");
+    client.type_text(&format!("{ALT}p"));
+    client.wait_text("Actions");
+    client.type_text("mission control: slack relay");
+    client.wait_text("› Mission control: Slack relay");
+    client.type_text("\r");
+    let screen = client.wait_text("WHAT REACHES YOU");
+    assert!(
+        screen.iter().any(|l| l.contains("Not set up")),
+        "{}",
+        screen.join("\n")
+    );
+    // Down past the presets and two kinds to Finished turns; Enter's menu
+    // offers its other choices.
+    client.type_text("jjjjjj");
+    client.wait_for("Finished turns chosen", |s| {
+        s.iter()
+            .any(|l| l.starts_with("▌") && l.contains("Finished turns"))
+    });
+    client.type_text("\r");
+    pick(&mut client, "Don't send");
+    wait_saved(&server, "Finished turns off", |s| {
+        s["relay_send_finished"] == "off"
+    });
+    // Said in a box, which the next key closes and goes no further.
+    client.wait_text("Finished turns: Don't send");
+    client.type_text("\x1b");
+    client.wait_for("the box closed", |s| {
+        !s.iter().any(|l| l.contains("Finished turns: Don't send"))
+    });
+    client.wait_for("its changed chip", |s| {
+        s.iter()
+            .any(|l| l.contains("Finished turns") && l.contains("changed"))
+    });
+    // A preset applied writes its settings and lights.
+    client.type_text("kkkkk");
+    client.wait_for("the first preset chosen", |s| {
+        s.iter()
+            .any(|l| l.contains("what you must answer or fix notifies"))
+    });
+    client.type_text("\r");
+    pick(&mut client, "Use Only what needs me");
+    wait_saved(&server, "the preset", |s| {
+        s["relay_send_milestones"] == "off" && s["relay_send_autopilot"] == "landings"
+    });
+    client.wait_text("Only what needs me: ");
+    client.type_text("\x1b");
+    client.wait_for("the box closed", |s| {
+        !s.iter().any(|l| l.contains("Only what needs me: "))
+    });
+    // A click on a switch's part sets it at once.
+    let screen = client.wait_for("milestones off", |s| {
+        s.iter()
+            .any(|l| l.contains("Commits, pushes and pull requests") && l.contains("Off"))
+    });
+    let row = screen
+        .iter()
+        .position(|l| l.contains("Commits, pushes and pull requests"))
+        .unwrap();
+    let col = screen[row]
+        .chars()
+        .collect::<Vec<_>>()
+        .windows(6)
+        .position(|w| w.iter().collect::<String>() == "Notify")
+        .unwrap();
+    client.send(
+        format!(
+            "\x1b[<0;{};{}M\x1b[<0;{};{}m",
+            col + 2,
+            row + 1,
+            col + 2,
+            row + 1
+        )
+        .as_bytes(),
+    );
+    wait_saved(&server, "a click's choice", |s| {
+        s["relay_send_milestones"] == "notify"
+    });
 }

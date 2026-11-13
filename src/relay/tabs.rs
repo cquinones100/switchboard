@@ -54,6 +54,8 @@ pub struct Tab {
     pub since: String,
     pub focused: bool,
     pub loop_tab: bool,
+    /// Opened by autopilot (`@autopilot`), for `relay_send_autopilot`.
+    pub autopilot: bool,
     pub pane: String,
     pub pid: String,
     pub pids: Vec<String>,
@@ -104,6 +106,7 @@ pub fn claude_tabs(cx: &Relay) -> Vec<Tab> {
             since: chosen.since.clone(),
             focused: w.focused,
             loop_tab: w.loop_tab,
+            autopilot: w.autopilot,
             pane: chosen.id.clone(),
             pid: chosen.pid.clone(),
             pids: claude.iter().map(|p| p.pid.clone()).collect(),
