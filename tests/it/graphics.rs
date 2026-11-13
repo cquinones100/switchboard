@@ -385,11 +385,11 @@ fn half_circles_sent(raw: &[u8]) -> bool {
 }
 
 /// The one-cell sixels a client was sent on screen line `line`, for a cell
-/// of 13 by 25 pixels (24, whole bands).
+/// of 13 by 25 pixels (30, its height rounded up to whole bands).
 fn ends_on(raw: &[u8], line: usize) -> usize {
     common::sixels(raw)
         .iter()
-        .filter(|((l, _), size)| *l == line && *size == (13, 24))
+        .filter(|((l, _), size)| *l == line && *size == (13, 30))
         .count()
 }
 

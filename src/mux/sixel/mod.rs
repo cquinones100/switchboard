@@ -298,8 +298,12 @@ fn draw_at_once(key: &Key, raster: &Draw) -> Option<Made> {
 /// color, and the cell's size in pixels.
 type End = (bool, [u8; 3], (u16, u16));
 
-/// One rounded end as sixel, a cell of `cell` pixels, a whole number of
-/// bands tall (`draw`), the rest of the cell clear.
+/// One rounded end as sixel, a cell of `cell` pixels, the rest of the cell
+/// clear. Its height is rounded up to a whole number of bands, the rows
+/// past the cell clear, where a picture's is cut down (`draw`): cut, the
+/// half circle would lose its foot beside the object's body, whose cells
+/// reach the cell's bottom, while the clear rows lie over the top of the
+/// row below and leave it as it is.
 fn end_sixel(left: bool, color: [u8; 3], cell: (u16, u16)) -> Option<Arc<[u8]>> {
     let pm = crate::ui::images::raster_end(left, color, cell);
     let picture = encode::own_colours(&crate::ui::images::rgba(&pm))?;
@@ -309,8 +313,7 @@ fn end_sixel(left: bool, color: [u8; 3], cell: (u16, u16)) -> Option<Arc<[u8]>> 
         at: (0, 0),
         size: (w, h),
     };
-    let height = if h >= 6 { h / 6 * 6 } else { h };
-    Some(encode::encode(&fitted, (0, 0, w, height)).into())
+    Some(encode::encode(&fitted, (0, 0, w, h.div_ceil(6) * 6)).into())
 }
 
 /// Whether a picture is small enough to draw on the server's task: one of
@@ -1018,13 +1021,22 @@ mod tests {
     fn a_rounded_end_is_one_cell_of_sixel_in_its_color() {
         let sixel = end_sixel(true, [0, 0, 255], (10, 20)).unwrap();
         let (w, h, pixels) = encode::tests::decode(&sixel);
-        assert_eq!((w, h), (10, 18), "a cell, whole bands");
+        assert_eq!((w, h), (10, 24), "a cell, rounded up to whole bands");
         assert!(pixels.iter().flatten().all(|p| *p == [0, 0, 255]));
         assert_eq!(pixels[0], None, "its far corner clear");
         assert_eq!(
             pixels[9 * 10 + 9],
             Some([0, 0, 255]),
             "solid at its flat side"
+        );
+        assert_eq!(
+            pixels[19 * 10 + 9],
+            Some([0, 0, 255]),
+            "its foot, on the cell's last row"
+        );
+        assert!(
+            pixels[20 * 10..].iter().all(Option::is_none),
+            "clear past the cell"
         );
     }
 
