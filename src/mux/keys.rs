@@ -150,6 +150,9 @@ pub enum Action {
     /// server on it when it is new, keeping every pane, tab and terminal
     /// attached (src/mux/latest.rs, src/mux/upgrade.rs).
     Upgrade,
+    /// The tabs from before the last start brought back beside the
+    /// workspace's one tab (src/mux/persist.rs's `restore_layout`).
+    RestoreLayout,
     /// The computer kept awake whatever runs, until pressed again
     /// (src/awake).
     KeepAwake,
@@ -269,6 +272,7 @@ impl Action {
             "remind-tab" => Action::RemindTab,
             "tab-title" => Action::TabTitle,
             "upgrade" => Action::Upgrade,
+            "restore-layout" => Action::RestoreLayout,
             "keep-awake" => Action::KeepAwake,
             "context-menu" => Action::ContextMenu,
             _ => {
@@ -349,6 +353,7 @@ impl Action {
             Action::StopSlackRelay => "stop-slack-relay".into(),
             Action::Update(command) => command.name().into(),
             Action::Upgrade => "upgrade".into(),
+            Action::RestoreLayout => "restore-layout".into(),
             Action::KeepAwake => "keep-awake".into(),
             Action::ContextMenu => "context-menu".into(),
             Action::Notes(command) => command.name().into(),
@@ -448,6 +453,7 @@ impl Action {
             Action::StopSlackRelay => "Stop the Slack relay".into(),
             Action::Update(command) => command.about().into(),
             Action::Upgrade => "Restart Switchboard on the latest build on disk".into(),
+            Action::RestoreLayout => "Restore the layout from before the last start".into(),
             Action::KeepAwake => {
                 "Keep the computer awake until I say, or back to only while tabs work".into()
             }
@@ -612,6 +618,9 @@ impl Action {
             Action::Upgrade => {
                 "Builds the checkout the running binary came from, then the server runs the new build in its own process, handing it every pane, so nothing in a pane ends.".into()
             }
+            Action::RestoreLayout => {
+                "For when the tabs didn't come back after a restart: the tabs kept from before the server last started (layout.json.start) open beside the one tab you have, each Claude resumed. It refuses while other tabs are open.".into()
+            }
             Action::KeepAwake => {
                 "Held whatever the tabs do, through a restart on a new build too, until chosen again, which goes back to Settings' \"Keep the computer awake while tabs work\" (keep_awake). A ☕ shows while it holds; the display still sleeps.".into()
             }
@@ -680,6 +689,7 @@ impl Action {
             Action::SlackRelay | Action::StopSlackRelay => &["slack", "relay", "remote"],
             Action::Update(command) => command.tags(),
             Action::Upgrade => &["switchboard", "update", "restart", "upgrade"],
+            Action::RestoreLayout => &["tabs", "restore", "restart", "layout"],
             Action::KeepAwake => &["system", "sleep", "awake"],
             Action::ContextMenu => &["mouse", "menus"],
             Action::Notes(command) => command.tags(),
@@ -774,6 +784,7 @@ impl Action {
             Action::RemindTab,
             Action::StopSlackRelay,
             Action::Upgrade,
+            Action::RestoreLayout,
             Action::KeepAwake,
         ]
         .into_iter()
@@ -1040,6 +1051,7 @@ mod tests {
             Action::RemindTab,
             Action::TabTitle,
             Action::Upgrade,
+            Action::RestoreLayout,
             Action::KeepAwake,
             Action::ContextMenu,
             Action::ShapeNote,

@@ -111,6 +111,8 @@ pub enum Event {
     },
     /// Time for a client's held ESC to count as the Escape key.
     FlushInput(ClientId),
+    /// The save `restore-layout` asked for, read (src/mux/persist.rs).
+    RestoreLayout(Box<super::persist::LayoutRead>),
     /// A tab focused `agent::SEEN_DELAY` ago, to clear what it showed as
     /// finished if it is still in front (src/agent).
     AgentSeen(TabId),
@@ -1155,6 +1157,14 @@ impl Server {
                     self.upgrade_asked(Some(reply), None, None);
                     return;
                 }
+                // Answered once its file is read, off this task.
+                if args.first().is_some_and(|a| a == "restore-layout")
+                    && !matches!(args.get(1).map(String::as_str), Some("--help" | "-h"))
+                {
+                    let file = args.get(1).map(|f| cwd.join(f));
+                    self.restore_layout_asked(super::persist::Asker::Command(reply), file);
+                    return;
+                }
                 let answer = self.command(&args, &cwd, pane.as_deref(), stdin.as_deref());
                 let _ = reply.send(Answer::Reply(answer));
             }
@@ -1172,6 +1182,7 @@ impl Server {
                     self.flush_later(id, input::PASTE_TIMEOUT);
                 }
             }
+            Event::RestoreLayout(read) => self.restore_layout_read(*read),
             Event::AgentSeen(tab) => self.agent_seen(tab),
             Event::Presence(p) => self.presence.take(p),
             Event::TabLookup(answer) => self.tab_lookup(answer),
@@ -2881,6 +2892,9 @@ impl Server {
             Action::StopSlackRelay => self.slack_relay(false),
             Action::Update(command) => self.update_command(id, command),
             Action::Upgrade => self.latest_asked(id),
+            Action::RestoreLayout => {
+                self.restore_layout_asked(super::persist::Asker::Client(id), None)
+            }
             Action::KeepAwake => self.awake_by_hand(id),
             Action::Notes(command) => self.notes_command(id, command, pane),
             Action::Extra(command) => self.extras_command(id, command, pane),

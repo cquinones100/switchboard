@@ -49,9 +49,11 @@ A pane closes when its program ends. The colors a program asks for by name are y
 
 ### Saved and restored
 
-The server saves the layout as it changes: every session with its tabs in order, each tab's name, splits, zoom and options (a reminder, a pin, a note), and each pane's directory, the program in front of it, and the Claude session it runs. It goes to `~/.local/state/switchboard/layout.json`, which only you can read, at most every ten seconds, and again when the server ends; the save before it is kept as `layout.json.1`. `switchboard save` writes it now and prints where.
+The server saves the layout as it changes: every session with its tabs in order, each tab's name, splits, zoom and options (a reminder, a pin, a note), and each pane's directory, the program in front of it, and the Claude session it runs. It goes to `~/.local/state/switchboard/layout.json`, which only you can read, at most every ten seconds, and again when the server ends; the save before it is kept as `layout.json.1`. A layout that has lost panes is written only once it has stayed so for a minute, or when `switchboard kill-server` ends the server, so a computer shutting down, which ends the shells one by one, never leaves a save missing some of them; a tab opened in that minute is saved with the rest once it has passed. `switchboard save` writes it now and prints where.
 
 When the server next starts with nothing open, as after a reboot, it brings the last save back: every session, tab and pane, with the same ids. Each pane starts your shell in its saved directory, `$HOME` when that is gone. A pane that ran Claude has `claude --resume <session>` typed into that shell, so the same conversation carries on and a shell is there when it ends. A pane that ran `nvim`, `vim`, `vi`, `less`, `man`, `htop` or `top` has that program typed again; any other comes back as its shell, since running a command a second time, a deploy or a migration, can do harm. Settings' "Restore on start" (`auto_restore`) turns this off. A save that can't be read is set aside as `layout.json.bad` and the server starts fresh.
+
+Each time the server starts with nothing open, before it writes anything, it keeps the larger of `layout.json` and `layout.json.1` as `layout.json.start`, whether it restores it or not, and leaves it there until the next such start. So when the tabs didn't come back after a restart, or came back fewer, close all but one tab and choose `M-p`'s "Restore the layout from before the last start" (`switchboard restore-layout`): the tabs kept there open beside the one you have, as a start brings them back, each Claude resumed but one already running in the workspace, whose pane comes back as its shell. It refuses while other tabs are open, so no conversation is resumed twice, and when the file has no more tabs than the workspace. `switchboard restore-layout <file>` brings back another save's tabs the same way, each pane as a fresh shell, with nothing typed into it and none of what it showed, since a file named by hand can come from anywhere.
 
 With Settings' "Save what panes show" (`save_contents`) on, each save also keeps every pane's screen and the last 2,000 lines of its history, read again once a minute, and a restored pane shows them above its new prompt. What a pane showed can hold secrets: turn it off to keep only the layout.
 
@@ -2299,6 +2301,9 @@ switchboard list-keys                    every key and what it does
 switchboard server-version               the build the server runs, as
                                          switchboard --version names it
 switchboard save                         save the layout now; prints its file
+switchboard restore-layout [<file>]      bring back the tabs from before the last
+                                         start (layout.json.start), or of a save,
+                                         beside the workspace's one tab
 switchboard detach [-s session]          detach every terminal, or a session's
 switchboard kill-server                  save, then end the server and its panes
 switchboard upgrade                      restart the server on the build installed

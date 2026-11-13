@@ -158,6 +158,11 @@ pub struct Handover {
     /// The computer held awake by hand, until you say (src/awake).
     #[serde(default)]
     pub awake_by_hand: bool,
+    /// How many panes the layout last saved held, so a layout that lost
+    /// panes before the upgrade still holds `persist::SHRINK_HOLD` before
+    /// it is written (src/mux/persist.rs); none from an older build.
+    #[serde(default)]
+    pub written_panes: Option<usize>,
 }
 
 /// An attached terminal handed over: its connection by descriptor, where it
@@ -800,6 +805,7 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
         asked_cell: server.terminal.asked_cell,
         given: server.views.given.records(),
         awake_by_hand: server.awake.by_hand,
+        written_panes: super::persist::written_panes(server),
         clients: held
             .iter()
             .filter_map(|(id, held)| {
@@ -975,6 +981,7 @@ pub fn adopt(server: &mut Server, handover: Handover) {
         }
     }
     server.awake.by_hand = handover.awake_by_hand;
+    super::persist::take_written_panes(server, handover.written_panes);
     // The one used longest ago first, so the one used last sizes its
     // session, as it did.
     let mut clients = handover.clients;
@@ -1170,6 +1177,7 @@ mod tests {
             asked_cell: Some((10, 20)),
             given: vec![(PaneId(4), vec!["https://a.example/1".into()])],
             awake_by_hand: true,
+            written_panes: Some(5),
         }
     }
 
@@ -1201,6 +1209,7 @@ mod tests {
         assert_eq!(read.images, sample().images);
         assert_eq!(read.asked_cell, Some((10, 20)));
         assert!(read.awake_by_hand);
+        assert_eq!(read.written_panes, Some(5));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1211,7 +1220,9 @@ mod tests {
         fields.remove("images");
         fields.remove("asked_cell");
         fields.remove("awake_by_hand");
+        fields.remove("written_panes");
         let read: Handover = serde_json::from_value(json).unwrap();
+        assert_eq!(read.written_panes, None);
         assert!(read.images.is_empty());
         assert_eq!(read.asked_cell, None);
         assert!(!read.awake_by_hand, "nothing held by hand");

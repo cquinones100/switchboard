@@ -13,14 +13,19 @@
 //!
 //! It is written when it differs from what was written last, checked on the
 //! server's tick. A change to the layout is written once it has held for a
-//! tick, so the panes of a shutting-down machine going one by one (each shell
-//! hung up in turn) are never caught half gone, and no more often than every
-//! `MIN_GAP`. What panes show changes all the time, so it is read again only
+//! tick, and one with fewer panes than the last written once it has held
+//! `SHRINK_HOLD`, so the panes of a shutting-down machine going one by one
+//! (each shell hung up in turn) are never caught half gone, and no more often
+//! than every `MIN_GAP`. What panes show changes all the time, so it is read again only
 //! every `CONTENTS_EVERY`, as continuum saved once a minute, and when the
 //! server ends or `switchboard save` asks. A server ending with no tabs left
 //! writes nothing, so the last workspace comes back, as continuum restored its
 //! last save. The file before each write is kept as `layout.json.1`, which a
-//! restore reads when a crash left no `layout.json`. Writing runs on a thread
+//! restore reads when a crash left no `layout.json`, and a server starting
+//! fresh keeps the larger of the two as `layout.json.start` before anything
+//! is written, until its next fresh start, so the saves written after a start
+//! that brought back too little (or nothing) can't take what was there with
+//! them; `switchboard restore-layout` brings it back. Writing runs on a thread
 //! of its own, since a file of a few megabytes of history mustn't hold up a
 //! keystroke.
 //!
@@ -65,6 +70,10 @@ use crate::{paths, settings, util};
 pub const FILE: &str = "layout.json";
 /// The one before it.
 const PREVIOUS: &str = "layout.json.1";
+/// The save found as the server last started fresh, the larger of `FILE`
+/// and `PREVIOUS` then, kept until the next fresh start, so the two saves
+/// written after a start can't take the workspace from before it with them.
+pub const START: &str = "layout.json.start";
 /// Where a file that couldn't be read is put.
 const SET_ASIDE: &str = "layout.json.bad";
 /// The file's shape; one of another version is set aside, not guessed at.
@@ -73,6 +82,10 @@ const VERSION: u32 = 1;
 pub const CONTENT_LINES: usize = 2000;
 /// The least time between two writes.
 const MIN_GAP: Duration = Duration::from_secs(10);
+/// How long a layout with fewer panes than the last one written must hold
+/// before it is written, so the panes a shutting-down computer hangs up one
+/// by one never reach the file.
+const SHRINK_HOLD: Duration = Duration::from_secs(60);
 /// How often what panes show is read again.
 const CONTENTS_EVERY: Duration = Duration::from_secs(60);
 /// How long after a restore the commands are typed: the shells have started
@@ -250,6 +263,66 @@ fn write_file(dir: &Path, json: &str) -> io::Result<()> {
     fs::set_permissions(&file, fs::Permissions::from_mode(0o600))
 }
 
+/// How many panes a save holds.
+fn pane_count(saved: &Saved) -> usize {
+    saved
+        .sessions
+        .iter()
+        .flat_map(|s| &s.tabs)
+        .map(|t| t.layout.panes().len())
+        .sum()
+}
+
+/// How many tabs a save holds.
+fn tab_count(saved: &Saved) -> usize {
+    saved.sessions.iter().map(|s| s.tabs.len()).sum()
+}
+
+/// As a server starts fresh, before anything is written: keeps the larger of
+/// `layout.json` and `layout.json.1` (`layout.json` when they are alike) as
+/// `layout.json.start`, whether or not it is restored, so a restore that
+/// brings back less than was there, or none at all, still leaves it to bring
+/// back with `switchboard restore-layout`. With neither to read, the one kept
+/// at an earlier start stays.
+pub fn keep_start(dir: &Path) {
+    let best = [PREVIOUS, FILE]
+        .into_iter()
+        .filter_map(|name| {
+            let text = fs::read_to_string(dir.join(name)).ok()?;
+            let panes = pane_count(&parse(&text).ok()?);
+            Some((panes, text))
+        })
+        .max_by_key(|(panes, _)| *panes);
+    let Some((_, text)) = best else {
+        return;
+    };
+    let file = dir.join(START);
+    let kept = util::write_atomic(&file, &text)
+        .and_then(|()| fs::set_permissions(&file, fs::Permissions::from_mode(0o600)));
+    if let Err(e) = kept {
+        eprintln!(
+            "switchboard server: keeping the layout from before the start as {}: {e}",
+            paths::tilde(&file)
+        );
+    }
+}
+
+/// How long a layout with fewer panes than the last one written holds before
+/// it is written: `SHRINK_HOLD`, or `SWITCHBOARD_SHRINK_HOLD_MS` in its place,
+/// which the tests set.
+fn shrink_hold() -> Duration {
+    std::env::var("SWITCHBOARD_SHRINK_HOLD_MS")
+        .ok()
+        .and_then(|ms| ms.trim().parse().ok())
+        .map_or(SHRINK_HOLD, Duration::from_millis)
+}
+
+/// Whether a layout of `panes` panes, that many for `held_for`, waits to be
+/// written: it has fewer than the last one written and hasn't held `hold`.
+fn shrink_waits(written: Option<usize>, panes: usize, held_for: Duration, hold: Duration) -> bool {
+    written.is_some_and(|n| panes < n) && held_for < hold
+}
+
 // ── What a pane runs ────────────────────────────────────────────────────────
 
 /// The running Claude sessions by pid, from their session files. A headless
@@ -409,9 +482,18 @@ pub struct Persist {
     /// When the last write was asked for, by the clock, for the health light
     /// (src/status/health.rs) to compare with the file's own time.
     asked_at: Option<std::time::SystemTime>,
-    /// The layout as the last tick found it, and its panes.
+    /// How many panes the last file written held.
+    written_panes: Option<usize>,
+    /// The layout as the last tick found it, its panes, how many of them
+    /// the save holds, and since when it has held that many, which moving
+    /// between tabs and panes doesn't change.
     seen: Option<u64>,
     seen_panes: HashSet<PaneId>,
+    seen_count: usize,
+    count_since: Option<Instant>,
+    /// Whether `switchboard kill-server` ended the server, rather than a
+    /// signal, as a shutting-down computer sends.
+    ended_by_hand: bool,
     /// What each pane showed when last read.
     contents: HashMap<PaneId, String>,
     contents_at: Option<Instant>,
@@ -436,13 +518,19 @@ pub fn tick(server: &mut Server) {
 
 /// Before the server ends: a last save, unless panes have gone since the
 /// last tick (the machine shutting down hangs every shell up, and the server
-/// may hear of some before it is told to end), when the save from before
-/// they went stays.
+/// may hear of some before it is told to end), or the last tick found fewer
+/// panes than were written and they haven't held `SHRINK_HOLD`, unless
+/// `switchboard kill-server` ended it (`ended_by_hand`), when the save from
+/// before they went stays.
 pub fn shutdown(server: &mut Server) {
     let mut p = std::mem::take(&mut server.persist);
     if !server.sessions.is_empty() {
         let now: HashSet<PaneId> = server.panes.keys().copied().collect();
+        let held_for = p.count_since.map_or(Duration::ZERO, |t| t.elapsed());
+        let shrinking = !p.ended_by_hand
+            && shrink_waits(p.written_panes, p.seen_count, held_for, shrink_hold());
         if p.seen_panes.is_subset(&now)
+            && !shrinking
             && let Err(e) = p.save(server, true)
         {
             eprintln!("switchboard server: saving the layout: {e}");
@@ -463,6 +551,25 @@ pub fn finish_writing(server: &mut Server) {
         drop(w.tx);
         let _ = w.thread.join();
     }
+}
+
+/// `switchboard kill-server`: the server ends because you asked, so the last
+/// save is made even while a layout that lost panes is held.
+pub fn ended_by_hand(server: &mut Server) {
+    server.persist.ended_by_hand = true;
+}
+
+/// How many panes the last save held, handed to a new build
+/// (src/mux/upgrade.rs).
+pub fn written_panes(server: &Server) -> Option<usize> {
+    server.persist.written_panes
+}
+
+/// Takes up the count `written_panes` handed over, so a layout that lost
+/// panes before an upgrade holds `SHRINK_HOLD` from it, counted again from
+/// the new build's first tick.
+pub fn take_written_panes(server: &mut Server, written: Option<usize>) {
+    server.persist.written_panes = written;
 }
 
 /// When the layout's last write was asked for; `None` before any.
@@ -491,9 +598,18 @@ impl Persist {
         let shape_saved = self.snapshot(server);
         let shape = hash_of(&util::json_compact(&shape_saved));
         let held = self.seen == Some(shape);
+        let count = pane_count(&shape_saved);
+        if self.count_since.is_none() || count != self.seen_count {
+            self.count_since = Some(Instant::now());
+        }
         self.seen = Some(shape);
         self.seen_panes = server.panes.keys().copied().collect();
+        self.seen_count = count;
         if !held || self.written_at.is_some_and(|t| t.elapsed() < MIN_GAP) {
+            return;
+        }
+        let held_for = self.count_since.map_or(Duration::ZERO, |t| t.elapsed());
+        if shrink_waits(self.written_panes, self.seen_count, held_for, shrink_hold()) {
             return;
         }
         let with_text = settings::is_on("save_contents");
@@ -514,6 +630,7 @@ impl Persist {
         }
         self.written = Some(whole);
         self.written_shape = Some(shape);
+        self.written_panes = Some(self.seen_count);
         self.written_at = Some(Instant::now());
         self.send(json, None);
     }
@@ -526,9 +643,11 @@ impl Persist {
         }
         let shape_saved = self.snapshot(server);
         let shape = hash_of(&util::json_compact(&shape_saved));
+        let panes = pane_count(&shape_saved);
         let json = self.full(shape_saved, with_text);
         self.written = Some(hash_of(&json));
         self.written_shape = Some(shape);
+        self.written_panes = Some(panes);
         self.written_at = Some(Instant::now());
         if !wait {
             self.send(json, None);
@@ -747,19 +866,260 @@ impl Server {
     }
 }
 
-/// When the server starts: brings back the last save, if the server has no
+/// When the server starts: keeps the save found as `layout.json.start`
+/// (`keep_start`), and brings back the last save, if the server has no
 /// sessions yet and `auto_restore` is on.
 pub fn restore(server: &mut Server) {
-    if !server.sessions.is_empty() || !settings::is_on("auto_restore") {
+    if !server.sessions.is_empty() {
         return;
     }
-    let Some(saved) = load_from(&paths::state_dir()) else {
+    let dir = paths::state_dir();
+    keep_start(&dir);
+    if !settings::is_on("auto_restore") {
+        return;
+    }
+    let Some(saved) = load_from(&dir) else {
         return;
     };
     let mut p = std::mem::take(&mut server.persist);
     p.restore(server, saved);
     server.persist = p;
     server.number_tabs();
+}
+
+/// Who asked for `restore-layout`, answered once its file is read.
+pub enum Asker {
+    /// `switchboard restore-layout`, answered on its socket.
+    Command(tokio::sync::oneshot::Sender<super::server::Answer>),
+    /// M-p's "Restore the layout from before the last start", said in a box.
+    Client(super::server::ClientId),
+}
+
+/// A save `restore-layout` read off the server's task, and the Claude
+/// sessions running then.
+pub struct LayoutRead {
+    asker: Asker,
+    /// Whether it is the state directory's own `layout.json.start`, the
+    /// only save whose commands are typed again.
+    own: bool,
+    saved: Result<Saved, String>,
+    sessions: HashMap<u32, String>,
+}
+
+/// Reads and parses a save for `restore-layout`, saying what is wrong.
+fn read_layout(file: &Path) -> Result<Saved, String> {
+    let text = match fs::read_to_string(file) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(format!(
+                "there is no {} to restore from",
+                paths::tilde(file)
+            ));
+        }
+        Err(e) => return Err(format!("couldn't read {}: {e}", paths::tilde(file))),
+    };
+    parse(&text).map_err(|e| format!("{} isn't a saved layout: {e:#}", paths::tilde(file)))
+}
+
+/// What `restore_layout` says it did.
+pub fn opened_words(tabs: usize) -> String {
+    format!(
+        "Brought back {tabs} tab{} from before the last start.",
+        if tabs == 1 { "" } else { "s" }
+    )
+}
+
+impl Server {
+    /// `switchboard restore-layout [<file>]`, and M-p's "Restore the layout
+    /// from before the last start": reads the save (`layout.json.start`
+    /// unless a file is given) in a task of its own, since it can be
+    /// megabytes of the panes' history, then `restore_layout_read` brings it
+    /// back.
+    pub(crate) fn restore_layout_asked(&mut self, asker: Asker, file: Option<PathBuf>) {
+        let own = file.is_none();
+        let file = file.unwrap_or_else(|| paths::state_dir().join(START));
+        let tx = self.tx.clone();
+        let read = move || {
+            let saved = read_layout(&file);
+            let sessions = claude_sessions();
+            let _ = tx.send(super::server::Event::RestoreLayout(Box::new(LayoutRead {
+                asker,
+                own,
+                saved,
+                sessions,
+            })));
+        };
+        if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::task::spawn_blocking(read);
+        } else {
+            read();
+        }
+    }
+
+    /// The save read: brought back and answered.
+    pub(crate) fn restore_layout_read(&mut self, read: LayoutRead) {
+        let LayoutRead {
+            asker,
+            own,
+            saved,
+            sessions,
+        } = read;
+        let result = saved.and_then(|saved| restore_layout(self, saved, &sessions, own));
+        match asker {
+            Asker::Command(reply) => {
+                let answer = match result {
+                    Ok(n) => super::server::Reply::ok(format!("{}\n", opened_words(n))),
+                    Err(e) => super::server::Reply::fail(e),
+                };
+                let _ = reply.send(super::server::Answer::Reply(answer));
+            }
+            Asker::Client(client) => {
+                let words = match result {
+                    Ok(n) => opened_words(n),
+                    Err(e) => format!("The layout wasn't restored: {e}."),
+                };
+                self.say(Some(client), &words);
+            }
+        }
+    }
+}
+
+/// Brings back the sessions, tabs and panes of a save beside the one tab the
+/// workspace has, as a server start does, giving how many tabs it opened.
+/// It refuses while the workspace has other tabs, since their Claude
+/// sessions would be resumed twice, and when the save has no more tabs than
+/// the workspace. A tab or pane whose id is taken is given a new one, and a
+/// pane whose Claude session already runs in the workspace (`sessions`, the
+/// one tab kept may be one the start brought back) comes back as its shell
+/// alone. A tool and the pane it stood in for (src/diff/in_place.rs) come
+/// back as two shells that don't name each other. Only the state directory's
+/// own save (`own`) has its Claude sessions and programs typed again and
+/// its panes' text shown; one named by hand comes back as fresh shells, with
+/// ids the server gives.
+fn restore_layout(
+    server: &mut Server,
+    mut saved: Saved,
+    sessions: &HashMap<u32, String>,
+    own: bool,
+) -> Result<usize, String> {
+    let open = server
+        .sessions
+        .iter()
+        .flat_map(|s| &s.tabs)
+        .filter(|t| !server.is_notices_tab(**t))
+        .count();
+    if open > 1 {
+        return Err(format!(
+            "the workspace has {open} tabs; close all but one first, so no Claude session is resumed twice"
+        ));
+    }
+    let in_file = tab_count(&saved);
+    if in_file <= open {
+        return Err(format!(
+            "the saved layout has {in_file} tab{}, no more than the workspace has",
+            if in_file == 1 { "" } else { "s" }
+        ));
+    }
+    let running: HashSet<String> = server
+        .panes
+        .values()
+        .filter_map(|slot| claude_of(&slot.pane, sessions))
+        .collect();
+    for pane in saved
+        .sessions
+        .iter_mut()
+        .flat_map(|s| s.tabs.iter_mut())
+        .flat_map(|t| t.panes.iter_mut())
+    {
+        // A file named by hand can come from anywhere, so nothing it names
+        // is typed and none of its text reaches a terminal: each pane comes
+        // back as a fresh shell.
+        if !own {
+            pane.command = None;
+            pane.claude = None;
+            pane.text = None;
+        }
+        if pane.claude.as_ref().is_some_and(|c| running.contains(c)) {
+            pane.claude = None;
+        }
+    }
+    renumber(server, &mut saved, !own);
+    let before = server.tabs.len();
+    let mut p = std::mem::take(&mut server.persist);
+    p.restore(server, saved);
+    server.persist = p;
+    server.number_tabs();
+    let names: Vec<String> = server.sessions.iter().map(|s| s.name.clone()).collect();
+    for name in names {
+        server.dirty_session(&name);
+    }
+    Ok(server.tabs.len().saturating_sub(before))
+}
+
+/// Gives each tab and pane of a save whose id the server already uses (or
+/// the save uses twice) a new one, so it can be restored beside them; with
+/// `fresh`, every one, from the server's own counters, so a file named by
+/// hand can't choose the ids the server goes on to give.
+fn renumber(server: &Server, saved: &mut Saved, fresh: bool) {
+    let tabs = saved.sessions.iter().flat_map(|s| &s.tabs);
+    let (mut next_tab, mut next_pane) = if fresh {
+        (server.next_tab, server.next_pane)
+    } else {
+        (
+            tabs.clone()
+                .map(|t| t.id.0.saturating_add(1))
+                .fold(server.next_tab, u32::max),
+            tabs.flat_map(|t| t.layout.panes())
+                .map(|p| p.0.saturating_add(1))
+                .fold(server.next_pane, u32::max),
+        )
+    };
+    let mut used_tabs: HashSet<TabId> = server.tabs.keys().copied().collect();
+    let mut used_panes: HashSet<PaneId> = server.panes.keys().copied().collect();
+    for ss in &mut saved.sessions {
+        let mut moved: HashMap<TabId, TabId> = HashMap::new();
+        for st in &mut ss.tabs {
+            if fresh || !used_tabs.insert(st.id) {
+                let new = TabId(next_tab);
+                next_tab += 1;
+                used_tabs.insert(new);
+                moved.insert(st.id, new);
+                st.id = new;
+            }
+            let mut map: HashMap<PaneId, PaneId> = HashMap::new();
+            for old in st.layout.panes() {
+                if !fresh && used_panes.insert(old) {
+                    continue;
+                }
+                let new = PaneId(next_pane);
+                next_pane += 1;
+                used_panes.insert(new);
+                map.insert(old, new);
+            }
+            // All at once, so a new id that is also an old one isn't taken
+            // for it.
+            relabel(&mut st.layout, &map);
+            for pane in &mut st.panes {
+                pane.id = map.get(&pane.id).copied().unwrap_or(pane.id);
+            }
+            st.active = map.get(&st.active).copied().unwrap_or(st.active);
+            st.last_pane = st.last_pane.map(|p| map.get(&p).copied().unwrap_or(p));
+        }
+        ss.current = moved.get(&ss.current).copied().unwrap_or(ss.current);
+        ss.last = ss.last.map(|t| moved.get(&t).copied().unwrap_or(t));
+    }
+}
+
+/// A layout's panes given the ids `map` gives them.
+fn relabel(layout: &mut Layout, map: &HashMap<PaneId, PaneId>) {
+    match layout {
+        Layout::Pane(id) => *id = map.get(id).copied().unwrap_or(*id),
+        Layout::Split { children, .. } => {
+            for child in children {
+                relabel(child, map);
+            }
+        }
+    }
 }
 
 impl Persist {
@@ -770,11 +1130,14 @@ impl Persist {
         let mut typing = Vec::new();
         let mut expect = HashMap::new();
         for ss in saved.sessions {
-            if ss.name.is_empty() || server.session(&ss.name).is_some() {
+            if ss.name.is_empty() {
                 continue;
             }
-            let cols = if ss.cols == 0 { 80 } else { ss.cols };
-            let rows = if ss.rows == 0 { 24 } else { ss.rows };
+            // `restore-layout` brings tabs back beside a session's own.
+            let existing = server.session(&ss.name).map(|s| (s.cols, s.rows));
+            let (cols, rows) = existing.unwrap_or((ss.cols, ss.rows));
+            let cols = if cols == 0 { 80 } else { cols };
+            let rows = if rows == 0 { 24 } else { rows };
             let area = Rect::new(0, 0, cols, rows.saturating_sub(1).max(1));
             let mut tabs = Vec::new();
             for st in ss.tabs {
@@ -803,6 +1166,16 @@ impl Persist {
                 }
             }
             if tabs.is_empty() {
+                continue;
+            }
+            if let Some(session) = server.session_mut(&ss.name)
+                && existing.is_some()
+            {
+                session.tabs.extend(tabs.iter().copied());
+                for t in tabs {
+                    server.relayout(t);
+                    server.refresh_name(t);
+                }
                 continue;
             }
             let current = if tabs.contains(&ss.current) {
@@ -850,6 +1223,15 @@ impl Persist {
         });
     }
 }
+
+/// What makes a pane a tool standing in for another, or one waiting behind
+/// a tool (src/diff/in_place.rs): a restored pane is a shell, and its ids may
+/// be given to others (`renumber`), so none of them comes back.
+const TOOL_MARKS: &[&str] = &[
+    crate::diff::in_place::PARKED_PANE,
+    crate::diff::in_place::IN_PLACE,
+    crate::diff::in_place::PANE_PARKED,
+];
 
 /// Brings back one tab, giving its panes as saved; `None` when none of its
 /// panes could be started. A pane that is in two places, or can't start, is
@@ -903,7 +1285,10 @@ fn restore_tab(
             slot.opts = pane
                 .opts
                 .iter()
-                .filter(|(name, _)| !super::respawn::PROGRAM_MARKS.contains(&name.as_str()))
+                .filter(|(name, _)| {
+                    !super::respawn::PROGRAM_MARKS.contains(&name.as_str())
+                        && !TOOL_MARKS.contains(&name.as_str())
+                })
                 .map(|(name, value)| (name.clone(), value.clone()))
                 .collect();
         }
@@ -1261,6 +1646,55 @@ mod tests {
             fs::read_to_string(dir.join(SET_ASIDE)).unwrap(),
             "{ not json"
         );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_shrinking_layout_waits_for_the_hold_and_a_growing_one_doesnt() {
+        let hold = Duration::from_secs(60);
+        let soon = Duration::from_secs(5);
+        assert!(shrink_waits(Some(3), 2, soon, hold), "a pane gone waits");
+        assert!(
+            !shrink_waits(Some(3), 2, hold, hold),
+            "once held, it is written"
+        );
+        assert!(
+            !shrink_waits(Some(3), 3, soon, hold),
+            "the same size doesn't wait"
+        );
+        assert!(
+            !shrink_waits(Some(3), 4, soon, hold),
+            "a larger one doesn't wait"
+        );
+        assert!(
+            !shrink_waits(None, 1, soon, hold),
+            "nothing written yet, nothing waits"
+        );
+    }
+
+    #[test]
+    fn a_start_keeps_the_larger_save_and_keeps_the_last_with_none() {
+        let dir = temp_dir("start");
+        let big = sample();
+        let mut small = sample();
+        small.sessions[0].tabs.truncate(1);
+        fs::write(dir.join(FILE), util::json_pretty(&small)).unwrap();
+        fs::write(dir.join(PREVIOUS), util::json_pretty(&big)).unwrap();
+        keep_start(&dir);
+        let kept = || parse(&fs::read_to_string(dir.join(START)).unwrap()).unwrap();
+        assert_eq!(kept(), big, "the larger of the two is kept");
+        let mode = fs::metadata(dir.join(START)).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        fs::remove_file(dir.join(FILE)).unwrap();
+        fs::remove_file(dir.join(PREVIOUS)).unwrap();
+        keep_start(&dir);
+        assert_eq!(kept(), big, "with nothing to read, the one kept stays");
+        let mut alike = sample();
+        alike.sessions[0].name = "newer".into();
+        fs::write(dir.join(FILE), util::json_pretty(&alike)).unwrap();
+        fs::write(dir.join(PREVIOUS), util::json_pretty(&big)).unwrap();
+        keep_start(&dir);
+        assert_eq!(kept(), alike, "of two alike, layout.json is kept");
         fs::remove_dir_all(&dir).unwrap();
     }
 

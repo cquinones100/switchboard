@@ -176,3 +176,108 @@ fn a_change_is_saved_without_asking_once_it_holds() {
         std::thread::sleep(Duration::from_millis(100));
     }
 }
+
+/// Waits until the saved layout's text passes `pred`.
+fn wait_saved(file: &std::path::Path, what: &str, pred: impl Fn(&str) -> bool) {
+    let deadline = common::deadline(Duration::from_secs(40));
+    while !std::fs::read_to_string(file).is_ok_and(|t| pred(&t)) {
+        assert!(Instant::now() < deadline, "the layout never {what}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[test]
+fn a_layout_that_loses_panes_is_saved_only_once_it_has_held() {
+    // The hold and the wait inside it both scale with a busy computer.
+    let patience = common::patience();
+    let hold = (20_000 * patience).to_string();
+    let server = TestServer::start_with_env(&[("SWITCHBOARD_SHRINK_HOLD_MS", &hold)]);
+    let mut client = server.attach(80, 24);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-n", "gone"]);
+    let file = server.state.join("layout.json");
+    wait_saved(&file, "held the new tab", |t| t.contains("\"gone\""));
+    let gone = tabs(&server.list())
+        .into_iter()
+        .find(|t| t["name"] == "gone")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["kill-tab", "-t", &gone]);
+    // Past the least time between writes and a few ticks, but short of the hold.
+    std::thread::sleep(Duration::from_secs(14) * patience);
+    assert!(
+        std::fs::read_to_string(&file).unwrap().contains("\"gone\""),
+        "a layout with fewer panes waits for the hold"
+    );
+    wait_saved(&file, "lost the closed tab", |t| !t.contains("\"gone\""));
+}
+
+#[test]
+fn a_restore_keeps_what_it_read_through_later_saves() {
+    let mut server = TestServer::start();
+    let mut client = server.attach(80, 24);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-n", "second"]);
+    server.ok(&["save"]);
+    let before = std::fs::read_to_string(server.state.join("layout.json")).unwrap();
+    drop(client);
+    server.restart();
+    assert_eq!(tabs(&server.list()).len(), 2);
+    let start = server.state.join("layout.json.start");
+    assert_eq!(std::fs::read_to_string(&start).unwrap(), before);
+    server.ok(&["save"]);
+    server.ok(&["save"]);
+    assert_eq!(
+        std::fs::read_to_string(&start).unwrap(),
+        before,
+        "two saves after the start leave it"
+    );
+}
+
+#[test]
+fn a_start_with_nothing_restored_keeps_the_old_layout_to_restore_by_hand() {
+    let mut server = TestServer::start();
+    let mut client = server.attach(80, 24);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-n", "second"]);
+    server.ok(&["new-tab", "-n", "third"]);
+    server.ok(&["save"]);
+    common::write_settings(&server.home, serde_json::json!({ "auto_restore": false }));
+    drop(client);
+    server.restart();
+    let mut client = server.attach(80, 24);
+    client.wait_text("$");
+    server.ok(&["save"]);
+    server.ok(&["save"]);
+    let start = std::fs::read_to_string(server.state.join("layout.json.start")).unwrap();
+    assert!(
+        start.contains("\"third\""),
+        "the old layout is kept: {start}"
+    );
+
+    let (code, _, err) = server.run(&["restore-layout", "missing.json"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("no "), "a missing file is said: {err}");
+
+    let said = server.ok(&["restore-layout"]);
+    assert!(said.contains("3 tabs"), "{said}");
+    let names: Vec<String> = tabs(&server.list())
+        .iter()
+        .map(|t| t["name"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(
+        names.len(),
+        4,
+        "the one tab and the three brought back: {names:?}"
+    );
+    assert!(names.contains(&"third".to_string()), "{names:?}");
+    let ids: std::collections::HashSet<_> =
+        pane_ids(&server.list()).into_iter().flatten().collect();
+    assert_eq!(ids.len(), 4, "every pane has an id of its own");
+
+    let (code, _, err) = server.run(&["restore-layout"]);
+    assert_ne!(code, 0, "with other tabs open it refuses");
+    assert!(err.contains("close all but one"), "{err}");
+}

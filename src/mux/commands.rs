@@ -96,6 +96,7 @@ pub const NAMES: &[&str] = &[
     "detach",
     "kill-server",
     "save",
+    "restore-layout",
     "upgrade",
     "say",
     "picture",
@@ -167,6 +168,10 @@ pub const USAGE: &[(&str, &str)] = &[
         "kill-server: ends the server and everything in it",
     ),
     ("save", "save: the layout now; prints its file"),
+    (
+        "restore-layout",
+        "restore-layout [<file>]: brings back the tabs of the layout from before the last start (layout.json.start), or of that file (its panes as fresh shells, nothing typed or shown), beside the workspace's one tab",
+    ),
     (
         "upgrade",
         "upgrade: restarts the server on the build installed now, keeping every pane and its program running",
@@ -390,6 +395,7 @@ impl Server {
             }
             "server-version" => Ok(Reply::ok(format!("{}\n", crate::update::version_line()))),
             "kill-server" => {
+                super::persist::ended_by_hand(self);
                 self.quit = true;
                 Ok(Reply::ok(""))
             }
@@ -409,6 +415,7 @@ impl Server {
                 .map_err(|e| format!("{e:#}")),
             // Taken before it reaches here, by the server's loop.
             "upgrade" => Err("upgrade is answered by the server's loop".to_string()),
+            "restore-layout" => Err("restore-layout is answered by the server's loop".to_string()),
             other => Err(format!("no command named {other}")),
         };
         result.unwrap_or_else(Reply::fail)
