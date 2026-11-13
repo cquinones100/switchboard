@@ -536,18 +536,14 @@ impl Server {
     }
 
     /// After a restart, the new server's row says it for `RESTARTED_FOR`,
-    /// and the notifications keep a line of it.
+    /// and nothing else does: no notification, which would stay until
+    /// dismissed for a restart you made yourself.
     fn restarted(&mut self) {
         let hash = env!("SWITCHBOARD_COMMIT").to_string();
         self.upgrade.shown = Some(Shown::Restarted {
-            hash: hash.clone(),
+            hash,
             until: Instant::now() + super::build_row::RESTARTED_FOR,
         });
-        let at = crate::util::now_ms();
-        let item = crate::items::Item::new(format!("{hash}-{at}"), format!("Restarted on {hash}"))
-            .detail("every pane kept")
-            .time(at);
-        self.set_notices("restarted", vec![item]);
         if tokio::runtime::Handle::try_current().is_ok() {
             self.send_later(
                 super::build_row::RESTARTED_FOR + Duration::from_millis(50),

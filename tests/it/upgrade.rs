@@ -882,9 +882,10 @@ fn with_ux2_the_restart_builds_in_the_sidebars_row_without_blocking() {
     wait_restarted(&server, &mut client);
     client.wait_text("✓ Restarted on");
     let screen = client.screen();
-    assert!(
-        screen.iter().filter(|l| l.contains("Restarted on")).count() >= 2,
-        "the row and the notification: {screen:?}"
+    assert_eq!(
+        screen.iter().filter(|l| l.contains("Restarted on")).count(),
+        1,
+        "the row alone, no notification: {screen:?}"
     );
     let counts: Value = serde_json::from_str(&std::fs::read_to_string(&counts).unwrap()).unwrap();
     assert_eq!(counts[checkout.to_str().unwrap()], 13);

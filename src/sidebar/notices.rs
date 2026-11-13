@@ -39,9 +39,9 @@ pub const MARK: &str = "@notices_window";
 /// Slack's new messages, what changed on today's calendar, notes written
 /// for you, the Linear inbox, your PRs' news, a default branch whose CI fails, the landings its tabs made without asking,
 /// what autopilot has to say, the landed tabs it closed
-/// without your seeing them, the restart M-p made, and suggestions. A source not named here goes
+/// without your seeing them, and suggestions. A source not named here goes
 /// after them.
-pub const ORDER: [&str; 13] = [
+pub const ORDER: [&str; 12] = [
     "meeting",
     "slack",
     "calendar",
@@ -52,7 +52,6 @@ pub const ORDER: [&str; 13] = [
     "autolanded",
     "autopilot",
     "landed",
-    "restarted",
     "routines",
     "habits",
 ];
@@ -81,15 +80,13 @@ pub fn view_of(source: &str) -> Option<ViewId> {
 /// (`mission::choices::notice_leads`): a change on the calendar (the
 /// Calendar lists the day's events, not what changed), a note written for
 /// you, what autopilot said and the landings it tells of (its view's rows
-/// are its tabs), the restart M-p made, which is only to be read, and a
-/// suggestion.
-pub const NO_VIEW: [&str; 7] = [
+/// are its tabs), and a suggestion.
+pub const NO_VIEW: [&str; 6] = [
     "calendar",
     "new-notes",
     "autolanded",
     "autopilot",
     "landed",
-    "restarted",
     "habits",
 ];
 
