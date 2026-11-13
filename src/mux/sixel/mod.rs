@@ -2,11 +2,14 @@
 //! graphics protocol: Windows Terminal (1.22 and later), and the rest of
 //! the VT340's heirs (foot, WezTerm, xterm with sixel on, mlterm). Settings'
 //! "Image protocol" (`image_protocol`) chooses, as src/mux/graphics.rs
-//! reads it: `kitty`, the default, passes a pane's graphics commands on to
-//! the terminal (src/mux/passthrough.rs) and sends the server's own images
-//! by kitty's protocol; `sixel` keeps the panes' commands here too and,
-//! for each terminal that doesn't speak kitty's, draws every picture
-//! itself, the panes' and the server's alike.
+//! reads it: by the terminal (`auto`, the default), one whose answer to
+//! "what are you" (DA1) says it draws sixel gets it; `sixel` gives it to
+//! every terminal that doesn't speak kitty's; `kitty` to none. For a
+//! terminal that gets it, the server keeps the panes' graphics commands
+//! here rather than passing them on (src/mux/passthrough.rs) and draws
+//! every picture itself, the panes' and its own alike; any other is passed
+//! the panes' commands and sent the server's own images by kitty's
+//! protocol where it speaks it.
 //!
 //! The apps stay as they are. Notes and the image view give the terminal
 //! each picture's PNG by its path as a kitty virtual placement, and the
@@ -18,7 +21,7 @@
 //! panes allowed to send them, as before, and keeps what each image is
 //! (`kitty`: its path or its PNG's data, and its placement), forgetting it
 //! as they delete it, never forwarding them to a terminal that gets sixel.
-//! A picture given inline is taken in only while sixel is chosen, kept as
+//! A picture given inline is taken in only where sixel may draw it, kept as
 //! it was sent until its pane deletes it, and named by its transmission
 //! (`Source::Data`), its data handed to the work that decodes and fits it
 //! off the task beside the name (`Make`), so no cache's key keeps it
@@ -72,7 +75,7 @@
 //! drawn anew once it has.
 //!
 //! A cell's size in the terminal's sixel pixels is asked of each terminal
-//! as it attaches while sixel is chosen (`CSI 16 t`, answered as `CSI 6 ;
+//! that gets sixel, as it attaches or answers DA1 (`CSI 16 t`, answered as `CSI 6 ;
 //! <height> ; <width> t` among its keys, src/mux/terminal.rs). Windows
 //! Terminal answers with the virtual cell its sixel works in, 10 by 20
 //! pixels whatever its font (`SixelParser::CellSizeForLevel`, as the VT340
@@ -582,7 +585,7 @@ impl Server {
         Some(place::Drawn::of(&frame.buf, allowed))
     }
 
-    /// The pictures a frame shows, while sixel is chosen, once everything
+    /// The pictures a frame shows, for a terminal that gets sixel, once everything
     /// is drawn: every placeholder cell in it blanked, and each piece of a
     /// picture still showing put beside the frame's cells when ready: a
     /// pane's where the pane drew it (`drawn`, from `pictures_drawn`), and

@@ -173,6 +173,9 @@ pub fn chosen_now() -> Chosen {
 /// (`Server::terminal_answered`), asked as it attaches.
 pub const ANSWERS_SIXEL: &str = "answers-sixel";
 
+/// The word added once that answer says it doesn't.
+pub const ANSWERS_NO_SIXEL: &str = "answers-no-sixel";
+
 /// Whether a terminal that doesn't speak kitty's protocol gets sixel: with
 /// sixel chosen, or, chosen by the terminal, where its DA1 answer said it
 /// draws sixel.
@@ -216,20 +219,25 @@ pub fn speaks_kitty(term: &str) -> bool {
 /// answer comes a moment after it attaches, by when a view may already have
 /// given a picture again, which would otherwise be dropped.
 pub fn may_get_sixel(term: &str) -> bool {
-    for_panes(term) == Protocol::Sixel || (!speaks_kitty(term) && apps_want_sixel(term, chosen()))
+    for_panes(term) == Protocol::Sixel
+        || (!speaks_kitty(term)
+            && apps_want_sixel(term, chosen())
+            && !term.split_whitespace().any(|w| w == ANSWERS_NO_SIXEL))
 }
 
 /// Whether a terminal's picture cells are blanked rather than sent as the
-/// placeholder's box: one known never to draw kitty's pictures (Windows
-/// Terminal) that doesn't get sixel either, as one from before 1.22, which
-/// an app in a pane may still draw for (`apps_want_sixel`). Any other
-/// terminal that gets neither way is sent the cells as they are, since it
-/// may speak kitty's protocol by a name this doesn't know.
+/// placeholder's box, where it gets neither way: one known never to draw
+/// kitty's pictures (Windows Terminal), as one from before 1.22, or any
+/// while the apps in panes draw pictures for sixel by what they guess
+/// (`apps_want_sixel`, the panes having the server's own `WT_SESSION`), as
+/// a second terminal attached to a workspace started in Windows Terminal.
+/// Otherwise the cells go as they are, since a terminal may speak kitty's
+/// protocol by a name this doesn't know.
 pub fn pictures_blank(term: &str) -> bool {
+    let windows_terminal = WINDOWS_TERMINAL.to_lowercase();
     for_terminal(term).is_none()
-        && term
-            .to_lowercase()
-            .contains(&WINDOWS_TERMINAL.to_lowercase())
+        && (term.to_lowercase().contains(&windows_terminal)
+            || apps_want_sixel(&this_terminal(), chosen()))
 }
 
 /// How pictures reach a terminal that says it is `term` (what it attached
@@ -377,11 +385,13 @@ impl Server {
         let mut words: Vec<&str> = c
             .term
             .split_whitespace()
-            .filter(|w| *w != ANSWERS_SIXEL)
+            .filter(|w| *w != ANSWERS_SIXEL && *w != ANSWERS_NO_SIXEL)
             .collect();
-        if sixel {
-            words.push(ANSWERS_SIXEL);
-        }
+        words.push(if sixel {
+            ANSWERS_SIXEL
+        } else {
+            ANSWERS_NO_SIXEL
+        });
         c.term = words.join(" ");
         let now = for_panes(&c.term);
         if now != before {
@@ -629,6 +639,8 @@ mod tests {
         assert!(!wants_sixel("xterm-256color", Chosen::Auto));
         assert!(!wants_sixel(answered, Chosen::Kitty));
         assert!(wants_sixel("xterm-256color", Chosen::Sixel));
+        let no = "xterm-256color WindowsTerminal answers-no-sixel";
+        assert!(!wants_sixel(no, Chosen::Auto));
         // An app can't see the answer: Windows Terminal is its guess.
         assert!(apps_want_sixel(wt, Chosen::Auto));
         assert!(!apps_want_sixel(wt, Chosen::Kitty));
