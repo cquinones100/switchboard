@@ -22,7 +22,7 @@ use serde_json::Value;
 
 use super::render::{Image, Shape};
 use super::views::{self, View};
-use super::{HitBox, Mission, Spot};
+use super::{HitBox, Mission, Pane, Spot};
 use crate::items::Item;
 use crate::settings;
 use crate::sidebar::render::Line;
@@ -282,7 +282,16 @@ fn option_lines(item: &Item, row: usize, chosen: bool, w: usize, m: &Mission) ->
     let lit = !chosen
         && (m.hover == Some(Spot::Index(row as isize))
             || m.hover == Some(Spot::Menu(row as isize)));
-    let first = kit::row(left, w, chosen, theme);
+    // With the categories focused (`C-w h`), the chosen option rests.
+    let resting = chosen && m.pane_now() == Pane::Panel;
+    let line = |spans: Vec<Span<'static>>| {
+        if resting {
+            kit::row_resting(spans, w, theme)
+        } else {
+            kit::row(spans, w, chosen, theme)
+        }
+    };
+    let first = line(left);
     let first = if lit {
         on_surface(first, Surface::Raised.color(theme))
     } else {
@@ -300,12 +309,7 @@ fn option_lines(item: &Item, row: usize, chosen: bool, w: usize, m: &Mission) ->
     }];
     let words_w = inner.saturating_sub(2).min(TEXT_MAX);
     let under = |text: String, tone: Tone| {
-        kit::row(
-            vec![Span::raw(" "), Span::styled(text, tone.style(theme))],
-            w,
-            chosen,
-            theme,
-        )
+        line(vec![Span::raw(" "), Span::styled(text, tone.style(theme))])
     };
     if chosen {
         for line in wrap(&item.detail, words_w) {
@@ -468,7 +472,13 @@ pub fn board(
             spans.push(Span::styled(count, Tone::Faint.style(theme)));
             let lit =
                 !chosen && first.is_some() && m.hover == first.map(|r| Spot::Category(r as isize));
-            let row = kit::row(spans, side_w, chosen, theme);
+            // The category in front is chosen while the panel has the
+            // focus, and rests while its options have it.
+            let row = if chosen && m.pane_now() != Pane::Panel {
+                kit::row_resting(spans, side_w, theme)
+            } else {
+                kit::row(spans, side_w, chosen, theme)
+            };
             let bg = if lit {
                 Surface::Raised.color(theme)
             } else {
@@ -635,7 +645,7 @@ mod tests {
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
             .collect();
-        assert!(shown.contains(&format!("▌ {}", &head[..8])), "{shown}");
+        assert!(shown.contains(&format!("  {}", &head[..8])), "{shown}");
     }
 
     #[test]

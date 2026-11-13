@@ -5351,15 +5351,33 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
             .map(|(k, w)| (k.to_string(), w.to_string()))
             .collect()
     };
-    // Several views at once: Tab goes between them, Esc back to one.
-    if m.grid.is_some() && !m.filter.as_ref().is_some_and(|f| f.typing) && m.jump.is_none() {
+    // After `C-w`, its second key.
+    if m.window_waits(crate::util::now_ms()) {
         return pairs(&[
+            ("C-w", ""),
+            ("h l", "left, right pane"),
+            ("w W", "next, last pane"),
+        ]);
+    }
+    // Several views at once: Tab goes between them, Esc back to one; the
+    // focused view's pane beside, when it has the focus, scrolls.
+    let grid_moves = if m.pane_now() == super::Pane::Beside {
+        ("jk", "scroll")
+    } else {
+        ("jk", "move")
+    };
+    if m.grid.is_some() && !m.filter.as_ref().is_some_and(|f| f.typing) && m.jump.is_none() {
+        let mut out = pairs(&[
             ("tab", "next view"),
-            ("jk", "move"),
+            grid_moves,
             ("Enter", "actions"),
             ("m", "view actions"),
-            ("esc", "one view"),
         ]);
+        if beside && crate::settings::is_on("ctrl_w_panes") {
+            out.extend(pairs(&[("C-w h l", "panes")]));
+        }
+        out.extend(pairs(&[("esc", "one view")]));
+        return out;
     }
     if m.jump.is_some() {
         return pairs(&[
@@ -5389,10 +5407,14 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
         &[("tab", "next view")]
     };
     let close: &[(&str, &str)] = &[("?", "keys"), ("esc", "close")];
+    let panel = view.is_some_and(|v| v.id == ViewId::Settings) && settings_board_shown(m);
     let with = |first: &[(&str, &str)]| {
         let mut out = pairs(first);
         if beside {
             out.extend(pairs(&[("J K", "scroll")]));
+        }
+        if (beside || panel) && crate::settings::is_on("ctrl_w_panes") {
+            out.extend(pairs(&[("C-w h l", "panes")]));
         }
         out.extend(pairs(next));
         out.extend(pairs(close));
@@ -5410,6 +5432,18 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
     const ACTS: &str = "actions";
     const VIEW: &str = "view actions";
     let filter: &[(&str, &str)] = &[("/", "filter")];
+    match m.pane_now() {
+        super::Pane::Panel => return with(&[("jk", "category"), ("Enter", "its options")]),
+        super::Pane::Beside => {
+            return with(&[
+                ("jk", "scroll"),
+                ("g G", "top, end"),
+                ("Enter", ACTS),
+                ("m", VIEW),
+            ]);
+        }
+        super::Pane::List => {}
+    }
     let Some(view) = view else {
         return with_acts(&[("hjkl", "move")], ACTS, VIEW, filter);
     };
@@ -5728,7 +5762,7 @@ fn footer_key(label: &str) -> Option<crate::mux::input::Key> {
         "↵" | "Enter" => "Enter",
         "esc" => "Escape",
         "tab" => "Tab",
-        l if l.chars().count() == 1 || l.starts_with("M-") => l,
+        l if l.chars().count() == 1 || l.starts_with("M-") || l == "C-w" => l,
         _ => return None,
     };
     crate::mux::input::Key::parse(name)
@@ -5777,6 +5811,8 @@ fn key_footer(
         // with nothing said of them (a filter being typed) are no keys.
         let keys: Vec<(crate::mux::input::Key, usize, usize)> = match footer_key(key) {
             _ if what.is_empty() => Vec::new(),
+            // `C-w` and its directions are a sequence, no key each.
+            None if key.starts_with("C-") => Vec::new(),
             Some(k) => vec![(k, 0, key.len())],
             None => {
                 let named = |c: char| {
@@ -6388,6 +6424,31 @@ pub(super) fn body(
     pictures
 }
 
+/// With the pane beside a list focused (`C-w l`, a click in it), the rule
+/// between them in the accent along the pane's rows: the rule a few
+/// columns left of where each row's pane starts, whichever board drew it
+/// (alone, or with the space after it, as the PR and ticket boards draw it).
+fn light_divider(lines: &mut [Line], hits: &[HitBox], theme: &Theme) {
+    let accent = Tone::Accent.style(theme);
+    for h in hits.iter().filter(|h| matches!(h.spot, Spot::Side(_))) {
+        let Some(line) = lines.get_mut(h.y as usize) else {
+            continue;
+        };
+        let from = (h.x0 as usize).saturating_sub(3);
+        let mut x = 0;
+        for span in line.spans.iter_mut() {
+            let w = width(&span.content);
+            if span.content.trim() == "│" && x >= from && x < h.x0 as usize {
+                span.style = span.style.patch(accent);
+            }
+            x += w;
+            if x >= h.x0 as usize {
+                break;
+            }
+        }
+    }
+}
+
 /// The lines cut or padded to the screen's rows, and the footer: the keys,
 /// or what the last action did.
 pub(super) fn finish(
@@ -6424,6 +6485,9 @@ pub(super) fn finish(
         }
     };
     lines.push(foot.line(cols, None));
+    if m.pane_now() == super::Pane::Beside {
+        light_divider(&mut lines, &hits, theme);
+    }
     hits.retain(|h| (h.y as usize) < rows.saturating_sub(1));
     hits.extend(keys_hit);
     meters.retain(|image| (image.y + image.height) as usize <= rows.saturating_sub(1));
@@ -6439,6 +6503,28 @@ mod tests {
     use crate::sidebar::claude::{LoopRun, SessionRef};
     use crate::sidebar::model::tests::rules;
     use crate::sidebar::model::{MergeState, TabLoop};
+
+    #[test]
+    fn a_focused_pane_beside_lights_the_rule_before_it_alone_or_with_its_space() {
+        let theme = Mission::new().snap.theme;
+        let accent = Tone::Accent.style(&theme).fg;
+        for rule in ["│", "│ "] {
+            let mut lines = vec![Line {
+                spans: vec![Span::raw("list"), Span::raw(rule), Span::raw("pane")],
+                fill: None,
+            }];
+            let x0 = 4 + width(rule) as u16;
+            let hits = [HitBox {
+                y: 0,
+                x0,
+                x1: 20,
+                spot: Spot::Side(3),
+            }];
+            light_divider(&mut lines, &hits, &theme);
+            assert_eq!(lines[0].spans[1].style.fg, accent, "{rule:?}");
+            assert_ne!(lines[0].spans[2].style.fg, accent);
+        }
+    }
 
     #[test]
     fn the_check_after_a_clean_rebase_shows_in_the_tests_cell() {
@@ -7921,10 +8007,11 @@ mod tests {
         let (lines, hits, images, _) = drawn(&m, 160, 40);
         let text = texts(&lines);
         let all_text = text.join("\n");
-        // The panel: the Sidebar's chip of 1 before its count.
+        // The panel: the Sidebar's chip of 1 before its count, the
+        // category in front resting while its options have the focus.
         let sidebar = text
             .iter()
-            .find(|l| l.starts_with("▌ Sidebar"))
+            .find(|l| l.starts_with("  Sidebar ") && !l.starts_with("  Sidebar layout"))
             .unwrap_or_else(|| panic!("{all_text}"));
         let count = items
             .iter()

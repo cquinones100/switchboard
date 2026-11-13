@@ -432,7 +432,27 @@ pub struct Mission {
     /// Whether Slack was shown as the view was last put together, alone or
     /// among several, so that it is seen once it no longer shows.
     pub slack_was_shown: bool,
+    /// Which of a view's panes has the focus, `C-w` and a direction moving
+    /// it, and the view it was given in: another view has its list's.
+    pub pane: Option<(usize, Pane)>,
+    /// When `C-w` was pressed (ms), its second key awaited until
+    /// `WINDOW_WAIT_MS` after it.
+    pub window_key: Option<i64>,
 }
+
+/// A view's panes from left to right, as Vim's windows: a side panel (the
+/// Settings board's categories), the list or board, and a pane beside it
+/// (a ticket's, a PR's, a Slack thread). `C-w h` and `C-w l` move the focus
+/// between them, and the focused one takes `j` and `k`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pane {
+    Panel,
+    List,
+    Beside,
+}
+
+/// How long `C-w` waits for its second key.
+pub const WINDOW_WAIT_MS: i64 = 1000;
 
 impl Mission {
     pub fn new() -> Mission {
@@ -480,6 +500,8 @@ impl Mission {
             grid: None,
             cells: Vec::new(),
             slack_was_shown: false,
+            pane: None,
+            window_key: None,
         }
     }
 
@@ -569,6 +591,9 @@ impl Mission {
     /// Gives the view in the grid's place `cell` the focus: the cursor of
     /// the one that had it kept for it, and its own taken up.
     pub fn focus_cell(&mut self, cell: usize) {
+        // The view given the focus starts on its list, as Tab hands the
+        // keys back to it within one view.
+        self.pane = None;
         let cursor = self.cursor;
         let chosen = self.chosen_id();
         let Some(g) = self.grid.as_mut() else {
@@ -747,6 +772,40 @@ impl Mission {
 
     /// The most the first line of the pane beside a board can be, as it
     /// was last drawn; `None` with no pane shown.
+    /// The view in front's panes from left to right, as last drawn; the
+    /// list alone with Settings' `ctrl_w_panes` off.
+    pub fn panes(&self) -> Vec<Pane> {
+        if !crate::settings::is_on("ctrl_w_panes") {
+            return vec![Pane::List];
+        }
+        let panel = self.current().is_some_and(|v| v.id == ViewId::Settings)
+            && render::settings_board_shown(self);
+        let beside = self.side_last().is_some();
+        [
+            (panel, Pane::Panel),
+            (true, Pane::List),
+            (beside, Pane::Beside),
+        ]
+        .into_iter()
+        .filter_map(|(shown, pane)| shown.then_some(pane))
+        .collect()
+    }
+
+    /// The pane with the focus: the list, unless one of the view in front's
+    /// other panes was given it and still shows.
+    pub fn pane_now(&self) -> Pane {
+        match self.pane {
+            Some((view, pane)) if view == self.view && self.panes().contains(&pane) => pane,
+            _ => Pane::List,
+        }
+    }
+
+    /// Whether `C-w` waits for its second key, at `now` (ms).
+    pub fn window_waits(&self, now: i64) -> bool {
+        self.window_key
+            .is_some_and(|at| now.saturating_sub(at) <= WINDOW_WAIT_MS)
+    }
+
     pub fn side_last(&self) -> Option<usize> {
         self.hits.iter().find_map(|h| match h.spot {
             Spot::Side(last) => Some(last),

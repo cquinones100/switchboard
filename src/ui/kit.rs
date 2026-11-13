@@ -528,6 +528,20 @@ pub fn row(
         .collect()
 }
 
+/// The chosen line of a pane without the focus, when another of its view's
+/// panes has it (`C-w` and a direction): filled with the Raised surface,
+/// with no bar, dimmer than the focused pane's chosen line.
+pub fn row_resting(spans: Vec<Span<'static>>, cols: usize, theme: &Theme) -> Vec<Span<'static>> {
+    let bg = Surface::Raised.color(theme);
+    row(spans, cols, false, theme)
+        .into_iter()
+        .map(|s| {
+            let style = s.style.bg(bg);
+            Span::styled(s.content, style)
+        })
+        .collect()
+}
+
 /// The ends of a rounded object filled with `fill`: the half circles in
 /// the fill's color where the terminal draws them, else a space of it.
 fn ends(fill: Color, caps: bool) -> (Span<'static>, Span<'static>) {

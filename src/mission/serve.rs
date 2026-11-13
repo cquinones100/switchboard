@@ -40,7 +40,7 @@ use super::choices::{self, Choice, Ctx, Do};
 use super::inbox_board;
 use super::remind;
 use super::views::{self, Scope, View, ViewId};
-use super::{After, Focus, Jump, Mission, MissionEvent, Snapshot, Spot};
+use super::{After, Focus, Jump, Mission, MissionEvent, Pane, Snapshot, Spot};
 use crate::items::{Item, Target, ViewData};
 use crate::mux::input::{self, Input, Key, KeyCode, Mods, Mouse, MouseButton, MouseKind, Parsed};
 use crate::mux::server::{ClientId, Event, Server};
@@ -102,6 +102,18 @@ pub(super) const KEYS: &[(&str, &str)] = &[
     (
         "J K",
         "scroll the pane beside a board or list (a PR's or a ticket's description, the Autopilot plan, a CI check's failing step) down, up; the wheel over it too",
+    ),
+    (
+        "C-w h",
+        "the focus to the view's pane at the left (the Settings board's categories, or the list from the pane beside it), as Vim's windows; j k there walk the categories, ↵ back to the options",
+    ),
+    (
+        "C-w l",
+        "the focus to the view's pane at the right (the pane beside a list, j k scrolling it a line, g G its top and end); a click in a pane gives it the focus too",
+    ),
+    (
+        "C-w w",
+        "the focus to the view's next pane round (C-w W the one before)",
     ),
     (
         "↵",
@@ -388,6 +400,8 @@ impl Server {
             Opening::View(slug) => find(&m, &|v| v.slug() == *slug),
             Opening::Picker(_) => find(&m, &|v| v.id == ViewId::WorkMap),
         };
+        // The view opened starts on its list.
+        m.pane = None;
         // With several views at once, one shown takes the focus and
         // another shows alone.
         match how {
@@ -1927,6 +1941,10 @@ impl Server {
         let view = m.view;
         let only_moving = !looked && only_moves(&m, key);
         self.mission_key_in(client, &mut m, key);
+        // Another view brought to the front starts on its list.
+        if m.view != view {
+            m.pane = None;
+        }
         // A move leaves the snapshot standing; anything else may have
         // changed what it shows.
         let stands = only_moving && m.view == view;
@@ -2008,6 +2026,19 @@ impl Server {
         }
         // What the last action did stays in the footer until the next key.
         m.note = None;
+        // `C-w` and a direction move the focus between the view's panes,
+        // as Vim's windows; any other second key, or one after the wait,
+        // is taken as itself.
+        let now = util::now_ms();
+        let waited = m.window_waits(now);
+        m.window_key = None;
+        if waited && window_key(m, k) {
+            return;
+        }
+        if k.code == KeyCode::Char('w') && k.mods == Mods::CTRL && settings::is_on("ctrl_w_panes") {
+            m.window_key = Some(now);
+            return;
+        }
         let mut k = k;
         let press = matches!(k.code, KeyCode::Enter) || (k.code == KeyCode::Char(' ') && plain(&k));
         match m.focus {
@@ -2044,6 +2075,13 @@ impl Server {
                 k = Key::new(KeyCode::Enter, Mods::NONE)
             }
             _ => {}
+        }
+        // The focused pane's own keys, typed or pressed from the footer;
+        // a control Tab's focus is on (a view's name, the filter) took
+        // Enter above.
+        let on_items = matches!(m.focus, None | Some(Focus::Item | Focus::Key(_)));
+        if on_items && pane_key(m, k) {
+            return;
         }
         // `?`, typed or pressed from the footer with Tab's focus on it.
         if k.code == KeyCode::Char('?') && plain(&k) {
@@ -2161,6 +2199,8 @@ impl Server {
                 if m.current().and_then(View::columns).is_none() {
                     let text = m.filter.take().map(|f| f.text).unwrap_or_default();
                     m.filter = Some(Filter { text, typing: true });
+                    // What the filter finds is the list's, which takes the focus.
+                    m.pane = None;
                     m.cursor = 0;
                 }
             }
@@ -3458,6 +3498,7 @@ impl Server {
                 m.grid = Some(super::grid::Grid::new(choice));
                 m.focus = None;
                 m.filter = None;
+                m.pane = None;
                 if let Some(at) = m.grid_shown().first().map(|(_, at)| *at) {
                     m.view = at;
                     m.cursor = 0;
@@ -5319,6 +5360,9 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                     Then::Nothing
                 };
             }
+            // The wheel over the list moves the list, which takes the
+            // focus from another pane, as a click on it would.
+            m.pane = None;
             let key = match (m.view == 0, up) {
                 (true, true) => 'h',
                 (true, false) => 'l',
@@ -5374,11 +5418,35 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
             // A click puts away the focus ring Tab draws, and the light.
             m.focus = None;
             m.hover = None;
+            // A click in one of the view's panes gives it the focus, as
+            // `C-w` and a direction do.
+            let pane = match spot {
+                // A picture may be the list's thumbnail or the thread's, so
+                // it leaves the focus where it is.
+                Spot::Side(_) | Spot::PaneBar { .. } => Some(Pane::Beside),
+                Spot::Category(_) => Some(Pane::Panel),
+                Spot::Index(_) | Spot::Menu(_) | Spot::Check(..) | Spot::Choose(_) => {
+                    Some(Pane::List)
+                }
+                _ => None,
+            };
+            if let Some(pane) = pane {
+                m.pane = Some((m.view, pane));
+                // Another pane takes the keys from a filter being typed,
+                // its words kept.
+                if pane != Pane::List
+                    && let Some(f) = m.filter.as_mut()
+                {
+                    f.typing = false;
+                }
+            }
             match spot {
                 Spot::Close => Then::Close,
                 Spot::Filter => {
                     let text = m.filter.take().map(|f| f.text).unwrap_or_default();
                     m.filter = Some(Filter { text, typing: true });
+                    // What the filter finds is the list's, which takes the focus.
+                    m.pane = None;
                     Then::Prepare
                 }
                 Spot::Group(g) if first_of(m, g) != Some(m.view) => {
@@ -5428,7 +5496,7 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                     choose_day(m, day);
                     Then::Prepare
                 }
-                Spot::Side(_) => Then::Nothing,
+                Spot::Side(_) => Then::Redraw,
                 Spot::PaneBar { row, body, total } => {
                     m.pane_bar_drag = Some(m.side_bar_grab((row, body, total)));
                     if m.side_bar_to((row, body, total), None) {
@@ -5485,12 +5553,16 @@ fn right_press(m: &mut Mission, mouse: Mouse, hit: Option<Spot>) -> Then {
     let on_footer = mouse.row + 1 >= rows;
     let chosen = match hit {
         Some(Spot::Index(i) | Spot::Menu(i) | Spot::Choose(i)) => {
+            // The list takes the focus, so the Enter that opens its menu
+            // reaches it rather than a focused pane.
+            m.pane = Some((m.view, Pane::List));
             m.cursor = i;
             choose_check(m, None);
             follow_reminder(m);
             true
         }
         Some(Spot::Check(i, n)) => {
+            m.pane = Some((m.view, Pane::List));
             m.cursor = i;
             choose_check(m, Some(n));
             true
@@ -5612,6 +5684,9 @@ fn context_menu_key(m: &mut Mission) -> Key {
             None => !m.order().is_empty(),
         };
     if an_item_is_chosen {
+        // As a right click on the item, which gives the list the focus, so
+        // the Enter reaches the item rather than Settings' categories.
+        m.pane = None;
         Key::new(KeyCode::Enter, Mods::NONE)
     } else {
         Key::new(KeyCode::Char('m'), Mods::NONE)
@@ -5969,6 +6044,84 @@ fn row_step(m: &Mission, by: isize) -> isize {
     next[column.min(next.len() - 1)] as isize
 }
 
+/// The key after `C-w`: `h` (or `C-h`, ←) the pane at the left, `l` (or
+/// `C-l`, →) the one at the right, `w` (or `C-w`) the next round and `W`
+/// the one before; a direction with no pane that way does nothing. False
+/// for any other key, which is then taken as itself.
+fn window_key(m: &mut Mission, k: Key) -> bool {
+    let either = plain(&k) || k.mods == Mods::CTRL;
+    let (by, round) = match k.code {
+        KeyCode::Char('h') | KeyCode::Left if either => (-1, false),
+        KeyCode::Char('l') | KeyCode::Right if either => (1, false),
+        KeyCode::Char('w') if either => (1, true),
+        KeyCode::Char('W') if plain(&k) => (-1, true),
+        _ => return false,
+    };
+    let panes = m.panes();
+    let at = panes.iter().position(|p| *p == m.pane_now()).unwrap_or(0) as isize;
+    let to = if round {
+        Some((at + by).rem_euclid(panes.len() as isize))
+    } else {
+        Some(at + by).filter(|to| (0..panes.len() as isize).contains(to))
+    };
+    if let Some(to) = to {
+        m.pane = Some((m.view, panes[to as usize]));
+        // The pane takes the keys at once, from a control Tab's focus was on.
+        if m.focus.is_some() {
+            m.focus = Some(Focus::Item);
+        }
+    }
+    true
+}
+
+/// The focused pane's own keys, where it isn't the list: in the Settings
+/// board's categories `j` and `k` walk the categories, the options
+/// following, and Enter goes back into the options; in a pane beside, `j`
+/// and `k` scroll it a line, `g` and `G` to its top and end. False for
+/// any other key, which the view takes as it would.
+fn pane_key(m: &mut Mission, k: Key) -> bool {
+    let down = matches!(k.code, KeyCode::Char('j') | KeyCode::Down) && plain(&k)
+        || k.code == KeyCode::Char('n') && k.mods == Mods::CTRL;
+    let up = matches!(k.code, KeyCode::Char('k') | KeyCode::Up) && plain(&k)
+        || k.code == KeyCode::Char('p') && k.mods == Mods::CTRL;
+    match m.pane_now() {
+        Pane::List => false,
+        Pane::Panel => {
+            let by = match k.code {
+                _ if down => 1,
+                _ if up => -1,
+                KeyCode::Enter => {
+                    m.pane = None;
+                    return true;
+                }
+                KeyCode::Char(' ') if plain(&k) => {
+                    m.pane = None;
+                    return true;
+                }
+                _ => return false,
+            };
+            if let Some(view) = m.current() {
+                m.cursor = super::settings_board::side_step(&view.data.items, m.cursor, by);
+            }
+            true
+        }
+        Pane::Beside => {
+            let Some(last) = m.side_last() else {
+                return false;
+            };
+            let lines = match k.code {
+                _ if down => 1,
+                _ if up => -1,
+                KeyCode::Char('g') | KeyCode::Home if plain(&k) => -(last as isize),
+                KeyCode::Char('G') | KeyCode::End => last as isize,
+                _ => return false,
+            };
+            m.scroll_side(lines, last);
+            true
+        }
+    }
+}
+
 /// h and l: in the tabs the card before or after; on a board the next
 /// column with items in it, at the same row as far as it reaches.
 fn side_step(m: &Mission, by: isize) -> isize {
@@ -6139,6 +6292,8 @@ fn open_group(m: &mut Mission, g: views::Group) {
 /// A view brought to the front: focus on a view's name follows, and on
 /// the filter goes to the items of a board, which has none.
 fn show_view(m: &mut Mission, to: usize) {
+    // A view brought to the front starts on its list.
+    m.pane = None;
     if m.grid.is_some() {
         match m.grid_shown().iter().find(|(_, at)| *at == to) {
             Some(&(cell, _)) => {
@@ -6164,6 +6319,10 @@ fn show_view(m: &mut Mission, to: usize) {
 /// the views in front's group, else each view's name; the filter (not on a
 /// board), each item, and easy mode's ×.
 fn move_focus(m: &mut Mission, by: isize) {
+    // Tab goes round what can be clicked, the list's items among them, so
+    // it hands the keys back to the list from Settings' categories or the
+    // pane beside; `C-w` gives them to another pane again.
+    m.pane = Some((m.view, Pane::List));
     #[derive(Clone, Copy, PartialEq)]
     enum Stop {
         Group(views::Group),
@@ -6332,6 +6491,7 @@ fn jump_key(m: &mut Mission, k: Key) {
 mod tests {
     use super::*;
     use crate::items::ViewData;
+    use crate::mission::{HitBox, WINDOW_WAIT_MS};
     use crate::mux::TabId;
     use crate::sidebar::model::TabModel;
     use crate::sidebar::model::tests::rules;
@@ -7142,5 +7302,121 @@ mod tests {
             Then::Key(Key::new(KeyCode::Char('l'), Mods::NONE)),
             "card by card on the tabs"
         );
+    }
+
+    fn settings_mission() -> Mission {
+        let head = |id: &str| Item::new(id, id).data(serde_json::json!({ "header": true }));
+        let option = |id: &str| Item::new(id, id);
+        let view = View {
+            id: ViewId::Settings,
+            title: "Settings".into(),
+            data: ViewData {
+                items: vec![
+                    head("header:Look"),
+                    option("a"),
+                    option("b"),
+                    head("header:Tabs"),
+                    option("c"),
+                ],
+                ..ViewData::default()
+            },
+            loaded: true,
+        };
+        let mut m = mission(1, vec![view]);
+        m.snap.rules.ux2 = true;
+        m.size = (160, 40);
+        m.view = 1;
+        m.cursor = 2;
+        m
+    }
+
+    #[test]
+    fn c_w_h_focuses_the_settings_categories_whose_j_walks_them_and_c_w_l_goes_back() {
+        let key = |k: &str| Key::parse(k).unwrap();
+        let mut m = settings_mission();
+        assert_eq!(m.panes(), vec![Pane::Panel, Pane::List]);
+        assert!(window_key(&mut m, key("h")));
+        assert_eq!(m.pane_now(), Pane::Panel);
+        assert!(window_key(&mut m, key("h")), "no pane further left");
+        assert_eq!(m.pane_now(), Pane::Panel);
+        assert!(pane_key(&mut m, key("j")));
+        assert_eq!(m.cursor, 4, "the next category's first option");
+        assert!(pane_key(&mut m, key("k")));
+        assert_eq!(m.cursor, 1);
+        assert!(
+            !pane_key(&mut m, key("m")),
+            "the view's menu stays the view's"
+        );
+        assert!(window_key(&mut m, key("C-l")));
+        assert_eq!(m.pane_now(), Pane::List);
+        assert!(!pane_key(&mut m, key("j")), "the list moves as it would");
+        window_key(&mut m, key("h"));
+        assert!(pane_key(&mut m, key("Enter")));
+        assert_eq!(m.pane_now(), Pane::List, "Enter goes back into the options");
+        assert!(
+            !window_key(&mut m, key("x")),
+            "any other key is taken as itself"
+        );
+    }
+
+    #[test]
+    fn c_w_l_focuses_the_pane_beside_whose_j_scrolls_it_and_another_view_has_its_list() {
+        let key = |k: &str| Key::parse(k).unwrap();
+        let mut m = ci_mission();
+        assert_eq!(
+            m.panes(),
+            vec![Pane::List],
+            "no pane beside until one is drawn"
+        );
+        assert!(window_key(&mut m, key("l")));
+        assert_eq!(m.pane_now(), Pane::List);
+        m.hits.push(HitBox {
+            y: 3,
+            x0: 80,
+            x1: 120,
+            spot: Spot::Side(10),
+        });
+        window_key(&mut m, key("l"));
+        assert_eq!(m.pane_now(), Pane::Beside);
+        let cursor = m.cursor;
+        assert!(pane_key(&mut m, key("j")));
+        pane_key(&mut m, key("j"));
+        assert_eq!(
+            (m.cursor, m.side_top()),
+            (cursor, 2),
+            "scrolled, the same row chosen"
+        );
+        pane_key(&mut m, key("G"));
+        assert_eq!(m.side_top(), 10);
+        pane_key(&mut m, key("g"));
+        assert_eq!(m.side_top(), 0);
+        window_key(&mut m, key("w"));
+        assert_eq!(m.pane_now(), Pane::List, "w goes round");
+        window_key(&mut m, key("W"));
+        assert_eq!(m.pane_now(), Pane::Beside);
+        // The wheel over the list moves the list, giving it the focus; a
+        // control Tab's focus is on takes Enter before the pane does.
+        let wheel = Mouse {
+            kind: MouseKind::Press,
+            button: MouseButton::WheelDown,
+            col: 5,
+            row: 5,
+            mods: Mods::NONE,
+        };
+        assert_eq!(
+            mouse_in(&mut m, wheel, true),
+            Then::Key(Key::new(KeyCode::Char('j'), Mods::NONE))
+        );
+        assert_eq!(m.pane_now(), Pane::List);
+        m.view = 0;
+        assert_eq!(m.pane_now(), Pane::List, "another view has its list");
+    }
+
+    #[test]
+    fn c_w_waits_a_second_for_its_second_key() {
+        let mut m = Mission::new();
+        m.window_key = Some(1_000);
+        assert!(m.window_waits(1_000 + WINDOW_WAIT_MS));
+        assert!(!m.window_waits(1_001 + WINDOW_WAIT_MS));
     }
 }

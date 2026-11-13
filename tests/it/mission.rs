@@ -441,6 +441,51 @@ fn the_settings_view_changes_a_setting_in_the_settings_file() {
     });
 }
 
+/// The Settings board's category on the chosen surface, `▌` at the
+/// screen's left, by its name.
+fn chosen_category(screen: &[String]) -> Option<String> {
+    screen.iter().find_map(|l| {
+        let name = l.strip_prefix("▌")?.trim_start().split("  ").next()?;
+        Some(name.to_string())
+    })
+}
+
+#[test]
+fn with_ux2_c_w_h_moves_into_the_settings_categories_and_c_w_l_back_to_their_options() {
+    let server = TestServer::start();
+    settings(&server, json!({"ux2": true}));
+    let mut client = server.attach(160, 40);
+    client.wait_text("$");
+    client.wait_text("M-c Claude");
+    open(&mut client);
+    client.type_text("vsett\r");
+    client.wait_text("CATEGORIES");
+    client.wait_text("panes");
+    // C-w h: the categories have the focus, the one in front chosen.
+    client.type_text("\x17h");
+    let screen = client.wait_text("its options");
+    let first = chosen_category(&screen).unwrap_or_else(|| panic!("{}", screen.join("\n")));
+    // j walks to the next category, its options shown beside.
+    client.type_text("j");
+    let screen = client.wait_for("the next category", |s| {
+        chosen_category(s).is_some_and(|c| c != first)
+    });
+    let next = chosen_category(&screen).unwrap();
+    assert!(
+        screen.iter().any(|l| l.contains(&format!("│ {next}"))),
+        "{}",
+        screen.join("\n")
+    );
+    // C-w l: back into the options, the category resting.
+    client.type_text("\x17l");
+    client.wait_for("the options focused", |s| {
+        chosen_category(s).is_none() && !s.join("\n").contains("its options")
+    });
+    // Any other key after C-w is taken as itself: / starts a filter.
+    client.type_text("\x17/");
+    client.wait_text("/▏");
+}
+
 #[test]
 fn your_claude_md_row_names_where_the_rules_come_from_and_runs_setup() {
     let (server, mut client) = two_tabs(json!({}));

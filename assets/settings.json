@@ -990,7 +990,7 @@
     "key": "ctrl_w_panes",
     "category": "Help",
     "label": "C-w then h, j, k or l moves between panes",
-    "description": "C-w followed by h, j, k or l moves to the pane on that side, as in Vim, which itself still gets C-w; C-w twice sends one to the pane. Off, C-w reaches the pane as it is, deleting a word in a shell or Claude's prompt",
+    "description": "C-w followed by h, j, k or l moves to the pane on that side, as in Vim, which itself still gets C-w; C-w twice sends one to the pane. In mission control, C-w and h or l move between a view's side panel, list and the pane beside it. Off, C-w reaches the pane as it is, deleting a word in a shell or Claude's prompt, and a mission control view's list keeps the keys",
     "default": true
   },
   {
