@@ -37,6 +37,11 @@
 //! it had reached and goes on from there, so a new pid, from the session file
 //! naming this session, adds only what its cost has grown past the one kept;
 //! only a lower cost, a count that really started over, counts from nothing.
+//! A session first seen resumed, with no record of its own (one resumed
+//! after its record was cleared, or in a home whose state is new), starts
+//! from the cost it reached, since that cost is everything it has cost since
+//! it began: it is resumed when its transcript began more than a minute
+//! before its Claude process started, which is read only then.
 //! A record of four fields, from before that, may hold a resumed session's
 //! cost counted twice, so today's is cut to the session's cost so far. A
 //! record from before the pid was kept may hold a share counted many times
@@ -69,6 +74,7 @@ pub fn main(_args: Vec<String>) -> ExitCode {
     keep(
         &payload,
         &paths::state_dir(),
+        &sessions::sessions_dir(),
         &util::ymd(&util::local_now()),
     );
     if in_workspace {
@@ -267,7 +273,7 @@ fn awk_number(text: &str) -> Option<f64> {
 
 /// Writes what the Sessions and Usage views read, each file only when it
 /// changes.
-pub fn keep(payload: &Value, state: &Path, today: &str) {
+pub fn keep(payload: &Value, state: &Path, sessions: &Path, today: &str) {
     let session = or_empty(&payload["session_id"]).unwrap_or_default();
     if !safe_id(&session) {
         return;
@@ -286,8 +292,9 @@ pub fn keep(payload: &Value, state: &Path, today: &str) {
     let usage = usage_dir(state);
     let spend_file = usage.join(format!("spend-{session}"));
     let old = fs::read_to_string(&spend_file).unwrap_or_default();
-    let pid = pid_of(&sessions::sessions_dir(), &session).unwrap_or_default();
-    let new = next_spend(&old, today, &cost, &pid);
+    let pid = pid_of(sessions, &session).unwrap_or_default();
+    let resumed = old.is_empty() && resumed(payload, sessions, &session);
+    let new = next_spend(&old, today, &cost, &pid, resumed);
     if new != old {
         write_changed(&spend_file, &new);
         if let Some(more) = crate::usage::charts::added(&old, &new, today) {
@@ -325,9 +332,52 @@ fn pid_of(dir: &Path, session: &str) -> Option<String> {
     })
 }
 
-/// The spend file's next text, from its text now: the script's awk.
-pub fn next_spend(old: &str, today: &str, cost: &str, pid: &str) -> String {
+/// Whether a session the statusline has no record of was resumed rather
+/// than started: its transcript began more than a minute before its Claude
+/// process did (the `startedAt` of the newest session file naming it, since
+/// an ended process's file can outlast it and the one drawing started last).
+fn resumed(payload: &Value, sessions: &Path, session: &str) -> bool {
+    let started = fs::read_dir(sessions)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .filter_map(|e| util::read_json(e.path()))
+        .filter(|v| v.get("sessionId").and_then(Value::as_str) == Some(session))
+        .filter_map(|v| v.get("startedAt").and_then(Value::as_i64))
+        .max();
+    let began = payload["transcript_path"]
+        .as_str()
+        .and_then(|path| transcript_began(Path::new(path)));
+    matches!((began, started), (Some(began), Some(started)) if began + 60_000 < started)
+}
+
+/// When a transcript began, in milliseconds: the first top-level
+/// `timestamp` among its first lines, past the bookkeeping lines (the
+/// mode, the last prompt) Claude Code writes before it.
+fn transcript_began(path: &Path) -> Option<i64> {
+    use std::io::BufRead;
+    let file = fs::File::open(path).ok()?;
+    std::io::BufReader::new(file)
+        .lines()
+        .take(64)
+        .map_while(Result::ok)
+        .find_map(|line| {
+            let v: Value = serde_json::from_str(&line).ok()?;
+            let stamp: jiff::Timestamp = v.get("timestamp")?.as_str()?.parse().ok()?;
+            Some(stamp.as_millisecond())
+        })
+}
+
+/// The spend file's next text, from its text now: the script's awk. A
+/// session `resumed` with no record starts from the cost it reached, spent
+/// nothing yet today, since that cost is everything it has cost since it
+/// began, other days included.
+pub fn next_spend(old: &str, today: &str, cost: &str, pid: &str, resumed: bool) -> String {
     let record = old.lines().last().unwrap_or("");
+    if record.is_empty() && resumed {
+        return format!("{today}\t0.0000\t{cost}\t{pid}\t2");
+    }
     let fields: Vec<&str> = if record.is_empty() {
         Vec::new()
     } else {
@@ -394,57 +444,138 @@ mod tests {
         let day = "2026-11-06";
         // Nothing yet: the whole cost so far.
         assert_eq!(
-            next_spend("", day, "1.5", "100"),
+            next_spend("", day, "1.5", "100", false),
             "2026-11-06\t1.5000\t1.5\t100\t2"
         );
         // The same process, a higher cost: the difference added.
         assert_eq!(
-            next_spend("2026-11-06\t1.5000\t1.5\t100\t2", day, "2.25", "100"),
+            next_spend("2026-11-06\t1.5000\t1.5\t100\t2", day, "2.25", "100", false),
             "2026-11-06\t2.2500\t2.25\t100\t2"
         );
         // A dip from the same process adds nothing and keeps the higher one.
         assert_eq!(
-            next_spend("2026-11-06\t2.2500\t2.25\t100\t2", day, "2.0", "100"),
+            next_spend("2026-11-06\t2.2500\t2.25\t100\t2", day, "2.0", "100", false),
             "2026-11-06\t2.2500\t2.25\t100\t2"
         );
         // A new process resuming the session goes on from the cost it had
         // reached, so only the growth is added.
         assert_eq!(
-            next_spend("2026-11-06\t2.2500\t2.25\t100\t2", day, "3.0", "200"),
+            next_spend("2026-11-06\t2.2500\t2.25\t100\t2", day, "3.0", "200", false),
             "2026-11-06\t3.0000\t3.0\t200\t2"
         );
         // A new process with a lower cost started over: it counts whole, and
         // the day keeps what was spent before.
         assert_eq!(
-            next_spend("2026-11-06\t2.2500\t2.25\t100\t2", day, "0.5", "200"),
+            next_spend("2026-11-06\t2.2500\t2.25\t100\t2", day, "0.5", "200", false),
             "2026-11-06\t2.7500\t0.5\t200\t2"
         );
         // A new day starts the share again.
         assert_eq!(
-            next_spend("2026-11-05\t9.0000\t3\t100\t2", day, "3.5", "100"),
+            next_spend("2026-11-05\t9.0000\t3\t100\t2", day, "3.5", "100", false),
             "2026-11-06\t0.5000\t3.5\t100\t2"
         );
         // A record of four fields, from before a resume counted only its
         // growth, may hold the cost counted twice: today's cut to the cost.
         assert_eq!(
-            next_spend("2026-11-06\t6.0000\t3\t100", day, "3.5", "200"),
+            next_spend("2026-11-06\t6.0000\t3\t100", day, "3.5", "200", false),
             "2026-11-06\t3.5000\t3.5\t200\t2"
         );
         // A record from before the pid was kept: today's cut to the cost so
         // far, and a lower cost becomes the one to count on from.
         assert_eq!(
-            next_spend("2026-11-06\t40\t3", day, "4", ""),
+            next_spend("2026-11-06\t40\t3", day, "4", "", false),
             "2026-11-06\t4.0000\t4\t\t2"
         );
         assert_eq!(
-            next_spend("2026-11-06\t2\t3", day, "1", "300"),
+            next_spend("2026-11-06\t2\t3", day, "1", "300", false),
             "2026-11-06\t2.0000\t1\t300\t2"
+        );
+        // A session resumed with no record starts from the cost it reached:
+        // nothing spent today yet, and only what it adds counts.
+        assert_eq!(
+            next_spend("", day, "764.66", "100", true),
+            "2026-11-06\t0.0000\t764.66\t100\t2"
+        );
+        assert_eq!(
+            next_spend(
+                "2026-11-06\t0.0000\t764.66\t100\t2",
+                day,
+                "765.5",
+                "100",
+                false
+            ),
+            "2026-11-06\t0.8400\t765.5\t100\t2"
+        );
+        // With a record, a resume changes nothing.
+        assert_eq!(
+            next_spend("2026-11-06\t1.5000\t1.5\t100\t2", day, "2.25", "100", true),
+            "2026-11-06\t2.2500\t2.25\t100\t2"
         );
         // No pid found keeps the one written.
         assert_eq!(
-            next_spend("2026-11-06\t1.0000\t1\t100\t2", day, "1.25", ""),
+            next_spend("2026-11-06\t1.0000\t1\t100\t2", day, "1.25", "", false),
             "2026-11-06\t1.2500\t1.25\t100\t2"
         );
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("sb-statusline-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("sessions")).unwrap();
+        dir
+    }
+
+    /// Keeps a draw of session `s1` at $12.50, its process started now and
+    /// its transcript begun `began`, with no spend record; gives back the
+    /// record and the day's log.
+    fn first_draw(name: &str, began: i64) -> (String, String) {
+        let dir = scratch(name);
+        let now = util::now_ms();
+        // An ended process's file naming the session, from when it began.
+        fs::write(
+            dir.join("sessions/50.json"),
+            json!({"pid": 50, "sessionId": "s1", "startedAt": began}).to_string(),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("sessions/100.json"),
+            json!({"pid": 100, "sessionId": "s1", "startedAt": now}).to_string(),
+        )
+        .unwrap();
+        let stamp = jiff::Timestamp::from_millisecond(began).unwrap();
+        let transcript = dir.join("s1.jsonl");
+        fs::write(
+            &transcript,
+            format!(
+                "{}\n{}\n",
+                json!({"type": "mode", "mode": "normal"}),
+                json!({"type": "user", "timestamp": stamp.to_string()})
+            ),
+        )
+        .unwrap();
+        let payload = json!({
+            "session_id": "s1",
+            "transcript_path": transcript,
+            "cost": {"total_cost_usd": 12.5}
+        });
+        let today = "2026-11-13";
+        keep(&payload, &dir.join("state"), &dir.join("sessions"), today);
+        let usage = usage_dir(&dir.join("state"));
+        let record = fs::read_to_string(usage.join("spend-s1")).unwrap_or_default();
+        let log = fs::read_to_string(usage.join(format!("spent-{today}.tsv"))).unwrap_or_default();
+        let _ = fs::remove_dir_all(&dir);
+        (record, log)
+    }
+
+    #[test]
+    fn a_session_resumed_with_no_record_logs_none_of_what_it_cost_before() {
+        let (record, log) = first_draw("resumed", util::now_ms() - 86_400_000);
+        assert_eq!(record, "2026-11-13\t0.0000\t12.5\t100\t2");
+        assert_eq!(log, "");
+        // A session started now counts its whole cost, all of it today's.
+        let (record, log) = first_draw("new", util::now_ms());
+        assert_eq!(record, "2026-11-13\t12.5000\t12.5\t100\t2");
+        assert!(log.ends_with("\ts1\t12.5000\n"), "{log}");
     }
 
     #[test]
