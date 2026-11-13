@@ -515,7 +515,8 @@ impl Store {
 
     /// The IDs autopilot keeps for notes squashed into one
     /// (`renumber`, each squashed note's ID to the merged note's) follow
-    /// too: its note's, its skipped items', its landings' and its tabs'
+    /// too: its note's, its skipped items', its landings', the items it has
+    /// put next and its tabs'
     /// (`@autopilot_note`),
     /// whichever of the squashed notes they were.
     pub fn renumber(&self, renumber: &std::collections::HashMap<String, String>) {
@@ -533,7 +534,7 @@ impl Store {
                 mode.insert("noteId".into(), to.clone().into());
                 changed = true;
             }
-            for key in ["skipped", "landed"] {
+            for key in ["skipped", "landed", "next"] {
                 let Some(Value::Array(items)) = mode.get_mut(key) else {
                     continue;
                 };

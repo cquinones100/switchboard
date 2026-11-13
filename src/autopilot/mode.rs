@@ -1,7 +1,7 @@
 //! The mode's state, what you chose, kept in `autopilot.json` in the state
 //! directory as lib/sidebar/autopilot.js kept it: `{ on, note, noteId, repo,
 //! slots, cap, paused, readyOnly, skipped, spendLimit, landWithoutAsking,
-//! handsFree, said, closed, landed }`.
+//! handsFree, said, closed, landed, next }`.
 //! `note` is the note's path within the notes directory and `noteId` its
 //! stable ID (src/notes/id.rs), which the mode follows the note by when it
 //! has been renamed or moved, outside Notes too, writing its path back;
@@ -17,7 +17,9 @@
 //! time, for the notifications; `landed` today's landings of its tabs,
 //! `[{ id, item, note, hash, at }]`, `id` as `closed`'s, `note` the item's
 //! note's ID, for the view's Landed, which lists them once their tabs are
-//! closed too.
+//! closed too; `next` the items put next in its queue, `[{ note, text }]`
+//! as `skipped`'s, the last put there first, taken before the rest of the
+//! settled ones until each lands (Notes' "Work on this item" box).
 //!
 //! The notes app writes the file too, when a note it works is renamed or
 //! moved (src/notes/store.rs's `relink_mode`), so it is read again on every
@@ -56,6 +58,9 @@ pub struct Mode {
     pub ready_only: bool,
     /// The items skipped, each by its note's ID and its first line.
     pub skipped: Vec<Skipped>,
+    /// The items put next in its queue, each by its note's ID and its
+    /// first line, the last put there first.
+    pub next: Vec<Skipped>,
     /// Today's Claude spend, in dollars, past which it opens no more tabs;
     /// 0 for none.
     pub spend_limit: f64,
@@ -145,6 +150,7 @@ impl Default for Mode {
             paused: false,
             ready_only: false,
             skipped: Vec::new(),
+            next: Vec::new(),
             spend_limit: 0.0,
             land_without_asking: false,
             hands_free: false,
@@ -197,6 +203,18 @@ impl Mode {
                             text: o.get("text").and_then(Value::as_str)?.to_string(),
                         }),
                         _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            },
+            next: match map.get("next") {
+                Some(Value::Array(list)) => list
+                    .iter()
+                    .filter_map(|x| {
+                        Some(Skipped {
+                            note: x.get("note").and_then(Value::as_str)?.to_string(),
+                            text: x.get("text").and_then(Value::as_str)?.to_string(),
+                        })
                     })
                     .collect(),
                 _ => Vec::new(),
@@ -274,6 +292,15 @@ impl Mode {
                     .collect(),
             ),
         );
+        map.insert(
+            "next".into(),
+            Value::Array(
+                self.next
+                    .into_iter()
+                    .map(|x| serde_json::json!({ "note": x.note, "text": x.text }))
+                    .collect(),
+            ),
+        );
         map.insert("spendLimit".into(), util::js_number(self.spend_limit));
         map.insert("landWithoutAsking".into(), self.land_without_asking.into());
         map.insert("handsFree".into(), self.hands_free.into());
@@ -338,6 +365,17 @@ impl Mode {
             .iter()
             .filter(|x| x.note == self.note_id)
             .map(|x| x.text.as_str())
+    }
+}
+
+impl Mode {
+    /// The items of its note put next in its queue, by their first lines.
+    pub fn next_here(&self) -> Vec<String> {
+        self.next
+            .iter()
+            .filter(|x| x.note == self.note_id)
+            .map(|x| x.text.clone())
+            .collect()
     }
 }
 
@@ -535,6 +573,29 @@ mod tests {
         let mode = Mode::read(&dir);
         assert_eq!(mode.skipped[0].note, "n-0123456789ab");
         assert_eq!(mode.skipped_here().collect::<Vec<_>>(), ["Old", "Here"]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_items_put_next_round_trip_and_only_the_modes_notes_are_here() {
+        let dir = temp("next");
+        Mode::update(&dir, |m| {
+            m.note_id = "n-0123456789ab".into();
+            m.next = vec![
+                Skipped {
+                    note: "n-0123456789ab".into(),
+                    text: "Here".into(),
+                },
+                Skipped {
+                    note: "n-ffffffffffff".into(),
+                    text: "Elsewhere".into(),
+                },
+            ];
+        })
+        .unwrap();
+        let mode = Mode::read(&dir);
+        assert_eq!(mode.next.len(), 2);
+        assert_eq!(mode.next_here(), ["Here"]);
         let _ = fs::remove_dir_all(&dir);
     }
 

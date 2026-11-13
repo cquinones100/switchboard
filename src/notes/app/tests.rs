@@ -2166,7 +2166,7 @@ fn ga_adds_an_item_to_the_end_of_the_top_list() {
 }
 
 #[test]
-fn enter_on_an_item_opens_its_plan_and_ticks_one_with_none() {
+fn enter_on_an_item_shows_its_plan_beside_and_ticks_one_with_none() {
     let (_dir, mut app) = started_ux2("plan");
     let plan = app.store.create("", Some("Plan - Kit"));
     write(&plan, "# Plan - Kit\n\nThe steps\n");
@@ -2177,8 +2177,14 @@ fn enter_on_an_item_opens_its_plan_and_ticks_one_with_none() {
     );
     app.open_note(&path, false, false);
     keys(&mut app, "3G<CR>");
-    assert_eq!(name(&app), "Plan - Kit.md");
-    app.open_note(&path, false, false);
+    assert_eq!(name(&app), "Design.md");
+    assert_eq!(
+        app.beside.as_ref().map(|b| b.plan.name.as_str()),
+        Some("Kit")
+    );
+    assert!(screen(&mut app).iter().any(|l| l.contains("The steps")));
+    keys(&mut app, "<Esc>");
+    assert!(app.beside.is_none());
     keys(&mut app, "5G<CR>");
     assert_eq!(name(&app), "Design.md");
     assert!(
@@ -2409,7 +2415,11 @@ fn a_click_on_an_items_plan_chip_opens_its_plan_and_on_its_tab_chip_goes_to_the_
     let shown = screen(&mut app);
     let (x, y) = find(&shown, "plan");
     click(&mut app, x, y);
-    assert_eq!(name(&app), "Plan - Logo.md", "the plan opened, as Enter");
+    assert_eq!(
+        app.beside.as_ref().map(|b| b.plan.name.as_str()),
+        Some("Logo"),
+        "the plan shown beside the note, as Enter"
+    );
 }
 
 #[test]
@@ -2526,6 +2536,7 @@ fn enter_in_a_folded_section_opens_the_fold_not_a_hidden_items_plan() {
     app.open_note(&path, false, false);
     keys(&mut app, "3G<CR>");
     assert_eq!(name(&app), "Work.md");
+    assert!(app.beside.is_none());
     assert!(screen(&mut app).iter().any(|l| l.contains("Task")));
 }
 
@@ -2853,4 +2864,516 @@ fn an_image_pasted_but_not_saved_goes_along_with_a_note_moved_outside() {
     app.save();
     assert_eq!(app.current_path(), Some(moved.as_path()));
     assert!(folder.join(".attachments/new.png").exists());
+}
+
+// UX 2.0 board 8: an item's plan beside the note.
+
+const PLAN_A_B: &str = "# Plan - Condensed sidebar
+
+Item: \"a condensed sidebar\"
+
+## Today
+
+- The sidebar is 34 columns wide, each tab on two lines.
+
+## Decision needed
+
+- [ ] A (recommended): focus widens it
+  ```mock
+  ● 2 stable note IDs
+  ```
+- [ ] B: stays condensed
+
+## Steps (A)
+
+1. A sidebar_condensed setting
+2. Tests
+";
+
+fn with_plan(name: &str, cols: u16) -> (Dir, App, PathBuf, PathBuf) {
+    let (dir, mut app) = started_ux2(name);
+    app.cols = cols;
+    let plan = app
+        .store
+        .create("Switchboard Plans", Some("Plan - Condensed sidebar"));
+    write(&plan, PLAN_A_B);
+    let path = app.store.create("", Some("Design"));
+    write(
+        &path,
+        "# Design\n\n- [ ] a condensed sidebar\n  Plan: [[Plan - Condensed sidebar]] (needs a choice: A, B)\n- [ ] bare\n",
+    );
+    app.open_note(&path, false, false);
+    (dir, app, path, plan)
+}
+
+fn alt(c: char) -> Key {
+    Key::new(
+        KeyCode::Char(c),
+        Mods {
+            ctrl: false,
+            shift: false,
+            alt: true,
+        },
+    )
+}
+
+#[test]
+fn the_plan_beside_the_note_shows_its_choice_as_cards_and_a_letter_chooses() {
+    let (_dir, mut app, path, plan) = with_plan("beside", 160);
+    keys(&mut app, "3G<CR>");
+    let shown = screen(&mut app);
+    let text = shown.join("\n");
+    // The list put away, the note narrowed beside the plan.
+    let (header_x, _) = find(&shown, "Plan Condensed sidebar");
+    assert!(header_x > 40 && header_x < 80, "{text}");
+    assert!(text.contains("Switchboard Plans"), "the folder: {text}");
+    assert!(text.contains("TODAY"), "{text}");
+    assert!(text.contains("DECISION NEEDED"), "{text}");
+    let (a_x, a_y) = find(&shown, "A · focus widens it");
+    let (b_x, b_y) = find(&shown, "B · stays condensed");
+    assert_eq!(a_y, b_y, "the cards side by side: {text}");
+    assert!(b_x > a_x);
+    assert!(text.contains("recommended"));
+    assert!(text.contains("● 2 stable note IDs"), "the mock: {text}");
+    assert!(
+        text.contains("Choose A") && text.contains("Choose B"),
+        "{text}"
+    );
+    assert!(text.contains("STEPS (A)"));
+    assert!(text.contains("1. A sidebar_condensed setting"));
+    let footer = shown.last().unwrap();
+    assert!(footer.contains("C-w note or plan"), "{footer}");
+    assert!(footer.contains("a/b choose"), "{footer}");
+    assert!(footer.contains("Esc close"), "{footer}");
+
+    // C-w l gives the plan the keys, C-w h the note back.
+    keys(&mut app, "<C-w>l");
+    assert!(app.beside.as_ref().unwrap().focused);
+    keys(&mut app, "<C-w>h");
+    assert!(!app.beside.as_ref().unwrap().focused);
+    assert_eq!(app.focus, Focus::Note);
+
+    // b in the plan chooses B: written into the plan, and the item says so.
+    keys(&mut app, "<C-w>lb");
+    let written = fs::read_to_string(&plan).unwrap();
+    assert!(written.contains("## Decision\n"), "{written}");
+    assert!(written.contains("- [x] B: stays condensed"), "{written}");
+    assert!(written.contains("## Steps (B)"), "{written}");
+    assert_eq!(
+        lines(&app)[3],
+        "  Plan: [[Plan - Condensed sidebar]] (chose B)"
+    );
+    let saved = fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("(chose B)"), "{saved}");
+    // u in the note doesn't take the choice back from the item alone.
+    keys(&mut app, "<C-w>hu");
+    assert_eq!(
+        lines(&app)[3],
+        "  Plan: [[Plan - Condensed sidebar]] (chose B)"
+    );
+    keys(&mut app, "<C-w>l");
+    assert!(app.beside.as_ref().unwrap().plan.choice().is_none());
+
+    // Esc closes it, the note widens again.
+    keys(&mut app, "<Esc>");
+    assert!(app.beside.is_none());
+    assert!(
+        !screen(&mut app)
+            .join("\n")
+            .contains("Plan Condensed sidebar")
+    );
+}
+
+#[test]
+fn a_click_on_a_card_chooses_it_and_e_opens_the_plan_note() {
+    let (_dir, mut app, _path, plan) = with_plan("beside click", 160);
+    keys(&mut app, "3G<CR>");
+    let shown = screen(&mut app);
+    let (x, y) = find(&shown, "Choose A");
+    click(&mut app, x + 1, y);
+    let written = fs::read_to_string(&plan).unwrap();
+    assert!(written.contains("- [x] A (recommended)"), "{written}");
+    assert!(app.beside.as_ref().unwrap().focused);
+    keys(&mut app, "e");
+    assert!(app.beside.is_none());
+    assert_eq!(name(&app), "Plan - Condensed sidebar.md");
+}
+
+#[test]
+fn a_paste_with_the_plan_focused_and_going_to_the_list_leave_the_note_alone() {
+    let (_dir, mut app, _path, _plan) = with_plan("beside paste", 160);
+    keys(&mut app, "3G<CR><C-w>l");
+    app.paste("pasted");
+    assert!(!lines(&app).iter().any(|l| l.contains("pasted")));
+    assert_eq!(
+        app.request(socket::Request::Run("Go to the list".into())),
+        "ok"
+    );
+    assert!(app.beside.is_none());
+    assert!(app.list_shown);
+    assert_eq!(app.focus, Focus::List);
+
+    // Ctrl-B from the plan shows the list too.
+    keys(&mut app, "<Tab>");
+    app.focus = Focus::Note;
+    keys(&mut app, "3G<CR><C-w>l<C-b>");
+    assert!(app.beside.is_none());
+    assert!(app.list_shown);
+
+    // Narrow, a click outside the plan leaves it the keys while it hides
+    // the note.
+    app.cols = 90;
+    app.focus = Focus::Note;
+    keys(&mut app, "3G<CR>");
+    let _ = screen(&mut app);
+    let y = app.rows - 2;
+    click(&mut app, 2, y);
+    keys(&mut app, "<Esc>");
+    assert!(app.beside.as_ref().is_some_and(|b| b.focused));
+}
+
+#[test]
+fn choosing_turns_the_item_s_needs_a_choice_past_a_blank_line() {
+    let (_dir, mut app) = started_ux2("beside blank");
+    app.cols = 160;
+    let plan = app.store.create("", Some("Plan - Condensed sidebar"));
+    write(&plan, PLAN_A_B);
+    let path = app.store.create("", Some("Design"));
+    write(
+        &path,
+        "# Design\n\n- [ ] a condensed sidebar\n\n  Plan: [[Plan - Condensed sidebar]] (needs a choice: A, B)\n",
+    );
+    app.open_note(&path, false, false);
+    keys(&mut app, "3G<CR><C-w>la");
+    assert_eq!(
+        lines(&app)[4],
+        "  Plan: [[Plan - Condensed sidebar]] (chose A)"
+    );
+}
+
+#[test]
+fn choosing_on_the_item_s_own_line_keeps_the_panel_on_the_item() {
+    let (_dir, mut app) = started_ux2("beside first line");
+    app.cols = 160;
+    let plan = app.store.create("", Some("Plan - Condensed sidebar"));
+    write(&plan, PLAN_A_B);
+    let path = app.store.create("", Some("Design"));
+    write(
+        &path,
+        "# Design\n\n- [ ] a condensed sidebar (needs a choice: A, B)\n  Plan: [[Plan - Condensed sidebar]]\n",
+    );
+    app.open_note(&path, false, false);
+    keys(&mut app, "3G<CR><C-w>la");
+    assert_eq!(lines(&app)[2], "- [ ] a condensed sidebar (chose A)");
+    keys(&mut app, "<C-w>h3G");
+    assert!(app.beside_is_of_cursor());
+}
+
+#[test]
+fn only_the_first_open_decision_is_drawn_as_cards() {
+    let (_dir, mut app, _path, plan) = with_plan("beside two decisions", 160);
+    let two = PLAN_A_B.replace(
+        "## Steps (A)",
+        "## Decision needed\n\n- [ ] A: later one\n- [ ] B: later two\n\n## Steps (A)",
+    );
+    write(&plan, &two);
+    keys(&mut app, "3G<CR>");
+    let text = screen(&mut app).join("\n");
+    assert!(text.contains("B · stays condensed"), "{text}");
+    assert!(!text.contains("B · later two"), "{text}");
+    assert!(text.contains("- B: later two"), "{text}");
+}
+
+#[test]
+fn choosing_passes_a_sub_item_s_own_choice() {
+    let (_dir, mut app) = started_ux2("beside sub item");
+    app.cols = 160;
+    let plan = app.store.create("", Some("Plan - Condensed sidebar"));
+    write(&plan, PLAN_A_B);
+    let path = app.store.create("", Some("Design"));
+    write(
+        &path,
+        "# Design\n\n- [ ] a condensed sidebar\n  - [ ] a part (needs a choice: X)\n  Plan: [[Plan - Condensed sidebar]] (needs a choice: A, B)\n",
+    );
+    app.open_note(&path, false, false);
+    keys(&mut app, "3G<CR><C-w>la");
+    assert_eq!(lines(&app)[3], "  - [ ] a part (needs a choice: X)");
+    assert_eq!(
+        lines(&app)[4],
+        "  Plan: [[Plan - Condensed sidebar]] (chose A)"
+    );
+}
+
+#[test]
+fn a_plan_changed_on_disk_is_shown_again_before_a_choice() {
+    let (_dir, mut app, _path, plan) = with_plan("beside changed", 160);
+    keys(&mut app, "3G<CR>");
+    write(
+        &plan,
+        &PLAN_A_B.replace("focus widens it", "focus grows it"),
+    );
+    keys(&mut app, "<C-w>la");
+    let written = fs::read_to_string(&plan).unwrap();
+    assert!(
+        written.contains("- [ ] A (recommended): focus grows it"),
+        "{written}"
+    );
+    assert_eq!(
+        app.message.as_ref().map(|m| m.0.as_str()),
+        Some("notes: the plan changed; look again and choose")
+    );
+    assert!(screen(&mut app).join("\n").contains("focus grows it"));
+    keys(&mut app, "a");
+    assert!(fs::read_to_string(&plan).unwrap().contains("- [x] A"));
+}
+
+#[test]
+fn a_later_open_decision_without_options_keeps_the_item_needing_a_choice() {
+    let (_dir, mut app, _path, plan) = with_plan("beside open question", 160);
+    write(
+        &plan,
+        &PLAN_A_B.replace(
+            "## Steps (A)",
+            "## Decision needed\n\nWhich color?\n\n## Steps (A)",
+        ),
+    );
+    keys(&mut app, "3G<CR><C-w>la");
+    assert!(
+        lines(&app)[3].contains("(needs a choice: A, B)"),
+        "{:?}",
+        lines(&app)
+    );
+}
+
+#[test]
+fn an_item_reworded_while_its_plan_shows_is_still_the_one_chosen_for() {
+    let (_dir, mut app, _path, _plan) = with_plan("beside reworded", 160);
+    keys(&mut app, "3G<CR>3GA now<Esc><C-w>lb");
+    assert_eq!(lines(&app)[2], "- [ ] a condensed sidebar now");
+    assert_eq!(
+        lines(&app)[3],
+        "  Plan: [[Plan - Condensed sidebar]] (chose B)"
+    );
+    assert_eq!(app.beside.as_ref().unwrap().item, "a condensed sidebar now");
+    keys(&mut app, "<C-w>h3G");
+    assert!(app.beside_is_of_cursor());
+}
+
+#[test]
+fn a_palette_command_that_starts_typing_gives_the_note_the_keys() {
+    let (_dir, mut app, _path, plan) = with_plan("beside palette typing", 160);
+    keys(&mut app, "3G<CR><C-w>l");
+    let bold = palette::commands(false, true, true)
+        .into_iter()
+        .find(|c| c.name.ends_with("Bold"))
+        .unwrap()
+        .name;
+    assert_eq!(app.request(socket::Request::Run(bold)), "ok");
+    keys(&mut app, "b");
+    assert!(!app.beside.as_ref().unwrap().focused);
+    assert!(!fs::read_to_string(&plan).unwrap().contains("[x]"));
+
+    // An indent leaves Normal mode as it was, and still gives the note the
+    // keys.
+    keys(&mut app, "<Esc><C-w>l");
+    assert!(app.beside.as_ref().unwrap().focused);
+    let indent = palette::commands(false, true, true)
+        .into_iter()
+        .find(|c| c.act == PaletteAct::Indent)
+        .unwrap()
+        .name;
+    assert_eq!(app.request(socket::Request::Run(indent)), "ok");
+    assert!(!app.beside.as_ref().unwrap().focused);
+}
+
+#[test]
+fn an_item_linking_another_plan_since_is_not_chosen_for() {
+    let (_dir, mut app, _path, plan) = with_plan("beside relinked", 160);
+    keys(&mut app, "3G<CR>4G");
+    keys(&mut app, "0f-lct]New<Esc>");
+    assert!(
+        lines(&app)[3].contains("[[Plan -New]]"),
+        "{:?}",
+        lines(&app)
+    );
+    keys(&mut app, "<C-w>la");
+    assert!(!fs::read_to_string(&plan).unwrap().contains("[x]"));
+    assert!(lines(&app)[3].contains("needs a choice"));
+}
+
+#[test]
+fn a_plan_whose_title_differs_from_its_file_name_is_chosen_for() {
+    let (_dir, mut app) = started_ux2("beside colon title");
+    app.cols = 160;
+    let plan = app.store.create("", Some("Plan - UI: layout"));
+    write(
+        &plan,
+        &PLAN_A_B.replace("# Plan - Condensed sidebar", "# Plan - UI: layout"),
+    );
+    let path = app.store.create("", Some("Design"));
+    write(
+        &path,
+        "# Design\n\n- [ ] the layout\n  Plan: [[Plan - UI: layout]] (needs a choice: A, B)\n",
+    );
+    app.open_note(&path, false, false);
+    keys(&mut app, "3G<CR><C-w>la");
+    assert_eq!(lines(&app)[3], "  Plan: [[Plan - UI: layout]] (chose A)");
+}
+
+#[test]
+fn tab_to_a_card_below_the_view_scrolls_it_into_view() {
+    let (_dir, mut app, _path, plan) = with_plan("beside long today", 160);
+    let long = PLAN_A_B.replace(
+        "- The sidebar is 34 columns wide, each tab on two lines.",
+        &"- A line of today.\n".repeat(40),
+    );
+    write(&plan, &long);
+    keys(&mut app, "3G<CR>");
+    assert!(!screen(&mut app).join("\n").contains("Choose A"));
+    keys(&mut app, "<C-w>l<Tab>");
+    assert!(screen(&mut app).join("\n").contains("Choose A"));
+}
+
+#[test]
+fn the_panel_goes_once_its_item_no_longer_links_the_plan_and_the_chip_only_shows_it() {
+    let (_dir, mut app, _path, _plan) = with_plan("beside unlinked", 160);
+    keys(&mut app, "3G<CR>");
+    // The palette's "Open this item's plan" again keeps the plan shown.
+    assert!(app.open_plan());
+    assert!(app.beside.is_some());
+    assert!(app.message.is_none());
+    keys(&mut app, "4Gdd");
+    app.save_due = Some(Instant::now());
+    app.tick();
+    assert!(app.beside.is_none());
+}
+
+#[test]
+fn search_results_put_the_plan_away() {
+    let (_dir, mut app, _path, _plan) = with_plan("beside search", 160);
+    keys(&mut app, "3G<CR>");
+    app.show(None, None, Some("sidebar".into()));
+    assert!(app.beside.is_none());
+    assert!(app.list_shown);
+}
+
+#[test]
+fn opening_another_note_puts_the_plan_away() {
+    let (_dir, mut app, _path, _plan) = with_plan("beside other note", 160);
+    keys(&mut app, "3G<CR>");
+    assert!(app.beside.is_some());
+    let other = app.store.create("", Some("Other"));
+    write(&other, "# Other\n");
+    app.open_note(&other, false, false);
+    assert!(app.beside.is_none());
+}
+
+#[test]
+fn m_e_opens_the_plan_of_the_item_under_the_cursor_and_closes_it() {
+    let (_dir, mut app, _path, _plan) = with_plan("beside m-e", 160);
+    keys(&mut app, "3G");
+    app.key(alt('e'));
+    assert!(app.beside.is_some());
+    app.key(alt('e'));
+    assert!(app.beside.is_none());
+    keys(&mut app, "1G");
+    app.key(alt('e'));
+    assert!(app.beside.is_none());
+    assert_eq!(
+        app.message.as_ref().map(|m| m.0.as_str()),
+        Some("No plan for this line")
+    );
+}
+
+#[test]
+fn the_plan_fills_the_width_in_its_share_and_drops_its_extras_when_narrow() {
+    // Wide: the plan's text stops at 100 columns, the folder at the right.
+    let (_dir, mut app, _path, _plan) = with_plan("beside wide", 240);
+    keys(&mut app, "3G<CR>");
+    let shown = screen(&mut app);
+    let plan = app.geo.plan;
+    let note = app.geo.note;
+    assert_eq!(note.width + 1 + plan.width, 240);
+    assert!(plan.width > note.width, "{note:?} {plan:?}");
+    let header = &shown[0];
+    assert!(header.trim_end().ends_with("Switchboard Plans"), "{header}");
+
+    // The board's width: everything.
+    let (_dir, mut app, _path, _plan) = with_plan("beside board", 125);
+    keys(&mut app, "3G<CR>");
+    let text = screen(&mut app).join("\n");
+    assert!(
+        text.contains("Switchboard Plans") && text.contains("● 2 stable"),
+        "{text}"
+    );
+
+    // Narrower: the folder goes, then the mocks, then the cards stack.
+    let (_dir, mut app, _path, _plan) = with_plan("beside 120", 120);
+    keys(&mut app, "3G<CR>");
+    let text = screen(&mut app).join("\n");
+    assert!(!text.contains("Switchboard Plans"), "{text}");
+    assert!(text.contains("● 2 stable"), "{text}");
+    let (_dir, mut app, _path, _plan) = with_plan("beside 115", 115);
+    keys(&mut app, "3G<CR>");
+    let text = screen(&mut app).join("\n");
+    assert!(!text.contains("● 2 stable"), "{text}");
+    let shown = screen(&mut app);
+    let (_, a_y) = find(&shown, "A · focus");
+    let (_, b_y) = find(&shown, "B · stays");
+    assert_eq!(a_y, b_y);
+    let (_dir, mut app, _path, _plan) = with_plan("beside 108", 108);
+    keys(&mut app, "3G<CR>");
+    let shown = screen(&mut app);
+    let (_, a_y) = find(&shown, "A · focus");
+    let (_, b_y) = find(&shown, "B · stays");
+    assert!(b_y > a_y, "stacked:\n{}", shown.join("\n"));
+    assert!(app.geo.note.width > 0, "the note still beside the plan");
+
+    // Under the narrowest, the plan takes the width, and the command shows
+    // the note in its place; Esc there gives the plan back.
+    let (_dir, mut app, path, _plan) = with_plan("beside 90", 90);
+    keys(&mut app, "3G<CR>");
+    let _ = screen(&mut app);
+    assert_eq!(app.geo.note.width, 0);
+    // The plan has the keys, so typing doesn't reach the hidden note.
+    assert!(app.beside.as_ref().unwrap().focused);
+    keys(&mut app, "ix");
+    assert_eq!(lines(&app)[2], "- [ ] a condensed sidebar");
+    let _ = path;
+    assert_eq!(app.geo.plan.width, 90);
+    assert_eq!(
+        app.request(socket::Request::Run("Show the note beside its plan".into())),
+        "ok"
+    );
+    let _ = screen(&mut app);
+    assert_eq!(app.geo.plan.width, 0);
+    assert_eq!(app.geo.note.width, 90);
+    keys(&mut app, "<Esc>");
+    let _ = screen(&mut app);
+    assert_eq!(app.geo.plan.width, 90);
+}
+
+#[test]
+fn enter_on_the_item_whose_plan_shows_starts_work_on_it() {
+    let (_dir, mut app, _path, _plan) = with_plan("beside start", 160);
+    keys(&mut app, "3G<CR>");
+    assert!(app.beside.is_some());
+    keys(&mut app, "<CR>");
+    // Outside the workspace, gw's press says it needs it.
+    assert_eq!(
+        app.message.as_ref().map(|m| m.0.as_str()),
+        Some("notes: that needs Switchboard's workspace")
+    );
+}
+
+#[test]
+fn an_item_put_next_in_autopilot_s_queue_has_its_chip() {
+    let (_dir, mut app, path, _plan) = with_plan("next chip", 160);
+    let id = app.open.as_ref().and_then(|o| o.id.clone()).unwrap();
+    app.handle(Msg::Next(
+        [note_item_key(&id, "bare")].into_iter().collect(),
+    ));
+    let text = screen(&mut app).join("\n");
+    assert!(text.contains("next in the queue"), "{text}");
+    let _ = path;
 }

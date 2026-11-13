@@ -560,6 +560,21 @@ impl Server {
         let Some(old) = self.pane_tab(notes) else {
             return;
         };
+        if old == here_tab
+            && here == notes
+            && self.tab_opt(here_tab, "@notes").as_deref() == Some("1")
+            && settings::is_on("ux2")
+        {
+            // In Notes' own tab, with UX 2.0, M-e is the app's: the plan of
+            // the item under its cursor beside the note, or put away.
+            if let Some(slot) = self.panes.get_mut(&notes)
+                && let Some(key) = crate::mux::input::Key::parse("M-e")
+            {
+                let bytes = crate::mux::input::encode_key(&key, &slot.pane.modes());
+                let _ = slot.pane.write(&bytes);
+            }
+            return;
+        }
         if old == here_tab {
             // Beside the pane already: home again. Alone in its own tab, it
             // is home.
@@ -958,7 +973,7 @@ impl Server {
 
     /// The client a press runs in: the one used last on the caller's
     /// session, else the one used last.
-    fn press_client(&self, caller: Option<PaneId>) -> Option<ClientId> {
+    pub(crate) fn press_client(&self, caller: Option<PaneId>) -> Option<ClientId> {
         caller
             .and_then(|p| self.pane_tab(p))
             .and_then(|t| self.session_of_tab(t))

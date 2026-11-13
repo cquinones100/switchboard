@@ -36,13 +36,16 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
+use crate::cmd::work_item_box::{
+    self, Chosen, Context as BoxContext, PlanChip, Repo as BoxRepo, WorkItemBox,
+};
 use crate::cmd::{work_recent, worktree_from_note};
 use crate::integrations::github;
 use crate::mux::keys::Action;
 use crate::mux::server::{ClientId, Event, Opened, Server};
 use crate::mux::{PaneId, TabId};
 use crate::ui::picker::TYPED;
-use crate::ui::{Confirm, PickItem, Picker};
+use crate::ui::{Confirm, Outcome, PickItem, Picker};
 use crate::worktree;
 use crate::{paths, platform, settings, util};
 
@@ -85,6 +88,26 @@ pub struct WorkEvent {
 enum Wanted {
     Any,
     Repo,
+}
+
+/// What `gw` read before the "Work on this item" box: the note (its path in
+/// the notes directory, its text, its key for the repository kept), the
+/// item, the repositories offered and the note's last one, and a tab on
+/// the item already.
+struct ItemOpen {
+    note: String,
+    line: usize,
+    item: worktree_from_note::Item,
+    key: String,
+    text: String,
+    repos: Vec<PathBuf>,
+    note_repo: Option<PathBuf>,
+    linked: Option<TabId>,
+    /// Opened again on another repository, its focus on that one's row.
+    reopened: bool,
+    /// The directory `gw` was pressed from, which "Another directory…"
+    /// offers.
+    here: PathBuf,
 }
 
 /// What a key found before its first box: the directories to offer, the
@@ -1096,17 +1119,18 @@ impl Server {
                 // A note started before it had an ID was kept by its path,
                 // which wtn then gave one.
                 let last = work_recent::note_repo(&key).or_else(|| work_recent::note_repo(&name));
+                let note_repo = last.as_deref().and_then(main_clone);
                 recent.splice(0..0, last);
                 let found = Found {
                     dirs: offered(&here, &panes, &recent, &recent_session_dirs(), Wanted::Repo),
                     here,
                     clipboard: String::new(),
                 };
-                Some((text, key, found, tabs))
+                Some((text, key, found, tabs, note_repo))
             },
             move |server, client, read| {
                 let title = note.strip_suffix(".md").unwrap_or(&note).to_string();
-                let Some((text, key, found, tabs)) = read else {
+                let Some((text, key, found, tabs, note_repo)) = read else {
                     server.say(Some(client), &format!("No note {title}."));
                     return;
                 };
@@ -1122,6 +1146,22 @@ impl Server {
                     .iter()
                     .find(|(t, named)| *named == item.text && server.tabs.contains_key(t))
                     .map(|(t, _)| *t);
+                if settings::is_on("ux2") {
+                    let open = ItemOpen {
+                        note,
+                        line,
+                        item,
+                        key,
+                        text,
+                        repos: found.dirs,
+                        note_repo,
+                        linked,
+                        reopened: false,
+                        here: found.here.clone(),
+                    };
+                    server.work_item_box(client, open, None);
+                    return;
+                }
                 if let Some(tab) = linked {
                     let question = Confirm::new(format!("“{short}” has a tab already. Go to it?"));
                     server.ask(client, question, move |server, client, yes| {
@@ -1179,6 +1219,309 @@ impl Server {
                         );
                     },
                 );
+            },
+        );
+    }
+
+    /// UX 2.0's "Work on this item" box (src/cmd/work_item_box.rs) for
+    /// `open`'s item, on the repository `chosen` (by its place among the
+    /// offered ones, the note's last first when none is), what it shows of
+    /// the repository read off the task: its branches and the one last
+    /// picked, how it lands, whether a worktree has the item, the item's
+    /// plan.
+    fn work_item_box(&mut self, client: ClientId, open: ItemOpen, chosen: Option<usize>) {
+        let chosen = chosen
+            .or_else(|| {
+                open.note_repo
+                    .as_ref()
+                    .and_then(|r| open.repos.iter().position(|d| d == r))
+            })
+            .unwrap_or(0)
+            .min(open.repos.len().saturating_sub(1));
+        let Some(repo) = open.repos.get(chosen).cloned() else {
+            // None offered: one typed in, as "Another directory…" asks.
+            self.work_item_other(client, open);
+            return;
+        };
+        let (name, text, item) = (open.note.clone(), open.text.clone(), open.item.clone());
+        let line = open.line;
+        self.off_task(
+            client,
+            move || {
+                let common = crate::tabs::git::locate(&repo).map(|p| p.common_dir);
+                let (default, branches, last) = common
+                    .as_deref()
+                    .map(|c| {
+                        let default = crate::tabs::git::default_branch(c);
+                        let local = crate::tabs::git::local_branches(c);
+                        // A branch picked before counts only while it is
+                        // still here or on origin, as "Land on:" lists it.
+                        let recent: Vec<String> = work_recent::branches(c)
+                            .into_iter()
+                            .filter(|b| {
+                                b.is_empty()
+                                    || local.contains(b)
+                                    || crate::tabs::git::on_origin(c, b)
+                            })
+                            .collect();
+                        let mut branches: Vec<String> = Vec::new();
+                        for b in default
+                            .iter()
+                            .cloned()
+                            .chain(recent.iter().cloned())
+                            .chain(local.iter().cloned())
+                        {
+                            if !b.is_empty() && !branches.contains(&b) {
+                                branches.push(b);
+                            }
+                        }
+                        (
+                            default,
+                            branches,
+                            recent.first().cloned().unwrap_or_default(),
+                        )
+                    })
+                    .unwrap_or_default();
+                let landing = crate::repos::landing_for(&repo, false).map(|l| {
+                    let said = crate::autopilot::said_by(&l.source).to_string();
+                    (l.landing, said)
+                });
+                let claimed = !worktree_from_note::unclaimed(&repo, &name, &text)
+                    .iter()
+                    .any(|i| i.line == line);
+                let plan = match worktree_from_note::plan_of(
+                    &worktree_from_note::notes_dir(),
+                    &worktree_from_note::item_text(&text, line),
+                ) {
+                    worktree_from_note::Plan::Settled if !item.needs_choice => PlanChip::Settled,
+                    worktree_from_note::Plan::None => PlanChip::None,
+                    _ => PlanChip::Choice,
+                };
+                (default, branches, last, landing, claimed, plan)
+            },
+            move |server, client, (default, branches, last, landing, claimed, plan)| {
+                let tab = (1..)
+                    .find(|n| server.tab_numbered(*n).is_none())
+                    .unwrap_or(1);
+                let linked = open
+                    .linked
+                    .filter(|t| server.tabs.contains_key(t))
+                    .map(|t| {
+                        let waits = server.tab_agent(t) == Some(crate::agent::State::Waiting);
+                        (server.tab_number(t), server.tab_label(t), waits)
+                    });
+                let ctx = BoxContext {
+                    item: open.item.text.clone(),
+                    plan,
+                    repos: open
+                        .repos
+                        .iter()
+                        .map(|d| BoxRepo {
+                            name: d
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| paths::tilde(d)),
+                            path: paths::tilde(d),
+                        })
+                        .collect(),
+                    chosen,
+                    note_repo: open
+                        .note_repo
+                        .as_ref()
+                        .and_then(|r| open.repos.iter().position(|d| d == r)),
+                    // The default branch typed by name is landed on as the
+                    // default branch, so it shows empty.
+                    target: if default.as_deref() == Some(last.as_str()) {
+                        String::new()
+                    } else {
+                        last
+                    },
+                    branches,
+                    default_branch: default.clone().unwrap_or_default(),
+                    landing,
+                    tab,
+                    worktree: worktree_from_note::worktree_name(&open.item.text),
+                    claimed,
+                    autopilot: server.autopilot_works(&open.note),
+                    linked,
+                };
+                let focus = chosen;
+                let boxed = WorkItemBox::new(ctx);
+                let boxed = if open.reopened {
+                    boxed.with_focus(work_item_box::Part::Repo(focus))
+                } else {
+                    boxed
+                };
+                server.open(
+                    client,
+                    Box::new(boxed),
+                    Some(Box::new(move |server: &mut Server, client, outcome| {
+                        let Outcome::Picked(p) = outcome else {
+                            return;
+                        };
+                        let Ok(picked) = serde_json::from_str::<Chosen>(&p.value) else {
+                            return;
+                        };
+                        server.work_item_chosen(client, open, p.index, picked, default);
+                    })),
+                );
+            },
+        );
+    }
+
+    /// What the "Work on this item" box closed with: the item started on
+    /// the repository and branch chosen, put next in autopilot's queue, the
+    /// box opened again on another repository, or the tab on it gone to.
+    fn work_item_chosen(
+        &mut self,
+        client: ClientId,
+        mut open: ItemOpen,
+        index: usize,
+        picked: Chosen,
+        default: Option<String>,
+    ) {
+        match index {
+            work_item_box::REPO => {
+                open.reopened = true;
+                self.work_item_box(client, open, Some(picked.repo));
+            }
+            work_item_box::OTHER => self.work_item_other(client, open),
+            work_item_box::GO_TO => {
+                if let Some(tab) = open.linked {
+                    self.go_to_tab(client, tab);
+                }
+            }
+            work_item_box::NEXT => {
+                self.autopilot_put_next(client, open.note, open.line, Some(open.item.text))
+            }
+            work_item_box::START => {
+                let Some(repo) = open.repos.get(picked.repo).cloned() else {
+                    return;
+                };
+                let (note, item, key) = (open.note, open.item, open.key);
+                let (name, text, line) = (note.clone(), open.text, open.line);
+                let at = repo.clone();
+                self.off_task(
+                    client,
+                    move || {
+                        worktree_from_note::unclaimed(&at, &name, &text)
+                            .iter()
+                            .any(|i| i.line == line)
+                    },
+                    move |server, client, free| {
+                        let short = crate::tabs::title::short_name(&item.text);
+                        if !free {
+                            server.say(
+                                Some(client),
+                                &format!(
+                                    "“{short}” has a worktree in {} already.",
+                                    paths::tilde(&repo)
+                                ),
+                            );
+                            return;
+                        }
+                        let at = repo.clone();
+                        server.landing_target(
+                            client,
+                            at,
+                            picked.target,
+                            default,
+                            move |server, client, target| {
+                                keep_note_repo(key, &repo);
+                                if let Some(tab) = server.open_item_tab(
+                                    client,
+                                    &repo,
+                                    &note,
+                                    &item,
+                                    &target,
+                                    Opened::Front,
+                                ) {
+                                    server.front(client, &[tab]);
+                                }
+                            },
+                        );
+                    },
+                );
+            }
+            _ => {}
+        }
+    }
+
+    /// "Another directory…" in the "Work on this item" box: a repository
+    /// picked or typed in as `gw` asked it before the box, the box opened
+    /// again on it, first among those offered.
+    fn work_item_other(&mut self, client: ClientId, mut open: ItemOpen) {
+        let short = crate::tabs::title::short_name(&open.item.text);
+        let found = Found {
+            here: open.here.clone(),
+            dirs: open.repos.clone(),
+            clipboard: String::new(),
+        };
+        let ask = format!("Work on “{short}”: the repository");
+        self.ask_dir(
+            client,
+            &ask,
+            found,
+            Wanted::Repo,
+            move |server, client, repo, _| {
+                open.repos.retain(|r| *r != repo);
+                open.repos.insert(0, repo);
+                open.reopened = true;
+                server.work_item_box(client, open, Some(0));
+            },
+        );
+    }
+
+    /// `branch` checked as the branch an item lands on in `repo`, as
+    /// "Land on:" checks it (`autopilot_pick_target`): the default branch
+    /// (empty, or typed by name) always, another only where the repository
+    /// lands straight on a branch; kept as the one last picked, and `then`
+    /// given it (empty for the default branch). Why not, said otherwise.
+    pub(crate) fn landing_target(
+        &mut self,
+        client: ClientId,
+        repo: PathBuf,
+        branch: String,
+        default: Option<String>,
+        then: impl FnOnce(&mut Server, ClientId, String) + Send + 'static,
+    ) {
+        let branch = if default.as_deref() == Some(branch.as_str()) {
+            String::new()
+        } else {
+            branch
+        };
+        let keep = {
+            let repo = repo.clone();
+            move |branch: String| {
+                work_recent::in_background(move || {
+                    if let Some(place) = crate::tabs::git::locate(&repo) {
+                        work_recent::pick_branch(&place.common_dir, &branch);
+                    }
+                });
+            }
+        };
+        if branch.is_empty() {
+            keep(branch.clone());
+            then(self, client, branch);
+            return;
+        }
+        if crate::autopilot::mode::typed_branch(&branch).is_none() {
+            self.say(Some(client), &format!("Not a branch name: {branch}"));
+            return;
+        }
+        self.off_task(
+            client,
+            move || crate::repos::landing_for(&repo, false).map(|l| (l, repo)),
+            move |server, client, landing| match landing {
+                Ok((l, _)) if l.landing == "direct" => {
+                    keep(branch.clone());
+                    then(server, client, branch);
+                }
+                Ok((l, at)) => server.say(
+                    Some(client),
+                    &crate::autopilot::target_refused(&branch, &at, &l.source),
+                ),
+                Err(e) => server.say(Some(client), &format!("Couldn't tell how it lands: {e}")),
             },
         );
     }

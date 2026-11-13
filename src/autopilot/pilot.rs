@@ -155,6 +155,8 @@ pub struct Job {
     /// Items whose plan needs a choice taken too (hands-free).
     pub with_choices: bool,
     pub skip: HashSet<String>,
+    /// The items put next in the queue, by their first lines.
+    pub next: Vec<String>,
     /// Today's Claude spend past which nothing opens; 0 for none.
     pub spend_limit: f64,
     /// For a read for mission control, the key it is read under.
@@ -182,7 +184,7 @@ impl Job {
         notes: &Path,
         state: &Path,
     ) -> Result<(Vec<Item>, Vec<Item>), String> {
-        queue_and_held(
+        let (mut items, held) = queue_and_held(
             notes,
             &self.repo,
             &self.note,
@@ -190,7 +192,17 @@ impl Job {
             self.ready_only,
             self.with_choices,
             &crate::cmd::worktree_from_note::claims_in(state),
-        )
+        )?;
+        if !self.next.is_empty() {
+            // Only an item whose plan is settled now is put first: its plan
+            // may have gained a decision since it was put next.
+            use crate::cmd::worktree_from_note::{item_text, plan_open, put_next};
+            let text = std::fs::read_to_string(notes.join(&self.note)).unwrap_or_default();
+            put_next(&mut items, &self.next, |i| {
+                !plan_open(notes, &item_text(&text, i.line))
+            });
+        }
+        Ok((items, held))
     }
 
     /// The plan each item of the note links, by the item's first line.
@@ -651,6 +663,7 @@ impl Pilot {
             ready_only: mode.ready_only,
             with_choices: mode.hands_free,
             skip: skip.clone(),
+            next: mode.next_here(),
             spend_limit: mode.spend_limit,
             key,
             mtime,
@@ -659,7 +672,7 @@ impl Pilot {
         let mut skipped: Vec<&String> = skip.iter().collect();
         skipped.sort();
         let key = format!(
-            "{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}",
             mode.note,
             mtime.unwrap_or(0),
             skipped
@@ -668,7 +681,8 @@ impl Pilot {
                 .collect::<Vec<_>>()
                 .join("\n"),
             mode.ready_only,
-            mode.hands_free
+            mode.hands_free,
+            mode.next_here().join("\n")
         );
         if mtime.is_some()
             && !self.reading
@@ -870,6 +884,7 @@ mod tests {
             ready_only: false,
             with_choices: false,
             skip: HashSet::new(),
+            next: Vec::new(),
             spend_limit: 0.0,
             key: String::new(),
             mtime: 0,
