@@ -1730,7 +1730,7 @@ switchboard slack-relay notify [--from <name>] [<text>]
                                   post a notice in the DM, from <text> or stdin
 ```
 
-It needs the workspace's server running, and works from anywhere that server can be reached (a Claude job, ssh): a new tab goes in the session you used last. The tab runs `switchboard slack-relay run`, which starts the relay again if it crashes, inside an interactive shell so your shell's setup puts `claude` on the PATH for its Haiku calls. When the relay stops, the tab is left at that shell, and `M-S` starts the relay there again. It also needs Switchboard's hooks for Claude Code, since that is how it hears what each session does: as a plugin, only the sessions in the workspace's panes run them, so the relay hears of those alone; with Settings' "Load Switchboard as a plugin" off, every session runs them from your `~/.claude/settings.json`, one in a terminal of its own too.
+It needs the workspace's server running, and works from anywhere that server can be reached (a Claude job, ssh): a new tab goes in the session you used last. The tab runs `switchboard slack-relay run`, which starts the relay again if it crashes, inside an interactive shell so your shell's setup puts `claude` on the PATH for its Haiku calls. Stopping the relay on purpose (M-p, `slack-relay stop`, `stop` in the DM, Ctrl-C) closes its tab once it has said so in the DM; when it crashes past its restarts or refuses to start, the tab is left at that shell with the error, and `M-S` starts the relay there again. Settings' "Close the relay's tab when it stops" (`relay_close_tab`) off leaves the tab at its shell however the relay ends; a tab opened before the setting existed keeps the old way until the relay is next started. It also needs Switchboard's hooks for Claude Code, since that is how it hears what each session does: as a plugin, only the sessions in the workspace's panes run them, so the relay hears of those alone; with Settings' "Load Switchboard as a plugin" off, every session runs them from your `~/.claude/settings.json`, one in a terminal of its own too.
 
 `switchboard slack-relay notify` is how something else on the computer reaches you through the relay, such as the `oncall` skill. The notice goes out as the app's bot, under a 🔔 and the `--from` name (`notice` when none is given; up to 40 letters, digits, spaces and `. : _ -`), so Slack notifies you, which it never does for anything posted as you. The running relay posts it within a second, whether or not you are at the computer, and `notify` waits up to 45 seconds for it: it exits 0 once it is posted and 1 if it wasn't (the relay isn't running, or Slack refused), so a caller knows whether you were reached. It only ever posts in the DM.
 
@@ -2204,6 +2204,7 @@ With UX 2.0 on, this category is named "Tabs and header".
 
 | Setting | Default | What it does |
 |---|---|---|
+| Close the relay's tab when it stops (`relay_close_tab`) | on | Stopping the Slack relay, from M-p, `slack-relay stop`, `stop` in its DM or Ctrl-C in its tab, closes its tab; a crash or a start it refuses keeps the tab at a shell with the error. Off, the tab stays at a shell whenever the relay ends |
 | Haiku summaries (`haiku_summaries`) | on | One line on what each tab is doing in the relay's Home tab and progress, each a paid Haiku call |
 
 ## Commands for scripts

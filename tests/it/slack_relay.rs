@@ -260,13 +260,16 @@ fn start_opens_the_relays_tab_once_and_the_rest_say_it_isnt_running() {
     // Asked again, it goes to that tab rather than opening another.
     assert_eq!(relay(&server, &["start"]).0, 0);
     assert_eq!(marked(&server.list()), 1);
-    let tab = server.list()["sessions"][0]["tabs"]
+    let list = server.list();
+    let relay_tab = list["sessions"][0]["tabs"]
         .as_array()
         .unwrap()
         .iter()
         .find(|t| t["options"]["@slack_relay"] == "1")
-        .map(|t| t["id"].as_str().unwrap().to_string())
         .unwrap();
+    // Its pane is marked too, the one `start` runs the relay in again.
+    assert_eq!(relay_tab["panes"][0]["options"]["@slack_relay"], "1");
+    let tab = relay_tab["id"].as_str().unwrap().to_string();
     server.ok(&["kill-tab", "-t", &tab]);
 }
 
@@ -335,8 +338,13 @@ fn start_runs_the_relay_again_in_its_tab_when_the_one_there_has_stopped() {
     // The relay's tab, left at a program (cat stands in) by a relay that
     // stopped.
     let opened = server.ok(&["new-tab", "-d", "-n", "relay", "--", "cat"]);
-    let tab = opened.split_whitespace().next().unwrap().to_string();
+    let mut ids = opened.split_whitespace();
+    let (tab, pane) = (
+        ids.next().unwrap().to_string(),
+        ids.next().unwrap().to_string(),
+    );
     server.ok(&["set", "-t", &tab, "@slack_relay", "1"]);
+    server.ok(&["set", "-t", &pane, "@slack_relay", "1"]);
     let pid = || {
         relay_tabs(&server)
             .into_iter()
@@ -368,6 +376,41 @@ fn start_runs_the_relay_again_in_its_tab_when_the_one_there_has_stopped() {
 }
 
 #[test]
+fn start_leaves_a_stopped_relays_tab_alone_when_another_pane_kept_it_open() {
+    let server = TestServer::start();
+    settings(&server);
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    // The relay's tab after the relay's pane closed, kept open by the one
+    // pane split beside it (cat stands in for its program), which carries
+    // no mark of the relay's.
+    let opened = server.ok(&["new-tab", "-d", "-n", "relay", "--", "cat"]);
+    let tab = opened.split_whitespace().next().unwrap().to_string();
+    server.ok(&["set", "-t", &tab, "@slack_relay", "1"]);
+    let pids = |server: &TestServer| -> Vec<String> {
+        server.list()["sessions"][0]["tabs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["id"] == tab.as_str())
+            .unwrap()["panes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["pid"].to_string())
+            .collect()
+    };
+    let before = pids(&server);
+    assert_eq!(relay(&server, &["start"]).0, 0, "{}", server.log());
+    let tabs = relay_tabs(&server);
+    assert_eq!(tabs.len(), 1, "the relay's new tab");
+    assert_ne!(tabs[0].0, tab, "a new tab, not the split one");
+    assert_eq!(pids(&server), before, "the split tab's programs are kept");
+    server.ok(&["kill-tab", "-t", &tabs[0].0]);
+    server.ok(&["kill-tab", "-t", &tab]);
+}
+
+#[test]
 fn start_without_a_server_says_so() {
     let dir = common::TempDir::new("sbr");
     let out = Command::new(common::BIN)
@@ -380,4 +423,48 @@ fn start_without_a_server_says_so() {
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("no Switchboard server is running"));
+}
+
+#[test]
+fn the_relays_tab_closes_when_it_stops_on_purpose_and_stays_otherwise() {
+    let server = TestServer::start();
+    settings(&server);
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let setting = format!(
+        "{} setting relay_close_tab",
+        switchboard::worktree::shell_quote(common::BIN)
+    );
+    // The tab's line, with `true` and `false` standing in for the relay
+    // stopping and crashing; `sh` for the shell it keeps.
+    let open = |relay: &str| {
+        let line = switchboard::relay::cli::run_command(relay, &setting, "sh");
+        let opened = server.ok(&["new-tab", "-d", "-n", "relay", "--", "sh", "-c", &line]);
+        opened.split_whitespace().next().unwrap().to_string()
+    };
+    let open_tabs = || -> Vec<String> {
+        server.list()["sessions"][0]["tabs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let stopped = open("true");
+    wait("the stopped relay's tab to close", || {
+        (!open_tabs().contains(&stopped)).then_some(())
+    });
+    let crashed = open("false");
+    std::thread::sleep(Duration::from_millis(500) * common::patience());
+    assert!(open_tabs().contains(&crashed), "a crash keeps the tab");
+    server.ok(&["kill-tab", "-t", &crashed]);
+
+    common::write_settings(
+        &server.home,
+        json!({ "notifications": false, "tips": false, "relay_close_tab": false }),
+    );
+    let kept = open("true");
+    std::thread::sleep(Duration::from_millis(500) * common::patience());
+    assert!(open_tabs().contains(&kept), "the setting off keeps the tab");
+    server.ok(&["kill-tab", "-t", &kept]);
 }

@@ -20,10 +20,15 @@
 //! since a key has nowhere to show output.
 //!
 //! The relay's tab is marked `@slack_relay` rather than known by its name,
-//! which the tab's label can change. A tab left at a shell by a relay that
-//! stopped is reused: its pane's shell is replaced by the relay, as the tab
+//! which the tab's label can change. Stopping the relay closes its tab
+//! (Settings' `relay_close_tab`); a tab left at a shell by a relay that
+//! crashed, or with that setting off, is reused: its pane, marked
+//! `@slack_relay` too, has its shell replaced by the relay, as the tab
 //! first ran it (the server's `respawn-pane`), rather than the command
-//! typed into a shell that may have had something half typed.
+//! typed into a shell that may have had something half typed. A marked
+//! tab with no marked pane (the relay's pane closed, a pane split beside it
+//! keeping the tab) is unmarked and the relay opens in a new tab, so no
+//! other program is replaced.
 
 use std::io::Read;
 use std::process::ExitCode;
@@ -38,21 +43,47 @@ pub fn relay_window(server: &Server) -> Option<super::mux::Window> {
     server.windows()?.into_iter().find(|w| w.relay)
 }
 
+/// The pane in `tab` marked as the relay's, if it is still there.
+fn relay_pane(server: &Server, tab: &str) -> Option<String> {
+    let list: serde_json::Value = serde_json::from_str(&server.ask(&["list"]).ok()?).ok()?;
+    list["sessions"]
+        .as_array()?
+        .iter()
+        .flat_map(|s| s["tabs"].as_array().into_iter().flatten())
+        .find(|t| t["id"] == tab)?["panes"]
+        .as_array()?
+        .iter()
+        .find(|p| p["options"]["@slack_relay"] == "1")
+        .and_then(|p| p["id"].as_str().map(String::from))
+}
+
 /// Whether a relay holds the lock and its process is alive.
 pub fn running(paths: &Paths) -> bool {
     lock_holder(paths).is_some()
 }
 
 /// What the relay's tab runs: an interactive shell, so your rc puts
-/// `claude` on the PATH for Haiku, which stays a shell if the relay stops.
+/// `claude` on the PATH for Haiku.
 fn tab_command() -> Vec<String> {
     let shell = crate::worktree::work_shell();
-    let line = format!(
-        "{} run; exec {} -i",
-        crate::worktree::self_command("slack-relay"),
-        crate::worktree::shell_quote(&shell)
+    let line = run_command(
+        &crate::worktree::self_command("slack-relay"),
+        &crate::worktree::self_command("setting relay_close_tab"),
+        &shell,
     );
     vec![shell, "-i".into(), "-c".into(), line]
+}
+
+/// The line the tab's shell runs: `<relay> run`, then, when it ended
+/// cleanly (stopped from M-p, `slack-relay stop`, `stop` in the DM or
+/// Ctrl-C) and `<setting>` prints `on`, nothing more, so the shell ends and
+/// the tab closes; after a crash or a start the relay refused, or with the
+/// setting off, the tab stays at a shell with what it said on the screen.
+pub fn run_command(relay: &str, setting: &str, shell: &str) -> String {
+    format!(
+        "{relay} run && [ \"$({setting})\" = on ] && exit; exec {} -i",
+        crate::worktree::shell_quote(shell)
+    )
 }
 
 /// Goes to the relay's tab, or opens one running it. The running server
@@ -63,14 +94,20 @@ pub fn start(server: &Server, paths: &Paths) -> Result<String, String> {
         return Err("no Switchboard server is running; start the workspace first".into());
     }
     if let Some(existing) = relay_window(server) {
-        if !running(paths)
-            && let Some(pane) = existing.panes.first()
-        {
+        if !running(paths) {
+            let Some(pane) = relay_pane(server, &existing.id) else {
+                // The relay's pane closed and a pane split beside it kept
+                // the tab: no longer the relay's, its panes left alone.
+                server
+                    .set_option(&existing.id, "@slack_relay", None)
+                    .map_err(|e| e.to_string())?;
+                return start(server, paths);
+            };
             // Left at its shell when the relay stopped: started there again,
             // in the shell's place.
             let home = crate::paths::home();
             let home = home.to_string_lossy();
-            let mut args = vec!["respawn-pane", "-k", "-t", &pane.id, "-c", &home, "--"];
+            let mut args = vec!["respawn-pane", "-k", "-t", &pane, "-c", &home, "--"];
             let command = tab_command();
             args.extend(command.iter().map(String::as_str));
             server.ask(&args).map_err(|e| e.to_string())?;
@@ -79,10 +116,11 @@ pub fn start(server: &Server, paths: &Paths) -> Result<String, String> {
         return Ok(String::new());
     }
     let dir = crate::paths::home();
-    let (tab, _) = server
+    let (tab, pane) = server
         .new_tab(&dir, Some("Slack relay"), Some(&tab_command()))
         .map_err(|e| e.to_string())?;
     let _ = server.set_option(&tab, "@slack_relay", Some("1"));
+    let _ = server.set_option(&pane, "@slack_relay", Some("1"));
     server.select_tab(&tab).map_err(|e| e.to_string())?;
     Ok(String::new())
 }
@@ -202,5 +240,29 @@ pub fn main(args: Vec<String>) -> ExitCode {
             &format!("unknown command \"{other}\"; use start, stop, status, run or notify"),
             1,
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_command;
+
+    /// What the tab's line prints with `echo` standing in for the shell:
+    /// `-i` when the shell is kept, nothing when the tab would close.
+    fn after(relay: &str, setting: &str) -> String {
+        let out = std::process::Command::new("sh")
+            .args(["-c", &run_command(relay, setting, "echo")])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn the_tab_closes_only_on_a_clean_stop_with_the_setting_on() {
+        // `true run` and `false run`: the relay stopped, or crashed.
+        assert_eq!(after("true", "echo on"), "");
+        assert_eq!(after("false", "echo on"), "-i");
+        assert_eq!(after("true", "echo off"), "-i");
+        assert_eq!(after("true", "false"), "-i");
     }
 }

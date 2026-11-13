@@ -500,7 +500,8 @@ async fn run(cx: Cx, owner: String, app_token: String) -> Result<()> {
         util::write_private(&events, "", false)?;
     }
     // Mark this tab as the relay's, so `slack-relay` finds it whatever the
-    // tab ends up named, and the relay never reports on itself.
+    // tab ends up named, and the relay never reports on itself, and its pane,
+    // the one `slack-relay start` runs it in again once it has stopped.
     if let Ok(pane) = std::env::var("SWITCHBOARD_PANE")
         && !pane.is_empty()
     {
@@ -513,6 +514,7 @@ async fn run(cx: Cx, owner: String, app_token: String) -> Result<()> {
             .map(|w| w.id);
         if let Some(tab) = tab {
             let _ = cx.mux.set_option(&tab, "@slack_relay", Some("1"));
+            let _ = cx.mux.set_option(&pane, "@slack_relay", Some("1"));
         }
     }
     // The computer awake while the relay runs, and no longer. Not the

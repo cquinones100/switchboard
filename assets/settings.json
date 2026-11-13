@@ -1050,6 +1050,13 @@
     "default": true
   },
   {
+    "key": "relay_close_tab",
+    "category": "Slack relay",
+    "label": "Close the relay's tab when it stops",
+    "description": "Stopping the Slack relay, from M-p, `slack-relay stop`, `stop` in its DM or Ctrl-C in its tab, closes its tab; a crash or a start it refuses keeps the tab at a shell with the error. Off, the tab stays at a shell whenever the relay ends",
+    "default": true
+  },
+  {
     "key": "relay_home_reminders",
     "category": "Slack relay",
     "label": "Reminder tabs on the Slack Home",
