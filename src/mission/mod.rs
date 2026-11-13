@@ -983,6 +983,21 @@ impl Mission {
     }
 
     /// The chosen item of a view after the tabs.
+    /// Where the view in front is drawn out of `spread`, the area right of
+    /// the sidebar: all of it for several views at once or a view with a
+    /// pane beside its list (`views::has_side`), else at most `lone` wide,
+    /// as a lone pane is.
+    pub fn view_area(&self, spread: ratatui::layout::Rect) -> ratatui::layout::Rect {
+        let has_side = self
+            .current()
+            .is_some_and(|v| views::has_side(v, self.chosen_item().is_some(), self.snap.rules.ux2));
+        if self.grid.is_some() || has_side {
+            spread
+        } else {
+            crate::mux::layout::capped(spread, self.lone)
+        }
+    }
+
     pub fn chosen_item(&self) -> Option<&Item> {
         let at = usize::try_from(self.cursor).ok()?;
         let view = self.current()?;
@@ -1076,11 +1091,7 @@ impl Overlay for Mission {
         let left = self.left.min(whole.width.saturating_sub(1));
         let spread =
             ratatui::layout::Rect::new(whole.x + left, whole.y, whole.width - left, whole.height);
-        let area = if self.grid.is_some() {
-            spread
-        } else {
-            crate::mux::layout::capped(spread, self.lone)
-        };
+        let area = self.view_area(spread);
         if area != spread {
             crate::mux::compose::draw_spare(buf, spread, area, &look.theme);
         }

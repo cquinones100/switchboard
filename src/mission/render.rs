@@ -9671,6 +9671,70 @@ mod tests {
     }
 
     #[test]
+    fn a_view_with_a_pane_beside_its_list_is_not_capped_as_a_lone_one() {
+        let rows = vec![pilot_row(3, "Give notes stable IDs", TabState::Working)];
+        let list = crate::autopilot::view::items(
+            &pilot_summary(),
+            "",
+            &rows,
+            &[],
+            &[],
+            &[],
+            &std::collections::HashMap::from([(
+                "Give notes stable IDs".to_string(),
+                crate::cmd::worktree_from_note::PlanNote {
+                    name: "Plan - Stable IDs".into(),
+                    text: Some("## Today\n\nNotes are found by name.".into()),
+                },
+            )]),
+        );
+        let chosen = list
+            .iter()
+            .position(|i| i.title == "Give notes stable IDs")
+            .unwrap();
+        let pr = Item {
+            id: "pr:1".into(),
+            title: "Port the PR board".into(),
+            data: serde_json::json!({ "column": "review", "body": "Ports it." }),
+            ..Item::default()
+        };
+        let mut m = mission(
+            Vec::new(),
+            vec![
+                list_view(ViewId::Autopilot, "Autopilot", list),
+                list_view(ViewId::Prs, "PRs", vec![pr]),
+                list_view(ViewId::Settings, "Settings", vec![Item::default()]),
+            ],
+        );
+        m.snap.rules.ux2 = true;
+        m.lone = Some(165);
+        let spread = ratatui::layout::Rect::new(35, 0, 365, 40);
+        let width = |m: &Mission| m.view_area(spread).width;
+        m.view = 1;
+        m.cursor = chosen as isize;
+        assert_eq!(width(&m), 365, "Autopilot with a card chosen");
+        m.size = (width(&m), 40);
+        let text = texts(&drawn(&m, 365, 40).0).join("\n");
+        assert!(text.contains("Notes are found by name."), "{text}");
+        assert!(
+            description_beside(&m).is_some(),
+            "the plan beside the board"
+        );
+        m.cursor = -1;
+        assert_eq!(width(&m), 165, "nothing chosen, no pane");
+        m.view = 2;
+        m.cursor = 0;
+        assert_eq!(width(&m), 365, "the PRs view with a PR chosen");
+        m.view = 3;
+        assert_eq!(width(&m), 165, "Settings has no pane beside");
+        m.view = 0;
+        assert_eq!(width(&m), 165, "the Tabs cards");
+        m.view = 2;
+        m.snap.rules.ux2 = false;
+        assert_eq!(width(&m), 165, "no pane beside the list with UX 2.0 off");
+    }
+
+    #[test]
     fn notifications_say_when_they_came_at_their_rows_end() {
         // 2027-01-15 08:00 UTC, a Friday.
         let now = rules().now_ms;

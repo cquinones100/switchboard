@@ -1267,11 +1267,7 @@ impl Server {
         m.left = left;
         m.lone = crate::mux::layout::lone_width();
         let spread = ratatui::layout::Rect::new(0, 0, cols - left, rows);
-        m.size = if m.grid.is_some() {
-            (spread.width, rows)
-        } else {
-            (crate::mux::layout::capped(spread, m.lone).width, rows)
-        };
+        m.size = (m.view_area(spread).width, rows);
         if m.view > m.snap.views.len() {
             m.view = 0;
         }
@@ -1293,6 +1289,9 @@ impl Server {
         if reminder_chosen {
             follow_reminder(&mut m);
         }
+        // Laid out again with its item chosen, which a view with a pane
+        // beside its list fills the width for.
+        m.size = (m.view_area(spread).width, rows);
         self.calendar_extras(&mut m);
         self.inbox_extras(&mut m);
         self.slack_board_extras(&mut m);
@@ -4484,6 +4483,8 @@ impl Server {
                 self.mission_prepare(client);
                 self.mission_redraw();
             }
+            Do::SetSetting { key, value } => self.set_setting_shown(client, &key, value),
+            Do::TypeSetting(key) => self.type_setting(client, key),
             Do::Press(action) => {
                 self.mission_close(client);
                 self.act(client, action);
@@ -5234,21 +5235,14 @@ impl Server {
         };
         if let Some(key) = item.data.get("setting").and_then(Value::as_str) {
             let option = settings::read_settings().into_iter().find(|o| o.key == key);
-            out.push(change(match option {
-                Some(o) if o.choices.is_none() && o.is_on() => "Turn it off".into(),
-                Some(o) if o.choices.is_none() => "Turn it on".into(),
-                Some(o) => {
-                    let next = o.next_value();
-                    let words = o
-                        .choices
-                        .iter()
-                        .flatten()
-                        .find(|c| c.value == next)
-                        .map_or_else(|| util::js_string(&next), |c| c.label.clone());
-                    format!("Change it to {words}")
+            match option {
+                Some(o) if o.choices.is_none() && o.is_on() => {
+                    out.push(change("Turn it off".into()))
                 }
-                None => "Change it".into(),
-            }));
+                Some(o) if o.choices.is_none() => out.push(change("Turn it on".into())),
+                Some(o) => out.extend(choices::every_choice(&o)),
+                None => out.push(change("Change it".into())),
+            }
         } else if item.data.get("own").is_some() || item.data.get("repo_setting").is_some() {
             out.push(change("Change it".into()));
         }
@@ -5280,7 +5274,65 @@ impl Server {
         let option = settings::read_settings()
             .into_iter()
             .find(|o| o.key == key)?;
-        if let Err(e) = settings::write_setting(key, option.next_value()) {
+        self.set_setting(key, option.next_value())
+    }
+
+    /// A setting set to one of its choices from its menu, or a number typed
+    /// in, and Settings drawn again; what went wrong said.
+    fn set_setting_shown(&mut self, client: ClientId, key: &str, value: Value) {
+        if let Some(note) = self.set_setting(key, value) {
+            self.mission_note(client, note);
+        }
+        self.mission_prepare(client);
+        self.mission_redraw();
+    }
+
+    /// A setting's number typed in, starting from the one it has, for an
+    /// option that takes one besides its choices (`settings::Typed`).
+    fn type_setting(&mut self, client: ClientId, key: String) {
+        let Some(option) = settings::read_settings().into_iter().find(|o| o.key == key) else {
+            return;
+        };
+        let Some(typed) = option.typed.clone() else {
+            return;
+        };
+        let now = typed
+            .number(&option.value)
+            .map(|n| n.to_string())
+            .unwrap_or_default();
+        let ask = Ask::new(
+            format!("{} ({})", option.label, typed.unit),
+            format!("A number from {}.", typed.least),
+        )
+        .text(now);
+        self.open(
+            client,
+            Box::new(ask),
+            Some(Box::new(move |server: &mut Server, client, outcome| {
+                let Outcome::Picked(p) = outcome else {
+                    return;
+                };
+                let value = Value::from(p.value.trim());
+                if typed.number(&value).is_none() {
+                    server.mission_note(
+                        client,
+                        format!(
+                            "Not saved: {} isn't a number from {}",
+                            p.value.trim(),
+                            typed.least
+                        ),
+                    );
+                    return;
+                }
+                server.set_setting_shown(client, &key, value);
+            })),
+        );
+    }
+
+    /// A setting set to `value`, written to the settings file and taken up
+    /// at once; what went wrong, if anything.
+    fn set_setting(&mut self, key: &str, value: Value) -> Option<String> {
+        if let Err(e) = settings::write_setting(key, value) {
             return Some(format!("Couldn't save it: {e}"));
         }
         settings::reload_settings();

@@ -163,6 +163,13 @@ pub enum Do {
     /// A Settings row changed: an on/off flipped, a choice to the next, a
     /// file of yours or a repository's landing typed or picked.
     Change(Box<Item>),
+    /// A Settings option with choices set to one of them, from its menu.
+    SetSetting {
+        key: String,
+        value: serde_json::Value,
+    },
+    /// A Settings option's number typed in (`settings::Typed`).
+    TypeSetting(String),
     /// A Slack relay setting set to one of its values (the Slack relay
     /// view), with the value's words for what is said.
     RelaySet {
@@ -444,6 +451,52 @@ fn choice(key: char, label: impl Into<String>, act: Do) -> Choice {
         label: label.into(),
         act,
     }
+}
+
+/// A Settings option with choices: each choice one pick away in its menu,
+/// from the one after its value round to its value, marked "(now)", then "Columns…" (its `Typed`'s label)
+/// for an option that takes a number typed in, which, with a number
+/// typed in, is the one marked.
+pub fn every_choice(option: &crate::settings::Setting) -> Vec<Choice> {
+    let keys = "123456789abcdefghijklmnopqrstuvwxyz";
+    let choices = option.choices.as_deref().unwrap_or_default();
+    // From the one after its value, so Enter twice moves it on as Enter
+    // once did.
+    let after = choices
+        .iter()
+        .position(|c| c.value == option.value)
+        .map_or(0, |i| i + 1);
+    let mut out: Vec<Choice> = choices
+        .iter()
+        .cycle()
+        .skip(after)
+        .take(choices.len())
+        .enumerate()
+        .map(|(n, c)| {
+            let now = if c.value == option.value {
+                " (now)"
+            } else {
+                ""
+            };
+            choice(
+                keys.chars().nth(n).unwrap_or(' '),
+                format!("{}{now}", c.label),
+                Do::SetSetting {
+                    key: option.key.clone(),
+                    value: c.value.clone(),
+                },
+            )
+        })
+        .collect();
+    if let Some(typed) = &option.typed {
+        let a_choice_has_it = out.iter().any(|c| c.label.ends_with(" (now)"));
+        let label = match typed.number(&option.value) {
+            Some(n) if !a_choice_has_it => format!("{} ({n} {} now)", typed.label, typed.unit),
+            _ => typed.label.clone(),
+        };
+        out.push(choice('#', label, Do::TypeSetting(option.key.clone())));
+    }
+    out
 }
 
 /// A card's menu in Autopilot's view (src/autopilot/view.rs): its tab, its
@@ -1510,6 +1563,46 @@ mod tests {
 
     fn keys(choices: &[Choice]) -> String {
         choices.iter().map(|c| c.key).collect()
+    }
+
+    #[test]
+    fn a_setting_with_choices_lists_every_one_the_one_it_has_marked() {
+        let mut lone = crate::settings::schema()
+            .into_iter()
+            .find(|o| o.key == "lone_pane_width")
+            .unwrap();
+        let labels = |o: &crate::settings::Setting| -> Vec<String> {
+            every_choice(o).into_iter().map(|c| c.label).collect()
+        };
+        assert_eq!(
+            labels(&lone),
+            [
+                "200 columns",
+                "240 columns",
+                "off",
+                "120 columns",
+                "140 columns",
+                "165 columns (now)",
+                "Columns…"
+            ]
+        );
+        let picked = every_choice(&lone).swap_remove(0).act;
+        assert!(matches!(
+            picked,
+            Do::SetSetting { ref key, ref value } if key == "lone_pane_width" && value == "200"
+        ));
+        lone.value = json!("230");
+        assert!(lone.valid(&lone.value));
+        assert_eq!(lone.value_words(), "230 columns");
+        let shown = labels(&lone);
+        assert_eq!(shown[0], "off", "none of its choices: from the first");
+        assert!(!shown.iter().any(|l| l.ends_with("(now)")), "{shown:?}");
+        assert_eq!(shown.last().unwrap(), "Columns… (230 columns now)");
+        assert!(matches!(
+            every_choice(&lone).pop().unwrap().act,
+            Do::TypeSetting(ref key) if key == "lone_pane_width"
+        ));
+        assert!(!lone.valid(&json!("79")), "under the least");
     }
 
     fn ctx<'a>(tabs: &'a [TabModel], repo: &'a dyn Fn(&Path) -> Vec<String>) -> Ctx<'a> {

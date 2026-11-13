@@ -202,7 +202,7 @@ fn enter_words(item: &Item) -> String {
     }
     let (default, next) = (words("default"), words("next"));
     if d["choice"] == true {
-        return format!("default {default} · Enter: {next}");
+        return format!("default {default} · Enter lists its choices");
     }
     if d["changed"] == true {
         format!("default {default} · Enter turns it back {next}")

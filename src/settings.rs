@@ -5,7 +5,8 @@
 //! which you may edit by hand. Mission control's Settings view changes them
 //! here, and the server reads them again whenever the file changes.
 //!
-//! An option is on/off (a boolean default) or one of its `choices`. A value in
+//! An option is on/off (a boolean default) or one of its `choices`, or for
+//! one with `typed` a number from its least typed in. A value in
 //! the file that is neither is ignored, and the default used. A setting
 //! renamed since it was saved (`RENAMED`) is read once as its new key and
 //! dropped from the file when the server starts (`migrate`), as the sidebar
@@ -30,6 +31,25 @@ pub struct Choice {
     pub label: String,
 }
 
+/// A whole number an option with choices also takes when typed in
+/// (`lone_pane_width`'s columns): the least it takes, the label of the
+/// menu option that asks for it, and the words after the number when it is
+/// shown ("columns").
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Typed {
+    pub least: u64,
+    pub label: String,
+    pub unit: String,
+}
+
+impl Typed {
+    /// The number `value` holds, written as the choices are (a string of
+    /// digits), when it is one this takes.
+    pub fn number(&self, value: &Value) -> Option<u64> {
+        value.as_str()?.parse().ok().filter(|n| *n >= self.least)
+    }
+}
+
 /// One option, with its value now (`value`), as `readSettings` gives it.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Setting {
@@ -42,6 +62,9 @@ pub struct Setting {
     pub description: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub choices: Option<Vec<Choice>>,
+    /// A number it takes typed in besides its choices, for the few that do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typed: Option<Typed>,
     pub default: Value,
     /// The option's value now; the default until read.
     #[serde(default)]
@@ -52,7 +75,13 @@ impl Setting {
     /// Whether `value` is one this option can take.
     pub fn valid(&self, value: &Value) -> bool {
         match &self.choices {
-            Some(choices) => choices.iter().any(|c| &c.value == value),
+            Some(choices) => {
+                choices.iter().any(|c| &c.value == value)
+                    || self
+                        .typed
+                        .as_ref()
+                        .is_some_and(|t| t.number(value).is_some())
+            }
             None => value.is_boolean(),
         }
     }
@@ -79,6 +108,10 @@ impl Setting {
                 .iter()
                 .find(|c| c.value == self.value)
                 .map(|c| c.label.clone())
+                .or_else(|| {
+                    let typed = self.typed.as_ref()?;
+                    Some(format!("{} {}", typed.number(&self.value)?, typed.unit))
+                })
                 .unwrap_or_else(|| util::js_string(&self.value)),
             None => if util::truthy(&self.value) {
                 "on"
@@ -395,6 +428,7 @@ mod tests {
             label: String::new(),
             description: String::new(),
             choices,
+            typed: None,
             default: value.clone(),
             value,
         }

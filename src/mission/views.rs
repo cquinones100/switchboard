@@ -136,6 +136,33 @@ impl View {
     }
 }
 
+/// Whether `view` draws a pane beside its board or list (the chosen PR's,
+/// ticket's or plan's description, a message's thread while Settings'
+/// `slack_threads` is on, a closed tab's turns, a check's step, a
+/// landing's output, a day's reminders, the Calendar day's event) with
+/// an item `chosen`, as each does only with UX 2.0 on (`ux2`): such a view
+/// is two panes, so it is never capped at a lone pane's width
+/// (`Mission::view_area`), and the pane has the room to sit beside it.
+pub fn has_side(view: &View, chosen: bool, ux2: bool) -> bool {
+    let calendar_day = view.id == ViewId::Calendar && super::calendar::is_day(view);
+    let slack_threads = view.id == ViewId::Slack && crate::settings::is_on("slack_threads");
+    ux2 && chosen
+        && (calendar_day
+            || slack_threads
+            || matches!(
+                view.id,
+                ViewId::Prs
+                    | ViewId::Tickets
+                    | ViewId::Autopilot
+                    | ViewId::Inbox
+                    | ViewId::Reopen
+                    | ViewId::Ci
+                    | ViewId::Landing
+                    | ViewId::Reminders
+                    | ViewId::Routines
+            ))
+}
+
 /// What M-p says of each view: its "Mission control: <view>" command
 /// (`extras::Command::Mission`) lists every view here while it shows, so a
 /// view added to `ViewId` is one pick away once it is in `BUILT_IN`.

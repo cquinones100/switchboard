@@ -6,7 +6,8 @@
 //! settings file with `node -e` to read it the same way.
 //!
 //! With a value it changes the setting, as `tmux/settings.sh set` did: `on`
-//! or `off` (`true`, `false`) for a switch, one of its choices' values for
+//! or `off` (`true`, `false`) for a switch, one of its choices' values (or a
+//! number an option takes typed in, `settings::Typed`) for
 //! the rest, anything else refused; `--reset` gives it its default back.
 //! The write is `settings::write_setting`'s, the one Settings makes: never
 //! over a file that can't be read as a JSON object, the version before kept
@@ -85,7 +86,11 @@ fn value_of(option: &settings::Setting, given: &str) -> Option<Value> {
         Some(choices) => choices
             .iter()
             .find(|c| util::js_string(&c.value) == given)
-            .map(|c| c.value.clone()),
+            .map(|c| c.value.clone())
+            .or_else(|| {
+                let value = Value::from(given);
+                option.valid(&value).then_some(value)
+            }),
     }
 }
 
@@ -93,11 +98,17 @@ fn value_of(option: &settings::Setting, given: &str) -> Option<Value> {
 fn takes(option: &settings::Setting) -> String {
     match &option.choices {
         None => "on or off".into(),
-        Some(choices) => choices
-            .iter()
-            .map(|c| util::js_string(&c.value))
-            .collect::<Vec<_>>()
-            .join(", "),
+        Some(choices) => {
+            let listed = choices
+                .iter()
+                .map(|c| util::js_string(&c.value))
+                .collect::<Vec<_>>()
+                .join(", ");
+            match &option.typed {
+                Some(typed) => format!("{listed}, or a number from {}", typed.least),
+                None => listed,
+            }
+        }
     }
 }
 
@@ -135,5 +146,21 @@ mod tests {
             Some(first.clone())
         );
         assert_eq!(value_of(chosen, "no-such-choice"), None);
+    }
+
+    #[test]
+    fn the_lone_pane_width_takes_any_number_of_columns_from_80() {
+        let schema = settings::schema();
+        let lone = schema.iter().find(|o| o.key == "lone_pane_width").unwrap();
+        assert_eq!(value_of(lone, "230"), Some(Value::from("230")));
+        assert_eq!(value_of(lone, "80"), Some(Value::from("80")));
+        assert_eq!(value_of(lone, "79"), None);
+        assert_eq!(value_of(lone, "wide"), None);
+        assert_eq!(value_of(lone, "off"), Some(Value::from("off")));
+        assert!(
+            takes(lone).ends_with("or a number from 80"),
+            "{}",
+            takes(lone)
+        );
     }
 }
