@@ -569,3 +569,127 @@ fn only_the_pipeline_decides_by_what_a_terminal_is() {
     assert!(terminal_names(r#"std::env::var("WT_SESSION")"#).len() == 1);
     assert!(terminal_names(r#"let name = "my ghostty notes";"#).is_empty());
 }
+
+/// Has `pane` print `text` with printf (its octal escapes, so the line
+/// typed holds no ESC) and then `done` split by quotes, and waits for it.
+fn printed(
+    server: &TestServer,
+    client: &mut common::TestClient,
+    pane: &str,
+    text: &str,
+    done: &str,
+) {
+    let (head, tail) = done.split_at(done.len() / 2);
+    server.ok(&[
+        "send-keys",
+        "-t",
+        pane,
+        "-l",
+        &format!("printf '{text}'; echo {head}''{tail}"),
+    ]);
+    server.ok(&["send-keys", "-t", pane, "Enter"]);
+    client.wait_text(done);
+}
+
+/// A half circle (U+E0B6, as printf's octal escapes) in a color, then
+/// `word`.
+fn half_circle_then(word: &str) -> String {
+    format!("\\033[38;2;0;128;255m\\356\\202\\266\\033[0m{word}\\n")
+}
+
+fn first_pane_of(server: &TestServer) -> String {
+    server.list()["sessions"][0]["tabs"][0]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn with_sixel_a_program_s_half_circles_are_its_own_and_switchboard_s_apps_become_pictures() {
+    let (server, mut client) = sixel_server(100, 30);
+    let pane = first_pane_of(&server);
+    // A program of yours (a powerline prompt): the glyph, left to the
+    // terminal.
+    printed(
+        &server,
+        &mut client,
+        &pane,
+        &half_circle_then("mine"),
+        "mine-done",
+    );
+    assert!(half_circles_sent(&client.raw), "the program's own glyph");
+    // In a pane Switchboard's app draws in (allowed pictures): a picture.
+    server.ok(&["set", "-t", &pane, "@allow_passthrough", "1"]);
+    let before = client.raw.len();
+    printed(
+        &server,
+        &mut client,
+        &pane,
+        &half_circle_then("ours"),
+        "ours-done",
+    );
+    let screen = client.screen();
+    let line = screen
+        .iter()
+        .position(|l| l.contains("ours") && !l.contains("printf"))
+        .unwrap_or_else(|| panic!("the line: {}", screen.join("\n")));
+    let deadline = common::deadline(std::time::Duration::from_secs(10));
+    while ends_on(&client.raw[before..], line) == 0 {
+        client.screen();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the app's half circle not drawn as sixel: {:?}",
+            common::sixels(&client.raw[before..])
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn the_apps_ask_what_the_session_s_terminals_get_and_one_that_gets_neither_shows_blanks() {
+    // By the terminal, as by default.
+    let server = TestServer::start_with_settings(
+        r#"{"ux2": true, "notifications": false, "tips": false, "sidebar": false}"#,
+    );
+    let mut plain = server.attach_as("xterm-256color", 100, 30);
+    plain.wait_for("the header", |s| s[2].contains("M-c Claude"));
+    let pane = first_pane_of(&server);
+    let graphics = || {
+        server
+            .ok(&["show", "-t", &pane, "@graphics"])
+            .trim()
+            .to_string()
+    };
+    assert_eq!(graphics(), "none");
+    // Windows Terminal, before it answers: it may get sixel.
+    let mut wt = server.attach_as("xterm-256color WindowsTerminal", 100, 30);
+    wt.wait_sent("asked what it is", b"\x1b[c");
+    assert_eq!(graphics(), "sixel");
+    wt.send(b"\x1b[?61;4;6;7c");
+    wt.wait_sent("asked for its sixel cell", b"\x1b[16t");
+    wt.send(b"\x1b[6;25;13t");
+    let deadline = common::deadline(std::time::Duration::from_secs(10));
+    while graphics() != "sixel round" {
+        assert!(std::time::Instant::now() < deadline, "{}", graphics());
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // Switchboard's app in the pane draws for Windows Terminal: a picture's
+    // placeholders and a half circle. The terminal that gets neither has
+    // them blank and a space of its color, never boxes or a glyph.
+    server.ok(&["set", "-t", &pane, "@allow_passthrough", "1"]);
+    let before = plain.raw.len();
+    printed(
+        &server,
+        &mut plain,
+        &pane,
+        &half_circle_then("app"),
+        "app-done",
+    );
+    server.show_picture(&mut plain, &pane);
+    assert!(!common::sent(&plain.raw[before..], "\u{10EEEE}".as_bytes()));
+    assert!(!half_circles_sent(&plain.raw[before..]));
+    // A Ghostty: kitty's, with its glyphs.
+    let mut ghostty = server.attach_as("xterm-ghostty", 100, 30);
+    ghostty.wait_for("the header", |s| s[2].contains("Claude"));
+    assert_eq!(graphics(), "kitty sixel round");
+}

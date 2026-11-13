@@ -904,6 +904,9 @@ impl Server {
             return Err("show: which option?".into());
         };
         let value = match self.option_target(&a, caller, name)? {
+            // What the terminals showing the pane's session get, for an app
+            // in it to draw by (src/mux/graphics.rs).
+            Target::Pane(p) if name == "@graphics" => Some(self.graphics_for_pane(p)),
             Target::Pane(p) => self
                 .agent_option(p, name)
                 .unwrap_or_else(|| self.panes.get(&p).and_then(|s| s.opts.get(name)).cloned()),

@@ -523,9 +523,9 @@ impl Server {
         let Some(m) = self.mission_mut(client) else {
             return;
         };
-        let Some(cell) = m.snap.cell else {
+        if m.snap.cell.is_none() {
             return;
-        };
+        }
         let Some((text, place)) = super::render::description_beside(m) else {
             return;
         };
@@ -541,7 +541,10 @@ impl Server {
         if sources.is_empty() {
             return;
         }
-        let width = super::render::ABOUT_COLS as u32 * cell.0 as u32;
+        // Fitted to a cell wider than any terminal's, not the asker's, since
+        // every terminal shares what is kept and each picture is scaled to
+        // its own cells as it is drawn (`ui::images::raster_picture`).
+        let width = super::render::ABOUT_COLS as u32 * super::diagrams::WIDEST_CELL;
         let tx = self.tx.clone();
         tokio::task::spawn_blocking(move || {
             let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());

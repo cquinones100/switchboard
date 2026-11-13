@@ -614,20 +614,52 @@ impl Server {
         frame: &Frame,
         panes: &[(PaneId, Rect)],
         way: Protocol,
+        ends: graphics::Ends,
     ) -> Option<place::Drawn> {
-        if way != Protocol::Sixel {
+        if way != Protocol::Sixel && ends != graphics::Ends::Spaces {
             return None;
         }
-        let allowed = panes
-            .iter()
-            .filter(|(pane, _)| {
-                self.panes
-                    .get(pane)
-                    .is_some_and(|s| super::passthrough::graphics_allowed(&s.opts))
-            })
-            .copied()
-            .collect();
-        Some(place::Drawn::of(&frame.buf, allowed))
+        type Panes = Vec<(PaneId, Rect)>;
+        let (allowed, others): (Panes, Panes) = panes.iter().partition(|(pane, _)| {
+            self.panes
+                .get(pane)
+                .is_some_and(|s| super::passthrough::graphics_allowed(&s.opts))
+        });
+        let others: Vec<Rect> = others.into_iter().map(|(_, area)| area).collect();
+        Some(place::Drawn::of(&frame.buf, allowed).with_others(&frame.buf, &others))
+    }
+
+    /// The rounded ends of kit's objects in a frame as `ends` has them
+    /// reach its terminal (src/mux/graphics.rs), once everything is drawn:
+    /// as sixel pictures (`draw_ends`) where it gets sixel; as spaces of
+    /// their color where it gets spaces, for those Switchboard's apps drew
+    /// in their panes for another terminal showing the session (the
+    /// server's own drawing writes spaces itself). A half circle a program
+    /// of yours drew in its pane is left to the terminal either way.
+    pub(super) fn fix_ends(
+        &mut self,
+        frame: &mut Frame,
+        drawn: &place::Drawn,
+        ends: graphics::Ends,
+    ) {
+        match ends {
+            graphics::Ends::Pictures => self.draw_ends(frame, drawn),
+            graphics::Ends::Spaces => {
+                let area = frame.buf.area;
+                for y in area.top()..area.bottom() {
+                    for x in area.left()..area.right() {
+                        let c = &mut frame.buf[(x, y)];
+                        if place::is_end(c) && drawn.end_by(x, y, c) == Some(true) {
+                            let fill = c.fg;
+                            c.set_symbol(" ");
+                            c.fg = ratatui::style::Color::Reset;
+                            c.bg = fill;
+                        }
+                    }
+                }
+            }
+            graphics::Ends::Glyphs => {}
+        }
     }
 
     /// The pictures a frame shows, for a terminal that gets sixel, once everything
@@ -642,7 +674,6 @@ impl Server {
         let Some(drawn) = drawn else {
             return;
         };
-        self.draw_ends(frame);
         // The server's images, by id, where this frame draws them as sixel.
         let by_sixel = frame
             .graphics
@@ -740,13 +771,15 @@ impl Server {
     }
 
     /// The rounded ends of kit's objects in a frame for a terminal that
-    /// gets sixel (src/mux/graphics.rs's `Ends::Pictures`), wherever they
-    /// are (the server's drawing, an app's in its pane): each half circle's
-    /// cell left a space on its own background and the half circle drawn
-    /// over it as sixel in its color, which, a few colors and a cell big,
-    /// is drawn on the task and kept; one on the frame's last row, where a
-    /// sixel would scroll the screen, a space of its color.
-    fn draw_ends(&mut self, frame: &mut Frame) {
+    /// gets sixel (src/mux/graphics.rs's `Ends::Pictures`), wherever
+    /// Switchboard drew them (the server's drawing, an app's in its pane,
+    /// a copy of either), never one a program of yours drew in its pane
+    /// (`drawn`), which is left to the terminal: each half circle's cell
+    /// left a space on its own background and the half circle drawn over it
+    /// as sixel in its color, which, a few colors and a cell big, is drawn
+    /// on the task and kept; one on the frame's last row, where a sixel
+    /// would scroll the screen, a space of its color.
+    fn draw_ends(&mut self, frame: &mut Frame, drawn: &place::Drawn) {
         use crate::ui::kit::{CAP_LEFT, CAP_RIGHT};
         let cell = self.picture_cell();
         // The colors the panes' programs draw in: the terminal's own, with
@@ -757,6 +790,9 @@ impl Server {
         for y in area.top()..area.bottom() {
             for x in area.left()..area.right() {
                 let c = &mut frame.buf[(x, y)];
+                if drawn.end_by(x, y, c) == Some(false) {
+                    continue;
+                }
                 let left = match c.symbol() {
                     s if s == CAP_LEFT => true,
                     s if s == CAP_RIGHT => false,

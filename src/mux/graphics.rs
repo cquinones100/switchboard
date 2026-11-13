@@ -187,11 +187,12 @@ fn wants_sixel(term: &str, chosen: Chosen) -> bool {
     }
 }
 
-/// The same for an app in a pane, which can't see the attached terminal's
-/// answer: chosen by the terminal, Windows Terminal (by the `WT_SESSION`
-/// the panes keep) is taken to draw sixel. One too old to (before 1.22)
-/// has its pictures' cells blank rather than drawn as boxes
-/// (`pictures_blank`).
+/// The guess an app in a pane falls back on when the server is too old to
+/// say what the session's terminals get (`workspace_draws`), since it can't
+/// see their answers: chosen by the terminal, Windows Terminal (by the
+/// `WT_SESSION` the panes keep) is taken to draw sixel. Also the server's
+/// own count of a Windows Terminal that hasn't answered yet
+/// (`may_get_sixel`).
 fn apps_want_sixel(term: &str, chosen: Chosen) -> bool {
     wants_sixel(term, chosen)
         || (chosen == Chosen::Auto
@@ -227,17 +228,16 @@ pub fn may_get_sixel(term: &str) -> bool {
 
 /// Whether a terminal's picture cells are blanked rather than sent as the
 /// placeholder's box, where it gets neither way: one known never to draw
-/// kitty's pictures (Windows Terminal), as one from before 1.22, or any
-/// while the apps in panes draw pictures for sixel by what they guess
-/// (`apps_want_sixel`, the panes having the server's own `WT_SESSION`), as
-/// a second terminal attached to a workspace started in Windows Terminal.
-/// Otherwise the cells go as they are, since a terminal may speak kitty's
-/// protocol by a name this doesn't know.
-pub fn pictures_blank(term: &str) -> bool {
-    let windows_terminal = WINDOWS_TERMINAL.to_lowercase();
+/// kitty's pictures (Windows Terminal), or any while another terminal
+/// showing the session gets them (`others_draw`), for which the apps in
+/// its panes draw them. Otherwise the cells go as they are, since a
+/// terminal may speak kitty's protocol by a name this doesn't know.
+pub fn pictures_blank(term: &str, others_draw: bool) -> bool {
     for_terminal(term).is_none()
-        && (term.to_lowercase().contains(&windows_terminal)
-            || apps_want_sixel(&this_terminal(), chosen()))
+        && (others_draw
+            || term
+                .to_lowercase()
+                .contains(&WINDOWS_TERMINAL.to_lowercase()))
 }
 
 /// How pictures reach a terminal that says it is `term` (what it attached
@@ -281,15 +281,37 @@ pub fn for_server(term: &str) -> Option<Protocol> {
     }
 }
 
-/// Whether an app in a pane (Notes, the views) draws its pictures: the
-/// terminal it runs in speaks kitty's protocol (Ghostty or kitty, by
-/// `$TERM` or `$TERM_PROGRAM`; the multiplexer's panes keep the terminal
-/// the workspace started in as `TERM_PROGRAM`), or, inside the workspace,
-/// the server draws them as sixel where their placeholders are (sixel
-/// chosen, or Windows Terminal with it chosen by the terminal).
+/// What the workspace an app runs in draws for the terminals showing its
+/// pane's session, as the server says (`show @graphics`,
+/// `Server::graphics_for_pane`): the words `kitty`, `sixel`, `round`, or
+/// `none`. `None` outside the workspace, or from a server too old to say.
+fn workspace_draws() -> Option<String> {
+    if !super::socket::in_pane() {
+        return None;
+    }
+    let said = super::socket::ask_ok(&["show", "@graphics"]).ok()?;
+    let said = said.trim();
+    (!said.is_empty()).then(|| said.to_string())
+}
+
+/// Whether an app (Notes, the views) draws its pictures: in the workspace,
+/// where a terminal showing its pane's session gets them, kitty's or sixel,
+/// as the server says, since only it has the terminals' answers; outside
+/// it, or with a server too old to say, where the terminal it runs in
+/// speaks kitty's protocol (Ghostty or kitty, by `$TERM` or
+/// `$TERM_PROGRAM`, which the panes keep as the workspace's), or, in a
+/// pane, gets sixel by its guess (`apps_want_sixel`).
 pub fn apps_draw() -> bool {
-    let term = this_terminal();
-    speaks_kitty(&term) || (super::socket::in_pane() && apps_want_sixel(&term, chosen_now()))
+    match workspace_draws() {
+        Some(said) => said
+            .split_whitespace()
+            .any(|w| w == "kitty" || w == "sixel"),
+        None => {
+            let term = this_terminal();
+            speaks_kitty(&term)
+                || (super::socket::in_pane() && apps_want_sixel(&term, chosen_now()))
+        }
+    }
 }
 
 /// The word a client adds to what it attaches as when it runs in Windows
@@ -360,11 +382,14 @@ pub fn round_ends(term: &str) -> bool {
 }
 
 /// The same for an app in a pane (Notes, the views), which draws into a
-/// terminal of its own: by the terminal it runs in (`$TERM` and
-/// `$TERM_PROGRAM`, the panes keeping the workspace's in the second), or,
-/// in the workspace with sixel chosen, whose server draws its half circles
-/// as pictures, whatever the terminal is called.
+/// terminal of its own: in the workspace, where a terminal showing its
+/// pane's session has round ends, as the server says; else by the terminal
+/// it runs in (`$TERM` and `$TERM_PROGRAM`), or, in a pane, by its guess
+/// at sixel.
 pub fn apps_round_ends() -> bool {
+    if let Some(said) = workspace_draws() {
+        return said.split_whitespace().any(|w| w == "round");
+    }
     let term = this_terminal();
     ends_way(
         term.to_lowercase().contains("ghostty"),
@@ -373,6 +398,40 @@ pub fn apps_round_ends() -> bool {
 }
 
 impl Server {
+    /// What the terminals showing a pane's session get, for an app in the
+    /// pane to draw by (`show @graphics`): `kitty` where one gets kitty's
+    /// pictures, `sixel` where one gets sixel or may once it answers DA1,
+    /// `round` where one's pill ends are round, `none` for none of them.
+    pub(super) fn graphics_for_pane(&self, pane: super::PaneId) -> String {
+        let session = self
+            .panes
+            .get(&pane)
+            .and_then(|slot| self.session_of_tab(slot.tab))
+            .map(|s| s.name.clone());
+        let (mut kitty, mut sixel, mut round) = (false, false, false);
+        for c in self
+            .clients
+            .values()
+            .filter(|c| Some(&c.session) == session.as_ref())
+        {
+            match for_terminal(&c.term) {
+                Some(Protocol::Kitty) => kitty = true,
+                Some(Protocol::Sixel) => sixel = true,
+                None => sixel |= may_get_sixel(&c.term),
+            }
+            round |= ends(&c.term) != Ends::Spaces;
+        }
+        let words: Vec<&str> = [(kitty, "kitty"), (sixel, "sixel"), (round, "round")]
+            .into_iter()
+            .filter_map(|(on, w)| on.then_some(w))
+            .collect();
+        if words.is_empty() {
+            "none".into()
+        } else {
+            words.join(" ")
+        }
+    }
+
     /// A client's terminal answered "what are you" (DA1), asked as it
     /// attached: whether it draws sixel kept with what it attached as
     /// (`ANSWERS_SIXEL`), and, where that changes how pictures reach it,

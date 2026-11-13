@@ -82,6 +82,16 @@ fn is_placeholder(cell: &Cell) -> bool {
 pub struct Drawn {
     panes: Vec<(PaneId, Rect)>,
     cells: HashMap<(u16, u16), Cell>,
+    /// The half circles at the ends of kit's objects (U+E0B6, U+E0B4) the
+    /// panes drew, and whether by a pane allowed pictures (Switchboard's
+    /// own apps) or another (a program of yours, a powerline prompt).
+    ends: HashMap<(u16, u16), (Cell, bool)>,
+}
+
+/// Whether a cell holds one of the half circles kit ends its objects with.
+pub fn is_end(cell: &Cell) -> bool {
+    let s = cell.symbol();
+    s == crate::ui::kit::CAP_LEFT || s == crate::ui::kit::CAP_RIGHT
 }
 
 impl Drawn {
@@ -89,6 +99,7 @@ impl Drawn {
     /// `buf`) drew.
     pub fn of(buf: &Buffer, panes: Vec<(PaneId, Rect)>) -> Drawn {
         let mut cells = HashMap::new();
+        let mut ends = HashMap::new();
         for (_, area) in &panes {
             let area = area.intersection(buf.area);
             for y in area.top()..area.bottom() {
@@ -96,11 +107,30 @@ impl Drawn {
                     let cell = &buf[(x, y)];
                     if is_placeholder(cell) {
                         cells.insert((x, y), cell.clone());
+                    } else if is_end(cell) {
+                        ends.insert((x, y), (cell.clone(), true));
                     }
                 }
             }
         }
-        Drawn { panes, cells }
+        Drawn { panes, cells, ends }
+    }
+
+    /// With the half circles the panes not allowed pictures drew in
+    /// `others`, their areas of `buf`.
+    pub fn with_others(mut self, buf: &Buffer, others: &[Rect]) -> Drawn {
+        for area in others {
+            let area = area.intersection(buf.area);
+            for y in area.top()..area.bottom() {
+                for x in area.left()..area.right() {
+                    let cell = &buf[(x, y)];
+                    if is_end(cell) {
+                        self.ends.insert((x, y), (cell.clone(), false));
+                    }
+                }
+            }
+        }
+        self
     }
 
     /// Whether the cell at `x`, `y` is still what its pane drew there.
@@ -108,6 +138,16 @@ impl Drawn {
         self.cells
             .get(&(x, y))
             .is_some_and(|c| c.symbol() == cell.symbol() && c.fg == cell.fg)
+    }
+
+    /// Whether the half circle at `x`, `y` is still as a pane drew it, and
+    /// if so whether that pane is allowed pictures (one of Switchboard's
+    /// apps).
+    pub fn end_by(&self, x: u16, y: u16, cell: &Cell) -> Option<bool> {
+        self.ends
+            .get(&(x, y))
+            .filter(|(c, _)| c.symbol() == cell.symbol() && c.fg == cell.fg)
+            .map(|(_, allowed)| *allowed)
     }
 }
 
