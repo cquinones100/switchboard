@@ -296,7 +296,8 @@ fn draw_at_once(key: &Key, raster: &Draw) -> Option<Made> {
 
 /// The pixels a rounded end's color is in the terminal that draws it: one
 /// of its sixteen and its default text color as it said them when asked
-/// (src/mux/terminal.rs), so a half circle a program of yours colored with
+/// (src/mux/terminal.rs), or as `terminal_colors` set them, so a half
+/// circle a program of yours colored with
 /// them (a powerline prompt's) matches the rest of what it drew, else
 /// xterm's (`images::rgb`), as Switchboard's own, in 256 colors or
 /// truecolor, are anyway.
@@ -748,6 +749,9 @@ impl Server {
     fn draw_ends(&mut self, frame: &mut Frame) {
         use crate::ui::kit::{CAP_LEFT, CAP_RIGHT};
         let cell = self.picture_cell();
+        // The colors the panes' programs draw in: the terminal's own, with
+        // the ones `terminal_colors` sets in their place.
+        let said = self.pane_colors();
         let area = frame.buf.area;
         let last = area.bottom().saturating_sub(1);
         for y in area.top()..area.bottom() {
@@ -765,7 +769,7 @@ impl Server {
                     c.bg = fill;
                     continue;
                 }
-                let color = end_color(fill, &self.terminal.colors);
+                let color = end_color(fill, &said);
                 // On the row above the last, where clear rows reaching
                 // into the last would have the screen scroll as a picture
                 // there would, cut to whole bands as a picture is.
