@@ -20,20 +20,30 @@
 //!   from the asset here rather than kept twice, and a SessionStart hook
 //!   running `switchboard claude-context`, which gives the session
 //!   Switchboard's part of its instructions (src/cmd/claude_context.rs);
-//!   and, under `modules`, the plugin's hooks modules;
-//! - `hooks/statusline.js`: the statusline, as a hooks module (what Claude
-//!   Code calls a mod, which it runs inside itself) whose `settings.read`
-//!   hook puts the asset's statusline (`switchboard statusline`) over the
-//!   settings Claude Code has merged from its files. That answer is held
-//!   in memory, so the sessions that load the plugin draw Switchboard's
-//!   statusline, every other Claude yours, and no file changes; Settings'
+//!   and, under `modules`, the plugin's hooks module, `hooks/switchboard.js`
+//!   (what Claude Code calls a mod, which it runs inside itself), which
+//!   registers the hooks of the two files below. Claude Code runs one hooks
+//!   module a plugin and refuses a second in the list, so this one imports
+//!   the others, each kept in a file of its own;
+//! - `hooks/statusline.js`: the statusline, whose `settings.read` hook puts
+//!   the asset's statusline (`switchboard statusline`) over the settings
+//!   Claude Code has merged from its files. That answer is held in memory,
+//!   so the sessions that load the plugin draw Switchboard's statusline,
+//!   every other Claude yours, and no file changes; Settings'
 //!   `pane_statusline` off, which it asks `switchboard setting` for, has it
 //!   leave the statusline alone.
+//! - `hooks/permissions.js`: the permissions (src/setup/permissions.rs),
+//!   whose `tool.check` hook allows the few of the asset's `switchboard`
+//!   commands Switchboard's instructions run on any turn and refuses what
+//!   its deny rules name; the skills carry the rest of its rules in their
+//!   `allowed-tools`.
 //!
-//! A plugin's own settings can't hold a statusline (Claude Code takes only
-//! `agent` from them), hence the module; and the same answer for the
-//! permission rules doesn't reach Claude Code's permission check, so as a
-//! plugin those are in no file Switchboard writes. Every pane's environment
+//! A plugin's own settings can't hold a statusline or permission rules
+//! (Claude Code takes only `agent` from them), hence the modules; and the
+//! statusline's answer for the permission rules wouldn't reach Claude
+//! Code's permission check, which reads them from its files alone, so they
+//! reach it through the skills and the permissions module, in no file
+//! Switchboard writes. Every pane's environment
 //! names the plugin in `CLAUDE_CODE_PLUGIN_DIRS` while Settings'
 //! `claude_plugin` is on (`env_value`, src/mux/server.rs), which Claude Code
 //! 2.1.280 and later load for the session as `--plugin-dir` does, beside
@@ -68,9 +78,32 @@ pub const ENV: &str = "CLAUDE_CODE_PLUGIN_DIRS";
 /// The oldest Claude Code that reads `ENV`.
 pub const CLAUDE_VERSION: (u64, u64, u64) = (2, 1, 280);
 
-/// The statusline's module, in `hooks/` beside the hooks.json that lists
-/// it.
+/// The plugin's one hooks module, in `hooks/` beside the hooks.json that
+/// lists it: Claude Code runs one a plugin, so it registers each of the
+/// files' hooks below.
+const ENTRY_MODULE: &str = "switchboard.js";
+
+/// The statusline's file, beside the module that imports it.
 const STATUSLINE_MODULE: &str = "statusline.js";
+
+/// `hooks/switchboard.js`: the plugin's hooks module, which registers the
+/// statusline's hooks and the permissions', each imported from its file.
+pub fn entry_module() -> String {
+    format!(
+        "// Switchboard's hooks module, written by `switchboard setup`
+// (src/setup/plugin.rs). Claude Code runs one hooks module a plugin, so
+// this one registers each of Switchboard's, kept in files of their own.
+import {{ register as statusline }} from './{STATUSLINE_MODULE}';
+import {{ register as permissions }} from './{}';
+
+export function register(on) {{
+  statusline(on);
+  permissions(on);
+}}
+",
+        super::permissions::MODULE
+    )
+}
 
 /// What the SessionStart hook runs for Switchboard's instructions.
 pub const CONTEXT_COMMAND: &str = "switchboard claude-context";
@@ -84,7 +117,7 @@ pub fn dir() -> PathBuf {
 }
 
 /// `hooks/hooks.json`: the asset's hooks, the instructions as a session
-/// starts, and the statusline's module.
+/// starts, and the plugin's hooks module.
 pub fn hooks() -> Value {
     let mut hooks = super::claude_settings::ours()["hooks"].clone();
     if let Some(events) = hooks.as_object_mut() {
@@ -95,14 +128,14 @@ pub fn hooks() -> Value {
             groups.push(json!({ "hooks": [{ "type": "command", "command": CONTEXT_COMMAND }] }));
         }
     }
-    json!({ "hooks": hooks, "modules": [format!("./{STATUSLINE_MODULE}")] })
+    json!({ "hooks": hooks, "modules": [format!("./{ENTRY_MODULE}")] })
 }
 
 /// `.claude-plugin/plugin.json`.
 pub fn manifest() -> Value {
     json!({
         "name": NAME,
-        "description": "Switchboard's skills, the hooks that tell the workspace what each Claude is doing, its statusline and its instructions, for Claude in Switchboard's panes",
+        "description": "Switchboard's skills, the hooks that tell the workspace what each Claude is doing, its statusline, its permissions and its instructions, for Claude in Switchboard's panes",
         "version": env!("CARGO_PKG_VERSION"),
     })
 }
@@ -159,9 +192,14 @@ pub fn files() -> Vec<(String, Vec<u8>)> {
         "hooks/hooks.json".into(),
         format!("{}\n", util::json_pretty(&hooks())).into_bytes(),
     ));
+    files.push((format!("hooks/{ENTRY_MODULE}"), entry_module().into_bytes()));
     files.push((
         format!("hooks/{STATUSLINE_MODULE}"),
         statusline_module().into_bytes(),
+    ));
+    files.push((
+        format!("hooks/{}", super::permissions::MODULE),
+        super::permissions::module().into_bytes(),
     ));
     files.push((
         ".claude-plugin/plugin.json".into(),

@@ -25,8 +25,10 @@
 //! leaves empty, your other hooks kept, since left in they would run twice
 //! in a pane; and the statusline they wrote, Switchboard's own or the tmux
 //! version's taken out and `IN_PANES` taken off one of yours. The
-//! permissions earlier versions added stay: a plugin can't carry them yet,
-//! and taking them out would leave its skills asking. As a plugin, the
+//! permissions earlier versions added stay, though the plugin carries them
+//! now (src/setup/permissions.rs): one of them can't be told from the same
+//! rule of yours, which Claude Code's "always allow" writes there too. As a
+//! plugin, the
 //! guided setup runs this part only on a file holding some of that
 //! (`set_up`), and a new build's first run only on one holding the hooks
 //! (`has_hooks`).

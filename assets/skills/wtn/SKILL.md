@@ -3,6 +3,12 @@ name: wtn
 description: Replace this Claude session with `wtn` in the same Switchboard pane, so a worktree opens in this tab for one checklist item of a note, with a fresh Claude session working on it and its plan. For work kept in a note in any repository; /queue-and-clean lands it as `switchboard landing` says for the repository: straight on the default branch, or through a PR.
 argument-hint: "[note] [item text or line number] [→ branch to land on] [what to add to its prompt]"
 disable-model-invocation: true
+allowed-tools:
+  - Bash(switchboard skill-path *)
+  - Bash(switchboard set *)
+  - Bash(switchboard landing)
+  - Bash(switchboard landing *)
+  - Bash(switchboard respawn *)
 ---
 
 # wtn

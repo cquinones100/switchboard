@@ -1148,14 +1148,30 @@ fn the_guided_setup_writes_the_plugin_and_changes_nothing_the_second_time() {
         hooks.contains("switchboard hook Stop") && hooks.contains("switchboard claude-context"),
         "{hooks}"
     );
-    // The statusline's module, which hooks.json lists.
+    // The plugin's one hooks module, which hooks.json lists, importing the
+    // statusline's file and the permissions'.
     let listed: Value = serde_json::from_str(&hooks).unwrap();
-    assert_eq!(listed["modules"], json!(["./statusline.js"]));
+    assert_eq!(listed["modules"], json!(["./switchboard.js"]));
+    let entry = read(&plugin.join("hooks/switchboard.js"));
+    assert!(
+        entry.contains("from './statusline.js'") && entry.contains("from './permissions.js'"),
+        "{entry}"
+    );
     let module = read(&plugin.join("hooks/statusline.js"));
     assert!(
         module.contains("on('settings.read'")
             && module.contains(r#""command":"switchboard statusline""#)
             && module.contains("['switchboard', 'setting', 'pane_statusline']"),
+        "{module}"
+    );
+    // The permissions' module, its lists filled in from the asset.
+    let module = read(&plugin.join("hooks/permissions.js"));
+    assert!(
+        module.contains("hook('tool.check', { tool: 'Bash' }"),
+        "{module}"
+    );
+    assert!(
+        module.contains(r#""Bash(switchboard tabs)""#) && module.contains(r#""Bash(git pull)""#),
         "{module}"
     );
 

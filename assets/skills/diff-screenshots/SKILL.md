@@ -2,6 +2,10 @@
 name: diff-screenshots
 description: Render a branch's or PR's diff with git delta, side by side and in colour, as PNG screenshots, one set per file, ordered core code first and tests last with a numbered label for each, then open them in Preview. Use whenever the user wants to see, share, review, present or attach a diff, a branch's changes or a PR as images or screenshots, even if they don't say "delta" or "screenshot" (for example "show me the diff as pictures", "make images of this PR for the deck", "I want to look over the changes in Preview").
 argument-hint: "[base ref or PR number] [unified]"
+allowed-tools:
+  - Bash(node ~/.local/share/switchboard/claude/plugin/skills/*)
+  - Bash(switchboard skill-path *)
+  - Bash(git diff *)
 ---
 
 # Diff screenshots

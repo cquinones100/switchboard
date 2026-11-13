@@ -2,6 +2,17 @@
 name: review-loop
 description: Run the branch through repeated skeptical, read-only Codex reviews (Claude reviews when Codex isn't available), fixing what each round finds, until two consecutive rounds come back clean. Use when the user says a branch or PR is ready for review, asks to "run the review loop", or asks for a Codex review of the branch.
 argument-hint: "[all] [norules] [<worktree of someone else's PR> [<base>]]"
+allowed-tools:
+  - Bash(switchboard codex-review)
+  - Bash(switchboard codex-review *)
+  - Bash(switchboard skill-path *)
+  - Bash(switchboard show *)
+  - Bash(switchboard setting review_security)
+  - Bash(switchboard land-lock *)
+  - Bash(git status)
+  - Bash(git status *)
+  - Bash(git log *)
+  - Bash(git rev-parse *)
 ---
 
 # Review loop

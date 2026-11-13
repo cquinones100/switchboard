@@ -7,6 +7,18 @@ description: >
   interval); each run is one tick. The channels, and the team's own rules for what is urgent,
   come from ~/.config/switchboard/oncall.json. Use when someone says "start the on-call watch",
   "watch the alerts", "I'm on call", or asks to mark a monitor chronic or what the watch has seen.
+allowed-tools:
+  - Bash(switchboard skill-path *)
+  - Bash(switchboard slack-relay notify *)
+  - Bash(gh pr view*)
+  - Bash(gh run view *)
+  - mcp__claude_ai_Slack__slack_read_channel
+  - mcp__claude_ai_Slack__slack_read_thread
+  - mcp__claude_ai_Slack__slack_search_public
+  - mcp__claude_ai_Slack__slack_search_public_and_private
+  - mcp__claude_ai_Slack__slack_search_channels
+  - mcp__claude_ai_Slack__slack_search_users
+  - mcp__claude_ai_Slack__slack_read_user_profile
 ---
 
 # On call

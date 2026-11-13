@@ -61,6 +61,7 @@ pub mod claude_settings;
 pub mod lazygit;
 pub mod leftovers;
 pub mod optional;
+pub mod permissions;
 pub mod plugin;
 pub mod skills;
 pub mod terminal;

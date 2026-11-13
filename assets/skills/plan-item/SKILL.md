@@ -2,6 +2,10 @@
 name: plan-item
 description: Add a checklist item to the tab's note and write its plan note in the plans folder beside it, after checking the item isn't there already and looking into the code it touches, in the shape `/wtn` and autopilot build from, its first line a bug ("BUG:") or a feature ("FEAT:"). Use when the user asks to add something to their note's checklist, plan an item, or log a bug or a feature for later work; not for a Linear ticket (`/shape`) or for working an item now (`/wtn`).
 argument-hint: "<what the item is about, in your words>"
+allowed-tools:
+  - Bash(switchboard skill-path *)
+  - Bash(switchboard tabs)
+  - Bash(switchboard show *)
 ---
 
 # plan-item

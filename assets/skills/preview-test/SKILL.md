@@ -3,6 +3,13 @@ name: preview-test
 description: Wait until an open PR's preview deploy is up, test the feature it adds on the preview in a real browser, record a captioned video of the test, and ask you to approve it. The before-merge counterpart of /deploy-test, using its recorder; run it on any open PR whose repository deploys previews.
 argument-hint: "[PR number]"
 disable-model-invocation: true
+allowed-tools:
+  - Bash(node ~/.local/share/switchboard/claude/plugin/skills/*)
+  - Bash(switchboard skill-path *)
+  - Bash(switchboard wait-deploy *)
+  - Bash(gh pr view*)
+  - Bash(gh pr diff*)
+  - Bash(gh run list*)
 ---
 
 # Preview test

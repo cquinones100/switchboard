@@ -1,6 +1,16 @@
 ---
 name: resolve-conflicts
 description: Bring the current branch up to date with the remote's main by fetching and rebasing onto it, then resolve any conflicts and carry the rebase, merge, or cherry-pick through to completion. Use when the user says they are in the middle of a rebase, mentions conflicts, says a PR has conflicts or is behind main, or when a git operation stops with conflicted files.
+allowed-tools:
+  - Bash(switchboard skill-path *)
+  - Bash(git status)
+  - Bash(git status *)
+  - Bash(git log *)
+  - Bash(git diff *)
+  - Bash(git fetch)
+  - Bash(git fetch *)
+  - Bash(git rev-parse *)
+  - Bash(git branch --show-current)
 ---
 
 # Resolve conflicts

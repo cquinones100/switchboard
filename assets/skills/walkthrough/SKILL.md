@@ -2,6 +2,13 @@
 name: walkthrough
 description: Record a captioned video of a feature, reached the way a person would reach it, and hand back an MP4 to share - in a real browser, with every click, highlight and the page's address shown, or in a terminal app on Switchboard's demo, with every key pressed shown. Use when asked for a walkthrough, a demo video, a screen recording of a feature, or a video to put in a PR, a ticket or Slack, and to show a change to Switchboard itself as a video. Its browser recorder is the one /deploy-test and /preview-test record their tests with.
 argument-hint: "[what to show, a PR number, a URL, or terminal]"
+allowed-tools:
+  - Bash(node ~/.local/share/switchboard/claude/plugin/skills/*)
+  - Bash(switchboard skill-path *)
+  - Bash(switchboard wait-deploy *)
+  - Bash(gh pr view*)
+  - Bash(gh pr diff*)
+  - Bash(gh run list*)
 ---
 
 # Walkthrough

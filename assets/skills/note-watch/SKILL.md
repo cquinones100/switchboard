@@ -3,6 +3,10 @@ name: note-watch
 description: Watch one of the user's notes for new checklist items while this session runs, and work each one as it appears, ticking it when done. Confirms the note before starting.
 argument-hint: "[note title or path]"
 disable-model-invocation: true
+allowed-tools:
+  - Bash(switchboard skill-path *)
+  - Bash(switchboard set *)
+  - Bash(switchboard watch-note *)
 ---
 
 # Note watch
