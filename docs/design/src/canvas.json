@@ -189,6 +189,18 @@
       "title": "45. Layout: how a view fills a screen of any size, every board being 160 × 45",
       "page": "design"
     },
+    "LonePaneCentered.dc.html": {
+      "title": "61. A lone pane on a 365-column screen, A: the Work map capped at 165 columns and centered, the spare columns sunken on both sides",
+      "page": "design"
+    },
+    "LonePaneLeft.dc.html": {
+      "title": "62. A lone pane on a 365-column screen, B: the Work map capped at 165 columns against the sidebar, the spare columns sunken on its right",
+      "page": "design"
+    },
+    "TabWithNotes.dc.html": {
+      "title": "63. Two panes on a 365-column screen: a tab with Notes beside it splits the whole width, past a lone pane's cap",
+      "page": "design"
+    },
     "SlackDm.dc.html": {
       "title": "46. Slack on a phone: the DM, one line for each thing that needs you",
       "page": "design"

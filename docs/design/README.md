@@ -8,6 +8,9 @@ The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a scre
 - [0c. The kit's board: columns of cards, one look for PRs, Tickets and Autopilot](https://cquinones100.github.io/switchboard/design/0c.html)
 - [0d. The kit: a person, one avatar for Slack, Linear and GitHub, Large beside their words and Small inline](https://cquinones100.github.io/switchboard/design/0d.html)
 - [45. Layout: how a view fills a screen of any size, every board being 160 × 45](https://cquinones100.github.io/switchboard/design/45.html)
+- [61. A lone pane on a 365-column screen, A: the Work map capped at 165 columns and centered, the spare columns sunken on both sides](https://cquinones100.github.io/switchboard/design/61.html)
+- [62. A lone pane on a 365-column screen, B: the Work map capped at 165 columns against the sidebar, the spare columns sunken on its right](https://cquinones100.github.io/switchboard/design/62.html)
+- [63. Two panes on a 365-column screen: a tab with Notes beside it splits the whole width, past a lone pane's cap](https://cquinones100.github.io/switchboard/design/63.html)
 
 ## The workspace
 
