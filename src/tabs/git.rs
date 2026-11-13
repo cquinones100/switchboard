@@ -159,7 +159,7 @@ fn ref_exists(git_dir: &Path, common_dir: &Path, name: &str) -> bool {
 /// (origin's, else the local one; empty with none), so a commit made or
 /// landed on the default branch changes it; `None` when `HEAD` can't be
 /// read. With the commit its upstream is at (`ref_at`), what a count of
-/// its commits is kept by (the Work map's chosen row).
+/// its commits is kept by (Reopen's chosen worktree).
 pub fn head_commit(dir: &Path) -> Option<String> {
     let place = locate(dir)?;
     let head = fs::read_to_string(place.git_dir.join("HEAD")).ok()?;

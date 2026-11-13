@@ -3,7 +3,8 @@
 //! keys): M-Space opens it over the whole screen, `]` moves to the next
 //! view, Enter on a tab's card opens its menu and "Go to tab" goes there,
 //! the Settings view changes a setting in the settings file, M-j opens the
-//! Work map as a picker of the open tabs, and q closes it. With UX 2.0 and
+//! Work map as a picker of the open tabs, Reopen lists the worktrees no tab
+//! has open and its menus open and remove them, and q closes it. With UX 2.0 and
 //! many tabs, moving about leaves what it shows standing, while a tab's new
 //! output and a tab closing still show. With UX 2.0, the Resources board ends
 //! a tab's busy process from its menu after a yes, and a number on a card
@@ -28,7 +29,6 @@ fn settings(server: &TestServer, extra: Value) {
         "sidebar": false,
         "github": false,
         "linear": false,
-        "view_work_map": false,
         "view_calendar": false,
         "view_slack": false,
         "view_relay": false,
@@ -568,54 +568,105 @@ fn m_j_picks_an_open_tab_from_the_work_map() {
     });
 }
 
+/// Runs git in `cwd`, with none of your own config.
+fn git(cwd: &std::path::Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@e")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@e")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {out:?}");
+}
+
 #[test]
-fn with_ux2_the_work_map_s_menus_scope_fold_and_go() {
+fn reopen_lists_the_worktrees_no_tab_has_open_and_its_menus_open_and_remove_them() {
     let server = TestServer::start();
-    settings(&server, json!({ "ux2": true, "view_work_map": true }));
-    let mut client = server.attach(140, 36);
+    settings(&server, json!({ "ux2": true, "view_reopen": true }));
+    let repo = server.dir.path().join("repo");
+    git(server.dir.path(), &["init", "-q", repo.to_str().unwrap()]);
+    git(&repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "start"]);
+    let clean = server.dir.path().join("wt-clean");
+    let dirty = server.dir.path().join("wt-dirty");
+    let opened = server.dir.path().join("wt-opened");
+    for (dir, branch) in [
+        (&clean, "feat-clean"),
+        (&dirty, "feat-dirty"),
+        (&opened, "feat-opened"),
+    ] {
+        git(
+            &repo,
+            &["worktree", "add", "-q", "-b", branch, dir.to_str().unwrap()],
+        );
+    }
+    std::fs::write(dirty.join("new.txt"), "work").unwrap();
+    let mut client = server.attach(160, 40);
     client.wait_text("$");
-    server.ok(&["new-tab", "-n", "second"]);
-    wait_list(&server, "two tabs named", |l| {
-        tabs(l).len() == 2
-            && tabs(l)
-                .iter()
-                .all(|t| t["name"].as_str().is_some_and(|n| !n.is_empty()))
-    });
+    server.ok(&["new-tab", "-c", repo.to_str().unwrap()]);
+    // Reopen lists them under their heading, with no Work map in the bar.
     open(&mut client);
-    client.type_text("vwork\r");
-    // The tabs in no repository under a heading of their own, the keys on
-    // the footer.
-    client.wait_text("▾ Other tabs");
-    client.wait_text("m view actions");
-    // The view's menu shows only the work with no tab, which leaves
-    // nothing; then all.
-    client.type_text("m");
-    pick(&mut client, "Show only the rows with no tab");
-    client.wait_for("nothing without a tab", |s| {
-        !s.iter().any(|l| l.contains("Other tabs"))
-    });
-    client.type_text("m");
-    pick(&mut client, "Show every row");
-    client.wait_text("▾ Other tabs");
-    // Enter on the heading folds it and opens it again; z is no key.
-    client.type_text("\r");
-    client.wait_text("▸ Other tabs");
-    client.type_text("z");
-    client.type_text("\r");
-    client.wait_text("▾ Other tabs");
-    // A row's menu folds its repository too, the cursor on its heading,
-    // where Enter opens it again.
-    client.type_text("j\r");
-    pick(&mut client, "Fold its repository");
-    client.wait_text("▸ Other tabs");
-    client.type_text("\r");
-    client.wait_text("▾ Other tabs");
-    // Enter on a row opens its menu, going to its tab first.
-    client.type_text("j\r");
-    client.wait_text("Go to tab");
-    client.type_text("\r");
+    client.type_text("vreopen\r");
+    let screen = client.wait_text("feat-clean");
+    let all = screen.join("\n");
+    assert!(
+        all.to_lowercase().contains("worktrees with no tab"),
+        "{all}"
+    );
+    assert!(
+        all.contains("feat-dirty") && all.contains("feat-opened"),
+        "{all}"
+    );
+    assert!(!all.contains("Map ") && !all.contains("Work map"), "{all}");
+    client.type_text("q");
     client.wait_for("mission control closed", |s| {
         !s.iter().any(|l| l.contains("MISSION CONTROL"))
+    });
+    // M-o's picker: a clean worktree removed after a yes.
+    let menu = |client: &mut TestClient, name: &str| {
+        client.type_text(&format!("{ALT}o"));
+        client.wait_text(name);
+        client.type_text(name);
+        client.type_text("\r");
+        client.wait_text("Open a tab here and resume its Claude");
+    };
+    menu(&mut client, "feat-clean");
+    pick(&mut client, "Remove the worktree…");
+    client.wait_text("[Y/n]");
+    client.type_text("\r");
+    let deadline = common::deadline(Duration::from_secs(10));
+    while clean.exists() {
+        assert!(Instant::now() < deadline, "the clean worktree removed");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // One with a change is kept, saying so.
+    client.type_text("\x1b");
+    menu(&mut client, "feat-dirty");
+    pick(&mut client, "Remove the worktree…");
+    client.wait_text("[Y/n]");
+    client.type_text("\r");
+    client.wait_text("changes not committed");
+    assert!(dirty.exists());
+    // Its first option opens a tab there.
+    client.type_text("\x1b");
+    menu(&mut client, "feat-opened");
+    client.type_text("\r");
+    let want = opened.canonicalize().unwrap();
+    wait_list(&server, "a tab in the worktree", |l| {
+        tabs(l).iter().any(|t| {
+            t["path"]
+                .as_str()
+                .is_some_and(|p| std::path::Path::new(p).canonicalize().ok() == Some(want.clone()))
+        })
+    });
+    // M-j still picks an open tab, its view named Map in UX 2.0's bar.
+    client.type_text(&format!("{ALT}j"));
+    client.wait_for("M-j's picker of the open tabs", |s| {
+        s.iter().any(|l| l.contains(" Map ")) && s.iter().any(|l| l.contains("tab 1"))
     });
 }
 
@@ -2476,6 +2527,27 @@ fn on_a_wide_screen_one_view_is_capped_against_the_sidebar_and_its_side_takes_no
     client.send(b"\x1b[<0;340;10M\x1b[<0;340;10m");
     std::thread::sleep(Duration::from_millis(300) * common::patience());
     assert_eq!(client.screen().join("\n"), before);
+}
+
+#[test]
+fn the_resize_keys_move_a_lone_views_right_edge_and_set_the_lone_width() {
+    let server = TestServer::start();
+    settings(&server, json!({ "lone_pane_width": "165" }));
+    let mut client = server.attach(365, 40);
+    client.wait_text("$");
+    wait_list(&server, "the settings read", |l| {
+        l["sessions"][0]["sidebar"]["columns"] == 0
+    });
+    open(&mut client);
+    let rule_at =
+        |screen: &[String], col: usize| screen.iter().any(|row| row.chars().nth(col) == Some('│'));
+    client.wait_for("the view against its rule", |s| rule_at(s, 165));
+    // C-M-S-l, with no pane beside the list, moves the view's edge.
+    client.send(b"\x1b[108;8u");
+    client.wait_for("the rule 5 columns further", |s| rule_at(s, 170));
+    wait_saved(&server, "the lone width", |saved| {
+        saved["lone_pane_width"] == "170"
+    });
 }
 
 /// The settings file as written, once `pred` holds of it.

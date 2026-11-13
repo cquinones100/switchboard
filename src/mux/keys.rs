@@ -596,13 +596,13 @@ impl Action {
                 "Drawn as the PR image draws a PR, a page at a time; j, k and Space page, q closes it.".into()
             }
             Action::MissionControl => {
-                "Every tab of every session as a card, then the views (Work map, PRs, CI, tickets, your day, Settings) named in the bar across the top.".into()
+                "Every tab of every session as a card, then the views (Reopen, PRs, CI, tickets, your day, Settings) named in the bar across the top.".into()
             }
             Action::FindTab => {
                 "The Work map with the open tabs alone, a filter already typing; Enter opens the chosen tab's menu, so Enter twice goes to it.".into()
             }
             Action::ReviveWorktree => {
-                "The Work map with the worktrees no tab has open; Enter twice opens a tab in the chosen one and resumes its Claude. Untrusted worktrees are left out.".into()
+                "The Reopen view as a picker: closed tabs, past Claude sessions and the worktrees no tab has open; Enter opens the chosen row's menu, its first option reopening or resuming it. Untrusted worktrees are left out.".into()
             }
             Action::Settings => {
                 "Mission control's Settings view: every option by category, then your own files' settings. What you change is kept in ~/.config/switchboard/settings.json.".into()

@@ -165,12 +165,12 @@ pub fn has_side(view: &View, chosen: bool, ux2: bool) -> bool {
 
 /// What M-p says of each view: its "Mission control: <view>" command
 /// (`extras::Command::Mission`) lists every view here while it shows, so a
-/// view added to `ViewId` is one pick away once it is in `BUILT_IN`.
+/// view added to `ViewId` is one pick away once it is in `BUILT_IN`. The
+/// Work map is M-j's picker alone, so it is in none.
 impl ViewId {
     /// Every view but the plugins', in mission control's order.
-    pub const BUILT_IN: [ViewId; 18] = [
+    pub const BUILT_IN: [ViewId; 17] = [
         ViewId::Notifications,
-        ViewId::WorkMap,
         ViewId::Calendar,
         ViewId::Reminders,
         ViewId::Slack,
@@ -251,7 +251,7 @@ impl ViewId {
             ViewId::Reminders => "every tab's reminder, by when it comes due",
             ViewId::Slack => "what is new for you on Slack",
             ViewId::Relay => "which of the Slack relay's messages reach you, and how",
-            ViewId::Reopen => "tabs closed and past Claude sessions, to reopen",
+            ViewId::Reopen => "closed tabs, past sessions and worktrees with no tab",
             ViewId::Prs => "your pull requests by where they stand",
             ViewId::Ci => "your pull requests failing, running and passing",
             ViewId::Landing => {
@@ -277,7 +277,7 @@ impl ViewId {
                 "Newest first, Enter opening one's actions; with Settings' \"Notifications' history\" (notification_history) on, every one of the last two weeks by day, with what it led to. Settings' \"Notifications\" (sidebar_notifications)."
             }
             ViewId::WorkMap => {
-                "A row for each worktree and tab in your tabs' repositories, with its ticket, its tab and where its PR stands, what needs you first. Enter goes to it or reopens it. Settings' \"Work map\" (view_work_map)."
+                "M-j's picker: a row for each open tab, with its ticket and where its PR stands. Enter goes to it."
             }
             ViewId::Calendar => {
                 "Today laid out as Google Calendar's Day view, read from its iCal feed every five minutes, else from what /today last saved. Enter joins a call or answers an invitation. Settings' \"Calendar\" (view_calendar)."
@@ -292,7 +292,7 @@ impl ViewId {
                 "Whether the relay runs and what it sent today, then each kind of message it sends (prompts, finished turns, stuck tabs, commits and pushes, failures, full context, notices) with where it goes: Notify, Thread only or Off, three presets, autopilot's tabs and quiet hours. Settings' \"Slack relay\" (view_relay)."
             }
             ViewId::Reopen => {
-                "The tabs closed and the Claude sessions of the last two weeks no tab runs, one row a conversation, newest first by day, with what became of the work and, with UX 2.0, the chosen one's last screen. Enter reopens a tab where it was, with its name and its Claude resumed, or resumes a session in a new tab; m shows only tabs or only sessions. Settings' \"Reopen\" (view_reopen)."
+                "The tabs closed and the Claude sessions of the last two weeks no tab runs, one row a conversation, newest first by day, with what became of the work and, with UX 2.0, the chosen one's last screen; then the worktrees no tab has open, a line each with where its PR stands, the merged ones folded. Enter opens the row's menu: reopen a tab where it was, resume a session in a new tab, or open a tab in a worktree, and remove a worktree after asking; m shows only tabs or only sessions. Settings' \"Reopen\" (view_reopen)."
             }
             ViewId::Prs => {
                 "Columns Draft, In review, Approved, In merge queue and Merged in the last 7 days, from the repositories your tabs are in, with checks and reviews. Needs GitHub; Settings' \"PR board\" (pr_board)."
@@ -1250,6 +1250,7 @@ pub fn work_map(
                 "checks": checks,
                 "checksTone": checks_tone,
                 "used": last_used(tab, last, facts.now_secs),
+                "when": last.map(|l| l.when),
                 "tab": tab.map(|t| json!({ "index": t.index, "name": t.name })),
                 "place": place,
                 "prompt": prompt,

@@ -53,8 +53,11 @@ use crate::usage::ViewKind;
 use crate::{paths, settings, util};
 
 /// How often the worktrees of the tabs' repositories are read again while
-/// the Work map is wanted.
+/// Reopen (or M-j's picker) is wanted.
 const WORKTREES_EVERY: Duration = Duration::from_secs(60);
+/// The key Reopen's merged worktrees are shown under in a client's
+/// `Folds::merged_open`, beside the Work map's repositories.
+const REOPEN_MERGED: &str = "reopen";
 /// How long `wt-revive --json` may take before the look is given up.
 const REVIVED_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long your own files' Settings rows are kept before they are read
@@ -132,8 +135,8 @@ pub(super) const KEYS: &[(&str, &str)] = &[
         "what a right click opens: the chosen item's actions, as ↵, or the view's, as m",
     ),
     (
-        "↵ on a heading",
-        "Work map: fold or open a repository (a row's menu folds its own too); on its merged line, its menu shows or hides its merged worktrees",
+        "↵ on a fold line",
+        "Reopen: its merged worktrees' menu shows or hides them, or removes them after asking",
     ),
     (
         "i",
@@ -190,15 +193,11 @@ enum ViewAct {
     Autopilot,
     /// A change to autopilot as a whole, as its menu's option would make.
     Pilot(crate::autopilot::Act),
-    /// The Work map's rows narrowed to those with a tab, without, or all.
-    Scope(Option<Scope>),
     /// The Reopen view's rows narrowed to tabs, to sessions, or both.
     ReopenKind(crate::usage::reopen::Kind),
     /// The Reopen view's chosen row's pane shown over the list, or put
     /// away, as `i` does.
     ReopenPane,
-    /// The Work map's merged worktrees of a repository shown or folded.
-    Merged(String),
     /// A day of the Notifications history unfolded.
     Unfold(String),
     /// The Calendar a day back or forward, or on today.
@@ -1135,6 +1134,10 @@ impl Server {
                     m.resources_sort.sort(&mut v.data.items);
                 }
                 if v.id == ViewId::Reopen {
+                    // A filter shows the merged worktrees it matches, as
+                    // the Work map unfolded its matches while filtering.
+                    let merged = m.folds.merged_open.contains(REOPEN_MERGED) || !text.is_empty();
+                    crate::usage::reopen::fold_merged(&mut v.data.items, merged);
                     crate::usage::reopen::keep(&mut v.data.items, m.reopen_kind);
                     // M-o's picker lists rows to pick, with no day's
                     // heading for Enter to land on.
@@ -1353,6 +1356,8 @@ impl Server {
                 .is_some_and(|(id, _)| *id == ViewId::Reopen)
         {
             self.want_past_sessions();
+            self.mission_worktrees(false);
+            self.mission_revived(false);
         }
         // A view shown beside the one in front is kept up to date as it is.
         let mut shown_ids = grid_ids;
@@ -1366,7 +1371,11 @@ impl Server {
                 ViewId::Resources => self.want_view(ViewKind::Resources),
                 ViewId::Usage => self.want_view(ViewKind::Usage),
                 ViewId::Keys => self.want_key_counts(),
-                ViewId::Reopen => self.want_past_sessions(),
+                ViewId::Reopen => {
+                    self.want_past_sessions();
+                    self.mission_worktrees(false);
+                    self.mission_revived(false);
+                }
                 ViewId::Slack if settings::is_on("slack_background") => {
                     self.connector_shown("Slack")
                 }
@@ -1395,6 +1404,10 @@ impl Server {
                 self.mission_worktrees(true);
                 self.mission_revived(true);
                 self.work_out_landing();
+            }
+            ViewId::Reopen => {
+                self.mission_worktrees(true);
+                self.mission_revived(true);
             }
             _ => {}
         }
@@ -1483,7 +1496,10 @@ impl Server {
             };
             out.push(view(ViewId::Notifications, "Notifications", data, true));
         }
-        if on("view_work_map") || picker {
+        // The Work map's gathering: M-j's picker lists its open tabs, and
+        // Reopen its worktrees no tab has open.
+        let reopen = on("view_reopen") || picker;
+        let map = (picker || reopen).then(|| {
             let tabs = self.sidebar_all_tabs();
             let trees: Vec<views::Worktree> =
                 self.mission.worktrees.values().flatten().cloned().collect();
@@ -1493,9 +1509,11 @@ impl Server {
                 counts: self.mission.counts.clone(),
                 now_secs: util::now_ms() / 1000,
             };
-            let items = views::work_map(&tabs, &trees, &self.mission.revived, &pr_of, &facts);
+            views::work_map(&tabs, &trees, &self.mission.revived, &pr_of, &facts)
+        });
+        if picker && let Some(items) = &map {
             let data = ViewData {
-                items,
+                items: items.clone(),
                 at: Some(1),
                 ..ViewData::default()
             };
@@ -1545,8 +1563,35 @@ impl Server {
             out.push(view(ViewId::Relay, "Slack relay", data, true));
         }
         // M-o's picker lists it with the view turned off too.
-        if on("view_reopen") || picker {
-            let d = self.usage_view(ViewKind::Reopen);
+        if reopen {
+            let mut d = self.usage_view(ViewKind::Reopen);
+            d.items.extend(crate::usage::reopen::worktrees(
+                map.as_deref().unwrap_or(&[]),
+            ));
+            // The worktrees a tab has open, with its PR's address.
+            let tabbed: Vec<(PathBuf, Option<String>)> = self
+                .sidebar_all_tabs()
+                .into_iter()
+                .filter_map(|t| {
+                    let path = t.path.as_ref()?;
+                    let tree = self
+                        .mission
+                        .worktrees
+                        .values()
+                        .flatten()
+                        .filter(|w| !w.main && path.starts_with(&w.path))
+                        .max_by_key(|w| w.path.as_os_str().len())?;
+                    let url = settings::is_on("github")
+                        .then(|| {
+                            let (n, repo) = (self.tab_pr(t.id)?, self.tab_pr_repo(t.id)?);
+                            Some(format!("https://github.com/{repo}/pull/{n}"))
+                        })
+                        .flatten();
+                    Some((tree.path.clone(), url))
+                })
+                .collect();
+            let pr_of = |p: &Path| self.sources.untabbed_pr(p).map(|pr| pr.url.clone());
+            crate::usage::reopen::mark_sessions(&mut d.items, &tabbed, &pr_of);
             out.push(view(ViewId::Reopen, "Reopen", d, true));
         }
         for (id, name, title) in [
@@ -2363,6 +2408,13 @@ impl Server {
         if resize_key(&self.bindings, m, k) || resize_key(&self.bindings, m, key) {
             return;
         }
+        if let Some(cap) =
+            lone_key(&self.bindings, m, k).or_else(|| lone_key(&self.bindings, m, key))
+        {
+            m.lone = cap;
+            m.note = Some(self.set_lone_width(cap).unwrap_or_else(|e| e));
+            return;
+        }
         let mut k = k;
         let press = matches!(k.code, KeyCode::Enter) || (k.code == KeyCode::Char(' ') && plain(&k));
         match m.focus {
@@ -2766,9 +2818,9 @@ impl Server {
         }
     }
 
-    /// Counts, in the background, the branch of the Work map's chosen row
-    /// against its default branch and its upstream, for the pane under the
-    /// map: only with UX 2.0, the map in front and the row a worktree, once
+    /// Counts, in the background, the branch of Reopen's chosen worktree
+    /// against its default branch and its upstream, for its commits' chip
+    /// and its pane: only with UX 2.0 and Reopen in front, once
     /// for each commit it is at (read from git's files, so moving back to
     /// a row counted starts nothing), one count at a time, so the cursor
     /// running down the rows counts the one it settles on.
@@ -2783,13 +2835,14 @@ impl Server {
         else {
             return;
         };
-        if !m.snap.rules.ux2 || m.current().is_none_or(|v| v.id != ViewId::WorkMap) {
+        if !m.snap.rules.ux2 || m.current().is_none_or(|v| v.id != ViewId::Reopen) {
             return;
         }
         let Some(tree) = m
             .chosen_item()
-            .filter(|i| !views::is_header(i))
-            .and_then(|i| i.data.get("tree")?.as_str().map(PathBuf::from))
+            .filter(|i| crate::usage::reopen::kind_of(i) == crate::usage::reopen::WORKTREE)
+            .and_then(crate::usage::reopen::dir_of)
+            .map(Path::to_path_buf)
         else {
             return;
         };
@@ -3211,29 +3264,6 @@ impl Server {
             self.tab_menu(client, &tab, None, false);
             return;
         }
-        // A folded line is an item too: its menu shows what it folds.
-        if views::is_fold_line(&item)
-            && let Some(repo) = views::repo_key(&item)
-        {
-            let label = if item.data["open"] == true {
-                "Fold them again"
-            } else {
-                "Show them"
-            };
-            self.small_view_menu(
-                client,
-                &item.title,
-                label,
-                ViewAct::Merged(repo.to_string()),
-            );
-            return;
-        }
-        if views::is_repo_heading(&item)
-            && let Some(repo) = views::repo_key(&item)
-        {
-            m.folds.fold(repo);
-            return;
-        }
         // Autopilot's view's heading opens the menu its line on the Tabs
         // view opens without UX 2.0.
         if view.id == ViewId::Autopilot && item.id == crate::autopilot::view::HEADING {
@@ -3366,17 +3396,6 @@ impl Server {
                 },
             );
         }
-        // A Work map row folds its repository, as its heading does.
-        if *view == ViewId::WorkMap
-            && !views::is_header(item)
-            && let Some(repo) = views::repo_key(item)
-        {
-            list.push(Choice {
-                key: 'z',
-                label: "Fold its repository".into(),
-                act: Do::FoldRepo(repo.to_string()),
-            });
-        }
         list
     }
 
@@ -3469,17 +3488,6 @@ impl Server {
                         );
                     }
                     add("Stop working the note", ViewAct::Pilot(Act::Stop));
-                }
-            }
-            Some(ViewId::WorkMap) if m.snap.rules.ux2 && !m.picker => {
-                for (label, scope) in [
-                    ("Show only the rows with a tab", Some(Scope::Tabs)),
-                    ("Show only the rows with no tab", Some(Scope::Untabbed)),
-                    ("Show every row", None),
-                ] {
-                    if m.scope != scope {
-                        add(label, ViewAct::Scope(scope));
-                    }
                 }
             }
             Some(ViewId::Calendar) if view.as_ref().is_some_and(|v| v.data.setup.is_none()) => {
@@ -3622,10 +3630,6 @@ impl Server {
                 settle(&mut m);
             }
             ViewAct::Sort => m.resources_sort = m.resources_sort.next(),
-            ViewAct::Scope(scope) => {
-                m.scope = scope;
-                m.cursor = 0;
-            }
             ViewAct::ReopenKind(kind) => {
                 m.reopen_kind = kind;
                 m.cursor = 0;
@@ -3641,7 +3645,6 @@ impl Server {
                 let today = super::reminders::today(&m);
                 choose_day(&mut m, today);
             }
-            ViewAct::Merged(repo) => m.folds.merged(&repo),
             ViewAct::Unfold(day) => {
                 // On its first notification, under its heading.
                 m.unfolded.insert(day);
@@ -4379,7 +4382,55 @@ impl Server {
                 Ok(_) => self.mission_close(client),
                 Err(e) => self.mission_note(client, e),
             },
-            Do::RemoveClosed(key) => self.remove_closed(&key),
+            Do::RemoveClosed(key) => {
+                let name = self
+                    .clients
+                    .get(&client)
+                    .and_then(|c| c.overlays.find::<Mission>())
+                    .and_then(|m| m.chosen_item())
+                    .map(|i| i.title.clone())
+                    .unwrap_or_default();
+                self.ask(
+                    client,
+                    Confirm::new("Forget it? Its directory and session stay.").list(vec![name]),
+                    move |server, _, yes| {
+                        if yes {
+                            server.remove_closed(&key);
+                        }
+                    },
+                );
+            }
+            Do::OpenTabNote(note) => {
+                self.mission_close(client);
+                self.open_note(client, &note);
+            }
+            Do::ShowMerged => {
+                let Some(mut m) = self.take_mission(client) else {
+                    return;
+                };
+                m.folds.merged(REOPEN_MERGED);
+                m.taken_at = None;
+                self.put_mission(client, m);
+                self.mission_prepare(client);
+                self.mission_redraw();
+            }
+            Do::RemoveWorktrees(dirs) => {
+                let n = dirs.len();
+                let shown: Vec<String> = dirs.iter().map(paths::tilde).collect();
+                let question = format!(
+                    "Remove {n} merged worktree{}? One with changes not committed is kept.",
+                    if n == 1 { "" } else { "s" }
+                );
+                self.ask(
+                    client,
+                    Confirm::new(question).list(shown),
+                    move |server, client, yes| {
+                        if yes {
+                            server.remove_worktrees(client, dirs);
+                        }
+                    },
+                );
+            }
             Do::OpenHere(dir) => {
                 self.mission_close(client);
                 // The same handoff wtr makes: the worktree's last Claude
@@ -4393,10 +4444,11 @@ impl Server {
                 let shown = paths::tilde(&dir);
                 self.ask(
                     client,
-                    Confirm::new("Remove this merged worktree?").list(vec![shown]),
+                    Confirm::new("Remove this worktree? One with changes not committed is kept.")
+                        .list(vec![shown]),
                     move |server, client, yes| {
                         if yes {
-                            server.remove_worktree(client, dir);
+                            server.remove_worktrees(client, vec![dir]);
                         }
                     },
                 );
@@ -4444,23 +4496,6 @@ impl Server {
             Do::OpenView(slug) => self.open_mission(client, Opening::View(slug)),
             Do::AnswerWith { tab, reply } => self.answer_tab(client, tab, &reply),
             Do::SlackPlay(item) => self.slack_play_now(client, Some(*item)),
-            Do::FoldRepo(repo) => {
-                let Some(mut m) = self.take_mission(client) else {
-                    return;
-                };
-                let heading = format!("repo:{repo}");
-                if let Some(at) = m
-                    .current()
-                    .and_then(|v| v.data.items.iter().position(|i| i.id == heading))
-                {
-                    m.cursor = at as isize;
-                }
-                m.folds.fold(&repo);
-                m.taken_at = None;
-                self.put_mission(client, m);
-                self.mission_prepare(client);
-                self.mission_redraw();
-            }
             Do::EditFile { dir, file } => self.edit_own_file(client, &dir, &file),
             Do::CardScreen(tab) => {
                 let Some(mut m) = self.take_mission(client) else {
@@ -4601,7 +4636,13 @@ impl Server {
     fn mission_after(&mut self, client: ClientId, after: After) {
         match after {
             After::DropInbox(id) => self.inbox_dropped(&id),
-            After::Worktrees => self.mission_worktrees(true),
+            After::Worktrees => {
+                // A worktree just removed leaves the rows wt-revive gave at
+                // once, not at its next look.
+                self.mission.revived.retain(|r| r.tree.is_dir());
+                self.mission_worktrees(true);
+                self.mission_revived(true);
+            }
             After::Calendar => self.calendar_reread(),
             After::Tickets => {
                 self.refresh_sources(Some(crate::sources::TICKETS));
@@ -5711,38 +5752,15 @@ impl Server {
     /// A merged worktree removed: `git worktree remove` without force, so
     /// one with changes not committed, or files git doesn't track, is kept
     /// and git's reason said.
-    fn remove_worktree(&mut self, client: ClientId, dir: PathBuf) {
-        let name = dir
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+    fn remove_worktrees(&mut self, client: ClientId, dirs: Vec<PathBuf>) {
         self.mission_busy(
             client,
             "Working on it",
             Some(After::Worktrees),
             async move {
                 tokio::task::spawn_blocking(move || {
-                    let Some((_, common)) = crate::sources::landing::git_of(&dir) else {
-                        return Some(format!("Kept {name}: not a git worktree."));
-                    };
-                    let main = common.parent().map(Path::to_path_buf).unwrap_or(common);
-                    match util::output_of(
-                        std::process::Command::new("git")
-                            .arg("-C")
-                            .arg(&main)
-                            .args(["worktree", "remove"])
-                            .arg(&dir),
-                    ) {
-                        Ok(_) => Some(format!("Removed {name}.")),
-                        Err(e) => {
-                            let why = e.to_string();
-                            let why = why.split_once(": ").map_or(why.as_str(), |(_, w)| w);
-                            Some(format!(
-                                "Kept {name}: {}",
-                                why.trim_start_matches("fatal: ")
-                            ))
-                        }
-                    }
+                    let said: Vec<String> = dirs.iter().map(|d| remove_one_worktree(d)).collect();
+                    Some(said.join(" "))
                 })
                 .await
                 .unwrap_or(None)
@@ -5949,6 +5967,26 @@ fn resize_key(bindings: &crate::mux::keys::Bindings, m: &mut Mission, key: Key) 
         _ => false,
     };
     true
+}
+
+/// The widest width a pane resize key left or right gives a lone view
+/// (`Mission::lone_view`), whose right edge it moves as it moves a lone
+/// pane's; none when `key` is no such key or the view isn't lone.
+fn lone_key(bindings: &crate::mux::keys::Bindings, m: &Mission, key: Key) -> Option<Option<u16>> {
+    use crate::mux::Direction;
+    let Some(crate::mux::keys::Action::Resize(dir @ (Direction::Left | Direction::Right), cells)) =
+        bindings.root.get(&key)
+    else {
+        return None;
+    };
+    if !m.lone_view() || m.spread_cols == 0 {
+        return None;
+    }
+    let by = i32::from(*cells) * if *dir == Direction::Right { 1 } else { -1 };
+    Some(crate::mux::layout::lone_moved(
+        i32::from(m.size.0) + by,
+        m.spread_cols,
+    ))
 }
 
 /// The pane beside a board's width kept in its file once it was resized and
@@ -6515,6 +6553,37 @@ fn landing_key(m: &mut Mission, k: Key) -> bool {
         return true;
     }
     false
+}
+
+/// A worktree removed with `git worktree remove` from its main clone,
+/// which keeps one with changes not committed or files git doesn't track;
+/// what became of it, in words.
+fn remove_one_worktree(dir: &Path) -> String {
+    let name = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let Some((_, common)) = crate::sources::landing::git_of(dir) else {
+        return format!("Kept {name}: not a git worktree.");
+    };
+    let main = common.parent().map(Path::to_path_buf).unwrap_or(common);
+    match util::output_of(
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&main)
+            .args(["worktree", "remove"])
+            .arg(dir),
+    ) {
+        Ok(_) => format!("Removed {name}."),
+        Err(e) => {
+            let why = e.to_string();
+            if why.contains("modified or untracked files") {
+                return format!("Kept {name}: it has changes not committed.");
+            }
+            let why = why.split_once(": ").map_or(why.as_str(), |(_, w)| w);
+            format!("Kept {name}: {}", why.trim_start_matches("fatal: "))
+        }
+    }
 }
 
 /// UX 2.0's Reopen view's own key: `i` shows the chosen row's pane (what
