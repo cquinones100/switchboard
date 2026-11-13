@@ -227,17 +227,13 @@ pub fn may_get_sixel(term: &str) -> bool {
 }
 
 /// Whether a terminal's picture cells are blanked rather than sent as the
-/// placeholder's box, where it gets neither way: one known never to draw
-/// kitty's pictures (Windows Terminal), or any while another terminal
-/// showing the session gets them (`others_draw`), for which the apps in
-/// its panes draw them. Otherwise the cells go as they are, since a
-/// terminal may speak kitty's protocol by a name this doesn't know.
-pub fn pictures_blank(term: &str, others_draw: bool) -> bool {
+/// placeholder's box: one that gets neither way. The apps in panes draw
+/// pictures only where the server said a terminal showing their session
+/// gets them (`show @graphics`), so cells left for one that doesn't are
+/// for another, or for one that has gone since they asked, and a program
+/// of yours never has its pictures passed on.
+pub fn pictures_blank(term: &str) -> bool {
     for_terminal(term).is_none()
-        && (others_draw
-            || term
-                .to_lowercase()
-                .contains(&WINDOWS_TERMINAL.to_lowercase()))
 }
 
 /// How pictures reach a terminal that says it is `term` (what it attached
@@ -402,24 +398,31 @@ impl Server {
     /// pane to draw by (`show @graphics`): `kitty` where one gets kitty's
     /// pictures, `sixel` where one gets sixel or may once it answers DA1,
     /// `round` where one's pill ends are round, `none` for none of them.
+    /// Nothing (unknown) while no terminal shows the session, so an app
+    /// started then goes by the terminal it runs in.
     pub(super) fn graphics_for_pane(&self, pane: super::PaneId) -> String {
         let session = self
             .panes
             .get(&pane)
             .and_then(|slot| self.session_of_tab(slot.tab))
             .map(|s| s.name.clone());
-        let (mut kitty, mut sixel, mut round) = (false, false, false);
+        let (mut kitty, mut sixel, mut round, mut any) = (false, false, false, false);
         for c in self
             .clients
             .values()
             .filter(|c| Some(&c.session) == session.as_ref())
         {
+            any = true;
+            let may = may_get_sixel(&c.term);
             match for_terminal(&c.term) {
                 Some(Protocol::Kitty) => kitty = true,
                 Some(Protocol::Sixel) => sixel = true,
-                None => sixel |= may_get_sixel(&c.term),
+                None => sixel |= may,
             }
-            round |= ends(&c.term) != Ends::Spaces;
+            round |= ends(&c.term) != Ends::Spaces || may;
+        }
+        if !any {
+            return String::new();
         }
         let words: Vec<&str> = [(kitty, "kitty"), (sixel, "sixel"), (round, "round")]
             .into_iter()

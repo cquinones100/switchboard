@@ -616,7 +616,12 @@ impl Server {
         way: Protocol,
         ends: graphics::Ends,
     ) -> Option<place::Drawn> {
-        if way != Protocol::Sixel && ends != graphics::Ends::Spaces {
+        let any_allowed = panes.iter().any(|(pane, _)| {
+            self.panes
+                .get(pane)
+                .is_some_and(|s| super::passthrough::graphics_allowed(&s.opts))
+        });
+        if way != Protocol::Sixel && !(ends == graphics::Ends::Spaces && any_allowed) {
             return None;
         }
         type Panes = Vec<(PaneId, Rect)>;
@@ -633,9 +638,10 @@ impl Server {
     /// reach its terminal (src/mux/graphics.rs), once everything is drawn:
     /// as sixel pictures (`draw_ends`) where it gets sixel; as spaces of
     /// their color where it gets spaces, for those Switchboard's apps drew
-    /// in their panes for another terminal showing the session (the
-    /// server's own drawing writes spaces itself). A half circle a program
-    /// of yours drew in its pane is left to the terminal either way.
+    /// in their panes, for another terminal or one that has gone since
+    /// they asked (the server's own drawing writes spaces itself). A half
+    /// circle a program of yours drew in its pane is left to the terminal
+    /// either way.
     pub(super) fn fix_ends(
         &mut self,
         frame: &mut Frame,

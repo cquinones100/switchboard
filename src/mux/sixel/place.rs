@@ -140,13 +140,14 @@ impl Drawn {
             .is_some_and(|c| c.symbol() == cell.symbol() && c.fg == cell.fg)
     }
 
-    /// Whether the half circle at `x`, `y` is still as a pane drew it, and
-    /// if so whether that pane is allowed pictures (one of Switchboard's
-    /// apps).
+    /// Whether the half circle at `x`, `y` is still the one a pane drew
+    /// there, and if so whether that pane is allowed pictures (one of
+    /// Switchboard's apps). By the character alone, since a box standing
+    /// out dims the colors behind it (`ui::dim_behind`).
     pub fn end_by(&self, x: u16, y: u16, cell: &Cell) -> Option<bool> {
         self.ends
             .get(&(x, y))
-            .filter(|(c, _)| c.symbol() == cell.symbol() && c.fg == cell.fg)
+            .filter(|(c, _)| c.symbol() == cell.symbol())
             .map(|(_, allowed)| *allowed)
     }
 }

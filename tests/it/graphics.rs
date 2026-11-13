@@ -651,8 +651,7 @@ fn the_apps_ask_what_the_session_s_terminals_get_and_one_that_gets_neither_shows
     let server = TestServer::start_with_settings(
         r#"{"ux2": true, "notifications": false, "tips": false, "sidebar": false}"#,
     );
-    let mut plain = server.attach_as("xterm-256color", 100, 30);
-    plain.wait_for("the header", |s| s[2].contains("M-c Claude"));
+    let mut first = server.attach_as("xterm-256color", 100, 30);
     let pane = first_pane_of(&server);
     let graphics = || {
         server
@@ -660,11 +659,23 @@ fn the_apps_ask_what_the_session_s_terminals_get_and_one_that_gets_neither_shows
             .trim()
             .to_string()
     };
+    first.detach();
+    let deadline = common::deadline(std::time::Duration::from_secs(10));
+    while !graphics().is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "unknown with no terminal attached: {}",
+            graphics()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let mut plain = server.attach_as("xterm-256color", 100, 30);
+    plain.wait_for("the header", |s| s[2].contains("M-c Claude"));
     assert_eq!(graphics(), "none");
-    // Windows Terminal, before it answers: it may get sixel.
+    // Windows Terminal, before it answers: it may get sixel, round.
     let mut wt = server.attach_as("xterm-256color WindowsTerminal", 100, 30);
     wt.wait_sent("asked what it is", b"\x1b[c");
-    assert_eq!(graphics(), "sixel");
+    assert_eq!(graphics(), "sixel round");
     wt.send(b"\x1b[?61;4;6;7c");
     wt.wait_sent("asked for its sixel cell", b"\x1b[16t");
     wt.send(b"\x1b[6;25;13t");

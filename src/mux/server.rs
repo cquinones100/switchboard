@@ -3587,27 +3587,16 @@ impl Server {
             Some(s) => self.compose(&mut frame, s, c),
             None => Default::default(),
         };
-        // How pictures and pill ends reach this terminal, and what the
-        // others showing the session get, which the apps in its panes draw
-        // for (src/mux/graphics.rs).
-        use super::graphics::{self, Ends};
+        // How pictures and pill ends reach this terminal
+        // (src/mux/graphics.rs).
+        use super::graphics;
         let term = self
             .clients
             .get(&id)
             .map(|c| c.term.clone())
             .unwrap_or_default();
-        let others = || {
-            self.clients
-                .values()
-                .filter(|o| o.id != id && o.session == session)
-        };
-        let others_draw = others().any(|o| graphics::for_terminal(&o.term).is_some());
-        let others_round = others().any(|o| graphics::ends(&o.term) != Ends::Spaces);
         let way = graphics::for_panes(&term);
-        let ends = match graphics::ends(&term) {
-            Ends::Spaces if !others_round => Ends::Glyphs,
-            ends => ends,
-        };
+        let ends = graphics::ends(&term);
         // Where a terminal needs them, the pictures' and the half circles'
         // cells as the panes drew them, before anything is drawn over them
         // (src/mux/sixel).
@@ -3628,9 +3617,8 @@ impl Server {
             pictures.filter(|_| way == graphics::Protocol::Sixel),
         );
         // A terminal that draws no pictures gets their cells blank, never
-        // as the placeholder's box, where the panes' apps may draw them
-        // (src/mux/graphics.rs).
-        if graphics::pictures_blank(&term, others_draw) {
+        // as the placeholder's box (src/mux/graphics.rs).
+        if graphics::pictures_blank(&term) {
             super::sixel::place::blank(&mut frame.buf);
         }
         let c = self.clients.get_mut(&id).expect("checked above");
