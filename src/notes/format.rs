@@ -54,12 +54,61 @@ pub struct Pending {
 
 /// A selection, for the styles that act on one: its first and last row,
 /// the byte where it starts on the first and where it ends (exclusive) on
-/// the last, and whether whole lines were selected.
+/// the last, whether whole lines were selected, and the block's columns
+/// when it is a block (Ctrl-V).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Selection {
     pub start: (usize, usize),
     pub end: (usize, usize),
     pub linewise: bool,
+    pub block: Option<Block>,
+}
+
+impl Selection {
+    /// The bytes of a row inside the selection, the end exclusive; none
+    /// for a row it misses.
+    pub fn span(&self, row: usize, line: &str) -> Option<(usize, usize)> {
+        if row < self.start.0 || row > self.end.0 {
+            return None;
+        }
+        if let Some(block) = self.block {
+            return block.span(line);
+        }
+        let s = if self.linewise || row > self.start.0 {
+            0
+        } else {
+            self.start.1.min(line.len())
+        };
+        let e = if self.linewise || row < self.end.0 {
+            line.len()
+        } else {
+            self.end.1.min(line.len())
+        };
+        Some((s, e.max(s)))
+    }
+}
+
+/// A block selection's columns, in characters, the right one inclusive,
+/// and whether it reaches each line's end (`$`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Block {
+    pub cols: (usize, usize),
+    pub to_end: bool,
+}
+
+impl Block {
+    /// The bytes of a line inside the block, the end exclusive; none for a
+    /// line that ends before the block's left column.
+    pub fn span(&self, line: &str) -> Option<(usize, usize)> {
+        let mut starts = line.char_indices().map(|(i, _)| i).skip(self.cols.0);
+        let from = starts.next()?;
+        let to = if self.to_end {
+            line.len()
+        } else {
+            starts.nth(self.cols.1 - self.cols.0).unwrap_or(line.len())
+        };
+        Some((from, to))
+    }
 }
 
 /// What Insert mode was asked for by an edit: at the cursor, or after the
@@ -409,6 +458,14 @@ pub fn character(
     if let Some(sel) = selection {
         for row in sel.start.0..=sel.end.0 {
             let line = doc.line(row);
+            if sel.block.is_some() {
+                if let Some((from, to)) = sel.span(row, &line)
+                    && to > from
+                {
+                    wrap(doc, row, from, to, style);
+                }
+                continue;
+            }
             let start = text_start(&line);
             let from = if !sel.linewise && row == sel.start.0 {
                 sel.start.1
@@ -505,6 +562,20 @@ pub fn character(
 /// nothing under the cursor, the address is the link's text too.
 pub fn link(doc: &mut Doc, selection: Option<Selection>, url: &str) {
     let (row, s, e) = match selection {
+        Some(sel) if sel.block.is_some() => {
+            // A link on each row's part of a block, a row it misses left
+            // alone.
+            for row in sel.start.0..=sel.end.0 {
+                let line = doc.line(row);
+                if let Some((s, e)) = sel.span(row, &line)
+                    && e > s
+                {
+                    let new = format!("{}[{}]({url}){}", &line[..s], &line[s..e], &line[e..]);
+                    doc.set_line(row, &new);
+                }
+            }
+            return;
+        }
         Some(sel) => {
             let len = doc.line(sel.start.0).len();
             let e = if sel.start.0 == sel.end.0 && !sel.linewise {
@@ -968,9 +1039,33 @@ mod tests {
             start: (0, 0),
             end: (0, 7),
             linewise: false,
+            block: None,
         };
         character(&mut d, Character::Italic, Some(sel), None);
         assert_eq!(d.line(0), "*one two*", "the selection");
+        let mut d = doc(&["one two", "x", "six ten"]);
+        let sel = Selection {
+            start: (0, 4),
+            end: (2, 7),
+            linewise: false,
+            block: Some(Block {
+                cols: (4, 6),
+                to_end: false,
+            }),
+        };
+        character(&mut d, Character::Bold, Some(sel), None);
+        assert_eq!(
+            d.text.lines(),
+            ["one **two**", "x", "six **ten**"],
+            "each row's part of a block, a row it misses left alone"
+        );
+        let mut d = doc(&["one two", "x", "six ten"]);
+        link(&mut d, Some(sel), "https://e.x");
+        assert_eq!(
+            d.text.lines(),
+            ["one [two](https://e.x)", "x", "six [ten](https://e.x)"],
+            "a link on each row of a block"
+        );
     }
 
     #[test]

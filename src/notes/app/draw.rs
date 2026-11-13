@@ -469,18 +469,9 @@ impl App {
                 .take(sel.end.0 + 1)
                 .skip(sel.start.0)
             {
-                let len = line.len();
-                let s = if sel.linewise || r > sel.start.0 {
-                    0
-                } else {
-                    sel.start.1
-                };
-                let e = if sel.linewise || r < sel.end.0 {
-                    len
-                } else {
-                    sel.end.1
-                };
-                selected.insert(r, (s, e.max(s)));
+                if let Some(span) = sel.span(r, line) {
+                    selected.insert(r, span);
+                }
             }
         }
         let chips = if self.opts.ux2 && self.opts.item_chips {
@@ -496,7 +487,10 @@ impl App {
         };
         let mut ctx = Ctx {
             raw: self.focus == Focus::Note
-                && matches!(self.editor.mode, Mode::Insert | Mode::Visual { .. }),
+                && matches!(
+                    self.editor.mode,
+                    Mode::Insert | Mode::Replace | Mode::Visual { .. }
+                ),
             cursor_row,
             text_w: text.width,
             text_h: text.height,
@@ -867,7 +861,7 @@ impl App {
         }
         if self.opts.easy && self.opts.key_help {
             let mode = match self.editor.mode {
-                Mode::Insert => easy::HelpMode::Insert,
+                Mode::Insert | Mode::Replace => easy::HelpMode::Insert,
                 Mode::Visual { .. } => easy::HelpMode::Visual,
                 Mode::Normal => easy::HelpMode::Normal,
             };
@@ -900,8 +894,11 @@ impl App {
         }
         let mode = match self.editor.mode {
             Mode::Insert if self.focus == Focus::Note => "-- INSERT --",
+            Mode::Replace if self.focus == Focus::Note => "-- REPLACE --",
+            Mode::Normal if self.editor.one_command() => "-- (insert) --",
             Mode::Visual { select: true, .. } => "-- SELECT --",
             Mode::Visual { line: true, .. } => "-- VISUAL LINE --",
+            Mode::Visual { block: true, .. } => "-- VISUAL BLOCK --",
             Mode::Visual { .. } => "-- VISUAL --",
             _ => "",
         };

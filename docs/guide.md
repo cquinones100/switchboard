@@ -1177,7 +1177,7 @@ The note is edited with Vim's keys, with the settings a note had before: Space i
 
 | | Keys |
 | --- | --- |
-| Modes | `i` `a` `I` `A` `o` `O`, `v` `V`, `gv`, `gi`, Esc |
+| Modes | `i` `a` `I` `A` `o` `O`, `R`, `v` `V` Ctrl-V, `gv`, `gi`, Esc |
 | Motions, each with a count | `h` `j` `k` `l` and the arrows, `w` `W` `b` `B` `e` `E` `ge` `gE`, `0` `^` `$` `g_`, Home, End, `gg` `G`, `f` `F` `t` `T` `;` `,`, `{` `}`, `%`, `H` `M` `L`, `+` `-` `_`, `gj` `gk`, Enter where there is nothing to tick, fold or follow, Shift-Left and Shift-Right by words |
 | Operators, with a count, a motion or a text object | `d` `c` `y` `>` `<` `g~` `gu` `gU`, doubled for whole lines (`dd`, `cc`, `yy`, `>>`, `<<`, `g~~`, `guu`, `gUU`) |
 | Text objects, after `i` or `a` | `w` `W`, `"` `'` `` ` ``, `(` `)` `b`, `[` `]`, `{` `}` `B`, `<` `>`, `p` |
@@ -1187,8 +1187,9 @@ The note is edited with Vim's keys, with the settings a note had before: Space i
 | Scrolling | Ctrl-D Ctrl-U, PageDown PageUp, Ctrl-E Ctrl-Y, `zz` `zt` `zb` |
 | Folds | `za` `zo` `zc` `zM` `zR` |
 | Commands | `:<line>`, `:s/a/b/g` and `:%s/a/b/g`, `:w`, `:q`, `:wq` or `:x`, `:noh`; `ZZ`, `ZQ` |
-| Insert mode | Ctrl-W, Ctrl-U, Ctrl-H, Backspace, Delete, the arrows, Home, End; Ctrl-V then a key types the key itself |
-| Visual mode | the motions and text objects grow the selection; `d` `x` `c` `s` `y` `>` `<` `~` `u` `U` `J` `p` `r` `o` act on it, `v` and `V` switch between characters and lines, Ctrl-C copies it |
+| Insert mode | Ctrl-W, Ctrl-U, Ctrl-H, Backspace, Delete, the arrows, Home, End; Ctrl-R then `"` `0` `+` or `*` types the register (which is the clipboard) and Ctrl-R `/` the last search; Ctrl-O runs one Normal mode command and goes on typing; Ctrl-T and Ctrl-D indent and outdent the line; Ctrl-V then a key types the key itself |
+| Replace mode | typing replaces the character under the cursor, Backspace puts back what was there, Enter still breaks the line, Esc ends it; a count (`3R`) types what was typed again |
+| Visual mode | the motions and text objects grow the selection; `d` `x` `c` `s` `y` `>` `<` `~` `u` `U` `J` `p` `r` `o` act on it, `v`, `V` and Ctrl-V switch between characters, lines and a block, Ctrl-C copies it. On a block (Ctrl-V) they act on the rectangle, `>` and `<` shifting at its column; `I` and `A` type before or after it on every line, `$` stretches it to each line's end, `O` goes to the other corner on the same row, and `p` puts a block cut or yanked as a column |
 | Work | `gw` on an unticked checklist item at the top of its list starts work on it in a new tab, as `M-I` does (see [Starting work from the workspace](#starting-work-from-the-workspace)); with UX 2.0, Enter opens an item's plan, `o` goes to its tab, and `ga` adds an item (see [UX 2.0](#ux-20)); `M-p` lists "Autopilot: work “<note>”" first (see [The palette](#the-palette)) |
 | Windows | Ctrl-W `h` or `M-Left` (typing too) goes to the list, saving the note and leaving Insert mode; Ctrl-W `l` or `M-Right` goes on to the pane on the note's right, and Ctrl-W `j` `k`, `M-Down` `M-Up` to the pane below or above, as the Alt-arrows move between panes |
 

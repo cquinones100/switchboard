@@ -1018,6 +1018,153 @@ fn the_leader_keys_style_the_word_or_the_selection_and_dot_repeats() {
 }
 
 #[test]
+fn r_types_over_in_replace_mode_and_dot_does_it_again() {
+    let (_dir, mut app) = started("replace-mode");
+    app.editor
+        .change(|doc| doc.text = Text::from_lines(&["# T", "", "hello world"]));
+    app.editor.doc.row = 2;
+    app.editor.doc.col = 0;
+    keys(&mut app, "R");
+    let shown = screen(&mut app);
+    assert!(
+        shown.iter().any(|l| l.contains("-- REPLACE --")),
+        "{}",
+        shown.join("\n")
+    );
+    keys(&mut app, "ab<Esc>");
+    assert_eq!(app.editor.doc.line(2), "abllo world");
+    keys(&mut app, "w.");
+    assert_eq!(app.editor.doc.line(2), "abllo abrld", ". types over again");
+    keys(&mut app, "0j");
+    app.editor
+        .change(|doc| doc.text = Text::from_lines(&["# T", "", "0123456789", "0123456789"]));
+    app.editor.doc.row = 2;
+    app.editor.doc.col = 0;
+    keys(&mut app, "3R");
+    app.paste("ab");
+    keys(&mut app, "<Esc>");
+    assert_eq!(
+        app.editor.doc.line(2),
+        "ababab6789",
+        "a paste typed again for a count"
+    );
+    keys(&mut app, "j0.");
+    assert_eq!(
+        app.editor.doc.line(3),
+        "ababab6789",
+        ". types the paste over again"
+    );
+}
+
+#[test]
+fn ctrl_o_runs_one_command_and_types_on_in_the_same_item() {
+    let (_dir, mut app) = started("ctrl-o");
+    app.editor
+        .change(|doc| doc.text = Text::from_lines(&["# T", "", "- [ ] one"]));
+    app.editor.doc.row = 2;
+    app.editor.doc.col = 0;
+    keys(&mut app, "A <C-o>");
+    let shown = screen(&mut app);
+    assert!(
+        shown.iter().any(|l| l.contains("-- (insert) --")),
+        "{}",
+        shown.join("\n")
+    );
+    keys(&mut app, "0two<Esc>");
+    assert_eq!(app.editor.doc.line(2), "two- [ ] one ");
+    keys(&mut app, "u");
+    assert_eq!(
+        app.editor.doc.line(2),
+        "- [ ] one ",
+        "what was typed after Ctrl-O is a step of its own"
+    );
+    app.editor
+        .change(|doc| doc.text = Text::from_lines(&["# T", "", "a"]));
+    app.editor.doc.row = 2;
+    keys(&mut app, "0i<C-o>/<BS>x");
+    assert_eq!(
+        app.editor.doc.line(2),
+        "xa",
+        "Backspace on an empty prompt goes back to typing"
+    );
+    keys(&mut app, "<Esc>u");
+    keys(&mut app, "A<C-o>:s/a//<CR>");
+    assert_eq!(
+        (app.editor.doc.line(2), app.editor.mode),
+        (String::new(), Mode::Insert),
+        "an Ex command under Ctrl-O runs, then typing goes on"
+    );
+    keys(&mut app, "<Esc>");
+    keys(&mut app, ".");
+    assert!(app.prompt.is_none(), ". opens no prompt left over from it");
+}
+
+#[test]
+fn ctrl_v_highlights_the_same_columns_on_every_row_of_the_block() {
+    let (_dir, mut app) = started("block-visual");
+    app.editor
+        .change(|doc| doc.text = Text::from_lines(&["# T", "", "abcdefgh", "abcdefgh"]));
+    app.editor.doc.row = 2;
+    app.editor.doc.col = 2;
+    keys(&mut app, "<C-v>jl");
+    let mut buf = Buffer::empty(Rect::new(0, 0, app.cols, app.rows));
+    app.draw(&mut buf);
+    let shown: Vec<String> = (0..buf.area.height)
+        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect())
+        .collect();
+    assert!(shown.iter().any(|l| l.contains("-- VISUAL BLOCK --")));
+    let (x, y) = find(&shown, "abcdefgh");
+    for row in [y, y + 1] {
+        let bg = |dx: u16| buf[(x + dx, row)].bg;
+        assert_eq!(bg(2), bg(3), "c and d alike on row {row}");
+        assert_ne!(bg(1), bg(2), "b outside the block on row {row}");
+        assert_ne!(bg(4), bg(3), "e outside the block on row {row}");
+    }
+    assert_eq!(buf[(x + 2, y)].bg, buf[(x + 2, y + 1)].bg);
+}
+
+#[test]
+fn a_style_from_the_format_menu_in_replace_mode_is_for_what_is_typed_next() {
+    let (_dir, mut app) = started("replace-format");
+    app.editor
+        .change(|doc| doc.text = Text::from_lines(&["# T", "", "hello"]));
+    app.editor.doc.row = 2;
+    app.editor.doc.col = 0;
+    keys(&mut app, "RABCDE<C-p>b");
+    assert_eq!(app.editor.doc.line(2), "ABCDE****", "as in Insert mode");
+    app.editor
+        .change(|doc| doc.text = Text::from_lines(&["# T", "", "hello"]));
+    app.editor.doc.row = 2;
+    app.editor.doc.col = 0;
+    keys(&mut app, "<Esc>");
+    app.editor
+        .change(|doc| doc.text = Text::from_lines(&["# T", "", "ab"]));
+    app.editor.doc.col = 0;
+    keys(&mut app, "2RAB<C-p>b");
+    assert_eq!(app.editor.doc.line(2), "ABAB****", "after R's count");
+}
+
+#[test]
+fn tab_in_a_list_moves_the_column_down_keeps() {
+    let (_dir, mut app) = started("list-want");
+    let row = "- one two three";
+    app.editor
+        .change(|doc| doc.text = Text::from_lines(&["# T", "", row, row, row]));
+    app.editor.doc.row = 2;
+    app.editor.insert_at(4);
+    let down = Key::new(KeyCode::Down, Mods::NONE);
+    app.key(down);
+    keys(&mut app, "<Tab>");
+    let col = app.editor.doc.col;
+    app.key(down);
+    assert_eq!(
+        (app.editor.doc.row, app.editor.doc.col),
+        (4, col),
+        "under where Tab left the cursor"
+    );
+}
+
+#[test]
 fn a_count_before_dot_replaces_the_changes_count() {
     let (_dir, mut app) = started("dot-count");
     app.editor

@@ -1030,7 +1030,7 @@ impl App {
         // written with the next save, unless you are typing it again: in
         // Insert mode on the first line with the title gone from the editor.
         let base_body = id::body_of(&base);
-        let typing_title = self.editor.mode == Mode::Insert
+        let typing_title = self.editor.is_typing()
             && self.editor.doc.row == 0
             && sync::keep_title(&base_body, &self.editor.doc.text.file_text()).is_some();
         let kept = sync::keep_title(&base_body, &new).filter(|_| !typing_title);
@@ -1150,7 +1150,7 @@ impl App {
         // note keeps it and its name. Typing a new title over the old one
         // autosaves as it goes, the line empty for a moment: the editor gets
         // it back only once that's done.
-        let typing_title = self.editor.mode == Mode::Insert && self.editor.doc.row == 0;
+        let typing_title = self.editor.is_typing() && self.editor.doc.row == 0;
         if keep_title && !typing_title {
             self.put_title_back();
         }
@@ -2083,7 +2083,7 @@ impl App {
             }
             Then::Complete => {
                 if let Outcome::Picked(p) = outcome {
-                    self.editor.type_text(&format!("{}]]", p.value));
+                    self.editor.paste_text(&format!("{}]]", p.value));
                     self.changed();
                 }
             }
@@ -2113,18 +2113,30 @@ impl App {
         }
     }
 
+    /// Where the cursor is typing, in Insert or Replace mode (`R`'s count
+    /// typed out first, as leaving it would).
+    fn typing_col(&mut self) -> Option<usize> {
+        let before = self.editor.doc.text.clone();
+        self.editor.settle_replace_count();
+        if self.editor.doc.text != before {
+            self.changed();
+        }
+        self.editor.is_typing().then_some(self.editor.doc.col)
+    }
+
     /// The Format menu, from where the cursor or the selection is.
     fn open_menu(&mut self) {
-        let typing = (self.editor.mode == Mode::Insert).then_some(self.editor.doc.col);
+        let typing = self.typing_col();
         let from = self.format_from(typing);
         self.leave_modes();
         self.push(Box::<FormatMenu>::default(), Then::Format(from));
     }
 
-    /// Out of Insert and Visual mode, as a menu or a button takes the keys.
+    /// Out of Insert, Replace and Visual mode, as a menu or a button takes
+    /// the keys.
     fn leave_modes(&mut self) {
         match self.editor.mode {
-            Mode::Insert => {
+            Mode::Insert | Mode::Replace => {
                 self.editor.key(Key::new(KeyCode::Esc, Mods::NONE));
                 self.after_insert();
             }
@@ -2480,14 +2492,16 @@ impl App {
             return;
         };
         match key.code {
-            KeyCode::Esc => return,
+            KeyCode::Esc => return self.editor.prompt_done(),
             KeyCode::Enter => {
+                let before = self.editor.doc.text.clone();
                 self.editor.begin();
                 match kind {
                     ':' => self.editor.ex(&text),
                     _ => self.editor.search_for(&text, kind == '/'),
                 }
-                if self.editor.end().is_some() {
+                self.editor.prompt_done();
+                if self.editor.end().is_some() || self.editor.doc.text != before {
                     self.changed();
                 }
                 self.effects();
@@ -2495,7 +2509,8 @@ impl App {
             }
             KeyCode::Backspace => {
                 if text.pop().is_none() {
-                    return;
+                    // Backspace on an empty prompt cancels it, as Esc does.
+                    return self.editor.prompt_done();
                 }
             }
             KeyCode::Char('u') if key.mods.ctrl => text.clear(),
@@ -2640,7 +2655,7 @@ impl App {
     /// from, out of Insert and Visual mode as a command needs it.
     fn palette_here(&mut self) -> (Vec<palette::Command>, PaletteFrom) {
         let from_list = self.focus == Focus::List && self.list_shown;
-        let typing = (self.editor.mode == Mode::Insert).then_some(self.editor.doc.col);
+        let typing = self.typing_col();
         let format = self.format_from(typing);
         self.leave_modes();
         let commands =
@@ -2693,7 +2708,9 @@ impl App {
         while let Some(layer) = self.layers.pop() {
             self.closed(layer.then, Outcome::Dismissed);
         }
-        self.prompt = None;
+        if self.prompt.take().is_some() {
+            self.editor.prompt_done();
+        }
         if act != PaletteAct::AddItem {
             self.adding = None;
         }
@@ -2833,13 +2850,21 @@ impl App {
         }
         let mode_before = self.editor.mode;
         let text_before = self.editor.doc.text.clone();
+        if self.editor.is_typing() {
+            // The note's own typing keys (Tab, Enter in a list) move the
+            // column j and k keep as the editor's do.
+            self.editor.forget_want(key);
+        }
         self.editor.begin();
         self.note_key_inner(key);
         // Saved a moment after each change, typing included.
         if self.editor.doc.text != text_before {
             self.changed();
         }
-        if mode_before == Mode::Insert && self.editor.mode != Mode::Insert {
+        let stopped_typing = matches!(mode_before, Mode::Insert | Mode::Replace)
+            && !self.editor.is_typing()
+            && !self.editor.one_command();
+        if stopped_typing {
             self.after_insert();
         } else if self.editor.mode == Mode::Normal && self.editor.idle() {
             let row = self.editor.doc.row;
@@ -2896,7 +2921,7 @@ impl App {
                     KeyCode::Char(c) => c.to_string(),
                     _ => String::new(),
                 };
-                self.editor.type_text(&text);
+                self.editor.paste_text(&text);
             }
             return;
         }
@@ -2951,7 +2976,7 @@ impl App {
                 }
                 _ => {}
             },
-            Mode::Insert => match key.code {
+            Mode::Insert if idle => match key.code {
                 KeyCode::Char('p') if ctrl => return self.open_menu(),
                 KeyCode::Char('f') if ctrl => {
                     self.leave_modes();
@@ -2988,6 +3013,15 @@ impl App {
                     }
                     return;
                 }
+                _ => {}
+            },
+            Mode::Replace => match key.code {
+                KeyCode::Char('p') if ctrl => return self.open_menu(),
+                KeyCode::Char('f') if ctrl => {
+                    self.leave_modes();
+                    return self.finder();
+                }
+                KeyCode::Char('b') if ctrl => return self.toggle_list(),
                 _ => {}
             },
             Mode::Visual { .. } => match key.code {
@@ -3119,7 +3153,7 @@ impl App {
         for key in keys {
             self.note_key_inner(key);
         }
-        if self.editor.mode == Mode::Insert {
+        if self.editor.is_typing() {
             self.editor.key(Key::new(KeyCode::Esc, Mods::NONE));
             self.after_insert();
         }
@@ -3173,13 +3207,23 @@ impl App {
         // One step to undo, whatever mode it came in.
         self.editor.begin_any();
         match mode {
-            Mode::Insert => self.editor.type_text(&text),
+            Mode::Insert => self.editor.paste_text(&text),
+            Mode::Replace => {
+                self.editor.paste_over(&text);
+                // Kept as the keys that type it, so . types it over again.
+                if !self.replaying
+                    && let Some((keys, _)) = &mut self.recording
+                {
+                    keys.extend(text.chars().map(|c| match c {
+                        '\n' => Key::new(KeyCode::Enter, Mods::NONE),
+                        c => Key::new(KeyCode::Char(c), Mods::NONE),
+                    }));
+                }
+            }
             Mode::Visual { .. } => {
                 let keep = std::mem::replace(&mut self.editor.clipboard, false);
-                self.editor.cut();
+                self.editor.cut_to_type();
                 self.editor.clipboard = keep;
-                let col = self.editor.doc.col;
-                self.editor.insert_at(col);
                 self.editor.type_text(&text);
                 self.editor.key(Key::new(KeyCode::Esc, Mods::NONE));
             }
@@ -3196,7 +3240,7 @@ impl App {
                 self.editor.key(Key::new(KeyCode::Esc, Mods::NONE));
             }
         }
-        if self.editor.end().is_some() || mode == Mode::Insert {
+        if self.editor.end().is_some() || self.editor.is_typing() {
             self.changed();
         }
     }
@@ -3212,7 +3256,15 @@ impl App {
                     self.save();
                     self.quit = true;
                 }
-                Effect::Prompt(c) => self.prompt = Some((c, String::new())),
+                Effect::Prompt(c) => {
+                    // A change that goes through a prompt under Ctrl-O
+                    // isn't kept for . to make again, which would replay
+                    // its keys without the prompt.
+                    if self.editor.one_command() {
+                        self.recording = None;
+                    }
+                    self.prompt = Some((c, String::new()));
+                }
                 Effect::Window(dir) => self.window_move(dir),
                 Effect::WorkOnItem => self.work_on_item(),
                 Effect::AddItem => self.start_adding(),
@@ -3465,7 +3517,7 @@ impl App {
     fn button(&mut self, index: usize) {
         let b = easy::BUTTONS[index];
         self.focus = Focus::Note;
-        let typing = (self.editor.mode == Mode::Insert).then_some(self.editor.doc.col);
+        let typing = self.typing_col();
         let from = self.format_from(typing);
         self.leave_modes();
         match b.item.and_then(menu::by_label) {
@@ -3781,13 +3833,15 @@ pub fn run(store: Store) -> ExitCode {
         if dirty && !app.quit {
             let mut frame = Frame::new(size.0, size.1);
             frame.cursor = app.draw(&mut frame.buf);
-            frame.cursor_style = Some(
-                if app.editor.mode == Mode::Insert && app.focus == Focus::Note {
+            frame.cursor_style = Some(match app.editor.mode {
+                Mode::Insert if app.focus == Focus::Note => {
                     crossterm::cursor::SetCursorStyle::SteadyBar
-                } else {
-                    crossterm::cursor::SetCursorStyle::SteadyBlock
-                },
-            );
+                }
+                Mode::Replace if app.focus == Focus::Note => {
+                    crossterm::cursor::SetCursorStyle::SteadyUnderScore
+                }
+                _ => crossterm::cursor::SetCursorStyle::SteadyBlock,
+            });
             let mut bytes = screen.render(&frame);
             bytes.append(&mut app.out);
             let mut out = std::io::stdout().lock();

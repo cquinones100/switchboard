@@ -1,5 +1,5 @@
 //! Vim's keys on a note, in place of the Neovim the plugin ran in: Normal,
-//! Insert and Visual modes, motions, operators and text objects, counts,
+//! Insert, Replace and Visual modes, motions, operators and text objects, counts,
 //! registers, undo and redo, and search, enough of Vim that a note edits
 //! the way it did. What a note added on top (Enter ticking a box, the Format
 //! menu, the leader keys) is the app's; this is the editing underneath.
@@ -19,7 +19,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use super::fold::Folds;
-use super::format::{Doc, Insert, Selection};
+use super::format::{Block, Doc, Insert, Selection};
 use super::render;
 use super::text::Text;
 use crate::mux::input::{Key, KeyCode};
@@ -28,11 +28,15 @@ use crate::mux::input::{Key, KeyCode};
 pub enum Mode {
     Normal,
     Insert,
-    /// A selection: by characters or whole lines; `select` is Select mode
-    /// (easy mode's), where typing replaces the selection.
+    /// `R`: typing replaces the character under the cursor.
+    Replace,
+    /// A selection: by characters, whole lines or a block (Ctrl-V);
+    /// `select` is Select mode (easy mode's), where typing replaces the
+    /// selection.
     Visual {
         line: bool,
         select: bool,
+        block: bool,
     },
 }
 
@@ -57,11 +61,52 @@ pub enum Effect {
     AddItem,
 }
 
-/// A register's text, and whether it holds whole lines.
+/// A register's text, and whether it holds whole lines or a block (a
+/// line of text for each row, put as a column).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Register {
     pub text: String,
     pub linewise: bool,
+    pub block: bool,
+}
+
+/// Typing into every line of a block (`I`, `A`, `c` on one): its rows,
+/// the character column the typing goes in at on each (each line's end
+/// with `at_end`), the rows passed over since they didn't reach into the
+/// block (`I` and `c`; `A` pads a short one with spaces instead), and
+/// the byte on the first row the typing starts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BlockInsert {
+    rows: (usize, usize),
+    /// The row typed on: the first that isn't passed over.
+    row: usize,
+    /// Where the last key typed left the cursor: moved from there any
+    /// other way (a click), the typing goes into this row alone.
+    at: (usize, usize),
+    col: usize,
+    at_end: bool,
+    skip: Vec<usize>,
+    from: usize,
+}
+
+/// What a key typed in Replace mode did, for Backspace to take back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Over {
+    /// Typed over this character.
+    Char(char),
+    /// Typed past the line's end.
+    Added,
+    /// Enter broke the line.
+    Break,
+}
+
+/// A key Insert mode waits for after Ctrl-R, or the Normal mode command
+/// it runs after Ctrl-O, from where the cursor was (past the line's end
+/// too, which the command's cursor can't be).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Waiting {
+    Register,
+    OneCommand { at: (usize, usize) },
 }
 
 /// The text before a change, to undo to.
@@ -149,12 +194,13 @@ enum Op {
     Upper,
 }
 
-/// A range to act on: from a position to another (the end exclusive), or
-/// whole lines.
+/// A range to act on: from a position to another (the end exclusive),
+/// whole lines, or a block of rows and columns.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Range {
     Chars((usize, usize), (usize, usize)),
     Lines(usize, usize),
+    Block((usize, usize), Block),
 }
 
 /// What a complete Normal mode command is.
@@ -206,6 +252,24 @@ pub struct Editor {
     /// Easy mode: Shift with an arrow starts a selection, and typing over
     /// one replaces it.
     pub easy: bool,
+    /// Replace mode: what each key typed since `R` (or since the cursor
+    /// last moved) did, what it typed, and `R`'s count, which types it
+    /// again on Esc.
+    over: Vec<Over>,
+    typed_over: String,
+    over_count: usize,
+    /// Where Replace mode's last key left the cursor: moved from there any
+    /// other way (a click), what it typed over can't be put back.
+    over_end: (usize, usize),
+    waiting: Option<Waiting>,
+    block_insert: Option<BlockInsert>,
+    /// A block's cursor column when `$` stretched it to each line's end,
+    /// which its left edge keeps.
+    end_from: usize,
+    /// A block's anchor column in characters, kept apart from the anchor's
+    /// byte, which a short row clamps, so swapping corners keeps the
+    /// rectangle.
+    anchor_col: usize,
     out: Vec<Effect>,
 }
 
@@ -356,6 +420,14 @@ impl Editor {
             height: 20,
             center: false,
             easy: false,
+            over: Vec::new(),
+            typed_over: String::new(),
+            over_count: 1,
+            over_end: (0, 0),
+            waiting: None,
+            block_insert: None,
+            end_from: 0,
+            anchor_col: 0,
             out: Vec::new(),
         }
     }
@@ -402,6 +474,8 @@ impl Editor {
         self.doc.insert = None;
         self.mode = Mode::Normal;
         self.keys.clear();
+        self.waiting = None;
+        self.block_insert = None;
         self.undo.clear();
         self.redo.clear();
         self.group = None;
@@ -420,12 +494,18 @@ impl Editor {
 
     /// Whether a Normal mode command is half typed.
     pub fn idle(&self) -> bool {
-        self.keys.is_empty() && self.mode == Mode::Normal
+        self.keys.is_empty() && self.mode == Mode::Normal && self.waiting.is_none()
     }
 
-    /// Whether keys are waiting for the rest of a command.
+    /// Whether keys are waiting for the rest of a command: a Normal mode
+    /// one, a register's name after Ctrl-R, or the command after Ctrl-O.
     pub fn pending(&self) -> bool {
-        !self.keys.is_empty()
+        !self.keys.is_empty() || self.waiting.is_some()
+    }
+
+    /// Whether Normal mode is running one command for Insert mode (Ctrl-O).
+    pub fn one_command(&self) -> bool {
+        matches!(self.waiting, Some(Waiting::OneCommand { .. }))
     }
 
     pub fn row(&self) -> usize {
@@ -438,6 +518,11 @@ impl Editor {
 
     pub fn line(&self) -> String {
         self.doc.line(self.doc.row)
+    }
+
+    /// Whether keys type into the note: Insert or Replace mode.
+    pub fn is_typing(&self) -> bool {
+        matches!(self.mode, Mode::Insert | Mode::Replace)
     }
 
     // ── Undo ──────────────────────────────────────────────────────────────
@@ -535,7 +620,7 @@ impl Editor {
     // ── The cursor ────────────────────────────────────────────────────────
 
     /// The cursor kept on a character: in Normal mode on the last at most,
-    /// in Insert mode past it at most.
+    /// in Insert and Replace mode past it at most.
     pub fn clamp(&mut self) {
         self.doc.row = self.doc.row.min(self.doc.text.len().saturating_sub(1));
         let line = self.line();
@@ -543,7 +628,7 @@ impl Editor {
         while !line.is_char_boundary(col) {
             col -= 1;
         }
-        if self.mode != Mode::Insert && col == line.len() && col > 0 {
+        if !self.is_typing() && col == line.len() && col > 0 {
             col = line[..col].char_indices().last().map_or(0, |(i, _)| i);
         }
         self.doc.col = col;
@@ -743,7 +828,7 @@ impl Editor {
             Motion::Left => (row, Self::byte_of(&line, ci.saturating_sub(count))),
             Motion::Right => {
                 let len = line.chars().count();
-                let max = if self.mode == Mode::Insert {
+                let max = if self.is_typing() {
                     len
                 } else {
                     len.saturating_sub(1)
@@ -1054,7 +1139,23 @@ impl Editor {
                 text.clone()
             }));
         }
-        self.register = Register { text, linewise };
+        self.register = Register {
+            text,
+            linewise,
+            block: false,
+        };
+    }
+
+    /// A block's rows kept, a line each, as a block to put back as one.
+    fn keep_block(&mut self, text: String) {
+        if self.clipboard {
+            self.out.push(Effect::Copy(text.clone()));
+        }
+        self.register = Register {
+            text,
+            linewise: false,
+            block: true,
+        };
     }
 
     /// The register to put: the system clipboard's text when it holds
@@ -1075,10 +1176,12 @@ impl Editor {
                     Some(lines) => Register {
                         text: lines.to_string(),
                         linewise: true,
+                        block: false,
                     },
                     None => Register {
                         text,
                         linewise: false,
+                        block: false,
                     },
                 };
             }
@@ -1092,6 +1195,11 @@ impl Editor {
             return;
         }
         let (row, col) = (self.doc.row, self.doc.col);
+        if reg.block {
+            let line = self.line();
+            let at = Self::char_index(&line, col) + usize::from(!before && !line.is_empty());
+            return self.put_block(&reg.text, row, at, count);
+        }
         if reg.linewise {
             let lines: Vec<String> = std::iter::repeat_n(reg.text.as_str(), count)
                 .flat_map(|t| t.split('\n'))
@@ -1123,20 +1231,59 @@ impl Editor {
         }
     }
 
+    /// A block put as a column: each of its lines into a row from `row`
+    /// down at character `at`, a row too short padded with spaces and
+    /// rows added past the text's end, each piece padded to the block's
+    /// width where text follows it, as Vim's blockwise put; the cursor on
+    /// its top-left.
+    fn put_block(&mut self, text: &str, row: usize, at: usize, count: usize) {
+        let pieces: Vec<&str> = text.split('\n').collect();
+        let width = pieces.iter().map(|p| p.chars().count()).max().unwrap_or(0);
+        for (k, piece) in pieces.iter().enumerate() {
+            // Each copy but the last padded to the block's width, so a
+            // count's copies stay columns on a short row too.
+            let short = " ".repeat(width - piece.chars().count());
+            let piece = format!("{piece}{short}").repeat(count - 1) + piece;
+            let r = row + k;
+            if r >= self.doc.text.len() {
+                let len = self.doc.text.len();
+                self.doc.text.set_lines(len, len, &[""]);
+            }
+            let mut line = self.doc.line(r);
+            let n = line.chars().count();
+            if n < at {
+                line.push_str(&" ".repeat(at - n));
+            }
+            let b = Self::byte_of(&line, at);
+            let fill = if b < line.len() { short } else { String::new() };
+            let new = format!("{}{piece}{fill}{}", &line[..b], &line[b..]);
+            self.doc.set_line(r, &new);
+        }
+        let b = Self::byte_of(&self.doc.line(row), at);
+        self.set(row, b);
+    }
+
+    /// A line indented or outdented by `width` spaces; gives the bytes
+    /// added (taken away as a negative).
+    fn indent_line(&mut self, row: usize, out: bool, width: usize) -> isize {
+        let line = self.doc.line(row);
+        if out {
+            let removed = width.min(render::indent_of(&line));
+            self.doc.set_line(row, &line[removed..]);
+            -(removed as isize)
+        } else {
+            self.doc
+                .set_line(row, &format!("{}{line}", " ".repeat(width)));
+            width as isize
+        }
+    }
+
     fn indent_rows(&mut self, from: usize, to: usize, out: bool, count: usize) {
         let width = self.doc.opts.shiftwidth * count;
         for r in from..=to {
-            let line = self.doc.line(r);
-            if line.is_empty() {
-                continue;
+            if !self.doc.line(r).is_empty() {
+                self.indent_line(r, out, width);
             }
-            let new = if out {
-                let removed = width.min(render::indent_of(&line));
-                line[removed..].to_string()
-            } else {
-                format!("{}{line}", " ".repeat(width))
-            };
-            self.doc.set_line(r, &new);
         }
         let fnb = first_non_blank(&self.doc.line(from));
         self.set(from, fnb);
@@ -1146,6 +1293,14 @@ impl Editor {
         let (from, to) = match range {
             Range::Chars(a, b) => (a, b),
             Range::Lines(a, b) => ((a, 0), (b, self.doc.line(b).len())),
+            Range::Block((a, b), block) => {
+                for r in a..=b {
+                    if let Some((s, e)) = block.span(&self.doc.line(r)) {
+                        self.case(Range::Chars((r, s), (r, e)), op);
+                    }
+                }
+                return self.block_corner(a, block);
+            }
         };
         let text = self.text_between(from, to);
         let changed: String = text
@@ -1163,7 +1318,150 @@ impl Editor {
         self.set(from.0, from.1);
     }
 
+    /// The cursor on a block's top-left, as an operator on one leaves it.
+    fn block_corner(&mut self, row: usize, block: Block) {
+        let b = Self::byte_of(&self.doc.line(row), block.cols.0);
+        self.set(row, b);
+    }
+
+    /// Each row's text inside a block, a line each.
+    fn block_text(&self, (a, b): (usize, usize), block: Block) -> String {
+        (a..=b)
+            .map(|r| {
+                let line = self.doc.line(r);
+                block
+                    .span(&line)
+                    .map_or(String::new(), |(s, e)| line[s..e].to_string())
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn apply_block(&mut self, op: Op, (a, b): (usize, usize), block: Block) {
+        match op {
+            Op::Toggle | Op::Lower | Op::Upper => self.case(Range::Block((a, b), block), op),
+            Op::Yank => {
+                let text = self.block_text((a, b), block);
+                self.keep_block(text);
+                self.block_corner(a, block);
+            }
+            Op::Delete | Op::Change => {
+                let text = self.block_text((a, b), block);
+                self.keep_block(text);
+                let skip = self.rows_short_of((a, b), block.cols.0);
+                for r in a..=b {
+                    if let Some((s, e)) = block.span(&self.doc.line(r)) {
+                        self.replace((r, s), (r, e), "");
+                    }
+                }
+                if op == Op::Delete {
+                    return self.block_corner(a, block);
+                }
+                self.start_block_insert((a, b), block.cols.0, false, skip);
+            }
+            Op::Indent | Op::Outdent => {
+                // Shifted at the block's left column, as Vim shifts a block.
+                let width = self.doc.opts.shiftwidth;
+                for r in a..=b {
+                    let line = self.doc.line(r);
+                    let Some((s, _)) = block.span(&line) else {
+                        continue;
+                    };
+                    let new = if op == Op::Indent {
+                        format!("{}{}{}", &line[..s], " ".repeat(width), &line[s..])
+                    } else {
+                        let blanks = line[s..].len() - line[s..].trim_start_matches(' ').len();
+                        format!("{}{}", &line[..s], &line[s + blanks.min(width)..])
+                    };
+                    self.doc.set_line(r, &new);
+                }
+                self.block_corner(a, block);
+            }
+        }
+    }
+
+    /// The rows that don't reach into a block whose left column is `col`.
+    fn rows_short_of(&self, (a, b): (usize, usize), col: usize) -> Vec<usize> {
+        (a..=b)
+            .filter(|&r| self.doc.line(r).chars().count() <= col)
+            .collect()
+    }
+
+    /// Insert mode on a block's first row that reaches into it, at its
+    /// column (padded with spaces to reach it, for `A`), or the line's end
+    /// with `at_end`; what is typed there goes into every row on Esc.
+    fn start_block_insert(
+        &mut self,
+        rows: (usize, usize),
+        col: usize,
+        at_end: bool,
+        skip: Vec<usize>,
+    ) {
+        let Some(row) = (rows.0..=rows.1).find(|r| !skip.contains(r)) else {
+            // No row reaches into the block: nothing to type into.
+            self.mode = Mode::Normal;
+            return self.set(rows.0, self.doc.col);
+        };
+        let mut line = self.doc.line(row);
+        let n = line.chars().count();
+        if !at_end && n < col {
+            line.push_str(&" ".repeat(col - n));
+            self.doc.set_line(row, &line);
+        }
+        let from = if at_end {
+            line.len()
+        } else {
+            Self::byte_of(&line, col)
+        };
+        self.block_insert = Some(BlockInsert {
+            rows,
+            row,
+            at: (row, from),
+            col,
+            at_end,
+            skip,
+            from,
+        });
+        self.mode = Mode::Insert;
+        self.doc.row = row;
+        self.doc.col = from;
+    }
+
+    /// Esc after typing into a block: what was typed on the row typed on
+    /// put into each of the others, unless it broke the line or went back past
+    /// where it started, as Vim drops it then.
+    fn finish_block_insert(&mut self, bi: BlockInsert) {
+        let (row, col) = (self.doc.row, self.doc.col);
+        if row != bi.row || col < bi.from {
+            return;
+        }
+        let typed = self.line()[bi.from..col].to_string();
+        if typed.is_empty() {
+            return;
+        }
+        for r in (bi.rows.0..=bi.rows.1).filter(|&r| r != bi.row) {
+            let mut line = self.doc.line(r);
+            let n = line.chars().count();
+            let at = if bi.at_end {
+                line.len()
+            } else if bi.skip.contains(&r) {
+                continue;
+            } else if n < bi.col {
+                line.push_str(&" ".repeat(bi.col - n));
+                line.len()
+            } else {
+                Self::byte_of(&line, bi.col)
+            };
+            self.doc
+                .set_line(r, &format!("{}{typed}{}", &line[..at], &line[at..]));
+        }
+        self.doc.col = bi.from;
+    }
+
     fn apply(&mut self, op: Op, range: Range, _count: usize) {
+        if let Range::Block(rows, block) = range {
+            return self.apply_block(op, rows, block);
+        }
         match (op, range) {
             (Op::Indent | Op::Outdent, Range::Lines(a, b)) => {
                 self.indent_rows(a, b, op == Op::Outdent, 1);
@@ -1228,6 +1526,7 @@ impl Editor {
                 self.doc.row = a.0;
                 self.doc.col = a.1;
             }
+            (_, Range::Block(..)) => {}
         }
     }
 
@@ -1431,8 +1730,13 @@ impl Editor {
 
     /// A key, in whatever mode the editor is in.
     pub fn key(&mut self, key: Key) {
+        let one_command = self.mode == Mode::Normal && self.one_command();
+        // `"` and a register's name, which `normal_key` drops: the
+        // command comes after it.
+        let naming_a_register = self.keys.len() == 1 && typed(&self.keys[0]) == Some('"');
         match self.mode {
             Mode::Insert => self.insert_key(key),
+            Mode::Replace => self.replace_key(key),
             Mode::Visual { .. } => self.visual_key(key),
             Mode::Normal => self.normal_key(key),
         }
@@ -1443,6 +1747,42 @@ impl Editor {
             }
         }
         self.clamp();
+        // A command typed at a prompt (`:`, `/`) runs once the prompt is
+        // done, which says so (`prompt_done`).
+        let prompting = self.out.iter().any(|e| matches!(e, Effect::Prompt(_)));
+        if one_command && self.keys.is_empty() && !naming_a_register && !prompting {
+            self.back_to_insert();
+        }
+    }
+
+    /// The prompt a command asked for is done (run or canceled): Ctrl-O's
+    /// command with it, so typing goes on.
+    pub fn prompt_done(&mut self) {
+        if self.mode == Mode::Normal && self.keys.is_empty() {
+            self.back_to_insert();
+        }
+    }
+
+    /// After Ctrl-O's command (or what was no command): Insert mode
+    /// again, unless the command left Normal mode itself, and the cursor
+    /// back past the line's end when the command left it where it was.
+    fn back_to_insert(&mut self) {
+        let Some(Waiting::OneCommand { at }) = self.waiting.take() else {
+            return;
+        };
+        if self.mode != Mode::Normal {
+            return;
+        }
+        let now = (self.doc.row, self.doc.col);
+        let unchanged = self.group.as_ref().is_some_and(|g| g.text == self.doc.text);
+        (self.doc.row, self.doc.col) = at;
+        self.clamp();
+        let unmoved = unchanged && (self.doc.row, self.doc.col) == now;
+        self.mode = Mode::Insert;
+        (self.doc.row, self.doc.col) = if unmoved { at } else { now };
+        self.clamp();
+        // What is typed after the command is a step of its own.
+        self.begin_any();
     }
 
     /// The count typed so far, when the keys pending are only that (as
@@ -1802,6 +2142,7 @@ impl Editor {
                 self.mode = Mode::Visual {
                     line: false,
                     select: false,
+                    block: false,
                 }
             }
             ('g', 'i') => self.mode = Mode::Insert,
@@ -1863,6 +2204,14 @@ impl Editor {
                     .map_or(col, |c| col + c.len_utf8());
             }
             'I' => self.insert_at(first_non_blank(&line)),
+            'R' => {
+                self.begin_any();
+                self.over.clear();
+                self.typed_over.clear();
+                self.over_count = count.max(1);
+                self.over_end = (row, col);
+                self.mode = Mode::Replace;
+            }
             'A' => self.insert_at(line.len()),
             'o' | 'O' => {
                 let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
@@ -1922,6 +2271,7 @@ impl Editor {
                 self.mode = Mode::Visual {
                     line: false,
                     select: false,
+                    block: false,
                 };
             }
             'V' => {
@@ -1929,6 +2279,7 @@ impl Editor {
                 self.mode = Mode::Visual {
                     line: true,
                     select: false,
+                    block: false,
                 };
             }
             '*' => self.star(true),
@@ -1968,6 +2319,15 @@ impl Editor {
         } else if ctrl(&key, 'a') || ctrl(&key, 'x') {
             let by = i64::try_from(count).unwrap_or(i64::MAX);
             self.add_to_number(if ctrl(&key, 'a') { by } else { -by });
+        } else if ctrl(&key, 'v') {
+            self.anchor = (self.doc.row, self.doc.col);
+            self.anchor_col = Self::char_index(&self.line(), self.doc.col);
+            self.want = None;
+            self.mode = Mode::Visual {
+                line: false,
+                select: false,
+                block: true,
+            };
         } else if ctrl(&key, 'e') {
             self.top = (self.top + count).min(last);
             if self.doc.row < self.top {
@@ -2025,6 +2385,7 @@ impl Editor {
         self.mode = Mode::Visual {
             line: false,
             select: true,
+            block: false,
         };
         if let Some(p) = self.target(m, 1, false) {
             self.doc.row = p.0;
@@ -2042,9 +2403,85 @@ impl Editor {
         self.doc.col = end.1;
     }
 
+    /// Ctrl-R and a register's name: what it holds typed in. `"`, `0`,
+    /// `+` and `*` are the one register, which is the clipboard too, and
+    /// `/` the last search; whole lines come with their newline.
+    fn type_register(&mut self, key: Key) {
+        let Some(name) = typed(&key) else {
+            return;
+        };
+        let text = match name {
+            '"' | '0' | '+' | '*' => {
+                let reg = self.to_put();
+                if reg.linewise {
+                    format!("{}\n", reg.text)
+                } else {
+                    reg.text
+                }
+            }
+            '/' => self
+                .search
+                .as_ref()
+                .map(|(s, _)| s.clone())
+                .unwrap_or_default(),
+            _ => {
+                self.say(format!("E353: Nothing in register {name}"));
+                return;
+            }
+        };
+        self.type_text(&text);
+    }
+
     fn insert_key(&mut self, key: Key) {
+        self.forget_want(key);
+        self.typing_into_block(|me| me.insert_key_here(key));
+    }
+
+    /// While typing, any key but Up and Down moves the column j and k
+    /// would keep, as Vim's do.
+    pub fn forget_want(&mut self, key: Key) {
+        if !matches!(key.code, KeyCode::Up | KeyCode::Down) {
+            self.want = None;
+        }
+    }
+
+    /// Text the note types in Insert mode (a paste, a link completed, a key
+    /// typed literally), typed into every row of a block as typed keys are.
+    pub fn paste_text(&mut self, text: &str) {
+        self.typing_into_block(|me| me.type_text(text));
+    }
+
+    /// An edit while typing, with typing into a block kept only while the
+    /// cursor stays on the row typed on, from where the last key left it
+    /// (not a click away) and never back past where the typing started.
+    fn typing_into_block(&mut self, edit: impl FnOnce(&mut Self)) {
+        let here = (self.doc.row, self.doc.col);
+        if self.block_insert.as_ref().is_some_and(|bi| bi.at != here) {
+            self.block_insert = None;
+        }
+        let rows = self.doc.text.len();
+        edit(self);
+        let here = (self.doc.row, self.doc.col);
+        // Lines joined or broken move the block's rows under it.
+        let reshaped = self.mode != Mode::Insert || self.doc.text.len() != rows;
+        if let Some(bi) = &mut self.block_insert {
+            if reshaped || here.0 != bi.row || here.1 < bi.from {
+                self.block_insert = None;
+            } else {
+                bi.at = here;
+            }
+        }
+    }
+
+    fn insert_key_here(&mut self, key: Key) {
+        // A change made outside a key (an Ex command, a file changed from
+        // outside) may have left the cursor past its line.
+        self.clamp();
         let (row, col) = (self.doc.row, self.doc.col);
         let line = self.line();
+        if self.waiting.take() == Some(Waiting::Register) {
+            return self.type_register(key);
+        }
         if self.easy
             && key.mods.shift
             && !key.mods.ctrl
@@ -2058,8 +2495,40 @@ impl Editor {
                 if col > 0 {
                     self.doc.col = line[..col].char_indices().last().map_or(0, |(i, _)| i);
                 }
+                if let Some(bi) = self.block_insert.take() {
+                    self.doc.col = col;
+                    self.finish_block_insert(bi);
+                }
             }
-            _ if ctrl(&key, 'c') => self.mode = Mode::Normal,
+            _ if ctrl(&key, 'c') => {
+                self.mode = Mode::Normal;
+                self.block_insert = None;
+            }
+            _ if ctrl(&key, 'r') => self.waiting = Some(Waiting::Register),
+            _ if ctrl(&key, 'o') => {
+                // What was typed so far is a step of its own, as Vim breaks
+                // the undo there, so the command can undo it.
+                if let Some(group) = self.group.take()
+                    && group.text != self.doc.text
+                {
+                    self.undo.push(group);
+                    self.redo.clear();
+                }
+                // The command and what is typed after it are the next.
+                self.group = Some(self.snap());
+                // Typing into a block ends here: the command may move rows.
+                self.block_insert = None;
+                self.waiting = Some(Waiting::OneCommand { at: (row, col) });
+                self.mode = Mode::Normal;
+            }
+            _ if ctrl(&key, 't') || ctrl(&key, 'd') => {
+                // The line indented or outdented, the cursor kept on its
+                // character; typing into a block goes into this row alone.
+                self.block_insert = None;
+                let width = self.doc.opts.shiftwidth;
+                let by = self.indent_line(row, ctrl(&key, 'd'), width);
+                self.doc.col = col.saturating_add_signed(by);
+            }
             _ if ctrl(&key, 'w') => {
                 // The word before the cursor, and the blanks after it.
                 let before = &line[..col];
@@ -2116,6 +2585,18 @@ impl Editor {
                     self.replace((row, col), (row + 1, 0), "");
                 }
             }
+            KeyCode::Left
+            | KeyCode::Right
+            | KeyCode::Up
+            | KeyCode::Down
+            | KeyCode::Home
+            | KeyCode::End
+                if self.block_insert.take().is_some() =>
+            {
+                // Moving while typing into a block ends the typing into
+                // every row, as in Vim; the key moves as usual.
+                self.insert_key(key);
+            }
             KeyCode::Left => {
                 self.doc.col = line[..col].char_indices().last().map_or(0, |(i, _)| i);
             }
@@ -2139,6 +2620,182 @@ impl Editor {
             KeyCode::Home => self.doc.col = 0,
             KeyCode::End => self.doc.col = line.len(),
             _ => {}
+        }
+    }
+
+    // ── Replace mode ──────────────────────────────────────────────────────
+
+    /// Text typed over what is under the cursor, a character at a time
+    /// (past the line's end, added), as Replace mode types it; a newline
+    /// breaks the line without taking a character.
+    pub fn type_over(&mut self, text: &str) {
+        for c in text.chars() {
+            let (row, col) = (self.doc.row, self.doc.col);
+            let line = self.line();
+            if c == '\n' {
+                self.doc
+                    .text
+                    .set_lines(row, row + 1, &[&line[..col], &line[col..]]);
+                self.doc.row = row + 1;
+                self.doc.col = 0;
+                self.over.push(Over::Break);
+                continue;
+            }
+            let next = line[col..].chars().next();
+            let end = col + next.map_or(0, char::len_utf8);
+            self.replace((row, col), (row, end), c.encode_utf8(&mut [0; 4]));
+            self.doc.col = col + c.len_utf8();
+            self.over.push(next.map_or(Over::Added, Over::Char));
+        }
+    }
+
+    /// Backspace in Replace mode: what the last key typed over put back,
+    /// else the cursor one left, changing nothing, as Vim's does.
+    fn back_over(&mut self) {
+        let (row, col) = (self.doc.row, self.doc.col);
+        let line = self.line();
+        let Some(last) = self.over.pop() else {
+            self.doc.col = line[..col].char_indices().last().map_or(0, |(i, _)| i);
+            return;
+        };
+        self.typed_over.pop();
+        if last == Over::Break {
+            return self.join_back();
+        }
+        let start = line[..col].char_indices().last().map_or(0, |(i, _)| i);
+        let back = match last {
+            Over::Char(c) => c.to_string(),
+            _ => String::new(),
+        };
+        self.replace((row, start), (row, col), &back);
+        self.doc.col = start;
+    }
+
+    /// Text pasted in Replace mode: typed over as keys are, and typed
+    /// again for `R`'s count.
+    pub fn paste_over(&mut self, text: &str) {
+        self.forget_over_if_moved();
+        self.type_over(text);
+        self.typed_over.push_str(text);
+        self.over_end = (self.doc.row, self.doc.col);
+    }
+
+    /// `R`'s count typed out now, Replace mode going on, so where the
+    /// cursor is typing is where it will be once Replace mode is left.
+    pub fn settle_replace_count(&mut self) {
+        if self.mode != Mode::Replace || self.over_count <= 1 {
+            return;
+        }
+        self.forget_over_if_moved();
+        let again = self.typed_over.repeat(self.over_count - 1);
+        self.over_count = 1;
+        self.type_over(&again);
+        self.over_end = (self.doc.row, self.doc.col);
+    }
+
+    fn forget_over_if_moved(&mut self) {
+        if (self.doc.row, self.doc.col) != self.over_end {
+            self.over.clear();
+            self.typed_over.clear();
+        }
+    }
+
+    fn replace_key(&mut self, key: Key) {
+        self.forget_want(key);
+        self.forget_over_if_moved();
+        self.replace_key_here(key);
+        self.over_end = (self.doc.row, self.doc.col);
+    }
+
+    fn replace_key_here(&mut self, key: Key) {
+        let (row, col) = (self.doc.row, self.doc.col);
+        let line = self.line();
+        let moved = |me: &mut Self| {
+            me.over.clear();
+            me.typed_over.clear();
+        };
+        match key.code {
+            KeyCode::Esc => {
+                let again = self.typed_over.repeat(self.over_count.saturating_sub(1));
+                self.type_over(&again);
+                self.leave_replace();
+            }
+            _ if ctrl(&key, 'c') => self.leave_replace(),
+            _ if ctrl(&key, 'h') => self.back_over(),
+            _ if ctrl(&key, 'w') || ctrl(&key, 'u') => {
+                let before = &line[..col];
+                let start = if ctrl(&key, 'u') {
+                    let fnb = first_non_blank(&line).min(col);
+                    if fnb == col { 0 } else { fnb }
+                } else {
+                    let end = before.trim_end().len();
+                    let k = before[..end].chars().last().map(|c| class(c, false));
+                    before[..end]
+                        .char_indices()
+                        .rev()
+                        .take_while(|&(_, c)| Some(class(c, false)) == k)
+                        .last()
+                        .map_or(end, |(i, _)| i)
+                };
+                while self.doc.row == row && self.doc.col > start {
+                    self.back_over();
+                }
+            }
+            KeyCode::Char(c) if !key.mods.ctrl && !key.mods.alt => {
+                self.type_over(c.encode_utf8(&mut [0; 4]));
+                self.typed_over.push(c);
+            }
+            KeyCode::Enter => {
+                self.type_over("\n");
+                self.typed_over.push('\n');
+            }
+            KeyCode::Tab => {
+                let spaces = " ".repeat(self.doc.opts.shiftwidth);
+                self.type_over(&spaces);
+                self.typed_over.push_str(&spaces);
+            }
+            KeyCode::Backspace => self.back_over(),
+            KeyCode::Delete => {
+                if col < line.len() {
+                    let next = line[col..].chars().next().map_or(0, char::len_utf8);
+                    self.replace((row, col), (row, col + next), "");
+                }
+            }
+            KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
+                moved(self);
+                let m = match key.code {
+                    KeyCode::Left => Motion::Left,
+                    KeyCode::Right => Motion::Right,
+                    KeyCode::Up => Motion::Up,
+                    _ => Motion::Down,
+                };
+                if let Some(p) = self.target(m, 1, false) {
+                    self.doc.row = p.0;
+                    self.doc.col = p.1;
+                }
+            }
+            KeyCode::Home => {
+                moved(self);
+                self.doc.col = 0;
+            }
+            KeyCode::End => {
+                moved(self);
+                self.doc.col = line.len();
+            }
+            _ => {}
+        }
+    }
+
+    /// Out of Replace mode, the cursor a column left as Insert mode's Esc
+    /// leaves it.
+    fn leave_replace(&mut self) {
+        self.mode = Mode::Normal;
+        self.over.clear();
+        self.typed_over.clear();
+        let line = self.line();
+        let col = self.doc.col.min(line.len());
+        if col > 0 {
+            self.doc.col = line[..col].char_indices().last().map_or(0, |(i, _)| i);
         }
     }
 
@@ -2167,10 +2824,13 @@ impl Editor {
 
     /// The selection, its start first, its end exclusive.
     pub fn selection(&self) -> Option<Selection> {
-        let Mode::Visual { line, .. } = self.mode else {
+        let Mode::Visual { line, block, .. } = self.mode else {
             return None;
         };
         let cursor = (self.doc.row, self.doc.col);
+        if block {
+            return Some(self.block_selection());
+        }
         let (a, b) = if cursor < self.anchor {
             (cursor, self.anchor)
         } else {
@@ -2185,11 +2845,41 @@ impl Editor {
             start: a,
             end: (b.0, end),
             linewise: line,
+            block: None,
         })
+    }
+
+    /// A block's rows and columns, from the anchor's column and the
+    /// cursor's (the one j and k keep, past a shorter line), to each line's
+    /// end after `$`.
+    fn block_selection(&self) -> Selection {
+        let row = self.doc.row;
+        let anchor_col = self.anchor_col;
+        let cursor_col = self.block_cursor_col();
+        let to_end = self.want == Some(usize::MAX);
+        let block = Block {
+            cols: (anchor_col.min(cursor_col), anchor_col.max(cursor_col)),
+            to_end,
+        };
+        let (a, b) = (self.anchor.0.min(row), self.anchor.0.max(row));
+        let edge = |r: usize, end: bool| {
+            let line = self.doc.line(r);
+            let (s, e) = block.span(&line).unwrap_or((line.len(), line.len()));
+            if end { e } else { s }
+        };
+        Selection {
+            start: (a, edge(a, false)),
+            end: (b, edge(b, true)),
+            linewise: false,
+            block: Some(block),
+        }
     }
 
     fn selected(&self) -> Option<Range> {
         let sel = self.selection()?;
+        if let Some(block) = sel.block {
+            return Some(Range::Block((sel.start.0, sel.end.0), block));
+        }
         Some(if sel.linewise {
             Range::Lines(sel.start.0, sel.end.0)
         } else {
@@ -2215,6 +2905,28 @@ impl Editor {
         true
     }
 
+    /// Deletes the selection and starts typing where it was, as a paste
+    /// over it does: at a block's own column on its first row, padded to
+    /// reach it, which the cursor can't sit on past a line's end.
+    pub fn cut_to_type(&mut self) {
+        let block = self
+            .selection()
+            .and_then(|s| s.block.map(|b| (s.start.0, b.cols.0)));
+        self.cut();
+        let Some((row, col)) = block else {
+            let at = self.doc.col;
+            return self.insert_at(at);
+        };
+        let mut line = self.doc.line(row);
+        let n = line.chars().count();
+        if n < col {
+            line.push_str(&" ".repeat(col - n));
+            self.doc.set_line(row, &line);
+        }
+        self.doc.row = row;
+        self.insert_at(Self::byte_of(&line, col));
+    }
+
     /// The selection's text, for Ctrl-C.
     pub fn selected_text(&self) -> Option<String> {
         Some(match self.selected()? {
@@ -2226,6 +2938,7 @@ impl Editor {
                     .collect::<Vec<_>>()
                     .join("\n")
             ),
+            Range::Block(rows, block) => self.block_text(rows, block),
         })
     }
 
@@ -2233,6 +2946,7 @@ impl Editor {
         let Mode::Visual {
             line: linewise,
             select,
+            block,
         } = self.mode
         else {
             return;
@@ -2247,7 +2961,7 @@ impl Editor {
                         self.mode = Mode::Normal;
                         let at = match range {
                             Range::Chars(a, _) => a,
-                            Range::Lines(a, _) => (a, 0),
+                            Range::Lines(a, _) | Range::Block((a, _), _) => (a, 0),
                         };
                         self.apply(Op::Delete, range, 1);
                         if matches!(range, Range::Lines(..)) {
@@ -2304,11 +3018,8 @@ impl Editor {
             let plain = Key::new(key.code, crate::mux::input::Mods::NONE);
             self.keys.clear();
             self.keys.push(plain);
-            if let Parse::Done(Command::Move(m, n)) = self.parse()
-                && let Some(p) = self.target(m, n.max(1), n > 0)
-            {
-                self.doc.row = p.0;
-                self.doc.col = p.1;
+            if let Parse::Done(Command::Move(m, n)) = self.parse() {
+                self.visual_move(m, n, block);
             }
             self.keys.clear();
             return;
@@ -2334,28 +3045,59 @@ impl Editor {
                 Some('~') => return act(self, Op::Toggle),
                 Some('u') => return act(self, Op::Lower),
                 Some('U') => return act(self, Op::Upper),
+                Some('o') if block => {
+                    // The opposite corner: rows and columns swap.
+                    let mine = self.block_cursor_col();
+                    let to_end = self.want == Some(usize::MAX);
+                    let row = self.doc.row;
+                    self.doc.row = self.anchor.0;
+                    self.place_block_corners(mine, to_end);
+                    self.anchor.0 = row;
+                    self.anchor.1 = Self::byte_of(&self.doc.line(row), self.anchor_col);
+                    self.keys.clear();
+                    return;
+                }
                 Some('o') => {
                     let cursor = (self.doc.row, self.doc.col);
                     (self.doc.row, self.doc.col) = self.anchor;
                     self.anchor = cursor;
+                    self.want = None;
                     self.keys.clear();
+                    return;
+                }
+                Some('O') if block => {
+                    // The other corner on the same row: the columns swap.
+                    let mine = self.block_cursor_col();
+                    let to_end = self.want == Some(usize::MAX);
+                    self.place_block_corners(mine, to_end);
+                    self.keys.clear();
+                    return;
+                }
+                Some('I' | 'A') if block => {
+                    if let Some(Range::Block((a, b), blk)) = self.selected() {
+                        self.keys.clear();
+                        self.block_type_in(first == Some('A'), (a, b), blk);
+                    }
                     return;
                 }
                 Some('v') | Some('V') => {
                     let to_line = first == Some('V');
-                    if to_line == linewise {
+                    if !block && to_line == linewise {
                         self.leave_visual();
                     } else {
                         self.mode = Mode::Visual {
                             line: to_line,
                             select: false,
+                            block: false,
                         };
                         self.keys.clear();
                     }
                     return;
                 }
                 Some('J') => {
-                    if let Some(Range::Lines(a, b) | Range::Chars((a, _), (b, _))) = self.selected()
+                    if let Some(
+                        Range::Lines(a, b) | Range::Chars((a, _), (b, _)) | Range::Block((a, b), _),
+                    ) = self.selected()
                     {
                         self.mode = Mode::Normal;
                         self.keys.clear();
@@ -2376,6 +3118,30 @@ impl Editor {
                         self.clipboard = clipboard;
                         self.register = reg;
                         match range {
+                            Range::Block((a, _), blk) => {
+                                // At the block's own column, which the
+                                // cursor can't sit on past a line's end.
+                                let reg = self.register.clone();
+                                if reg.block {
+                                    self.put_block(&reg.text, a, blk.cols.0, 1);
+                                } else if reg.linewise {
+                                    self.block_corner(a, blk);
+                                    self.put(true, 1);
+                                } else {
+                                    let mut line = self.doc.line(a);
+                                    let n = line.chars().count();
+                                    if n < blk.cols.0 {
+                                        line.push_str(&" ".repeat(blk.cols.0 - n));
+                                        self.doc.set_line(a, &line);
+                                    }
+                                    let at = Self::byte_of(&line, blk.cols.0);
+                                    let end = self.replace((a, at), (a, at), &reg.text);
+                                    let l = self.doc.line(end.0);
+                                    let last =
+                                        l[..end.1].char_indices().last().map_or(0, |(i, _)| i);
+                                    self.set(end.0, last);
+                                }
+                            }
                             Range::Lines(a, _) => {
                                 let len = self.doc.text.len();
                                 if a < len && !(len == 1 && self.doc.line(0).is_empty()) {
@@ -2418,6 +3184,7 @@ impl Editor {
                 match range {
                     Range::Chars(a, b) => {
                         self.anchor = a;
+                        self.anchor_col = Self::char_index(&self.doc.line(a.0), a.1);
                         let l = self.doc.line(b.0);
                         let last = l[..b.1.min(l.len())]
                             .char_indices()
@@ -2426,9 +3193,14 @@ impl Editor {
                         self.doc.row = b.0;
                         self.doc.col = last;
                     }
+                    Range::Block(..) => {}
                     Range::Lines(a, b) => {
                         self.anchor = (a, 0);
-                        self.mode = Mode::Visual { line: true, select };
+                        self.mode = Mode::Visual {
+                            line: true,
+                            select,
+                            block: false,
+                        };
                         self.doc.row = b;
                     }
                 }
@@ -2441,10 +3213,23 @@ impl Editor {
             }
             let with = typed(&self.keys[1]);
             self.keys.clear();
+            if let (Some(c), Some(Range::Block((a, b), blk))) = (with, self.selected()) {
+                for r in a..=b {
+                    let line = self.doc.line(r);
+                    if let Some((s, e)) = blk.span(&line) {
+                        let over: String = line[s..e].chars().map(|_| c).collect();
+                        self.replace((r, s), (r, e), &over);
+                    }
+                }
+                self.mode = Mode::Normal;
+                self.block_corner(a, blk);
+                return;
+            }
             if let (Some(c), Some(range)) = (with, self.selected()) {
                 let (a, b) = match range {
                     Range::Chars(a, b) => (a, b),
                     Range::Lines(a, b) => ((a, 0), (b, self.doc.line(b).len())),
+                    Range::Block(..) => return,
                 };
                 let text = self.text_between(a, b);
                 let replaced: String = text
@@ -2462,24 +3247,86 @@ impl Editor {
             Parse::Invalid => self.keys.clear(),
             Parse::Done(Command::Move(m, count)) => {
                 self.keys.clear();
-                if !matches!(m, Motion::Down | Motion::Up | Motion::LineEnd) {
-                    self.want = None;
-                }
-                if let Some(p) = self.target(m, count.max(1), count > 0) {
-                    self.doc.row = p.0;
-                    self.doc.col = p.1;
-                }
+                self.visual_move(m, count, block);
             }
             Parse::Done(Command::Simple('\0', _)) => {
                 let k = self.keys.pop();
                 self.keys.clear();
-                if let Some(k) = k
-                    && ctrl(&k, 'c')
-                {
-                    self.leave_visual();
+                match k {
+                    Some(k) if ctrl(&k, 'c') => self.leave_visual(),
+                    // Ctrl-V: to a block, or out of one, as v and V do.
+                    Some(k) if ctrl(&k, 'v') && block => self.leave_visual(),
+                    Some(k) if ctrl(&k, 'v') => {
+                        self.end_from = Self::char_index(&self.line(), self.doc.col);
+                        self.anchor_col =
+                            Self::char_index(&self.doc.line(self.anchor.0), self.anchor.1);
+                        self.mode = Mode::Visual {
+                            line: false,
+                            select: false,
+                            block: true,
+                        };
+                    }
+                    _ => {}
                 }
             }
             Parse::Done(_) => self.keys.clear(),
+        }
+    }
+
+    /// The cursor put on the block's own column, where j and k left it
+    /// wanting one past a shorter line, so swapping corners keeps it.
+    fn block_cursor_col(&self) -> usize {
+        match self.want {
+            Some(usize::MAX) => self.end_from,
+            Some(w) => w,
+            None => Self::char_index(&self.line(), self.doc.col),
+        }
+    }
+
+    /// A block's columns swapped between the anchor and the cursor (on
+    /// the cursor's row as it now is), the cursor's kept in `want` past a
+    /// shorter line, and a block to each line's end kept so.
+    fn place_block_corners(&mut self, mine: usize, to_end: bool) {
+        let theirs = self.anchor_col;
+        self.anchor_col = mine;
+        self.anchor.1 = Self::byte_of(&self.doc.line(self.anchor.0), mine);
+        if to_end {
+            self.end_from = theirs;
+        } else {
+            self.want = Some(theirs);
+        }
+        let line = self.line();
+        self.doc.col = Self::byte_of(&line, theirs);
+        self.clamp();
+    }
+
+    /// `I` and `A` on a block: typing on its first row before or after
+    /// it, into every row on Esc.
+    fn block_type_in(&mut self, after: bool, (a, b): (usize, usize), blk: Block) {
+        let col = if after { blk.cols.1 + 1 } else { blk.cols.0 };
+        let skip = if after {
+            Vec::new()
+        } else {
+            self.rows_short_of((a, b), col)
+        };
+        self.start_block_insert((a, b), col, after && blk.to_end, skip);
+    }
+
+    /// A motion moving the selection's end, keeping the column j and k
+    /// want (a block's own) and, for a block stretched by `$`, the column
+    /// it was stretched from.
+    fn visual_move(&mut self, m: Motion, count: usize, block: bool) {
+        if block && m == Motion::LineEnd && self.want != Some(usize::MAX) {
+            self.end_from = self
+                .want
+                .unwrap_or_else(|| Self::char_index(&self.line(), self.doc.col));
+        }
+        if !matches!(m, Motion::Down | Motion::Up | Motion::LineEnd) {
+            self.want = None;
+        }
+        if let Some(p) = self.target(m, count.max(1), count > 0) {
+            self.doc.row = p.0;
+            self.doc.col = p.1;
         }
     }
 
@@ -2490,6 +3337,7 @@ impl Editor {
         self.mode = Mode::Visual {
             line: false,
             select: self.easy,
+            block: false,
         };
         self.doc.row = to.0;
         self.doc.col = to.1;
@@ -2793,6 +3641,393 @@ mod tests {
         assert_eq!(e.doc.line(1), "  new", "cc keeps the indent");
         press(&mut e, "kJ");
         assert_eq!(lines(&e), ["  item onetwo new"]);
+    }
+
+    #[test]
+    fn replace_mode_types_over_and_backspace_puts_back() {
+        let mut e = editor(&["hello"]);
+        press(&mut e, "Rab");
+        assert_eq!(e.mode, Mode::Replace);
+        press(&mut e, "<Esc>");
+        assert_eq!(e.doc.line(0), "abllo");
+        assert_eq!((e.mode, e.col()), (Mode::Normal, 1), "the cursor on b");
+        press(&mut e, "u");
+        assert_eq!(e.doc.line(0), "hello", "the whole of it one step to undo");
+        press(&mut e, "0Rab<BS><BS><Esc>");
+        assert_eq!(e.doc.line(0), "hello", "Backspace puts back what was there");
+        press(&mut e, "0l<BS>Rx<BS><BS>y<Esc>");
+        assert_eq!(
+            e.doc.line(0),
+            "yello",
+            "Backspace past where R started only moves left"
+        );
+        press(&mut e, "u$Rxyz<Esc>");
+        assert_eq!(e.doc.line(0), "hellxyz", "past the end it adds");
+        press(&mut e, "u0Rab<CR>cd<Esc>");
+        assert_eq!(
+            lines(&e),
+            ["ab", "cdo"],
+            "Enter breaks the line, taking nothing"
+        );
+        press(&mut e, "u");
+
+        let mut e = editor(&["abcdef"]);
+        press(&mut e, "RX");
+        e.doc.col = 4;
+        press(&mut e, "<BS><Esc>");
+        assert_eq!(
+            e.doc.line(0),
+            "Xbcdef",
+            "moved by a click, Backspace puts back nothing it didn't type over"
+        );
+
+        let mut clicked = editor(&["one", "two"]);
+        press(&mut clicked, "3RX");
+        clicked.doc.row = 1;
+        clicked.doc.col = 0;
+        clicked.settle_replace_count();
+        assert_eq!(
+            lines(&clicked),
+            ["Xne", "two"],
+            "nothing typed again after a click"
+        );
+
+        let mut down = editor(&["abcdef", "abcdef", "abcdef"]);
+        press(&mut down, "R");
+        for code in [KeyCode::Down, KeyCode::Right, KeyCode::Right, KeyCode::Down] {
+            down.key(Key::new(code, Mods::NONE));
+        }
+        press(&mut down, "X<Esc>");
+        assert_eq!(
+            down.doc.line(2),
+            "abXdef",
+            "the arrows' column, not one kept from before"
+        );
+
+        let mut e = editor(&["0123456789"]);
+        press(&mut e, "3Rab<Esc>");
+        assert_eq!(e.doc.line(0), "ababab6789", "a count types it again");
+        assert_eq!(e.col(), 5);
+    }
+
+    #[test]
+    fn insert_modes_ctrl_keys_put_a_register_run_a_command_and_indent() {
+        let mut e = editor(&["alpha beta"]);
+        press(&mut e, "yiwA <C-r>\"<Esc>");
+        assert_eq!(e.doc.line(0), "alpha beta alpha", "the register typed in");
+        e.search_for("beta", true);
+        press(&mut e, "0i<C-r>/<Esc>");
+        assert_eq!(e.doc.line(0), "betaalpha beta alpha", "the last search");
+        press(&mut e, "u");
+        press(&mut e, "i<C-r>z<Esc>");
+        assert_eq!(
+            e.doc.line(0),
+            "alpha beta alpha",
+            "an unknown register types nothing"
+        );
+        assert!(
+            e.effects()
+                .iter()
+                .any(|m| matches!(m, Effect::Message(t) if t.starts_with("E353"))),
+            "and says so"
+        );
+
+        let mut e = editor(&["one", "two"]);
+        press(&mut e, "A<C-o>");
+        assert_eq!(e.mode, Mode::Normal);
+        assert!(e.one_command());
+        press(&mut e, "0");
+        assert_eq!((e.mode, e.col()), (Mode::Insert, 0), "back to typing");
+        press(&mut e, "X<C-o><Esc>Y<Esc>");
+        assert_eq!(e.doc.line(0), "XYone");
+        press(&mut e, "u");
+        assert_eq!(e.doc.line(0), "Xone", "Ctrl-O breaks the step to undo");
+        press(&mut e, "u");
+        assert_eq!(e.doc.line(0), "one");
+        let mut gone = editor(&["abc", "x"]);
+        press(&mut gone, "A<C-o>ddX<Esc>");
+        assert_eq!(
+            lines(&gone),
+            ["Xx"],
+            "typing goes on where the command left it"
+        );
+        let mut ex = editor(&["a"]);
+        press(&mut ex, "A<C-o>:");
+        assert!(ex.one_command(), "waiting for the prompt");
+        ex.ex("s/a//");
+        ex.prompt_done();
+        press(&mut ex, "<Esc>");
+        assert_eq!((lines(&ex), ex.mode), (vec![String::new()], Mode::Normal));
+        let mut dd = editor(&["one", "two"]);
+        press(&mut dd, "i<C-o>dd<Esc>u");
+        assert_eq!(lines(&dd), ["one", "two"], "a command under Ctrl-O undoes");
+        press(&mut e, "AZ<C-o>u");
+        assert_eq!(
+            (e.doc.line(0).as_str(), e.mode),
+            ("one", Mode::Insert),
+            "u under Ctrl-O undoes what was just typed"
+        );
+        press(&mut e, "<Esc>");
+        let mut named = editor(&["word"]);
+        press(&mut named, "yiwA <C-o>\"+p");
+        assert_eq!(
+            (named.doc.line(0).as_str(), named.mode),
+            ("word word", Mode::Insert),
+            "a register named is part of the one command"
+        );
+        press(&mut named, "<Esc>");
+        press(&mut e, "A<C-o>l!<Esc>");
+        assert_eq!(
+            e.doc.line(0),
+            "one!",
+            "a command that doesn't move keeps the cursor past the end"
+        );
+        press(&mut e, "i<C-o>dd-<Esc>");
+        assert_eq!(lines(&e), ["-two"], "the line deleted and typing kept on");
+
+        let mut e = editor(&["- item", "", "yy"]);
+        press(&mut e, "llli<C-t>");
+        assert_eq!(
+            (e.doc.line(0).as_str(), e.col()),
+            ("  - item", 5),
+            "on the same character"
+        );
+        press(&mut e, "<C-d><C-d><Esc>");
+        assert_eq!(
+            e.doc.line(0),
+            "- item",
+            "and back, nothing past the line's start"
+        );
+        press(&mut e, "jji<C-t><Esc>");
+        assert_eq!(e.doc.line(2), "  yy");
+        press(&mut e, "ggyyGo<C-r>\"<Esc>");
+        assert_eq!(
+            lines(&e)[3..],
+            ["  - item", ""],
+            "a line put with its newline"
+        );
+    }
+
+    #[test]
+    fn block_visual_mode_acts_on_a_rectangle() {
+        let text = ["abcdef", "a", "abcdefgh", "abcd"];
+        let mut e = editor(&text);
+        press(&mut e, "l<C-v>jjl");
+        assert!(matches!(e.mode, Mode::Visual { block: true, .. }));
+        press(&mut e, "d");
+        assert_eq!(
+            lines(&e),
+            ["adef", "a", "adefgh", "abcd"],
+            "two columns cut, a row short of them left alone"
+        );
+        assert_eq!((e.row(), e.col()), (0, 1), "the cursor on the top-left");
+        assert_eq!(e.register.text, "bc\n\nbc");
+        press(&mut e, "u");
+        assert_eq!(lines(&e), text);
+
+        press(&mut e, "gg0l<C-v>jjly$p");
+        assert_eq!(
+            lines(&e)[..3],
+            ["abcdefbc", "a     ", "abcdefbcgh"],
+            "put as a column, a short row padded to reach it"
+        );
+        press(&mut e, "u");
+        press(&mut e, "gg0<C-v>jrx");
+        assert_eq!(lines(&e)[..2], ["xbcdef", "x"]);
+        press(&mut e, "u");
+        press(&mut e, "gg0l<C-v>jj>");
+        assert_eq!(
+            lines(&e)[..3],
+            ["a  bcdef", "a", "a  bcdefgh"],
+            "shifted at the block's column"
+        );
+        press(&mut e, "u");
+        press(&mut e, "gg0l<C-v>jjI- <Esc>");
+        assert_eq!(
+            lines(&e)[..3],
+            ["a- bcdef", "a", "a- bcdefgh"],
+            "typed into every line"
+        );
+        press(&mut e, "u");
+        assert_eq!(lines(&e), text, "one step to undo");
+        press(&mut e, "gg0<C-v>jjj$A;<Esc>");
+        assert_eq!(
+            lines(&e),
+            ["abcdef;", "a;", "abcdefgh;", "abcd;"],
+            "each line's end"
+        );
+        press(&mut e, "u");
+        press(&mut e, "gg0l<C-v>jjlc_<Esc>");
+        assert_eq!(
+            lines(&e)[..3],
+            ["a_def", "a", "a_defgh"],
+            "changed on each row"
+        );
+        press(&mut e, "u");
+
+        let mut short = editor(&["abcdef", "xy"]);
+        press(&mut short, "3l<C-v>j$d");
+        assert_eq!(
+            lines(&short),
+            ["abc", "xy"],
+            "$ keeps the block's left edge"
+        );
+        let mut short = editor(&["a", "abcdef"]);
+        press(&mut short, "j2l<C-v>kIX<Esc>");
+        assert_eq!(
+            lines(&short),
+            ["a", "abXcdef"],
+            "typing starts on a row that reaches the block"
+        );
+        let mut moved = editor(&["abc", "abc"]);
+        press(&mut moved, "<C-v>jIX");
+        moved.key(Key::new(KeyCode::Right, Mods::NONE));
+        press(&mut moved, "<Esc>");
+        assert_eq!(
+            lines(&moved),
+            ["Xabc", "abc"],
+            "moving ends typing into every row"
+        );
+        let mut switched = editor(&["abcd"]);
+        press(&mut switched, "$v<C-v>d");
+        assert_eq!(
+            lines(&switched),
+            ["abc"],
+            "v then Ctrl-V keeps the block's column"
+        );
+        let mut clicked = editor(&["abc", "abc"]);
+        press(&mut clicked, "<C-v>jIX");
+        clicked.doc.col = 3;
+        press(&mut clicked, "<Esc>");
+        assert_eq!(
+            lines(&clicked),
+            ["Xabc", "abc"],
+            "a click ends typing into every row"
+        );
+        let mut indented = editor(&["abcd", "abcd"]);
+        press(&mut indented, "ll<C-v>jI<C-t>X<Esc>");
+        assert_eq!(lines(&indented), ["  abXcd", "abcd"]);
+        let mut ragged = editor(&["abc", "d", "xy", "xy"]);
+        press(&mut ragged, "0<C-v>lljy");
+        press(&mut ragged, "jj0l2P");
+        assert_eq!(
+            lines(&ragged)[2..],
+            ["xabcabcy", "xd  d  y"],
+            "each copy of a count padded to the block's width"
+        );
+        let mut pasted = editor(&["abc", "abc"]);
+        press(&mut pasted, "<C-v>jI");
+        pasted.paste_text("X");
+        press(&mut pasted, "<Esc>");
+        assert_eq!(
+            lines(&pasted),
+            ["Xabc", "Xabc"],
+            "a paste goes into every row"
+        );
+        let mut back = editor(&["abcd", "abcd"]);
+        press(&mut back, "ll<C-v>jI<BS>XY<Esc>");
+        assert_eq!(
+            lines(&back),
+            ["aXYcd", "abcd"],
+            "deleting back past the block's column keeps it to the row"
+        );
+        let mut corners = editor(&["abcdef", "a"]);
+        press(&mut corners, "l<C-v>lljOd");
+        assert_eq!(
+            lines(&corners),
+            ["aef", "a"],
+            "O on a short row keeps the rectangle"
+        );
+        let mut corners = editor(&["abcdef", "a"]);
+        press(&mut corners, "l<C-v>lljoOd");
+        assert_eq!(lines(&corners), ["aef", "a"], "and so does o");
+        let mut swap = editor(&["ab12", "cd34"]);
+        press(&mut swap, "<C-v>jlyll<C-v>jlp");
+        assert_eq!(
+            lines(&swap),
+            ["abab", "cdcd"],
+            "p over a block at the lines' end"
+        );
+        let mut charwise = editor(&["a", "abcdef"]);
+        charwise.register = Register {
+            text: "X".into(),
+            linewise: false,
+            block: false,
+        };
+        press(&mut charwise, "j3l<C-v>kp");
+        assert_eq!(
+            lines(&charwise),
+            ["a  X", "abcef"],
+            "text put at the block's column"
+        );
+        let mut pasted = editor(&["abcd", "abcd"]);
+        press(&mut pasted, "$<C-v>j");
+        pasted.cut_to_type();
+        pasted.type_text("X");
+        assert_eq!(
+            lines(&pasted),
+            ["abcX", "abc"],
+            "a paste over a block at its column"
+        );
+        let mut none = editor(&["abcdef", "a", "b"]);
+        press(&mut none, "4l<C-v>jojjIX<Esc>");
+        assert_eq!(
+            lines(&none),
+            ["abcdef", "a", "b"],
+            "no row reaches the block"
+        );
+        let mut easy = editor(&["abc", "abc"]);
+        easy.easy = true;
+        press(&mut easy, "<C-v>jIX<S-Right><Esc>i<Esc>");
+        assert_eq!(
+            lines(&easy),
+            ["Xabc", "abc"],
+            "a selection ends typing into a block"
+        );
+        let mut shifted = editor(&["abc", "abc"]);
+        press(&mut shifted, "<C-v>j<S-Right>d");
+        assert_eq!(
+            lines(&shifted),
+            ["c", "c"],
+            "Shift with an arrow widens a block"
+        );
+        let mut joined = editor(&["abc", "def", "ghi"]);
+        press(&mut joined, "<C-v>jj$A");
+        joined.key(Key::new(KeyCode::Delete, Mods::NONE));
+        press(&mut joined, "X<Esc>");
+        assert_eq!(
+            lines(&joined),
+            ["abcXdef", "ghi"],
+            "a join ends typing into every row"
+        );
+        let mut cmd = editor(&["abc", "def"]);
+        press(&mut cmd, "<C-v>jI<C-o>ddX<Esc>");
+        assert_eq!(lines(&cmd), ["Xdef"], "Ctrl-O ends typing into every row");
+        let mut two = editor(&["abc", "abc"]);
+        press(&mut two, "<C-v>j$cX<Esc>");
+        assert_eq!(
+            lines(&two),
+            ["X", "X"],
+            "a row cut to nothing still takes it"
+        );
+
+        press(&mut e, "gg0l<C-v>jjlO");
+        assert_eq!(
+            (e.row(), e.col(), e.anchor),
+            (2, 1, (0, 2)),
+            "the other corner"
+        );
+        press(&mut e, "v");
+        assert!(matches!(
+            e.mode,
+            Mode::Visual {
+                block: false,
+                line: false,
+                ..
+            }
+        ));
+        press(&mut e, "<Esc><C-v><C-v>");
+        assert_eq!(e.mode, Mode::Normal, "Ctrl-V again leaves it");
     }
 
     #[test]
