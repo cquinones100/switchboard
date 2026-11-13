@@ -9,7 +9,10 @@
 //!                        [--term <name>] [--yes]
 //!       attaches a client, prints its id and leaves it running; it says it
 //!       is Ghostty (xterm-ghostty) unless --term names another terminal,
-//!       so the server draws its images and truecolor for it
+//!       so the server draws its images and truecolor for it; with no
+//!       --size, it is the narrowest screen on which no view's panes stack
+//!       (`ui::layout::SIDE_BY_SIDE`)
+//!   switchboard headless --min-size     prints that size, <cols>x<rows>
 //!   switchboard headless --stop <id>
 //!   switchboard headless-keys <id> <key>...     keys by name: M-m ] j Enter
 //!   switchboard headless-screen <id> [--ansi | --png <file>]
@@ -59,6 +62,11 @@ fn value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
 }
 
 fn start(args: &[String]) -> Result<ExitCode> {
+    if args.iter().any(|a| a == "--min-size") {
+        let (cols, rows) = crate::ui::layout::SIDE_BY_SIDE;
+        println!("{cols}x{rows}");
+        return Ok(ExitCode::SUCCESS);
+    }
     let state = paths::state_dir();
     if let Some(id) = value(args, "--stop") {
         let id: u32 = id
@@ -69,7 +77,7 @@ fn start(args: &[String]) -> Result<ExitCode> {
     }
     let size = match value(args, "--size") {
         Some(s) => parse_size(s).ok_or_else(|| anyhow!("--size takes <cols>x<rows>"))?,
-        None => (160, 45),
+        None => crate::ui::layout::SIDE_BY_SIDE,
     };
     let session = value(args, "--session").map(str::to_string);
     let term = value(args, "--term").unwrap_or(headless::TERM).to_string();

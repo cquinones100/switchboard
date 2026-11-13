@@ -47,7 +47,7 @@ use crate::ui::{Look, Outcome, Overlay, Picked, Step};
 /// Its inside, while the screen leaves room around it.
 const WIDTH: usize = 92;
 /// The screen narrower than which its rows drop their extras.
-const WIDE: u16 = 160;
+pub const WIDE: u16 = 160;
 
 /// What it closed with, as `Picked::index`.
 pub const SAVE: usize = 0;

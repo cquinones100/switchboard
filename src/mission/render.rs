@@ -2471,7 +2471,7 @@ fn ready_diagrams(m: &Mission) -> Option<Images> {
 /// How wide a screen shows the chosen item's description beside the board,
 /// and how many columns it takes there at 160, its share of a screen of
 /// any width (board 45).
-const SIDE_AT: usize = 140;
+pub const SIDE_AT: usize = 140;
 const SIDE_W: usize = 50;
 /// The columns a diagram in the description is drawn for: the pane's at
 /// 160, which a wider pane shows as drawn.
@@ -3600,7 +3600,7 @@ const WORKTREE_MIN: usize = 20;
 /// A waiting cell with no room for its words: the mark alone.
 const WAITING_MARK: &str = "◌";
 /// Under this wide the chosen worktree's last output is behind `i`.
-pub(crate) const LANDING_OUTPUT_AT: usize = 140;
+pub const LANDING_OUTPUT_AT: usize = 140;
 /// The detail's labels' column.
 const DETAIL_LABEL: usize = 12;
 
@@ -4487,7 +4487,7 @@ pub fn keys_board_shown(m: &Mission, v: &View, cols: usize) -> bool {
 /// chosen card's pane beside it, under it on a narrower screen, and how
 /// many columns that takes.
 pub const PILOT_BOARD_AT: usize = 108;
-const PILOT_SIDE_AT: usize = 200;
+pub const PILOT_SIDE_AT: usize = 200;
 const PILOT_SIDE_W: usize = 44;
 /// Where a diagram of a plan that can't be drawn beside the board is shown
 /// properly (`Markdown::parse`).

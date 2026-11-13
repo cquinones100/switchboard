@@ -99,7 +99,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "headless",
         run: headless::main,
-        about: "Attach a client with no terminal and print its id, for headless-keys and headless-screen (--size, --session, --stop <id>)",
+        about: "Attach a client with no terminal and print its id, for headless-keys and headless-screen (--size, --min-size, --session, --stop <id>)",
     },
     Command {
         name: "headless-keys",

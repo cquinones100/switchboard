@@ -4,8 +4,16 @@
 // browser, sharing its strips, MP4 and contact sheet (video.js).
 //
 //   node record-terminal.js <steps.js> --out <dir> [--name "<what it shows>"]
-//        [--bin <switchboard>] [--size 160x45] [--pace demo|test]
+//        [--bin <switchboard>] [--size <cols>x<rows>] [--pace demo|test]
 //   node record-terminal.js --self-test
+//
+// It records at the size of your workspace's screen (the session this runs
+// in, read from `switchboard list`; 160x45 outside Switchboard), each side
+// raised to the least size at which no view's panes stack, as the build
+// recorded says (`switchboard headless --min-size`). --size is used as it
+// is, and one under that least size is noted in the log. A frame wider than
+// 2560 pixels is scaled down to it in the video, the strips drawn at that
+// width.
 //
 // It starts the demo (`switchboard demo`, made-up data in a home of its own
 // that links nothing of yours) under a folder of its own in /tmp, so no
@@ -46,8 +54,9 @@
 // timeline being each frame's second, caption and keys.
 //
 // --self-test checks what needs no server: the timeline a made-up walk makes,
+// the size it records at and the width it scales a wide screen to,
 // and, with Playwright's packages and Chrome, a video made from made-up
-// frames. It prints { timeline, video } ("ok", or why a part was skipped) and
+// frames. It prints { timeline, size, fit, video } ("ok", or why a part was skipped) and
 // exits 1 when a part fails.
 
 const { execFileSync } = require("node:child_process");
@@ -61,6 +70,49 @@ const arg = (name) => (args.includes(`--${name}`) ? args[args.indexOf(`--${name}
 
 // How long each kind of frame is held, in seconds, by pace.
 const HOLD = { demo: { step: 2.5, key: 0.8 }, test: { step: 1.2, key: 0.4 } };
+
+// The widest video made, in pixels: a wider screen's frames are scaled down
+// to it.
+const MAX_WIDTH = 2560;
+
+// The size used outside Switchboard, with no --size.
+const PLAIN = "160x45";
+
+// `<cols>x<rows>` as numbers, or null.
+const parseSize = (text) => {
+  const match = /^(\d+)x(\d+)$/.exec(text ?? "");
+  return match ? { cols: Number(match[1]), rows: Number(match[2]) } : null;
+};
+
+// The size to record at: --size (`given`) as it is, noted in the log when
+// under `least` (a view's panes stack there); else the screen's (`screen`,
+// the workspace's, or 160x45 outside it), each side raised to `least`'s so
+// no view's panes stack. `least` is null when the build can't say it.
+const sizeFor = ({ given, screen, least, log }) => {
+  const under = (size) => least && (size.cols < least.cols || size.rows < least.rows);
+  if (given) {
+    if (under(given)) log.push(`panes stack below ${least.cols}x${least.rows}`);
+    return given;
+  }
+  const from = screen ?? parseSize(PLAIN);
+  return least ? { cols: Math.max(from.cols, least.cols), rows: Math.max(from.rows, least.rows) } : from;
+};
+
+// The size of the workspace this runs in, from its server's list (the
+// session holding this pane, else the first), read without attaching a
+// client; null outside Switchboard or when it can't be read.
+const workspaceSize = () => {
+  if (!process.env.SWITCHBOARD) return null;
+  try {
+    const list = JSON.parse(execFileSync("switchboard", ["list"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
+    const pane = process.env.SWITCHBOARD_PANE;
+    const holds = (session) => (session.tabs ?? []).some((tab) => (tab.panes ?? []).some((p) => p.id === pane));
+    const session = (list.sessions ?? []).find(holds) ?? list.sessions?.[0];
+    return session?.cols && session?.rows ? { cols: session.cols, rows: session.rows } : null;
+  } catch {
+    return null;
+  }
+};
 
 // The walk itself, given `shoot` (takes a frame into a file), `press` (types
 // one key), `screen` (the screen's text) and `settle` (waits until the screen
@@ -130,12 +182,15 @@ const render = async (frames, out, name, log) => {
     fs.writeFileSync(list, `${timed.map((frame) => `file ${quote(frame.file)}\nduration ${frame.hold.toFixed(3)}\n`).join("")}file ${quote(timed.at(-1).file)}\n`);
     const { width, height } = video.dimensions(timed[0].file);
     // The frames are drawn at two pixels to a CSS pixel (headless-screen's
-    // SCALE), and so are the strips, to match.
+    // SCALE), and so are the strips, to match, at the width the video is
+    // scaled down to (a 365-column screen's frame is near 6,000 pixels
+    // wide), so their text reads as it does on a narrower screen's.
     const scale = 2;
-    const { layers, cut } = await video.strips(dir, items, { width: width / scale, scale });
+    const fitted = video.fit({ width, height }, MAX_WIDTH);
+    const { layers, cut } = await video.strips(dir, items, { width: fitted.width / scale, scale });
     cut.forEach((text) => log.push(`caption cut short, too long for two lines: ${text}`));
     const mp4 = path.join(out, `${name}.mp4`);
-    return video.compose({ input: ["-f", "concat", "-safe", "0", "-i", list], width, height, top: video.KEYS * scale, bottom: video.CAPTION * scale, rate: 25, layers, mp4 });
+    return video.compose({ input: ["-f", "concat", "-safe", "0", "-i", list], width, height, maxWidth: MAX_WIDTH, top: video.KEYS * scale, bottom: video.CAPTION * scale, rate: 25, layers, mp4 });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -159,8 +214,8 @@ const record = async () => {
   const stepsFile = args[0];
   const out = arg("out") && path.resolve(arg("out"));
   const pace = arg("pace") ?? "test";
-  const size = arg("size") ?? "160x45";
-  if (!stepsFile || stepsFile.startsWith("--") || !out || !HOLD[pace] || !/^\d+x\d+$/.test(size)) {
+  const given = arg("size") && parseSize(arg("size"));
+  if (!stepsFile || stepsFile.startsWith("--") || !out || !HOLD[pace] || (arg("size") && !given)) {
     console.error('usage: node record-terminal.js <steps.js> --out <dir> [--name "<what it shows>"] [--bin <switchboard>] [--size <cols>x<rows>] [--pace demo|test]');
     process.exit(2);
   }
@@ -182,7 +237,20 @@ const record = async () => {
   try {
     env = parseExports(execFileSync(bin, ["demo", "--print"], { encoding: "utf8", env: outside, stdio: ["ignore", "pipe", "pipe"] }));
     if (!env.HOME) throw new Error("switchboard demo --print named no home");
-    client = run(["headless", "--size", size]).trim();
+    // The least size no view's panes stack at, as the build recorded says
+    // (the demo's switchboard is that build); one too old to say prints no
+    // size, and is recorded at the screen's.
+    let least = null;
+    try {
+      const said = run(["headless", "--min-size"]).trim();
+      least = parseSize(said);
+      // A build without --min-size attached a client instead: stopped.
+      if (/^\d+$/.test(said)) run(["headless", "--stop", said]);
+    } catch {}
+    if (!least) log.push("the build says no least size, so views may stack");
+    const size = sizeFor({ given, screen: workspaceSize(), least, log });
+    log.push(`size: ${size.cols}x${size.rows}`);
+    client = run(["headless", "--size", `${size.cols}x${size.rows}`]).trim();
     const screen = async () => run(["headless-screen", client]);
     const settle = async () => {
       const deadline = Date.now() + 3000;
@@ -253,8 +321,9 @@ const record = async () => {
 };
 
 // What needs no server: a walk of two steps and three keys makes five frames,
-// held their times, the keys on their frames; and three made-up frames make a
-// video as tall as a frame and both strips.
+// held their times, the keys on their frames; the size is the screen's raised
+// to the least, --size kept as given; three made-up frames make a video as
+// tall as a frame and both strips, and a 365-column frame one 2560 wide.
 const selfTest = async () => {
   const report = {};
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "walkthrough-self-test-"));
@@ -289,6 +358,23 @@ const selfTest = async () => {
       failures.length === 1;
     report.timeline = ok ? "ok" : `wrong: ${JSON.stringify({ shot: shot.length, got, captions, failures })}`;
 
+    // The size: the screen's raised to the least, --size kept and noted.
+    const least = { cols: 175, rows: 50 };
+    const sizeLog = [];
+    const sizes = [
+      sizeFor({ given: null, screen: null, least, log: sizeLog }),
+      sizeFor({ given: null, screen: { cols: 365, rows: 91 }, least, log: sizeLog }),
+      sizeFor({ given: null, screen: { cols: 365, rows: 40 }, least, log: sizeLog }),
+      sizeFor({ given: { cols: 120, rows: 30 }, screen: { cols: 365, rows: 91 }, least, log: sizeLog }),
+      sizeFor({ given: null, screen: null, least: null, log: sizeLog }),
+    ].map(({ cols, rows }) => `${cols}x${rows}`);
+    const sizesWant = ["175x50", "365x91", "365x50", "120x30", "160x45"];
+    const sizeOk = JSON.stringify(sizes) === JSON.stringify(sizesWant) && JSON.stringify(sizeLog) === JSON.stringify(["panes stack below 175x50"]);
+    report.size = sizeOk ? "ok" : `wrong: ${JSON.stringify({ sizes, sizeLog })}`;
+    const wide = video.fit({ width: 365 * 16, height: 91 * 32 }, MAX_WIDTH);
+    const narrow = video.fit({ width: 1280, height: 720 }, MAX_WIDTH);
+    report.fit = wide.width === 2560 && wide.height % 2 === 0 && narrow.width === 1280 ? "ok" : `wrong: ${JSON.stringify({ wide, narrow })}`;
+
     let playwright = true;
     try {
       require.resolve("playwright");
@@ -307,7 +393,15 @@ const selfTest = async () => {
         const mp4 = await render(made, dir, "self-test", []);
         const { width, height } = video.dimensions(mp4);
         const tall = 360 + 2 * (video.KEYS + video.CAPTION);
-        report.video = width === 640 && height === tall ? "ok" : `wrong: ${width}x${height}, not 640x${tall}`;
+        // A 365-column screen's frame, scaled down to MAX_WIDTH.
+        const wideFrame = path.join(dir, "wide.png");
+        execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-f", "lavfi", "-i", `color=c=gray:s=${365 * 16}x${91 * 16}`, "-frames:v", "1", wideFrame]);
+        const wideMp4 = await render([{ file: wideFrame, hold: 0.8, caption: "A wide screen", keys: ["j"] }], dir, "self-test-wide", []);
+        const wideSize = video.dimensions(wideMp4);
+        report.video =
+          width === 640 && height === tall && wideSize.width === MAX_WIDTH
+            ? "ok"
+            : `wrong: ${width}x${height}, not 640x${tall}, or ${wideSize.width} wide, not ${MAX_WIDTH}`;
       } catch (error) {
         report.video = /chrome|executable/i.test(error.message) ? `skipped: no Chrome (${error.message.split("\n")[0]})` : `wrong: ${error.message.split("\n")[0]}`;
       }

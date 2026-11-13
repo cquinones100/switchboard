@@ -127,14 +127,26 @@ const strips = async (dir, items, { width, scale }) => {
   }
 };
 
+// A recording `width` by `height` pixels scaled down to at most `maxWidth`
+// wide, keeping its aspect, each side even, as H.264 needs; as it is with no
+// `maxWidth` or when it is narrower.
+const fit = ({ width, height }, maxWidth) => {
+  if (!maxWidth || width <= maxWidth) return { width, height };
+  const even = (n) => Math.max(2, 2 * Math.round(n / 2));
+  return { width: even(maxWidth), height: even((height * maxWidth) / width) };
+};
+
 // The MP4: the recording (ffmpeg's `input` arguments, `width` by `height`
 // pixels, at `rate` frames a second when given, for pictures each held a
-// while) padded by `top` pixels above and `bottom` below, each layer drawn in
-// its strip while it lasts: an address bar or keys at the top, a caption at
-// the bottom.
-const compose = ({ input, width, height, top, bottom, rate, layers, mp4 }) => {
+// while), scaled down to `maxWidth` when given and wider (`fit`), padded by
+// `top` pixels above and `bottom` below, each layer drawn in its strip while
+// it lasts: an address bar or keys at the top, a caption at the bottom. The
+// layers are drawn at the scaled width.
+const compose = ({ input, width: drawnWidth, height: drawnHeight, maxWidth, top, bottom, rate, layers, mp4 }) => {
+  const { width, height } = fit({ width: drawnWidth, height: drawnHeight }, maxWidth);
   const steady = rate ? `fps=${rate},` : "";
-  const filters = [`[0:v]${steady}pad=${width}:${height + top + bottom}:0:${top}:color=0x14141e[v0]`];
+  const scaled = width === drawnWidth ? "" : `scale=${width}:${height}:flags=lanczos,`;
+  const filters = [`[0:v]${steady}${scaled}pad=${width}:${height + top + bottom}:0:${top}:color=0x14141e[v0]`];
   layers.forEach((layer, i) => {
     const y = layer.kind === "caption" ? top + height : 0;
     filters.push(`[v${i}][${i + 1}:v]overlay=0:${y}:enable='between(t,${layer.at.toFixed(3)},${layer.until.toFixed(3)})'[v${i + 1}]`);
@@ -182,4 +194,4 @@ const writeLog = (out, log) => {
   return file;
 };
 
-module.exports = { BAR, KEYS, CAPTION, needFfmpeg, fileName, videoName, spans, strips, compose, contactSheet, dimensions, writeLog };
+module.exports = { BAR, KEYS, CAPTION, needFfmpeg, fileName, videoName, spans, strips, fit, compose, contactSheet, dimensions, writeLog };

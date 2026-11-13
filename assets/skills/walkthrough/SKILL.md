@@ -64,8 +64,10 @@ The scripts need their packages (`record-terminal.js` too, since the captions ar
    ```
    node ~/.local/share/switchboard/plugin/skills/walkthrough/scripts/record-terminal.js <scratchpad>/walkthrough-<slug>/steps.js \
      --out <scratchpad>/walkthrough-<slug> --pace demo --name "<what it shows>" \
-     --bin "$home/.local/bin/switchboard" [--size 160x45]
+     --bin "$home/.local/bin/switchboard" [--size <cols>x<rows>]
    ```
+
+   It records at the size of your workspace's screen (160x45 outside Switchboard), raised to the least size at which no view's panes stack (`switchboard headless --min-size` of the build recorded), so leave `--size` out unless a size is asked for; one under that least size is noted in the log as "panes stack below <size>". A frame wider than 2560 pixels is scaled down to that width in the video.
 
    It starts a demo of its own, attaches a client with no terminal (`switchboard headless`), takes a picture of the screen for each step and key, ends and removes the demo, and prints the same JSON as `record.js`, `timeline` holding each frame's second, caption and keys.
 4. **Signing in.** Each site keeps its own Chrome profile under `~/.cache/deploy-test/profiles/`. If the recording lands on a sign-in page, ask the user to sign in, then run `node ~/.local/share/switchboard/plugin/skills/walkthrough/scripts/record.js --login --url <url>` (with the same `--profile`, if any) in the background: it opens a visible window, and they close it once signed in. Then record again. Never type a password or a code yourself.

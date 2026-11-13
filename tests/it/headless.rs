@@ -150,3 +150,22 @@ fn a_headless_client_attaches_as_ghostty_and_keeps_the_servers_images() {
     );
     plain.detach();
 }
+
+#[test]
+fn a_headless_client_with_no_size_is_wide_enough_that_no_view_stacks() {
+    let server = TestServer::start();
+    let (cols, rows) = switchboard::ui::layout::SIDE_BY_SIDE;
+    let (code, out, err) = server.run_binary(&["headless", "--min-size"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out.trim(), format!("{cols}x{rows}"));
+
+    let (code, out, err) = server.run_binary(&["headless"]);
+    assert_eq!(code, 0, "{err}");
+    let id = out.trim().to_string();
+    let (code, screen, err) = server.run_binary(&["headless-screen", &id]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(screen.lines().count(), rows as usize, "{screen}");
+    let clients = server.list()["clients"].clone();
+    assert_eq!(clients[0]["cols"], cols, "{clients}");
+    server.run_binary(&["headless", "--stop", &id]);
+}

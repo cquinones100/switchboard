@@ -20,6 +20,8 @@
 //!   drawn with kitty graphics, or as text where the terminal can't.
 //! - `kit`: UX 2.0's atoms (tones, marks, chips, cards, keys), which every
 //!   part draws with.
+//! - `layout`: the narrowest screen on which no view's panes stack
+//!   (`SIDE_BY_SIDE`), `switchboard headless`'s size.
 //! - `picture`: a picture shown full size over its pane, in place of
 //!   Quick Look.
 //! - `message`: say.sh's box in the middle, which any key closes.
@@ -61,6 +63,7 @@ pub mod headless;
 pub mod images;
 pub mod keylist;
 pub mod kit;
+pub mod layout;
 pub mod menu;
 pub mod message;
 pub mod palette;

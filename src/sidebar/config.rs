@@ -21,10 +21,13 @@ pub struct Config {
     pub plugins: serde_json::Map<String, Value>,
 }
 
+/// The sidebar's width when sidebar.json names none.
+pub const WIDTH: u16 = 34;
+
 impl Default for Config {
     fn default() -> Config {
         Config {
-            width: 34,
+            width: WIDTH,
             min_window_width: 90,
             card_width: 56,
             card_height: 13,
