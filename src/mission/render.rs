@@ -1924,7 +1924,7 @@ fn board_cards(
             .collect()
     };
     let week_items = week.first().map(|w| in_group(w)).unwrap_or_default();
-    let side_w = beside_w(cols, SIDE_AT, SIDE_W);
+    let side_w = side_width(m, &view.key(), cols);
     let chosen_item = usize::try_from(m.cursor)
         .ok()
         .and_then(|c| view.data.items.get(c));
@@ -2076,6 +2076,20 @@ fn pane_beside(
     let Some(about) = about.filter(|_| side_w > 0) else {
         return Vec::new();
     };
+    // Its edge, which a drag moves, lit under the mouse and while dragged.
+    let resizable = crate::settings::is_on("resize_side_panes");
+    hits.extend((0..body).filter(|_| resizable).map(|i| HitBox {
+        y: (top_row + i) as u16,
+        x0: board_w as u16,
+        x1: board_w as u16,
+        spot: Spot::SideEdge(side_w),
+    }));
+    let edge_lit = m.side_drag.is_some() || matches!(m.hover, Some(Spot::SideEdge(_)));
+    let edge = if edge_lit {
+        fg(ACCENT)
+    } else {
+        fg(theme.faint)
+    };
     side_hits(
         about.last_top(body),
         board_w + 2,
@@ -2092,7 +2106,7 @@ fn pane_beside(
     let inner = side_w - 2 - usize::from(!bar.is_empty());
     for (i, row) in rows.iter_mut().enumerate() {
         let mut spans = fit(std::mem::take(row), board_w, Style::new());
-        spans.push(Span::styled("│ ", fg(theme.faint)));
+        spans.push(Span::styled("│ ", edge));
         spans.extend(fit(
             about.lines.get(i).cloned().unwrap_or_default(),
             inner,
@@ -2473,6 +2487,35 @@ fn beside_w(cols: usize, at: usize, share: usize) -> usize {
     }
 }
 
+/// The fewest columns a pane beside a board is resized to.
+pub const SIDE_MIN: usize = 30;
+/// The fewest columns resizing the pane leaves the PR and ticket boards.
+const BOARD_MIN: usize = 90;
+
+/// The columns the pane beside the board of the view `key` takes on a
+/// screen `cols` wide (its `View::key`): none where the board has it
+/// under its columns (or has none), else the width it was resized to
+/// (`Mission::side_widths`, by the pane resize keys or a drag of its
+/// edge), kept between `SIDE_MIN` and what leaves the board its narrowest,
+/// else, and with Settings' `resize_side_panes` off, its share of the
+/// screen.
+pub fn side_width(m: &Mission, key: &str, cols: usize) -> usize {
+    let (at, share, board_min) = match key {
+        "prs" | "tickets" => (SIDE_AT, SIDE_W, BOARD_MIN),
+        "autopilot" => (PILOT_SIDE_AT, PILOT_SIDE_W, PILOT_BOARD_AT),
+        _ => return 0,
+    };
+    if cols < at {
+        return 0;
+    }
+    match m.side_widths.get(key) {
+        Some(&w) if crate::settings::is_on("resize_side_panes") => {
+            w.min(cols.saturating_sub(board_min)).max(SIDE_MIN)
+        }
+        _ => beside_w(cols, at, share),
+    }
+}
+
 /// A diagram the pane beside a board places as an image once its lines are
 /// drawn (`ui::images::picture_cut`): its key among the snapshot's
 /// diagrams, the id its layout gave it, where the corner of what shows of
@@ -2537,6 +2580,14 @@ impl About {
 /// ticket's, or the plan of the Autopilot board's chosen item, whose pane
 /// sits beside the board or under it.
 pub fn description_beside(m: &Mission) -> Option<(&str, &'static str)> {
+    let (item, field, place) = item_beside(m)?;
+    Some((item.data[field].as_str()?, place))
+}
+
+/// The item the board in front shows in its pane, beside the board or
+/// under it, whether or not it has a description, with the field its
+/// description is in and the place its Markdown is read for.
+pub fn item_beside(m: &Mission) -> Option<(&Item, &'static str, &'static str)> {
     let view = m.current()?;
     let (field, place, board_at) = match view.id {
         ViewId::Prs => ("body", crate::views::pr::PLACE, 0),
@@ -2553,8 +2604,7 @@ pub fn description_beside(m: &Mission) -> Option<(&str, &'static str)> {
     if !board_with_the_pane {
         return None;
     }
-    let text = m.chosen_item()?.data[field].as_str()?;
-    Some((text, place))
+    Some((m.chosen_item()?, field, place))
 }
 
 /// Markdown laid out `cols` wide for the pane beside a board, as the PR
@@ -4682,7 +4732,7 @@ fn pilot_board(
     }
     let body = rows.saturating_sub(1 + lines.len());
     let top = lines.len();
-    let side_w = beside_w(cols, PILOT_SIDE_AT, PILOT_SIDE_W);
+    let side_w = side_width(m, "autopilot", cols);
     let board_w = cols - side_w;
     let held: Vec<Vec<usize>> = crate::autopilot::view::COLUMNS
         .iter()
@@ -5373,7 +5423,7 @@ fn label(title: &str, count: Option<usize>) -> String {
 
 /// The keys the footer names for the view in front, each a key and what it
 /// does (a pair with no key is words of its own).
-fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)> {
+fn hints(m: &Mission, view: Option<&View>, beside: bool, resizes: bool) -> Vec<(String, String)> {
     let pairs = |p: &[(&str, &str)]| -> Vec<(String, String)> {
         p.iter()
             .map(|(k, w)| (k.to_string(), w.to_string()))
@@ -5403,6 +5453,9 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
         ]);
         if beside && crate::settings::is_on("ctrl_w_panes") {
             out.extend(pairs(&[("C-w h l", "panes")]));
+        }
+        if resizes && !m.snap.side_keys.is_empty() {
+            out.push((m.snap.side_keys.clone(), "width".to_string()));
         }
         out.extend(pairs(&[("esc", "one view")]));
         return out;
@@ -5443,6 +5496,9 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
         }
         if (beside || panel) && crate::settings::is_on("ctrl_w_panes") {
             out.extend(pairs(&[("C-w h l", "panes")]));
+        }
+        if resizes && !m.snap.side_keys.is_empty() {
+            out.push((m.snap.side_keys.clone(), "width".to_string()));
         }
         out.extend(pairs(next));
         out.extend(pairs(close));
@@ -5839,6 +5895,23 @@ fn key_footer(
         // with nothing said of them (a filter being typed) are no keys.
         let keys: Vec<(crate::mux::input::Key, usize, usize)> = match footer_key(key) {
             _ if what.is_empty() => Vec::new(),
+            // Keys whole, one or a space apart (`C-h`, `M-h M-l`, the pane
+            // resize keys as keys.json binds them), each a control of its
+            // own; a group of single keys (`J K`, `C-w h l`) is no such.
+            None if key.split(' ').all(|t| t.chars().count() > 1)
+                && key
+                    .split(' ')
+                    .all(|t| crate::mux::input::Key::parse(t).is_some()) =>
+            {
+                let mut at = 0;
+                key.split(' ')
+                    .filter_map(|t| {
+                        let start = at;
+                        at += t.len() + 1;
+                        crate::mux::input::Key::parse(t).map(|k| (k, start, t.len()))
+                    })
+                    .collect()
+            }
             // `C-w` and its directions are a sequence, no key each.
             None if key.starts_with("C-") => Vec::new(),
             Some(k) => vec![(k, 0, key.len())],
@@ -6503,7 +6576,8 @@ pub(super) fn finish(
             let mut row = Row::default();
             row.put(" ", Style::new());
             let beside = hits.iter().any(|h| matches!(h.spot, Spot::Side(_)));
-            let pairs = hints(m, view, beside);
+            let resizes = hits.iter().any(|h| matches!(h.spot, Spot::SideEdge(_)));
+            let pairs = hints(m, view, beside, resizes);
             // Every footer's keys take a click and a Tab stop, with UX 2.0
             // or without.
             let y = rows.saturating_sub(1) as u16;
@@ -6603,6 +6677,7 @@ mod tests {
             theme: Theme::DARK,
             card: (56, 13),
             tab_focus: true,
+            side_keys: String::new(),
             close: false,
             now_secs: rules().now_secs(),
             tz: jiff::tz::TimeZone::UTC,
@@ -7470,7 +7545,7 @@ mod tests {
         for ux2 in [false, true] {
             let mut m = mission(vec![tab(1, "one")], Vec::new());
             m.snap.rules.ux2 = ux2;
-            let pairs = hints(&m, None, false);
+            let pairs = hints(&m, None, false, false);
             assert!(has(&pairs, "Enter", "actions") && has(&pairs, "m", "view actions"));
             for id in [
                 ViewId::Closed,
@@ -7494,7 +7569,7 @@ mod tests {
                 );
                 m.snap.rules.ux2 = ux2;
                 m.view = 1;
-                let pairs = hints(&m, m.current(), false);
+                let pairs = hints(&m, m.current(), false, false);
                 let enter = pairs
                     .iter()
                     .any(|(k, w)| k == "Enter" && w.starts_with("actions"))
@@ -8402,6 +8477,145 @@ mod tests {
             Some(240 - 75),
             "{}",
             wide[0]
+        );
+    }
+
+    #[test]
+    fn a_resized_pane_beside_a_board_keeps_its_width_within_bounds() {
+        let mut m = Mission::new();
+        assert_eq!(side_width(&m, "prs", 160), 50, "its share, unresized");
+        assert_eq!(side_width(&m, "slack", 160), 0, "no board of these");
+        m.side_widths.insert("prs".into(), 65);
+        assert_eq!(side_width(&m, "prs", 160), 65);
+        assert_eq!(side_width(&m, "tickets", 160), 50, "each board its own");
+        assert_eq!(side_width(&m, "prs", 120), 0, "under the board there");
+        m.side_widths.insert("prs".into(), 10);
+        assert_eq!(side_width(&m, "prs", 160), SIDE_MIN);
+        m.side_widths.insert("prs".into(), 150);
+        assert_eq!(side_width(&m, "prs", 160), 160 - BOARD_MIN);
+        m.side_widths.insert("autopilot".into(), 150);
+        assert_eq!(side_width(&m, "autopilot", 220), 220 - PILOT_BOARD_AT);
+    }
+
+    #[test]
+    fn a_resized_pane_lays_the_description_out_at_its_width_with_an_edge_to_drag() {
+        let body = "word ".repeat(40);
+        let items = vec![
+            Item::new("1", "ABC-7 Fix it")
+                .group("Todo")
+                .data(serde_json::json!({ "identifier": "ABC-7", "description": body })),
+        ];
+        let mut m = mission(
+            Vec::new(),
+            vec![list_view(ViewId::Tickets, "Tickets", items)],
+        );
+        m.snap.rules.ux2 = true;
+        m.snap.side_keys = "C-M-S-h C-M-S-l".into();
+        m.view = 1;
+        m.cursor = 0;
+        let columns = crate::sources::tickets::columns(true);
+        let drawn = |m: &Mission| {
+            let mut l = Vec::new();
+            let mut h = Vec::new();
+            board_cards(
+                &m.snap.views[0],
+                columns,
+                160,
+                20,
+                m,
+                &Theme::DARK,
+                0,
+                &mut l,
+                &mut h,
+            );
+            (texts(&l), h)
+        };
+        let (text, hits) = drawn(&m);
+        assert_eq!(
+            text[0].chars().position(|c| c == '│'),
+            Some(110),
+            "{}",
+            text[0]
+        );
+        m.side_widths.insert("tickets".into(), 70);
+        let (wide, hits_wide) = drawn(&m);
+        assert_eq!(
+            wide[0].chars().position(|c| c == '│'),
+            Some(90),
+            "{}",
+            wide[0]
+        );
+        let words = |text: &[String]| {
+            text.iter()
+                .filter_map(|l| l.split_once('│').map(|(_, r)| r.matches("word").count()))
+                .max()
+                .unwrap_or(0)
+        };
+        assert!(words(&wide) > words(&text), "laid out wider: {wide:#?}");
+        assert!(
+            hits.iter()
+                .any(|h| h.spot == Spot::SideEdge(50) && h.x0 == 110)
+        );
+        assert!(
+            hits_wide
+                .iter()
+                .any(|h| h.spot == Spot::SideEdge(70) && h.x0 == 90)
+        );
+        let footer = hints(&m, m.current(), true, true);
+        assert!(
+            footer.contains(&("C-M-S-h C-M-S-l".to_string(), "width".to_string())),
+            "{footer:?}"
+        );
+        // Keys bound whole, each a control of its own that presses it.
+        let pressed = |m: &Mission| -> Vec<String> {
+            let mut keys = Vec::new();
+            key_footer(
+                &hints(m, m.current(), true, true),
+                m,
+                &Theme::DARK,
+                (0, 200),
+                &mut keys,
+            );
+            keys.iter()
+                .filter_map(|h| match h.spot {
+                    Spot::Key(k) => Some(k.notation()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let defaults = pressed(&m);
+        assert!(
+            defaults.contains(&"C-M-S-h".to_string()) && defaults.contains(&"C-M-S-l".to_string()),
+            "{defaults:?}"
+        );
+        m.snap.side_keys = "C-h C-l".into();
+        let ctrl = pressed(&m);
+        assert!(
+            ctrl.contains(&"C-h".to_string()) && ctrl.contains(&"C-l".to_string()),
+            "{ctrl:?}"
+        );
+        m.snap.side_keys = "C-h".into();
+        assert!(pressed(&m).contains(&"C-h".to_string()), "one bound alone");
+        m.snap.side_keys = "M-h M-l".into();
+        let pressed = pressed(&m);
+        assert!(
+            pressed.contains(&"M-h".to_string()) && pressed.contains(&"M-l".to_string()),
+            "{pressed:?}"
+        );
+        assert_eq!(
+            pressed.iter().filter(|k| *k == "h").count(),
+            1,
+            "h once, for moving: {pressed:?}"
+        );
+        // With several views shown, the focused one's pane too.
+        m.grid = Some(super::super::grid::Grid::new(Default::default()));
+        let footer = hints(&m, m.current(), true, true);
+        assert!(footer.iter().any(|(_, w)| w == "width"), "{footer:?}");
+        m.grid = None;
+        let footer = hints(&m, m.current(), true, false);
+        assert!(
+            !footer.iter().any(|(_, w)| w == "width"),
+            "no pane beside: {footer:?}"
         );
     }
 

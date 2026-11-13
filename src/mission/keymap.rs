@@ -611,7 +611,13 @@ mod tests {
                 "panes",
                 "Move the pane's divider left",
                 "Move the pane's divider left by 1",
-                "Split pane to the left"
+                "Split pane to the left",
+                "Mission control",
+                super::super::serve::KEYS
+                    .iter()
+                    .find(|(k, _)| k.starts_with("C-M-S-h"))
+                    .unwrap()
+                    .1,
             ]
         );
         let by_tag = views::shown(&view, "#split", None, &views::Folds::default());

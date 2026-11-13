@@ -116,6 +116,10 @@ pub(super) const KEYS: &[(&str, &str)] = &[
         "the focus to the view's next pane round (C-w W the one before)",
     ),
     (
+        "C-M-S-h C-M-S-l",
+        "widen, narrow the pane beside the PR, ticket or Autopilot board (the pane resize keys, as keys.json binds them without the prefix, which the footer names); a drag of its edge too; each board keeps its width",
+    ),
+    (
         "↵",
         "the chosen card's or row's actions, in every view, what ↵ did before them first (so ↵↵ does it: on a tab, go there)",
     ),
@@ -329,6 +333,7 @@ impl Server {
         let fresh = !self.mission_open(client);
         if fresh {
             let mut m = Mission::new();
+            m.side_widths = super::side_widths();
             // Its first opening says how to get around it, in its own
             // footer (a tip's corner box would sit over its bar).
             if how == Opening::Tabs && settings::is_on("tips") && !self.tip_was_seen("mission") {
@@ -1118,6 +1123,7 @@ impl Server {
                 self.sidebar.config.card_height,
             ),
             tab_focus: settings::is_on("tab_focus"),
+            side_keys: super::side_keys(&self.bindings),
             close: settings::is_on("easy_keys") && settings::is_on("menu_mouse"),
             now_secs: now.div_euclid(1000),
             tz: jiff::tz::TimeZone::system(),
@@ -1945,6 +1951,7 @@ impl Server {
         if m.view != view {
             m.pane = None;
         }
+        save_side(&mut m);
         // A move leaves the snapshot standing; anything else may have
         // changed what it shows.
         let stands = only_moving && m.view == view;
@@ -2039,6 +2046,11 @@ impl Server {
             m.window_key = Some(now);
             return;
         }
+        // The pane resize keys, once a C-w waiting for its direction has
+        // had it.
+        if resize_key(&self.bindings, m, k) || resize_key(&self.bindings, m, key) {
+            return;
+        }
         let mut k = k;
         let press = matches!(k.code, KeyCode::Enter) || (k.code == KeyCode::Char(' ') && plain(&k));
         match m.focus {
@@ -2075,6 +2087,10 @@ impl Server {
                 k = Key::new(KeyCode::Enter, Mods::NONE)
             }
             _ => {}
+        }
+        // A resize key pressed from the footer with Tab's focus on it.
+        if resize_key(&self.bindings, m, k.normalized()) {
+            return;
         }
         // The focused pane's own keys, typed or pressed from the footer;
         // a control Tab's focus is on (a view's name, the filter) took
@@ -2561,7 +2577,9 @@ impl Server {
             return;
         }
         let mouse = Mouse { col, ..mouse };
-        match mouse_in(m, mouse, look.hover) {
+        let then = mouse_in(m, mouse, look.hover);
+        save_side(m);
+        match then {
             Then::Nothing => {}
             Then::Redraw => self.mission_dirty(client),
             Then::Close => self.mission_close(client),
@@ -5341,6 +5359,39 @@ fn count_with_git(tree: &Path) -> Option<(String, u32, Option<u32>, String)> {
     Some((default, ahead, right("@{upstream}...HEAD"), upstream))
 }
 
+/// Whether `key` is a pane resize key taken by the pane beside a board,
+/// whose left edge it moves as it moves a divider: left widening it, right
+/// narrowing it, nothing at its least or most. With no pane there, the key
+/// goes on as any other, as it did before there was one.
+fn resize_key(bindings: &crate::mux::keys::Bindings, m: &mut Mission, key: Key) -> bool {
+    let Some(crate::mux::keys::Action::Resize(dir, cells)) = bindings.root.get(&key) else {
+        return false;
+    };
+    if m.side_shown().is_none() || !settings::is_on("resize_side_panes") {
+        return false;
+    }
+    let cells = *cells as isize;
+    match dir {
+        crate::mux::Direction::Left => m.resize_side(-cells),
+        crate::mux::Direction::Right => m.resize_side(cells),
+        _ => false,
+    };
+    true
+}
+
+/// The pane beside a board's width kept in its file once it was resized and
+/// isn't being dragged.
+fn save_side(m: &mut Mission) {
+    if m.side_drag.is_some() {
+        return;
+    }
+    if let Some(key) = m.side_unsaved.take()
+        && let Some(&width) = m.side_widths.get(&key)
+    {
+        super::save_side_width(&key, width);
+    }
+}
+
 /// A mouse event on mission control, against where its parts were last
 /// drawn: the mouse moving lights what a click would press (not the chosen
 /// view or row, nor anything on the screen's edge, the way out of it); the
@@ -5352,6 +5403,7 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
     // sidebar, which never reaches here, leaves no drag behind.
     if mouse.kind == MouseKind::Press {
         m.pane_bar_drag = None;
+        m.side_drag = None;
     }
     let (cols, rows) = m.size;
     let hit = m
@@ -5432,6 +5484,21 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                 Some(bar) if m.side_bar_to(bar, m.pane_bar_drag) => Then::Redraw,
                 _ => Then::Nothing,
             }
+        }
+        // Dragging the pane's edge, from a press on it: the pane's left
+        // edge follows the mouse's column.
+        (MouseKind::Drag, MouseButton::Left) if m.side_drag.is_some() => {
+            let right = m.side_drag.unwrap_or_default();
+            let width = usize::from(right.saturating_sub(mouse.col));
+            if m.set_side_width(width) {
+                Then::Redraw
+            } else {
+                Then::Nothing
+            }
+        }
+        (MouseKind::Release, _) if m.side_drag.is_some() => {
+            m.side_drag = None;
+            Then::Redraw
         }
         (MouseKind::Release, _) if m.pane_bar_drag.is_some() => {
             m.pane_bar_drag = None;
@@ -5542,6 +5609,10 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                     Then::Prepare
                 }
                 Spot::Side(_) => Then::Redraw,
+                Spot::SideEdge(width) => {
+                    m.side_drag = Some(mouse.col + width as u16);
+                    Then::Redraw
+                }
                 Spot::PaneBar { row, body, total } => {
                     m.pane_bar_drag = Some(m.side_bar_grab((row, body, total)));
                     if m.side_bar_to((row, body, total), None) {
@@ -7246,6 +7317,95 @@ mod tests {
         assert_eq!(mouse_in(&mut m, click, true), Then::Enter);
         assert_eq!(m.cursor, 2);
         assert!(m.filter.as_ref().is_some_and(|f| !f.typing));
+    }
+
+    /// The Tickets board with UX 2.0 on a screen 160 wide, its one ticket
+    /// chosen, its description beside it.
+    fn tickets_board() -> Mission {
+        let ticket = Item::new("1", "Fix it")
+            .group("Todo")
+            .data(serde_json::json!({ "description": "Do it." }));
+        let mut tickets = list("Tickets", 0);
+        tickets.id = ViewId::Tickets;
+        tickets.data.items = vec![ticket];
+        let mut m = mission(1, vec![tickets]);
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.size = (160, 30);
+        m
+    }
+
+    #[test]
+    fn the_resize_keys_move_the_left_edge_of_the_pane_beside_the_board_in_front() {
+        assert_eq!(
+            super::super::side_keys(&crate::mux::keys::Bindings::default()),
+            "C-M-S-h C-M-S-l",
+            "as the footer names them"
+        );
+        let mut m = tickets_board();
+        assert!(m.resize_side(-5), "left widens it");
+        assert_eq!(m.side_widths.get("tickets"), Some(&55));
+        assert_eq!(m.side_unsaved.as_deref(), Some("tickets"));
+        assert!(m.resize_side(10), "right narrows it");
+        assert_eq!(m.side_widths.get("tickets"), Some(&45));
+        assert_eq!(m.side_widths.get("prs"), None, "the board in front alone");
+        m.side_widths
+            .insert("tickets".into(), super::super::render::SIDE_MIN);
+        assert!(!m.resize_side(5), "no narrower than the least");
+        // With no pane shown (a narrow screen has it under the board),
+        // nothing.
+        m.size = (120, 30);
+        assert!(!m.resize_side(-5));
+        assert_eq!(
+            m.side_widths.get("tickets"),
+            Some(&super::super::render::SIDE_MIN)
+        );
+        // A ticket with no description shows its pane all the same, and
+        // resizes.
+        m.size = (160, 30);
+        m.snap.views[0].data.items[0].data = serde_json::json!({});
+        assert!(m.resize_side(-5));
+    }
+
+    #[test]
+    fn a_drag_of_the_panes_edge_resizes_it_to_the_mouse() {
+        let mut m = tickets_board();
+        let (_, hits) = super::super::render::screen(&m, 160, 30);
+        m.hits = hits;
+        let edge = *m
+            .hits
+            .iter()
+            .find(|h| matches!(h.spot, Spot::SideEdge(_)))
+            .expect("the pane's edge");
+        assert_eq!((edge.x0, edge.spot), (110, Spot::SideEdge(50)));
+        let mouse = |kind, col| Mouse {
+            kind,
+            button: MouseButton::Left,
+            col,
+            row: edge.y,
+            mods: Mods::NONE,
+        };
+        assert_eq!(
+            mouse_in(&mut m, mouse(MouseKind::Press, 110), true),
+            Then::Redraw
+        );
+        assert_eq!(m.side_drag, Some(160));
+        assert_eq!(
+            mouse_in(&mut m, mouse(MouseKind::Drag, 95), true),
+            Then::Redraw
+        );
+        assert_eq!(m.side_widths.get("tickets"), Some(&65));
+        save_side(&mut m);
+        assert_eq!(
+            m.side_unsaved.as_deref(),
+            Some("tickets"),
+            "kept while dragged"
+        );
+        assert_eq!(
+            mouse_in(&mut m, mouse(MouseKind::Release, 95), true),
+            Then::Redraw
+        );
+        assert_eq!(m.side_drag, None);
     }
 
     #[test]

@@ -139,6 +139,9 @@ pub enum Spot {
     /// the most the pane's first line shown can be, for `J` and the wheel
     /// to stop at its end.
     Side(usize),
+    /// The left edge of the pane beside a board, on one of its rows, with
+    /// the pane's width: a drag moves it, resizing the pane.
+    SideEdge(usize),
     /// A row of the scroll bar of the pane beside a board: the row, the
     /// pane's height and its lines in all; a press pages the pane toward
     /// it, a drag moves the pane with it.
@@ -200,6 +203,10 @@ pub struct Snapshot {
     /// sidebar.json's cardWidth and cardHeight.
     pub card: (u16, u16),
     pub tab_focus: bool,
+    /// The keys the pane resize actions are bound to left and right
+    /// (`side_keys`), which the footer names beside a board's pane; empty
+    /// with neither bound.
+    pub side_keys: String,
     /// Easy mode's × at the bar's right end.
     pub close: bool,
     pub now_secs: i64,
@@ -273,6 +280,7 @@ impl Default for Snapshot {
             theme: Theme::DARK,
             card: (56, 13),
             tab_focus: true,
+            side_keys: String::new(),
             close: false,
             now_secs: 0,
             tz: jiff::tz::TimeZone::UTC,
@@ -383,6 +391,18 @@ pub struct Mission {
     /// The pane's scroll bar is being dragged (`Spot::PaneBar`), from where
     /// (`kit::scroll_grab`).
     pub pane_bar_drag: Option<crate::ui::kit::Grab>,
+    /// The columns the pane beside each board was resized to, by its
+    /// view's key (`View::key`), read from `SIDE_FILE` as mission control
+    /// opens; a board missing takes its share of the screen
+    /// (`render::side_width`).
+    pub side_widths: HashMap<String, usize>,
+    /// The pane's edge is being dragged (`Spot::SideEdge`): the column
+    /// just past the pane's right end, which the mouse's column is taken
+    /// from for its width.
+    pub side_drag: Option<u16>,
+    /// The view whose pane was resized since its width was last saved in
+    /// `SIDE_FILE`, which the server does once a drag is let go.
+    pub side_unsaved: Option<String>,
     /// The CI view's chosen failed check: the PR's item id and the check's
     /// key (`views::ci_check_key`, its name and page), so a look that changes which checks fail keeps the same one
     /// chosen; none, another item's, or a check no longer failing is the
@@ -483,6 +503,9 @@ impl Mission {
             keep_autopilot: false,
             side: None,
             pane_bar_drag: None,
+            side_widths: HashMap::new(),
+            side_drag: None,
+            side_unsaved: None,
             ci_check: None,
             notice_kind: 1,
             unfolded: HashSet::new(),
@@ -752,6 +775,43 @@ impl Mission {
         to != was
     }
 
+    /// The view in front's key and the columns its board's pane takes now,
+    /// while it shows one beside the board; `None` with no pane there.
+    fn side_shown(&self) -> Option<(String, usize)> {
+        let view = self.current()?;
+        let key = view.key();
+        let width = render::side_width(self, &key, self.laid().0 as usize);
+        let shown = width > 0 && render::item_beside(self).is_some();
+        shown.then_some((key, width))
+    }
+
+    /// Moves the left edge of the pane beside the board in front by
+    /// `cells` columns, left (widening it) when negative, kept as
+    /// `render::side_width` keeps it, for the server to save
+    /// (`side_unsaved`); false with no pane shown, or when it didn't move.
+    pub fn resize_side(&mut self, cells: isize) -> bool {
+        let Some((_, width)) = self.side_shown() else {
+            return false;
+        };
+        self.set_side_width(width.saturating_add_signed(-cells))
+    }
+
+    /// The pane beside the board in front made `width` columns wide, as
+    /// `resize_side` makes it; false when it didn't change.
+    pub fn set_side_width(&mut self, width: usize) -> bool {
+        let Some((key, was)) = self.side_shown() else {
+            return false;
+        };
+        self.side_widths.insert(key.clone(), width);
+        let now = render::side_width(self, &key, self.laid().0 as usize);
+        self.side_widths.insert(key.clone(), now);
+        if now == was {
+            return false;
+        }
+        self.side_unsaved = Some(key);
+        true
+    }
+
     /// Lets the pane's scroll go once another view or item is chosen, so
     /// coming back to the one it was made on shows that pane from the top.
     pub fn forget_side_elsewhere(&mut self) {
@@ -866,6 +926,49 @@ impl Mission {
 impl Default for Mission {
     fn default() -> Mission {
         Mission::new()
+    }
+}
+
+/// The keys `bindings` gives the pane resize actions left and right, as
+/// the footer names them, each whole so a click on it presses it: both a
+/// space apart, or the one bound; each the shortest bound to it.
+pub fn side_keys(bindings: &crate::mux::keys::Bindings) -> String {
+    use crate::mux::Direction;
+    use crate::mux::keys::Action;
+    let key_for = |toward: Direction| {
+        bindings
+            .root
+            .iter()
+            .filter(|(_, a)| matches!(a, Action::Resize(d, _) if *d == toward))
+            .map(|(k, _)| crate::ui::palette::shown_key(&k.notation()))
+            .min_by(|a, b| (a.len(), a).cmp(&(b.len(), b)))
+    };
+    match (key_for(Direction::Left), key_for(Direction::Right)) {
+        (Some(left), Some(right)) => format!("{left} {right}"),
+        (Some(one), None) | (None, Some(one)) => one,
+        (None, None) => String::new(),
+    }
+}
+
+/// Where the widths the panes beside the boards were resized to are kept,
+/// in the state directory: `{ "<view key>": <columns> }`.
+const SIDE_FILE: &str = "mission-side.json";
+
+/// The widths kept in `SIDE_FILE`, none when it can't be read.
+pub fn side_widths() -> HashMap<String, usize> {
+    std::fs::read_to_string(crate::paths::state_dir().join(SIDE_FILE))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+/// `width` kept in `SIDE_FILE` for the view `key`, beside what another
+/// client kept for the others.
+pub fn save_side_width(key: &str, width: usize) {
+    let mut widths = side_widths();
+    widths.insert(key.to_string(), width);
+    if let Ok(text) = serde_json::to_string_pretty(&widths) {
+        let _ = crate::util::write_atomic(crate::paths::state_dir().join(SIDE_FILE), text);
     }
 }
 

@@ -1008,6 +1008,13 @@
     "default": true
   },
   {
+    "key": "resize_side_panes",
+    "category": "Help",
+    "label": "Resize the pane beside a board",
+    "description": "In mission control, the pane resize keys (C-M-S-h and C-M-S-l) and a drag of its left edge widen or narrow the pane beside the PRs, Tickets and Autopilot boards, each board keeping its width. Off, the pane keeps its share of the screen and the keys and its edge do nothing there",
+    "default": true
+  },
+  {
     "key": "ctrl_w_panes",
     "category": "Help",
     "label": "C-w then h, j, k or l moves between panes",

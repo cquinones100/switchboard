@@ -2230,3 +2230,66 @@ fn a_change_to_claude_codes_config_asks_about_a_connector_down() {
     }
     client.wait_text("Fathom is connected again.");
 }
+
+/// With UX 2.0 the pane beside the Tickets board widens with the pane
+/// resize key (C-M-S-h by default), the board narrowing, and keeps its
+/// width once mission control is opened again, read from
+/// `mission-side.json`.
+#[test]
+fn the_pane_beside_the_tickets_board_resizes_with_the_pane_keys_and_keeps_its_width() {
+    use common::http::{Fake, Reply};
+    let linear = Fake::linear("test-key", |request| {
+        if !request.query().contains("assignedIssues") {
+            return None;
+        }
+        let issue = json!({
+            "identifier": "ABC-7", "title": "Hold the landing lock",
+            "description": "What it is about.", "url": "https://linear.app/acme/issue/ABC-7",
+            "priority": 2, "priorityLabel": "High", "updatedAt": jiff::Timestamp::now().to_string(),
+            "completedAt": null, "canceledAt": null,
+            "state": { "name": "Todo", "type": "unstarted" }, "project": null,
+        });
+        Some(Reply::json(
+            200,
+            json!({ "data": { "viewer": {
+                "assignedIssues": { "nodes": [issue] }, "canceled": { "nodes": [] },
+            } } }),
+        ))
+    });
+    let server = TestServer::start_with_env(&[
+        ("LINEAR_API_KEY", "test-key"),
+        ("SWITCHBOARD_LINEAR_API", &linear.graphql_url()),
+    ]);
+    settings(
+        &server,
+        json!({"ux2": true, "linear": true, "photos": false}),
+    );
+    let mut client = server.attach(200, 40);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("vtickets\r");
+    let edge = |s: &[String]| {
+        s.iter()
+            .find(|l| l.contains("What it is about."))
+            .map(|l| column_of(l, "│ What it is about."))
+    };
+    let before = client.wait_for("the ticket's description beside the board", |s| {
+        edge(s).is_some()
+    });
+    let before = edge(&before).unwrap();
+    client.type_text("\x1b[104;8u");
+    client.wait_for("the pane five columns wider", |s| {
+        edge(s) == Some(before - 5)
+    });
+    let kept =
+        std::fs::read_to_string(server.state.join("mission-side.json")).expect("the width kept");
+    let kept: Value = serde_json::from_str(&kept).unwrap();
+    assert!(kept["tickets"].as_u64().is_some(), "{kept}");
+    client.type_text("q");
+    client.wait_for("mission control closed", |s| edge(s).is_none());
+    open(&mut client);
+    client.type_text("vtickets\r");
+    client.wait_for("the width kept on opening again", |s| {
+        edge(s) == Some(before - 5)
+    });
+}
