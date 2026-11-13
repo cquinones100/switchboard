@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use super::{Direction, PaneId};
 
 /// The widest a lone pane gets (Settings' `lone_pane_width`), in columns;
-/// none when it is off.
+/// none when it is off, as it is unless someone chooses a width.
 pub fn lone_width() -> Option<u16> {
     let value = crate::settings::cached("lone_pane_width")?;
     value

@@ -1683,19 +1683,19 @@ mod tests {
         assert_eq!(
             labels(&lone),
             [
-                "200 columns",
-                "240 columns",
-                "off",
                 "120 columns",
                 "140 columns",
-                "165 columns (now)",
+                "165 columns",
+                "200 columns",
+                "240 columns",
+                "off (now)",
                 "Columns…"
             ]
         );
         let picked = every_choice(&lone).swap_remove(0).act;
         assert!(matches!(
             picked,
-            Do::SetSetting { ref key, ref value } if key == "lone_pane_width" && value == "200"
+            Do::SetSetting { ref key, ref value } if key == "lone_pane_width" && value == "120"
         ));
         lone.value = json!("230");
         assert!(lone.valid(&lone.value));
