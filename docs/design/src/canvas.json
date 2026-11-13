@@ -296,6 +296,22 @@
     "NotesHistory.dc.html": {
       "title": "70. M-o in a note, o in the list: every note opened lately, the last 20, in the finder's box",
       "page": "design"
+    },
+    "ReopenTabMenu.dc.html": {
+      "title": "71. Enter on a closed tab in Reopen: reopen it, its note, its directory, or forget it",
+      "page": "design"
+    },
+    "ReopenSessionMenu.dc.html": {
+      "title": "72. Enter on a past session in Reopen: resume it, its diff, its PR, or remove its worktree after asking",
+      "page": "design"
+    },
+    "ReopenWorktreeMenu.dc.html": {
+      "title": "73. Enter on a worktree with no tab in Reopen: open a tab and resume its Claude, its diff, lazygit, or remove it after asking",
+      "page": "design"
+    },
+    "ReopenMergedMenu.dc.html": {
+      "title": "74. Enter on Reopen's folded merged worktrees: show them, or remove them all after asking",
+      "page": "design"
     }
   }
 }

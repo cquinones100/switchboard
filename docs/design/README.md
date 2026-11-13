@@ -43,6 +43,10 @@ The tabs and where each piece of work stands.
 - [30. A new routine: its name, directory, schedule, tab and prompt in one box](https://cquinones100.github.io/switchboard/design/30.html)
 - [17. Work map, replaced by Reopen (18): every piece of work, with a tab or without](https://cquinones100.github.io/switchboard/design/17.html)
 - [18. Reopen: closed tabs, past sessions and worktrees no tab has open, in one view, in place of the Work map](https://cquinones100.github.io/switchboard/design/18.html)
+- [71. Enter on a closed tab in Reopen: reopen it, its note, its directory, or forget it](https://cquinones100.github.io/switchboard/design/71.html)
+- [72. Enter on a past session in Reopen: resume it, its diff, its PR, or remove its worktree after asking](https://cquinones100.github.io/switchboard/design/72.html)
+- [73. Enter on a worktree with no tab in Reopen: open a tab and resume its Claude, its diff, lazygit, or remove it after asking](https://cquinones100.github.io/switchboard/design/73.html)
+- [74. Enter on Reopen's folded merged worktrees: show them, or remove them all after asking](https://cquinones100.github.io/switchboard/design/74.html)
 
 ## Mission control · code
 
