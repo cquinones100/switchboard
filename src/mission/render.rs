@@ -691,17 +691,24 @@ fn context_meter(tab: &TabModel, theme: &Theme) -> Vec<Span<'static>> {
     out
 }
 
-/// A card's foot: its branch dim, its context meter, its checks' chip at
-/// the right edge; the meter goes first where the card is too narrow.
+/// A card's foot: its branch dim, how long the tab has been open dim, its
+/// context meter, its checks' chip at the right edge; the age goes first
+/// where the card is too narrow, then the meter.
 fn card_foot(
     tab: &TabModel,
     branch: Option<&str>,
     inner: usize,
+    now_secs: i64,
     caps: bool,
     theme: &Theme,
 ) -> Vec<Span<'static>> {
     let chip = checks_chip(tab, caps, theme);
     let chip_w = spans_width(&chip);
+    let opened = tab
+        .opened
+        .map(|at| format!("opened {}", text::span(now_secs - at)))
+        .unwrap_or_default();
+    let opened_w = width(&opened);
     let meter = context_meter(tab, theme);
     let meter_w = spans_width(&meter);
     let at = kit::columns(
@@ -710,6 +717,11 @@ fn card_foot(
                 weight: 1,
                 min: 1,
                 max: None,
+            },
+            Col::Fixed {
+                min: opened_w,
+                natural: opened_w,
+                cap: opened_w,
             },
             Col::Fixed {
                 min: meter_w,
@@ -723,7 +735,7 @@ fn card_foot(
         ],
         inner,
         1,
-        &[1],
+        &[1, 2],
     );
     let mut line = Vec::new();
     if let Some(Some(place)) = at.first() {
@@ -737,11 +749,20 @@ fn card_foot(
         );
     }
     if let Some(Some(place)) = at.get(1)
+        && !opened.is_empty()
+    {
+        kit::place(
+            &mut line,
+            vec![Span::styled(opened, Tone::Dim.style(theme))],
+            *place,
+        );
+    }
+    if let Some(Some(place)) = at.get(2)
         && !meter.is_empty()
     {
         kit::place(&mut line, meter, *place);
     }
-    if let Some(Some(place)) = at.get(2) {
+    if let Some(Some(place)) = at.get(3) {
         kit::place(&mut line, chip, *place);
     }
     line
@@ -1225,7 +1246,14 @@ fn card_2(
     let mut lines: Vec<Vec<Span<'static>>> = inside.lines.into_iter().take(rows).collect();
     lines.resize(rows, Vec::new());
     let branch = look.screen.and_then(|s| s.branch.as_deref());
-    lines.push(card_foot(tab, branch, inner, snap.caps, theme));
+    lines.push(card_foot(
+        tab,
+        branch,
+        inner,
+        r.now_secs(),
+        snap.caps,
+        theme,
+    ));
     kit::open_card(
         look.w,
         look.h,
@@ -6538,6 +6566,24 @@ mod tests {
         assert_eq!(at("rebasing and testing again"), "testing…");
     }
 
+    #[test]
+    fn a_cards_foot_says_how_long_its_tab_has_been_open_and_drops_it_first() {
+        let words = |spans: Vec<Span<'static>>| -> String {
+            spans.iter().map(|s| s.content.as_ref()).collect()
+        };
+        let mut t = tab(1, "work");
+        t.opened = Some(1_000);
+        let now = 1_000 + 72 * 60;
+        let wide = words(card_foot(&t, Some("main"), 50, now, false, &Theme::DARK));
+        assert!(wide.starts_with("main"), "{wide}");
+        assert!(wide.contains("opened 1h12m"), "{wide}");
+        let narrow = words(card_foot(&t, Some("main"), 16, now, false, &Theme::DARK));
+        assert!(!narrow.contains("opened"), "{narrow}");
+        t.opened = None;
+        let none = words(card_foot(&t, Some("main"), 50, now, false, &Theme::DARK));
+        assert!(!none.contains("opened"), "{none}");
+    }
+
     fn tab(n: u32, name: &str) -> TabModel {
         let mut t = TabModel::new(TabId(n), n as usize, name);
         t.claude = Some(SessionRef {
@@ -8924,6 +8970,8 @@ mod tests {
             in_note: true,
             started: None,
             ended: None,
+            phases: Vec::new(),
+            now: 0,
         }
     }
 

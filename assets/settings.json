@@ -512,6 +512,13 @@
     "default": true
   },
   {
+    "key": "tab_age",
+    "category": "Tabs and status bar",
+    "label": "Tab age and stage times",
+    "description": "Shows how long each tab has been open, as 'opened 1h12m' in the UX 2.0 tab header and on mission control's cards, and how long each stage of an autopilot tab took (or has taken so far) on its board; off, none of them is shown, while a landed item's Done line still says how long it took, since the landing writes it",
+    "default": true
+  },
+  {
     "key": "tab_back_forward",
     "category": "Tabs and status bar",
     "label": "M-[ and M-] go back and forward",

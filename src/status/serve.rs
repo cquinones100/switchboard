@@ -18,12 +18,15 @@ use crate::mux::proto::ServerMsg;
 use crate::mux::server::{ClientId, Server, Session};
 use crate::{paths, settings, util};
 
+/// The minute the UX 2.0 headers were last drawn again for their ages.
+static HEADER_MINUTE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
 impl Server {
     /// On the server's tick: the status line's rows from the
     /// `second_status` setting, every tab laid out again when they change;
     /// the health light checked again; and with the second status line on,
     /// every client drawn again for the times it shows ("waiting on you for
-    /// 4m").
+    /// 4m"), and with UX 2.0 each minute for the headers' ages.
     pub fn status_tick(&mut self) {
         // UX 2.0 has no status line, and a header at the top of each tab.
         let ux2 = settings::is_on("ux2");
@@ -63,6 +66,15 @@ impl Server {
         }
         if want == 2 {
             self.push_look();
+            self.dirty_all();
+        }
+        // The UX 2.0 header's ages ("opened 1h12m") move by the minute,
+        // with nothing else to draw it again while the sidebar is hidden.
+        let minute = util::now_secs() / 60;
+        if ux2
+            && settings::is_on("tab_age")
+            && HEADER_MINUTE.swap(minute, Ordering::Relaxed) != minute
+        {
             self.dirty_all();
         }
     }

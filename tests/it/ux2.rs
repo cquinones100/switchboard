@@ -596,3 +596,31 @@ fn with_ux2_the_header_says_how_full_the_context_is_once_the_statusline_draws() 
     hook(&server, &pane, "SessionStart", json!({"source": "clear"}));
     client.wait_for("the context gone", |s| !s[0].contains("ctx"));
 }
+
+#[test]
+fn with_ux2_the_header_says_how_long_the_tab_has_been_open() {
+    let server = TestServer::start();
+    settings(&server, json!({"ux2": true}));
+    let mut client = server.attach(120, 24);
+    client.wait_for("the header", |s| s[2].contains("M-c Claude"));
+    let tab = server.list()["sessions"][0]["tabs"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let opened = server.ok(&["show", "-t", &tab, "@tab_opened"]);
+    let opened: i64 = opened.trim().parse().expect("set as the tab opened");
+    server.ok(&[
+        "set",
+        "-t",
+        &tab,
+        "@tab_opened",
+        &(opened - 72 * 60).to_string(),
+    ]);
+    client.wait_for("its age in the header", |s| s[0].contains("opened 1h12m"));
+    assert_eq!(server.ok(&["show", "-t", &tab, "@tab_age"]).trim(), "1h12m");
+    // Off, the header says nothing of it.
+    settings(&server, json!({"ux2": true, "tab_age": false}));
+    client.wait_for("its age gone", |s| {
+        s[2].contains("M-c Claude") && !s[0].contains("opened")
+    });
+}

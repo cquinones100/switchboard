@@ -148,6 +148,9 @@ pub struct Header {
     pub state: Option<State>,
     /// How long it has been in that state (`4m`), empty when not known.
     pub age: String,
+    /// How long the tab has been open (`1h12m`), empty when not known or
+    /// with the tab_age setting off.
+    pub opened: String,
     pub color: Option<Color>,
     pub shown: Shown,
     /// The tab M-a goes to next, its number and name.
@@ -248,6 +251,9 @@ pub fn draw(
         } else {
             format!("{} {}", s.name(), h.age)
         });
+    }
+    if !h.opened.is_empty() {
+        facts.push(format!("opened {}", h.opened));
     }
     if let Some(used) = h.context {
         facts.push(format!("ctx {used}%"));
@@ -374,6 +380,7 @@ mod tests {
             branch: String::new(),
             state: Some(State::Working),
             age: "2m".into(),
+            opened: String::new(),
             color: None,
             shown,
             next: None,
@@ -423,6 +430,36 @@ mod tests {
             "{}",
             text(&buf, 0)
         );
+    }
+
+    #[test]
+    fn says_how_long_the_tab_has_been_open_after_the_state() {
+        let area = Rect::new(0, 0, 90, ROWS);
+        let mut buf = Buffer::empty(area);
+        let h = Header {
+            opened: "1h12m".into(),
+            context: Some(62),
+            ..header(Shown::Claude)
+        };
+        draw(&mut buf, area, &h, None, &Palette::DARK, false, false);
+        assert!(
+            text(&buf, 0)
+                .starts_with(" ⠹ planning   ~/switchboard · working 2m · opened 1h12m · ctx 62%"),
+            "{}",
+            text(&buf, 0)
+        );
+        // The moment the history shows keeps its room: the age gives way.
+        let narrow = Rect::new(0, 0, 60, ROWS);
+        let mut buf = Buffer::empty(narrow);
+        let h = Header {
+            opened: "1h12m".into(),
+            viewing: Some("viewing 13:41, 51 minutes ago".into()),
+            ..header(Shown::Claude)
+        };
+        draw(&mut buf, narrow, &h, None, &Palette::DARK, false, false);
+        let first = text(&buf, 0);
+        assert!(first.ends_with("viewing 13:41, 51 minutes ago"), "{first}");
+        assert!(!first.contains("opened 1h12m"), "{first}");
     }
 
     #[test]
@@ -659,6 +696,7 @@ mod history_tests {
             branch: String::new(),
             state: None,
             age: String::new(),
+            opened: String::new(),
             color: None,
             shown: Shown::Claude,
             next: Some((3, "billing".into())),
@@ -693,6 +731,7 @@ mod viewing_tests {
             branch: "note/a-long-branch-name".into(),
             state: None,
             age: String::new(),
+            opened: String::new(),
             color: None,
             shown: Shown::Claude,
             next: None,

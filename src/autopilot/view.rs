@@ -96,6 +96,11 @@ pub struct Row {
     /// When it landed, in seconds (`@autopilot_landed_at`, else
     /// `@autopilot_left`, or a closed landing's `at`): none while it works.
     pub ended: Option<i64>,
+    /// Each step its Claude's loop said it was at, with when it began
+    /// (`PaneAgent::phases`), for each stage's time; none for a closed tab.
+    pub phases: Vec<(String, i64)>,
+    /// Now, in seconds, for the time of a stage still running.
+    pub now: i64,
 }
 
 /// An option's time in seconds, none when unset or zero.
@@ -131,8 +136,79 @@ fn waiting() -> Cell {
     ("waiting", "waiting".into())
 }
 
-/// A tab's eight stages, as the module's comment says.
+/// A tab's eight stages, as the module's comment says, each done or
+/// running one with how long it took or has taken so far (`timed`), with
+/// the tab_age setting on.
 pub fn stages(r: &Row) -> [Cell; 8] {
+    let cells = cells(r);
+    if crate::settings::is_on("tab_age") {
+        timed(cells, r)
+    } else {
+        cells
+    }
+}
+
+/// How long the phases matching `which` took, together: each from when
+/// it began to when the next began, the last to when the tab landed, else
+/// now, none past the landing; none when no phase matches.
+fn phase_time(r: &Row, which: impl Fn(&str) -> bool) -> Option<i64> {
+    let end = r.ended.unwrap_or(r.now);
+    let mut total = None;
+    for (at, (phase, began)) in r.phases.iter().enumerate() {
+        if phase.is_empty() || !which(phase) {
+            continue;
+        }
+        // A step after the landing (cleaning up) doesn't stretch one before it.
+        let until = r
+            .phases
+            .get(at + 1)
+            .map_or(end, |(_, next)| (*next).min(end));
+        *total.get_or_insert(0) += (until - began).max(0);
+    }
+    total
+}
+
+/// The stages' cells with their times: the work from the tab's opening to
+/// its first phase (now, while there is none), the tests (`testing`,
+/// `testing in CI`, `testing again`, `checking after the rebase`), the
+/// review (`reviewing`, `reviewing again`), the wait for the landing lock
+/// and the push, each as its phases said; a failed or waiting cell keeps
+/// its words alone.
+fn timed(mut cells: [Cell; 8], r: &Row) -> [Cell; 8] {
+    let work = r.started.and_then(|started| {
+        let until = r
+            .phases
+            .first()
+            .map(|(_, at)| *at)
+            .or(r.ended)
+            .unwrap_or(r.now);
+        // Done with no phase to end it at, the work's end isn't known.
+        (cells[1].0 == "running" || !r.phases.is_empty()).then_some(until - started)
+    });
+    let times = [
+        (1, work),
+        (
+            2,
+            phase_time(r, |p| p.contains("testing") || p.starts_with("checking")),
+        ),
+        (3, phase_time(r, |p| p.starts_with("reviewing"))),
+        (5, phase_time(r, |p| p == "waiting for the landing lock")),
+        (6, phase_time(r, |p| p.starts_with("pushing"))),
+    ];
+    for (at, time) in times {
+        let (look, words) = &mut cells[at];
+        if let Some(time) = time
+            && matches!(*look, "done" | "running" | "queued")
+        {
+            words.push(' ');
+            words.push_str(&crate::sidebar::text::span(time));
+        }
+    }
+    cells
+}
+
+/// A tab's eight stages' cells, without their times.
+fn cells(r: &Row) -> [Cell; 8] {
     let mut out: [Cell; 8] = std::array::from_fn(|_| waiting());
     let phase = r.phase.as_deref().unwrap_or("");
     out[0] = if r.was_in || r.left {
@@ -202,6 +278,16 @@ pub fn stages(r: &Row) -> [Cell; 8] {
         out[2] = ("running", "testing…".into());
     } else if let Some(rest) = phase.strip_prefix("tests failed") {
         out[2] = failed(rest, "failed");
+    } else if phase.starts_with("asking") {
+        // Asking before the push: the tests and the review it ran are
+        // behind it; one the repository skips stays waiting.
+        let ran = |which: fn(&str) -> bool| r.phases.iter().any(|(p, _)| which(p));
+        if ran(|p| p.contains("testing")) {
+            out[2] = done("passed");
+        }
+        if ran(|p| p.starts_with("reviewing")) {
+            out[3] = done("clean");
+        }
     }
     out
 }
@@ -502,6 +588,8 @@ mod tests {
             in_note: true,
             started: None,
             ended: None,
+            phases: Vec::new(),
+            now: 0,
         }
     }
 
@@ -531,6 +619,66 @@ mod tests {
         let s = stages(&r);
         assert_eq!(s[6], done("on its own"));
         assert_eq!(s[7].0, "waiting");
+    }
+
+    #[test]
+    fn asking_to_land_marks_only_the_checks_its_landing_ran() {
+        let mut r = row(TabState::Waiting);
+        r.loop_skill = Some("queue".into());
+        r.phase = Some("asking to land".into());
+        r.phases = vec![("testing".into(), 1), ("asking to land".into(), 2)];
+        let s = cells(&r);
+        assert_eq!(s[2], done("passed"));
+        assert_eq!(s[3].0, "waiting", "no review ran: {s:?}");
+        r.phases = vec![("asking to land".into(), 2)];
+        assert_eq!(cells(&r)[2].0, "waiting");
+    }
+
+    #[test]
+    fn each_stage_says_how_long_it_took_and_a_running_one_how_long_so_far() {
+        let mut r = row(TabState::Working);
+        r.started = Some(1_000);
+        r.now = 1_000 + 12 * 60;
+        let s = timed(cells(&r), &r);
+        assert_eq!(s[1], ("running", "working… 12m".to_string()));
+        // Its landing: worked 20m, tested 3m, reviewed 1h12m, waited 4m
+        // for the lock in line, then tested again 2m, and pushing now.
+        let at = |m: i64| 1_000 + m * 60;
+        r.loop_skill = Some("queue".into());
+        r.phases = vec![
+            ("testing".into(), at(20)),
+            ("reviewing".into(), at(23)),
+            // The question before the push is no part of the review.
+            ("asking to land".into(), at(95)),
+            ("waiting for the landing lock".into(), at(95)),
+            ("testing again".into(), at(99)),
+            ("pushing".into(), at(101)),
+        ];
+        r.phase = Some("pushing".into());
+        r.landing = Some(json!({ "holding": true, "phase": "pushing" }));
+        r.now = at(102);
+        let s = timed(cells(&r), &r);
+        assert_eq!(s[1], done("done 20m"));
+        assert_eq!(s[2], done("passed 5m"));
+        assert_eq!(s[3], done("clean 1h12m"));
+        assert_eq!(s[4], done("none"), "the leak check has no phase");
+        assert_eq!(s[5], done("held 4m"));
+        assert_eq!(s[6], ("running", "pushing… 1m".to_string()));
+        // Landed: the push ends where the tab landed, not now, nor where a
+        // step after the landing began.
+        r.left = true;
+        r.ended = Some(at(103));
+        r.now = at(500);
+        assert_eq!(timed(cells(&r), &r)[6], done("landed 2m"));
+        r.phases.push(("cleaning up".into(), at(110)));
+        assert_eq!(timed(cells(&r), &r)[6], done("landed 2m"));
+        r.phases.pop();
+        // A failed cell keeps its words alone.
+        r.left = false;
+        r.ended = None;
+        r.phase = Some("tests failed 2 of 401".into());
+        r.phases.push(("tests failed 2 of 401".into(), at(104)));
+        assert_eq!(timed(cells(&r), &r)[2], ("failed", "✕ 2 of 401".into()));
     }
 
     #[test]

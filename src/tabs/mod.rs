@@ -35,6 +35,24 @@ pub use color::{
 pub use names::{Answer, Names};
 pub use serve::Shown;
 
+/// When a tab opened, in seconds (`Server::new_tab` sets it as every tab
+/// opens): saved with its other options, so its age survives a restart and
+/// an upgrade; a tab from a build before it has none, and shows no age.
+pub const OPENED: &str = "@tab_opened";
+
+/// When a tab opened, from its options; none when unset or zero.
+pub fn opened(opts: &std::collections::BTreeMap<String, String>) -> Option<i64> {
+    opts.get(OPENED)
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .filter(|s| *s > 0)
+}
+
+/// How long a tab has been open (`1h12m`), from its options; none for a
+/// tab with no opening time.
+pub fn age(opts: &std::collections::BTreeMap<String, String>, now_secs: i64) -> Option<String> {
+    opened(opts).map(|at| crate::sidebar::text::span(now_secs - at))
+}
+
 /// What the server keeps for the tab bar: each directory's answer and its
 /// lookups, and what each tab shows.
 #[derive(Default)]

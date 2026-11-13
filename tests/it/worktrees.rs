@@ -2128,6 +2128,20 @@ fn an_items_branch_is_cut_from_its_target_which_landing_names_with_what_it_track
         landing_target(&first),
         serde_json::json!({ "branch": "local-dev", "remote": null, "remoteBranch": null })
     );
+    // When the item started, for how long its Done line says it took.
+    let started: i64 = w
+        .git(&repo, &["config", "branch.note/first-thing.wtnStarted"])
+        .parse()
+        .unwrap();
+    let out = w.run(&first, &["landing", "--json"]);
+    let answer = serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap();
+    assert_eq!(answer["started"], started);
+    assert_eq!(answer["took"], "<1m");
+    // A branch wtn didn't start has neither.
+    let out = w.run(&repo, &["landing", "--json"]);
+    let answer = serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap();
+    assert_eq!(answer["started"], serde_json::Value::Null);
+    assert_eq!(answer["took"], serde_json::Value::Null);
 
     let second = wtn("4", "shared");
     assert_eq!(w.git(&second, &["rev-parse", "HEAD"]), dev_tip);

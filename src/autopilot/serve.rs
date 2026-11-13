@@ -1486,6 +1486,14 @@ impl Server {
                 in_note: !other_note,
                 started,
                 ended,
+                phases: self
+                    .tab_panes(model.id)
+                    .into_iter()
+                    .filter_map(|p| self.agents.get(p))
+                    .find(|a| !a.phases.is_empty())
+                    .map(|a| a.phases.clone())
+                    .unwrap_or_default(),
+                now: util::now_secs(),
             });
         }
         let now = util::now_ms();
@@ -1513,6 +1521,8 @@ impl Server {
                 in_note: true,
                 started,
                 ended,
+                phases: Vec::new(),
+                now: util::now_secs(),
             });
         }
         let summary = Summary {

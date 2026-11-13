@@ -1923,6 +1923,8 @@ mod tests {
             in_note: true,
             started: None,
             ended: None,
+            phases: Vec::new(),
+            now: 0,
         };
         let view = View {
             id: ViewId::Autopilot,

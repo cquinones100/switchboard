@@ -52,6 +52,14 @@ fn tabs_panes_names_options_and_screens_come_back() {
     let split = server.ok(&["split", "-t", pane, "-D", "-d"]);
     let split = split.trim();
     server.ok(&["set", "-t", tab, "@tab_note", "Today's plan"]);
+    // When it opened, set as it opened, and an hour before for the test.
+    assert!(
+        !server
+            .ok(&["show", "-t", tab, "@tab_opened"])
+            .trim()
+            .is_empty()
+    );
+    server.ok(&["set", "-t", tab, "@tab_opened", "1700000000"]);
     // Autopilot's marks, as tmux/window-options.sh carried them.
     server.ok(&["set", "-t", tab, "@autopilot_land", "1"]);
     server.ok(&["set", "-t", tab, "@autopilot_autoland", "abc1234"]);
@@ -98,6 +106,10 @@ fn tabs_panes_names_options_and_screens_come_back() {
         "the current tab is current again"
     );
     assert_eq!(restored[1]["options"]["@tab_note"], "Today's plan");
+    assert_eq!(
+        restored[1]["options"]["@tab_opened"], "1700000000",
+        "its age goes on from when it opened"
+    );
     assert_eq!(restored[1]["options"]["@autopilot_land"], "1");
     assert_eq!(restored[1]["options"]["@autopilot_autoland"], "abc1234");
     assert_eq!(restored[1]["panes"][1]["options"]["@role"], "logs");

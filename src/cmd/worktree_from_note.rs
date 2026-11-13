@@ -1187,6 +1187,18 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
         return Err(format!("could not record the item in git config ({key})"));
     }
     claim(&note_id, &first);
+    // When the item started, for the time its Done line says it took
+    // (`switchboard landing`'s `took`): kept when a rerun reuses it.
+    let started_key = format!("branch.{branch}.wtnStarted");
+    if worktree::git_at(&root, &["config", "--get", &started_key])
+        .unwrap_or_default()
+        .is_empty()
+    {
+        worktree::git_ok(
+            &root,
+            &["config", &started_key, &crate::util::now_secs().to_string()],
+        );
+    }
     // The branch it lands on, read by `switchboard landing` for
     // queue-and-clean; none, the default branch.
     let target_key = format!("branch.{branch}.wtnTarget");

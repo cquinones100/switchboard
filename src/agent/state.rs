@@ -188,6 +188,10 @@ pub struct PaneAgent {
     /// The step a loop says it is at (queue-and-clean's landing), set by the
     /// loop and ended by a new prompt or session.
     pub phase: Option<String>,
+    /// Each step the loop said it was at, with the second it began, an
+    /// empty step where one ended with none after it (`note_phase`): the
+    /// last `PHASES_KEPT`, for autopilot's board to time its stages.
+    pub phases: Vec<(String, i64)>,
     /// A permission request made in auto mode while the pane works, until
     /// its Notification says it reached you or the call goes on.
     pub asked: Option<Asked>,
@@ -213,6 +217,7 @@ impl PaneAgent {
             && self.wait_call.is_none()
             && self.loop_name.is_none()
             && self.phase.is_none()
+            && self.phases.is_empty()
             && self.asked.is_none()
             && self.ask.is_none()
             && self.doing.is_none()
@@ -563,6 +568,28 @@ impl Agents {
                 Some((*p, a.state?, a.since))
             })
             .max_by(|a, b| a.1.cmp(&b.1).then(b.2.cmp(&a.2)))
+    }
+
+    /// Forgets what a pane's Claude was doing as its program starts again
+    /// (`switchboard respawn`), keeping the steps its loop named, since
+    /// queue-and-clean's resume in the main clone comes after its landing,
+    /// whose stage times the board still shows.
+    pub fn restarted(&mut self, pane: PaneId) {
+        self.dirs.remove(&pane);
+        let phases = self
+            .panes
+            .remove(&pane)
+            .map(|a| a.phases)
+            .unwrap_or_default();
+        if !phases.is_empty() {
+            self.panes.insert(
+                pane,
+                PaneAgent {
+                    phases,
+                    ..PaneAgent::default()
+                },
+            );
+        }
     }
 
     /// Forgets the panes that are gone.
@@ -969,7 +996,7 @@ impl Agents {
                 Ok(())
             }
             _ => {
-                agent.phase = text;
+                note_phase(agent, text, now);
                 Ok(())
             }
         };
@@ -982,6 +1009,24 @@ impl Agents {
         }
         Some(result)
     }
+}
+
+/// How many of a pane's steps are kept (`PaneAgent::phases`).
+const PHASES_KEPT: usize = 32;
+
+/// Sets the step a pane's loop is at (`None` to clear it), noting when a
+/// new one began, or when one ended with none after it; the same step
+/// again notes nothing.
+fn note_phase(agent: &mut PaneAgent, phase: Option<String>, now: i64) {
+    if agent.phase == phase {
+        return;
+    }
+    agent.phase = phase;
+    agent
+        .phases
+        .push((agent.phase.clone().unwrap_or_default(), now));
+    let over = agent.phases.len().saturating_sub(PHASES_KEPT);
+    agent.phases.drain(..over);
 }
 
 /// Puts a pane in a state (`None` to clear it): the same state again changes
@@ -1016,7 +1061,7 @@ fn details(agent: &mut PaneAgent, state: Option<State>, hook: &Hook, now: i64) {
     }
     if hook.begins_anew() {
         // A loop's step is set again by the loop as it goes on.
-        agent.phase = None;
+        note_phase(agent, None, now);
     }
     // A new session's statusline says its own once it draws.
     if matches!(hook.event.as_str(), "SessionStart" | "SessionEnd") {
@@ -1726,7 +1771,55 @@ mod tests {
         on(&mut a, "PostToolUse", json!({}), 100);
         assert_eq!(a.get(P).unwrap().phase.as_deref(), Some("landing"));
         on(&mut a, "SessionStart", json!({"source": "startup"}), 101);
-        assert!(a.get(P).is_none());
+        let left = a.get(P).unwrap();
+        assert_eq!(left.phase, None);
+        assert_eq!(left.loop_name, None);
+        // When it ended stays, for the board's stage times.
+        assert_eq!(
+            left.phases,
+            [("landing".to_string(), 1), (String::new(), 101)]
+        );
+    }
+
+    #[test]
+    fn a_restarted_pane_keeps_only_its_phases() {
+        let mut a = Agents::default();
+        a.set_option(P, "@agent_state", Some("working"), 5);
+        a.set_option(P, "@agent_phase", Some("pushing"), 10);
+        a.restarted(P);
+        let kept = a.get(P).unwrap();
+        assert_eq!(kept.state, None);
+        assert_eq!(kept.phase, None);
+        assert_eq!(kept.phases, [("pushing".to_string(), 10)]);
+        let mut b = Agents::default();
+        b.set_option(P, "@agent_state", Some("working"), 5);
+        b.restarted(P);
+        assert!(b.get(P).is_none(), "nothing kept with no phases");
+    }
+
+    #[test]
+    fn each_new_phase_is_noted_with_when_it_began() {
+        let mut a = Agents::default();
+        a.set_option(P, "@agent_phase", Some("testing"), 10);
+        a.set_option(P, "@agent_phase", Some("testing"), 20);
+        a.set_option(P, "@agent_phase", Some("reviewing"), 70);
+        a.set_option(P, "@agent_phase", None, 200);
+        a.set_option(P, "@agent_phase", None, 210);
+        assert_eq!(
+            a.get(P).unwrap().phases,
+            [
+                ("testing".to_string(), 10),
+                ("reviewing".to_string(), 70),
+                (String::new(), 200),
+            ],
+            "the same phase again, or clearing none, notes nothing"
+        );
+        for at in 0..40 {
+            a.set_option(P, "@agent_phase", Some(&format!("step {at}")), 300 + at);
+        }
+        let phases = &a.get(P).unwrap().phases;
+        assert_eq!(phases.len(), PHASES_KEPT);
+        assert_eq!(phases.last().unwrap().0, "step 39");
     }
 
     #[test]

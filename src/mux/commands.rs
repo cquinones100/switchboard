@@ -890,6 +890,10 @@ impl Server {
             Target::Tab(t) if name == "@agent" => self.tab_agent(t).map(|a| a.name().to_string()),
             // What the tab bar shows is worked out by the server (src/tabs).
             Target::Tab(t) if name == "@tab_label" => Some(self.tab_label(t)),
+            Target::Tab(t) if name == "@tab_age" => self
+                .tabs
+                .get(&t)
+                .and_then(|tab| crate::tabs::age(&tab.opts, crate::util::now_secs())),
             Target::Tab(t) if name == "@tab_path" => {
                 self.tab_path(t).map(|p| p.to_string_lossy().into_owned())
             }

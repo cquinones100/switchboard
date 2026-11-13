@@ -78,7 +78,7 @@ impl Server {
         if let Some(t) = self.tabs.get_mut(&tab) {
             t.opts.remove(super::server::TAB_DIR);
         }
-        self.agents.retain(|p| p != pane);
+        self.agents.restarted(pane);
         self.sidebar.panes.remove(&pane);
         self.sidebar.stale = true;
         self.name_tab(tab);

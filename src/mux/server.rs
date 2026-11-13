@@ -3686,6 +3686,12 @@ impl Server {
                 .to_string(),
             state,
             age: crate::sidebar::text::ago(since, crate::util::now_secs()),
+            opened: self
+                .tabs
+                .get(&tab)
+                .filter(|_| crate::settings::is_on("tab_age"))
+                .and_then(|t| crate::tabs::age(&t.opts, crate::util::now_secs()))
+                .unwrap_or_default(),
             color: self.tab_color(tab).map(Into::into),
             shown,
             next: self.sidebar_needs_next(tab),
@@ -3738,7 +3744,11 @@ pub(super) fn new_tab(id: TabId, pane: PaneId) -> Tab {
         active: pane,
         last_pane: None,
         zoomed: false,
-        opts: BTreeMap::new(),
+        // A restored tab takes its saved options in place of these.
+        opts: BTreeMap::from([(
+            crate::tabs::OPENED.to_string(),
+            util::now_secs().to_string(),
+        )]),
     }
 }
 

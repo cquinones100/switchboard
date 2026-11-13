@@ -635,6 +635,9 @@ impl Server {
         t.own_name = self.tab_own_name(id).map(str::to_string);
         t.color = self.tab_color(id);
         t.state = state;
+        t.opened = settings::is_on("tab_age")
+            .then(|| crate::tabs::opened(&tab.opts))
+            .flatten();
         t.pinned = opt("@pinned").is_some_and(|v| v != "0");
         t.remind_at = opt("@remind_at")
             .and_then(|v| v.trim().parse::<i64>().ok())

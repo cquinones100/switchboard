@@ -12,7 +12,10 @@
 //! --target` recorded as `branch.<branch>.wtnTarget`, with the remote branch
 //! it tracks (`remote` and `remoteBranch`, null when it tracks none, and
 //! then the landing only moves the local branch); null for the default
-//! branch.
+//! branch. `started` is when `wtn` started the branch's item, in seconds
+//! (`branch.<branch>.wtnStarted`), and `took` how long from then until
+//! now (`1h12m`), for queue-and-clean's Done line; both null for a branch
+//! `wtn` didn't start.
 //! The answer is src/repos.rs's. Ported from bin/landing.
 
 use std::path::PathBuf;
@@ -43,6 +46,20 @@ fn target_at(dir: &std::path::Path) -> Value {
     json!({ "branch": target, "remote": remote, "remoteBranch": remote_branch })
 }
 
+/// When `wtn` started the branch's item, as the module's opening says.
+fn started_at(dir: &std::path::Path) -> Option<i64> {
+    let branch = worktree::git_at(dir, &["rev-parse", "--abbrev-ref", "HEAD"]).ok()?;
+    worktree::git_at(
+        dir,
+        &["config", "--get", &format!("branch.{branch}.wtnStarted")],
+    )
+    .ok()?
+    .trim()
+    .parse::<i64>()
+    .ok()
+    .filter(|s| *s > 0)
+}
+
 pub fn main(args: Vec<String>) -> ExitCode {
     let as_json = args.iter().any(|a| a == "--json");
     let refresh = args.iter().any(|a| a == "--refresh");
@@ -68,6 +85,12 @@ pub fn main(args: Vec<String>) -> ExitCode {
                 map.insert("why".into(), json!(answer.why));
                 map.insert("repo".into(), json!(answer.repo));
                 map.insert("target".into(), target_at(&dir));
+                let started = started_at(&dir);
+                map.insert("started".into(), json!(started));
+                map.insert(
+                    "took".into(),
+                    json!(started.map(|s| crate::sidebar::text::span(crate::util::now_secs() - s))),
+                );
             }
             if as_json {
                 let mut all = serde_json::Map::new();

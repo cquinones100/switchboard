@@ -173,6 +173,9 @@ pub struct TabModel {
     pub state: TabState,
     /// Pinned by hand (M-f) as needing you, until unpinned.
     pub pinned: bool,
+    /// When it opened, in seconds (`@tab_opened`); none for a tab from a
+    /// build before it was kept, or with the tab_age setting off.
+    pub opened: Option<i64>,
     /// A reminder set on it (`@remind_at`, seconds, and `@remind_note`).
     pub remind_at: Option<i64>,
     pub remind_note: Option<String>,
@@ -269,6 +272,7 @@ impl TabModel {
             color: None,
             state: TabState::Idle,
             pinned: false,
+            opened: None,
             remind_at: None,
             remind_note: None,
             routine_next: None,
