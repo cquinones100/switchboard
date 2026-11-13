@@ -85,7 +85,7 @@ const box = (x, y, w, h, title, tone) => {
   K(x, y, w, h, 'border-radius:7px;box-shadow:0 14px 34px 8px rgba(0,0,0,.6),0 3px 8px rgba(0,0,0,.45)');
 };
 const backdrop = () => { for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { if (BOXES.some(([bx, by, bw, bh]) => x >= bx && x < bx + bw && y >= by && y < by + bh)) continue; const c = g[y][x]; c.fg = 'f'; if (c.bg === '4' || c.bg === 'A') c.bg = '2'; } };
-// OPTION: one choice in a box; the chosen one lit, a yellow › before it; its key at the right.
+// OPTION: one choice in a box; the chosen one lit, a yellow › before it. Never a letter key: a menu is moved with ↑↓ (or /), chosen with Enter or a click; what sits at the right is a fact, such as a time.
 const option = (x, y, w, text, key, chosen) => { const bg = chosen ? '4' : 'E'; if (chosen) fill(x + 1, y, w - 2, 1, '4'); put(x + 2, y, chosen ? '›' : ' ', 'y', 'b', bg); put(x + 4, y, text, 't', chosen ? 'b' : '', bg); if (key) R(x + w - 3, y, key, chosen ? 'a' : 'd', '', bg); };
 // KEYCAP: a key you can press or click, with what it does; lit while what it opens is in front.
 const keycap = (x, y, k, what, lit) => { const kb = lit ? 'A' : '3'; let n = put(x, y, '\uE0B6', kb); n += put(x + n, y, k, lit ? 'k' : 'a', 'b', kb); if (lit) { n += put(x + n, y, ' ', 'k', '', kb); n += put(x + n, y, ' ' + what, 't', 'b', '4'); n += put(x + n, y, '\uE0B4', '4'); } else { n += put(x + n, y, '\uE0B4', kb); n += put(x + n, y, ' ' + what + ' ', 'd'); } return n + 1; };
@@ -203,14 +203,14 @@ keys(36, 44, [['j/k', 'events'], ['h/l', 'day'], ['Enter', 'actions'], ['m', 'vi
 const X = 50, W = 40;
 box(X, 9, W, 16, 'Calendar');
 put(X + 2, 10, 'this view, not the chosen event', 'd', '', 'E');
-option(X, 12, W, 'Go to today', 't', true);
-option(X, 13, W, 'Go to a date…', 'd');
-option(X, 14, W, 'Show the week', 'w');
-option(X, 15, W, 'Show declined events', 'v');
-option(X, 16, W, 'Look again now', 'r');
+option(X, 12, W, 'Go to today', '', true);
+option(X, 13, W, 'Go to a date…', '');
+option(X, 14, W, 'Show the week', '');
+option(X, 15, W, 'Show declined events', '');
+option(X, 16, W, 'Look again now', '');
 label(X + 2, 18, 'Mission control', 'd');
-option(X, 19, W, 'Several views at once…', '=');
-option(X, 20, W, 'This view\'s settings', 's');
+option(X, 19, W, 'Several views at once…', '');
+option(X, 20, W, 'This view\'s settings', '');
 keys(X + 2, 22, [['↑↓', 'move'], ['↵', 'choose'], ['esc', 'close']]);
 backdrop();
 }

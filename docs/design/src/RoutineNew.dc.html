@@ -93,7 +93,7 @@ const box = (x, y, w, h, title, tone) => {
   K(x, y, w, h, 'border-radius:7px;box-shadow:0 14px 34px 8px rgba(0,0,0,.6),0 3px 8px rgba(0,0,0,.45)');
 };
 const backdrop = () => { for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { if (BOXES.some(([bx, by, bw, bh]) => x >= bx && x < bx + bw && y >= by && y < by + bh)) continue; const c = g[y][x]; c.fg = 'f'; if (c.bg === '4' || c.bg === 'A') c.bg = '2'; } };
-// OPTION: one choice in a box; the chosen one lit, a yellow › before it; its key at the right.
+// OPTION: one choice in a box; the chosen one lit, a yellow › before it. Never a letter key: a menu is moved with ↑↓ (or /), chosen with Enter or a click; what sits at the right is a fact, such as a time.
 const option = (x, y, w, text, key, chosen) => { const bg = chosen ? '4' : 'E'; if (chosen) fill(x + 1, y, w - 2, 1, '4'); put(x + 2, y, chosen ? '›' : ' ', 'y', 'b', bg); put(x + 4, y, text, 't', chosen ? 'b' : '', bg); if (key) R(x + w - 3, y, key, chosen ? 'a' : 'd', '', bg); };
 // KEYCAP: a key you can press or click, with what it does; lit while what it opens is in front.
 const keycap = (x, y, k, what, lit) => { const kb = lit ? 'A' : '3'; let n = put(x, y, '\uE0B6', kb); n += put(x + n, y, k, lit ? 'k' : 'a', 'b', kb); if (lit) { n += put(x + n, y, ' ', 'k', '', kb); n += put(x + n, y, ' ' + what, 't', 'b', '4'); n += put(x + n, y, '\uE0B4', '4'); } else { n += put(x + n, y, '\uE0B4', kb); n += put(x + n, y, ' ' + what + ' ', 'd'); } return n + 1; };
@@ -211,7 +211,7 @@ ruleV(97, 3, 40);
 
 // THE CHOSEN ROUTINE
 let py = pane(99, 3, 61, 'Oncall watch', [['every 30 minutes, 9:00 to 6:00 on weekdays', 't'], ['  · ~/code/oncall-tools', 'd']]);
-let kx = 99; kx += keycap(kx, py, 'r', 'Run now', true); kx += keycap(kx, py, 'e', 'Edit'); kx += keycap(kx, py, 'p', 'Pause'); keycap(kx, py, 'x', 'Delete');
+let kx = 99; keycap(kx, py, '↵', 'run now, edit, pause or delete it', true);
 label(99, py + 2, 'Prompt'); R(158, py + 2, 'added to Claude\'s system prompt', 'd');
 fill(99, py + 3, 60, 4, '2');
 ['Watch #alerts-web and #alerts-sync. Tell me only about what is', 'still firing after 30 minutes with nobody on it, and say who', 'last spoke in its thread. Never post or react in a channel.'].forEach((l, i) => put(101, py + 3 + i, l, 't', '', '2'));
@@ -269,9 +269,9 @@ put(FX + 2, 30, '▏', 'a', '', '2');
 R(FX + FW - 3, 31, 'M-e opens it in $EDITOR', 'f', '', '2');
 T(FX + 2, 32, ['Added to Claude\'s system prompt; a run begins with "Run Morning triage".', 'f', '', 'E']);
 field(34, 'Model');
-let mx = FX; mx += keycap(mx, 34, 'm', 'Sonnet', true); put(mx, 34, 'the default for a new tab; m picks another', 'f', '', 'E');
+let mx = FX; mx += chip(mx, 34, 'Sonnet ▾', 'a') + 1; put(mx, 34, 'the default for a new tab; Enter or a click picks another', 'f', '', 'E');
 rule(BX + 1, 35, BW - 2);
-let sx = BX + 3; sx += keycap(sx, 36, 'M-↵', 'Save', true); sx += keycap(sx, 36, 'M-r', 'Save and run now'); keycap(sx, 36, 'esc', 'Cancel');
+let sx = BX + 3; sx += keycap(sx, 36, 'M-↵', 'Save', true); sx += chip(sx, 36, 'Save and run now', 'd') + 1; keycap(sx, 36, 'esc', 'Cancel');
 keys(BX + 3, 38, [['Tab ⇧Tab', 'field'], ['↵', 'next field, a new line in Prompt'], ['↑↓', 'option'], ['M-↵', 'save from any field']]);
 backdrop();
 // ─────────────────────────────────────────────────────────────────────────────

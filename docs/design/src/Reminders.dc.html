@@ -92,7 +92,7 @@ const box = (x, y, w, h, title, tone) => {
   K(x, y, w, h, 'border-radius:7px;box-shadow:0 14px 34px 8px rgba(0,0,0,.6),0 3px 8px rgba(0,0,0,.45)');
 };
 const backdrop = () => { for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { if (BOXES.some(([bx, by, bw, bh]) => x >= bx && x < bx + bw && y >= by && y < by + bh)) continue; const c = g[y][x]; c.fg = 'f'; if (c.bg === '4' || c.bg === 'A') c.bg = '2'; } };
-// OPTION: one choice in a box; the chosen one lit, a yellow › before it; its key at the right.
+// OPTION: one choice in a box; the chosen one lit, a yellow › before it. Never a letter key: a menu is moved with ↑↓ (or /), chosen with Enter or a click; what sits at the right is a fact, such as a time.
 const option = (x, y, w, text, key, chosen) => { const bg = chosen ? '4' : 'E'; if (chosen) fill(x + 1, y, w - 2, 1, '4'); put(x + 2, y, chosen ? '›' : ' ', 'y', 'b', bg); put(x + 4, y, text, 't', chosen ? 'b' : '', bg); if (key) R(x + w - 3, y, key, chosen ? 'a' : 'd', '', bg); };
 // KEYCAP: a key you can press or click, with what it does; lit while what it opens is in front.
 const keycap = (x, y, k, what, lit) => { const kb = lit ? 'A' : '3'; let n = put(x, y, '\uE0B6', kb); n += put(x + n, y, k, lit ? 'k' : 'a', 'b', kb); if (lit) { n += put(x + n, y, ' ', 'k', '', kb); n += put(x + n, y, ' ' + what, 't', 'b', '4'); n += put(x + n, y, '\uE0B4', '4'); } else { n += put(x + n, y, '\uE0B4', kb); n += put(x + n, y, ' ' + what + ' ', 'd'); } return n + 1; };
@@ -207,7 +207,7 @@ ruleV(121, 3, 34);
 let py = pane(124, 3, 36, 'Tuesday, November 10', [['9:00', 't'], ['  in 3 days 19 hours', 'd']]);
 mark(124, py, 'reminder'); put(126, py, '7', 'n7', 'b'); put(128, py, 'Rust port notes', 't', 'b'); put(144, py, 'working 3m', 'd');
 put(124, py + 1, 'check the notes against main', 't');
-let kx = 124; kx += keycap(kx, py + 3, 'g', 'Go there', true); kx += keycap(kx, py + 3, 'e', 'Change'); keycap(kx, py + 3, 'x', 'Clear');
+let kx = 124; keycap(kx, py + 3, '↵', 'go there, change or clear it', true);
 label(124, py + 5, 'This month', 'd', 4, 158);
 // A reminder that came due shows it in place of its time, in the needs-you tone.
 const agenda = (y, day, time, num, name, tone) => { put(124, y, day, 'd'); if (tone) chip(136, y, 'due', tone); else R(142, y, time, 'd'); put(144, y, String(num), 'n' + num, 'b'); put(146, y, clip(name, 14), 't'); };

@@ -85,7 +85,7 @@ const box = (x, y, w, h, title, tone) => {
   K(x, y, w, h, 'border-radius:7px;box-shadow:0 14px 34px 8px rgba(0,0,0,.6),0 3px 8px rgba(0,0,0,.45)');
 };
 const backdrop = () => { for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { if (BOXES.some(([bx, by, bw, bh]) => x >= bx && x < bx + bw && y >= by && y < by + bh)) continue; const c = g[y][x]; c.fg = 'f'; if (c.bg === '4' || c.bg === 'A') c.bg = '2'; } };
-// OPTION: one choice in a box; the chosen one lit, a yellow › before it; its key at the right.
+// OPTION: one choice in a box; the chosen one lit, a yellow › before it. Never a letter key: a menu is moved with ↑↓ (or /), chosen with Enter or a click; what sits at the right is a fact, such as a time.
 const option = (x, y, w, text, key, chosen) => { const bg = chosen ? '4' : 'E'; if (chosen) fill(x + 1, y, w - 2, 1, '4'); put(x + 2, y, chosen ? '›' : ' ', 'y', 'b', bg); put(x + 4, y, text, 't', chosen ? 'b' : '', bg); if (key) R(x + w - 3, y, key, chosen ? 'a' : 'd', '', bg); };
 // KEYCAP: a key you can press or click, with what it does; lit while what it opens is in front.
 const keycap = (x, y, k, what, lit) => { const kb = lit ? 'A' : '3'; let n = put(x, y, '\uE0B6', kb); n += put(x + n, y, k, lit ? 'k' : 'a', 'b', kb); if (lit) { n += put(x + n, y, ' ', 'k', '', kb); n += put(x + n, y, ' ' + what, 't', 'b', '4'); n += put(x + n, y, '\uE0B4', '4'); } else { n += put(x + n, y, '\uE0B4', kb); n += put(x + n, y, ' ' + what + ' ', 'd'); } return n + 1; };
@@ -182,7 +182,7 @@ T(98, 12, ['⠼', 'b', '', '1'], [' 7 Rust port notes', 't', '', '1']);
 T(98, 13, ['○', 'd', '', '1'], [' 8 handoff', 't', '', '1']);
 T(85, 15, ['Focus (M-s, a click) widens it', 'd']);
 T(85, 16, ['to full width until focus leaves.', 'd']);
-keycap(85, 18, 'a', 'Choose A');
+chip(85, 18, 'Choose A', 'a');
 
 card(121, 8, 37, 13, { title: 'B · stays condensed' });
 fill(123, 10, 7, 4, '1');
@@ -195,7 +195,7 @@ T(131, 13, ['◀── its name, on the', 'd']);
 T(135, 14, ['sidebar\'s last line', 'd']);
 T(123, 15, ['Stays narrow when focused; moving', 'd']);
 T(123, 16, ['the cursor names the tab under it.', 'd']);
-keycap(123, 18, 'b', 'Choose B');
+chip(123, 18, 'Choose B', 'a');
 
 T(83, 22, ['Choosing one renames the heading to Decision and rewrites the steps,', 'd']);
 T(83, 23, ['so the work-a-note mode can take the item.', 'd']);
@@ -208,7 +208,7 @@ T(83, 30, '5. Notifications fold to one ✉ line; Enter opens them');
 T(83, 31, '6. Focus widens it to full width; leaving narrows it again');
 T(83, 32, '7. Tests: one line per tab, both widths, a click, focus widening');
 
-keys(36, 44, [['C-w', 'note or plan'], ['a/b', 'choose'], ['Enter', 'start the item'], ['e', 'edit the plan'], ['Esc', 'close']]);
+keys(36, 44, [['C-w', 'note or plan'], ['Enter', 'start the item'], ['e', 'edit the plan'], ['Esc', 'close']]);
 
 // Lines and blocks are drawn to fill the cell, as Ghostty draws them, not taken from the font.
 const LINE = { '\uE0B6': ['cap', 'l'], '\uE0B4': ['cap', 'r'], '─': ['h', 1], '━': ['h', 2], '┄': ['hd'], '│': ['v'], '┆': ['vd'], '╭': ['arc', 'rb'], '┌': ['c', 'rb'], '╮': ['arc', 'lb'], '┐': ['c', 'lb'], '╰': ['arc', 'rt'], '└': ['c', 'rt'], '╯': ['arc', 'lt'], '┘': ['c', 'lt'], '█': ['f'], '▌': ['lh'], '▁': ['lo'] };

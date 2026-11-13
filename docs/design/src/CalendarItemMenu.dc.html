@@ -85,7 +85,7 @@ const box = (x, y, w, h, title, tone) => {
   K(x, y, w, h, 'border-radius:7px;box-shadow:0 14px 34px 8px rgba(0,0,0,.6),0 3px 8px rgba(0,0,0,.45)');
 };
 const backdrop = () => { for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { if (BOXES.some(([bx, by, bw, bh]) => x >= bx && x < bx + bw && y >= by && y < by + bh)) continue; const c = g[y][x]; c.fg = 'f'; if (c.bg === '4' || c.bg === 'A') c.bg = '2'; } };
-// OPTION: one choice in a box; the chosen one lit, a yellow › before it; its key at the right.
+// OPTION: one choice in a box; the chosen one lit, a yellow › before it. Never a letter key: a menu is moved with ↑↓ (or /), chosen with Enter or a click; what sits at the right is a fact, such as a time.
 const option = (x, y, w, text, key, chosen) => { const bg = chosen ? '4' : 'E'; if (chosen) fill(x + 1, y, w - 2, 1, '4'); put(x + 2, y, chosen ? '›' : ' ', 'y', 'b', bg); put(x + 4, y, text, 't', chosen ? 'b' : '', bg); if (key) R(x + w - 3, y, key, chosen ? 'a' : 'd', '', bg); };
 // KEYCAP: a key you can press or click, with what it does; lit while what it opens is in front.
 const keycap = (x, y, k, what, lit) => { const kb = lit ? 'A' : '3'; let n = put(x, y, '\uE0B6', kb); n += put(x + n, y, k, lit ? 'k' : 'a', 'b', kb); if (lit) { n += put(x + n, y, ' ', 'k', '', kb); n += put(x + n, y, ' ' + what, 't', 'b', '4'); n += put(x + n, y, '\uE0B4', '4'); } else { n += put(x + n, y, '\uE0B4', kb); n += put(x + n, y, ' ' + what + ' ', 'd'); } return n + 1; };
@@ -204,14 +204,14 @@ keys(36, 44, [['j/k', 'events'], ['h/l', 'day'], ['Enter', 'actions'], ['m', 'vi
 const X = 58, W = 46;
 box(X, 11, W, 16, 'Design review · 3:00–4:00');
 T(X + 2, 12, ['Google Meet · 6 going · you: ', 'd', '', 'E'], ['not replied', 'y', '', 'E']);
-option(X, 14, W, 'Join the Meet', 'o', true);
-option(X, 15, W, 'Going', 'y');
-option(X, 16, W, 'Not going', 'n');
-option(X, 17, W, 'Maybe', 'm');
-option(X, 19, W, 'Open in Google Calendar', 'g');
-option(X, 20, W, 'Copy the Meet link', 'c');
-option(X, 21, W, 'Remind me before it starts', 'r');
-option(X, 22, W, 'Start a note for it', 'e');
+option(X, 14, W, 'Join the Meet', '', true);
+option(X, 15, W, 'Going', '');
+option(X, 16, W, 'Not going', '');
+option(X, 17, W, 'Maybe', '');
+option(X, 19, W, 'Open in Google Calendar', '');
+option(X, 20, W, 'Copy the Meet link', '');
+option(X, 21, W, 'Remind me before it starts', '');
+option(X, 22, W, 'Start a note for it', '');
 keys(X + 2, 24, [['↑↓', 'move'], ['↵', 'choose'], ['esc', 'close']]);
 backdrop();
 }

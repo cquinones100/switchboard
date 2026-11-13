@@ -85,7 +85,7 @@ const box = (x, y, w, h, title, tone) => {
   K(x, y, w, h, 'border-radius:7px;box-shadow:0 14px 34px 8px rgba(0,0,0,.6),0 3px 8px rgba(0,0,0,.45)');
 };
 const backdrop = () => { for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { if (BOXES.some(([bx, by, bw, bh]) => x >= bx && x < bx + bw && y >= by && y < by + bh)) continue; const c = g[y][x]; c.fg = 'f'; if (c.bg === '4' || c.bg === 'A') c.bg = '2'; } };
-// OPTION: one choice in a box; the chosen one lit, a yellow › before it; its key at the right.
+// OPTION: one choice in a box; the chosen one lit, a yellow › before it. Never a letter key: a menu is moved with ↑↓ (or /), chosen with Enter or a click; what sits at the right is a fact, such as a time.
 const option = (x, y, w, text, key, chosen) => { const bg = chosen ? '4' : 'E'; if (chosen) fill(x + 1, y, w - 2, 1, '4'); put(x + 2, y, chosen ? '›' : ' ', 'y', 'b', bg); put(x + 4, y, text, 't', chosen ? 'b' : '', bg); if (key) R(x + w - 3, y, key, chosen ? 'a' : 'd', '', bg); };
 // KEYCAP: a key you can press or click, with what it does; lit while what it opens is in front.
 const keycap = (x, y, k, what, lit) => { const kb = lit ? 'A' : '3'; let n = put(x, y, '\uE0B6', kb); n += put(x + n, y, k, lit ? 'k' : 'a', 'b', kb); if (lit) { n += put(x + n, y, ' ', 'k', '', kb); n += put(x + n, y, ' ' + what, 't', 'b', '4'); n += put(x + n, y, '\uE0B4', '4'); } else { n += put(x + n, y, '\uE0B4', kb); n += put(x + n, y, ' ' + what + ' ', 'd'); } return n + 1; };
@@ -195,7 +195,7 @@ option(X, 20, W, '', '', false); T(X + 4, 20, ['○', 'f', '', 'E'], [' web-138-
 T(X + 2, 22, ['Matches a tab\'s name, its ticket, its PR\'s number or title, its branch.', 'd', '', 'E']);
 T(X + 2, 23, ['A worktree with no tab opens one there, its Claude resumed.', 'd', '', 'E']);
 T(X + 2, 25, ['M-\\ ', 'a', 'b', 'E'], ['opens it as "Show beside 1 planning": the pick goes beside this tab.', 'd', '', 'E']);
-keys(X + 2, 27, [['↑↓', 'move'], ['↵', 'go there'], ['M-\\', 'beside instead'], ['1-9', 'that tab'], ['esc', 'close']]);
+keys(X + 2, 27, [['↑↓', 'move'], ['↵', 'go there'], ['M-\\', 'beside instead'], ['esc', 'close']]);
 backdrop();
 }
 
