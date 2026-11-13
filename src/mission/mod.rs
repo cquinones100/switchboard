@@ -84,6 +84,7 @@ pub mod remind;
 pub mod remind_box;
 pub mod reminders;
 pub mod render;
+pub mod reopen_board;
 pub mod resources_board;
 mod serve;
 pub mod settings_board;
@@ -269,6 +270,8 @@ pub struct Snapshot {
     pub slack_files_failed: HashMap<String, String>,
     /// Its files kept on this computer, by ID.
     pub slack_files_kept: std::collections::HashSet<String>,
+    /// The Reopen view's chosen row's last screen, once read.
+    pub reopen_shot: Option<Arc<crate::usage::shots::Shot>>,
 }
 
 impl Default for Snapshot {
@@ -310,6 +313,7 @@ impl Default for Snapshot {
             slack_thread_failed: None,
             slack_files_failed: Default::default(),
             slack_files_kept: Default::default(),
+            reopen_shot: None,
         }
     }
 }
@@ -343,8 +347,9 @@ pub struct Mission {
     pub jump: Option<Jump>,
     pub focus: Option<Focus>,
     pub hover: Option<Spot>,
-    /// M-j's and M-o's picker: the Work map scoped, a filter typing, Enter
-    /// going to the chosen row and Esc closing.
+    /// M-j's and M-o's picker: the Work map scoped to the open tabs, or
+    /// the Reopen view, a filter typing, Enter opening the chosen row's
+    /// menu and Esc closing.
     pub scope: Option<Scope>,
     pub picker: bool,
     /// Which of the Work map's repositories are folded, and which show
@@ -397,6 +402,12 @@ pub struct Mission {
     pub landing_output: bool,
     /// Autopilot's view kept the same way, with the mode off.
     pub keep_autopilot: bool,
+    /// Which rows the Reopen view shows (its menu's "Show only tabs" and
+    /// "Show only sessions").
+    pub reopen_kind: crate::usage::reopen::Kind,
+    /// The Reopen view's chosen row's pane shown over the list (`i`), on a
+    /// screen too narrow to show it under the rows.
+    pub reopen_pane: bool,
     /// How far the pane beside a board is scrolled (`J`, `K`, the wheel
     /// over it): the view and the item it was scrolled on, and its first
     /// line shown. Another view or item shows its pane from the top.
@@ -527,6 +538,8 @@ impl Mission {
             keep_landing: false,
             landing_output: false,
             keep_autopilot: false,
+            reopen_kind: Default::default(),
+            reopen_pane: false,
             side: None,
             pane_bar_drag: None,
             side_widths: HashMap::new(),
@@ -1135,6 +1148,9 @@ impl Overlay for Mission {
                         photo.map(|p| p.as_ref()),
                     )
                 }
+                render::Shape::Screen { shot } => {
+                    crate::ui::images::screen(frame, &image.name, area, shot)
+                }
                 render::Shape::Picture { key } => {
                     if let Some(p) = self.snap.slack_pictures.get(key) {
                         crate::ui::images::picture_shared(
@@ -1316,6 +1332,9 @@ pub struct MissionState {
     /// Each tab's last turn in a sentence, as Haiku wrote it
     /// (`summary`).
     pub(crate) summaries: summary::Summaries,
+    /// The Reopen view's chosen row's last screen as last read, by its
+    /// file's name.
+    pub(crate) reopen_shot: Option<(String, Arc<crate::usage::shots::Shot>)>,
 }
 
 /// See `MissionState::after_key`.

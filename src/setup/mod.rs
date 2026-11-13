@@ -670,15 +670,15 @@ fn plugin_way(check: bool, list: &mut List) {
     }
     match way::claude_version() {
         _ if !crate::settings::is_on("pane_statusline") => list.optional(
-            "Switchboard's statusline in its panes, for the Sessions and Usage views: off in Settings' \"Switchboard's statusline in its panes\", so they draw yours",
+            "Switchboard's statusline in its panes, for mission control's Usage view: off in Settings' \"Switchboard's statusline in its panes\", so they draw yours",
         ),
         Some(v) if v < plugin::MODULE_VERSION => list.optional(&format!(
-            "Switchboard's statusline in its panes, for the Sessions and Usage views: Claude Code {} is older than {}, which draws the plugin's: claude update",
+            "Switchboard's statusline in its panes, for mission control's Usage view: Claude Code {} is older than {}, which draws the plugin's: claude update",
             way::words(v),
             way::words(plugin::MODULE_VERSION)
         )),
         _ => list.ok(
-            "Switchboard's statusline in its panes, drawn by its plugin (the Sessions and Usage views), yours everywhere else",
+            "Switchboard's statusline in its panes, drawn by its plugin (mission control's Usage view), yours everywhere else",
         ),
     }
 

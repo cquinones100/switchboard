@@ -108,6 +108,8 @@ pub enum Do {
     FoldRepo(String),
     /// A closed tab opened again.
     Reopen(String),
+    /// A past Claude session resumed in a new tab, by its id.
+    ResumeSession(String),
     RemoveClosed(String),
     /// A tab in a directory, resuming its Claude there.
     OpenHere(PathBuf),
@@ -1143,28 +1145,38 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
             }
             add_hand_offs(&mut out, handoff("meeting", item, ctx), ctx);
         }
-        ViewId::Closed => {
+        // A row of Reopen: a closed tab reopened where it was (a sealed
+        // review with its sealed try beside it), or a past session resumed
+        // in a new tab; forgetting it; copying its directory.
+        ViewId::Reopen => {
             let key = text(&item.data, "/closed/key");
             let key = if key.is_empty() {
                 item.id.as_str()
             } else {
                 key
             };
-            let shell = item.data.get("session").is_none_or(Value::is_null);
-            out.push(choice(
-                'r',
-                if shell {
-                    "Reopen it, with a shell"
-                } else {
-                    "Reopen it, resuming its Claude"
-                },
-                Do::Reopen(key.to_string()),
-            ));
-            out.push(choice(
-                'x',
-                "Remove it from this list",
-                Do::RemoveClosed(key.to_string()),
-            ));
+            if crate::usage::reopen::is_session(item) {
+                out.push(choice(
+                    'r',
+                    "Resume it in a new tab",
+                    Do::ResumeSession(item.id.clone()),
+                ));
+            } else {
+                let shell = item.data.get("session").is_none_or(Value::is_null);
+                let sealed = text(&item.data, "/reopen/sealed");
+                out.push(choice(
+                    'r',
+                    if !sealed.is_empty() {
+                        "Reopen it, resuming its Claude, with a sealed try"
+                    } else if shell {
+                        "Reopen it, with a shell"
+                    } else {
+                        "Reopen it, resuming its Claude"
+                    },
+                    Do::Reopen(key.to_string()),
+                ));
+            }
+            out.push(choice('x', "Forget it", Do::RemoveClosed(key.to_string())));
             if let Target::Dir(d) = &item.target {
                 out.push(choice(
                     'y',

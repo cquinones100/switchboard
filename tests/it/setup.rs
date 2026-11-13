@@ -394,7 +394,7 @@ fn as_a_plugin_the_guided_setup_leaves_your_claude_settings_alone_and_asks_nothi
         let said = ok(&h.run_with(&["setup"], "\n\n\n"));
         assert!(!said.contains("[Y/n]"), "{said}");
         assert!(
-            said.contains("✓ Switchboard's statusline in its panes, drawn by its plugin (the Sessions and Usage views), yours everywhere else"),
+            said.contains("✓ Switchboard's statusline in its panes, drawn by its plugin (mission control's Usage view), yours everywhere else"),
             "{said}"
         );
         assert!(said.ends_with("Ready.\n"), "{said}");
@@ -416,7 +416,7 @@ fn as_a_plugin_the_guided_setup_leaves_your_claude_settings_alone_and_asks_nothi
     h.claude_version("2.1.286");
     let said = ok(&h.run_with(&["setup"], "\n\n\n"));
     assert!(
-        said.contains("Switchboard's statusline in its panes, for the Sessions and Usage views: Claude Code 2.1.286 is older than 2.1.287, which draws the plugin's: claude update"),
+        said.contains("Switchboard's statusline in its panes, for mission control's Usage view: Claude Code 2.1.286 is older than 2.1.287, which draws the plugin's: claude update"),
         "{said}"
     );
     assert_eq!(snapshot(&h.path(".claude")), before);
@@ -453,7 +453,7 @@ fn as_a_plugin_the_guided_setup_leaves_your_claude_settings_alone_and_asks_nothi
     fs::write(&file, earlier.to_string()).unwrap();
     let said = ok(&h.run_with(&["setup"], "\n\n\n"));
     assert!(
-        said.contains("– Switchboard's statusline in its panes, for the Sessions and Usage views: off in Settings' \"Switchboard's statusline in its panes\", so they draw yours"),
+        said.contains("– Switchboard's statusline in its panes, for mission control's Usage view: off in Settings' \"Switchboard's statusline in its panes\", so they draw yours"),
         "{said}"
     );
     assert_eq!(
@@ -2377,29 +2377,29 @@ fn the_statusline_shows_the_context_in_the_workspace_unless_its_setting_is_off()
         "workspace": { "current_dir": h.home.to_string_lossy() },
         "context_window": { "used_percentage": 12.5 }
     });
-    h.settings(json!({ "ux2": true, "view_sessions": true }));
+    h.settings(json!({ "ux2": true, "usage": true }));
     let line = statusline(&h, &payload, true);
     assert!(
         line.ends_with("Context: \x1b[97m12.5% used\x1b[0m"),
-        "on by default, beside the Sessions view: {line:?}"
+        "on by default, beside the Usage view's Sessions: {line:?}"
     );
 
-    h.settings(json!({ "ux2": true, "view_sessions": true, "statusline_context": false }));
+    h.settings(json!({ "ux2": true, "usage": true, "statusline_context": false }));
     let line = statusline(&h, &payload, true);
     assert!(line.contains("Opus"), "{line:?}");
     assert!(
         !line.contains("Context:"),
-        "off, the Sessions view shows it: {line:?}"
+        "off, the Usage view's Sessions show it: {line:?}"
     );
     assert!(
         statusline(&h, &payload, false).contains("Context:"),
-        "a plain terminal has no Sessions view"
+        "a plain terminal has no Usage view"
     );
 
-    h.settings(json!({ "ux2": true, "view_sessions": false, "statusline_context": false }));
+    h.settings(json!({ "ux2": true, "usage": false, "statusline_context": false }));
     assert!(
         statusline(&h, &payload, true).contains("Context:"),
-        "off with no Sessions view, nothing else shows it"
+        "off with no Usage view, nothing else shows it"
     );
 }
 

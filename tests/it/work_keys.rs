@@ -1,7 +1,7 @@
 //! The keys that start work (src/cmd/work.rs), pressed in a client of a
 //! test server: M-t's directory list and the Claude tab it opens, M-W's
 //! tickets each in a tab of its own running `wt`, M-B's branch made in a
-//! worktree by `wtb`, and M-o's worktrees with no tab. A stand-in `claude`
+//! worktree by `wtb`, and M-o's past sessions resumed. A stand-in `claude`
 //! in the test home's `bin` says where it ran, and Linear is an address
 //! nothing answers on, so nothing leaves the machine.
 
@@ -163,44 +163,36 @@ fn m_shift_b_makes_a_branch_no_branch_matches_in_a_worktree_and_starts_claude_th
 }
 
 #[test]
-fn m_o_lists_a_worktree_no_tab_has_open_and_reopens_it_in_a_tab() {
+fn m_o_lists_a_past_session_and_resumes_it_in_a_new_tab() {
     let (server, repo, mut client) = world();
-    let tree = repo.join(".claude/worktrees/lonely");
-    git(
-        &repo,
-        &[
-            "worktree",
-            "add",
-            "-q",
-            "-b",
-            "lonely",
-            tree.to_str().unwrap(),
-        ],
-    );
-    // M-o opens mission control's Work map as a picker of the work no tab
-    // has open, a row each.
-    client.send(b"\x1bo");
-    client.wait_for("the worktree's row", |s| {
-        s.iter()
-            .any(|l| l.contains("lonely") && l.contains("no tab"))
+    // A Claude session of today in the repository that no tab runs.
+    let encoded: String = repo
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let project = server.home.join(".claude/projects").join(encoded);
+    std::fs::create_dir_all(&project).unwrap();
+    let line = serde_json::json!({
+        "type": "user",
+        "cwd": repo,
+        "timestamp": jiff::Timestamp::now().to_string(),
+        "message": { "content": "make the lonely thing work again" },
     });
-    // Enter opens its menu, as the daemon's picker did: a tab there first,
-    // then its diff and lazygit, and its directory to copy.
+    std::fs::write(project.join("sess-1.jsonl"), line.to_string()).unwrap();
+    // M-o opens mission control's Reopen view as a picker, a row each.
+    client.send(b"\x1bo");
+    client.wait_for("the session's row", |s| {
+        s.iter()
+            .any(|l| l.contains("repo") && l.contains("a past session"))
+    });
+    // Enter opens its menu, resuming it first.
     client.send(b"\r");
-    let screen = client.wait_text("Open a tab there, resuming its Claude");
-    for offered in ["Its diff (M-d)", "lazygit", "Copy its directory"] {
-        assert!(
-            screen.iter().any(|l| l.contains(offered)),
-            "{offered}: {screen:#?}"
-        );
-    }
+    client.wait_text("Resume it in a new tab");
     client.send(b"\r");
-    wait("a tab in the worktree", || {
-        tabs(&server).iter().any(|t| {
-            t["panes"][0]["cwd"]
-                .as_str()
-                .is_some_and(|c| Path::new(c) == tree)
-        })
+    wait("Claude resumed in a new tab", || {
+        std::fs::read_to_string(server.home.join("claude-ran"))
+            .is_ok_and(|t| t.contains(&format!("{} --resume sess-1", repo.display())))
     });
 }
 

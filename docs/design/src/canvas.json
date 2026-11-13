@@ -106,7 +106,7 @@
       "page": "design"
     },
     "Slack.dc.html": {
-      "title": "21. Slack: what is new for you, by section as Slack's sidebar lists them, newest first in each",
+      "title": "21. Slack: what is new for you, by section as Slack's sidebar lists them; the section one row per thread, the chosen thread whole beside it",
       "page": "design"
     },
     "TicketInPlace.dc.html": {
@@ -311,6 +311,10 @@
     },
     "ReopenMergedMenu.dc.html": {
       "title": "74. Enter on Reopen's folded merged worktrees: show them, or remove them all after asking",
+      "page": "design"
+    },
+    "PinnedTab.dc.html": {
+      "title": "75. A pinned tab (M-f): first in Needs you, the flag ⚑ in place of its state's mark",
       "page": "design"
     }
   }

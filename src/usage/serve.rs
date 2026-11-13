@@ -7,7 +7,7 @@
 //! intervals.
 //!
 //! Mission control asks for a view with `want_view` each time it draws it,
-//! and reads it with `usage_view`: Resources, Sessions and Usage are worked
+//! and reads it with `usage_view`: Resources and Usage are worked
 //! out off the server's task, only while one was wanted within `WANT_FOR`,
 //! so a view nobody looks at reads no processes and no files. Nothing here
 //! starts a process or waits on the server's task, but the plugins', which
@@ -43,8 +43,12 @@ const KEEP_EVERY: Duration = Duration::from_secs(60);
 const SUGGEST_EVERY: Duration = Duration::from_secs(10 * 60);
 /// How often which pane runs which Claude is read again.
 const SURVEY_EVERY: Duration = Duration::from_secs(5);
-/// How often the Sessions and Usage views are read again while in front.
+/// How often the Usage view is read again while in front.
 const FILES_EVERY: Duration = Duration::from_secs(4);
+/// How often the past Claude sessions are read again while the Reopen view
+/// is in front, and how long a look may take.
+const SESSIONS_EVERY: Duration = Duration::from_secs(30);
+const SESSIONS_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long after a tab reopens its `claude --resume` is typed: its shell
 /// has drawn its prompt by then (persist.rs's wait).
 const TYPE_AFTER: Duration = Duration::from_millis(500);
@@ -53,9 +57,8 @@ const TYPE_AFTER: Duration = Duration::from_millis(500);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ViewKind {
     Resources,
-    Sessions,
     Usage,
-    Closed,
+    Reopen,
 }
 
 impl ViewKind {
@@ -63,9 +66,8 @@ impl ViewKind {
     pub fn title(self) -> &'static str {
         match self {
             ViewKind::Resources => "Resources",
-            ViewKind::Sessions => "Sessions",
             ViewKind::Usage => "Usage",
-            ViewKind::Closed => "Closed",
+            ViewKind::Reopen => "Reopen",
         }
     }
 
@@ -73,9 +75,8 @@ impl ViewKind {
     pub fn setting(self) -> &'static str {
         match self {
             ViewKind::Resources => "view_resources",
-            ViewKind::Sessions => "view_sessions",
             ViewKind::Usage => "usage",
-            ViewKind::Closed => "view_closed",
+            ViewKind::Reopen => "view_reopen",
         }
     }
 }
@@ -91,6 +92,39 @@ pub struct PluginView {
     pub data: ViewData,
 }
 
+/// The tab option `/review-pr` sets once its sealed try starts: the
+/// worktree of the PR it reviews, which a closing keeps.
+pub const SEALED_REVIEW: &str = "@sealed_review";
+/// Set to 1 beside it when that try fetched the PR's crates (`--fetch`).
+pub const SEALED_REVIEW_FETCH: &str = "@sealed_review_fetch";
+
+/// What became of a tab's work, as the Reopen view's chip says it: landed
+/// straight on its branch or through its merged PR, its PR's checks
+/// failing, or changes asked for.
+fn outcome_of(t: &crate::sidebar::model::TabModel) -> String {
+    if let Some((hash, _)) = &t.landed_on {
+        return format!("landed {hash}");
+    }
+    let merged = t.merge == Some(crate::sidebar::model::MergeState::Merged)
+        || t.pr_state == Some(crate::facts::PrState::Merged);
+    if merged {
+        return t.pr.map_or("landed".into(), |n| format!("landed #{n}"));
+    }
+    // Its PR's checks failing, or a landing straight on a branch stopped
+    // on its tests (its phase, `land-lock phase tests failed …`).
+    let landing_failed = t
+        .phase
+        .as_deref()
+        .is_some_and(|p| p.starts_with("tests failed"));
+    if t.checks.is_some_and(|c| c.fail > 0) || landing_failed {
+        return "tests failed".into();
+    }
+    if t.review.as_deref() == Some("CHANGES_REQUESTED") {
+        return "changes asked".into();
+    }
+    String::new()
+}
+
 fn setting_value(key: &str) -> Option<Value> {
     settings::cached(key)
 }
@@ -102,9 +136,12 @@ impl Server {
     pub fn usage_tick(&mut self) {
         let now = Instant::now();
         self.usage_survey(now);
-        self.usage_see_tabs();
+        // Every tab is seen again as the survey answers (every
+        // `SURVEY_EVERY`), each with its sidebar model, and once more as it
+        // closes, rather than on every tick.
         self.usage_habits(now);
-        for kind in [ViewKind::Sessions, ViewKind::Usage, ViewKind::Closed] {
+        self.usage_past_sessions(now);
+        for kind in [ViewKind::Usage, ViewKind::Reopen] {
             if self.usage_wanted(kind, now)
                 && self
                     .usage
@@ -191,6 +228,13 @@ impl Server {
                         Duration::from_millis(resources::RESOURCES_MS),
                         Event::Usage(UsageEvent::Refresh(ViewKind::Resources)),
                     );
+                }
+            }
+            UsageEvent::Sessions(rows) => {
+                self.usage.sessions_busy = false;
+                if let Some(rows) = rows {
+                    self.usage.sessions = rows;
+                    self.usage_refresh(ViewKind::Reopen);
                 }
             }
             UsageEvent::View(kind, data) => {
@@ -305,7 +349,8 @@ impl Server {
     }
 
     fn usage_wanted(&self, kind: ViewKind, now: Instant) -> bool {
-        settings::is_on(kind.setting())
+        // M-o's picker lists Reopen with the view turned off too.
+        (kind == ViewKind::Reopen || settings::is_on(kind.setting()))
             && self
                 .usage
                 .wanted
@@ -326,11 +371,13 @@ impl Server {
     }
 
     /// Works a view out again: off the task for what reads files or
-    /// processes, here for the closed tabs, which are kept in memory.
+    /// processes, here for Reopen, whose closings are kept in memory and
+    /// whose past sessions were read in the background
+    /// (`usage_past_sessions`).
     fn usage_refresh(&mut self, kind: ViewKind) {
         self.usage.asked.insert(kind, Instant::now());
-        if kind == ViewKind::Closed {
-            let data = self.usage_closed_view();
+        if kind == ViewKind::Reopen {
+            let data = self.usage_reopen_view();
             self.usage_set_view(kind, data);
             return;
         }
@@ -376,26 +423,10 @@ impl Server {
                     }));
                 });
             }
-            ViewKind::Sessions => {
-                let tabs = self.usage_claude_tabs();
-                tokio::task::spawn_blocking(move || {
-                    let items = sessions::session_items(
-                        &tabs,
-                        &state,
-                        &paths::claude_dir(),
-                        util::now_ms(),
-                    );
-                    let data = ViewData {
-                        items,
-                        at: Some(util::now_ms()),
-                        ..ViewData::default()
-                    };
-                    let _ = tx.send(Event::Usage(UsageEvent::View(kind, data)));
-                });
-            }
             ViewKind::Usage => {
                 let audit = settings::is_on("request_audit");
                 let open = self.usage_tabs_seen();
+                let tabs = self.usage_claude_tabs();
                 tokio::task::spawn_blocking(move || {
                     let now = util::now_ms();
                     let local = util::local_at_ms(now);
@@ -413,15 +444,22 @@ impl Server {
                             .map(|l| (l.remaining, l.limit)),
                     );
                     let model = charts::model(&state, now, &open, requests);
+                    let mut items = charts::items(base, &model);
+                    items.extend(sessions::sessions_section(
+                        &tabs,
+                        &state,
+                        &paths::claude_dir(),
+                        now,
+                    ));
                     let data = ViewData {
-                        items: charts::items(base, &model),
+                        items,
                         at: Some(now),
                         ..ViewData::default()
                     };
                     let _ = tx.send(Event::Usage(UsageEvent::View(kind, data)));
                 });
             }
-            ViewKind::Closed => {}
+            ViewKind::Reopen => {}
         }
     }
 
@@ -476,7 +514,7 @@ impl Server {
             .collect()
     }
 
-    /// The tabs running Claude, for Sessions, each quiet while the sidebar
+    /// The tabs running Claude, for Usage's Sessions, each quiet while the sidebar
     /// has it idle or finished (sessions.js read the tab's state), so one
     /// looping in the background or stopped on an API error isn't.
     fn usage_claude_tabs(&self) -> Vec<ClaudeTab> {
@@ -508,26 +546,102 @@ impl Server {
 
     /// The Claude session running in a tab, as last read.
     pub fn tab_claude_session(&self, tab: TabId) -> Option<&sessions::Claude> {
-        let panes = self.tabs.get(&tab)?.layout.panes();
+        // A pane parked behind a tool (the diff in its place) included,
+        // its Claude still running there.
+        let panes = self.panes_with_parked(tab);
         panes.iter().find_map(|p| self.usage.claudes.get(p))
     }
 
-    /// The Closed view, from the log.
-    fn usage_closed_view(&mut self) -> ViewData {
-        let open: Vec<OpenTab> = self
-            .usage_tab_list()
-            .into_iter()
+    /// The Reopen view, from the log and the past sessions last read.
+    fn usage_reopen_view(&mut self) -> ViewData {
+        let tabs = self.usage_tab_list();
+        let open: Vec<OpenTab> = tabs
+            .iter()
             .map(|(tab, _)| OpenTab {
-                path: self.tab_reopen_path(tab),
-                session: self.tab_claude_session(tab).map(|c| c.session_id.clone()),
+                path: self.tab_reopen_path(*tab),
+                session: self.tab_claude_session(*tab).map(|c| c.session_id.clone()),
             })
             .collect();
+        let running: std::collections::HashSet<String> =
+            open.iter().filter_map(|t| t.session.clone()).collect();
+        let state = paths::state_dir();
         let now = util::now_ms();
+        let closings = self.usage.closed.listed(&state, &open);
+        let items = super::reopen::items(
+            &closings,
+            &self.usage.sessions,
+            &running,
+            &super::closed::removed(&state),
+            now,
+            &|ms| util::ymd(&util::local_at_ms(ms)),
+        );
         ViewData {
-            items: self.usage.closed.items(&paths::state_dir(), &open, now),
+            items,
+            empty: Some(
+                "Nothing to reopen: a tab you close and a Claude session of the last two weeks with no tab are listed here."
+                    .into(),
+            ),
             at: Some(now),
             ..ViewData::default()
         }
+    }
+
+    /// The Reopen view shows, or M-o's picker lists it: its past sessions
+    /// are read while it does, at once the first time.
+    pub fn want_past_sessions(&mut self) {
+        let now = Instant::now();
+        let first = self
+            .usage
+            .sessions_wanted
+            .is_none_or(|at| now.duration_since(at) >= WANT_FOR);
+        self.usage.sessions_wanted = Some(now);
+        if first {
+            self.usage_past_sessions(now);
+        }
+    }
+
+    /// Reads the Claude sessions of the last two weeks again (`wt-revive
+    /// --sessions --json`, off the task, as the Work map reads its rows)
+    /// while the Reopen view or M-o's picker was shown within `WANT_FOR`,
+    /// at most every `SESSIONS_EVERY`; a look that fails keeps the rows the
+    /// last one gave.
+    fn usage_past_sessions(&mut self, now: Instant) {
+        let wanted = self
+            .usage
+            .sessions_wanted
+            .is_some_and(|at| now.duration_since(at) < WANT_FOR);
+        if !wanted
+            || self.usage.sessions_busy
+            || self
+                .usage
+                .sessions_at
+                .is_some_and(|at| now.duration_since(at) < SESSIONS_EVERY)
+            || tokio::runtime::Handle::try_current().is_err()
+        {
+            return;
+        }
+        let Ok(exe) = util::exe() else {
+            return;
+        };
+        self.usage.sessions_busy = true;
+        self.usage.sessions_at = Some(now);
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let mut cmd = tokio::process::Command::new(exe);
+            cmd.args(["wt-revive", "--sessions", "--json"]);
+            let rows: Option<Vec<crate::cmd::wt_revive::SessionRow>> =
+                util::run_async(&mut cmd, Some(SESSIONS_TIMEOUT))
+                    .await
+                    .ok()
+                    .filter(|o| o.status.success())
+                    .map(|o| {
+                        String::from_utf8_lossy(&o.stdout)
+                            .lines()
+                            .filter_map(|l| serde_json::from_str(l).ok())
+                            .collect()
+                    });
+            let _ = tx.send(Event::Usage(UsageEvent::Sessions(rows)));
+        });
     }
 
     // ── Which pane runs which Claude ────────────────────────────────────────
@@ -563,8 +677,35 @@ impl Server {
 
     // ── Closed tabs ─────────────────────────────────────────────────────────
 
-    fn usage_tab_now(&self, tab: TabId, index: usize) -> TabNow {
+    /// A tab as it is now, what its sidebar model says of it (`model`)
+    /// giving its last prompt and what became of its work.
+    fn usage_tab_now(
+        &self,
+        tab: TabId,
+        index: usize,
+        model: Option<&crate::sidebar::model::TabModel>,
+    ) -> TabNow {
+        let opt = |key: &str| {
+            self.tabs
+                .get(&tab)
+                .and_then(|t| t.opts.get(key))
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from)
+        };
         TabNow {
+            prompt: model
+                .and_then(|m| m.turn.as_ref())
+                .map(|t| crate::sidebar::text::plain(&t.prompt).replace('\n', " "))
+                .unwrap_or_default(),
+            outcome: model.map(outcome_of).unwrap_or_default(),
+            panes: self.tabs.get(&tab).map_or(0, |t| t.layout.panes().len()),
+            opened: self
+                .tabs
+                .get(&tab)
+                .and_then(|t| crate::tabs::opened(&t.opts))
+                .map(|secs| secs * 1000),
+            sealed: opt(SEALED_REVIEW),
+            sealed_fetch: opt(SEALED_REVIEW_FETCH).is_some_and(|v| v.as_os_str() == "1"),
             tab,
             index,
             name: self.tab_label(tab),
@@ -595,37 +736,77 @@ impl Server {
     /// Keeps every tab as it is now, for when it closes.
     fn usage_see_tabs(&mut self) {
         let now = util::now_ms();
+        let models: HashMap<TabId, crate::sidebar::model::TabModel> = self
+            .sidebar_all_tabs()
+            .into_iter()
+            .map(|t| (t.id, t))
+            .collect();
         let seen: Vec<TabNow> = self
             .usage_tab_list()
             .into_iter()
-            .map(|(tab, index)| self.usage_tab_now(tab, index))
+            .map(|(tab, index)| self.usage_tab_now(tab, index, models.get(&tab)))
             .collect();
         for t in seen {
             self.usage.closed.seen(t, now);
         }
     }
 
+    /// A tab about to close is losing its panes (`kill_tab`, or its last
+    /// pane ending): the screen of its Claude's pane (else its active one),
+    /// read from the emulator in memory alone, is kept for the closing's
+    /// last screen.
+    /// Only while Settings' "Save what panes show" (`save_contents`) and
+    /// the Reopen view are on, since a screen can hold secrets.
+    pub fn keep_closing_screen(&mut self, tab: TabId, shot: Option<super::shots::Shot>) {
+        let kept = settings::is_on("save_contents") && settings::is_on("view_reopen");
+        if let Some(shot) = shot.filter(|_| kept) {
+            self.usage.closing_shots.insert(tab, shot);
+        }
+    }
+
+    /// The pane whose screen a closing tab keeps: its Claude's, else its
+    /// active one.
+    pub fn closing_screen_pane(&self, tab: TabId) -> Option<PaneId> {
+        let t = self.tabs.get(&tab)?;
+        let panes = t.layout.panes();
+        panes
+            .iter()
+            .copied()
+            .find(|p| self.sidebar.panes.get(p).is_some_and(|r| r.claude))
+            .or(Some(t.active))
+    }
+
     /// A tab is being taken out (`remove_tab`, before it goes): it is seen
-    /// once more and logged, for the Closed view.
+    /// once more and logged, with its last screen, for the Reopen view.
     pub fn tab_closing(&mut self, tab: TabId) {
+        let shot = self.usage.closing_shots.remove(&tab);
         // The Notifications window is no tab to reopen.
         if self.is_notices_tab(tab) {
             return;
         }
         let index = self.tab_number(tab);
         let now = util::now_ms();
-        let seen = self.usage_tab_now(tab, index);
+        let model = self.sidebar_all_tabs().into_iter().find(|t| t.id == tab);
+        let seen = self.usage_tab_now(tab, index, model.as_ref());
         self.usage.closed.seen(seen, now);
-        self.usage.closed.closed(&paths::state_dir(), tab, now);
-        if self.usage_wanted(ViewKind::Closed, Instant::now()) {
-            self.usage_refresh(ViewKind::Closed);
+        self.usage
+            .closed
+            .closed(&paths::state_dir(), tab, now, shot.as_ref());
+        if self.usage_wanted(ViewKind::Reopen, Instant::now()) {
+            self.usage_refresh(ViewKind::Reopen);
         }
     }
 
     /// Reopens a closed tab, by its item's id, in the session `client`
     /// shows: in its directory (home when that is gone), with the name it
-    /// was given, and its Claude resumed in its shell.
-    pub fn reopen_closed(&mut self, client: ClientId, key: &str) -> Result<TabId, String> {
+    /// was given, and its Claude resumed in its shell. Gives the tab, and
+    /// what to say once mission control has closed (a sealed review's try
+    /// that couldn't start).
+    pub fn reopen_closed(
+        &mut self,
+        client: ClientId,
+        key: &str,
+    ) -> Result<(TabId, Option<String>), String> {
         let state = paths::state_dir();
         let Some(closing) = self.usage.closed.find(&state, key) else {
             return Err("That tab isn't in the closed list any more.".into());
@@ -656,6 +837,16 @@ impl Server {
                 crate::mux::server::Opened::Front,
             )
             .map_err(|e| format!("Couldn't open it: {e}"))?;
+        // A sealed review stays one, so closing it again keeps its try.
+        if let Some(sealed) = &closing.sealed
+            && let Some(t) = self.tabs.get_mut(&tab)
+        {
+            t.opts
+                .insert(SEALED_REVIEW.into(), sealed.to_string_lossy().into_owned());
+            if closing.sealed_fetch {
+                t.opts.insert(SEALED_REVIEW_FETCH.into(), "1".into());
+            }
+        }
         // The review tab about its PR's worktree again, while that is there.
         if let Some(about) = closing.tab_dir.as_ref().filter(|d| d.is_dir())
             && let Some(t) = self.tabs.get_mut(&tab)
@@ -670,18 +861,98 @@ impl Server {
         if let Some(text) = super::closed::resume_line(closing.session.as_deref()) {
             self.send_later(TYPE_AFTER, Event::Usage(UsageEvent::Type { pane, text }));
         }
+        let note = closing
+            .sealed
+            .as_ref()
+            .and_then(|worktree| self.reopen_sealed(pane, worktree, closing.sealed_fetch));
+        Ok((tab, note))
+    }
+
+    /// A sealed review reopened: the PR's code tried again in a sealed try
+    /// (`switchboard try --sealed --detached`, with `--fetch` when the
+    /// review's try fetched the PR's crates), typed into a shell split
+    /// beside its Claude, so what it prints stays; on a computer with no
+    /// sandbox, or with the worktree gone, only its Claude is resumed,
+    /// which it gives back to say.
+    fn reopen_sealed(
+        &mut self,
+        pane: PaneId,
+        worktree: &std::path::Path,
+        fetch: bool,
+    ) -> Option<String> {
+        if let Err(why) = crate::platform::sandbox_ready() {
+            return Some(format!("Only the review's Claude was resumed: {why}"));
+        }
+        if !worktree.is_dir() {
+            return Some(format!(
+                "Only the review's Claude was resumed: {} is gone.",
+                paths::tilde(worktree)
+            ));
+        }
+        let Ok(beside) = self.split(pane, crate::mux::Direction::Right, None, None, None, true)
+        else {
+            return Some("Only the review's Claude was resumed: no room beside it.".into());
+        };
+        let quoted = format!("'{}'", worktree.to_string_lossy().replace('\'', "'\\''"));
+        self.send_later(
+            TYPE_AFTER,
+            Event::Usage(UsageEvent::Type {
+                pane: beside,
+                text: format!(
+                    "switchboard try --sealed{} --detached {quoted}\r",
+                    if fetch { " --fetch" } else { "" }
+                ),
+            }),
+        );
+        None
+    }
+
+    /// Resumes a past Claude session in a new tab in the folder Claude finds
+    /// it from (its project's), never in someone else's PR's worktree.
+    pub fn resume_session(&mut self, client: ClientId, id: &str) -> Result<TabId, String> {
+        let Some(row) = self.usage.sessions.iter().find(|s| s.id == id).cloned() else {
+            return Err("That session isn't in the list any more.".into());
+        };
+        let Some(text) = super::closed::resume_line(Some(&row.id)) else {
+            return Err("That session can't be resumed.".into());
+        };
+        // Where Claude finds the conversation: the folder its project is
+        // named from, and nowhere else.
+        let dir = Some(PathBuf::from(&row.resume))
+            .filter(|p| !row.resume.is_empty() && p.is_dir())
+            .ok_or("That session's folder is gone, so Claude can't find it to resume.")?;
+        if crate::trust::in_review_dir(&dir) {
+            return Err(crate::trust::refusal(&dir));
+        }
+        let session = self
+            .clients
+            .get(&client)
+            .map(|c| c.session.clone())
+            .or_else(|| self.sessions.first().map(|s| s.name.clone()))
+            .ok_or("No session to open it in.")?;
+        let (tab, pane) = self
+            .new_tab(
+                &session,
+                Some(dir),
+                None,
+                None,
+                crate::mux::server::Opened::Front,
+            )
+            .map_err(|e| format!("Couldn't open it: {e}"))?;
+        self.send_later(TYPE_AFTER, Event::Usage(UsageEvent::Type { pane, text }));
         Ok(tab)
     }
 
-    /// M-T: reopens the newest tab of the Closed view (one in a review
-    /// worktree passed over, as `reopen_closed` refuses it) and takes it out
-    /// of the list, so pressing again reopens the one closed before.
+    /// M-T: reopens the newest closed tab of the Reopen view (one in a
+    /// review worktree passed over, as `reopen_closed` refuses it) and takes
+    /// it out of the list, so pressing again reopens the one closed before.
     pub fn reopen_last(&mut self, client: ClientId) {
         let state = paths::state_dir();
         let newest = self
-            .usage_closed_view()
+            .usage_reopen_view()
             .items
             .into_iter()
+            .filter(|item| super::reopen::of(item).is_some() && !super::reopen::is_session(item))
             .find(|item| match &item.target {
                 crate::items::Target::Dir(dir) => !crate::trust::in_review_dir(dir),
                 _ => true,
@@ -692,25 +963,39 @@ impl Server {
         };
         let closed_at = self.usage.closed.find(&state, &item.id).map(|c| c.at);
         match self.reopen_closed(client, &item.id) {
-            Ok(_) => {
+            Ok((_, note)) => {
                 if let Some(at) = closed_at {
                     self.usage.closed.remove(&state, &item.id, at);
                 }
-                if self.usage_wanted(ViewKind::Closed, Instant::now()) {
-                    self.usage_refresh(ViewKind::Closed);
+                if self.usage_wanted(ViewKind::Reopen, Instant::now()) {
+                    self.usage_refresh(ViewKind::Reopen);
+                }
+                if let Some(note) = note {
+                    self.say(Some(client), &note);
                 }
             }
             Err(e) => self.say(Some(client), &e),
         }
     }
 
-    /// Removes a closed tab from the view, up to when it closed.
+    /// Removes a closed tab from the view, up to when it closed, or a past
+    /// session, up to when it was last used.
     pub fn remove_closed(&mut self, key: &str) {
         let state = paths::state_dir();
-        if let Some(closing) = self.usage.closed.find(&state, key) {
-            self.usage.closed.remove(&state, key, closing.at);
+        // Up to the newest of its closing and its session's last use, so a
+        // conversation resumed elsewhere since it closed goes too.
+        let closed = self.usage.closed.find(&state, key).map(|c| c.at);
+        let used = self
+            .usage
+            .sessions
+            .iter()
+            .find(|s| s.id == key)
+            .map(|s| s.when * 1000);
+        let until = closed.max(used);
+        if let Some(at) = until {
+            self.usage.closed.remove(&state, key, at);
         }
-        self.usage_refresh(ViewKind::Closed);
+        self.usage_refresh(ViewKind::Reopen);
     }
 
     // ── Habits ──────────────────────────────────────────────────────────────
@@ -981,5 +1266,35 @@ impl Server {
                 data: p.view(),
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::facts::{Checks, PrState};
+    use crate::sidebar::model::{MergeState, TabModel};
+
+    #[test]
+    fn what_became_of_a_tab_s_work() {
+        let mut t = TabModel::new(TabId(1), 1, "api");
+        assert_eq!(outcome_of(&t), "");
+        t.review = Some("CHANGES_REQUESTED".into());
+        assert_eq!(outcome_of(&t), "changes asked");
+        t.phase = Some("tests failed 2 of 401".into());
+        assert_eq!(outcome_of(&t), "tests failed", "a landing's tests");
+        t.phase = None;
+        t.checks = Some(Checks {
+            pass: 3,
+            fail: 1,
+            pending: 0,
+        });
+        assert_eq!(outcome_of(&t), "tests failed");
+        t.pr = Some(12);
+        t.pr_state = Some(PrState::Merged);
+        t.merge = Some(MergeState::Merged);
+        assert_eq!(outcome_of(&t), "landed #12", "a merged PR landed");
+        t.landed_on = Some(("a3f1c2e".into(), "main".into()));
+        assert_eq!(outcome_of(&t), "landed a3f1c2e");
     }
 }

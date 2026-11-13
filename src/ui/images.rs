@@ -343,6 +343,98 @@ pub fn raster_picture(img: &RgbaImage, cols: u16, rows: u16, cell: Cell, tones: 
     pm
 }
 
+/// A closed tab's last screen (src/usage/shots.rs) as board 18's
+/// thumbnail: on the sunken surface inside a 1 px border with a 6 px
+/// corner, each run of its lines a rounded bar of its color as wide as it
+/// was, its lines scaled to fit the cells, the last ones kept when they
+/// don't all fit.
+pub fn raster_screen(
+    shot: &crate::usage::shots::Shot,
+    cols: u16,
+    rows: u16,
+    cell: Cell,
+    tones: &Tones,
+) -> Pixmap {
+    let (w, h) = (cols as u32 * cell.0 as u32, rows as u32 * cell.1 as u32);
+    let mut pm = canvas(w, h);
+    let (wf, hf) = (w as f32, h as f32);
+    fill(
+        &mut pm,
+        round_rect(0.0, 0.0, wf, hf, 6.0),
+        rgb(tones.rule),
+        1.0,
+    );
+    fill(
+        &mut pm,
+        round_rect(1.0, 1.0, wf - 2.0, hf - 2.0, 5.0),
+        rgb(tones.sunken),
+        1.0,
+    );
+    let pad = 6.0;
+    let (iw, ih) = (wf - 2.0 * pad, hf - 2.0 * pad);
+    if iw <= 0.0 || ih <= 0.0 || shot.lines.is_empty() {
+        return pm;
+    }
+    // A line no shorter than 3 px, so a bar reads; the last lines kept.
+    let line_h = (ih / shot.lines.len() as f32).max(3.0);
+    let shown = ((ih / line_h) as usize).min(shot.lines.len());
+    let from = shot.lines.len() - shown;
+    let col_w = iw / f32::from(shot.cols.max(1));
+    for (n, line) in shot.lines[from..].iter().enumerate() {
+        let y = pad + n as f32 * line_h + line_h * 0.2;
+        let bar_h = line_h * 0.6;
+        let mut x = 0u32;
+        for (run, color) in &line.runs {
+            if let Some(c) = color {
+                let bx = pad + x as f32 * col_w;
+                let bw = (*run as f32 * col_w).min(pad + iw - bx);
+                fill(&mut pm, round_rect(bx, y, bw, bar_h, bar_h / 2.0), *c, 0.85);
+            }
+            x += u32::from(*run);
+        }
+    }
+    pm
+}
+
+/// A closed tab's last screen in `area`, as `raster_screen` draws it; as
+/// text, its last lines, dim.
+pub fn screen(
+    frame: &mut Frame,
+    name: &str,
+    area: Rect,
+    shot: &std::sync::Arc<crate::usage::shots::Shot>,
+) {
+    let area = area.intersection(frame.buf.area);
+    let tones = Tones::now();
+    if let Some(cell) = frame.graphics
+        && placeable(frame, area)
+    {
+        let key = key_of((
+            "screen",
+            area.width,
+            area.height,
+            cell,
+            tones,
+            shot.as_ref(),
+        ));
+        let shot = shot.clone();
+        let (cols, rows) = (area.width, area.height);
+        place(
+            frame,
+            name,
+            area,
+            key,
+            Box::new(move || raster_screen(&shot, cols, rows, cell, &tones)),
+        );
+        return;
+    }
+    frame.links.clear_area(area);
+    let style = Style::new().fg(tones.secondary);
+    for (row, text) in shot.last_text(area.height as usize).iter().enumerate() {
+        put_text(frame, area.x, area.y + row as u16, text, style, area.width);
+    }
+}
+
 /// A meter one row tall: a track in the rule's color and a fill to `frac`,
 /// each 0.3 of the row tall and centered with a 3 px corner, and with
 /// `tick` a light 2 px mark at that fraction, 0.8 of the row tall.
@@ -1734,6 +1826,33 @@ impl ImageCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_last_screen_is_rastered_as_bars_of_its_colors() {
+        use crate::usage::shots::{Shot, ShotLine};
+        let shot = Shot {
+            cols: 10,
+            lines: vec![ShotLine {
+                runs: vec![(5, Some([255, 0, 0])), (5, None)],
+                text: String::new(),
+            }],
+        };
+        let tones = Tones {
+            rule: Color::Rgb(1, 1, 1),
+            sunken: Color::Rgb(0, 0, 0),
+            light: Color::White,
+            secondary: Color::Gray,
+            failed: Color::Red,
+            done: Color::Green,
+        };
+        let pm = raster_screen(&shot, 10, 4, (10, 20), &tones);
+        let at = |x: u32, y: u32| pm.pixel(x, y).unwrap().demultiply();
+        let mid = 40;
+        let red = at(25, mid);
+        assert!(red.red() > 180 && red.green() < 60, "the run's own color");
+        let gap = at(80, mid);
+        assert!(gap.red() < 20, "a gap is the surface");
+    }
 
     const CELL: Cell = (8, 16);
 

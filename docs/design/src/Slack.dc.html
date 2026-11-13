@@ -59,7 +59,7 @@ const K = (x, y, w, h, css, text) => imgs.push({ pos: 'position:absolute;left:ca
 // Tints for chips and cells: Y B M G R by tone, 5 neutral.
 const TINT = { y: 'Y', b: 'B', m: 'M', g: 'G', r: 'R', d: '5', t: '5', a: '3' };
 // MARK: one glyph per state, the same everywhere.
-const MARK = { needs: ['●', 'y'], working: ['⠹', 'b'], landing: ['▲', 'm'], queued: ['▲', 'm'], idle: ['○', 'd'], failed: ['✕', 'r'], passed: ['✓', 'g'], pending: ['◌', 'y'], reminder: ['◷', 'y'], mention: ['@', 'b'], note: ['✎', 'm'], comment: ['◇', 'b'] };
+const MARK = { needs: ['●', 'y'], working: ['⠹', 'b'], landing: ['▲', 'm'], queued: ['▲', 'm'], idle: ['○', 'd'], failed: ['✕', 'r'], passed: ['✓', 'g'], pending: ['◌', 'y'], reminder: ['◷', 'y'], mention: ['@', 'b'], note: ['✎', 'm'], comment: ['◇', 'b'], pinned: ['⚑', 'y'] };
 const mark = (x, y, state, bg) => put(x, y, MARK[state][0], MARK[state][1], '', bg);
 // LABEL: a section's name in capitals, bold, in its tone (d unless it names a state); its count at xr.
 const label = (x, y, text, tone, count, xr) => { put(x, y, text.toUpperCase(), tone || 'd', 'b'); if (count !== undefined && xr) R(xr, y, String(count), tone || 'd'); };
@@ -182,13 +182,13 @@ const sec = (y, glyph, gtone, name, count, isNew, sel) => {
   if (count) R(SX + SW - 1, y, String(count), isNew ? 'a' : 'd', isNew ? 'b' : '', bg);
 };
 const dm = (y, who, name, count, isNew) => { avatar(SX + 1, y, who); T(SX + 4, y, [name, isNew ? 't' : 'd', isNew ? 'b' : '']); if (count) R(SX + SW - 1, y, String(count), isNew ? 'a' : 'd', isNew ? 'b' : ''); };
-sec(3, '@', 'b', 'Mentions', 2, true, true);
+sec(3, '@', 'b', 'Mentions', 1, true);
 sec(4, '◇', 'b', 'Threads', 1, true);
 label(SX + 1, 6, 'Direct messages');
 dm(7, 'Ben', 'Ben', 1, true);
 dm(8, 'Priya', 'Priya, Sam', 0, false);
 label(SX + 1, 10, 'Channels');
-sec(11, '#', 'd', 'web-app', 3, true);
+sec(11, '#', 'd', 'web-app', 5, true, true);
 sec(12, '#', 'd', 'design', 1, true);
 sec(13, '#', 'd', 'landing', 1, false);
 sec(14, '#', 'd', 'deploys', 0, false);
@@ -196,29 +196,40 @@ sec(15, '#', 'd', 'oncall', 0, false);
 T(SX + 1, 17, ['▸ ', 'd'], ['6 quiet today', 'f']);
 ruleV(SX + SW + 2, 3, 40);
 
-// THE CHOSEN SECTION'S MESSAGES: newest first, new and seen together, each headed by its person's Large avatar.
+// THE CHOSEN SECTION, ONE ROW PER THREAD: a thread is one row however many of its replies are new, so nothing shows twice
+// beside the thread pane; a message with no replies is a row of its own. Newest activity first.
+// A row: who started it (Large avatar) and its first message, what it is about; then who is in it (Small avatars),
+// its replies and how many are new, and when it last moved at the right. A thread started before the window is
+// headed by its first message all the same, fetched with the thread, and says when it started.
 const MX = 61, MW = 49;
-let my = pane(MX, 3, MW, 'Mentions', '2 new · 4 this week · newest first');
-const msg = (y, who, where, when, lines, opts) => {
+let my = pane(MX, 3, MW, '#web-app', '2 threads with new replies · 5 new · newest first');
+const thread = (y, who, first, people, replies, fresh, when, opts) => {
   opts = opts || {};
-  const bg = row(MX - 1, y, MW + 1, lines.length + 1, opts.sel);
+  const bg = row(MX - 1, y, MW + 1, replies ? 3 : 2, opts.sel);
+  const seen = !fresh;
   avatar(MX, y, who, true);
-  let nx = T(MX + 5, y, [who, 't', 'b', bg], ['  ' + where + '  ' + when, 'd', '', bg]);
-  if (opts.isNew) chip(nx + 2, y, 'new', 'a');
-  if (opts.right) R(MX + MW - 1, y, opts.right[0], opts.right[1], '', bg);
-  lines.forEach((l, i) => T(MX + 5, y + 1 + i, ...(typeof l === 'string' ? [[l, opts.seen ? 'd' : 't', '', bg]] : l.map((q) => typeof q === 'string' ? [q, opts.seen ? 'd' : 't', '', bg] : [q[0], q[1], '', bg]))));
-  return y + lines.length + 2;
+  let nx = T(MX + 5, y, [who, 't', 'b', bg]);
+  if (opts.started) put(nx + 2, y, 'started ' + opts.started, 'd', '', bg);
+  R(MX + MW - 1, y, when, fresh ? 'a' : 'd', '', bg);
+  put(MX + 5, y + 1, clip(first, MW - 6), seen ? 'd' : 't', '', bg);
+  if (replies) {
+    let ax = MX + 5; for (const p of people) { avatar(ax, y + 2, p); ax += 2; }
+    ax += put(ax + 1, y + 2, replies + (replies === 1 ? ' reply' : ' replies'), 'd', '', bg) + 2;
+    if (fresh) chip(ax, y + 2, fresh + ' new', 'a');
+  }
+  return y + (replies ? 4 : 3);
 };
-my = msg(my, 'Ana', '#web-app', '4m', [[['@you', 'a'], ' can you look at the RSVP menu before'], 'the 3:00 review? It closes when the', 'calendar refreshes.'], { sel: true, isNew: true, right: ['3 replies', 'd'] });
-my = msg(my, 'Priya', '#landing', '32m', [[['@you', 'a'], ' is the benchmark harness waiting on'], 'the queue?'], { isNew: true, right: ['↩ replied', 'd'] });
-my = msg(my, 'Lee', '#deploys', 'yesterday', [[['@you', 'a'], ' web-app PR 2031 is on test; the'], 'notes are in the thread.'], { seen: true });
-my = msg(my, 'Sam', '#oncall', 'Mon', [[['@you', 'a'], ' the sync worker alert is chronic now,'], 'muted for the week.'], { seen: true });
-put(MX, my, 'Older mentions stay in Slack.', 'f');
+my = thread(my, 'Ana', '@you can you look at the RSVP menu before the 3:00 review? It closes when the calendar refreshes.', ['Ana', 'Ben', 'Priya'], 3, 3, '1m', { sel: true });
+my = thread(my, 'Lee', 'Retry banner copy: "Try again" or "Retry"? Leaning "Try again" for the inline one.', ['Lee', 'Maya', 'Alex', 'You'], 7, 2, '12m', { started: 'Tue' });
+my = thread(my, 'Sam', 'web-app PR 2031 is on test; release notes are pinned in #deploys.', [], 0, 0, '40m');
+my = thread(my, 'Alex', 'checkout e2e is flaky again on the slow runner, retried twice.', ['Alex', 'Ben'], 4, 0, '2h');
+my = thread(my, 'Maya', 'Lunch and learn moved to Thursday, same room.', [], 0, 0, 'yesterday');
+put(MX, my, 'Older messages stay in Slack.', 'f');
 ruleV(MX + MW + 2, 3, 40);
 
 // THE CHOSEN MESSAGE'S THREAD, from 160 columns; narrower, i shows it in the messages' place.
 const TX = 114, TW = 46;
-let py = pane(TX, 3, TW, '#web-app', 'thread · 3 replies · opened from your mention');
+let py = pane(TX, 3, TW, '#web-app', 'thread · 3 replies, 3 new');
 const reply = (y, who, when, lines, isNew) => {
   if (isNew) put(TX - 1, y, '▌', 'a');
   avatar(TX, y, who, true);
