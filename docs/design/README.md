@@ -33,7 +33,7 @@ A tab and what it shows in Claude's place.
 
 The tabs and where each piece of work stands.
 
-- [3. M-Space: mission control's Tabs: what each tab asks, is doing or did, rather than its screen](https://cquinones100.github.io/switchboard/design/3-mission-control.html)
+- [3. M-Space: mission control's Tabs: what each tab asks, is doing or did, rather than its screen; a finished tab, loops and reminders too](https://cquinones100.github.io/switchboard/design/3-mission-control.html)
 - [5. Landing as a pipeline](https://cquinones100.github.io/switchboard/design/5-landing.html)
 - [16. Autopilot as a kanban board](https://cquinones100.github.io/switchboard/design/16-autopilot-board.html)
 - [29. Routines: a prompt of yours on a schedule, in the tab its last run used](https://cquinones100.github.io/switchboard/design/29-routines.html)
