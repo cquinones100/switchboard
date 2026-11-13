@@ -139,7 +139,9 @@ tab(32, '○', 'd', 9, 'oncall watch', 'idle 14m');
 keys(1, 44, [['M-t', 'new'], ['M-j', 'jump'], ['M-a', 'next']]);
 vl(34, 0, 45);
 
-// TWO TABS SIDE BY SIDE: M-\ put tab 5 beside tab 1, split by a rule at column 97
+// TWO TABS SIDE BY SIDE: M-\ put tab 5 beside tab 1, split by a rule at column 97.
+// Each header's keys row is board 1's: M-c Claude, M-d Diff, M-v PR, M-i Ticket, M-e Note, M-h History, M-\ Beside, then ⌘ Commands at the right; Beside is lit on both sides while two tabs share the screen, and a click on it puts the pane back.
+// Narrow, they give way from the end: ⌘ first, then Beside (the footer under the beside side still says M-\ put back), then History. At 160 columns a side is 62 wide, room for the first five alone; History needs 77, Beside 91.
 vl(97, 0, 45);
 
 // THE LEFT SIDE, in focus: tab 1, its Claude idle at the prompt

@@ -142,7 +142,9 @@ vl(34, 0, 45);
 // THE TAB IN FOCUS: what it shows in Claude's place, by the keys you already use
 fill(35, 0, 125, 1, '3');
 T(36, 0, ['⠹', 'b', '', '3'], [' 1 planning', 't', 'b', '3'], ['   ~/switchboard · main · working 2m', 'd', '', '3']);
-let x = 36; x += keycap(x, 2, 'M-c', 'Claude', true); x += keycap(x, 2, 'M-d', 'Diff'); x += keycap(x, 2, 'M-v', 'PR'); x += keycap(x, 2, 'M-i', 'Ticket'); keycap(x, 2, 'M-e', 'Note');
+let x = 36; x += keycap(x, 2, 'M-c', 'Claude', true); x += keycap(x, 2, 'M-d', 'Diff'); x += keycap(x, 2, 'M-v', 'PR'); x += keycap(x, 2, 'M-i', 'Ticket'); x += keycap(x, 2, 'M-e', 'Note');
+// Then the tab's history and M-\'s picker of a tab to show beside it; when the row is narrow, the ⌘ button gives way first, then Beside, then History.
+x += keycap(x, 2, 'M-h', 'History'); keycap(x, 2, 'M-\\', 'Beside');
 hl(35, 3, 125);
 fill(36, 5, 52, 1, '4'); put(36, 5, '> how many commits are left for the fork to port?', 't', '', '4');
 T(36, 7, '⏺ About five commits are still unported. GitHub counts our main as 27 commits ahead, but the');
