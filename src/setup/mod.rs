@@ -39,13 +39,13 @@
 //! before a part changes anything of yours the first time (Enter is yes, a
 //! closed input no, so nothing piped or unattended says yes), brings a part
 //! already set up up to date without asking, and ends with what is left to
-//! do. As a plugin, Switchboard keeps out of your Claude Code settings: the
-//! guided setup never asks to add its statusline and permissions to them,
-//! only says that `switchboard setup claude` does, and changes them only
-//! when Switchboard's part is there already. The plugin is Switchboard's
-//! own, so it is never asked about. An install an earlier version made is
-//! asked once whether to load Switchboard as a plugin; after a yes, taking
-//! out what it put in your files isn't asked about again.
+//! do. As a plugin, Switchboard adds nothing to your Claude Code settings:
+//! its plugin draws the statusline in its panes, and the guided setup only
+//! takes out the statusline and hooks an earlier version added to them.
+//! The plugin is Switchboard's own, so it is never asked about. An install
+//! an earlier version made is asked once whether to load Switchboard as a
+//! plugin; after a yes, taking out what it put in your files isn't asked
+//! about again.
 //!
 //! What the parts write is compiled into the binary, so a binary built from
 //! a clone brings new skills, hooks and settings that reach the plugin and
@@ -130,7 +130,7 @@ pub const PARTS: &[Part] = &[
     },
     Part {
         name: "claude",
-        about: "add Switchboard's statusline and permissions to ~/.claude/settings.json, and its hooks unless it loads as a plugin (then take them out)",
+        about: "add Switchboard's hooks, statusline and permissions to ~/.claude/settings.json; as a plugin, which carries the hooks and statusline itself, take out the ones earlier versions added there",
         run: claude_settings::run,
     },
     Part {
@@ -636,45 +636,50 @@ fn way_offered(check: bool, list: &mut List) -> Way {
     way
 }
 
-/// Switchboard as a plugin: your settings are left as they are, its
-/// statusline and permissions named as yours to add (`switchboard setup
-/// claude`), never asked about, unless its part is there already, which is
-/// brought up to date; what an earlier version put in `~/.claude` is taken
-/// out without asking.
+/// Switchboard as a plugin: nothing added to your settings, its plugin
+/// drawing the statusline in its panes; what an earlier version put in
+/// `~/.claude` (the hooks and statusline in your settings, its part of your
+/// CLAUDE.md) taken out without asking.
 fn plugin_way(check: bool, list: &mut List) {
     let settings = part_named("claude").expect("a part");
-    // Without Switchboard's part, the file isn't looked at further: a link
-    // leading nowhere, which leaves Claude Code none of your settings, is
-    // said, and changed only when you ask.
-    if !claude_settings::set_up() {
-        if let Some((target, into_clone)) = claude_settings::dead_link() {
-            let fix = if into_clone {
-                ": switchboard setup claude makes it a file of your own from what it held in its clone, with Switchboard's statusline and permissions"
-            } else {
-                ""
-            };
-            list.todo(format!(
-                "~/.claude/settings.json links to {}, which isn't there, so Claude Code reads none of your settings{fix}",
-                home_tilde(&target)
-            ));
-        }
-        list.optional(
-            "Switchboard's statusline and permissions, for the Sessions and Usage views and the loops running unattended, left out of your ~/.claude/settings.json: switchboard setup claude adds them, a statusline of yours still run outside Switchboard's panes",
-        );
-    } else {
+    // A link leading nowhere, which leaves Claude Code none of your
+    // settings, is said, and changed only when you ask.
+    if let Some((target, into_clone)) = claude_settings::dead_link() {
+        let fix = if into_clone {
+            ": switchboard setup claude makes it a file of your own from what it held in its clone"
+        } else {
+            ""
+        };
+        list.todo(format!(
+            "~/.claude/settings.json links to {}, which isn't there, so Claude Code reads none of your settings{fix}",
+            home_tilde(&target)
+        ));
+    }
+    if claude_settings::set_up() {
         match pending(settings) {
             Err(e) => list.todo(format!("Claude Code's settings: {e:#}")),
-            Ok(0) => list.ok(
-                "Claude Code's statusline and permissions (the Sessions and Usage views, the loops running unattended)",
-            ),
+            Ok(0) => {}
             Ok(_) if check => list.todo(
-                "your Claude Code settings have Switchboard's changes to take: switchboard setup claude",
+                "your ~/.claude/settings.json has what an earlier version added there and Switchboard's plugin carries now: switchboard setup claude takes it out",
             ),
-            Ok(_) if apply(settings) => {
-                list.ok("Switchboard's Claude Code settings, brought up to date in yours")
-            }
+            Ok(_) if apply(settings) => list.ok(
+                "what an earlier version added to your ~/.claude/settings.json and Switchboard's plugin carries now, taken out (a statusline of yours kept)",
+            ),
             Ok(_) => list.todo("switchboard setup claude failed"),
         }
+    }
+    match way::claude_version() {
+        _ if !crate::settings::is_on("pane_statusline") => list.optional(
+            "Switchboard's statusline in its panes, for the Sessions and Usage views: off in Settings' \"Switchboard's statusline in its panes\", so they draw yours",
+        ),
+        Some(v) if v < plugin::MODULE_VERSION => list.optional(&format!(
+            "Switchboard's statusline in its panes, for the Sessions and Usage views: Claude Code {} is older than {}, which draws the plugin's: claude update",
+            way::words(v),
+            way::words(plugin::MODULE_VERSION)
+        )),
+        _ => list.ok(
+            "Switchboard's statusline in its panes, drawn by its plugin (the Sessions and Usage views), yours everywhere else",
+        ),
     }
 
     // Your CLAUDE.md: Switchboard's import taken out without asking, your
@@ -1078,8 +1083,17 @@ pub fn refresh_now() -> bool {
         worked &= way::keep_unasked().is_ok();
     }
     let (way, _) = way::settle(false);
-    if claude_settings::set_up() {
-        worked &= claude_settings::run(&mut report).is_ok();
+    // As a plugin, your settings are changed only to take out the hooks an
+    // earlier version added, which would run twice in a pane; the statusline
+    // it added waits for the guided setup, which says what it takes out.
+    match way {
+        Way::Old if claude_settings::set_up() => {
+            worked &= claude_settings::run(&mut report).is_ok();
+        }
+        Way::Plugin if claude_settings::has_hooks() => {
+            worked &= claude_settings::take_out_hooks(&mut report).is_ok();
+        }
+        _ => {}
     }
     match way {
         Way::Old if claude_md::set_up() => {

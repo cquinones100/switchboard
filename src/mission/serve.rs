@@ -1531,7 +1531,7 @@ impl Server {
                 let mut d = self.usage_view(kind);
                 if kind == ViewKind::Usage {
                     d.empty = Some(
-                        "No Claude session has reported its usage yet today: each one does as Switchboard's statusline draws, which switchboard setup claude puts in your Claude Code settings."
+                        "No Claude session has reported its usage yet today: each one does as its statusline draws."
                             .into(),
                     );
                 }

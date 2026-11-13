@@ -10,7 +10,8 @@
 //! The plugin is:
 //!
 //! - `.claude-plugin/plugin.json`: its name, `switchboard`, the build's
-//!   version and a line about it;
+//!   version, a line about it, and `hooks/modules.json` named as more
+//!   hooks;
 //! - `skills/`: every skill the binary carries (`assets/skills`, compiled in
 //!   by build.rs), as the skills part wrote them, named `/switchboard:<name>`
 //!   by Claude Code, and `/<name>` too while no skill of a project's or of
@@ -19,13 +20,27 @@
 //!   (`switchboard hook <Event>`, how a tab knows its Claude's state), made
 //!   from the asset here rather than kept twice, and a SessionStart hook
 //!   running `switchboard claude-context`, which gives the session
-//!   Switchboard's part of its instructions (src/cmd/claude_context.rs).
+//!   Switchboard's part of its instructions (src/cmd/claude_context.rs);
+//! - `hooks/modules.json` and `hooks/statusline.js`: the statusline, as
+//!   a hooks module (what Claude Code calls a mod, which it runs inside
+//!   itself from 2.1.287) whose `settings.read` hook puts the asset's
+//!   statusline (`switchboard statusline`) over the settings Claude Code
+//!   has merged from its files. That answer is held in memory, so the
+//!   sessions that load the plugin draw Switchboard's statusline, every
+//!   other Claude yours, and no file changes; Settings' `pane_statusline`
+//!   off, which it asks `switchboard setting` for, has it leave the
+//!   statusline alone. Listed in a file plugin.json names rather than a
+//!   `modules` key in hooks.json, so a Claude Code that can't load a module
+//!   still reads the hooks.
 //!
-//! A plugin can't carry a statusline or permission rules, so those stay the
-//! `claude` part's, in your settings. Every pane's environment names the
-//! plugin in `CLAUDE_CODE_PLUGIN_DIRS` while Settings' `claude_plugin` is on
-//! (`env_value`, src/mux/server.rs), which Claude Code 2.1.280 and later
-//! load for the session as `--plugin-dir` does, beside your own plugins.
+//! A plugin's own settings can't hold a statusline (Claude Code takes only
+//! `agent` from them), hence the module; and the same answer for the
+//! permission rules doesn't reach Claude Code's permission check, so as a
+//! plugin those are in no file Switchboard writes. Every pane's environment
+//! names the plugin in `CLAUDE_CODE_PLUGIN_DIRS` while Settings'
+//! `claude_plugin` is on (`env_value`, src/mux/server.rs), which Claude Code
+//! 2.1.280 and later load for the session as `--plugin-dir` does, beside
+//! your own plugins, whoever starts it there.
 //!
 //! It is Switchboard's own, under `~/.local/share/switchboard`, so the part
 //! is never asked about: `switchboard setup` writes it in every mode, and so
@@ -55,6 +70,17 @@ pub const ENV: &str = "CLAUDE_CODE_PLUGIN_DIRS";
 
 /// The oldest Claude Code that reads `ENV`.
 pub const CLAUDE_VERSION: (u64, u64, u64) = (2, 1, 280);
+
+/// The oldest Claude Code that runs a plugin's hooks module, which draws
+/// Switchboard's statusline in its panes.
+pub const MODULE_VERSION: (u64, u64, u64) = (2, 1, 287);
+
+/// The hooks file, named by plugin.json, that lists the plugin's hooks
+/// modules.
+const MODULES: &str = "hooks/modules.json";
+
+/// The statusline's module, beside the file that lists it.
+const STATUSLINE_MODULE: &str = "statusline.js";
 
 /// What the SessionStart hook runs for Switchboard's instructions.
 pub const CONTEXT_COMMAND: &str = "switchboard claude-context";
@@ -86,9 +112,52 @@ pub fn hooks() -> Value {
 pub fn manifest() -> Value {
     json!({
         "name": NAME,
-        "description": "Switchboard's skills, the hooks that tell the workspace what each Claude is doing, and Switchboard's instructions, for Claude in Switchboard's panes",
+        "description": "Switchboard's skills, the hooks that tell the workspace what each Claude is doing, its statusline and its instructions, for Claude in Switchboard's panes",
         "version": env!("CARGO_PKG_VERSION"),
+        "hooks": format!("./{MODULES}"),
     })
+}
+
+/// `hooks/statusline.js`: the module that layers the asset's statusline
+/// over the settings Claude Code merged from its files, read after every
+/// hook beneath it has answered (`next`). A read of one file as it stands
+/// (`e.source`) is left as it came, so it is the file's own.
+pub fn statusline_module() -> String {
+    let statusline = super::claude_settings::ours()["statusLine"].clone();
+    format!(
+        "// Switchboard's statusline in its panes, written by `switchboard setup`
+// (src/setup/plugin.rs). Claude Code takes a statusline from its settings
+// alone, so this puts Switchboard's over the settings it merged from its
+// files, in memory: no file changes, and only the sessions that load this
+// plugin, the ones in Switchboard's panes, draw it.
+const statusLine = {};
+
+// Settings' pane_statusline ('Switchboard's statusline in its panes'), as
+// Switchboard reads it: off leaves the statusline alone, so the panes draw
+// yours too. Asked as Claude Code reads its settings, not as it draws.
+async function wanted($) {{
+  try {{
+    const {{ exitCode, stdout }} = await $.process.run(
+      ['switchboard', 'setting', 'pane_statusline'],
+      {{ timeoutMs: 5000 }},
+    );
+    return !(exitCode === 0 && stdout.trim() === 'off');
+  }} catch {{
+    return true;
+  }}
+}}
+
+export function register(on) {{
+  on('settings.read', async ($, e, next) => {{
+    const read = await next(e);
+    if (e.source || !read || !('value' in read)) return read;
+    if (!(await wanted($))) return read;
+    return {{ value: {{ ...read.value, statusLine }} }};
+  }});
+}}
+",
+        serde_json::to_string(&statusline).unwrap_or_else(|_| "null".into())
+    )
 }
 
 /// Every file of the plugin, by its path within it, plugin.json last.
@@ -100,6 +169,18 @@ pub fn files() -> Vec<(String, Vec<u8>)> {
     files.push((
         "hooks/hooks.json".into(),
         format!("{}\n", util::json_pretty(&hooks())).into_bytes(),
+    ));
+    files.push((
+        MODULES.into(),
+        format!(
+            "{}\n",
+            util::json_pretty(&json!({ "modules": [format!("./{STATUSLINE_MODULE}")] }))
+        )
+        .into_bytes(),
+    ));
+    files.push((
+        format!("hooks/{STATUSLINE_MODULE}"),
+        statusline_module().into_bytes(),
     ));
     files.push((
         ".claude-plugin/plugin.json".into(),
