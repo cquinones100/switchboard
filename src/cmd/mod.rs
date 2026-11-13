@@ -42,6 +42,7 @@ pub mod wait_ci;
 pub mod wait_deploy;
 pub mod watch_note;
 pub mod work;
+pub mod work_item_box;
 pub mod work_recent;
 pub mod workspace;
 pub mod worktree_done;
@@ -336,6 +337,11 @@ pub const COMMANDS: &[Command] = &[
         name: "notes",
         run: crate::notes::main,
         about: "The notes app: your notes in $NOTES_DIR or ~/Notes, drawn as Notes shows them and edited with Vim's keys",
+    },
+    Command {
+        name: "new-note",
+        run: crate::day::new_notes::main,
+        about: "Put a note just written for you (its path in your notes) in the notifications until you read it, as the todo note and meeting notes routines do",
     },
     Command {
         name: "notifications",

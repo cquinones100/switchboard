@@ -1,7 +1,7 @@
 //! The keys that start work (src/cmd/work.rs), pressed in a client of a
 //! test server: M-t's directory list and the Claude tab it opens, M-W's
 //! tickets each in a tab of its own running `wt`, M-B's branch made in a
-//! worktree by `wtb`, and M-o's worktrees with no tab. A stand-in `claude`
+//! worktree by `wtb`, and M-o's past sessions resumed. A stand-in `claude`
 //! in the test home's `bin` says where it ran, and Linear is an address
 //! nothing answers on, so nothing leaves the machine.
 
@@ -163,44 +163,36 @@ fn m_shift_b_makes_a_branch_no_branch_matches_in_a_worktree_and_starts_claude_th
 }
 
 #[test]
-fn m_o_lists_a_worktree_no_tab_has_open_and_reopens_it_in_a_tab() {
+fn m_o_lists_a_past_session_and_resumes_it_in_a_new_tab() {
     let (server, repo, mut client) = world();
-    let tree = repo.join(".claude/worktrees/lonely");
-    git(
-        &repo,
-        &[
-            "worktree",
-            "add",
-            "-q",
-            "-b",
-            "lonely",
-            tree.to_str().unwrap(),
-        ],
-    );
-    // M-o opens mission control's Work map as a picker of the work no tab
-    // has open, a row each.
-    client.send(b"\x1bo");
-    client.wait_for("the worktree's row", |s| {
-        s.iter()
-            .any(|l| l.contains("lonely") && l.contains("no tab"))
+    // A Claude session of today in the repository that no tab runs.
+    let encoded: String = repo
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let project = server.home.join(".claude/projects").join(encoded);
+    std::fs::create_dir_all(&project).unwrap();
+    let line = serde_json::json!({
+        "type": "user",
+        "cwd": repo,
+        "timestamp": jiff::Timestamp::now().to_string(),
+        "message": { "content": "make the lonely thing work again" },
     });
-    // Enter opens its menu, as the daemon's picker did: a tab there first,
-    // then its diff and lazygit, and its directory to copy.
+    std::fs::write(project.join("sess-1.jsonl"), line.to_string()).unwrap();
+    // M-o opens mission control's Reopen view as a picker, a row each.
+    client.send(b"\x1bo");
+    client.wait_for("the session's row", |s| {
+        s.iter()
+            .any(|l| l.contains("repo") && l.contains("a past session"))
+    });
+    // Enter opens its menu, resuming it first.
     client.send(b"\r");
-    let screen = client.wait_text("Open a tab there, resuming its Claude");
-    for offered in ["Its diff (M-d)", "lazygit", "Copy its directory"] {
-        assert!(
-            screen.iter().any(|l| l.contains(offered)),
-            "{offered}: {screen:#?}"
-        );
-    }
+    client.wait_text("Resume it in a new tab");
     client.send(b"\r");
-    wait("a tab in the worktree", || {
-        tabs(&server).iter().any(|t| {
-            t["panes"][0]["cwd"]
-                .as_str()
-                .is_some_and(|c| Path::new(c) == tree)
-        })
+    wait("Claude resumed in a new tab", || {
+        std::fs::read_to_string(server.home.join("claude-ran"))
+            .is_ok_and(|t| t.contains(&format!("{} --resume sess-1", repo.display())))
     });
 }
 
@@ -545,11 +537,25 @@ fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_
                 }}}}),
             ));
         }
+        // An older draft, not in the list, asked about by its number.
+        let older_draft = request.path() == "/graphql"
+            && request.text().contains("pullRequest(number:")
+            && request.text().contains("\"number\":11");
+        if older_draft {
+            return Some(Reply::json(
+                200,
+                json!({"data": {"repository": {"pullRequest": {
+                    "number": 11, "url": "https://github.com/acme/widgets/pull/11",
+                    "title": "Old work", "state": "OPEN", "isDraft": true,
+                    "baseRefName": "main", "headRefName": "old"
+                }}}}),
+            ));
+        }
         (request.path() == "/graphql" && request.text().contains("states: OPEN")).then(|| {
             let pr = |number: u64, title: &str, cross: bool, author: &str| {
                 json!({
                     "number": number, "url": format!("https://github.com/acme/widgets/pull/{number}"),
-                    "title": title, "state": "OPEN", "isDraft": false,
+                    "title": title, "state": "OPEN", "isDraft": number == 9,
                     "baseRefName": "main", "headRefName": "topic",
                     "isCrossRepository": cross, "author": {"login": author}
                 })
@@ -557,7 +563,10 @@ fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_
             Reply::json(
                 200,
                 json!({"data": {"repository": {"pullRequests": {"nodes": [
-                    pr(7, "Add a theme", true, "someone"),
+                    pr(9, "Half a feature", true, "another"),
+                    // Its author wrote the title: a control character in
+                    // it shows nowhere, the picker or the tab's name.
+                    pr(7, "Add a\u{7} theme", true, "someone"),
                     pr(8, "Our own branch", false, "acme"),
                 ]}}}}),
             )
@@ -667,6 +676,14 @@ fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_
     });
 
     let before = tabs(&server).len();
+    let w_tab = tabs(&server)
+        .into_iter()
+        .find(|t| t["current"] == true)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let w_dir = worktree.clone();
     server.ok(&["press", "review-pr"]);
     let screen = client.wait_text("#7 Add a theme");
     assert!(screen.iter().any(|l| l.contains("@someone")), "{screen:#?}");
@@ -674,6 +691,16 @@ fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_
         !screen.iter().any(|l| l.contains("Our own branch")),
         "only PRs from forks: {screen:#?}"
     );
+    // A draft is listed after the ready PRs, marked, and Enter on it
+    // takes nothing.
+    let row = |text: &str| screen.iter().position(|l| l.contains(text));
+    assert!(
+        row("#9 Half a feature · draft") > row("#7 Add a theme"),
+        "{screen:#?}"
+    );
+    client.type_text("\x1b[B");
+    client.type_text("\r");
+    client.type_text("\x1b[A");
     client.type_text("\r");
     // The workspace's own background `claude -p` calls (its connectors)
     // write to the same file, so the tab's is one line among them.
@@ -685,7 +712,7 @@ fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_
     let all = tabs(&server);
     assert_eq!(all.len(), before + 1);
     let tab = all.last().unwrap();
-    assert_eq!(tab["options"]["@tab_name"], "Review PR");
+    assert_eq!(tab["options"]["@tab_name"], "Review PR Add a theme");
     assert_eq!(tab["current"], true, "in front, as a tab you asked for");
 
     // The tab is about the PR's worktree, checked out untrusted.
@@ -702,7 +729,7 @@ fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_
     wait("the tab to carry its PR", || {
         tabs(&server)
             .iter()
-            .any(|t| t["id"] == id.as_str() && t["label"] == "#7 Review PR")
+            .any(|t| t["id"] == id.as_str() && t["label"] == "#7 Review PR Add a theme")
     });
     let tab = tabs(&server)
         .into_iter()
@@ -716,8 +743,128 @@ fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_
     std::fs::set_permissions(&bin, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     server.ok(&["select-tab", "-t", &id]);
     client.wait_for("the review tab in front", |s| {
-        s.iter().any(|l| l.contains("#7 Review PR"))
+        s.iter().any(|l| l.contains("#7 Review PR Add a theme"))
     });
     server.ok(&["press", "lazygit"]);
     client.wait_text("so lazygit isn't opened there");
+
+    // A draft's number typed opens nothing.
+    server.ok(&["select-tab", "-t", &w_tab]);
+    in_front_at(&server, &mut client, "3 w", &w_dir);
+    let before = tabs(&server).len();
+    server.ok(&["press", "review-pr"]);
+    client.wait_text("#9 Half a feature · draft");
+    client.type_text("9");
+    client.type_text("\x1b\r");
+    client.wait_text("#9 is a draft: it can be reviewed once it is ready");
+    assert_eq!(tabs(&server).len(), before);
+
+    // So does one the list doesn't hold, asked about by its number.
+    client.type_text("\r");
+    client.wait_for("the message to close", |s| {
+        !s.iter().any(|l| l.contains("#9 is a draft"))
+    });
+    server.ok(&["press", "review-pr"]);
+    client.wait_text("#9 Half a feature · draft");
+    client.type_text("11");
+    client.type_text("\x1b\r");
+    client.wait_text("#11 is a draft: it can be reviewed once it is ready");
+    assert_eq!(tabs(&server).len(), before);
+}
+
+/// With UX 2.0, Notes' `gw` opens the "Work on this item" box (board 36):
+/// the item with its plan's chip, the repository, how it lands and what
+/// Start opens; while autopilot works the note, its "Next in autopilot's
+/// queue" puts the item first in the mode's `next`; Enter on "▶ Start it"
+/// opens the item's tab; and with a tab on the item, the box offers to go
+/// there.
+#[test]
+fn with_ux2_gw_opens_the_work_on_this_item_box() {
+    let (server, repo, mut client) = world();
+    common::write_settings(
+        &server.home,
+        serde_json::json!({ "ux2": true, "tips": false }),
+    );
+    let notes = server.home.join("Notes");
+    std::fs::create_dir_all(&notes).unwrap();
+    std::fs::write(
+        notes.join("Plan.md"),
+        "# Plan\n\n- [ ] Fix the login\n- [ ] Speed up the build\n",
+    )
+    .unwrap();
+    std::fs::write(
+        server.state.join("autopilot.json"),
+        serde_json::json!({
+            "on": true, "paused": true, "note": "Plan.md",
+            "repo": repo.to_str().unwrap(), "slots": 1, "cap": 1,
+            "skipped": ["Speed up the build"],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let before = tabs(&server).len();
+
+    // Autopilot read and the setting taken in, the box offers the queue;
+    // before then, the chain of boxes it replaces, put away.
+    let deadline = common::deadline(Duration::from_secs(15));
+    loop {
+        server.ok(&["press", "work-on-item", "Plan.md", "4"]);
+        let shown = client.wait_for("a box for the item", |s| {
+            s.iter()
+                .any(|l| l.contains("Work on this item") || l.contains("the repository"))
+        });
+        if shown
+            .iter()
+            .any(|l| l.contains("Next in autopilot's queue"))
+        {
+            break;
+        }
+        client.send(b"\x1b");
+        client.wait_for("the box put away", |s| {
+            !s.iter()
+                .any(|l| l.contains("Work on this item") || l.contains("the repository"))
+        });
+        assert!(Instant::now() < deadline, "no queue row: {shown:#?}");
+        std::thread::sleep(Duration::from_millis(300) * common::patience());
+    }
+    let shown = client.wait_text("▶ Start it");
+    let text = shown.join("\n");
+    assert!(text.contains("☐ Speed up the build"), "{text}");
+    assert!(text.contains("no plan"), "{text}");
+    assert!(text.contains("REPOSITORY"), "{text}");
+    assert!(text.contains("~/repo"), "{text}");
+    assert!(text.contains("LANDS ON"), "{text}");
+    assert!(text.contains("note-speed-up-the-build"), "{text}");
+
+    // ↓ to the queue's row, Enter: the item first in the mode's next.
+    client.send(b"\x1b[B");
+    client.send(b"\r");
+    client.wait_text("Next in autopilot's queue: Speed up the build");
+    let mode: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(server.state.join("autopilot.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(mode["next"][0]["text"], "Speed up the build", "{mode:#}");
+    assert_eq!(
+        mode["skipped"],
+        serde_json::json!([]),
+        "put next, taken back: {mode:#}"
+    );
+    client.send(b"\r");
+
+    // Enter on "▶ Start it": the item's tab.
+    server.ok(&["press", "work-on-item", "Plan.md", "4"]);
+    client.wait_text("▶ Start it");
+    client.send(b"\r");
+    wait("the item's tab", || tabs(&server).len() == before + 1);
+    let tab = &tabs(&server)[before];
+    assert_eq!(tab["options"]["@tab_name"], "Speed up the build");
+    assert_eq!(tab["options"]["@tab_note"], "Plan.md");
+
+    // Pressed again, the box says a tab has it and offers to go there.
+    server.ok(&["press", "work-on-item", "Plan.md", "4"]);
+    client.wait_text("A tab works on it already");
+    client.wait_text("Go to it");
+    client.send(b"\x1b");
+    assert_eq!(tabs(&server).len(), before + 1);
 }

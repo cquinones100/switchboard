@@ -5,10 +5,10 @@
 //! In the daemon's order, each only while its setting is on: the
 //! Notifications (the sidebar's, whole), the Work map, the Calendar,
 //! Reminders (while `reminders` is on), Slack,
-//! Closed, the PR board, CI, Landing (while something lands), Autopilot
+//! Reopen, the PR board, CI, Landing (while something lands), Autopilot
 //! (with UX 2.0, while it is on, src/autopilot/view.rs), Routines (while
 //! `routines` is on, src/routines/view.rs), the ticket
-//! board, the Inbox, Sessions, Resources, Usage, Keys (`keymap`), Settings,
+//! board, the Inbox, Resources, Usage, Keys (`keymap`), Settings,
 //! then each plugin's. With UX 2.0 the bar shows them by feature in groups
 //! (`groups`): Work, Code, Day and System.
 //!
@@ -25,8 +25,8 @@
 //!
 //! A view as a client sees it (`shown`) is narrowed by its `/` filter, which
 //! matches an item's title, detail and `search`, the boards excepted, and the
-//! Work map is scoped to open tabs or to work with no tab (M-j's and M-o's
-//! pickers, `o` and `n`), each repository folded by Enter on its heading
+//! Work map is scoped to open tabs or to work with no tab (M-j's picker and
+//! its `m` menu), each repository folded by Enter on its heading
 //! or `z`, and its merged work hidden under a line of its own until Enter
 //! there shows it (`Folds`).
 
@@ -54,7 +54,8 @@ pub enum ViewId {
     Slack,
     /// Which of the Slack relay's messages reach you (src/mission/relay_board.rs).
     Relay,
-    Closed,
+    /// The tabs closed and the past Claude sessions (src/usage/reopen.rs).
+    Reopen,
     Prs,
     Ci,
     Landing,
@@ -64,7 +65,6 @@ pub enum ViewId {
     Routines,
     Tickets,
     Inbox,
-    Sessions,
     Resources,
     Usage,
     Keys,
@@ -113,7 +113,7 @@ impl View {
             ViewId::Reminders => "reminders",
             ViewId::Slack => "slack",
             ViewId::Relay => "relay",
-            ViewId::Closed => "closed",
+            ViewId::Reopen => "reopen",
             ViewId::Prs => "prs",
             ViewId::Ci => "ci",
             ViewId::Landing => "landing",
@@ -121,7 +121,6 @@ impl View {
             ViewId::Routines => "routines",
             ViewId::Tickets => "tickets",
             ViewId::Inbox => "inbox",
-            ViewId::Sessions => "sessions",
             ViewId::Resources => "resources",
             ViewId::Usage => "usage",
             ViewId::Keys => "keys",
@@ -137,19 +136,46 @@ impl View {
     }
 }
 
+/// Whether `view` draws a pane beside its board or list (the chosen PR's,
+/// ticket's or plan's description, a message's thread while Settings'
+/// `slack_threads` is on, a closed tab's turns, a check's step, a
+/// landing's output, a day's reminders, the Calendar day's event) with
+/// an item `chosen`, as each does only with UX 2.0 on (`ux2`): such a view
+/// is two panes, so it is never capped at a lone pane's width
+/// (`Mission::view_area`), and the pane has the room to sit beside it.
+pub fn has_side(view: &View, chosen: bool, ux2: bool) -> bool {
+    let calendar_day = view.id == ViewId::Calendar && super::calendar::is_day(view);
+    let slack_threads = view.id == ViewId::Slack && crate::settings::is_on("slack_threads");
+    ux2 && chosen
+        && (calendar_day
+            || slack_threads
+            || matches!(
+                view.id,
+                ViewId::Prs
+                    | ViewId::Tickets
+                    | ViewId::Autopilot
+                    | ViewId::Inbox
+                    | ViewId::Reopen
+                    | ViewId::Ci
+                    | ViewId::Landing
+                    | ViewId::Reminders
+                    | ViewId::Routines
+            ))
+}
+
 /// What M-p says of each view: its "Mission control: <view>" command
 /// (`extras::Command::Mission`) lists every view here while it shows, so a
 /// view added to `ViewId` is one pick away once it is in `BUILT_IN`.
 impl ViewId {
     /// Every view but the plugins', in mission control's order.
-    pub const BUILT_IN: [ViewId; 19] = [
+    pub const BUILT_IN: [ViewId; 18] = [
         ViewId::Notifications,
         ViewId::WorkMap,
         ViewId::Calendar,
         ViewId::Reminders,
         ViewId::Slack,
         ViewId::Relay,
-        ViewId::Closed,
+        ViewId::Reopen,
         ViewId::Prs,
         ViewId::Ci,
         ViewId::Landing,
@@ -157,7 +183,6 @@ impl ViewId {
         ViewId::Routines,
         ViewId::Tickets,
         ViewId::Inbox,
-        ViewId::Sessions,
         ViewId::Resources,
         ViewId::Usage,
         ViewId::Keys,
@@ -174,7 +199,7 @@ impl ViewId {
             ViewId::Reminders => "Reminders",
             ViewId::Slack => "Slack",
             ViewId::Relay => "Slack relay",
-            ViewId::Closed => "Closed",
+            ViewId::Reopen => "Reopen",
             ViewId::Prs => "PRs",
             ViewId::Ci => "CI",
             ViewId::Landing => "Landing",
@@ -182,7 +207,6 @@ impl ViewId {
             ViewId::Routines => "Routines",
             ViewId::Tickets => "Tickets",
             ViewId::Inbox => "Inbox",
-            ViewId::Sessions => "Sessions",
             ViewId::Resources => "Resources",
             ViewId::Usage => "Usage",
             ViewId::Keys => "Keys",
@@ -227,7 +251,7 @@ impl ViewId {
             ViewId::Reminders => "every tab's reminder, by when it comes due",
             ViewId::Slack => "what is new for you on Slack",
             ViewId::Relay => "which of the Slack relay's messages reach you, and how",
-            ViewId::Closed => "the tabs closed last, to reopen",
+            ViewId::Reopen => "tabs closed and past Claude sessions, to reopen",
             ViewId::Prs => "your pull requests by where they stand",
             ViewId::Ci => "your pull requests failing, running and passing",
             ViewId::Landing => {
@@ -237,7 +261,6 @@ impl ViewId {
             ViewId::Routines => "your prompts run on a schedule, their runs this week",
             ViewId::Tickets => "your Linear issues by state",
             ViewId::Inbox => "your unread Linear mentions, comments and assignments",
-            ViewId::Sessions => "each Claude session's context and age",
             ViewId::Resources => "the CPU and memory each tab uses",
             ViewId::Usage => "today's Claude spend and the rate limits",
             ViewId::Keys => "every key, by what it is about",
@@ -268,8 +291,8 @@ impl ViewId {
             ViewId::Relay => {
                 "Whether the relay runs and what it sent today, then each kind of message it sends (prompts, finished turns, stuck tabs, commits and pushes, failures, full context, notices) with where it goes: Notify, Thread only or Off, three presets, autopilot's tabs and quiet hours. Settings' \"Slack relay\" (view_relay)."
             }
-            ViewId::Closed => {
-                "Newest first, one per Claude conversation. Enter reopens it where it was, with its name and its Claude resumed, or a shell when it had none. The newest 200 outlive a restart. Settings' \"Closed tabs\" (view_closed)."
+            ViewId::Reopen => {
+                "The tabs closed and the Claude sessions of the last two weeks no tab runs, one row a conversation, newest first by day, with what became of the work and, with UX 2.0, the chosen one's last screen. Enter reopens a tab where it was, with its name and its Claude resumed, or resumes a session in a new tab; m shows only tabs or only sessions. Settings' \"Reopen\" (view_reopen)."
             }
             ViewId::Prs => {
                 "Columns Draft, In review, Approved, In merge queue and Merged in the last 7 days, from the repositories your tabs are in, with checks and reviews. Needs GitHub; Settings' \"PR board\" (pr_board)."
@@ -292,14 +315,11 @@ impl ViewId {
             ViewId::Inbox => {
                 "Newest first, each in the sidebar's notifications too; status changes are left out. Enter offers what the Tickets board does, and marks it read in Linear. Needs Linear; Settings' \"Inbox\" (view_inbox)."
             }
-            ViewId::Sessions => {
-                "The fullest context first, with its model, how long it has run and since it last did anything; one at 80% or more is marked as needing you. Settings' \"Sessions\" (view_sessions)."
-            }
             ViewId::Resources => {
                 "Every process under a tab's panes counted, the heaviest tab first, read every three seconds only while the view is in front. Enter goes to the tab. Settings' \"Resources\" (view_resources)."
             }
             ViewId::Usage => {
-                "Spend at API prices as Claude Code estimates it, interactive sessions only, and when each limit resets; below, today's requests to services outside the computer. Settings' \"Usage\" (usage)."
+                "Spend at API prices as Claude Code estimates it, interactive sessions only, and when each limit resets; below, today's requests to services outside the computer, then each open Claude session's context, model and age, the fullest first. Settings' \"Usage\" (usage)."
             }
             ViewId::Keys => {
                 "The same as M-/: the workspace's keys by their first tag, then the sidebar's, mission control's, the diff's and Notes', then those only through M-p, with / to filter. Settings' \"Keys\" (view_keys)."
@@ -323,7 +343,7 @@ impl ViewId {
             ViewId::Reminders => &["mission", "remind", "tabs"],
             ViewId::Slack => &["mission", "slack"],
             ViewId::Relay => &["mission", "slack", "settings"],
-            ViewId::Closed => &["mission", "tabs"],
+            ViewId::Reopen => &["mission", "tabs", "claude", "reopen"],
             ViewId::Prs => &["mission", "github", "pr"],
             ViewId::Ci => &["mission", "github", "ci"],
             ViewId::Landing => &["mission", "queue", "landing"],
@@ -331,7 +351,6 @@ impl ViewId {
             ViewId::Routines => &["mission", "routines", "schedule"],
             ViewId::Tickets => &["mission", "linear", "ticket"],
             ViewId::Inbox => &["mission", "linear", "inbox"],
-            ViewId::Sessions => &["mission", "claude", "context"],
             ViewId::Resources => &["mission", "cpu", "memory", "processes"],
             ViewId::Usage => &["mission", "claude", "usage", "cost"],
             ViewId::Keys => &["mission", "help", "keys"],
@@ -362,16 +381,14 @@ impl Group {
 }
 
 /// A view's group and its place in it, after the tabs, which lead Work.
-/// Closed and Sessions stand where the canvas's Reopen will, and each
-/// plugin's view comes after Keys.
+/// Each plugin's view comes after Keys.
 fn place(id: &ViewId) -> (Group, u8) {
     match id {
         ViewId::Landing => (Group::Work, 1),
         ViewId::Autopilot => (Group::Work, 2),
         ViewId::Routines => (Group::Work, 3),
         ViewId::WorkMap => (Group::Work, 4),
-        ViewId::Closed => (Group::Work, 5),
-        ViewId::Sessions => (Group::Work, 6),
+        ViewId::Reopen => (Group::Work, 5),
         ViewId::Prs => (Group::Code, 0),
         ViewId::Tickets => (Group::Code, 1),
         ViewId::Ci => (Group::Code, 2),
@@ -417,13 +434,16 @@ pub fn bar_title(view: &View) -> &str {
     }
 }
 
-/// Which of the Work map's rows M-j and M-o show.
+/// What a picker shows: the Work map's rows M-j shows or its `m` menu
+/// narrows it to, or the Reopen view, M-o's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
     /// M-j: the open tabs.
     Tabs,
-    /// M-o: the work no tab has open.
+    /// The Work map's work no tab has open.
     Untabbed,
+    /// M-o: the Reopen view, whole.
+    Reopen,
 }
 
 /// Whether an item is a heading over the items after it (a Settings
@@ -466,6 +486,7 @@ pub fn grouped(id: &ViewId) -> bool {
             | ViewId::Ci
             | ViewId::Notifications
             | ViewId::Usage
+            | ViewId::Reopen
     )
 }
 
@@ -579,7 +600,7 @@ pub fn shown(view: &View, filter: &str, scope: Option<Scope>, folds: &Folds) -> 
     let title = match scope {
         Some(Scope::Tabs) => format!("{} · open tabs", view.title),
         Some(Scope::Untabbed) => format!("{} · no tab", view.title),
-        None => view.title.clone(),
+        Some(Scope::Reopen) | None => view.title.clone(),
     };
     View {
         title,
@@ -599,7 +620,7 @@ pub fn shown(view: &View, filter: &str, scope: Option<Scope>, folds: &Folds) -> 
 fn work_map_shown(items: &[Item], text: &str, scope: Option<Scope>, folds: &Folds) -> Vec<Item> {
     let keeps = |i: &Item| {
         let scoped = match scope {
-            None => true,
+            None | Some(Scope::Reopen) => true,
             Some(Scope::Tabs) => matches!(i.target, Target::Tab(_)),
             Some(Scope::Untabbed) => !matches!(i.target, Target::Tab(_)),
         };
@@ -1560,7 +1581,7 @@ mod tests {
             v(ViewId::Notifications, "Notifications"),
             v(ViewId::WorkMap, "Work map"),
             v(ViewId::Calendar, "Calendar"),
-            v(ViewId::Closed, "Closed"),
+            v(ViewId::Reopen, "Reopen"),
             v(ViewId::Landing, "Landing"),
             v(ViewId::Settings, "Settings"),
             v(ViewId::Plugin("p".into()), "Plugin"),

@@ -77,6 +77,9 @@ impl Server {
         // resume): the directory it was about goes with what it was doing.
         if let Some(t) = self.tabs.get_mut(&tab) {
             t.opts.remove(super::server::TAB_DIR);
+            // Nor a sealed review's, whose try isn't the new work's.
+            t.opts.remove(crate::usage::serve::SEALED_REVIEW);
+            t.opts.remove(crate::usage::serve::SEALED_REVIEW_FETCH);
         }
         self.agents.restarted(pane);
         self.sidebar.panes.remove(&pane);

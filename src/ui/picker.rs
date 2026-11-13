@@ -69,6 +69,10 @@ pub struct PickItem {
     pub key: String,
     /// What picking it gives back.
     pub value: String,
+    /// Shown, dimmed, but not taken: passed over by the moving keys and
+    /// the wheel, never chosen as the list opens, and Enter or a click on
+    /// it does nothing (a draft PR in "Review a contributor's PR").
+    pub off: bool,
 }
 
 impl PickItem {
@@ -280,7 +284,11 @@ impl Picker {
     /// The chosen row marked, or unmarked when it was, and the cursor moved
     /// on toward `down` or up.
     fn mark(&mut self, down: bool) -> Step {
-        let Some((i, _)) = self.shown.get(self.cursor) else {
+        let Some((i, _)) = self
+            .shown
+            .get(self.cursor)
+            .filter(|_| self.takes(self.cursor))
+        else {
             return Step::Same;
         };
         match self.marked.iter().position(|m| m == i) {
@@ -338,9 +346,36 @@ impl Picker {
             .collect()
     }
 
-    /// The row chosen, by its text.
+    /// The row chosen, by its text; none when every row shown is off.
     pub fn chosen(&self) -> Option<&PickItem> {
-        self.shown.get(self.cursor).map(|(i, _)| &self.items[*i])
+        self.shown
+            .get(self.cursor)
+            .map(|(i, _)| &self.items[*i])
+            .filter(|item| !item.off)
+    }
+
+    /// Whether the row shown at `row` can be taken.
+    fn takes(&self, row: usize) -> bool {
+        self.shown
+            .get(row)
+            .is_some_and(|(i, _)| !self.items[*i].off)
+    }
+
+    /// The row to stop on moving to `to`: the nearest that can be taken
+    /// onward (down or up), else `to` itself, so the keys still reach the
+    /// rows that are off past the last that can be taken, which Enter then
+    /// leaves alone. None when no row is shown.
+    fn on_row(&self, to: usize, down: bool) -> Option<usize> {
+        let len = self.shown.len();
+        if to >= len {
+            return None;
+        }
+        let onward = if down {
+            (to..len).find(|r| self.takes(*r))
+        } else {
+            (0..=to).rev().find(|r| self.takes(*r))
+        };
+        Some(onward.unwrap_or(to))
     }
 
     fn refilter(&mut self) {
@@ -391,8 +426,11 @@ impl Picker {
                     .map(|(_, _, idx)| (i, idx.clone()))
             })
             .collect();
-        self.cursor = 0;
+        self.cursor = self.on_row(0, true).unwrap_or(0);
         self.top = 0;
+        if self.cursor >= self.room.max(1) {
+            self.top = self.cursor + 1 - self.room.max(1);
+        }
         self.hover = None;
     }
 
@@ -412,6 +450,7 @@ impl Picker {
             ));
         }
         match self.shown.get(self.cursor) {
+            Some((i, _)) if self.items[*i].off => Step::Same,
             Some((i, _)) => Step::Close(Outcome::Picked(Picked {
                 index: *i,
                 value: self.items[*i].value.clone(),
@@ -445,6 +484,14 @@ impl Picker {
 
     fn move_to(&mut self, to: usize) -> Step {
         let to = to.min(self.shown.len().saturating_sub(1));
+        // Already at the end it moves toward (Up on the first row, Down
+        // on the last), it stays, rather than looking the other way.
+        if to == self.cursor {
+            return Step::Same;
+        }
+        let Some(to) = self.on_row(to, to > self.cursor) else {
+            return Step::Same;
+        };
         if to == self.cursor {
             return Step::Same;
         }
@@ -512,7 +559,9 @@ impl Picker {
         } else {
             None
         };
-        let base = if chosen {
+        let base = if item.off {
+            look.faint()
+        } else if chosen {
             look.bold_bright()
         } else {
             look.text()
@@ -550,7 +599,8 @@ impl Picker {
             spans.push(Span::raw(" "));
             spans.extend(lit(&item.key, key_w, look.dim(), hit, matched, key_at));
         }
-        BoxLine::spans(spans).fill(fill).clickable()
+        let line = BoxLine::spans(spans).fill(fill);
+        if item.off { line } else { line.clickable() }
     }
 }
 
@@ -649,7 +699,14 @@ impl Overlay for Picker {
             self.top = self.cursor + 1 - self.room;
         }
         let widths = self.columns(inner);
-        let count = if self.marked.is_empty() {
+        let none_taken = !self.items.is_empty() && self.items.iter().all(|i| i.off);
+        let count = if none_taken {
+            format!(
+                "{}/{} (none can be picked)",
+                self.shown.len(),
+                self.items.len()
+            )
+        } else if self.marked.is_empty() {
             format!("{}/{}", self.shown.len(), self.items.len())
         } else {
             format!(
@@ -822,7 +879,13 @@ impl Overlay for Picker {
         };
         if let Some(to) = to {
             self.top = to;
-            self.cursor = self.cursor.clamp(to, to + room - 1).min(total - 1);
+            let kept = self.cursor.clamp(to, to + room - 1).min(total - 1);
+            // Kept on a row shown that can be taken, else on the off row,
+            // which Enter leaves alone.
+            self.cursor = (to..(to + room).min(total))
+                .filter(|r| self.takes(*r))
+                .min_by_key(|r| r.abs_diff(kept))
+                .unwrap_or(kept);
             return Step::Redraw;
         }
         let Some(drawn) = &self.drawn else {
@@ -830,9 +893,10 @@ impl Overlay for Picker {
         };
         let hit = drawn.hit(mouse.col, mouse.row);
         let first = self.first_row();
+        // A row that can't be taken neither lights nor takes a click.
         let row = match hit {
             Hit::Line(i, _) if i >= first && i < first + self.room => {
-                Some(self.top + i - first).filter(|r| *r < self.shown.len())
+                Some(self.top + i - first).filter(|r| self.takes(*r))
             }
             _ => None,
         };
@@ -1010,6 +1074,56 @@ mod tests {
     }
 
     #[test]
+    fn a_row_that_is_off_is_drawn_faint_passed_over_and_never_taken() {
+        let look = Look::default();
+        let enter = Key::new(KeyCode::Enter, Mods::NONE);
+        let down = Key::new(KeyCode::Down, Mods::NONE);
+        let mut rows = items();
+        rows[0].off = true;
+        rows[2].off = true;
+        let mut p = Picker::new("Pick", rows.clone());
+        assert_eq!(p.chosen().unwrap().text, "Close the pane", "not opened on");
+        p.key(down, &look);
+        assert_eq!(p.chosen().unwrap().text, "Zoom the pane in or out");
+        p.key(Key::new(KeyCode::Up, Mods::NONE), &look);
+        assert_eq!(p.chosen().unwrap().text, "Close the pane");
+        // Past the last row that can be taken, the keys still move, onto
+        // the rows that are off, and Enter there takes nothing.
+        p.key(Key::new(KeyCode::Up, Mods::NONE), &look);
+        assert!(p.chosen().is_none());
+        assert_eq!(p.key(enter, &look), Step::Same);
+        // Up on the first row stays there.
+        assert_eq!(p.key(Key::new(KeyCode::Up, Mods::NONE), &look), Step::Same);
+        assert!(p.chosen().is_none());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, 30));
+        p.draw(&mut buf, &look);
+        let s = screen(&buf);
+        let y = s.iter().position(|l| l.contains("Split pane")).unwrap() as u16;
+        let x = s[y as usize].find("Split").unwrap();
+        let x = s[y as usize][..x].chars().count() as u16;
+        assert_eq!(buf[(x, y)].fg, look.theme.faint, "{s:#?}");
+
+        // Filtered to an off row alone, Enter takes nothing.
+        typed(&mut p, "new tab");
+        assert_eq!(p.shown(), vec!["New tab"]);
+        assert!(p.chosen().is_none());
+        assert_eq!(p.key(enter, &look), Step::Same);
+
+        // Every row off, the count says so.
+        for row in &mut rows {
+            row.off = true;
+        }
+        let mut p = Picker::new("Pick", rows);
+        assert_eq!(p.key(enter, &look), Step::Same);
+        p.draw(&mut buf, &look);
+        let s = screen(&buf);
+        assert!(
+            s.iter().any(|l| l.contains("4/4 (none can be picked)")),
+            "{s:#?}"
+        );
+    }
+
+    #[test]
     fn a_long_list_has_a_scroll_bar_on_its_edge_that_pages_and_drags() {
         let look = Look::default();
         let many = (0..60)
@@ -1058,6 +1172,55 @@ mod tests {
             .map(|y| buf[(x, *y)].symbol().to_string())
             .collect();
         assert!(!edge.contains('┃'), "{edge}");
+    }
+
+    #[test]
+    fn paging_by_the_scroll_bar_onto_rows_that_are_off_takes_nothing_hidden() {
+        let look = Look::default();
+        let many = (0..60)
+            .map(|i| PickItem {
+                off: i > 0,
+                ..PickItem::new(format!("Row {i}"), i.to_string())
+            })
+            .collect();
+        let mut p = Picker::new("Pick", many);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, 30));
+        p.draw(&mut buf, &look);
+        let d = p.drawn.clone().unwrap();
+        let first = p.first_row();
+        let last = d
+            .rows
+            .iter()
+            .filter(|(_, i)| *i >= first && *i < first + p.room)
+            .map(|(y, _)| *y)
+            .max()
+            .unwrap();
+        let press = Mouse {
+            kind: MouseKind::Press,
+            button: MouseButton::Left,
+            col: d.outer.right() - 1,
+            row: last,
+            mods: Mods::NONE,
+        };
+        p.mouse(press, &look);
+        assert_eq!(p.top, p.room, "a page down, onto rows that are off");
+        assert!(p.chosen().is_none());
+        assert_eq!(
+            p.key(Key::new(KeyCode::Enter, Mods::NONE), &look),
+            Step::Same
+        );
+
+        // The keys reach them too, and come back to the row that can be
+        // taken.
+        let mut p = Picker::new("Pick", p.items.clone());
+        p.draw(&mut buf, &look);
+        p.key(Key::new(KeyCode::PageDown, Mods::NONE), &look);
+        p.key(Key::new(KeyCode::PageDown, Mods::NONE), &look);
+        assert!(p.top > 0, "paged down by the keys");
+        assert!(p.chosen().is_none());
+        p.key(Key::new(KeyCode::PageUp, Mods::NONE), &look);
+        p.key(Key::new(KeyCode::PageUp, Mods::NONE), &look);
+        assert_eq!(p.chosen().unwrap().text, "Row 0");
     }
 
     #[test]

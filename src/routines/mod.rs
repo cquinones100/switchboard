@@ -11,6 +11,8 @@
 //! - `view`: mission control's Routines view, its items and, with UX 2.0,
 //!   its board (board 29).
 //! - `form`: the box a routine is made and changed in (board 30).
+//! - `starters`: the routines Switchboard starts you with (today's todo
+//!   note, meeting notes, the Slack and Calendar tabs), made once.
 //! - `serve`: the server's side: the runs on the tick, the hooks that end
 //!   them, the view's keys and the palette's commands.
 
@@ -18,6 +20,7 @@ pub mod form;
 pub mod routine;
 pub mod schedule;
 mod serve;
+pub mod starters;
 pub mod view;
 
 use std::collections::HashMap;

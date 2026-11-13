@@ -76,8 +76,6 @@ pub const SETTINGS: &[(&str, &str)] = &[
     ("search_slack", "false"),
     ("standup_note", "false"),
     ("standup_summary", "false"),
-    ("meeting_notes", "false"),
-    ("todo_note", "false"),
     ("haiku_summaries", "false"),
     ("turn_summaries", "false"),
     ("diff_story", "false"),
@@ -211,6 +209,13 @@ pub fn lay_out(home: &Path, bin: &Path) -> Result<()> {
     util::write_atomic(
         home.join(".config/switchboard/settings.json"),
         format!("{}\n", util::json_pretty(&Value::Object(settings))),
+    )?;
+    // No starter routines: the demo's day is its services' alone, and a
+    // Slack routine would open a tab of its own every 15 minutes.
+    util::write_atomic(
+        home.join(".local/state/switchboard/routines")
+            .join(crate::routines::starters::MARKER),
+        "",
     )?;
     let secrets = json!({
         "linear-api-key": fixtures::LINEAR_KEY,

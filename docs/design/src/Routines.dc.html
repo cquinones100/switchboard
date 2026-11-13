@@ -58,7 +58,7 @@ const K = (x, y, w, h, css, text) => imgs.push({ pos: 'position:absolute;left:ca
 // Tints for chips and cells: Y B M G R by tone, 5 neutral.
 const TINT = { y: 'Y', b: 'B', m: 'M', g: 'G', r: 'R', d: '5', t: '5', a: '3' };
 // MARK: one glyph per state, the same everywhere.
-const MARK = { needs: ['●', 'y'], working: ['⠹', 'b'], landing: ['▲', 'm'], queued: ['▲', 'm'], idle: ['○', 'd'], failed: ['✕', 'r'], passed: ['✓', 'g'], pending: ['◌', 'y'], reminder: ['◷', 'y'], mention: ['@', 'b'], note: ['✎', 'm'], comment: ['◇', 'b'] };
+const MARK = { needs: ['●', 'y'], working: ['⠹', 'b'], landing: ['▲', 'm'], queued: ['▲', 'm'], idle: ['○', 'd'], failed: ['✕', 'r'], passed: ['✓', 'g'], pending: ['◌', 'y'], reminder: ['◷', 'y'], mention: ['@', 'b'], note: ['✎', 'm'], comment: ['◇', 'b'], pinned: ['⚑', 'y'] };
 const mark = (x, y, state, bg) => put(x, y, MARK[state][0], MARK[state][1], '', bg);
 // LABEL: a section's name in capitals, bold, in its tone (d unless it names a state); its count at xr.
 const label = (x, y, text, tone, count, xr) => { put(x, y, text.toUpperCase(), tone || 'd', 'b'); if (count !== undefined && xr) R(xr, y, String(count), tone || 'd'); };
@@ -166,31 +166,31 @@ const mcBar = (group, current, right) => {
 };
 
 // ─── THE BOARD ───
-sidebar(9);
-// MISSION CONTROL'S ROUTINES: a prompt of yours on a schedule. When one comes due it goes to the tab its last run used,
-// or resumes that run's session in a new tab when the tab is closed, or opens a new tab in its directory the first time.
+sidebar(0);
+// MISSION CONTROL'S ROUTINES: a prompt of yours on a schedule. Each run is a headless Claude in the routine's directory,
+// allowed only the tools its list names, and opens no tab; its session is kept, for a tab to resume when you want it.
 mcBar('Work', 'Routines', '5 routines · next at 2:30');
 
 // A routine: its mark, its name bold, its schedule in words, when it runs next at the right;
-// under it where it runs and how its last run went, as chips.
+// under it the tools it may use and how its last run went, as chips; a run that reached for a tool off its list failed.
 MARK.routine = ['↻', 'a']; MARK.paused = ['‖', 'd'];
-const routine = (y, state, name, when, next, where, last, sel) => {
+const routine = (y, state, name, when, next, tools, last, sel) => {
   const bg = row(35, y, 62, 2, sel);
   mark(37, y, state, bg);
   T(39, y, [name, state === 'paused' ? 'd' : 't', 'b', bg]);
   put(62, y, when, 'd', '', bg);
   R(95, y, next, state === 'paused' ? 'f' : 't', '', bg);
   let x = 39;
-  x += chip(x, y + 1, where[0], where[1]);
+  x += chip(x, y + 1, tools, 'd');
   if (last) chip(x, y + 1, last[0], last[1]);
 };
 label(36, 4, 'Recurring', 'd', 4, 95);
-routine(5, 'routine', 'Oncall watch', 'every 30m · 9–6 weekdays', '2:30', ['tab 9 · open', 'a'], ['✓ 2:00 · nothing new', 'g'], true);
-routine(8, 'routine', 'Morning triage', 'weekdays at 8:45', 'Mon 8:45', ['tab closed · resumes its session', 'd'], ['✓ 8:45 · 4 things', 'g']);
-routine(11, 'routine', 'Dependency check', 'Mondays at 10:00', 'Mon 10:00', ['a new tab each run', 'd'], ['✕ Mon · 2 audits failed', 'r']);
-routine(14, 'paused', 'Retro prep', 'Fridays at 2:00', 'paused', ['tab 8 · open', 'a'], ['paused since Oct 30', 'd']);
+routine(5, 'routine', 'Oncall watch', 'every 30m · 9–6 weekdays', '2:30', 'Read, Glob, Grep', ['✓ 2:00 · nothing new', 'g']);
+routine(8, 'routine', 'Morning triage', 'weekdays at 8:45', 'Mon 8:45', 'Read, Glob, Grep', ['✓ 8:45 · 4 things', 'g']);
+routine(11, 'failed', 'Dependency check', 'Mondays at 10:00', 'Mon 10:00', 'Read, Grep', ['✕ Mon · failed: needs Bash', 'r'], true);
+routine(14, 'paused', 'Retro prep', 'Fridays at 2:00', 'paused', 'Read, Glob, Grep', ['paused since Oct 30', 'd']);
 label(36, 17, 'Once', 'd', 1, 95);
-routine(18, 'routine', 'PR 2031\'s deploy', 'Wed Nov 11 at 9:00', 'in 5 days', ['a new tab', 'd']);
+routine(18, 'routine', 'PR 2031\'s deploy', 'Wed Nov 11 at 9:00', 'in 5 days', 'Read, Glob, Grep');
 T(38, 21, ['▸ 3 that ran once, folded', 'f']);
 
 // THIS WEEK: a row per routine, a column per day; what ran as its mark, what is still to come as its time.
@@ -199,7 +199,7 @@ label(36, 24, 'This week'); put(48, 24, 'Nov 2 – 8', 'f');
 const DX = 58, DW = 6;
 ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].forEach((d, i) => put(DX + i * DW, 25, d, i === 4 ? 'r' : 'd', i === 4 ? 'b' : ''));
 headRule(36, 26, 60);
-const week = (y, name, cells) => { put(37, y, name, 't'); cells.forEach((c, i) => { if (c) put(DX + i * DW, y, c[0], c[1], c[1] === 'r' || c[1] === 'g' ? '' : ''); }); };
+const week = (y, name, cells) => { put(37, y, name, 't'); cells.forEach((c, i) => { if (c) put(DX + i * DW, y, c[0], c[1]); }); };
 week(27, 'Oncall watch', [['18✓', 'g'], ['18✓', 'g'], ['17✓', 'g'], ['18✓', 'g'], ['11✓', 'g'], null, null]);
 week(28, 'Morning triage', [['✓', 'g'], ['–', 'd'], ['◌', 'y'], ['✓', 'g'], ['✓', 'g'], null, null]);
 week(29, 'Dependency', [['✕', 'r'], null, null, null, null, null, null]);
@@ -209,29 +209,28 @@ T(37, 33, ['◌ Wed: missed at 8:45 while asleep, ran at 9:12 on waking', 'd']);
 T(37, 34, ['– Tue: missed at 8:45, asleep past 9:45, so skipped', 'd']);
 ruleV(97, 3, 40);
 
-// THE CHOSEN ROUTINE
-let py = pane(99, 3, 61, 'Oncall watch', [['every 30 minutes, 9:00 to 6:00 on weekdays', 't'], ['  · ~/code/oncall-tools', 'd']]);
-let kx = 99; keycap(kx, py, '↵', 'run now, edit, pause or delete it', true);
+// THE CHOSEN ROUTINE: its last run failed reaching for Bash, which its list doesn't allow.
+let py = pane(99, 3, 61, 'Dependency check', [['Mondays at 10:00', 't'], ['  · ~/code/web-app', 'd']]);
+keycap(99, py, '↵', 'actions: allow Bash and run it again first', true);
 label(99, py + 2, 'Prompt'); R(158, py + 2, 'added to Claude\'s system prompt', 'd');
-fill(99, py + 3, 60, 4, '2');
-['Watch #alerts-web and #alerts-sync. Tell me only about what is', 'still firing after 30 minutes with nobody on it, and say who', 'last spoke in its thread. Never post or react in a channel.'].forEach((l, i) => put(101, py + 3 + i, l, 't', '', '2'));
-put(101, py + 6, 'e edits it · the next run takes the new words', 'f', '', '2');
-label(99, py + 8, 'Where it runs');
-T(99, py + 9, ['●', 'a'], ' ', ['9', 'n9', 'b'], [' oncall watch', 't', 'b'], ['  open · idle 14m · the run before is its last turn', 'd']);
-T(101, py + 10, ['Idle: the prompt goes in as its next turn. Working: it waits for the', 'd']);
-T(101, py + 11, ['turn to end, up to 30m, then skips. Closed: its session resumes in', 'd']);
-T(101, py + 12, ['a new tab. Never ran: a new tab in its directory.', 'd']);
-T(101, py + 13, ['Asleep when due: it runs on waking, up to 1h late.', 'd']);
-label(99, py + 14, 'Runs', 'd', '11 today', 158);
-const run = (y, at, st, words, facts) => { R(104, y, at, 'd'); mark(106, y, st); put(108, y, clip(words, 30), st === 'pending' ? 'y' : 't'); R(158, y, facts, 'd'); };
-run(py + 15, '2:00', 'passed', 'Nothing new', 'tab 9 · 41s · $0.04');
-run(py + 16, '1:30', 'passed', 'Sync alert, 12m, Sam on it', 'tab 9 · 1m 08s · $0.06');
-run(py + 17, '1:00', 'pending', 'Waited 4m for its turn to end', 'tab 9 · 52s · $0.05');
-run(py + 18, '12:30', 'passed', 'Nothing firing', 'tab 9 · 33s · $0.03');
-run(py + 19, '12:00', 'passed', 'Nothing firing', 'tab 9 · 30s · $0.03');
-T(101, py + 20, ['▸ 6 earlier today · its spend today ', 'f'], ['$0.39', 'd']);
-label(99, py + 22, 'Next');
-T(99, py + 23, ['2:30', 't', 'b'], ['  then 3:00, 3:30 … 5:30 · Monday 9:00', 'd']);
+fill(99, py + 3, 60, 3, '2');
+['Run the audit for each package and list the failing ones,', 'each with its advisory\'s link. Don\'t change anything.'].forEach((l, i) => put(101, py + 3 + i, l, 't', '', '2'));
+put(101, py + 5, 'editing it from its menu; the next run takes the new words', 'f', '', '2');
+label(99, py + 7, 'Allowed tools');
+let tx = 99; for (const t of ['Read', 'Grep']) tx += chip(tx, py + 8, t, 'd');
+put(tx + 1, py + 8, 'another tool fails the run, naming it', 'f');
+label(99, py + 10, 'How it runs');
+T(101, py + 11, ['A headless Claude in its directory, opening no tab.', 'd']);
+T(101, py + 12, ['Each run\'s session is kept; "Open its last session in a', 'd']);
+T(101, py + 13, ['tab" resumes it. Asleep when due, it runs on waking.', 'd']);
+label(99, py + 15, 'Runs', 'd', '1 this week', 158);
+const run = (y, at, st, words, facts) => { R(109, y, at, 'd'); mark(111, y, st); put(113, y, clip(words, 28), st === 'failed' ? 'r' : st === 'pending' ? 'y' : 't'); R(158, y, facts, 'd'); };
+run(py + 16, 'Mon 10:00', 'failed', 'failed: needs Bash', '22s · $0.02');
+run(py + 17, 'Nov 2', 'passed', '2 audits failing, both listed', '1m 40s · $0.09');
+run(py + 18, 'Oct 26', 'passed', 'Nothing failing', '1m 12s · $0.07');
+T(101, py + 19, ['▸ 4 earlier · each run\'s session kept', 'f']);
+label(99, py + 21, 'Next');
+T(99, py + 22, ['Mon 10:00', 't', 'b'], ['  with Read and Grep, unless Bash is allowed', 'd']);
 
 keys(36, 44, [['j/k', 'move'], ['Enter', 'actions'], ['m', 'view actions'], ['/', 'filter']]);
 // ─────────────────────────────────────────────────────────────────────────────

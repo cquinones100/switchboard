@@ -32,15 +32,13 @@ fn settings(server: &TestServer, extra: Value) {
         "view_calendar": false,
         "view_slack": false,
         "view_relay": false,
-        "view_closed": false,
-        "view_sessions": false,
+        "view_reopen": false,
         "view_resources": false,
         "usage": false,
         "view_keys": false,
         // The Reminders view too, which a test of reminders turns on.
         "reminders": false,
         "standup_note": false,
-        "meeting_notes": false,
         "new_notes": false,
     });
     for (k, v) in extra.as_object().unwrap() {
@@ -2073,7 +2071,7 @@ fn views_row(s: &[String]) -> String {
 }
 
 #[test]
-fn with_ux2_braces_move_between_groups_and_m_brackets_close_it_and_step_back() {
+fn with_ux2_braces_and_m_brackets_move_between_groups_and_m_braces_close_it_and_step_back() {
     let (server, mut client) = two_tabs_ux2();
     let screen = open(&mut client);
     assert!(views_row(&screen).contains("Tabs"), "{}", screen.join("\n"));
@@ -2087,8 +2085,13 @@ fn with_ux2_braces_move_between_groups_and_m_brackets_close_it_and_step_back() {
         true,
         "the tab unchanged"
     );
-    // M-[ closes it and goes back through the tabs, to the first.
+    // M-] and M-[ move between the groups too, mission control left open.
+    client.type_text(&format!("{ALT}]"));
+    client.wait_for("Day's views", |s| views_row(s).contains("Reminders"));
     client.type_text(&format!("{ALT}["));
+    client.wait_for("Work's views", |s| views_row(s).contains("Tabs"));
+    // M-{ closes it and goes back through the tabs, to the first.
+    client.type_text(&format!("{ALT}{{"));
     client.wait_for("mission control closed", closed);
     wait_list(&server, "the first tab in front", |l| {
         tabs(l)[0]["current"] == true

@@ -9,8 +9,9 @@
 //!
 //! Two things in it aren't notes: `.trash/`, where a deleted note goes (the
 //! "Recently Deleted" folder; deleting it from there removes it for good),
-//! and `.notes.json`, which records the pinned notes and the note open last,
-//! by their paths in the notes directory. A note's last line holds its
+//! and `.notes.json`, which records the pinned notes, the note open last
+//! and the notes opened lately (`recent`, newest first), by their paths in
+//! the notes directory. A note's last line holds its
 //! stable ID (id.rs), which the app writes and never shows. Nothing else is
 //! kept anywhere, so the notes stay plain files any editor can open.
 //!
@@ -32,6 +33,8 @@ use crate::util;
 pub const TRASH: &str = ".trash";
 pub const META: &str = ".notes.json";
 pub const LOCK: &str = ".notes.lock";
+/// How many notes opened lately `.notes.json` keeps.
+pub const RECENT: usize = 20;
 
 /// The notes directory, and where the rest of the workspace keeps what
 /// follows a note (the tabs linked to it, the mode working it).
@@ -223,14 +226,34 @@ impl Store {
         self.save_meta(&data);
     }
 
-    /// A note moved or renamed keeps its pin, and stays the note open last.
+    fn recent_list(data: &Map<String, Value>) -> Vec<String> {
+        data.get("recent")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// A note moved or renamed keeps its pin and its place in the notes
+    /// opened lately, and stays the note open last.
     fn repin(&self, from: &str, to: &str) {
         let mut data = self.meta();
-        let list: Vec<String> = Self::pinned_list(&data)
-            .into_iter()
-            .map(|p| if p == from { to.to_string() } else { p })
-            .collect();
+        let follow = |p: String| if p == from { to.to_string() } else { p };
+        let list: Vec<String> = Self::pinned_list(&data).into_iter().map(follow).collect();
         data.insert("pinned".into(), list.into());
+        // A note moved into Recently Deleted leaves the history.
+        let recent: Vec<String> = Self::recent_list(&data)
+            .into_iter()
+            .map(follow)
+            .filter(|p| !is_trash(p))
+            .collect();
+        if data.contains_key("recent") {
+            data.insert("recent".into(), recent.into());
+        }
         if data.get("last").and_then(Value::as_str) == Some(from) {
             data.insert("last".into(), to.into());
         }
@@ -252,6 +275,45 @@ impl Store {
             }
         }
         self.save_meta(&data);
+    }
+
+    /// A note opened: the note open last, and first in the notes opened
+    /// lately, each there once, the oldest past `RECENT` let go. A note in
+    /// Recently Deleted, or one gone, takes no place there.
+    pub fn opened(&self, rel: &str) {
+        let mut data = self.meta();
+        let mut recent: Vec<String> = Self::recent_list(&data)
+            .into_iter()
+            .filter(|p| p != rel && !is_trash(p) && self.absolute(p).is_file())
+            .collect();
+        if !is_trash(rel) {
+            recent.insert(0, rel.to_string());
+        }
+        recent.truncate(RECENT);
+        let unchanged = data.get("last").and_then(Value::as_str) == Some(rel)
+            && Self::recent_list(&data) == recent;
+        if unchanged {
+            return;
+        }
+        data.insert("last".into(), rel.into());
+        data.insert("recent".into(), recent.into());
+        self.save_meta(&data);
+    }
+
+    /// The notes opened lately, newest first: those still notes, and not
+    /// in Recently Deleted.
+    pub fn recent(&self) -> Vec<NoteEntry> {
+        let data = self.meta();
+        let pinned = Self::pinned_list(&data);
+        Self::recent_list(&data)
+            .iter()
+            .filter(|rel| !is_trash(rel))
+            .filter_map(|rel| self.entry(&self.absolute(rel)))
+            .map(|mut note| {
+                note.pinned = pinned.contains(&note.rel);
+                note
+            })
+            .collect()
     }
 
     /// The note open last, while it is still a note and not in Recently
@@ -449,6 +511,13 @@ impl Store {
             .map(|p| moved(&p).unwrap_or(p))
             .collect();
         data.insert("pinned".into(), list.into());
+        let recent: Vec<String> = Self::recent_list(&data)
+            .into_iter()
+            .map(|p| moved(&p).unwrap_or(p))
+            .collect();
+        if !recent.is_empty() {
+            data.insert("recent".into(), recent.into());
+        }
         if let Some(last) = data.get("last").and_then(Value::as_str).and_then(moved) {
             data.insert("last".into(), last.into());
         }
@@ -515,7 +584,8 @@ impl Store {
 
     /// The IDs autopilot keeps for notes squashed into one
     /// (`renumber`, each squashed note's ID to the merged note's) follow
-    /// too: its note's, its skipped items', its landings' and its tabs'
+    /// too: its note's, its skipped items', its landings', the items it has
+    /// put next and its tabs'
     /// (`@autopilot_note`),
     /// whichever of the squashed notes they were.
     pub fn renumber(&self, renumber: &std::collections::HashMap<String, String>) {
@@ -533,7 +603,7 @@ impl Store {
                 mode.insert("noteId".into(), to.clone().into());
                 changed = true;
             }
-            for key in ["skipped", "landed"] {
+            for key in ["skipped", "landed", "next"] {
                 let Some(Value::Array(items)) = mode.get_mut(key) else {
                     continue;
                 };

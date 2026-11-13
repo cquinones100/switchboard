@@ -20,6 +20,7 @@ pub const RECENT_MAX: usize = 8;
 pub enum Act {
     ToggleList,
     Find,
+    Recent,
     Search,
     ClearSearch,
     /// To the note, from the list; to the list, from a note.
@@ -44,6 +45,9 @@ pub enum Act {
     ItemTab,
     /// UX 2.0: the "Add an item" input (ga).
     AddItem,
+    /// UX 2.0: on a narrow screen, the note shown in the place of the plan
+    /// beside it, or the plan again.
+    NoteOrPlan,
     /// A Switchboard command for Notes, by its name in keys.json, which the
     /// workspace runs (`switchboard press <name>`).
     Press(&'static str),
@@ -62,7 +66,7 @@ impl Act {
     pub fn on_item(self) -> bool {
         matches!(
             self,
-            Act::WorkOnItem | Act::OpenPlan | Act::ItemTab | Act::AddItem
+            Act::WorkOnItem | Act::OpenPlan | Act::ItemTab | Act::AddItem | Act::NoteOrPlan
         )
     }
 }
@@ -100,6 +104,7 @@ pub fn commands(from_list: bool, in_note: bool, ux2: bool) -> Vec<Command> {
             Act::ToggleList,
         ),
         command("Find a note", "Ctrl-F", "view", Act::Find),
+        command("Open a recent note", "", "view", Act::Recent),
         command("Search every note", "/", "view", Act::Search),
         command("Clear the search or tag", "x", "view", Act::ClearSearch),
         command(
@@ -235,6 +240,12 @@ pub fn commands(from_list: bool, in_note: bool, ux2: bool) -> Vec<Command> {
     list
 }
 
+/// UX 2.0's command while an item's plan shows beside the note, which
+/// has no key of its own.
+pub fn note_or_plan() -> Command {
+    command("Show the note beside its plan", "", "view", Act::NoteOrPlan)
+}
+
 /// The commands picked last, newest first.
 pub fn recent(file: &Path) -> Vec<String> {
     util::read_text(file)
@@ -271,6 +282,7 @@ pub fn items(commands: &[Command], recent: &[String]) -> Vec<PickItem> {
         .map(|i| {
             let c = &commands[i];
             PickItem {
+                off: false,
                 text: c.name.clone(),
                 tags: format!("#{}", c.tag),
                 key: c.key.clone(),

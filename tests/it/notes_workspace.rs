@@ -502,3 +502,36 @@ fn m_p_with_notes_in_front_lists_autopilot_on_its_note_and_its_own_commands() {
     client.type_text("\r");
     client.wait_text("Working Plan");
 }
+
+/// With UX 2.0, M-e in Notes' own tab is the app's (the plan of the item
+/// under its cursor beside the note): passed to it, Notes staying where it
+/// is; beside another tab, M-e still sends Notes home.
+#[test]
+fn with_ux2_m_e_in_notes_own_tab_is_the_apps_and_beside_a_tab_sends_it_home() {
+    let rig = Rig::with(json!({ "ux2": true }));
+    let (mut client, first, notes) = notes_open(&rig);
+    // Notes' own tab in front, M-e there: the stand-in app is sent it.
+    client.type_text(&format!("{ALT}2"));
+    rig.wait("Notes' tab in front", |l| tabs(l)[1]["current"] == true);
+    client.type_text(&format!("{ALT}e"));
+    client.wait_for("M-e passed to the app", |_| {
+        rig.server
+            .ok(&["capture-pane", "-t", &notes])
+            .contains("^[e")
+    });
+    let list = rig.list();
+    assert_eq!(pane_ids(&tabs(&list)[1]), std::slice::from_ref(&notes));
+    assert_eq!(pane_ids(&tabs(&list)[0]), std::slice::from_ref(&first));
+
+    // Beside the first tab's pane, M-e in Notes sends it home.
+    client.type_text(&format!("{ALT}1"));
+    rig.wait("the first tab in front", |l| tabs(l)[0]["current"] == true);
+    client.type_text(&format!("{ALT}e"));
+    rig.wait("Notes beside the first pane", |l| {
+        pane_ids(&tabs(l)[0]) == [first.clone(), notes.clone()]
+    });
+    client.type_text(&format!("{ALT}e"));
+    rig.wait("Notes home again", |l| {
+        pane_ids(&tabs(l)[0]) == [first.clone()] && pane_ids(&tabs(l)[1]) == [notes.clone()]
+    });
+}

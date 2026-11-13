@@ -207,7 +207,7 @@ pub struct Session {
     pub tabs: Vec<TabId>,
     pub current: TabId,
     pub last: Option<TabId>,
-    /// The tabs visited before and after the current one, for M-[ and M-].
+    /// The tabs visited before and after the current one, for M-{ and M-}.
     pub trail: Trail,
     /// The size its tabs are laid out for: its latest client's.
     pub cols: u16,
@@ -1857,12 +1857,20 @@ impl Server {
             // (src/notes/serve.rs).
             self.notes_orphan(tab_id);
         } else {
+            // Its last pane: what it showed is the closing's last screen.
+            let shot = crate::usage::shots::Shot::of_pane(&slot.pane);
+            self.keep_closing_screen(tab_id, shot);
             self.remove_tab(tab_id);
         }
     }
 
     /// Ends every pane of a tab and takes it out.
     pub fn kill_tab(&mut self, tab: TabId) {
+        let shot = self
+            .closing_screen_pane(tab)
+            .and_then(|p| self.panes.get(&p))
+            .and_then(|slot| crate::usage::shots::Shot::of_pane(&slot.pane));
+        self.keep_closing_screen(tab, shot);
         let panes = self.panes_with_parked(tab);
         for p in panes {
             if let Some(mut slot) = self.panes.remove(&p) {
@@ -1933,7 +1941,7 @@ impl Server {
     }
 
     /// Goes `steps` back (or forward) through the tabs a session visited,
-    /// as M-[ (or M-]) pressed that many times would, setting the trail's
+    /// as M-{ (or M-}) pressed that many times would, setting the trail's
     /// place on the way; nothing with no tab that way.
     pub fn trail_step(&mut self, session: &str, back: bool, steps: usize) {
         let to = self.session_mut(session).and_then(|s| {
@@ -2744,7 +2752,7 @@ impl Server {
     }
 
     pub fn act(&mut self, id: ClientId, action: Action) {
-        // Off in Settings, M-[ and M-] go to the tab on either side.
+        // Off in Settings, M-{ and M-} go to the tab on either side.
         let action = match action {
             Action::TabBack if !crate::settings::is_on("tab_back_forward") => Action::PrevTab,
             Action::TabForward if !crate::settings::is_on("tab_back_forward") => Action::NextTab,
@@ -2927,7 +2935,7 @@ impl Server {
             }
             Action::ReviveWorktree => self.open_mission(
                 id,
-                crate::mission::Opening::Picker(crate::mission::Scope::Untabbed),
+                crate::mission::Opening::Picker(crate::mission::Scope::Reopen),
             ),
             Action::Settings => self.open_mission(id, crate::mission::Opening::Settings),
             Action::RemindTab => self.remind_tab(id, current_tab),

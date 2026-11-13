@@ -125,7 +125,8 @@ pub enum Action {
     MissionControl,
     /// The Work map as a picker of the open tabs (M-j).
     FindTab,
-    /// The Work map as a picker of the work no tab has open (M-o).
+    /// The Reopen view as a picker: tabs closed and past Claude sessions
+    /// (M-o).
     ReviveWorktree,
     /// Mission control's Settings view.
     Settings,
@@ -196,7 +197,7 @@ impl Action {
     /// the extras'
     /// (`rename-tab`, `go-to-tab`, `pane-nav`, `mission-<view>`,
     /// `notifications`, `habits-report`, `send-reply`, `update-main`,
-    /// `check-setup`, `setup-part`, `calendar-tab`, `slack-tab`,
+    /// `check-setup`, `setup-part`,
     /// `open-pr-number`, `open-ticket-id`, `aws-login`), and
     /// `work-note-continuously`.
     pub fn parse(name: &str) -> Option<Action> {
@@ -445,7 +446,7 @@ impl Action {
             Action::MissionControl => "Open or close mission control".into(),
             Action::FindTab => "Search and jump to a tab".into(),
             Action::ReviveWorktree => {
-                "Reopen a worktree with no tab and resume its Claude".into()
+                "Reopen a closed tab or resume a past Claude session".into()
             }
             Action::Settings => "Settings: turn the workspace's options on and off".into(),
             Action::RemindTab => {
@@ -613,7 +614,7 @@ impl Action {
                 "The title wrapped, its PR number in front, then its branch, directory, PR and ticket as far as the workspace knows them; y copies the title.".into()
             }
             Action::ReopenLastTab => {
-                "In its directory, with its name and its Claude resumed, as the Closed view reopens one; pressed again, the one closed before. Off in Settings (reopen_tab_key), M-T shows the tab's full title.".into()
+                "In its directory, with its name and its Claude resumed, as the Reopen view reopens one; pressed again, the one closed before. Off in Settings (reopen_tab_key), M-T shows the tab's full title.".into()
             }
             Action::View(command) => command.detail().into(),
             Action::Diff(command) => command.detail().into(),
@@ -689,7 +690,7 @@ impl Action {
             Action::TicketImage => &["linear", "ticket", "panes"],
             Action::MissionControl => &["sidebar", "overview", "tabs"],
             Action::FindTab => &["tabs", "navigate", "find"],
-            Action::ReviveWorktree => &["worktree", "claude", "tabs", "reopen"],
+            Action::ReviveWorktree => &["tabs", "claude", "reopen"],
             Action::Settings => &["settings", "config", "preferences"],
             Action::RemindTab => &["tabs", "remind", "todo"],
             Action::TabTitle => &["tabs"],
@@ -851,8 +852,8 @@ impl Default for Bindings {
         bind("M-Right", SelectPane(Right));
         bind("M-Up", SelectPane(Up));
         bind("M-Down", SelectPane(Down));
-        bind("M-[", TabBack);
-        bind("M-]", TabForward);
+        bind("M-{", TabBack);
+        bind("M-}", TabForward);
         bind("M-Tab", LastTab);
         for n in 1..=9 {
             bind(&format!("M-{n}"), SelectTab(n));
@@ -1041,6 +1042,15 @@ impl Bindings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn m_braces_go_back_and_forward_and_m_brackets_are_free() {
+        let b = Bindings::default();
+        assert_eq!(b.root.get(&key("M-{")), Some(&Action::TabBack));
+        assert_eq!(b.root.get(&key("M-}")), Some(&Action::TabForward));
+        assert_eq!(b.root.get(&key("M-[")), None);
+        assert_eq!(b.root.get(&key("M-]")), None);
+    }
 
     #[test]
     fn action_names_round_trip() {

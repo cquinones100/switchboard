@@ -129,6 +129,11 @@ impl Server {
     /// first look), with each one's runs of the last days.
     fn routines_read(&mut self) {
         let dir = routine::dir();
+        if !self.routines.read {
+            let was = self.before_starters();
+            let home = crate::paths::home();
+            super::starters::make_once(&dir, &was, &home, &util::local_now());
+        }
         let seen = routine::stamp(&dir);
         if self.routines.read && seen == self.routines.seen {
             return;
@@ -179,6 +184,46 @@ impl Server {
             .map(|r| (r.id.clone(), routine::read_runs(&dir, &r.id, since)))
             .collect();
         self.mission_changed();
+    }
+
+    /// What was on before the starter routines (`starters::Was`): the
+    /// settings they replace, Fathom's connector, and the views' tabs the
+    /// server kept.
+    fn before_starters(&mut self) -> super::starters::Was {
+        let todo_hour = settings::cached("todo_note_time")
+            .map(|v| util::js_string(&v))
+            .and_then(|v| v.parse::<u8>().ok())
+            .filter(|h| (7..=11).contains(h))
+            .unwrap_or(9);
+        super::starters::Was {
+            todo_note: settings::is_on("todo_note"),
+            todo_hour,
+            // Fathom seen working: its connector's last call, or a record of
+            // the meetings the built-in notes wrote, which a last call that
+            // failed doesn't undo.
+            meeting_notes: settings::is_on("meeting_notes")
+                && (crate::connector::connected("Fathom")
+                    || crate::paths::state_dir().join("meetings.json").exists()),
+            slack_tab: !settings::is_on("slack_background")
+                && settings::is_on("view_slack")
+                && !self.loop_tab_open("Slack"),
+            calendar_tab: settings::is_on("view_calendar")
+                && self.calendar_needs_tab()
+                && !self.loop_tab_open("Calendar"),
+        }
+    }
+
+    /// Whether a tab the server opened before the starters to keep a view
+    /// (`@loop_tab`, named `name`) still runs Claude: its loop goes on, so the
+    /// starter replacing it is made paused rather than run beside it.
+    fn loop_tab_open(&self, name: &str) -> bool {
+        self.sidebar_all_tabs().iter().any(|t| {
+            self.tabs
+                .get(&t.id)
+                .is_some_and(|tab| tab.opts.get("@loop_tab").map(String::as_str) == Some("1"))
+                && self.tab_own_name(t.id).unwrap_or(&t.name) == name
+                && t.panes.iter().any(|p| self.runs_claude(*p))
+        })
     }
 
     /// A routine written, the folder's time taken as read.
@@ -358,11 +403,21 @@ impl Server {
                 }
                 continue;
             }
+            // The todo note's starter waits for you, as the note it writes
+            // gathers what is there when you are, and runs on your return.
+            if self.away() && super::starters::is_todo_note(&routine::dir(), r) {
+                continue;
+            }
             // The last time it was due, when it missed several.
             let latest = latest_due(r, due, now, &tz);
             let mut handled = r.clone();
             handled.handled = latest;
             self.routine_save(&handled);
+            if super::starters::done_today(&routine::dir(), r)
+                || super::starters::from_another_day(&routine::dir(), r, latest, &tz)
+            {
+                continue;
+            }
             let missed = latest < self.routines.awake_since;
             if !missed {
                 self.routine_start(&handled, latest, false, false);
@@ -1254,6 +1309,22 @@ impl Server {
         }
         self.routine_start(&r, util::now_secs(), false, true);
         Some(format!("Running {}.", r.name))
+    }
+
+    /// A run now of a starter routine, as its schedule would: the Slack view
+    /// asking its routine to look. `None` when that starter was never made
+    /// or is deleted; else whether a run started, none while routines are
+    /// off, it is paused or a run of it is under way.
+    pub(crate) fn routine_run_starter(&mut self, kind: super::starters::Kind) -> Option<bool> {
+        self.routines_read();
+        let id = super::starters::id_of(&routine::dir(), kind)?;
+        let r = self.routines.get(&id).cloned()?;
+        if !settings::is_on("routines") || r.paused || self.routines.live.contains_key(&r.id) {
+            return Some(false);
+        }
+        // Not by hand: the routine's own rule for a busy tab holds.
+        self.routine_start(&r, util::now_secs(), false, false);
+        Some(true)
     }
 
     /// p: paused, or resumed counting from now, so it doesn't run at once

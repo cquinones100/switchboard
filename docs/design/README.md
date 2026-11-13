@@ -17,6 +17,7 @@ The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a scre
 A tab and what it shows in Claude's place.
 
 - [1. The workspace: the sidebar with notifications, the tab in focus and its views](https://cquinones100.github.io/switchboard/design/1.html)
+- [75. A pinned tab (M-f): first in Needs you, the flag ⚑ in place of its state's mark](https://cquinones100.github.io/switchboard/design/75.html)
 - [2. M-a: straight to what needs you, answered in Claude's own dialog](https://cquinones100.github.io/switchboard/design/2.html)
 - [4. M-\\: two tabs side by side](https://cquinones100.github.io/switchboard/design/4.html)
 - [6. A tab's history](https://cquinones100.github.io/switchboard/design/6.html)
@@ -39,8 +40,9 @@ The tabs and where each piece of work stands.
 - [3. M-Space: mission control's Tabs: what each tab asks, is doing or did, rather than its screen; a finished tab, loops and reminders too](https://cquinones100.github.io/switchboard/design/3.html)
 - [5. Landing as a pipeline](https://cquinones100.github.io/switchboard/design/5.html)
 - [16. Autopilot as a kanban board](https://cquinones100.github.io/switchboard/design/16.html)
-- [29. Routines: a prompt of yours on a schedule, in the tab its last run used](https://cquinones100.github.io/switchboard/design/29.html)
-- [30. A new routine: its name, directory, schedule, tab and prompt in one box](https://cquinones100.github.io/switchboard/design/30.html)
+- [29. Routines: a prompt of yours on a schedule, run headless with the tools it allows, opening no tab; a run that needed another tool failed](https://cquinones100.github.io/switchboard/design/29.html)
+- [30. A new routine: its name, directory, schedule, allowed tools and prompt in one box](https://cquinones100.github.io/switchboard/design/30.html)
+- [76. Enter on a routine whose run failed for a tool: allow it and run again, open its session in a tab, or edit it](https://cquinones100.github.io/switchboard/design/76.html)
 - [17. Work map, replaced by Reopen (18): every piece of work, with a tab or without](https://cquinones100.github.io/switchboard/design/17.html)
 - [18. Reopen: closed tabs, past sessions and worktrees no tab has open, in one view, in place of the Work map](https://cquinones100.github.io/switchboard/design/18.html)
 - [71. Enter on a closed tab in Reopen: reopen it, its note, its directory, or forget it](https://cquinones100.github.io/switchboard/design/71.html)
@@ -62,7 +64,7 @@ The calendar, reminders, Slack and what came in.
 
 - [9. Calendar: the day as a timeline, the event beside it](https://cquinones100.github.io/switchboard/design/9.html)
 - [28. Reminders: every tab's reminder on a month, the months ahead under it](https://cquinones100.github.io/switchboard/design/28.html)
-- [21. Slack: what is new for you, by section as Slack's sidebar lists them, newest first in each](https://cquinones100.github.io/switchboard/design/21.html)
+- [21. Slack: what is new for you, by section as Slack's sidebar lists them; the section one row per thread, the chosen thread whole beside it](https://cquinones100.github.io/switchboard/design/21.html)
 - [53. Slack relay: which messages reach you, and where](https://cquinones100.github.io/switchboard/design/53.html)
 - [22. Inbox: Linear's notifications](https://cquinones100.github.io/switchboard/design/22.html)
 - [23. Notifications: the sidebar's, whole](https://cquinones100.github.io/switchboard/design/23.html)

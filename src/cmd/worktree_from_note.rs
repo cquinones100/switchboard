@@ -619,6 +619,19 @@ pub fn item_text(text: &str, line: usize) -> String {
     format!("{block}\n")
 }
 
+/// What an item's branch and worktree are named after: its first line made
+/// a slug, cut to `SLUG_LENGTH`; empty when nothing in it names one.
+pub fn slug_of(first: &str) -> String {
+    let slug: String = worktree::slugify(first).chars().take(SLUG_LENGTH).collect();
+    slug.trim_end_matches('-').to_string()
+}
+
+/// The worktree wtn makes for an item, by its first line: `note-<slug>`,
+/// its branch `note/<slug>` made flat.
+pub fn worktree_name(first: &str) -> String {
+    format!("note-{}", slug_of(first))
+}
+
 /// The items no worktree is working on yet. wtn keeps the item a branch is
 /// for in the repository's git config, `branch.<branch>.wtnItem`, as
 /// `<note's ID>: <item's first line>`, the ID read from the note's text, so
@@ -751,6 +764,11 @@ fn open_choices(plan: &str) -> Vec<String> {
     out
 }
 
+/// Whether a plan note leaves any choice open, as `open_choices` reads it.
+pub fn open_choice(plan: &str) -> bool {
+    !open_choices(plan).is_empty()
+}
+
 /// What an open choice waits on when it is a design review: the boards it
 /// names, else a design, as "your review of …"; none for any other choice.
 fn review_of(choice: &str) -> Option<String> {
@@ -807,6 +825,22 @@ pub fn plan_of(notes: &Path, item: &str) -> Plan {
     }
 }
 
+/// Whether an item links a plan note of its own that is there (a
+/// sub-item's link isn't the item's).
+pub fn has_plan(notes: &Path, item: &str) -> bool {
+    own_plan(&without_after(item)).is_some_and(|name| plan_file(notes, &name).is_some())
+}
+
+/// Whether an item's plan note leaves a decision open, whatever the item
+/// says of a choice made (an earlier decision's `(chose …)` doesn't settle
+/// a later one).
+pub fn plan_open(notes: &Path, item: &str) -> bool {
+    own_plan(&without_after(item))
+        .and_then(|name| plan_file(notes, &name))
+        .and_then(|file| fs::read_to_string(file).ok())
+        .is_some_and(|text| open_choice(&text))
+}
+
 /// The items autopilot would take, in its order: those
 /// whose plan is settled first, then those with no plan (or a plan note
 /// that isn't there), each in the note's order. An item whose plan needs a
@@ -831,6 +865,24 @@ pub fn queue(
 ) -> Result<Vec<Item>, String> {
     queue_and_held(notes, repo, note, skip, ready_only, with_choices, claims)
         .map(|(queue, _)| queue)
+}
+
+/// The queue with the items put next in it (autopilot's `next`, by their
+/// first lines) moved to its front, in the order they were put there; one
+/// that needs a choice, by its line or its plan as `settled` says, stays
+/// where it was, since it is taken only once its plan is settled or
+/// hands-free takes it in its turn.
+pub fn put_next(items: &mut Vec<Item>, next: &[String], settled: impl Fn(&Item) -> bool) {
+    let mut front = Vec::new();
+    for text in next {
+        if let Some(at) = items
+            .iter()
+            .position(|i| i.text == *text && !i.needs_choice && settled(i))
+        {
+            front.push(items.remove(at));
+        }
+    }
+    items.splice(0..0, front);
 }
 
 /// `queue`'s items, and apart from them those it would take but for the
@@ -1127,11 +1179,7 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
         return Err(format!("{first} waits on {other}, still open"));
     }
     let block = item_block(&lines, at);
-    let slug: String = worktree::slugify(&first)
-        .chars()
-        .take(SLUG_LENGTH)
-        .collect();
-    let slug = slug.trim_end_matches('-').to_string();
+    let slug = slug_of(&first);
     if slug.is_empty() {
         return Err(format!(
             "the item's first line has nothing to name a branch after: {first}"
@@ -2060,6 +2108,35 @@ mod tests {
         );
         assert!(held.is_empty());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_item_put_next_leads_the_queue_but_never_one_needing_a_choice() {
+        let item = |text: &str, needs_choice: bool| Item {
+            line: 0,
+            text: text.into(),
+            needs_choice,
+            after: Vec::new(),
+            waits_on: None,
+        };
+        let mut queue = vec![
+            item("First", false),
+            item("Second", false),
+            item("Choice", true),
+            item("Third", false),
+        ];
+        put_next(
+            &mut queue,
+            &[
+                "Third".into(),
+                "Choice".into(),
+                "Gone".into(),
+                "Second".into(),
+            ],
+            |i| i.text != "Second",
+        );
+        let texts: Vec<&str> = queue.iter().map(|i| i.text.as_str()).collect();
+        assert_eq!(texts, ["Third", "First", "Second", "Choice"]);
     }
 
     #[test]

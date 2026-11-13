@@ -219,8 +219,54 @@ pub async fn alert_tabs(cx: &Cx, tabs: &[Tab], events: &[Event]) {
     }
 }
 
+/// Whether a finished turn another tab's message or a background task
+/// started, or one that wrote no reply, is posted in its tab's thread.
+pub const OTHER_TURNS: &str = "relay_send_other_turns";
+
+/// What becomes of a finished turn: posted, counted as reported without a
+/// post, or left for a later tick while its transcript catches up.
+enum Turn {
+    Post,
+    Skip,
+    Later,
+}
+
+/// A tab waiting on you is always posted; a finished turn only when you
+/// started it and it wrote a reply, unless Settings' `OTHER_TURNS` is on.
+/// A turn of yours with no reply yet, known from the tab's state, waits, as
+/// a follow-up does, for `REPLY_WAIT_MS` after it ended, since Claude Code
+/// writes the last words a moment after the Stop hook fires; the next tick
+/// looks again. One known from a hook's event (the tab in front of you) has
+/// the hook's final message instead, and its event is read only once, so it
+/// is decided at once.
+fn which_turn(cx: &Cx, due: &Due) -> Turn {
+    let tab = &due.tab;
+    let posts_every_turn = (cx.settings)(OTHER_TURNS) == Some(serde_json::Value::Bool(true));
+    if tab.state == "waiting" || posts_every_turn {
+        return Turn::Post;
+    }
+    let transcript = due.transcript.clone().or_else(|| tab.transcript.clone());
+    let Some(found) = transcript.as_deref().and_then(tabs::turn_for) else {
+        return Turn::Post;
+    };
+    let said = due.said.as_deref().is_some_and(|s| !s.trim().is_empty());
+    let ended_at = tabs::since_ms(tab.since.trim_start_matches("turn:"));
+    let from_state = due.transcript.is_none();
+    let may_still_be_written =
+        from_state && ended_at.is_some_and(|at| util::now_ms() - at < super::config::REPLY_WAIT_MS);
+    match (found.yours, found.replied || said) {
+        (true, true) => Turn::Post,
+        (true, false) if may_still_be_written => Turn::Later,
+        _ => Turn::Skip,
+    }
+}
+
 async fn alert(cx: &Cx, due: Due) {
     let tab = &due.tab;
+    let decided = which_turn(cx, &due);
+    if matches!(decided, Turn::Later) {
+        return;
+    }
     cx.state
         .borrow_mut()
         .reported
@@ -232,19 +278,25 @@ async fn alert(cx: &Cx, due: Due) {
             .insert(tab.id.clone(), at.parse().unwrap_or(0));
     }
     let waiting = tab.state == "waiting";
-    // Where its kind goes; one turned off still counts as reported.
+    // Where its kind goes; one turned off, or a turn not for you, still
+    // counts as reported.
     let kind = if waiting {
         Kind::Prompts
     } else {
         Kind::Finished
     };
     let send = sending::send_now(cx, kind, tab.autopilot);
-    if send == Send::Off {
+    let not_for_you = matches!(decided, Turn::Skip);
+    if send == Send::Off || not_for_you {
+        let why = if not_for_you {
+            format!("not yours or no reply, {OTHER_TURNS} off")
+        } else {
+            format!("relay_send_{}", kind.name())
+        };
         cx.log(&format!(
-            "alert: {} {} not sent (relay_send_{})",
+            "alert: {} {} not sent ({why})",
             label(tab.index, &tab.name),
             tab.state,
-            kind.name()
         ));
         // A full context is a kind of its own, warned of whatever the turn.
         if !waiting {

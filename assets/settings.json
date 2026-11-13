@@ -276,14 +276,14 @@
     "key": "todo_note",
     "category": "Integrations",
     "label": "Today's todo note",
-    "description": "Each weekday at the time below, a note Todos/Today's Todo <date> that Claude (Sonnet) writes from your notes' unticked items, today's calendar, and what mission control last read of GitHub, Linear and Slack; off by default, since it sends your notes' unticked items to Claude",
+    "description": "Whether the Today's todo note starter routine is made running when this version first sets up the routines (it sends your notes' unticked items to Claude); after that, pause or resume it in mission control's Routines view. Kept off by default for a workspace still running an older Switchboard, which reads this list",
     "default": false
   },
   {
     "key": "todo_note_time",
     "category": "Integrations",
     "label": "Todo note time",
-    "description": "When Today's todo note is written each weekday, or as soon as the computer is on after it",
+    "description": "The hour the Today's todo note starter routine starts its weekday runs at, when this version first sets up the routines; after that, change its schedule in mission control's Routines view. Kept for a workspace still running an older Switchboard, which reads this list",
     "choices": [
       {
         "value": "7",
@@ -312,7 +312,7 @@
     "key": "meeting_notes",
     "category": "Integrations",
     "label": "Meeting notes",
-    "description": "Each meeting of yours Fathom recorded as a note in Meetings, with its summary, action items and transcript, through Claude's Fathom connector (a Haiku call every 30 minutes from 7am to 9pm, and two for each new meeting)",
+    "description": "Whether the Meeting notes starter routine is made running when this version first sets up the routines (once Fathom has worked); after that, pause or resume it in mission control's Routines view. Kept for a workspace still running an older Switchboard, which reads this list",
     "default": true
   },
   {
@@ -445,7 +445,7 @@
     "key": "view_work_map",
     "category": "Mission control",
     "label": "Work map",
-    "description": "Mission control's Work map: every piece of work in your tabs' repositories (M-j and M-o open it whatever this says)",
+    "description": "Mission control's Work map: every piece of work in your tabs' repositories (M-j opens it whatever this says)",
     "default": true
   },
   {
@@ -470,17 +470,10 @@
     "default": true
   },
   {
-    "key": "view_closed",
+    "key": "view_reopen",
     "category": "Mission control",
-    "label": "Closed tabs",
-    "description": "Mission control's Closed view: the tabs closed last, to reopen",
-    "default": true
-  },
-  {
-    "key": "view_sessions",
-    "category": "Mission control",
-    "label": "Sessions",
-    "description": "Mission control's Sessions view: each Claude session's context, model and age",
+    "label": "Reopen",
+    "description": "Mission control's Reopen view: tabs closed and past Claude sessions to resume, with the last screen of each; off, M-o opens it still and nothing else lists them",
     "default": true
   },
   {
@@ -536,7 +529,7 @@
     "key": "lone_pane_width",
     "category": "Tabs and status bar",
     "label": "Widest a lone pane gets",
-    "description": "A tab with one pane (or zoomed into one), and mission control showing one view, is drawn at most this wide, against the sidebar, its program given that width and the columns at its right the sidebar's sunken surface with a rule at the pane's right edge; with two or more panes they share the whole width and may be wider, and several views at once fill it too. Off, as it is unless you choose a width, a lone pane fills the width",
+    "description": "A tab with one pane (or zoomed into one), and mission control showing one view with no pane beside its list, is drawn at most this wide, against the sidebar, its program given that width and the columns at its right the sidebar's sunken surface with a rule at the pane's right edge; with two or more panes they share the whole width and may be wider, and several views at once fill it too. Besides the widths listed, Columns… takes any number from 80 typed in, as `switchboard setting lone_pane_width <n>` does. Off, as it is unless you choose a width, a lone pane fills the width",
     "choices": [
       {
         "value": "off",
@@ -563,13 +556,18 @@
         "label": "240 columns"
       }
     ],
+    "typed": {
+      "least": 80,
+      "label": "Columns…",
+      "unit": "columns"
+    },
     "default": "off"
   },
   {
     "key": "tab_back_forward",
     "category": "Tabs and status bar",
-    "label": "M-[ and M-] go back and forward",
-    "description": "M-[ and M-] go back and forward through the tabs you visited, as a browser's back and forward do, and do nothing with nowhere further to go, and the ← and → buttons before mission control's ⊞ do the same; off, they go to the tab on the left and right, as the prefix's p and n always do, and the buttons are left out",
+    "label": "M-{ and M-} go back and forward",
+    "description": "M-{ and M-} go back and forward through the tabs you visited, as a browser's back and forward do, and do nothing with nowhere further to go, and the ← and → buttons before mission control's ⊞ do the same; off, they go to the tab on the left and right, as the prefix's p and n always do, and the buttons are left out",
     "default": true
   },
   {
@@ -633,6 +631,13 @@
     "category": "Notes",
     "label": "Images drawn in a note",
     "description": "An image pasted into a note (Format menu, Paste image) drawn under the line that names it, in a terminal that speaks the kitty graphics protocol (Ghostty and kitty do), or one that draws sixel with Image protocol on sixel (Windows Terminal); off, it is its name, which Enter opens as \"Enter shows a picture full size\" says",
+    "default": true
+  },
+  {
+    "key": "notes_recent",
+    "category": "Notes",
+    "label": "Recent notes in the list",
+    "description": "Notes' list shows the notes you opened last under Recent, above the folders. Off, the list shows only the folders.",
     "default": true
   },
   {
@@ -723,7 +728,7 @@
     "key": "slack_background",
     "category": "Mission control",
     "label": "Slack without a tab",
-    "description": "Mission control looks at Slack itself every minute, through cheap headless Haiku calls, instead of a Slack tab looping /slack-updates",
+    "description": "Mission control looks at Slack itself every minute, through cheap headless Haiku calls, instead of the Slack routine running /slack-updates",
     "default": true
   },
   {
@@ -960,7 +965,7 @@
     "key": "save_contents",
     "category": "Sessions",
     "label": "Save what panes show",
-    "description": "Keep each pane's screen in the layout saves, to show again after a restart; it can hold secrets",
+    "description": "Keep each pane's screen in the layout saves, to show again after a restart, and a closed tab's last screen for the Reopen view; it can hold secrets",
     "default": true
   },
   {
@@ -988,7 +993,7 @@
     "key": "statusline_context",
     "category": "Sessions",
     "label": "Context in Claude's status line",
-    "description": "Claude Code's status line under its prompt says how full the context is, beside the model, inside the workspace as outside it. Off, with UX 2.0 and mission control's Sessions view on, the status line inside the workspace shows the model alone and the Sessions view shows the context; without both of those it shows the context anyway",
+    "description": "Claude Code's status line under its prompt says how full the context is, beside the model, inside the workspace as outside it. Off, with UX 2.0 and mission control's Usage view on, the status line inside the workspace shows the model alone and the Usage view's Sessions show the context; without both of those it shows the context anyway",
     "default": true
   },
   {
@@ -1220,6 +1225,13 @@
       }
     ],
     "default": "thread"
+  },
+  {
+    "key": "relay_send_other_turns",
+    "category": "Slack relay",
+    "label": "Turns another tab or a task started",
+    "description": "Posts a tab's finished turn in its thread when another tab's message or a background task started it, or when it wrote no reply. Off, only turns you started that wrote a reply, and tabs waiting on you, are posted",
+    "default": false
   },
   {
     "key": "relay_send_stuck",

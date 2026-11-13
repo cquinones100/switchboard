@@ -197,7 +197,7 @@ impl Server {
         let session = session.to_string();
         self.choose(client, menu, move |server, _, chose| {
             if let Some((back, n)) = chose.and_then(|i| rows.get(i)).and_then(|(_, _, go)| *go) {
-                // As M-[ and M-] do: out of the sidebar, onto the tab.
+                // As M-{ and M-} do: out of the sidebar, onto the tab.
                 server.sidebar_leave(&session);
                 server.trail_step(&session, back, n);
             }

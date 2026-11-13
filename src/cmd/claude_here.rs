@@ -302,7 +302,7 @@ fn parent(dir: &str) -> Option<String> {
 /// encoded from where it runs, which is where the session started, so it is
 /// resumed from there; or, when that folder has since been renamed, from the
 /// folder its last directory is in (or is) that encodes the same.
-fn resume_dir(first: Option<&str>, last: &str, project_dir: &Path) -> Option<String> {
+pub(crate) fn resume_dir(first: Option<&str>, last: &str, project_dir: &Path) -> Option<String> {
     let encoded = project_dir.file_name()?.to_string_lossy().into_owned();
     let mut candidates: Vec<String> = first.map(str::to_string).into_iter().collect();
     let mut at = Some(last.to_string());

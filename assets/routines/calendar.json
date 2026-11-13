@@ -1,0 +1,6 @@
+{
+  "name": "Calendar",
+  "when": "every 30m",
+  "model": "",
+  "prompt": "Each run, run the today skill (/today), which saves today's events for mission control's Calendar view. Reply with one line: the meetings left today."
+}

@@ -1,12 +1,14 @@
 //! `wt-revive`: the worktrees no tab has open, for mission control's Work
-//! map, which M-o opens showing only them: Enter there opens a tab in one
-//! and resumes its Claude session with `claude-here`, as `wtr` does. Ported
+//! map, whose `m` menu shows only them: Enter there opens a tab in one and
+//! resumes its Claude session with `claude-here`, as `wtr` does. Ported
 //! from `bin/wt-revive`.
 //!
 //! ```text
 //! wt-revive          print the rows, from the repository of the current directory
 //! wt-revive <dir>    the same, starting from <dir>'s repository
 //! wt-revive --json   each row as a line of JSON, nothing when there are none
+//! wt-revive --sessions --json
+//!                    each Claude session of the last two weeks instead, newest first
 //! ```
 //!
 //! Which repositories: the one `<dir>` is in, every open pane's, and every
@@ -19,10 +21,18 @@
 //! in `~/.cache/switchboard/pr-review` (src/trust.rs), which no Claude is
 //! started in.
 //!
-//! What a transcript says (its last directory and last prompt) is cached in
+//! `--sessions` lists the conversations themselves, for mission control's
+//! Reopen view: each of the last two weeks (a subagent's left out) with its
+//! id, the directory it ended in, when it was last used, its last prompt and
+//! how many prompts you gave it, leaving out one that ended in someone
+//! else's PR's worktree. Which of them a tab still runs is the view's to
+//! say.
+//!
+//! What a transcript says (its last directory, last prompt and prompts
+//! counted) is cached in
 //! `~/.cache/wt-revive/index.json` against the file's size and modified
 //! time, and what repository a directory belongs to against the directory,
-//! in the shape the Node version wrote. Between two presses of M-o almost no
+//! in the shape the Node version wrote. Between two looks almost no
 //! transcript has changed, so a press reads only the few that have.
 //!
 //! The panes' directories come from the server (`switchboard list`) where
@@ -46,7 +56,7 @@ const RECENT_MS: i64 = 14 * 24 * 60 * 60 * 1000;
 /// where the session finished, and some transcripts are megabytes long.
 const CWD_TAIL: u64 = 64 * 1024;
 /// Bumped when what `tail_facts` reads changes, so the cache is read again.
-const FACTS: i64 = 2;
+const FACTS: i64 = 6;
 /// A prompt can be followed by any amount of tool output, so the search for
 /// it widens until it finds one or has read the whole file.
 const PROMPT_TAILS: [u64; 3] = [256 * 1024, 2 * 1024 * 1024, u64::MAX];
@@ -169,8 +179,8 @@ fn tail_facts(path: &Path, size: u64, mtime_ms: f64) -> (Option<String>, f64) {
     }
 }
 
-/// What you typed, not what Claude Code added: string content only (a tool
-/// result is a list), nothing marked meta, and nothing that starts with a
+/// What you typed, not what Claude Code added: string content or text
+/// blocks (`typed_text`), nothing marked meta, and nothing that starts with a
 /// tag (slash commands, hook output).
 fn prompts_in(text: &str) -> Vec<String> {
     text.split('\n')
@@ -180,13 +190,31 @@ fn prompts_in(text: &str) -> Vec<String> {
             e.get("type").and_then(Value::as_str) == Some("user")
                 && !e.get("isMeta").is_some_and(util::truthy)
         })
-        .filter_map(|e| {
-            e.pointer("/message/content")
-                .and_then(Value::as_str)
-                .map(|c| c.replace(['\n', '\t'], " "))
-        })
+        .filter_map(|e| typed_text(e.pointer("/message/content")?))
+        .map(|c| c.replace(['\n', '\t'], " "))
         .filter(|p| !p.starts_with('<'))
         .collect()
+}
+
+/// What a prompt's content says: a string, or the text blocks of a list
+/// (a prompt with a picture), never a list holding a tool's result.
+fn typed_text(content: &Value) -> Option<String> {
+    if let Some(text) = content.as_str() {
+        return Some(text.to_string());
+    }
+    let parts = content.as_array()?;
+    if parts
+        .iter()
+        .any(|p| p.get("type").and_then(Value::as_str) == Some("tool_result"))
+    {
+        return None;
+    }
+    let text: Vec<&str> = parts
+        .iter()
+        .filter(|p| p.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|p| p.get("text").and_then(Value::as_str))
+        .collect();
+    (!text.is_empty()).then(|| text.join(" "))
 }
 
 /// The last prompt that says something: "yes" and "go ahead" don't say what
@@ -364,6 +392,137 @@ fn worktrees_of(repo: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// A Claude session, as `--sessions --json` prints it.
+#[derive(Clone, Debug, Serialize, serde::Deserialize, PartialEq, Eq, Default)]
+pub struct SessionRow {
+    pub id: String,
+    pub dir: String,
+    /// When it was last used, in seconds since the epoch.
+    pub when: i64,
+    pub prompt: String,
+    /// The prompts you gave it.
+    pub turns: usize,
+    /// Where `claude --resume` finds it: the folder its transcript's
+    /// project is named from (`claude_here::resume_dir`); a session with
+    /// none there any more isn't listed.
+    #[serde(default)]
+    pub resume: String,
+}
+
+/// The prompts you gave a transcript, a line at a time: what `prompts_in`
+/// finds, and the slash commands you typed (`<command-name>`), which it
+/// passes over for the last prompt.
+fn turns_in(path: &Path) -> usize {
+    use std::io::BufRead;
+    let Ok(file) = File::open(path) else {
+        return 0;
+    };
+    std::io::BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter(|l| l.contains(r#""type":"user""#))
+        .filter(|l| !prompts_in(l).is_empty() || typed_command(l))
+        .count()
+}
+
+/// Whether a transcript's line is a slash command you typed, its
+/// `<command-name>` first or after its `<command-message>`.
+fn typed_command(line: &str) -> bool {
+    let Ok(e) = serde_json::from_str::<Value>(line) else {
+        return false;
+    };
+    e.get("type").and_then(Value::as_str) == Some("user")
+        && !e.get("isMeta").is_some_and(util::truthy)
+        && e.pointer("/message/content")
+            .and_then(typed_text)
+            .is_some_and(|t| t.contains("<command-name>"))
+}
+
+/// Each conversation of the last two weeks, newest first: a transcript
+/// directly in a project's folder (a subagent's is a folder down), never
+/// one that ended in someone else's PR's worktree.
+fn session_rows() -> Vec<SessionRow> {
+    let (transcripts, repos) = read_cache();
+    let mut sessions = recent_sessions(&transcripts);
+    let projects = paths::claude_dir().join("projects");
+    let mut rows = Vec::new();
+    // One row a conversation: the newest transcript of an id kept in two
+    // projects' folders that can be resumed, the sessions coming newest
+    // first.
+    let mut listed = HashSet::new();
+    for s in &mut sessions {
+        let path = PathBuf::from(&s.file);
+        let top = path
+            .parent()
+            .and_then(Path::parent)
+            .is_some_and(|p| p == projects);
+        // Used within two weeks by its own last timestamp, not only by
+        // the file's modified time, which an entry with none moves.
+        let recent = s.active_ms() > (util::now_ms() - RECENT_MS) as f64;
+        if !top || !recent || crate::trust::is_untrusted(Path::new(s.cwd())) {
+            continue;
+        }
+        let Some(id) = path.file_stem().map(|n| n.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        if listed.contains(&id) {
+            continue;
+        }
+        if !s.entry.contains_key("prompt") {
+            let p = prompt_in(&path, s.size());
+            s.entry.insert("prompt".into(), json!(p));
+        }
+        if !s.entry.contains_key("turns") {
+            s.entry.insert("turns".into(), json!(turns_in(&path)));
+        }
+        // Where it started is the transcript's own, kept; where it resumes
+        // from is worked out on every look, since its folder can go and
+        // come back.
+        if !s.entry.contains_key("firstCwd") {
+            let first = crate::cmd::claude_here::read_first_cwd(&path);
+            s.entry
+                .insert("firstCwd".into(), json!(first.unwrap_or_default()));
+        }
+        let first = s
+            .entry
+            .get("firstCwd")
+            .and_then(Value::as_str)
+            .filter(|f| !f.is_empty());
+        let resume = path
+            .parent()
+            .and_then(|project| crate::cmd::claude_here::resume_dir(first, s.cwd(), project))
+            .unwrap_or_default();
+        // Nor one `claude --resume` can't find, no folder its project is
+        // named from being there any more, as claude-here leaves it out,
+        // nor one whose resuming would start Claude in an untrusted folder.
+        if resume.is_empty() || crate::trust::is_untrusted(Path::new(&resume)) {
+            continue;
+        }
+        // Its newest copy Claude can resume it from, an older one in a
+        // folder still there standing in for one whose folder is gone.
+        listed.insert(id.clone());
+        rows.push(SessionRow {
+            id,
+            dir: s.cwd().to_string(),
+            when: (s.active_ms() / 1000.0).floor() as i64,
+            prompt: s
+                .entry
+                .get("prompt")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            turns: s.entry.get("turns").and_then(Value::as_u64).unwrap_or(0) as usize,
+            resume,
+        });
+    }
+    let kept: Map<String, Value> = sessions
+        .into_iter()
+        .map(|s| (s.file, Value::Object(s.entry)))
+        .collect();
+    write_cache(kept, repos);
+    rows
+}
+
 /// How long ago, as the rows say it.
 fn age(when: i64, now_secs: i64) -> String {
     let s = now_secs - when;
@@ -507,13 +666,28 @@ fn pane_dirs() -> Vec<PathBuf> {
 
 pub fn main(args: Vec<String>) -> ExitCode {
     let usage = || {
-        eprintln!("Usage: wt-revive [--json] [<dir>]");
+        eprintln!("Usage: wt-revive [--json] [<dir>] | wt-revive --sessions [--json]");
         ExitCode::from(1)
     };
     if args.iter().any(|a| a == "--help" || a == "-h") {
         return usage();
     }
     let json = args.iter().any(|a| a == "--json");
+    if args.iter().any(|a| a == "--sessions") {
+        for row in session_rows() {
+            if json {
+                println!("{}", util::json_compact(&row));
+            } else {
+                println!(
+                    "{}\t{}\t{}",
+                    row.id,
+                    paths::tilde(Path::new(&row.dir)),
+                    row.prompt
+                );
+            }
+        }
+        return ExitCode::SUCCESS;
+    }
     // --list, from before the rows were all it printed, is still taken.
     let positional: Vec<&String> = args
         .iter()
@@ -568,9 +742,20 @@ mod tests {
             r#"{"type":"user","message":{"content":"a long enough prompt\nhere"}}"#,
             r#"{"type":"user","isMeta":true,"message":{"content":"meta, not yours at all"}}"#,
             r#"{"type":"user","message":{"content":"<command-name>/clear</command-name>"}}"#,
+            r#"{"type":"user","message":{"content":"<command-message>shape</command-message>\n<command-name>/shape</command-name>"}}"#,
             r#"{"type":"user","message":{"content":[{"type":"tool_result"}]}}"#,
+            r#"{"type":"user","message":{"content":[{"type":"text","text":"look at this screenshot"},{"type":"image"}]}}"#,
         ]
         .join("\n");
-        assert_eq!(prompts_in(&text), vec!["a long enough prompt here"]);
+        assert_eq!(
+            prompts_in(&text),
+            vec!["a long enough prompt here", "look at this screenshot"]
+        );
+        let lines: Vec<&str> = text.split('\n').collect();
+        assert_eq!(
+            lines.iter().filter(|l| typed_command(l)).count(),
+            2,
+            "the slash commands you typed count as turns"
+        );
     }
 }

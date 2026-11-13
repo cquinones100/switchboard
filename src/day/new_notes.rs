@@ -4,8 +4,12 @@
 //! `new-notes.json` in the state directory as `{ path, title, source, at }`,
 //! its path within the notes directory, and is let go once Notes shows it
 //! (`.notes.json`'s `last`), its file is gone, or its menu dismisses it.
+//! `switchboard new-note` (`main`) is how a routine's Claude adds one, as
+//! the starter routines that write today's todo note and the meeting notes
+//! do (src/routines/starters.rs).
 
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -67,6 +71,34 @@ pub fn note_written(state: &Path, notes_dir: &Path, note: &Path, source: &str) {
         at: util::now_ms(),
     });
     write(state, &notes);
+}
+
+/// `switchboard new-note <note> [what wrote it]`: a note just written for
+/// you, in the notes directory, put in the notifications until you read it.
+pub fn main(args: Vec<String>) -> ExitCode {
+    let Some(given) = args.first() else {
+        eprintln!("Usage: switchboard new-note <note file> [what wrote it]");
+        return ExitCode::from(1);
+    };
+    let dirs = super::Dirs::here();
+    let note = dirs.notes.join(given);
+    let inside = match (note.canonicalize(), dirs.notes.canonicalize()) {
+        (Ok(note), Ok(notes)) => note.starts_with(&notes) && note.is_file(),
+        _ => false,
+    };
+    if !inside {
+        eprintln!("new-note: {given} isn't a note in {}", dirs.notes.display());
+        return ExitCode::from(1);
+    }
+    let source = if args.len() > 1 {
+        args[1..].join(" ")
+    } else {
+        "a routine".to_string()
+    };
+    let notes = dirs.notes.canonicalize().unwrap_or(dirs.notes.clone());
+    let note = note.canonicalize().unwrap_or(note);
+    note_written(&dirs.state, &notes, &note, &source);
+    ExitCode::SUCCESS
 }
 
 /// The ones not yet read, newest first.

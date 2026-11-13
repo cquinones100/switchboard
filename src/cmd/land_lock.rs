@@ -27,9 +27,17 @@
 //! land-lock wait      takes it, waiting in the queue for its turn
 //!                     (every LAND_LOCK_POLL seconds, 5 by default); exit 4
 //!                     when taken out of the queue meanwhile (mission
-//!                     control's Landing view), rather than joining again
+//!                     control's Landing view), or, after a requeue, while
+//!                     it reviewed, rather than joining again
 //! land-lock release   lets it go, when this worktree holds it, and takes
 //!                     this worktree out of the queue
+//! land-lock requeue   lets it go, when this worktree holds it, and puts
+//!                     this worktree first in the queue, marked reviewing,
+//!                     in one step, so no other take slips in between: a
+//!                     landing reviewing its change again keeps its turn
+//!                     without holding up the others, since a take passes
+//!                     over a waiter marked reviewing; its next take or
+//!                     wait drops the mark, ready to land
 //! land-lock leave     takes this worktree out of the queue
 //! land-lock holder    prints which worktree holds it, nothing when none
 //! land-lock queue     prints the holder ("landing") and each waiter by its
@@ -78,10 +86,11 @@
 //!                     last 40 lines in the record; `clear` starts it again
 //! ```
 //!
-//! A landing holds it only to rebase, test and push, but one whose change no
-//! longer matches its review reviews again and asks again while holding it,
-//! which can wait on you for as long as you like, so the lock never expires
-//! with time: it is taken over only from a landing that is gone, its
+//! A landing holds it only to rebase, test and push: one whose change no
+//! longer matches its review lets it go to review again (`requeue`), and
+//! takes it back first in line. It can still wait on you while holding it
+//! (a failing default branch, a push question asked again in a tab that
+//! landed without asking), so the lock never expires with time: it is taken over only from a landing that is gone, its
 //! worktree removed, or neither the Claude session that took it nor any
 //! other running in it. A waiter gone the same way is dropped from the
 //! queue as it is read.
@@ -126,8 +135,10 @@ const STALE_MUTEX_MS: i64 = 10_000;
 /// many tries it makes.
 const MUTEX_WAIT: Duration = Duration::from_millis(20);
 const MUTEX_TRIES: u32 = 500;
+/// `requeue`'s mark, in the worktree's own git directory.
+const REQUEUED: &str = "land-requeued";
 
-const USAGE: &str = "usage: land-lock [--target <branch>] take|wait|release|leave|holder|queue|move|phase [words]|record ...|landed <short hash> <branch>|autolanded <short hash> [--plan <file> | --decided <n>] [--not-applied <labels>] [item]";
+const USAGE: &str = "usage: land-lock [--target <branch>] take|wait|release|requeue|leave|holder|queue|move|phase [words]|record ...|landed <short hash> <branch>|autolanded <short hash> [--plan <file> | --decided <n>] [--not-applied <labels>] [item]";
 
 pub fn main(mut args: Vec<String>) -> ExitCode {
     let mut given_target = None;
@@ -191,6 +202,7 @@ pub fn main(mut args: Vec<String>) -> ExitCode {
         // too: a waiter stopped while its session goes on would otherwise
         // hold up every worktree behind it.
         "release" => lock.release().map(|()| ExitCode::SUCCESS),
+        "requeue" => lock.requeue().map(|()| ExitCode::SUCCESS),
         "leave" => lock
             .with_queue(|queue| (Some(without(queue, &lock.here)), ()))
             .map(|()| ExitCode::SUCCESS),
@@ -536,10 +548,13 @@ impl Lock {
 
     /// Takes it, waiting in the queue for its turn every `poll`: 0 taken,
     /// 4 taken out of the queue meanwhile (mission control's Landing view),
-    /// rather than joining again at the back.
+    /// rather than joining again at the back. A landing `requeue` put
+    /// first in line that was taken out while it reviewed (its mark left,
+    /// `REQUEUED`, no take since) is out before its wait starts, and says
+    /// so too.
     pub(crate) fn wait(&self, poll: Duration) -> io::Result<u8> {
         let here = self.here.to_string_lossy().into_owned();
-        let mut waited = false;
+        let mut waited = self.requeued_mark().is_some_and(|m| m.exists());
         loop {
             if waited {
                 let there = self.with_queue(|queue| {
@@ -547,6 +562,9 @@ impl Lock {
                     (None, there)
                 })?;
                 if !there {
+                    if let Some(mark) = self.requeued_mark() {
+                        let _ = fs::remove_file(mark);
+                    }
                     return Ok(4);
                 }
             }
@@ -656,6 +674,11 @@ impl Lock {
     /// the queue: 0 taken, 3 not, this worktree then in the queue.
     pub(crate) fn take(&self, quiet: bool) -> io::Result<u8> {
         let here = self.here.to_string_lossy().into_owned();
+        // Taking (or waiting) again is the requeued landing back: its
+        // place, if it still has one, is ready.
+        if let Some(mark) = self.requeued_mark() {
+            let _ = fs::remove_file(mark);
+        }
         self.change_queue(true, |queue| {
             let current = self.holder();
             let held = self.dir.exists();
@@ -684,7 +707,12 @@ impl Lock {
             let mine = queue
                 .iter()
                 .position(|e| entry_path(e) == Some(here.as_str()));
-            let ahead = mine.unwrap_or(queue.len());
+            // A waiter reviewing its change again keeps its place without
+            // holding up those behind it.
+            let ahead = queue[..mine.unwrap_or(queue.len())]
+                .iter()
+                .filter(|e| !reviewing(e))
+                .count();
             let free = !held || gone(current.as_ref());
             if free && ahead == 0 {
                 let made = match fs::create_dir(&self.dir) {
@@ -714,20 +742,66 @@ impl Lock {
                 println!("{}", said.join("; "));
             }
             let mut joined = queue;
-            if mine.is_none() {
-                joined.push(self.entry(&here));
+            match mine {
+                Some(at) => {
+                    if let Some(entry) = joined[at].as_object_mut() {
+                        entry.remove("reviewing");
+                    }
+                }
+                None => joined.push(self.entry(&here)),
             }
             (Some(joined), Ok(3))
         })?
     }
 
     pub(crate) fn release(&self) -> io::Result<()> {
+        if let Some(mark) = self.requeued_mark() {
+            let _ = fs::remove_file(mark);
+        }
         self.with_queue(|queue| (Some(without(queue, &self.here)), ()))?;
         let here = self.here.to_string_lossy();
         if self.holder().as_ref().and_then(holder_path).as_deref() == Some(&*here) {
             let _ = fs::remove_dir_all(&self.dir);
         }
         Ok(())
+    }
+
+    /// Lets the lock go, when this worktree holds it, and puts this
+    /// worktree first in the queue marked reviewing, under the queue's
+    /// mutex, which every take holds, so none slips in between.
+    pub(crate) fn requeue(&self) -> io::Result<()> {
+        let here = self.here.to_string_lossy().into_owned();
+        self.change_queue(true, |queue| {
+            let mut entry = queue
+                .iter()
+                .find(|e| entry_path(e) == Some(here.as_str()))
+                .cloned()
+                .unwrap_or_else(|| self.entry(&here));
+            entry["reviewing"] = Value::Bool(true);
+            let mut next = without(queue, &self.here);
+            next.insert(0, entry);
+            let holds = self.holder().as_ref().and_then(holder_path).as_deref() == Some(&*here);
+            let freed = if holds {
+                fs::remove_dir_all(&self.dir).or_else(|e| match e.kind() {
+                    io::ErrorKind::NotFound => Ok(()),
+                    _ => Err(e),
+                })
+            } else {
+                Ok(())
+            };
+            (Some(next), freed)
+        })??;
+        if let Some(mark) = self.requeued_mark() {
+            util::write_atomic(mark, "")?;
+        }
+        Ok(())
+    }
+
+    /// The mark `requeue` leaves in the worktree's own git directory until
+    /// its next take, by which a wait tells a landing taken out of the
+    /// queue during its review from one that never joined it.
+    fn requeued_mark(&self) -> Option<PathBuf> {
+        crate::sources::landing::own_git_dir(&self.here).map(|d| d.join(REQUEUED))
     }
 
     fn print_queue(&self) -> io::Result<()> {
@@ -870,6 +944,12 @@ fn entry_session(entry: &Value) -> Option<&str> {
         .filter(|s| !s.is_empty())
 }
 
+/// Whether a waiter is reviewing its change again (`requeue`), so a take
+/// passes over it.
+fn reviewing(entry: &Value) -> bool {
+    entry.get("reviewing").and_then(Value::as_bool) == Some(true)
+}
+
 fn holder_path(holder: &Value) -> Option<String> {
     entry_path(holder).map(str::to_string)
 }
@@ -1002,6 +1082,83 @@ mod tests {
         ok(&["clear"], 12);
         assert_eq!(read(), json!({}));
         assert!(!dir.join(crate::sources::landing::OUTPUT).exists());
+    }
+
+    #[test]
+    fn a_requeued_landing_lets_the_lock_go_and_keeps_its_turn() {
+        let scratch = crate::tabs::git::tests::Scratch::new("land-requeue");
+        let common = scratch.0.join("git");
+        fs::create_dir_all(&common).unwrap();
+        let lock = |name: &str| {
+            let here = scratch.0.join(name);
+            fs::create_dir_all(here.join(".git")).unwrap();
+            Lock {
+                pid: Some(std::process::id()),
+                ..Lock::new(&common, here, None)
+            }
+        };
+        let (a, b, c) = (lock("a"), lock("b"), lock("c"));
+        let waiters = || -> Vec<(String, bool)> {
+            a.with_queue(|q| {
+                let names = q
+                    .iter()
+                    .map(|e| {
+                        let path = Path::new(entry_path(e).unwrap());
+                        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                        (name, reviewing(e))
+                    })
+                    .collect();
+                (None, names)
+            })
+            .unwrap()
+        };
+        let held_by = || {
+            a.holder()
+                .filter(|_| a.dir.exists())
+                .and_then(|h| holder_path(&h))
+        };
+        let path_of = |l: &Lock| Some(l.here.to_string_lossy().into_owned());
+
+        assert_eq!(a.take(true).unwrap(), 0);
+        assert_eq!(b.take(true).unwrap(), 3);
+        a.requeue().unwrap();
+        assert_eq!(held_by(), None, "the lock is free");
+        assert_eq!(waiters(), [("a".into(), true), ("b".into(), false)]);
+
+        assert_eq!(
+            b.take(true).unwrap(),
+            0,
+            "a take passes over a reviewing waiter"
+        );
+        assert_eq!(c.take(true).unwrap(), 3);
+        assert_eq!(waiters(), [("a".into(), true), ("c".into(), false)]);
+
+        c.requeue().unwrap();
+        assert_eq!(held_by(), path_of(&b), "a waiter requeued only moves first");
+        assert_eq!(waiters(), [("c".into(), true), ("a".into(), true)]);
+        assert_eq!(c.take(true).unwrap(), 3, "held by b");
+        assert_eq!(a.take(true).unwrap(), 3, "held by b");
+        assert_eq!(waiters(), [("c".into(), false), ("a".into(), false)]);
+
+        b.release().unwrap();
+        assert_eq!(a.take(true).unwrap(), 3, "c is ready and ahead");
+        assert_eq!(c.wait(Duration::ZERO).unwrap(), 0, "c takes it next");
+        assert_eq!(held_by(), path_of(&c));
+
+        a.requeue().unwrap();
+        a.with_queue(|q| (Some(without(q, &a.here)), ())).unwrap();
+        c.release().unwrap();
+        assert_eq!(
+            a.wait(Duration::ZERO).unwrap(),
+            4,
+            "taken out of the queue while it reviewed, it lands nothing"
+        );
+        assert_eq!(held_by(), None);
+        assert_eq!(
+            a.wait(Duration::ZERO).unwrap(),
+            0,
+            "a wait of its own takes it"
+        );
     }
 
     #[test]

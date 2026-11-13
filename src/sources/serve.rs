@@ -174,15 +174,6 @@ impl Server {
     /// A lookup answered.
     pub fn source_answer(&mut self, answer: Answer) {
         let tabs = self.source_tabs();
-        // The views today's todo note is written from (src/day), told what
-        // they read once each answers.
-        let for_todo = match &answer {
-            Answer::Board { .. } => Some(PRS),
-            Answer::Checks(_) => Some(CI),
-            Answer::Tickets(_) => Some(TICKETS),
-            Answer::Inbox(_) => Some(INBOX),
-            _ => None,
-        };
         match answer {
             Answer::Merges(result) => {
                 self.sources.schedule.done("merges");
@@ -283,9 +274,6 @@ impl Server {
                 self.sources.kept.landing_busy = false;
                 self.sources.landing = read;
             }
-        }
-        if let Some(name) = for_todo {
-            self.hand_to_todo(name);
         }
         self.update_facts(&tabs);
         self.redraw_everywhere();
@@ -422,41 +410,6 @@ impl Server {
         });
     }
 
-    /// Gives today's todo note what a view last read, as the daemon handed
-    /// todo.js its views: each item as a line (`todo_line`), the PR board's
-    /// open ones under their column ("In review: ..."), the merged left out,
-    /// and the ticket board's not done or closed; and whether the look failed.
-    fn hand_to_todo(&mut self, name: &str) {
-        let Some(view) = self.sources.views.get(name) else {
-            return;
-        };
-        let lines = view
-            .items
-            .iter()
-            .filter_map(|i| {
-                let column = i.group.as_deref().unwrap_or("");
-                match name {
-                    PRS if column == "Merged" => None,
-                    PRS if !column.is_empty() => Some(format!("{column}: {}", todo_line(i))),
-                    TICKETS if column == "Done" || column == "Closed" => None,
-                    // The todo hears of failing PRs only, not those running
-                    // or passing the CI view lists too.
-                    CI if i
-                        .data
-                        .pointer("/ci/state")
-                        .and_then(Value::as_str)
-                        .is_some_and(|state| state != "failing") =>
-                    {
-                        None
-                    }
-                    _ => Some(todo_line(i)),
-                }
-            })
-            .collect();
-        let failed = view.error.is_some() || view.setup.is_some();
-        self.day.answered(name, lines, failed);
-    }
-
     /// Asks for a view's lookup now, or every lookup with `None`, unless it
     /// is still waiting on its last answer.
     pub fn refresh_sources(&mut self, view: Option<&str>) {
@@ -507,7 +460,7 @@ impl Server {
     pub fn sources_command(&mut self, rest: &[String]) -> Reply {
         match rest.first().map(String::as_str) {
             None => {
-                let views: serde_json::Map<String, Value> = VIEWS
+                let mut views: serde_json::Map<String, Value> = VIEWS
                     .iter()
                     .map(|v| {
                         let data = if *v == LANDING {
@@ -521,6 +474,14 @@ impl Server {
                         (v.to_string(), data)
                     })
                     .collect();
+                // Today's calendar as the Calendar view holds it, from the
+                // feed or /today, for the todo note's routine.
+                let calendar = if settings::is_on("view_calendar") {
+                    serde_json::to_value(&self.day.calendar).unwrap_or(Value::Null)
+                } else {
+                    Value::Null
+                };
+                views.insert("calendar".into(), calendar);
                 Reply::ok(format!("{}\n", json!({ "views": views })))
             }
             Some("refresh") => {
@@ -1082,35 +1043,9 @@ pub fn github_file() -> PathBuf {
     paths::state_dir().join("github")
 }
 
-/// An item as a line of today's todo note's prompt (daemon.js's `line`): its
-/// title and detail, then its link, so the note can link to it.
-fn todo_line(item: &Item) -> String {
-    let mut line = [item.title.as_str(), item.detail.as_str()]
-        .into_iter()
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join(" · ");
-    let data = |pointer: &str| {
-        item.data
-            .pointer(pointer)
-            .and_then(Value::as_str)
-            .filter(|u| !u.is_empty())
-    };
-    let url = match &item.target {
-        crate::items::Target::Url(u) => Some(u.as_str()),
-        _ => data("/url").or_else(|| data("/ci/url")),
-    };
-    if let Some(url) = url {
-        line.push(' ');
-        line.push_str(url);
-    }
-    line
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::items::Target;
 
     #[test]
     fn a_directory_s_origin_is_what_was_last_read_of_it_with_no_read_of_its_own() {
@@ -1134,18 +1069,5 @@ mod tests {
         std::fs::create_dir_all(&outside).unwrap();
         kept.remotes(&outside);
         assert!(kept.origin_kept(&outside).is_none(), "outside a repository");
-    }
-
-    #[test]
-    fn a_todo_line_is_the_title_the_detail_and_the_link() {
-        let pr = Item::new("1", "#12 Fix the login")
-            .detail("acme/app · checks passing")
-            .target(Target::Url("https://github.com/acme/app/pull/12".into()));
-        assert_eq!(
-            todo_line(&pr),
-            "#12 Fix the login · acme/app · checks passing https://github.com/acme/app/pull/12"
-        );
-        let ci = Item::new("2", "#3 Tidy").data(json!({ "ci": { "url": "https://x/3" } }));
-        assert_eq!(todo_line(&ci), "#3 Tidy https://x/3");
     }
 }

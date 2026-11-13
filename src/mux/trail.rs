@@ -1,4 +1,4 @@
-//! The tabs a session has visited, for M-[ and M-] to go back and forward
+//! The tabs a session has visited, for M-{ and M-} to go back and forward
 //! through as a browser's buttons do (new, no tmux version had it). Every
 //! switch puts the tab left on `back` and clears `forward`, however it came;
 //! a step back or forward moves the current tab to the other side instead.
