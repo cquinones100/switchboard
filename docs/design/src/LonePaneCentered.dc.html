@@ -226,8 +226,9 @@ const drawMap = (X0) => {
 // A: the capped pane centered in the columns beside the sidebar, the spare columns sunken on both sides.
 const X0 = 35 + Math.floor((W - 35 - PW) / 2);
 spare(35, X0 - 35); spare(X0 + PW, W - X0 - PW);
-vl(X0 - 1, 0, H); vl(X0 + PW, 0, H);
 drawMap(X0);
+// The rules at the pane's edges last, so nothing the view writes at its edge breaks them.
+vl(X0 - 1, 0, H); vl(X0 + PW, 0, H);
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Lines and blocks are drawn to fill the cell, as Ghostty draws them, not taken from the font.
