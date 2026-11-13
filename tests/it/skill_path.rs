@@ -480,6 +480,41 @@ fn a_landing_whose_tests_run_in_ci_checks_for_leaks_pushes_its_own_branch_waits_
     );
 }
 
+// A landing that must review its change again lets the landing lock go,
+// keeping its turn, and takes the lock back to rebase again before pushing.
+#[test]
+fn a_landing_reviews_again_without_the_lock_and_rebases_again_once_it_has_it() {
+    let all = skills();
+    let (_, queue) = all
+        .iter()
+        .find(|(name, _)| name == "queue-and-clean")
+        .unwrap();
+    let start = queue
+        .find("10. **Still the change the review found clean?**")
+        .unwrap();
+    let end = queue.find("11. **Push**").unwrap();
+    let step10 = &queue[start..end];
+    let requeue = step10
+        .find("run `<lock> requeue`")
+        .expect("step 10 requeues");
+    let review = step10
+        .find("review it again as step 6 does")
+        .expect("step 10 reviews again");
+    let without = step10
+        .find("**Again without the lock.** Before reviewing or asking again")
+        .expect("the requeue comes before the review");
+    assert!(review < without && without < requeue, "{step10}");
+    let wait = step10.find("`<lock> wait`").expect("it waits for the lock");
+    let back = step10
+        .find("once it has the lock go back to step 9")
+        .expect("it rebases again");
+    assert!(requeue < wait && wait < back, "{step10}");
+    assert!(
+        !step10.contains("holding the lock"),
+        "nothing reviews or asks again holding the lock: {step10}"
+    );
+}
+
 // A hands-free tab's review loop runs to 20 rounds, still asking at the cap.
 #[test]
 fn review_loop_runs_twenty_rounds_hands_free_and_five_otherwise() {
