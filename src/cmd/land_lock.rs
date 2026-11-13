@@ -50,7 +50,10 @@
 //!                     the tab @tab_landed, with the repository and its
 //!                     main clone's branch, which files it under Merged in
 //!                     the sidebar and mission control while the tab is in
-//!                     that main clone on that branch
+//!                     that main clone on that branch; on the default
+//!                     branch, with Settings' target_follows_default on, it
+//!                     opens a tab running `update-target` for each branch
+//!                     items land on (src/cmd/update_target.rs)
 //! land-lock autolanded <short hash> [--plan <file> | --decided <n>] [--not-applied <labels>] [item]
 //!                     says this tab landed without asking (autopilot's
 //!                     "Land without asking"): marks the tab
@@ -82,6 +85,10 @@
 //! worktree removed, or neither the Claude session that took it nor any
 //! other running in it. A waiter gone the same way is dropped from the
 //! queue as it is read.
+//!
+//! `update-target`, which is no Claude session, holds a target's lock as its
+//! process: its entries name the process (`pid`) in place of a session, and
+//! count as there while it runs.
 //!
 //! Each entry, the holder's and every waiter's, names the worktree and since
 //! when, and the Claude session that wrote it (`CLAUDE_CODE_SESSION_ID`,
@@ -173,32 +180,12 @@ pub fn main(mut args: Vec<String>) -> ExitCode {
                 .and_then(|p| p.trim().parse::<f64>().ok())
                 .filter(|p| p.is_finite() && *p >= 0.0)
                 .unwrap_or(5.0);
-            // A waiter taken out of the queue by someone else (mission
-            // control's Landing view) stops, rather than joining again at
-            // the back.
-            let here = lock.here.to_string_lossy().into_owned();
-            let mut waited = false;
-            loop {
-                if waited {
-                    match lock.with_queue(|queue| {
-                        let there = queue.iter().any(|e| entry_path(e) == Some(here.as_str()));
-                        (None, there)
-                    }) {
-                        Ok(false) => {
-                            println!("taken out of the landing queue");
-                            break Ok(ExitCode::from(4));
-                        }
-                        Ok(true) => {}
-                        Err(e) => break Err(e),
-                    }
+            lock.wait(Duration::from_secs_f64(poll)).map(|code| {
+                if code == 4 {
+                    println!("taken out of the landing queue");
                 }
-                match lock.take(true) {
-                    Ok(0) => break Ok(ExitCode::SUCCESS),
-                    Ok(_) => std::thread::sleep(Duration::from_secs_f64(poll)),
-                    Err(e) => break Err(e),
-                }
-                waited = true;
-            }
+                ExitCode::from(code)
+            })
         }
         // Every way out of a landing runs release, so it leaves the queue
         // too: a waiter stopped while its session goes on would otherwise
@@ -338,10 +325,15 @@ fn record_in(dir: &Path, words: &[&str], now: i64) -> Result<(), RecordError> {
 /// queue-and-clean's; no words clear the step and leave the loop. Outside a
 /// Switchboard pane it does nothing.
 fn phase(words: &[String]) {
+    set_phase(&words.join(" "));
+}
+
+/// `phase`, its words as one string: `update-target` marks its steps so.
+pub(crate) fn set_phase(words: &str) {
     if !socket::in_pane() {
         return;
     }
-    let words = worktree::one_line(&words.join(" "));
+    let words = worktree::one_line(words);
     if words.is_empty() {
         let _ = socket::ask(&["set", "-u", "@agent_phase"]);
     } else {
@@ -381,6 +373,15 @@ fn landed(args: &[String]) -> ExitCode {
         clone.common_dir.display()
     );
     let _ = socket::ask(&["set", crate::sidebar::model::LANDED, &mark]);
+    // A landing on the default branch carries on to the branches items land
+    // on, each brought up to date in a tab of its own.
+    let default = crate::tabs::git::default_branch(&clone.common_dir);
+    if default.as_deref() == Some(branch)
+        && crate::settings::is_on("target_follows_default")
+        && let Some(root) = clone.common_dir.parent()
+    {
+        crate::cmd::update_target::follow_from_pane(root, branch);
+    }
     ExitCode::SUCCESS
 }
 
@@ -462,7 +463,7 @@ fn autolanded(args: &[String]) -> ExitCode {
 }
 
 /// The lock and queue of one repository, from one of its worktrees.
-struct Lock {
+pub(crate) struct Lock {
     /// `<common git dir>/land.lock`, a directory, made to take the lock.
     dir: PathBuf,
     holder_file: PathBuf,
@@ -470,6 +471,10 @@ struct Lock {
     queue_mutex: PathBuf,
     /// The worktree this runs in.
     here: PathBuf,
+    /// The process that holds or waits for it, when no Claude session does
+    /// (`update-target`): its entries name it, and it counts as there while
+    /// it runs.
+    pid: Option<u32>,
 }
 
 impl Lock {
@@ -486,6 +491,70 @@ impl Lock {
             queue_mutex: common.join(named("land.mutex")),
             queue_file: common.join(named("land.queue")),
             here,
+            pid: None,
+        }
+    }
+
+    /// The lock of `branch` (the default branch's own files when it is the
+    /// default one) for the worktree at `here`, held by this process,
+    /// which keeps it while it runs whether or not a Claude session does:
+    /// `update-target`'s.
+    pub(crate) fn for_process(common: &Path, here: PathBuf, branch: &str) -> Lock {
+        let suffix = (crate::tabs::git::default_branch(common).as_deref() != Some(branch))
+            .then(|| file_suffix(branch));
+        Lock {
+            pid: Some(std::process::id()),
+            ..Lock::new(common, here, suffix.as_deref())
+        }
+    }
+
+    /// Another running process that holds the lock, or waits for it, for
+    /// this same worktree (a second `update-target` for the branch): its
+    /// pid. Two would share the worktree, each taking the other's place.
+    pub(crate) fn other_process_here(&self) -> io::Result<Option<i64>> {
+        let here = self.here.to_string_lossy().into_owned();
+        let mine = self.pid.map(i64::from);
+        let other = |entry: &Value| {
+            let pid = entry.get("pid").and_then(Value::as_i64)?;
+            (entry_path(entry) == Some(here.as_str()) && Some(pid) != mine && util::is_alive(pid))
+                .then_some(pid)
+        };
+        let holder = self
+            .holder()
+            .filter(|_| self.dir.exists())
+            .as_ref()
+            .and_then(other);
+        if holder.is_some() {
+            return Ok(holder);
+        }
+        self.with_queue(|queue| (None, queue.iter().find_map(other)))
+    }
+
+    fn entry(&self, path: &str) -> Value {
+        new_entry(path, self.pid)
+    }
+
+    /// Takes it, waiting in the queue for its turn every `poll`: 0 taken,
+    /// 4 taken out of the queue meanwhile (mission control's Landing view),
+    /// rather than joining again at the back.
+    pub(crate) fn wait(&self, poll: Duration) -> io::Result<u8> {
+        let here = self.here.to_string_lossy().into_owned();
+        let mut waited = false;
+        loop {
+            if waited {
+                let there = self.with_queue(|queue| {
+                    let there = queue.iter().any(|e| entry_path(e) == Some(here.as_str()));
+                    (None, there)
+                })?;
+                if !there {
+                    return Ok(4);
+                }
+            }
+            if self.take(true)? == 0 {
+                return Ok(0);
+            }
+            std::thread::sleep(poll);
+            waited = true;
         }
     }
 
@@ -494,7 +563,7 @@ impl Lock {
     }
 
     fn hold(&self) -> io::Result<()> {
-        let holder = new_entry(&self.here.to_string_lossy());
+        let holder = self.entry(&self.here.to_string_lossy());
         util::write_atomic(&self.holder_file, util::json_compact(&holder))
     }
 
@@ -585,13 +654,26 @@ impl Lock {
     /// Takes the lock when it is free (or its holder gone) and no live
     /// waiter is ahead of this worktree in the queue, so a take can't jump
     /// the queue: 0 taken, 3 not, this worktree then in the queue.
-    fn take(&self, quiet: bool) -> io::Result<u8> {
+    pub(crate) fn take(&self, quiet: bool) -> io::Result<u8> {
         let here = self.here.to_string_lossy().into_owned();
         self.change_queue(true, |queue| {
             let current = self.holder();
             let held = self.dir.exists();
             if held && current.as_ref().and_then(holder_path).as_deref() == Some(here.as_str()) {
-                let named = match current.as_ref().and_then(renamed) {
+                // A process taking up its worktree's lock from one that
+                // ended (a run cut short, its tab closed) names itself, so
+                // the lock counts as held while it runs.
+                let taken_up = self.pid.and_then(|pid| {
+                    let holder = current.as_ref()?;
+                    (holder.get("pid").and_then(Value::as_i64) != Some(i64::from(pid))).then(|| {
+                        let mut now = self.entry(&here);
+                        if let Some(since) = holder.get("since") {
+                            now["since"] = since.clone();
+                        }
+                        now
+                    })
+                });
+                let named = match taken_up.or_else(|| current.as_ref().and_then(renamed)) {
                     Some(holder) => {
                         util::write_atomic(&self.holder_file, util::json_compact(&holder))
                     }
@@ -633,13 +715,13 @@ impl Lock {
             }
             let mut joined = queue;
             if mine.is_none() {
-                joined.push(new_entry(&here));
+                joined.push(self.entry(&here));
             }
             (Some(joined), Ok(3))
         })?
     }
 
-    fn release(&self) -> io::Result<()> {
+    pub(crate) fn release(&self) -> io::Result<()> {
         self.with_queue(|queue| (Some(without(queue, &self.here)), ()))?;
         let here = self.here.to_string_lossy();
         if self.holder().as_ref().and_then(holder_path).as_deref() == Some(&*here) {
@@ -732,16 +814,19 @@ pub fn branch_of_suffix(suffix: &str) -> String {
 }
 
 /// An entry for the worktree at `path`, taken or joined now, naming the
-/// Claude session and the pane this runs in when it runs in one.
-fn new_entry(path: &str) -> Value {
+/// Claude session and the pane this runs in when it runs in one, or, for a
+/// process that holds it itself (`pid`), that process and the pane alone.
+fn new_entry(path: &str, pid: Option<u32>) -> Value {
     let mut entry = json!({
         "path": path,
         "since": util::js_number(util::now_ms() as f64),
     });
-    for (key, variable) in [
-        ("session", "CLAUDE_CODE_SESSION_ID"),
-        ("pane", "SWITCHBOARD_PANE"),
-    ] {
+    let mut named = vec![("pane", "SWITCHBOARD_PANE")];
+    match pid {
+        Some(pid) => entry["pid"] = json!(pid),
+        None => named.push(("session", "CLAUDE_CODE_SESSION_ID")),
+    }
+    for (key, variable) in named {
         if let Some(value) = std::env::var(variable).ok().filter(|v| !v.is_empty()) {
             entry[key] = Value::String(value);
         }
@@ -754,7 +839,10 @@ fn new_entry(path: &str) -> Value {
 /// landing up, or a build from before that named none), its place and since
 /// when kept; `None` when it names them already, or this runs in no session.
 fn renamed(entry: &Value) -> Option<Value> {
-    let mut now = new_entry(entry_path(entry)?);
+    if entry.get("pid").is_some() {
+        return None;
+    }
+    let mut now = new_entry(entry_path(entry)?, None);
     let session = now.get("session")?;
     if entry.get("session") == Some(session) && entry.get("pane") == now.get("pane") {
         return None;
@@ -812,8 +900,9 @@ fn worktree_of(dir: &Path) -> Option<PathBuf> {
 }
 
 /// Whether a landing (the holder, or a waiter) is gone: none, its worktree
-/// removed, or neither the session that wrote it running, wherever it
-/// works, nor any running in its worktree.
+/// removed, the process that holds it itself (`pid`) ended, or neither the
+/// session that wrote it running, wherever it works, nor any running in its
+/// worktree.
 fn gone(current: Option<&Value>) -> bool {
     let Some(entry) = current else {
         return true;
@@ -827,6 +916,9 @@ fn gone(current: Option<&Value>) -> bool {
     }
     if entry_session(entry).is_some_and(worktree::session_runs) {
         return false;
+    }
+    if let Some(pid) = entry.get("pid").and_then(Value::as_i64) {
+        return !util::is_alive(pid);
     }
     !worktree::live_sessions_in(path).iter().any(|session| {
         session

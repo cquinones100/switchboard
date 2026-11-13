@@ -685,7 +685,13 @@ impl Server {
             .and_then(|a| a.doing.clone());
         t.context = agent.and_then(|a| a.context.as_ref()).map(|c| c.used);
         t.loop_skill = agent.and_then(|a| some(&a.loop_name));
-        t.phase = agent.and_then(|a| some(&a.phase));
+        // A tab with no Claude (update-target's) shows the step its program
+        // set on its pane.
+        t.phase = agent.and_then(|a| some(&a.phase)).or_else(|| {
+            with_parked
+                .iter()
+                .find_map(|p| self.agents.get(*p).and_then(|a| some(&a.phase)))
+        });
         t.since = since;
         t.path = self.tab_path(id).map(std::path::Path::to_path_buf);
         t.repo = t.path.as_deref().and_then(|p| self.sources.origin_kept(p));

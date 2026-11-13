@@ -389,6 +389,28 @@ fn repository_at(dir: &Path) -> Option<(Option<String>, PathBuf, String)> {
     Some((repo, top, key))
 }
 
+/// A direct landing's steps for the repository at `dir`, by the key
+/// `landing_with` reads them under (its `owner/name`, else its shared git
+/// directory), else by origin's URL as its config writes it, which an
+/// `insteadOf` may point elsewhere; an error when repos.json can't be read,
+/// so nothing lands without what it may say. Runs git, so off the server's
+/// task.
+pub fn steps_at(dir: &Path) -> Result<Steps, String> {
+    let (_, _, key) =
+        repository_at(dir).ok_or_else(|| format!("{} isn't in a git repository", dir.display()))?;
+    let data = read()
+        .map_err(|e| format!("{} can't be read ({e}); fix it first", paths::tilde(file())))?;
+    let mut entry = landing_entry(&data, &key);
+    if entry.is_empty()
+        && let Some(configured) = worktree::git_at(dir, &["config", "--get", "remote.origin.url"])
+            .ok()
+            .and_then(|url| repo_of_url(&url))
+    {
+        entry = landing_entry(&data, &configured);
+    }
+    Ok(steps_of(&entry))
+}
+
 /// How the repository at `dir` lands as far as is known without asking
 /// anyone: what repos.json sets, else the last answer worked out, of any
 /// age; `None` when neither says. It runs git, so off the server's task.

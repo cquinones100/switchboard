@@ -175,6 +175,13 @@
     "default": true
   },
   {
+    "key": "target_follows_default",
+    "category": "Sessions",
+    "label": "Target branches follow the default branch",
+    "description": "When a landing pushes to the default branch while autopilot or hand-started items land on another branch, opens a tab in the background that merges the default branch into that branch under its landing lock, runs the repository's tests and pushes it, so the branch and the builds made from it carry the default branch's work; a conflict or failing tests leave the merge in its worktree for you, marked red in the Landing view. Off, a target branch takes the default branch's work only when you merge it yourself; M-p's 'Bring a target branch up to date with the default branch' still runs it by hand",
+    "default": true
+  },
+  {
     "key": "main_ci_watch",
     "category": "Sessions",
     "label": "Watch the default branch's CI",

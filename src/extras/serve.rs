@@ -206,6 +206,7 @@ impl Server {
             }
             Command::SendReply => self.send_reply(client),
             Command::UpdateMain => self.update_main(client, pane),
+            Command::UpdateTarget => self.update_target(client, pane),
             Command::CheckSetup => self.run_setup(
                 client,
                 "Switchboard setup, checked",
@@ -531,6 +532,110 @@ impl Server {
                 server.open(client, Box::new(TextBox::plain("Update main", &text)), None);
             },
         );
+    }
+
+    /// "Bring a target branch up to date with the default branch": one of
+    /// the pane's repository's local branches, read from git's files off the
+    /// server's task, then
+    /// the tab running `switchboard update-target` for it in the main clone
+    /// (src/cmd/update_target.rs), or the one already running it brought to
+    /// the front.
+    fn update_target(&mut self, client: ClientId, pane: Option<PaneId>) {
+        let dir = self.dir_or_home(pane);
+        let Some(place) = crate::tabs::git::locate(&dir) else {
+            self.say(Some(client), "This pane isn't in a git repository.");
+            return;
+        };
+        let Some(root) = place.common_dir.parent().map(PathBuf::from) else {
+            return;
+        };
+        // A repository's refs can be many files, and finding its default
+        // branch may read them all: both off the task.
+        let common = place.common_dir.clone();
+        self.off_task(
+            client,
+            move || {
+                let default = crate::tabs::git::default_branch(&common);
+                (default, crate::tabs::git::local_branches(&common))
+            },
+            move |server, client, (default, branches)| {
+                let Some(default) = default else {
+                    server.say(
+                        Some(client),
+                        "The repository's default branch isn't known (git remote set-head origin -a).",
+                    );
+                    return;
+                };
+                server.pick_update_target(client, root, default, branches);
+            },
+        );
+    }
+
+    /// The branch to bring up to date, picked from `branches`, then its tab.
+    fn pick_update_target(
+        &mut self,
+        client: ClientId,
+        root: PathBuf,
+        default: String,
+        mut branches: Vec<String>,
+    ) {
+        branches.retain(|b| *b != default);
+        branches.sort();
+        if branches.is_empty() {
+            self.say(
+                Some(client),
+                &format!("This repository has no local branch but {default}."),
+            );
+            return;
+        }
+        let items = branches
+            .iter()
+            .map(|b| PickItem::new(b.clone(), b.clone()))
+            .collect();
+        let picker = Picker::new(format!("Which branch takes {default}'s work?"), items)
+            .named("update-target")
+            .prompt("branch> ");
+        self.pick(client, picker, move |server, client, picked| {
+            let Some(branch) = picked.map(|p| p.value) else {
+                return;
+            };
+            use crate::cmd::update_target::{TAB_OPTION, live, tab_command, tab_mark, tab_name};
+            let mark = tab_mark(&root, &branch);
+            let marked: Vec<TabId> = server
+                .tabs
+                .iter()
+                .filter(|(_, t)| t.opts.get(TAB_OPTION) == Some(&mark))
+                .map(|(id, _)| *id)
+                .collect();
+            let running = marked.iter().copied().find(|tab| {
+                let commands: Vec<String> = server.tabs[tab]
+                    .layout
+                    .panes()
+                    .into_iter()
+                    .filter_map(|p| server.panes.get(&p)?.pane.foreground_command())
+                    .collect();
+                live(&root, &branch, &commands)
+            });
+            if let Some(tab) = running {
+                server.front(client, &[tab]);
+                return;
+            }
+            for tab in marked {
+                if let Some(t) = server.tabs.get_mut(&tab) {
+                    t.opts.remove(TAB_OPTION);
+                }
+            }
+            let opened = crate::mux::server::Opened::Front;
+            if let Some(tab) = server.work_tab(client, &root, tab_command(&branch), opened) {
+                if let Some(t) = server.tabs.get_mut(&tab) {
+                    t.opts.insert(TAB_OPTION.into(), mark);
+                    t.opts
+                        .insert("@tab_name".into(), tab_name(&branch, &default));
+                }
+                server.dirty_tab(tab);
+                server.front(client, &[tab]);
+            }
+        });
     }
 
     /// `switchboard <args>` run off the server's task, what it printed shown

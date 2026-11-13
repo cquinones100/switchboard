@@ -60,6 +60,9 @@ pub struct Entry {
     pub since: i64,
     pub session: Option<String>,
     pub pane: Option<String>,
+    /// The process holding it itself (`update-target`), which keeps it
+    /// while it runs, with no Claude session.
+    pub pid: Option<i64>,
     pub tab: Option<TabId>,
     /// What the landing has recorded of itself (`read_record`).
     pub record: Option<Value>,
@@ -200,9 +203,13 @@ pub fn running_sessions(dir: &Path) -> Vec<RunningSession> {
 
 // Whether a landing is still there: its worktree is, and the session that
 // wrote its entry runs, wherever it works, or a session runs in the
-// worktree (not in a worktree nested inside it).
+// worktree (not in a worktree nested inside it); for one a process holds
+// itself, that process runs (a signal 0, starting nothing).
 fn live_in(entry: &Entry, running: &[RunningSession]) -> bool {
     let root = entry.path.as_path();
+    if let Some(pid) = entry.pid {
+        return root.exists() && util::is_alive(pid);
+    }
     let its_session_runs = entry
         .session
         .as_deref()
@@ -230,6 +237,7 @@ fn entry_of(value: &Value) -> Option<Entry> {
         since: value.get("since").and_then(Value::as_f64).unwrap_or(0.0) as i64,
         session: text("session"),
         pane: text("pane"),
+        pid: value.get("pid").and_then(Value::as_i64),
         tab: None,
         record: None,
     })
@@ -1012,6 +1020,7 @@ mod tests {
             since: 1,
             session: None,
             pane: None,
+            pid: None,
             tab: Some(TabId(tab)),
             record,
         };

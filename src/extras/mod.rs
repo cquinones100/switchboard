@@ -55,6 +55,8 @@ pub enum Command {
     SendReply,
     /// "Update local main to origin's".
     UpdateMain,
+    /// "Bring a target branch up to date with the default branch".
+    UpdateTarget,
     /// "Check Switchboard's setup".
     CheckSetup,
     /// "Run a part of Switchboard's setup, or only check it".
@@ -91,6 +93,7 @@ impl Command {
                 Command::Habits,
                 Command::SendReply,
                 Command::UpdateMain,
+                Command::UpdateTarget,
                 Command::CheckSetup,
                 Command::SetupPart,
                 Command::CalendarTab,
@@ -118,6 +121,7 @@ impl Command {
             Command::Habits => "habits-report".into(),
             Command::SendReply => "send-reply".into(),
             Command::UpdateMain => "update-main".into(),
+            Command::UpdateTarget => "update-target".into(),
             Command::CheckSetup => "check-setup".into(),
             Command::SetupPart => "setup-part".into(),
             Command::CalendarTab => "calendar-tab".into(),
@@ -163,6 +167,9 @@ impl Command {
             }
             Command::SendReply => "Send Claude's last reply to another tab",
             Command::UpdateMain => "Update local main to origin's, without switching branches",
+            Command::UpdateTarget => {
+                "Bring a target branch up to date with the default branch, under its landing lock"
+            }
             Command::CheckSetup => {
                 "Check Switchboard's setup: say what isn't in place, changing nothing"
             }
@@ -208,6 +215,9 @@ impl Command {
             }
             Command::UpdateMain => {
                 "Runs switchboard update-main in the pane's repository, which only fast-forwards and leaves a checkout with uncommitted changes as it is. What it did shows in a box."
+            }
+            Command::UpdateTarget => {
+                "Picks one of the pane's repository's local branches other than its default one, then opens a tab in its main clone running switchboard update-target: under the branch's landing lock it merges origin's default branch into origin's branch, runs the repository's tests and pushes it. A conflict or failing tests leave the merge in its worktree for you, marked red in the Landing view. A landing on the default branch opens the same tab by itself for the branches items land on while Settings' \"Target branches follow the default branch\" (target_follows_default) is on."
             }
             Command::CheckSetup => {
                 "Runs switchboard setup --check, asking nothing, and shows what each part would change in a box."
@@ -257,6 +267,7 @@ impl Command {
             Command::Habits => &["help", "habits", "report"],
             Command::SendReply => &["claude", "reply", "tabs"],
             Command::UpdateMain => &["git", "main", "sync"],
+            Command::UpdateTarget => &["git", "autopilot", "sync"],
             Command::CheckSetup | Command::SetupPart => &["switchboard", "setup"],
             Command::CalendarTab => &["calendar", "claude", "tabs", "new"],
             Command::SlackTab => &["slack", "claude", "tabs", "new"],

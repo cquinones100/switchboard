@@ -3668,7 +3668,9 @@ fn stage_cell(stage: Stage, label: impl Into<String>) -> StageCell {
 /// "✕ found"); without a record, "passed", "clean" and "none". A waiter is
 /// queued for the lock at its place; the one holding it is at the step its
 /// phase names, a failure included (`tests failed …`, `review blocked …`,
-/// the words after it shown in the cell), the check after a clean rebase
+/// the words after it shown in the cell, and `merge conflict <files>`,
+/// update-target's merge left for you, in the lock's cell), the check
+/// after a clean rebase
 /// (`checking …`, `check failed`) in the tests' cell.
 fn landing_stages(landing: &serde_json::Value, now_ms: i64) -> [StageCell; 6] {
     let done = |s: &str| stage_cell(Stage::Done, format!("✓ {s}"));
@@ -3756,6 +3758,9 @@ fn landing_stages(landing: &serde_json::Value, now_ms: i64) -> [StageCell; 6] {
     let tests_note = out[0].note.clone();
     if let Some(rest) = phase.strip_prefix("tests failed") {
         out[0] = failed(rest, "failed", tests_note);
+    } else if let Some(files) = phase.strip_prefix("merge conflict") {
+        // update-target's merge of the default branch, left for you.
+        out[3] = failed("", "conflict", printable(files.trim()));
     } else if phase.starts_with("check failed") {
         out[0] = failed("", "check failed", tests_note);
     } else if let Some(rest) = phase.strip_prefix("review blocked") {
@@ -3989,7 +3994,9 @@ fn then_words(landing: &serde_json::Value) -> String {
         return format!("takes the lock at its turn, catches up with {onto}, pushes, cleans up");
     }
     let phase = landing["phase"].as_str().unwrap_or("");
-    if phase.starts_with("tests failed")
+    if phase.starts_with("merge conflict") {
+        "waits for you to resolve the merge in its worktree and run update-target again".into()
+    } else if phase.starts_with("tests failed")
         || phase.starts_with("check failed")
         || phase.starts_with("review blocked")
     {
@@ -6669,6 +6676,17 @@ mod tests {
         t.opened = None;
         let none = words(card_foot(&t, Some("main"), 50, now, false, &Theme::DARK));
         assert!(!none.contains("opened"), "{none}");
+    }
+
+    #[test]
+    fn a_merge_left_with_conflicts_is_a_red_lock_cell_naming_its_files() {
+        let landing =
+            serde_json::json!({ "holding": true, "phase": "merge conflict src/a.rs b.md" });
+        let cells = landing_stages(&landing, 0);
+        assert_eq!(cells[3].stage, Stage::Failed);
+        assert_eq!(cells[3].label, "✕ conflict");
+        assert_eq!(cells[3].note, "src/a.rs b.md");
+        assert!(then_words(&landing).contains("resolve the merge"));
     }
 
     fn tab(n: u32, name: &str) -> TabModel {

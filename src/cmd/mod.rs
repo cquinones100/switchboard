@@ -37,6 +37,7 @@ pub mod today_save;
 pub mod try_;
 pub mod try_sealed;
 pub mod update_main;
+pub mod update_target;
 pub mod wait_ci;
 pub mod wait_deploy;
 pub mod watch_note;
@@ -200,6 +201,11 @@ pub const COMMANDS: &[Command] = &[
         name: "update-main",
         run: update_main::main,
         about: "Bring the main clone's default branch up to date",
+    },
+    Command {
+        name: "update-target",
+        run: update_target::main,
+        about: "Merge the default branch into a target branch under its landing lock, test it and push it",
     },
     Command {
         name: "worktree-done",

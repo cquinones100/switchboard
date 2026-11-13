@@ -39,6 +39,7 @@ mod tabs;
 mod try_;
 mod ui;
 mod update_main;
+mod update_target;
 mod upgrade;
 mod usage;
 mod ux2;

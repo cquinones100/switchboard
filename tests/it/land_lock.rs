@@ -998,3 +998,150 @@ fn with_ux2_the_landing_views_menu_moves_the_chosen_waiter_down_the_queue() {
         std::thread::sleep(Duration::from_millis(100) * common::patience());
     }
 }
+
+// A landing on the default branch opens a tab running update-target for
+// each branch items land on: autopilot's target, and a hand-started item's
+// `wtnTarget` while its worktree is there. Once each while it runs (here
+// waiting on the targets' locks), again once it has ended, and none with the
+// setting off.
+#[test]
+fn a_landing_on_the_default_branch_opens_a_tab_bringing_each_target_up_to_date() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let repo = repo(server.dir.path());
+    let origin = server.dir.path().join("origin.git");
+    git(
+        server.dir.path(),
+        &["init", "-q", "--bare", origin.to_str().unwrap()],
+    );
+    git(
+        &repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(
+        &repo,
+        &["push", "-q", "origin", "main", "main:ux", "main:team/next"],
+    );
+    let item = worktree(&server.home, &repo, server.dir.path(), "item");
+    git(&repo, &["config", "branch.item.wtnTarget", "team/next"]);
+    // A landing onto each target holds its lock meanwhile.
+    let held = |args: &[&str]| {
+        land_lock(&server.home, &item, args)
+            .env("CLAUDE_CODE_SESSION_ID", "item")
+            .output()
+            .unwrap()
+    };
+    for target in ["ux", "team/next"] {
+        assert_eq!(code(&held(&["--target", target, "take"])), 0);
+    }
+    std::fs::write(
+        server.state.join("autopilot.json"),
+        json!({ "on": true, "repo": repo, "target": "ux" }).to_string(),
+    )
+    .unwrap();
+    let pane = server.list()["sessions"][0]["tabs"][0]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let landed = |branch: &str| {
+        let out = land_lock(&server.home, &item, &["landed", "abc1234", branch])
+            .env("SWITCHBOARD_STATE_DIR", &server.state)
+            .env("SWITCHBOARD", server.socket())
+            .env("SWITCHBOARD_PANE", &pane)
+            .output()
+            .unwrap();
+        assert_eq!(code(&out), 0, "{}", String::from_utf8_lossy(&out.stderr));
+    };
+    let marks = || -> Vec<String> {
+        let mut marks: Vec<String> = server.list()["sessions"][0]["tabs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t["options"]["@tab_update_target"].as_str())
+            .map(|m| m.split(' ').next().unwrap().to_string())
+            .collect();
+        marks.sort();
+        marks
+    };
+
+    common::write_settings(&server.home, json!({ "target_follows_default": false }));
+    landed("main");
+    assert!(marks().is_empty(), "the setting off opens none");
+
+    common::write_settings(&server.home, json!({}));
+    landed("ux");
+    assert!(marks().is_empty(), "a landing on a target opens none");
+    landed("main");
+    assert_eq!(marks(), vec!["team/next".to_string(), "ux".to_string()]);
+    let tabs = server.list()["sessions"][0]["tabs"].clone();
+    let ux = tabs
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| {
+            t["options"]["@tab_update_target"]
+                .as_str()
+                .is_some_and(|m| m.starts_with("ux "))
+        })
+        .unwrap();
+    assert_eq!(ux["options"]["@tab_name"], "ux ← main");
+    assert_eq!(ux["current"], false, "opened in the background");
+
+    landed("main");
+    assert_eq!(
+        marks().len(),
+        2,
+        "a second landing while they run opens none"
+    );
+
+    for target in ["ux", "team/next"] {
+        assert_eq!(code(&held(&["--target", target, "release"])), 0);
+    }
+    let deadline = common::deadline(Duration::from_secs(30));
+    while !marks().is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the runs never ended: {:?}",
+            marks()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    landed("main");
+    assert_eq!(
+        marks().len(),
+        2,
+        "once they ended, the next landing opens them again"
+    );
+}
+
+// update-target's tab runs no Claude: the step it sets on its pane, a
+// conflict left for you, still reaches mission control's Work map.
+#[test]
+fn a_tab_with_no_claude_shows_its_pane_s_merge_conflict_in_the_work_map() {
+    let server = TestServer::start();
+    common::write_settings(&server.home, json!({ "ux2": true }));
+    let mut client = server.attach(160, 36);
+    client.wait_text("$");
+    let repo = repo(server.dir.path());
+    let out = server.ok(&["new-tab", "-c", repo.to_str().unwrap()]);
+    let pane = out.split_whitespace().nth(1).unwrap().to_string();
+    server.ok(&["set", "-t", &pane, "@agent_phase", "merge conflict a.rs"]);
+    server.ok(&["press", "mission-work-map"]);
+    client.wait_text("merge conflict");
+}
+
+// M-p's "Bring a target branch up to date with the default branch" lists
+// the pane's repository's branches but its default one.
+#[test]
+fn the_palette_command_picks_a_branch_other_than_the_default_one() {
+    let server = TestServer::start();
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    let repo = repo(server.dir.path());
+    git(&repo, &["branch", "ux"]);
+    server.ok(&["new-tab", "-c", repo.to_str().unwrap()]);
+    server.ok(&["press", "update-target"]);
+    client.wait_text("Which branch takes main's work?");
+    client.wait_text("ux");
+}

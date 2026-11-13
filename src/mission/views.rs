@@ -897,6 +897,13 @@ pub fn standing(facts: &TabModel, counts: Option<&Counts>) -> (String, &'static 
     {
         return ("✕ tests failed".into(), "failed");
     }
+    if facts
+        .phase
+        .as_deref()
+        .is_some_and(|p| p.starts_with("merge conflict"))
+    {
+        return ("✕ merge conflict".into(), "failed");
+    }
     if let Some(l) = facts.landing {
         return if l.holding {
             ("Landing".into(), "landing")
@@ -1762,6 +1769,10 @@ mod tests {
         assert_eq!(
             with_pr(&|t| t.phase = Some("tests failed: 2".into())),
             "✕ tests failed"
+        );
+        assert_eq!(
+            with_pr(&|t| t.phase = Some("merge conflict src/a.rs".into())),
+            "✕ merge conflict"
         );
         let bare = TabModel::new(TabId(2), 2, "t");
         let counted = Counts {
