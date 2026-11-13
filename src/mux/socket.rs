@@ -162,13 +162,24 @@ pub fn ask_quiet(
     pane: Option<String>,
     stdin: Option<Vec<u8>>,
 ) -> Option<(i32, Vec<u8>, Vec<u8>)> {
+    ask_within(args, pane, stdin, QUIET_WAIT)
+}
+
+/// As `ask_quiet`, waiting at most `wait` on each read and write: for
+/// `switchboard statusline`, which Claude Code draws as it waits.
+pub fn ask_within(
+    args: Vec<String>,
+    pane: Option<String>,
+    stdin: Option<Vec<u8>>,
+    wait: Duration,
+) -> Option<(i32, Vec<u8>, Vec<u8>)> {
     let cwd = std::env::current_dir()
         .ok()
         .or_else(|| std::env::var_os("PWD").map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("/"));
     let mut stream = UnixStream::connect(socket_path()).ok()?;
-    stream.set_read_timeout(Some(QUIET_WAIT)).ok()?;
-    stream.set_write_timeout(Some(QUIET_WAIT)).ok()?;
+    stream.set_read_timeout(Some(wait)).ok()?;
+    stream.set_write_timeout(Some(wait)).ok()?;
     let msg = ClientMsg::Command {
         args,
         cwd,

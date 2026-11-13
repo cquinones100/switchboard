@@ -107,14 +107,19 @@ impl Server {
         for ask in asks {
             self.start_lookup(ask);
         }
+        let switches = self.tab_names.names.last_switches();
+        let tint = switches
+            .apart
+            .then(|| self.own_tint(tab_id, facts.tint))
+            .flatten();
         let shown = Shown {
             label: facts.label,
             pr: facts.pr,
             pr_repo: facts.pr_repo,
-            color: Some(if self.tab_names.names.last_switches().colors {
-                facts.color
-            } else {
-                color::GRAY
+            color: Some(match tint {
+                _ if !switches.colors => color::GRAY,
+                Some(tint) => color::tab_color(tint, switches.shade),
+                None => facts.color,
             }),
             repo_dir: Some(crate::tabs::git::main_clone(&dir)),
             path: Some(dir),
@@ -127,6 +132,27 @@ impl Server {
                 self.dirty_session(&name);
             }
         }
+    }
+
+    /// The tab's own tint (`@tab_hue`, `@tab_step`), given as it is first
+    /// named: the one farthest from every other open tab's, in every
+    /// session, starting from its directory's (`home`), kept in its options
+    /// so it is saved with the layout and never changes while it is open.
+    fn own_tint(&mut self, tab_id: TabId, home: color::Tint) -> Option<color::Tint> {
+        if let Some(tint) = color::Tint::of_opts(&self.tabs.get(&tab_id)?.opts) {
+            return Some(tint);
+        }
+        let taken: Vec<color::Tint> = self
+            .tabs
+            .iter()
+            .filter(|(id, _)| **id != tab_id)
+            .filter_map(|(_, tab)| color::Tint::of_opts(&tab.opts))
+            .collect();
+        let tint = color::apart(&taken, home);
+        let opts = &mut self.tabs.get_mut(&tab_id)?.opts;
+        opts.insert(color::HUE.into(), tint.hue.to_string());
+        opts.insert(color::STEP.into(), tint.step.name().into());
+        Some(tint)
     }
 
     /// Names every tab again, and forgets what was kept for tabs and

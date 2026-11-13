@@ -7,7 +7,7 @@
 
 use crate::common;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -73,7 +73,10 @@ fn wait_tab(server: &TestServer, what: &str, pred: impl Fn(&Value) -> bool) -> V
 #[test]
 fn a_tab_in_a_repository_wears_its_name_and_color_and_a_given_name_wins() {
     let server = TestServer::start();
-    settings(&server, json!({"github": false, "linear": false}));
+    settings(
+        &server,
+        json!({"github": false, "linear": false, "tab_colors_apart": false}),
+    );
     let work = server.dir.path().join("shop");
     repo(&work, "feature-x");
 
@@ -142,7 +145,7 @@ fn a_tab_in_a_repository_wears_its_name_and_color_and_a_given_name_wins() {
     // With tab colors vivid, the stronger color from before.
     settings(
         &server,
-        json!({"github": false, "linear": false, "tab_colors": "vivid"}),
+        json!({"github": false, "linear": false, "tab_colors_apart": false, "tab_colors": "vivid"}),
     );
     let vivid = tabs::accent_color("shop | branch:main", Shade::Vivid);
     assert_ne!(vivid, main);
@@ -151,7 +154,7 @@ fn a_tab_in_a_repository_wears_its_name_and_color_and_a_given_name_wins() {
     // With project colors off, every tab is gray.
     settings(
         &server,
-        json!({"github": false, "linear": false, "accent_colors": false}),
+        json!({"github": false, "linear": false, "tab_colors_apart": false, "accent_colors": false}),
     );
     wait_tab(&server, "the gray", |t| t["color"] == "8a8a8a");
 }
@@ -159,7 +162,10 @@ fn a_tab_in_a_repository_wears_its_name_and_color_and_a_given_name_wins() {
 #[test]
 fn a_tab_keeps_its_name_after_its_worktree_is_removed_until_it_moves() {
     let server = TestServer::start();
-    settings(&server, json!({"github": false, "linear": false}));
+    settings(
+        &server,
+        json!({"github": false, "linear": false, "tab_colors_apart": false}),
+    );
     let main = server.dir.path().join("app");
     repo(&main, "main");
     let worktree = main.join(".claude/worktrees/fix-login");
@@ -208,7 +214,10 @@ fn a_tab_keeps_its_name_after_its_worktree_is_removed_until_it_moves() {
 #[test]
 fn m_shift_t_shows_the_tabs_whole_title_and_its_branch_and_copies_it() {
     let server = TestServer::start();
-    settings(&server, json!({"github": false, "linear": false}));
+    settings(
+        &server,
+        json!({"github": false, "linear": false, "tab_colors_apart": false}),
+    );
     let work = server.dir.path().join("shop");
     repo(&work, "feature-x");
     let mut client = server.attach(100, 30);
@@ -335,7 +344,10 @@ mod from_the_services {
 #[test]
 fn the_tabs_command_names_each_panes_claude_and_its_address() {
     let server = TestServer::start();
-    settings(&server, json!({"github": false, "linear": false}));
+    settings(
+        &server,
+        json!({"github": false, "linear": false, "tab_colors_apart": false}),
+    );
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     server.ok(&["new-tab", "-d", "-n", "plain"]);
@@ -381,7 +393,10 @@ fn the_tabs_command_names_each_panes_claude_and_its_address() {
 #[test]
 fn a_tab_with_a_tab_dir_is_named_from_it_and_forgets_it_when_handed_over() {
     let server = TestServer::start();
-    settings(&server, json!({"github": false, "linear": false}));
+    settings(
+        &server,
+        json!({"github": false, "linear": false, "tab_colors_apart": false}),
+    );
     let main = server.dir.path().join("app");
     repo(&main, "main");
     let worktree = main.join(".claude/worktrees/fix-login");
@@ -525,4 +540,192 @@ fn a_tab_keeps_its_number_while_open_and_a_new_one_takes_the_smallest_free() {
     assert_eq!(numbers(&server), [1, 3, 2, 5], "after a restore");
     server.ok(&["new-tab", "-d"]);
     assert!(numbers(&server).contains(&4), "4 is free for the next");
+}
+
+/// Every tab's id, `@tab_hue` and color, the sessions and their tabs in
+/// order, once every tab has a hue of its own.
+fn hues(server: &TestServer) -> Vec<(String, i64, String)> {
+    let deadline = common::deadline(Duration::from_secs(15));
+    loop {
+        let tabs: Vec<Value> = server.list()["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|s| s["tabs"].as_array().unwrap().clone())
+            .collect();
+        let hues: Vec<(String, i64, String)> = tabs
+            .iter()
+            .filter_map(|t| {
+                let hue = t["options"]["@tab_hue"].as_str()?.parse().ok()?;
+                let color = t["color"].as_str()?.to_string();
+                Some((t["id"].as_str()?.to_string(), hue, color))
+            })
+            .collect();
+        if hues.len() == tabs.len() {
+            return hues;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "a tab never took a hue: {tabs:?}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// How far apart two tab colors (hex) are drawn around the hue circle, in
+/// degrees: the hue of the color itself, since the shell's steps draw two
+/// hue numbers of one segment in one color.
+fn apart_by(a: &str, b: &str) -> i64 {
+    let hue = |hex: &str| {
+        let c = |i: usize| f64::from(u8::from_str_radix(&hex[i..i + 2], 16).unwrap());
+        let (r, g, b) = (c(0), c(2), c(4));
+        let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+        let h = if max == r {
+            (g - b) / (max - min)
+        } else if max == g {
+            2.0 + (b - r) / (max - min)
+        } else {
+            4.0 + (r - g) / (max - min)
+        };
+        (h * 60.0).rem_euclid(360.0)
+    };
+    let d = (hue(a) - hue(b)).rem_euclid(360.0);
+    d.min(360.0 - d).round() as i64
+}
+
+#[test]
+fn each_tab_takes_a_hue_of_its_own_and_keeps_it() {
+    let mut server = TestServer::start();
+    settings(&server, json!({"github": false, "linear": false}));
+    let work = server.dir.path().join("shop");
+    repo(&work, "main");
+    let work_dir = work.to_str().unwrap();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    // Three tabs in one directory, each far from the others' hues, and
+    // drawn in its own.
+    client.type_text(&format!("cd {work_dir}\r"));
+    client.wait_for("the first tab in the repository", |s| {
+        s[29].ends_with("1:shop")
+    });
+    server.ok(&["new-tab", "-d", "-c", work_dir]);
+    server.ok(&["new-tab", "-d", "-c", work_dir]);
+    let before = hues(&server);
+    assert_eq!(before.len(), 3);
+    for (i, (_, _, a)) in before.iter().enumerate() {
+        for (_, _, b) in &before[i + 1..] {
+            assert!(apart_by(a, b) >= 85, "{before:?}");
+        }
+    }
+    let tabs = server.list()["sessions"][0]["tabs"].clone();
+    for (t, (id, hue, color)) in tabs.as_array().unwrap().iter().zip(&before) {
+        let step = tabs::color::Step::of(t["options"]["@tab_step"].as_str().unwrap_or(""));
+        let tint = tabs::color::Tint::new(*hue, step);
+        assert_eq!(
+            *color,
+            tabs::color::tab_color(tint, Shade::Soft).hex(),
+            "{id}"
+        );
+    }
+
+    // Closing one leaves the others theirs, and a new tab takes the hue
+    // farthest from those left.
+    server.ok(&["kill-tab", "-t", &before[1].0]);
+    let left: Vec<_> = before
+        .iter()
+        .filter(|t| t.0 != before[1].0)
+        .cloned()
+        .collect();
+    assert_eq!(hues(&server), left);
+    server.ok(&["new-tab", "-d", "-c", work_dir]);
+    let now = hues(&server);
+    assert!(left.iter().all(|t| now.contains(t)), "{now:?}");
+    let new = now.iter().find(|t| !left.contains(t)).unwrap();
+    assert!(left.iter().all(|t| apart_by(&new.2, &t.2) >= 85), "{now:?}");
+
+    // An upgrade and a restart keep every tab's hue.
+    let (code, out, err) = server.run(&["upgrade"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(hues(&server), now, "after an upgrade");
+    server.ok(&["save"]);
+    drop(client);
+    server.restart();
+    assert_eq!(hues(&server), now, "after a restore");
+
+    // With each tab's own hue off, the tabs of one directory share its color.
+    settings(
+        &server,
+        json!({"github": false, "linear": false, "tab_colors_apart": false}),
+    );
+    let home = tabs::accent_color("shop | branch:main", Shade::Soft).hex();
+    let deadline = common::deadline(Duration::from_secs(15));
+    while !hues(&server).iter().all(|(_, _, color)| *color == home) {
+        assert!(Instant::now() < deadline, "{:?}", hues(&server));
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // And the statusline is given no tab's tint.
+    assert_eq!(server.ok(&["show", "-t", &now[0].0, "@tab_tint"]), "");
+}
+
+#[test]
+fn claude_s_statusline_draws_its_tab_s_hue() {
+    let server = TestServer::start();
+    settings(&server, json!({"github": false, "linear": false}));
+    let work = server.dir.path().join("shop");
+    repo(&work, "main");
+    let work_dir = work.to_str().unwrap();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-d", "-c", work_dir]);
+    let tabs_now = hues(&server);
+    let (id, hue, _) = tabs_now.iter().find(|t| t.0 != "@1").unwrap();
+    let step = server.ok(&["show", "-t", id, "@tab_step"]);
+    let tint = tabs::color::Tint::new(*hue, tabs::color::Step::of(&step));
+    // The statusline as Claude Code runs it in the tab's pane, and outside
+    // the workspace.
+    let payload = json!({
+        "model": { "display_name": "Opus" },
+        "workspace": { "current_dir": work_dir },
+    })
+    .to_string();
+    let out = server.dir.path().join("line");
+    let script = format!(
+        "printf '%s' '{payload}' | {} statusline > {} && unset SWITCHBOARD SWITCHBOARD_PANE && printf '%s' '{payload}' | {} statusline > {}.outside; exec sleep 600",
+        common::BIN,
+        out.display(),
+        common::BIN,
+        out.display()
+    );
+    server.ok(&["new-tab", "-d", "-c", work_dir, "--", "sh", "-c", &script]);
+    // The new tab's own hue, not the second's.
+    let third = hues(&server)
+        .into_iter()
+        .find(|t| !tabs_now.contains(t))
+        .unwrap();
+    let outside = PathBuf::from(format!("{}.outside", out.display()));
+    let deadline = common::deadline(Duration::from_secs(15));
+    while std::fs::read_to_string(&outside).map_or(true, |s| s.is_empty()) {
+        assert!(Instant::now() < deadline, "the statusline never ran");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let step = server.ok(&["show", "-t", &third.0, "@tab_step"]);
+    let own = tabs::color::line_color(
+        tabs::color::Tint::new(third.1, tabs::color::Step::of(&step)),
+        Shade::Soft,
+    );
+    let line = std::fs::read_to_string(&out).unwrap();
+    assert!(
+        line.starts_with(&format!("\x1b[38;2;{};{};{}mOpus", own.r, own.g, own.b)),
+        "{line:?}"
+    );
+    assert_ne!(
+        tint,
+        tabs::color::Tint::new(third.1, tabs::color::Step::of(&step))
+    );
+    let home = tabs::statusline_color("shop | branch:main", Shade::Soft);
+    let line = std::fs::read_to_string(&outside).unwrap();
+    assert!(
+        line.starts_with(&format!("\x1b[38;2;{};{};{}mOpus", home.r, home.g, home.b)),
+        "{line:?}"
+    );
 }

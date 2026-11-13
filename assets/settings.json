@@ -767,7 +767,7 @@
     "key": "tab_colors",
     "category": "Tabs and status bar",
     "label": "Tab colors",
-    "description": "The colors tabs take from their project, in the tab bar, the sidebar, the header and Claude's statusline: soft pastels, as the UX 2.0 canvas draws them, or the stronger colors from before. Each project keeps its own hue either way",
+    "description": "The colors tabs take from their project, in the tab bar, the sidebar, the header and Claude's statusline: soft pastels, as the UX 2.0 canvas draws them, or the stronger colors from before. Each tab keeps its own hue either way",
     "choices": [
       {
         "value": "soft",
@@ -779,6 +779,13 @@
       }
     ],
     "default": "soft"
+  },
+  {
+    "key": "tab_colors_apart",
+    "category": "Tabs and status bar",
+    "label": "A color a tab",
+    "description": "Each tab gets the hue farthest from the open tabs' as it opens, a deeper shade of it when it is close to one, kept while it is open and through restarts, so tabs, and the Usage view's spend chart, tell apart. Off, a tab wears its directory's color, the same for every tab of one checkout",
+    "default": true
   },
   {
     "key": "health_light",

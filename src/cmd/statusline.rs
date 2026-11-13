@@ -81,7 +81,15 @@ pub fn main(_args: Vec<String>) -> ExitCode {
         .as_ref()
         .and_then(Value::as_str)
         == Some("light");
-    let line = line(&payload, in_workspace, hide_context, Shade::read(), light);
+    let tint = in_workspace.then(tab_tint).flatten();
+    let line = line(
+        &payload,
+        in_workspace,
+        hide_context,
+        Shade::read(),
+        light,
+        tint,
+    );
     let mut out = std::io::stdout().lock();
     let _ = out.write_all(line.as_bytes());
     let _ = out.flush();
@@ -109,6 +117,32 @@ fn tell_server(payload: &Value) {
     );
 }
 
+/// The tint of this pane's tab (`show @tab_tint`, its `@tab_hue` and
+/// `@tab_step` in one answer), asked of the server, which answers only
+/// while each tab has a hue of its own (`tab_colors_apart`); none outside
+/// Switchboard or when no answer comes within 100 ms, when the line hashes
+/// the directory as before.
+fn tab_tint() -> Option<tabs::color::Tint> {
+    let pane = std::env::var("SWITCHBOARD_PANE")
+        .ok()
+        .filter(|p| !p.is_empty())?;
+    let (code, out, _) = crate::mux::socket::ask_within(
+        vec!["show".into(), "@tab_tint".into()],
+        Some(pane),
+        None,
+        std::time::Duration::from_millis(100),
+    )?;
+    let answer = String::from_utf8_lossy(&out);
+    let (hue, step) = answer.trim().split_once(' ')?;
+    let opts = std::collections::BTreeMap::from([
+        (tabs::color::HUE.to_string(), hue.to_string()),
+        (tabs::color::STEP.to_string(), step.to_string()),
+    ]);
+    (code == 0)
+        .then(|| tabs::color::Tint::of_opts(&opts))
+        .flatten()
+}
+
 /// A field as `jq -r` printed it: a string as it is, anything else as JSON,
 /// `null` when missing.
 fn raw(v: &Value) -> String {
@@ -125,13 +159,15 @@ fn or_empty(v: &Value) -> Option<String> {
 
 /// What the statusline prints.
 /// `light`: Settings' `theme` is light, where the color is drawn darker
-/// (`Rgb::darker`) so it shows on the pale background.
+/// (`Rgb::darker`) so it shows on the pale background. `tint`: the pane's
+/// tab's own, drawn in place of the directory's.
 pub fn line(
     payload: &Value,
     in_workspace: bool,
     hide_context: bool,
     shade: Shade,
     light: bool,
+    tint: Option<tabs::color::Tint>,
 ) -> String {
     let model = raw(&payload["model"]["display_name"]);
     let raw_cwd = match &payload["workspace"]["current_dir"] {
@@ -140,10 +176,13 @@ pub fn line(
     };
     let dir = PathBuf::from(&raw_cwd);
     let place = git::locate(&dir);
-    let color = tabs::statusline_color(
-        &tabs::color::color_key(&tabs::color::dir_name(&dir), place.as_ref()),
-        shade,
-    );
+    let color = match tint {
+        Some(tint) => tabs::color::line_color(tint, shade),
+        None => tabs::statusline_color(
+            &tabs::color::color_key(&tabs::color::dir_name(&dir), place.as_ref()),
+            shade,
+        ),
+    };
     let color = if light { color.darker() } else { color };
     let accent = format!("\x1b[38;2;{};{};{}m", color.r, color.g, color.b);
 
@@ -418,16 +457,16 @@ mod tests {
         let color = tabs::statusline_color("at-all", Shade::Soft);
         let accent = format!("\x1b[38;2;{};{};{}m", color.r, color.g, color.b);
         assert_eq!(
-            line(&payload, true, true, Shade::Soft, false),
+            line(&payload, true, true, Shade::Soft, false, None),
             format!("{accent}Opus{RESET}")
         );
         assert_eq!(
-            line(&payload, true, false, Shade::Soft, false),
+            line(&payload, true, false, Shade::Soft, false, None),
             format!("{accent}Opus{RESET} | Context: \x1b[38;5;178m42.3% used{RESET}")
         );
         for hide_context in [true, false] {
             assert_eq!(
-                line(&payload, false, hide_context, Shade::Soft, false),
+                line(&payload, false, hide_context, Shade::Soft, false, None),
                 format!(
                     "{accent}Opus{RESET} | {accent}/nowhere/at-all{RESET} | Context: \x1b[38;5;178m42.3% used{RESET}"
                 )
@@ -436,8 +475,15 @@ mod tests {
         // With the light theme, the same hue darker.
         let dark = color.darker();
         assert_eq!(
-            line(&payload, true, true, Shade::Soft, true),
+            line(&payload, true, true, Shade::Soft, true, None),
             format!("\x1b[38;2;{};{};{}mOpus{RESET}", dark.r, dark.g, dark.b)
+        );
+        // The tab's own tint, in place of the directory's.
+        let tint = tabs::color::Tint::new(87, tabs::color::Step::Deep);
+        let own = tabs::color::line_color(tint, Shade::Soft);
+        assert_eq!(
+            line(&payload, true, true, Shade::Soft, false, Some(tint)),
+            format!("\x1b[38;2;{};{};{}mOpus{RESET}", own.r, own.g, own.b)
         );
         let bare =
             json!({ "model": { "display_name": "Haiku" }, "workspace": { "current_dir": "/x" } });
@@ -445,7 +491,8 @@ mod tests {
             [(true, true), (true, false), (false, true), (false, false)]
         {
             assert!(
-                !line(&bare, in_workspace, hide_context, Shade::Vivid, false).contains("Context")
+                !line(&bare, in_workspace, hide_context, Shade::Vivid, false, None)
+                    .contains("Context")
             );
         }
     }

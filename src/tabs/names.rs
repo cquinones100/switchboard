@@ -43,7 +43,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use super::color::{self, Rgb, Shade};
+use super::color::{self, Rgb, Shade, Tint};
 use super::git::{self, GitPlace};
 use super::label;
 use crate::integrations::github::{self, Repo};
@@ -83,6 +83,8 @@ pub struct Switches {
     pub colors: bool,
     /// `tab_colors`: how a project's hue is drawn.
     pub shade: Shade,
+    /// `tab_colors_apart`: each tab its own hue as it opens.
+    pub apart: bool,
 }
 
 impl Default for Switches {
@@ -93,6 +95,7 @@ impl Default for Switches {
             lookups: true,
             colors: true,
             shade: Shade::Soft,
+            apart: true,
         }
     }
 }
@@ -108,6 +111,7 @@ impl Switches {
             linear: on("linear"),
             lookups: on("tab_lookups"),
             colors: on("accent_colors"),
+            apart: on("tab_colors_apart"),
             shade: Shade::of(all.iter().find(|o| o.key == "tab_colors").map(|o| &o.value)),
         }
     }
@@ -126,6 +130,8 @@ impl Switches {
 pub struct Facts {
     /// Its accent color (the setting not applied).
     pub color: Rgb,
+    /// The tint its key hashes to, which a tab opening there starts from.
+    pub tint: Tint,
     /// Its label when the tab has no name of its own.
     pub label: String,
     /// Its branch's pull request.
@@ -319,7 +325,8 @@ impl Names {
         asks: &mut Vec<Ask>,
     ) -> Facts {
         let name = color::dir_name(dir);
-        let color = color::accent_color(&color::color_key(&name, place), switches.shade);
+        let tint = color::tint_of(&color::color_key(&name, place));
+        let color = color::tab_color(tint, switches.shade);
         let window = color::window_name(&name, place);
 
         // Matches any team key; a branch that only looks like a ticket is
@@ -366,6 +373,7 @@ impl Names {
         };
         Facts {
             color,
+            tint,
             label,
             pr,
             pr_repo,

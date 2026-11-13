@@ -3,6 +3,22 @@
 //! claude/statusline-command.sh draws it, so the tab and the Claude
 //! statusline agree on a project's color.
 //!
+//! A tab's hue is its own (Settings' `tab_colors_apart`): chosen as the tab
+//! opens (`apart`), the one farthest from the open tabs' hues, and kept on
+//! the tab (`@tab_hue`, `@tab_step`) with the layout, so it lasts through
+//! restarts and upgrades and never changes while the tab is open. The
+//! directory's hash is only the tie-break among the farthest hues, the hue
+//! of a lone tab, the color with the setting off, and the statusline's
+//! outside the workspace; the key stays byte for byte, since that hue still
+//! hangs on it.
+//!
+//! A hue is drawn in one of two lightness steps (`Step`): light, as it
+//! always was, or deep, darker, so two tabs whose hues are close still tell
+//! apart. A tab whose free hue is within `NEAR` of an open tab's takes the
+//! other step from that tab's; with the setting off, the step is the next
+//! bit of the key's hash after the hue's. A hue whose deep step would read
+//! as red keeps the light one.
+//!
 //! The color key and the name are separate strings. The key is hashed, so it
 //! has to stay byte for byte what the scripts built, which is why it spells
 //! out `worktree:` and repeats the directory's name; nobody reads it. The
@@ -13,12 +29,12 @@
 //! the key's hash, as a number, picks the hue from those whose color doesn't
 //! read as red (the scripts took any of the 360). Settings' `tab_colors`
 //! picks how that hue is drawn, never the key or the hue: soft, a pastel at
-//! about 65% saturation and 78% lightness as the UX 2.0 canvas draws its
-//! tabs, the same for the tab and the statusline; or vivid, the scripts'
-//! color at about 80% saturation and 45% lightness in the same integer steps
-//! the shell's arithmetic took, the tab's then lifted to a perceived
-//! luminance of at least 100 for reading on a dark status line, the
-//! statusline's not, as it never was.
+//! about 65% saturation and 78% lightness (deep: 62%) as the UX 2.0 canvas
+//! draws its tabs, the same for the tab and the statusline; or vivid, the
+//! scripts' color at about 80% saturation and 45% lightness (deep: about
+//! 33%) in the same integer steps the shell's arithmetic took, the tab's
+//! then lifted to a perceived luminance of at least 100 for reading on a
+//! dark status line, the statusline's not, as it never was.
 
 use std::path::Path;
 use std::sync::LazyLock;
@@ -174,64 +190,176 @@ fn reads_as_red(c: Rgb) -> bool {
     c.r > c.g.max(c.b) && c.g.max(c.b) < 135
 }
 
-/// The hue a key hashes to, in degrees.
-fn hue(key: &str) -> i64 {
-    let digest = sha256(key.as_bytes());
-    let hash = u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]]) as usize;
-    HUES[hash % HUES.len()]
+/// One of a hue's two lightness steps.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Step {
+    /// As a hue was always drawn.
+    #[default]
+    Light,
+    /// Darker, for a tab whose hue is close to an open tab's.
+    Deep,
 }
 
-/// The color a key hashes to, as the Claude statusline draws it.
-pub fn statusline_color(key: &str, shade: Shade) -> Rgb {
-    match shade {
-        Shade::Soft => soft_color(hue(key)),
-        Shade::Vivid => hue_color(hue(key)),
+impl Step {
+    /// The value kept in `@tab_step`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Step::Light => "light",
+            Step::Deep => "deep",
+        }
+    }
+
+    /// The step a `@tab_step` value names: light unless it says deep.
+    pub fn of(value: &str) -> Step {
+        match value.trim() {
+            "deep" => Step::Deep,
+            _ => Step::Light,
+        }
+    }
+
+    fn other(self) -> Step {
+        match self {
+            Step::Light => Step::Deep,
+            Step::Deep => Step::Light,
+        }
     }
 }
 
-/// A hue made a pastel at about 65% saturation and 78% lightness, in the
-/// same integer steps as `hue_color`.
-fn soft_color(hue: i64) -> Rgb {
-    let segment = hue / 60;
-    let frac = (hue % 60) * 255 / 60;
-    let c: i64 = 73;
-    let x = c * (255 - (frac * 2 - 255).abs()) / 255;
-    let m: i64 = 162;
-    let (r, g, b) = match segment {
-        0 => (c + m, x + m, m),
-        1 => (x + m, c + m, m),
-        2 => (m, c + m, x + m),
-        3 => (m, x + m, c + m),
-        4 => (x + m, m, c + m),
-        _ => (c + m, m, x + m),
-    };
-    Rgb::new(channel(r), channel(g), channel(b))
+/// A hue and the step it is drawn in: what a tab keeps of its color, Settings'
+/// `tab_colors` deciding how it is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Tint {
+    pub hue: i64,
+    pub step: Step,
 }
 
-/// A hue made a color at about 80% saturation and 45% lightness, in the
-/// shell's integer steps.
-fn hue_color(hue: i64) -> Rgb {
-    let segment = hue / 60;
-    let frac = (hue % 60) * 255 / 60;
-    let c: i64 = 204;
-    let x = c * (255 - (frac * 2 - 255).abs()) / 255;
-    let m: i64 = 35;
-    let (r, g, b) = match segment {
-        0 => (c + m, x + m, m),
-        1 => (x + m, c + m, m),
-        2 => (m, c + m, x + m),
-        3 => (m, x + m, c + m),
-        4 => (x + m, m, c + m),
-        _ => (c + m, m, x + m),
-    };
-    Rgb::new(channel(r), channel(g), channel(b))
+impl Tint {
+    /// A hue in a step, the deep step falling back to the light one where it
+    /// would read as red.
+    pub fn new(hue: i64, step: Step) -> Tint {
+        let step = if step == Step::Deep && !deep_allowed(hue) {
+            Step::Light
+        } else {
+            step
+        };
+        Tint { hue, step }
+    }
+
+    /// The tint a tab's options keep (`@tab_hue`, `@tab_step`); none
+    /// without a hue that a key could hash to.
+    pub fn of_opts(opts: &std::collections::BTreeMap<String, String>) -> Option<Tint> {
+        let hue = opts.get(HUE)?.trim().parse::<i64>().ok()?;
+        HUES.contains(&hue).then(|| {
+            Tint::new(
+                hue,
+                Step::of(opts.get(STEP).map(String::as_str).unwrap_or("")),
+            )
+        })
+    }
 }
 
-/// The color a key hashes to, as the tab wears it: the statusline's, a
-/// vivid one lifted to a perceived luminance of at least 100 (a soft one is
-/// far above it).
-pub fn accent_color(key: &str, shade: Shade) -> Rgb {
-    let color = statusline_color(key, shade);
+/// The tab options its tint is kept in, saved with the layout.
+pub const HUE: &str = "@tab_hue";
+pub const STEP: &str = "@tab_step";
+
+/// How close two hues are, in degrees, for a new tab to take the other step
+/// from the open tab's.
+pub const NEAR: i64 = 20;
+
+/// Whether a hue's deep step reads as other than red, soft and vivid, the
+/// tab's lifted color too.
+fn deep_allowed(hue: i64) -> bool {
+    let tint = Tint {
+        hue,
+        step: Step::Deep,
+    };
+    [Shade::Soft, Shade::Vivid].into_iter().all(|shade| {
+        !reads_as_red(line_color(tint, shade)) && !reads_as_red(tab_color(tint, shade))
+    })
+}
+
+/// The tint a key hashes to: the hue from the hash's first four bytes, the
+/// step from the next bit.
+pub fn tint_of(key: &str) -> Tint {
+    let digest = sha256(key.as_bytes());
+    let hash = u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]]) as usize;
+    let step = if digest[4] & 1 == 1 {
+        Step::Deep
+    } else {
+        Step::Light
+    };
+    Tint::new(HUES[hash % HUES.len()], step)
+}
+
+/// How far apart the colors two hues are drawn in are around the circle, in
+/// degrees: the shell's steps run each 60° segment out and back, so 315° and
+/// 345° draw one color, and the hue numbers alone would set them apart.
+fn distance(a: i64, b: i64) -> i64 {
+    let d = (drawn_hue(a) - drawn_hue(b)).rem_euclid(360);
+    d.min(360 - d)
+}
+
+/// The hue a hue's color is drawn in (`hsl_steps`), in degrees: each
+/// segment covers its own 60°, there and back.
+fn drawn_hue(hue: i64) -> i64 {
+    let segment = hue / 60;
+    let frac = (hue % 60) * 255 / 60;
+    let c = 204;
+    let x = c * (255 - (frac * 2 - 255).abs()) / 255;
+    let along = 60 * x / c;
+    segment * 60 + if segment % 2 == 0 { along } else { 60 - along }
+}
+
+/// The tint for a tab opening while tabs of the `taken` tints are open: the
+/// hue farthest from all of theirs, the tie going to the one nearest its
+/// directory's (`home`), never a red one; in the other step from the
+/// nearest open tab's when that is within `NEAR`, else in the light one.
+/// A lone tab wears its directory's tint.
+pub fn apart(taken: &[Tint], home: Tint) -> Tint {
+    if taken.is_empty() {
+        return home;
+    }
+    let nearest = |h: i64| {
+        taken
+            .iter()
+            .min_by_key(|t| distance(h, t.hue))
+            .expect("not empty")
+    };
+    let hue = HUES
+        .iter()
+        .copied()
+        .max_by_key(|h| {
+            (
+                distance(*h, nearest(*h).hue),
+                std::cmp::Reverse(distance(*h, home.hue)),
+                std::cmp::Reverse(*h),
+            )
+        })
+        .expect("hues");
+    let close = nearest(hue);
+    let step = if distance(hue, close.hue) <= NEAR {
+        close.step.other()
+    } else {
+        Step::Light
+    };
+    Tint::new(hue, step)
+}
+
+/// A tint as the Claude statusline draws it.
+pub fn line_color(tint: Tint, shade: Shade) -> Rgb {
+    let (c, m) = match (shade, tint.step) {
+        (Shade::Soft, Step::Light) => (73, 162),
+        (Shade::Soft, Step::Deep) => (126, 95),
+        (Shade::Vivid, Step::Light) => (204, 35),
+        (Shade::Vivid, Step::Deep) => (160, 22),
+    };
+    hsl_steps(tint.hue, c, m)
+}
+
+/// A tint as the tab wears it: the statusline's, a vivid one lifted to a
+/// perceived luminance of at least 100 (a soft one is far above it).
+pub fn tab_color(tint: Tint, shade: Shade) -> Rgb {
+    let color = line_color(tint, shade);
     let lum = color.luminance() as i64;
     if lum >= 100 {
         return color;
@@ -240,6 +368,46 @@ pub fn accent_color(key: &str, shade: Shade) -> Rgb {
     let Rgb { r, g, b } = color;
     let (r, g, b) = (r as i64, g as i64, b as i64);
     Rgb::new(channel(r + boost), channel(g + boost), channel(b + boost))
+}
+
+/// The color a key hashes to, as the Claude statusline draws it.
+pub fn statusline_color(key: &str, shade: Shade) -> Rgb {
+    line_color(tint_of(key), shade)
+}
+
+/// A hue made a pastel at about 65% saturation and 78% lightness, in the
+/// same integer steps as `hue_color`.
+#[cfg(test)]
+fn soft_color(hue: i64) -> Rgb {
+    hsl_steps(hue, 73, 162)
+}
+
+/// A hue made a color at about 80% saturation and 45% lightness, in the
+/// shell's integer steps.
+fn hue_color(hue: i64) -> Rgb {
+    hsl_steps(hue, 204, 35)
+}
+
+/// A hue as the shell's integer steps drew it, with chroma `c` and the
+/// floor `m` every channel starts from.
+fn hsl_steps(hue: i64, c: i64, m: i64) -> Rgb {
+    let segment = hue / 60;
+    let frac = (hue % 60) * 255 / 60;
+    let x = c * (255 - (frac * 2 - 255).abs()) / 255;
+    let (r, g, b) = match segment {
+        0 => (c + m, x + m, m),
+        1 => (x + m, c + m, m),
+        2 => (m, c + m, x + m),
+        3 => (m, x + m, c + m),
+        4 => (x + m, m, c + m),
+        _ => (c + m, m, x + m),
+    };
+    Rgb::new(channel(r), channel(g), channel(b))
+}
+
+/// The color a key hashes to, as the tab wears it.
+pub fn accent_color(key: &str, shade: Shade) -> Rgb {
+    tab_color(tint_of(key), shade)
 }
 
 /// The tab's color for a directory, read from its git files.
@@ -404,7 +572,7 @@ mod tests {
                 let key = format!("project-{i} | branch:eng-{i}-fix");
                 assert!(!reads_as_red(statusline_color(&key, Shade::Vivid)), "{key}");
                 assert!(!reads_as_red(accent_color(&key, Shade::Vivid)), "{key}");
-                hue(&key)
+                tint_of(&key).hue
             })
             .collect();
         assert_eq!(hues.len(), HUES.len());
@@ -415,7 +583,7 @@ mod tests {
         // The steps of tmux/accent-color.sh, over the hues that aren't red,
         // so a change to the hash or the steps shows up here.
         for (key, hex) in PINNED {
-            assert_eq!(accent_color(key, Shade::Vivid).hex(), *hex, "{key}");
+            assert_eq!(light(key, Shade::Vivid).hex(), *hex, "{key}");
         }
         // Lifting never lowers a channel; a light color is left alone.
         for (key, _) in PINNED {
@@ -467,6 +635,134 @@ mod tests {
         assert_eq!(Shade::of(None), Shade::Soft);
         assert_eq!(Shade::of(Some(&serde_json::json!("vivid"))), Shade::Vivid);
         assert_eq!(Shade::of(Some(&serde_json::json!("soft"))), Shade::Soft);
+    }
+
+    #[test]
+    fn a_new_tab_takes_the_farthest_hue() {
+        let light = |hue| Tint::new(hue, Step::Light);
+        let home = light(267);
+        // A lone tab wears its directory's tint.
+        assert_eq!(apart(&[], home), home);
+        // A second, the hue whose color is drawn farthest from the first's.
+        let far = |h: i64| HUES.iter().map(|o| distance(h, *o)).max().unwrap();
+        let second = apart(&[home], home);
+        assert_eq!(distance(second.hue, 267), far(267));
+        assert!(far(267) >= 170, "{}", far(267));
+        // Among hues as far, the one drawn nearest the directory's decides.
+        let ties: Vec<i64> = HUES
+            .iter()
+            .copied()
+            .filter(|h| distance(*h, 267) == far(267))
+            .collect();
+        for h in &ties {
+            assert_eq!(distance(apart(&[home], light(*h)).hue, *h), 0, "{ties:?}");
+        }
+        // The shell's steps run each segment out and back: 315° and 345°
+        // draw one color, so they count as one hue.
+        assert_eq!(soft_color(315), soft_color(345));
+        assert!(distance(315, 345) <= 1);
+        assert_eq!(apart(&[light(315)], light(345)).step, Step::Light);
+        assert!(distance(apart(&[light(315)], light(345)).hue, 315) >= 170);
+        // Three tabs of one directory, whatever its hue, each drawn about 90°
+        // from the others (89° at worst, the drawn hues in whole steps).
+        for home in HUES.iter().map(|h| light(*h)) {
+            let mut open = vec![home];
+            for _ in 0..2 {
+                open.push(apart(&open, home));
+            }
+            for (i, a) in open.iter().enumerate() {
+                for b in &open[i + 1..] {
+                    assert!(distance(a.hue, b.hue) >= 85, "{open:?}");
+                }
+            }
+        }
+        // However many are open, never a red one.
+        let mut open = vec![];
+        for i in 0..40 {
+            let tint = apart(&open, tint_of(&format!("p{i}")));
+            assert!(HUES.contains(&tint.hue), "{tint:?}");
+            open.push(tint);
+        }
+    }
+
+    #[test]
+    fn a_hue_close_to_an_open_tabs_takes_the_other_step() {
+        // Every hue taken but those drawn 126° to 154°, in the light step:
+        // the next, drawn about 140°, is within 20° of the nearest, and takes
+        // the deep step.
+        let taken = |step| -> Vec<Tint> {
+            HUES.iter()
+                .copied()
+                .filter(|h| !(126..=154).contains(&drawn_hue(*h)))
+                .map(|h| Tint::new(h, step))
+                .collect()
+        };
+        let next = apart(&taken(Step::Light), Tint::new(10, Step::Light));
+        assert!((135..=145).contains(&drawn_hue(next.hue)), "{next:?}");
+        assert_eq!(next.step, Step::Deep);
+        // Taken in the deep step, the light one.
+        let next = apart(&taken(Step::Deep), Tint::new(10, Step::Light));
+        assert_eq!(next.step, Step::Light);
+        // Far from every open tab, the light step.
+        assert_eq!(
+            apart(&[Tint::new(267, Step::Deep)], Tint::new(10, Step::Deep)).step,
+            Step::Light
+        );
+    }
+
+    #[test]
+    fn both_steps_read_and_are_not_red() {
+        let mut deep = 0;
+        for h in HUES.iter().copied() {
+            let (l, d) = (Tint::new(h, Step::Light), Tint::new(h, Step::Deep));
+            for shade in [Shade::Soft, Shade::Vivid] {
+                for tint in [l, d] {
+                    assert!(!reads_as_red(line_color(tint, shade)), "{tint:?} {shade:?}");
+                    assert!(!reads_as_red(tab_color(tint, shade)), "{tint:?} {shade:?}");
+                }
+            }
+            if d.step == Step::Light {
+                // A hue whose deep step reads as red keeps the light one.
+                assert!(!deep_allowed(h), "{h}°");
+                continue;
+            }
+            deep += 1;
+            for shade in [Shade::Soft, Shade::Vivid] {
+                assert!(
+                    line_color(d, shade).luminance() < line_color(l, shade).luminance(),
+                    "{h}° {shade:?}"
+                );
+            }
+            // Soft's deep step, a darker pastel whose words are chosen for it.
+            let Rgb { r, g, b } = line_color(d, Shade::Soft);
+            let (max, min) = (r.max(g).max(b) as f64, r.min(g).min(b) as f64);
+            let lightness = (max + min) / 2.0 / 255.0;
+            assert!((0.55..=0.68).contains(&lightness), "{h}°: {lightness}");
+            let words = words_on(line_color(d, Shade::Soft).into());
+            let dark = words == ratatui::style::Color::Indexed(232);
+            assert_eq!(dark, line_color(d, Shade::Soft).takes_dark_words(), "{h}°");
+        }
+        assert!(deep > HUES.len() / 2, "most hues have a deep step: {deep}");
+        // The hash's step is the key's own, and both come up.
+        assert_eq!(
+            tint_of("switchboard | branch:main"),
+            tint_of("switchboard | branch:main")
+        );
+        let steps: std::collections::HashSet<Step> =
+            (0..50).map(|i| tint_of(&format!("k{i}")).step).collect();
+        assert_eq!(steps.len(), 2);
+        // Kept on a tab and read back.
+        let opts = std::collections::BTreeMap::from([
+            (HUE.to_string(), "87".to_string()),
+            (STEP.to_string(), "deep".to_string()),
+        ]);
+        assert_eq!(Tint::of_opts(&opts), Some(Tint::new(87, Step::Deep)));
+        assert_eq!(Tint::of_opts(&Default::default()), None);
+    }
+
+    /// A key's hue in the light step, as the tab wears it.
+    fn light(key: &str, shade: Shade) -> Rgb {
+        tab_color(Tint::new(tint_of(key).hue, Step::Light), shade)
     }
 
     // Some lifted for a dark status line (a), some not.
@@ -526,7 +822,7 @@ mod tests {
         ] {
             assert_eq!(color_key_of(dir), key, "{}", dir.display());
             if let Some((_, hex)) = PINNED.iter().find(|(k, _)| *k == key) {
-                assert_eq!(accent_color_of(dir, Shade::Vivid).hex(), *hex, "{key}");
+                assert_eq!(light(&color_key_of(dir), Shade::Vivid).hex(), *hex, "{key}");
             }
             let place = super::super::git::locate(dir);
             assert_eq!(window_name(&dir_name(dir), place.as_ref()), name, "{key}");
