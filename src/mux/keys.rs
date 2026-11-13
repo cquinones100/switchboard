@@ -134,6 +134,9 @@ pub enum Action {
     /// The tab's whole title in a box, which the sidebar and the status
     /// line cut (M-T; tab-title.sh; src/tabs/title.rs).
     TabTitle,
+    /// The tab closed most recently opened again, as a browser's
+    /// Cmd-Shift-T does (M-T; src/usage/serve.rs's `reopen_last`).
+    ReopenLastTab,
     /// What the views do: M-v, M-i, M-r, M-l, M-m, M-S-f and the link
     /// commands (src/views).
     View(crate::views::Command),
@@ -182,7 +185,7 @@ impl Action {
     /// `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`,
     /// `continue-shaping`, `shape-note`, `shape-new-ticket`, `pr-image`,
     /// `ticket-image`, `mission-control`, `find-tab`,
-    /// `revive-worktree`, `settings`, `remind-tab`, `tab-title`, and the views' (`pr-view`,
+    /// `revive-worktree`, `settings`, `remind-tab`, `tab-title`, `reopen-last-tab`, and the views' (`pr-view`,
     /// `ticket-view`, `open-pr`, `open-repo`, `open-ticket`, `pr-ready`,
     /// `search-everything`, `read-link`, `open-link-being-read`,
     /// `open-merge-queue`, `open-linear-project`, `copy-ticket-id`,
@@ -271,6 +274,7 @@ impl Action {
             "settings" => Action::Settings,
             "remind-tab" => Action::RemindTab,
             "tab-title" => Action::TabTitle,
+            "reopen-last-tab" => Action::ReopenLastTab,
             "upgrade" => Action::Upgrade,
             "restore-layout" => Action::RestoreLayout,
             "keep-awake" => Action::KeepAwake,
@@ -347,6 +351,7 @@ impl Action {
             Action::Settings => "settings".into(),
             Action::RemindTab => "remind-tab".into(),
             Action::TabTitle => "tab-title".into(),
+            Action::ReopenLastTab => "reopen-last-tab".into(),
             Action::View(command) => command.name().into(),
             Action::Diff(command) => command.name().into(),
             Action::SlackRelay => "slack-relay".into(),
@@ -447,6 +452,7 @@ impl Action {
                 "Remind me about this tab later, as Slack does: it waits under Reminders with the time left, then needs you".into()
             }
             Action::TabTitle => "Show this tab's full title".into(),
+            Action::ReopenLastTab => "Reopen the most recently closed tab".into(),
             Action::View(command) => command.about().into(),
             Action::Diff(command) => command.about().into(),
             Action::SlackRelay => "Open the Slack relay in its own tab".into(),
@@ -606,6 +612,9 @@ impl Action {
             Action::TabTitle => {
                 "The title wrapped, its PR number in front, then its branch, directory, PR and ticket as far as the workspace knows them; y copies the title.".into()
             }
+            Action::ReopenLastTab => {
+                "In its directory, with its name and its Claude resumed, as the Closed view reopens one; pressed again, the one closed before. Off in Settings (reopen_tab_key), M-T shows the tab's full title.".into()
+            }
             Action::View(command) => command.detail().into(),
             Action::Diff(command) => command.detail().into(),
             Action::SlackRelay => {
@@ -684,6 +693,7 @@ impl Action {
             Action::Settings => &["settings", "config", "preferences"],
             Action::RemindTab => &["tabs", "remind", "todo"],
             Action::TabTitle => &["tabs"],
+            Action::ReopenLastTab => &["tabs", "reopen", "closed"],
             Action::View(command) => command.tags(),
             Action::Diff(command) => command.tags(),
             Action::SlackRelay | Action::StopSlackRelay => &["slack", "relay", "remote"],
@@ -696,6 +706,16 @@ impl Action {
             Action::Extra(command) => command.tags(),
             Action::Autopilot(command) => command.tags(),
             Action::Routines(command) => command.tags(),
+        }
+    }
+
+    /// What a key bound to it does when pressed: with Settings'
+    /// `reopen_tab_key` off, M-T's reopening shows the tab's full title
+    /// instead, as M-T did before.
+    pub fn pressed(self, reopen_tab_key: bool) -> Action {
+        match self {
+            Action::ReopenLastTab if !reopen_tab_key => Action::TabTitle,
+            other => other,
         }
     }
 
@@ -782,6 +802,7 @@ impl Action {
             Action::TicketImage,
             Action::Settings,
             Action::RemindTab,
+            Action::TabTitle,
             Action::StopSlackRelay,
             Action::Upgrade,
             Action::RestoreLayout,
@@ -863,7 +884,7 @@ impl Default for Bindings {
         bind("M-S", SlackRelay);
         bind("M-j", FindTab);
         bind("M-o", ReviveWorktree);
-        bind("M-T", TabTitle);
+        bind("M-T", ReopenLastTab);
         for command in crate::views::Command::ALL {
             if let Some(k) = command.key() {
                 bind(k, View(command));
@@ -1050,6 +1071,7 @@ mod tests {
             Action::Settings,
             Action::RemindTab,
             Action::TabTitle,
+            Action::ReopenLastTab,
             Action::Upgrade,
             Action::RestoreLayout,
             Action::KeepAwake,
@@ -1079,6 +1101,17 @@ mod tests {
         );
         assert_eq!(Action::parse("select-tab-0"), None);
         assert_eq!(Action::parse("fly"), None);
+    }
+
+    #[test]
+    fn alt_shift_t_reopens_the_last_closed_tab_or_shows_the_title_when_off() {
+        let b = Bindings::default();
+        let pressed = b.root.get(&key("M-T")).cloned().unwrap();
+        assert_eq!(pressed, Action::ReopenLastTab);
+        assert_eq!(pressed.clone().pressed(true), Action::ReopenLastTab);
+        assert_eq!(pressed.pressed(false), Action::TabTitle);
+        assert!(Action::palette_only().contains(&Action::TabTitle));
+        assert!(!b.root.values().any(|a| *a == Action::TabTitle));
     }
 
     #[test]

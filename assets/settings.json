@@ -932,7 +932,14 @@
     "key": "tab_title",
     "category": "Tabs and status bar",
     "label": "Show a tab's full title",
-    "description": "M-T, the sidebar's i and a tab's menu in mission control show the tab's whole title in a box, with its branch, directory, PR and ticket, which the sidebar and the status line cut; off, the key reaches the pane",
+    "description": "M-p's \"Show this tab's full title\", the sidebar's i and a tab's menu in mission control (and M-T, with \"M-T reopens the last closed tab\" off) show the tab's whole title in a box, with its branch, directory, PR and ticket, which the sidebar and the status line cut; off, M-T reaches the pane",
+    "default": true
+  },
+  {
+    "key": "reopen_tab_key",
+    "category": "Tabs and status bar",
+    "label": "M-T reopens the last closed tab",
+    "description": "M-T reopens the tab closed most recently, in its directory with its Claude resumed; pressed again, the one before. Off, M-T shows the tab's full title as before",
     "default": true
   },
   {

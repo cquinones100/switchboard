@@ -673,6 +673,37 @@ impl Server {
         Ok(tab)
     }
 
+    /// M-T: reopens the newest tab of the Closed view (one in a review
+    /// worktree passed over, as `reopen_closed` refuses it) and takes it out
+    /// of the list, so pressing again reopens the one closed before.
+    pub fn reopen_last(&mut self, client: ClientId) {
+        let state = paths::state_dir();
+        let newest = self
+            .usage_closed_view()
+            .items
+            .into_iter()
+            .find(|item| match &item.target {
+                crate::items::Target::Dir(dir) => !crate::trust::in_review_dir(dir),
+                _ => true,
+            });
+        let Some(item) = newest else {
+            self.say(Some(client), "No closed tab to reopen.");
+            return;
+        };
+        let closed_at = self.usage.closed.find(&state, &item.id).map(|c| c.at);
+        match self.reopen_closed(client, &item.id) {
+            Ok(_) => {
+                if let Some(at) = closed_at {
+                    self.usage.closed.remove(&state, &item.id, at);
+                }
+                if self.usage_wanted(ViewKind::Closed, Instant::now()) {
+                    self.usage_refresh(ViewKind::Closed);
+                }
+            }
+            Err(e) => self.say(Some(client), &e),
+        }
+    }
+
     /// Removes a closed tab from the view, up to when it closed.
     pub fn remove_closed(&mut self, key: &str) {
         let state = paths::state_dir();

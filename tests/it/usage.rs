@@ -79,6 +79,65 @@ fn a_closed_tab_is_logged_with_its_name_and_directory() {
     assert_eq!(line["path"], dir.to_str().unwrap());
 }
 
+/// The tab in front, from `list`: its name and directory.
+fn front_tab(server: &TestServer) -> Option<(String, String)> {
+    let list = server.list();
+    let tab = list["sessions"][0]["tabs"]
+        .as_array()?
+        .iter()
+        .find(|t| t["current"] == true)?
+        .clone();
+    Some((
+        tab["name"].as_str()?.to_string(),
+        tab["path"].as_str()?.to_string(),
+    ))
+}
+
+#[test]
+fn alt_shift_t_reopens_the_closed_tabs_newest_first() {
+    let mut server = TestServer::start();
+    let first = server.home.join("first");
+    let second = server.home.join("second");
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    // Two tabs that lived a minute each, the second closed last, logged as
+    // a closing tab logs them; the server reads the log as it starts.
+    let line = |at: i64, name: &str, dir: &std::path::Path| {
+        serde_json::json!({
+            "at": at, "id": format!("@{at}"), "index": 2, "name": name,
+            "tabName": name, "kind": "closed", "path": dir, "lived": 60_000,
+        })
+        .to_string()
+    };
+    let now = switchboard::util::now_ms();
+    std::fs::create_dir_all(&server.state).unwrap();
+    std::fs::write(
+        server.state.join("closed.jsonl"),
+        format!(
+            "{}\n{}\n",
+            line(now - 20_000, "first one", &first),
+            line(now - 10_000, "second one", &second)
+        ),
+    )
+    .unwrap();
+    server.restart();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+
+    server.ok(&["press", "reopen-last-tab"]);
+    client.wait_for("the second closed in front", |_| {
+        front_tab(&server)
+            .is_some_and(|(name, path)| name == "second one" && path == second.to_str().unwrap())
+    });
+    server.ok(&["press", "reopen-last-tab"]);
+    client.wait_for("the first closed in front", |_| {
+        front_tab(&server)
+            .is_some_and(|(name, path)| name == "first one" && path == first.to_str().unwrap())
+    });
+    server.ok(&["press", "reopen-last-tab"]);
+    client.wait_text("No closed tab to reopen.");
+}
+
 #[test]
 fn a_named_plugin_runs_with_its_options() {
     let server = TestServer::start();

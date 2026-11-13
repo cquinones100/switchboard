@@ -2681,7 +2681,7 @@ impl Server {
             if action != Action::Extra(crate::extras::Command::PaneNav) {
                 self.count_key(&key.notation());
             }
-            self.act(id, action);
+            self.act(id, action.pressed(crate::settings::is_on("reopen_tab_key")));
             return;
         }
         // Easy mode's Cmd keys reach only a pane that takes them.
@@ -2911,6 +2911,7 @@ impl Server {
             Action::Settings => self.open_mission(id, crate::mission::Opening::Settings),
             Action::RemindTab => self.remind_tab(id, current_tab),
             Action::TabTitle => self.show_tab_title(id, current_tab),
+            Action::ReopenLastTab => self.reopen_last(id),
             Action::View(command) => self.view_command(id, command),
             Action::Diff(command) => self.diff_command(id, command),
             Action::SlackRelay => self.slack_relay(true),

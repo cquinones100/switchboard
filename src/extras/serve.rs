@@ -112,8 +112,14 @@ impl Server {
         {
             return KeyFate::ToPane;
         }
-        // M-T with the tab_title setting off reaches the pane as it is.
-        if matches!(self.bindings.root.get(&key), Some(Action::TabTitle)) && is_off("tab_title") {
+        // M-T showing the title (reopen_tab_key off) with the tab_title
+        // setting off too reaches the pane as it is.
+        let shows_title = self
+            .bindings
+            .root
+            .get(&key)
+            .is_some_and(|a| a.clone().pressed(!is_off("reopen_tab_key")) == Action::TabTitle);
+        if shows_title && is_off("tab_title") {
             return KeyFate::ToPane;
         }
         if let KeyCode::Char(c) = key.code

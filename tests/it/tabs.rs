@@ -214,9 +214,11 @@ fn a_tab_keeps_its_name_after_its_worktree_is_removed_until_it_moves() {
 #[test]
 fn m_shift_t_shows_the_tabs_whole_title_and_its_branch_and_copies_it() {
     let server = TestServer::start();
+    // M-T shows the title with reopen_tab_key off, as it did before it
+    // reopened the last closed tab.
     settings(
         &server,
-        json!({"github": false, "linear": false, "tab_colors_apart": false}),
+        json!({"github": false, "linear": false, "tab_colors_apart": false, "reopen_tab_key": false}),
     );
     let work = server.dir.path().join("shop");
     repo(&work, "feature-x");

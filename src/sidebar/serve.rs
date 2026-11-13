@@ -74,7 +74,7 @@ pub const KEYS: &[(&str, &str)] = &[
         "to the notifications, when there are any, unfolding them",
     ),
     ("t", "new tab running Claude there (M-t)"),
-    ("i", "its full title (M-T)"),
+    ("i", "its full title"),
     ("d L", "its diff, or lazygit, in its pane's place"),
     (
         "v",
