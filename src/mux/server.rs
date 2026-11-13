@@ -391,13 +391,6 @@ pub struct Client {
 }
 
 impl Client {
-    /// Whether the server draws its images in this client's terminal
-    /// (src/ui/images.rs): one that speaks kitty's graphics protocol, with
-    /// the `server_images` setting on.
-    pub fn graphics(&self) -> bool {
-        crate::ui::images::speaks_kitty(&self.term) && crate::settings::is_on("server_images")
-    }
-
     /// Whether the mouse pointer's shape follows what is under it in this
     /// client's terminal (src/ui/pointer.rs): Ghostty or kitty, with the
     /// `hover_highlight` setting on.
@@ -2135,7 +2128,7 @@ impl Server {
         };
         // Its colours, for the panes' programs that ask (src/mux/terminal.rs),
         // the background's for the `system` theme too (src/status).
-        Server::ask_background(&client.tx);
+        Server::ask_background(&client.tx, &client.term);
         self.clients.insert(id, client);
         self.terminal_colors_sync();
         self.size_session_to(id);
@@ -2195,7 +2188,7 @@ impl Server {
             let put_back = crate::status::theme::PUT_COLORS_BACK.to_vec();
             let _ = otx.send(ServerMsg::Output(put_back));
         }
-        Server::ask_background(&otx);
+        Server::ask_background(&otx, &term);
         let client = Client {
             id,
             tx: otx,
@@ -3577,24 +3570,30 @@ impl Server {
             return;
         };
         let mut frame = Frame::new(c.cols.max(1), c.rows.max(1));
-        if c.graphics() {
-            frame.graphics = Some(self.terminal.cell.unwrap_or(super::pane::CELL));
-        }
+        frame.graphics = self.graphics_of(c);
         let session = c.session.clone();
         let (hits, side, header_keys, panes) = match self.session(&c.session) {
             Some(s) => self.compose(&mut frame, s, c),
             None => Default::default(),
         };
-        // With sixel chosen, the pictures' cells as the panes drew them,
-        // before anything is drawn over them (src/mux/sixel).
-        let pictures = self.pictures_drawn(&frame, &panes);
+        // For a terminal the panes' pictures reach as sixel, their cells as
+        // the panes drew them, before anything is drawn over them
+        // (src/mux/sixel).
+        let way = self
+            .clients
+            .get(&id)
+            .map_or(super::graphics::Protocol::Kitty, |c| {
+                super::graphics::for_panes(&c.term)
+            });
+        let pictures = self.pictures_drawn(&frame, &panes, way);
         let c = self.clients.get_mut(&id).expect("checked above");
         frame.cover_links(|frame| c.overlays.draw(frame));
         c.status_hits = hits;
         c.header_keys = header_keys;
         c.dirty = false;
-        // Pictures as sixel where the panes' own placeholders still show,
-        // once everything over the panes is drawn.
+        // Pictures as sixel where their placeholders still show (the
+        // panes' own, and the server's images'), once everything over the
+        // panes is drawn.
         self.place_pictures(&mut frame, pictures);
         let c = self.clients.get_mut(&id).expect("checked above");
         let bytes = c.screen.render(&frame);

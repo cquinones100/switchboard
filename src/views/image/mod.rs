@@ -23,7 +23,8 @@
 //! its path, and the pane is filled with placeholder cells coloured with
 //! the picture's id, which the multiplexer places as text (and, with
 //! Settings' "Image protocol" on sixel, draws the page over as sixel
-//! itself, src/mux/sixel, for Windows Terminal). Two ids take turns, a
+//! itself, src/mux/sixel, for Windows Terminal), the commands written by
+//! src/mux/graphics.rs. Two ids take turns, a
 //! page taking the one the page before it didn't, so every cell changes
 //! from one page to the next and is drawn again. j, k, the arrows,
 //! Space and b page; g and G go to the ends; r draws the page again; q
@@ -42,6 +43,7 @@ use serde_json::{Value, json};
 
 use crate::diff::in_place::IN_PLACE;
 use crate::integrations::{github, linear};
+use crate::mux::graphics;
 use crate::mux::server::{ClientId, Event as ServerEvent, Server};
 use crate::notes::images::{self, Picture};
 use crate::ui::Confirm;
@@ -158,16 +160,6 @@ fn cell() -> (u32, u32) {
     if (w, h) == (8, 16) { (16, 32) } else { (w, h) }
 }
 
-/// A kitty graphics command, wrapped for tmux when the view runs inside it.
-fn graphics(body: &str) -> String {
-    let seq = format!("\x1b_G{body}\x1b\\");
-    if std::env::var_os("TMUX").is_some_and(|t| !t.is_empty()) {
-        format!("\x1bPtmux;{}\x1b\\", seq.replace('\x1b', "\x1b\x1b"))
-    } else {
-        seq
-    }
-}
-
 /// The two ids the pages take turns with: 24 bits each, never 0, and this
 /// view's own, so two views open at once don't take each other's pictures.
 fn ids_for(pid: u32) -> [u32; 2] {
@@ -182,13 +174,9 @@ fn ids_for(pid: u32) -> [u32; 2] {
 pub fn page_bytes(shot: &Shot, cols: u16, id: u32, ids: [u32; 2]) -> String {
     let mut out = String::from("\x1b[H\x1b[2J");
     for old in ids {
-        out.push_str(&graphics(&format!("a=d,d=I,i={old},q=2")));
+        out.push_str(&graphics::take_back(old));
     }
-    out.push_str(&graphics(&format!(
-        "a=T,U=1,f=100,t=f,q=2,i={id},c={cols},r={};{}",
-        shot.rows,
-        util::base64(shot.file.to_string_lossy().as_bytes())
-    )));
+    out.push_str(&graphics::by_path(id, cols, shot.rows, &shot.file));
     out.push_str(&format!(
         "\x1b[38;2;{};{};{}m",
         (id >> 16) & 0xff,
@@ -447,7 +435,7 @@ impl Drop for Screen {
     fn drop(&mut self) {
         let mut out = std::io::stdout();
         for id in self.ids {
-            let _ = out.write_all(graphics(&format!("a=d,d=I,i={id},q=2")).as_bytes());
+            let _ = out.write_all(graphics::take_back(id).as_bytes());
         }
         let _ = out.write_all(b"\x1b[0m\x1b[H\x1b[2J\x1b[?25h\x1b[?1049l");
         let _ = out.flush();
@@ -551,7 +539,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
         resized: None,
         tx: tx.clone(),
     };
-    if let Some(why) = cannot_draw(chrome.is_some() || ready.is_some(), images::terminal_can()) {
+    if let Some(why) = cannot_draw(chrome.is_some() || ready.is_some(), graphics::apps_draw()) {
         app.fail(why);
     } else {
         match cached {

@@ -24,8 +24,8 @@
 //!
 //! Each is drawn as Images' picture atom (`ui::images::raster_picture`, in
 //! a rounded border on the sunken surface) and sent with its data inline,
-//! never a path, through Images' `ImageCache`, so an image is sent once and
-//! again only when its size changes. The view's pane is marked
+//! never a path, through the pipeline's `ImageCache` (src/mux/graphics.rs),
+//! so an image is sent once and again only when its size changes. The view's pane is marked
 //! `@allow_passthrough` while it runs (src/mux/passthrough.rs), and every
 //! line the view writes leaves control characters out
 //! (`markdown::Line::ansi`), so nothing in a PR or ticket can send the
@@ -43,7 +43,8 @@ use image::RgbaImage;
 use super::image::cache::{self, Cache};
 use super::image::render::{self, Renderer};
 use super::markdown::{Images, Placement, Wanted};
-use crate::ui::images::{ImageCache, Placed, Spot, Tones};
+use crate::mux::graphics::ImageCache;
+use crate::ui::images::{Placed, Spot, Tones};
 use crate::{net, photos, settings, util};
 
 /// What a photo's key starts with (`markdown::photo_key`).
@@ -77,8 +78,8 @@ const PHOTO_RETRY: Duration = Duration::from_secs(15 * 60);
 pub fn on() -> bool {
     draws(
         settings::is_on("view_images"),
-        crate::notes::images::terminal_can(),
-        crate::mux::socket::in_pane() && crate::mux::sixel::chosen_now(),
+        crate::mux::graphics::apps_draw(),
+        crate::mux::socket::in_pane() && crate::mux::graphics::sixel_chosen_now(),
     )
 }
 
@@ -626,10 +627,11 @@ impl Pictures {
                     rows,
                     spot: Spot::Placeholders,
                     key: h.finish(),
+                    photo: true,
                     draw: if p.key.starts_with(PHOTO) {
-                        Box::new(move || crate::ui::images::raster_avatar(&img, cols, rows, cell))
+                        Arc::new(move || crate::ui::images::raster_avatar(&img, cols, rows, cell))
                     } else {
-                        Box::new(move || {
+                        Arc::new(move || {
                             crate::ui::images::raster_picture(&img, cols, rows, cell, &tones)
                         })
                     },

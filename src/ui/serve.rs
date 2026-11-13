@@ -361,8 +361,11 @@ impl Server {
         let Some(pane) = pane.or_else(|| client.and_then(|c| self.current_pane(c))) else {
             return Reply::fail("picture: no pane to show it over");
         };
-        let Some(client) = client.filter(|c| self.clients.get(c).is_some_and(|c| c.graphics()))
-        else {
+        let Some(client) = client.filter(|c| {
+            self.clients
+                .get(c)
+                .is_some_and(|c| self.graphics_of(c).is_some())
+        }) else {
             return Reply::fail("picture: this terminal doesn't draw the server's images");
         };
         if self.pane_rect(client, pane).is_none() {

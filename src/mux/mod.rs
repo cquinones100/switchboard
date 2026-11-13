@@ -21,8 +21,11 @@
 //! - `respawn`: a pane's program ended and another started in its place.
 //! - `passthrough`: what one pane may pass to the terminal or take from it
 //!   that others may not: kitty's graphics commands, easy mode's Cmd keys.
-//! - `sixel`: those pictures drawn by the server as sixel, where their
-//!   placeholders show, for a terminal without kitty's (Windows Terminal).
+//! - `graphics`: how every picture reaches a terminal (kitty's protocol,
+//!   sixel or text), decided in one place, and kitty's commands written.
+//! - `sixel`: pictures drawn by the server as sixel, the panes' and its
+//!   own, where their placeholders show, for a terminal without kitty's
+//!   (Windows Terminal).
 //! - `terminal`: what the attached terminal says of itself (its cell's
 //!   size, its colours), which the panes' programs are told when they ask.
 //! - `persist`: the layout saved as it changes and restored on start.
@@ -39,6 +42,7 @@ pub mod client;
 pub mod commands;
 pub mod compose;
 pub mod extkeys;
+pub mod graphics;
 pub mod header;
 pub mod input;
 pub mod keys;

@@ -523,9 +523,9 @@ impl Server {
         let Some(m) = self.mission_mut(client) else {
             return;
         };
-        if m.snap.cell.is_none() {
+        let Some(cell) = m.snap.cell else {
             return;
-        }
+        };
         let Some((text, place)) = super::render::description_beside(m) else {
             return;
         };
@@ -541,7 +541,6 @@ impl Server {
         if sources.is_empty() {
             return;
         }
-        let cell = self.terminal.cell.unwrap_or(crate::mux::pane::CELL);
         let width = super::render::ABOUT_COLS as u32 * cell.0 as u32;
         let tx = self.tx.clone();
         tokio::task::spawn_blocking(move || {
@@ -1188,12 +1187,9 @@ impl Server {
             cell: self
                 .clients
                 .get(&client)
-                .filter(|c| {
-                    // With sixel chosen every placeholder is blanked for the
-                    // panes' pictures (src/mux/sixel), so the text stays.
-                    c.graphics() && settings::is_on("view_images") && !crate::mux::sixel::chosen()
-                })
-                .map(|_| self.terminal.cell.unwrap_or(crate::mux::pane::CELL)),
+                .filter(|_| settings::is_on("view_images"))
+                .and_then(|c| self.graphics_of(c))
+                .map(|g| g.cell),
             diagrams: self.mission.diagrams.ready(crate::status::theme::light()),
             notice_counts: Self::notice_history_on().then(|| {
                 super::history::counts(

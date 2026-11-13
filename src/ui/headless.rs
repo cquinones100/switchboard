@@ -1097,7 +1097,7 @@ mod tests {
         assert_eq!(attached_as(TERM), "xterm-ghostty ghostty truecolor");
         assert_eq!(attached_as("xterm-256color"), "xterm-256color");
         assert!(crate::status::theme::draws_truecolor(&attached_as(TERM)));
-        assert!(crate::ui::images::speaks_kitty(&attached_as(TERM)));
+        assert!(crate::mux::graphics::speaks_kitty(&attached_as(TERM)));
     }
 
     #[test]

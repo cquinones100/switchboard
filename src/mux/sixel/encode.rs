@@ -155,6 +155,13 @@ fn solid(p: &Rgba<u8>) -> bool {
 /// 256 NeuQuant learns from it (255 and a clear one when any pixel is
 /// clear), each pixel its nearest.
 pub fn quantize(image: &RgbaImage) -> Indexed {
+    own_colours(image).unwrap_or_else(|| learned(image))
+}
+
+/// The picture in its own colours, when it has no more than a palette
+/// holds (255 and a clear one when any pixel is clear): quick, where
+/// learning a palette takes a while for a large picture.
+pub fn own_colours(image: &RgbaImage) -> Option<Indexed> {
     let (width, height) = image.dimensions();
     let clear = image.pixels().any(|p| !solid(p)).then_some(255u8);
     let room = if clear.is_some() { 255 } else { 256 };
@@ -173,22 +180,30 @@ pub fn quantize(image: &RgbaImage) -> Indexed {
         own.insert(rgb, palette.len() as u8);
         palette.push(rgb);
     }
-    if few {
-        let pixels = image
-            .pixels()
-            .map(|p| match solid(p) {
-                true => own[&[p[0], p[1], p[2]]],
-                false => 255,
-            })
-            .collect();
-        return Indexed {
-            width,
-            height,
-            palette,
-            pixels,
-            clear,
-        };
+    if !few {
+        return None;
     }
+    let pixels = image
+        .pixels()
+        .map(|p| match solid(p) {
+            true => own[&[p[0], p[1], p[2]]],
+            false => 255,
+        })
+        .collect();
+    Some(Indexed {
+        width,
+        height,
+        palette,
+        pixels,
+        clear,
+    })
+}
+
+/// The picture in a palette NeuQuant learns from it.
+fn learned(image: &RgbaImage) -> Indexed {
+    let (width, height) = image.dimensions();
+    let clear = image.pixels().any(|p| !solid(p)).then_some(255u8);
+    let room = if clear.is_some() { 255 } else { 256 };
     let samples: Vec<u8> = image
         .pixels()
         .filter(|p| solid(p))

@@ -605,7 +605,7 @@ mod tests {
     fn the_state_lane_and_the_context_are_images_where_the_terminal_draws_them() {
         let m = model();
         let mut frame = Frame::new(112, ROWS);
-        frame.graphics = Some((8, 16));
+        frame.graphics = Some(crate::mux::graphics::Graphics::kitty((8, 16)));
         draw_timeline(
             &mut frame,
             Rect::new(0, 0, 112, ROWS),

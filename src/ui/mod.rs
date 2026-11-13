@@ -495,9 +495,9 @@ const KEPT_BEHIND: f32 = 0.45;
 /// which stays apart from the shades of a row under the mouse and the
 /// chosen one, so both still show on it) where it drew no background of
 /// its own. Its shadow is drawn after (`images::shadow`, a soft image under
-/// the text where the terminal draws them and half blocks where it doesn't;
-/// `images::shadow_cells` in the notes app, which draws into a buffer of
-/// its own).
+/// the text where the terminal draws one there, by kitty's protocol, and
+/// half blocks where it doesn't, sixel among them; `images::shadow_cells`
+/// in the notes app, which draws into a buffer of its own).
 ///
 /// A color is dimmed by mixing it toward the background. The terminal's
 /// own colors (its default and the 16 its theme names) can't be mixed by
@@ -630,7 +630,7 @@ mod tests {
     #[test]
     fn with_graphics_a_box_s_shadow_is_an_image_and_placeholders_keep_their_id() {
         let mut f = frame_behind(20, 8);
-        f.graphics = Some((8, 16));
+        f.graphics = Some(crate::mux::graphics::Graphics::kitty((8, 16)));
         f.buf[(1, 6)].set_symbol(&images::PLACEHOLDER.to_string());
         let id = f.buf[(1, 6)].fg;
         let outer = Rect::new(5, 2, 8, 3);
@@ -651,7 +651,7 @@ mod tests {
             });
         }
         let mut f = frame_behind(60, 12);
-        f.graphics = Some((8, 16));
+        f.graphics = Some(crate::mux::graphics::Graphics::kitty((8, 16)));
         stack.draw(&mut f);
         assert_eq!(f.images.len(), 1);
     }

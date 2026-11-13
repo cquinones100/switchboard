@@ -1,29 +1,38 @@
 //! Pictures as sixel, for a terminal that draws sixel but not kitty's
 //! graphics protocol: Windows Terminal (1.22 and later), and the rest of
 //! the VT340's heirs (foot, WezTerm, xterm with sixel on, mlterm). Settings'
-//! "Image protocol" (`image_protocol`) chooses: `kitty`, the default, passes
-//! a pane's graphics commands on to the terminal as before
-//! (src/mux/passthrough.rs); `sixel` keeps them here and draws each
-//! picture itself.
+//! "Image protocol" (`image_protocol`) chooses, as src/mux/graphics.rs
+//! reads it: `kitty`, the default, passes a pane's graphics commands on to
+//! the terminal (src/mux/passthrough.rs) and sends the server's own images
+//! by kitty's protocol; `sixel` keeps the panes' commands here too and,
+//! for each terminal that doesn't speak kitty's, draws every picture
+//! itself, the panes' and the server's alike.
 //!
 //! The apps stay as they are. Notes and the image view give the terminal
 //! each picture's PNG by its path as a kitty virtual placement and write
 //! its placeholder cells (src/notes/images.rs), which the panes' emulators
-//! keep as text; with sixel chosen, `images::terminal_can` lets them draw
+//! keep as text; with sixel chosen, `graphics::apps_draw` lets them draw
 //! inside the workspace whatever the terminal is called. The server reads
 //! the commands from the panes allowed to send them, as before, and keeps
 //! what each image is (`kitty`: its path and placement), forgetting it as
-//! they delete it, never forwarding them. As each frame is composed, the
-//! placeholder cells those panes drew are noted before anything is drawn
+//! they delete it, never forwarding them. The server's own images (src/ui/
+//! images.rs: the image atoms, board 6's lane and chart, mission control's
+//! diagrams and Slack pictures, the picture shown full size) write their
+//! placeholder cells into the frame as they are drawn and add themselves
+//! to its `images`, as they do for kitty. As each frame is composed, the
+//! placeholder cells the panes drew are noted before anything is drawn
 //! over them, and after everything is, every placeholder cell in the
-//! frame is blanked and those still as their pane drew them are gathered
+//! frame is blanked, and those still as their pane drew them, and those
+//! naming one of the frame's own images wherever they are, are gathered
 //! into pieces of one picture each (`place`), and each piece is drawn as
 //! sixel beside the frame's cells (`compose::Frame::pictures`, as the
 //! hyperlinks ride beside them), which `compose::Screen` writes over its
 //! cells, so a picture is placed, scrolled, cut off and covered exactly as
-//! its placeholders are, and a copy of them (UX 2.0's mission control
+//! its placeholders are, and a copy of a pane's (UX 2.0's mission control
 //! cards show each tab's last lines, a peek a tab's screen) is never
-//! taken for the picture.
+//! taken for the picture. The shadow under a box is the one image that
+//! goes under the text, which a sixel can't, so with sixel the frame asks
+//! for its text form instead (`images::shadow`).
 //!
 //! UX 2.0 (`ux2`) changes where panes are, not how: its header's rows are
 //! above the panes, so a picture scrolled up out of a pane is cut at the
@@ -35,11 +44,21 @@
 //! Nothing on the drawing path waits: a picture's file is looked at (its
 //! time and length) and read, fitted, quantised and encoded (`encode`) off
 //! the server's task, the answer coming back as `SixelEvent`, and its cells
-//! stay blank until then. The fitted picture and each piece's sixel are
-//! kept, each cache held to a size (`Lru`), the piece's under its file's
-//! path, time and length, its placement, the part of it shown and the
-//! cell's size, so a piece shown again (a page turned back to, a box
-//! closed) is drawn at once, and one cut anew (a scroll) only encoded. A
+//! stay blank until then. One of the server's own images is rastered at
+//! the cell its frame was drawn for and taken as it is, no fitting; one no
+//! larger than `AT_ONCE_PIXELS` that is a drawing whose colours fit a
+//! palette as they are (a switch, a meter, a chart) is rastered and encoded
+//! on the task as the frame is drawn, as kitty's are sent, so one that
+//! changes shows changed with no blank frame between; a photo (`Placed::
+//! photo`: an avatar, a Slack picture), whose palette takes a while to
+//! learn, and a larger one (a picture shown full size), are drawn off it,
+//! and only a piece cut anew from one fitted before is encoded on it.
+//! The fitted picture and each piece's sixel are kept, each cache held to
+//! a size (`Lru`), the piece's under what it is drawn from (a pane's
+//! file's path, time and length and its placement, or a server image's
+//! key and size), the part of it shown and the cell's size, so a piece
+//! shown again (a page turned back to, a box closed) is drawn at once, and
+//! one cut anew (a scroll) only encoded. A
 //! picture given again (Notes gives its pictures again as it gets the
 //! focus) is drawn by what its file was when last looked at until it has
 //! been looked at again, so it doesn't blink, and a file changed since is
@@ -62,7 +81,8 @@
 //!
 //! What a pane's program gave is part of what `switchboard upgrade` hands
 //! the new build (src/mux/upgrade.rs), since a program gives a picture
-//! once; the caches are made again.
+//! once; the caches are made again, and the server's own images are
+//! described anew with every frame.
 
 pub mod encode;
 pub mod kitty;
@@ -77,8 +97,10 @@ use std::time::UNIX_EPOCH;
 use ratatui::layout::Rect;
 
 use super::compose::{Frame, Placed};
+use super::graphics::{self, Protocol};
 use super::server::{Event, Server};
 use super::{PaneId, TabId};
+use crate::ui::images::{Draw, Spot};
 use encode::Fitted;
 use kitty::Look;
 
@@ -99,25 +121,32 @@ const AT_ONCE: usize = 4;
 /// whole screen wide, could be tens of megabytes): one longer isn't drawn.
 const MOST_BYTES: usize = 8 << 20;
 
-/// Whether pictures are drawn as sixel (Settings' `image_protocol`), from
-/// the settings as the server last read them.
-pub fn chosen() -> bool {
-    crate::settings::cached("image_protocol").is_some_and(|v| v == "sixel")
+/// The server's own images no larger than this many pixels whole, and of
+/// no more colours than a palette holds, are drawn on the server's task as
+/// the frame is (a switch, a meter, a chart), so one that changes is drawn
+/// changed in the same frame, as kitty's are sent; others off it.
+const AT_ONCE_PIXELS: u32 = 160_000;
+
+/// What a picture is drawn from.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Source {
+    /// A pane's: its file as looked at, and its placement's columns and
+    /// rows as given.
+    File {
+        path: PathBuf,
+        look: Look,
+        given: (Option<u16>, Option<u16>),
+    },
+    /// One of the server's own images (src/ui/images.rs): its key, made of
+    /// everything it is drawn from, and its size in cells.
+    Server { key: u64, cols: u16, rows: u16 },
 }
 
-/// The same from the settings file as it is now, for a program that reads
-/// them once (Notes, the image view).
-pub fn chosen_now() -> bool {
-    crate::settings::setting("image_protocol").is_some_and(|v| v == "sixel")
-}
-
-/// A fitted picture's name: its file as looked at, its placement's columns
-/// and rows as given, and the cell's size in pixels.
+/// A fitted picture's name: what it is drawn from, and the cell's size in
+/// pixels.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Fit {
-    pub path: PathBuf,
-    pub look: Look,
-    pub given: (Option<u16>, Option<u16>),
+    pub source: Source,
     pub cell: (u16, u16),
 }
 
@@ -138,23 +167,20 @@ impl Key {
     }
 }
 
-/// Draws a piece, off the server's task: its picture read and fitted,
-/// unless `fitted` has it, and its part encoded, a whole number of sixel
-/// bands tall (encode.rs says why). Its height is cut down to that, so a
-/// piece loses up to 4 pixel rows at its foot (with Windows Terminal's
-/// 20-pixel cell, 2 for a piece one row tall, 4 for two, none for three):
-/// a picture whole loses a sliver of its bottom edge, and one a box cuts
-/// into pieces a row tall a sliver under each row, less than a band
-/// reaching into the row below would cover.
-pub fn draw(key: &Key, fitted: Option<Arc<Fitted>>) -> Result<(Arc<[u8]>, Arc<Fitted>), Failure> {
+/// Draws a piece, off the server's task or, for a small one of the
+/// server's own, on it: its picture read and fitted (a pane's) or rastered
+/// (`raster`, the server's), unless `fitted` has it, and its part encoded,
+/// a whole number of sixel bands tall (encode.rs says why). Its height is
+/// cut down to that, so a piece loses up to 4 pixel rows at its foot (with
+/// Windows Terminal's 20-pixel cell, 2 for a piece one row tall, 4 for
+/// two, none for three): a picture whole loses a sliver of its bottom
+/// edge, and one a box cuts into pieces a row tall a sliver under each
+/// row, less than a band reaching into the row below would cover.
+pub fn draw(key: &Key, fitted: Option<Arc<Fitted>>, raster: Option<&Draw>) -> Made {
     let cell = (key.fit.cell.0.max(1) as u32, key.fit.cell.1.max(1) as u32);
     let fitted = match fitted {
         Some(f) => f,
-        None => {
-            let image = encode::read_png(&key.fit.path).map_err(Failure::Picture)?;
-            let cells = encode::cells_of(key.fit.given, image.dimensions(), cell);
-            Arc::new(encode::prepare(&image, cells, cell).map_err(Failure::Picture)?)
-        }
+        None => Arc::new(fit(&key.fit.source, cell, raster)?),
     };
     let (col, row, cols, rows) = key.crop;
     let height = rows as u32 * cell.1;
@@ -178,6 +204,71 @@ pub fn draw(key: &Key, fitted: Option<Arc<Fitted>>) -> Result<(Arc<[u8]>, Arc<Fi
     Ok((sixel.into(), fitted))
 }
 
+/// A picture made ready to cut pieces from: a pane's read from its file and
+/// fitted into its placement, or one of the server's rastered at its cells
+/// and taken as it is.
+fn fit(source: &Source, cell: (u32, u32), raster: Option<&Draw>) -> Result<Fitted, Failure> {
+    match source {
+        Source::File { path, given, .. } => {
+            let image = encode::read_png(path).map_err(Failure::Picture)?;
+            let cells = encode::cells_of(*given, image.dimensions(), cell);
+            encode::prepare(&image, cells, cell).map_err(Failure::Picture)
+        }
+        Source::Server { cols, rows, .. } => {
+            let raster = raster.ok_or_else(|| Failure::Picture("nothing to raster".into()))?;
+            let size = (*cols as u32 * cell.0, *rows as u32 * cell.1);
+            if size.0 > encode::MOST || size.1 > encode::MOST {
+                return Err(Failure::Picture(format!(
+                    "an image of {}x{} pixels is too large",
+                    size.0, size.1
+                )));
+            }
+            Ok(Fitted {
+                picture: encode::quantize(&crate::ui::images::rgba(&raster())),
+                at: (0, 0),
+                size,
+            })
+        }
+    }
+}
+
+/// A piece of one of the server's own small drawings rastered and drawn on
+/// the task, when its colours fit a palette as they are (a switch, a
+/// meter, a chart: a few colours and their edges' transparency); `None`
+/// when they don't, since learning a palette takes a while.
+fn draw_at_once(key: &Key, raster: &Draw) -> Option<Made> {
+    let Source::Server { cols, rows, .. } = key.fit.source else {
+        return None;
+    };
+    let picture = encode::own_colours(&crate::ui::images::rgba(&raster()))?;
+    let size = (
+        cols as u32 * key.fit.cell.0 as u32,
+        rows as u32 * key.fit.cell.1 as u32,
+    );
+    let fitted = Fitted {
+        picture,
+        at: (0, 0),
+        size,
+    };
+    Some(draw(key, Some(Arc::new(fitted)), None))
+}
+
+/// Whether a picture is small enough to draw on the server's task: one of
+/// the server's own of no more than `AT_ONCE_PIXELS`.
+fn small(fit: &Fit) -> bool {
+    match fit.source {
+        Source::Server { cols, rows, .. } => {
+            (cols as u32 * fit.cell.0 as u32).saturating_mul(rows as u32 * fit.cell.1 as u32)
+                <= AT_ONCE_PIXELS
+        }
+        Source::File { .. } => false,
+    }
+}
+
+/// A piece drawn, its sixel and the picture fitted for it, or why it
+/// couldn't be.
+pub type Made = Result<(Arc<[u8]>, Arc<Fitted>), Failure>;
+
 /// Why a piece couldn't be drawn: its picture (not a PNG, gone), which no
 /// other piece of it can be drawn from either, or the piece alone (too
 /// large to send), when a smaller piece of the same picture still can be.
@@ -199,10 +290,7 @@ pub enum SixelEvent {
         look: Look,
     },
     /// A piece drawn, or why it couldn't be.
-    Drawn {
-        key: Key,
-        made: Result<(Arc<[u8]>, Arc<Fitted>), Failure>,
-    },
+    Drawn { key: Key, made: Made },
 }
 
 /// A cache held to a number of bytes, the entry used longest ago going
@@ -274,6 +362,9 @@ pub struct Sixel {
     /// Pieces too large to draw, not tried again while their picture and
     /// crop stay the same; the picture's other pieces still are.
     failed_pieces: HashSet<Key>,
+    /// The server's drawings found to have more colours than a palette
+    /// holds, drawn off the task from then on rather than rastered on it.
+    many_colours: HashSet<Fit>,
     /// Transmissions counted, newest highest.
     serial: u64,
     /// Whether sixel was chosen when last looked, so a change draws every
@@ -293,6 +384,7 @@ impl Default for Sixel {
             looks: HashMap::new(),
             failed: HashSet::new(),
             failed_pieces: HashSet::new(),
+            many_colours: HashSet::new(),
             serial: 0,
             on: false,
         }
@@ -303,7 +395,7 @@ impl Sixel {
     /// As a server starts, with the setting as it is.
     pub fn new() -> Sixel {
         Sixel {
-            on: chosen(),
+            on: graphics::sixel_chosen(),
             ..Sixel::default()
         }
     }
@@ -346,8 +438,9 @@ impl Server {
     }
 
     /// Graphics commands from a pane allowed to send them: what they give
-    /// kept, and the commands passed on to the terminal unless sixel is
-    /// chosen, when the server draws the pictures itself.
+    /// kept, and the commands passed on to the terminals that take them
+    /// (src/mux/graphics.rs), the server drawing the pictures itself as
+    /// sixel for the rest.
     pub(super) fn take_graphics(&mut self, pane: PaneId, tab: TabId, commands: Vec<Vec<u8>>) {
         if commands.is_empty() {
             return;
@@ -364,9 +457,7 @@ impl Server {
                 self.sixel.images.remove(&pane);
             }
         }
-        if !chosen() {
-            self.pass_graphics(tab, commands);
-        }
+        self.pass_graphics(tab, commands);
     }
 
     /// A pane's program may no longer give pictures, or has gone: what it
@@ -376,15 +467,17 @@ impl Server {
     }
 
     /// Once the panes are drawn (`panes`, each drawn and its area on the
-    /// screen) and before anything is drawn over them, while sixel is
-    /// chosen: the placeholder cells drawn by the panes allowed to send
-    /// pictures, as they drew them (`place::Drawn`).
+    /// screen) and before anything is drawn over them, for a terminal that
+    /// gets the panes' pictures as sixel (`way`): the placeholder cells
+    /// drawn by the panes allowed to send pictures, as they drew them
+    /// (`place::Drawn`).
     pub(super) fn pictures_drawn(
         &self,
         frame: &Frame,
         panes: &[(PaneId, Rect)],
+        way: Protocol,
     ) -> Option<place::Drawn> {
-        if !chosen() {
+        if way != Protocol::Sixel {
             return None;
         }
         let allowed = panes
@@ -401,67 +494,139 @@ impl Server {
 
     /// The pictures a frame shows, while sixel is chosen, once everything
     /// is drawn: every placeholder cell in it blanked, and each piece of a
-    /// picture still showing in its pane as the pane drew it (`drawn`,
-    /// from `pictures_drawn`) put beside the frame's cells when ready; one
-    /// not ready yet is looked at or drawn off the task.
+    /// picture still showing put beside the frame's cells when ready: a
+    /// pane's where the pane drew it (`drawn`, from `pictures_drawn`), and
+    /// one of the server's own images (the frame's `images`, which with
+    /// sixel are drawn here rather than sent) wherever its cells still
+    /// show. One not ready yet is looked at or drawn off the task, or, one
+    /// of the server's small enough, drawn now.
     pub(super) fn place_pictures(&mut self, frame: &mut Frame, drawn: Option<place::Drawn>) {
         let Some(drawn) = drawn else {
             return;
         };
+        // The server's images, by id, where this frame draws them as sixel.
+        let by_sixel = frame
+            .graphics
+            .filter(|g| g.protocol == Protocol::Sixel)
+            .map(|g| g.cell);
+        let mut own: HashMap<u32, crate::ui::images::Placed> = HashMap::new();
+        if by_sixel.is_some() {
+            for image in std::mem::take(&mut frame.images) {
+                if image.spot == Spot::Placeholders {
+                    own.entry(image.id).or_insert(image);
+                }
+            }
+        }
+        let ids: HashSet<u32> = own.keys().copied().collect();
         let bottom = frame.area().bottom().saturating_sub(1);
-        let pieces = place::find(&mut frame.buf, &drawn, bottom);
+        let pieces = place::find(&mut frame.buf, &drawn, &ids, bottom);
         if pieces.is_empty() {
             return;
         }
         let cell = self.picture_cell();
         for piece in pieces {
-            let Some(image) = self
-                .sixel
-                .images
-                .get(&piece.pane)
-                .and_then(|m| m.get(piece.id))
-                .filter(|i| i.placed)
-            else {
-                continue;
-            };
-            let (path, serial, given, look) = (
-                image.path.clone(),
-                image.serial,
-                (image.cols, image.rows),
-                image.look.clone(),
-            );
-            let look = match look {
-                // Not looked at since it was given: looked at now, and
-                // drawn meanwhile as its file was when last looked at.
-                Look::Unknown => {
-                    let before = self.sixel.looks.get(&path).cloned();
-                    self.look_at(piece.pane, piece.id, serial, path.clone());
-                    before.unwrap_or(Look::Unknown)
+            let crop = (piece.col, piece.row, piece.area.width, piece.area.height);
+            let (key, raster, photo) = match piece.pane {
+                Some(pane) => match self.pane_fit(pane, piece.id, cell) {
+                    Some(fit) => (Key { fit, crop }, None, true),
+                    None => continue,
+                },
+                None => {
+                    let (Some(image), Some(cell)) = (own.get(&piece.id), by_sixel) else {
+                        continue;
+                    };
+                    let source = Source::Server {
+                        key: image.key,
+                        cols: image.cols,
+                        rows: image.rows,
+                    };
+                    let fit = Fit { source, cell };
+                    (Key { fit, crop }, Some(image.draw.clone()), image.photo)
                 }
-                look => look,
             };
-            let fit = Fit {
-                path,
-                look,
-                given,
-                cell,
-            };
-            if !matches!(fit.look, Look::File { .. }) {
-                continue;
-            }
-            let key = Key {
-                fit,
-                crop: (piece.col, piece.row, piece.area.width, piece.area.height),
-            };
-            match self.sixel.encoded.get(&key) {
-                Some(sixel) => frame.pictures.push(Placed {
+            if let Some(sixel) = self.sixel.encoded.get(&key) {
+                frame.pictures.push(Placed {
                     area: piece.area,
                     key: key.number(),
                     sixel,
-                }),
-                None => self.draw_piece(key),
+                });
+                continue;
+            }
+            match raster {
+                Some(raster) if small(&key.fit) => {
+                    if self.sixel.failed.contains(&key.fit)
+                        || self.sixel.failed_pieces.contains(&key)
+                        || self.sixel.drawing.contains(&key)
+                        || self.sixel.fitting.contains(&key.fit)
+                    {
+                        continue;
+                    }
+                    // Encoded now from the picture fitted before; else, a
+                    // drawing of a few colours rastered now; a photo, or a
+                    // drawing found to have more colours than a palette
+                    // holds, whose palette takes a while to learn, off the
+                    // task, never rastered here first.
+                    let at_once = match self.sixel.fitted.get(&key.fit) {
+                        Some(fitted) => Some(draw(&key, Some(fitted), None)),
+                        None if photo || self.sixel.many_colours.contains(&key.fit) => None,
+                        None => {
+                            let drawn = draw_at_once(&key, &raster);
+                            if drawn.is_none() {
+                                if self.sixel.many_colours.len() >= 256 {
+                                    self.sixel.many_colours.clear();
+                                }
+                                self.sixel.many_colours.insert(key.fit.clone());
+                            }
+                            drawn
+                        }
+                    };
+                    match at_once {
+                        Some(made) => {
+                            if let Ok((sixel, _)) = &made {
+                                frame.pictures.push(Placed {
+                                    area: piece.area,
+                                    key: key.number(),
+                                    sixel: sixel.clone(),
+                                });
+                            }
+                            self.keep_drawn(key, made);
+                        }
+                        None => self.draw_piece(key, Some(raster)),
+                    }
+                }
+                raster => self.draw_piece(key, raster),
             }
         }
+    }
+
+    /// What a pane's picture is drawn from, while its image is placed and
+    /// its file known to be one: looked at when it hasn't been since it was
+    /// given, and drawn meanwhile as its file was when last looked at.
+    fn pane_fit(&mut self, pane: PaneId, id: u32, cell: (u16, u16)) -> Option<Fit> {
+        let image = self
+            .sixel
+            .images
+            .get(&pane)
+            .and_then(|m| m.get(id))
+            .filter(|i| i.placed)?;
+        let (path, serial, given, look) = (
+            image.path.clone(),
+            image.serial,
+            (image.cols, image.rows),
+            image.look.clone(),
+        );
+        let look = match look {
+            Look::Unknown => {
+                let before = self.sixel.looks.get(&path).cloned();
+                self.look_at(pane, id, serial, path.clone());
+                before.unwrap_or(Look::Unknown)
+            }
+            look => look,
+        };
+        matches!(look, Look::File { .. }).then_some(Fit {
+            source: Source::File { path, look, given },
+            cell,
+        })
     }
 
     /// Looks at an image's file off the task: its time and length, or that
@@ -498,7 +663,8 @@ impl Server {
     /// Draws a piece off the task, unless it is being drawn, its picture
     /// failed, or as many as are drawn at once are under way; a picture
     /// being fitted for another piece is waited for, and fitted once.
-    fn draw_piece(&mut self, key: Key) {
+    /// `raster` draws one of the server's own images.
+    fn draw_piece(&mut self, key: Key, raster: Option<Draw>) {
         if tokio::runtime::Handle::try_current().is_err()
             || self.sixel.drawing.len() >= AT_ONCE
             || self.sixel.drawing.contains(&key)
@@ -514,9 +680,35 @@ impl Server {
         self.sixel.drawing.insert(key.clone());
         let tx = self.tx.clone();
         tokio::task::spawn_blocking(move || {
-            let made = draw(&key, fitted);
+            let made = draw(&key, fitted, raster.as_ref());
             let _ = tx.send(Event::Sixel(SixelEvent::Drawn { key, made }));
         });
+    }
+
+    /// A piece drawn kept, or why it couldn't be, so it isn't tried again.
+    fn keep_drawn(&mut self, key: Key, made: Made) {
+        match made {
+            Ok((sixel, fitted)) => {
+                let bytes = fitted.bytes();
+                self.sixel.fitted.insert(key.fit.clone(), fitted, bytes);
+                let bytes = sixel.len();
+                self.sixel.encoded.insert(key, sixel, bytes);
+            }
+            Err(Failure::Picture(e)) => {
+                eprintln!("switchboard server: a picture couldn't be drawn as sixel: {e}");
+                if self.sixel.failed.len() >= 256 {
+                    self.sixel.failed.clear();
+                }
+                self.sixel.failed.insert(key.fit);
+            }
+            Err(Failure::Piece(e)) => {
+                eprintln!("switchboard server: a picture couldn't be drawn as sixel: {e}");
+                if self.sixel.failed_pieces.len() >= 256 {
+                    self.sixel.failed_pieces.clear();
+                }
+                self.sixel.failed_pieces.insert(key);
+            }
+        }
     }
 
     pub fn sixel_event(&mut self, event: SixelEvent) {
@@ -547,28 +739,7 @@ impl Server {
             SixelEvent::Drawn { key, made } => {
                 self.sixel.drawing.remove(&key);
                 self.sixel.fitting.remove(&key.fit);
-                match made {
-                    Ok((sixel, fitted)) => {
-                        let bytes = fitted.bytes();
-                        self.sixel.fitted.insert(key.fit.clone(), fitted, bytes);
-                        let bytes = sixel.len();
-                        self.sixel.encoded.insert(key, sixel, bytes);
-                    }
-                    Err(Failure::Picture(e)) => {
-                        eprintln!("switchboard server: a picture couldn't be drawn as sixel: {e}");
-                        if self.sixel.failed.len() >= 256 {
-                            self.sixel.failed.clear();
-                        }
-                        self.sixel.failed.insert(key.fit);
-                    }
-                    Err(Failure::Piece(e)) => {
-                        eprintln!("switchboard server: a picture couldn't be drawn as sixel: {e}");
-                        if self.sixel.failed_pieces.len() >= 256 {
-                            self.sixel.failed_pieces.clear();
-                        }
-                        self.sixel.failed_pieces.insert(key);
-                    }
-                }
+                self.keep_drawn(key, made);
             }
         }
         for c in self.clients.values_mut() {
@@ -579,11 +750,11 @@ impl Server {
     /// Each tick: the images of panes gone forgotten, and, when the
     /// setting has changed, every screen drawn again whole (taking away
     /// the pictures of the protocol before) and, for sixel, each terminal
-    /// asked for its cell.
+    /// that gets it asked for its cell.
     pub(super) fn sixel_tick(&mut self) {
         let panes = &self.panes;
         self.sixel.images.retain(|pane, _| panes.contains_key(pane));
-        let on = chosen();
+        let on = graphics::sixel_chosen();
         if on == self.sixel.on {
             return;
         }
@@ -591,7 +762,7 @@ impl Server {
         for c in self.clients.values_mut() {
             c.screen.invalidate();
             c.dirty = true;
-            if on {
+            if graphics::for_panes(&c.term) == Protocol::Sixel {
                 let _ =
                     c.tx.send(super::proto::ServerMsg::Output(CELL_QUERY.to_vec()));
             }
@@ -633,17 +804,19 @@ mod tests {
             .unwrap();
         let key = Key {
             fit: Fit {
-                path: png.clone(),
-                look: Look::File {
-                    modified: 1,
-                    len: 1,
+                source: Source::File {
+                    path: png.clone(),
+                    look: Look::File {
+                        modified: 1,
+                        len: 1,
+                    },
+                    given: (Some(4), Some(2)),
                 },
-                given: (Some(4), Some(2)),
                 cell: (10, 20),
             },
             crop: (1, 1, 2, 1),
         };
-        let (sixel, fitted) = draw(&key, None).unwrap();
+        let (sixel, fitted) = draw(&key, None, None).unwrap();
         let (w, h, pixels) = encode::tests::decode(&sixel);
         assert_eq!(
             (w, h),
@@ -657,7 +830,7 @@ mod tests {
             crop: (0, 0, 4, 2),
             ..key.clone()
         };
-        let (sixel, _) = draw(&other, Some(fitted.clone())).unwrap();
+        let (sixel, _) = draw(&other, Some(fitted.clone()), None).unwrap();
         assert_eq!(encode::tests::decode(&sixel).0, 40);
         let too_wide = Key {
             crop: (0, 0, 2000, 1),
@@ -665,16 +838,106 @@ mod tests {
         };
         assert!(
             matches!(
-                draw(&too_wide, Some(fitted.clone())),
+                draw(&too_wide, Some(fitted.clone()), None),
                 Err(Failure::Piece(_))
             ),
             "the piece alone, not its picture"
         );
         assert!(
-            matches!(draw(&key, None), Err(Failure::Picture(_))),
+            matches!(draw(&key, None, None), Err(Failure::Picture(_))),
             "the file gone, none to read"
         );
         assert_ne!(key.number(), other.number());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn one_of_the_server_s_images_is_drawn_from_its_raster_at_its_cells() {
+        // A switch, on: four cells by one, its track in the done tone on
+        // the right, the rest of its row clear.
+        let tones = crate::ui::images::Tones::now();
+        let raster: Draw =
+            Arc::new(move || crate::ui::images::raster_switch(true, (10, 20), &tones));
+        let fit = Fit {
+            source: Source::Server {
+                key: 7,
+                cols: 4,
+                rows: 1,
+            },
+            cell: (10, 20),
+        };
+        assert!(small(&fit), "a switch is drawn as the frame is");
+        let whole = Key {
+            fit: fit.clone(),
+            crop: (0, 0, 4, 1),
+        };
+        let (sixel, fitted) = draw(&whole, None, Some(&raster)).unwrap();
+        let (w, h, pixels) = encode::tests::decode(&sixel);
+        assert_eq!((w, h), (40, 18), "its cells, made whole bands");
+        // Sixel gives colors in percent, so they come back near, not same.
+        let done = crate::ui::images::rgb(tones.done);
+        let near = |p: &[u8; 3]| (0..3).all(|i| p[i].abs_diff(done[i]) <= 3);
+        assert!(pixels.iter().flatten().any(near), "its track drawn");
+        assert_eq!(pixels[0], None, "its corner clear");
+        // Its right half alone, from the picture fitted once.
+        let half = Key {
+            fit: fit.clone(),
+            crop: (2, 0, 2, 1),
+        };
+        let (sixel, _) = draw(&half, Some(fitted), None).unwrap();
+        assert_eq!(encode::tests::decode(&sixel).0, 20);
+        // Nothing to raster it with, nothing drawn.
+        assert!(matches!(draw(&whole, None, None), Err(Failure::Picture(_))));
+        // A picture larger than drawing at once allows, as the picture
+        // shown full size is.
+        let large = Fit {
+            source: Source::Server {
+                key: 8,
+                cols: 200,
+                rows: 50,
+            },
+            cell: (10, 20),
+        };
+        assert!(!small(&large));
+    }
+
+    #[test]
+    fn a_small_image_of_few_colours_is_drawn_at_once_and_a_photo_is_not() {
+        let fit = |key| Fit {
+            source: Source::Server {
+                key,
+                cols: 4,
+                rows: 2,
+            },
+            cell: (10, 20),
+        };
+        let whole = |key| Key {
+            fit: fit(key),
+            crop: (0, 0, 4, 2),
+        };
+        let tones = crate::ui::images::Tones::now();
+        let switch: Draw =
+            Arc::new(move || crate::ui::images::raster_switch(true, (10, 20), &tones));
+        let (sixel, fitted) = draw_at_once(&whole(1), &switch)
+            .expect("drawn at once")
+            .unwrap();
+        assert!(encode::tests::decode(&sixel).0 == 40);
+        // A photo's thousands of colours wait for a palette off the task.
+        let photo: Draw = Arc::new(|| {
+            let mut pm = tiny_skia::Pixmap::new(40, 40).unwrap();
+            for (i, p) in pm.pixels_mut().iter_mut().enumerate() {
+                let (x, y) = ((i % 40) as u8, (i / 40) as u8);
+                *p = tiny_skia::ColorU8::from_rgba(x * 6, y * 6, x ^ y, 255).premultiply();
+            }
+            pm
+        });
+        assert!(draw_at_once(&whole(2), &photo).is_none());
+        // Once fitted, a piece of it is only encoded.
+        let half = Key {
+            fit: fit(1),
+            crop: (0, 0, 2, 1),
+        };
+        let (sixel, _) = draw(&half, Some(fitted), None).unwrap();
+        assert_eq!(encode::tests::decode(&sixel).0, 20);
     }
 }

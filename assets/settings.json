@@ -646,7 +646,7 @@
     "key": "picture_full_size",
     "category": "Notes",
     "label": "Enter shows a picture full size",
-    "description": "Enter or a click on a note's picture shows it full size over the notes pane, as it does a picture or diagram under the cursor in the PR, ticket, link and file views, drawn by the workspace in a terminal that speaks the kitty graphics protocol (Ghostty, kitty) with \"Images in the workspace\" on, Esc going back; off, or where the terminal can't, it opens in Quick Look or the desktop's image viewer",
+    "description": "Enter or a click on a note's picture shows it full size over the notes pane, as it does a picture or diagram under the cursor in the PR, ticket, link and file views, drawn by the workspace in a terminal that speaks the kitty graphics protocol (Ghostty, kitty), or as sixel with \"Image protocol\" on sixel, with \"Images in the workspace\" on, Esc going back; off, or where the terminal can't, it opens in Quick Look or the desktop's image viewer",
     "default": true
   },
   {
@@ -852,7 +852,7 @@
     "key": "server_images",
     "category": "Appearance",
     "label": "Images in the workspace",
-    "description": "Draws avatars, pictures, meters, charts and the shadow under boxes as images where the terminal can show them (Ghostty, kitty). Off, they are drawn with characters",
+    "description": "Draws avatars, pictures, meters, charts and the shadow under boxes as images where the terminal can show them: by kitty's graphics protocol (Ghostty, kitty), or as sixel with Image protocol on sixel, the shadow there staying half blocks, since a sixel can't sit under text. Off, they are drawn with characters",
     "default": true
   },
   {
@@ -873,7 +873,7 @@
     "key": "view_images",
     "category": "Appearance",
     "label": "Pictures and diagrams in the views",
-    "description": "Draws the pictures on lines of their own and the Mermaid diagrams in the PR, ticket, link and file views as images where the terminal can show them (Ghostty, kitty), fetching the pictures and drawing the diagrams with Mermaid in Chrome, and draws the diagrams of the description beside mission control's PR and ticket boards the same way (with \"Images in the workspace\" on too). Off, a picture is its name and a diagram is drawn with characters",
+    "description": "Draws the pictures on lines of their own and the Mermaid diagrams in the PR, ticket, link and file views as images where the terminal can show them (Ghostty, kitty), fetching the pictures and drawing the diagrams with Mermaid in Chrome, and draws the diagrams of the description beside mission control's PR and ticket boards the same way, as sixel too with \"Image protocol\" on sixel (with \"Images in the workspace\" on too). Off, a picture is its name and a diagram is drawn with characters",
     "default": true
   },
   {
@@ -915,7 +915,7 @@
     "key": "image_protocol",
     "category": "Appearance",
     "label": "Image protocol",
-    "description": "How pictures (a note's images, the PR and ticket image views) reach your terminal: kitty passes kitty's graphics commands on, for Ghostty and kitty; sixel has the workspace draw each picture itself as sixel where it shows, for a terminal that draws sixel but not kitty's pictures, as Windows Terminal (1.22 and later) does; Notes and the image view opened after a change draw by it",
+    "description": "How pictures (a note's images, the PR and ticket image views, and the workspace's own: avatars, meters, charts, switches, the diagrams beside a board, a picture shown full size) reach your terminal: kitty sends them by kitty's graphics protocol, for Ghostty and kitty; sixel has the workspace draw each picture itself as sixel where it shows, for a terminal that draws sixel but not kitty's pictures, as Windows Terminal (1.22 and later) does, the shadow under a box drawn with characters there, while Ghostty and kitty keep kitty's; Notes and the image view opened after a change draw by it",
     "choices": [
       {
         "value": "kitty",

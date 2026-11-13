@@ -1,9 +1,11 @@
 //! A picture shown full size over the pane that asked for it (`switchboard
 //! picture <file>`, from the notes app's Enter on a picture), in place of
 //! Quick Look: Images' picture atom (src/ui/images.rs) as large as the pane,
-//! less a row of key hints under it, drawn with kitty graphics and sent
-//! inline by the server like any atom. Esc, q or Enter go back, as does a
-//! click; every other key is kept from the pane while it is up.
+//! less a row of key hints under it, reaching the terminal as any atom
+//! does (src/mux/graphics.rs): sent inline by kitty's protocol, or drawn
+//! as sixel over its cells with Settings' "Image protocol" on sixel. Esc, q
+//! or Enter go back, as does a click; every other key is kept from the
+//! pane while it is up.
 //!
 //! The server keeps `area` on the pane's place on each draw
 //! (`Server::pictures_before_draw`), so a resize or a split moves it with
@@ -183,7 +185,7 @@ mod tests {
         let mut p = picture();
         p.area = Some(Rect::new(10, 2, 30, 12));
         let mut frame = Frame::new(60, 20);
-        frame.graphics = Some((8, 16));
+        frame.graphics = Some(crate::mux::graphics::Graphics::kitty((8, 16)));
         p.draw_frame(&mut frame, &Look::default());
         assert_eq!(frame.images.len(), 1, "one image");
         let placed = &frame.images[0];

@@ -1,42 +1,41 @@
-//! Images the server draws itself, with the kitty graphics protocol: the
-//! image atoms of the UX 2.0 canvas's board 0 (an avatar's photo, a
-//! picture, a meter with a tick, a series as a chart or a sparkline, a
-//! setting's on/off switch, the keyboard as a heatmap of the keys pressed,
-//! and the soft shadow under a box), and board 6's lane and chart over time (a
-//! tab's history), rastered here in Rust at the size of the
-//! terminal's cell (src/mux/terminal.rs) and sent to each client that can
-//! show them.
+//! Images the server draws itself: the image atoms of the UX 2.0
+//! canvas's board 0 (an avatar's photo, a picture, a meter with a tick, a
+//! series as a chart or a sparkline, a setting's on/off switch, the
+//! keyboard as a heatmap of the keys pressed, and the soft shadow under a
+//! box), and board 6's lane and chart over time (a tab's history), each
+//! described into a frame here and rastered here in Rust at the frame's
+//! cell, and turned into what reaches each client's terminal by
+//! src/mux/graphics.rs, which alone decides how: kitty's graphics
+//! protocol, sixel (src/mux/sixel), or the atom's text form.
 //!
-//! An atom is placed with the protocol's Unicode placeholders, as a note's
+//! An atom is placed with kitty's Unicode placeholders, as a note's
 //! picture is (src/notes/images.rs): its cells in the frame are U+10EEEE
 //! marked with their row and column and colored with the image's id, so
 //! they ride in the frame as text, move with their cells, and a box drawn
-//! over them covers them as it covers text. The shadow alone is a direct
-//! placement under the text (`z=-1`), since it must sit over the cells'
-//! backgrounds and under a box's words, which a placeholder can't.
+//! over them covers them as it covers text. A kitty terminal draws the
+//! image on them; with sixel the server reads them back once everything
+//! is drawn, and draws as sixel the parts of the image whose cells still
+//! show, which is how a sixel is cut and covered as the text is. The
+//! shadow alone is a direct placement under the text (`Spot::Under`),
+//! since it must sit over the cells' backgrounds and under a box's words,
+//! which a placeholder can't; where nothing can sit under the text (sixel,
+//! `Graphics::under_text`) it is its text form.
 //!
-//! Each client keeps what it was sent (`ImageCache`, in its `Screen`), by
-//! a stable name the caller gives, with a key made of what the image is
-//! drawn from: an image whose key is unchanged isn't sent again, one that
-//! changed replaces the old under the same id, and one no longer placed is
-//! deleted, so the terminal never collects images. Anything that may have
-//! cleared the terminal (an attach, a resize, `Screen::invalidate`, a new
-//! build after `switchboard upgrade`, whose screen starts empty) sends them
-//! all again.
+//! Each atom adds itself to the frame's `images` as a `Placed`: its id,
+//! from the stable name its caller gives, a key made of everything it is
+//! drawn from, and how to raster it (`Draw`), which runs only when a
+//! terminal hasn't the image with that key already, off the server's task
+//! where it is large enough to take a while.
 //!
-//! The image's data is always sent inline (`t=d`), never a file's path: a
-//! graphics command naming a file has the terminal read any file of yours,
-//! which is why only the notes pane may pass its own (src/mux/passthrough.rs).
-//!
-//! Each atom has a text form drawn in the same cells where the terminal
-//! doesn't speak the protocol (`Frame::graphics` is `None`: not Ghostty or
-//! kitty, or the `server_images` setting off), and the atom's function
-//! picks the form, so no part checks the terminal itself. An avatar is its
-//! text form, the initial on the person's color, unless it has a photo,
-//! since the binary carries no font to raster an initial with.
+//! Each atom has a text form drawn in the same cells where the frame
+//! carries no `Graphics` (a terminal that speaks neither protocol, or the
+//! `server_images` setting off), and the atom's function picks the form,
+//! so no part checks the terminal itself. An avatar is its text form, the
+//! initial on the person's color, unless it has a photo, since the binary
+//! carries no font to raster an initial with.
 
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use image::RgbaImage;
 use ratatui::buffer::Buffer;
@@ -47,7 +46,6 @@ use tiny_skia::{
 };
 
 use crate::mux::compose::Frame;
-use crate::util;
 
 /// kitty's gen/rowcolumn-diacritics.txt: the nth mark means row or column n.
 pub const MARKS: &[u32] = &[
@@ -98,13 +96,6 @@ pub fn placeholder(row: u16, col: u16) -> String {
 /// The color a placeholder carries: the image's 24-bit id.
 pub fn id_color(id: u32) -> Color {
     Color::Rgb((id >> 16) as u8, (id >> 8 & 0xff) as u8, (id & 0xff) as u8)
-}
-
-/// Whether a terminal, by its `TERM` or `TERM_PROGRAM`, speaks kitty's
-/// graphics protocol with placeholders: Ghostty and kitty do.
-pub fn speaks_kitty(term: &str) -> bool {
-    let term = term.to_lowercase();
-    term.contains("ghostty") || term.contains("kitty")
 }
 
 /// The id of one of the server's images, from the stable name its caller
@@ -582,17 +573,23 @@ fn box_pass(src: &[f32], dst: &mut [f32], w: usize, h: usize, r: usize, across: 
     }
 }
 
-/// A pixmap as a PNG.
-pub fn png(pm: &Pixmap) -> Vec<u8> {
-    use image::ImageEncoder;
+/// A pixmap's pixels, no longer premultiplied.
+pub fn rgba(pm: &Pixmap) -> RgbaImage {
     let mut data = Vec::with_capacity(pm.data().len());
     for p in pm.pixels() {
         let c = p.demultiply();
         data.extend_from_slice(&[c.red(), c.green(), c.blue(), c.alpha()]);
     }
+    RgbaImage::from_raw(pm.width(), pm.height(), data).expect("four bytes a pixel")
+}
+
+/// A pixmap as a PNG.
+pub fn png(pm: &Pixmap) -> Vec<u8> {
+    use image::ImageEncoder;
+    let pixels = rgba(pm);
     let mut out = Vec::new();
     let _ = image::codecs::png::PngEncoder::new(&mut out).write_image(
-        &data,
+        pixels.as_raw(),
         pm.width(),
         pm.height(),
         image::ExtendedColorType::Rgba8,
@@ -611,8 +608,13 @@ pub enum Spot {
     Under { x: u16, y: u16, dx: u16, dy: u16 },
 }
 
+/// How an image is rastered: shared, and sent off the server's task to
+/// run where it is large (src/mux/sixel).
+pub type Draw = Arc<dyn Fn() -> Pixmap + Send + Sync>;
+
 /// An image a frame places: its id, its size in cells, where it goes, a
-/// key made of everything it is drawn from, and how to draw it, which
+/// key made of everything it is drawn from, whether it is drawn from a
+/// picture of its own (a photo, a screenshot), and how to draw it, which
 /// runs only when the client hasn't the image with that key already.
 pub struct Placed {
     pub id: u32,
@@ -620,7 +622,12 @@ pub struct Placed {
     pub rows: u16,
     pub spot: Spot,
     pub key: u64,
-    pub draw: Box<dyn Fn() -> Pixmap>,
+    /// Drawn from a picture of its own, of more colours than a palette
+    /// holds as they are, so with sixel its palette is learned off the
+    /// server's task (src/mux/sixel); a drawing of a few colours (a meter,
+    /// a switch, a chart) is drawn as the frame is.
+    pub photo: bool,
+    pub draw: Draw,
 }
 
 impl std::fmt::Debug for Placed {
@@ -655,7 +662,7 @@ fn put_placeholders(frame: &mut Frame, id: u32, area: Rect, from_row: u16) {
 }
 
 /// Places an image by placeholders, if the area fits the marks.
-fn place(frame: &mut Frame, name: &str, area: Rect, key: u64, draw: Box<dyn Fn() -> Pixmap>) {
+fn place(frame: &mut Frame, name: &str, area: Rect, key: u64, photo: bool, draw: Draw) {
     let id = id_of(name);
     let (cols, rows) = (area.width, area.height);
     put_placeholders(frame, id, area, 0);
@@ -665,6 +672,7 @@ fn place(frame: &mut Frame, name: &str, area: Rect, key: u64, draw: Box<dyn Fn()
         rows,
         spot: Spot::Placeholders,
         key,
+        photo,
         draw,
     });
 }
@@ -711,7 +719,7 @@ pub fn avatar(
     photo: Option<&RgbaImage>,
 ) {
     let area = area.intersection(frame.buf.area);
-    if let (Some(cell), Some(photo)) = (frame.graphics, photo)
+    if let (Some(cell), Some(photo)) = (frame.graphics.map(|g| g.cell), photo)
         && placeable(frame, area)
     {
         let key = key_of((
@@ -729,7 +737,8 @@ pub fn avatar(
             name,
             area,
             key,
-            Box::new(move || raster_avatar(&photo, cols, rows, cell)),
+            true,
+            Arc::new(move || raster_avatar(&photo, cols, rows, cell)),
         );
         return;
     }
@@ -781,7 +790,7 @@ pub fn picture_shared(
 ) {
     let area = area.intersection(frame.buf.area);
     let tones = Tones::now();
-    if let Some(cell) = frame.graphics
+    if let Some(cell) = frame.graphics.map(|g| g.cell)
         && placeable(frame, area)
     {
         let key = key_of(("picture", area.width, area.height, cell, tones, content));
@@ -792,7 +801,8 @@ pub fn picture_shared(
             name,
             area,
             key,
-            Box::new(move || raster_picture(&img, cols, rows, cell, &tones)),
+            true,
+            Arc::new(move || raster_picture(&img, cols, rows, cell, &tones)),
         );
         return;
     }
@@ -830,7 +840,7 @@ pub fn picture_cut(
     img: &std::sync::Arc<RgbaImage>,
     content: u64,
 ) {
-    let Some(cell) = frame.graphics else {
+    let Some(cell) = frame.graphics.map(|g| g.cell) else {
         return;
     };
     let cols = area.width;
@@ -852,7 +862,8 @@ pub fn picture_cut(
         rows,
         spot: Spot::Placeholders,
         key: key_of(("picture", cols, rows, cell, tones, content)),
-        draw: Box::new(move || raster_picture(&img, cols, rows, cell, &tones)),
+        photo: true,
+        draw: Arc::new(move || raster_picture(&img, cols, rows, cell, &tones)),
     });
 }
 
@@ -873,7 +884,7 @@ pub fn meter(
     }
     .intersection(frame.buf.area);
     let tones = Tones::now();
-    if let Some(cell) = frame.graphics
+    if let Some(cell) = frame.graphics.map(|g| g.cell)
         && placeable(frame, area)
     {
         let key = key_of((
@@ -891,7 +902,8 @@ pub fn meter(
             name,
             area,
             key,
-            Box::new(move || raster_meter(cols, frac, color, tick, cell, &tones)),
+            false,
+            Arc::new(move || raster_meter(cols, frac, color, tick, cell, &tones)),
         );
         return;
     }
@@ -923,7 +935,7 @@ pub fn switch(frame: &mut Frame, name: &str, area: Rect, on: bool) {
     }
     .intersection(frame.buf.area);
     let tones = Tones::now();
-    if let Some(cell) = frame.graphics
+    if let Some(cell) = frame.graphics.map(|g| g.cell)
         && area.width == SWITCH_COLS
         && placeable(frame, area)
     {
@@ -933,7 +945,8 @@ pub fn switch(frame: &mut Frame, name: &str, area: Rect, on: bool) {
             name,
             area,
             key,
-            Box::new(move || raster_switch(on, cell, &tones)),
+            false,
+            Arc::new(move || raster_switch(on, cell, &tones)),
         );
         return;
     }
@@ -981,7 +994,7 @@ pub fn series(
 ) {
     let area = area.intersection(frame.buf.area);
     let tones = Tones::now();
-    if let Some(cell) = frame.graphics
+    if let Some(cell) = frame.graphics.map(|g| g.cell)
         && placeable(frame, area)
     {
         let shape: Vec<Vec<(u32, Color)>> = bars
@@ -1009,7 +1022,8 @@ pub fn series(
             name,
             area,
             key,
-            Box::new(move || raster_series(cols, rows, &bars, max, over, &marks, cell, &tones)),
+            false,
+            Arc::new(move || raster_series(cols, rows, &bars, max, over, &marks, cell, &tones)),
         );
         return;
     }
@@ -1125,10 +1139,12 @@ pub fn series(
 }
 
 /// The shadow under a box at `area`: an image placed under the text,
-/// reaching past the box; as text, half blocks down its right and along
-/// its bottom in a near-black shade.
+/// reaching past the box, where the frame's pictures can sit under its
+/// text (kitty's); as text, half blocks down its right and along its
+/// bottom in a near-black shade, which is also what sixel shows, since a
+/// sixel is drawn over its cells and would hide what it should lie under.
 pub fn shadow(frame: &mut Frame, name: &str, area: Rect) {
-    if let Some(cell) = frame.graphics
+    if let Some(cell) = frame.graphics.filter(|g| g.under_text()).map(|g| g.cell)
         && area.width > 0
         && area.height > 0
     {
@@ -1152,7 +1168,8 @@ pub fn shadow(frame: &mut Frame, name: &str, area: Rect) {
             rows: 0,
             spot,
             key,
-            draw: Box::new(move || {
+            photo: false,
+            draw: Arc::new(move || {
                 let full = raster_shadow(cols, rows, cell);
                 if crop_x == 0 && crop_y == 0 {
                     return full;
@@ -1305,7 +1322,7 @@ pub fn lane(frame: &mut Frame, name: &str, area: Rect, segments: &[Segment], rul
         ..area
     }
     .intersection(frame.buf.area);
-    if let Some(cell) = frame.graphics
+    if let Some(cell) = frame.graphics.map(|g| g.cell)
         && placeable(frame, area)
     {
         let shape: Vec<(u32, u32, Color)> = segments
@@ -1319,7 +1336,8 @@ pub fn lane(frame: &mut Frame, name: &str, area: Rect, segments: &[Segment], rul
             name,
             area,
             key,
-            Box::new(move || raster_lane(cols, &segments, &rules, cell)),
+            false,
+            Arc::new(move || raster_lane(cols, &segments, &rules, cell)),
         );
         return;
     }
@@ -1356,7 +1374,7 @@ pub fn chart(
     rules: &[Rule],
 ) {
     let area = area.intersection(frame.buf.area);
-    if let Some(cell) = frame.graphics
+    if let Some(cell) = frame.graphics.map(|g| g.cell)
         && placeable(frame, area)
     {
         let shape: Vec<Option<u32>> = values.iter().map(|v| v.map(f32::to_bits)).collect();
@@ -1368,7 +1386,8 @@ pub fn chart(
             name,
             area,
             key,
-            Box::new(move || raster_chart(cols, rows, &values, color, &rules, cell)),
+            false,
+            Arc::new(move || raster_chart(cols, rows, &values, color, &rules, cell)),
         );
         return;
     }
@@ -1589,7 +1608,7 @@ pub fn keyboard(
         ..area
     };
     let tones = Tones::now();
-    if let Some(cell) = frame.graphics
+    if let Some(cell) = frame.graphics.map(|g| g.cell)
         && placeable(frame, area)
     {
         let key = key_of(("keyboard", cell, tones, heat, outlined, accent));
@@ -1599,7 +1618,8 @@ pub fn keyboard(
             name,
             area,
             key,
-            Box::new(move || raster_keyboard(&heat, &outlined, accent, cell, &tones)),
+            false,
+            Arc::new(move || raster_keyboard(&heat, &outlined, accent, cell, &tones)),
         );
         return;
     }
@@ -1640,97 +1660,6 @@ pub fn keyboard(
     }
 }
 
-// ── Sending ─────────────────────────────────────────────────────────────────
-
-/// One kitty graphics command carrying `data` base64'd in chunks of 4096
-/// bytes, `keys` on the first; with no data, the keys alone.
-fn command(keys: &str, data: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
-    if data.is_empty() {
-        out.extend_from_slice(format!("\x1b_G{keys}\x1b\\").as_bytes());
-        return out;
-    }
-    let encoded = util::base64(data);
-    let chunks: Vec<&[u8]> = encoded.as_bytes().chunks(4096).collect();
-    for (i, chunk) in chunks.iter().enumerate() {
-        let more = u8::from(i + 1 < chunks.len());
-        out.extend_from_slice(b"\x1b_G");
-        if i == 0 {
-            out.extend_from_slice(format!("{keys},m={more};").as_bytes());
-        } else {
-            out.extend_from_slice(format!("m={more};").as_bytes());
-        }
-        out.extend_from_slice(chunk);
-        out.extend_from_slice(b"\x1b\\");
-    }
-    out
-}
-
-fn delete(id: u32) -> Vec<u8> {
-    command(&format!("a=d,d=I,i={id},q=2"), &[])
-}
-
-/// The images one client's terminal holds, by id, each with its key.
-#[derive(Default, Debug)]
-pub struct ImageCache {
-    sent: HashMap<u32, u64>,
-}
-
-impl ImageCache {
-    /// The commands that bring the terminal from what it holds to what the
-    /// frame places: an id new, or placed with another key, is sent (the
-    /// old under it deleted first), and one no longer placed is deleted.
-    pub fn commands(&mut self, placed: &[Placed]) -> Vec<u8> {
-        let mut out = Vec::new();
-        let now: HashMap<u32, &Placed> = placed.iter().map(|p| (p.id, p)).collect();
-        let mut gone: Vec<u32> = self
-            .sent
-            .keys()
-            .filter(|id| !now.contains_key(id))
-            .copied()
-            .collect();
-        gone.sort_unstable();
-        for id in gone {
-            out.extend(delete(id));
-            self.sent.remove(&id);
-        }
-        let mut done = std::collections::HashSet::new();
-        for p in placed {
-            if !done.insert(p.id) || self.sent.get(&p.id) == Some(&p.key) {
-                continue;
-            }
-            if self.sent.contains_key(&p.id) {
-                out.extend(delete(p.id));
-            }
-            let data = png(&(p.draw)());
-            match p.spot {
-                Spot::Placeholders => out.extend(command(
-                    &format!("a=T,U=1,f=100,t=d,q=2,i={},c={},r={}", p.id, p.cols, p.rows),
-                    &data,
-                )),
-                Spot::Under { x, y, dx, dy } => {
-                    out.extend_from_slice(format!("\x1b7\x1b[{};{}H", y + 1, x + 1).as_bytes());
-                    out.extend(command(
-                        &format!("a=T,f=100,t=d,q=2,i={},X={dx},Y={dy},z=-1,C=1", p.id),
-                        &data,
-                    ));
-                    out.extend_from_slice(b"\x1b8");
-                }
-            }
-            self.sent.insert(p.id, p.key);
-        }
-        out
-    }
-
-    /// Every image deleted, and nothing taken as held, so the next frame
-    /// sends them all again (the terminal may have lost them).
-    pub fn forget(&mut self) -> Vec<u8> {
-        let mut ids: Vec<u32> = self.sent.drain().map(|(id, _)| id).collect();
-        ids.sort_unstable();
-        ids.into_iter().flat_map(delete).collect()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1739,7 +1668,7 @@ mod tests {
 
     fn graphics_frame(cols: u16, rows: u16) -> Frame {
         let mut f = Frame::new(cols, rows);
-        f.graphics = Some(CELL);
+        f.graphics = Some(crate::mux::graphics::Graphics::kitty(CELL));
         f
     }
 
@@ -1772,10 +1701,6 @@ mod tests {
         shadow_cells(&mut buf, area);
         assert_eq!(buf[(6, 3)].symbol(), "▌");
         assert!((0..10).all(|x| buf[(x, 3)].symbol() != "▀"));
-    }
-
-    fn text(out: &[u8]) -> String {
-        String::from_utf8_lossy(out).into_owned()
     }
 
     #[test]
@@ -1815,14 +1740,6 @@ mod tests {
 
     fn red() -> Color {
         Color::Indexed(196)
-    }
-
-    #[test]
-    fn a_kitty_or_ghostty_terminal_speaks_the_protocol_and_others_do_not() {
-        assert!(speaks_kitty("xterm-ghostty"));
-        assert!(speaks_kitty("xterm-kitty"));
-        assert!(!speaks_kitty("xterm-256color"));
-        assert!(!speaks_kitty(""));
     }
 
     #[test]
@@ -1934,63 +1851,6 @@ mod tests {
         assert_eq!(c.fg, id_color(id));
         assert_eq!(f.buf[(11, 1)].symbol(), placeholder(0, 9));
         assert_eq!(f.buf[(12, 1)].symbol(), " ");
-    }
-
-    #[test]
-    fn the_cache_sends_once_replaces_a_change_and_deletes_what_goes() {
-        let mut cache = ImageCache::default();
-        let mut f = graphics_frame(20, 3);
-        meter(&mut f, "m", Rect::new(0, 0, 10, 1), 0.4, red(), None);
-        let id = id_of("m");
-        let first = text(&cache.commands(&f.images));
-        assert!(first.starts_with(&format!("\x1b_Ga=T,U=1,f=100,t=d,q=2,i={id},c=10,r=1,m=")));
-        assert_eq!(first.matches("a=T").count(), 1);
-
-        let mut same = graphics_frame(20, 3);
-        meter(&mut same, "m", Rect::new(0, 0, 10, 1), 0.4, red(), None);
-        assert!(cache.commands(&same.images).is_empty());
-
-        let mut changed = graphics_frame(20, 3);
-        meter(&mut changed, "m", Rect::new(0, 0, 10, 1), 0.9, red(), None);
-        let again = text(&cache.commands(&changed.images));
-        assert!(again.starts_with(&format!("\x1b_Ga=d,d=I,i={id},q=2\x1b\\\x1b_Ga=T")));
-
-        let empty = graphics_frame(20, 3);
-        assert_eq!(
-            text(&cache.commands(&empty.images)),
-            format!("\x1b_Ga=d,d=I,i={id},q=2\x1b\\")
-        );
-        assert!(cache.commands(&empty.images).is_empty());
-
-        cache.commands(&f.images);
-        assert!(!cache.forget().is_empty());
-        assert!(cache.commands(&f.images).windows(3).any(|w| w == b"a=T"));
-    }
-
-    #[test]
-    fn a_large_image_is_sent_in_chunks_and_every_command_carries_its_data_inline() {
-        let mut cache = ImageCache::default();
-        let mut f = graphics_frame(60, 20);
-        let noise = RgbaImage::from_fn(200, 200, |x, y| {
-            image::Rgba([
-                (x * 7 % 256) as u8,
-                (y * 13 % 256) as u8,
-                ((x ^ y) % 256) as u8,
-                255,
-            ])
-        });
-        picture(&mut f, "p", Rect::new(0, 0, 40, 15), "shot.png", &noise);
-        shadow(&mut f, "box", Rect::new(5, 5, 10, 4));
-        let out = text(&cache.commands(&f.images));
-        let commands: Vec<&str> = out.split("\x1b_G").skip(1).collect();
-        assert!(commands.len() > 2);
-        assert!(out.contains(",m=1;"));
-        assert!(commands.last().unwrap().starts_with("m=0;"));
-        for c in &commands {
-            let keys = c.split(';').next().unwrap();
-            assert!(!keys.contains("t=f") && !keys.contains("t=t") && !keys.contains("t=s"));
-        }
-        assert!(out.contains("z=-1,C=1"));
     }
 
     #[test]

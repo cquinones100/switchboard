@@ -233,9 +233,9 @@ pub struct Snapshot {
     /// The client's terminal draws the kit's half circles (src/ui/kit.rs).
     pub caps: bool,
     /// The terminal's cell in pixels where the description beside a board
-    /// draws its diagrams as pictures: the client draws the server's images,
-    /// Settings' `view_images` is on and `image_protocol` isn't sixel.
-    /// `None` keeps them text.
+    /// draws its diagrams as pictures: the client draws the server's images
+    /// (by kitty's protocol or sixel, src/mux/graphics.rs) and Settings'
+    /// `view_images` is on. `None` keeps them text.
     pub cell: Option<(u16, u16)>,
     /// The diagrams ready to draw there, by their key in the layout
     /// (`diagrams`).
