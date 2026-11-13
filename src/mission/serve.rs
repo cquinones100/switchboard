@@ -2363,6 +2363,13 @@ impl Server {
         if resize_key(&self.bindings, m, k) || resize_key(&self.bindings, m, key) {
             return;
         }
+        if let Some(cap) =
+            lone_key(&self.bindings, m, k).or_else(|| lone_key(&self.bindings, m, key))
+        {
+            m.lone = cap;
+            m.note = Some(self.set_lone_width(cap).unwrap_or_else(|e| e));
+            return;
+        }
         let mut k = k;
         let press = matches!(k.code, KeyCode::Enter) || (k.code == KeyCode::Char(' ') && plain(&k));
         match m.focus {
@@ -5949,6 +5956,26 @@ fn resize_key(bindings: &crate::mux::keys::Bindings, m: &mut Mission, key: Key) 
         _ => false,
     };
     true
+}
+
+/// The widest width a pane resize key left or right gives a lone view
+/// (`Mission::lone_view`), whose right edge it moves as it moves a lone
+/// pane's; none when `key` is no such key or the view isn't lone.
+fn lone_key(bindings: &crate::mux::keys::Bindings, m: &Mission, key: Key) -> Option<Option<u16>> {
+    use crate::mux::Direction;
+    let Some(crate::mux::keys::Action::Resize(dir @ (Direction::Left | Direction::Right), cells)) =
+        bindings.root.get(&key)
+    else {
+        return None;
+    };
+    if !m.lone_view() || m.spread_cols == 0 {
+        return None;
+    }
+    let by = i32::from(*cells) * if *dir == Direction::Right { 1 } else { -1 };
+    Some(crate::mux::layout::lone_moved(
+        i32::from(m.size.0) + by,
+        m.spread_cols,
+    ))
 }
 
 /// The pane beside a board's width kept in its file once it was resized and

@@ -50,6 +50,24 @@ pub fn capped(area: Rect, cap: Option<u16>) -> Rect {
     }
 }
 
+/// The narrowest a lone pane's edge goes, dragged or moved with the pane
+/// resize keys, as Settings' "Columns…" takes no fewer.
+pub const LONE_LEAST: u16 = 80;
+
+/// A lone pane's widest width once its edge is moved to `width` columns of
+/// a spread `spread` columns wide: at least `LONE_LEAST`, and none (the
+/// setting off) once the edge reaches the spread's last column, where no
+/// column would be left beside the rule.
+pub fn lone_moved(width: i32, spread: u16) -> Option<u16> {
+    let width = width.max(i32::from(LONE_LEAST));
+    (width + 1 < i32::from(spread)).then(|| u16::try_from(width).unwrap_or(u16::MAX))
+}
+
+/// `lone_pane_width`'s value for a widest width, "off" for none.
+pub fn lone_value(cap: Option<u16>) -> serde_json::Value {
+    serde_json::Value::String(cap.map_or_else(|| "off".to_string(), |n| n.to_string()))
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Layout {
     Pane(PaneId),
@@ -1821,5 +1839,16 @@ mod tests {
             rect(0, 0, 165, 10),
             "a column at its right for the rule"
         );
+    }
+
+    #[test]
+    fn a_lone_panes_edge_moves_from_80_columns_to_off_at_the_spreads_edge() {
+        assert_eq!(lone_moved(200, 330), Some(200), "dragged from 165 to 200");
+        assert_eq!(lone_moved(170, 330), Some(170), "moved 5 with a key");
+        assert_eq!(lone_moved(60, 330), Some(LONE_LEAST), "stopped at 80");
+        assert_eq!(lone_moved(329, 330), None, "the last column turns it off");
+        assert_eq!(lone_moved(400, 330), None, "past the main area too");
+        assert_eq!(lone_value(Some(200)), serde_json::json!("200"));
+        assert_eq!(lone_value(None), serde_json::json!("off"));
     }
 }

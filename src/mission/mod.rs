@@ -388,6 +388,9 @@ pub struct Mission {
     /// The view's width as last drawn while `lone` capped it, against the
     /// sidebar, the columns at its right taking no clicks; none uncapped.
     pub capped_at: Option<u16>,
+    /// The columns right of the sidebar as last drawn, which a lone view
+    /// is capped in.
+    pub spread_cols: u16,
     /// The view last brought to the front, by its title ("Tabs" for the
     /// cards), for what going to one does.
     pub(crate) came: Option<String>,
@@ -533,6 +536,7 @@ impl Mission {
             left: 0,
             lone: None,
             capped_at: None,
+            spread_cols: 0,
             came: None,
             spun_at: 0,
             keep_landing: false,
@@ -988,14 +992,20 @@ impl Mission {
     /// pane beside its list (`views::has_side`), else at most `lone` wide,
     /// as a lone pane is.
     pub fn view_area(&self, spread: ratatui::layout::Rect) -> ratatui::layout::Rect {
+        if self.lone_view() {
+            crate::mux::layout::capped(spread, self.lone)
+        } else {
+            spread
+        }
+    }
+
+    /// Whether one view is in front with no pane beside its list, drawn as
+    /// a lone pane is.
+    pub fn lone_view(&self) -> bool {
         let has_side = self
             .current()
             .is_some_and(|v| views::has_side(v, self.chosen_item().is_some(), self.snap.rules.ux2));
-        if self.grid.is_some() || has_side {
-            spread
-        } else {
-            crate::mux::layout::capped(spread, self.lone)
-        }
+        self.grid.is_none() && !has_side
     }
 
     pub fn chosen_item(&self) -> Option<&Item> {
@@ -1096,6 +1106,7 @@ impl Overlay for Mission {
             crate::mux::compose::draw_spare(buf, spread, area, &look.theme);
         }
         self.capped_at = (area != spread).then_some(area.width);
+        self.spread_cols = spread.width;
         self.size = (area.width, area.height);
         self.forget_side_elsewhere();
         let (lines, hits, images, pictures) = if self.grid.is_some() {

@@ -269,6 +269,17 @@ pub fn cached(key: &str) -> Option<Value> {
         .map(|o| o.value.clone())
 }
 
+/// Gives one option `value` in the cache alone, not the file, for what is
+/// shown while it is being changed (a lone pane's edge dragged), until
+/// `reload_settings` reads the file again.
+pub fn hold(key: &str, value: Value) {
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let settings = cache.get_or_insert_with(read_settings);
+    if let Some(option) = settings.iter_mut().find(|o| o.key == key) {
+        option.value = value;
+    }
+}
+
 /// Sets one option. Keeps the file to what differs from the defaults, written
 /// to a temporary file and renamed into place, so a reader never sees half of
 /// it. A file that is there but can't be read as a JSON object is never

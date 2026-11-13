@@ -2478,6 +2478,27 @@ fn on_a_wide_screen_one_view_is_capped_against_the_sidebar_and_its_side_takes_no
     assert_eq!(client.screen().join("\n"), before);
 }
 
+#[test]
+fn the_resize_keys_move_a_lone_views_right_edge_and_set_the_lone_width() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(365, 40);
+    client.wait_text("$");
+    wait_list(&server, "the settings read", |l| {
+        l["sessions"][0]["sidebar"]["columns"] == 0
+    });
+    open(&mut client);
+    let rule_at =
+        |screen: &[String], col: usize| screen.iter().any(|row| row.chars().nth(col) == Some('│'));
+    client.wait_for("the view against its rule", |s| rule_at(s, 165));
+    // C-M-S-l, with no pane beside the list, moves the view's edge.
+    client.send(b"\x1b[108;8u");
+    client.wait_for("the rule 5 columns further", |s| rule_at(s, 170));
+    wait_saved(&server, "the lone width", |saved| {
+        saved["lone_pane_width"] == "170"
+    });
+}
+
 /// The settings file as written, once `pred` holds of it.
 fn wait_saved(server: &TestServer, what: &str, pred: impl Fn(&Value) -> bool) -> Value {
     let file = server.home.join(".config/switchboard/settings.json");
