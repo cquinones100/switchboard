@@ -294,6 +294,41 @@ fn draw_at_once(key: &Key, raster: &Draw) -> Option<Made> {
     Some(draw(key, Some(Arc::new(fitted)), None))
 }
 
+/// The pixels a rounded end's color is in the terminal that draws it: one
+/// of its sixteen and its default text color as it said them when asked
+/// (src/mux/terminal.rs), so a half circle a program of yours colored with
+/// them (a powerline prompt's) matches the rest of what it drew, else
+/// xterm's (`images::rgb`), as Switchboard's own, in 256 colors or
+/// truecolor, are anyway.
+fn end_color(color: ratatui::style::Color, said: &super::terminal::Colors) -> [u8; 3] {
+    use ratatui::style::Color;
+    let index = match color {
+        Color::Indexed(n) if n < 16 => Some(n as usize),
+        Color::Black => Some(0),
+        Color::Red => Some(1),
+        Color::Green => Some(2),
+        Color::Yellow => Some(3),
+        Color::Blue => Some(4),
+        Color::Magenta => Some(5),
+        Color::Cyan => Some(6),
+        Color::Gray => Some(7),
+        Color::DarkGray => Some(8),
+        Color::LightRed => Some(9),
+        Color::LightGreen => Some(10),
+        Color::LightYellow => Some(11),
+        Color::LightBlue => Some(12),
+        Color::LightMagenta => Some(13),
+        Color::LightCyan => Some(14),
+        Color::White => Some(15),
+        _ => None,
+    };
+    let own = match color {
+        Color::Reset => said.fg,
+        _ => index.and_then(|i| said.ansi[i]),
+    };
+    own.map_or_else(|| crate::ui::images::rgb(color), |c| [c.r, c.g, c.b])
+}
+
 /// A rounded end of kit's objects as drawn: the left one or not, its
 /// color, and the cell's size in pixels.
 type End = (bool, [u8; 3], (u16, u16), bool);
@@ -730,7 +765,7 @@ impl Server {
                     c.bg = fill;
                     continue;
                 }
-                let color = crate::ui::images::rgb(fill);
+                let color = end_color(fill, &self.terminal.colors);
                 // On the row above the last, where clear rows reaching
                 // into the last would have the screen scroll as a picture
                 // there would, cut to whole bands as a picture is.
@@ -1025,6 +1060,36 @@ mod tests {
         );
         assert_ne!(key.number(), other.number());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_rounded_end_takes_the_terminal_s_own_palette_where_it_said_it() {
+        use alacritty_terminal::vte::ansi::Rgb;
+        use ratatui::style::Color;
+        let mut said = crate::mux::terminal::Colors::default();
+        said.ansi[2] = Some(Rgb {
+            r: 19,
+            g: 161,
+            b: 14,
+        });
+        said.fg = Some(Rgb {
+            r: 204,
+            g: 204,
+            b: 204,
+        });
+        assert_eq!(end_color(Color::Indexed(2), &said), [19, 161, 14]);
+        assert_eq!(end_color(Color::Green, &said), [19, 161, 14]);
+        assert_eq!(end_color(Color::Reset, &said), [204, 204, 204]);
+        assert_eq!(
+            end_color(Color::Indexed(3), &said),
+            [205, 205, 0],
+            "not said"
+        );
+        assert_eq!(end_color(Color::Rgb(1, 2, 3), &said), [1, 2, 3]);
+        assert_eq!(
+            end_color(Color::Indexed(52), &said),
+            crate::ui::images::rgb(Color::Indexed(52))
+        );
     }
 
     #[test]
