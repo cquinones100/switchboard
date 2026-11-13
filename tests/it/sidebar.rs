@@ -1919,3 +1919,206 @@ fn the_pointer_is_a_hand_over_a_tab_s_row_and_an_arrow_over_a_divider() {
     off.screen();
     assert_eq!(count(&off, b"\x1b]22;"), 0);
 }
+
+/// A press of `button` (0 the left, 2 the right) at a 0-based cell.
+fn press(client: &mut TestClient, button: u8, (row, col): (usize, usize)) {
+    client.send(
+        format!(
+            "\x1b[<{button};{};{}M\x1b[<{button};{};{}m",
+            col + 1,
+            row + 1,
+            col + 1,
+            row + 1
+        )
+        .as_bytes(),
+    );
+}
+
+/// Where a text first shows on the screen: its row and the column it
+/// starts at.
+fn cell_of(screen: &[String], text: &str) -> Option<(usize, usize)> {
+    screen.iter().enumerate().find_map(|(row, line)| {
+        let at = line.find(text)?;
+        Some((row, switchboard::ui::draw::width(&line[..at])))
+    })
+}
+
+/// A server with UX 2.0 and three tabs, opened one after another, so the
+/// third is in front with the second and the first behind it.
+fn three_visited(extra: Value) -> (TestServer, TestClient) {
+    let server = TestServer::start();
+    let mut all = json!({"ux2": true, "sidebar": true});
+    for (k, v) in extra.as_object().unwrap() {
+        all[k] = v.clone();
+    }
+    settings(&server, all);
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-n", "second"]);
+    server.ok(&["new-tab", "-n", "third"]);
+    wait_list(&server, "the third tab in front", |l| {
+        tabs(l).len() == 3 && tabs(l)[2]["current"] == true
+    });
+    (server, client)
+}
+
+#[test]
+fn with_ux2_the_top_lines_arrows_step_back_and_forward_and_a_right_click_shows_the_trail() {
+    let (server, mut client) = three_visited(json!({}));
+    let screen = client.wait_for("the buttons on the top line", |s| {
+        s[0].starts_with("  ←   →   ⊞")
+    });
+    let back = cell_of(&screen, "←").unwrap();
+    let forward = cell_of(&screen, "→").unwrap();
+    press(&mut client, 0, back);
+    wait_list(&server, "back to the second", |l| {
+        tabs(l)[1]["current"] == true
+    });
+    press(&mut client, 0, forward);
+    wait_list(&server, "forward to the third", |l| {
+        tabs(l)[2]["current"] == true
+    });
+    // The whole trail by a right click, the first two steps back; a click
+    // on it goes straight there.
+    press(&mut client, 2, back);
+    let screen = client.wait_text("you are here");
+    let first = cell_of(&screen, "← 2").unwrap_or_else(|| panic!("{}", screen.join("\n")));
+    assert!(screen[first.0].contains("1 "), "{}", screen[first.0]);
+    press(&mut client, 0, first);
+    wait_list(&server, "the first tab in front", |l| {
+        tabs(l)[0]["current"] == true
+    });
+    // Now two steps forward, none back.
+    press(&mut client, 2, forward);
+    let screen = client.wait_text("you are here");
+    assert!(cell_of(&screen, "→ 2").is_some(), "{}", screen.join("\n"));
+    assert!(cell_of(&screen, "← 1").is_none(), "{}", screen.join("\n"));
+}
+
+#[test]
+fn with_ux2_the_mission_control_button_opens_and_closes_it_and_its_right_click_lists_the_views() {
+    let (server, mut client) = three_visited(json!({}));
+    let screen = client.wait_for("the buttons on the top line", |s| {
+        s[0].starts_with("  ←   →   ⊞")
+    });
+    let mission = cell_of(&screen, "⊞").unwrap();
+    press(&mut client, 0, mission);
+    client.wait_text("MISSION CONTROL");
+    // Still there beside it, a second click closes it.
+    press(&mut client, 0, mission);
+    client.wait_for("mission control closed", |s| {
+        !s.iter().any(|l| l.contains("MISSION CONTROL"))
+    });
+    press(&mut client, 2, mission);
+    let screen = client.wait_text("Settings");
+    for group in ["Work", "Code", "Day", "System"] {
+        assert!(
+            screen.iter().any(|l| l.contains(group)),
+            "{group}:\n{}",
+            screen.join("\n")
+        );
+    }
+    let settings = cell_of(&screen, "Settings").unwrap();
+    press(&mut client, 0, settings);
+    client.wait_text("MISSION CONTROL");
+    client.wait_text("INTEGRATIONS");
+    // With mission control open, M-[ closes it and steps back.
+    client.type_text(&format!("{ALT}["));
+    client.wait_for("mission control closed", |s| {
+        !s.iter().any(|l| l.contains("MISSION CONTROL"))
+    });
+    wait_list(&server, "back to the second", |l| {
+        tabs(l)[1]["current"] == true
+    });
+}
+
+#[test]
+fn with_back_and_forward_off_the_top_line_has_mission_control_alone() {
+    let (_server, mut client) = three_visited(json!({"tab_back_forward": false}));
+    let screen = client.wait_for("the button on the top line", |s| s[0].starts_with("  ⊞"));
+    assert!(!screen[0].contains('←'), "{}", screen[0]);
+}
+
+#[test]
+fn with_the_sidebar_hidden_the_buttons_start_the_tab_header() {
+    let (server, mut client) = three_visited(json!({"sidebar": false}));
+    let screen = client.wait_for("the buttons in the header", |s| {
+        s[0].starts_with("  ←   →   ⊞")
+    });
+    press(&mut client, 0, cell_of(&screen, "←").unwrap());
+    wait_list(&server, "back to the second", |l| {
+        tabs(l)[1]["current"] == true
+    });
+    let screen = client.wait_for("the buttons in the header", |s| s[0].starts_with("  ←"));
+    press(&mut client, 0, cell_of(&screen, "⊞").unwrap());
+    client.wait_text("MISSION CONTROL");
+}
+
+#[test]
+fn with_ux2_the_notifications_window_on_the_trail_is_named_by_the_buttons_and_the_menu() {
+    let notes = common::TempDir::new("sbtw");
+    std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
+    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
+    settings(&server, json!({"ux2": true, "sidebar": true}));
+    std::fs::create_dir_all(&server.state).unwrap();
+    std::fs::write(
+        server.state.join("new-notes.json"),
+        json!([{ "path": "Plan.md", "title": "Plan", "source": "Fathom", "at": 1 }]).to_string(),
+    )
+    .unwrap();
+    let mut client = server.attach(140, 36);
+    client.wait_text("New note: Plan");
+    // Into the Notifications window and back out to the tab.
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("n");
+    wait_list(&server, "the Notifications window in front", |l| {
+        notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == true)
+    });
+    client.type_text(&format!("{ALT}["));
+    wait_list(&server, "the first tab in front", |l| {
+        notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == false)
+    });
+    // Forward goes to the window: → isn't faint, and its menu lists it.
+    let screen = client.wait_for("the buttons on the top line", |s| {
+        s[0].starts_with("  ←   →   ⊞")
+    });
+    let forward = cell_of(&screen, "→").unwrap();
+    client.send(format!("\x1b[<35;{};{}M", forward.1 + 1, forward.0 + 1).as_bytes());
+    client.wait_for("the window named on the top line", |s| {
+        !s[0].contains("tab")
+    });
+    press(&mut client, 2, forward);
+    let screen = client.wait_text("you are here");
+    assert!(cell_of(&screen, "→ 1").is_some(), "{}", screen.join("\n"));
+}
+
+#[test]
+fn the_trail_menu_keeps_each_rows_steps_in_sight_however_long_a_tabs_name() {
+    let (server, mut client) = three_visited(json!({}));
+    let id = tabs(&server.list())[1]["id"].as_str().unwrap().to_string();
+    server.ok(&["rename-tab", "-t", &id, &"a very long tab name ".repeat(5)]);
+    let screen = client.wait_for("the buttons on the top line", |s| {
+        s[0].starts_with("  ←   →   ⊞")
+    });
+    press(&mut client, 2, cell_of(&screen, "←").unwrap());
+    let screen = client.wait_text("you are here");
+    assert!(cell_of(&screen, "← 1").is_some(), "{}", screen.join("\n"));
+    assert!(cell_of(&screen, "← 2").is_some(), "{}", screen.join("\n"));
+}
+
+#[test]
+fn a_step_chosen_from_the_trail_menu_leaves_the_sidebar() {
+    let (server, mut client) = three_visited(json!({}));
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    let screen = client.wait_for("the buttons on the top line", |s| {
+        s[0].starts_with("  ←   →   ⊞")
+    });
+    press(&mut client, 2, cell_of(&screen, "←").unwrap());
+    let screen = client.wait_text("you are here");
+    press(&mut client, 0, cell_of(&screen, "← 2").unwrap());
+    wait_list(&server, "the first tab in front, the sidebar left", |l| {
+        tabs(l)[0]["current"] == true && !focused(l)
+    });
+}

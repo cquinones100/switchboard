@@ -2066,35 +2066,29 @@ fn with_ux2_a_click_on_a_tab_in_the_sidebar_closes_it_and_goes_there() {
 /// The bar's second row, the views of the group in front and its keys.
 fn views_row(s: &[String]) -> String {
     s.iter()
-        .find(|l| l.contains("M-[ ] groups"))
+        .find(|l| l.contains("{ } groups"))
         .cloned()
         .unwrap_or_default()
 }
 
 #[test]
-fn with_ux2_m_brackets_move_between_groups_and_stay_the_tabs_outside_it() {
+fn with_ux2_braces_move_between_groups_and_m_brackets_close_it_and_step_back() {
     let (server, mut client) = two_tabs_ux2();
     let screen = open(&mut client);
     assert!(views_row(&screen).contains("Tabs"), "{}", screen.join("\n"));
-    // M-[ round to the last group, System, and M-] back to Work.
-    client.type_text(&format!("{ALT}["));
-    client.wait_for("System's views", |s| views_row(s).contains("Settings"));
-    client.type_text(&format!("{ALT}]"));
-    client.wait_for("Work's views", |s| views_row(s).contains("Tabs"));
-    // `}` and `{` leave the view as it is.
+    // { round to the last group, System, and } back to Work.
     client.type_text("{");
-    std::thread::sleep(Duration::from_millis(300) * common::patience());
-    let screen = client.screen();
-    assert!(views_row(&screen).contains("Tabs"), "{}", screen.join("\n"));
+    client.wait_for("System's views", |s| views_row(s).contains("Settings"));
+    client.type_text("}");
+    client.wait_for("Work's views", |s| views_row(s).contains("Tabs"));
     assert_eq!(
         tabs(&server.list())[1]["current"],
         true,
         "the tab unchanged"
     );
-    // Closed, M-[ goes back through the tabs again, to the first.
-    client.type_text("q");
-    client.wait_for("mission control closed", closed);
+    // M-[ closes it and goes back through the tabs, to the first.
     client.type_text(&format!("{ALT}["));
+    client.wait_for("mission control closed", closed);
     wait_list(&server, "the first tab in front", |l| {
         tabs(l)[0]["current"] == true
     });

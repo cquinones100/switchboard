@@ -79,6 +79,12 @@ pub enum Command {
     SidebarAll,
     /// "Select several tabs in the sidebar".
     SidebarSelect,
+    /// "Back and forward: every tab you visited", the menu a right click
+    /// on ← or → opens.
+    TabTrail,
+    /// "Mission control's views by group", the menu a right click on ⊞
+    /// opens.
+    MissionViews,
 }
 
 impl Command {
@@ -105,6 +111,8 @@ impl Command {
                 Command::SidebarRepo,
                 Command::SidebarAll,
                 Command::SidebarSelect,
+                Command::TabTrail,
+                Command::MissionViews,
             ])
             .collect()
     }
@@ -133,6 +141,8 @@ impl Command {
             Command::SidebarRepo => "sidebar-repo".into(),
             Command::SidebarAll => "sidebar-all".into(),
             Command::SidebarSelect => "sidebar-select".into(),
+            Command::TabTrail => "tab-trail".into(),
+            Command::MissionViews => "mission-views".into(),
         }
     }
 
@@ -187,6 +197,8 @@ impl Command {
             Command::SidebarRepo => "Filter the sidebar to a repository",
             Command::SidebarAll => "Show every repository's tabs in the sidebar",
             Command::SidebarSelect => "Select several tabs in the sidebar",
+            Command::TabTrail => "Back and forward: every tab you visited, to go straight to one",
+            Command::MissionViews => "Mission control's views by group, to open one",
         };
         words.to_string()
     }
@@ -249,6 +261,12 @@ impl Command {
             Command::SidebarSelect => {
                 "v in the sidebar; Space or a click selects each, Enter opens what to do with them. The focus goes into the sidebar with the tab in front selected, and Close these tabs asks once before closing them all. Settings' \"Select several tabs\" (sidebar_select)."
             }
+            Command::TabTrail => {
+                "The menu a right click on the sidebar's ← or → opens: the tabs forward, the one you are on, then the tabs back, each with its steps away; a choice goes there as that many M-[ or M-] would. Settings' \"M-[ and M-] go back and forward\" (tab_back_forward)."
+            }
+            Command::MissionViews => {
+                "The menu a right click on the sidebar's ⊞ opens: each view that is on, by group, the Tabs view with how many tabs need you; a choice opens mission control on it."
+            }
             Command::Keys => {
                 "Mission control's Keys view: the workspace's keys by their first tag, then the sidebar's, mission control's, the diff's and Notes', then those only through M-p; Enter presses a workspace key and ? finds one by pressing it. With UX 2.0, a board with a heatmap of the Alt keys pressed this week. Settings' \"Keys\" (view_keys) off hands M-/ to the pane."
             }
@@ -278,6 +296,8 @@ impl Command {
             Command::SidebarRepo | Command::SidebarAll | Command::SidebarSelect => {
                 &["sidebar", "tabs"]
             }
+            Command::TabTrail => &["tabs", "navigate", "history"],
+            Command::MissionViews => &["mission", "views"],
         }
     }
 
@@ -301,6 +321,7 @@ impl Command {
                 crate::settings::is_on("sidebar_repo_filter")
             }
             Command::SidebarSelect => crate::settings::is_on("sidebar_select"),
+            Command::TabTrail => crate::settings::is_on("tab_back_forward"),
             _ => true,
         }
     }

@@ -119,6 +119,9 @@ pub struct Drawn {
     pub spins: bool,
     /// The columns of its top line the ⏰ chip takes, while it shows.
     pub reminders_at: Option<(usize, usize)>,
+    /// The columns of its top line each of the workspace's own buttons
+    /// takes.
+    pub buttons_at: Vec<(Owner, usize, usize)>,
 }
 
 /// What the server keeps for the sidebar.

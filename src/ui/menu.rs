@@ -295,6 +295,12 @@ fn widest(cols: usize) -> usize {
     (cols * 2 / 3).min(72).saturating_sub(2)
 }
 
+/// The widest an option's label (one with no key of its own) is drawn on
+/// a screen `cols` wide, before it is cut.
+pub fn label_room(cols: usize) -> usize {
+    widest(cols).saturating_sub(5)
+}
+
 impl Overlay for Menu {
     fn drawn(&self) -> Option<&crate::ui::draw::Drawn> {
         self.drawn.as_ref()
@@ -383,7 +389,11 @@ impl Overlay for Menu {
         // A row is `   label` and, two columns past the longest label, its
         // key, inside the box's margin of a column each side.
         let keyed = self.options.iter().any(|o| o.key.is_some());
-        let label_room = inner.saturating_sub(5 + if keyed { 3 } else { 0 });
+        let label_room = if keyed {
+            inner.saturating_sub(8)
+        } else {
+            inner.saturating_sub(5)
+        };
         let labels: Vec<String> = self
             .options
             .iter()

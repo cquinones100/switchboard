@@ -515,6 +515,36 @@ pub fn draw_status(
     let base = Style::new().bg(p.status_bg).fg(p.status_fg);
     buf.set_style(area, base);
     let mut x = area.x;
+    // The workspace's own buttons first: ← and → (faint with no tab that
+    // way) and ⊞ with the tabs that need you.
+    let mut nav = Vec::new();
+    if let Some(n) = left.nav {
+        let theme = if *p == Palette::LIGHT {
+            crate::ui::Theme::LIGHT
+        } else {
+            crate::ui::Theme::DARK
+        };
+        use crate::mux::header::Button;
+        use crate::ui::kit::{self, Press, Tone};
+        let press = |idle: bool| if idle { Press::Idle } else { Press::Rest };
+        let mut list = Vec::new();
+        if let Some((back, forward)) = n.trail {
+            list.push((Button::Back, "←", None, press(!back)));
+            list.push((Button::Forward, "→", None, press(!forward)));
+        }
+        let count = (n.needs > 0).then(|| (n.needs.to_string(), Tone::Needs));
+        list.push((Button::Mission, "⊞", count, Press::Rest));
+        x += 1;
+        for (button, glyph, count, press) in list {
+            let line = ratatui::text::Line::from(kit::button(glyph, count, press, false, &theme));
+            let start = x;
+            x = crate::ui::draw::put_line(buf, x, area.y, area.right().saturating_sub(x), &line);
+            if x > start {
+                nav.push((start, x, button));
+            }
+            x += 1;
+        }
+    }
     let session_label = format!("  {session} ");
     x = put(
         buf,
@@ -618,6 +648,7 @@ pub fn draw_status(
     Hits {
         button,
         tabs: spans,
+        nav,
     }
 }
 
@@ -932,6 +963,7 @@ mod tests {
             health: Vec::new(),
             awake: false,
             build: None,
+            nav: None,
         };
         let hits = draw_status(
             &mut frame.buf,

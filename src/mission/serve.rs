@@ -142,9 +142,10 @@ pub(super) const KEYS: &[(&str, &str)] = &[
     ("/", "filter the cards and rows (↵ keep, esc clear)"),
     ("1-9", "choose that tab"),
     ("] [", "next, last view (with UX 2.0, in its group)"),
+    ("} {", "with UX 2.0, the next, last group of views"),
     (
-        "M-] M-[",
-        "with UX 2.0, the next, last group of views (outside mission control, the next, last tab)",
+        "M-[ M-]",
+        "close it, and back, forward through the tabs visited, as outside it",
     ),
     (
         "tab ⇧tab",
@@ -1339,6 +1340,32 @@ impl Server {
         }
     }
 
+    /// Mission control's views as its bar groups them, for the ⊞ button's
+    /// menu (board 60): each one that is on, by group, with its slug (none
+    /// for the tabs) and how many rows it holds now, from what the server
+    /// already has.
+    pub(crate) fn mission_view_list(
+        &mut self,
+    ) -> Vec<(views::Group, String, Option<String>, usize)> {
+        let look = NoticeLook {
+            kind: 0,
+            unfolded: Default::default(),
+            screenful: usize::MAX,
+        };
+        let all = self.mission_views(false, false, false, &look);
+        views::groups(&all)
+            .into_iter()
+            .flat_map(|(g, held)| held.into_iter().map(move |at| (g, at)))
+            .map(|(g, at)| match at.checked_sub(1).and_then(|i| all.get(i)) {
+                None => (g, "Tabs".to_string(), None, 0),
+                Some(v) => {
+                    let rows = v.data.items.iter().filter(|i| !views::is_header(i)).count();
+                    (g, views::bar_title(v).to_string(), Some(v.slug()), rows)
+                }
+            })
+            .collect()
+    }
+
     /// Every view after the tabs, each only while its setting is on (the
     /// Work map for M-j's and M-o's pickers whatever its setting), Landing
     /// only while something lands or `keep_landing` (the client has it in
@@ -2057,6 +2084,16 @@ impl Server {
                 self.act(client, crate::mux::keys::Action::SelectTab(n));
                 return;
             }
+            // Back and forward through the tabs visited close it first,
+            // since it sits over the tab you are on.
+            Some(
+                a @ (crate::mux::keys::Action::TabBack | crate::mux::keys::Action::TabForward),
+            ) => {
+                let a = a.clone();
+                self.mission_close_from(client, m);
+                self.act(client, a);
+                return;
+            }
             Some(crate::mux::keys::Action::Palette) => {
                 // A view's name or a filter being typed ends, the filter's
                 // words kept, so the keys after a pick act on what it shows.
@@ -2257,8 +2294,12 @@ impl Server {
             KeyCode::BackTab => switch_view(m, -1, false),
             KeyCode::Char(']') if none => switch_view(m, 1, true),
             KeyCode::Char('[') if none => switch_view(m, -1, true),
-            KeyCode::Char(']') if k.mods == Mods::ALT && m.snap.rules.ux2 => switch_group(m, 1),
-            KeyCode::Char('[') if k.mods == Mods::ALT && m.snap.rules.ux2 => switch_group(m, -1),
+            KeyCode::Char('}') if !k.mods.alt && !k.mods.ctrl && m.snap.rules.ux2 => {
+                switch_group(m, 1)
+            }
+            KeyCode::Char('{') if !k.mods.alt && !k.mods.ctrl && m.snap.rules.ux2 => {
+                switch_group(m, -1)
+            }
             KeyCode::Esc if m.filter.is_some() => {
                 // Esc clears a filter before it closes mission control.
                 m.filter = None;
@@ -2679,6 +2720,27 @@ impl Server {
             return;
         }
         let Some(col) = held.or_else(|| m.col_in(mouse.col)) else {
+            // The ⊞ button stays where it is, lit: a click on it closes
+            // mission control, and its right click opens its views' menu
+            // over it.
+            let on_mission_button = self.sidebar_under(client, mouse.col, mouse.row)
+                == Some(Some(crate::sidebar::Owner::Mission));
+            if on_mission_button && mouse.kind == MouseKind::Press {
+                match mouse.button {
+                    MouseButton::Left => {
+                        if let Some(session) = self.clients.get(&client).map(|c| c.session.clone())
+                        {
+                            self.sidebar_leave(&session);
+                        }
+                        self.mission_close(client);
+                    }
+                    MouseButton::Right => {
+                        self.sidebar_mouse(client, mouse);
+                    }
+                    _ => {}
+                }
+                return;
+            }
             if mouse.kind == MouseKind::Press && !mouse.button.is_wheel() {
                 self.mission_close(client);
             }
@@ -6587,7 +6649,7 @@ fn switch_view(m: &mut Mission, by: isize, in_group: bool) {
     show_view(m, to);
 }
 
-/// M-] and M-[ with UX 2.0: the first view of the next or last group,
+/// } and { with UX 2.0: the first view of the next or last group,
 /// round; Tab's focus on a group's name follows.
 fn switch_group(m: &mut Mission, by: isize) {
     let Some(groups) = m.groups() else {

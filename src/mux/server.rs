@@ -1931,6 +1931,31 @@ impl Server {
         self.select_tab_as(session, tab, false);
     }
 
+    /// Goes `steps` back (or forward) through the tabs a session visited,
+    /// as M-[ (or M-]) pressed that many times would, setting the trail's
+    /// place on the way; nothing with no tab that way.
+    pub fn trail_step(&mut self, session: &str, back: bool, steps: usize) {
+        let to = self.session_mut(session).and_then(|s| {
+            let mut to = None;
+            for _ in 0..steps {
+                let current = to.unwrap_or(s.current);
+                let step = if back {
+                    s.trail.back(current)
+                } else {
+                    s.trail.forward(current)
+                };
+                match step {
+                    Some(t) => to = Some(t),
+                    None => break,
+                }
+            }
+            to
+        });
+        if let Some(t) = to {
+            self.select_tab_as(session, t, true);
+        }
+    }
+
     /// Goes to a tab, as `select_tab`; `stepping` when it is a step back or
     /// forward through the tabs visited, which moves along the session's
     /// trail rather than adding to it.
@@ -2778,17 +2803,12 @@ impl Server {
                 }
             }
             Action::TabBack | Action::TabForward => {
-                let to = self.session_mut(&session).and_then(|s| {
-                    let current = s.current;
-                    if action == Action::TabBack {
-                        s.trail.back(current)
-                    } else {
-                        s.trail.forward(current)
-                    }
-                });
-                if let Some(t) = to {
-                    self.select_tab_as(&session, t, true);
+                // Mission control sits over the tab you are on, so it
+                // closes first.
+                if self.mission_open(id) {
+                    self.mission_close(id);
                 }
+                self.trail_step(&session, action == Action::TabBack, 1);
             }
             Action::SelectTab(n) => {
                 if let Some(t) = self.tab_numbered(n) {
@@ -3159,6 +3179,25 @@ impl Server {
             if m.kind == MouseKind::Press && m.button == MouseButton::Left {
                 self.act(id, button.action());
             }
+            // A right click on ← or → opens the trail, on ⊞ mission
+            // control's views, as on the sidebar's.
+            if m.kind == MouseKind::Press
+                && m.button == MouseButton::Right
+                && crate::settings::is_on("menu_mouse")
+            {
+                let session = self
+                    .clients
+                    .get(&id)
+                    .map(|c| c.session.clone())
+                    .unwrap_or_default();
+                match button {
+                    super::header::Button::Back | super::header::Button::Forward => {
+                        self.sidebar_trail_menu(id, &session)
+                    }
+                    super::header::Button::Mission => self.sidebar_views_menu(id),
+                    _ => {}
+                }
+            }
             return;
         }
         let Some(c) = self.clients.get(&id) else {
@@ -3179,6 +3218,21 @@ impl Server {
                     Action::PrevTab
                 },
             );
+            return;
+        }
+        // A right click on the status line's ← or → opens the trail, on
+        // ⊞ mission control's views, as on the sidebar's.
+        if m.row == status_row
+            && m.kind == MouseKind::Press
+            && m.button == MouseButton::Right
+            && crate::settings::is_on("menu_mouse")
+            && let Some(crate::status::Hit::Nav(button)) = c.status_hits.at(m.col)
+        {
+            let session = c.session.clone();
+            match button {
+                super::header::Button::Mission => self.sidebar_views_menu(id),
+                _ => self.sidebar_trail_menu(id, &session),
+            }
             return;
         }
         if m.row >= status_row && m.kind == MouseKind::Press && m.button == MouseButton::Left {
@@ -3690,6 +3744,10 @@ impl Server {
         if let Some(area) = header_at {
             let mut header = self.tab_header(s.current);
             (header.history_open, header.viewing) = self.history_shown(c.id, s.current);
+            // With the sidebar hidden, its buttons at the header's left end.
+            if !self.sidebar_shown(&s.name) {
+                header.nav = Some(self.header_nav(s));
+            }
             header_keys = super::header::draw(
                 &mut frame.buf,
                 area,
@@ -3770,6 +3828,7 @@ impl Server {
             history_open: false,
             viewing: None,
             context: self.tab_context(tab).map(|c| c.used),
+            nav: None,
         }
     }
 

@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use super::TabId;
 
+/// The tabs one way, nearest first, each with how many steps away it is.
+pub type Steps = Vec<(TabId, usize)>;
+
 /// How many tabs each way are kept.
 pub const CAP: usize = 50;
 
@@ -45,6 +48,33 @@ impl Trail {
         let to = pop_other(&mut self.forward, current)?;
         push(&mut self.back, current);
         Some(to)
+    }
+
+    /// The tab a step back from `current` would go to, without taking it.
+    pub fn peek_back(&self, current: TabId) -> Option<TabId> {
+        self.back.iter().rev().copied().find(|t| *t != current)
+    }
+
+    /// The tab a step forward from `current` would go to.
+    pub fn peek_forward(&self, current: TabId) -> Option<TabId> {
+        self.forward.iter().rev().copied().find(|t| *t != current)
+    }
+
+    /// Every step each way from `current`, nearest first, with how many
+    /// steps away it is, as stepping again and again would go: the back
+    /// ones, then the forward ones.
+    pub fn steps(&self, current: TabId) -> (Steps, Steps) {
+        let way = |list: &[TabId]| {
+            let mut list = list.to_vec();
+            let mut out: Steps = Vec::new();
+            let mut at = current;
+            while let Some(t) = pop_other(&mut list, at) {
+                out.push((t, out.len() + 1));
+                at = t;
+            }
+            out
+        };
+        (way(&self.back), way(&self.forward))
     }
 
     /// A tab closed, or not in the session any more.
@@ -110,6 +140,19 @@ mod tests {
         t.visited(B);
         assert_eq!(t.forward(A), None);
         assert_eq!(t.back(A), Some(B));
+    }
+
+    #[test]
+    fn peeking_and_steps_take_nothing_off_the_trail() {
+        let mut t = Trail::default();
+        t.visited(A);
+        t.visited(B);
+        assert_eq!(t.back(C), Some(B));
+        assert_eq!(t.peek_back(B), Some(A));
+        assert_eq!(t.peek_forward(B), Some(C));
+        assert_eq!(t.steps(B), (vec![(A, 1)], vec![(C, 1)]));
+        assert_eq!(t.back(B), Some(A));
+        assert_eq!(t.steps(A), (vec![], vec![(B, 1), (C, 2)]));
     }
 
     #[test]

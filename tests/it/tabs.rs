@@ -93,7 +93,8 @@ fn a_tab_in_a_repository_wears_its_name_and_color_and_a_given_name_wins() {
         expected,
         tabs::accent_color("shop | branch:feature-x", Shade::Soft)
     );
-    let col = screen[29].find("shop:feature-x").unwrap();
+    let col =
+        switchboard::ui::draw::width(&screen[29][..screen[29].find("shop:feature-x").unwrap()]);
     assert_eq!(
         client.fg_rgb(29, col),
         Some((expected.r, expected.g, expected.b))
@@ -119,7 +120,7 @@ fn a_tab_in_a_repository_wears_its_name_and_color_and_a_given_name_wins() {
     // A name given to the tab wins, still in the project's color.
     server.ok(&["rename-tab", "-t", &id, "My work"]);
     let screen = client.wait_for("the given name", |s| s[29].ends_with("1:My work"));
-    let col = screen[29].find("My work").unwrap();
+    let col = switchboard::ui::draw::width(&screen[29][..screen[29].find("My work").unwrap()]);
     assert_eq!(
         client.fg_rgb(29, col),
         Some((expected.r, expected.g, expected.b))

@@ -241,6 +241,12 @@ impl Server {
                 );
             }
             Command::SidebarSelect => self.sidebar_select_start(client),
+            Command::TabTrail => {
+                if let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) {
+                    self.sidebar_trail_menu(client, &session);
+                }
+            }
+            Command::MissionViews => self.sidebar_views_menu(client),
             Command::SidebarAll => {
                 if let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) {
                     self.sidebar_set_repo(&session, None);

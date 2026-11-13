@@ -133,6 +133,7 @@ impl Server {
             health: self.status.health.clone(),
             awake: self.awake.holding(),
             build: self.build_words(),
+            nav: (!settings::is_on("ux2")).then(|| self.header_nav(s)),
         }
     }
 
@@ -220,10 +221,11 @@ impl Server {
     /// `MouseDown1Status` pressed M-p on its range; gives whether the click
     /// was the button's.
     pub fn status_button(&mut self, client: ClientId, hit: Option<super::Hit>) -> bool {
-        if hit != Some(super::Hit::Button) {
-            return false;
+        match hit {
+            Some(super::Hit::Button) => self.open_palette(client),
+            Some(super::Hit::Nav(b)) => self.act(client, b.action()),
+            _ => return false,
         }
-        self.open_palette(client);
         true
     }
 

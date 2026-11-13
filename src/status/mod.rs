@@ -86,6 +86,9 @@ pub struct Left {
     pub awake: bool,
     /// M-p's restart as it goes, in words (src/mux/build_row.rs).
     pub build: Option<String>,
+    /// The workspace's own buttons at the line's left end (← → ⊞), which
+    /// the sidebar's top line holds with UX 2.0.
+    pub nav: Option<crate::mux::header::Nav>,
 }
 
 /// What a click on the status line can land on.
@@ -93,6 +96,8 @@ pub struct Left {
 pub enum Hit {
     /// The ⌘ Commands button.
     Button,
+    /// The workspace's own buttons: ←, → and ⊞.
+    Nav(crate::mux::header::Button),
     /// A tab, by its number.
     Tab(usize),
 }
@@ -103,6 +108,8 @@ pub enum Hit {
 pub struct Hits {
     pub button: Option<(u16, u16)>,
     pub tabs: TabSpans,
+    /// The workspace's own buttons' columns.
+    pub nav: Vec<(u16, u16, crate::mux::header::Button)>,
 }
 
 impl Hits {
@@ -111,6 +118,9 @@ impl Hits {
     pub fn at(&self, col: u16) -> Option<Hit> {
         if self.button.is_some_and(|(a, b)| col >= a && col < b) {
             return Some(Hit::Button);
+        }
+        if let Some((_, _, b)) = self.nav.iter().find(|(a, b, _)| col >= *a && col < *b) {
+            return Some(Hit::Nav(*b));
         }
         self.tabs
             .iter()
@@ -197,6 +207,7 @@ mod tests {
             health: vec!["relay down".into(), "Slack not connected".into()],
             awake: false,
             build: None,
+            nav: None,
         };
         let (x, button) = draw_left(&mut buf, 3, Rect::new(0, 0, 60, 1), &left, &Palette::DARK);
         let line = row(&buf);
@@ -261,7 +272,9 @@ mod tests {
         let hits = Hits {
             button: Some((10, 22)),
             tabs: vec![(23, 30, 1), (30, 36, 2)],
+            nav: vec![(1, 4, crate::mux::header::Button::Back)],
         };
+        assert_eq!(hits.at(2), Some(Hit::Nav(crate::mux::header::Button::Back)));
         assert_eq!(hits.at(10), Some(Hit::Button));
         assert_eq!(hits.at(21), Some(Hit::Button));
         assert_eq!(hits.at(22), None);

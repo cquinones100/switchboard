@@ -986,6 +986,7 @@ impl Server {
             .map(|p| render::Section::of(&p.title, &p.items, p.error.as_deref(), p.sidebar))
             .collect();
         let build = self.build_row();
+        let buttons = r.ux2.then(|| self.sidebar_buttons(s, client, &r));
         let view = View {
             focused,
             cursor: side.and_then(|x| x.cursor.as_ref()),
@@ -1004,6 +1005,7 @@ impl Server {
             selected: side
                 .and_then(|x| x.select.as_ref())
                 .filter(|_| focused && settings::is_on("sidebar_select")),
+            buttons: buttons.as_ref(),
         };
         let out = render::sidebar_lines(
             &tabs,
@@ -1048,7 +1050,53 @@ impl Server {
             scroll: out.scroll,
             spins: out.spins,
             reminders_at: out.reminders_at,
+            buttons_at: out.buttons_at,
         })
+    }
+
+    /// A tab on a session's trail as the sidebar would show it, the
+    /// Notifications window included, which the sidebar lists apart but
+    /// back and forward go to as to any tab.
+    pub(crate) fn trail_model(&self, s: &Session, tab: TabId) -> Option<TabModel> {
+        let attached = self.clients.values().any(|c| c.session == s.name);
+        self.tab_model(s, attached, tab, self.tab_number(tab))
+    }
+
+    /// What the header's copy of the workspace's own buttons shows, with
+    /// the sidebar hidden.
+    pub fn header_nav(&self, s: &Session) -> crate::mux::header::Nav {
+        let all = self.sidebar_tabs(&s.name);
+        crate::mux::header::Nav {
+            trail: settings::is_on("tab_back_forward").then(|| {
+                (
+                    s.trail.peek_back(s.current).is_some(),
+                    s.trail.peek_forward(s.current).is_some(),
+                )
+            }),
+            needs: model::needs_you(&all, &Rules::now()).len(),
+        }
+    }
+
+    /// What the workspace's own buttons on a session's top line show for a
+    /// client: the tabs back and forward go to (while tab_back_forward is
+    /// on), whether its mission control is open and how many tabs need you.
+    fn sidebar_buttons(&self, s: &Session, client: ClientId, r: &Rules) -> render::Buttons {
+        let all = self.sidebar_tabs(&s.name);
+        let trail = settings::is_on("tab_back_forward").then(|| {
+            (
+                s.trail
+                    .peek_back(s.current)
+                    .and_then(|t| self.trail_model(s, t)),
+                s.trail
+                    .peek_forward(s.current)
+                    .and_then(|t| self.trail_model(s, t)),
+            )
+        });
+        render::Buttons {
+            trail,
+            mission_open: self.mission_open(client),
+            needs: model::needs_you(&all, r).len(),
+        }
     }
 
     /// After a client is drawn: where its sidebar went, kept for the mouse
@@ -2272,12 +2320,20 @@ impl Server {
             .drawn
             .get(&client)
             .filter(|d| col <= d.area.right() && row < d.area.bottom())?;
-        // The top line's ⏰ chip is a target of its own on a line the
-        // repository filter's chip may share.
-        let on_reminders = row == d.area.y
-            && d.reminders_at
-                .is_some_and(|(from, to)| (from..to).contains(&usize::from(col - d.area.x)));
-        Some(if on_reminders {
+        // The top line's ⏰ chip and buttons are targets of their own on a
+        // line the repository filter's chip may share.
+        let on_top = |(from, to): (usize, usize)| {
+            row == d.area.y && (from..to).contains(&usize::from(col - d.area.x))
+        };
+        let on_button = d
+            .buttons_at
+            .iter()
+            .find(|(_, from, to)| on_top((*from, *to)))
+            .map(|(o, _, _)| o.clone());
+        let on_reminders = d.reminders_at.is_some_and(on_top);
+        Some(if on_button.is_some() {
+            on_button
+        } else if on_reminders {
             Some(Owner::Reminders)
         } else {
             (col < d.area.right())
@@ -2441,6 +2497,16 @@ impl Server {
                         .get(&session)
                         .is_some_and(|s| s.notices_folded);
                     self.sidebar_fold_notices(&session, !folded);
+                }
+                // ← and →: back and forward through the tabs visited, as
+                // M-[ and M-] (mission control, over the tab you are on,
+                // closed first by its own click); ⊞: mission control, or,
+                // while it is open, closed.
+                Some(Owner::Back) => self.act(client, Action::TabBack),
+                Some(Owner::Forward) => self.act(client, Action::TabForward),
+                Some(Owner::Mission) => {
+                    self.sidebar_leave(&session);
+                    self.toggle_mission(client);
                 }
                 // The ⏰ chip: mission control's Reminders view.
                 Some(Owner::Reminders) => {

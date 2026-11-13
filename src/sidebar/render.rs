@@ -42,7 +42,8 @@ const YELLOW: Color = Color::Indexed(220);
 /// or unfolds; or the top line's ⏰ chip while the sidebar leaves the
 /// Reminders group out, which a click opens mission control's Reminders
 /// view from; or, in select mode, its chip on the top line, which a click
-/// opens the menu of.
+/// opens the menu of; or, with UX 2.0, one of the workspace's own buttons
+/// first on the top line (back, forward, mission control).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Owner {
     Tab(TabId),
@@ -60,6 +61,12 @@ pub enum Owner {
     /// M-p's restart as it goes (src/mux/build_row.rs), whose steps a
     /// click opens.
     BuildRow,
+    /// ← and →, which step back and forward through the tabs visited as
+    /// M-[ and M-] do.
+    Back,
+    Forward,
+    /// ⊞, which opens mission control as M-Space does.
+    Mission,
 }
 
 impl Owner {
@@ -123,6 +130,20 @@ pub struct Filter {
     pub typing: bool,
 }
 
+/// The workspace's own buttons on the top line, with UX 2.0 (boards 57
+/// to 60): ← and → while back and forward step through the tabs visited
+/// (tab_back_forward), with the tab each goes to, and ⊞ mission control.
+#[derive(Clone, Debug, Default)]
+pub struct Buttons {
+    /// The tabs back and forward go to, while they step through the tabs
+    /// visited; none draws no ← and →.
+    pub trail: Option<(Option<TabModel>, Option<TabModel>)>,
+    /// Mission control is open on this client, which lights ⊞.
+    pub mission_open: bool,
+    /// How many tabs need you, beside ⊞ while over 0.
+    pub needs: usize,
+}
+
 /// How the sidebar is being looked at.
 #[derive(Clone, Copy, Debug)]
 pub struct View<'a> {
@@ -164,6 +185,8 @@ pub struct View<'a> {
     /// Select mode: the tabs selected, each drawn with the selected mark, and how
     /// many on the top line's chip.
     pub selected: Option<&'a std::collections::BTreeSet<TabId>>,
+    /// The workspace's own buttons first on the top line, with UX 2.0.
+    pub buttons: Option<&'a Buttons>,
 }
 
 /// One line: its spans, exactly the sidebar's width, and a background for
@@ -274,6 +297,9 @@ pub struct Lines {
     /// The columns the top line's ⏰ chip takes, from and to, while it
     /// shows, which a click there takes for `Owner::Reminders`.
     pub reminders_at: Option<(usize, usize)>,
+    /// The columns of the top line each of the workspace's own buttons
+    /// takes, from and to, which a click there takes for it.
+    pub buttons_at: Vec<(Owner, usize, usize)>,
 }
 
 /// A tab's badge: a colored pill three columns wide, the spinner turning
@@ -364,6 +390,62 @@ fn counts(row: &mut Row, tabs: &[TabModel], r: &Rules, theme: &Theme) {
     }
 }
 
+/// A tab's number in its project's color, as its row shows it.
+fn number_color(tab: &TabModel, theme: &Theme) -> Color {
+    tab.color
+        .map(|c| crate::tabs::color::as_words(c.into(), *theme == Theme::LIGHT))
+        .unwrap_or(theme.faint)
+}
+
+/// The workspace's own buttons, first on the top line with UX 2.0 (boards
+/// 57 to 60): ← and → (faint with no tab that way) while they step through
+/// the tabs visited, then ⊞ with the count of tabs that need you, lit while
+/// mission control is open; each on the chosen surface under the mouse,
+/// with a column after it. Gives the columns each took.
+fn buttons(
+    row: &mut Row,
+    b: &Buttons,
+    hover: Option<&Owner>,
+    theme: &Theme,
+) -> Vec<(Owner, usize, usize)> {
+    let press = |owner: &Owner, idle: bool| {
+        if hover == Some(owner) {
+            kit::Press::Hover
+        } else if idle {
+            kit::Press::Idle
+        } else {
+            kit::Press::Rest
+        }
+    };
+    let mut list = Vec::new();
+    if let Some((back, forward)) = &b.trail {
+        list.push((Owner::Back, "←", None, press(&Owner::Back, back.is_none())));
+        list.push((
+            Owner::Forward,
+            "→",
+            None,
+            press(&Owner::Forward, forward.is_none()),
+        ));
+    }
+    let count = (b.needs > 0).then(|| (b.needs.to_string(), Tone::Needs));
+    let mission = if b.mission_open {
+        kit::Press::Lit
+    } else {
+        press(&Owner::Mission, false)
+    };
+    list.push((Owner::Mission, "⊞", count, mission));
+    let mut at = Vec::new();
+    for (owner, glyph, count, press) in list {
+        let from: usize = row.spans.iter().map(|s| width(&s.content)).sum();
+        row.spans
+            .extend(kit::button(glyph, count, press, false, theme));
+        let to: usize = row.spans.iter().map(|s| width(&s.content)).sum();
+        row.put(" ", Style::new());
+        at.push((owner, from, to));
+    }
+    at
+}
+
 /// The sidebar for one tab of a session: its session's tabs, most in need of
 /// you first, the plugins' lists, then the notifications. `tabs` are the session's (filtered
 /// already, when a filter is kept), `frozen` the layout held while browsing.
@@ -438,6 +520,21 @@ pub fn sidebar_lines(
         Some((from, to))
     };
     let mut reminders_at = None;
+    let mut buttons_at = Vec::new();
+    // The tab ← or → goes to while the mouse is over it, and its arrow.
+    let going: Option<(&TabModel, &str)> = match (view.buttons, view.hover) {
+        (Some(b), Some(Owner::Back)) => b
+            .trail
+            .as_ref()
+            .and_then(|(to, _)| to.as_ref())
+            .map(|t| (t, "←")),
+        (Some(b), Some(Owner::Forward)) => b
+            .trail
+            .as_ref()
+            .and_then(|(_, to)| to.as_ref())
+            .map(|t| (t, "→")),
+        _ => None,
+    };
     if r.ux2 {
         // The count, a ☕ while the computer is held awake, and on the
         // right how to filter; the groups' own headings say how many need
@@ -445,27 +542,53 @@ pub fn sidebar_lines(
         let n = tabs.len();
         let said = format!("{n} {}", if n == 1 { "tab" } else { "tabs" });
         pill_row.put(" ", Style::new());
-        // The ⏰ chip first, so a long repository chip never pushes it off.
-        if view.reminders > 0 {
-            reminders_at = reminders_chip(&mut pill_row);
-            pill_row.put(" ", Style::new());
+        if let Some(b) = view.buttons {
+            buttons_at = buttons(&mut pill_row, b, view.hover, theme);
         }
-        repo_chip(&mut pill_row);
-        if view.repo.is_none() {
-            pill_row.put(said.clone(), fg(theme.dim));
-        }
-        let mut used: usize = pill_row.spans.iter().map(|s| width(&s.content)).sum();
-        if view.awake {
-            let cup = kit::mark(Mark::Awake, 0, theme);
-            used += 2 + width(&cup.content);
-            pill_row.put("  ", Style::new());
-            pill_row.spans.push(cup);
-        }
-        let gap = cols.saturating_sub(used + width("/ filter") + 1);
-        if gap > 0 {
-            pill_row
-                .put(" ".repeat(gap), Style::new())
-                .put("/ filter", fg(theme.faint));
+        // Under the mouse, a button names where it goes in place of the
+        // rest of the line.
+        let named = match (going, view.hover) {
+            (Some((tab, _)), _) => {
+                let state = model::badge_state(tab, r);
+                pill_row
+                    .spans
+                    .push(kit::mark(Mark::of_badge(state), view.frame, theme));
+                pill_row
+                    .put(" ", Style::new())
+                    .put(tab.index.to_string(), fg(number_color(tab, theme)))
+                    .put(" ", Style::new())
+                    .put(tab.name.clone(), fg(theme.text));
+                true
+            }
+            (None, Some(Owner::Mission)) if view.buttons.is_some() => {
+                pill_row.put("Mission control", bold(theme.text));
+                true
+            }
+            _ => false,
+        };
+        if !named {
+            // The ⏰ chip first, so a long repository chip never pushes it off.
+            if view.reminders > 0 {
+                reminders_at = reminders_chip(&mut pill_row);
+                pill_row.put(" ", Style::new());
+            }
+            repo_chip(&mut pill_row);
+            if view.repo.is_none() {
+                pill_row.put(said.clone(), fg(theme.dim));
+            }
+            let mut used: usize = pill_row.spans.iter().map(|s| width(&s.content)).sum();
+            if view.awake {
+                let cup = kit::mark(Mark::Awake, 0, theme);
+                used += 2 + width(&cup.content);
+                pill_row.put("  ", Style::new());
+                pill_row.spans.push(cup);
+            }
+            let gap = cols.saturating_sub(used + width("/ filter") + 1);
+            if gap > 0 {
+                pill_row
+                    .put(" ".repeat(gap), Style::new())
+                    .put("/ filter", fg(theme.faint));
+            }
         }
     } else {
         pill_row
@@ -491,6 +614,7 @@ pub fn sidebar_lines(
         let n = picked.len();
         pill_row = Row::default();
         reminders_at = None;
+        buttons_at.clear();
         pill_row.put(" ", Style::new());
         pill_row.spans.extend(kit::chip(
             &format!("{n} selected"),
@@ -672,9 +796,12 @@ pub fn sidebar_lines(
                 // under it, what it is doing.
                 let state = model::badge_state(tab, r);
                 spins |= kit::spins(state, true);
+                // The tab ← or → goes to lights under the mouse on it too,
+                // the arrow at its right edge.
+                let arrow = going.filter(|(t, _)| t.id == tab.id).map(|(_, a)| a);
                 let fill = if chosen {
                     Some(theme.highlight)
-                } else if view.hover == Some(&Owner::Tab(tab.id)) {
+                } else if view.hover == Some(&Owner::Tab(tab.id)) || arrow.is_some() {
                     Some(theme.panel)
                 } else {
                     None
@@ -693,13 +820,7 @@ pub fn sidebar_lines(
                     .push(kit::mark(Mark::of_badge(state), view.frame, theme));
                 first
                     .put(" ", Style::new())
-                    .put(
-                        number,
-                        fg(tab
-                            .color
-                            .map(|c| crate::tabs::color::as_words(c.into(), *theme == Theme::LIGHT))
-                            .unwrap_or(theme.faint)),
-                    )
+                    .put(number, fg(number_color(tab, theme)))
                     .put(" ", Style::new())
                     .put(text::cut(&tab.name, room), name_style);
                 let kit_row = |row: Row| Line {
@@ -710,6 +831,14 @@ pub fn sidebar_lines(
                         theme,
                     ),
                     fill,
+                };
+                let first = match arrow {
+                    Some(a) => {
+                        let mut spans = first.fit(cols.saturating_sub(3), None).spans;
+                        spans.push(Span::styled(a, Tone::Accent.bold(theme)));
+                        Row { spans }
+                    }
+                    None => first,
                 };
                 lines.push(kit_row(first));
                 owners.push(Some(Owner::Tab(tab.id)));
@@ -1183,6 +1312,11 @@ pub fn sidebar_lines(
         },
         spins,
         reminders_at,
+        buttons_at: buttons_at
+            .into_iter()
+            .filter(|(_, from, _)| *from < cols)
+            .map(|(o, from, to)| (o, from, to.min(cols)))
+            .collect(),
     }
 }
 
@@ -1254,6 +1388,7 @@ mod tests {
             awake: false,
             repo: None,
             folded: &NONE_FOLDED,
+            buttons: None,
             notices_folded: false,
             reminders: 0,
             build: None,
@@ -1513,6 +1648,103 @@ mod tests {
         );
         assert!(!texts(&old)[1].contains("Building"));
         assert_ne!(old.owners[1], Some(Owner::BuildRow));
+    }
+
+    #[test]
+    fn with_ux2_the_top_line_starts_with_back_forward_and_mission_control() {
+        let tabs = vec![
+            tab(1, "planning", TabState::Working),
+            tab(2, "stable note IDs", TabState::Waiting),
+        ];
+        let r = Rules {
+            ux2: true,
+            ..rules()
+        };
+        let draw = |b: &Buttons, hover: Option<&Owner>| {
+            sidebar_lines(
+                &tabs,
+                None,
+                &[],
+                &[],
+                "s",
+                40,
+                20,
+                &View {
+                    buttons: Some(b),
+                    hover,
+                    ..view(1)
+                },
+                &r,
+                &Theme::DARK,
+            )
+        };
+        // Nothing back or forward: both faint; a tab needs you: its count.
+        let b = Buttons {
+            trail: Some((None, None)),
+            mission_open: false,
+            needs: 1,
+        };
+        let out = draw(&b, None);
+        let text = texts(&out);
+        assert!(
+            text[0].starts_with("  ←   →   ⊞ 1  2 tabs"),
+            "{:?}",
+            text[0]
+        );
+        assert_eq!(out.lines[0].spans[2].style.fg, Some(Theme::DARK.faint));
+        assert_eq!(
+            out.buttons_at,
+            vec![
+                (Owner::Back, 1, 4),
+                (Owner::Forward, 5, 8),
+                (Owner::Mission, 9, 14)
+            ]
+        );
+        // With a tab back there, the mouse over ← names it in place of the
+        // count, and lights its row with the arrow at its right edge.
+        let b = Buttons {
+            trail: Some((Some(tabs[1].clone()), None)),
+            mission_open: false,
+            needs: 0,
+        };
+        let out = draw(&b, Some(&Owner::Back));
+        let text = texts(&out);
+        assert!(
+            text[0].starts_with("  ←   →   ⊞  ● 2 stable note IDs"),
+            "{:?}",
+            text[0]
+        );
+        assert!(!text[0].contains("tabs"), "{:?}", text[0]);
+        let row = out
+            .owners
+            .iter()
+            .position(|o| *o == Some(Owner::Tab(TabId(2))))
+            .unwrap();
+        assert_eq!(out.lines[row].fill, Some(Theme::DARK.panel));
+        // A column in from the edge.
+        assert!(text[row].ends_with("←"), "{:?}", text[row]);
+        assert_eq!(text[row].chars().count(), 39, "{:?}", text[row]);
+        // Over ⊞, "Mission control"; lit while it is open.
+        let out = draw(&b, Some(&Owner::Mission));
+        assert!(texts(&out)[0].contains("Mission control"));
+        let open = Buttons {
+            mission_open: true,
+            ..b.clone()
+        };
+        let out = draw(&open, None);
+        let lit = out.lines[0]
+            .spans
+            .iter()
+            .find(|s| s.content == "⊞")
+            .unwrap();
+        assert_eq!(lit.style.bg, Some(crate::mux::compose::colors::ACCENT));
+        // With back and forward off, ⊞ alone.
+        let off = Buttons {
+            trail: None,
+            ..b.clone()
+        };
+        let text = texts(&draw(&off, None));
+        assert!(text[0].starts_with("  ⊞  2 tabs"), "{:?}", text[0]);
     }
 
     #[test]

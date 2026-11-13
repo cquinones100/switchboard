@@ -8,15 +8,20 @@
 //! unfolding first on a group's heading or the notifications'. It follows Settings' "Click in menus", off
 //! leaving a right click on a tab the peek it was. `m` in the sidebar and
 //! the context-menu key (S-F10) open the same menu for the cursor's row,
-//! beside it, whatever that setting says, since a key is no click.
+//! beside it, whatever that setting says, since a key is no click. On ←
+//! or →, the whole trail of tabs visited (board 58), any step one choice
+//! away; on ⊞, mission control's views by group (board 60).
 
-use super::super::model::Stage;
+use super::super::model::{self, Rules, Stage};
 use super::super::render::Owner;
 use crate::extras::Command as Extra;
 use crate::mux::TabId;
 use crate::mux::keys::Action;
 use crate::mux::server::{ClientId, Server};
 use crate::settings;
+use crate::sidebar::text::{self, width};
+
+use crate::ui::kit::Mark;
 
 /// What the sidebar's own menu does.
 enum Act {
@@ -96,6 +101,8 @@ impl Server {
         match owner {
             Some(Owner::Tab(t)) => self.sidebar_tab_menu(client, t),
             Some(notice @ Owner::Notice { .. }) => self.sidebar_notice_menu(client, &notice),
+            Some(Owner::Back | Owner::Forward) => self.sidebar_trail_menu(client, session),
+            Some(Owner::Mission) => self.sidebar_views_menu(client),
             other => self.sidebar_own_menu(client, session, other),
         }
     }
@@ -128,6 +135,129 @@ impl Server {
         let mut item = item.clone();
         item.id = format!("{source}\t{}", item.id);
         self.notice_menu(client, item);
+    }
+
+    /// The whole trail of tabs a session visited, as board 58 draws it:
+    /// the forward ones furthest first, the tab you are on marked "you are
+    /// here", then the back ones nearest first, each its mark, number and
+    /// name with its steps away at the right; a choice goes straight there,
+    /// as that many steps would.
+    pub(crate) fn sidebar_trail_menu(&mut self, client: ClientId, session: &str) {
+        let Some((current, (back, forward))) = self
+            .session(session)
+            .map(|s| (s.current, s.trail.steps(s.current)))
+        else {
+            return;
+        };
+        let Some(s) = self.session(session) else {
+            return;
+        };
+        let r = Rules::now();
+        // How wide a tab's mark, number and name may be, so the widest row,
+        // with "you are here" after it, fits the menu on this screen.
+        const HERE: &str = "you are here";
+        let cols = self
+            .clients
+            .get(&client)
+            .map_or(80, |c| usize::from(c.cols));
+        let room = crate::ui::menu::label_room(cols).saturating_sub(3 + width(HERE));
+        let name = |t: TabId| {
+            self.trail_model(s, t).map(|m| {
+                let mark = Mark::of_badge(model::badge_state(&m, &r)).look().0;
+                // Cut so its steps away stay in the menu's width
+                // whatever the tab's title.
+                text::cut(&format!("{mark} {} {}", m.index, m.name), room)
+            })
+        };
+        // Each row: its words, its steps away, and where a choice goes
+        // (back or not, and how many steps).
+        type Row = (String, String, Option<(bool, usize)>);
+        let mut rows: Vec<Row> = Vec::new();
+        for (t, n) in forward.iter().rev() {
+            if let Some(words) = name(*t) {
+                rows.push((words, format!("→ {n}"), Some((false, *n))));
+            }
+        }
+        let here = rows.len();
+        rows.push((name(current).unwrap_or_default(), HERE.into(), None));
+        for (t, n) in &back {
+            if let Some(words) = name(*t) {
+                rows.push((words, format!("← {n}"), Some((true, *n))));
+            }
+        }
+        let left = rows.iter().map(|(w, _, _)| width(w)).max().unwrap_or(0);
+        let labels: Vec<String> = rows
+            .iter()
+            .map(|(w, steps, _)| format!("{w}{}   {steps}", " ".repeat(left - width(w))))
+            .collect();
+        let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+        // The step back is chosen as it opens, else the tab you are on.
+        let at = if back.is_empty() { here } else { here + 1 };
+        let menu = crate::ui::Menu::of("Back and forward", &labels).at(at);
+        let session = session.to_string();
+        self.choose(client, menu, move |server, _, chose| {
+            if let Some((back, n)) = chose.and_then(|i| rows.get(i)).and_then(|(_, _, go)| *go) {
+                // As M-[ and M-] do: out of the sidebar, onto the tab.
+                server.sidebar_leave(&session);
+                server.trail_step(&session, back, n);
+            }
+        });
+    }
+
+    /// Mission control's views by group, as board 60 draws them: each
+    /// view that is on under Work, Code, Day and System, the Tabs view
+    /// with the tabs that need you; a choice opens mission control on it.
+    pub(crate) fn sidebar_views_menu(&mut self, client: ClientId) {
+        let needs = self
+            .clients
+            .get(&client)
+            .map(|c| c.session.clone())
+            .map_or(0, |s| {
+                model::needs_you(&self.sidebar_tabs(&s), &Rules::now()).len()
+            });
+        let views = self.mission_view_list();
+        let mut rows: Vec<(String, String, Option<String>)> = Vec::new();
+        let mut group = None;
+        for (g, title, slug, count) in views {
+            use crate::mission::views::Group;
+            let head = if group == Some(g) { "" } else { g.name() };
+            group = Some(g);
+            // The tabs that need you, and how many the views of your code
+            // and your day hold.
+            let fact = match slug.as_deref() {
+                None if needs > 0 => format!("{needs} need you"),
+                Some(_) if count > 0 && matches!(g, Group::Code | Group::Day) => count.to_string(),
+                _ => String::new(),
+            };
+            rows.push((format!("{head:<7} {title}"), fact, slug));
+        }
+        let left = rows.iter().map(|(w, _, _)| width(w)).max().unwrap_or(0);
+        let labels: Vec<String> = rows
+            .iter()
+            .map(|(w, fact, _)| {
+                if fact.is_empty() {
+                    w.clone()
+                } else {
+                    format!("{w}{}   {fact}", " ".repeat(left - width(w)))
+                }
+            })
+            .collect();
+        let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+        let menu = crate::ui::Menu::of("Mission control", &labels);
+        self.choose(client, menu, move |server, client, chose| {
+            let Some((_, _, slug)) = chose.and_then(|i| rows.into_iter().nth(i)) else {
+                return;
+            };
+            let how = match slug {
+                None => crate::mission::Opening::Tabs,
+                Some(s) if s == "settings" => crate::mission::Opening::Settings,
+                Some(s) => crate::mission::Opening::View(s),
+            };
+            if let Some(session) = server.clients.get(&client).map(|c| c.session.clone()) {
+                server.sidebar_leave(&session);
+            }
+            server.open_mission(client, how);
+        });
     }
 
     /// The sidebar's own menu, each option what its palette command does;

@@ -6175,7 +6175,7 @@ fn grouped_bar(
             Tone::Dim.style(theme),
         )]
     } else {
-        kit::hints(&[("M-[ ]", "groups"), ("[ ]", "views")], theme)
+        kit::hints(&[("{ }", "groups"), ("[ ]", "views")], theme)
     };
     // At the right, a column in from the edge, two clear of what is before.
     let gap = cols.saturating_sub(row.width() + spans_width(&keys) + 1);
@@ -8036,7 +8036,7 @@ mod tests {
         );
         assert!(t[1].starts_with("  PRs  "), "{:?}", t[1]);
         assert!(
-            t[1].trim_end().ends_with("M-[ ] groups  [ ] views"),
+            t[1].trim_end().ends_with("{ } groups  [ ] views"),
             "{:?}",
             t[1]
         );

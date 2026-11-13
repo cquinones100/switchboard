@@ -764,6 +764,7 @@ impl Action {
                     | Action::FindTab
                     | Action::ReviveWorktree
                     | Action::Extra(Extra::Mission(_))
+                    | Action::Extra(Extra::MissionViews)
                     | Action::Autopilot(_)
                     | Action::ContextMenu
             ),
@@ -1160,6 +1161,13 @@ mod tests {
         assert!(!b.yours.contains(&k("M-t")));
         assert!(b.yours_prefix.contains(&k("y")));
         assert!(Bindings::default().yours.is_empty());
+    }
+
+    #[test]
+    fn the_views_menu_runs_over_mission_control_and_the_trail_closes_it() {
+        use crate::extras::Command as Extra;
+        assert!(Action::Extra(Extra::MissionViews).in_mission());
+        assert!(!Action::Extra(Extra::TabTrail).in_mission());
     }
 
     #[test]

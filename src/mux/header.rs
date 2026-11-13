@@ -3,6 +3,10 @@
 //! with no tmux-version file behind it, since tmux drew its status line
 //! and nothing over a window's panes.
 //!
+//! With the sidebar hidden, its first row starts with the workspace's own
+//! buttons, as the sidebar's top line does (boards 57 to 60): ← and → back
+//! and forward through the tabs visited, and ⊞ mission control.
+//!
 //! Its first row is filled with the tab's own color (the one its number
 //! has in the sidebar, src/tabs/color.rs), and on it, dark, the state's
 //! mark, the tab's name in bold, where it works, what Claude is doing and
@@ -118,6 +122,12 @@ impl Shown {
 /// What a click in the header lands on: a key, or the ⌘ Commands button.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Button {
+    /// ← and →, back and forward through the tabs visited, and ⊞,
+    /// mission control, at the first row's left end with the sidebar
+    /// hidden.
+    Back,
+    Forward,
+    Mission,
     Show(Shown),
     /// M-h, the tab's history (src/history).
     History,
@@ -129,6 +139,9 @@ impl Button {
     /// click while the palette is open lands outside it, which closes it).
     pub fn action(self) -> Action {
         match self {
+            Button::Back => Action::TabBack,
+            Button::Forward => Action::TabForward,
+            Button::Mission => Action::MissionControl,
             Button::Show(shown) => shown.action(),
             Button::History => Action::History,
             Button::Commands => Action::Palette,
@@ -166,6 +179,19 @@ pub struct Header {
     /// How full its Claude's context is, in percent, once its statusline
     /// has said.
     pub context: Option<u8>,
+    /// The workspace's own buttons, while the sidebar that otherwise
+    /// holds them is hidden.
+    pub nav: Option<Nav>,
+}
+
+/// What the workspace's own buttons show: whether ← and → are drawn and
+/// have a tab to go to, and ⊞'s count of tabs that need you.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Nav {
+    /// Back and forward step through the tabs visited (tab_back_forward):
+    /// whether each has a tab that way.
+    pub trail: Option<(bool, bool)>,
+    pub needs: usize,
 }
 
 /// A state's mark in the kit.
@@ -231,6 +257,40 @@ pub fn draw(
         None => band.patch(mark.style),
     };
     let mut x = area.x + 1;
+    if let Some(nav) = h.nav {
+        let press = |button: Button, idle: bool| {
+            if hover == Some(button) {
+                kit::Press::Hover
+            } else if idle {
+                kit::Press::Idle
+            } else {
+                kit::Press::Rest
+            }
+        };
+        let mut list = Vec::new();
+        if let Some((back, forward)) = nav.trail {
+            list.push((Button::Back, "←", None, press(Button::Back, !back)));
+            list.push((Button::Forward, "→", None, press(Button::Forward, !forward)));
+        }
+        let count = (nav.needs > 0).then(|| (nav.needs.to_string(), kit::Tone::Needs));
+        list.push((Button::Mission, "⊞", count, press(Button::Mission, false)));
+        for (button, glyph, count, press) in list {
+            let spans = kit::button(glyph, count, press, caps, &theme);
+            let start = x;
+            x = crate::ui::draw::put_line(
+                buf,
+                x,
+                first.y,
+                area.right().saturating_sub(x),
+                &Line::from(spans),
+            );
+            if x > start {
+                keys.push((Rect::new(start, first.y, x - start, 1), button));
+            }
+            x += 1;
+        }
+        x += 1;
+    }
     x = compose::put(buf, x, first, &mark.content, mark_style);
     x = compose::put(
         buf,
@@ -389,7 +449,46 @@ mod tests {
             history_open: false,
             viewing: None,
             context: None,
+            nav: None,
         }
+    }
+
+    #[test]
+    fn with_the_sidebar_hidden_its_buttons_start_the_first_row_and_take_clicks() {
+        let area = Rect::new(0, 0, 90, ROWS);
+        let mut buf = Buffer::empty(area);
+        let h = Header {
+            nav: Some(Nav {
+                trail: Some((true, false)),
+                needs: 3,
+            }),
+            ..header(Shown::Claude)
+        };
+        let keys = draw(&mut buf, area, &h, None, &Palette::DARK, false, false);
+        let first = text(&buf, 0);
+        assert!(first.starts_with("  ←   →   ⊞ 3   ⠹ planning"), "{first:?}");
+        let buttons: Vec<Button> = keys.iter().map(|(_, b)| *b).take(3).collect();
+        assert_eq!(buttons, [Button::Back, Button::Forward, Button::Mission]);
+        assert_eq!(keys[0].0, Rect::new(1, 0, 3, 1));
+        assert_eq!(Button::Back.action(), Action::TabBack);
+        assert_eq!(Button::Mission.action(), Action::MissionControl);
+        // → has no tab that way: faint.
+        assert_eq!(buf[(6, 0)].fg, Theme::DARK.faint);
+        // With back and forward off, ⊞ alone.
+        let h = Header {
+            nav: Some(Nav {
+                trail: None,
+                needs: 0,
+            }),
+            ..header(Shown::Claude)
+        };
+        let mut buf = Buffer::empty(area);
+        draw(&mut buf, area, &h, None, &Palette::DARK, false, false);
+        assert!(
+            text(&buf, 0).starts_with("  ⊞   ⠹ planning"),
+            "{:?}",
+            text(&buf, 0)
+        );
     }
 
     #[test]
@@ -705,6 +804,7 @@ mod history_tests {
             history_open: true,
             viewing: Some("viewing 13:41, 51 minutes ago".into()),
             context: None,
+            nav: None,
         };
         let keys = draw(&mut buf, area, &h, None, &Palette::DARK, false, false);
         let row: String = (0..120).map(|x| buf[(x, 2)].symbol().to_string()).collect();
@@ -740,6 +840,7 @@ mod viewing_tests {
             history_open: true,
             viewing: Some("viewing 13:41, 51 minutes ago".into()),
             context: None,
+            nav: None,
         };
         draw(&mut buf, area, &h, None, &Palette::DARK, false, false);
         let first: String = (0..70).map(|x| buf[(x, 0)].symbol().to_string()).collect();

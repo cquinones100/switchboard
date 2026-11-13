@@ -578,6 +578,50 @@ pub fn chip(text: &str, tone: Tone, caps: bool, theme: &Theme) -> Vec<Span<'stat
     out
 }
 
+/// How one of the workspace's own buttons (back, forward, mission
+/// control) is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Press {
+    /// Ready: on the panel surface.
+    Rest,
+    /// With nothing to do (no tab that way): its glyph faint.
+    Idle,
+    /// Under the mouse: on the chosen surface.
+    Hover,
+    /// What it opens is in front: dark on the accent.
+    Lit,
+}
+
+/// A button: its glyph bold in the accent on the panel surface between
+/// its ends, with `count` after it bold in its tone (`⊞ 3`, the tabs that
+/// need you), by `press`; no column after it.
+pub fn button(
+    glyph: &str,
+    count: Option<(String, Tone)>,
+    press: Press,
+    caps: bool,
+    theme: &Theme,
+) -> Vec<Span<'static>> {
+    let fill = match press {
+        Press::Rest | Press::Idle => Surface::Panel.color(theme),
+        Press::Hover => Surface::Chosen.color(theme),
+        Press::Lit => accent(theme),
+    };
+    let ink = |tone: Tone| {
+        let style = match press {
+            Press::Lit => Style::new().fg(on_color(theme)),
+            Press::Idle => Tone::Faint.style(theme),
+            _ => tone.style(theme),
+        };
+        style.add_modifier(Modifier::BOLD)
+    };
+    let mut inner = vec![Span::styled(glyph.to_string(), ink(Tone::Accent))];
+    if let Some((n, tone)) = count {
+        inner.push(Span::styled(format!(" {n}"), ink(tone)));
+    }
+    rounded(inner, fill, caps)
+}
+
 /// A meter of `cells` cells, as many filled as `used` percent reaches
 /// (rounded), filled ones in `tone` and the rest faint.
 pub fn meter(used: u8, cells: usize, tone: Tone, theme: &Theme) -> Vec<Span<'static>> {
