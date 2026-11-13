@@ -665,7 +665,7 @@ pub fn unclaimed(repo: &Path, note: &str, text: &str) -> Vec<Item> {
 }
 
 /// Whether an item's plan is settled.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Plan {
     /// Its `Plan: [[<name>]]` links a plan note with no "## Decision
     /// needed", the heading plans mark an open choice with, or one whose
@@ -674,6 +674,12 @@ pub enum Plan {
     Settled,
     /// The plan note has an open choice.
     Choice,
+    /// The plan note's open choice waits on the person's review of a design
+    /// board: it names one (`board 21`, `boards 69 and 70`) or says it
+    /// waits until something is reviewed. Never decided hands-free, so
+    /// autopilot holds it in either mode; what it waits on, as the held rows
+    /// say it (`your review of boards 69 and 70`).
+    Review(String),
     /// No plan, or its plan note isn't there.
     None,
 }
@@ -687,12 +693,32 @@ static MADE: LazyLock<Regex> =
 // An item that says what was chosen: "(chose B)".
 static CHOSE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\(chose\b").unwrap());
 
-/// Whether a plan note leaves a choice open: a "## Decision needed"
-/// section (up to the next heading of its level or above, its subheadings
-/// in it) with no ticked option and no `Chose …` line. The heading is often
+// A design board an option names: "board 21", "boards 69 and 70",
+// "boards 57 to 60".
+static BOARD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\bboards?\s+\d+(?:(?:\s*,\s*|\s+and\s+|\s+to\s+|\s*[-–]\s*)\d+)*").unwrap()
+});
+// An option that waits on a person's review being done: "once Carlos has
+// reviewed them", "until the design is reviewed", "once you review it",
+// "after your review"; never a mention of a review alone ("when a review
+// comment arrives"). The boards named by number (`BOARD`) are what
+// plan-item writes; this catches the plans worded without them.
+static REVIEWED: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b(?:once|until|after)\b[^.]*\b(?:reviewed|approved|reviews|approves|(?:review|approve)\s+(?:it|them|this|that|the)\b|(?:your|their|his|her|\w+'s)\s+(?:review|approval)\b)").unwrap()
+});
+
+// Where an option, or a heading, starts a new part of a decision.
+static OPTION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(?:[-*+]|\d+[.)]|#+)\s").unwrap());
+
+/// A plan note's open choices: each "## Decision needed" section (up to
+/// the next heading of its level or above, its subheadings in it) with no
+/// ticked option and no `Chose …` line, as its lines. The heading is often
 /// left in place once the choice is made, so the heading alone doesn't say
 /// it is open.
-fn open_choice(plan: &str) -> bool {
+fn open_choices(plan: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut section: Vec<&str> = Vec::new();
     let mut open = false;
     // The level of the decision section the lines are in, if any.
     let mut decision: Option<usize> = None;
@@ -700,18 +726,52 @@ fn open_choice(plan: &str) -> bool {
         if let Some(m) = HEADING.captures(line) {
             let level = m[1].len();
             if decision.is_some_and(|d| level > d) {
+                section.push(line);
                 continue;
             }
             if open {
-                return true;
+                out.push(section.join("\n"));
             }
+            section.clear();
             decision = DECISION.is_match(line).then_some(level);
             open = decision.is_some();
-        } else if decision.is_some() && MADE.is_match(line) {
-            open = false;
+            if open {
+                section.push(line);
+            }
+        } else if decision.is_some() {
+            section.push(line);
+            if MADE.is_match(line) {
+                open = false;
+            }
         }
     }
-    open
+    if open {
+        out.push(section.join("\n"));
+    }
+    out
+}
+
+/// What an open choice waits on when it is a design review: the boards it
+/// names, else a design, as "your review of …"; none for any other choice.
+fn review_of(choice: &str) -> Option<String> {
+    if let Some(m) = BOARD.find(choice) {
+        return Some(format!("your review of {}", m.as_str().to_lowercase()));
+    }
+    // Each option read on its own, with the lines wrapped under it, so a
+    // word in one ("after every change") never pairs with another's.
+    let mut options: Vec<String> = Vec::new();
+    for line in choice.lines() {
+        if OPTION.is_match(line) || options.is_empty() {
+            options.push(line.to_string());
+        } else if let Some(last) = options.last_mut() {
+            last.push('\n');
+            last.push_str(line);
+        }
+    }
+    options
+        .iter()
+        .any(|o| REVIEWED.is_match(o))
+        .then(|| "your review of its design".to_string())
 }
 
 /// An item's block without its `After:` lines, which name other items, so
@@ -734,10 +794,16 @@ pub fn plan_of(notes: &Path, item: &str) -> Plan {
     let Some(file) = plan_file(notes, &name) else {
         return Plan::None;
     };
-    match fs::read_to_string(file) {
-        Ok(text) if open_choice(&text) && !CHOSE.is_match(item) => Plan::Choice,
-        Ok(_) => Plan::Settled,
-        Err(_) => Plan::None,
+    let Ok(text) = fs::read_to_string(file) else {
+        return Plan::None;
+    };
+    let open = open_choices(&text);
+    if open.is_empty() || CHOSE.is_match(item) {
+        return Plan::Settled;
+    }
+    match open.iter().find_map(|c| review_of(c)) {
+        Some(what) => Plan::Review(what),
+        None => Plan::Choice,
     }
 }
 
@@ -746,7 +812,8 @@ pub fn plan_of(notes: &Path, item: &str) -> Plan {
 /// that isn't there), each in the note's order. An item whose plan needs a
 /// choice is taken only `with_choices` (autopilot hands-free, whose tab
 /// takes the recommended option), after the settled ones and before those
-/// with no plan; never taken is nor one under a parked section, nor one a
+/// with no plan; never taken is one whose choice waits on the person's
+/// review of a design board (`Plan::Review`), in either mode, nor one under a parked section, nor one a
 /// worktree has or wtn started in the last half hour (its claims file),
 /// nor one held by an open item its `After:` line names, nor an empty one, nor one whose first line is in `skip` (the items
 /// skipped, and those opened a moment ago, before wtn has made their
@@ -767,7 +834,9 @@ pub fn queue(
 }
 
 /// `queue`'s items, and apart from them those it would take but for the
-/// open item each waits on (`Item::waits_on`), in the note's order.
+/// open item each waits on (`Item::waits_on`), or the review of a design
+/// board its plan's choice waits on (`waits_on` saying "your review of
+/// board 69"), in the note's order.
 pub fn queue_and_held(
     notes: &Path,
     repo: &Path,
@@ -790,14 +859,24 @@ pub fn queue_and_held(
         crate::util::now_secs(),
     );
     for item in unclaimed(repo, note, &text) {
-        if (item.needs_choice && !with_choices)
-            || skip.contains(&item.text)
-            || lately.contains(&item.text)
-            || item.text.trim().is_empty()
-        {
+        if skip.contains(&item.text) || lately.contains(&item.text) || item.text.trim().is_empty() {
             continue;
         }
-        let bucket = match plan_of(notes, &item_text(&text, item.line)) {
+        // A review hold is listed whatever the item says of its choice, so
+        // one marked "(needs a choice: …)" shows as held in either mode.
+        let plan = plan_of(notes, &item_text(&text, item.line));
+        if let Plan::Review(what) = plan {
+            held.push(Item {
+                waits_on: Some(item.waits_on.unwrap_or(what)),
+                ..item
+            });
+            continue;
+        }
+        if item.needs_choice && !with_choices {
+            continue;
+        }
+        let bucket = match plan {
+            Plan::Review(_) => continue,
             Plan::Choice if with_choices => &mut choices,
             Plan::Choice => continue,
             Plan::Settled if item.needs_choice => &mut choices,
@@ -1233,7 +1312,7 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
     let hands_free = in_hands_free_tab();
     let plan_words = match (&plan, &plan_name) {
         (Some(p), _) if hands_free => format!(
-            "Its plan is {}: read it first. This tab is hands-free: where the plan or the item still marks a choice as needed, take the recommended option (else the plan's first), tick it in the plan with a `Decided hands-free: <choice>` line, then build it, as long as `switchboard show @autopilot_handsfree` still prints 1 when you decide (otherwise hands-free was turned off: ask me as usual). ",
+            "Its plan is {}: read it first. This tab is hands-free: where the plan or the item still marks a choice as needed, take the recommended option (else the plan's first), tick it in the plan with a `Decided hands-free: <choice>` line, then build it, as long as `switchboard show @autopilot_handsfree` still prints 1 when you decide (otherwise hands-free was turned off: ask me as usual). A choice that approves a design board (one naming a board, or waiting until it is reviewed) is never decided hands-free: ask it with `[always ask]` as the question's header. ",
             p.display()
         ),
         (Some(p), _) => format!(
@@ -1646,6 +1725,129 @@ mod tests {
             vec!["Picked", "Ticked", "Open", "Asking"],
             "hands-free takes the items needing a choice too, after the settled ones"
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_choice_waiting_on_a_design_review_is_held_in_either_mode() {
+        let dir = std::env::temp_dir().join(format!("sb-review-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("Plans")).unwrap();
+        let plans = [
+            (
+                "Boards",
+                "## Decision needed\n\n- [ ] A: build it as boards 69 and 70 draw it (Recommended)\n- [ ] B: keep it as it is\n\n## Steps\n\nLike board 3.\n",
+            ),
+            (
+                "Reviewed",
+                "## Decision needed\n\n- [ ] Build the new list once Carlos has reviewed it\n- [ ] Leave it\n",
+            ),
+            (
+                "Until",
+                "## Decision needed\n\n- [ ] Wait until the design is reviewed\n- [ ] Build it now\n",
+            ),
+            (
+                "After",
+                "## Decision needed\n\n- [ ] Build it after the design is reviewed (Recommended)\n",
+            ),
+            (
+                "Heading",
+                "## Decision needed: approve board 69\n\n- [ ] A: build it (Recommended)\n- [ ] B: leave it\n",
+            ),
+            (
+                "Apart",
+                "## Decision needed\n\n- [ ] A: refresh after every change (Recommended)\n- [ ] B: add a refresh button to the review view\n- [ ] C: refresh when a review comment arrives\n- [ ] D: refresh when your review comment arrives\n",
+            ),
+            (
+                "Active",
+                "## Decision needed\n\n- [ ] A: build the design once you review it (Recommended)\n",
+            ),
+            (
+                "Wrapped",
+                "## Decision needed\n\n- [ ] A: build the design once you have\n  reviewed it (Recommended)\n",
+            ),
+            (
+                "Plain",
+                "## Decision needed\n\n- [ ] A\n- [ ] B\n\n## Steps\n\nAs board 12 draws it.\n",
+            ),
+            (
+                "Approved",
+                "## Decision needed\n\n- [x] Build it as board 21 draws it\n",
+            ),
+        ];
+        for (name, body) in plans {
+            fs::write(
+                dir.join(format!("Plans/Plan - {name}.md")),
+                format!("# Plan - {name}\n\n{body}"),
+            )
+            .unwrap();
+        }
+        let item = |name: &str| format!("- [ ] {name}\n  Plan: [[Plan - {name}]]\n");
+        assert_eq!(
+            plan_of(&dir, &item("Boards")),
+            Plan::Review("your review of boards 69 and 70".into())
+        );
+        assert_eq!(
+            plan_of(&dir, &item("Reviewed")),
+            Plan::Review("your review of its design".into())
+        );
+        assert_eq!(
+            plan_of(&dir, &item("Heading")),
+            Plan::Review("your review of board 69".into()),
+            "a board named in the decision's heading"
+        );
+        for name in ["Until", "After", "Active", "Wrapped"] {
+            assert_eq!(
+                plan_of(&dir, &item(name)),
+                Plan::Review("your review of its design".into()),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            plan_of(&dir, &item("Apart")),
+            Plan::Choice,
+            "a review mentioned in one option and a condition in another"
+        );
+        assert_eq!(
+            plan_of(&dir, &item("Plain")),
+            Plan::Choice,
+            "a board named outside the open choice holds nothing"
+        );
+        assert_eq!(plan_of(&dir, &item("Approved")), Plan::Settled);
+
+        fs::write(
+            dir.join("Work.md"),
+            "# Work\n\n- [ ] Boards\n  Plan: [[Plan - Boards]] (needs a choice: A or B)\n- [ ] Plain\n  Plan: [[Plan - Plain]]\n- [ ] Approved\n  Plan: [[Plan - Approved]]\n",
+        )
+        .unwrap();
+        for hands_free in [true, false] {
+            let (taken, held) = queue_and_held(
+                &dir,
+                &dir,
+                "Work.md",
+                &HashSet::new(),
+                false,
+                hands_free,
+                &dir.join("claims.tsv"),
+            )
+            .unwrap();
+            let taken: Vec<&str> = taken.iter().map(|i| i.text.as_str()).collect();
+            let expected = if hands_free {
+                vec!["Approved", "Plain"]
+            } else {
+                vec!["Approved"]
+            };
+            assert_eq!(taken, expected, "hands-free {hands_free}");
+            let held: Vec<(&str, Option<&str>)> = held
+                .iter()
+                .map(|i| (i.text.as_str(), i.waits_on.as_deref()))
+                .collect();
+            assert_eq!(
+                held,
+                vec![("Boards", Some("your review of boards 69 and 70"))],
+                "hands-free {hands_free}"
+            );
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 

@@ -875,6 +875,17 @@ mod tests {
         let held = items.iter().find(|i| i.title == "Builds on it").unwrap();
         assert_eq!(held.detail, "waits on The base");
         assert_eq!(held.data["waitsOn"], "The base");
+        let review = super::items(
+            &s,
+            "",
+            &[],
+            &[],
+            &[("New list".into(), "your review of board 69".into())],
+            &[],
+            &HashMap::new(),
+        );
+        let review = review.iter().find(|i| i.title == "New list").unwrap();
+        assert_eq!(review.detail, "waits on your review of board 69");
         let placed: Vec<(&str, &str)> = items
             .iter()
             .filter_map(|i| Some((i.group.as_deref()?, i.title.as_str())))

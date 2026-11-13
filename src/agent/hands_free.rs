@@ -30,7 +30,7 @@ pub const ALWAYS_ASK: &str = "[always ask]";
 pub const NUDGES: u32 = 3;
 
 /// What still stops a hands-free tab, in both reasons.
-const EXCEPTIONS: &str = "Only what must be asked still stops: what the user's or the repository's CLAUDE.md says to ask about (deleting data, end-to-end tests, a push anywhere but the landing), a question a skill you follow says to stop and ask (an unclear conflict, a failure the branch didn't cause, untracked files of someone else's, or one it heads `[always ask]`), whatever its wording, and a permission that was denied.";
+const EXCEPTIONS: &str = "Only what must be asked still stops: what the user's or the repository's CLAUDE.md says to ask about (deleting data, end-to-end tests, a push anywhere but the landing), a decision that approves a design board (one naming a board, or waiting until it is reviewed), a question a skill you follow says to stop and ask (an unclear conflict, a failure the branch didn't cause, untracked files of someone else's, or one it heads `[always ask]`), whatever its wording, and a permission that was denied.";
 
 /// The deny for a question box, as PreToolUse's output.
 pub fn deny_question() -> String {
@@ -182,5 +182,14 @@ mod tests {
         let block: Value = serde_json::from_str(&block_stop()).unwrap();
         assert_eq!(block["decision"], "block");
         assert!(block["reason"].as_str().unwrap().contains("[always ask]"));
+        for reason in [
+            deny["hookSpecificOutput"]["permissionDecisionReason"].as_str(),
+            block["reason"].as_str(),
+        ] {
+            assert!(
+                reason.unwrap().contains("approves a design board"),
+                "a design review is among what is still asked"
+            );
+        }
     }
 }
