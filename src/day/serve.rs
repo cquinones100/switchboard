@@ -540,8 +540,34 @@ impl Server {
         log(&dirs.state, "slack: asked the Slack tab to look now");
     }
 
-    /// Leaving the Slack view: what its look brought is seen.
-    pub fn slack_left(&mut self) {
+    /// Leaving the Slack view: what its look brought is seen, or with
+    /// `only`, those messages alone (the board showed no others).
+    pub fn slack_left(&mut self, only: Option<Vec<Item>>) {
+        if let Some(items) = only {
+            let dirs = Dirs::here();
+            let now = util::now_ms();
+            // Its threads read as far as the look that showed them, as
+            // leaving the whole look would have them.
+            let checked = slack::read(&dirs.state).map_or(now, |d| d.checked);
+            for item in &items {
+                let (_, id) = crate::mission::choices::notice_of(item);
+                self.notice_history_mark(
+                    "slack",
+                    &id,
+                    crate::sidebar::history::Sidebar::Read,
+                    false,
+                );
+                if let Some(m) = item.data.get("message") {
+                    let get = |k: &str| m.get(k).and_then(Value::as_str).unwrap_or("");
+                    slack::mark_item_seen(&dirs.state, get("channel"), get("ts"), now);
+                }
+                if let Some(thread) = item.data.get("thread").and_then(Value::as_str) {
+                    slack::mark_thread_read(&dirs.state, thread, checked);
+                }
+            }
+            self.day_views(&dirs, &util::local_now());
+            return;
+        }
         // Read there, as the history says before their list lets them go.
         let shown: Vec<String> = self
             .notices

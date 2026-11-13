@@ -163,6 +163,14 @@ pub fn mark_item_seen(state: &Path, channel: &str, ts: &str, now: i64) {
     );
 }
 
+/// A thread whose messages the Slack board showed while leaving the rest
+/// of the look unseen: its replies up to `at` (the look's time) are read, kept beside the
+/// messages seen on their own (`slack-seen-items.json`, as
+/// `thread:<thread key>`).
+pub fn mark_thread_read(state: &Path, thread: &str, at: i64) {
+    mark_item_seen(state, "thread", thread, at);
+}
+
 /// A message to dismiss, from an item's `data.message`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Ref {
@@ -362,8 +370,15 @@ pub fn slack_view(look: &Look) -> ViewData {
         items: items.into_iter().map(|(_, _, i)| i).collect(),
         error,
         at: Some(data.checked),
-        // Since when replies are new, for the thread beside the list.
-        head: json!({ "seen": seen }),
+        // Since when replies are new, for the thread beside the list, and
+        // the threads read since on their own.
+        head: json!({
+            "seen": seen,
+            "read_threads": acted
+                .iter()
+                .filter_map(|(k, at)| Some((k.strip_prefix("thread:")?.to_string(), at.clone())))
+                .collect::<Map<String, Value>>(),
+        }),
         ..ViewData::default()
     }
 }

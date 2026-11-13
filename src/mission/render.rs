@@ -5517,6 +5517,9 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool, resizes: bool) -> Vec<(
     const VIEW: &str = "view actions";
     let filter: &[(&str, &str)] = &[("/", "filter")];
     match m.pane_now() {
+        super::Pane::Panel if view.is_some_and(|v| v.id == ViewId::Slack) => {
+            return with(&[("jk", "section"), ("l", "its messages"), ("m", VIEW)]);
+        }
         super::Pane::Panel => return with(&[("jk", "category"), ("Enter", "its options")]),
         super::Pane::Beside => {
             return with(&[
@@ -5561,7 +5564,12 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool, resizes: bool) -> Vec<(
                 keys.push(("i", "thread"));
             }
             keys.push(("/", "filter"));
-            with_acts(&[("jk", "move")], ACTS, VIEW, &keys)
+            let hl = if m.panes().contains(&super::Pane::Panel) {
+                ("hl", "sections, messages, thread")
+            } else {
+                ("hl", "section")
+            };
+            with_acts(&[("jk", "move"), hl], ACTS, VIEW, &keys)
         }
         ViewId::Landing if m.snap.rules.ux2 => {
             let narrow = (m.laid().0 as usize) < LANDING_OUTPUT_AT;
@@ -6487,6 +6495,11 @@ pub(super) fn body(
                         Some(Spot::Index(i)) => usize::try_from(i).ok(),
                         _ => None,
                     },
+                    hover_section: match m.hover {
+                        Some(Spot::Choose(i)) => usize::try_from(i).ok(),
+                        _ => None,
+                    },
+                    sections_focused: m.pane_now() == super::Pane::Panel,
                 };
                 let (board, at, images) = super::slack_board::board(v, &look);
                 lines.extend(board);

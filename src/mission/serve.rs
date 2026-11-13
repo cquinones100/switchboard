@@ -434,14 +434,15 @@ impl Server {
         let leaving_slack = c
             .overlays
             .find::<Mission>()
-            .is_some_and(|m| m.came.as_deref() == Some("Slack") || m.grid_has("slack"));
+            .filter(|m| m.came.as_deref() == Some("Slack") || m.grid_has("slack"))
+            .map(Mission::slack_seen);
         let above: Vec<&'static str> = kinds[at + 1..].to_vec();
         for kind in above.into_iter().rev() {
             self.close_overlays(client, kind);
         }
         self.close_overlays(client, "mission");
-        if leaving_slack {
-            self.slack_left();
+        if let Some(seen) = leaving_slack {
+            self.slack_left(seen);
         }
     }
 
@@ -709,14 +710,49 @@ impl Server {
     /// message's thread and its pictures (`Server::slack_extras`), and the
     /// photos of the people it shows.
     fn slack_board_extras(&mut self, m: &mut Mission) {
+        // A Slack cell without the focus, among views shown at once, shows
+        // its first section, which has been shown too.
+        let cell = m
+            .grid_shown()
+            .into_iter()
+            .filter(|(_, at)| *at != m.view)
+            .filter_map(|(_, at)| at.checked_sub(1).and_then(|i| m.snap.views.get(i)))
+            .find(|v| super::render::slack_board_shown(m, v))
+            .cloned();
+        if let Some(v) = cell {
+            let first = super::slack_board::shown(&v.data.items, -1);
+            m.slack_viewed
+                .get_or_insert_default()
+                .extend(first.into_iter().map(|i| {
+                    let item = &v.data.items[i];
+                    (item.id.clone(), item.clone())
+                }));
+        }
         let Some(view) = m
             .current()
             .filter(|v| super::render::slack_board_shown(m, v))
             .cloned()
         else {
             m.slack_thread_open = false;
+            // The plain list shows the whole look, so leaving marks it all
+            // seen, whatever the board showed before or after.
+            // (Not the board's loading screen, before its first look.)
+            if !m.snap.rules.ux2
+                && m.current()
+                    .is_some_and(|v| v.id == ViewId::Slack && !v.data.items.is_empty())
+            {
+                m.slack_plain_shown = true;
+            }
             return;
         };
+        // What the board shows has been shown.
+        let shown = slack_shown(m, &view);
+        m.slack_viewed
+            .get_or_insert_default()
+            .extend(shown.into_iter().map(|i| {
+                let item = &view.data.items[i];
+                (item.id.clone(), item.clone())
+            }));
         let extras = self.slack_extras(m.chosen_item());
         let (thread, pictures) = (extras.thread, extras.pictures);
         m.snap.slack_thread_failed = extras.failed;
@@ -1014,6 +1050,11 @@ impl Server {
         } else {
             Vec::new()
         };
+        // The Slack look whole, for what leaving the board marks seen,
+        // kept while the view is turned off.
+        if let Some(v) = all.iter().find(|v| v.id == ViewId::Slack) {
+            m.slack_all = v.data.items.iter().map(|i| i.id.clone()).collect();
+        }
         // The Calendar on another day than today, from the feed's days.
         if let Some(date) = m.calendar_day.clone() {
             let now_z = util::local_now();
@@ -1051,10 +1092,10 @@ impl Server {
                 if v.id == ViewId::Resources {
                     m.resources_sort.sort(&mut v.data.items);
                 }
-                // The Slack board lists its messages by group, so j and k
-                // walk them in the order they are drawn.
+                // The Slack board lists its messages by section, so each
+                // section's are together, newest first.
                 if ux2 && v.id == ViewId::Slack {
-                    super::slack_board::in_groups(&mut v.data.items);
+                    super::slack_board::in_order(&mut v.data.items);
                 }
                 v
             })
@@ -1068,7 +1109,9 @@ impl Server {
         // tab's CPU or memory, Usage its tabs by their spend, Reminders by
         // their time, and Landing its waiters by their place in the queue,
         // so a stage, a check, a reading, a reminder or J and K changed moves
-        // them: the cursor follows the chosen one.
+        // them: the cursor follows the chosen one. So does the Slack board,
+        // whose conversations move up as new messages come and which shows
+        // only the chosen one's section.
         let follows = |id: &ViewId| {
             matches!(
                 id,
@@ -1079,7 +1122,7 @@ impl Server {
                     | ViewId::Reminders
                     | ViewId::Routines
                     | ViewId::Landing
-            )
+            ) || ux2 && *id == ViewId::Slack
         };
         // The Reminders view's chosen reminder, moved to another day, takes
         // the chosen day with it.
@@ -1217,9 +1260,14 @@ impl Server {
         // focus moving between views shown at once leaving nothing.
         let slack_now = title == "Slack" || m.grid_has("slack");
         let slack_left = std::mem::replace(&mut m.slack_was_shown, slack_now) && !slack_now;
+        let slack_seen = m.slack_seen();
+        if slack_left {
+            m.slack_viewed = None;
+            m.slack_plain_shown = false;
+        }
         self.put_mission(client, m);
         if slack_left {
-            self.slack_left();
+            self.slack_left(slack_seen);
         }
         if came.as_deref() != Some(&title) {
             if !picker {
@@ -2273,16 +2321,68 @@ impl Server {
     /// `h` and `l` in the Calendar: the day before or after the one shown,
     /// from the feed's days; past them, or with /today's day alone, says
     /// why not.
-    /// The Slack board's own key: `i` (or Esc) shows or hides the thread in
-    /// the list's place on a screen too narrow for both. Enter opens the
-    /// message's menu, as in every view, which plays its video or shows its
-    /// picture. True when it took the key.
+    /// The Slack board's own keys: `h` and `l` move the focus between the
+    /// sections, the messages and the thread, as `C-w` and a direction do
+    /// (with the sections folded into a line, or Settings' `ctrl_w_panes`
+    /// off, they change the section);
+    /// `j` and `k` in the messages stay within the section; `i` (or Esc)
+    /// shows or hides the thread in the list's place on a screen too
+    /// narrow for both. Enter opens the message's menu, as in every view,
+    /// which plays its video or shows its picture. True when it took the
+    /// key.
     fn slack_board_key(m: &mut Mission, k: Key) -> bool {
         let shown = m
             .current()
             .is_some_and(|v| super::render::slack_board_shown(m, v));
-        if !shown || !(plain(&k) || k.code == KeyCode::Enter) {
+        // C-n and C-p move as j and k do.
+        let ctrl_step = k.mods == Mods::CTRL && matches!(k.code, KeyCode::Char('n' | 'p'));
+        if !shown || !(plain(&k) || k.code == KeyCode::Enter || ctrl_step) {
             return false;
+        }
+        // With the sections folded into a line, or no panes to move
+        // between (Settings' `ctrl_w_panes` off), h and l change the
+        // section.
+        let folded =
+            !super::slack_board::column(m.laid().0 as usize) || !m.panes().contains(&Pane::Panel);
+        let by = match k.code {
+            KeyCode::Char('h') | KeyCode::Left => Some(-1),
+            KeyCode::Char('l') | KeyCode::Right => Some(1),
+            _ => None,
+        };
+        if let Some(by) = by {
+            if folded {
+                if let Some(v) = m.current() {
+                    m.cursor = super::slack_board::section_step(&v.data.items, m.cursor, by);
+                }
+            } else {
+                let panes = m.panes();
+                let at = panes.iter().position(|p| *p == m.pane_now()).unwrap_or(0);
+                if let Some(to) = at.checked_add_signed(by).and_then(|i| panes.get(i)) {
+                    m.pane = Some((m.view, *to));
+                }
+            }
+            if m.focus.is_some() {
+                m.focus = Some(Focus::Item);
+            }
+            return true;
+        }
+        let step = match k.code {
+            KeyCode::Char('n') if ctrl_step => Some(1),
+            KeyCode::Char('p') if ctrl_step => Some(-1),
+            KeyCode::Char('j') | KeyCode::Down => Some(1),
+            KeyCode::Char('k') | KeyCode::Up => Some(-1),
+            _ => None,
+        };
+        if let Some(by) = step
+            && m.pane_now() == Pane::List
+        {
+            if let Some(v) = m.current() {
+                m.cursor = super::slack_board::row_step(&v.data.items, m.cursor, by);
+            }
+            if m.focus.is_some() {
+                m.focus = Some(Focus::Item);
+            }
+            return true;
         }
         match k.code {
             KeyCode::Char('i') if !super::slack_board::beside(m.laid().0 as usize) => {
@@ -2437,7 +2537,7 @@ impl Server {
     fn mission_close_from(&mut self, client: ClientId, m: &Mission) {
         // Shown among several views, it was looked at too.
         if m.came.as_deref() == Some("Slack") || m.grid_has("slack") {
-            self.slack_left();
+            self.slack_left(m.slack_seen());
         }
         self.mission_close(client);
     }
@@ -2845,7 +2945,17 @@ impl Server {
             Some(n) if view.id == ViewId::Ci => with_check(item, n),
             _ => item,
         };
-        self.item_menu(client, &view.id, item, &view.data.items);
+        // The Slack board shows one section at a time, which is what its
+        // menu's "every message shown" puts away.
+        let shown: Vec<Item> = if super::render::slack_board_shown(m, &view) {
+            slack_shown(m, &view)
+                .into_iter()
+                .map(|i| view.data.items[i].clone())
+                .collect()
+        } else {
+            view.data.items.clone()
+        };
+        self.item_menu(client, &view.id, item, &shown);
     }
 
     /// An item's menu in a view, with what the view shows of the item above
@@ -5456,6 +5566,16 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                     Then::Nothing
                 };
             }
+            // The wheel over the Slack board's sections walks them, which
+            // take the focus, as a click on one gives it.
+            if slack_sections_at(m, mouse.col)
+                && let Some(v) = m.current()
+            {
+                let by = if up { -1 } else { 1 };
+                m.cursor = super::slack_board::section_step(&v.data.items, m.cursor, by);
+                m.pane = Some((m.view, Pane::Panel));
+                return Then::Prepare;
+            }
             // The wheel over the list moves the list, which takes the
             // focus from another pane, as a click on it would.
             m.pane = None;
@@ -5536,6 +5656,7 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                 // it leaves the focus where it is.
                 Spot::Side(_) | Spot::PaneBar { .. } => Some(Pane::Beside),
                 Spot::Category(_) => Some(Pane::Panel),
+                Spot::Choose(_) if slack_sections_at(m, mouse.col) => Some(Pane::Panel),
                 Spot::Index(_) | Spot::Menu(_) | Spot::Check(..) | Spot::Choose(_) => {
                     Some(Pane::List)
                 }
@@ -5706,6 +5827,39 @@ fn right_press(m: &mut Mission, mouse: Mouse, hit: Option<Spot>) -> Then {
     } else {
         Then::Press(Key::new(KeyCode::Char('m'), Mods::NONE))
     }
+}
+
+/// The Slack board's messages on screen, by their places in `view`: the
+/// chosen section's, or with the thread in the list's place on a narrow
+/// screen, the chosen message alone.
+fn slack_shown(m: &Mission, view: &View) -> Vec<usize> {
+    let thread_alone = m.slack_thread_open
+        && settings::is_on("slack_threads")
+        && !super::slack_board::beside(m.laid().0 as usize);
+    if thread_alone {
+        usize::try_from(m.cursor)
+            .ok()
+            .filter(|c| *c < view.data.items.len())
+            .into_iter()
+            .collect()
+    } else {
+        super::slack_board::shown(&view.data.items, m.cursor)
+    }
+}
+
+/// Whether column `col` is the Slack board's sections column, its own
+/// pane, in the view in front, where its sections were last drawn (a cell
+/// of views shown at once starts where it is).
+fn slack_sections_at(m: &Mission, col: u16) -> bool {
+    let shown = m
+        .current()
+        .is_some_and(|v| super::render::slack_board_shown(m, v));
+    shown
+        && m.hits.iter().any(|h| {
+            matches!(h.spot, Spot::Choose(_))
+                && usize::from(h.x1 - h.x0) + 1 == super::slack_board::SECTIONS_W
+                && (h.x0..=h.x1).contains(&col)
+        })
 }
 
 /// The Keys board's moves with UX 2.0: h and l between groups, j and k
@@ -6191,7 +6345,8 @@ fn window_key(m: &mut Mission, k: Key) -> bool {
 
 /// The focused pane's own keys, where it isn't the list: in the Settings
 /// board's categories `j` and `k` walk the categories, the options
-/// following, and Enter goes back into the options; in a pane beside, `j`
+/// following, and Enter goes back into the options (in the Slack board's
+/// sections, the sections, their messages following, and Enter into them); in a pane beside, `j`
 /// and `k` scroll it a line, `g` and `G` to its top and end. False for
 /// any other key, which the view takes as it would.
 fn pane_key(m: &mut Mission, k: Key) -> bool {
@@ -6216,7 +6371,11 @@ fn pane_key(m: &mut Mission, k: Key) -> bool {
                 _ => return false,
             };
             if let Some(view) = m.current() {
-                m.cursor = super::settings_board::side_step(&view.data.items, m.cursor, by);
+                m.cursor = if view.id == ViewId::Slack {
+                    super::slack_board::section_step(&view.data.items, m.cursor, by)
+                } else {
+                    super::settings_board::side_step(&view.data.items, m.cursor, by)
+                };
             }
             true
         }
@@ -7632,5 +7791,35 @@ mod tests {
         m.window_key = Some(1_000);
         assert!(m.window_waits(1_000 + WINDOW_WAIT_MS));
         assert!(!m.window_waits(1_001 + WINDOW_WAIT_MS));
+    }
+
+    #[test]
+    fn leaving_the_slack_board_marks_seen_what_its_sections_showed_of_the_whole_look() {
+        let mut m = Mission::new();
+        m.slack_all = ["a", "b"].into_iter().map(String::from).collect();
+        assert_eq!(m.slack_seen(), None, "the plain list: the whole look");
+        m.slack_viewed = Some(Default::default());
+        assert_eq!(
+            m.slack_seen(),
+            Some(Vec::new()),
+            "the board, a filter leaving it nothing: nothing seen"
+        );
+        m.slack_viewed
+            .get_or_insert_default()
+            .insert("a".into(), crate::items::Item::new("a", "Ada"));
+        let seen = m.slack_seen().expect("one section shown");
+        assert_eq!(
+            seen.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+            ["a"]
+        );
+        // A filter leaving only "a" in the view doesn't make "b" shown.
+        m.slack_viewed
+            .get_or_insert_default()
+            .insert("b".into(), crate::items::Item::new("b", "Bo"));
+        assert_eq!(m.slack_seen(), None, "every one shown");
+        // The plain list, shown before or after the board, shows them all.
+        m.slack_viewed = Some(Default::default());
+        m.slack_plain_shown = true;
+        assert_eq!(m.slack_seen(), None, "the plain list shown");
     }
 }

@@ -1219,7 +1219,7 @@ fn choosing_a_slack_message_reads_its_thread_once_and_draws_it_beside() {
     client.type_text("vslack\r");
     let screen = client.wait_text("my first question");
     let all = screen.join("\n");
-    assert!(all.contains("YOUR THREADS"), "{all}");
+    assert!(all.contains("◇ Threads"), "{all}");
     assert!(all.contains("thread · 1 reply"), "{all}");
     let kept = std::fs::read_to_string(server.state.join("slack-threads.json")).unwrap();
     assert!(kept.contains(&format!("C1:{first}")), "{kept}");
@@ -1229,6 +1229,166 @@ fn choosing_a_slack_message_reads_its_thread_once_and_draws_it_beside() {
     client.wait_text("my first question");
     let reads = std::fs::read_to_string(&calls).unwrap();
     assert_eq!(reads.lines().count(), 1, "read once");
+}
+
+// With UX 2.0 the Slack view lists its sections as Slack's sidebar does
+// (board 21), the chosen one's messages beside them, newest first: j in
+// the sections moves to the next and shows its messages, l then j moves
+// within them and stops at the section's end, and a click on a section
+// shows its messages.
+#[test]
+fn the_slack_views_sections_choose_the_messages_beside_them() {
+    let server = TestServer::start();
+    std::fs::create_dir_all(&server.state).unwrap();
+    let secs = switchboard::util::now_ms() / 1000;
+    let ts = |ago: i64| format!("{}.000100", secs - ago);
+    let said = |kind: &str, channel: &str, place: &str, from: &str, text: &str, ago: i64| {
+        json!({ "kind": kind, "channel": channel, "where": place, "from": from,
+            "user": format!("U{from}"), "text": text, "ts": ts(ago) })
+    };
+    std::fs::write(
+        server.state.join("slack.json"),
+        json!({ "checked": secs * 1000, "items": [
+            said("mention", "C1", "#dev", "Ada", "mention words", 300),
+            said("dm", "D1", "Bo", "Bo", "dm words", 200),
+            said("channel", "C2", "#ops", "Dee", "ops older", 100),
+            said("channel", "C2", "#ops", "Cy", "ops newer", 10),
+        ] })
+        .to_string(),
+    )
+    .unwrap();
+    settings(
+        &server,
+        json!({ "view_slack": true, "ux2": true, "slack_threads": false, "slack_background": false, "photos": false }),
+    );
+    let mut client = server.attach(180, 40);
+    client.wait_text("$");
+    open(&mut client);
+    // UX 2.0 taken up first, its bar grouped, so the view opens as the
+    // board, on its first section.
+    client.wait_for("the bar grouped", |s| {
+        s.iter()
+            .any(|l| l.contains("Work") && l.contains("Day") && l.contains("System"))
+    });
+    client.type_text("vslack\r");
+    // The board once UX 2.0 is taken up.
+    let screen = client.wait_text("@ Mentions");
+    let all = screen.join("\n");
+    assert!(
+        all.contains("mention words") && all.contains("# ops"),
+        "{all}"
+    );
+    assert!(!all.contains("dm words"), "another section's: {all}");
+    // h gives the sections the focus, and j walks them.
+    client.type_text("h");
+    client.type_text("j");
+    client.wait_for("Bo's messages", |s| {
+        let all = s.join("\n");
+        all.contains("dm words") && !all.contains("mention words")
+    });
+    client.type_text("j");
+    let screen = client.wait_text("ops newer");
+    let all = screen.join("\n");
+    let at = |s: &str| all.find(s).unwrap_or_else(|| panic!("{s} in\n{all}"));
+    assert!(at("ops newer") < at("ops older"), "newest first: {all}");
+    // l gives the messages the focus; j moves within them, and stops at
+    // the section's end.
+    let chosen = |s: &[String], from: &str| {
+        s.iter()
+            .any(|l| l.contains(&format!("▌{}", &from[..1])) && l.contains(from))
+    };
+    client.type_text("l");
+    client.type_text("j");
+    client.wait_for("Dee chosen", |s| chosen(s, "Dee"));
+    client.type_text("j");
+    std::thread::sleep(Duration::from_millis(300) * common::patience());
+    let screen = client.screen();
+    assert!(chosen(&screen, "Dee"), "{}", screen.join("\n"));
+    assert!(!screen.join("\n").contains("mention words"));
+    // A click on Mentions shows its messages.
+    let row = screen
+        .iter()
+        .position(|l| l.contains("@ Mentions"))
+        .unwrap_or_else(|| panic!("Mentions' row:\n{}", screen.join("\n")));
+    let col = screen[row]
+        .chars()
+        .collect::<Vec<_>>()
+        .windows(2)
+        .position(|w| w == ['@', ' '])
+        .unwrap();
+    client.send(
+        format!(
+            "\x1b[<0;{};{}M\x1b[<0;{};{}m",
+            col + 3,
+            row + 1,
+            col + 3,
+            row + 1
+        )
+        .as_bytes(),
+    );
+    client.wait_text("mention words");
+    // The wheel over the sections walks them.
+    client.send(format!("\x1b[<65;{};{}M", col + 3, row + 1).as_bytes());
+    client.wait_for("Bo's messages", |s| {
+        let all = s.join("\n");
+        all.contains("dm words") && !all.contains("mention words")
+    });
+}
+
+// The Slack board shows one section at a time, so leaving it marks seen
+// only the messages of the sections it showed, not the whole look.
+#[test]
+fn leaving_the_slack_board_marks_only_the_sections_shown_seen() {
+    let server = TestServer::start();
+    std::fs::create_dir_all(&server.state).unwrap();
+    let secs = switchboard::util::now_ms() / 1000;
+    let (mention, dm) = (
+        format!("{}.000100", secs - 300),
+        format!("{}.000100", secs - 200),
+    );
+    std::fs::write(
+        server.state.join("slack.json"),
+        json!({ "checked": secs * 1000, "items": [
+            { "kind": "mention", "channel": "C1", "where": "#dev", "from": "Ada", "user": "UAda",
+              "text": "mention words", "ts": mention },
+            { "kind": "dm", "channel": "D1", "where": "Bo", "from": "Bo", "user": "UBo",
+              "text": "dm words", "ts": dm },
+        ] })
+        .to_string(),
+    )
+    .unwrap();
+    settings(
+        &server,
+        json!({ "view_slack": true, "ux2": true, "slack_threads": false, "slack_background": false, "photos": false }),
+    );
+    let mut client = server.attach(180, 40);
+    client.wait_text("$");
+    open(&mut client);
+    // UX 2.0 taken up first, its bar grouped, so the view opens as the
+    // board, on its first section.
+    client.wait_for("the bar grouped", |s| {
+        s.iter()
+            .any(|l| l.contains("Work") && l.contains("Day") && l.contains("System"))
+    });
+    client.type_text("vslack\r");
+    client.wait_text("@ Mentions");
+    client.wait_text("mention words");
+    client.type_text("\x1b");
+    client.wait_for("mission control closed", |s| {
+        !s.iter().any(|l| l.contains("MISSION CONTROL"))
+    });
+    let seen = server.state.join("slack-seen-items.json");
+    let deadline = common::deadline(Duration::from_secs(5));
+    while !seen.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let kept = std::fs::read_to_string(&seen).unwrap_or_default();
+    assert!(kept.contains(&format!("C1:{mention}")), "{kept}");
+    assert!(!kept.contains(&format!("D1:{dm}")), "{kept}");
+    assert!(
+        !server.state.join("slack-seen").exists(),
+        "the look as a whole isn't seen"
+    );
 }
 
 // A notification no view lists as an item is shown whole above its choices

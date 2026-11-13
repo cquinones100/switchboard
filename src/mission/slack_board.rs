@@ -1,6 +1,10 @@
-//! UX 2.0's Slack view, board 21 of the UX 2.0 canvas ("Slack: the chosen
-//! message beside its thread"): the messages grouped as Mentions, Direct,
-//! Your threads and Channels, each with its sender's Large avatar
+//! UX 2.0's Slack view, board 21 of the canvas ("Slack: what is new for
+//! you, by section as Slack's sidebar lists them, newest first in each"):
+//! a column of sections as Slack's own sidebar lists them (Mentions,
+//! Threads, each direct message by its people, each channel by its name),
+//! each with its count, bold in the accent while it holds something new;
+//! beside it the chosen section's messages, newest first, new and seen
+//! together, each with its sender's Large avatar
 //! (`kit::avatar`), where and how long ago, its reply count or "↩
 //! replied", two lines of its text and its pictures; and beside the list,
 //! the chosen message's whole thread, each message with its sender's Large
@@ -13,12 +17,17 @@
 //! the filter and the menu work on them as on the plain list; the thread
 //! comes from `slack-threads.json` (`day::slack_thread`) by way of the
 //! snapshot, and its pictures from those the server has read and decoded,
-//! so drawing reads nothing. Laid out as board 45 says (`kit::columns`): the
-//! list and the pane stretch by `LIST_WEIGHT` and `PANE_WEIGHT`, the pane
-//! never under `PANE_LEAST`; below `NAMES_AT` columns the names beside the
-//! list's pictures go, then where each message was, then From your work's
-//! states; under `BESIDE_AT` the pane goes behind `i`, drawn in the list's
-//! place until `i` or Esc.
+//! so drawing reads nothing. The cursor stays the view's own, on a
+//! message: the section in front is the chosen message's, as the Keys
+//! board's group is its chosen key's, so the filter and Enter work as on
+//! the plain list (`in_order` puts each section's messages together).
+//! Laid out as board 45 says (`kit::columns`): the sections at a fixed
+//! `SECTIONS_W`, the list and the pane stretching by `LIST_WEIGHT` and
+//! `PANE_WEIGHT`, the pane never under `PANE_LEAST`; under `SECTIONS_AT`
+//! columns the sections fold into a line above the messages; below
+//! `NAMES_AT` the names beside the list's pictures go, then where each
+//! message was, then From your work's states; under `BESIDE_AT` the pane
+//! goes behind `i`, drawn in the list's place until `i` or Esc.
 
 use std::collections::HashMap;
 
@@ -41,10 +50,15 @@ use crate::ui::Theme;
 use crate::ui::kit::{self, Col, Tone};
 
 /// Under this many columns the thread pane goes behind `i`.
-pub const BESIDE_AT: usize = 140;
+pub const BESIDE_AT: usize = 120;
 /// Under this many, the names beside the list's pictures, where each
 /// message was and From your work's states go.
-pub const NAMES_AT: usize = 160;
+pub const NAMES_AT: usize = 120;
+/// Under this many the sections' column folds into a line above the
+/// messages.
+pub const SECTIONS_AT: usize = 100;
+/// The sections' column, as the board's.
+pub const SECTIONS_W: usize = 23;
 const LIST_WEIGHT: usize = 62;
 const PANE_WEIGHT: usize = 62;
 const LIST_LEAST: usize = 34;
@@ -60,14 +74,6 @@ const PICS: usize = 3;
 /// 34 of 61 columns, and its rows.
 const PANE_PIC_SHARE: (usize, usize) = (34, 61);
 const PANE_PIC_ROWS: usize = 8;
-
-/// The groups the list is in, by their kind, in order.
-const GROUPS: [(&str, &str); 4] = [
-    ("mention", "Mentions"),
-    ("dm", "Direct"),
-    ("thread", "Your threads"),
-    ("channel", "Channels"),
-];
 
 /// What drawing the board needs beyond the view.
 pub struct Look<'a> {
@@ -105,6 +111,10 @@ pub struct Look<'a> {
     pub files_kept: &'a std::collections::HashSet<String>,
     /// The message under the mouse, lit.
     pub hover: Option<usize>,
+    /// The section under the mouse, by its first message, lit.
+    pub hover_section: Option<usize>,
+    /// The sections' column has the focus (`h`, `C-w h`).
+    pub sections_focused: bool,
 }
 
 /// A piece of a line: text, someone's avatar (`kit::avatar`, `rows` of
@@ -132,21 +142,167 @@ fn get<'a>(item: &'a Item, key: &str) -> &'a str {
     item.data.get(key).and_then(Value::as_str).unwrap_or("")
 }
 
-/// The messages in the order the board draws them: by group, each group
-/// as the view orders it (the new before the seen, newest first).
-pub fn in_groups(items: &mut [Item]) {
-    let group = |i: &Item| {
-        GROUPS
-            .iter()
-            .position(|(k, _)| *k == get(i, "kind"))
-            .unwrap_or(GROUPS.len())
+/// What a section holds, in the order the column lists them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Kind {
+    Mentions,
+    Threads,
+    Direct,
+    Channel,
+}
+
+/// A section of the column: what it holds, its name, a direct message's
+/// person (for their avatar), its messages' places in the view's items,
+/// newest first, and whether any of them is new.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Section {
+    pub kind: Kind,
+    pub title: String,
+    pub user: String,
+    pub items: Vec<usize>,
+    pub new: bool,
+}
+
+/// The section a message is in: Mentions and Threads whole, a direct
+/// message or a channel's by its conversation.
+fn section_key(item: &Item) -> (Kind, String) {
+    let conversation = || {
+        item.data
+            .pointer("/message/channel")
+            .and_then(Value::as_str)
+            .filter(|c| !c.is_empty())
+            .unwrap_or_else(|| get(item, "where"))
+            .to_string()
     };
-    items.sort_by_key(group);
+    match get(item, "kind") {
+        "mention" => (Kind::Mentions, String::new()),
+        "thread" => (Kind::Threads, String::new()),
+        "dm" => (Kind::Direct, conversation()),
+        _ => (Kind::Channel, conversation()),
+    }
+}
+
+fn when(item: &Item) -> f64 {
+    get(item, "ts").parse::<f64>().unwrap_or(0.0)
+}
+
+/// The messages in the order the board draws them: by section (Mentions,
+/// Threads, then the direct messages and the channels, each by its newest
+/// message), each section's newest first, new and seen together.
+pub fn in_order(items: &mut [Item]) {
+    let mut newest: HashMap<(Kind, String), f64> = HashMap::new();
+    for i in items.iter() {
+        let at = newest.entry(section_key(i)).or_insert(f64::MIN);
+        *at = at.max(when(i));
+    }
+    items.sort_by(|a, b| {
+        let (ka, kb) = (section_key(a), section_key(b));
+        ka.0.cmp(&kb.0)
+            .then(newest[&kb].total_cmp(&newest[&ka]))
+            .then(ka.1.cmp(&kb.1))
+            .then(when(b).total_cmp(&when(a)))
+    });
+}
+
+/// The column's sections, from items `in_order` put in order.
+pub fn sections(items: &[Item]) -> Vec<Section> {
+    let mut out: Vec<(String, Section)> = Vec::new();
+    for (n, item) in items.iter().enumerate() {
+        let (kind, key) = section_key(item);
+        let new = item.data.get("old").and_then(Value::as_bool) != Some(true);
+        if let Some((k, s)) = out.last_mut()
+            && s.kind == kind
+            && *k == key
+        {
+            s.items.push(n);
+            s.new |= new;
+            continue;
+        }
+        let title = match kind {
+            Kind::Mentions => "Mentions".to_string(),
+            Kind::Threads => "Threads".to_string(),
+            Kind::Direct => match (get(item, "where"), get(item, "from")) {
+                ("", "") => "Someone".to_string(),
+                ("", from) => from.to_string(),
+                (place, _) => place.to_string(),
+            },
+            Kind::Channel => match get(item, "where").trim_start_matches('#') {
+                "" => "Slack".to_string(),
+                name => name.to_string(),
+            },
+        };
+        let user = if kind == Kind::Direct {
+            get(item, "user").to_string()
+        } else {
+            String::new()
+        };
+        out.push((
+            key,
+            Section {
+                kind,
+                title,
+                user,
+                items: vec![n],
+                new,
+            },
+        ));
+    }
+    out.into_iter().map(|(_, s)| s).collect()
+}
+
+/// The place of the section holding message `cursor`.
+fn section_at(sections: &[Section], cursor: isize) -> Option<usize> {
+    let c = usize::try_from(cursor).ok()?;
+    sections.iter().position(|s| s.items.contains(&c))
+}
+
+/// `j` and `k` in the sections' column, or `h` and `l` on the line
+/// they fold into: the first message of the section `by` from the
+/// chosen one's, staying at the ends.
+pub fn section_step(items: &[Item], cursor: isize, by: isize) -> isize {
+    let all = sections(items);
+    let Some(at) = section_at(&all, cursor).or((!all.is_empty()).then_some(0)) else {
+        return cursor;
+    };
+    let to = at.saturating_add_signed(by).min(all.len() - 1);
+    all[to].items[0] as isize
+}
+
+/// `j` and `k` in the messages: the message `by` from the chosen one
+/// within its section, staying at its ends.
+pub fn row_step(items: &[Item], cursor: isize, by: isize) -> isize {
+    let all = sections(items);
+    let Some(section) = section_at(&all, cursor).map(|s| &all[s]) else {
+        return section_step(items, cursor, 0);
+    };
+    let at = section
+        .items
+        .iter()
+        .position(|i| *i as isize == cursor)
+        .unwrap_or(0);
+    let to = at.saturating_add_signed(by).min(section.items.len() - 1);
+    section.items[to] as isize
+}
+
+/// The messages the board shows with message `cursor` chosen: its
+/// section's, or the first section's with none chosen.
+pub fn shown(items: &[Item], cursor: isize) -> Vec<usize> {
+    let mut all = sections(items);
+    match section_at(&all, cursor).or((!all.is_empty()).then_some(0)) {
+        Some(at) => all.swap_remove(at).items,
+        None => Vec::new(),
+    }
 }
 
 /// Whether the pane is drawn beside the list on a screen this wide.
 pub fn beside(cols: usize) -> bool {
     cols >= BESIDE_AT
+}
+
+/// Whether the sections are a column of their own on a screen this wide,
+/// rather than a line above the messages.
+pub fn column(cols: usize) -> bool {
+    cols >= SECTIONS_AT
 }
 
 /// The people the board draws, for their photos: the senders of the
@@ -229,8 +385,38 @@ pub fn board(view: &View, look: &Look) -> (Vec<Line>, Vec<HitBox>, Vec<Image>) {
         spans: kit::fit(bar_line, cols, Style::new()),
         fill: None,
     });
-    let rows = look.rows.saturating_sub(1);
-    let top_row = look.top_row + 1;
+    let mut rows = look.rows.saturating_sub(1);
+    let mut top_row = look.top_row + 1;
+
+    let secs = sections(&view.data.items);
+    let front = look
+        .cursor
+        .and_then(|c| section_at(&secs, c as isize))
+        .or((!secs.is_empty()).then_some(0));
+    let in_column = column(cols) && !secs.is_empty();
+    // Narrower, the sections fold into a line above the messages, while
+    // the thread isn't in their place.
+    if !in_column && !secs.is_empty() && !(look.threads_on && look.thread_open && !beside(cols)) {
+        let (spans, at) = section_line(&secs, front, look, cols);
+        for (x0, x1, first) in at {
+            hits.push(HitBox {
+                y: top_row as u16,
+                x0: x0 as u16,
+                x1: x1.saturating_sub(1) as u16,
+                spot: Spot::Choose(first as isize),
+            });
+        }
+        lines.push(Line {
+            spans: kit::fit(spans, cols, Style::new()),
+            fill: None,
+        });
+        rows = rows.saturating_sub(1);
+        top_row += 1;
+    }
+    // The sections' column and the rule after it; the rest beside them.
+    let left = if in_column { SECTIONS_W + 1 } else { 0 };
+    let rest = cols.saturating_sub(left);
+    let shift = |at: Option<(usize, usize)>| at.map(|(x, w)| (x + left, w));
 
     let side = look.threads_on && beside(cols);
     let (list_at, pane_at) = if side {
@@ -252,30 +438,49 @@ pub fn board(view: &View, look: &Look) -> (Vec<Line>, Vec<HitBox>, Vec<Image>) {
                     max: None,
                 },
             ],
-            cols,
+            rest,
             1,
             &[],
         );
-        (at[0], at[2])
+        (shift(at[0]), shift(at[2]))
     } else if look.threads_on && look.thread_open {
         (None, Some((1, cols.saturating_sub(2))))
     } else {
-        (Some((0, cols)), None)
+        (Some((left, rest)), None)
     };
+    let in_column = in_column && list_at.is_some();
 
     let chosen = look.cursor.and_then(|c| view.data.items.get(c));
+    let section = front.map(|s| &secs[s]);
     let (list, owners, list_scroll) = match list_at {
-        Some((_, w)) => list_lines(view, look, w, rows),
+        Some((_, w)) => list_lines(view, section, look, w, rows),
         None => (Vec::new(), Vec::new(), 0),
+    };
+    let (column_lines, column_owners, column_scroll) = if in_column {
+        section_lines(&secs, front, look, SECTIONS_W, rows)
+    } else {
+        (Vec::new(), Vec::new(), 0)
     };
     let pane = match (pane_at, chosen) {
         (Some((_, w)), Some(item)) => {
+            // Since you last looked at the look, or at this thread when
+            // the board left the look's other sections unseen.
             let seen = view
                 .data
                 .head
                 .get("seen")
                 .and_then(Value::as_i64)
-                .unwrap_or(0);
+                .unwrap_or(0)
+                .max(
+                    view.data
+                        .head
+                        .pointer(&format!(
+                            "/read_threads/{}",
+                            get(item, "thread").replace('~', "~0").replace('/', "~1")
+                        ))
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0),
+                );
             thread_lines(item, look, w, seen)
         }
         (Some(_), None) => vec![
@@ -292,10 +497,33 @@ pub fn board(view: &View, look: &Look) -> (Vec<Line>, Vec<HitBox>, Vec<Image>) {
 
     let mut list = window(list, list_scroll, rows).into_iter();
     let mut owners = owners.into_iter().skip(list_scroll);
+    let mut column_rows = window(column_lines, column_scroll, rows).into_iter();
+    let mut column_owners = column_owners.into_iter().skip(column_scroll);
     let mut pane = window(pane, pane_top, rows).into_iter();
     for r in 0..rows {
         let y = top_row + r;
         let mut line: Vec<Span<'static>> = Vec::new();
+        if in_column {
+            let runs = column_rows.next().unwrap_or_default();
+            put(
+                &mut line,
+                runs,
+                (0, SECTIONS_W),
+                y,
+                look,
+                &mut images,
+                "slack-sections",
+            );
+            if let Some(Some(first)) = column_owners.next() {
+                hits.push(HitBox {
+                    y: y as u16,
+                    x0: 0,
+                    x1: (SECTIONS_W - 1) as u16,
+                    spot: Spot::Choose(first as isize),
+                });
+            }
+            kit::place(&mut line, vec![kit::rule_v(theme)], (SECTIONS_W, 1));
+        }
         if let Some(at) = list_at {
             let runs = list.next().unwrap_or_default();
             let before = images.len();
@@ -519,10 +747,111 @@ fn put(
     kit::place(line, spans, (x0, w));
 }
 
-/// The list's lines, which item each belongs to, and the first line shown
-/// so the chosen message is on the screen.
+/// The chosen section's messages: its name and facts, then each message,
+/// newest first, a blank line after each; which item each line belongs
+/// to, and the first line shown so the chosen message is on the screen.
 fn list_lines(
     view: &View,
+    section: Option<&Section>,
+    look: &Look,
+    w: usize,
+    rows: usize,
+) -> (Vec<Vec<Run>>, Vec<Option<usize>>, usize) {
+    let theme = look.theme;
+    let Some(section) = section else {
+        return (
+            vec![texts(vec![Span::styled(
+                " Nothing new on Slack.",
+                Tone::Dim.style(theme),
+            )])],
+            vec![None],
+            0,
+        );
+    };
+    let mut out: Vec<Vec<Run>> = Vec::new();
+    let mut owners = Vec::new();
+    let fresh = section
+        .items
+        .iter()
+        .filter(|i| {
+            view.data.items[**i]
+                .data
+                .get("old")
+                .and_then(Value::as_bool)
+                != Some(true)
+        })
+        .count();
+    let mut facts = Vec::new();
+    if fresh > 0 {
+        facts.push(format!("{fresh} new"));
+    }
+    facts.push(format!("{} today", section.items.len()));
+    facts.push("newest first".into());
+    let title = match section.kind {
+        Kind::Channel => format!("#{}", section.title),
+        _ => section.title.clone(),
+    };
+    for line in kit::pane(
+        &title,
+        vec![Span::styled(facts.join(" · "), Tone::Dim.style(theme))],
+        w.saturating_sub(1),
+        theme,
+    ) {
+        let mut runs = vec![Run::Text(Span::raw(" "))];
+        runs.extend(texts(line));
+        out.push(runs);
+        owners.push(None);
+    }
+    let mut chosen_at = (0, 0);
+    for &i in &section.items {
+        let item = &view.data.items[i];
+        let start = out.len();
+        let lit = look.cursor != Some(i) && look.hover == Some(i);
+        let lines = message_lines(item, look, w, look.cursor == Some(i), lit);
+        owners.extend(std::iter::repeat_n(Some(i), lines.len()));
+        out.extend(lines);
+        if look.cursor == Some(i) {
+            chosen_at = (start, out.len());
+        }
+        out.push(Vec::new());
+        owners.push(None);
+    }
+    out.push(texts(vec![Span::styled(
+        " Older messages stay in Slack.",
+        Tone::Faint.style(theme),
+    )]));
+    owners.push(None);
+    // The chosen message whole on the screen; a message taller than the
+    // screen shows from its top.
+    let (start, end) = chosen_at;
+    let scroll = if end > rows {
+        (end - rows).min(start)
+    } else {
+        0
+    };
+    (out, owners, scroll)
+}
+
+/// A section's mark and name, as the column and the folded line show it.
+fn section_name(section: &Section) -> (&'static str, Tone, String) {
+    match section.kind {
+        Kind::Mentions => ("@", Tone::Working, section.title.clone()),
+        Kind::Threads => ("◇", Tone::Working, section.title.clone()),
+        Kind::Direct => ("", Tone::Dim, section.title.clone()),
+        Kind::Channel => ("#", Tone::Dim, section.title.clone()),
+    }
+}
+
+/// The sections' column, `w` wide: Mentions and Threads, then DIRECT
+/// MESSAGES (each with its person's Small avatar) and CHANNELS, each with
+/// its count at the right edge, bold in the accent while it holds
+/// something new; the chosen one on the chosen row (resting while the
+/// messages have the focus), the one under the mouse lit. Which section
+/// each line belongs to, by its first message, and the first line shown
+/// so the chosen one is on the screen.
+fn section_lines(
+    secs: &[Section],
+    front: Option<usize>,
     look: &Look,
     w: usize,
     rows: usize,
@@ -530,58 +859,236 @@ fn list_lines(
     let theme = look.theme;
     let mut out: Vec<Vec<Run>> = Vec::new();
     let mut owners = Vec::new();
-    let mut chosen_at = (0, 0);
-    for (kind, name) in GROUPS {
-        let members: Vec<(usize, &Item)> = view
-            .data
-            .items
-            .iter()
-            .enumerate()
-            .filter(|(_, i)| get(i, "kind") == kind)
-            .collect();
-        if members.is_empty() {
-            continue;
-        }
-        if !out.is_empty() {
-            out.push(Vec::new());
+    let mut chosen_at = 0;
+    let mut last: Option<Kind> = None;
+    for (n, s) in secs.iter().enumerate() {
+        let heading = match s.kind {
+            Kind::Direct => Some("Direct messages"),
+            Kind::Channel => Some("Channels"),
+            _ => None,
+        };
+        if last != Some(s.kind)
+            && let Some(heading) = heading
+        {
+            if !out.is_empty() {
+                out.push(Vec::new());
+                owners.push(None);
+            }
+            out.push(texts(kit::label(heading, Tone::Dim, None, w, theme)));
             owners.push(None);
         }
-        out.push(texts(kit::label(
-            name,
-            Tone::Dim,
-            Some(members.len()),
-            w,
-            theme,
-        )));
-        owners.push(None);
-        for (i, item) in members {
-            let start = out.len();
-            let lit = look.cursor != Some(i) && look.hover == Some(i);
-            let lines = message_lines(item, look, w, look.cursor == Some(i), lit);
-            owners.extend(std::iter::repeat_n(Some(i), lines.len()));
-            out.extend(lines);
-            if look.cursor == Some(i) {
-                chosen_at = (start, out.len());
+        last = Some(s.kind);
+        let chosen = front == Some(n);
+        let first = s.items[0];
+        let (mark, tone, name) = section_name(s);
+        let strong = s.new || chosen;
+        let name_style = if strong {
+            Tone::Text.bold(theme)
+        } else {
+            Tone::Dim.style(theme)
+        };
+        let count = s.items.len().to_string();
+        let count_style = if s.new {
+            Tone::Accent.bold(theme)
+        } else {
+            Tone::Dim.style(theme)
+        };
+        // The bar, then the mark or avatar, the name stretching and the
+        // count at the right edge.
+        let lead = if s.kind == Kind::Direct {
+            kit::AvatarSize::Small.cols()
+        } else {
+            width(mark)
+        };
+        let at = kit::columns(
+            &[
+                Col::Fixed {
+                    min: lead,
+                    natural: lead,
+                    cap: lead,
+                },
+                Col::Stretch {
+                    weight: 1,
+                    min: 0,
+                    max: None,
+                },
+                Col::Right {
+                    natural: width(&count),
+                    cap: width(&count),
+                },
+            ],
+            w.saturating_sub(1),
+            1,
+            &[],
+        );
+        let mut runs = vec![bar(chosen && look.sections_focused, theme)];
+        let mut x = 0;
+        let pad_to = |runs: &mut Vec<Run>, to: usize, x: &mut usize| {
+            if to > *x {
+                runs.push(Run::Text(Span::raw(" ".repeat(to - *x))));
+                *x = to;
             }
+        };
+        if let Some((mx, _)) = at[0] {
+            pad_to(&mut runs, mx, &mut x);
+            if s.kind == Kind::Direct {
+                runs.push(Run::Avatar {
+                    who: (!s.user.is_empty()).then(|| Who::new(Service::Slack, &s.user)),
+                    name: s.title.clone(),
+                    size: kit::AvatarSize::Small,
+                    rows: 1,
+                });
+            } else {
+                runs.push(Run::Text(Span::styled(mark, tone.style(theme))));
+            }
+            x += lead;
         }
+        if let Some((nx, nw)) = at[1] {
+            pad_to(&mut runs, nx, &mut x);
+            let name = cut(&name, nw);
+            x += width(&name);
+            runs.push(Run::Text(Span::styled(name, name_style)));
+        }
+        if let Some((cx, _)) = at[2] {
+            pad_to(&mut runs, cx, &mut x);
+            runs.push(Run::Text(Span::styled(count, count_style)));
+        }
+        let lit = !chosen && look.hover_section == Some(first);
+        let runs = if chosen {
+            let bg = if look.sections_focused {
+                kit::Surface::Chosen.color(theme)
+            } else {
+                kit::Surface::Raised.color(theme)
+            };
+            on_surface(runs, w, bg)
+        } else if lit {
+            on_surface(runs, w, theme.panel)
+        } else {
+            runs
+        };
+        if chosen {
+            chosen_at = out.len();
+        }
+        out.push(runs);
+        owners.push(Some(first));
     }
-    if out.is_empty() {
-        out.push(texts(vec![Span::styled(
-            " Nothing new on Slack.",
-            Tone::Dim.style(theme),
-        )]));
-        owners.push(None);
-    }
-    // The chosen message whole on the screen, its group's label too when
-    // it fits.
-    let (start, end) = chosen_at;
-    // A message taller than the screen shows from its top.
-    let scroll = if end > rows {
-        (end - rows).min(start)
-    } else {
-        0
-    };
+    let scroll = (chosen_at + 1).saturating_sub(rows);
     (out, owners, scroll)
+}
+
+/// The sections folded into one line, `cols` wide, on a narrow screen:
+/// each its mark, name and count, the chosen one lit, as many as fit and
+/// then how many more; where each is, for a click.
+fn section_line(
+    secs: &[Section],
+    front: Option<usize>,
+    look: &Look,
+    cols: usize,
+) -> (Vec<Span<'static>>, Vec<(usize, usize, usize)>) {
+    let theme = look.theme;
+    // A long name is cut, so even the chosen section fits on the line.
+    let cap = cols.saturating_sub(16).clamp(4, 30);
+    let named = |s: &Section| {
+        let (mark, tone, name) = section_name(s);
+        (mark, tone, cut(&name, cap))
+    };
+    let mut spans = vec![Span::raw(" ")];
+    let mut x = 1;
+    let mut at = Vec::new();
+    // The chosen one always shows: the line starts far enough along.
+    let from = front.unwrap_or(0);
+    let mut start = 0;
+    let piece = |s: &Section| {
+        let (mark, _, name) = named(s);
+        let mark = if mark.is_empty() {
+            String::new()
+        } else {
+            format!("{mark} ")
+        };
+        width(&format!(" {mark}{name} {} ", s.items.len())) + 1
+    };
+    while start < from && secs[start..=from].iter().map(piece).sum::<usize>() + 8 > cols {
+        start += 1;
+    }
+    if start > 0 {
+        let more = format!("+{start} ");
+        x += width(&more);
+        spans.push(Span::styled(more, Tone::Dim.style(theme)));
+    }
+    for (n, s) in secs.iter().enumerate().skip(start) {
+        let left = secs.len() - n;
+        let tail = if left > 1 { 6 } else { 0 };
+        if x + piece(s) + tail > cols {
+            spans.push(Span::styled(format!("… +{left}"), Tone::Dim.style(theme)));
+            break;
+        }
+        let chosen = front == Some(n);
+        // The chosen one lit, the one under the mouse on the panel's.
+        let bg = if chosen {
+            Some(kit::Surface::Chosen.color(theme))
+        } else {
+            (look.hover_section == Some(s.items[0])).then_some(theme.panel)
+        };
+        let on = |style: Style| match bg {
+            Some(bg) => style.bg(bg),
+            None => style,
+        };
+        let (mark, tone, name) = named(s);
+        let x0 = x;
+        let mut piece_spans = vec![Span::styled(" ", on(Style::new()))];
+        if !mark.is_empty() {
+            piece_spans.push(Span::styled(format!("{mark} "), on(tone.style(theme))));
+        }
+        let name_style = if s.new || chosen {
+            Tone::Text.bold(theme)
+        } else {
+            Tone::Dim.style(theme)
+        };
+        piece_spans.push(Span::styled(name, on(name_style)));
+        let count_style = if s.new {
+            Tone::Accent.bold(theme)
+        } else {
+            Tone::Dim.style(theme)
+        };
+        piece_spans.push(Span::styled(format!(" {}", s.items.len()), on(count_style)));
+        piece_spans.push(Span::styled(" ", on(Style::new())));
+        x += piece_spans.iter().map(|s| width(&s.content)).sum::<usize>();
+        at.push((x0, x, s.items[0]));
+        spans.extend(piece_spans);
+        spans.push(Span::raw(" "));
+        x += 1;
+    }
+    (spans, at)
+}
+
+/// `runs` on a surface edge to edge, `w` wide.
+fn on_surface(runs: Vec<Run>, w: usize, bg: ratatui::style::Color) -> Vec<Run> {
+    let mut used = 0;
+    let mut runs: Vec<Run> = runs
+        .into_iter()
+        .map(|r| match r {
+            Run::Text(s) => {
+                used += width(&s.content);
+                let style = s.style.bg(bg);
+                Run::Text(Span::styled(s.content, style))
+            }
+            Run::Avatar { size, .. } => {
+                used += size.cols();
+                r
+            }
+            Run::Picture { cols, .. } => {
+                used += cols;
+                r
+            }
+        })
+        .collect();
+    if used < w {
+        runs.push(Run::Text(Span::styled(
+            " ".repeat(w - used),
+            Style::new().bg(bg),
+        )));
+    }
+    runs
 }
 
 /// How long ago a message's ts was: `4m`, `2h`.
@@ -800,34 +1307,7 @@ fn message_lines(item: &Item, look: &Look, w: usize, chosen: bool, lit: bool) ->
         theme.panel
     };
     out.into_iter()
-        .map(|runs| {
-            let mut used = 0;
-            let mut runs: Vec<Run> = runs
-                .into_iter()
-                .map(|r| match r {
-                    Run::Text(s) => {
-                        used += width(&s.content);
-                        let style = s.style.bg(bg);
-                        Run::Text(Span::styled(s.content, style))
-                    }
-                    Run::Avatar { size, .. } => {
-                        used += size.cols();
-                        r
-                    }
-                    Run::Picture { cols, .. } => {
-                        used += cols;
-                        r
-                    }
-                })
-                .collect();
-            if used < w {
-                runs.push(Run::Text(Span::styled(
-                    " ".repeat(w - used),
-                    Style::new().bg(bg),
-                )));
-            }
-            runs
-        })
+        .map(|runs| on_surface(runs, w, bg))
         .collect()
 }
 
@@ -872,7 +1352,7 @@ fn thread_lines(item: &Item, look: &Look, w: usize, seen: i64) -> Vec<Vec<Run>> 
         None => {}
     }
     facts.push(brought_by(kind).into());
-    let mut out: Vec<Vec<Run>> = vec![Vec::new()];
+    let mut out: Vec<Vec<Run>> = Vec::new();
     out.extend(
         kit::pane(place, vec![Span::styled(facts.join(" · "), dim)], w, theme)
             .into_iter()
@@ -1258,6 +1738,8 @@ mod tests {
             files_failed: &Default::default(),
             files_kept: &Default::default(),
             hover: None,
+            hover_section: None,
+            sections_focused: false,
         };
         let (lines, _, images) = board(&view(), &look);
         for l in &lines {
@@ -1271,29 +1753,40 @@ mod tests {
     }
 
     #[test]
-    fn the_list_is_grouped_with_counts_and_replies_or_replied_at_the_right() {
+    fn the_sections_column_lists_the_sections_and_the_chosen_ones_messages_beside() {
         let (lines, images) = draw(200, None, false, &[]);
         let all = lines.join("\n");
         let at = |s: &str| all.find(s).unwrap_or_else(|| panic!("{s} in\n{all}"));
-        assert!(at("MENTIONS") < at("DIRECT") && at("DIRECT") < at("CHANNELS"));
         assert!(
-            !all.contains("YOUR THREADS"),
-            "a group with nothing is left out"
+            at("@ Mentions") < at("DIRECT MESSAGES") && at("DIRECT MESSAGES") < at("CHANNELS"),
+            "{all}"
         );
+        assert!(
+            !all.contains("Threads"),
+            "a section with nothing is left out"
+        );
+        let mentions = lines.iter().find(|l| l.contains("@ Mentions")).unwrap();
+        let column = mentions.split('│').next().unwrap();
+        assert_eq!(width(column), SECTIONS_W, "{mentions}");
+        assert!(
+            column.trim_end().ends_with('1'),
+            "its count at the right: {mentions}"
+        );
+        assert!(all.contains("1 new · 1 today · newest first"), "{all}");
+        assert!(all.contains("Older messages stay in Slack."));
         let ada = lines
             .iter()
             .find(|l| l.contains("Ada") && l.contains("#dev"))
             .unwrap();
         assert!(ada.contains("3 replies"));
-        let left = ada.split('│').next().unwrap();
+        let list = ada.split('│').nth(1).unwrap();
         assert!(
-            left.trim_end().ends_with("3 replies") && left.ends_with(" "),
+            list.trim_end().ends_with("3 replies") && list.ends_with(" "),
             "at the list's right edge: {ada}"
         );
         assert!(
-            lines
-                .iter()
-                .any(|l| l.contains("Bo") && l.contains("↩ replied"))
+            !lines.iter().any(|l| l.contains("lunch?")),
+            "another section's messages aren't listed"
         );
         assert!(
             lines[0].ends_with("looked 2m ago"),
@@ -1333,6 +1826,8 @@ mod tests {
             files_failed: &failed_files,
             files_kept: &kept_files,
             hover: None,
+            hover_section: None,
+            sections_focused: false,
         };
         let said = texts(&board(&view(), &look).0).join("\n");
         assert!(
@@ -1401,8 +1896,11 @@ mod tests {
         let words = &lines[ada + 1];
         assert_eq!(col(words, "can"), x + 5, "{words}");
         assert!(
-            upto(words, x + 5).trim_matches(['▌', ' ']).is_empty(),
-            "the avatar's second row blank"
+            upto(words, x + 5)
+                .chars()
+                .skip(x)
+                .all(|c| c == ' ' || c == '▌'),
+            "the avatar's second row blank: {words}"
         );
         // In the thread beside, each message the same way.
         let ed = images
@@ -1450,16 +1948,71 @@ mod tests {
         );
     }
 
-    #[test]
-    fn j_and_k_walk_the_messages_in_the_order_they_are_drawn() {
+    /// A message in a conversation of its own, as a DM's or a channel's.
+    fn in_place(kind: &str, from: &str, channel: &str, place: &str, ago_s: i64, old: bool) -> Item {
+        message(
+            kind,
+            from,
+            "x",
+            ago_s,
+            json!({ "where": place, "old": old, "message": { "channel": channel, "ts": ts(ago_s) } }),
+        )
+    }
+
+    fn mixed() -> Vec<Item> {
         let mut items = vec![
-            message("dm", "Bo", "new", 60, json!({})),
-            message("mention", "Ada", "x", 120, json!({})),
-            message("dm", "Cy", "older", 600, json!({})),
+            in_place("channel", "Cy", "C2", "#ops", 900, true),
+            in_place("dm", "Bo", "D1", "Bo", 60, false),
+            in_place("mention", "Ada", "C1", "#dev", 600, true),
+            in_place("thread", "Lin", "C3", "#docs", 30, false),
+            in_place("channel", "Dee", "C4", "#web", 20, false),
+            in_place("mention", "Ed", "C1", "#dev", 120, false),
+            in_place("dm", "Bo", "D1", "Bo", 700, true),
+            in_place("channel", "Fay", "C2", "#ops", 10, true),
         ];
-        in_groups(&mut items);
+        in_order(&mut items);
+        items
+    }
+
+    #[test]
+    fn each_message_is_in_its_section_newest_first_with_counts_and_the_new_flag() {
+        let items = mixed();
         let from: Vec<&str> = items.iter().map(|i| get(i, "from")).collect();
-        assert_eq!(from, ["Ada", "Bo", "Cy"]);
+        assert_eq!(
+            from,
+            ["Ed", "Ada", "Lin", "Bo", "Bo", "Fay", "Cy", "Dee"],
+            "Mentions, Threads, the DMs, then the channels by their newest"
+        );
+        let secs = sections(&items);
+        let shape: Vec<(Kind, &str, usize, bool)> = secs
+            .iter()
+            .map(|s| (s.kind, s.title.as_str(), s.items.len(), s.new))
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                (Kind::Mentions, "Mentions", 2, true),
+                (Kind::Threads, "Threads", 1, true),
+                (Kind::Direct, "Bo", 2, true),
+                (Kind::Channel, "ops", 2, false),
+                (Kind::Channel, "web", 1, true),
+            ]
+        );
+        assert_eq!(secs[2].user, "UBo", "a DM's person, for their avatar");
+    }
+
+    #[test]
+    fn j_and_k_stay_in_the_section_and_the_sections_step_to_their_first() {
+        let items = mixed();
+        // Ed, Ada | Lin | Bo, Bo | Fay, Cy | Dee
+        assert_eq!(row_step(&items, 0, 1), 1);
+        assert_eq!(row_step(&items, 1, 1), 1, "the section's last stays");
+        assert_eq!(row_step(&items, 4, -1), 3);
+        assert_eq!(section_step(&items, 1, 1), 2);
+        assert_eq!(section_step(&items, 2, 1), 3);
+        assert_eq!(section_step(&items, 4, 1), 5);
+        assert_eq!(section_step(&items, 7, 1), 7, "the last section stays");
+        assert_eq!(section_step(&items, 3, -1), 2);
     }
 
     #[test]
@@ -1488,6 +2041,8 @@ mod tests {
             files_failed: &Default::default(),
             files_kept: &Default::default(),
             hover: None,
+            hover_section: None,
+            sections_focused: false,
         };
         let (_, hits, _) = board(&view(), &look);
         assert!(
@@ -1499,39 +2054,136 @@ mod tests {
     #[test]
     fn the_board_lays_out_by_the_screens_width() {
         let thread = thread();
-        // At 240 and 160 the list and the pane share the width equally.
-        for cols in [240, 160] {
+        let rules = |l: &str| -> Vec<usize> {
+            l.char_indices()
+                .filter(|(_, c)| *c == '│')
+                .map(|(b, _)| width(&l[..b]))
+                .collect()
+        };
+        // From 120 the sections, the messages and the thread, the list and
+        // the pane sharing what the sections leave equally.
+        for cols in [240, 160, 120] {
             let (lines, _) = draw(cols, Some(&thread), false, &[]);
-            let rule = lines[2]
-                .find('│')
-                .map(|b| lines[2][..b].chars().count())
-                .unwrap();
-            assert!(rule.abs_diff(cols / 2) <= 1, "{cols}: the rule at {rule}");
+            let at = rules(&lines[2]);
+            assert_eq!(at.len(), 2, "{cols}: {}", lines[2]);
+            assert_eq!(at[0], SECTIONS_W, "{cols}");
+            let half = SECTIONS_W + 1 + (cols - SECTIONS_W - 1) / 2;
+            assert!(at[1].abs_diff(half) <= 1, "{cols}: the rule at {}", at[1]);
+            assert!(lines[1].starts_with(" @ Mentions"), "{cols}: {}", lines[1]);
             assert!(
                 lines
                     .iter()
-                    .any(|l| l.contains("Ada") && l.contains("#dev")),
+                    .any(|l| l.contains("Ada") && l.contains("#dev ·")),
                 "where, at {cols}"
             );
         }
-        // At 120 where goes and the thread is behind i.
-        let (lines, _) = draw(120, Some(&thread), false, &[]);
-        assert!(!lines.iter().any(|l| l.contains('│')), "no pane");
+        // Narrower the thread is behind i and where goes.
+        let (lines, _) = draw(110, Some(&thread), false, &[]);
+        assert_eq!(rules(&lines[2]), [SECTIONS_W], "no pane: {}", lines[2]);
         assert!(
             !lines
                 .iter()
-                .any(|l| l.contains("Ada") && l.contains("#dev")),
+                .any(|l| l.contains("Ada") && l.contains("#dev ·")),
             "no where"
         );
         assert!(
             lines.iter().any(|l| l.contains("Ada") && l.contains("2m")),
             "how long ago kept"
         );
-        let (lines, _) = draw(120, Some(&thread), true, &[]);
+        // Under 100 the sections fold into a line above the messages.
+        let (lines, _) = draw(90, Some(&thread), false, &[]);
+        assert!(lines.iter().all(|l| !l.contains('│')), "no column");
+        assert!(
+            lines[1].contains("@ Mentions 1") && lines[1].contains("# dev 1"),
+            "{}",
+            lines[1]
+        );
+        let (lines, _) = draw(90, Some(&thread), true, &[]);
         let all = lines.join("\n");
         assert!(
-            all.contains("thread · 2 replies") && !all.contains("MENTIONS"),
-            "i shows the thread in the list's place"
+            all.contains("thread · 2 replies") && !all.contains("@ Mentions"),
+            "i shows the thread in the list's place: {all}"
         );
+    }
+
+    #[test]
+    fn a_thread_read_on_its_own_marks_no_reply_before_then_new() {
+        let thread = thread();
+        let mut view = view();
+        let key = format!("C1:{}", ts(120));
+        view.data.head = json!({ "seen": NOW - 200_000, "read_threads": { key: NOW } });
+        let tz = TimeZone::UTC;
+        let pictures = HashMap::new();
+        let look = Look {
+            cols: 200,
+            rows: 40,
+            top_row: 1,
+            cursor: Some(0),
+            theme: &Theme::DARK,
+            caps: false,
+            now_ms: NOW,
+            tz: &tz,
+            thread: Some(&thread),
+            threads_on: true,
+            pictures: &pictures,
+            graphics: false,
+            work: &[],
+            tabs: &[],
+            side_top: 0,
+            thread_open: false,
+            failed: None,
+            files_failed: &Default::default(),
+            files_kept: &Default::default(),
+            hover: None,
+            hover_section: None,
+            sections_focused: false,
+        };
+        let lines = texts(&board(&view, &look).0);
+        let ed = lines.iter().find(|l| l.contains("Ed ")).unwrap();
+        assert!(!ed.contains("▎") && !ed.contains("new"), "{ed}");
+    }
+
+    #[test]
+    fn a_long_channel_name_is_cut_so_the_chosen_section_stays_on_the_folded_line() {
+        let long = format!("#{}", "x".repeat(75));
+        let mut items = vec![
+            message("mention", "Ada", "hi", 60, json!({})),
+            message("channel", "Cy", "yo", 30, json!({ "where": long })),
+        ];
+        in_order(&mut items);
+        let secs = sections(&items);
+        let tz = TimeZone::UTC;
+        let pictures = HashMap::new();
+        let look = Look {
+            cols: 80,
+            rows: 40,
+            top_row: 1,
+            cursor: Some(1),
+            theme: &Theme::DARK,
+            caps: false,
+            now_ms: NOW,
+            tz: &tz,
+            thread: None,
+            threads_on: false,
+            pictures: &pictures,
+            graphics: false,
+            work: &[],
+            tabs: &[],
+            side_top: 0,
+            thread_open: false,
+            failed: None,
+            files_failed: &Default::default(),
+            files_kept: &Default::default(),
+            hover: None,
+            hover_section: None,
+            sections_focused: false,
+        };
+        let (spans, at) = section_line(&secs, Some(1), &look, 80);
+        assert!(
+            at.iter().any(|(_, _, first)| *first == 1),
+            "the chosen one has its place"
+        );
+        let line: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(width(&line) <= 80 && line.contains("# xxx"), "{line}");
     }
 }

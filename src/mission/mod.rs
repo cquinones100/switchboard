@@ -35,8 +35,9 @@
 //! - `find_key`: the Find a key box the Keys view's `m` menu opens: a
 //!   key pressed comes up with what it does.
 //! - `render`: the screen, as lines, and where a click lands.
-//! - `slack_board`: the Slack view as UX 2.0's board, the chosen message's
-//!   thread beside the list.
+//! - `slack_board`: the Slack view as UX 2.0's board, a column of sections
+//!   as Slack's sidebar lists them, the chosen one's messages and the
+//!   chosen message's thread beside it.
 //! - `calendar`: the Calendar view drawn as a day, hours down the side,
 //!   the chosen event beside it with who is going as photos.
 //! - `history`: the Notifications view as a history by day.
@@ -452,6 +453,17 @@ pub struct Mission {
     /// Whether Slack was shown as the view was last put together, alone or
     /// among several, so that it is seen once it no longer shows.
     pub slack_was_shown: bool,
+    /// The Slack board's messages shown since it came to the front, by
+    /// item ID: its sections show one at a time, so leaving marks only
+    /// these seen while others were never shown; `None` while the board
+    /// hasn't been shown (the plain list shows the whole look).
+    pub slack_viewed: Option<HashMap<String, Item>>,
+    /// The plain Slack list was shown since the view came to the front,
+    /// which shows the whole look.
+    pub slack_plain_shown: bool,
+    /// Every message of the Slack view's look, by item ID, whatever the
+    /// filter leaves.
+    pub slack_all: std::collections::HashSet<String>,
     /// Which of a view's panes has the focus, `C-w` and a direction moving
     /// it, and the view it was given in: another view has its list's.
     pub pane: Option<(usize, Pane)>,
@@ -461,7 +473,7 @@ pub struct Mission {
 }
 
 /// A view's panes from left to right, as Vim's windows: a side panel (the
-/// Settings board's categories), the list or board, and a pane beside it
+/// Settings board's categories, the Slack board's sections), the list or board, and a pane beside it
 /// (a ticket's, a PR's, a Slack thread). `C-w h` and `C-w l` move the focus
 /// between them, and the focused one takes `j` and `k`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -523,6 +535,9 @@ impl Mission {
             grid: None,
             cells: Vec::new(),
             slack_was_shown: false,
+            slack_viewed: Default::default(),
+            slack_plain_shown: false,
+            slack_all: Default::default(),
             pane: None,
             window_key: None,
         }
@@ -830,6 +845,20 @@ impl Mission {
         }
     }
 
+    /// The Slack messages leaving the view marks seen: `None` for all of
+    /// them, as when every one was shown, else those the board's sections
+    /// showed.
+    pub fn slack_seen(&self) -> Option<Vec<Item>> {
+        if self.slack_plain_shown {
+            return None;
+        }
+        let viewed = self.slack_viewed.as_ref()?;
+        if self.slack_all.iter().all(|id| viewed.contains_key(id)) {
+            return None;
+        }
+        Some(viewed.values().cloned().collect())
+    }
+
     /// The most the first line of the pane beside a board can be, as it
     /// was last drawn; `None` with no pane shown.
     /// The view in front's panes from left to right, as last drawn; the
@@ -838,8 +867,17 @@ impl Mission {
         if !crate::settings::is_on("ctrl_w_panes") {
             return vec![Pane::List];
         }
-        let panel = self.current().is_some_and(|v| v.id == ViewId::Settings)
-            && render::settings_board_shown(self);
+        let panel = self.current().is_some_and(|v| {
+            v.id == ViewId::Settings && render::settings_board_shown(self)
+                || render::slack_board_shown(self, v)
+                    && slack_board::column(self.laid().0 as usize)
+                    && !v.data.items.is_empty()
+                    // Not while the thread is in the list's place, the
+                    // sections hidden with it.
+                    && !(self.slack_thread_open
+                        && crate::settings::is_on("slack_threads")
+                        && !slack_board::beside(self.laid().0 as usize))
+        });
         let beside = self.side_last().is_some();
         [
             (panel, Pane::Panel),
