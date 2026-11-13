@@ -561,8 +561,8 @@
   {
     "key": "tab_back_forward",
     "category": "Tabs and status bar",
-    "label": "M-[ and M-] go back and forward",
-    "description": "M-[ and M-] go back and forward through the tabs you visited, as a browser's back and forward do, and do nothing with nowhere further to go, and the ← and → buttons before mission control's ⊞ do the same; off, they go to the tab on the left and right, as the prefix's p and n always do, and the buttons are left out",
+    "label": "M-{ and M-} go back and forward",
+    "description": "M-{ and M-} go back and forward through the tabs you visited, as a browser's back and forward do, and do nothing with nowhere further to go, and the ← and → buttons before mission control's ⊞ do the same; off, they go to the tab on the left and right, as the prefix's p and n always do, and the buttons are left out",
     "default": true
   },
   {

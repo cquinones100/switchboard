@@ -75,7 +75,7 @@ runs the workspace on made-up data, in a home of its own under `/tmp` that links
 | `M-Left` `M-Down` `M-Up` `M-Right` | To the pane on that side |
 | `M-H` `M-J` `M-K` `M-L` | Split the pane to that side |
 | `C-M-S-h` `C-M-S-j` `C-M-S-k` `C-M-S-l` | Move the pane's divider that way, growing or shrinking it (Ghostty, kitty) |
-| `M-[` `M-]`, `M-1` … `M-9` | Back or forward through the tabs you visited, or a tab by the number it keeps while open |
+| `M-{` `M-}`, `M-1` … `M-9` | Back or forward through the tabs you visited, or a tab by the number it keeps while open |
 | `M-w` | Close the pane, asking first when something runs in it |
 | `M-v` / `M-i` | The branch's PR description / its Linear ticket, in a pane to the right |
 | `M-d` | The branch's diff against its PR's base, in place of the pane, its changes told as a story, what isn't committed yet included, marked ● and listed last (`R` reads it again); `M-p`'s "Clear this tab's diff cache" makes the next one ask again |

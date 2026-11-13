@@ -46,11 +46,11 @@ fn splitting_tabs_and_closing() {
         s.iter().take(28).any(|l| l.contains('│'))
     });
     assert!(screen.iter().filter(|l| l.contains('$')).count() >= 1);
-    // A new tab from a command, then M-[ back to the first.
+    // A new tab from a command, then M-{ back to the first.
     server.ok(&["new-tab", "-n", "second"]);
     client.wait_text("2:second");
     assert_eq!(tabs(&server.list()), 2);
-    client.type_text(&format!("{ALT}["));
+    client.type_text(&format!("{ALT}{{"));
     client.wait_for("the first tab current", |_| {
         server.list()["sessions"][0]["tabs"][0]["current"] == true
     });
@@ -855,15 +855,15 @@ fn is_current(server: &TestServer, i: usize) -> bool {
 }
 
 #[test]
-fn alt_brackets_go_back_and_forward_through_the_tabs_visited() {
+fn alt_braces_go_back_and_forward_through_the_tabs_visited() {
     let server = TestServer::start();
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     three_tabs_visited(&server);
     for (key, i, what) in [
-        ("[", 2, "back to the third tab"),
-        ("[", 0, "back to the first tab"),
-        ("]", 2, "forward to the third tab"),
+        ("{", 2, "back to the third tab"),
+        ("{", 0, "back to the first tab"),
+        ("}", 2, "forward to the third tab"),
     ] {
         client.type_text(&format!("{ALT}{key}"));
         client.wait_for(what, |_| is_current(&server, i));
@@ -871,12 +871,12 @@ fn alt_brackets_go_back_and_forward_through_the_tabs_visited() {
 }
 
 #[test]
-fn with_tab_back_forward_off_alt_brackets_go_to_the_tab_beside() {
+fn with_tab_back_forward_off_alt_braces_go_to_the_tab_beside() {
     let server = TestServer::start_with_settings(r#"{"tab_back_forward": false}"#);
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     three_tabs_visited(&server);
-    client.type_text(&format!("{ALT}["));
+    client.type_text(&format!("{ALT}{{"));
     client.wait_for("the first tab, on the left", |_| is_current(&server, 0));
 }
 

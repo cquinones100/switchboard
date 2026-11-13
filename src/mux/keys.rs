@@ -852,8 +852,8 @@ impl Default for Bindings {
         bind("M-Right", SelectPane(Right));
         bind("M-Up", SelectPane(Up));
         bind("M-Down", SelectPane(Down));
-        bind("M-[", TabBack);
-        bind("M-]", TabForward);
+        bind("M-{", TabBack);
+        bind("M-}", TabForward);
         bind("M-Tab", LastTab);
         for n in 1..=9 {
             bind(&format!("M-{n}"), SelectTab(n));
@@ -1042,6 +1042,15 @@ impl Bindings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn m_braces_go_back_and_forward_and_m_brackets_are_free() {
+        let b = Bindings::default();
+        assert_eq!(b.root.get(&key("M-{")), Some(&Action::TabBack));
+        assert_eq!(b.root.get(&key("M-}")), Some(&Action::TabForward));
+        assert_eq!(b.root.get(&key("M-[")), None);
+        assert_eq!(b.root.get(&key("M-]")), None);
+    }
 
     #[test]
     fn action_names_round_trip() {

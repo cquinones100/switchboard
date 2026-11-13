@@ -2022,8 +2022,8 @@ fn with_ux2_the_mission_control_button_opens_and_closes_it_and_its_right_click_l
     press(&mut client, 0, settings);
     client.wait_text("MISSION CONTROL");
     client.wait_text("INTEGRATIONS");
-    // With mission control open, M-[ closes it and steps back.
-    client.type_text(&format!("{ALT}["));
+    // With mission control open, M-{ closes it and steps back.
+    client.type_text(&format!("{ALT}{{"));
     client.wait_for("mission control closed", |s| {
         !s.iter().any(|l| l.contains("MISSION CONTROL"))
     });
@@ -2075,7 +2075,7 @@ fn with_ux2_the_notifications_window_on_the_trail_is_named_by_the_buttons_and_th
     wait_list(&server, "the Notifications window in front", |l| {
         notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == true)
     });
-    client.type_text(&format!("{ALT}["));
+    client.type_text(&format!("{ALT}{{"));
     wait_list(&server, "the first tab in front", |l| {
         notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == false)
     });

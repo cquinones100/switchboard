@@ -244,7 +244,7 @@ impl Command {
                 "v in the sidebar; Space or a click selects each, Enter opens what to do with them. The focus goes into the sidebar with the tab in front selected, and Close these tabs asks once before closing them all. Settings' \"Select several tabs\" (sidebar_select)."
             }
             Command::TabTrail => {
-                "The menu a right click on the sidebar's ← or → opens: the tabs forward, the one you are on, then the tabs back, each with its steps away; a choice goes there as that many M-[ or M-] would. Settings' \"M-[ and M-] go back and forward\" (tab_back_forward)."
+                "The menu a right click on the sidebar's ← or → opens: the tabs forward, the one you are on, then the tabs back, each with its steps away; a choice goes there as that many M-{ or M-} would. Settings' \"M-{ and M-} go back and forward\" (tab_back_forward)."
             }
             Command::MissionViews => {
                 "The menu a right click on the sidebar's ⊞ opens: each view that is on, by group, the Tabs view with how many tabs need you; a choice opens mission control on it."

@@ -62,7 +62,7 @@ pub enum Owner {
     /// click opens.
     BuildRow,
     /// ← and →, which step back and forward through the tabs visited as
-    /// M-[ and M-] do.
+    /// M-{ and M-} do.
     Back,
     Forward,
     /// ⊞, which opens mission control as M-Space does.
