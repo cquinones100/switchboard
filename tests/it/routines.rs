@@ -375,3 +375,92 @@ fn a_run_missed_while_asleep_runs_on_waking_within_the_hour_else_is_skipped() {
         runs(&server).contains("\tbusy\t")
     });
 }
+
+/// The routines in the state directory, by name: whether each is paused,
+/// and when it runs.
+fn routines_by_name(server: &TestServer) -> Vec<(String, bool, String)> {
+    let mut out: Vec<(String, bool, String)> = std::fs::read_dir(server.state.join("routines"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".json"))
+        .map(|e| {
+            let r: Value =
+                serde_json::from_str(&std::fs::read_to_string(e.path()).unwrap()).unwrap();
+            (
+                r["name"].as_str().unwrap().to_string(),
+                r["paused"].as_bool().unwrap(),
+                r["when"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn the_starter_routines_are_made_once_running_as_what_they_replace_did() {
+    let mut server = TestServer::start_with_starters(
+        r#"{"todo_note": true, "todo_note_time": "7", "view_slack": false}"#,
+    );
+    let mut client = server.attach(120, 40);
+    client.wait_text("$");
+    wait(&server, "the starters made", || {
+        server.state.join("routines/.starters").exists()
+    });
+    let made = routines_by_name(&server);
+    assert_eq!(
+        made,
+        [
+            ("Calendar".into(), true, "every 30m".into()),
+            ("Meeting notes".into(), true, "every 30m 7am-9pm".into()),
+            ("Slack".into(), true, "every 15m".into()),
+            (
+                "Today's todo note".into(),
+                false,
+                "every 1h 7-11pm weekdays".into()
+            ),
+        ]
+    );
+    // One deleted stays deleted: a server started again makes none.
+    let slack = std::fs::read_dir(server.state.join("routines"))
+        .unwrap()
+        .flatten()
+        .find(|e| std::fs::read_to_string(e.path()).is_ok_and(|t| t.contains("\"Slack\"")))
+        .unwrap()
+        .path();
+    std::fs::remove_file(slack).unwrap();
+    drop(client);
+    server.restart();
+    let mut client = server.attach(120, 40);
+    client.wait_text("$");
+    std::thread::sleep(Duration::from_secs(2) * common::patience());
+    assert_eq!(routines_by_name(&server).len(), 3);
+}
+
+#[test]
+fn a_note_a_routine_wrote_is_put_in_the_notifications_and_one_outside_the_notes_refused() {
+    let server = TestServer::start();
+    let notes = server.home.join("Notes/Todos");
+    std::fs::create_dir_all(&notes).unwrap();
+    std::fs::write(
+        notes.join("Today's Todo 2026-11-13.md"),
+        "# Today's Todo 2026-11-13\n",
+    )
+    .unwrap();
+    let (code, _, err) = server.run_binary(&[
+        "new-note",
+        "Todos/Today's Todo 2026-11-13.md",
+        "today's to-do list",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let kept: Value = serde_json::from_str(
+        &std::fs::read_to_string(server.state.join("new-notes.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(kept[0]["path"], "Todos/Today's Todo 2026-11-13.md");
+    assert_eq!(kept[0]["title"], "Today's Todo 2026-11-13");
+    assert_eq!(kept[0]["source"], "today's to-do list");
+    std::fs::write(server.home.join("elsewhere.md"), "# Not a note\n").unwrap();
+    assert_eq!(server.run_binary(&["new-note", "../elsewhere.md"]).0, 1);
+}

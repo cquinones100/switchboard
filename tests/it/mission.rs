@@ -39,7 +39,6 @@ fn settings(server: &TestServer, extra: Value) {
         // The Reminders view too, which a test of reminders turns on.
         "reminders": false,
         "standup_note": false,
-        "meeting_notes": false,
         "new_notes": false,
     });
     for (k, v) in extra.as_object().unwrap() {

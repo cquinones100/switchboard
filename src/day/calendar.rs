@@ -2,7 +2,7 @@
 //! calendar's iCal feed when its secret address is stored (the secret
 //! `google-calendar-ical`), else from the day /today last saved
 //! (`calendar.json` in the state directory, which `switchboard today-save`
-//! writes; the Calendar tab runs /today every 30 minutes). Ported from
+//! writes; the Calendar routine runs /today every 30 minutes). Ported from
 //! lib/sidebar/calendar.js and calendar-feed.js; drawing the day is
 //! mission control's, which takes the view's items from here.
 //!
@@ -10,9 +10,8 @@
 //! here, and when you go to the view; what is shown is only ever the last
 //! answer, in the shape /today saves, so the view takes either. A day saved
 //! before today, or more than `STALE_MS` ago, is out of date, and the view
-//! says so rather than passing it off as today's; the server then opens a
-//! Calendar tab in the background unless one already keeps it, at most once
-//! every `REOPEN_MS`.
+//! says so rather than passing it off as today's, and that the Calendar
+//! routine catches it up.
 //!
 //! The feed is lost once its looks have failed one after another for
 //! `FEED_DOWN_MS`, three at least, and stays lost until one succeeds: the
@@ -39,7 +38,6 @@ use crate::{connector, net, platform, settings, util};
 pub const FEED_POLL_MS: i64 = 5 * 60_000;
 pub const FEED_DOWN_MS: i64 = 15 * 60_000;
 pub const STALE_MS: i64 = 45 * 60_000;
-pub const REOPEN_MS: i64 = 10 * 60_000;
 /// The secret the feed's address is stored under.
 pub const SECRET: &str = "google-calendar-ical";
 /// The next meeting's notification shows from this long before it starts
@@ -49,7 +47,7 @@ pub const MEETING_AFTER_MS: i64 = 10 * 60_000;
 
 /// What the view says when neither the feed nor /today is set up, from
 /// lib/sidebar/setup-help.js.
-pub const SETUP: &str = "The calendar isn't set up. Either: (1) give mission control your Google Calendar's secret address: in Google Calendar, open Settings, your calendar, Integrate calendar, copy \"Secret address in iCal format\", then run switchboard platform secret-set google-calendar-ical in a terminal, paste it and press Ctrl-D; mission control reads it every five minutes. Or (2) connect Google Calendar in Claude (/mcp in Claude Code) and open a Calendar tab (M-p, \"Open a Calendar tab\"), which runs /today every 30 minutes.";
+pub const SETUP: &str = "The calendar isn't set up. Either: (1) give mission control your Google Calendar's secret address: in Google Calendar, open Settings, your calendar, Integrate calendar, copy \"Secret address in iCal format\", then run switchboard platform secret-set google-calendar-ical in a terminal, paste it and press Ctrl-D; mission control reads it every five minutes. Or (2) connect Google Calendar in Claude (/mcp in Claude Code) and resume the Calendar routine in mission control's Routines view, which runs /today every 30 minutes.";
 
 /// A ticket or pull request an event names, with its link when it has one.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -252,6 +250,11 @@ pub enum Fetched {
 impl Feed {
     pub fn configured(&self) -> bool {
         self.configured == Some(true)
+    }
+
+    /// Known to have no secret address, rather than not read yet.
+    pub fn unconfigured(&self) -> bool {
+        self.configured == Some(false)
     }
 
     /// Lost: failing for `FEED_DOWN_MS`, and not read since.
@@ -468,7 +471,7 @@ pub fn calendar_view(look: &Look) -> ViewData {
             view.error = Some("Nothing saved yet: the Calendar tab is looking.".into());
         } else if feed.configured() {
             view.error = Some(format!(
-                "{} Opening a Calendar tab to read it with /today.",
+                "{} Resume the Calendar routine in the Routines view to read it with /today.",
                 feed.error.as_deref().unwrap_or("")
             ));
         } else {
@@ -481,9 +484,9 @@ pub fn calendar_view(look: &Look) -> ViewData {
             .clone()
             .unwrap_or_else(|| "reading the calendar feed".into())
     } else if look.looping {
-        "the Calendar tab fetches it every 30 minutes".into()
+        "the Calendar routine fetches it every 30 minutes".into()
     } else {
-        "opening a Calendar tab to fetch it".into()
+        "resume the Calendar routine in the Routines view to fetch it".into()
     };
     let mut view = ViewData {
         at: (day.updated > 0).then_some(day.updated),
@@ -1002,7 +1005,7 @@ mod tests {
         assert_eq!(
             run(&lost, 86_400_000),
             (true, true),
-            "a lost feed with nothing newer saved opens a Calendar tab"
+            "a lost feed with nothing newer saved needs the Calendar routine"
         );
         let mut away = feed.clone();
         failed(&mut away, &[75, 70, 0]);

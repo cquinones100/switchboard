@@ -1,6 +1,7 @@
 //! Mission control's Slack view: what is new for you on Slack in the last
 //! day, newest first, as the server's own look (`slack_look`, the
-//! slack_background setting) or the /slack-updates skill in a Slack tab last
+//! slack_background setting) or the /slack-updates skill in the Slack
+//! routine's tab last
 //! saved it (`slack.json` in the state directory): direct messages and
 //! mentions marked as needing you, then replies in your threads and the
 //! channels you chose. Ported from lib/sidebar/slack.js, and the saving from
@@ -25,7 +26,8 @@ use serde_json::{Map, Value, json};
 use crate::items::{Item, State, Target, ViewData};
 use crate::util;
 
-pub const STALE_MS: i64 = 15 * 60_000;
+/// Past the Slack routine's 15 minutes between looks, with time for a look.
+pub const STALE_MS: i64 = 20 * 60_000;
 const DISMISS_KEEP_MS: i64 = 2 * 24 * 60 * 60_000;
 /// Messages over a day old are let go.
 pub const KEEP_MS: i64 = 24 * 60 * 60_000;
@@ -278,7 +280,7 @@ pub fn slack_view(look: &Look) -> ViewData {
         } else if look.looping {
             "Nothing saved yet: the Slack tab is looking.".into()
         } else {
-            "Nothing saved yet: going to this view opens a Slack tab, which looks every 5 minutes."
+            "Nothing saved yet: resume the Slack routine in mission control's Routines view, which looks every 15 minutes, or turn on Settings' \"Slack without a tab\"."
                 .into()
         };
         return ViewData {
@@ -353,9 +355,9 @@ pub fn slack_view(look: &Look) -> ViewData {
     let catching = if look.background {
         "mission control looks every minute while you're here"
     } else if look.looping {
-        "the Slack tab looks every 5 minutes"
+        "the Slack routine looks every 15 minutes"
     } else {
-        "opening a Slack tab to catch up"
+        "resume the Slack routine in the Routines view to catch up"
     };
     // Its connector down says so first: nothing else will fix it.
     let error = look.down.clone().filter(|_| look.background).or_else(|| {

@@ -197,7 +197,7 @@ impl Action {
     /// the extras'
     /// (`rename-tab`, `go-to-tab`, `pane-nav`, `mission-<view>`,
     /// `notifications`, `habits-report`, `send-reply`, `update-main`,
-    /// `check-setup`, `setup-part`, `calendar-tab`, `slack-tab`,
+    /// `check-setup`, `setup-part`,
     /// `open-pr-number`, `open-ticket-id`, `aws-login`), and
     /// `work-note-continuously`.
     pub fn parse(name: &str) -> Option<Action> {

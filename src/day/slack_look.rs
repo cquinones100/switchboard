@@ -1,5 +1,5 @@
 //! The Slack view's look, run by the server in the background in place of a
-//! Slack tab looping /slack-updates: every `SLACK_LOOK_MS` while you're at
+//! Slack routine running /slack-updates: every `SLACK_LOOK_MS` while you're at
 //! the computer, and when you go to the view. Ported from
 //! lib/sidebar/slack-look.js. It reaches Slack through Claude's connector
 //! (`crate::connector`), a headless Haiku allowed one tool at a time with no

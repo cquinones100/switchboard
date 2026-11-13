@@ -302,6 +302,15 @@ impl Watch {
     }
 }
 
+/// Whether a service's last call worked.
+pub fn connected(service: &str) -> bool {
+    read_status()
+        .get(service)
+        .and_then(|s| s.get("ok"))
+        .and_then(Value::as_bool)
+        == Some(true)
+}
+
 /// What a view shows when its service is down, or `None`.
 pub fn connector_down(service: &str) -> Option<String> {
     let status = read_status();

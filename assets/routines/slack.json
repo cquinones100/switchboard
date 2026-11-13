@@ -1,0 +1,6 @@
+{
+  "name": "Slack",
+  "when": "every 15m",
+  "model": "",
+  "prompt": "Each run, run the slack-updates skill (/slack-updates), which saves what is new for you on Slack for mission control's Slack view. Reply with one line: what it found."
+}

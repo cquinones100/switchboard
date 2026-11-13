@@ -276,14 +276,14 @@
     "key": "todo_note",
     "category": "Integrations",
     "label": "Today's todo note",
-    "description": "Each weekday at the time below, a note Todos/Today's Todo <date> that Claude (Sonnet) writes from your notes' unticked items, today's calendar, and what mission control last read of GitHub, Linear and Slack; off by default, since it sends your notes' unticked items to Claude",
+    "description": "Whether the Today's todo note starter routine is made running when this version first sets up the routines (it sends your notes' unticked items to Claude); after that, pause or resume it in mission control's Routines view. Kept off by default for a workspace still running an older Switchboard, which reads this list",
     "default": false
   },
   {
     "key": "todo_note_time",
     "category": "Integrations",
     "label": "Todo note time",
-    "description": "When Today's todo note is written each weekday, or as soon as the computer is on after it",
+    "description": "The hour the Today's todo note starter routine starts its weekday runs at, when this version first sets up the routines; after that, change its schedule in mission control's Routines view. Kept for a workspace still running an older Switchboard, which reads this list",
     "choices": [
       {
         "value": "7",
@@ -312,7 +312,7 @@
     "key": "meeting_notes",
     "category": "Integrations",
     "label": "Meeting notes",
-    "description": "Each meeting of yours Fathom recorded as a note in Meetings, with its summary, action items and transcript, through Claude's Fathom connector (a Haiku call every 30 minutes from 7am to 9pm, and two for each new meeting)",
+    "description": "Whether the Meeting notes starter routine is made running when this version first sets up the routines (once Fathom has worked); after that, pause or resume it in mission control's Routines view. Kept for a workspace still running an older Switchboard, which reads this list",
     "default": true
   },
   {
@@ -716,7 +716,7 @@
     "key": "slack_background",
     "category": "Mission control",
     "label": "Slack without a tab",
-    "description": "Mission control looks at Slack itself every minute, through cheap headless Haiku calls, instead of a Slack tab looping /slack-updates",
+    "description": "Mission control looks at Slack itself every minute, through cheap headless Haiku calls, instead of the Slack routine running /slack-updates",
     "default": true
   },
   {

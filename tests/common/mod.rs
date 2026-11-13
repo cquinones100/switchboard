@@ -62,10 +62,8 @@ pub fn deadline(base: Duration) -> Instant {
 /// keeping the computer awake, which would start (a stand-in) caffeinate
 /// whenever a test's pane works. A test of one of them turns it on.
 pub const QUIET: &[(&str, bool)] = &[
-    ("meeting_notes", false),
     ("standup_note", false),
     ("standup_summary", false),
-    ("todo_note", false),
     ("slack_background", false),
     ("keep_awake", false),
     ("turn_summaries", false),
@@ -127,6 +125,10 @@ pub struct TestServer {
     /// The binary the server is started from: `BIN`, or a copy of the
     /// test's own that it can put something else in place of.
     bin: PathBuf,
+    /// Whether the server makes the starter routines
+    /// (src/routines/starters.rs); a test server is marked as having made
+    /// them unless a test of them asks, so its routines are the test's own.
+    starters: bool,
 }
 
 impl TestServer {
@@ -151,7 +153,17 @@ impl TestServer {
         TestServer::start_with(env, Some(settings))
     }
 
+    /// A server with `settings` that makes the starter routines as yours
+    /// does, the first time it reads the routines.
+    pub fn start_with_starters(settings: &str) -> TestServer {
+        TestServer::start_as(&[], Some(settings), true)
+    }
+
     fn start_with(env: &[(&str, &str)], settings: Option<&str>) -> TestServer {
+        TestServer::start_as(env, settings, false)
+    }
+
+    fn start_as(env: &[(&str, &str)], settings: Option<&str>, starters: bool) -> TestServer {
         let dir = TempDir::new("sbt");
         let home = dir.path().join("home");
         let state = dir.path().join("s");
@@ -175,6 +187,7 @@ impl TestServer {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             bin: PathBuf::from(BIN),
+            starters,
         };
         server.launch();
         server
@@ -211,6 +224,7 @@ impl TestServer {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             bin: bin.clone(),
+            starters: false,
         };
         server.launch();
         (server, bin)
@@ -231,6 +245,7 @@ impl TestServer {
             child: None,
             extra_env: vec![("SWITCHBOARD_STATE_DIR".into(), String::new())],
             bin: PathBuf::from(BIN),
+            starters: false,
         };
         server.launch();
         server
@@ -281,6 +296,11 @@ impl TestServer {
     /// for it to listen.
     fn launch(&mut self) {
         self.stand_ins();
+        if !self.starters {
+            let routines = self.state.join("routines");
+            std::fs::create_dir_all(&routines).unwrap();
+            std::fs::write(routines.join(".starters"), "").unwrap();
+        }
         let settings = match self
             .extra_env
             .iter()

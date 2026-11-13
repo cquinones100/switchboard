@@ -1,6 +1,6 @@
 ---
 name: slack-updates
-description: Gather what is new for the user on Slack since the last look (mentions, direct messages, replies in threads they started, and the channels they chose) and save it for mission control's Slack view. Meant to run in the Slack tab as /loop 5m /slack-updates; run it by hand to refresh the view.
+description: Gather what is new for the user on Slack since the last look (mentions, direct messages, replies in threads they started, and the channels they chose) and save it for mission control's Slack view. Meant to run from the Slack starter routine every 15 minutes; run it by hand to refresh the view.
 ---
 
 # Slack updates

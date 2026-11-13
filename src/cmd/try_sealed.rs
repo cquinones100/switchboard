@@ -86,8 +86,6 @@ pub const SEALED_OFF: &[(&str, &str)] = &[
     ("chrome_profiles", "false"),
     ("standup_note", "false"),
     ("standup_summary", "false"),
-    ("todo_note", "false"),
-    ("meeting_notes", "false"),
     ("search_everything", "false"),
     ("search_slack", "false"),
     ("diff_order", "false"),
