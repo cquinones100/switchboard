@@ -17,6 +17,7 @@ The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a scre
 A tab and what it shows in Claude's place.
 
 - [1. The workspace: the sidebar with notifications, the tab in focus and its views](https://cquinones100.github.io/switchboard/design/1.html)
+- [75. A pinned tab (M-f): first in Needs you, its own state mark kept and the flag ⚑ at its row's right](https://cquinones100.github.io/switchboard/design/75.html)
 - [2. M-a: straight to what needs you, answered in Claude's own dialog](https://cquinones100.github.io/switchboard/design/2.html)
 - [4. M-\\: two tabs side by side](https://cquinones100.github.io/switchboard/design/4.html)
 - [6. A tab's history](https://cquinones100.github.io/switchboard/design/6.html)

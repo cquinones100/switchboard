@@ -59,7 +59,7 @@ const K = (x, y, w, h, css, text) => imgs.push({ pos: 'position:absolute;left:ca
 // Tints for chips and cells: Y B M G R by tone, 5 neutral.
 const TINT = { y: 'Y', b: 'B', m: 'M', g: 'G', r: 'R', d: '5', t: '5', a: '3' };
 // MARK: one glyph per state, the same everywhere.
-const MARK = { needs: ['●', 'y'], working: ['⠹', 'b'], landing: ['▲', 'm'], queued: ['▲', 'm'], idle: ['○', 'd'], failed: ['✕', 'r'], passed: ['✓', 'g'], pending: ['◌', 'y'], reminder: ['◷', 'y'], mention: ['@', 'b'], note: ['✎', 'm'], comment: ['◇', 'b'] };
+const MARK = { needs: ['●', 'y'], working: ['⠹', 'b'], landing: ['▲', 'm'], queued: ['▲', 'm'], idle: ['○', 'd'], failed: ['✕', 'r'], passed: ['✓', 'g'], pending: ['◌', 'y'], reminder: ['◷', 'y'], mention: ['@', 'b'], note: ['✎', 'm'], comment: ['◇', 'b'], pinned: ['⚑', 'y'] };
 const mark = (x, y, state, bg) => put(x, y, MARK[state][0], MARK[state][1], '', bg);
 // LABEL: a section's name in capitals, bold, in its tone (d unless it names a state); its count at xr.
 const label = (x, y, text, tone, count, xr) => { put(x, y, text.toUpperCase(), tone || 'd', 'b'); if (count !== undefined && xr) R(xr, y, String(count), tone || 'd'); };
