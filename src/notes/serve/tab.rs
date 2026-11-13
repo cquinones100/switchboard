@@ -88,6 +88,8 @@ impl Server {
                     && self.tab_opt(*t, "@notes").as_deref() != Some("1")
             });
         if let Some(tab) = linked {
+            // Going to it from the note is linking it yourself.
+            self.set_tab_opt(tab, super::BY_YOU, Some(&note));
             self.go_to_tab(client, tab);
             self.note_tab_beside(tab, client);
             return;
@@ -133,6 +135,7 @@ impl Server {
                 return;
             };
             server.set_tab_opt(tab, "@tab_note", Some(&note));
+            server.set_tab_opt(tab, super::BY_YOU, Some(&note));
             server.go_to_tab(client, tab);
             server.note_tab_beside(tab, client);
         });
@@ -171,6 +174,7 @@ impl Server {
         };
         self.tab_to_end(tab);
         self.set_tab_opt(tab, "@tab_note", Some(note));
+        self.set_tab_opt(tab, super::BY_YOU, Some(note));
         let name = if title.is_empty() {
             note.trim_end_matches(".md")
         } else {

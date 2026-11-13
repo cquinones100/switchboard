@@ -645,6 +645,13 @@
     "default": true
   },
   {
+    "key": "note_by_precedence",
+    "category": "Notes",
+    "label": "M-e opens the tab's plan or autopilot's note",
+    "description": "M-e shows the note you linked to the tab, else the plan of an autopilot tab's item, else the note autopilot is working through, else the note shown there last. Off, M-e shows the tab's note or the one shown there last, as before.",
+    "default": true
+  },
+  {
     "key": "tab_note_context",
     "category": "Notes",
     "label": "Point Claude at the tab's note",

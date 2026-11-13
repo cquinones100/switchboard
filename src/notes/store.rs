@@ -100,6 +100,10 @@ pub struct TabLinks {
     /// The ID of the note autopilot opened it for
     /// (`@autopilot_note`).
     pub pilot_note: String,
+    /// The note you linked to it yourself (`@tab_note_by_you`).
+    pub by_you: String,
+    /// Its autopilot item's plan (`@tab_plan_note`).
+    pub plan: String,
 }
 
 fn dirname(rel: &str) -> &str {
@@ -863,6 +867,8 @@ pub fn tab_links(listed: &str) -> Vec<TabLinks> {
                 arrived: opt("@tab_note_arrived"),
                 name: opt("@tab_name"),
                 pilot_note: opt("@autopilot_note"),
+                by_you: opt(crate::notes::serve::BY_YOU),
+                plan: opt(crate::notes::serve::PLAN_NOTE),
             });
         }
     }
@@ -881,10 +887,14 @@ pub fn relink_plan(
         let to_note = followed(&tab.note);
         let to_last = followed(&tab.last);
         let to_arrived = followed(&tab.arrived);
+        let to_by_you = followed(&tab.by_you);
+        let to_plan = followed(&tab.plan);
         for (option, to) in [
             ("@tab_note_arrived", &to_arrived),
             ("@tab_note", &to_note),
             ("@tab_note_last", &to_last),
+            (crate::notes::serve::BY_YOU, &to_by_you),
+            (crate::notes::serve::PLAN_NOTE, &to_plan),
         ] {
             if let Some(to) = to {
                 plan.push((tab.id.clone(), option.to_string(), to.clone()));
@@ -1238,6 +1248,12 @@ pub(crate) mod tests {
                 arrived: "Work/Ideas.md".into(),
                 ..Default::default()
             },
+            TabLinks {
+                id: "@5".into(),
+                by_you: "Work/Mine.md".into(),
+                plan: "Work/Plan - X.md".into(),
+                ..Default::default()
+            },
         ];
         let follow = |rel: &str| (rel == "Plans.md").then(|| "Weekend plans.md".to_string());
         let title = Retitled {
@@ -1282,8 +1298,18 @@ pub(crate) mod tests {
                     "@tab_note_last".to_string(),
                     "Home/Ideas.md".to_string()
                 ),
+                (
+                    "@5".to_string(),
+                    "@tab_note_by_you".to_string(),
+                    "Home/Mine.md".to_string()
+                ),
+                (
+                    "@5".to_string(),
+                    "@tab_plan_note".to_string(),
+                    "Home/Plan - X.md".to_string()
+                ),
             ],
-            "a renamed folder takes its notes' links along"
+            "a renamed folder takes its notes' links along, the one you made and the plan too"
         );
         let listed = r#"{"sessions":[{"tabs":[{"id":"@4","options":{"@tab_note":"A.md","@tab_name":"A"}}]}]}"#;
         assert_eq!(

@@ -382,6 +382,19 @@ pub fn plan_notes(notes: &Path, text: &str) -> HashMap<String, PlanNote> {
         .collect()
 }
 
+/// The plan note the item whose first line is `item` links in the note
+/// `text`, ticked or not (`Plan: [[…]]`, as `plan_notes` reads it): its
+/// file, found under `notes`; none when the item or the plan isn't there.
+/// For M-e on an autopilot tab, off the server's task.
+pub fn item_plan_file(notes: &Path, text: &str, item: &str) -> Option<PathBuf> {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let at = lines
+        .iter()
+        .position(|line| ITEM.captures(line).is_some_and(|m| m[1].trim() == item))?;
+    let name = own_plan(&item_block(&lines, at))?;
+    plan_file(notes, &name)
+}
+
 /// The item's first line, when the line is an unticked item.
 fn unticked(line: &str) -> Option<String> {
     UNTICKED
@@ -1499,6 +1512,17 @@ mod tests {
             "a plan under a sub-item is the sub-item's"
         );
         assert_eq!(plans.len(), 2, "top-level items alone: {plans:?}");
+        assert_eq!(
+            item_plan_file(&dir, note, "Give notes stable IDs"),
+            Some(dir.join("Plans/Plan - Stable IDs.md"))
+        );
+        assert_eq!(item_plan_file(&dir, note, "No plan here"), None);
+        assert_eq!(
+            item_plan_file(&dir, note, "Landed already"),
+            None,
+            "its plan is in the trash"
+        );
+        assert_eq!(item_plan_file(&dir, note, "Not an item"), None);
         let _ = fs::remove_dir_all(&dir);
     }
 

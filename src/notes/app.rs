@@ -2395,6 +2395,10 @@ impl App {
     pub fn request(&mut self, request: Request) -> String {
         match request {
             Request::Ping => "ok".into(),
+            Request::Say(words) => {
+                self.say(words);
+                "ok".into()
+            }
             Request::Palette => self.palette_request(),
             Request::Run(name) => self.run_request(&name),
             Request::Shown => match self.current_path().map(Path::to_path_buf) {

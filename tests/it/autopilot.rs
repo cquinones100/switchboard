@@ -72,9 +72,34 @@ fn set_up(
     TestClient,
     std::path::PathBuf,
 ) {
+    set_up_with(
+        more,
+        "# Work\n\n- [ ] First thing\n- [ ] Second thing\n",
+        &[],
+    )
+}
+
+/// `set_up` with the note's own text, and other notes (a path in the
+/// notes directory and its text) written before the server starts.
+fn set_up_with(
+    more: Value,
+    text: &str,
+    others: &[(&str, &str)],
+) -> (
+    TempDir,
+    std::path::PathBuf,
+    TestServer,
+    TestClient,
+    std::path::PathBuf,
+) {
     let notes = TempDir::new("sbn");
     let note = notes.path().join("Work.md");
-    std::fs::write(&note, "# Work\n\n- [ ] First thing\n- [ ] Second thing\n").unwrap();
+    std::fs::write(&note, text).unwrap();
+    for (rel, words) in others {
+        let path = notes.path().join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, words).unwrap();
+    }
     // A note with nothing left to tick, behind "More notes…".
     std::fs::write(notes.path().join("Done.md"), "# Done\n\n- [x] All of it\n").unwrap();
     // Changed long enough ago to have settled.
@@ -472,6 +497,57 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_until_none_is
             .ok()
             .and_then(|t| serde_json::from_str::<Value>(&t).ok())
             .is_some_and(|m| m["note"] == "Projects/Renamed.md" && m["noteId"] == note_id.as_str())
+    });
+}
+
+#[test]
+fn m_e_in_its_tab_shows_the_items_plan_until_you_choose_the_tabs_note() {
+    let plan = "Plans/Plan - First thing.md";
+    let (notes, _note, server, mut client, _repo) = set_up_with(
+        json!({}),
+        "# Work\n\n- [ ] First thing\n  Plan: [[Plan - First thing]]\n- [ ] Second thing\n",
+        &[
+            (plan, "# Plan - First thing\n\n## Steps\n\n1. Do it.\n"),
+            ("Other.md", "# Other\n"),
+        ],
+    );
+    let tab_of = |item: &str| {
+        opened(&server)
+            .into_iter()
+            .find(|t| t["options"]["@autopilot_item"] == item)
+    };
+    wait("the first item's tab, its plan found", &server, || {
+        tab_of("First thing").is_some_and(|t| t["options"]["@tab_plan_note"] == plan)
+    });
+    let tab = tab_of("First thing").unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let last = || {
+        std::fs::read_to_string(notes.path().join(".notes.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .and_then(|m| m["last"].as_str().map(str::to_string))
+    };
+    // Mission control, opened as the mode was set up, closed first.
+    client.type_text("\x1b");
+    server.ok(&["select-tab", "-t", &tab]);
+    client.type_text("\x1be");
+    wait("Notes opening on the item's plan", &server, || {
+        last().as_deref() == Some(plan)
+    });
+    // The app up and showing it, so it hears the next note it is told of.
+    client.wait_text("1. Do it.");
+
+    // Another note chosen as the tab's outranks the plan.
+    server.ok(&["press", "choose-tab-note"]);
+    client.wait_text("Which note is this tab's?");
+    client.type_text("Other\r");
+    wait("the note you chose linked", &server, || {
+        tab_of("First thing").is_some_and(|t| t["options"]["@tab_note_by_you"] == "Other.md")
+    });
+    wait("Notes showing it", &server, || {
+        last().as_deref() == Some("Other.md")
     });
 }
 

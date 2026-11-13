@@ -1569,6 +1569,10 @@ impl Server {
         } else {
             Vec::new()
         };
+        // A tab opened before it had its plan looked for (an older build's).
+        for one in &mine {
+            self.find_tab_plan(one.tab);
+        }
         let notes = worktree_from_note::notes_dir();
         let mtime = (mode.set_up() && !mode.note.is_empty())
             .then(|| modified_ms(&notes.join(&mode.note)))
@@ -2229,6 +2233,7 @@ impl Server {
             }
         }
         self.dirty_tab(tab);
+        self.find_tab_plan(tab);
         self.autopilot
             .pilot
             .took(&mode.note_id, &item.text, util::now_ms());

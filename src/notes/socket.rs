@@ -18,6 +18,7 @@
 //!                                       the app's palette lists there,
 //!                                       for the workspace's M-p  → ok <JSON>
 //! run <command's words>                 that palette command run → ok | error <why>
+//! say <words>                           the words on its message line → ok
 //! ping                                                           → ok
 //! ```
 //!
@@ -53,6 +54,7 @@ pub enum Request {
     Shown,
     Palette,
     Run(String),
+    Say(String),
     Ping,
 }
 
@@ -66,6 +68,7 @@ pub fn parse(line: &str) -> Option<Request> {
         ("shown", "") => Some(Request::Shown),
         ("palette", "") => Some(Request::Palette),
         ("run", name) if !name.is_empty() => Some(Request::Run(name.to_string())),
+        ("say", words) if !words.is_empty() => Some(Request::Say(words.to_string())),
         ("ping", "") => Some(Request::Ping),
         _ => None,
     }
@@ -210,6 +213,10 @@ mod tests {
         );
         assert_eq!(parse("sidebar off"), Some(Request::Sidebar(false)));
         assert_eq!(parse("shown"), Some(Request::Shown));
+        assert_eq!(
+            parse("say This tab's plan"),
+            Some(Request::Say("This tab's plan".into()))
+        );
         assert_eq!(parse("palette"), Some(Request::Palette));
         assert_eq!(
             parse("run Find a note\n"),

@@ -94,7 +94,7 @@ pub use line::{Act, Summary};
 pub use mode::Mode;
 pub use pilot::Pilot;
 pub use serve::{
-    AUTOLAND, HANDS_FREE, LAND, LANDED_AT, LEFT, NUDGED, OPENED, PUSHED, REFUSED, landed_at,
+    AUTOLAND, HANDS_FREE, ITEM, LAND, LANDED_AT, LEFT, NUDGED, OPENED, PUSHED, REFUSED, landed_at,
 };
 
 /// Whether the mode has its own view in mission control (UX 2.0 and the

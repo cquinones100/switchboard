@@ -23,7 +23,12 @@
 //! (`.notes.lock`) among the panes' programs, and marked then. A tab of its
 //! own carries `@notes`.
 //!
-//! Each tab shows its own note: the one its Claude works from (`@tab_note`,
+//! Each tab shows its own note, the first whose file is there
+//! (`by_precedence`, with the note_by_precedence setting on): the one you
+//! linked (`@tab_note_by_you`, set with `@tab_note` by the picker and a
+//! note's tab), an autopilot tab's item's plan (`@tab_plan_note`, found
+//! once off the server's task, `find_tab_plan`), the note autopilot is
+//! working through; then the one its Claude works from (`@tab_note`,
 //! which /note-watch and /queue-and-clean set once a note is settled), else
 //! the one Notes last showed beside it (`@tab_note_last`, kept as Notes
 //! leaves, but only once the tab has a note or another was opened while
@@ -214,6 +219,71 @@ fn exe() -> String {
 /// Sends a request to the running app, after those sent before it, on a
 /// thread of its own: an app that isn't running, or doesn't answer, holds
 /// up nothing.
+/// Marks the note you linked to a tab yourself (the picker, Notes' `t`,
+/// M-p's "Choose the tab's note"), set with `@tab_note`; what the workspace
+/// links leaves it alone.
+pub const BY_YOU: &str = "@tab_note_by_you";
+
+/// The plan note of an autopilot tab's item, a path in the notes directory,
+/// found once off the server's task (`find_tab_plan`); empty while it is
+/// looked for, or when the item links none.
+pub const PLAN_NOTE: &str = "@tab_plan_note";
+
+/// Why a tab's note is the one M-e shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Why {
+    /// The note you linked to the tab.
+    Linked,
+    /// The plan of the autopilot tab's item.
+    Plan,
+    /// The note autopilot is working through.
+    Autopilot,
+    /// The tab's note, else the one shown there last, as before precedence.
+    Tab,
+}
+
+impl Why {
+    /// What Notes says as it shows the note, so a note shown by precedence
+    /// isn't taken for one you chose.
+    fn said(self) -> Option<&'static str> {
+        match self {
+            Why::Linked => Some("The note linked to this tab"),
+            Why::Plan => Some("This tab's plan"),
+            Why::Autopilot => Some("Autopilot's note"),
+            Why::Tab => None,
+        }
+    }
+}
+
+/// A tab's note, from its options (`opt`), the note autopilot is working
+/// through (`working`, while it is on) and whether a note's file is
+/// there: with `precedence` (Settings' note_by_precedence), the note you
+/// linked, else an autopilot tab's plan, else autopilot's note, else the
+/// tab's note or the one shown beside it last; without it, those last two
+/// alone. The first whose file is there.
+pub fn by_precedence(
+    opt: impl Fn(&str) -> Option<String>,
+    working: Option<&str>,
+    precedence: bool,
+    there: impl Fn(&str) -> bool,
+) -> Option<(String, Why)> {
+    let autopilot_tab = opt(crate::autopilot::OPENED).is_some_and(|v| v != "0");
+    let mut order: Vec<(Option<String>, Why)> = Vec::new();
+    if precedence {
+        order.push((opt(BY_YOU), Why::Linked));
+        if autopilot_tab {
+            order.push((opt(PLAN_NOTE), Why::Plan));
+        }
+        order.push((working.map(str::to_string), Why::Autopilot));
+    }
+    order.push((opt("@tab_note"), Why::Tab));
+    order.push((opt("@tab_note_last"), Why::Tab));
+    order
+        .into_iter()
+        .filter_map(|(note, why)| Some((note?, why)))
+        .find(|(rel, _)| in_notes(rel) && there(rel))
+}
+
 pub(crate) fn tell(request: String) {
     static QUEUE: OnceLock<Mutex<Sender<String>>> = OnceLock::new();
     let queue = QUEUE.get_or_init(|| {
@@ -670,14 +740,62 @@ impl Server {
 
     // ── Each tab's note ──────────────────────────────────────────────────────
 
-    /// A tab's note: the one its Claude works from, else the one last shown
-    /// beside it, while its file is there.
+    /// A tab's note, as `note_and_why` picks it.
     pub(crate) fn note_for(&self, tab: TabId) -> Option<String> {
+        self.note_and_why(tab).map(|(note, _)| note)
+    }
+
+    /// A tab's note and why it is that one (`by_precedence`), from the
+    /// tab's options and the autopilot mode the server holds, while its
+    /// file is there.
+    fn note_and_why(&self, tab: TabId) -> Option<(String, Why)> {
         let dir = store::notes_dir();
-        ["@tab_note", "@tab_note_last"]
-            .iter()
-            .filter_map(|name| self.tab_opt(tab, name))
-            .find(|rel| in_notes(rel) && dir.join(rel).is_file())
+        let mode = &self.autopilot.mode;
+        let working = (settings::is_on("autopilot") && mode.on && !mode.note.is_empty())
+            .then_some(mode.note.as_str());
+        by_precedence(
+            |name| self.tab_opt(tab, name),
+            working,
+            settings::is_on("note_by_precedence"),
+            |rel| dir.join(rel).is_file(),
+        )
+    }
+
+    /// An autopilot tab's plan note (`PLAN_NOTE`), looked for once, off the
+    /// server's task: the plan the item it works on links in its note
+    /// (`@tab_note`, else the note autopilot works through). Empty while it
+    /// is looked for and when there is none, so it is looked for only once.
+    pub(crate) fn find_tab_plan(&mut self, tab: TabId) {
+        let Some(t) = self.tabs.get(&tab) else {
+            return;
+        };
+        if t.opts.contains_key(PLAN_NOTE) || !settings::is_on("note_by_precedence") {
+            return;
+        }
+        let Some(item) = self.tab_opt(tab, crate::autopilot::ITEM) else {
+            return;
+        };
+        let note = self
+            .tab_opt(tab, "@tab_note")
+            .unwrap_or_else(|| self.autopilot.mode.note.clone());
+        if !in_notes(&note) {
+            return;
+        }
+        self.set_tab_opt(tab, PLAN_NOTE, Some(""));
+        self.notes_off_task(
+            move || {
+                let dir = store::notes_dir();
+                let text = std::fs::read_to_string(dir.join(&note)).ok()?;
+                let file = crate::cmd::worktree_from_note::item_plan_file(&dir, &text, &item)?;
+                let rel = file.strip_prefix(&dir).ok()?.to_string_lossy().into_owned();
+                Some(rel)
+            },
+            move |server, found| {
+                if let Some(rel) = found {
+                    server.set_tab_opt(tab, PLAN_NOTE, Some(&rel));
+                }
+            },
+        );
     }
 
     /// Notes leaving a tab: the note it shows becomes the tab's last, once
@@ -706,15 +824,18 @@ impl Server {
         }
     }
 
-    /// The tab's note shown in the running app.
+    /// The tab's note shown in the running app, which says why it is that
+    /// one when precedence picked it.
     fn show_note(&mut self, tab: TabId) {
-        let Some(want) = self.note_for(tab) else {
+        let Some((want, why)) = self.note_and_why(tab) else {
             return;
         };
-        if shown().as_ref() == Some(&want) {
-            return;
+        if shown().as_ref() != Some(&want) {
+            tell(format!("open {want}"));
         }
-        tell(format!("open {want}"));
+        if let Some(said) = why.said() {
+            tell(format!("say {said}"));
+        }
     }
 
     /// The tab's note shown, if Notes is beside it (a note just chosen for
@@ -863,6 +984,87 @@ mod tests {
         assert_eq!(Command::Open.key(), Some("M-N"));
         assert_eq!(Command::Beside.key(), Some("M-e"));
         assert_eq!(Command::NoteTab.key(), None);
+    }
+
+    /// `by_precedence` over the options given, every note there but those
+    /// in `gone`.
+    fn pick(
+        opts: &[(&str, &str)],
+        working: Option<&str>,
+        precedence: bool,
+        gone: &[&str],
+    ) -> Option<(String, Why)> {
+        let opts: std::collections::HashMap<String, String> = opts
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        by_precedence(
+            |name| opts.get(name).filter(|v| !v.is_empty()).cloned(),
+            working,
+            precedence,
+            |rel| !gone.contains(&rel),
+        )
+    }
+
+    fn picked(note: &str, why: Why) -> Option<(String, Why)> {
+        Some((note.to_string(), why))
+    }
+
+    #[test]
+    fn m_e_picks_the_tabs_note_by_precedence() {
+        let autopilot_tab = [
+            ("@autopilot", "1700000000"),
+            ("@tab_note", "Work.md"),
+            ("@tab_plan_note", "Plans/Plan - X.md"),
+            ("@tab_note_last", "Last.md"),
+        ];
+        let mut linked = autopilot_tab.to_vec();
+        linked.push((BY_YOU, "Mine.md"));
+        assert_eq!(
+            pick(&linked, Some("Work.md"), true, &[]),
+            picked("Mine.md", Why::Linked),
+            "a note you linked wins over the plan"
+        );
+        assert_eq!(
+            pick(&autopilot_tab, Some("Work.md"), true, &[]),
+            picked("Plans/Plan - X.md", Why::Plan),
+        );
+        let plain = [("@tab_note", "Other.md"), ("@tab_note_last", "Last.md")];
+        assert_eq!(
+            pick(&plain, Some("Work.md"), true, &[]),
+            picked("Work.md", Why::Autopilot),
+            "a plain tab while autopilot works a note"
+        );
+        assert_eq!(
+            pick(&plain, None, true, &[]),
+            picked("Other.md", Why::Tab),
+            "autopilot off"
+        );
+        assert_eq!(
+            pick(&[("@tab_note_last", "Last.md")], None, true, &[]),
+            picked("Last.md", Why::Tab),
+        );
+        assert_eq!(
+            pick(
+                &linked,
+                Some("Work.md"),
+                true,
+                &["Mine.md", "Plans/Plan - X.md"]
+            ),
+            picked("Work.md", Why::Autopilot),
+            "a note that isn't there falls through"
+        );
+        assert_eq!(
+            pick(&[("@tab_plan_note", "Plans/Plan - X.md")], None, true, &[]),
+            None,
+            "a plan counts only on autopilot's tab"
+        );
+        assert_eq!(
+            pick(&linked, Some("Work.md"), false, &[]),
+            picked("Work.md", Why::Tab),
+            "with the setting off, the tab's note, as before"
+        );
+        assert_eq!(pick(&[], None, true, &[]), None);
     }
 
     #[test]
