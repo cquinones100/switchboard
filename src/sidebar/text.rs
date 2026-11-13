@@ -558,7 +558,7 @@ impl Badge {
             Badge::Merged => l(135, 232, "◆", "merged"),
             Badge::Landing => l(179, 232, "⇣", "landing"),
             Badge::Failing => l(160, 255, "✗", "build failing"),
-            Badge::Pinned => l(220, 232, if ux2() { "▲" } else { "📌" }, "pinned"),
+            Badge::Pinned => l(220, 232, if ux2() { "⚑" } else { "📌" }, "pinned"),
             Badge::Later => l(75, 232, if ux2() { "◷" } else { "⏰" }, "reminder"),
             Badge::Reminder => l(209, 232, if ux2() { "◷" } else { "⏰" }, "reminder"),
         }

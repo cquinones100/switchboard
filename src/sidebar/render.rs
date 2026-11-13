@@ -2193,6 +2193,49 @@ mod tests {
     }
 
     #[test]
+    fn with_ux2_a_pinned_tab_wears_the_flag_in_place_of_its_state_mark() {
+        let r = Rules {
+            ux2: true,
+            ..rules()
+        };
+        let mut pinned = tab(1, "pinned", TabState::Waiting);
+        pinned.pinned = true;
+        let waiting = tab(2, "waiting", TabState::Waiting);
+        let out = sidebar_lines(
+            &[pinned, waiting],
+            None,
+            &[],
+            &[],
+            "s",
+            40,
+            20,
+            &view(1),
+            &r,
+            &Theme::DARK,
+        );
+        let text = texts(&out);
+        let row = |name: &str| {
+            text.iter()
+                .find(|l| l.contains(name) && !l.contains('·'))
+                .unwrap_or_else(|| panic!("{name}: {text:?}"))
+        };
+        assert!(row("1 pinned").contains('⚑'), "{text:?}");
+        assert!(!row("1 pinned").contains('●'), "{text:?}");
+        assert!(row("2 waiting").contains('●'), "{text:?}");
+        assert!(!row("2 waiting").contains('⚑'), "{text:?}");
+        let flag = out
+            .lines
+            .iter()
+            .flat_map(|l| &l.spans)
+            .find(|s| s.content == "⚑")
+            .expect("the flag is a span of its own");
+        assert_eq!(
+            flag.style.fg,
+            Some(kit::Tone::Needs.bold(&Theme::DARK).fg.unwrap())
+        );
+    }
+
+    #[test]
     fn in_select_mode_selected_tabs_are_ticked_and_the_top_line_counts_them() {
         let tabs: Vec<TabModel> = (1..=4)
             .map(|n| tab(n, &format!("tab {n}"), TabState::Idle))
