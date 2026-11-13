@@ -1,6 +1,6 @@
 # The design of UX 2.0
 
-The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from the kit's first board, every page beside a sidebar of them all. Drawn from the boards' sources in [`src/`](https://github.com/cquinones100/switchboard/tree/main/docs/design/src) on 2026-11-12 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again: a board is changed in its source, never in its page.
+The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from the kit's first board, every page beside a sidebar of them all. Drawn from the boards' sources in [`src/`](https://github.com/cquinones100/switchboard/tree/main/docs/design/src) on 2026-11-13 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again: a board is changed in its source, never in its page.
 
 ## The kit and the index
 
@@ -85,7 +85,7 @@ The dialogs the views open, each over its view.
 - [32. Several views at once, from any view's m menu: which views, their order and layout](https://cquinones100.github.io/switchboard/design/32-view-picker.html)
 - [33. Finding a key, from the Keys view's m menu: press it to find its binding](https://cquinones100.github.io/switchboard/design/33-find-key.html)
 - [34. Setting or changing a tab's reminder: when, typed or picked, and what for](https://cquinones100.github.io/switchboard/design/34-remind-box.html)
-- [35. Autopilot's settings: its note, branch, tabs, spend limit and switches](https://cquinones100.github.io/switchboard/design/35-autopilot-box.html)
+- [35. Autopilot's settings: one list moved with ↑↓, a pause button, what the chosen row does said once, changes applied as made](https://cquinones100.github.io/switchboard/design/35-autopilot-box.html)
 - [36. Working on a note's item: its repository, the branch it lands on, or autopilot's queue](https://cquinones100.github.io/switchboard/design/36-start-item.html)
 - [54. Enter in any mission control view: the chosen item's actions in a menu, here a calendar event's](https://cquinones100.github.io/switchboard/design/54-calendar-item-menu.html)
 - [55. m in any mission control view: the view's own actions in a menu, here Calendar's](https://cquinones100.github.io/switchboard/design/55-calendar-view-menu.html)

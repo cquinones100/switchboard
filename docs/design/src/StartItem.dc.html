@@ -187,24 +187,31 @@ rule(62, 42, 98);
 keys(36, 44, [['j/k', 'item'], ['x', 'tick'], ['Enter', 'its plan'], ['o', 'its tab'], ['c', 'add'], ['z', 'fold'], ['M-p', 'work this note']]);
 
 {
-// ENTER ON AN ITEM (or gw): where to work it. With a tab on it already, that tab; with autopilot on the note, its queue too.
-const X = 52, W = 78;
-box(X, 7, W, 26, 'Work on this item');
+// ENTER ON AN ITEM (or gw): where to work it. One list, ↑↓ through every row, as autopilot's settings (board 35): nothing
+// here has a key of its own. It opens on Start it, so Enter alone starts the item where the note's work goes. With a tab on
+// it already, that tab and Go to it; with autopilot on the note, Next in its queue too.
+const X = 52, W = 78, LX = X + 4;
+box(X, 7, W, 22, 'Work on this item');
+// What the note drew under the box is covered by it, images too, as the terminal covers them.
+for (let i = imgs.length - 1; i >= 0; i--) { const m = imgs[i].pos.match(/left:calc\(([\d.]+)ch\);top:([\d.]+)px;width:calc\(([\d.]+)ch\);height:([\d.]+)px/); if (!m) continue; const ix = +m[1], iy = +m[2] / 17, iw = +m[3], ih = +m[4] / 17; if (ix < X + W && ix + iw > X && iy < 7 + 22 && iy + ih > 7 && !/box-shadow/.test(imgs[i].style)) imgs.splice(i, 1); }
 T(X + 2, 9, ['☐', 'd', '', 'E'], [' cycle through idle tabs with M-A', 't', 'b', 'E']); chip(X + 38, 9, 'plan settled', 'g');
-label(X + 2, 11, 'Repository');
-option(X, 12, W, 'switchboard   ~/switchboard', 'the note\'s', true);
-option(X, 13, W, 'web-app   ~/code/web-app', '');
-option(X, 14, W, 'oncall-tools   ~/code/oncall-tools', '');
-label(X + 2, 16, 'Lands on');
-input(X + 1, 17, W - 2, 'main', '', [['→', 'accept']]);
-T(X + 3, 18, ['straight on main through queue-and-clean; → takes a suggested branch', 'f', '', 'E']);
-headRule(X + 2, 20, W - 4);
-T(X + 2, 21, ['Opens ', 'd', '', 'E'], ['tab 10', 't', 'b', 'E'], [' in a new worktree, ', 'd', '', 'E'], ['note-cycle-idle-tabs', 't', '', 'E'], [', running wtn on', 'd', '', 'E']);
-T(X + 2, 22, ['this item and its plan.', 'd', '', 'E']);
-T(X + 2, 24, ['Autopilot works this note: ', 'd', '', 'E'], ['n', 'a', 'b', 'E'], [' puts the item next in its queue instead.', 'd', '', 'E']);
-rule(X + 1, 27, W - 2);
-let sx = X + 3; sx += keycap(sx, 28, '↵', 'Start it', true); sx += keycap(sx, 28, 'n', 'Next in autopilot\'s queue'); keycap(sx, 28, 'esc', 'Cancel');
-keys(X + 2, 30, [['↑↓', 'repository'], ['Tab', 'lands on'], ['↵', 'start'], ['n', 'queue it'], ['esc', 'cancel']]);
+label(LX, 11, 'Repository');
+const repo = (y, name, path, picked, note) => { put(LX, y, picked ? '●' : '○', picked ? 'a' : 'd', '', 'E'); T(LX + 2, y, [name, 't', picked ? 'b' : '', 'E'], ['   ' + path, 'd', '', 'E']); if (note) R(X + W - 3, y, note, 'd', '', 'E'); };
+repo(12, 'switchboard', '~/switchboard', true, 'the note\'s');
+repo(13, 'web-app', '~/code/web-app', false);
+repo(14, 'oncall-tools', '~/code/oncall-tools', false);
+label(LX, 16, 'Lands on');
+input(LX - 1, 17, W - 8, 'main', '', [['→', 'take the suggestion']]);
+T(LX + 1, 18, ['straight on main through queue-and-clean', 'f', '', 'E']);
+headRule(X + 2, 19, W - 4);
+T(LX, 20, ['Opens ', 'd', '', 'E'], ['tab 10', 't', 'b', 'E'], [' in a new worktree, ', 'd', '', 'E'], ['note-cycle-idle-tabs', 't', '', 'E'], [', running wtn on', 'd', '', 'E']);
+T(LX, 21, ['this item and its plan.', 'd', '', 'E']);
+// The two ways to go, rows like the rest: Start it chosen as the box opens.
+fill(X + 1, 23, W - 2, 1, '4'); put(X + 1, 23, '▌', 'a', '', '4');
+put(LX, 23, '', 'A'); put(LX + 1, 23, ' ▶ Start it ', 'k', 'b', 'A'); put(LX + 13, 23, '', 'A'); R(X + W - 3, 23, 'in tab 10, now', 'd', '', '4');
+T(LX + 2, 24, ['Next in autopilot\'s queue', 't', '', 'E']); R(X + W - 3, 24, 'autopilot works this note', 'd', '', 'E');
+rule(X + 1, 26, W - 2);
+keys(LX, 27, [['↑↓', 'row'], ['↵', 'choose'], ['→', 'take the suggestion'], ['esc', 'cancel']]);
 backdrop();
 }
 

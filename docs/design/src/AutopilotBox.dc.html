@@ -230,35 +230,48 @@ keys(36, 44, [['h/l', 'column'], ['j/k', 'card'], ['Enter', 'actions'], ['m', 'v
 // ─────────────────────────────────────────────────────────────────────────────
 
 {
-// AUTOPILOT'S SETTINGS: k from the top of its board, or M-p's "Autopilot: change or stop working …" while it is on.
-// The same box starts it, titled "Work a note", with Start in place of Save.
-const X = 48, W = 92, FX = 70, FW = 66;
-box(X, 4, W, 37, 'Autopilot · Switchboard Notes');
-T(X + 2, 6, ['⠹', 'b', '', 'E'], [' working · 2 tabs working, 4 open · $6.20 of $10.00 today', 'd', '', 'E']);
-const field = (y, name) => put(X + 3, y, name, 'd', '', 'E');
+// AUTOPILOT'S SETTINGS: m in its board ("its settings, pause"), or M-p's "Autopilot: change or stop working …" while it is on.
+// One list, ↑↓ through every row; the chosen row lit, and what it does said once, at the bottom, for that row only. Changes
+// apply as they are made: no Save, no Cancel, Esc closes. Nothing here has a key of its own. Started from a note's item,
+// the same box is titled "Work a note" and its first row is ▶ Start.
+const X = 42, W = 76, LX = X + 4, VX = X + 26, RX = X + W - 4;
+box(X, 4, W, 30, 'Autopilot · Switchboard Notes');
+// What the board drew under the box is covered by it, images too, as the terminal covers them.
+for (let i = imgs.length - 1; i >= 0; i--) { const m = imgs[i].pos.match(/left:calc\(([\d.]+)ch\);top:([\d.]+)px;width:calc\(([\d.]+)ch\);height:([\d.]+)px/); if (!m) continue; const ix = +m[1], iy = +m[2] / 17, iw = +m[3], ih = +m[4] / 17; if (ix < X + W && ix + iw > X && iy < 4 + 30 && iy + ih > 4 && !/box-shadow/.test(imgs[i].style)) imgs.splice(i, 1); }
 const sw = (x, y, on) => { K(x, y + 0.18, 3.6, 0.64, 'background:' + (on ? '#7fd18b' : '#3a3f52') + ';border-radius:6px'); K(x + (on ? 2.15 : 0.25), y + 0.26, 1.2, 0.48, 'background:' + (on ? '#11131a' : '#8d93a8') + ';border-radius:50%'); };
-const step = (x, y, n) => { let k = x; k += keycap(k, y, '−', ''); put(k, y, String(n), 't', 'b', 'E'); keycap(k + 2, y, '+', ''); };
-field(8, 'Note'); input(FX, 8, FW, 'Switchboard Notes', '', [['↵', 'pick another']]);
-field(10, 'Repository'); input(FX, 10, FW, '~/switchboard', '', [['→', 'accept']]);
-field(12, 'Lands on'); input(FX, 12, FW, 'ux', '', [['→', 'accept']]);
-put(FX + 6, 12, '-2-0', 'f', '', '2');
-T(FX + 2, 13, ['the dim rest is a suggestion, → takes it; Tab moves to the next field', 'f', '', 'E']);
-field(15, 'Tabs at once'); step(FX, 15, 2); put(FX + 12, 15, 'working on items at the same time', 'f', '', 'E');
-field(17, 'Most open'); step(FX, 17, 6); put(FX + 12, 17, 'open at once, landing and waiting ones too', 'f', '', 'E');
-field(19, 'Spend limit'); input(FX, 19, 30, '$10.00 a day', '', null); meter(FX + 32, 19, 22, 0.62, '#82aaff'); put(FX + 56, 19, '$6.20', 'd', '', 'E');
-T(FX + 2, 20, ['it opens no new tab past it; the ones working finish', 'f', '', 'E']);
-const toggle = (y, name, on, what) => { field(y, name); sw(FX, y, on); put(FX + 5, y, what, 'd', '', 'E'); };
-toggle(22, 'Planned only', true, 'take only items whose plan is settled');
-toggle(24, 'Land without', true, 'land on main with no push question, once tests,');
-put(X + 3, 25, 'asking', 'd', '', 'E'); put(FX + 5, 25, 'two clean reviews and leak-check pass', 'd', '', 'E');
-toggle(27, 'Hands-free', false, 'answer its tabs\' questions with each plan\'s');
-put(FX + 5, 28, 'recommended option rather than waiting on you', 'd', '', 'E');
-label(X + 3, 30, 'Skipped', 'd', 2, X + W - 4);
-T(X + 3, 31, ['board 4, two tabs side by side', 't', '', 'E'], ['  skipped by you · ', 'f', '', 'E'], ['u', 'a', 'b', 'E'], [' takes it back', 'f', '', 'E']);
-T(X + 3, 32, ['a condensed sidebar for short screens', 't', '', 'E'], ['  needs a choice', 'y', '', 'E']);
-rule(X + 1, 35, W - 2);
-let sx = X + 3; sx += keycap(sx, 36, 'M-↵', 'Save', true); sx += keycap(sx, 36, 'p', 'Pause'); sx += keycap(sx, 36, 's', 'Stop'); keycap(sx, 36, 'esc', 'Cancel');
-keys(X + 3, 38, [['Tab ⇧Tab', 'field'], ['− +', 'or ← →'], ['Space', 'a switch'], ['M-↵', 'save'], ['esc', 'cancel']]);
+const line = (y, name, chosen) => { const bg = chosen ? '4' : 'E'; if (chosen) { fill(X + 1, y, W - 2, 1, '4'); put(X + 1, y, '▌', 'a', '', '4'); } put(LX, y, name, chosen ? 't' : 'd', chosen ? 'b' : '', bg); return bg; };
+const more = (y, bg) => put(RX, y, '›', 'd', '', bg);
+
+// The run: a play and pause button, the first stop, then where it stands.
+const playing = true;
+{ const bx = LX; put(bx, 6, '', 'B'); put(bx + 1, 6, playing ? ' ‖ Pause ' : ' ▶ Resume ', 'b', 'b', 'B'); put(bx + 10, 6, '', 'B'); }
+T(LX + 13, 6, ['⠹', 'b', '', 'E'], [' working · 2 of 2 tabs working, 4 open', 'd', '', 'E']);
+
+label(LX, 8, 'What it works', 'd');
+let bg = line(9, 'Note'); put(VX, 9, 'Switchboard Notes', 't', '', bg); more(9, bg);
+bg = line(10, 'Repository'); put(VX, 10, '~/switchboard', 't', '', bg); more(10, bg);
+bg = line(11, 'Lands on'); T(VX, 11, ['main', 't', '', bg], ['  straight, through queue-and-clean', 'f', '', bg]); more(11, bg);
+
+label(LX, 13, 'How much at once', 'd');
+const step = (y, n, bgc) => { let k = VX; k += keycap(k, y, '−', ''); put(k, y, String(n), 't', 'b', bgc); keycap(k + 3, y, '+', ''); };
+bg = line(14, 'Tabs at once', true); step(14, 2, bg); R(RX, 14, '2 working now', 'd', '', bg);
+bg = line(15, 'Most open'); step(15, 6, bg); R(RX, 15, '4 open now', 'd', '', bg);
+bg = line(16, 'Spend limit'); put(VX, 16, '$10.00 a day', 't', '', bg); meter(VX + 14, 16, 18, 0.62, '#82aaff'); R(RX, 16, '$6.20 today', 'd', '', bg);
+
+label(LX, 18, 'When it asks you', 'd');
+bg = line(19, 'Planned only'); sw(VX, 19, true);
+bg = line(20, 'Land without asking'); sw(VX, 20, true);
+bg = line(21, 'Hands-free'); sw(VX, 21, false);
+
+bg = line(23, 'Skipped'); T(VX, 23, ['2 items', 't', '', bg], ['  one needs a choice', 'y', '', bg]); more(23, bg);
+bg = line(24, 'Stop autopilot'); T(VX, 24, ['■ Stop', 'r', 'b', bg], ['  its tabs finish what they are on', 'f', '', bg]);
+
+// What the chosen row does, said once.
+rule(X + 1, 26, W - 2);
+put(LX, 27, 'How many of its tabs work on items at the same time. A tab', 't', '', 'E');
+put(LX, 28, 'waiting on you doesn\'t count. It applies at once.', 't', '', 'E');
+rule(X + 1, 30, W - 2);
+keys(LX, 31, [['↑↓', 'row'], ['← →', 'count'], ['Space', 'switch, pause'], ['↵', 'choices'], ['esc', 'close']]);
 backdrop();
 }
 
