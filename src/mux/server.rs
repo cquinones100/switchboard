@@ -244,12 +244,32 @@ impl Session {
         )
     }
 
-    /// Where a tab's panes go: the whole of it when zoomed.
-    pub fn area_for(&self, zoomed: bool) -> Rect {
+    /// What a tab's panes have to fill: the whole of it when zoomed.
+    pub fn spread_for(&self, zoomed: bool) -> Rect {
         if zoomed {
             self.full_area()
         } else {
             self.main_area()
+        }
+    }
+
+    /// Where a tab's panes go: its spread, but for a lone pane (one pane,
+    /// or zoomed into one of several) at most Settings' `lone_pane_width`
+    /// wide, against the sidebar, while a split shares out the whole width.
+    pub fn area_for(&self, tab: &Tab) -> Rect {
+        Self::area_in(
+            self.spread_for(tab.zoomed),
+            tab,
+            super::layout::lone_width(),
+        )
+    }
+
+    fn area_in(spread: Rect, tab: &Tab, cap: Option<u16>) -> Rect {
+        let lone = tab.zoomed || matches!(tab.layout, super::layout::Layout::Pane(_));
+        if lone {
+            super::layout::capped(spread, cap)
+        } else {
+            spread
         }
     }
 }
@@ -1294,6 +1314,11 @@ impl Server {
         // own colors theirs.
         self.pr_notices();
         self.terminal_colors_sync();
+        // A lone pane's widest width may have changed.
+        let tabs: Vec<TabId> = self.tabs.keys().copied().collect();
+        for tab in tabs {
+            self.relayout(tab);
+        }
         if !first {
             for c in self.clients.values_mut() {
                 c.dirty = true;
@@ -1603,7 +1628,7 @@ impl Server {
             rows,
             sidebar: self.sidebar_columns(cols),
         };
-        let area = session.main_area();
+        let area = super::layout::capped(session.main_area(), super::layout::lone_width());
         // In the directory asked from, while it is still there, else home.
         let dir = cwd.filter(|d| d.is_dir()).unwrap_or_else(paths::home);
         let pane = self.spawn_pane(tab, Some(dir), None, area.width, area.height)?;
@@ -1627,7 +1652,7 @@ impl Server {
         let Some(s) = self.session(session) else {
             return Err(anyhow!("no session named {session}"));
         };
-        let area = s.main_area();
+        let area = super::layout::capped(s.main_area(), super::layout::lone_width());
         let tab = TabId(self.next_tab);
         self.next_tab += 1;
         let pane = self.spawn_pane(tab, cwd, command, area.width, area.height)?;
@@ -2007,7 +2032,7 @@ impl Server {
         let Some(tab) = self.tabs.get(&tab_id) else {
             return;
         };
-        let Some(area) = self.session_of_tab(tab_id).map(|s| s.area_for(tab.zoomed)) else {
+        let Some(area) = self.session_of_tab(tab_id).map(|s| s.area_for(tab)) else {
             return;
         };
         let rects: Vec<(PaneId, Rect)> = if tab.zoomed {
@@ -3058,7 +3083,7 @@ impl Server {
         let c = self.clients.get(&id)?;
         let s = self.session(&c.session)?;
         let tab = self.tabs.get(&s.current)?;
-        let area = s.area_for(tab.zoomed);
+        let area = s.area_for(tab);
         let rects = if tab.zoomed {
             vec![(tab.active, area)]
         } else {
@@ -3076,7 +3101,7 @@ impl Server {
         let c = self.clients.get(&id)?;
         let s = self.session(&c.session)?;
         let tab = self.tabs.get(&s.current)?;
-        let area = s.area_for(tab.zoomed);
+        let area = s.area_for(tab);
         let rects = if tab.zoomed {
             vec![(tab.active, area)]
         } else {
@@ -3086,6 +3111,21 @@ impl Server {
             .into_iter()
             .find(|(p, _)| *p == pane)
             .map(|(_, r)| r.intersection(area))
+    }
+
+    /// A cell of a client's screen in the own coordinates of the pane a
+    /// drag began in, the nearest of its cells while the mouse is outside
+    /// it (beside a capped pane, or over another), so the drag goes on and
+    /// its release arrives.
+    fn held_cell(&self, id: ClientId, pane: PaneId, col: u16, row: u16) -> Option<(u16, u16)> {
+        let r = self.pane_rect(id, pane)?;
+        if r.width == 0 || r.height == 0 {
+            return None;
+        }
+        Some((
+            col.clamp(r.x, r.right() - 1) - r.x,
+            row.clamp(r.y, r.bottom() - 1) - r.y,
+        ))
     }
 
     fn mouse(&mut self, id: ClientId, m: Mouse) {
@@ -3098,6 +3138,7 @@ impl Server {
         let status_row = c.rows.saturating_sub(crate::status::lines());
         // UX 2.0's header: a click on a key or the ⌘ Commands button does
         // what it does, and the one under the mouse is lit (hover_highlight).
+        let dragging = c.drag.is_some();
         let header_hit = c
             .header_keys
             .iter()
@@ -3112,7 +3153,8 @@ impl Server {
                 c.dirty = true;
             }
         }
-        if let Some(button) = header_hit {
+        // A drag held from a pane goes on over the header, to its release.
+        if let Some(button) = header_hit.filter(|_| !dragging) {
             if m.kind == MouseKind::Press && m.button == MouseButton::Left {
                 self.act(id, button.action());
             }
@@ -3198,10 +3240,8 @@ impl Server {
                 return;
             }
             (MouseKind::Drag, Some(Drag::Select(pane))) => {
-                if let Some((p, col, row)) = self
-                    .pane_at(id, m.col, m.row)
-                    .filter(|(p, _, _)| *p == pane)
-                    && let Some(slot) = self.panes.get_mut(&p)
+                if let Some((col, row)) = self.held_cell(id, pane, m.col, m.row)
+                    && let Some(slot) = self.panes.get_mut(&pane)
                 {
                     slot.pane.select_extend(col, row);
                     let tab = slot.tab;
@@ -3210,11 +3250,8 @@ impl Server {
                 return;
             }
             (MouseKind::Drag | MouseKind::Release, Some(Drag::Forward(pane))) => {
-                if let Some((p, col, row)) = self
-                    .pane_at(id, m.col, m.row)
-                    .filter(|(p, _, _)| *p == pane)
-                {
-                    self.forward_mouse(p, Mouse { col, row, ..m });
+                if let Some((col, row)) = self.held_cell(id, pane, m.col, m.row) {
+                    self.forward_mouse(pane, Mouse { col, row, ..m });
                 }
                 if m.kind == MouseKind::Release
                     && let Some(c) = self.clients.get_mut(&id)
@@ -3242,6 +3279,14 @@ impl Server {
         let Some((pane, col, row)) = self.pane_at(id, m.col, m.row) else {
             if m.kind == MouseKind::Press && m.button == MouseButton::Left {
                 self.press_border(id, m.col, m.row);
+            }
+            // Off every pane (a line, or the columns beside a capped one),
+            // what the mouse lit in the Notifications window goes out.
+            if m.kind == MouseKind::Move
+                && self.sidebar.windows.hover.remove(&id).is_some()
+                && let Some(session) = self.clients.get(&id).map(|c| c.session.clone())
+            {
+                self.dirty_session(&session);
             }
             return;
         };
@@ -3525,7 +3570,7 @@ impl Server {
         let mut cursor = None;
         let mut drawn = Vec::new();
         if let Some(tab) = self.tabs.get(&s.current) {
-            let area = s.area_for(tab.zoomed);
+            let area = s.area_for(tab);
             let main = area.intersection(frame.area());
             let placement = if tab.zoomed {
                 super::layout::Placement {
@@ -3623,6 +3668,10 @@ impl Server {
                     focus,
                     palette.border,
                 );
+            }
+            let spread = s.spread_for(tab.zoomed);
+            if spread != area {
+                compose::draw_spare(&mut frame.buf, spread, area, &c.overlays.look().theme);
             }
         }
         // UX 2.0's header over the tab's panes (src/mux/header.rs); a
@@ -3774,7 +3823,8 @@ pub(super) fn new_tab(id: TabId, pane: PaneId) -> Tab {
 
 #[cfg(test)]
 mod tests {
-    use super::fill_numbers;
+    use super::{PaneId, Rect, Session, TabId, fill_numbers, new_tab};
+    use crate::mux::Direction;
 
     #[test]
     fn tabs_keep_their_numbers_and_the_rest_take_the_smallest_free() {
@@ -3785,6 +3835,31 @@ mod tests {
             fill_numbers(&[3, 3, 0]),
             [3, 1, 2],
             "the first keeps a twice-held one"
+        );
+    }
+
+    #[test]
+    fn a_lone_pane_is_capped_while_a_split_shares_the_whole_width() {
+        let spread = Rect::new(35, 1, 330, 88);
+        let mut tab = new_tab(TabId(1), PaneId(1));
+        let capped = Rect::new(35, 1, 165, 88);
+        assert_eq!(Session::area_in(spread, &tab, Some(165)), capped);
+        assert_eq!(Session::area_in(spread, &tab, None), spread, "off");
+        tab.layout
+            .split(PaneId(1), PaneId(2), Direction::Right, None);
+        assert_eq!(Session::area_in(spread, &tab, Some(165)), spread);
+        tab.zoomed = true;
+        assert_eq!(
+            Session::area_in(spread, &tab, Some(165)),
+            capped,
+            "zoomed into one of several"
+        );
+        tab.zoomed = false;
+        tab.layout.remove(PaneId(2));
+        assert_eq!(
+            Session::area_in(spread, &tab, Some(165)),
+            capped,
+            "closed back to one"
         );
     }
 }

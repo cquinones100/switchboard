@@ -371,6 +371,12 @@ pub struct Mission {
     /// With UX 2.0, the sidebar's columns, which it leaves showing on its
     /// left; 0 to cover the whole screen.
     pub left: u16,
+    /// The widest one view is drawn (Settings' `lone_pane_width`), as a
+    /// lone pane is; none to fill the width. Several views at once fill it.
+    pub lone: Option<u16>,
+    /// The view's width as last drawn while `lone` capped it, against the
+    /// sidebar, the columns at its right taking no clicks; none uncapped.
+    pub capped_at: Option<u16>,
     /// The view last brought to the front, by its title ("Tabs" for the
     /// cards), for what going to one does.
     pub(crate) came: Option<String>,
@@ -508,6 +514,8 @@ impl Mission {
             diagrams_asked: None,
             size: (0, 0),
             left: 0,
+            lone: None,
+            capped_at: None,
             came: None,
             spun_at: 0,
             keep_landing: false,
@@ -541,6 +549,13 @@ impl Mission {
             pane: None,
             window_key: None,
         }
+    }
+
+    /// A column of the screen in the view's own columns; none left of it
+    /// (the sidebar's) or right of a capped view (its spare columns).
+    pub fn col_in(&self, col: u16) -> Option<u16> {
+        let col = col.checked_sub(self.left)?;
+        self.capped_at.is_none_or(|w| col < w).then_some(col)
     }
 
     /// The columns and rows the view in front is laid out in: the screen,
@@ -1021,7 +1036,7 @@ impl Overlay for Mission {
     /// sidebar's.
     fn pointer(&self, col: u16, row: u16, _look: &Look) -> Option<crate::ui::pointer::Pointer> {
         use crate::ui::pointer::Pointer;
-        let col = col.checked_sub(self.left)?;
+        let col = self.col_in(col)?;
         let hit = self
             .hits
             .iter()
@@ -1033,15 +1048,24 @@ impl Overlay for Mission {
         })
     }
 
-    fn draw(&mut self, buf: &mut Buffer, _look: &Look) {
+    fn draw(&mut self, buf: &mut Buffer, look: &Look) {
         // A card's screen (`s`) ends once the cursor has moved off it.
         if self.card_screen.is_some_and(|(_, at)| at != self.cursor) {
             self.card_screen = None;
         }
         let whole = buf.area;
         let left = self.left.min(whole.width.saturating_sub(1));
-        let area =
+        let spread =
             ratatui::layout::Rect::new(whole.x + left, whole.y, whole.width - left, whole.height);
+        let area = if self.grid.is_some() {
+            spread
+        } else {
+            crate::mux::layout::capped(spread, self.lone)
+        };
+        if area != spread {
+            crate::mux::compose::draw_spare(buf, spread, area, &look.theme);
+        }
+        self.capped_at = (area != spread).then_some(area.width);
         self.size = (area.width, area.height);
         self.forget_side_elsewhere();
         let (lines, hits, images, pictures) = if self.grid.is_some() {

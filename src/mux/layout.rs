@@ -29,6 +29,27 @@ use serde::{Deserialize, Serialize};
 
 use super::{Direction, PaneId};
 
+/// The widest a lone pane gets (Settings' `lone_pane_width`), in columns;
+/// none when it is off.
+pub fn lone_width() -> Option<u16> {
+    let value = crate::settings::cached("lone_pane_width")?;
+    value
+        .as_u64()
+        .and_then(|n| u16::try_from(n).ok())
+        .or_else(|| value.as_str()?.parse().ok())
+}
+
+/// Where a lone pane goes in `area` when it gets at most `cap` columns:
+/// against its left edge (the sidebar), with a column left at its right for
+/// the rule at its edge (UX 2.0 board 62), or the whole area when that
+/// leaves no room beside it.
+pub fn capped(area: Rect, cap: Option<u16>) -> Rect {
+    match cap {
+        Some(cap) if cap > 0 && area.width > cap => Rect { width: cap, ..area },
+        _ => area,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Layout {
     Pane(PaneId),
@@ -1787,5 +1808,18 @@ mod tests {
                 layout.place(rect(0, 0, 97, 41))
             );
         }
+    }
+
+    #[test]
+    fn a_lone_pane_is_capped_against_the_sidebar_with_room_for_its_rule() {
+        let area = rect(35, 1, 330, 88);
+        assert_eq!(capped(area, Some(165)), rect(35, 1, 165, 88));
+        assert_eq!(capped(area, None), area, "off fills the width");
+        assert_eq!(capped(rect(0, 0, 165, 10), Some(165)), rect(0, 0, 165, 10));
+        assert_eq!(
+            capped(rect(0, 0, 166, 10), Some(165)),
+            rect(0, 0, 165, 10),
+            "a column at its right for the rule"
+        );
     }
 }

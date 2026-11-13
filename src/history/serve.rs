@@ -308,7 +308,7 @@ impl Server {
         let session = self.session(&c.session);
         let place = session
             .filter(|s| s.current == tab)
-            .and_then(|s| self.tabs.get(&tab).map(|t| s.area_for(t.zoomed)));
+            .and_then(|s| self.tabs.get(&tab).map(|t| s.area_for(t)));
         let (Some(area), Some(record), Some(slot)) =
             (place, self.history.get(pane), self.panes.get(&pane))
         else {

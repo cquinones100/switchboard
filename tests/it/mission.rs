@@ -360,7 +360,7 @@ fn enter_on_a_tabs_card_and_go_to_tab_goes_there() {
     client.wait_for("mission control closed", |s| {
         !s.iter().any(|l| l.contains("MISSION CONTROL"))
     });
-    std::thread::sleep(Duration::from_millis(300));
+    std::thread::sleep(Duration::from_millis(300) * common::patience());
     assert!(
         !client.screen().iter().any(|l| l.contains("xyz")),
         "{:#?}",
@@ -2452,4 +2452,30 @@ fn the_pane_beside_the_tickets_board_resizes_with_the_pane_keys_and_keeps_its_wi
     client.wait_for("the width kept on opening again", |s| {
         edge(s) == Some(before - 5)
     });
+}
+
+#[test]
+fn on_a_wide_screen_one_view_is_capped_against_the_sidebar_and_its_side_takes_no_clicks() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(365, 40);
+    client.wait_text("$");
+    wait_list(&server, "the settings read", |l| {
+        l["sessions"][0]["sidebar"]["columns"] == 0
+    });
+    open(&mut client);
+    // 165 columns from the left edge, a rule at its right, nothing beyond.
+    let screen = client.wait_for("the view against its rule", |screen| {
+        screen.iter().all(|row| {
+            let cells: Vec<char> = row.chars().collect();
+            cells.get(165) == Some(&'│') && cells[166..].iter().all(|c| *c == ' ')
+        })
+    });
+    assert!(screen.iter().any(|l| l.contains("MISSION CONTROL")));
+    // A click in the spare columns leaves mission control as it was.
+    let before = screen.join("\n");
+    client.send(b"\x1b[<0;200;10M\x1b[<0;200;10m");
+    client.send(b"\x1b[<0;340;10M\x1b[<0;340;10m");
+    std::thread::sleep(Duration::from_millis(300) * common::patience());
+    assert_eq!(client.screen().join("\n"), before);
 }

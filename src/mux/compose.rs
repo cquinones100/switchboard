@@ -355,6 +355,29 @@ impl Screen {
     }
 }
 
+/// The columns of `whole` a capped lone pane at `inner` leaves over
+/// (`layout::capped`), as UX 2.0 board 62 draws them: the sunken surface,
+/// with a rule down each of the pane's edges that `whole` holds (its right).
+pub fn draw_spare(buf: &mut Buffer, whole: Rect, inner: Rect, theme: &crate::ui::Theme) {
+    let whole = whole.intersection(buf.area);
+    let sunken = crate::ui::kit::Surface::Sunken.color(theme);
+    let line = crate::ui::kit::border(theme);
+    let edges = [inner.x.checked_sub(1), Some(inner.right())];
+    for y in whole.top()..whole.bottom() {
+        for x in whole.left()..whole.right() {
+            if x >= inner.left() && x < inner.right() {
+                continue;
+            }
+            let cell = &mut buf[(x, y)];
+            cell.reset();
+            cell.set_bg(sunken);
+            if edges.contains(&Some(x)) {
+                cell.set_symbol("│").set_fg(line);
+            }
+        }
+    }
+}
+
 /// Lines between panes, with their crossings joined, in `line`, the ones
 /// beside the focused pane in `focus` (the current tab's color).
 pub fn draw_borders(

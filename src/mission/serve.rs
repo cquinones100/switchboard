@@ -1211,8 +1211,14 @@ impl Server {
             slack_files_failed: Default::default(),
             slack_files_kept: Default::default(),
         };
-        m.size = (cols - left, rows);
         m.left = left;
+        m.lone = crate::mux::layout::lone_width();
+        let spread = ratatui::layout::Rect::new(0, 0, cols - left, rows);
+        m.size = if m.grid.is_some() {
+            (spread.width, rows)
+        } else {
+            (crate::mux::layout::capped(spread, m.lone).width, rows)
+        };
         if m.view > m.snap.views.len() {
             m.view = 0;
         }
@@ -2653,7 +2659,24 @@ impl Server {
         // sidebar a click closes it and does what it does there (a tab gone
         // to, a right click's peek over the workspace); the wheel and the
         // mouse moving stay the sidebar's, mission control left open.
-        let Some(col) = mouse.col.checked_sub(m.left) else {
+        let dragging = m.side_drag.is_some() || m.pane_bar_drag.is_some();
+        let beside = mouse.col >= m.left && m.col_in(mouse.col).is_none();
+        // A drag begun in the view goes on, and ends, at its nearest column
+        // while the mouse is beside it.
+        let held =
+            (beside && dragging).then(|| (mouse.col - m.left).min(m.size.0.saturating_sub(1)));
+        if beside && !dragging {
+            // The spare columns beside a capped view take no clicks, and
+            // put out what the mouse lit on its way there.
+            if mouse.kind == MouseKind::Move {
+                if m.hover.take().is_some() {
+                    self.mission_dirty(client);
+                }
+                self.sidebar_mouse(client, mouse);
+            }
+            return;
+        }
+        let Some(col) = held.or_else(|| m.col_in(mouse.col)) else {
             if mouse.kind == MouseKind::Press && !mouse.button.is_wheel() {
                 self.mission_close(client);
             }

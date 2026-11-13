@@ -913,3 +913,50 @@ fn a_pane_scrolled_back_shows_a_scroll_bar_until_it_is_at_the_bottom() {
     client.type_text("echo typed-$((40+2))\r");
     client.wait_text("typed-42");
 }
+
+/// Each pane's columns in the first tab.
+fn widths(list: &serde_json::Value) -> Vec<u64> {
+    list["sessions"][0]["tabs"][0]["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["cols"].as_u64().unwrap())
+        .collect()
+}
+
+#[test]
+fn a_lone_pane_is_capped_on_a_wide_screen_and_a_split_uses_it_all() {
+    let server = TestServer::start();
+    let mut client = server.attach(365, 40);
+    client.wait_text("$");
+    client.wait_for("the lone pane at 165 columns", |_| {
+        widths(&server.list()) == [165]
+    });
+    // The rule at the pane's right edge, against the sidebar.
+    let side = server.list()["sessions"][0]["sidebar"]["columns"]
+        .as_u64()
+        .unwrap_or(0) as usize;
+    client.wait_for("the rule at the pane's right edge", |screen| {
+        screen.iter().any(|row| {
+            let cells: Vec<char> = row.chars().collect();
+            cells.get(side + 165) == Some(&'│')
+        })
+    });
+    client.type_text(&format!("{ALT}L"));
+    client.wait_for("two panes sharing the whole width", |_| {
+        let w = widths(&server.list());
+        w.len() == 2 && w.iter().sum::<u64>() + 1 == 365 - side as u64
+    });
+    let second = server.list()["sessions"][0]["tabs"][0]["panes"][1]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["kill-pane", "-t", &second]);
+    client.wait_for("back to one pane, capped again", |_| {
+        widths(&server.list()) == [165]
+    });
+    common::write_settings(&server.home, serde_json::json!({"lone_pane_width": "off"}));
+    client.wait_for("off, the pane fills the width", |_| {
+        widths(&server.list()) == [365 - side as u64]
+    });
+}
