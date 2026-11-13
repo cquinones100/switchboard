@@ -282,6 +282,7 @@ pub fn items(commands: &[Command], recent: &[String]) -> Vec<PickItem> {
         .map(|i| {
             let c = &commands[i];
             PickItem {
+                off: false,
                 text: c.name.clone(),
                 tags: format!("#{}", c.tag),
                 key: c.key.clone(),

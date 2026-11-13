@@ -537,11 +537,25 @@ fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_
                 }}}}),
             ));
         }
+        // An older draft, not in the list, asked about by its number.
+        let older_draft = request.path() == "/graphql"
+            && request.text().contains("pullRequest(number:")
+            && request.text().contains("\"number\":11");
+        if older_draft {
+            return Some(Reply::json(
+                200,
+                json!({"data": {"repository": {"pullRequest": {
+                    "number": 11, "url": "https://github.com/acme/widgets/pull/11",
+                    "title": "Old work", "state": "OPEN", "isDraft": true,
+                    "baseRefName": "main", "headRefName": "old"
+                }}}}),
+            ));
+        }
         (request.path() == "/graphql" && request.text().contains("states: OPEN")).then(|| {
             let pr = |number: u64, title: &str, cross: bool, author: &str| {
                 json!({
                     "number": number, "url": format!("https://github.com/acme/widgets/pull/{number}"),
-                    "title": title, "state": "OPEN", "isDraft": false,
+                    "title": title, "state": "OPEN", "isDraft": number == 9,
                     "baseRefName": "main", "headRefName": "topic",
                     "isCrossRepository": cross, "author": {"login": author}
                 })
@@ -549,6 +563,7 @@ fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_
             Reply::json(
                 200,
                 json!({"data": {"repository": {"pullRequests": {"nodes": [
+                    pr(9, "Half a feature", true, "another"),
                     // Its author wrote the title: a control character in
                     // it shows nowhere, the picker or the tab's name.
                     pr(7, "Add a\u{7} theme", true, "someone"),
@@ -661,6 +676,14 @@ fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_
     });
 
     let before = tabs(&server).len();
+    let w_tab = tabs(&server)
+        .into_iter()
+        .find(|t| t["current"] == true)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let w_dir = worktree.clone();
     server.ok(&["press", "review-pr"]);
     let screen = client.wait_text("#7 Add a theme");
     assert!(screen.iter().any(|l| l.contains("@someone")), "{screen:#?}");
@@ -668,6 +691,16 @@ fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_
         !screen.iter().any(|l| l.contains("Our own branch")),
         "only PRs from forks: {screen:#?}"
     );
+    // A draft is listed after the ready PRs, marked, and Enter on it
+    // takes nothing.
+    let row = |text: &str| screen.iter().position(|l| l.contains(text));
+    assert!(
+        row("#9 Half a feature · draft") > row("#7 Add a theme"),
+        "{screen:#?}"
+    );
+    client.type_text("\x1b[B");
+    client.type_text("\r");
+    client.type_text("\x1b[A");
     client.type_text("\r");
     // The workspace's own background `claude -p` calls (its connectors)
     // write to the same file, so the tab's is one line among them.
@@ -714,6 +747,29 @@ fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_
     });
     server.ok(&["press", "lazygit"]);
     client.wait_text("so lazygit isn't opened there");
+
+    // A draft's number typed opens nothing.
+    server.ok(&["select-tab", "-t", &w_tab]);
+    in_front_at(&server, &mut client, "3 w", &w_dir);
+    let before = tabs(&server).len();
+    server.ok(&["press", "review-pr"]);
+    client.wait_text("#9 Half a feature · draft");
+    client.type_text("9");
+    client.type_text("\x1b\r");
+    client.wait_text("#9 is a draft: it can be reviewed once it is ready");
+    assert_eq!(tabs(&server).len(), before);
+
+    // So does one the list doesn't hold, asked about by its number.
+    client.type_text("\r");
+    client.wait_for("the message to close", |s| {
+        !s.iter().any(|l| l.contains("#9 is a draft"))
+    });
+    server.ok(&["press", "review-pr"]);
+    client.wait_text("#9 Half a feature · draft");
+    client.type_text("11");
+    client.type_text("\x1b\r");
+    client.wait_text("#11 is a draft: it can be reviewed once it is ready");
+    assert_eq!(tabs(&server).len(), before);
 }
 
 /// With UX 2.0, Notes' `gw` opens the "Work on this item" box (board 36):

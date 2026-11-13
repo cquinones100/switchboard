@@ -103,6 +103,7 @@ fn search_title(query: &str, waiting: &[Source]) -> String {
 
 fn item(found: &Found) -> PickItem {
     PickItem {
+        off: false,
         text: found.text.clone(),
         tags: found.detail.clone(),
         key: found.source.name().to_string(),
@@ -1009,6 +1010,7 @@ impl Server {
         let items: Vec<PickItem> = tabs
             .iter()
             .map(|t| PickItem {
+                off: false,
                 text: format!("{} {}", self.tab_number(*t), self.tab_label(*t)),
                 tags: self.tab_agent(*t).map(|a| a.name()).unwrap_or("").into(),
                 key: String::new(),

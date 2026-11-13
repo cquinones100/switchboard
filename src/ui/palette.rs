@@ -46,6 +46,7 @@ pub struct Entry {
 impl Entry {
     pub fn item(&self) -> PickItem {
         PickItem {
+            off: false,
             text: self.words.clone(),
             tags: self.tags.clone(),
             key: self
@@ -243,6 +244,7 @@ Keeps tabs working through this note's checklist, the next opened as each lands.
 No key: Notes in front lists it"
             ),
             item: PickItem {
+                off: false,
                 text: words,
                 tags: "#notes #autopilot".into(),
                 key: String::new(),
@@ -264,6 +266,7 @@ No key: Notes in front lists it"
                     "{words}\nNotes' own command, run in Notes as its key would.\n{key}"
                 ),
                 item: PickItem {
+                    off: false,
                     text: words,
                     tags: format!("#notes #{}", c.tag),
                     key: c.key.clone(),
