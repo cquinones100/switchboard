@@ -123,10 +123,10 @@ note(5, '✓', 'g', 'PR 212 merged', '40m');
 note(6, '@', 'b', 'Ana mentioned you', '1h');
 note(7, '✎', 'm', 'Standup note written', '9h');
 const tab = (y, glyph, gc, num, name, sub, sel) => { const bg = row(0, y, 34, 2, sel); T(2, y, [glyph, gc, '', bg], ' ', [String(num), 'n' + num], ' ', [name, 't', sel ? 'b' : '']); put(6, y + 1, sub, 'd'); };
-// A PINNED TAB (M-f): first in Needs you whatever its state, its own state's mark kept at the left so the row still says
-// what its Claude is doing, and the kit's pinned mark, the flag, at the row's right; its second line says pinned first.
+// A PINNED TAB (M-f): first in Needs you whatever its state, the kit's pinned mark, the flag, in place of its state's mark;
+// its second line says pinned, then what its Claude is doing.
 label(1, 9, 'NEEDS YOU', 'y', 4, 32);
-tab(10, '○', 'd', 8, 'handoff', 'pinned · idle 58m'); mark(32, 10, 'pinned');
+tab(10, '⚑', 'y', 8, 'handoff', 'pinned · idle 58m');
 tab(12, '●', 'y', 2, 'stable note IDs', 'Bash: git push origin main');
 tab(14, '●', 'y', 6, 'review PR 41', 'asks: which fixture?');
 tab(16, '●', 'y', 4, 'full titles', 'tests failed: 2 of 401');
