@@ -145,7 +145,7 @@ fn notes_opens_the_list_and_the_newest_note_a_welcome_note_at_first() {
     assert!(
         app.list_rows
             .iter()
-            .any(|r| r.text.trim_start().starts_with("All Notes") && r.text.ends_with(" 1")),
+            .any(|r| r.item == Some(Item::Folder(String::new())) && r.text.ends_with(" 1")),
         "the list counts the note"
     );
     let shown = screen(&mut app);
@@ -414,6 +414,113 @@ fn a_note_keeps_its_title_line_and_its_name_whatever_empties_it() {
 }
 
 #[test]
+fn opening_a_note_puts_it_first_in_recent_and_a_tag_lists_its_notes() {
+    let (dir, mut store) = temp("recent-app");
+    let a = store.create("", Some("Groceries"));
+    write(&a, "# Groceries\n\n- [ ] eggs #food\n");
+    let b = store.create("", Some("Trip"));
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&b, false, false);
+    app.open_note(&a, false, false);
+    app.open_note(&b, false, false);
+    let meta: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(dir.path.join(".notes.json")).unwrap()).unwrap();
+    assert_eq!(
+        meta["recent"],
+        serde_json::json!(["Trip.md", "Groceries.md"]),
+        "newest first, each once"
+    );
+    app.open_note(&a, false, false);
+    let food = app.editor.doc.line(2).find("#food").unwrap();
+    assert!(app.follow(2, food + 1));
+    assert_eq!(app.list.tag.as_deref(), Some("food"));
+    assert!(
+        app.list_rows
+            .iter()
+            .any(|r| r.text.trim() == "#food    1 note"
+                || (r.look == sidebar::Look::Header && r.text.contains("#food")))
+    );
+    app.focus = Focus::List;
+    keys(&mut app, "x");
+    assert_eq!(app.list.tag, None, "x clears it");
+    assert_eq!(app.list.folder, "");
+    app.list_at = app
+        .list_rows
+        .iter()
+        .position(|r| r.item == Some(Item::Recent))
+        .unwrap();
+    app.activate();
+    assert_eq!(app.layers.len(), 1, "Recent's heading opens the history");
+    keys(&mut app, "<Esc>");
+    assert!(app.layers.is_empty());
+    app.list.show(None, None, None);
+    keys(&mut app, "/#food<CR>");
+    assert_eq!(app.list.tag.as_deref(), Some("food"), "#tag typed into /");
+    assert!(
+        matches!(
+            app.list_rows[app.list_at].look,
+            sidebar::Look::Title | sidebar::Look::Open
+        ),
+        "the cursor on the tag's first note, not one under Recent"
+    );
+    assert!(app.list_rows[app.list_at].text.contains("Groceries"));
+    app.list_at = app
+        .list_rows
+        .iter()
+        .position(|r| matches!(r.item, Some(Item::Note(_))) && r.look == sidebar::Look::Plain)
+        .unwrap();
+    app.show(None, None, Some("nothing like it".into()));
+    assert_eq!(
+        app.list_rows[app.list_at].item, None,
+        "a search with no notes leaves no Recent row chosen"
+    );
+    app.show_list(false);
+    app.show_list(true);
+    assert_eq!(
+        app.list_rows[app.list_at].item, None,
+        "nor does putting the list away and showing it again"
+    );
+}
+
+#[test]
+fn a_note_moved_to_a_folder_takes_the_list_and_its_cursor_along() {
+    let (_dir, mut store) = temp("move-follow");
+    store.create("", Some("Stay"));
+    let go = store.create("", Some("Go"));
+    store.create_folder("Work");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&go, false, false);
+    app.focus = Focus::List;
+    app.reveal(&go);
+    keys(&mut app, "mj<CR>");
+    let moved = app.store.absolute("Work/Go.md");
+    assert!(moved.is_file());
+    assert_eq!(app.list.folder, "Work", "the list follows it");
+    assert_eq!(app.list_rows[app.list_at].listed(), Some(moved.as_path()));
+}
+
+#[test]
+fn deleting_the_last_note_in_recently_deleted_opens_no_live_note() {
+    let (_dir, mut store) = temp("trash-last");
+    store.create("", Some("Keep"));
+    let gone = store.create("", Some("Gone"));
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    let trashed = app.store.delete(&gone).unwrap();
+    app.show(Some(store::TRASH.into()), None, None);
+    app.open_note(&trashed, true, false);
+    app.delete_now(&trashed);
+    assert_eq!(app.current_path(), None, "nothing opened in its place");
+    assert_eq!(
+        app.list.folder,
+        store::TRASH,
+        "Recently Deleted still shown"
+    );
+}
+
+#[test]
 fn a_note_opened_from_outside_puts_the_lists_cursor_on_it() {
     let (_dir, mut store) = temp("reveal");
     store.create("", Some("Loose"));
@@ -433,10 +540,7 @@ fn a_note_opened_from_outside_puts_the_lists_cursor_on_it() {
         Some(Item::Note(work.clone())),
         "the cursor on it"
     );
-    assert_eq!(
-        app.list.folder, None,
-        "its folder's view left for All Notes, which lists it"
-    );
+    assert_eq!(app.list.folder, "Work", "the top folder left for its own");
     assert_eq!(app.request(socket::Request::Shown), "ok Work/Plan.md");
     // The workspace's M-p: the note shown and the commands listed here,
     // the item's first and the workspace's own left out; one run by its
@@ -2591,7 +2695,11 @@ fn a_note_renamed_outside_is_followed_by_its_id() {
     assert!(app.message.is_none(), "nothing said about a deleted note");
     assert_eq!(app.store.last(), Some(moved.clone()), "the last note open");
     let shown = screen(&mut app).join("\n");
-    assert_eq!(shown.matches("Roadmap").count(), 2, "listed once: {shown}");
+    assert_eq!(
+        shown.matches("Roadmap").count(),
+        3,
+        "listed once, and once under Recent: {shown}"
+    );
     assert!(!shown.contains("Plan"), "{shown}");
     // Typing saves to the new file, never the old one.
     app.editor

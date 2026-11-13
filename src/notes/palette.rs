@@ -20,6 +20,7 @@ pub const RECENT_MAX: usize = 8;
 pub enum Act {
     ToggleList,
     Find,
+    Recent,
     Search,
     ClearSearch,
     /// To the note, from the list; to the list, from a note.
@@ -103,6 +104,7 @@ pub fn commands(from_list: bool, in_note: bool, ux2: bool) -> Vec<Command> {
             Act::ToggleList,
         ),
         command("Find a note", "Ctrl-F", "view", Act::Find),
+        command("Open a recent note", "", "view", Act::Recent),
         command("Search every note", "/", "view", Act::Search),
         command("Clear the search or tag", "x", "view", Act::ClearSearch),
         command(

@@ -629,6 +629,13 @@
     "default": true
   },
   {
+    "key": "notes_recent",
+    "category": "Notes",
+    "label": "Recent notes in the list",
+    "description": "Notes' list shows the notes you opened last under Recent, above the folders. Off, the list shows only the folders.",
+    "default": true
+  },
+  {
     "key": "notes_item_chips",
     "category": "Notes",
     "label": "Chips on checklist items",

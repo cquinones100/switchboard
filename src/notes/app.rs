@@ -166,6 +166,8 @@ pub struct Options {
     /// A scroll bar at the list's right edge and the note's while they run
     /// past the screen (scroll_bars).
     pub scroll_bars: bool,
+    /// The notes opened lately under Recent in the list (notes_recent).
+    pub recent: bool,
 }
 
 impl Default for Options {
@@ -192,6 +194,7 @@ impl Default for Options {
             item_chips: true,
             caps: false,
             scroll_bars: true,
+            recent: true,
         }
     }
 }
@@ -226,6 +229,7 @@ impl Options {
                 .any(|s| s.key == "ux2" && s.value == serde_json::Value::Bool(true)),
             item_chips: on("notes_item_chips"),
             scroll_bars: on("scroll_bars"),
+            recent: on("notes_recent"),
             caps: crate::ui::kit::caps(&format!(
                 "{} {}",
                 std::env::var("TERM").unwrap_or_default(),
@@ -672,7 +676,10 @@ impl App {
             cols: cols.max(20),
             rows: rows.max(5),
             focus: Focus::Note,
-            list: sidebar::State::default(),
+            list: sidebar::State {
+                recent: opts.recent,
+                ..sidebar::State::default()
+            },
             list_rows: Vec::new(),
             list_at: 0,
             list_top: 0,
@@ -947,7 +954,7 @@ impl App {
             self.save_due = Some(Instant::now() + AUTOSAVE);
         }
         let rel = self.store.relative(path);
-        self.store.set_last(Some(&rel));
+        self.store.opened(&rel);
         self.store.opened_beside(&rel);
         self.rebuild();
         self.reveal(path);
@@ -1376,7 +1383,20 @@ impl App {
             return;
         }
         self.save();
-        let next = sidebar::next_note(&self.list.notes(&self.store), path);
+        // The next note listed, else, the folder's last one gone, the note
+        // opened before it, else any; never one outside Recently Deleted
+        // while it is shown, where the next dd would trash a live note.
+        let listed = sidebar::next_note(&self.list.notes(&self.store), path);
+        let trash_shown = self.list.folder == store::TRASH
+            && self.list.tag.is_none()
+            && self.list.query.is_none();
+        let next = if trash_shown {
+            listed
+        } else {
+            listed
+                .or_else(|| sidebar::next_note(&self.store.recent(), path))
+                .or_else(|| sidebar::next_note(&self.store.notes(None), path))
+        };
         self.open = None;
         self.editor.load(Text::default());
         if let Some(next) = next {
@@ -1462,14 +1482,14 @@ impl App {
     }
 
     /// The list's cursor put on a note's row, so the note open is the one
-    /// the cursor marks; a note the view doesn't list brings All Notes.
+    /// the cursor marks; a note the view doesn't list brings its folder.
+    /// Its row under Recent doesn't count.
     pub fn reveal(&mut self, path: &Path) {
-        let row = |rows: &[Row]| {
-            rows.iter()
-                .position(|r| r.item.as_ref() == Some(&Item::Note(path.to_path_buf())))
-        };
+        let row = |rows: &[Row]| rows.iter().position(|r| r.listed() == Some(path));
         if row(&self.list_rows).is_none() {
-            self.list.show(None, None, None);
+            let rel = self.store.relative(path);
+            let folder = rel.rsplit_once('/').map_or("", |(dir, _)| dir).to_string();
+            self.list.show(Some(folder), None, None);
             self.rebuild();
         }
         if let Some(at) = row(&self.list_rows) {
@@ -1477,8 +1497,9 @@ impl App {
         }
     }
 
-    /// Shows a folder, a tag or a search, the cursor on its first note;
-    /// put away, the list comes back to show it.
+    /// Shows a folder, a tag or a search, the cursor on its first note (not
+    /// a row under Recent), or on its heading when it has none; put away,
+    /// the list comes back to show it.
     pub fn show(&mut self, folder: Option<String>, tag: Option<String>, query: Option<String>) {
         self.list.show(folder, tag, query);
         // The list shown puts the plan beside the note away, as the list's
@@ -1488,12 +1509,17 @@ impl App {
         }
         self.list_shown = true;
         self.rebuild();
-        if let Some(at) = self
-            .list_rows
-            .iter()
-            .position(|r| matches!(r.item, Some(Item::Note(_))))
-        {
-            self.list_at = at;
+        let first = self.list_rows.iter().position(|r| r.listed().is_some());
+        // With nothing shown, the cursor on the heading over where its notes
+        // would be, so no row of another view stays chosen.
+        let heading = || {
+            self.list_rows
+                .iter()
+                .position(|r| r.look == sidebar::Look::Rule)
+                .map(|rule| rule + 1)
+        };
+        if let Some(at) = first.or_else(heading) {
+            self.list_at = at.min(self.list_rows.len().saturating_sub(1));
         }
     }
 
@@ -1516,7 +1542,7 @@ impl App {
                 && let Some(at) = self
                     .list_rows
                     .iter()
-                    .position(|r| r.item.as_ref() == Some(&Item::Note(path.clone())))
+                    .position(|r| r.listed() == Some(path.as_path()))
             {
                 self.list_at = at;
             }
@@ -1546,8 +1572,8 @@ impl App {
     pub fn activate(&mut self) {
         match self.list_item() {
             Some(Item::Note(path)) => self.open_note(&path, false, false),
-            Some(Item::Tag(tag)) => self.show(None, Some(tag), None),
-            Some(Item::Folder(folder)) => self.show(folder, None, None),
+            Some(Item::Folder(folder)) => self.show(Some(folder), None, None),
+            Some(Item::Recent) => self.recent_finder(),
             None => {}
         }
     }
@@ -1723,7 +1749,7 @@ impl App {
                     Then::RenameNote(path),
                 );
             }
-            Some(Item::Folder(Some(f))) if !f.is_empty() && f != store::TRASH => {
+            Some(Item::Folder(f)) if !f.is_empty() && f != store::TRASH => {
                 let name = f.rsplit('/').next().unwrap_or(&f).to_string();
                 self.push(
                     Box::new(Ask::new("Rename folder", "Rename folder:", &name)),
@@ -1755,7 +1781,18 @@ impl App {
     }
 
     fn finder(&mut self) {
-        self.push(Box::new(Finder::new(self.store.notes(None))), Then::Finder);
+        let notes = self.store.notes(None);
+        self.push(Box::new(Finder::new(notes, "Find a note")), Then::Finder);
+    }
+
+    /// Every note opened lately, newest first, in the finder's box.
+    pub fn recent_finder(&mut self) {
+        let notes = self.store.recent();
+        if notes.is_empty() {
+            self.say("notes: no note opened lately");
+            return;
+        }
+        self.push(Box::new(Finder::new(notes, "Recent notes")), Then::Finder);
     }
 
     /// A Switchboard command for Notes, asked of the workspace's server.
@@ -2085,6 +2122,9 @@ impl App {
                     let to = self.store.move_note(&path, rel);
                     self.moved(&path, &to);
                     self.rebuild();
+                    // The list follows it to its folder, the cursor on it,
+                    // rather than on whatever took its row.
+                    self.reveal(&to);
                 }
             }
             Then::NewFolder => {
@@ -2103,9 +2143,13 @@ impl App {
             Then::Search => {
                 if let Some(q) = typed(&outcome) {
                     let q = q.trim().to_string();
+                    let tag = q
+                        .strip_prefix('#')
+                        .filter(|t| !t.is_empty() && !t.contains(char::is_whitespace));
                     if q.is_empty() {
-                        let folder = self.list.folder.clone();
-                        self.show(folder, None, None);
+                        self.show(None, None, None);
+                    } else if let Some(tag) = tag {
+                        self.show(None, Some(tag.to_string()), None);
                     } else {
                         self.show(None, None, Some(q));
                     }
@@ -2685,10 +2729,7 @@ impl App {
                 Some('m') => self.move_note(),
                 Some('R') => self.rename(),
                 Some('/') => self.search(),
-                Some('x') => {
-                    let folder = self.list.folder.clone();
-                    self.show(folder, None, None);
-                }
+                Some('x') => self.show(None, None, None),
                 Some('q') => self.quit = true,
                 Some('?') => self.help(),
                 _ => {}
@@ -2909,7 +2950,7 @@ impl App {
             let Some(path) = app.current_path().map(Path::to_path_buf) else {
                 return false;
             };
-            if app.store.in_trash(&path) && app.list.folder.as_deref() != Some(store::TRASH) {
+            if app.store.in_trash(&path) && app.list.folder != store::TRASH {
                 app.show(Some(store::TRASH.into()), None, None);
             }
             app.list_shown = true;
@@ -2919,14 +2960,12 @@ impl App {
         match act {
             PaletteAct::ToggleList => self.toggle_list(),
             PaletteAct::Find => self.finder(),
+            PaletteAct::Recent => self.recent_finder(),
             PaletteAct::Search => {
                 self.list_shown = true;
                 self.search();
             }
-            PaletteAct::ClearSearch => {
-                let folder = self.list.folder.clone();
-                self.show(folder, None, None);
-            }
+            PaletteAct::ClearSearch => self.show(None, None, None),
             PaletteAct::OtherWindow => {
                 if from.list {
                     self.focus = Focus::Note;
