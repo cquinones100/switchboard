@@ -189,7 +189,7 @@ put(at(68) + 1, 38, 'compacted 66% → 18%', 'm');
 R(157, 39, '38% now', 'd');
 const cx = at(51);
 vl(cx, 30, 12, 'y');
-keys(36, 44, [['h/l', 'move in time'], ['[ ]', 'turns'], ['c', 'next commit'], ['w', 'next wait'], ['Esc', 'back to now']]);
+keys(36, 44, [['h/l', 'move in time'], ['[ ]', 'turns'], ['Enter', 'actions'], ['Esc', 'back to now']]);
 
 // ⌘ Commands at the right end of the header's keys row: a click opens the palette (M-p), and closes it while open; the palette_button setting takes it away.
 const cmd = (xr, on) => keycap(xr - 13, 2, '⌘', 'Commands', on);

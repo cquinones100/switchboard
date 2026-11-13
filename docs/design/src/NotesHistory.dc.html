@@ -142,7 +142,7 @@ fl(6, '▸ Meetings', 96);
 fl(7, '▸ Todos', 41);
 fl(8, '▸ Recipes', 12);
 fl(9, 'Recently Deleted', 4, 'd');
-put(LX + 2, 11, 'RECENT', 'd', 'b', '2'); T(LR - 7, 11, ['o', 'a', '', '2'], [' all 20', 'd', '', '2']);
+put(LX + 2, 11, 'RECENT', 'd', 'b', '2'); R(LR, 11, 'all 20 ›', 'a', '', '2');
 const fit = (s, n) => [...s].length > n ? [...s].slice(0, n - 1).join("") + "…" : s;
 const RECENT = [
   ['Switchboard Design', 'Notes'],
@@ -175,7 +175,7 @@ const NOTES = [
   ['Trip to Lisbon', 'Oct 2 · flights booked, TAP…'],
 ];
 NOTES.forEach(([title, detail], i) => { const y = 24 + i * 2; put(LX + 4, y, title, i === 0 ? 'a' : 't', i === 0 ? 'b' : '', '2'); put(LX + 4, y + 1, detail, 'd', '', '2'); });
-keys(LX + 1, 44, [['n', 'new'], ['o', 'history'], ['?', 'keys']]);
+keys(LX + 1, 44, [['Enter', 'actions'], ['m', 'list actions']]);
 vl(34, 0, 45);
 ruleV(LX + LW, 0, 45);
 // THE NOTE OPEN
@@ -193,9 +193,9 @@ it(11, '57: back and forward on the sidebar\'s top line');
 it(12, '59: the mission control button, with the count that needs you');
 T(NX + 2, 14, ['☑', 'f'], ' ', ['35: autopilot\'s settings as one list', 'f', 's']);
 T(NX + 2, 15, ['☑', 'f'], ' ', ['36: working on a note\'s item from its box', 'f', 's']);
-keys(NX + 1, 44, [['M-o', 'recent notes'], ['C-f', 'find a note'], ['C-b', 'hide the list']]);
+keys(NX + 1, 44, [['C-f', 'find a note'], ['C-b', 'hide the list']]);
 
-// M-o: THE WHOLE HISTORY, in the finder's box: the last 20 notes opened, newest first, the chosen one shown beside
+// ALL 20 › UNDER RECENT (a click, or Enter on it): THE WHOLE HISTORY, in the finder's box: the last 20 notes opened, newest first, the chosen one shown beside
 const BX = 18, BY = 5, BW = 124, BH = 26;
 box(BX, BY, BW, BH, 'Recent notes');
 put(BX + 2, BY + 1, 'Recent notes:', 'a', '', 'E'); put(BX + 16, BY + 1, '▏', 'd', '', 'E'); R(BX + BW - 3, BY + 1, '20/20', 'd', '', 'E');

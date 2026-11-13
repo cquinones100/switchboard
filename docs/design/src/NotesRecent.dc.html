@@ -142,7 +142,7 @@ fl(6, '▸ Meetings', 96);
 fl(7, '▸ Todos', 41);
 fl(8, '▸ Recipes', 12);
 fl(9, 'Recently Deleted', 4, 'd');
-put(LX + 2, 11, 'RECENT', 'd', 'b', '2'); T(LR - 7, 11, ['o', 'a', '', '2'], [' all 20', 'd', '', '2']);
+put(LX + 2, 11, 'RECENT', 'd', 'b', '2'); R(LR, 11, 'all 20 ›', 'a', '', '2');
 const fit = (s, n) => [...s].length > n ? [...s].slice(0, n - 1).join("") + "…" : s;
 const RECENT = [
   ['Switchboard Design', 'Notes'],
@@ -175,7 +175,7 @@ const NOTES = [
   ['Trip to Lisbon', 'Oct 2 · flights booked, TAP…'],
 ];
 NOTES.forEach(([title, detail], i) => { const y = 24 + i * 2; put(LX + 4, y, title, i === 0 ? 'a' : 't', i === 0 ? 'b' : '', '2'); put(LX + 4, y + 1, detail, 'd', '', '2'); });
-keys(LX + 1, 44, [['n', 'new'], ['o', 'history'], ['?', 'keys']]);
+keys(LX + 1, 44, [['Enter', 'actions'], ['m', 'list actions']]);
 vl(34, 0, 45);
 ruleV(LX + LW, 0, 45);
 // THE NOTE OPEN
@@ -193,7 +193,7 @@ it(11, '57: back and forward on the sidebar\'s top line');
 it(12, '59: the mission control button, with the count that needs you');
 T(NX + 2, 14, ['☑', 'f'], ' ', ['35: autopilot\'s settings as one list', 'f', 's']);
 T(NX + 2, 15, ['☑', 'f'], ' ', ['36: working on a note\'s item from its box', 'f', 's']);
-keys(NX + 1, 44, [['M-o', 'recent notes'], ['C-f', 'find a note'], ['C-b', 'hide the list']]);
+keys(NX + 1, 44, [['C-f', 'find a note'], ['C-b', 'hide the list']]);
 // Lines and blocks are drawn to fill the cell, as Ghostty draws them, not taken from the font.
 const LINE = { '\uE0B6': ['cap', 'l'], '\uE0B4': ['cap', 'r'], '─': ['h', 1], '━': ['h', 2], '┄': ['hd'], '│': ['v'], '┆': ['vd'], '╭': ['arc', 'rb'], '┌': ['c', 'rb'], '╮': ['arc', 'lb'], '┐': ['c', 'lb'], '╰': ['arc', 'rt'], '└': ['c', 'rt'], '╯': ['arc', 'lt'], '┘': ['c', 'lt'], '█': ['f'], '▌': ['lh'], '▁': ['lo'] };
 const draw = (ch, col) => { const k = LINE[ch]; const lg = 'linear-gradient(' + col + ',' + col + ')'; if (k[0] === 'cap') return ['radial-gradient(100% 50% at ' + (k[1] === 'l' ? '100%' : '0%') + ' 50%, ' + col + ' 98%, transparent 100%)', '100% 100%', 'center']; if (k[0] === 'arc') { /* Ghostty draws ╭ ╮ ╰ ╯ as quarter-circle arcs from the middle of one edge to the middle of the next */ const cx = k[1][0] === 'r' ? '100%' : '0%', cy = k[1][1] === 'b' ? '100%' : '0%'; return ['radial-gradient(50% 50% at ' + cx + ' ' + cy + ', transparent calc(100% - 1.2px), ' + col + ' calc(100% - 1.2px), ' + col + ' 100%, transparent 100%)', '100% 100%', 'center']; } if (k[0] === 'h') return [lg, '100% ' + k[1] + 'px', 'center']; if (k[0] === 'hd') return ['repeating-linear-gradient(90deg,' + col + ' 0 3px,transparent 3px 5px)', '100% 1px', 'center']; if (k[0] === 'v') return [lg, '1px 100%', 'center']; if (k[0] === 'vd') return ['repeating-linear-gradient(' + col + ' 0 4px,transparent 4px 7px)', '1px 100%', 'center']; if (k[0] === 'f') return [lg, '100% 100%', 'center']; if (k[0] === 'lh') return [lg, '50% 100%', 'left center']; if (k[0] === 'lo') return [lg, '100% 3px', 'center bottom']; const hx = k[1][0] === 'r' ? 'right' : 'left', vy = k[1][1] === 'b' ? 'bottom' : 'top'; return [lg + ',' + lg, 'calc(50% + 0.5px) 1px,1px calc(50% + 0.5px)', hx + ' center,center ' + vy]; };
