@@ -2614,6 +2614,12 @@ impl Server {
         // are the server's (src/mux/terminal.rs, and the background's for
         // the theme in src/status), whatever is up.
         if parsed.input == Input::Unknown {
+            // Its answer to "what are you", asked as it attached, says
+            // whether it draws sixel (src/mux/graphics.rs).
+            if let Some(sixel) = super::terminal::draws_sixel(&parsed.raw) {
+                self.terminal_answered(id, sixel);
+                return;
+            }
             let colour = self.terminal_reply(&parsed.raw);
             if self.status_reply(&parsed.raw) || colour {
                 self.mission_changed();
@@ -3601,6 +3607,11 @@ impl Server {
         // panes is drawn.
         self.place_pictures(&mut frame, pictures);
         let c = self.clients.get_mut(&id).expect("checked above");
+        // A terminal known to draw no pictures gets their cells blank,
+        // never as the placeholder's box (src/mux/graphics.rs).
+        if super::graphics::pictures_blank(&c.term) {
+            super::sixel::place::blank(&mut frame.buf);
+        }
         let bytes = c.screen.render(&frame);
         let _ = c.tx.send(ServerMsg::Output(bytes));
         self.sidebar_drawn(id, &session, side);

@@ -236,6 +236,9 @@ impl Server {
     /// `term`), its cell's size in pixels (src/mux/sixel).
     pub fn ask_background(tx: &mpsc::UnboundedSender<ServerMsg>, term: &str) {
         let _ = tx.send(ServerMsg::Output(crate::mux::terminal::queries()));
+        // And "what are you" (DA1), whose answer says whether it draws
+        // sixel (src/mux/graphics.rs, `Server::terminal_answered`).
+        let _ = tx.send(ServerMsg::Output(b"\x1b[c".to_vec()));
         if crate::mux::graphics::for_panes(term) == crate::mux::graphics::Protocol::Sixel {
             let _ = tx.send(ServerMsg::Output(crate::mux::sixel::CELL_QUERY.to_vec()));
         }

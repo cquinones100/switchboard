@@ -173,7 +173,7 @@ fn read(cell: &Cell, left: Option<Mark>) -> Option<Option<Mark>> {
 }
 
 /// A cell as a blank on its own background.
-fn blank(cell: &mut Cell) {
+fn blank_cell(cell: &mut Cell) {
     cell.set_symbol(" ");
     cell.fg = Color::Reset;
     cell.modifier = Modifier::empty();
@@ -207,13 +207,20 @@ pub fn find(buf: &mut Buffer, drawn: &Drawn, server: &HashSet<u32>, bottom: u16)
             },
         ));
     }
-    for cell in buf.content.iter_mut() {
-        if is_placeholder(cell) {
-            blank(cell);
-        }
-    }
+    self::blank(buf);
     done.sort_by_key(|p| (p.area.y, p.area.x));
     done
+}
+
+/// Every placeholder cell in `buf` blanked: for sixel once its pieces are
+/// found, and for a terminal that draws no pictures, which would show
+/// each as a box.
+pub fn blank(buf: &mut Buffer) {
+    for cell in buf.content.iter_mut() {
+        if is_placeholder(cell) {
+            blank_cell(cell);
+        }
+    }
 }
 
 /// The pieces in `area` of `buf`, none at or below row `bottom`, of the

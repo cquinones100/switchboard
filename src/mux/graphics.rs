@@ -24,16 +24,20 @@
 //!   sent inline (`t=d`) by each client's `ImageCache`, placed by their
 //!   placeholders, which the terminal draws them on, or, for the shadow
 //!   under a box, directly under the text (`z=-1`);
-//! - sixel (`Protocol::Sixel`), for any other terminal while Settings'
-//!   "Image protocol" (`image_protocol`) is on `sixel`, as Windows Terminal
-//!   and the VT340's other heirs want: the panes' commands kept rather than
+//! - sixel (`Protocol::Sixel`), for any other terminal that says it draws
+//!   sixel when asked as it attaches (its DA1 answer, `Chosen::Auto`, the
+//!   default), as Windows Terminal from 1.22 and the VT340's other heirs
+//!   do, or whatever it says with Settings' "Image protocol"
+//!   (`image_protocol`) on `sixel`: the panes' commands kept rather than
 //!   passed on, and every picture of either kind drawn by the server as
 //!   sixel where its placeholders still show once everything is drawn,
 //!   beside the frame's cells, the placeholders blanked (src/mux/sixel). A
 //!   sixel is drawn over its cells and can't sit under text, so the shadow
 //!   under a box is its text form there, half blocks along the box's edges;
 //! - neither: each of the server's images is its text form (any other
-//!   terminal while kitty is chosen, or Settings' `server_images` off), the
+//!   terminal, or Settings' `server_images` off), a picture's cells blank
+//!   rather than the placeholder's box where the terminal is known never to
+//!   draw kitty's (`pictures_blank`), the
 //!   panes' commands are still passed on, as a terminal drops a string it
 //!   doesn't know, and the apps in panes draw their pictures as text
 //!   (`apps_draw`).
@@ -133,9 +137,10 @@ impl Graphics {
 /// What Settings' "Image protocol" (`image_protocol`) chooses.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Chosen {
-    /// By the terminal: kitty's protocol where it speaks it, sixel for
-    /// Windows Terminal, which draws sixel and not kitty's, neither
-    /// elsewhere.
+    /// By the terminal: kitty's protocol where it speaks it, sixel where
+    /// its answer to "what are you" (DA1) says it draws sixel (Windows
+    /// Terminal from 1.22, foot, WezTerm, xterm with sixel, mlterm),
+    /// neither elsewhere.
     #[default]
     Auto,
     /// Kitty's protocol where the terminal speaks it, neither elsewhere.
@@ -163,16 +168,33 @@ pub fn chosen_now() -> Chosen {
     chosen_of(crate::settings::setting("image_protocol"))
 }
 
+/// The word the server adds to what a client attached as once its
+/// terminal's answer to "what are you" (DA1) says it draws sixel
+/// (`Server::terminal_answered`), asked as it attaches.
+pub const ANSWERS_SIXEL: &str = "answers-sixel";
+
 /// Whether a terminal that doesn't speak kitty's protocol gets sixel: with
-/// sixel chosen, or, chosen by the terminal, Windows Terminal.
+/// sixel chosen, or, chosen by the terminal, where its DA1 answer said it
+/// draws sixel.
 fn wants_sixel(term: &str, chosen: Chosen) -> bool {
     match chosen {
         Chosen::Sixel => true,
-        Chosen::Auto => term
-            .to_lowercase()
-            .contains(&WINDOWS_TERMINAL.to_lowercase()),
+        Chosen::Auto => term.split_whitespace().any(|w| w == ANSWERS_SIXEL),
         Chosen::Kitty => false,
     }
+}
+
+/// The same for an app in a pane, which can't see the attached terminal's
+/// answer: chosen by the terminal, Windows Terminal (by the `WT_SESSION`
+/// the panes keep) is taken to draw sixel. One too old to (before 1.22)
+/// has its pictures' cells blank rather than drawn as boxes
+/// (`pictures_blank`).
+fn apps_want_sixel(term: &str, chosen: Chosen) -> bool {
+    wants_sixel(term, chosen)
+        || (chosen == Chosen::Auto
+            && term
+                .to_lowercase()
+                .contains(&WINDOWS_TERMINAL.to_lowercase()))
 }
 
 /// What the terminal an app runs in says it is, as a client attaching from
@@ -187,6 +209,19 @@ fn this_terminal() -> String {
 pub fn speaks_kitty(term: &str) -> bool {
     let term = term.to_lowercase();
     term.contains("ghostty") || term.contains("kitty")
+}
+
+/// Whether a terminal's picture cells are blanked rather than sent as the
+/// placeholder's box: one known never to draw kitty's pictures (Windows
+/// Terminal) that doesn't get sixel either, as one from before 1.22, which
+/// an app in a pane may still draw for (`apps_want_sixel`). Any other
+/// terminal that gets neither way is sent the cells as they are, since it
+/// may speak kitty's protocol by a name this doesn't know.
+pub fn pictures_blank(term: &str) -> bool {
+    for_terminal(term).is_none()
+        && term
+            .to_lowercase()
+            .contains(&WINDOWS_TERMINAL.to_lowercase())
 }
 
 /// How pictures reach a terminal that says it is `term` (what it attached
@@ -238,7 +273,7 @@ pub fn for_server(term: &str) -> Option<Protocol> {
 /// chosen, or Windows Terminal with it chosen by the terminal).
 pub fn apps_draw() -> bool {
     let term = this_terminal();
-    speaks_kitty(&term) || (super::socket::in_pane() && wants_sixel(&term, chosen_now()))
+    speaks_kitty(&term) || (super::socket::in_pane() && apps_want_sixel(&term, chosen_now()))
 }
 
 /// The word a client adds to what it attaches as when it runs in Windows
@@ -317,11 +352,40 @@ pub fn apps_round_ends() -> bool {
     let term = this_terminal();
     ends_way(
         term.to_lowercase().contains("ghostty"),
-        super::socket::in_pane() && !speaks_kitty(&term) && wants_sixel(&term, chosen_now()),
+        super::socket::in_pane() && !speaks_kitty(&term) && apps_want_sixel(&term, chosen_now()),
     ) != Ends::Spaces
 }
 
 impl Server {
+    /// A client's terminal answered "what are you" (DA1), asked as it
+    /// attached: whether it draws sixel kept with what it attached as
+    /// (`ANSWERS_SIXEL`), and, where that changes how pictures reach it,
+    /// its screen drawn again whole and, for sixel, its cell asked for.
+    pub(super) fn terminal_answered(&mut self, id: super::server::ClientId, sixel: bool) {
+        let Some(c) = self.clients.get_mut(&id) else {
+            return;
+        };
+        let before = for_panes(&c.term);
+        let mut words: Vec<&str> = c
+            .term
+            .split_whitespace()
+            .filter(|w| *w != ANSWERS_SIXEL)
+            .collect();
+        if sixel {
+            words.push(ANSWERS_SIXEL);
+        }
+        c.term = words.join(" ");
+        let now = for_panes(&c.term);
+        if now != before {
+            c.screen.invalidate();
+            c.dirty = true;
+            if now == Protocol::Sixel {
+                let query = super::sixel::CELL_QUERY.to_vec();
+                let _ = c.tx.send(super::proto::ServerMsg::Output(query));
+            }
+        }
+    }
+
     /// How the server's images reach a client, and the cell they are
     /// rastered at: for kitty the cell the terminal's window makes (or the
     /// panes' stand-in), for sixel the cell its sixel works in
@@ -546,12 +610,22 @@ mod tests {
     }
 
     #[test]
-    fn chosen_by_the_terminal_windows_terminal_gets_sixel() {
+    fn chosen_by_the_terminal_one_that_answers_sixel_gets_it() {
         let wt = "xterm-256color WindowsTerminal";
-        assert!(wants_sixel(wt, Chosen::Auto));
+        let answered = "xterm-256color WindowsTerminal answers-sixel";
+        assert!(wants_sixel(answered, Chosen::Auto));
+        assert!(
+            !wants_sixel(wt, Chosen::Auto),
+            "an older one, until it says"
+        );
         assert!(!wants_sixel("xterm-256color", Chosen::Auto));
-        assert!(!wants_sixel(wt, Chosen::Kitty));
+        assert!(!wants_sixel(answered, Chosen::Kitty));
         assert!(wants_sixel("xterm-256color", Chosen::Sixel));
+        // An app can't see the answer: Windows Terminal is its guess.
+        assert!(apps_want_sixel(wt, Chosen::Auto));
+        assert!(!apps_want_sixel(wt, Chosen::Kitty));
+        assert!(!apps_want_sixel("xterm-256color", Chosen::Auto));
+        assert!(!wants_sixel("", Chosen::Kitty));
         assert_eq!(chosen_of(None), Chosen::Auto);
         assert_eq!(chosen_of(Some("auto".into())), Chosen::Auto);
         assert_eq!(chosen_of(Some("kitty".into())), Chosen::Kitty);

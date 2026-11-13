@@ -424,14 +424,19 @@ fn with_sixel_the_pills_rounded_ends_are_one_cell_sixels_and_ghostty_keeps_its_g
 }
 
 #[test]
-fn by_default_windows_terminal_gets_sixel_and_the_canvas_colors_and_another_neither() {
+fn by_default_a_terminal_that_answers_sixel_gets_it_and_windows_terminal_its_colors() {
     // No image protocol chosen: by the terminal.
     let server = TestServer::start_with_settings(
         r#"{"ux2": true, "notifications": false, "tips": false, "sidebar": false}"#,
     );
     let mut wt = server.attach_as("xterm-256color WindowsTerminal", 140, 30);
     wt.wait_for("the header", |s| s[2].contains("M-c Claude"));
-    wt.wait_sent("Windows Terminal asked for its sixel cell", b"\x1b[16t");
+    // Asked what it is (DA1); until it says, no sixel and no cell asked.
+    wt.wait_sent("asked what it is", b"\x1b[c");
+    assert!(!common::sent(&wt.raw, b"\x1b[16t"));
+    // Windows Terminal 1.22 says it draws sixel (attribute 4).
+    wt.send(b"\x1b[?61;4;6;7;14;21;22;23;24;28;32;42c");
+    wt.wait_sent("asked for its sixel cell", b"\x1b[16t");
     wt.send(b"\x1b[6;25;13t");
     let deadline = common::deadline(std::time::Duration::from_secs(10));
     while ends_on(&wt.raw, 2) < 4 {
@@ -446,11 +451,21 @@ fn by_default_windows_terminal_gets_sixel_and_the_canvas_colors_and_another_neit
     // The canvas's own colors, in truecolor.
     assert!(common::sent(&wt.raw, b"38;2;"), "truecolor");
     assert!(!kitty_sent(&wt.raw) && !half_circles_sent(&wt.raw));
-    // A terminal that says nothing of itself: neither sixel nor glyphs,
-    // nor a question about its cell, and the 256 colors.
+    // One older, whose answer lists no sixel: the text forms, its colors
+    // still the canvas's.
+    let mut old = server.attach_as("xterm-256color WindowsTerminal", 140, 30);
+    old.wait_for("the header", |s| s[2].contains("M-c Claude"));
+    old.wait_sent("asked what it is", b"\x1b[c");
+    old.send(b"\x1b[?61;6;7;22;23;24;28;32;42c");
+    old.type_text("\x1b ");
+    old.wait_text("MISSION CONTROL");
+    assert!(!common::sent(&old.raw, b"\x1b[16t"));
+    assert!(common::sixels(&old.raw).is_empty());
+    assert!(!kitty_sent(&old.raw) && !half_circles_sent(&old.raw));
+    assert!(common::sent(&old.raw, b"38;2;"), "truecolor");
+    // A terminal that says nothing of itself: the 256 colors too.
     let mut plain = server.attach_as("xterm-256color", 140, 30);
     plain.wait_for("the header", |s| s[2].contains("M-c Claude"));
-    assert!(!common::sent(&plain.raw, b"\x1b[16t"));
     assert!(common::sixels(&plain.raw).is_empty());
     assert!(!half_circles_sent(&plain.raw) && !common::sent(&plain.raw, b"38;2;"));
 }
