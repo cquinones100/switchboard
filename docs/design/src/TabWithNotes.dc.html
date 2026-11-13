@@ -18,7 +18,7 @@ body{margin:0}
 .kitty{position:absolute;left:0;top:0;width:0;height:0}
 </style>
 </helmet>
-<div class="scr" style="width:calc(365ch + 32px);height:800px;box-sizing:border-box;padding:16px;background:#0b0c12;overflow:hidden;position:relative">
+<div class="scr" style="width:calc(365ch + 32px);height:calc(91 * 17px + 32px);zoom:0.857;box-sizing:border-box;padding:16px;background:#0b0c12;overflow:hidden;position:relative">
 <a href="Index.dc.html" style="position:absolute;top:0;right:16px;font-size:11px;line-height:16px;color:#8d93a8;text-decoration:none">index</a>
 <div style="position:relative;display:inline-block;background:#15161e">
 <sc-for list="{{rows}}" as="row" hint-placeholder-count="45"><div class="ln"><sc-for list="{{row.runs}}" as="r" hint-placeholder-count="6"><span style="{{r.style}}">{{r.text}}</span></sc-for></div></sc-for>
@@ -26,10 +26,10 @@ body{margin:0}
 </div>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":2880,"height":800}}'>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":2468,"height":1353}}'>
 class Component extends DCLogic {
 renderVals() {
-const W = 365, H = 45;
+const W = 365, H = 91;
 const FG = { t: '#c9cdd9', d: '#8d93a8', a: '#5fd7ff', y: '#f2c56b', g: '#7fd18b', b: '#82aaff', r: '#ff8a94', m: '#c49bff', o: '#e0896b', k: '#11131a', L: '#3a3f52', f: '#565b6e', n1: '#8bd5ca', n2: '#f5bde6', n3: '#b7bdf8', n4: '#a6da95', n5: '#f5a97f', n6: '#91d7e3', n7: '#ee99a0', n8: '#c6a0f6', n9: '#e8d5a4' };
 const BG = { 0: '#15161e', 1: '#11121a', 2: '#1b1e29', 3: '#20243a', 4: '#262b40', 5: '#2a2e3d', A: '#5fd7ff', Y: '#3a3220', G: '#1d3a2a', B: '#20304f', R: '#3a1d24', M: '#2a2440', H1: '#8bd5ca', H2: '#f5bde6', H3: '#b7bdf8', H4: '#a6da95', H5: '#f5a97f', H6: '#91d7e3', H7: '#ee99a0', H8: '#c6a0f6', H9: '#e8d5a4', D1: '#33504c', E: '#1f2232' };
 const g = [];
@@ -113,7 +113,7 @@ const input = (x, y, w, text, placeholder, hints) => { put(x, y, '\uE0B6', '2');
 // ─────────────────────────────────────────────────────────────────────────────
 
 // THE SIDEBAR: notifications first, gone when there are none, then every tab by state
-fill(0, 0, 34, 45, '1');
+fill(0, 0, 34, H, '1');
 T(1, 0, ['9 tabs', 'd']); R(32, 0, '/ filter', 'd');
 label(1, 2, 'NOTIFICATIONS', 'a', 5, 32);
 const note = (y, glyph, gc, text, when) => { T(2, y, [glyph, gc], ' ', text); R(32, y, when, 'd'); };
@@ -136,8 +136,8 @@ tab(26, '▲', 'm', 5, 'benchmark harness', '2nd in the landing queue');
 label(1, 29, 'IDLE', 'd', 2, 32);
 tab(30, '○', 'd', 8, 'handoff', 'idle 58m');
 tab(32, '○', 'd', 9, 'oncall watch', 'idle 14m');
-keys(1, 44, [['M-t', 'new'], ['M-j', 'jump'], ['M-a', 'next']]);
-vl(34, 0, 45);
+keys(1, H - 1, [['M-t', 'new'], ['M-j', 'jump'], ['M-a', 'next']]);
+vl(34, 0, H);
 
 // THE TAB IN FOCUS: what it shows in Claude's place, by the keys you already use
 fill(35, 0, 200, 1, '3');
@@ -156,10 +156,10 @@ fill(36, 16, 58, 1, '4'); put(36, 16, '> monitor the fork and let me know when i
 T(36, 18, ['⏺', 'g'], ' ', ['Monitor', 't', 'b'], '(Rust port fork reaching feature parity)');
 T(36, 19, ['  ⎿  Monitor started (task bwil573qd, expires in 30m)', 'd']);
 T(36, 21, ['✻ Brewing…', 'o'], [' (2m 14s · ↓ 3.1k tokens · esc to interrupt)', 'd']);
-hl(35, 40, 200);
-T(36, 41, '> ', ['█', 't']);
-hl(35, 42, 200);
-T(37, 43, ['Opus 5.5', 'd']); R(233, 43, '-- INSERT --  ⏵⏵ auto mode on', 'd');
+hl(35, H - 5, 200);
+T(36, H - 4, '> ', ['█', 't']);
+hl(35, H - 3, 200);
+T(37, H - 2, ['Opus 5.5', 'd']); R(233, H - 2, '-- INSERT --  ⏵⏵ auto mode on', 'd');
 
 // ⌘ Commands at the right end of the header's keys row: a click opens the palette (M-p), and closes it while open; the palette_button setting takes it away.
 const cmd = (xr, on) => keycap(xr - 13, 2, '⌘', 'Commands', on);
@@ -184,7 +184,7 @@ item(18, 'cache PR and ticket images');
 rule(NX + 1, 20, NW - 3);
 item(21, 'land without asking, with bin/leak-check', null, true); R(W - 2, 21, 'landed a501ce1', 'g');
 item(22, 'sealed review of community PRs', null, true); R(W - 2, 22, 'landed 2505ca4', 'g');
-input(NX + 1, 41, NW - 3, '', 'Add an item', [['Enter', 'adds it'], ['M-Enter', 'adds it with its plan']]);
+input(NX + 1, H - 4, NW - 3, '', 'Add an item', [['Enter', 'adds it'], ['M-Enter', 'adds it with its plan']]);
 
 // Lines and blocks are drawn to fill the cell, as Ghostty draws them, not taken from the font.
 const LINE = { '\uE0B6': ['cap', 'l'], '\uE0B4': ['cap', 'r'], '─': ['h', 1], '━': ['h', 2], '┄': ['hd'], '│': ['v'], '┆': ['vd'], '╭': ['arc', 'rb'], '┌': ['c', 'rb'], '╮': ['arc', 'lb'], '┐': ['c', 'lb'], '╰': ['arc', 'rt'], '└': ['c', 'rt'], '╯': ['arc', 'lt'], '┘': ['c', 'lt'], '█': ['f'], '▌': ['lh'], '▁': ['lo'] };

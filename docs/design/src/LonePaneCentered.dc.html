@@ -18,7 +18,7 @@ body{margin:0}
 .kitty{position:absolute;left:0;top:0;width:0;height:0}
 </style>
 </helmet>
-<div class="scr" style="width:calc(365ch + 32px);height:800px;box-sizing:border-box;padding:16px;background:#0b0c12;overflow:hidden;position:relative">
+<div class="scr" style="width:calc(365ch + 32px);height:calc(91 * 17px + 32px);zoom:0.857;box-sizing:border-box;padding:16px;background:#0b0c12;overflow:hidden;position:relative">
 <a href="Index.dc.html" style="position:absolute;top:0;right:16px;font-size:11px;line-height:16px;color:#8d93a8;text-decoration:none">index</a>
 <div style="position:relative;display:inline-block;background:#15161e">
 <sc-for list="{{rows}}" as="row" hint-placeholder-count="45"><div class="ln"><sc-for list="{{row.runs}}" as="r" hint-placeholder-count="6"><span style="{{r.style}}">{{r.text}}</span></sc-for></div></sc-for>
@@ -26,10 +26,10 @@ body{margin:0}
 </div>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":2880,"height":800}}'>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":2468,"height":1353}}'>
 class Component extends DCLogic {
 renderVals() {
-const W = 365, H = 45;
+const W = 365, H = 91;
 const FG = { t: '#c9cdd9', d: '#8d93a8', a: '#5fd7ff', y: '#f2c56b', g: '#7fd18b', b: '#82aaff', r: '#ff8a94', m: '#c49bff', o: '#e0896b', k: '#11131a', L: '#3a3f52', f: '#565b6e', n1: '#8bd5ca', n2: '#f5bde6', n3: '#b7bdf8', n4: '#a6da95', n5: '#f5a97f', n6: '#91d7e3', n7: '#ee99a0', n8: '#c6a0f6', n9: '#e8d5a4' };
 const BG = { 0: '#15161e', 1: '#11121a', 2: '#1b1e29', 3: '#20243a', 4: '#262b40', 5: '#2a2e3d', A: '#5fd7ff', Y: '#3a3220', G: '#1d3a2a', B: '#20304f', R: '#3a1d24', M: '#2a2440', H1: '#8bd5ca', H2: '#f5bde6', H3: '#b7bdf8', H4: '#a6da95', H5: '#f5a97f', H6: '#91d7e3', H7: '#ee99a0', H8: '#c6a0f6', H9: '#e8d5a4', D1: '#33504c', E: '#1f2232' };
 const g = [];
@@ -123,7 +123,7 @@ const input = (x, y, w, text, placeholder, hints) => { put(x, y, '\uE0B6', '2');
 // THE SIDEBAR, the same on every board: sel is the number of the tab under the cursor, or 0.
 const sidebar = (sel, opts) => {
   opts = opts || {};
-  fill(0, 0, 34, 45, '1');
+  fill(0, 0, 34, H, '1');
   T(1, 0, ['9 tabs', 'd']); R(32, 0, '/ filter', 'd');
   T(1, 2, ['NOTIFICATIONS', 'a', 'b']); R(32, 2, '5', 'a');
   const note = (y, glyph, gc, text, when) => { T(2, y, [glyph, gc], ' ', text); R(32, y, when, 'd'); };
@@ -146,8 +146,8 @@ const sidebar = (sel, opts) => {
   T(1, 29, ['IDLE', 'd', 'b']); R(32, 29, '2', 'd');
   tab(30, '○', 'd', 8, 'handoff', 'idle 58m');
   tab(32, '○', 'd', 9, 'oncall watch', 'idle 14m');
-  keys(1, 44, [['M-t', 'new'], ['M-j', 'jump'], ['M-a', 'next']]);
-  vl(34, 0, 45);
+  keys(1, H - 1, [['M-t', 'new'], ['M-j', 'jump'], ['M-a', 'next']]);
+  vl(34, 0, H);
 };
 
 // MISSION CONTROL'S BAR: its views grouped by feature. Row 0: the groups, the one in front lit;
@@ -216,11 +216,11 @@ const drawMap = (X0) => {
   mapRow(23, 'main', '', ['idle', 9, 'oncall watch'], [], '14m');
   mapRow(24, 'alert-dedupe', 'OPS-77', null, ['#318', ['Draft', 'd'], ['✕ 1 failing', 'r']], '4d');
   mapRow(25, 'runbook-links', '', null, ['', ['no PR', 'f']], '12d');
-  rule(X0, 36, PW);
-  let py = pane(X0 + 1, 37, PW - 2, 'rust-notes', '~/switchboard/.claude/worktrees/rust-notes · open in tab 7');
+  rule(X0, H - 9, PW);
+  let py = pane(X0 + 1, H - 8, PW - 2, 'rust-notes', '~/switchboard/.claude/worktrees/rust-notes · open in tab 7');
   T(X0 + 1, py - 1, ['last prompt  ', 'd'], ['note what an upgrade keeps, and what a new build must read with a default', 't']);
   T(X0 + 1, py, ['branch       ', 'd'], ['rust-notes · 3 commits ahead of main · nothing to push', 't']);
-  keys(X0 + 1, 44, [['j/k', 'move'], ['Enter', 'actions'], ['m', 'view actions'], ['/', 'filter']]);
+  keys(X0 + 1, H - 1, [['j/k', 'move'], ['Enter', 'actions'], ['m', 'view actions'], ['/', 'filter']]);
 };
 
 // A: the capped pane centered in the columns beside the sidebar, the spare columns sunken on both sides.
