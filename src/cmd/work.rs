@@ -1,6 +1,6 @@
 //! The keys that start work, on the server: what tmux.conf's popups for
 //! M-t and M-n (tmux/new-tab.zsh), M-W (wt-open.zsh), M-B (wtb-open.zsh)
-//! and M-o (mission control's Work map of worktrees with no tab), and the
+//! and M-o (now mission control's Reopen view, src/usage/reopen.rs), and the
 //! palette's "Start work on a PR" (wtpr-open.zsh), "Start work on a note's
 //! checklist items" (wtn-open.zsh) and "Continue shaping Linear tickets"
 //! (shape-open.zsh) ran, as boxes over the workspace rather than popups:

@@ -278,9 +278,13 @@ pub fn write_setting(key: &str, value: Value) -> Result<()> {
 }
 
 /// Settings renamed since they were saved, old key first: the Merge queues
-/// view became the Landing view. A setting that became a choice is in
+/// view became the Landing view, and the Closed view the Reopen view. A
+/// setting that became a choice is in
 /// `REVALUED`.
-pub const RENAMED: &[(&str, &str)] = &[("view_merge_queues", "view_landing")];
+pub const RENAMED: &[(&str, &str)] = &[
+    ("view_merge_queues", "view_landing"),
+    ("view_closed", "view_reopen"),
+];
 
 /// Your file with what an earlier version saved read as this one names it:
 /// a renamed key's off kept under its new name (unless that is set already),

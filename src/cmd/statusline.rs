@@ -8,8 +8,8 @@
 //! shows, and the context used, colored by how full it is, inside the
 //! workspace as outside it. Settings' `statusline_context` off leaves the
 //! context out inside the workspace while UX 2.0 (`ux2`) and mission
-//! control's Sessions view (`view_sessions`) are both on, where that view
-//! shows it; a plain terminal has no Sessions view, so there it stays.
+//! control's Usage view (`usage`) are both on, where its Sessions show it;
+//! a plain terminal has no Usage view, so there it stays.
 //!
 //! In a pane it tells the server the context used (`context`, over the
 //! socket as a hook does, waiting at most a second), which the server keeps
@@ -17,7 +17,7 @@
 //! nothing on the drawing path reads a file.
 //!
 //! It also keeps what Claude Code tells the statusline alone, for mission
-//! control's Sessions and Usage views (src/usage/sessions.rs), under
+//! control's Usage view and its Sessions (src/usage/sessions.rs), under
 //! `paths::state_dir()`: `context/<session>` (`<percent>\t<model>`), and
 //! `usage/spend-<session>` (`<day>\t<spent that day>\t<the session's cost so
 //! far>\t<the Claude process's pid>\t2`, the last field marking a record
@@ -82,7 +82,7 @@ pub fn main(_args: Vec<String>) -> ExitCode {
     }
     let hide_context = !crate::settings::is_on("statusline_context")
         && crate::settings::is_on("ux2")
-        && crate::settings::is_on("view_sessions");
+        && crate::settings::is_on("usage");
     let light = crate::settings::setting("theme")
         .as_ref()
         .and_then(Value::as_str)
@@ -195,7 +195,7 @@ pub fn line(
     let mut output = format!("{accent}{model}{RESET}");
     // Inside the workspace the tab already names the directory and branch,
     // so only the model and context are shown there (the model alone when
-    // the context is hidden for the Sessions view to show); in a plain
+    // the context is hidden for the Usage view's Sessions to show); in a plain
     // terminal this is the only place they appear.
     if !in_workspace {
         output.push_str(&format!(" | {accent}{}{RESET}", tilde_start(&raw_cwd)));

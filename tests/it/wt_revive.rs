@@ -31,6 +31,14 @@ fn git(dir: &Path, args: &[&str]) {
     );
 }
 
+/// A folder's name under ~/.claude/projects, as Claude Code makes it.
+fn encode(dir: &Path) -> String {
+    dir.to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
 /// A repository with two worktrees, and a transcript of a session in the
 /// first, under `home`.
 fn layout(root: &Path, home: &Path) -> (PathBuf, PathBuf, PathBuf) {
@@ -55,8 +63,9 @@ fn layout(root: &Path, home: &Path) -> (PathBuf, PathBuf, PathBuf) {
     for dir in [&repo, &two] {
         fs::File::open(dir).unwrap().set_modified(day_ago).unwrap();
     }
-    let project = home.join(".claude/projects/-x");
+    let project = home.join(".claude/projects").join(encode(&one.join("src")));
     fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(one.join("src")).unwrap();
     let now = jiff::Timestamp::now().to_string();
     let lines = [
         json!({ "type": "user", "cwd": one.join("src"), "timestamp": now, "message": { "content": "make the thing do what it should, please" } }),
@@ -164,7 +173,7 @@ fn every_worktree_with_no_tab_newest_first_with_its_last_prompt() {
         .values()
         .next()
         .unwrap();
-    assert_eq!(entry["facts"], 2);
+    assert_eq!(entry["facts"], 6);
     assert_eq!(entry["cwd"], one.join("src").to_str().unwrap());
     assert_eq!(entry["prompt"], "make the thing do what it should, please");
 
@@ -204,4 +213,130 @@ fn a_worktree_a_tab_is_open_in_is_left_out() {
         "{trees:?}"
     );
     assert!(trees.contains(&two.to_string_lossy().into_owned()));
+}
+
+#[test]
+fn sessions_lists_each_conversation_with_its_prompt_and_turns_but_an_untrusted_one() {
+    let tmp = TempDir::new("wt-revive-sessions");
+    let home = tmp.path().join("home");
+    let (repo, one, _) = layout(tmp.path(), &home);
+    let state = tmp.path().join("s");
+    let now = jiff::Timestamp::now().to_string();
+    let project = home.join(".claude/projects").join(encode(&one.join("src")));
+    // A session that ended in someone else's PR's worktree, and a
+    // subagent's transcript, neither of them listed.
+    let review = home.join(".cache/switchboard/pr-review/o-r/1");
+    fs::write(
+        project.join("b.jsonl"),
+        json!({ "type": "user", "cwd": review, "timestamp": now, "message": { "content": "review it all now please" } }).to_string(),
+    )
+    .unwrap();
+    fs::create_dir_all(project.join("a/subagents")).unwrap();
+    fs::write(
+        project.join("a/subagents/s.jsonl"),
+        json!({ "type": "user", "cwd": one, "timestamp": now, "message": { "content": "a subagent's own prompt" } }).to_string(),
+    )
+    .unwrap();
+    // One whose project's folder is gone, which claude --resume can't
+    // find, left out too.
+    let gone = home.join(".claude/projects/-gone-folder");
+    fs::create_dir_all(&gone).unwrap();
+    fs::write(
+        gone.join("c.jsonl"),
+        json!({ "type": "user", "cwd": "/gone/folder", "timestamp": now, "message": { "content": "work in a folder since removed" } }).to_string(),
+    )
+    .unwrap();
+    // The same conversation's older transcript in another project's
+    // folder, listed once.
+    let other = home.join(".claude/projects").join(encode(&one));
+    fs::create_dir_all(&other).unwrap();
+    let old = (jiff::Timestamp::now() - jiff::SignedDuration::from_hours(1)).to_string();
+    fs::write(
+        other.join("a.jsonl"),
+        json!({ "type": "user", "cwd": one, "timestamp": old, "message": { "content": "an older copy of it" } }).to_string(),
+    )
+    .unwrap();
+    let (code, out, err) = run(&repo, &home, &state, &["--sessions", "--json"]);
+    assert_eq!(code, 0, "{err}");
+    let found = rows(&out);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["id"], "a");
+    assert_eq!(found[0]["dir"], one.join("src").to_str().unwrap());
+    assert_eq!(
+        found[0]["prompt"],
+        "make the thing do what it should, please"
+    );
+    assert_eq!(found[0]["turns"], 2, "both prompts you gave it");
+    // Read back from the cache the same.
+    let (_, again, _) = run(&repo, &home, &state, &["--sessions", "--json"]);
+    assert_eq!(rows(&again), found);
+}
+
+#[test]
+fn a_session_that_moved_up_resumes_from_the_folder_it_started_in() {
+    let tmp = TempDir::new("wt-revive-resume");
+    let home = tmp.path().join("home");
+    let (repo, one, _) = layout(tmp.path(), &home);
+    let state = tmp.path().join("s");
+    let start = one.join("src");
+    fs::create_dir_all(&start).unwrap();
+    let encoded: String = start
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let project = home.join(".claude/projects").join(encoded);
+    fs::create_dir_all(&project).unwrap();
+    let now = jiff::Timestamp::now().to_string();
+    let lines = [
+        json!({ "type": "user", "cwd": start, "timestamp": now, "message": { "content": "start down in the sources" } }),
+        json!({ "type": "user", "cwd": one, "timestamp": now, "message": { "content": "now up at the top of the worktree" } }),
+    ];
+    fs::write(
+        project.join("moved.jsonl"),
+        lines.map(|l| l.to_string()).join("\n"),
+    )
+    .unwrap();
+    let (code, out, err) = run(&repo, &home, &state, &["--sessions", "--json"]);
+    assert_eq!(code, 0, "{err}");
+    let row = rows(&out).into_iter().find(|r| r["id"] == "moved").unwrap();
+    assert_eq!(row["dir"], one.to_str().unwrap(), "where it ended");
+    assert_eq!(
+        row["resume"],
+        start.to_str().unwrap(),
+        "where claude --resume finds it"
+    );
+}
+
+#[test]
+fn a_session_that_started_in_someone_else_s_pr_is_left_out_wherever_it_ended() {
+    let tmp = TempDir::new("wt-revive-untrusted-start");
+    let home = tmp.path().join("home");
+    let (repo, one, _) = layout(tmp.path(), &home);
+    let state = tmp.path().join("s");
+    let review = home.join(".cache/switchboard/pr-review/o-r/2");
+    fs::create_dir_all(&review).unwrap();
+    let encoded: String = review
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let project = home.join(".claude/projects").join(encoded);
+    fs::create_dir_all(&project).unwrap();
+    let now = jiff::Timestamp::now().to_string();
+    let lines = [
+        json!({ "type": "user", "cwd": review, "timestamp": now, "message": { "content": "look at their change here" } }),
+        json!({ "type": "user", "cwd": one, "timestamp": now, "message": { "content": "and now over in my own worktree" } }),
+    ];
+    fs::write(
+        project.join("theirs.jsonl"),
+        lines.map(|l| l.to_string()).join("\n"),
+    )
+    .unwrap();
+    let (code, out, err) = run(&repo, &home, &state, &["--sessions", "--json"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        !rows(&out).iter().any(|r| r["id"] == "theirs"),
+        "resuming it would start Claude in their worktree: {out}"
+    );
 }

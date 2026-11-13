@@ -1856,12 +1856,20 @@ impl Server {
             // (src/notes/serve.rs).
             self.notes_orphan(tab_id);
         } else {
+            // Its last pane: what it showed is the closing's last screen.
+            let shot = crate::usage::shots::Shot::of_pane(&slot.pane);
+            self.keep_closing_screen(tab_id, shot);
             self.remove_tab(tab_id);
         }
     }
 
     /// Ends every pane of a tab and takes it out.
     pub fn kill_tab(&mut self, tab: TabId) {
+        let shot = self
+            .closing_screen_pane(tab)
+            .and_then(|p| self.panes.get(&p))
+            .and_then(|slot| crate::usage::shots::Shot::of_pane(&slot.pane));
+        self.keep_closing_screen(tab, shot);
         let panes = self.panes_with_parked(tab);
         for p in panes {
             if let Some(mut slot) = self.panes.remove(&p) {
@@ -2926,7 +2934,7 @@ impl Server {
             }
             Action::ReviveWorktree => self.open_mission(
                 id,
-                crate::mission::Opening::Picker(crate::mission::Scope::Untabbed),
+                crate::mission::Opening::Picker(crate::mission::Scope::Reopen),
             ),
             Action::Settings => self.open_mission(id, crate::mission::Opening::Settings),
             Action::RemindTab => self.remind_tab(id, current_tab),
