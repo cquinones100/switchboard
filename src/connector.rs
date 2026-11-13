@@ -37,6 +37,16 @@
 //! has each one down asked about once, at most every `CONFIG_CHECK_MS`; and
 //! while a view that shows one missing is in front, it is asked about every
 //! `SHOWN_CHECK_EVERY_MS`. One found connected is marked so at once.
+//!
+//! A run whose Haiku never called the tool is checked before the connector
+//! is called down: in `claude -p` claude.ai's connectors connect in the
+//! background, so the first turn could start before the tool was there, and
+//! every such run once read as Slack not connected while it was. So the run
+//! waits for its connectors (`MCP_CONNECTION_NONBLOCKING=false`), and a miss
+//! asks `claude mcp get` (no model): connected, the call is made once more
+//! after `RETRY_AFTER`, and a second miss is a failure of its own, never
+//! recorded as down, which clears a down state from before; not connected
+//! (or no answer), it is down as before.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -79,6 +89,16 @@ fn not_connected(service: &str) -> ConnectorError {
         not_connected: true,
     }
 }
+
+fn not_ready(service: &str) -> ConnectorError {
+    failed(format!(
+        "{service}'s tool wasn't ready in Claude; it will be tried again"
+    ))
+}
+
+/// How long a run whose tool was never called, its connector connected,
+/// waits before the call is made again.
+const RETRY_AFTER: Duration = Duration::from_secs(2);
 
 /// How long a background call leaves a connector found not connected before
 /// asking Claude Code again whether it is connected now.
@@ -397,7 +417,15 @@ pub async fn call_connector(
     timeout: Option<Duration>,
 ) -> Result<String, ConnectorError> {
     let service = service_of(tool);
-    match call(tool, input, timeout.unwrap_or(Duration::from_secs(120))).await {
+    let timeout = timeout.unwrap_or(Duration::from_secs(120));
+    let (result, said_connected) = confirmed(
+        &service,
+        || call(tool, input, timeout),
+        || check(&service),
+        RETRY_AFTER,
+    )
+    .await;
+    match result {
         Ok(text) => {
             record(&service, true, None);
             Ok(text)
@@ -405,10 +433,45 @@ pub async fn call_connector(
         Err(err) => {
             if err.not_connected {
                 record(&service, false, Some(&err.message));
+            } else if said_connected {
+                // A tool that wasn't ready, its connector connected: a down
+                // state from before is cleared, not kept.
+                record(&service, true, None);
             }
             Err(err)
         }
     }
+}
+
+/// A call's result, a run that never called the tool (`Ok(None)`) checked
+/// as the module's comment says: made once more while Claude Code says the
+/// connector is connected, down otherwise. Also whether Claude Code was asked
+/// and said it is connected.
+async fn confirmed<C, CF, K, KF>(
+    service: &str,
+    call: C,
+    check: K,
+    pause: Duration,
+) -> (Result<String, ConnectorError>, bool)
+where
+    C: Fn() -> CF,
+    CF: Future<Output = Result<Option<String>, ConnectorError>>,
+    K: FnOnce() -> KF,
+    KF: Future<Output = Connection>,
+{
+    match call().await {
+        Ok(Some(text)) => return (Ok(text), false),
+        Err(err) => return (Err(err), false),
+        Ok(None) => {}
+    }
+    if check().await != Connection::Connected {
+        return (Err(not_connected(service)), false);
+    }
+    tokio::time::sleep(pause).await;
+    let again = call()
+        .await
+        .and_then(|text| text.ok_or_else(|| not_ready(service)));
+    (again, true)
 }
 
 /// Each line of Claude's stream-json output's message content parts.
@@ -426,7 +489,13 @@ fn content_parts(stdout: &str) -> Vec<Value> {
         .collect()
 }
 
-async fn call(tool: &str, input: &Value, timeout: Duration) -> Result<String, ConnectorError> {
+/// One run of the headless Haiku: the tool's result, or `None` when it never
+/// called the tool.
+async fn call(
+    tool: &str,
+    input: &Value,
+    timeout: Duration,
+) -> Result<Option<String>, ConnectorError> {
     let prompt = format!(
         "Load {tool} with ToolSearch (query \"select:{tool}\"), then call it once, with exactly this input: {}. Then reply \"done\".",
         util::json_compact(input)
@@ -457,6 +526,9 @@ async fn call(tool: &str, input: &Value, timeout: Duration) -> Result<String, Co
     .current_dir(std::env::temp_dir())
     .env("PATH", path)
     .env("ENABLE_TOOL_SEARCH", "true")
+    // Waits for claude.ai's connectors before the first turn, which `-p`
+    // otherwise starts while they are still connecting.
+    .env("MCP_CONNECTION_NONBLOCKING", "false")
     .env("MAX_MCP_OUTPUT_TOKENS", "200000")
     .stdin(std::process::Stdio::null())
     .stdout(std::process::Stdio::piped())
@@ -561,10 +633,10 @@ async fn call(tool: &str, input: &Value, timeout: Duration) -> Result<String, Co
                 && p.get("tool_use_id") == id
         })
     });
-    // Never called: Claude has no such tool, because the connector isn't
-    // connected (or is turned off) in Claude.
+    // Never called: Claude had no such tool, because the connector isn't
+    // connected (or is turned off) in Claude, or wasn't yet.
     let Some(result) = result else {
-        return Err(not_connected(&service_of(tool)));
+        return Ok(None);
     };
     let text = match result.get("content") {
         Some(Value::Array(items)) => items.iter().map(block_text).collect::<String>(),
@@ -580,10 +652,10 @@ async fn call(tool: &str, input: &Value, timeout: Duration) -> Result<String, Co
         let _ = std::fs::remove_file(&saved[1]);
         if &saved[2] == "json" {
             if let Ok(Value::Array(blocks)) = serde_json::from_str::<Value>(&raw) {
-                return Ok(blocks.iter().map(block_text).collect());
+                return Ok(Some(blocks.iter().map(block_text).collect()));
             }
         } else {
-            return Ok(raw);
+            return Ok(Some(raw));
         }
     }
     if result.get("is_error").is_some_and(util::truthy) {
@@ -599,7 +671,7 @@ async fn call(tool: &str, input: &Value, timeout: Duration) -> Result<String, Co
             )
         });
     }
-    Ok(text)
+    Ok(Some(text))
 }
 
 /// A result's content block as text: its text, or an image (as
@@ -674,6 +746,60 @@ mod tests {
         assert_eq!(gate(Some(&asked), now), Gate::Skip("m".into()));
         let asked_long_ago = json!({"ok": false, "message": "m", "checked": now - CHECK_EVERY_MS});
         assert_eq!(gate(Some(&asked_long_ago), now), Gate::Check("m".into()));
+    }
+
+    /// `confirmed` with runs that answer in turn (`None` a miss) and
+    /// `claude mcp get` answering `connection`: its result and how many
+    /// runs were made.
+    async fn confirm(
+        answers: &[Option<&str>],
+        connection: Connection,
+    ) -> (Result<String, ConnectorError>, bool, usize) {
+        let runs = std::sync::atomic::AtomicUsize::new(0);
+        let (result, said_connected) = confirmed(
+            "Slack",
+            || {
+                let n = runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let answer = answers[n].map(str::to_string);
+                async move { Ok(answer) }
+            },
+            || async move { connection },
+            Duration::ZERO,
+        )
+        .await;
+        (result, said_connected, runs.into_inner())
+    }
+
+    #[tokio::test]
+    async fn a_tool_never_called_is_tried_again_while_its_connector_is_connected() {
+        let (result, said_connected, runs) =
+            confirm(&[None, Some("found it")], Connection::Connected).await;
+        assert_eq!(result.unwrap(), "found it");
+        assert!(said_connected);
+        assert_eq!(runs, 2);
+
+        let (result, said_connected, runs) = confirm(&[None, None], Connection::Connected).await;
+        let err = result.unwrap_err();
+        assert!(!err.not_connected, "a second miss isn't the connector down");
+        assert!(said_connected, "so a down state from before is cleared");
+        assert_eq!(
+            err.message,
+            "Slack's tool wasn't ready in Claude; it will be tried again"
+        );
+        assert_eq!(runs, 2);
+    }
+
+    #[tokio::test]
+    async fn a_tool_never_called_is_down_when_claude_code_says_so() {
+        for connection in [Connection::NotConnected, Connection::Unknown] {
+            let (result, said_connected, runs) = confirm(&[None], connection).await;
+            assert!(result.unwrap_err().not_connected);
+            assert!(!said_connected);
+            assert_eq!(runs, 1, "not tried again");
+        }
+        let (result, _, runs) = confirm(&[Some("found it")], Connection::NotConnected).await;
+        assert_eq!(result.unwrap(), "found it", "a call made isn't checked");
+        assert_eq!(runs, 1);
     }
 
     #[test]
