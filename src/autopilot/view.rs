@@ -436,14 +436,6 @@ pub fn items(
         facts.push("nothing more to start".into());
     }
     facts.extend(why_paused(s, said));
-    let pilot = json!({
-        "paused": s.paused,
-        "lands": s.lands_alone,
-        "handsFree": s.hands_free,
-        "slots": s.slots,
-        "cap": s.cap,
-        "spendLimit": s.spend_limit,
-    });
     let spend = (s.spend_limit > 0.0).then(|| json!([s.spent, s.spend_limit]));
     let mut out = vec![
         Item::new(HEADING, s.note.clone())
@@ -460,7 +452,7 @@ pub fn items(
                 Item::new(format!("next:{text}"), format!("{}. {text}", at + 1))
                     .group(COLUMNS[0])
                     .data(with_plan(
-                        json!({ "next": text, "place": at + 1, "mode": pilot }),
+                        json!({ "next": text, "place": at + 1 }),
                         plans,
                         text,
                     )),
@@ -475,7 +467,7 @@ pub fn items(
                     .detail(waits)
                     .group(COLUMNS[0])
                     .data(with_plan(
-                        json!({ "next": text, "waitsOn": other, "mode": pilot }),
+                        json!({ "next": text, "waitsOn": other }),
                         plans,
                         text,
                     )),
@@ -544,7 +536,6 @@ pub fn items(
                 "started": r.started,
                 "ended": r.ended,
             },
-            "mode": pilot,
         }))));
     }
     if !skipped.is_empty() {
@@ -557,11 +548,7 @@ pub fn items(
                 Item::new(format!("skipped:{text}"), text.clone())
                     .detail("skipped by you from autopilot's menu")
                     .group(COLUMNS[5])
-                    .data(with_plan(
-                        json!({ "skipped": text, "mode": pilot }),
-                        plans,
-                        text,
-                    )),
+                    .data(with_plan(json!({ "skipped": text }), plans, text)),
             );
         }
     }

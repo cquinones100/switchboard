@@ -301,6 +301,45 @@ fn with_ux2_its_command_shows_its_board_whose_menu_and_button_open_its_settings_
 }
 
 #[test]
+fn with_ux2_the_boards_m_pauses_lands_and_stops_while_a_cards_enter_keeps_to_its_item() {
+    let (_notes, _note, server, mut client, _repo) = set_up(json!({ "ux2": true }));
+    client.wait_text("WAITING ON YOU");
+    // Enter on the chosen card offers only what acts on it.
+    client.type_text("\r");
+    let screen = client.wait_text("Skip its item");
+    for gone in [
+        "Pause: open no more tabs",
+        "Land without asking",
+        "Stop working the note",
+    ] {
+        assert!(
+            !screen.iter().any(|l| l.contains(gone)),
+            "{gone}: {screen:#?}"
+        );
+    }
+    client.type_text("\x1b");
+    client.wait_for("the card's menu closed", |s| {
+        !s.iter().any(|l| l.contains("Skip its item"))
+    });
+    // The view's own menu changes autopilot as a whole.
+    client.type_text("m");
+    let screen = client.wait_text("Pause: open no more tabs for now");
+    for want in [
+        "Autopilot's settings",
+        "Land without asking",
+        "Stop working the note",
+    ] {
+        assert!(
+            screen.iter().any(|l| l.contains(want)),
+            "{want}: {screen:#?}"
+        );
+    }
+    client.type_text("\x1b[B\r");
+    wait("paused", &server, || mode(&server)["paused"] == true);
+    drop(server);
+}
+
+#[test]
 fn with_ux2_the_boards_side_panel_shows_the_chosen_items_plan_under_its_stages() {
     let (notes, note, server, mut client, _repo) = set_up(json!({ "ux2": true }));
     client.wait_text("WAITING ON YOU");

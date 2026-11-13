@@ -187,6 +187,8 @@ enum ViewAct {
     EditFile(PathBuf, String),
     /// Autopilot's own menu.
     Autopilot,
+    /// A change to autopilot as a whole, as its menu's option would make.
+    Pilot(crate::autopilot::Act),
     /// The Work map's rows narrowed to those with a tab, without, or all.
     Scope(Option<Scope>),
     /// The Work map's merged worktrees of a repository shown or folded.
@@ -3141,7 +3143,40 @@ impl Server {
                 );
             }
             Some(ViewId::Autopilot) => {
+                use crate::autopilot::Act;
                 add(autopilot_label(), ViewAct::Autopilot);
+                // What changes autopilot as a whole, kept off its cards' menus.
+                let mode = &self.autopilot.mode;
+                if mode.on {
+                    if mode.paused {
+                        add("Resume", ViewAct::Pilot(Act::Resume));
+                    } else {
+                        add(
+                            "Pause: open no more tabs for now",
+                            ViewAct::Pilot(Act::Pause),
+                        );
+                    }
+                    if mode.land_without_asking {
+                        add("Ask before landing", ViewAct::Pilot(Act::AskBeforeLanding));
+                    } else {
+                        add(
+                            "Land without asking",
+                            ViewAct::Pilot(Act::LandWithoutAsking),
+                        );
+                    }
+                    if mode.hands_free {
+                        add("Ask me again: hands-free off", ViewAct::Pilot(Act::AskMe));
+                    } else if settings::is_on("autopilot_handsfree") {
+                        add("Hands-free: decide for me", ViewAct::Pilot(Act::HandsFree));
+                    }
+                    if mode.skipped_here().next().is_some() {
+                        add(
+                            "Take the skipped items again",
+                            ViewAct::Pilot(Act::Unskip(None)),
+                        );
+                    }
+                    add("Stop working the note", ViewAct::Pilot(Act::Stop));
+                }
             }
             Some(ViewId::WorkMap) if m.snap.rules.ux2 && !m.picker => {
                 for (label, scope) in [
@@ -3232,6 +3267,7 @@ impl Server {
         match act {
             ViewAct::FindKey => return self.find_key(client),
             ViewAct::Autopilot => return self.autopilot_menu(client),
+            ViewAct::Pilot(act) => return self.mission_do(client, Do::Autopilot(act), ""),
             ViewAct::EditFile(dir, file) => return self.edit_own_file(client, &dir, &file),
             ViewAct::RemindOn(day) => return self.remind_on_day(client, day),
             ViewAct::NewRoutine => return self.routine_new(client),

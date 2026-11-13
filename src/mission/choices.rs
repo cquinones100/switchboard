@@ -435,11 +435,10 @@ fn choice(key: char, label: impl Into<String>, act: Do) -> Choice {
     }
 }
 
-/// A row's menu in Autopilot's view (src/autopilot/view.rs): its tab, its
-/// item skipped (an item to open next too), a skipped one taken again or
-/// all of them,
-/// then what changes the whole mode, as its line's menu does: pause or
-/// resume, land without asking or not, stop.
+/// A card's menu in Autopilot's view (src/autopilot/view.rs): its tab, its
+/// item skipped (an item to open next too) or a skipped one taken again.
+/// What changes the whole mode is on the view's own menu (`m`,
+/// `Server::view_menu`), not on every card.
 fn pilot_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
     use crate::autopilot::Act;
     let mut out = Vec::new();
@@ -479,64 +478,7 @@ fn pilot_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
             "Take this item again",
             Do::Autopilot(Act::Unskip(Some(text.to_string()))),
         ));
-        out.push(choice(
-            'c',
-            "Take the skipped items again",
-            Do::Autopilot(Act::Unskip(None)),
-        ));
     }
-    let flag = |k: &str| item.data.pointer(k).and_then(Value::as_bool) == Some(true);
-    out.push(if flag("/mode/paused") {
-        choice('r', "Resume", Do::Autopilot(Act::Resume))
-    } else {
-        choice(
-            'p',
-            "Pause: open no more tabs for now",
-            Do::Autopilot(Act::Pause),
-        )
-    });
-    out.push(if flag("/mode/lands") {
-        choice(
-            'w',
-            "Ask before landing",
-            Do::Autopilot(Act::AskBeforeLanding),
-        )
-    } else {
-        choice(
-            'w',
-            "Land without asking",
-            Do::Autopilot(Act::LandWithoutAsking),
-        )
-    });
-    if flag("/mode/handsFree") {
-        out.push(choice(
-            'h',
-            "Ask me again: hands-free off",
-            Do::Autopilot(Act::AskMe),
-        ));
-    } else if crate::settings::is_on("autopilot_handsfree") {
-        out.push(choice(
-            'h',
-            "Hands-free: decide for me",
-            Do::Autopilot(Act::HandsFree),
-        ));
-    }
-    let count = |k: &str| item.data.pointer(k).and_then(Value::as_u64).unwrap_or(0) as u32;
-    let limit = item
-        .data
-        .pointer("/mode/spendLimit")
-        .and_then(Value::as_f64)
-        .unwrap_or(0.0);
-    for (key, label, act) in
-        crate::autopilot::line::count_choices(count("/mode/slots"), count("/mode/cap"), limit)
-    {
-        out.push(choice(key, label, Do::Autopilot(act)));
-    }
-    out.push(choice(
-        'x',
-        "Stop working the note",
-        Do::Autopilot(Act::Stop),
-    ));
     out
 }
 
@@ -1761,25 +1703,34 @@ mod tests {
     }
 
     #[test]
-    fn an_autopilot_cards_menu_sets_its_counts_each_naming_its_value() {
+    fn an_autopilot_cards_menu_keeps_to_its_item_and_leaves_the_mode_to_the_views_menu() {
         let repo = |_: &Path| Vec::new();
-        let item = Item::new("autopilot:next:0", "One").data(json!({
-            "next": "One",
-            "mode": { "slots": 3, "cap": 5, "spendLimit": 12.5 },
-        }));
-        let labels: Vec<String> = item_choices(&ViewId::Autopilot, &item, &[], &ctx(&[], &repo))
-            .into_iter()
-            .map(|c| c.label)
-            .collect();
-        assert_eq!(
-            labels[labels.len() - 4..],
-            [
-                "Tabs working at once: 3…",
-                "Most tabs open: 5…",
-                "Spend limit: $12.5 a day…",
-                "Stop working the note"
-            ]
-        );
+        let labels = |item: &Item| -> Vec<String> {
+            item_choices(&ViewId::Autopilot, item, &[], &ctx(&[], &repo))
+                .into_iter()
+                .map(|c| c.label)
+                .collect()
+        };
+        let next = labels(&Item::new("autopilot:next:0", "One").data(json!({ "next": "One" })));
+        assert_eq!(next[0], "Skip its item: One");
+        let skipped = labels(&Item::new("skipped:Two", "Two").data(json!({ "skipped": "Two" })));
+        assert_eq!(skipped[0], "Take this item again");
+        for gone in [
+            "Pause: open no more tabs for now",
+            "Resume",
+            "Land without asking",
+            "Hands-free: decide for me",
+            "Tabs working at once",
+            "Take the skipped items again",
+            "Stop working the note",
+        ] {
+            for menu in [&next, &skipped] {
+                assert!(
+                    !menu.iter().any(|l| l.starts_with(gone)),
+                    "{gone}: {menu:?}"
+                );
+            }
+        }
     }
 
     #[test]
