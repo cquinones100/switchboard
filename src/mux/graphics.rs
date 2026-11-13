@@ -60,6 +60,13 @@
 //! Anything that may have cleared the terminal (an attach, a resize,
 //! `Screen::invalidate`, a new build after `switchboard upgrade`, whose
 //! screen starts empty) sends them all again, as it does the sixels.
+//!
+//! New with the Rust port, with no tmux-version file behind it (tmux passed
+//! the notes pane's commands on and the server drew no pictures of its
+//! own): its code was gathered here from where each kind of picture chose
+//! its own way, `ImageCache` and its commands from src/ui/images.rs, the
+//! commands given by a path and tmux's wrapping from src/notes/images.rs
+//! and src/views/image/mod.rs, and `apps_draw` from Notes' `terminal_can`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;

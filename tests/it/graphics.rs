@@ -315,3 +315,65 @@ fn with_sixel_chosen_a_kitty_terminal_still_gets_kitty_s_way() {
         "not asked for a sixel cell"
     );
 }
+
+#[test]
+fn with_sixel_a_picture_a_view_gives_inline_is_drawn_as_sixel_over_its_cells() {
+    use switchboard::notes::images::Picture;
+    let (server, mut client) = sixel_server(100, 30);
+    let pane = server.list()["sessions"][0]["tabs"][0]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["set", "-t", &pane, "@allow_passthrough", "1"]);
+    // The four-colour picture given as a view's `ImageCache` gives one:
+    // its data inline, in parts carrying only `m` after the first, then
+    // its placeholder cells, four by two, each row after "Q8".
+    let png = server.dir.path().join("four.png");
+    common::four_colours(&png, 40);
+    let data = switchboard::util::base64(&std::fs::read(&png).unwrap());
+    let parts: Vec<&str> = data
+        .as_bytes()
+        .chunks(data.len().div_ceil(3))
+        .map(|c| std::str::from_utf8(c).unwrap())
+        .collect();
+    let mut out = String::new();
+    for (i, part) in parts.iter().enumerate() {
+        let more = u8::from(i + 1 < parts.len());
+        let keys = if i == 0 {
+            format!("a=T,U=1,f=100,t=d,q=2,i=43,c=4,r=2,m={more}")
+        } else {
+            format!("m={more}")
+        };
+        out.push_str(&format!("\x1b_G{keys};{part}\x1b\\"));
+    }
+    // The pane cleared, the rows put at its first two, moved to.
+    out.push_str("\x1b[H\x1b[2J");
+    for row in 0..2u16 {
+        out.push_str(&format!("\x1b[{};1HQ8\x1b[38;2;0;0;43m", row + 1));
+        for col in 0..4 {
+            out.push_str(&Picture::cell(row, col));
+        }
+        out.push_str("\x1b[0m");
+    }
+    out.push_str("\x1b[10;1H");
+    let file = server.dir.path().join("inline.out");
+    std::fs::write(&file, out).unwrap();
+    server.ok(&[
+        "send-keys",
+        "-t",
+        &pane,
+        "-l",
+        &format!("cat {}; echo inl''ine-done", file.display()),
+    ]);
+    server.ok(&["send-keys", "-t", &pane, "Enter"]);
+    let screen = client.wait_text("inline-done");
+    assert!(screen[4].starts_with("Q8"), "under the header: {screen:?}");
+    // Four cells by two of 13 by 25 pixels, made whole bands, from the
+    // pane's top left under UX 2.0's header.
+    client.wait_sent("the picture drawn", b"\x1b[5;3H\x1bP0;1;0q\"1;1;52;48");
+    let sixel = common::sixel_at(&client.raw, 4, 2).unwrap();
+    for rgb in [";2;100;0;0", ";2;0;100;0", ";2;0;0;100", ";2;100;100;0"] {
+        assert!(sixel.contains(rgb), "{rgb} in {sixel:?}");
+    }
+    assert!(!kitty_sent(&client.raw), "nothing of kitty's passed on");
+}

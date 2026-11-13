@@ -873,7 +873,7 @@
     "key": "view_images",
     "category": "Appearance",
     "label": "Pictures and diagrams in the views",
-    "description": "Draws the pictures on lines of their own and the Mermaid diagrams in the PR, ticket, link and file views as images where the terminal can show them (Ghostty, kitty), fetching the pictures and drawing the diagrams with Mermaid in Chrome, and draws the diagrams of the description beside mission control's PR and ticket boards the same way, as sixel too with \"Image protocol\" on sixel (with \"Images in the workspace\" on too). Off, a picture is its name and a diagram is drawn with characters",
+    "description": "Draws the pictures on lines of their own and the Mermaid diagrams in the PR, ticket, link and file views as images where the terminal can show them (Ghostty, kitty, or as sixel with \"Image protocol\" on sixel), fetching the pictures and drawing the diagrams with Mermaid in Chrome, and draws the diagrams of the description beside mission control's PR and ticket boards the same way (with \"Images in the workspace\" on too). Off, a picture is its name and a diagram is drawn with characters",
     "default": true
   },
   {
@@ -915,7 +915,7 @@
     "key": "image_protocol",
     "category": "Appearance",
     "label": "Image protocol",
-    "description": "How pictures (a note's images, the PR and ticket image views, and the workspace's own: avatars, meters, charts, switches, the diagrams beside a board, a picture shown full size) reach your terminal: kitty sends them by kitty's graphics protocol, for Ghostty and kitty; sixel has the workspace draw each picture itself as sixel where it shows, for a terminal that draws sixel but not kitty's pictures, as Windows Terminal (1.22 and later) does, the shadow under a box drawn with characters there, while Ghostty and kitty keep kitty's; Notes and the image view opened after a change draw by it",
+    "description": "How pictures (a note's images, the PR and ticket image views, the pictures and diagrams in the PR, ticket, link and file views, and the workspace's own: avatars, meters, charts, switches, the diagrams beside a board, a picture shown full size) reach your terminal: kitty sends them by kitty's graphics protocol, for Ghostty and kitty; sixel has the workspace draw each picture itself as sixel where it shows, for a terminal that draws sixel but not kitty's pictures, as Windows Terminal (1.22 and later) does, the shadow under a box drawn with characters there, while Ghostty and kitty keep kitty's; Notes, the image view and the PR, ticket, link and file views opened after a change draw by it",
     "choices": [
       {
         "value": "kitty",

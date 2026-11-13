@@ -70,14 +70,22 @@ impl Fitted {
 /// is refused.
 pub fn read_png(path: &Path) -> Result<RgbaImage, String> {
     let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut reader = ImageReader::with_format(BufReader::new(file), ImageFormat::Png);
+    decode_png(BufReader::new(file)).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// A PNG's pixels from its data, as a pane gave it inline; refused as
+/// `read_png` refuses a file.
+pub fn read_png_bytes(bytes: &[u8]) -> Result<RgbaImage, String> {
+    decode_png(std::io::Cursor::new(bytes)).map_err(|e| format!("a picture given inline: {e}"))
+}
+
+fn decode_png<R: std::io::BufRead + std::io::Seek>(from: R) -> Result<RgbaImage, String> {
+    let mut reader = ImageReader::with_format(from, ImageFormat::Png);
     let mut limits = Limits::default();
     limits.max_image_width = Some(MOST);
     limits.max_image_height = Some(MOST);
     reader.limits(limits);
-    let image = reader
-        .decode()
-        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let image = reader.decode().map_err(|e| e.to_string())?;
     Ok(image.to_rgba8())
 }
 

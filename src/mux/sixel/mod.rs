@@ -9,13 +9,20 @@
 //! itself, the panes' and the server's alike.
 //!
 //! The apps stay as they are. Notes and the image view give the terminal
-//! each picture's PNG by its path as a kitty virtual placement and write
-//! its placeholder cells (src/notes/images.rs), which the panes' emulators
-//! keep as text; with sixel chosen, `graphics::apps_draw` lets them draw
-//! inside the workspace whatever the terminal is called. The server reads
-//! the commands from the panes allowed to send them, as before, and keeps
-//! what each image is (`kitty`: its path and placement), forgetting it as
-//! they delete it, never forwarding them. The server's own images (src/ui/
+//! each picture's PNG by its path as a kitty virtual placement, and the
+//! Markdown views (the PR, ticket, link and file views) its data inline,
+//! and both write its placeholder cells (src/notes/images.rs,
+//! src/views/markdown.rs), which the panes' emulators keep as text; with
+//! sixel chosen, `graphics::apps_draw` lets them draw inside the workspace
+//! whatever the terminal is called. The server reads the commands from the
+//! panes allowed to send them, as before, and keeps what each image is
+//! (`kitty`: its path or its PNG's data, and its placement), forgetting it
+//! as they delete it, never forwarding them to a terminal that gets sixel.
+//! A picture given inline is taken in only while sixel is chosen, kept as
+//! it was sent until its pane deletes it, and named by its transmission
+//! (`Source::Data`), its data handed to the work that decodes and fits it
+//! off the task beside the name (`Make`), so no cache's key keeps it
+//! alive. The server's own images (src/ui/
 //! images.rs: the image atoms, board 6's lane and chart, mission control's
 //! diagrams and Slack pictures, the picture shown full size) write their
 //! placeholder cells into the frame as they are drawn and add themselves
@@ -120,6 +127,10 @@ const AT_ONCE: usize = 4;
 /// The longest sixel string a piece may be (a photo of every colour, the
 /// whole screen wide, could be tens of megabytes): one longer isn't drawn.
 const MOST_BYTES: usize = 8 << 20;
+/// The most of the pictures given inline a handover carries to the new
+/// build, which has no other way to have them again (a megabyte in the
+/// unit tests, which fill it).
+const HANDED_DATA: usize = if cfg!(test) { 1 << 20 } else { 64 << 20 };
 
 /// The server's own images no larger than this many pixels whole, and of
 /// no more colours than a palette holds, are drawn on the server's task as
@@ -137,9 +148,26 @@ pub enum Source {
         look: Look,
         given: (Option<u16>, Option<u16>),
     },
+    /// A pane's given inline (the Markdown views'): its transmission (the
+    /// server's count, `kitty::Image::serial`), which names it, and its
+    /// placement's columns and rows as given. Its data goes beside the name
+    /// (`Make::Data`), so a cache's keys don't keep it alive.
+    Data {
+        serial: u64,
+        given: (Option<u16>, Option<u16>),
+    },
     /// One of the server's own images (src/ui/images.rs): its key, made of
     /// everything it is drawn from, and its size in cells.
     Server { key: u64, cols: u16, rows: u16 },
+}
+
+/// What a picture not yet fitted is made from, beyond what names it: one
+/// of the server's images rastered, or a PNG a pane gave inline, base64 as
+/// it was sent, decoded. A picture by its file needs none.
+#[derive(Clone)]
+pub enum Make {
+    Raster(Draw),
+    Data(Arc<[u8]>),
 }
 
 /// A fitted picture's name: what it is drawn from, and the cell's size in
@@ -176,11 +204,11 @@ impl Key {
 /// two, none for three): a picture whole loses a sliver of its bottom
 /// edge, and one a box cuts into pieces a row tall a sliver under each
 /// row, less than a band reaching into the row below would cover.
-pub fn draw(key: &Key, fitted: Option<Arc<Fitted>>, raster: Option<&Draw>) -> Made {
+pub fn draw(key: &Key, fitted: Option<Arc<Fitted>>, make: Option<&Make>) -> Made {
     let cell = (key.fit.cell.0.max(1) as u32, key.fit.cell.1.max(1) as u32);
     let fitted = match fitted {
         Some(f) => f,
-        None => Arc::new(fit(&key.fit.source, cell, raster)?),
+        None => Arc::new(fit(&key.fit.source, cell, make)?),
     };
     let (col, row, cols, rows) = key.crop;
     let height = rows as u32 * cell.1;
@@ -204,18 +232,28 @@ pub fn draw(key: &Key, fitted: Option<Arc<Fitted>>, raster: Option<&Draw>) -> Ma
     Ok((sixel.into(), fitted))
 }
 
-/// A picture made ready to cut pieces from: a pane's read from its file and
-/// fitted into its placement, or one of the server's rastered at its cells
-/// and taken as it is.
-fn fit(source: &Source, cell: (u32, u32), raster: Option<&Draw>) -> Result<Fitted, Failure> {
+/// A picture made ready to cut pieces from: a pane's read from its file or
+/// its data and fitted into its placement, or one of the server's rastered
+/// at its cells and taken as it is.
+fn fit(source: &Source, cell: (u32, u32), make: Option<&Make>) -> Result<Fitted, Failure> {
+    let read = |image: Result<image::RgbaImage, String>, given| {
+        let image = image.map_err(Failure::Picture)?;
+        let cells = encode::cells_of(given, image.dimensions(), cell);
+        encode::prepare(&image, cells, cell).map_err(Failure::Picture)
+    };
     match source {
-        Source::File { path, given, .. } => {
-            let image = encode::read_png(path).map_err(Failure::Picture)?;
-            let cells = encode::cells_of(*given, image.dimensions(), cell);
-            encode::prepare(&image, cells, cell).map_err(Failure::Picture)
-        }
+        Source::File { path, given, .. } => read(encode::read_png(path), *given),
+        Source::Data { given, .. } => match make {
+            Some(Make::Data(data)) => match crate::util::unbase64(data) {
+                Some(png) => read(encode::read_png_bytes(&png), *given),
+                None => Err(Failure::Picture("data that isn't base64".into())),
+            },
+            _ => Err(Failure::Picture("no data to read".into())),
+        },
         Source::Server { cols, rows, .. } => {
-            let raster = raster.ok_or_else(|| Failure::Picture("nothing to raster".into()))?;
+            let Some(Make::Raster(raster)) = make else {
+                return Err(Failure::Picture("nothing to raster".into()));
+            };
             let size = (*cols as u32 * cell.0, *rows as u32 * cell.1);
             if size.0 > encode::MOST || size.1 > encode::MOST {
                 return Err(Failure::Picture(format!(
@@ -261,7 +299,7 @@ fn small(fit: &Fit) -> bool {
             (cols as u32 * fit.cell.0 as u32).saturating_mul(rows as u32 * fit.cell.1 as u32)
                 <= AT_ONCE_PIXELS
         }
-        Source::File { .. } => false,
+        Source::File { .. } | Source::Data { .. } => false,
     }
 }
 
@@ -400,12 +438,34 @@ impl Sixel {
         }
     }
 
-    /// What a handover carries: each pane's images.
+    /// What a handover carries: each pane's images, those given inline
+    /// while `HANDED_DATA` lasts, the newest first across every pane.
     pub fn hand_over(&self) -> Vec<(PaneId, Vec<kitty::Handed>)> {
+        let mut inline: Vec<(u64, usize, PaneId, u32)> = self
+            .images
+            .iter()
+            .flat_map(|(pane, images)| {
+                images
+                    .inline()
+                    .map(move |(id, serial, len)| (serial, len, *pane, id))
+            })
+            .collect();
+        inline.sort_by_key(|(serial, ..)| std::cmp::Reverse(*serial));
+        let mut budget = HANDED_DATA;
+        let mut carried: HashSet<(PaneId, u32)> = HashSet::new();
+        for (_, len, pane, id) in inline {
+            if len <= budget {
+                budget -= len;
+                carried.insert((pane, id));
+            }
+        }
         let mut out: Vec<(PaneId, Vec<kitty::Handed>)> = self
             .images
             .iter()
-            .map(|(pane, images)| (*pane, images.hand_over()))
+            .map(|(pane, images)| {
+                let handed = images.hand_over(|id| carried.contains(&(*pane, id)));
+                (*pane, handed)
+            })
             .filter(|(_, images)| !images.is_empty())
             .collect();
         out.sort_by_key(|(pane, _)| *pane);
@@ -452,7 +512,7 @@ impl Server {
             self.sixel.serial += 1;
             let serial = self.sixel.serial;
             let images = self.sixel.images.entry(pane).or_default();
-            images.apply(&c, serial);
+            images.apply(&c, serial, graphics::sixel_chosen());
             if images.is_empty() {
                 self.sixel.images.remove(&pane);
             }
@@ -526,9 +586,9 @@ impl Server {
         let cell = self.picture_cell();
         for piece in pieces {
             let crop = (piece.col, piece.row, piece.area.width, piece.area.height);
-            let (key, raster, photo) = match piece.pane {
+            let (key, make, photo) = match piece.pane {
                 Some(pane) => match self.pane_fit(pane, piece.id, cell) {
-                    Some(fit) => (Key { fit, crop }, None, true),
+                    Some((fit, make)) => (Key { fit, crop }, make, true),
                     None => continue,
                 },
                 None => {
@@ -541,7 +601,8 @@ impl Server {
                         rows: image.rows,
                     };
                     let fit = Fit { source, cell };
-                    (Key { fit, crop }, Some(image.draw.clone()), image.photo)
+                    let make = Make::Raster(image.draw.clone());
+                    (Key { fit, crop }, Some(make), image.photo)
                 }
             };
             if let Some(sixel) = self.sixel.encoded.get(&key) {
@@ -552,8 +613,8 @@ impl Server {
                 });
                 continue;
             }
-            match raster {
-                Some(raster) if small(&key.fit) => {
+            match make {
+                Some(Make::Raster(raster)) if small(&key.fit) => {
                     if self.sixel.failed.contains(&key.fit)
                         || self.sixel.failed_pieces.contains(&key)
                         || self.sixel.drawing.contains(&key)
@@ -591,30 +652,37 @@ impl Server {
                             }
                             self.keep_drawn(key, made);
                         }
-                        None => self.draw_piece(key, Some(raster)),
+                        None => self.draw_piece(key, Some(Make::Raster(raster))),
                     }
                 }
-                raster => self.draw_piece(key, raster),
+                make => self.draw_piece(key, make),
             }
         }
     }
 
-    /// What a pane's picture is drawn from, while its image is placed and
-    /// its file known to be one: looked at when it hasn't been since it was
+    /// What a pane's picture is drawn from, and its data when it was given
+    /// inline, while its image is placed: one given by its file while that
+    /// is known to be one, looked at when it hasn't been since it was
     /// given, and drawn meanwhile as its file was when last looked at.
-    fn pane_fit(&mut self, pane: PaneId, id: u32, cell: (u16, u16)) -> Option<Fit> {
+    fn pane_fit(&mut self, pane: PaneId, id: u32, cell: (u16, u16)) -> Option<(Fit, Option<Make>)> {
         let image = self
             .sixel
             .images
             .get(&pane)
             .and_then(|m| m.get(id))
             .filter(|i| i.placed)?;
-        let (path, serial, given, look) = (
-            image.path.clone(),
-            image.serial,
-            (image.cols, image.rows),
-            image.look.clone(),
-        );
+        let given = (image.cols, image.rows);
+        let path = match &image.given {
+            kitty::Given::Data(data) => {
+                let source = Source::Data {
+                    serial: image.serial,
+                    given,
+                };
+                return Some((Fit { source, cell }, Some(Make::Data(data.clone()))));
+            }
+            kitty::Given::Path(path) => path.clone(),
+        };
+        let (serial, look) = (image.serial, image.look.clone());
         let look = match look {
             Look::Unknown => {
                 let before = self.sixel.looks.get(&path).cloned();
@@ -623,10 +691,18 @@ impl Server {
             }
             look => look,
         };
-        matches!(look, Look::File { .. }).then_some(Fit {
+        let fit = Fit {
             source: Source::File { path, look, given },
             cell,
-        })
+        };
+        matches!(
+            fit.source,
+            Source::File {
+                look: Look::File { .. },
+                ..
+            }
+        )
+        .then_some((fit, None))
     }
 
     /// Looks at an image's file off the task: its time and length, or that
@@ -663,8 +739,8 @@ impl Server {
     /// Draws a piece off the task, unless it is being drawn, its picture
     /// failed, or as many as are drawn at once are under way; a picture
     /// being fitted for another piece is waited for, and fitted once.
-    /// `raster` draws one of the server's own images.
-    fn draw_piece(&mut self, key: Key, raster: Option<Draw>) {
+    /// `make` makes a picture not given by its file.
+    fn draw_piece(&mut self, key: Key, make: Option<Make>) {
         if tokio::runtime::Handle::try_current().is_err()
             || self.sixel.drawing.len() >= AT_ONCE
             || self.sixel.drawing.contains(&key)
@@ -680,7 +756,7 @@ impl Server {
         self.sixel.drawing.insert(key.clone());
         let tx = self.tx.clone();
         tokio::task::spawn_blocking(move || {
-            let made = draw(&key, fitted, raster.as_ref());
+            let made = draw(&key, fitted, make.as_ref());
             let _ = tx.send(Event::Sixel(SixelEvent::Drawn { key, made }));
         });
     }
@@ -852,6 +928,67 @@ mod tests {
     }
 
     #[test]
+    fn a_handover_carries_the_newest_pictures_given_inline_across_every_pane() {
+        let mut sixel = Sixel::default();
+        let give = |sixel: &mut Sixel, pane: u32, id: u32, len: usize, serial: u64| {
+            let c = format!(
+                "\x1b_Ga=T,U=1,f=100,t=d,q=2,i={id},c=1,r=1;{}\x1b\\",
+                "A".repeat(len)
+            );
+            let images = sixel.images.entry(PaneId(pane)).or_default();
+            images.apply(&kitty::parse(c.as_bytes()).unwrap(), serial, true);
+        };
+        // The pane opened first holds two older pictures, the one in front
+        // a newer one; together more than the handover carries.
+        give(&mut sixel, 1, 10, 400 << 10, 1);
+        give(&mut sixel, 1, 11, 400 << 10, 2);
+        give(&mut sixel, 7, 70, 300 << 10, 3);
+        let handed = sixel.hand_over();
+        let ids: Vec<(PaneId, Vec<u32>)> = handed
+            .iter()
+            .map(|(pane, images)| (*pane, images.iter().map(|h| h.id).collect()))
+            .collect();
+        assert_eq!(
+            ids,
+            vec![(PaneId(1), vec![11]), (PaneId(7), vec![70])],
+            "the oldest left out, whatever its pane"
+        );
+    }
+
+    #[test]
+    fn a_picture_given_inline_is_drawn_from_its_data_named_by_its_transmission() {
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(40, 40, image::Rgba([255, 0, 0, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let key = Key {
+            fit: Fit {
+                source: Source::Data {
+                    serial: 3,
+                    given: (Some(2), Some(1)),
+                },
+                cell: (10, 20),
+            },
+            crop: (0, 0, 2, 1),
+        };
+        let make = Make::Data(crate::util::base64(&png).into_bytes().into());
+        let (sixel, _) = draw(&key, None, Some(&make)).unwrap();
+        let (w, _, pixels) = encode::tests::decode(&sixel);
+        assert_eq!(w, 20);
+        assert!(pixels.iter().flatten().all(|p| *p == [255, 0, 0]));
+        assert!(
+            matches!(draw(&key, None, None), Err(Failure::Picture(_))),
+            "no data, nothing drawn"
+        );
+        for not_png in [&b"bm8gcGljdHVyZQ=="[..], b"not base64 at all!"] {
+            assert!(matches!(
+                draw(&key, None, Some(&Make::Data(Arc::from(not_png)))),
+                Err(Failure::Picture(_))
+            ));
+        }
+    }
+
+    #[test]
     fn one_of_the_server_s_images_is_drawn_from_its_raster_at_its_cells() {
         // A switch, on: four cells by one, its track in the done tone on
         // the right, the rest of its row clear.
@@ -871,7 +1008,7 @@ mod tests {
             fit: fit.clone(),
             crop: (0, 0, 4, 1),
         };
-        let (sixel, fitted) = draw(&whole, None, Some(&raster)).unwrap();
+        let (sixel, fitted) = draw(&whole, None, Some(&Make::Raster(raster.clone()))).unwrap();
         let (w, h, pixels) = encode::tests::decode(&sixel);
         assert_eq!((w, h), (40, 18), "its cells, made whole bands");
         // Sixel gives colors in percent, so they come back near, not same.

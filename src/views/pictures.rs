@@ -1,8 +1,10 @@
 //! The pictures and Mermaid diagrams the Markdown views (the PR, ticket,
 //! link and file views, `super::pager`) draw as images, where the terminal
-//! speaks kitty's graphics protocol (Ghostty, kitty) and Settings' "Pictures
-//! and diagrams in the views" (`view_images`) is on; anywhere else each stays
-//! the text `super::markdown` draws it as.
+//! speaks kitty's graphics protocol (Ghostty, kitty), or inside the
+//! workspace with Settings' "Image protocol" on sixel, which draws them as
+//! sixel (src/mux/graphics.rs), and Settings' "Pictures and diagrams in
+//! the views" (`view_images`) is on; anywhere else each stays the text
+//! `super::markdown` draws it as.
 //!
 //! A picture on a line of its own is fetched from its link (counted in the
 //! request audit by src/net.rs), GitHub's attachments with your GitHub token
@@ -25,7 +27,9 @@
 //! Each is drawn as Images' picture atom (`ui::images::raster_picture`, in
 //! a rounded border on the sunken surface) and sent with its data inline,
 //! never a path, through the pipeline's `ImageCache` (src/mux/graphics.rs),
-//! so an image is sent once and again only when its size changes. The view's pane is marked
+//! so an image is sent once and again only when its size changes; with
+//! sixel the workspace keeps that data and draws it where its placeholders
+//! show, as it does a note's picture. The view's pane is marked
 //! `@allow_passthrough` while it runs (src/mux/passthrough.rs), and every
 //! line the view writes leaves control characters out
 //! (`markdown::Line::ansi`), so nothing in a PR or ticket can send the
@@ -71,20 +75,13 @@ const HELD: usize = 256 * 1024 * 1024;
 /// the server's Photos does (src/photos/serve.rs's `RETRY_MS`).
 const PHOTO_RETRY: Duration = Duration::from_secs(15 * 60);
 
-/// Whether the views draw pictures here: the terminal can and the setting
-/// is on, and not in a pane while Switchboard draws pictures as sixels,
-/// whose receiver takes only a picture given by its path, never the inline
-/// ones the views send, so each would be a blank where its text was.
+/// Whether the views draw pictures here: the setting is on and the
+/// terminal can, or, in a pane with sixel chosen, the workspace draws them
+/// as sixel (src/mux/graphics.rs's `apps_draw`), keeping the pictures the
+/// views give inline as it keeps a note's given by their path
+/// (src/mux/sixel/kitty.rs).
 pub fn on() -> bool {
-    draws(
-        settings::is_on("view_images"),
-        crate::mux::graphics::apps_draw(),
-        crate::mux::socket::in_pane() && crate::mux::graphics::sixel_chosen_now(),
-    )
-}
-
-fn draws(setting: bool, terminal_can: bool, sixels_in_pane: bool) -> bool {
-    setting && terminal_can && !sixels_in_pane
+    settings::is_on("view_images") && crate::mux::graphics::apps_draw()
 }
 
 /// An image's id: the top bit of its 24 clear, as a note's are, and the
@@ -728,14 +725,6 @@ mod tests {
         assert!(p.asked.contains(&picture));
         assert!(p.failed.is_empty());
         assert!(!p.retry_failed(failed_at + PHOTO_RETRY * 2));
-    }
-
-    #[test]
-    fn the_views_keep_their_text_where_switchboard_draws_sixels() {
-        assert!(draws(true, true, false));
-        assert!(!draws(true, true, true), "sixels in a pane: the text stays");
-        assert!(!draws(false, true, false));
-        assert!(!draws(true, false, false));
     }
 
     #[test]
