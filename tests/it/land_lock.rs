@@ -1115,22 +1115,6 @@ fn a_landing_on_the_default_branch_opens_a_tab_bringing_each_target_up_to_date()
     );
 }
 
-// update-target's tab runs no Claude: the step it sets on its pane, a
-// conflict left for you, still reaches mission control's Work map.
-#[test]
-fn a_tab_with_no_claude_shows_its_pane_s_merge_conflict_in_the_work_map() {
-    let server = TestServer::start();
-    common::write_settings(&server.home, json!({ "ux2": true }));
-    let mut client = server.attach(160, 36);
-    client.wait_text("$");
-    let repo = repo(server.dir.path());
-    let out = server.ok(&["new-tab", "-c", repo.to_str().unwrap()]);
-    let pane = out.split_whitespace().nth(1).unwrap().to_string();
-    server.ok(&["set", "-t", &pane, "@agent_phase", "merge conflict a.rs"]);
-    server.ok(&["press", "mission-work-map"]);
-    client.wait_text("merge conflict");
-}
-
 // M-p's "Bring a target branch up to date with the default branch" lists
 // the pane's repository's branches but its default one.
 #[test]

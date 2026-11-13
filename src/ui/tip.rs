@@ -81,7 +81,7 @@ pub fn text_of(name: &str, key: Option<&str>) -> Option<Vec<String>> {
             "A tab's PR has merged.".into(),
             String::new(),
             "/queue-and-clean  cleans up after a merge".into(),
-            "Enter in mission control's Work map".into(),
+            "Enter in mission control's Reopen".into(),
             "   can remove a merged worktree".into(),
         ],
         "pinned" => vec![

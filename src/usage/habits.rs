@@ -262,7 +262,6 @@ const fn service_view(title: &'static str, key: &'static str, needs: &'static st
 }
 
 pub const VIEWS: &[View] = &[
-    view("Work map", "view_work_map"),
     view("Calendar", "view_calendar"),
     view("Slack", "view_slack"),
     view("Slack relay", "view_relay"),

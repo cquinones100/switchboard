@@ -27,7 +27,7 @@
 //! changed since (`serve`), so drawing is a plain function of the snapshot
 //! (`render`), and the keys are handled with the whole server at hand.
 //!
-//! - `views`: the views after the tabs, the Work map and Settings among them.
+//! - `views`: the views after the tabs, Reopen and Settings among them; the Work map is M-j's picker.
 //! - `keymap`: the Keys view, every key Switchboard binds (M-/).
 //! - `keys_board`: with UX 2.0, the Keys view as a board: the groups, the
 //!   keyboard as a heatmap of the week's presses, the chosen key, the
@@ -1266,7 +1266,7 @@ pub enum MissionEvent {
     /// The worktrees of the tabs' repositories, as git lists them, by
     /// repository, and how each repository lands, in words.
     Worktrees(HashMap<PathBuf, Vec<Worktree>>, HashMap<PathBuf, String>),
-    /// A worktree's branch counted for the Work map's chosen row.
+    /// A worktree's branch counted for Reopen's chosen worktree.
     Counted(PathBuf, views::Counts),
     /// An Inbox ticket read, from its cache file or Linear, or why it
     /// couldn't be (`{"error": why}`); `last` once the read is over.
@@ -1316,7 +1316,7 @@ pub struct MissionState {
     pub(crate) worktrees_busy: bool,
     /// How each repository lands, in words, by its main checkout.
     pub(crate) landings: HashMap<PathBuf, String>,
-    /// The Work map's chosen rows' branches counted, by worktree; one
+    /// Reopen's chosen worktrees' branches counted, by worktree; one
     /// count at a time (`counting`).
     pub(crate) counts: HashMap<PathBuf, views::Counts>,
     pub(crate) counting: Option<PathBuf>,

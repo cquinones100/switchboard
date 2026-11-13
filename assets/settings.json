@@ -3,14 +3,14 @@
     "key": "github",
     "category": "Integrations",
     "label": "GitHub",
-    "description": "PR commands in M-p, the PRs view, PR numbers and merge states in tabs and the Work map; off, the workspace asks GitHub nothing by itself (programs you run, such as codex-review and wtpr, still do)",
+    "description": "PR commands in M-p, the PRs view, PR numbers and merge states in tabs and Reopen's worktrees; off, the workspace asks GitHub nothing by itself (programs you run, such as codex-review and wtpr, still do)",
     "default": true
   },
   {
     "key": "linear",
     "category": "Integrations",
     "label": "Linear",
-    "description": "Ticket commands in M-p, ticket titles in tab names and tickets in the Work map; off, the workspace asks Linear nothing by itself (programs you run, such as wt and worktree-done, still do)",
+    "description": "Ticket commands in M-p, ticket titles in tab names and tickets in M-j's picker; off, the workspace asks Linear nothing by itself (programs you run, such as wt and worktree-done, still do)",
     "default": true
   },
   {
@@ -442,13 +442,6 @@
     "default": false
   },
   {
-    "key": "view_work_map",
-    "category": "Mission control",
-    "label": "Work map",
-    "description": "Mission control's Work map: every piece of work in your tabs' repositories (M-j opens it whatever this says)",
-    "default": true
-  },
-  {
     "key": "view_calendar",
     "category": "Mission control",
     "label": "Calendar",
@@ -473,7 +466,7 @@
     "key": "view_reopen",
     "category": "Mission control",
     "label": "Reopen",
-    "description": "Mission control's Reopen view: tabs closed and past Claude sessions to resume, with the last screen of each; off, M-o opens it still and nothing else lists them",
+    "description": "Mission control's Reopen view: tabs closed and past Claude sessions to resume, with the last screen of each, and the worktrees no tab has open; off, M-o opens it still and nothing else lists them",
     "default": true
   },
   {

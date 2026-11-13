@@ -24,7 +24,7 @@
 //!   `.claude/settings.json`, hooks and skills are its author's, so nothing
 //!   starts Claude there (`claude-here`, `worktree-resume`,
 //!   `worktree-from-branch`, M-t, the Slack relay's places), nothing lists
-//!   it as work to reopen (`wt-revive`, the Work map), `skill-path` passes
+//!   it as work to reopen (`wt-revive`, Reopen's worktrees), `skill-path` passes
 //!   over its skills, nothing builds it but `switchboard try --sealed`, and
 //!   a listing in trusted-dirs doesn't make it trusted (`trusted`). Ported
 //!   from lib/untrusted.js.

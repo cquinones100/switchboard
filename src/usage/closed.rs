@@ -89,6 +89,10 @@ pub struct Closing {
     /// Its last screen's file in `closed-screens/`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub screen: Option<String>,
+    /// Its note (`@tab_note`), a file name in the notes directory, which
+    /// its menu opens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// A tab as it is now, to be kept as last seen.
@@ -113,6 +117,7 @@ pub struct TabNow {
     pub opened: Option<i64>,
     pub sealed: Option<PathBuf>,
     pub sealed_fetch: bool,
+    pub note: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -195,6 +200,9 @@ impl Closed {
             if now.opened.is_none() {
                 now.opened = was.now.opened;
             }
+            if now.note.is_none() {
+                now.note = was.now.note.clone();
+            }
             // A sealed review stays one for its own conversation, not for
             // work the tab was handed since.
             if now.sealed.is_none() && was.now.session == now.session {
@@ -239,6 +247,7 @@ impl Closed {
             sealed: was.now.sealed,
             sealed_fetch: was.now.sealed_fetch,
             screen,
+            note: was.now.note,
         };
         self.push(state, event);
     }
@@ -398,6 +407,7 @@ mod tests {
             opened: None,
             sealed: None,
             sealed_fetch: false,
+            note: None,
         }
     }
 
