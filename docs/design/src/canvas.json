@@ -288,6 +288,14 @@
     "McNavSwitcher.dc.html": {
       "title": "68. Option 5: a path for a bar, and M-Space again opening every view in a box to type into",
       "page": "design"
+    },
+    "NotesRecent.dc.html": {
+      "title": "69. Notes' list: Folders opening on Notes, then Recent, the last 8 notes opened, no All Notes or tags",
+      "page": "design"
+    },
+    "NotesHistory.dc.html": {
+      "title": "70. M-o in a note, o in the list: every note opened lately, the last 20, in the finder's box",
+      "page": "design"
     }
   }
 }

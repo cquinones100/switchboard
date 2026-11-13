@@ -89,6 +89,8 @@ Items, the tabs working them and their plans.
 
 - [7. M-N: Notes, each item showing the tab working it](https://cquinones100.github.io/switchboard/design/7.html)
 - [8. A note item's plan, and its choice, beside it](https://cquinones100.github.io/switchboard/design/8.html)
+- [69. Notes' list: Folders opening on Notes, then Recent, the last 8 notes opened, no All Notes or tags](https://cquinones100.github.io/switchboard/design/69.html)
+- [70. M-o in a note, o in the list: every note opened lately, the last 20, in the finder's box](https://cquinones100.github.io/switchboard/design/70.html)
 
 ## Boxes
 
