@@ -13,7 +13,7 @@
 //! note saying so. It is
 //! built with `cargo build --release --locked` (in the target directory the
 //! binary was built in when that was the main clone's, else cargo's own),
-//! as `swb build` and the README's install do, and the result put in place of the binary the
+//! as the README's install does, and the result put in place of the binary the
 //! server runs when that isn't the build's own file (a copy installed in
 //! `~/.local/bin`). What it does as it goes is told to the server as
 //! `Report`s, cargo's messages read as they come, for the build row
