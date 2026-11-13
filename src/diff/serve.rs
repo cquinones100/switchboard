@@ -235,6 +235,22 @@ impl Server {
         if working {
             command.push("--working".into());
         }
+        // The pane's own Claude session, for `ga` to ask a copy of.
+        if settings::is_on("diff_ask")
+            && settings::is_on("diff_ask_session")
+            && let Some(slot) = self.panes.get(&pane)
+            && let Some(session) = crate::agent::sessions::of_pids(
+                &crate::agent::sessions::sessions_dir(),
+                &slot.pane.foreground_pids(),
+            )
+        {
+            command.extend([
+                "--session".into(),
+                session.session_id,
+                "--session-dir".into(),
+                session.cwd,
+            ]);
+        }
         command.push(dir.to_string_lossy().into_owned());
         if let Err(e) = self.open_in_place(pane, TOOL, command, Some(client)) {
             self.say(Some(client), &format!("Couldn't open the diff: {e}"));

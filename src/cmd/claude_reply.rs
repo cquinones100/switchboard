@@ -331,6 +331,7 @@ mod tests {
             entrypoint: "cli".into(),
             job_id: job.into(),
             parked_job_id: parked.into(),
+            cwd: String::new(),
         };
         let all = vec![
             file("parked", "", "j1"),

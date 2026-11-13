@@ -38,6 +38,9 @@ pub struct SessionFile {
     pub entrypoint: String,
     pub job_id: String,
     pub parked_job_id: String,
+    /// The directory the session started in, under which Claude Code keeps
+    /// it, so `claude --resume` finds it only from there.
+    pub cwd: String,
 }
 
 impl SessionFile {
@@ -60,6 +63,7 @@ impl SessionFile {
             entrypoint: text("entrypoint"),
             job_id: text("jobId"),
             parked_job_id: text("parkedJobId"),
+            cwd: text("cwd"),
         }
     }
 }
@@ -148,6 +152,32 @@ fn runs_claude_by(
     })
 }
 
+/// The interactive session one of these processes (a pane's foreground)
+/// runs, from its session file in `dir`, counted as `runs_claude` counts
+/// it: what `M-d`'s question resumes a copy of.
+pub fn of_pids(dir: &Path, pids: &[u32]) -> Option<SessionFile> {
+    of_pids_by(dir, pids, crate::mux::procinfo::started_at)
+}
+
+fn of_pids_by(
+    dir: &Path,
+    pids: &[u32],
+    started_at: impl Fn(u32) -> Option<SystemTime>,
+) -> Option<SessionFile> {
+    pids.iter().find_map(|&pid| {
+        let file = dir.join(format!("{pid}.json"));
+        let modified = fs::metadata(&file).and_then(|m| m.modified()).ok()?;
+        if !written_since(modified, started_at(pid)) {
+            return None;
+        }
+        let session = SessionFile::from_json(&crate::util::read_json(&file)?);
+        let interactive = !session.session_id.is_empty()
+            && session.cwd.starts_with('/')
+            && !session.entrypoint.starts_with("sdk");
+        interactive.then_some(session)
+    })
+}
+
 /// Whether a session file modified at `modified` was written by the
 /// process that started at `started`, or by one before it that had its
 /// pid. A second's grace covers clocks kept to the second; a start that
@@ -228,6 +258,7 @@ mod tests {
             entrypoint: entrypoint.into(),
             job_id: job.into(),
             parked_job_id: parked.into(),
+            cwd: String::new(),
         }
     }
 
@@ -346,6 +377,31 @@ mod tests {
         // written: a dead Claude's file, not this process's.
         let later = |_| Some(SystemTime::now() + Duration::from_secs(60));
         assert!(!runs_claude_by(&dir, &[41], later));
+        // The session a pane runs: an interactive one, with where it began.
+        fs::write(
+            dir.join("43.json"),
+            r#"{"pid":43,"sessionId":"s3","entrypoint":"cli","cwd":"/w"}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("44.json"),
+            r#"{"pid":44,"sessionId":"s4","entrypoint":"sdk-cli","cwd":"/w"}"#,
+        )
+        .unwrap();
+        let found = of_pids_by(&dir, &[7, 44, 43], long_ago).unwrap();
+        assert_eq!(
+            (found.session_id.as_str(), found.cwd.as_str()),
+            ("s3", "/w")
+        );
+        assert!(
+            of_pids_by(&dir, &[41], long_ago).is_none(),
+            "no cwd: can't resume"
+        );
+        assert!(of_pids_by(&dir, &[44], long_ago).is_none(), "headless");
+        assert!(
+            of_pids_by(&dir, &[43], later).is_none(),
+            "a dead Claude's file"
+        );
         assert!(read_all(&dir.join("missing")).is_empty());
         let _ = fs::remove_dir_all(&dir);
     }

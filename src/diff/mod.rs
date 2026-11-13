@@ -170,17 +170,21 @@ impl Command {
     }
 }
 
-/// `switchboard diff [--base <ref> | --working] [--ahead] [dir]`: the
+/// `switchboard diff [--base <ref> | --working] [--ahead] [--session <id>
+/// --session-dir <dir>] [dir]`: the
 /// change in `dir` (where it runs, else) against `<ref>`, or, without one,
 /// its PR's base as M-d works it out, to the working tree with the
 /// diff_uncommitted setting on; with `--working`, the working tree's
 /// changes, staged and not; with `--ahead`, its story told and kept for
-/// M-d, with nothing drawn.
+/// M-d, with nothing drawn; with `--session`, `ga` asks a copy of that
+/// Claude session (the tab's, which M-d passes), resumed from the directory
+/// `--session-dir` names.
 pub fn main(args: Vec<String>) -> ExitCode {
     let mut base = None;
     let mut working = false;
     let mut ahead = false;
     let mut dir = None;
+    let (mut session, mut session_dir) = (None, None);
     let mut rest = args.into_iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -189,6 +193,14 @@ pub fn main(args: Vec<String>) -> ExitCode {
                 _ => return usage(),
             },
             "--ahead" => ahead = true,
+            "--session" => match rest.next() {
+                Some(id) => session = Some(id),
+                None => return usage(),
+            },
+            "--session-dir" => match rest.next() {
+                Some(d) => session_dir = Some(d),
+                None => return usage(),
+            },
             "--working" => working = true,
             "-h" | "--help" => {
                 usage();
@@ -207,10 +219,20 @@ pub fn main(args: Vec<String>) -> ExitCode {
     if ahead {
         return ahead::main(&dir);
     }
-    app::run(dir, base, working)
+    let session = match (session, session_dir) {
+        (None, None) => None,
+        (Some(id), Some(at)) => match ask::Session::new(&id, &at) {
+            Some(s) => Some(s),
+            None => return usage(),
+        },
+        _ => return usage(),
+    };
+    app::run(dir, base, working, session)
 }
 
 fn usage() -> ExitCode {
-    eprintln!("Usage: switchboard diff [--base <ref> | --working] [--ahead] [dir]");
+    eprintln!(
+        "Usage: switchboard diff [--base <ref> | --working] [--ahead] [--session <id> --session-dir <dir>] [dir]"
+    );
     ExitCode::from(2)
 }

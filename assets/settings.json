@@ -407,6 +407,13 @@
     "default": true
   },
   {
+    "key": "diff_ask_session",
+    "category": "Diff",
+    "label": "Ask in the tab's session",
+    "description": "With Ask Claude about the diff on, ga asks a copy of the tab's own Claude session, which knows the conversation that made the change, on that session's model; the tab's conversation is left as it was, and Haiku answers in its place when the session can't be resumed. Off, it asks a fresh Haiku with the story and the diff alone, which costs less",
+    "default": true
+  },
+  {
     "key": "diff_story_notes",
     "category": "Diff",
     "label": "Diff story notes on changes",

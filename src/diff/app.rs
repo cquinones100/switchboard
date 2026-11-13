@@ -378,6 +378,9 @@ struct Answer {
     top: usize,
     cursor: usize,
     asking: Asking,
+    /// Who was asked, once that is known: the tab's session on its model,
+    /// or Haiku in its place.
+    who: Option<String>,
 }
 
 /// A button of easy mode's row, or of a box's.
@@ -601,6 +604,9 @@ pub struct App {
     ask_box: Option<AskBox>,
     answer: Option<Answer>,
     asks: u64,
+    /// The tab's own Claude session, which a question asks a copy of
+    /// (diff_ask_session), when the diff was opened in its pane's place.
+    session: Option<ask::Session>,
     /// A message in a box over the screen, and when it was said.
     message: Option<(String, Instant)>,
     /// The first key of a pair (y, g, ], [, z, C-w as w), and a count typed.
@@ -693,6 +699,7 @@ impl App {
             ask_box: None,
             answer: None,
             asks: 0,
+            session: None,
             message: None,
             pending: None,
             visual: None,
@@ -3167,7 +3174,12 @@ impl App {
             return;
         };
         let story = self.story.as_ref();
-        let input = ask::input(story, Some(&self.input), &b.at, &question);
+        let question_for = ask::Question {
+            top: change.top.clone(),
+            session_input: ask::session_input(story, &self.input, &change.top, &b.at, &question),
+            input: ask::input(story, Some(&self.input), &b.at, &question),
+            session: self.session.clone(),
+        };
         self.asks += 1;
         let id = self.asks;
         let asking = Asking::default();
@@ -3182,14 +3194,14 @@ impl App {
             top: 0,
             cursor: 0,
             asking: asking.clone(),
+            who: None,
         });
         if !self.opts.haiku {
             return;
         }
-        let top = change.top.clone();
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            ask::run(&top, input, &asking, &|said| {
+            ask::run(&question_for, &asking, &|said| {
                 let _ = tx.send(Msg::Asked(id, said));
             });
         });
@@ -3201,6 +3213,7 @@ impl App {
         };
         match said {
             Said::Text(text) => a.body.push_str(&text),
+            Said::Who(who) => a.who = Some(who),
             Said::Tool(line) => {
                 if !a.body.is_empty() {
                     a.body.push_str("\n\n");
@@ -3225,7 +3238,15 @@ impl App {
                 if !a.body.is_empty() {
                     a.body.push_str("\n\n");
                 }
-                a.body.push_str("**Haiku couldn't answer**");
+                let asked_the_session = a
+                    .who
+                    .as_ref()
+                    .is_some_and(|w| w != ask::FELL_BACK && w != ask::ASKED_HAIKU);
+                a.body.push_str(if asked_the_session {
+                    "**The tab's session couldn't answer**"
+                } else {
+                    "**Haiku couldn't answer**"
+                });
                 if !why.is_empty() {
                     a.body.push_str(&format!(": {why}"));
                 }
@@ -3418,7 +3439,12 @@ impl App {
             return Vec::new();
         };
         let inner = cols.saturating_sub(4).max(10) as usize;
-        let mut text = a.body.clone();
+        let mut text = a
+            .who
+            .as_ref()
+            .map(|who| format!("_{who}_\n\n"))
+            .unwrap_or_default();
+        text.push_str(&a.body);
         if !a.done {
             if !text.is_empty() {
                 text.push_str("\n\n");
@@ -3828,11 +3854,17 @@ extern "C" fn on_signal(_: libc::c_int) {
 /// Runs the diff on this terminal until it is closed: the change in `dir`
 /// against `base` (worked out as M-d does when `None`), or with `working`
 /// the working tree's changes.
-pub fn run(dir: PathBuf, base: Option<String>, working: bool) -> ExitCode {
+pub fn run(
+    dir: PathBuf,
+    base: Option<String>,
+    working: bool,
+    session: Option<ask::Session>,
+) -> ExitCode {
     let (cols, rows) = terminal::size().unwrap_or((80, 24));
     let (tx, rx): (Sender<Msg>, Receiver<Msg>) = channel();
     let opts = Options::read();
     let mut app = App::new(opts, cols, rows, tx.clone());
+    app.session = session.filter(|_| settings::is_on("diff_ask_session"));
     {
         let tx = tx.clone();
         let uncommitted = opts.uncommitted;
