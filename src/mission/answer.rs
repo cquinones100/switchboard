@@ -15,6 +15,8 @@
 //! answers with that option, `s` submits a question of several answers, `t`
 //! types your own answer where the question takes one; Tab and Shift-Tab
 //! move a highlight round the options (and easy mode's ×), Enter taking it.
+//! `/` searches the options as it searches every menu (src/ui/menu.rs's
+//! `Filter`), each keeping its number, since that is what is pressed.
 //! It closes with what to press, which the server presses in the pane.
 
 use std::sync::LazyLock;
@@ -26,6 +28,7 @@ use regex::Regex;
 
 use crate::mux::input::{Key, KeyCode, Mods, Mouse};
 use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
+use crate::ui::menu::{Filter, Filtered, NO_MATCH, SEARCH_KEYS};
 use crate::ui::{Look, Outcome, Overlay, Picked, Step};
 
 /// How long a paste is given to land before Enter follows it: sent at once,
@@ -409,8 +412,10 @@ pub struct AnswerBox {
     text: String,
     typing: bool,
     note: Option<String>,
-    /// Where Tab has put the highlight: an option, or past the last the
-    /// close button.
+    /// The search `/` opens over the options.
+    filter: Filter,
+    /// Where Tab has put the highlight: one of the options shown, or past
+    /// the last the close button.
     focus: Option<usize>,
     close_focus: bool,
     /// The option under the mouse.
@@ -428,6 +433,7 @@ impl AnswerBox {
             text: String::new(),
             typing: false,
             note,
+            filter: Filter::default(),
             focus: None,
             close_focus: false,
             lit: None,
@@ -447,6 +453,17 @@ impl AnswerBox {
             value: reply.into(),
             query: String::new(),
         }))
+    }
+
+    /// The options shown, by their place: every one while the search is
+    /// closed.
+    fn shown(&self) -> Vec<usize> {
+        let labels: Vec<&str> = self
+            .found
+            .iter()
+            .flat_map(|f| f.options.iter().map(|o| o.label.as_str()))
+            .collect();
+        self.filter.shown(&labels)
     }
 
     fn typing_line(&self) -> bool {
@@ -469,14 +486,54 @@ impl Overlay for AnswerBox {
         self.option_rows.clear();
         let typing = self.typing_line();
         if let Some(found) = &self.found {
-            for line in found.question.split('\n') {
-                for w in draw::wrap(line, inner.saturating_sub(2)) {
-                    lines.push(BoxLine::text(format!(" {w}"), look.bright()));
-                }
+            let mut asked: Vec<String> = found
+                .question
+                .split('\n')
+                .flat_map(|line| draw::wrap(line, inner.saturating_sub(2)))
+                .collect();
+            // While searching, a question too long for the screen gives up
+            // its last rows, so the search and a match still fit in the box
+            // (four rows of its own and two of keys).
+            let room = (buf.area.height as usize).saturating_sub(6);
+            let most = room.saturating_sub(4).max(1);
+            if self.filter.is_open() && asked.len() > most {
+                asked.truncate(most - 1);
+                asked.push("…".into());
+            }
+            for w in asked {
+                lines.push(BoxLine::text(format!(" {w}"), look.bright()));
             }
             lines.push(BoxLine::blank());
-            for (i, o) in found.options.iter().enumerate() {
-                let chosen = self.focus == Some(i) && !typing;
+            let shown = self.shown();
+            if self.filter.is_open() {
+                lines.push(self.filter.line(
+                    inner.saturating_sub(2),
+                    shown.len(),
+                    found.options.len(),
+                    look,
+                ));
+                lines.push(BoxLine::blank());
+                if shown.is_empty() {
+                    lines.push(BoxLine::text(NO_MATCH, look.dim()));
+                }
+            }
+            // While searching, as many matches as the screen has rows for
+            // under the question and the search, the chosen one among them.
+            let (first, fits) = if self.filter.is_open() {
+                let room = room.saturating_sub(lines.len()).max(1);
+                let at = self.focus.unwrap_or(0);
+                (at.saturating_sub(room - 1), room)
+            } else {
+                (0, shown.len())
+            };
+            for (at, o) in shown
+                .iter()
+                .map(|i| &found.options[*i])
+                .enumerate()
+                .skip(first)
+                .take(fits)
+            {
+                let chosen = self.focus == Some(at) && !typing;
                 let lit = !chosen && !typing && self.lit == Some(o.n);
                 let reverse = |s: Style| {
                     if lit {
@@ -531,6 +588,7 @@ impl Overlay for AnswerBox {
             lines.push(BoxLine::text(format!(" {note}"), look.dim()));
         }
         let keys = match &self.found {
+            Some(_) if self.filter.is_open() => SEARCH_KEYS.to_string(),
             Some(found) if !typing => format!(
                 "1-{} or tab ↵ choose{}{}  esc back",
                 found.options.len(),
@@ -546,7 +604,7 @@ impl Overlay for AnswerBox {
         let mut spec = BoxSpec::new(&self.title, &lines);
         spec.keys = Some(&keys);
         spec.width = inner as u16;
-        let options = self.found.as_ref().map_or(0, |f| f.options.len());
+        let options = self.shown().len();
         spec.close_lit = self.close_focus || (!typing && self.focus == Some(options));
         self.drawn = Some(draw::draw_box(buf, &spec, look));
     }
@@ -554,6 +612,39 @@ impl Overlay for AnswerBox {
     fn key(&mut self, key: Key, look: &Look) -> Step {
         let k = key.normalized();
         let plain = k.mods.is_empty();
+        if !self.typing_line() {
+            match self.filter.key(k) {
+                Filtered::Changed | Filtered::Closed => {
+                    self.focus = self.filter.is_open().then_some(0);
+                    return Step::Redraw;
+                }
+                Filtered::Not => {}
+            }
+        }
+        if self.filter.is_open() {
+            let shown = self.shown();
+            let last = shown.len().saturating_sub(1);
+            let at = self.focus.unwrap_or(0);
+            let to = match k.code {
+                KeyCode::Enter => {
+                    return match (shown.get(at), &self.found) {
+                        (Some(i), Some(found)) => AnswerBox::give(found.options[*i].n.to_string()),
+                        _ => Step::Same,
+                    };
+                }
+                KeyCode::Down | KeyCode::Tab => at + 1,
+                KeyCode::Char('n') if k.mods == Mods::CTRL => at + 1,
+                KeyCode::Up | KeyCode::BackTab => at.saturating_sub(1),
+                KeyCode::Char('p') if k.mods == Mods::CTRL => at.saturating_sub(1),
+                KeyCode::Char('c') if k.mods == Mods::CTRL => {
+                    return Step::Close(Outcome::Dismissed);
+                }
+                _ => return Step::Same,
+            }
+            .min(last);
+            self.focus = Some(to);
+            return Step::Redraw;
+        }
         if k.code == KeyCode::Esc || (k.code == KeyCode::Char('c') && k.mods == Mods::CTRL) {
             return Step::Close(Outcome::Dismissed);
         }
@@ -652,6 +743,10 @@ impl Overlay for AnswerBox {
     }
 
     fn paste(&mut self, text: &str, _look: &Look) -> Step {
+        if self.filter.paste(text) {
+            self.focus = Some(0);
+            return Step::Redraw;
+        }
         if !self.typing_line() {
             return Step::Same;
         }
@@ -815,6 +910,77 @@ Which colors?
             b.key(Key::new(KeyCode::Enter, Mods::NONE), &look),
             Step::Close(Outcome::Picked(p)) if p.value == "hi there"
         ));
+    }
+
+    #[test]
+    fn slash_searches_the_options_each_keeping_its_number() {
+        let look = Look::default();
+        let mut b = AnswerBox::new("Answer 2 fix".into(), options_in(PERMISSION), None);
+        for c in "/tell".chars() {
+            assert_eq!(
+                b.key(Key::new(KeyCode::Char(c), Mods::NONE), &look),
+                Step::Redraw
+            );
+        }
+        let mut buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 24));
+        b.draw(&mut buf, &look);
+        let s = crate::ui::draw::tests::screen(&buf);
+        assert!(s.iter().any(|l| l.contains("› tell▏")), "{s:#?}");
+        assert!(s.iter().any(|l| l.contains("3  No, and tell Claude")));
+        assert!(!s.iter().any(|l| l.contains("don't ask again")));
+        assert!(matches!(
+            b.key(Key::new(KeyCode::Enter, Mods::NONE), &look),
+            Step::Close(Outcome::Picked(p)) if p.value == "3"
+        ));
+        let mut b = AnswerBox::new("Answer 2 fix".into(), options_in(PERMISSION), None);
+        b.key(Key::new(KeyCode::Char('/'), Mods::NONE), &look);
+        b.key(Key::new(KeyCode::Down, Mods::NONE), &look);
+        b.key(Key::new(KeyCode::Down, Mods::NONE), &look);
+        let mut short = Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 11));
+        b.draw(&mut short, &look);
+        let s = crate::ui::draw::tests::screen(&short);
+        assert!(
+            s.iter().any(|l| l.contains("3  No, and tell Claude")),
+            "the chosen match in view on a short screen: {s:#?}"
+        );
+        let long = Prompt {
+            question: (0..20)
+                .map(|i| format!("line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            ..options_in(PERMISSION).unwrap()
+        };
+        let mut b = AnswerBox::new("Answer 2 fix".into(), Some(long), None);
+        b.key(Key::new(KeyCode::Char('/'), Mods::NONE), &look);
+        let mut buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 24));
+        b.draw(&mut buf, &look);
+        let s = crate::ui::draw::tests::screen(&buf);
+        assert!(
+            s.iter().any(|l| l.contains("1  Yes")),
+            "a long question leaves a match: {s:#?}"
+        );
+        let mut b = AnswerBox::new("Answer 2 fix".into(), options_in(PERMISSION), None);
+        for c in "/yes".chars() {
+            b.key(Key::new(KeyCode::Char(c), Mods::NONE), &look);
+        }
+        b.key(Key::new(KeyCode::Char('n'), Mods::CTRL), &look);
+        assert!(
+            matches!(
+                b.key(Key::new(KeyCode::Enter, Mods::NONE), &look),
+                Step::Close(Outcome::Picked(p)) if p.value == "2"
+            ),
+            "Ctrl-N moves to the second match"
+        );
+        let mut b = AnswerBox::new("Answer 2 fix".into(), options_in(PERMISSION), None);
+        b.key(Key::new(KeyCode::Char('/'), Mods::NONE), &look);
+        assert_eq!(
+            b.key(Key::new(KeyCode::Esc, Mods::NONE), &look),
+            Step::Redraw
+        );
+        assert_eq!(
+            b.key(Key::new(KeyCode::Esc, Mods::NONE), &look),
+            Step::Close(Outcome::Dismissed)
+        );
     }
 
     #[test]

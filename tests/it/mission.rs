@@ -7,7 +7,7 @@
 //! many tabs, moving about leaves what it shows standing, while a tab's new
 //! output and a tab closing still show. With UX 2.0, the Resources board ends
 //! a tab's busy process from its menu after a yes, and a number on a card
-//! waiting on you answers its prompt.
+//! waiting on you answers its prompt. `/` searches a card's menu.
 
 use crate::common;
 
@@ -322,6 +322,24 @@ fn shift_f10_opens_the_chosen_cards_menu() {
     client.type_text("\r");
     let screen = client.wait_text("Go to tab 1");
     assert!(!closed(&screen), "still open:\n{}", screen.join("\n"));
+}
+
+#[test]
+fn slash_searches_a_cards_menu_and_enter_takes_the_match() {
+    let (server, mut client) = two_tabs(json!({}));
+    open(&mut client);
+    client.type_text("\r");
+    client.wait_text("Go to tab 1");
+    client.type_text("/go to");
+    let screen = client.wait_text("› go to▏");
+    assert!(
+        !screen.iter().any(|l| l.contains("Rename it")),
+        "{screen:#?}"
+    );
+    client.type_text("\r");
+    wait_list(&server, "the first tab in front", |l| {
+        tabs(l)[0]["current"] == true
+    });
 }
 
 #[test]

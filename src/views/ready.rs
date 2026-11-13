@@ -44,6 +44,7 @@ use super::pager::{self, Content};
 use crate::integrations::github;
 use crate::mux::input::{Key, KeyCode, Mods, Mouse};
 use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
+use crate::ui::menu::{Filter, Filtered, NO_MATCH, SEARCH_KEYS};
 use crate::ui::{Look, Outcome, Overlay, Step};
 use crate::util;
 
@@ -847,7 +848,13 @@ pub fn checks_main(dir: PathBuf) -> ExitCode {
 /// nothing to do, any key closes it, as pr-ready.sh's popup did.
 pub struct ReadyBox {
     answer: Option<Result<Answer, String>>,
+    /// The search `/` opens over its choices (src/ui/menu.rs).
+    filter: Filter,
     cursor: usize,
+    /// The first choice drawn, past those scrolled off while searching,
+    /// and the line it is drawn on.
+    first_shown: usize,
+    first_line: usize,
     hover: Option<usize>,
     drawn: Option<Drawn>,
 }
@@ -862,7 +869,10 @@ impl ReadyBox {
     pub fn new() -> ReadyBox {
         ReadyBox {
             answer: None,
+            filter: Filter::default(),
             cursor: 0,
+            first_shown: 0,
+            first_line: 0,
             hover: None,
             drawn: None,
         }
@@ -872,6 +882,7 @@ impl ReadyBox {
     pub fn answered(&mut self, answer: Result<Answer, String>) {
         self.answer = Some(answer);
         self.cursor = 0;
+        self.filter = Filter::default();
     }
 
     fn choices(&self) -> Vec<Choice> {
@@ -885,12 +896,15 @@ impl ReadyBox {
         }
     }
 
-    /// The index of the first option's line among the box's lines.
-    fn first_option(&self) -> usize {
-        match &self.answer {
-            Some(Ok(a)) => a.lines.len() + 1,
-            _ => 0,
-        }
+    /// The choices the search shows: every one while it is closed.
+    fn shown(&self) -> Vec<Choice> {
+        let all = self.choices();
+        let labels: Vec<&str> = all.iter().map(|c| c.label()).collect();
+        self.filter
+            .shown(&labels)
+            .into_iter()
+            .map(|i| all[i])
+            .collect()
     }
 }
 
@@ -913,15 +927,47 @@ impl Overlay for ReadyBox {
                 }
             }
             Some(Ok(answer)) => {
-                for l in &answer.lines {
+                // While searching, a verdict too long for the screen gives
+                // up its last rows, so the search and a match still fit in
+                // the box (four rows of its own and two of keys).
+                let most = (buf.area.height as usize).saturating_sub(10).max(1);
+                let cut = self.filter.is_open() && answer.lines.len() > most;
+                let keep = if cut { most - 1 } else { answer.lines.len() };
+                for l in &answer.lines[..keep] {
                     lines.push(BoxLine::spans(l.spans.clone()));
+                }
+                if cut {
+                    lines.push(BoxLine::text("…", look.dim()));
                 }
             }
         }
-        let choices = self.choices();
-        if !choices.is_empty() {
+        let choices = self.shown();
+        let searching = self.filter.is_open();
+        if !choices.is_empty() || searching {
             lines.push(BoxLine::blank());
-            for (i, c) in choices.iter().enumerate() {
+            if searching {
+                lines.push(
+                    self.filter
+                        .line(58, choices.len(), self.choices().len(), look),
+                );
+                lines.push(BoxLine::blank());
+                if choices.is_empty() {
+                    lines.push(BoxLine::text(NO_MATCH, look.dim()));
+                }
+            }
+            // While searching, as many matches as the screen has rows for
+            // under the verdict and the search, the chosen one among them.
+            let (first, fits) = if searching {
+                let room = (buf.area.height as usize)
+                    .saturating_sub(6 + lines.len())
+                    .max(1);
+                (self.cursor.saturating_sub(room - 1), room)
+            } else {
+                (0, choices.len())
+            };
+            self.first_shown = first;
+            self.first_line = lines.len();
+            for (i, c) in choices.iter().enumerate().skip(first).take(fits) {
                 let chosen = i == self.cursor;
                 let mut spans = if chosen {
                     vec![Span::raw(" "), look.pointer(), Span::raw(" ")]
@@ -946,7 +992,9 @@ impl Overlay for ReadyBox {
                 lines.push(BoxLine::spans(spans).fill(fill).clickable());
             }
         }
-        let keys = if choices.is_empty() {
+        let keys = if searching {
+            SEARCH_KEYS
+        } else if choices.is_empty() {
             if self.answer.is_none() {
                 "esc close"
             } else {
@@ -962,7 +1010,42 @@ impl Overlay for ReadyBox {
     }
 
     fn key(&mut self, key: Key, _look: &Look) -> Step {
-        let choices = self.choices();
+        if !self.choices().is_empty() {
+            match self.filter.key(key) {
+                Filtered::Changed | Filtered::Closed => {
+                    self.cursor = 0;
+                    return Step::Redraw;
+                }
+                Filtered::Not => {}
+            }
+        }
+        let choices = self.shown();
+        if self.filter.is_open() {
+            return match key.code {
+                KeyCode::Down | KeyCode::Tab if !choices.is_empty() => {
+                    self.cursor = (self.cursor + 1).min(choices.len() - 1);
+                    Step::Redraw
+                }
+                KeyCode::Char('n') if key.mods == Mods::CTRL && !choices.is_empty() => {
+                    self.cursor = (self.cursor + 1).min(choices.len() - 1);
+                    Step::Redraw
+                }
+                KeyCode::Up | KeyCode::BackTab => {
+                    self.cursor = self.cursor.saturating_sub(1);
+                    Step::Redraw
+                }
+                KeyCode::Char('p') if key.mods == Mods::CTRL => {
+                    self.cursor = self.cursor.saturating_sub(1);
+                    Step::Redraw
+                }
+                KeyCode::Enter => match choices.get(self.cursor) {
+                    Some(c) => Step::Close(Outcome::Chose(*c as usize)),
+                    None => Step::Same,
+                },
+                KeyCode::Char('c') if key.mods == Mods::CTRL => Step::Close(Outcome::Dismissed),
+                _ => Step::Same,
+            };
+        }
         if self.answer.is_none() {
             return match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => Step::Close(Outcome::Dismissed),
@@ -1008,15 +1091,26 @@ impl Overlay for ReadyBox {
         }
     }
 
+    fn paste(&mut self, text: &str, _look: &Look) -> Step {
+        if self.filter.paste(text) {
+            self.cursor = 0;
+            Step::Redraw
+        } else {
+            Step::Same
+        }
+    }
+
     fn mouse(&mut self, mouse: Mouse, look: &Look) -> Step {
         let Some(drawn) = &self.drawn else {
             return Step::Same;
         };
         let hit = drawn.hit(mouse.col, mouse.row);
-        let choices = self.choices();
-        let first = self.first_option();
+        let choices = self.shown();
+        let first = self.first_line;
         let option = match hit {
-            Hit::Line(i, _) if i >= first && i - first < choices.len() => Some(i - first),
+            Hit::Line(i, _) if i >= first => {
+                Some(i - first + self.first_shown).filter(|o| *o < choices.len())
+            }
             _ => None,
         };
         match draw::gesture(&mouse) {
@@ -1026,7 +1120,7 @@ impl Overlay for ReadyBox {
                 }
                 match option {
                     Some(i) => Step::Close(Outcome::Chose(choices[i] as usize)),
-                    None if choices.is_empty() && self.answer.is_some() => {
+                    None if self.choices().is_empty() && self.answer.is_some() => {
                         Step::Close(Outcome::Dismissed)
                     }
                     None => Step::Same,
@@ -1290,6 +1384,65 @@ mod tests {
         assert_eq!(
             done.key(Key::new(KeyCode::Char('x'), Mods::NONE), &look),
             Step::Close(Outcome::Dismissed)
+        );
+    }
+
+    #[test]
+    fn slash_searches_the_boxs_choices() {
+        let look = Look::default();
+        let mut b = ReadyBox::new();
+        b.answered(Ok(answer_from(&pr("OPEN", "DIRTY", "CONFLICTING"))));
+        let all = b.choices().len();
+        for c in "/confl".chars() {
+            b.key(Key::new(KeyCode::Char(c), Mods::NONE), &look);
+        }
+        assert_eq!(b.shown(), vec![Choice::ResolveConflicts], "of {all}");
+        let mut pasted = ReadyBox::new();
+        pasted.answered(Ok(answer_from(&pr("OPEN", "DIRTY", "CONFLICTING"))));
+        pasted.key(Key::new(KeyCode::Char('/'), Mods::NONE), &look);
+        assert_eq!(pasted.paste("confl", &look), Step::Redraw);
+        assert_eq!(
+            pasted.shown(),
+            vec![Choice::ResolveConflicts],
+            "a paste types too"
+        );
+        let mut short = ReadyBox::new();
+        short.answered(Ok(answer_from(&pr("OPEN", "DIRTY", "CONFLICTING"))));
+        short.key(Key::new(KeyCode::Char('/'), Mods::NONE), &look);
+        let last = short.shown().len() - 1;
+        for _ in 0..last {
+            short.key(Key::new(KeyCode::Down, Mods::NONE), &look);
+        }
+        let lines = answer_from(&pr("OPEN", "DIRTY", "CONFLICTING")).lines.len() as u16;
+        let mut buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, 80, lines + 10));
+        short.draw(&mut buf, &look);
+        let s = crate::ui::draw::tests::screen(&buf);
+        assert!(
+            s.iter().any(|l| l.contains("› Close")),
+            "the chosen match in view: {s:#?}"
+        );
+        let mut tabbed = ReadyBox::new();
+        tabbed.answered(Ok(answer_from(&pr("OPEN", "DIRTY", "CONFLICTING"))));
+        tabbed.key(Key::new(KeyCode::Char('/'), Mods::NONE), &look);
+        tabbed.key(Key::new(KeyCode::Tab, Mods::NONE), &look);
+        assert_eq!(tabbed.cursor, 1, "Tab moves among the matches");
+        tabbed.key(Key::new(KeyCode::BackTab, Mods::NONE), &look);
+        assert_eq!(tabbed.cursor, 0);
+        let mut tiny = Buffer::empty(ratatui::layout::Rect::new(0, 0, 80, 14));
+        tabbed.draw(&mut tiny, &look);
+        let s = crate::ui::draw::tests::screen(&tiny);
+        assert!(
+            s.iter()
+                .any(|l| l.contains('›') && l.contains("See the failing")),
+            "a long verdict leaves a match: {s:#?}"
+        );
+        let mut buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, 80, 30));
+        b.draw(&mut buf, &look);
+        let s = crate::ui::draw::tests::screen(&buf);
+        assert!(s.iter().any(|l| l.contains("› confl▏")), "{s:#?}");
+        assert_eq!(
+            b.key(Key::new(KeyCode::Enter, Mods::NONE), &look),
+            Step::Close(Outcome::Chose(Choice::ResolveConflicts as usize))
         );
     }
 }

@@ -151,6 +151,10 @@ impl Overlay for UpdateBox {
         self.0.mouse(mouse, look)
     }
 
+    fn paste(&mut self, text: &str, look: &Look) -> Step {
+        self.0.paste(text, look)
+    }
+
     fn deadline(&self) -> Option<Instant> {
         Overlay::deadline(&self.0)
     }
