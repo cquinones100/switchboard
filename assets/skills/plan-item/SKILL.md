@@ -14,7 +14,7 @@ Add one item to the tab's note: the item as a checklist line in the note, and a 
 
 1. **The note.** Notes are in `$NOTES_DIR` or `~/Notes`.
    - The tab's own note first: `switchboard show @tab_note`, else `switchboard show @tab_note_last`, each a path within the notes directory (each prints nothing when the tab has none, or when `$SWITCHBOARD_PANE` isn't set, outside Switchboard's panes).
-   - With neither, settle one as `~/.local/share/switchboard/plugin/skills/note-watch/pick-note.md` says: read it and follow it. Its last step records the note on the tab.
+   - With neither, settle one as `~/.local/share/switchboard/claude/plugin/skills/note-watch/pick-note.md` says: read it and follow it. Its last step records the note on the tab.
    - With no note at all, offer to create `<Name> Notes.md`, `<Name>` the repository's folder name with its first letter capitalized (its first line `# <Name> Notes`), and a `<Name> Plans/` folder beside it. Create the file only when no file by that name exists, never over one, then record it on the tab as `pick-note.md`'s step 5 does.
 
    The plans folder is the one beside the note, named after the note's title with `Notes` replaced by `Plans` (`Acme Notes` → `Acme Plans`). Create it when it is missing.

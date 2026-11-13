@@ -204,7 +204,7 @@ fn print_sets_a_home_up_and_clean_takes_it_away() {
         fs::read_to_string(s.real.join(".claude/settings.json")).unwrap(),
         "{\"model\": \"opus\"}\n"
     );
-    let plugin = home.join(".local/share/switchboard/plugin");
+    let plugin = home.join(".local/share/switchboard/claude/plugin");
     // The skills are the worktree's, the change under trial.
     assert_eq!(
         fs::read_to_string(plugin.join("skills/wt/SKILL.md")).unwrap(),

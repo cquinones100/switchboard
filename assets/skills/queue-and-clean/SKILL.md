@@ -52,7 +52,7 @@ The `sed` takes off the `#<PR> ` the label starts with when the branch has a PR,
 
 4. Settle the ticket and the note now, so finishing up later asks nothing:
    - **The ticket**: the Linear ticket the branch names (an ID like `ABC-123` at the start of the branch name), else one the PR's title or body names. None is fine: then there is no ticket to close out.
-   - **The note**: which of the user's notes holds this work's checklist item, settled as `~/.local/share/switchboard/plugin/skills/note-watch/pick-note.md` says, with **No note** as an option, since not every PR has one. For a branch `/wtn` opened, that takes the note its prompt names without asking, as pick-note's step 2 says. Remember the answer; read the note only at "Closing out".
+   - **The note**: which of the user's notes holds this work's checklist item, settled as `~/.local/share/switchboard/claude/plugin/skills/note-watch/pick-note.md` says, with **No note** as an option, since not every PR has one. For a branch `/wtn` opened, that takes the note its prompt names without asking, as pick-note's step 2 says. Remember the answer; read the note only at "Closing out".
    - **The deploy and the test**: settle both as "Settling" in the file `switchboard skill-path deploy-test` prints says, so nothing after the merge has to ask.
 
 ## No PR

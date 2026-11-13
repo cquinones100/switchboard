@@ -9,7 +9,7 @@ disable-model-invocation: true
 
 This is Switchboard's own copy, for repositories that have none. Before anything else, run `switchboard skill-path preview-test`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
 
-Test an open PR on its preview deploy before it merges, the way `/deploy-test` tests a merged one on the site it deploys to. This skill only says what differs: read the file `switchboard skill-path deploy-test` prints and follow its "Testing in a browser" and "Approval" sections as written (which record with `/walkthrough`'s recorder, `~/.local/share/switchboard/plugin/skills/walkthrough/scripts/record.js`), with the changes below, waiting with `switchboard wait-deploy`. Nothing here changes the repository or the PR.
+Test an open PR on its preview deploy before it merges, the way `/deploy-test` tests a merged one on the site it deploys to. This skill only says what differs: read the file `switchboard skill-path deploy-test` prints and follow its "Testing in a browser" and "Approval" sections as written (which record with `/walkthrough`'s recorder, `~/.local/share/switchboard/claude/plugin/skills/walkthrough/scripts/record.js`), with the changes below, waiting with `switchboard wait-deploy`. Nothing here changes the repository or the PR.
 
 When it is done, the final message is `preview-test: approved (tested: <video>)`, `preview-test: approved (not tested: <why>)` or `preview-test: fail: <reason>`, and nothing else.
 
@@ -53,7 +53,7 @@ As `/deploy-test`'s section says, with these changes:
 
 - **Files** go in `<scratchpad>/preview-test-<number>/`, the video too, and stay there, as `/deploy-test` says.
 - **Change nothing real, as `/deploy-test` says, preview or not**: a preview's own address says where the page runs, not which database or APIs it talks to, and many previews use production's. Submitting, saving or creating test data is fine only when the repository's docs say its previews have data of their own, or the user says so when asked. Never send real email or pay for anything.
-- **One profile per repository**: a preview's host changes with every PR, so record with `--profile preview-<owner>--<repo>` (two dashes, which no GitHub owner's name has, so no two repositories share it), and sign in with `node ~/.local/share/switchboard/plugin/skills/walkthrough/scripts/record.js --login --url <url> --profile preview-<owner>--<repo>` when the preview needs it (a Vercel or Netlify protection page is a sign-in page). Once signed in there, later PRs' previews of the same repository reuse it.
+- **One profile per repository**: a preview's host changes with every PR, so record with `--profile preview-<owner>--<repo>` (two dashes, which no GitHub owner's name has, so no two repositories share it), and sign in with `node ~/.local/share/switchboard/claude/plugin/skills/walkthrough/scripts/record.js --login --url <url> --profile preview-<owner>--<repo>` when the preview needs it (a Vercel or Netlify protection page is a sign-in page). Once signed in there, later PRs' previews of the same repository reuse it.
 
 ## Approval
 

@@ -6,7 +6,7 @@
 //! itself needs from Ghostty and lazygit, never an editor's:
 //!
 //! - `plugin` (`plugin`): Switchboard's skills, hooks and instructions as a
-//!   Claude Code plugin in `~/.local/share/switchboard/plugin`, which the
+//!   Claude Code plugin in `~/.local/share/switchboard/claude/plugin`, which the
 //!   Claude sessions in its panes load and Claude elsewhere doesn't.
 //! - `claude` (`claude_settings`): Switchboard's statusline and permissions
 //!   merged into your own `~/.claude/settings.json`, with its hooks the old
@@ -125,7 +125,7 @@ pub struct Part {
 pub const PARTS: &[Part] = &[
     Part {
         name: "plugin",
-        about: "write Switchboard's plugin (its hooks, skills and instructions), which Claude in its panes loads, to ~/.local/share/switchboard/plugin",
+        about: "write Switchboard's plugin (its hooks, skills and instructions), which Claude in its panes loads, to ~/.local/share/switchboard/claude/plugin",
         run: plugin::run,
     },
     Part {
@@ -543,7 +543,7 @@ fn claude_code(check: bool, list: &mut List) {
 
 /// The plugin: Switchboard's own, so written without asking.
 fn plugin_offered(check: bool, list: &mut List) {
-    const THERE: &str = "Switchboard's plugin for the Claude in its panes (its skills, the hooks behind tab states and M-a, its instructions), in ~/.local/share/switchboard/plugin";
+    const THERE: &str = "Switchboard's plugin for the Claude in its panes (its skills, the hooks behind tab states and M-a, its instructions), in ~/.local/share/switchboard/claude/plugin";
     let part = part_named("plugin").expect("a part");
     match pending(part) {
         Err(e) => list.todo(format!("Switchboard's plugin: {e:#}")),
@@ -668,18 +668,14 @@ fn plugin_way(check: bool, list: &mut List) {
             Ok(_) => list.todo("switchboard setup claude failed"),
         }
     }
-    match way::claude_version() {
-        _ if !crate::settings::is_on("pane_statusline") => list.optional(
-            "Switchboard's statusline in its panes, for mission control's Usage view: off in Settings' \"Switchboard's statusline in its panes\", so they draw yours",
-        ),
-        Some(v) if v < plugin::MODULE_VERSION => list.optional(&format!(
-            "Switchboard's statusline in its panes, for mission control's Usage view: Claude Code {} is older than {}, which draws the plugin's: claude update",
-            way::words(v),
-            way::words(plugin::MODULE_VERSION)
-        )),
-        _ => list.ok(
+    if crate::settings::is_on("pane_statusline") {
+        list.ok(
             "Switchboard's statusline in its panes, drawn by its plugin (mission control's Usage view), yours everywhere else",
-        ),
+        );
+    } else {
+        list.optional(
+            "Switchboard's statusline in its panes, for mission control's Usage view: off in Settings' \"Switchboard's statusline in its panes\", so they draw yours",
+        );
     }
 
     // Your CLAUDE.md: Switchboard's import taken out without asking, your

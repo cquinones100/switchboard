@@ -411,31 +411,13 @@ fn as_a_plugin_the_guided_setup_leaves_your_claude_settings_alone_and_asks_nothi
     ok(&h.run(&["setup", "claude"]));
     assert_eq!(snapshot(&h.path(".claude")), before);
 
-    // A Claude Code too old to run the plugin's module is told so, and
-    // still nothing of yours changes.
-    h.claude_version("2.1.286");
-    let said = ok(&h.run_with(&["setup"], "\n\n\n"));
-    assert!(
-        said.contains("Switchboard's statusline in its panes, for mission control's Usage view: Claude Code 2.1.286 is older than 2.1.287, which draws the plugin's: claude update"),
-        "{said}"
-    );
-    assert_eq!(snapshot(&h.path(".claude")), before);
-
-    // The statusline an earlier version added as a plugin stays while
-    // nothing would draw Switchboard's in its place (its hooks would go
-    // either way, which the unit tests cover).
+    // The statusline an earlier version added, taken out, since the plugin
+    // draws Switchboard's in its panes now.
     let earlier =
         json!({ "statusLine": { "type": "command", "command": "switchboard statusline" } });
     fs::write(&file, earlier.to_string()).unwrap();
     let said = ok(&h.run_with(&["setup"], "\n\n\n"));
     assert!(!said.contains("[Y/n]"), "{said}");
-    assert_eq!(
-        serde_json::from_str::<Value>(&read(&file)).unwrap(),
-        earlier
-    );
-    // Updated, it draws the plugin's, and the statusline goes too.
-    h.claude_version("2.1.319");
-    let said = ok(&h.run_with(&["setup"], "\n\n\n"));
     assert!(
         said.contains("✓ what an earlier version added to your ~/.claude/settings.json and Switchboard's plugin carries now, taken out (a statusline of yours kept)"),
         "{said}"
@@ -446,10 +428,8 @@ fn as_a_plugin_the_guided_setup_leaves_your_claude_settings_alone_and_asks_nothi
     );
 
     // Settings' "Switchboard's statusline in its panes" off: said, and an
-    // earlier statusline goes even on a Claude Code too old for the module,
-    // since yours is what the panes draw then.
+    // earlier statusline goes too, since yours is what the panes draw then.
     h.settings(json!({ "pane_statusline": false }));
-    h.claude_version("2.1.286");
     fs::write(&file, earlier.to_string()).unwrap();
     let said = ok(&h.run_with(&["setup"], "\n\n\n"));
     assert!(
@@ -460,6 +440,29 @@ fn as_a_plugin_the_guided_setup_leaves_your_claude_settings_alone_and_asks_nothi
         serde_json::from_str::<Value>(&read(&file)).unwrap(),
         json!({})
     );
+}
+
+#[test]
+fn the_plugin_moves_under_claude_and_leaves_a_link_where_earlier_builds_wrote_it() {
+    let h = Home::new("setup-plugin-move");
+    // An earlier build's plugin, with packages a skill installed for itself.
+    let former = h.path(".local/share/switchboard/plugin");
+    let packages = former.join("skills/walkthrough/scripts/node_modules/x");
+    fs::create_dir_all(&packages).unwrap();
+    fs::write(packages.join("index.js"), "").unwrap();
+    let said = ok(&h.run(&["setup", "plugin"]));
+    assert!(
+        said.contains("move Switchboard's plugin from ~/.local/share/switchboard/plugin to ~/.local/share/switchboard/claude/plugin, a link left where it was for the tabs open now"),
+        "{said}"
+    );
+    let now = h.path(".local/share/switchboard/claude/plugin");
+    assert_eq!(fs::read_link(&former).unwrap(), now);
+    assert!(now.join(".claude-plugin/plugin.json").is_file());
+    assert!(
+        now.join("skills/walkthrough/scripts/node_modules/x/index.js")
+            .is_file()
+    );
+    assert_eq!(ok(&h.run(&["setup", "plugin"])), "plugin: up to date\n");
 }
 
 #[test]
@@ -1108,7 +1111,7 @@ fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
 fn the_guided_setup_writes_the_plugin_and_changes_nothing_the_second_time() {
     let h = Home::new("setup-guided");
     std::os::unix::fs::symlink(BIN, h.path("bin/switchboard")).unwrap();
-    let plugin = h.path(".local/share/switchboard/plugin");
+    let plugin = h.path(".local/share/switchboard/claude/plugin");
 
     // --check says what the setup would do, and writes nothing.
     let check = ok(&h.run(&["setup", "--check"]));
@@ -1145,14 +1148,9 @@ fn the_guided_setup_writes_the_plugin_and_changes_nothing_the_second_time() {
         hooks.contains("switchboard hook Stop") && hooks.contains("switchboard claude-context"),
         "{hooks}"
     );
-    assert!(!hooks.contains("modules"), "{hooks}");
-    // The statusline's module, in a hooks file of its own that plugin.json
-    // names, so a Claude Code that can't load it still reads hooks.json.
-    let manifest: Value =
-        serde_json::from_str(&read(&plugin.join(".claude-plugin/plugin.json"))).unwrap();
-    assert_eq!(manifest["hooks"], "./hooks/modules.json");
-    let listed: Value = serde_json::from_str(&read(&plugin.join("hooks/modules.json"))).unwrap();
-    assert_eq!(listed, json!({ "modules": ["./statusline.js"] }));
+    // The statusline's module, which hooks.json lists.
+    let listed: Value = serde_json::from_str(&hooks).unwrap();
+    assert_eq!(listed["modules"], json!(["./statusline.js"]));
     let module = read(&plugin.join("hooks/statusline.js"));
     assert!(
         module.contains("on('settings.read'")
@@ -1185,7 +1183,7 @@ fn the_guided_setup_writes_the_plugin_and_changes_nothing_the_second_time() {
     fs::write(plugin.join("skills/wt/SKILL.md"), "an older wt\n").unwrap();
     let newer = ok(&h.run(&["setup"]));
     assert!(
-        newer.contains("bring ~/.local/share/switchboard/plugin up to date (1 file written), its skills and hooks as the binary carries them"),
+        newer.contains("bring ~/.local/share/switchboard/claude/plugin up to date (1 file written), its skills and hooks as the binary carries them"),
         "{newer}"
     );
     assert_ne!(read(&plugin.join("skills/wt/SKILL.md")), "an older wt\n");
@@ -1269,7 +1267,7 @@ fn earlier_install(h: &Home) {
 #[test]
 fn a_new_build_writes_the_plugin_and_keeps_an_earlier_install_the_old_way_moving_nothing() {
     let h = Home::new("setup-refresh");
-    let plugin = h.path(".local/share/switchboard/plugin");
+    let plugin = h.path(".local/share/switchboard/claude/plugin");
     // Nothing set up: the plugin and the build's mark, nothing of yours.
     ok(&h.run(&["setup", "--refresh"]));
     assert!(!h.path(".claude").exists());
@@ -1545,7 +1543,7 @@ fn the_setting_moves_exactly_switchboard_s_parts_into_the_plugin_and_back() {
         .collect();
     assert_eq!(wt, ["notes.md"]);
     assert!(
-        h.path(".local/share/switchboard/plugin/skills/wt/SKILL.md")
+        h.path(".local/share/switchboard/claude/plugin/skills/wt/SKILL.md")
             .is_file()
     );
     // Again: nothing to move.
@@ -2477,7 +2475,7 @@ fn a_build_reads_the_skills_and_instructions_of_the_clone_it_came_from_unless_tu
             .unwrap();
         child.wait_with_output().unwrap()
     };
-    let plugin = h.path(".local/share/switchboard/plugin");
+    let plugin = h.path(".local/share/switchboard/claude/plugin");
     let start = r#"{"session_id":"s1","hook_event_name":"SessionStart","source":"startup"}"#;
 
     let wrote = ok(&from_clone(&["setup", "plugin"], None));

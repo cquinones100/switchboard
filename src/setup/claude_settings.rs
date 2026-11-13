@@ -23,10 +23,8 @@
 //! then takes out what earlier versions added: any hook running one of the
 //! asset's commands or the tmux version's, with the groups and events that
 //! leaves empty, your other hooks kept, since left in they would run twice
-//! in a pane; and, where Claude Code runs the plugin's module (2.1.287 and
-//! later; an older one keeps it, with nothing to draw in its place), the
-//! statusline they wrote, Switchboard's own or the tmux version's taken
-//! out and `IN_PANES` taken off one of yours. The
+//! in a pane; and the statusline they wrote, Switchboard's own or the tmux
+//! version's taken out and `IN_PANES` taken off one of yours. The
 //! permissions earlier versions added stay: a plugin can't carry them yet,
 //! and taking them out would leave its skills asking. As a plugin, the
 //! guided setup runs this part only on a file holding some of that
@@ -294,15 +292,14 @@ pub fn merge(
     merge_for(current, ours, way, true, tmux_versions)
 }
 
-/// `merge`, saying whether Claude Code draws the plugin's statusline
-/// (`plugin_draws`, 2.1.287 and later run its module): as a plugin, an
-/// older one keeps the statusline it has, which nothing would draw in its
-/// place, and loses only the hooks.
+/// `merge`, as a plugin taking out the statusline an earlier version added
+/// only when `statusline` says to: a new build's first run takes out the
+/// hooks alone.
 fn merge_for(
     current: &Map<String, Value>,
     ours: &Value,
     way: Way,
-    plugin_draws: bool,
+    statusline: bool,
     tmux_versions: impl Fn(&str) -> bool,
 ) -> Map<String, Value> {
     let mut out = current.clone();
@@ -318,7 +315,7 @@ fn merge_for(
                 }
             }
         }
-        if plugin_draws {
+        if statusline {
             without_our_statusline(&mut out, tmux_versions);
         }
         return out;
@@ -475,7 +472,7 @@ pub fn take_out_hooks(r: &mut Report) -> Result<()> {
 }
 
 /// The part, as a plugin taking out the statusline an earlier version added
-/// too when `statusline` is asked for and Claude Code draws the plugin's.
+/// too when `statusline` says to.
 fn run_taking(r: &mut Report, statusline: bool) -> Result<()> {
     let file = settings_file();
     let shown = home_tilde(&file);
@@ -508,13 +505,7 @@ fn run_taking(r: &mut Report, statusline: bool) -> Result<()> {
         Err(e) => bail!("{shown} can't be read: {e}"),
     };
     let way = super::way::current();
-    // Kept only while it is what draws Switchboard's in the panes: with
-    // Settings' `pane_statusline` off, yours belongs there too.
-    let plugin_draws = statusline
-        && way == Way::Plugin
-        && (!crate::settings::is_on("pane_statusline")
-            || super::way::claude_version().is_none_or(|v| v >= super::plugin::MODULE_VERSION));
-    let merged = merge_for(&current, &ours(), way, plugin_draws, tmux_versions);
+    let merged = merge_for(&current, &ours(), way, statusline, tmux_versions);
     if merged == current {
         return Ok(());
     }
@@ -734,7 +725,7 @@ mod tests {
     }
 
     #[test]
-    fn as_a_plugin_a_claude_code_too_old_to_draw_its_statusline_keeps_the_one_it_has() {
+    fn as_a_plugin_the_hooks_alone_can_be_taken_out() {
         let product = ours();
         let before = object(json!({
             "statusLine": { "type": "command", "command": "switchboard statusline" },

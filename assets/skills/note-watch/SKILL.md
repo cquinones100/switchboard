@@ -21,7 +21,7 @@ Arguments: the note, by title (`Editor Configs Notes`) or path. With none, the n
 
 ## Steps
 
-1. **Settle the note**, as `~/.local/share/switchboard/plugin/skills/note-watch/pick-note.md` says (the argument, or the note this conversation has been working from, confirmed; else a list of titles to pick from). Start nothing until the user has picked.
+1. **Settle the note**, as `~/.local/share/switchboard/claude/plugin/skills/note-watch/pick-note.md` says (the argument, or the note this conversation has been working from, confirmed; else a list of titles to pick from). Start nothing until the user has picked.
 
 2. **Read it.** Read the note and say in a line how many items are still open. Ask whether to work those now, or only what is added from here.
 
