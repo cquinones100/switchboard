@@ -296,15 +296,16 @@ fn draw_at_once(key: &Key, raster: &Draw) -> Option<Made> {
 
 /// A rounded end of kit's objects as drawn: the left one or not, its
 /// color, and the cell's size in pixels.
-type End = (bool, [u8; 3], (u16, u16));
+type End = (bool, [u8; 3], (u16, u16), bool);
 
 /// One rounded end as sixel, a cell of `cell` pixels, the rest of the cell
 /// clear. Its height is rounded up to a whole number of bands, the rows
 /// past the cell clear, where a picture's is cut down (`draw`): cut, the
 /// half circle would lose its foot beside the object's body, whose cells
 /// reach the cell's bottom, while the clear rows lie over the top of the
-/// row below and leave it as it is.
-fn end_sixel(left: bool, color: [u8; 3], cell: (u16, u16)) -> Option<Arc<[u8]>> {
+/// row below and leave it as it is; not `whole`, on the row above the
+/// screen's last, which no sixel reaches, it is cut down as a picture is.
+fn end_sixel(left: bool, color: [u8; 3], cell: (u16, u16), whole: bool) -> Option<Arc<[u8]>> {
     let pm = crate::ui::images::raster_end(left, color, cell);
     let picture = encode::own_colours(&crate::ui::images::rgba(&pm))?;
     let (w, h) = (cell.0.max(1) as u32, cell.1.max(1) as u32);
@@ -313,7 +314,12 @@ fn end_sixel(left: bool, color: [u8; 3], cell: (u16, u16)) -> Option<Arc<[u8]>> 
         at: (0, 0),
         size: (w, h),
     };
-    Some(encode::encode(&fitted, (0, 0, w, h.div_ceil(6) * 6)).into())
+    let height = if whole || h < 6 {
+        h.div_ceil(6) * 6
+    } else {
+        h / 6 * 6
+    };
+    Some(encode::encode(&fitted, (0, 0, w, height)).into())
 }
 
 /// Whether a picture is small enough to draw on the server's task: one of
@@ -725,11 +731,15 @@ impl Server {
                     continue;
                 }
                 let color = crate::ui::images::rgb(fill);
-                let at = (left, color, cell);
+                // On the row above the last, where clear rows reaching
+                // into the last would have the screen scroll as a picture
+                // there would, cut to whole bands as a picture is.
+                let whole = y + 1 < last;
+                let at = (left, color, cell, whole);
                 let sixel = match self.sixel.ends.get(&at) {
                     Some(sixel) => sixel.clone(),
                     None => {
-                        let Some(sixel) = end_sixel(left, color, cell) else {
+                        let Some(sixel) = end_sixel(left, color, cell, whole) else {
                             continue;
                         };
                         if self.sixel.ends.len() >= 256 {
@@ -1019,7 +1029,7 @@ mod tests {
 
     #[test]
     fn a_rounded_end_is_one_cell_of_sixel_in_its_color() {
-        let sixel = end_sixel(true, [0, 0, 255], (10, 20)).unwrap();
+        let sixel = end_sixel(true, [0, 0, 255], (10, 20), true).unwrap();
         let (w, h, pixels) = encode::tests::decode(&sixel);
         assert_eq!((w, h), (10, 24), "a cell, rounded up to whole bands");
         assert!(pixels.iter().flatten().all(|p| *p == [0, 0, 255]));
@@ -1038,6 +1048,9 @@ mod tests {
             pixels[20 * 10..].iter().all(Option::is_none),
             "clear past the cell"
         );
+        // Above the screen's last row, kept inside its cell.
+        let cut = end_sixel(true, [0, 0, 255], (10, 20), false).unwrap();
+        assert_eq!(encode::tests::decode(&cut).1, 18);
     }
 
     #[test]
