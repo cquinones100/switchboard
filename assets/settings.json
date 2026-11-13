@@ -1215,6 +1215,13 @@
     "default": "thread"
   },
   {
+    "key": "relay_send_other_turns",
+    "category": "Slack relay",
+    "label": "Turns another tab or a task started",
+    "description": "Posts a tab's finished turn in its thread when another tab's message or a background task started it, or when it wrote no reply. Off, only turns you started that wrote a reply, and tabs waiting on you, are posted",
+    "default": false
+  },
+  {
     "key": "relay_send_stuck",
     "category": "Slack relay",
     "label": "Tabs that may be stuck",

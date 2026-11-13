@@ -649,6 +649,24 @@ pub fn activity_in(file: &Path) -> Option<i64> {
     })
 }
 
+/// Who a transcript's last turn is for: whether you started it (a prompt
+/// typed in the pane or sent from Slack, or one of yours queued into it),
+/// rather than another tab's message or a background task, and whether
+/// Claude wrote anything in it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TurnFor {
+    pub yours: bool,
+    pub replied: bool,
+}
+
+pub fn turn_for(file: &Path) -> Option<TurnFor> {
+    let last = last_prompt(file)?;
+    Some(TurnFor {
+        yours: !last.background || !queued_in(&last.after).is_empty(),
+        replied: !texts_after(&last.after).is_empty(),
+    })
+}
+
 /// Claude's last words in a transcript's last turn.
 pub fn last_said(file: &Path) -> Option<String> {
     texts_after(&last_prompt(file)?.after).pop()

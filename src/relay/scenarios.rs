@@ -654,7 +654,10 @@ fn alerts_come_once_per_state_change_with_the_screen_for_a_wait() {
     rig.transcript(
         &tab,
         "alerted",
-        &[json!({ "type": "user", "message": { "content": "edit the config" } })],
+        &[
+            json!({ "type": "user", "message": { "content": "edit the config" } }),
+            json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "Edited." }] } }),
+        ],
     );
     let run = |rig: &Rig| {
         let tabs = tabs::claude_tabs(&rig.cx);
@@ -698,8 +701,10 @@ fn alerts_come_once_per_state_change_with_the_screen_for_a_wait() {
 }
 
 #[test]
-fn a_turn_another_tabs_message_started_is_posted_with_who_sent_it() {
-    let rig = Rig::new();
+fn with_other_turns_on_a_turn_another_tabs_message_started_is_posted_with_who_sent_it() {
+    let mut rig = Rig::new();
+    std::rc::Rc::get_mut(&mut rig.cx).unwrap().settings =
+        Box::new(|k| (k == alerts::OTHER_TURNS).then_some(json!(true)));
     let (tab, _) = rig.claude_tab("work");
     let (sender, _) = rig.claude_tab("design");
     let sender_index = rig.index_of(&sender);
@@ -741,6 +746,112 @@ fn a_turn_another_tabs_message_started_is_posted_with_who_sent_it() {
     );
     assert!(body.contains("The proposal looks right."), "{body}");
     assert!(!body.contains("The walkthrough."), "{body}");
+}
+
+/// A transcript whose last turn another tab's message started.
+fn peer_turn(rig: &Rig, tab: &str, reply: &str) {
+    rig.transcript(
+        tab,
+        "messaged",
+        &[
+            json!({ "type": "user", "message": { "content": "walk me through it" } }),
+            json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "The walkthrough." }] } }),
+            json!({ "type": "user", "isMeta": true, "origin": { "kind": "peer", "from": "uds:/tmp/scenario-other.sock", "body": "Approved, go on" }, "message": { "content": "Another Claude session sent a message:\n<cross-session-message>Approved, go on</cross-session-message>" } }),
+            json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": reply }] } }),
+        ],
+    );
+}
+
+fn alert_run(rig: &Rig) {
+    let tabs = tabs::claude_tabs(&rig.cx);
+    rig.block_on(alerts::alert_tabs(&rig.cx, &tabs, &[]));
+}
+
+fn finished_posts(rig: &Rig) -> usize {
+    rig.posts()
+        .iter()
+        .filter(|p| p.body.contains("has finished"))
+        .count()
+}
+
+#[test]
+fn a_turn_another_tabs_message_started_is_not_posted() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    peer_turn(&rig, &tab, "Noted.");
+    rig.set_state(&tab, "done", "200");
+    alert_run(&rig);
+    alert_run(&rig);
+    assert_eq!(finished_posts(&rig), 0);
+    assert!(
+        rig.cx.state.borrow().reported.contains_key(&tab),
+        "counted as reported, so a later look doesn't post it"
+    );
+}
+
+#[test]
+fn a_turn_another_tabs_message_started_that_waits_on_you_is_posted() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    peer_turn(&rig, &tab, "Shall I merge?");
+    rig.set_state(&tab, "waiting", "200");
+    rig.set_screen(&tab, "Allow this edit? 1. Yes 2. No\n");
+    alert_run(&rig);
+    assert!(
+        rig.posts()
+            .iter()
+            .any(|p| p.body.contains("is **waiting on you**") && p.body.contains("Approved, go on"))
+    );
+}
+
+#[test]
+fn a_turn_a_background_task_started_is_not_posted() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    rig.transcript(&tab, "task", &[
+        json!({ "type": "user", "origin": { "kind": "task-notification" }, "message": { "content": "<task-notification><summary>The build finished</summary></task-notification>" } }),
+        json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "The build passed." }] } }),
+    ]);
+    rig.set_state(&tab, "done", "200");
+    alert_run(&rig);
+    assert_eq!(finished_posts(&rig), 0);
+}
+
+#[test]
+fn a_turn_you_queued_a_message_into_is_posted() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    rig.transcript(&tab, "queued", &[
+        json!({ "type": "user", "origin": { "kind": "task-notification" }, "message": { "content": "<task-notification><summary>The build finished</summary></task-notification>" } }),
+        json!({ "type": "attachment", "attachment": { "type": "queued_command", "prompt": "and deploy it" } }),
+        json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "Deployed." }] } }),
+    ]);
+    rig.set_state(&tab, "done", "200");
+    alert_run(&rig);
+    assert_eq!(finished_posts(&rig), 1);
+}
+
+#[test]
+fn a_turn_you_started_with_no_reply_is_not_posted_once_its_wait_is_over() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    rig.transcript(
+        &tab,
+        "silent",
+        &[json!({ "type": "user", "message": { "content": "stop there" } })],
+    );
+    rig.set_state(&tab, "done", &util::now_secs().to_string());
+    alert_run(&rig);
+    assert_eq!(finished_posts(&rig), 0);
+    assert!(
+        !rig.cx.state.borrow().reported.contains_key(&tab),
+        "waits while the transcript may still catch up"
+    );
+    let ended = util::now_secs() - super::config::REPLY_WAIT_MS / 1000 - 1;
+    rig.set_state(&tab, "done", &ended.to_string());
+    alert_run(&rig);
+    assert_eq!(finished_posts(&rig), 0);
+    assert!(rig.cx.state.borrow().reported.contains_key(&tab));
 }
 
 #[test]
@@ -3358,7 +3469,10 @@ fn a_turn_in_a_tab_you_arent_looking_at_is_posted_once() {
     let transcript = rig.transcript(
         &tab,
         "elsewhere",
-        &[json!({ "type": "user", "message": { "content": "run it" } })],
+        &[
+            json!({ "type": "user", "message": { "content": "run it" } }),
+            json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "Ran it." }] } }),
+        ],
     );
     let time = util::now_secs();
     // The hook's event lands while the tab still says working...

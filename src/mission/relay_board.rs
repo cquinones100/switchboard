@@ -202,8 +202,15 @@ pub(crate) fn items_of(
             }
         }
     };
-    out.push(views::header("kinds", "What reaches you", Kind::ALL.len()));
-    rows(Kind::ALL.iter().map(|k| k.key()).collect(), &mut out);
+    // Which finished turns are sent sits under Finished turns.
+    let mut kinds: Vec<String> = Kind::ALL.iter().map(|k| k.key()).collect();
+    let finished = kinds
+        .iter()
+        .position(|k| *k == Kind::Finished.key())
+        .map_or(kinds.len(), |at| at + 1);
+    kinds.insert(finished, crate::relay::alerts::OTHER_TURNS.to_string());
+    out.push(views::header("kinds", "What reaches you", kinds.len()));
+    rows(kinds, &mut out);
     out.push(views::header(
         "autopilot",
         "Autopilot's tabs",
@@ -884,6 +891,20 @@ mod tests {
             .find(|i| setting_of(i) == Some("relay_send_prompts"))
             .unwrap();
         assert_eq!(parts(prompts).len(), 2);
+        // Which finished turns are sent follows Finished turns, an on/off switch.
+        let at = |key: &str| {
+            items
+                .iter()
+                .position(|i| setting_of(i) == Some(key))
+                .unwrap()
+        };
+        assert_eq!(
+            at(crate::relay::alerts::OTHER_TURNS),
+            at("relay_send_finished") + 1
+        );
+        let other = &items[at(crate::relay::alerts::OTHER_TURNS)];
+        assert_eq!(parts(other).len(), 2);
+        assert!(other.data.get("today").is_none());
         let (key, value, label) = part_value(finished, 2).unwrap();
         assert_eq!(
             (key.as_str(), value, label.as_str()),
