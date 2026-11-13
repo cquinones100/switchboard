@@ -73,6 +73,16 @@ Spend, processes, settings and keys.
 - [26. Settings: every option by category, your files' too](https://cquinones100.github.io/switchboard/design/26.html)
 - [27. Keys: every binding, yours over the defaults](https://cquinones100.github.io/switchboard/design/27.html)
 
+## Proposed: moving between mission control's views
+
+Five ways to show its groups and views, to pick one.
+
+- [64. Mission control's views, option 1: while it is open, the sidebar lists its groups and views with what each says](https://cquinones100.github.io/switchboard/design/64.html)
+- [65. Option 2: mission control's own column of groups and views, as Slack's sidebar, the tabs' sidebar kept](https://cquinones100.github.io/switchboard/design/65.html)
+- [66. Option 3: one row, the group you are in open with its views, the others folded to what needs you](https://cquinones100.github.io/switchboard/design/66.html)
+- [67. Option 4: a home screen, a tile for every view saying what it would show, Enter opening one](https://cquinones100.github.io/switchboard/design/67.html)
+- [68. Option 5: a path for a bar, and M-Space again opening every view in a box to type into](https://cquinones100.github.io/switchboard/design/68.html)
+
 ## Notes
 
 Items, the tabs working them and their plans.

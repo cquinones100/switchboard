@@ -268,6 +268,26 @@
     "McButtonViews.dc.html": {
       "title": "60. A right-click on ⊞: mission control's views by group, any one a choice away",
       "page": "design"
+    },
+    "McNavSidebar.dc.html": {
+      "title": "64. Mission control's views, option 1: while it is open, the sidebar lists its groups and views with what each says",
+      "page": "design"
+    },
+    "McNavColumn.dc.html": {
+      "title": "65. Option 2: mission control's own column of groups and views, as Slack's sidebar, the tabs' sidebar kept",
+      "page": "design"
+    },
+    "McNavOneRow.dc.html": {
+      "title": "66. Option 3: one row, the group you are in open with its views, the others folded to what needs you",
+      "page": "design"
+    },
+    "McNavHome.dc.html": {
+      "title": "67. Option 4: a home screen, a tile for every view saying what it would show, Enter opening one",
+      "page": "design"
+    },
+    "McNavSwitcher.dc.html": {
+      "title": "68. Option 5: a path for a bar, and M-Space again opening every view in a box to type into",
+      "page": "design"
     }
   }
 }
