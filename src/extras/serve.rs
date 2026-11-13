@@ -454,13 +454,16 @@ impl Server {
                     let Some(tab) = picked.and_then(|p| p.value.parse().ok()).map(TabId) else {
                         return;
                     };
-                    server.paste_reply(client, tab, &reply);
+                    server.paste_into_tab(client, tab, &reply);
                 });
             },
         );
     }
 
-    fn paste_reply(&mut self, client: ClientId, tab: TabId, reply: &str) {
+    /// Text pasted into a tab's Claude (its active pane when it runs none)
+    /// without Enter, and the tab brought to the front: Claude's last reply
+    /// sent here, and a notification's "Send it to a tab".
+    pub(crate) fn paste_into_tab(&mut self, client: ClientId, tab: TabId, reply: &str) {
         let model = self.sidebar_all_tabs().into_iter().find(|t| t.id == tab);
         let Some(model) = model else {
             self.say(Some(client), "That tab has closed.");
@@ -478,7 +481,7 @@ impl Server {
         if self.parked(pane) {
             self.say(
                 Some(client),
-                "That tab's Claude is behind a tool that couldn't make room for it, so the reply wasn't pasted there.",
+                "That tab's Claude is behind a tool that couldn't make room for it, so nothing was pasted there.",
             );
             return;
         }
@@ -491,6 +494,15 @@ impl Server {
         }
         self.select_tab(&model.session, tab);
         self.focus_pane(pane);
+        // A tab in another session brings this client there, as going to
+        // a tab from mission control does.
+        if self
+            .clients
+            .get(&client)
+            .is_some_and(|c| c.session != model.session)
+        {
+            self.switch_client(client, &model.session);
+        }
     }
 
     // ── Git and setup ───────────────────────────────────────────────────────

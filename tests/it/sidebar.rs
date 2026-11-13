@@ -1172,7 +1172,9 @@ fn a_slack_message_s_menu_in_the_notifications_window_is_the_slack_view_s() {
             .any(|l| l.contains("its third line")),
         "the message above the choices: {all}"
     );
-    assert!(all.contains("Open a tab for this thread with Claude"));
+    for choice in ["Open a tab for it", "Send it to a tab", "Copy its link"] {
+        assert!(all.contains(choice), "{choice}: {all}");
+    }
     assert!(!all.contains("Dismiss every message shown"), "{all}");
     assert!(
         !all.replace("Dismiss it, until", "").contains("Dismiss it"),

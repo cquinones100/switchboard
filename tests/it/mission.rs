@@ -997,7 +997,9 @@ fn a_slack_notifications_menu_is_the_slack_views_with_the_message_whole() {
     assert!(row("its second line") < row("its third line"), "{all}");
     assert!(row("its third line") < choices, "above the choices: {all}");
     assert!(
-        row("Open a tab for this thread with Claude") < row("Dismiss it, until"),
+        row("Open a tab for it") < row("Send it to a tab")
+            && row("Send it to a tab") < row("Copy its link")
+            && row("Copy its link") < row("Dismiss it, until"),
         "{all}"
     );
     assert!(!all.contains("Dismiss every message shown"), "{all}");
@@ -1051,6 +1053,122 @@ fn the_notifications_views_menu_dismisses_every_notification_shown() {
     assert!(gone.contains(&format!("D1:{ts}")), "{gone}");
     let left = std::fs::read_to_string(server.state.join("new-notes.json")).unwrap();
     assert!(!left.contains("Plan.md"), "{left}");
+}
+
+// "Send it to a tab" on a notification: a tab running Claude picked, the
+// notification's words and link pasted into it without Enter, that tab in
+// front; a tab with no Claude isn't offered.
+#[test]
+fn send_it_to_a_tab_pastes_a_notification_into_the_tab_picked() {
+    let server = TestServer::start();
+    std::fs::create_dir_all(&server.state).unwrap();
+    let ts = format!("{}.000100", switchboard::util::now_ms() / 1000);
+    std::fs::write(
+        server.state.join("slack.json"),
+        json!({ "checked": 1, "items": [{
+            "kind": "dm", "channel": "D1", "from": "Ada", "where": "Ada",
+            "text": "a question", "ts": ts, "link": "https://slack.example/m",
+        }] })
+        .to_string(),
+    )
+    .unwrap();
+    settings(&server, json!({ "view_slack": true }));
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-n", "second"]);
+    server.ok(&["new-tab", "-n", "third"]);
+    client.wait_text("3:third");
+    // The second tab's shell counts as its Claude; the third runs none.
+    let list = server.list();
+    let pid = tabs(&list)[1]["panes"][0]["pid"].as_u64().unwrap();
+    session_file(&server.home, pid, "s-second");
+    wait_list(&server, "the second tab's Claude", |l| {
+        !tabs(l)[1]["panes"][0]["claude"].is_null()
+    });
+    open(&mut client);
+    client.type_text("]");
+    client.wait_text("DM Ada");
+    client.type_text("j");
+    client.type_text("\r");
+    pick(&mut client, "Send it to a tab");
+    let screen = client.wait_text("Send to: Slack: Ada");
+    let all = screen.join("\n");
+    assert!(all.contains("2  second"), "{all}");
+    assert!(
+        !all.contains("3  third"),
+        "a tab with no Claude isn't offered: {all}"
+    );
+    client.type_text("\r");
+    let list = wait_list(&server, "the second tab in front", |l| {
+        tabs(l)[1]["current"] == true
+    });
+    let pane = tabs(&list)[1]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let deadline = common::deadline(Duration::from_secs(10));
+    loop {
+        let screen = server.ok(&["capture-pane", "-t", &pane]);
+        // The test's sh takes no bracketed paste, so runs each line it gets.
+        if screen.contains("> a question") {
+            assert!(screen.contains("Slack message from Ada"), "{screen}");
+            assert!(screen.contains("(https://slack.example/m):"), "{screen}");
+            break;
+        }
+        assert!(Instant::now() < deadline, "not pasted: {screen}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+// "Open a tab for it" on a notification: a directory asked for, then a new
+// tab named for it whose Claude is told about it; a note's by its name and
+// path alone.
+#[test]
+fn open_a_tab_for_it_starts_claude_told_about_the_notification() {
+    let notes = common::TempDir::new("sbtf");
+    std::fs::write(notes.path().join("Plan.md"), "# Plan\nsecret words\n").unwrap();
+    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
+    Claude::new()
+        .answer("for a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$HOME/claude-args\"\nexec sleep 30")
+        .install(&server.home.join("bin"));
+    std::fs::create_dir_all(&server.state).unwrap();
+    std::fs::write(
+        server.state.join("new-notes.json"),
+        json!([{ "path": "Plan.md", "title": "Plan", "source": "Fathom",
+            "at": switchboard::util::now_ms() }])
+        .to_string(),
+    )
+    .unwrap();
+    settings(&server, json!({ "new_notes": true }));
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("]");
+    client.wait_text("Plan  shown");
+    client.type_text("j");
+    client.type_text("\r");
+    pick(&mut client, "Open a tab for it");
+    client.wait_text("A tab for it");
+    client.type_text("\r");
+    let list = wait_list(&server, "the note's tab", |l| tabs(l).len() == 2);
+    assert_eq!(tabs(&list)[1]["options"]["@tab_name"], "Note: Plan");
+    let args = server.home.join("claude-args");
+    let deadline = common::deadline(Duration::from_secs(10));
+    while !args.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "the stand-in Claude didn't start"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let args = std::fs::read_to_string(&args).unwrap();
+    let path = notes.path().join("Plan.md");
+    assert!(
+        args.contains(&format!("Note: Plan ({})", path.display())),
+        "{args}"
+    );
+    assert!(args.contains("don't read it unless I ask"), "{args}");
+    assert!(!args.contains("secret words"), "{args}");
 }
 
 // With UX 2.0 the Slack view is board 21: the chosen message's thread,

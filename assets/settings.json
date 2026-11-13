@@ -344,6 +344,13 @@
     "default": true
   },
   {
+    "key": "notice_to_tab",
+    "category": "Mission control",
+    "label": "Notifications hand off to a tab",
+    "description": "Every notification's menu, and the Slack, Inbox, Calendar and Autopilot views' and a failing default branch's in the CI view, offers Send it to a tab, which pastes its words and link into the Claude of a tab you pick without sending, and Open a tab for it, which starts a tab with Claude told about it (a failing default branch's in its repository's main clone, told to fix it). Off, the menus keep their own choices only",
+    "default": true
+  },
+  {
     "key": "boxes_near_click",
     "category": "Mission control",
     "label": "Open boxes by the click",
