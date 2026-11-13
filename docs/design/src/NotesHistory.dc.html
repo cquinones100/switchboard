@@ -129,20 +129,20 @@ tab(19, '○', 'd', 5, 'benchmark harness', 'idle 22m');
 tab(21, '○', 'd', 8, 'handoff', 'idle 58m');
 tab(23, '○', 'd', 9, 'oncall watch', 'idle 14m');
 keys(1, 44, [['M-t', 'new'], ['M-j', 'jump'], ['M-a', 'next']]);
-// NOTES' LIST: 34 columns, Folders, then Recent, then the notes in the folder chosen
+// NOTES' LIST: 34 columns, Recent first, then Folders, then the notes in the folder chosen
 const LX = 35, LW = 34, LR = LX + LW - 2;
 fill(LX, 0, LW, 45, '2');
 T(LX + 2, 0, ['Notes', 't', 'b', '2']); R(LR, 0, '/ search', 'd', '', '2');
-put(LX + 2, 2, 'FOLDERS', 'd', 'b', '2');
+put(LX + 2, 12, 'FOLDERS', 'd', 'b', '2');
 const fl = (y, name, count, tone, current) => { T(LX + 2, y, [name, current ? 'a' : (tone || 't'), current ? 'b' : '', '2']); R(LR, y, String(count), 'd', '', '2'); };
-fl(3, 'Notes', 23, 't', true);
-fl(4, '▸ Switchboard Plans', 38);
-fl(5, '▸ Standups', 212);
-fl(6, '▸ Meetings', 96);
-fl(7, '▸ Todos', 41);
-fl(8, '▸ Recipes', 12);
-fl(9, 'Recently Deleted', 4, 'd');
-put(LX + 2, 11, 'RECENT', 'd', 'b', '2'); R(LR, 11, 'all 20 ›', 'a', '', '2');
+fl(13, 'Notes', 23, 't', true);
+fl(14, '▸ Switchboard Plans', 38);
+fl(15, '▸ Standups', 212);
+fl(16, '▸ Meetings', 96);
+fl(17, '▸ Todos', 41);
+fl(18, '▸ Recipes', 12);
+fl(19, 'Recently Deleted', 4, 'd');
+put(LX + 2, 2, 'RECENT', 'd', 'b', '2'); R(LR, 2, 'all 20 ›', 'a', '', '2');
 const fit = (s, n) => [...s].length > n ? [...s].slice(0, n - 1).join("") + "…" : s;
 const RECENT = [
   ['Switchboard Design', 'Notes'],
@@ -155,7 +155,7 @@ const RECENT = [
   ['Todo Wednesday', 'Todos'],
 ];
 RECENT.forEach(([title, folder], i) => {
-  const y = 12 + i, open = i === 0, chosen = i === 1;
+  const y = 3 + i, open = i === 0, chosen = i === 1;
   const b = chosen ? row(LX, y, LW, 1, true) : '2';
   const shown = fit(title, 20), room = LW - 4 - [...shown].length - 2;
   put(LX + 2, y, shown, open ? 'a' : 't', open || chosen ? 'b' : '', b);
