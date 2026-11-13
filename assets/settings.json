@@ -368,7 +368,7 @@
     "key": "hover_highlight",
     "category": "Mission control",
     "label": "Highlight on hover",
-    "description": "What a click would press lights under the mouse: in mission control the views' names, the filter, the cards and rows, a menu's options, Yes and No, an answer's options and easy mode's ×; the sidebar's tabs and notifications; the options of M-m's, the update box's and M-w's menus; and the buttons of Notes' toolbar, its boxes' × and M-d's diff; off, nothing follows the mouse. Takes effect at once in mission control and the sidebar, and when a menu, Notes or the diff next opens",
+    "description": "What a click would press lights under the mouse: in mission control the views' names, the filter, the cards and rows, a menu's options, Yes and No, an answer's options and easy mode's ×; the sidebar's tabs and notifications; the options of M-m's, the update box's and M-w's menus; and the buttons of Notes' toolbar, its boxes' × and M-d's diff. In Ghostty and kitty the mouse pointer also turns into a hand over what a click presses (the workspace's sidebar, header, status line, mission control and boxes) and a resizing arrow over a line between panes. Off, nothing follows the mouse and the pointer is never changed. Takes effect at once in mission control and the sidebar, and when a menu, Notes or the diff next opens",
     "default": true
   },
   {

@@ -388,22 +388,20 @@ impl Server {
 
     /// The mouse over the window's pane (`row` in it); gives whether the
     /// window took it.
-    pub fn notices_mouse(
-        &mut self,
-        client: ClientId,
-        pane: PaneId,
-        col: u16,
-        row: u16,
-        m: Mouse,
-    ) -> bool {
-        if !self.is_notices_pane(pane) {
-            return false;
-        }
-        let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
-            return true;
-        };
+    /// What a click on a cell of the Notifications window's pane presses,
+    /// where its lines were drawn: the footer's row on its "m view actions"
+    /// alone.
+    pub fn notice_spot(&self, session: &str, pane: PaneId, col: u16, row: u16) -> Option<Spot> {
+        let (from, to) = notices::view_actions_at();
+        self.notice_row(session, pane, row)
+            .filter(|s| *s != Spot::ViewActions || (from..to).contains(&(col as usize)))
+    }
+
+    /// What a row of the Notifications window's pane is, where its lines
+    /// were drawn.
+    fn notice_row(&self, session: &str, pane: PaneId, row: u16) -> Option<Spot> {
         let entries = self.notice_entries();
-        let at = self.notice_cursor(&session, &entries);
+        let at = self.notice_cursor(session, &entries);
         let (cols, rows) = self
             .panes
             .get(&pane)
@@ -421,13 +419,26 @@ impl Server {
         };
         let items = self.notice_items(&entries);
         let (_, spots) = notices::list_lines(&items, &look, cols as usize, rows as usize);
-        // The footer's row takes a click on its "m view actions" alone.
-        let (from, to) = notices::view_actions_at();
-        let spot = spots
-            .get(row as usize)
-            .copied()
-            .flatten()
-            .filter(|s| *s != Spot::ViewActions || (from..to).contains(&(col as usize)));
+        spots.get(row as usize).copied().flatten()
+    }
+
+    pub fn notices_mouse(
+        &mut self,
+        client: ClientId,
+        pane: PaneId,
+        col: u16,
+        row: u16,
+        m: Mouse,
+    ) -> bool {
+        if !self.is_notices_pane(pane) {
+            return false;
+        }
+        let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
+            return true;
+        };
+        let entries = self.notice_entries();
+        let at = self.notice_cursor(&session, &entries);
+        let spot = self.notice_spot(&session, pane, col, row);
         match (m.kind, m.button) {
             (MouseKind::Move, _) => {
                 let lit = spot.filter(|_| settings::is_on("hover_highlight"));
@@ -466,7 +477,7 @@ impl Server {
                     self.focus_pane(pane);
                 }
                 let on_back_or_footer = matches!(
-                    spots.get(row as usize).copied().flatten(),
+                    self.notice_row(&session, pane, row),
                     Some(Spot::Back | Spot::ViewActions)
                 );
                 match spot {

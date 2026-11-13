@@ -874,6 +874,24 @@ impl Overlay for Mission {
         "mission"
     }
 
+    /// A hand over anything a click presses (a view's name, a card, a row,
+    /// a chip, a footer's key), the arrow elsewhere, among them the pane
+    /// beside a board, which only the wheel scrolls; left of its parts, the
+    /// sidebar's.
+    fn pointer(&self, col: u16, row: u16, _look: &Look) -> Option<crate::ui::pointer::Pointer> {
+        use crate::ui::pointer::Pointer;
+        let col = col.checked_sub(self.left)?;
+        let hit = self
+            .hits
+            .iter()
+            .find(|h| h.y == row && col >= h.x0 && col <= h.x1)
+            .map(|h| h.spot);
+        Some(match hit {
+            None | Some(Spot::Side(_)) => Pointer::Arrow,
+            Some(_) => Pointer::Hand,
+        })
+    }
+
     fn draw(&mut self, buf: &mut Buffer, _look: &Look) {
         // A card's screen (`s`) ends once the cursor has moved off it.
         if self.card_screen.is_some_and(|(_, at)| at != self.cursor) {

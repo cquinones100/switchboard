@@ -685,6 +685,10 @@ fn input(
 }
 
 impl Overlay for RoutineForm {
+    fn drawn(&self) -> Option<&crate::ui::draw::Drawn> {
+        self.drawn.as_ref()
+    }
+
     fn kind(&self) -> &'static str {
         "routine"
     }

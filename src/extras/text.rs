@@ -77,6 +77,10 @@ fn style(tone: Tone, look: &Look) -> Style {
 }
 
 impl Overlay for TextBox {
+    fn drawn(&self) -> Option<&crate::ui::draw::Drawn> {
+        self.drawn.as_ref()
+    }
+
     fn kind(&self) -> &'static str {
         "text"
     }

@@ -2254,6 +2254,29 @@ impl Server {
 
     // ── The mouse ───────────────────────────────────────────────────────────
 
+    /// What a cell of a client's sidebar is, where it last drew it: the row
+    /// or chip a click there presses (`None` for one it does nothing on),
+    /// or `None` outside the sidebar.
+    pub fn sidebar_under(&self, client: ClientId, col: u16, row: u16) -> Option<Option<Owner>> {
+        let d = self
+            .sidebar
+            .drawn
+            .get(&client)
+            .filter(|d| col <= d.area.right() && row < d.area.bottom())?;
+        // The top line's ⏰ chip is a target of its own on a line the
+        // repository filter's chip may share.
+        let on_reminders = row == d.area.y
+            && d.reminders_at
+                .is_some_and(|(from, to)| (from..to).contains(&usize::from(col - d.area.x)));
+        Some(if on_reminders {
+            Some(Owner::Reminders)
+        } else {
+            (col < d.area.right())
+                .then(|| d.owners.get((row - d.area.y) as usize).cloned().flatten())
+                .flatten()
+        })
+    }
+
     /// A mouse event, before the panes see it: on the sidebar, a click goes
     /// to a tab (a right click opens a menu by it, serve/menu.rs) or, on the
     /// ▲ or ▼ more row,
@@ -2268,11 +2291,7 @@ impl Server {
         let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
             return false;
         };
-        let drawn = self.sidebar.drawn.get(&client).cloned();
-        let inside = drawn
-            .as_ref()
-            .is_some_and(|d| m.col <= d.area.right() && m.row < d.area.bottom());
-        let Some(d) = drawn.filter(|_| inside) else {
+        let Some(owner) = self.sidebar_under(client, m.col, m.row) else {
             if self.sidebar.hover.remove(&client).is_some()
                 && let Some(c) = self.clients.get_mut(&client)
             {
@@ -2283,17 +2302,8 @@ impl Server {
             }
             return false;
         };
-        // The top line's ⏰ chip is a target of its own on a line the
-        // repository filter's chip may share.
-        let on_reminders = m.row == d.area.y
-            && d.reminders_at
-                .is_some_and(|(from, to)| (from..to).contains(&usize::from(m.col - d.area.x)));
-        let owner = if on_reminders {
-            Some(Owner::Reminders)
-        } else {
-            (m.col < d.area.right())
-                .then(|| d.owners.get((m.row - d.area.y) as usize).cloned().flatten())
-                .flatten()
+        let Some(d) = self.sidebar.drawn.get(&client).cloned() else {
+            return false;
         };
         match (m.kind, m.button) {
             (MouseKind::Move, _) => {

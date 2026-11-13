@@ -472,6 +472,10 @@ impl AnswerBox {
 }
 
 impl Overlay for AnswerBox {
+    fn drawn(&self) -> Option<&crate::ui::draw::Drawn> {
+        self.drawn.as_ref()
+    }
+
     fn kind(&self) -> &'static str {
         "answer"
     }
@@ -553,8 +557,10 @@ impl Overlay for AnswerBox {
                     look.text()
                 };
                 self.option_rows.push((lines.len(), o.n));
-                lines.push(
-                    BoxLine::spans(vec![
+                // While a custom answer is typed, the options take no click.
+                lines.push(BoxLine {
+                    clickable: !typing,
+                    ..BoxLine::spans(vec![
                         Span::raw(" "),
                         Span::styled(
                             o.n.to_string(),
@@ -567,8 +573,7 @@ impl Overlay for AnswerBox {
                         ),
                     ])
                     .fill(chosen.then_some(look.theme.highlight))
-                    .clickable(),
-                );
+                });
             }
         } else {
             lines.push(BoxLine::text(

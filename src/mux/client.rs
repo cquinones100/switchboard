@@ -30,7 +30,7 @@ use std::net::Shutdown;
 use std::os::fd::{AsRawFd, BorrowedFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, Once, mpsc};
 
 use anyhow::{Context, Result, bail};
@@ -111,6 +111,11 @@ struct Attached {
 
 static ATTACHED: Mutex<Option<Attached>> = Mutex::new(None);
 
+/// Whether the terminal takes `OSC 22`, whose pointer the server may have
+/// made a hand (src/ui/pointer.rs), so it is put back to the text beam as
+/// the terminal is put back.
+static POINTER: AtomicBool = AtomicBool::new(false);
+
 /// The pipe's writing end, for the signal handler; -1 when none is set.
 static SIGNAL_FD: AtomicI32 = AtomicI32::new(-1);
 
@@ -175,6 +180,7 @@ pub fn attach(session: Option<String>) -> Result<ExitCode> {
     .trim()
     .to_string();
     let keys = crate::settings::is_on("extended_keys");
+    POINTER.store(crate::ui::pointer::takes(&term), Ordering::Relaxed);
     let terminal = Terminal::enter(libc::STDIN_FILENO, libc::STDOUT_FILENO, keys)
         .context("couldn't set up the terminal")?;
     let hello = ClientMsg::Attach {
@@ -462,6 +468,9 @@ fn restore_terminal() {
         let _ = write_fd(term.output, KEYS_OFF);
     }
     let _ = write_fd(term.output, LEAVE);
+    if POINTER.load(Ordering::Relaxed) {
+        let _ = write_fd(term.output, &crate::ui::pointer::Pointer::Text.osc());
+    }
     // SAFETY: tcsetattr reads the termios it is given.
     unsafe { libc::tcsetattr(term.input, libc::TCSANOW, &term.saved) };
 }
@@ -983,6 +992,20 @@ mod tests {
         assert_eq!(pty.read_until(&on), on);
         drop(terminal);
         let off = [KEYS_OFF, LEAVE].concat();
+        assert_eq!(pty.read_until(&off), off);
+    }
+
+    #[test]
+    fn the_pointer_is_put_back_where_the_terminal_takes_osc_22() {
+        let _lock = terminal_lock();
+        let pty = Pty::open();
+        let fd = pty.slave.as_raw_fd();
+        POINTER.store(true, Ordering::Relaxed);
+        let terminal = Terminal::enter(fd, fd, false).unwrap();
+        pty.read_until(ENTER);
+        drop(terminal);
+        POINTER.store(false, Ordering::Relaxed);
+        let off = [LEAVE, b"\x1b]22;text\x1b\\"].concat();
         assert_eq!(pty.read_until(&off), off);
     }
 

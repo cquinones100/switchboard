@@ -146,6 +146,10 @@ impl Peek {
 }
 
 impl Overlay for Peek {
+    fn drawn(&self) -> Option<&crate::ui::draw::Drawn> {
+        self.drawn.as_ref()
+    }
+
     fn kind(&self) -> &'static str {
         "peek"
     }

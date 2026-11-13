@@ -273,7 +273,8 @@ impl Server {
 
     /// Asks a client's terminal for every mouse movement while something
     /// lights what is under the mouse (an overlay with hover_highlight, or
-    /// the sidebar's rows), and stops asking when nothing does. Turning
+    /// the sidebar's rows) or the pointer follows it (`Client::takes_pointer`),
+    /// and stops asking when nothing does. Turning
     /// 1003 off leaves a terminal reporting no mouse at all, so the presses
     /// and drags the client asked for (1002) are asked for again with it.
     pub fn sync_motion(&mut self, id: ClientId) {
@@ -282,7 +283,16 @@ impl Server {
             return;
         };
         let header = !c.header_keys.is_empty() && crate::settings::is_on("hover_highlight");
-        let motion = (!c.overlays.layers.is_empty() && c.overlays.look.hover) || sidebar || header;
+        let motion = (!c.overlays.layers.is_empty() && c.overlays.look.hover)
+            || sidebar
+            || header
+            || c.takes_pointer();
+        // A pointer that stops following the mouse (hover_highlight turned
+        // off) is put back to the beam now, as no movement may come again.
+        if !c.takes_pointer() && c.pointer.take().is_some() {
+            let _ =
+                c.tx.send(ServerMsg::Output(super::pointer::Pointer::Text.osc()));
+        }
         if motion != c.overlays.motion {
             c.overlays.motion = motion;
             let mode: &[u8] = if motion {

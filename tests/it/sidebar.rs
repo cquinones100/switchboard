@@ -1857,3 +1857,65 @@ fn the_line_beside_a_list_cut_short_is_its_scroll_bar_and_a_press_below_the_thum
         left(&s[1], 34).contains("▲") && left(&s[1], 34).contains("more")
     });
 }
+
+#[test]
+fn the_pointer_is_a_hand_over_a_tab_s_row_and_an_arrow_over_a_divider() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach_as("xterm-ghostty", 120, 30);
+    client.wait_text("$");
+    let row = row_of(&mut client, "  1 ") + 1;
+    let hand = b"\x1b]22;pointer\x1b\\";
+    let count = |client: &TestClient, needle: &[u8]| {
+        client
+            .raw
+            .windows(needle.len())
+            .filter(|w| *w == needle)
+            .count()
+    };
+    client.send(format!("\x1b[<35;6;{row}M").as_bytes());
+    client.wait_sent("a hand over the tab's row", hand);
+    // Moving on within the row sends nothing new; into the pane, the beam.
+    client.send(format!("\x1b[<35;8;{row}M\x1b[<35;60;5M").as_bytes());
+    client.wait_sent("the beam over the pane", b"\x1b]22;text\x1b\\");
+    assert_eq!(count(&client, hand), 1);
+    // A pane split beside it: the line between them is a resizing arrow.
+    server.ok(&["split", "-R"]);
+    let line = client.wait_for("the split", |s| {
+        s[5].chars().skip(40).filter(|c| *c == '│').count() == 1
+    });
+    let col = line[5]
+        .chars()
+        .enumerate()
+        .skip(40)
+        .find(|(_, c)| *c == '│')
+        .unwrap()
+        .0
+        + 1;
+    client.send(format!("\x1b[<35;{col};6M").as_bytes());
+    client.wait_sent("the arrow over the divider", b"\x1b]22;ew-resize\x1b\\");
+    // Detaching puts the beam back, whichever build the client is.
+    let beam = b"\x1b]22;text\x1b\\";
+    let beams = count(&client, beam);
+    server.ok(&["detach"]);
+    client.wait_exit();
+    assert_eq!(count(&client, beam), beams + 1);
+
+    // A terminal that doesn't take OSC 22 is never sent it, nor is one on a
+    // server with hover_highlight off.
+    let mut plain = server.attach(120, 30);
+    plain.wait_text("$");
+    plain.send(format!("\x1b[<35;6;{row}M\x1b[<35;60;5M").as_bytes());
+    std::thread::sleep(Duration::from_millis(300) * common::patience());
+    plain.screen();
+    assert_eq!(count(&plain, b"\x1b]22;"), 0);
+    let server = TestServer::start_with_settings(
+        r#"{"hover_highlight": false, "notifications": false, "tips": false}"#,
+    );
+    let mut off = server.attach_as("xterm-ghostty", 120, 30);
+    off.wait_text("$");
+    off.send(format!("\x1b[<35;6;{row}M").as_bytes());
+    std::thread::sleep(Duration::from_millis(300) * common::patience());
+    off.screen();
+    assert_eq!(count(&off, b"\x1b]22;"), 0);
+}

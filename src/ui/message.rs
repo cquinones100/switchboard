@@ -48,6 +48,10 @@ impl Message {
 }
 
 impl Overlay for Message {
+    fn drawn(&self) -> Option<&crate::ui::draw::Drawn> {
+        self.drawn.as_ref()
+    }
+
     fn kind(&self) -> &'static str {
         "message"
     }

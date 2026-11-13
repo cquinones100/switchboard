@@ -187,6 +187,10 @@ impl FormatMenu {
 }
 
 impl Overlay for FormatMenu {
+    fn drawn(&self) -> Option<&crate::ui::draw::Drawn> {
+        self.drawn.as_ref()
+    }
+
     fn kind(&self) -> &'static str {
         "format-menu"
     }
@@ -447,6 +451,10 @@ impl Ask {
 }
 
 impl Overlay for Ask {
+    fn drawn(&self) -> Option<&crate::ui::draw::Drawn> {
+        self.drawn.as_ref()
+    }
+
     fn kind(&self) -> &'static str {
         "ask"
     }
@@ -558,6 +566,10 @@ impl Progress {
 const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 impl Overlay for Progress {
+    fn drawn(&self) -> Option<&crate::ui::draw::Drawn> {
+        self.drawn.as_ref()
+    }
+
     fn kind(&self) -> &'static str {
         "squash-progress"
     }

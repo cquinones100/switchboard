@@ -56,6 +56,10 @@ impl Ask {
 }
 
 impl Overlay for Ask {
+    fn drawn(&self) -> Option<&crate::ui::draw::Drawn> {
+        self.drawn.as_ref()
+    }
+
     fn kind(&self) -> &'static str {
         "ask"
     }

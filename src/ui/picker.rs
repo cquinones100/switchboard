@@ -603,6 +603,10 @@ fn lit(
 }
 
 impl Overlay for Picker {
+    fn drawn(&self) -> Option<&crate::ui::draw::Drawn> {
+        self.drawn.as_ref()
+    }
+
     fn kind(&self) -> &'static str {
         self.kind
     }

@@ -296,6 +296,10 @@ fn widest(cols: usize) -> usize {
 }
 
 impl Overlay for Menu {
+    fn drawn(&self) -> Option<&crate::ui::draw::Drawn> {
+        self.drawn.as_ref()
+    }
+
     fn kind(&self) -> &'static str {
         "menu"
     }

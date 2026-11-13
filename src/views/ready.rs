@@ -909,6 +909,10 @@ impl ReadyBox {
 }
 
 impl Overlay for ReadyBox {
+    fn drawn(&self) -> Option<&crate::ui::draw::Drawn> {
+        self.drawn.as_ref()
+    }
+
     fn kind(&self) -> &'static str {
         "ready"
     }

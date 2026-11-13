@@ -349,6 +349,9 @@ pub struct Client {
     /// the mouse (src/mux/header.rs).
     pub header_keys: super::header::Keys,
     pub header_hover: Option<super::header::Button>,
+    /// The mouse pointer's shape last sent to its terminal (src/ui/pointer.rs),
+    /// none until one is.
+    pub pointer: Option<crate::ui::pointer::Pointer>,
     /// Where the left click being handled was pressed, while it is handled
     /// alone, so a box it opens opens beside it (`Server::open`); never
     /// set while a key is handled.
@@ -373,6 +376,13 @@ impl Client {
         crate::ui::images::speaks_kitty(&self.term) && crate::settings::is_on("server_images")
     }
 
+    /// Whether the mouse pointer's shape follows what is under it in this
+    /// client's terminal (src/ui/pointer.rs): Ghostty or kitty, with the
+    /// `hover_highlight` setting on.
+    pub fn takes_pointer(&self) -> bool {
+        crate::ui::pointer::takes(&self.term) && crate::settings::is_on("hover_highlight")
+    }
+
     /// Whether its terminal draws truecolor, so the dark theme is drawn in
     /// the canvas's colors for it (src/status/theme.rs).
     pub fn truecolor(&self) -> bool {
@@ -380,11 +390,18 @@ impl Client {
     }
 
     /// Tells its terminal's client to end with `message`, putting the
-    /// terminal's own colors back first where the server set them.
+    /// terminal's own colors back first where the server set them, and its
+    /// pointer's beam where the terminal takes `OSC 22` (a client from before
+    /// an upgrade doesn't put it back itself, and the server a build took over
+    /// from may have changed it).
     pub fn exit(&self, message: String) {
         if self.terminal_colors {
             let put_back = crate::status::theme::PUT_COLORS_BACK.to_vec();
             let _ = self.tx.send(ServerMsg::Output(put_back));
+        }
+        if crate::ui::pointer::takes(&self.term) {
+            let beam = crate::ui::pointer::Pointer::Text.osc();
+            let _ = self.tx.send(ServerMsg::Output(beam));
         }
         let _ = self.tx.send(ServerMsg::Exit {
             message: Some(message),
@@ -2042,6 +2059,7 @@ impl Server {
             status_hits: Default::default(),
             header_keys: Default::default(),
             header_hover: None,
+            pointer: None,
             pressed_at: None,
             overlays: Default::default(),
             activity: Instant::now(),
@@ -2128,6 +2146,7 @@ impl Server {
             status_hits: Default::default(),
             header_keys: Default::default(),
             header_hover: None,
+            pointer: None,
             pressed_at: None,
             overlays: Default::default(),
             activity: Instant::now()
@@ -2422,10 +2441,107 @@ impl Server {
         if let Some(c) = self.clients.get_mut(&id) {
             c.pressed_at = pressed_at;
         }
+        let mouse = match parsed.input {
+            Input::Mouse(m) => Some(m),
+            _ => None,
+        };
         self.dispatch_input(id, parsed);
         if let Some(c) = self.clients.get_mut(&id) {
             c.pressed_at = None;
         }
+        if let Some(m) = mouse {
+            self.sync_pointer(id, m.col, m.row);
+        }
+    }
+
+    /// Sets the mouse pointer to what a click where it is would do, when
+    /// that differs from what its terminal was last sent: only for a
+    /// terminal that takes `OSC 22` with hover_highlight on, and with it
+    /// turned off the text beam put back once.
+    fn sync_pointer(&mut self, id: ClientId, col: u16, row: u16) {
+        let shape = if self.clients.get(&id).is_some_and(Client::takes_pointer) {
+            Some(self.pointer_at(id, col, row))
+        } else {
+            None
+        };
+        let Some(c) = self.clients.get_mut(&id) else {
+            return;
+        };
+        let send = match (shape, c.pointer) {
+            (Some(now), was) if was != Some(now) => now,
+            (None, Some(_)) => crate::ui::pointer::Pointer::Text,
+            _ => return,
+        };
+        c.pointer = shape;
+        let _ = c.tx.send(ServerMsg::Output(send.osc()));
+    }
+
+    /// The pointer's shape over a cell of a client's screen: the overlays'
+    /// from the top down, then the sidebar's rows, the header's keys, the
+    /// status line's button and tabs, the beam over a pane and a resizing
+    /// arrow over a line between panes (or while one is dragged).
+    fn pointer_at(&self, id: ClientId, col: u16, row: u16) -> crate::ui::pointer::Pointer {
+        use crate::ui::pointer::Pointer;
+        let Some(c) = self.clients.get(&id) else {
+            return Pointer::Arrow;
+        };
+        if let Some(Drag::Border { vertical, .. }) = c.drag {
+            return Pointer::border(vertical);
+        }
+        let look = *c.overlays.look();
+        let over = c
+            .overlays
+            .layers
+            .iter()
+            .rev()
+            .find_map(|l| l.overlay.pointer(col, row, &look));
+        if let Some(shape) = over {
+            return shape;
+        }
+        if let Some(owner) = self.sidebar_under(id, col, row) {
+            return if owner.is_some() {
+                Pointer::Hand
+            } else {
+                Pointer::Arrow
+            };
+        }
+        if c.header_keys
+            .iter()
+            .any(|(r, _)| row == r.y && col >= r.x && col < r.right())
+        {
+            return Pointer::Hand;
+        }
+        let status_row = c.rows.saturating_sub(crate::status::lines());
+        if row >= status_row {
+            let on_a_tab = row == status_row && c.status_hits.at(col).is_some();
+            return if on_a_tab {
+                Pointer::Hand
+            } else {
+                Pointer::Arrow
+            };
+        }
+        if let Some((pane, col, row)) = self.pane_at(id, col, row) {
+            // The Notifications window is the server's own drawing.
+            // A scroll bar shows the arrow, as the boxes' and the sidebar's do.
+            if self.on_pane_scrollbar(pane, col, row) {
+                return Pointer::Arrow;
+            }
+            if !self.is_notices_pane(pane) {
+                return Pointer::Text;
+            }
+            return match self.notice_spot(&c.session, pane, col, row) {
+                Some(_) => Pointer::Hand,
+                None => Pointer::Arrow,
+            };
+        }
+        let border = self
+            .session(&c.session)
+            .and_then(|s| {
+                let tab = self.tabs.get(&s.current).filter(|t| !t.zoomed)?;
+                tab.layout.place(s.main_area()).border_at(col, row)
+            })
+            .map(|(_, _, vertical)| vertical);
+        border.map_or(Pointer::Arrow, Pointer::border)
     }
 
     fn dispatch_input(&mut self, id: ClientId, parsed: input::Parsed) {

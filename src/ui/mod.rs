@@ -29,6 +29,8 @@
 //! - `picker`: a filterable list, what fzf was, with nucleo-matcher.
 //! - `palette`: M-p, every command with a description (palette.sh).
 //! - `keylist`: the list of keys.
+//! - `pointer`: the mouse pointer's shape, a hand over what a click
+//!   presses (`OSC 22`).
 //! - `when`: when something came, as a date and a clock time for a row's
 //!   end (the Notifications view and window).
 //! - `headless`: a client with no terminal, for `switchboard headless`,
@@ -64,6 +66,7 @@ pub mod message;
 pub mod palette;
 pub mod picker;
 pub mod picture;
+pub mod pointer;
 mod serve;
 pub mod tip;
 pub mod when;
@@ -325,6 +328,20 @@ pub trait Overlay: AsAny + Send {
     /// pane keeps its focus and its cursor while it is up.
     fn lets_through(&self) -> bool {
         false
+    }
+
+    /// Where it last drew its box, for the pointer's shape over it.
+    fn drawn(&self) -> Option<&draw::Drawn> {
+        None
+    }
+
+    /// The mouse pointer's shape over a cell (`pointer`), or `None` where
+    /// what is under it decides, for one that hands a click there on (only
+    /// mission control, over the sidebar). A box's own from where it drew;
+    /// the arrow outside it, since a click there only closes it.
+    fn pointer(&self, col: u16, row: u16, look: &Look) -> Option<pointer::Pointer> {
+        let shape = self.drawn().and_then(|d| d.pointer(col, row, look.mouse));
+        Some(shape.unwrap_or(pointer::Pointer::Arrow))
     }
 }
 

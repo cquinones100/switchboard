@@ -213,6 +213,8 @@ pub struct Drawn {
     pub inner: Rect,
     /// The screen row of each line shown, by its index in the spec's lines.
     pub rows: Vec<(u16, usize)>,
+    /// The screen rows of the lines a click means something on.
+    pub clickable: Vec<u16>,
     /// The close button's cells, when it has one.
     pub close: Option<Rect>,
 }
@@ -470,6 +472,7 @@ pub fn draw_box(buf: &mut Buffer, spec: &BoxSpec<'_>, look: &Look) -> Drawn {
         Rect::new(x, t, close_w as u16, 1)
     });
     let mut drawn_rows = Vec::new();
+    let mut clickable = Vec::new();
     let line_rows = inner.height.saturating_sub(keys_rows as u16);
     for (i, line) in spec.lines.iter().take(line_rows as usize).enumerate() {
         let y = inner.y + i as u16;
@@ -484,6 +487,9 @@ pub fn draw_box(buf: &mut Buffer, spec: &BoxSpec<'_>, look: &Look) -> Drawn {
             &Line::from(line.spans.clone()),
         );
         drawn_rows.push((y, i));
+        if line.clickable {
+            clickable.push(y);
+        }
     }
     if let Some(keys) = keys_line
         && inner.height >= 2
@@ -500,6 +506,7 @@ pub fn draw_box(buf: &mut Buffer, spec: &BoxSpec<'_>, look: &Look) -> Drawn {
         outer,
         inner,
         rows: drawn_rows,
+        clickable,
         close: close_at,
     }
 }

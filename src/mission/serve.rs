@@ -7303,6 +7303,15 @@ mod tests {
             Then::Redraw
         );
         assert_eq!(m.hover, Some(Spot::Index(1)));
+        // The pointer is a hand over a row, the arrow off the rows.
+        use crate::ui::{Overlay, pointer::Pointer};
+        let look = crate::ui::Look::default();
+        assert_eq!(m.pointer(row.0, row.1, &look), Some(Pointer::Hand));
+        let bare = (0..20u16)
+            .flat_map(|y| (0..120u16).map(move |x| (x, y)))
+            .find(|&(x, y)| !m.hits.iter().any(|h| h.y == y && x >= h.x0 && x <= h.x1))
+            .expect("a cell nothing is on");
+        assert_eq!(m.pointer(bare.0, bare.1, &look), Some(Pointer::Arrow));
         let chosen = at(&m, Spot::Index(0));
         mouse_in(
             &mut m,

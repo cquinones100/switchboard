@@ -45,6 +45,10 @@ impl KeyList {
 }
 
 impl Overlay for KeyList {
+    fn drawn(&self) -> Option<&crate::ui::draw::Drawn> {
+        self.drawn.as_ref()
+    }
+
     fn kind(&self) -> &'static str {
         "keys"
     }

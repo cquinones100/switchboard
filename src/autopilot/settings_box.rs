@@ -41,6 +41,7 @@ use crate::mux::input::{Key, KeyCode, Mods, Mouse};
 use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
 use crate::ui::images::{self, Tones};
 use crate::ui::kit::{self, Col, Mark, Surface, Tone};
+use crate::ui::pointer::Pointer;
 use crate::ui::{Look, Outcome, Overlay, Picked, Step};
 
 /// Its inside, while the screen leaves room around it.
@@ -1234,7 +1235,36 @@ impl SettingsBox {
     }
 }
 
+impl SettingsBox {
+    /// The part a click on a cell of the box presses: while the question
+    /// before leaving is up, only Leave and Stay.
+    fn part_at(&self, hit: Hit) -> Option<Part> {
+        let part = match hit {
+            Hit::Close => Some(Part::Close),
+            Hit::Line(line, x) => self
+                .parts
+                .iter()
+                .find(|(l, x0, x1, _)| *l == line && x >= *x0 && x <= *x1)
+                .map(|p| p.3),
+            _ => None,
+        };
+        part.filter(|p| self.leaving.is_none() || matches!(p, Part::Leave | Part::Stay))
+    }
+}
+
 impl Overlay for SettingsBox {
+    /// A hand over a part a click presses (only Leave and Stay while the
+    /// question before leaving is up), the arrow elsewhere.
+    fn pointer(&self, col: u16, row: u16, look: &Look) -> Option<Pointer> {
+        let hit = self.drawn.as_ref().map(|d| d.hit(col, row));
+        let pressed = hit.and_then(|h| self.part_at(h)).is_some();
+        Some(if pressed && look.mouse {
+            Pointer::Hand
+        } else {
+            Pointer::Arrow
+        })
+    }
+
     fn kind(&self) -> &'static str {
         "autopilot"
     }
@@ -1428,16 +1458,7 @@ impl Overlay for SettingsBox {
             return Step::Same;
         };
         let hit = drawn.hit(mouse.col, mouse.row);
-        let part = match hit {
-            Hit::Close => Some(Part::Close),
-            Hit::Line(line, x) => self
-                .parts
-                .iter()
-                .find(|(l, x0, x1, _)| *l == line && x >= *x0 && x <= *x1)
-                .map(|p| p.3),
-            _ => None,
-        };
-        let part = part.filter(|p| self.leaving.is_none() || matches!(p, Part::Leave | Part::Stay));
+        let part = self.part_at(hit);
         match draw::gesture(&mouse) {
             Gesture::Click if look.mouse && self.leaving.is_some() => match part {
                 Some(p) => self.press(p),

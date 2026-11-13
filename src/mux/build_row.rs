@@ -479,6 +479,10 @@ impl Steps {
 }
 
 impl Overlay for Steps {
+    fn drawn(&self) -> Option<&crate::ui::draw::Drawn> {
+        self.drawn.as_ref()
+    }
+
     fn kind(&self) -> &'static str {
         "build-steps"
     }

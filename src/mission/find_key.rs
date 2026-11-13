@@ -498,6 +498,10 @@ fn big_keycap(f: &Found, caps: bool, theme: &Theme, inside: usize) -> Vec<BoxLin
 }
 
 impl Overlay for FindKey {
+    fn drawn(&self) -> Option<&crate::ui::draw::Drawn> {
+        self.drawn.as_ref()
+    }
+
     fn kind(&self) -> &'static str {
         "find-key"
     }

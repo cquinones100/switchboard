@@ -432,6 +432,10 @@ impl ViewsBox {
 }
 
 impl Overlay for ViewsBox {
+    fn drawn(&self) -> Option<&crate::ui::draw::Drawn> {
+        self.drawn.as_ref()
+    }
+
     fn kind(&self) -> &'static str {
         "views-at-once"
     }

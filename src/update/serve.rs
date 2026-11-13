@@ -143,6 +143,10 @@ impl Overlay for UpdateBox {
         self.0.stands_out()
     }
 
+    fn drawn(&self) -> Option<&crate::ui::draw::Drawn> {
+        self.0.drawn()
+    }
+
     fn key(&mut self, key: Key, look: &Look) -> Step {
         self.0.key(key, look)
     }

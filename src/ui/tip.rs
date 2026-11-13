@@ -203,6 +203,10 @@ impl Tip {
 }
 
 impl Overlay for Tip {
+    fn drawn(&self) -> Option<&crate::ui::draw::Drawn> {
+        self.drawn.as_ref()
+    }
+
     fn kind(&self) -> &'static str {
         "tip"
     }
@@ -294,6 +298,9 @@ mod tests {
         assert!(s[0].contains("─ tip ─"), "{:?}", s[0]);
         assert!(s[1].contains("│ Pinned."));
         assert!(s[6].contains("any key closes · tips are in Settings"));
+        // A click outside it only closes it, so nothing under it shows a hand.
+        use crate::ui::pointer::Pointer;
+        assert_eq!(tip.pointer(2, 20, &Look::default()), Some(Pointer::Arrow));
         assert_eq!(
             tip.key(Key::new(KeyCode::Char('j'), Mods::NONE), &Look::default()),
             Step::Pass

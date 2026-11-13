@@ -23,6 +23,7 @@ use crate::mux::input::{Key, KeyCode, Mouse};
 use crate::mux::{PaneId, TabId};
 use crate::ui::draw::{self, Gesture};
 use crate::ui::kit::{self, Tone};
+use crate::ui::pointer::Pointer;
 use crate::ui::{Look, Outcome, Overlay, Step};
 
 pub struct HistoryView {
@@ -211,6 +212,19 @@ impl Overlay for HistoryView {
     /// A paste closes it and goes on to the tab, as typing does.
     fn paste(&mut self, _text: &str, _look: &Look) -> Step {
         Step::Pass
+    }
+
+    /// A hand over easy mode's × and the timeline a click moves to, the
+    /// arrow everywhere else, since a click there only closes it or does
+    /// nothing.
+    fn pointer(&self, col: u16, row: u16, look: &Look) -> Option<Pointer> {
+        let within = |r: Rect| col >= r.x && col < r.right() && row >= r.y && row < r.bottom();
+        let pressed = self.close.is_some_and(within) || (self.plot.width > 0 && within(self.plot));
+        Some(if pressed && look.mouse {
+            Pointer::Hand
+        } else {
+            Pointer::Arrow
+        })
     }
 
     fn mouse(&mut self, mouse: Mouse, look: &Look) -> Step {
