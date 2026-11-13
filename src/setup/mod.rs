@@ -2,7 +2,8 @@
 //! Claude Code, and nothing beside it. Ported from setup.sh's Claude steps;
 //! the dotfiles it linked (tmux, Neovim, lazygit, Ghostty and the rest) are
 //! gone with the programs they configured, so these parts are all that is
-//! left of it:
+//! left of it, the only configs of other programs being what Switchboard
+//! itself needs from Ghostty and lazygit, never an editor's:
 //!
 //! - `plugin` (`plugin`): Switchboard's skills, hooks and instructions as a
 //!   Claude Code plugin in `~/.local/share/switchboard/plugin`, which the
@@ -15,7 +16,10 @@
 //! - `skills` (`skills`): Switchboard's skills in `~/.claude/skills` the old
 //!   way, taken out of it as a plugin, and the commands a repository's old
 //!   skills run linked into `~/.local/bin`.
-//! - `terminal` (`terminal`): Option acting as Alt in a Mac's terminal.
+//! - `terminal` (`terminal`): Option acting as Alt in a Mac's terminal,
+//!   and Notes' easy mode's Cmd keys in Ghostty.
+//! - `lazygit` (`lazygit`): a lazygit config where you have none, so Esc
+//!   quits lazygit in a pane's place.
 //! - `leftovers` (`leftovers`): what the tmux version's setup.sh left in
 //!   your home that leads nowhere now, and a `switchboard` function or alias
 //!   that starts tmux in the binary's place, tidied.
@@ -51,6 +55,7 @@
 
 pub mod claude_md;
 pub mod claude_settings;
+pub mod lazygit;
 pub mod leftovers;
 pub mod optional;
 pub mod plugin;
@@ -137,8 +142,13 @@ pub const PARTS: &[Part] = &[
     },
     Part {
         name: "terminal",
-        about: "make Option act as Alt in your terminal (a Mac's Ghostty, Terminal or iTerm2)",
+        about: "make Option act as Alt in your terminal (a Mac's Ghostty, Terminal or iTerm2), and send Cmd-S, Cmd-Z, Cmd-Shift-Z and Cmd-X to Notes' easy mode in Ghostty",
         run: terminal::run,
+    },
+    Part {
+        name: "lazygit",
+        about: "write a lazygit config where you have none, so Esc quits lazygit in a pane's place",
+        run: lazygit::run,
     },
     Part {
         name: "leftovers",
@@ -360,6 +370,7 @@ fn guided(check: bool) -> ExitCode {
     println!();
     heading("The terminal");
     terminal_offered(check, &mut list);
+    lazygit_offered(check, &mut list);
     println!();
     heading("Optional, each for what it names");
     for part in optional::all() {
@@ -415,20 +426,34 @@ fn terminal_offered(check: bool, list: &mut List) {
     match pending(part) {
         Err(e) => list.todo(format!("Option as Alt: {e:#}")),
         Ok(n) if n > 0 => {
-            if ask(
-                check,
-                "Make Option act as Alt in your terminal, which every M- key needs?",
-            ) {
+            let cmd_keys = terminal::adds_cmd_keys();
+            // Only the Cmd keys pending: Option already acts as Alt.
+            let only_cmd_keys = cmd_keys && n == 1;
+            let (question, done, later) = match (only_cmd_keys, cmd_keys) {
+                (true, _) => (
+                    "Send Cmd-S, Cmd-Z, Cmd-Shift-Z and Cmd-X to Notes' easy mode in Ghostty's config? Ghostty passes them on as keys rather than acting on them itself.",
+                    "Ghostty sends Notes' easy mode its Cmd keys; reload its config for them to take",
+                    "Notes' easy mode's Cmd keys in Ghostty: switchboard setup terminal",
+                ),
+                (false, true) => (
+                    "Make Option act as Alt in your terminal, which every M- key needs, and send Cmd-S, Cmd-Z, Cmd-Shift-Z and Cmd-X to Notes' easy mode in Ghostty's config, which then passes them on as keys rather than acting on them itself?",
+                    "Option acts as Alt, and Ghostty sends Notes' easy mode its Cmd keys; open a new window for them to take",
+                    "Option as Alt, which every M- key needs, and Notes' easy mode's Cmd keys in Ghostty: switchboard setup terminal",
+                ),
+                (false, false) => (
+                    "Make Option act as Alt in your terminal, which every M- key needs?",
+                    "Option acts as Alt; open a new window for it to take",
+                    "Option as Alt, which every M- key needs: switchboard setup terminal",
+                ),
+            };
+            if ask(check, question) {
                 if apply(part) {
-                    list.ok("Option acts as Alt; open a new window for it to take");
+                    list.ok(done);
                 } else {
                     list.todo("switchboard setup terminal failed");
                 }
             } else {
-                list.not_now(
-                    "terminal",
-                    "Option as Alt, which every M- key needs: switchboard setup terminal",
-                );
+                list.not_now("terminal", later);
             }
         }
         Ok(_) => match terminal::hint() {
@@ -438,6 +463,42 @@ fn terminal_offered(check: bool, list: &mut List) {
                 "the M- keys are Alt, which a Linux terminal sends as it is; one your desktop takes for itself can be moved in ~/.config/switchboard/keys.json",
             ),
         },
+    }
+}
+
+/// A lazygit config, offered only where lazygit is installed and you have
+/// none; a config of yours lacking `quitOnTopLevelReturn` gets the line to
+/// add said.
+fn lazygit_offered(check: bool, list: &mut List) {
+    if !lazygit::installed() {
+        return;
+    }
+    if let Some(yours) = lazygit::yours() {
+        if std::fs::read_to_string(&yours).is_ok_and(|t| lazygit::says_esc(&t)) {
+            list.ok("lazygit's config says what Esc does");
+        } else {
+            list.optional(&format!(
+                "Esc quitting lazygit in a pane's place: add quitOnTopLevelReturn: true to {}",
+                home_tilde(&yours)
+            ));
+        }
+        return;
+    }
+    let part = part_named("lazygit").expect("a part");
+    if ask(
+        check,
+        "Write a lazygit config, so Esc quits lazygit in a pane's place? You have none, and it would be yours.",
+    ) {
+        if apply(part) {
+            list.ok("lazygit quits on Esc in a pane's place");
+        } else {
+            list.todo("switchboard setup lazygit failed");
+        }
+    } else {
+        list.not_now(
+            "lazygit",
+            "a lazygit config, so Esc quits lazygit in a pane's place: switchboard setup lazygit",
+        );
     }
 }
 

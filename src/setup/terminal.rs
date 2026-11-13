@@ -5,7 +5,9 @@
 //!
 //! What it can change, it changes: a Ghostty config of your own gets
 //! `macos-option-as-alt = true` unless it already says how Option acts (and
-//! one is made when you are in Ghostty with none), and the terminal this
+//! one is made when you are in Ghostty with none), and the four Cmd keys
+//! Notes' easy mode reads (Cmd-S, Cmd-Z, Cmd-Shift-Z, Cmd-X) sent as kitty
+//! keys unless it binds any of them itself; and the terminal this
 //! runs in, when it is Terminal or iTerm2, has its default profile changed
 //! through macOS's own preferences (`platform::set_option_as_alt`). For any
 //! other terminal, `hint` gives the line to add to its config.
@@ -111,30 +113,93 @@ pub fn ghostty_says(text: &str) -> bool {
 const GHOSTTY_LINES: &str =
     "\n# Switchboard: Option as Alt, which its M- keys need.\nmacos-option-as-alt = true\n";
 
+/// Whether a Ghostty config already binds any of the Cmd keys Notes' easy
+/// mode reads, in which case they are its own and left alone. Ghostty
+/// takes `cmd` and `command` for `super`, the modifiers in any order, and
+/// prefixes (`global:`, `performable:`) that don't change the trigger; a
+/// letter matches in either case, and a sequence starting with one of the
+/// keys counts as binding it. A config that includes another
+/// (`config-file`) or a theme of its own by its path (`theme = ~/…`), either
+/// of which may bind them, counts as binding them.
+pub fn ghostty_binds_cmd_keys(text: &str) -> bool {
+    let includes_another = Regex::new(r"(?m)^\s*(config-file\s*=|theme\s*=[^\n]*[/~])")
+        .expect("a valid pattern")
+        .is_match(text);
+    if includes_another {
+        return true;
+    }
+    let wanted: [&[&str]; 4] = [&["s"], &["z"], &["shift", "z"], &["x"]];
+    Regex::new(r"(?m)^\s*keybind\s*=\s*([^=\n]+)=")
+        .expect("a valid pattern")
+        .captures_iter(text)
+        .any(|c| {
+            // A sequence's first key is bound too: binding it alone would
+            // unbind the sequence.
+            let trigger = c[1].to_lowercase();
+            let trigger = trigger.rsplit(':').next().unwrap_or_default();
+            let first = trigger.split('>').next().unwrap_or_default();
+            let mut keys: Vec<&str> = first.trim().split('+').map(str::trim).collect();
+            let before = keys.len();
+            keys.retain(|k| !matches!(*k, "super" | "cmd" | "command"));
+            keys.sort_unstable();
+            keys.len() + 1 == before && wanted.contains(&keys.as_slice())
+        })
+}
+
+const GHOSTTY_CMD_LINES: &str = "\n# Switchboard: Cmd-S, Cmd-Z, Cmd-Shift-Z and Cmd-X for Notes' easy mode.\nkeybind = super+s=csi:115;8u\nkeybind = super+z=csi:122;8u\nkeybind = super+shift+z=csi:121;8u\nkeybind = super+x=csi:120;8u\n";
+
+/// The Ghostty config the part changes: a config of your own, or one made
+/// when you are in Ghostty. None off a Mac.
+fn ghostty_target() -> Option<PathBuf> {
+    if platform::NAME != "macOS" {
+        return None;
+    }
+    ghostty_config()
+        .or_else(|| (term() == Term::Ghostty).then(|| paths::home_join(".config/ghostty/config")))
+}
+
+/// Whether the part would add Notes' Cmd keys to a Ghostty config, so the
+/// guided setup names them in its question.
+pub fn adds_cmd_keys() -> bool {
+    ghostty_target().is_some_and(|config| {
+        !ghostty_binds_cmd_keys(&fs::read_to_string(config).unwrap_or_default())
+    })
+}
+
 /// The part.
 pub fn run(r: &mut Report) -> Result<()> {
     if platform::NAME != "macOS" {
         return Ok(());
     }
-    // Ghostty: a config of your own, or one made when you are in Ghostty.
-    let config = ghostty_config()
-        .or_else(|| (term() == Term::Ghostty).then(|| paths::home_join(".config/ghostty/config")));
-    if let Some(config) = config {
+    if let Some(config) = ghostty_target() {
         let text = fs::read_to_string(&config).unwrap_or_default();
-        if !ghostty_says(&text) {
-            if !r.check {
-                if let Some(dir) = config.parent() {
-                    fs::create_dir_all(dir)?;
-                }
-                OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&config)
-                    .and_then(|mut f| f.write_all(GHOSTTY_LINES.as_bytes()))
-                    .with_context(|| format!("can't add to {}", home_tilde(&config)))?;
+        let option = !ghostty_says(&text);
+        let cmd_keys = !ghostty_binds_cmd_keys(&text);
+        if (option || cmd_keys) && !r.check {
+            if let Some(dir) = config.parent() {
+                fs::create_dir_all(dir)?;
             }
+            let lines: String = [(option, GHOSTTY_LINES), (cmd_keys, GHOSTTY_CMD_LINES)]
+                .iter()
+                .filter(|(wanted, _)| *wanted)
+                .map(|(_, lines)| *lines)
+                .collect();
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&config)
+                .and_then(|mut f| f.write_all(lines.as_bytes()))
+                .with_context(|| format!("can't add to {}", home_tilde(&config)))?;
+        }
+        if option {
             r.change(format!(
                 "make Option act as Alt in Ghostty's config, {} (reload its config, or open Ghostty again)",
+                home_tilde(&config)
+            ));
+        }
+        if cmd_keys {
+            r.change(format!(
+                "send Cmd-S, Cmd-Z, Cmd-Shift-Z and Cmd-X to Notes' easy mode in Ghostty's config, {}",
                 home_tilde(&config)
             ));
         }
@@ -172,5 +237,27 @@ mod tests {
         assert!(!ghostty_says(
             "# macos-option-as-alt = true\nfont-size = 13\n"
         ));
+    }
+
+    #[test]
+    fn a_ghostty_config_binding_a_cmd_key_of_its_own_gets_none_of_notes() {
+        assert!(ghostty_binds_cmd_keys("keybind = super+s=text:hi\n"));
+        assert!(ghostty_binds_cmd_keys("keybind=shift+cmd+z=undo\n"));
+        assert!(ghostty_binds_cmd_keys(
+            "keybind = performable:super+x=copy_to_clipboard\n"
+        ));
+        assert!(ghostty_binds_cmd_keys(
+            "keybind = global:unconsumed:cmd+s=x\n"
+        ));
+        assert!(ghostty_binds_cmd_keys("keybind = super+S=new_window\n"));
+        assert!(ghostty_binds_cmd_keys("keybind = super+s>n=new_window\n"));
+        assert!(ghostty_binds_cmd_keys("config-file = keys.conf\n"));
+        assert!(ghostty_binds_cmd_keys("theme = ~/themes/mine\n"));
+        assert!(!ghostty_binds_cmd_keys("theme = Dracula\n"));
+        assert!(ghostty_binds_cmd_keys(GHOSTTY_CMD_LINES));
+        assert!(!ghostty_binds_cmd_keys(
+            "keybind = super+shift+s=text:hi\n# keybind = super+x=cut\nkeybind = ctrl+z=undo\n"
+        ));
+        assert!(!ghostty_binds_cmd_keys(""));
     }
 }

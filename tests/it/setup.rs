@@ -22,6 +22,32 @@ use common::{BIN, TempDir};
 struct Home {
     _dir: TempDir,
     home: PathBuf,
+    /// The PATH its commands run with: `bin` first, then the test's own,
+    /// without the computer's own lazygit.
+    search_path: std::ffi::OsString,
+}
+
+/// The test's PATH with `bin` first and the computer's own lazygit, which
+/// the guided setup would offer a config for, left out: a folder holding
+/// one is replaced by a folder in `shadows` linking everything else in it,
+/// so git and the rest beside it are still found. A test that wants lazygit
+/// puts a stand-in in `bin`.
+fn search_path(bin: &Path, shadows: &Path) -> std::ffi::OsString {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let dirs = std::env::split_paths(&path).enumerate().map(|(i, dir)| {
+        if !dir.join("lazygit").exists() {
+            return dir;
+        }
+        let shadow = shadows.join(i.to_string());
+        fs::create_dir_all(&shadow).unwrap();
+        for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
+            if entry.file_name() != "lazygit" {
+                let _ = std::os::unix::fs::symlink(entry.path(), shadow.join(entry.file_name()));
+            }
+        }
+        shadow
+    });
+    std::env::join_paths(std::iter::once(bin.to_path_buf()).chain(dirs)).unwrap()
 }
 
 impl Home {
@@ -31,7 +57,12 @@ impl Home {
         let dir = TempDir::new(prefix);
         let home = dir.path().join("home");
         fs::create_dir_all(home.join("bin")).unwrap();
-        let h = Home { _dir: dir, home };
+        let search_path = search_path(&home.join("bin"), &dir.path().join("path"));
+        let h = Home {
+            _dir: dir,
+            home,
+            search_path,
+        };
         h.claude_version("2.1.319");
         // And a gh that isn't signed in, so the real one isn't asked.
         Gh::new().install(&h.path("bin"));
@@ -82,12 +113,8 @@ impl Home {
 
     fn command(&self, program: &str) -> Command {
         let mut cmd = Command::new(program);
-        let path = std::env::var("PATH").unwrap_or_default();
         cmd.env("HOME", &self.home)
-            .env(
-                "PATH",
-                format!("{}:{path}", self.home.join("bin").display()),
-            )
+            .env("PATH", &self.search_path)
             .env(
                 "SWITCHBOARD_STATE_DIR",
                 self.home.join(".local/state/switchboard"),
@@ -118,6 +145,8 @@ impl Home {
             .env_remove("ALACRITTY_SOCKET")
             .env_remove("XTERM_VERSION")
             .env_remove("XDG_CONFIG_HOME")
+            .env_remove("LG_CONFIG_FILE")
+            .env_remove("CONFIG_DIR")
             .env_remove("GH_TOKEN")
             .env_remove("GITHUB_TOKEN")
             .env_remove("LINEAR_API_KEY");
@@ -1897,6 +1926,59 @@ fn the_configs_the_clone_held_come_back_from_its_history() {
 }
 
 #[test]
+fn a_lazygit_config_is_written_only_where_lazygit_is_and_you_have_none() {
+    let h = Home::new("setup-lazygit");
+    std::os::unix::fs::symlink(BIN, h.path("bin/switchboard")).unwrap();
+    let config = h.path(if cfg!(target_os = "macos") {
+        "Library/Application Support/lazygit/config.yml"
+    } else {
+        ".config/lazygit/config.yml"
+    });
+
+    // Without lazygit, the part has nothing to set up and isn't offered.
+    let without = h.run(&["setup", "lazygit"]);
+    assert_eq!(without.status.code(), Some(1));
+    assert!(stderr(&without).contains("lazygit isn't installed"));
+    assert!(!stdout(&h.run(&["setup"])).contains("lazygit"));
+
+    // With it, the guided setup asks, and a no writes nothing.
+    common::stand_in::install(&h.path("bin/lazygit"), "#!/bin/sh\nexit 0\n");
+    let closed = ok(&h.run(&["setup"]));
+    assert!(
+        closed.contains("Write a lazygit config") && closed.contains("switchboard setup lazygit"),
+        "{closed}"
+    );
+    assert!(!config.exists());
+
+    // Named, it writes the config once.
+    let wrote = ok(&h.run(&["setup", "lazygit"]));
+    assert!(wrote.contains("write a lazygit config"), "{wrote}");
+    assert!(read(&config).contains("quitOnTopLevelReturn: true"));
+    assert_eq!(ok(&h.run(&["setup", "lazygit"])), "lazygit: up to date\n");
+    let guided = ok(&h.run(&["setup"]));
+    assert!(
+        guided.contains("✓ lazygit's config says what Esc does"),
+        "{guided}"
+    );
+
+    // A config of your own is kept byte for byte, and the line to add said.
+    fs::remove_file(&config).unwrap();
+    let own = h.path(".config/jesseduffield/lazygit/config.yml");
+    fs::create_dir_all(own.parent().unwrap()).unwrap();
+    fs::write(&own, "gui:\n  sidePanelWidth: 0.2\n").unwrap();
+    assert_eq!(ok(&h.run(&["setup", "lazygit"])), "lazygit: up to date\n");
+    assert_eq!(read(&own), "gui:\n  sidePanelWidth: 0.2\n");
+    assert!(!config.exists());
+    let said = ok(&h.run(&["setup"]));
+    assert!(
+        said.contains(
+            "add quitOnTopLevelReturn: true to ~/.config/jesseduffield/lazygit/config.yml"
+        ),
+        "{said}"
+    );
+}
+
+#[test]
 fn parts_are_listed_and_an_unknown_one_refused() {
     let h = Home::new("setup-parts");
     let parts = ok(&h.run(&["setup", "--parts"]));
@@ -1912,6 +1994,7 @@ fn parts_are_listed_and_an_unknown_one_refused() {
             "claude-md",
             "skills",
             "terminal",
+            "lazygit",
             "leftovers"
         ]
     );

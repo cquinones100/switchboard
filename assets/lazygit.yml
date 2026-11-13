@@ -1,0 +1,8 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/jesseduffield/lazygit/master/schema/config.json
+# Written by `switchboard setup lazygit` where you had no lazygit config; it is
+# yours now, and setup never writes over it.
+
+# Esc with nothing left to back out of quits, as q and Ctrl-C do, so lazygit
+# in a pane's place (M-p's "Open lazygit in place of this pane") closes the
+# way the diff and the views do, bringing the pane back.
+quitOnTopLevelReturn: true
