@@ -119,7 +119,8 @@ pub fn category_name(category: &str, ux2: bool) -> &str {
     }
 }
 
-/// The list of options, as compiled in.
+/// The list of options, as compiled in; `schema` reads the clone's first
+/// (src/assets.rs).
 pub const SCHEMA: &str = include_str!("../assets/settings.json");
 
 /// `SWITCHBOARD_SETTINGS`, else `~/.config/switchboard/settings.json`. In
@@ -136,7 +137,9 @@ pub fn settings_file() -> PathBuf {
 /// The options as listed, each with its default as its value.
 pub fn schema() -> Vec<Setting> {
     let mut options: Vec<Setting> =
-        serde_json::from_str(SCHEMA).expect("assets/settings.json is a list of options");
+        serde_json::from_value(crate::assets::json("settings.json", SCHEMA))
+            .or_else(|_| serde_json::from_str(SCHEMA))
+            .expect("assets/settings.json is a list of options");
     for option in &mut options {
         option.value = option.default.clone();
     }

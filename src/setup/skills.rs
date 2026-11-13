@@ -58,21 +58,28 @@ pub fn skills_dir() -> PathBuf {
     paths::claude_dir().join("skills")
 }
 
-/// Every skill the binary carries, by name, each with its files (their
-/// paths within the skill, and their bytes).
-pub fn shipped() -> BTreeMap<&'static str, Vec<(&'static str, &'static [u8])>> {
-    let mut skills: BTreeMap<&str, Vec<(&str, &[u8])>> = BTreeMap::new();
-    for (path, bytes) in FILES {
+/// Every skill Switchboard ships, by name, each with its files (their
+/// paths within the skill, and their bytes): the clone's, else what the
+/// binary carries (src/assets.rs).
+pub fn shipped() -> BTreeMap<String, Vec<(String, Vec<u8>)>> {
+    let mut skills: BTreeMap<String, Vec<(String, Vec<u8>)>> = BTreeMap::new();
+    for (path, bytes) in crate::assets::skills() {
         if let Some((name, rest)) = path.split_once('/') {
-            skills.entry(name).or_default().push((rest, bytes));
+            skills
+                .entry(name.to_string())
+                .or_default()
+                .push((rest.to_string(), bytes));
         }
     }
     skills
 }
 
-/// One skill's file, as the binary carries it: `"wt/SKILL.md"`.
-pub fn shipped_file(path: &str) -> Option<&'static [u8]> {
-    FILES.iter().find(|(p, _)| *p == path).map(|(_, b)| *b)
+/// One skill's file, as `shipped` has it: `"wt/SKILL.md"`.
+pub fn shipped_file(path: &str) -> Option<Vec<u8>> {
+    crate::assets::skills()
+        .into_iter()
+        .find(|(p, _)| p == path)
+        .map(|(_, b)| b)
 }
 
 /// What is at `~/.claude/skills/<name>`, as far as this part cares.
@@ -268,11 +275,17 @@ fn from_switchboard(name: &str) -> bool {
 }
 
 /// Whether Switchboard's skills are in `~/.claude/skills`: any of them
-/// written there, or linked from a clone.
+/// written there, or linked from a clone, or a skill folder Switchboard
+/// wrote that it no longer ships, which `run` takes out.
 pub fn installed() -> bool {
-    shipped()
-        .keys()
-        .any(|name| matches!(found(name), Found::Ours(_) | Found::Linked))
+    let names = fs::read_dir(skills_dir()).into_iter().flatten().flatten();
+    let wrote_one = names
+        .filter_map(|e| e.file_name().into_string().ok())
+        .any(|name| matches!(found(&name), Found::Ours(_)));
+    wrote_one
+        || shipped()
+            .keys()
+            .any(|name| matches!(found(name), Found::Linked))
 }
 
 /// Whether `~/.claude/skills/<name>` is Switchboard's skill by that name,
@@ -313,11 +326,43 @@ pub fn run(r: &mut Report) -> Result<()> {
     if way == Way::Old && !r.check {
         fs::create_dir_all(&dir)?;
     }
-    for (name, files) in shipped() {
-        let dest = dir.join(name);
+    let shipped = shipped();
+    // Either way, a skill Switchboard wrote that it ships no longer (one
+    // removed or renamed, or the clone's own once the build went back to
+    // what it carries, src/assets.rs) is taken out, keeping files of yours.
+    let mut retired = Vec::new();
+    {
+        let names = fs::read_dir(&dir).into_iter().flatten().flatten();
+        for name in names.filter_map(|e| e.file_name().into_string().ok()) {
+            if shipped.contains_key(&name) {
+                continue;
+            }
+            if let Found::Ours(list) = found(&name) {
+                let dest = dir.join(&name);
+                let yours = yours_in(&dest, &list);
+                if !yours.is_empty() {
+                    left.push((dest.clone(), yours));
+                }
+                if r.check || take_out(&dest, &list).is_ok() {
+                    retired.push(name);
+                } else {
+                    failed.push(name);
+                }
+            }
+        }
+    }
+    if !retired.is_empty() {
+        r.change(format!(
+            "take the skills Switchboard no longer ships out of {} ({})",
+            home_tilde(&dir),
+            retired.join(" ")
+        ));
+    }
+    for (name, files) in shipped {
+        let dest = dir.join(&name);
         let result = match way {
-            Way::Old => write_skill(r, &dest, name, &files),
-            Way::Plugin => match found(name) {
+            Way::Old => write_skill(r, &dest, &name, &files),
+            Way::Plugin => match found(&name) {
                 Found::Ours(list) => {
                     let yours = yours_in(&dest, &list);
                     if !yours.is_empty() {
@@ -409,7 +454,7 @@ fn link_commands(r: &mut Report) -> Result<()> {
 }
 
 /// One skill written into `~/.claude/skills`, the old way.
-fn write_skill(r: &mut Report, dest: &Path, name: &str, files: &[(&str, &[u8])]) -> Result<()> {
+fn write_skill(r: &mut Report, dest: &Path, name: &str, files: &[(String, Vec<u8>)]) -> Result<()> {
     let shown = home_tilde(dest);
     // A skill new here, or a link replaced, is said in one line; one
     // already written, by what changed in it.

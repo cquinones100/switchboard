@@ -7,6 +7,9 @@
 //! - `paths`: where things are, through `~` and the clone.
 //! - `util`: time, files, commands, JSON as JavaScript writes it.
 //! - `settings`: the workspace's options (`assets/settings.json`).
+//! - `assets`: what the binary carries in `assets/`, read from the clone
+//!   the build came from while it is there; `skill_files`, the skills' walk
+//!   it shares with build.rs.
 //! - `requests`: the request audit for the Usage view.
 //! - `platform`: what differs between macOS and Linux.
 //! - `presence`: whether you're at the computer.
@@ -78,6 +81,7 @@
 //! written once: `stand_in`, and `fake_http`, the demo's services.
 
 pub mod agent;
+pub mod assets;
 pub mod autopilot;
 pub mod awake;
 pub mod cmd;
@@ -106,6 +110,7 @@ pub mod routines;
 pub mod settings;
 pub mod setup;
 pub mod sidebar;
+pub mod skill_files;
 pub mod sources;
 pub mod status;
 pub mod tabs;

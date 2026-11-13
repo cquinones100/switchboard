@@ -48,7 +48,9 @@ impl Setup {
             &wt.join("Cargo.toml"),
             "[package]\nname = \"switchboard\"\n",
         );
-        fs::create_dir_all(wt.join("assets/skills")).unwrap();
+        // A skill of the worktree's own, which the try's build reads from
+        // it (src/assets.rs) in place of what it carries.
+        write(&wt.join("assets/skills/wt/SKILL.md"), "the worktree's wt\n");
         write(&wt.join("src/mux/mod.rs"), "\n");
         git(&wt, &["init", "-q"]);
         git(&wt, &["config", "user.email", "me@example.com"]);
@@ -203,7 +205,11 @@ fn print_sets_a_home_up_and_clean_takes_it_away() {
         "{\"model\": \"opus\"}\n"
     );
     let plugin = home.join(".local/share/switchboard/plugin");
-    assert!(plugin.join("skills/wt/SKILL.md").is_file());
+    // The skills are the worktree's, the change under trial.
+    assert_eq!(
+        fs::read_to_string(plugin.join("skills/wt/SKILL.md")).unwrap(),
+        "the worktree's wt\n"
+    );
     assert!(
         fs::read_to_string(plugin.join("hooks/hooks.json"))
             .unwrap()

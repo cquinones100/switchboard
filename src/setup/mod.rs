@@ -161,8 +161,13 @@ pub fn main(args: Vec<String>) -> ExitCode {
         match arg.as_str() {
             "--check" => check = true,
             "--refresh" => {
-                refresh_now();
-                return ExitCode::SUCCESS;
+                // Whether every part it ran worked, for the server's look
+                // at the clone (src/setup/plugin.rs), which tries again.
+                return if refresh_now() {
+                    ExitCode::SUCCESS
+                } else {
+                    ExitCode::FAILURE
+                };
             }
             "--move" => return move_over(),
             "--parts" => {
@@ -960,8 +965,8 @@ fn build_mark() -> String {
             hash = hash.wrapping_mul(0x100_0000_01b3);
         }
     };
-    add(claude_settings::ASSET.as_bytes());
-    add(claude_md::PART.as_bytes());
+    add(crate::assets::text("claude-settings.json", claude_settings::ASSET).as_bytes());
+    add(crate::cmd::claude_context::part().as_bytes());
     for (path, bytes) in plugin::files() {
         add(path.as_bytes());
         add(&bytes);
@@ -998,11 +1003,11 @@ pub fn refresh() {
 /// in `~/.claude` whose owner hasn't chosen is kept the old way, the setting
 /// off so the panes don't load the plugin on top of its hooks, and noted as
 /// unasked (`way::keep_unasked`), so the guided setup still asks.
-pub fn refresh_now() {
+pub fn refresh_now() -> bool {
     let file = build_file();
     let mark = build_mark();
     if util::read_text(&file).is_some_and(|t| t.trim() == mark) {
-        return;
+        return true;
     }
     let mut report = Report::new(false);
     report.silent = true;
@@ -1032,6 +1037,7 @@ pub fn refresh_now() {
         }
         let _ = util::write_atomic(&file, format!("{mark}\n"));
     }
+    worked
 }
 
 // ── What the parts share ────────────────────────────────────────────────────

@@ -403,6 +403,9 @@ pub fn run(name: Option<&str>, args: Vec<String>) -> ExitCode {
         }
         Some("version" | "-V" | "--version") => {
             println!("switchboard {}", crate::update::version_line());
+            if let Some(dir) = crate::assets::dir() {
+                println!("assets read from {}", crate::paths::tilde(&dir));
+            }
             ExitCode::SUCCESS
         }
         Some(name) if crate::mux::commands::NAMES.contains(&name) => {

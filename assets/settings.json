@@ -1057,6 +1057,13 @@
     "default": true
   },
   {
+    "key": "assets_from_checkout",
+    "category": "Updates",
+    "label": "Skills and instructions from the clone",
+    "description": "A build made from a clone reads its skills, Claude settings, instructions and settings list from that clone's assets/ folder, so a change there is live once it lands: the plugin and the parts you set up are brought up to date within seconds, with no rebuild or restart. A release build has no clone and keeps what it carries. Off, every build uses what it carries",
+    "default": true
+  },
+  {
     "key": "haiku_summaries",
     "category": "Slack relay",
     "label": "Haiku summaries",

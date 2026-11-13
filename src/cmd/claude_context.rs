@@ -47,19 +47,25 @@ use crate::settings;
 /// Switchboard's part, as compiled in.
 pub const PART: &str = include_str!("../../assets/switchboard.md");
 
+/// Switchboard's part: the clone's, else the compiled one (src/assets.rs).
+pub fn part() -> std::borrow::Cow<'static, str> {
+    crate::assets::text("switchboard.md", PART)
+}
+
 /// The most of the hook's JSON read.
 const INPUT_MAX: u64 = 1 << 20;
 
 /// The hook's answer: the part as SessionStart's added context, with the
 /// tab's note pointed at when it has one.
 pub fn answer(note: Option<&Path>) -> String {
+    let part = part();
     let context = match note {
         Some(note) => format!(
-            "{PART}\n# This tab's note\n\nThis tab's note is `{}`. Read it before your first reply: \
+            "{part}\n# This tab's note\n\nThis tab's note is `{}`. Read it before your first reply: \
              the standing rules it keeps apply to this session too, whatever repository it works in.\n",
             note.display()
         ),
-        None => PART.to_string(),
+        None => part.into_owned(),
     };
     json!({
         "hookSpecificOutput": {

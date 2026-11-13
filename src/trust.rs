@@ -130,6 +130,52 @@ pub fn is_untrusted_of(home: &Path, dir: &Path) -> bool {
         || marked(dir)
 }
 
+/// `is_untrusted` with no git run, for what asks on every hook
+/// (src/assets.rs): the mark read from the worktree's own config file,
+/// `<gitdir>/config.worktree`, where `git config --worktree` writes it.
+pub fn is_untrusted_without_git(dir: &Path) -> bool {
+    in_review_dir(dir)
+        || dir.canonicalize().is_ok_and(|real| in_review_dir(&real))
+        || marked_in_file(dir)
+}
+
+fn marked_in_file(dir: &Path) -> bool {
+    let dot_git = dir.join(".git");
+    let git_dir = if dot_git.is_dir() {
+        dot_git
+    } else {
+        let Ok(text) = std::fs::read_to_string(&dot_git) else {
+            return false;
+        };
+        match text.lines().find_map(|l| l.strip_prefix("gitdir:")) {
+            Some(gitdir) => dir.join(gitdir.trim()),
+            None => return false,
+        }
+    };
+    let Ok(config) = std::fs::read_to_string(git_dir.join("config.worktree")) else {
+        return false;
+    };
+    let (section, key) = MARK.split_once('.').expect("section.key");
+    let mut in_section = false;
+    config.lines().map(str::trim).any(|line| {
+        if let Some(header) = line.strip_prefix('[') {
+            in_section = header
+                .trim_end_matches(']')
+                .trim()
+                .eq_ignore_ascii_case(section);
+            return false;
+        }
+        in_section
+            && line.split_once('=').is_some_and(|(k, v)| {
+                k.trim().eq_ignore_ascii_case(key)
+                    && matches!(
+                        v.trim().to_ascii_lowercase().as_str(),
+                        "true" | "yes" | "on" | "1"
+                    )
+            })
+    })
+}
+
 /// What a command that would start Claude in such a worktree says instead.
 pub fn refusal(dir: &Path) -> String {
     format!(

@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
-use super::{Report, home_tilde, skills};
+use super::{Report, home_tilde};
 use crate::{paths, util};
 
 /// The plugin's name, which Claude Code puts before each of its skills'
@@ -93,9 +93,9 @@ pub fn manifest() -> Value {
 
 /// Every file of the plugin, by its path within it, plugin.json last.
 pub fn files() -> Vec<(String, Vec<u8>)> {
-    let mut files: Vec<(String, Vec<u8>)> = skills::FILES
-        .iter()
-        .map(|(path, bytes)| (format!("skills/{path}"), bytes.to_vec()))
+    let mut files: Vec<(String, Vec<u8>)> = crate::assets::skills()
+        .into_iter()
+        .map(|(path, bytes)| (format!("skills/{path}"), bytes))
         .collect();
     files.push((
         "hooks/hooks.json".into(),
@@ -119,6 +119,91 @@ pub fn write_quietly() -> Result<()> {
     let mut report = Report::new(false);
     report.silent = true;
     run(&mut report)
+}
+
+/// How often the server looks at the clone's assets (src/assets.rs).
+pub const ASSETS_LOOK: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The server's look at the clone the build came from: every
+/// `ASSETS_LOOK`, off its task, a hash of the paths, sizes and modified
+/// times of the clone's
+/// skills, Claude settings and part of CLAUDE.md, and the plugin and the
+/// parts already set up brought up to date (`switchboard setup --refresh`, whose
+/// mark hashes what they are made from) when it moved,
+/// or when where the assets come from changed (Settings'
+/// `assets_from_checkout` turned on or off), so a skill landed in the clone
+/// reaches the Claude sessions started after it with no rebuild or restart.
+/// A build with no clone only looks at the setting, reading nothing else.
+pub async fn follow_clone() {
+    let mut seen = tokio::task::spawn_blocking(look).await.ok();
+    let mut every = tokio::time::interval(ASSETS_LOOK);
+    every.tick().await;
+    // After a refresh that failed, the looks to let pass before the next
+    // try, so a part that keeps failing starts a process once a minute.
+    let mut failed_looks_left = 0u32;
+    loop {
+        every.tick().await;
+        let Ok(now) = tokio::task::spawn_blocking(look).await else {
+            continue;
+        };
+        if seen.as_ref() == Some(&now) || failed_looks_left > 0 {
+            failed_looks_left = failed_looks_left.saturating_sub(1);
+            continue;
+        }
+        let from = now.0.clone();
+        let checkout = from
+            .as_deref()
+            .and_then(std::path::Path::parent)
+            .map(std::path::Path::to_path_buf);
+        // The plugin and every part already set up (Claude's settings, the
+        // part of CLAUDE.md and the skills the old way), by the writers a new
+        // build's first run uses, which keep what is yours: in a process of
+        // its own, `switchboard setup --refresh`, since a run settles the
+        // way setup puts Switchboard once (src/setup/way.rs) and Settings
+        // may have moved it since the server's last refresh.
+        let refreshed = tokio::task::spawn_blocking(move || {
+            // A server started from a worktree's build outlives the
+            // worktree: then the `switchboard` on the PATH refreshes.
+            let exe = crate::util::exe()
+                .ok()
+                .filter(|exe| exe.is_file())
+                .or_else(|| crate::util::which("switchboard"))
+                .ok_or_else(|| std::io::Error::other("no switchboard to run"))?;
+            // The clone this server chose, which a binary from the PATH
+            // would choose for itself; none when it reads what it carries.
+            let checkout = checkout.map(std::path::PathBuf::into_os_string);
+            std::process::Command::new(exe)
+                .args(["setup", "--refresh"])
+                .env("SWITCHBOARD_CHECKOUT", checkout.unwrap_or_default())
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .status()
+        })
+        .await;
+        // Remembered only once it worked, so a refresh that failed is tried
+        // again at the next look.
+        if !matches!(refreshed, Ok(Ok(status)) if status.success()) {
+            failed_looks_left = 5;
+        } else {
+            seen = Some(now);
+            match from {
+                Some(dir) => eprintln!(
+                    "switchboard server: Switchboard's parts brought up to date from {}",
+                    home_tilde(&dir)
+                ),
+                None => eprintln!(
+                    "switchboard server: Switchboard's parts brought back to what the binary carries"
+                ),
+            }
+        }
+    }
+}
+
+/// Where the assets come from now, and what is there.
+fn look() -> (Option<std::path::PathBuf>, Option<u64>) {
+    let dir = crate::assets::dir();
+    let seen = dir.as_deref().map(crate::assets::fingerprint);
+    (dir, seen)
 }
 
 /// The plugin written into `dir`: each file that differs, the ones a newer
@@ -187,9 +272,10 @@ pub fn write_to(dir: &Path, r: &mut Report) -> Result<()> {
     {
         failed.push(format!("{LIST} ({e})"));
     }
+    let source = crate::assets::source_words();
     if before.is_none() {
         r.change(format!(
-            "write Switchboard's plugin for Claude Code to {shown}"
+            "write Switchboard's plugin for Claude Code to {shown}, its skills and hooks {source}"
         ));
     } else if written + gone > 0 {
         let mut what = Vec::new();
@@ -202,7 +288,10 @@ pub fn write_to(dir: &Path, r: &mut Report) -> Result<()> {
         if gone > 0 {
             what.push(format!("{gone} no longer shipped removed"));
         }
-        r.change(format!("bring {shown} up to date ({})", what.join(", ")));
+        r.change(format!(
+            "bring {shown} up to date ({}), its skills and hooks {source}",
+            what.join(", ")
+        ));
     }
     if failed.is_empty() {
         return Ok(());

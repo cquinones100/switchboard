@@ -60,7 +60,8 @@ pub fn main(args: Vec<String>) -> ExitCode {
     }
 }
 
-/// `--own <name>`: Switchboard's own SKILL.md, as the binary carries it, for
+/// `--own <name>`: Switchboard's own SKILL.md, as this build reads it
+/// (the clone's, else what the binary carries: src/assets.rs), for
 /// a hand-off that needs Switchboard's text whatever copy is installed
 /// (queue-and-clean reading ci-loop's "When queue-and-clean runs this"),
 /// since `~/.claude/skills/<name>` may be a skill of your own by that name.
@@ -71,7 +72,7 @@ fn own(name: Option<&str>) -> ExitCode {
     };
     match crate::setup::skills::shipped_file(&format!("{name}/SKILL.md")) {
         Some(text) => {
-            print!("{}", String::from_utf8_lossy(text));
+            print!("{}", String::from_utf8_lossy(&text));
             ExitCode::SUCCESS
         }
         None => ExitCode::from(1),

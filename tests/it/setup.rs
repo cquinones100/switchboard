@@ -103,6 +103,10 @@ impl Home {
             .env_remove("SWITCHBOARD_PANE")
             .env_remove("SWITCHBOARD_SETTINGS")
             .env_remove("SWITCHBOARD_PULL_ONLY")
+            // The assets are what the binary carries, not this
+            // repository's on disk (src/assets.rs), unless a test names a
+            // clone of its own.
+            .env("SWITCHBOARD_CHECKOUT", "")
             .env_remove("CLAUDE_CODE_PLUGIN_DIRS")
             .env_remove("CLAUDE_CODE_ENTRYPOINT")
             // The terminal and the services the guided setup looks at are
@@ -952,7 +956,7 @@ fn the_guided_setup_writes_the_plugin_asks_first_and_changes_nothing_the_second_
     fs::write(plugin.join("skills/wt/SKILL.md"), "an older wt\n").unwrap();
     let newer = ok(&h.run(&["setup"]));
     assert!(
-        newer.contains("bring ~/.local/share/switchboard/plugin up to date (1 file written)"),
+        newer.contains("bring ~/.local/share/switchboard/plugin up to date (1 file written), its skills and hooks as the binary carries them"),
         "{newer}"
     );
     assert_ne!(read(&plugin.join("skills/wt/SKILL.md")), "an older wt\n");
@@ -2122,4 +2126,115 @@ fn respawn_puts_a_program_in_the_pane_s_place_and_tabs_lists_it() {
     // As the system reads the pane's directory: /private/tmp on a Mac.
     let tmp = std::fs::canonicalize("/tmp").unwrap();
     assert_eq!(fields[5], tmp.to_str().unwrap());
+}
+
+#[test]
+fn a_build_reads_the_skills_and_instructions_of_the_clone_it_came_from_unless_turned_off() {
+    let h = Home::new("setup-assets");
+    let clone = h._dir.path().join("clone");
+    fs::create_dir_all(clone.join("assets/skills/x")).unwrap();
+    fs::write(clone.join("assets/skills/x/SKILL.md"), "the clone's x\n").unwrap();
+    fs::write(clone.join("assets/switchboard.md"), "the clone's part\n").unwrap();
+    let from_clone = |args: &[&str], input: Option<&str>| -> Output {
+        let mut cmd = h.command(BIN);
+        cmd.env("SWITCHBOARD_CHECKOUT", &clone)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = cmd.spawn().unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.unwrap_or("").as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    };
+    let plugin = h.path(".local/share/switchboard/plugin");
+    let start = r#"{"session_id":"s1","hook_event_name":"SessionStart","source":"startup"}"#;
+
+    let wrote = ok(&from_clone(&["setup", "plugin"], None));
+    assert!(wrote.contains("its skills and hooks from "), "{wrote}");
+    assert_eq!(read(&plugin.join("skills/x/SKILL.md")), "the clone's x\n");
+    assert!(
+        !plugin.join("skills/wt").exists(),
+        "only the clone's skills"
+    );
+    // Claude's hooks, which the clone doesn't have, are the binary's.
+    assert!(read(&plugin.join("hooks/hooks.json")).contains("switchboard hook Stop"));
+    assert_eq!(
+        ok(&from_clone(&["skill-path", "--own", "x"], None)),
+        "the clone's x\n"
+    );
+    let answer: Value =
+        serde_json::from_slice(&from_clone(&["claude-context"], Some(start)).stdout).unwrap();
+    assert_eq!(
+        answer["hookSpecificOutput"]["additionalContext"],
+        "the clone's part\n"
+    );
+
+    // An edit in the clone is taken up by the next run, with no new build.
+    fs::write(clone.join("assets/skills/x/SKILL.md"), "x, edited\n").unwrap();
+    ok(&from_clone(&["setup", "plugin"], None));
+    assert_eq!(read(&plugin.join("skills/x/SKILL.md")), "x, edited\n");
+
+    // Off, the build uses what it carries.
+    h.settings(json!({ "assets_from_checkout": false }));
+    let back = ok(&from_clone(&["setup", "plugin"], None));
+    assert!(back.contains("as the binary carries them"), "{back}");
+    assert!(!plugin.join("skills/x").exists());
+    assert!(plugin.join("skills/wt/SKILL.md").is_file());
+    assert!(
+        !from_clone(&["skill-path", "--own", "x"], None)
+            .status
+            .success()
+    );
+    let answer: Value =
+        serde_json::from_slice(&from_clone(&["claude-context"], Some(start)).stdout).unwrap();
+    assert_ne!(
+        answer["hookSpecificOutput"]["additionalContext"],
+        "the clone's part\n"
+    );
+}
+
+#[test]
+fn the_old_way_a_skill_the_clone_had_is_taken_out_once_the_build_goes_back_to_its_own() {
+    let h = Home::new("setup-assets-old");
+    h.old_way();
+    let clone = h._dir.path().join("clone");
+    fs::create_dir_all(clone.join("assets/skills/x")).unwrap();
+    fs::write(clone.join("assets/skills/x/SKILL.md"), "the clone's x\n").unwrap();
+    let setup = |h: &Home, args: &[&str]| {
+        let mut cmd = h.command(BIN);
+        cmd.env("SWITCHBOARD_CHECKOUT", &clone)
+            .arg("setup")
+            .args(args)
+            .stdin(Stdio::null());
+        ok(&cmd.output().unwrap())
+    };
+    let skills = |h: &Home| setup(h, &["skills"]);
+    skills(&h);
+    let x = h.path(".claude/skills/x");
+    assert_eq!(read(&x.join("SKILL.md")), "the clone's x\n");
+
+    // Renamed in the clone, the refresh the server runs takes the old name
+    // out though no skill it ships is installed.
+    fs::rename(clone.join("assets/skills/x"), clone.join("assets/skills/y")).unwrap();
+    setup(&h, &["--refresh"]);
+    assert!(!x.exists());
+    assert_eq!(
+        read(&h.path(".claude/skills/y/SKILL.md")),
+        "the clone's x\n"
+    );
+    let x = h.path(".claude/skills/y");
+
+    h.settings(json!({ "claude_plugin": false, "assets_from_checkout": false }));
+    let back = skills(&h);
+    assert!(
+        back.contains("take the skills Switchboard no longer ships out of ~/.claude/skills (y)"),
+        "{back}"
+    );
+    assert!(!x.exists());
+    assert!(h.path(".claude/skills/wt/SKILL.md").is_file());
 }

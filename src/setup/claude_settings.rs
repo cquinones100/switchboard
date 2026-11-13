@@ -44,9 +44,10 @@ use crate::{paths, util, worktree};
 /// Switchboard's part, as compiled in, and the hooks the plugin carries.
 pub const ASSET: &str = include_str!("../../assets/claude-settings.json");
 
-/// Switchboard's part, read.
+/// Switchboard's part, read: the clone's, else the compiled one
+/// (src/assets.rs).
 pub fn ours() -> Value {
-    serde_json::from_str(ASSET).expect("assets/claude-settings.json is JSON")
+    crate::assets::json("claude-settings.json", ASSET)
 }
 
 /// `~/.claude/settings.json`.

@@ -443,8 +443,10 @@ pub struct Server {
     /// desktop can't say how long you've been idle.
     pub typed: bool,
     /// The settings file's modification time when last read, so a change
-    /// made in the Settings view or by hand takes effect on the next tick.
-    settings_seen: Option<std::time::SystemTime>,
+    /// made in the Settings view or by hand takes effect on the next tick,
+    /// and the settings list's in the clone the build came from
+    /// (src/assets.rs), so a default or option landed there does too.
+    settings_seen: (Option<std::time::SystemTime>, Option<std::time::SystemTime>),
     /// What the desktop says of whether you're at the computer, read at
     /// most every `PRESENCE_EVERY` off the server's task (src/presence.rs).
     presence: crate::presence::Desktop,
@@ -569,6 +571,7 @@ async fn run(handover: Option<PathBuf>) -> Result<()> {
                 eprintln!("switchboard server: Switchboard's plugin for Claude Code: {e:#}");
             }
         });
+        tokio::spawn(crate::setup::plugin::follow_clone());
     }
     // A setting saved under its old name is read as its new one once,
     // before anything reads them.
@@ -1086,7 +1089,7 @@ impl Server {
             quit: false,
             last_input: Instant::now(),
             typed: false,
-            settings_seen: None,
+            settings_seen: (None, None),
             presence: Default::default(),
             presence_asked: None,
             persist: Default::default(),
@@ -1264,13 +1267,16 @@ impl Server {
     /// `settings::is_on` follows the file, as the sidebar daemon's watch did,
     /// and draws every client again with them.
     fn reload_settings_if_changed(&mut self) {
-        let seen = std::fs::metadata(crate::settings::settings_file())
-            .and_then(|m| m.modified())
-            .ok();
+        let modified =
+            |file: std::path::PathBuf| std::fs::metadata(file).and_then(|m| m.modified()).ok();
+        let seen = (
+            modified(crate::settings::settings_file()),
+            crate::assets::dir().and_then(|dir| modified(dir.join("settings.json"))),
+        );
         if seen == self.settings_seen {
             return;
         }
-        let first = self.settings_seen.is_none() && seen.is_some();
+        let first = self.settings_seen == (None, None) && seen != (None, None);
         self.settings_seen = seen;
         crate::settings::reload_settings();
         // Your PRs' news follows its setting at once, and the terminals'

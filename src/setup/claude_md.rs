@@ -58,9 +58,6 @@ use super::way::Way;
 use super::{Report, exists, home_tilde, is_link, stamp};
 use crate::{paths, util, worktree};
 
-/// Switchboard's part, as compiled in.
-pub const PART: &str = crate::cmd::claude_context::PART;
-
 /// The line importing Switchboard's part, the old way.
 pub const IMPORT: &str = "@~/.local/share/switchboard/switchboard.md";
 
@@ -398,15 +395,16 @@ fn remove_part(r: &mut Report, file: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Switchboard's part, as this binary carries it, written where your
+/// Switchboard's part, as this build reads it (src/assets.rs), written where your
 /// CLAUDE.md imports it from the old way. Alone, it is what a new build
 /// brings to a CLAUDE.md set up the old way (`super::refresh`), with no
 /// pull and no lock, since it touches only that one file, written whole.
 pub fn write_part(r: &mut Report) -> Result<()> {
     let part = part_file();
-    if util::read_text(&part).as_deref() != Some(PART) {
+    let text = crate::cmd::claude_context::part();
+    if util::read_text(&part).as_deref() != Some(&*text) {
         if !r.check {
-            util::write_atomic(&part, PART)?;
+            util::write_atomic(&part, &*text)?;
         }
         r.change(format!("write Switchboard's part to {}", home_tilde(&part)));
     }
