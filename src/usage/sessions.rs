@@ -264,7 +264,7 @@ fn last_write(claude_dir: &Path, claude: &Claude) -> Option<i64> {
     Some(secs as i64)
 }
 
-/// The Sessions view's rows: fullest first, a full one needing you, a quiet
+/// The Usage view's Sessions' rows: fullest first, a full one needing you, a quiet
 /// one idle.
 pub fn session_items(
     tabs: &[ClaudeTab],
@@ -315,6 +315,34 @@ pub fn session_items(
     // Stable, so sessions alike keep the tabs' order.
     rows.sort_by(|a, b| b.0.total_cmp(&a.0));
     rows.into_iter().map(|(_, item)| item).collect()
+}
+
+/// The Usage view's Sessions, which took the Sessions view's place: a
+/// heading, then each open tab's Claude as `session_items` gives it,
+/// fullest first, its id `session:<id>`; nothing with no Claude running.
+pub fn sessions_section(
+    tabs: &[ClaudeTab],
+    state: &Path,
+    claude_dir: &Path,
+    now_ms: i64,
+) -> Vec<Item> {
+    let rows = session_items(tabs, state, claude_dir, now_ms);
+    if rows.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![
+        Item::new("sessions", "Sessions").data(json!({ "header": true, "count": rows.len() })),
+    ];
+    out.extend(rows.into_iter().map(|mut i| {
+        i.id = format!("session:{}", i.id);
+        i
+    }));
+    out
+}
+
+/// Whether a Usage row is one of its Sessions'.
+pub fn is_session_row(item: &Item) -> bool {
+    item.id.starts_with("session:")
 }
 
 // ── Usage ───────────────────────────────────────────────────────────────────

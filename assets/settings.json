@@ -445,7 +445,7 @@
     "key": "view_work_map",
     "category": "Mission control",
     "label": "Work map",
-    "description": "Mission control's Work map: every piece of work in your tabs' repositories (M-j and M-o open it whatever this says)",
+    "description": "Mission control's Work map: every piece of work in your tabs' repositories (M-j opens it whatever this says)",
     "default": true
   },
   {
@@ -470,17 +470,10 @@
     "default": true
   },
   {
-    "key": "view_closed",
+    "key": "view_reopen",
     "category": "Mission control",
-    "label": "Closed tabs",
-    "description": "Mission control's Closed view: the tabs closed last, to reopen",
-    "default": true
-  },
-  {
-    "key": "view_sessions",
-    "category": "Mission control",
-    "label": "Sessions",
-    "description": "Mission control's Sessions view: each Claude session's context, model and age",
+    "label": "Reopen",
+    "description": "Mission control's Reopen view: tabs closed and past Claude sessions to resume, with the last screen of each; off, M-o opens it still and nothing else lists them",
     "default": true
   },
   {
@@ -964,7 +957,7 @@
     "key": "save_contents",
     "category": "Sessions",
     "label": "Save what panes show",
-    "description": "Keep each pane's screen in the layout saves, to show again after a restart; it can hold secrets",
+    "description": "Keep each pane's screen in the layout saves, to show again after a restart, and a closed tab's last screen for the Reopen view; it can hold secrets",
     "default": true
   },
   {
@@ -992,7 +985,7 @@
     "key": "statusline_context",
     "category": "Sessions",
     "label": "Context in Claude's status line",
-    "description": "Claude Code's status line under its prompt says how full the context is, beside the model, inside the workspace as outside it. Off, with UX 2.0 and mission control's Sessions view on, the status line inside the workspace shows the model alone and the Sessions view shows the context; without both of those it shows the context anyway",
+    "description": "Claude Code's status line under its prompt says how full the context is, beside the model, inside the workspace as outside it. Off, with UX 2.0 and mission control's Usage view on, the status line inside the workspace shows the model alone and the Usage view's Sessions show the context; without both of those it shows the context anyway",
     "default": true
   },
   {
@@ -1224,6 +1217,13 @@
       }
     ],
     "default": "thread"
+  },
+  {
+    "key": "relay_send_other_turns",
+    "category": "Slack relay",
+    "label": "Turns another tab or a task started",
+    "description": "Posts a tab's finished turn in its thread when another tab's message or a background task started it, or when it wrote no reply. Off, only turns you started that wrote a reply, and tabs waiting on you, are posted",
+    "default": false
   },
   {
     "key": "relay_send_stuck",

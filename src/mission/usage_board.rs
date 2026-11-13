@@ -288,6 +288,7 @@ pub fn board(
     );
     limits(&model, cols, theme, now_ms, lines, images);
     requests(&model, week, items, chosen_id, m, cols, lines, hits, images);
+    sessions(items, chosen_id, m, cols, lines, hits);
     // Scrolled up as far as the chosen row (and the line under a chosen
     // service) needs to be in sight above the footer, what goes off the top
     // taken out, an image cut by the top with it.
@@ -324,6 +325,109 @@ pub fn board(
     }
     true
 }
+
+/// Each open Claude session's context, model and age, the fullest first
+/// (`usage::sessions::sessions_section`, what the Sessions view showed):
+/// a row each, its context as a meter, one at 80% or more in the needs
+/// tone.
+fn sessions(
+    items: &[Item],
+    chosen_id: Option<&str>,
+    m: &Mission,
+    cols: usize,
+    lines: &mut Vec<Line>,
+    hits: &mut Vec<HitBox>,
+) {
+    let theme = &m.snap.theme;
+    let rows: Vec<(usize, &Item)> = items
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| crate::usage::sessions::is_session_row(i))
+        .collect();
+    if rows.is_empty() {
+        return;
+    }
+    lines.push(Line {
+        spans: vec![kit::rule(cols, theme)],
+        fill: None,
+    });
+    lines.push(Line {
+        spans: kit::label("Sessions", Tone::Dim, Some(rows.len()), cols, theme),
+        fill: None,
+    });
+    // The name up to 32 columns, the context's meter, and the facts
+    // stretching into the rest, the meter dropped first on a narrow screen.
+    let at = kit::columns(
+        &[
+            Col::Fixed {
+                min: 8,
+                natural: kit::natural(rows.iter().map(|(_, i)| i.title.as_str())),
+                cap: 32,
+            },
+            Col::Fixed {
+                min: METER_CELLS,
+                natural: METER_CELLS,
+                cap: METER_CELLS,
+            },
+            Col::Stretch {
+                weight: 1,
+                min: 10,
+                max: None,
+            },
+        ],
+        cols.saturating_sub(2),
+        2,
+        &[1],
+    );
+    for (index, item) in rows {
+        let chosen = chosen_id == Some(item.id.as_str());
+        let lit = m.hover == Some(Spot::Index(index as isize));
+        let used = item.data["used"].as_f64();
+        let tone = if used.is_some_and(|u| u >= 80.0) {
+            Tone::Needs
+        } else {
+            Tone::Accent
+        };
+        let name = if chosen {
+            Tone::Text.bold(theme)
+        } else {
+            Tone::Text.style(theme)
+        };
+        let mut line = Vec::new();
+        let mut put = |spans: Vec<Span<'static>>, slot: Option<(usize, usize)>| {
+            if let Some((x, w)) = slot {
+                kit::place(&mut line, spans, (x + 1, w));
+            }
+        };
+        put(vec![Span::styled(item.title.clone(), name)], at[0]);
+        put(
+            kit::meter(
+                used.map_or(0, |u| u.clamp(0.0, 100.0).round() as u8),
+                METER_CELLS,
+                tone,
+                theme,
+            ),
+            at[1],
+        );
+        put(
+            vec![Span::styled(item.detail.clone(), Tone::Dim.style(theme))],
+            at[2],
+        );
+        hits.push(HitBox {
+            y: lines.len() as u16,
+            x0: 0,
+            x1: cols.saturating_sub(1) as u16,
+            spot: Spot::Index(index as isize),
+        });
+        lines.push(Line {
+            spans: under_mouse(kit::row(line, cols, chosen, theme), lit && !chosen, theme),
+            fill: None,
+        });
+    }
+}
+
+/// A session's context meter's cells.
+const METER_CELLS: usize = 10;
 
 /// "Today $8.41", what the amount is, and where it comes from.
 fn heading(span: &SpanSpend, week: bool, cols: usize, theme: &Theme, lines: &mut Vec<Line>) {

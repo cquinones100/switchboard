@@ -109,7 +109,24 @@ fn file(state: &Path) -> PathBuf {
 /// doesn't read as one.
 pub fn load(state: &Path) -> Option<Choice> {
     let text = std::fs::read_to_string(file(state)).ok()?;
-    serde_json::from_str(&text).ok()
+    serde_json::from_str(&text).ok().map(renamed)
+}
+
+/// A choice saved before the Closed view became Reopen and the Sessions
+/// view a part of Usage, read by their new keys, each view once.
+fn renamed(mut choice: Choice) -> Choice {
+    let mut seen = std::collections::HashSet::new();
+    choice.views = choice
+        .views
+        .into_iter()
+        .map(|key| match key.as_str() {
+            "closed" => "reopen".to_string(),
+            "sessions" => "usage".to_string(),
+            _ => key,
+        })
+        .filter(|key| seen.insert(key.clone()))
+        .collect();
+    choice
 }
 
 pub fn save(state: &Path, choice: &Choice) -> io::Result<()> {
@@ -534,7 +551,8 @@ fn dim_line(text: &str, w: usize, theme: &Theme) -> Line {
 
 /// Whether a cell `rows` tall under its label leaves an item of its view
 /// out, so the cursor passes over it there: the Calendar's events all day,
-/// and while it shows `today` those already over, Usage's rows but the tabs that spent today, and
+/// and while it shows `today` those already over, Usage's rows but the tabs that spent today and
+/// its open Claude sessions, and
 /// the PR and ticket boards' week row when it doesn't fit.
 pub fn hidden(view: &View, item: &crate::items::Item, rows: usize, today: bool) -> bool {
     match view.id {
@@ -548,7 +566,8 @@ pub fn hidden(view: &View, item: &crate::items::Item, rows: usize, today: bool) 
             (today && item.state == State::Idle) || item.group.as_deref() == Some("All day")
         }
         ViewId::Usage if view.loaded => {
-            !item.id.starts_with("tab:") || item.detail == "nothing today"
+            let session = crate::usage::sessions::is_session_row(item);
+            !session && (!item.id.starts_with("tab:") || item.detail == "nothing today")
         }
         _ => false,
     }
@@ -739,6 +758,45 @@ fn usage(
             meter: Some((format!("grid/usage/{}", t.key), t.share, color)),
         });
     }
+    // Each open Claude's context, after the tabs, as the board's Sessions.
+    for (index, item) in v
+        .data
+        .items
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| crate::usage::sessions::is_session_row(i))
+    {
+        let used = item.data["used"].as_f64();
+        let tone = if used.is_some_and(|u| u >= 80.0) {
+            Tone::Needs
+        } else {
+            Tone::Accent
+        };
+        let mut spans = Vec::new();
+        if let Some(col) = at[0] {
+            kit::place(
+                &mut spans,
+                vec![Span::styled(item.title.clone(), Tone::Text.style(theme))],
+                col,
+            );
+        }
+        if let Some(col) = at[1] {
+            kit::place(&mut spans, Vec::new(), col);
+        }
+        if let Some(col) = at[3] {
+            let text = used.map_or("—".to_string(), |u| format!("{}%", u.round() as i64));
+            kit::place(&mut spans, right(text, col.1, tone.style(theme)), col);
+        }
+        rows.push(ListRow {
+            spans,
+            item: Some(index),
+            meter: Some((
+                format!("grid/usage/{}", item.id),
+                used.map_or(0.0, |u| (u / 100.0).clamp(0.0, 1.0)),
+                tone.fg(theme),
+            )),
+        });
+    }
     // The limit stays under the tabs, however many they are.
     let mut tail = Vec::new();
     if let Some(limit) = model.limits.iter().find(|l| l.key == "five_hour") {
@@ -917,6 +975,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_choice_saved_with_closed_and_sessions_reads_as_reopen_and_usage() {
+        let old = Choice {
+            views: vec!["closed".into(), "sessions".into(), "usage".into()],
+            layout: Layout::default(),
+        };
+        assert_eq!(renamed(old).views, vec!["reopen", "usage"]);
+    }
+
+    #[test]
     fn two_to_four_views_split_into_each_layout_s_cells() {
         // 2 × 2: four cells, two columns a rule apart, two rows a rule apart.
         let four = areas(&split(Layout::Grid, 4, 125, 21, CELL_MIN).unwrap());
@@ -1052,6 +1119,7 @@ mod tests {
                     Item::new("spent", "Spent today $8.41").data(json!({ "model": model })),
                     Item::new("tab:tab:1", "1 billing"),
                     Item::new("tab:tab:2", "2 docs"),
+                    Item::new("session:s1", "3 review").data(json!({ "used": 84.0 })),
                 ],
             ),
         ];
@@ -1091,6 +1159,12 @@ mod tests {
         assert!(lower.ends_with("3 left"), "{screen}");
         // The rules cross between the four.
         assert!(t.iter().any(|l| l.contains("─┼─")), "{screen}");
+        // Usage's cell lists each open Claude's context after the tabs.
+        assert!(
+            t.iter()
+                .any(|l| l.contains("3 review") && l.contains("84%")),
+            "{screen}"
+        );
         // The focused view's label is in the accent; another's is dim.
         let theme = m.snap.theme;
         let style_of = |text: &str| {
@@ -1108,12 +1182,13 @@ mod tests {
         let billing = t.iter().find(|l| l.contains("1 billing")).unwrap();
         assert!(billing.contains("$6.00 │"), "{screen}");
         assert!(screen.contains("42% used"), "{screen}");
-        // A meter a tab and the limit's, beside the Inbox board's photos.
+        // A meter a tab, a session and the limit's, beside the Inbox
+        // board's photos.
         let usage = meters
             .iter()
             .filter(|i| i.name.starts_with("grid/usage/"))
             .count();
-        assert_eq!(usage, 3, "a meter a tab and the limit's");
+        assert_eq!(usage, 4, "a meter a tab, a session and the limit's");
         // The Calendar: what is left, its times, a chip for what is soon,
         // and when the day ends.
         assert!(!screen.contains("Standup"), "{screen}");

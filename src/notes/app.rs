@@ -22,8 +22,9 @@
 //! ```
 //!
 //! With UX 2.0 on, a note's unticked checklist items have keys of their
-//! own, each falling back to Vim's where it has nothing to do: Enter opens
-//! the item's plan (its `Plan: [[...]]` line), o goes to the tab working
+//! own, each falling back to Vim's where it has nothing to do: Enter shows
+//! the item's plan (its `Plan: [[...]]` line) in a panel beside the note
+//! (app/beside.rs), and again starts work on it, o goes to the tab working
 //! on it, and `ga` types into the "Add an item" input at the bottom. M-p
 //! is the workspace's palette, which lists autopilot working the note and
 //! this app's own commands while Notes is in front (`palette` and `run`
@@ -88,6 +89,7 @@ use crate::ui::{
 };
 use crate::{settings, util};
 
+mod beside;
 mod draw;
 
 /// What the app's work off its own thread reports.
@@ -102,6 +104,9 @@ pub enum Msg {
     Socket(Request, Sender<String>),
     /// UX 2.0: the tabs on notes' items, from the background look.
     ItemTabs(HashMap<String, render::ItemTab>),
+    /// UX 2.0: the items autopilot has put next in its queue, each its
+    /// note's ID and its first line (`note_item_key`), from the same look.
+    Next(HashSet<String>),
     /// A link opened: what was said meanwhile, and whether the browser
     /// came to the front, or why it couldn't open.
     Opened(String, Result<bool, String>),
@@ -349,6 +354,9 @@ struct Geo {
     chips: Vec<(Rect, (usize, usize), render::Chip)>,
     /// UX 2.0's "Add an item" input's row, when it is drawn.
     input: Option<u16>,
+    /// UX 2.0's plan beside the note, where it was drawn, and its cards.
+    plan: Rect,
+    plan_hits: Vec<(Rect, beside::Stop)>,
     /// The note's scroll bar, when it is drawn: its column, first row and
     /// height, the shown lines' rows of the note (a closed fold's hidden
     /// ones left out) and how many show from the first.
@@ -438,7 +446,15 @@ pub const NOTE_KEYS: &[(&str, &str)] = &[
     ),
     (
         "Enter",
-        "with UX 2.0, on an unticked item with a plan: open its plan note",
+        "with UX 2.0, on an unticked item with a plan: its plan beside the note; again, start work on it",
+    ),
+    (
+        "M-e",
+        "with UX 2.0, in Notes' own tab: the plan of the item under the cursor beside the note, or put away",
+    ),
+    (
+        "C-w l  C-w h",
+        "with UX 2.0, the plan beside the note or the note: a, b choose an option, e opens the plan, Esc closes it",
     ),
     (
         "o",
@@ -529,6 +545,8 @@ pub struct App {
     /// the background look (`look_at_tabs`) last found them; drawing reads
     /// only this.
     pub item_tabs: HashMap<String, render::ItemTab>,
+    /// The items autopilot has put next, as `Msg::Next` hands them.
+    pub next_items: HashSet<String>,
     look: Look,
     cols: u16,
     rows: u16,
@@ -546,6 +564,8 @@ pub struct App {
     scrolled: bool,
     pub list_shown: bool,
     list_pending: Option<char>,
+    /// UX 2.0: the plan of an item shown beside the note (board 8).
+    beside: Option<beside::Beside>,
     pub editor: Editor,
     open: Option<Open>,
     layers: Vec<Layer>,
@@ -656,6 +676,7 @@ impl App {
             scrolled: false,
             list_shown: opts.list,
             list_pending: None,
+            beside: None,
             editor,
             open: None,
             layers: Vec::new(),
@@ -671,6 +692,7 @@ impl App {
             save_due: None,
             watch_due: None,
             item_tabs: HashMap::new(),
+            next_items: HashSet::new(),
             squash_pid: None,
             squash_paths: Vec::new(),
             squash_cancelled: false,
@@ -836,6 +858,14 @@ impl App {
         out
     }
 
+    /// Whether autopilot has put the open note's item next in its queue.
+    fn is_next(&self, item: &str) -> bool {
+        self.open
+            .as_ref()
+            .and_then(|o| o.id.as_deref())
+            .is_some_and(|id| self.next_items.contains(&note_item_key(id, item)))
+    }
+
     fn modified(&self) -> bool {
         self.open
             .as_ref()
@@ -857,6 +887,11 @@ impl App {
             self.say(format!("notes: can't read {}", self.store.relative(path)));
             return;
         };
+        // The plan beside the note is the open note's item's: another note
+        // puts it away.
+        if self.current_path() != Some(path) {
+            self.close_beside();
+        }
         let (text, note_id) = self.give_id(path, text);
         self.follow_jumps();
         if let Some(o) = &self.open
@@ -1442,6 +1477,11 @@ impl App {
     /// put away, the list comes back to show it.
     pub fn show(&mut self, folder: Option<String>, tag: Option<String>, query: Option<String>) {
         self.list.show(folder, tag, query);
+        // The list shown puts the plan beside the note away, as the list's
+        // other ways in do.
+        if self.beside.is_some() {
+            self.close_beside();
+        }
         self.list_shown = true;
         self.rebuild();
         if let Some(at) = self
@@ -1456,6 +1496,13 @@ impl App {
     /// The list shown or put away; shown again, its cursor on the open
     /// note when the view lists it.
     pub fn show_list(&mut self, show: bool) {
+        // The list asked for puts away the plan beside the note, which it
+        // shares the room with.
+        if show && self.beside.is_some() {
+            self.close_beside();
+            self.list_shown = true;
+            return;
+        }
         if show == self.list_shown {
             return;
         }
@@ -1475,7 +1522,7 @@ impl App {
     }
 
     pub fn toggle_list(&mut self) {
-        let shown = self.list_shown;
+        let shown = self.list_shown && self.beside.is_none();
         self.show_list(!shown);
     }
 
@@ -1797,28 +1844,21 @@ impl App {
         }
     }
 
-    /// Enter on an unticked item with a plan: its plan note. Whether it
-    /// had one.
+    /// An unticked item's plan beside the note (its chip, the palette),
+    /// kept where it shows already. Whether it had one.
     fn open_plan(&mut self) -> bool {
-        let lines = self.editor.doc.text.lines();
-        let kinds = render::kinds(&lines);
-        // In a closed fold, Enter opens the fold, as `act` does.
-        if self
-            .editor
-            .folds
-            .closed_at(&kinds, self.editor.doc.row)
-            .is_some()
-        {
-            return false;
+        self.beside_is_of_cursor() || self.open_beside()
+    }
+
+    /// Enter on an unticked item with a plan: its plan beside the note, or,
+    /// while it shows there already, work started on the item, as `gw`
+    /// does. Whether it had one.
+    fn enter_on_plan(&mut self) -> bool {
+        if self.beside_is_of_cursor() {
+            self.work_on_item();
+            return true;
         }
-        let Some(title) = render::plan_of(&lines, &kinds, self.editor.doc.row) else {
-            return false;
-        };
-        match self.store.find_by_title(&title) {
-            Some(n) => self.open_note(&n.path, false, false),
-            None => self.say(format!("notes: no note {title}")),
-        }
-        true
+        self.open_beside()
     }
 
     /// Whether a click on an item's chip does something: its tab's goes to
@@ -2383,6 +2423,7 @@ impl App {
                 let _ = back.send(reply);
             }
             Msg::ItemTabs(tabs) => self.item_tabs = tabs,
+            Msg::Next(items) => self.next_items = items,
             Msg::Opened(words, shown) => self.link_opened(&words, shown),
         }
     }
@@ -2435,12 +2476,17 @@ impl App {
         }
         if self.save_due.is_some_and(|due| now >= due) {
             self.save();
+            // The note saved after an edit: the plan beside it goes once
+            // its item no longer links it.
+            self.check_beside();
             changed = true;
         }
         if self.watch_due.is_some_and(|due| now >= due) {
             self.watch_due = None;
             self.check();
             self.rebuild();
+            self.reread_beside();
+            self.check_beside();
             changed = true;
         }
         if self
@@ -2523,6 +2569,14 @@ impl App {
         if self.message.is_some() && self.focus == Focus::Note && self.editor.mode == Mode::Normal {
             self.message = None;
         }
+        if self.opts.ux2
+            && key.mods.alt
+            && !key.mods.ctrl
+            && key.code == KeyCode::Char('e')
+            && self.open.is_some()
+        {
+            return self.toggle_beside();
+        }
         if let Some(dir) = alt_arrow(&key) {
             // With pane_arrows off the workspace passes them on unasked,
             // and they do nothing here, as Neovim's mapping fed them back.
@@ -2536,8 +2590,14 @@ impl App {
         if palette_key {
             return self.palette();
         }
+        if self.beside.as_ref().is_some_and(|b| b.focused) {
+            if self.list_pending.take() == Some('w') {
+                return self.window_key(key);
+            }
+            return self.plan_key(key);
+        }
         match self.focus {
-            Focus::List if self.list_shown => self.list_key(key),
+            Focus::List if self.list_shown && self.beside.is_none() => self.list_key(key),
             _ => self.note_key(key),
         }
     }
@@ -2653,6 +2713,34 @@ impl App {
     /// from the note to the list stops typing and saves it, as leaving its
     /// buffer did.
     fn window_move(&mut self, dir: char) {
+        if let Some(focused) = self.beside.as_ref().map(|b| b.focused) {
+            // The plan is the window right of the note, the list put away.
+            let narrow = self.cols < beside::NARROW;
+            match (focused, dir) {
+                (false, 'l' | 'w' | 'p') => {
+                    self.leave_modes();
+                    self.save();
+                    if let Some(b) = self.beside.as_mut() {
+                        b.focused = true;
+                        b.show_note = false;
+                    }
+                }
+                (true, 'h' | 'w' | 'p') => {
+                    if let Some(b) = self.beside.as_mut() {
+                        b.focused = false;
+                        b.stop = None;
+                        b.show_note = narrow;
+                    }
+                    self.focus = Focus::Note;
+                }
+                (_, 'h') => self.beside("-L"),
+                (_, 'l') => self.beside("-R"),
+                (_, 'j') => self.beside("-D"),
+                (_, 'k') => self.beside("-U"),
+                _ => {}
+            }
+            return;
+        }
         let list = self.focus == Focus::List && self.list_shown;
         match dir {
             'h' | 'w' | 'p' if !list && self.list_shown => {
@@ -2713,8 +2801,11 @@ impl App {
         let typing = self.typing_col();
         let format = self.format_from(typing);
         self.leave_modes();
-        let commands =
+        let mut commands =
             palette::commands(from_list, !from_list && self.open.is_some(), self.opts.ux2);
+        if self.beside.is_some() {
+            commands.push(palette::note_or_plan());
+        }
         let from = PaletteFrom {
             list: from_list,
             format,
@@ -2735,6 +2826,9 @@ impl App {
             .map(|p| self.store.relative(p));
         let mut commands =
             palette::commands(from_list, !from_list && self.open.is_some(), self.opts.ux2);
+        if self.beside.is_some() {
+            commands.push(palette::note_or_plan());
+        }
         // The checklist item's commands lead, the rest in the app's order.
         commands.sort_by_key(|c| !c.act.on_item());
         let commands = commands
@@ -2774,6 +2868,35 @@ impl App {
     }
 
     fn run_palette(&mut self, act: PaletteAct, from: PaletteFrom) {
+        self.run_palette_act(act, from);
+        // A command that went to the list puts the plan beside the note away.
+        if self.focus == Focus::List && self.beside.is_some() {
+            self.close_beside();
+            self.list_shown = true;
+        }
+        // One that edits the note, or left it being typed or selected in,
+        // gives it the keys, shown where the plan hid it.
+        let on_the_note = matches!(
+            act,
+            PaletteAct::Act
+                | PaletteAct::Indent
+                | PaletteAct::Outdent
+                | PaletteAct::FoldHere
+                | PaletteAct::FoldAll
+                | PaletteAct::UnfoldAll
+                | PaletteAct::Format(_)
+        );
+        if (on_the_note || self.editor.mode != Mode::Normal)
+            && let Some(b) = self.beside.as_mut()
+        {
+            b.focused = false;
+            b.stop = None;
+            b.show_note = self.cols < beside::NARROW;
+            self.focus = Focus::Note;
+        }
+    }
+
+    fn run_palette_act(&mut self, act: PaletteAct, from: PaletteFrom) {
         // A command on the note open, from a note: the list's cursor on it.
         let on_note = |app: &mut App| {
             if from.list {
@@ -2830,6 +2953,19 @@ impl App {
                 }
             }
             PaletteAct::AddItem => self.start_adding(),
+            PaletteAct::NoteOrPlan => {
+                let narrow = self.cols < beside::NARROW;
+                if let Some(b) = self.beside.as_mut() {
+                    // Side by side, the note gets the keys; narrow, it shows
+                    // in the plan's place, and again the plan.
+                    b.show_note = narrow && !b.show_note;
+                    b.focused = narrow && !b.show_note;
+                    if !b.focused {
+                        b.stop = None;
+                        self.focus = Focus::Note;
+                    }
+                }
+            }
             PaletteAct::Rename
             | PaletteAct::Move
             | PaletteAct::Pin
@@ -3061,8 +3197,19 @@ impl App {
         }
         match mode {
             Mode::Normal if idle => match key.code {
+                KeyCode::Esc if key.mods.is_empty() && self.beside.is_some() => {
+                    // On a narrow screen the note shown in the plan's place
+                    // gives the plan back; else the panel closes.
+                    match self.beside.as_mut().filter(|b| b.show_note) {
+                        Some(b) => {
+                            b.show_note = false;
+                            b.focused = true;
+                        }
+                        None => self.close_beside(),
+                    }
+                }
                 // UX 2.0: an item's plan, its tab, and the note worked.
-                KeyCode::Enter if key.mods.is_empty() && self.opts.ux2 && self.open_plan() => {
+                KeyCode::Enter if key.mods.is_empty() && self.opts.ux2 && self.enter_on_plan() => {
                     return;
                 }
                 KeyCode::Char('o')
@@ -3315,6 +3462,14 @@ impl App {
             let step = layer.overlay.paste(text, &self.look);
             return self.step(step);
         }
+        // The plan beside the note takes no text, and the note behind it
+        // none while the plan has the keys.
+        if self.beside.as_ref().is_some_and(|b| b.focused)
+            && self.prompt.is_none()
+            && self.adding.is_none()
+        {
+            return;
+        }
         if let Some((_, t)) = &mut self.prompt {
             t.push_str(text.lines().next().unwrap_or(""));
             return;
@@ -3510,11 +3665,18 @@ impl App {
                 if self.opts.hover {
                     self.hover_button = button;
                     self.mouse_at = Some((x, y));
+                    self.plan_hover(x, y);
                 }
             }
             (MouseKind::Press, MouseButton::WheelDown | MouseButton::WheelUp) => {
                 let down = m.button == MouseButton::WheelDown;
-                if inside(self.geo.list) {
+                if let Some(b) = self.beside.as_mut().filter(|_| inside(self.geo.plan)) {
+                    b.scroll = if down {
+                        b.scroll + 3
+                    } else {
+                        b.scroll.saturating_sub(3)
+                    };
+                } else if inside(self.geo.list) {
                     self.list_top = if down {
                         (self.list_top + 3).min(self.list_rows.len().saturating_sub(1))
                     } else {
@@ -3534,7 +3696,15 @@ impl App {
                             self.focus = Focus::List;
                         }
                         BarDrag::List => self.focus = Focus::List,
-                        BarDrag::Note => self.focus = Focus::Note,
+                        BarDrag::Note => {
+                            // The note's bar gives the note the keys, as a
+                            // click in it does.
+                            if let Some(b) = self.beside.as_mut() {
+                                b.focused = false;
+                                b.stop = None;
+                            }
+                            self.focus = Focus::Note;
+                        }
                     }
                     let shown = self.geo.note_bar.as_ref().map_or(1, |b| b.shown);
                     self.bar_drag = Some((bar, self.bar_grab(bar, y), shown));
@@ -3550,6 +3720,16 @@ impl App {
                 self.bar_drag = None;
             }
             (MouseKind::Press, MouseButton::Left) => {
+                if self.plan_click(x, y) {
+                    return;
+                }
+                // A click outside the plan gives the note the keys, but
+                // only where the note shows.
+                let narrow = self.cols < beside::NARROW;
+                if let Some(b) = self.beside.as_mut() {
+                    b.focused = narrow && !b.show_note;
+                    b.stop = None;
+                }
                 if let Some(b) = button {
                     return self.button(b);
                 }
@@ -3802,7 +3982,25 @@ const TABS_EVERY: Duration = Duration::from_secs(3);
 fn look_at_tabs(tx: Sender<Msg>) {
     std::thread::spawn(move || {
         let mut last = None;
+        let mut last_next = None;
         loop {
+            // Autopilot's items put next, from its file: those of the note
+            // it works, while it is on.
+            let mode = crate::autopilot::mode::Mode::read(&crate::paths::state_dir());
+            let next: HashSet<String> = if mode.on && settings::is_on("autopilot") {
+                mode.next_here()
+                    .iter()
+                    .map(|text| note_item_key(&mode.note_id, text))
+                    .collect()
+            } else {
+                HashSet::new()
+            };
+            if last_next.as_ref() != Some(&next) {
+                last_next = Some(next.clone());
+                if tx.send(Msg::Next(next)).is_err() {
+                    return;
+                }
+            }
             let found = crate::mux::socket::ask_ok(&["list"])
                 .ok()
                 .and_then(|out| serde_json::from_str::<serde_json::Value>(&out).ok())

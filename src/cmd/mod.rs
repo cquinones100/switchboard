@@ -42,6 +42,7 @@ pub mod wait_ci;
 pub mod wait_deploy;
 pub mod watch_note;
 pub mod work;
+pub mod work_item_box;
 pub mod work_recent;
 pub mod workspace;
 pub mod worktree_done;

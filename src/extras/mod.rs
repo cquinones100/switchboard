@@ -147,12 +147,14 @@ impl Command {
     }
 
     pub fn parse(name: &str) -> Option<Command> {
-        // The Merge queues view became the Landing view; a binding to its
-        // old name in keys.json still opens it.
-        let name = if name == "mission-merge-queues" {
-            "mission-landing"
-        } else {
-            name
+        // The Merge queues view became the Landing view, the Closed view
+        // Reopen and the Sessions view a part of Usage; a binding to an old
+        // name in keys.json still opens it.
+        let name = match name {
+            "mission-merge-queues" => "mission-landing",
+            "mission-closed" => "mission-reopen",
+            "mission-sessions" => "mission-usage",
+            name => name,
         };
         if let Some(plugin) = name.strip_prefix("mission-plugin:") {
             return Some(Command::Mission(ViewId::Plugin(plugin.to_string())));

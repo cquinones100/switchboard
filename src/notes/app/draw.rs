@@ -16,7 +16,7 @@ use super::{App, Focus, NoteBar, Shown, list_width};
 use crate::notes::easy;
 use crate::notes::editor::Mode;
 use crate::notes::images::Picture;
-use crate::notes::render::{self, Cell, Hl};
+use crate::notes::render::{self, Cell, Hl, Kind};
 use crate::notes::sidebar::Look as RowLook;
 use crate::ui::draw::{put_line, width};
 
@@ -97,14 +97,37 @@ impl App {
         }
         let bottom = 1 + u16::from(self.opts.easy && self.opts.key_help) + u16::from(self.adds());
         let body_h = area.height.saturating_sub(bottom);
-        let list_w = if self.list_shown {
+        // UX 2.0's plan beside the note puts the list away while it shows.
+        let split = self
+            .beside
+            .as_ref()
+            .map(|b| super::beside::split(area.width, b.show_note));
+        let list_w = if self.list_shown && split.is_none() {
             list_width(area.width).min(area.width.saturating_sub(10))
         } else {
             0
         };
         self.geo.list = Rect::new(0, 0, list_w, body_h);
         let note_x = if list_w > 0 { list_w + 1 } else { 0 };
-        self.geo.note = Rect::new(note_x, 0, area.width.saturating_sub(note_x), body_h);
+        self.geo.note = match split {
+            Some((Some((x, w)), _)) => Rect::new(x, 0, w, body_h),
+            Some((None, _)) => Rect::default(),
+            None => Rect::new(note_x, 0, area.width.saturating_sub(note_x), body_h),
+        };
+        // The note hidden (Notes narrowed under the plan), the plan takes
+        // the keys, so nothing typed reaches what can't be seen.
+        if let (Some((None, _)), Some(b)) = (split, self.beside.as_mut()) {
+            b.focused = true;
+        }
+        match split {
+            Some((note, Some((x, w)))) => {
+                self.draw_plan(buf, Rect::new(x, 0, w, body_h), note.is_some());
+            }
+            _ => {
+                self.geo.plan = Rect::default();
+                self.geo.plan_hits.clear();
+            }
+        }
         let mut cursor = None;
         if list_w > 0 {
             self.draw_list(buf);
@@ -114,7 +137,8 @@ impl App {
             }
         }
         let note_cursor = self.draw_note(buf);
-        if self.focus == Focus::Note {
+        let plan_focused = self.beside.as_ref().is_some_and(|b| b.focused);
+        if self.focus == Focus::Note && !plan_focused {
             cursor = note_cursor;
         }
         cursor = self.draw_bottom(buf, body_h).or(cursor);
@@ -407,6 +431,9 @@ impl App {
         self.geo.chips.clear();
         if self.open.is_none() || note.width < 4 || note.height < 2 {
             self.geo.text = Rect::default();
+            // A note not drawn (the plan beside it taking its place) has no
+            // scroll bar to press.
+            self.geo.note_bar = None;
             return None;
         }
         let mut top_y = note.y;
@@ -479,6 +506,13 @@ impl App {
             for (row, hash) in render::landed(&lines, &kinds).into_iter().enumerate() {
                 if let Some(hash) = hash {
                     chips[row].push(render::Chip::Landed(hash));
+                }
+            }
+            for (row, kind) in kinds.iter().enumerate() {
+                if matches!(kind, Kind::Check { done: false, .. })
+                    && self.is_next(render::item_text(&lines[row], *kind))
+                {
+                    chips[row].push(render::Chip::Next);
                 }
             }
             chips
@@ -902,6 +936,10 @@ impl App {
             Mode::Visual { .. } => "-- VISUAL --",
             _ => "",
         };
+        if mode.is_empty() && self.beside.is_some() {
+            put_line(buf, 0, y, w, &Line::from(self.plan_footer()));
+            return None;
+        }
         if mode.is_empty() && self.adds() && self.focus == Focus::Note {
             let spans = crate::ui::kit::hints(
                 &[

@@ -1,5 +1,7 @@
 //! How the workspace is used, on a server of the test's own: a tab that
-//! closes is logged for the Closed view with its name and directory, a
+//! closes is logged for the Reopen view with its name, directory and
+//! panes, a sealed review reopened from M-o's picker with its sealed try
+//! beside it, a
 //! plugin named in sidebar.json is run with its options on stdin, and one
 //! that asks for it lists its first items in the sidebar.
 
@@ -77,6 +79,55 @@ fn a_closed_tab_is_logged_with_its_name_and_directory() {
     assert_eq!(line["kind"], "closed");
     assert_eq!(line["tabName"], "keep me");
     assert_eq!(line["path"], dir.to_str().unwrap());
+    assert_eq!(line["panes"], 1);
+}
+
+#[test]
+fn a_sealed_review_reopens_from_m_o_with_its_try_beside_its_claude() {
+    let server = TestServer::start();
+    let bin = server.home.join("bin");
+    common::stand_in::Claude::new()
+        .answer("echo \"$*\" >> \"$HOME/claude-ran\"")
+        .install(&bin);
+    common::stand_in::install(
+        &bin.join("switchboard"),
+        "#!/bin/sh\necho \"$*\" >> \"$HOME/sealed-ran\"\n",
+    );
+    let clone = server.home.join("clone");
+    let worktree = server.home.join("pr-worktree");
+    std::fs::create_dir_all(&clone).unwrap();
+    std::fs::create_dir_all(&worktree).unwrap();
+    std::fs::create_dir_all(&server.state).unwrap();
+    let at = jiff::Timestamp::now().as_millisecond();
+    let closing = serde_json::json!({
+        "at": at, "id": "@9", "index": 3, "name": "Review PR 7", "kind": "closed",
+        "path": clone, "session": "s-7", "lived": 600_000, "panes": 1,
+        "sealed": worktree, "sealedFetch": true,
+    });
+    std::fs::write(server.state.join("closed.jsonl"), format!("{closing}\n")).unwrap();
+    let mut client = server.attach(120, 40);
+    client.wait_text("$");
+    client.send(b"\x1bo");
+    client.wait_text("Review PR 7");
+    client.send(b"\r");
+    client.wait_text("Reopen it, resuming its Claude, with a sealed try");
+    client.send(b"\r");
+    wait_until("its Claude resumed", || {
+        std::fs::read_to_string(server.home.join("claude-ran"))
+            .is_ok_and(|t| t.contains("--resume s-7"))
+    });
+    if cfg!(target_os = "macos") {
+        wait_until("the sealed try beside it", || {
+            std::fs::read_to_string(server.home.join("sealed-ran")).is_ok_and(|t| {
+                t.contains(&format!(
+                    "try --sealed --fetch --detached {}",
+                    worktree.display()
+                ))
+            })
+        });
+    } else {
+        client.wait_text("Only the review's Claude was resumed");
+    }
 }
 
 /// The tab in front, from `list`: its name and directory.

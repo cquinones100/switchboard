@@ -676,7 +676,7 @@ fn checks_chip(tab: &TabModel, caps: bool, theme: &Theme) -> Vec<Span<'static>> 
 const CONTEXT_CELLS: usize = 10;
 
 /// A card's context meter, `ctx` and its cells, in the needs-you tone once
-/// it is as full as the Sessions view calls full.
+/// it is as full as the Usage view's Sessions call full.
 fn context_meter(tab: &TabModel, theme: &Theme) -> Vec<Span<'static>> {
     let Some(used) = tab.context else {
         return Vec::new();
@@ -4580,6 +4580,10 @@ pub enum Shape {
     Picture {
         key: String,
     },
+    /// A closed tab's last screen (`images::screen`), the Reopen view's.
+    Screen {
+        shot: std::sync::Arc<crate::usage::shots::Shot>,
+    },
 }
 
 impl Image {
@@ -4631,7 +4635,8 @@ impl Image {
             | Shape::Switch { .. }
             | Shape::Keyboard { .. }
             | Shape::Avatar { .. }
-            | Shape::Picture { .. } => None,
+            | Shape::Picture { .. }
+            | Shape::Screen { .. } => None,
         }
     }
 }
@@ -5635,6 +5640,23 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool, resizes: bool) -> Vec<(
             rest.extend_from_slice(filter);
             with_acts(&[("jk", "move")], "actions, marks read", VIEW, &rest)
         }
+        ViewId::Reopen if super::reopen_board::shown(m, view) => {
+            let pane: &[(&str, &str)] = if m.laid().0 as usize >= super::reopen_board::PANE_AT {
+                &[]
+            } else if m.reopen_pane {
+                &[("i", "back to the list")]
+            } else {
+                &[("i", "what it brings back")]
+            };
+            let mut rest = pane.to_vec();
+            rest.extend_from_slice(filter);
+            with_acts(
+                &[("jk", "move")],
+                "reopen, forget",
+                "view actions: tabs or sessions only",
+                &rest,
+            )
+        }
         ViewId::Resources => with_acts(
             &[("jk", "move")],
             "actions: go to the tab, end a process",
@@ -6493,6 +6515,8 @@ pub(super) fn body(
             {
             } else if super::inbox_board::shown(m, v) {
                 super::inbox_board::board(v, cols, rows, m, lines, hits, meters);
+            } else if super::reopen_board::shown(m, v) {
+                super::reopen_board::board(v, cols, rows, m, lines, hits, meters);
             } else if keys_board_shown(m, v, cols) {
                 super::keys_board::board(v, cols, rows, m, lines, hits, meters);
             } else if slack_board_shown(m, v) {
@@ -6753,6 +6777,7 @@ mod tests {
             slack_thread_failed: None,
             slack_files_failed: Default::default(),
             slack_files_kept: Default::default(),
+            reopen_shot: None,
         };
         m
     }
@@ -7601,7 +7626,7 @@ mod tests {
             let pairs = hints(&m, None, false, false);
             assert!(has(&pairs, "Enter", "actions") && has(&pairs, "m", "view actions"));
             for id in [
-                ViewId::Closed,
+                ViewId::Reopen,
                 ViewId::Calendar,
                 ViewId::Settings,
                 ViewId::Keys,
@@ -7814,6 +7839,145 @@ mod tests {
         assert!(!text.contains("THIS WEEK"), "{text}");
     }
 
+    /// The Reopen view with UX 2.0: a closed tab that landed, chosen, with
+    /// its last screen and 41 turns, and a past session.
+    fn reopen_mission() -> (Mission, i64) {
+        use crate::usage::closed::Closing;
+        use crate::usage::shots::{Shot, ShotLine};
+        let now = 1_700_000_000_000;
+        let closing = Closing {
+            at: now - 60_000,
+            name: "api".into(),
+            kind: "closed".into(),
+            path: Some("/w/api".into()),
+            session: Some("s1".into()),
+            lived: 3_600_000,
+            prompt: "make the api answer faster".into(),
+            outcome: "landed a3f1c2e".into(),
+            panes: 2,
+            screen: Some("1-1.json".into()),
+            ..Closing::default()
+        };
+        let sessions = vec![crate::cmd::wt_revive::SessionRow {
+            id: "s1".into(),
+            dir: "/w/api".into(),
+            when: (now - 120_000) / 1000,
+            prompt: String::new(),
+            turns: 41,
+            resume: String::new(),
+        }];
+        let items = crate::usage::reopen::items(
+            &[("s1".into(), closing)],
+            &sessions,
+            &Default::default(),
+            &Default::default(),
+            now,
+            &|_| "today".into(),
+        );
+        let mut m = mission(Vec::new(), vec![list_view(ViewId::Reopen, "Reopen", items)]);
+        m.snap.rules.ux2 = true;
+        m.snap.now_secs = now / 1000;
+        m.snap.reopen_shot = Some(std::sync::Arc::new(Shot {
+            cols: 10,
+            lines: vec![ShotLine {
+                runs: vec![(4, Some([1, 2, 3]))],
+                text: "$ cargo test".into(),
+            }],
+        }));
+        m.view = 1;
+        m.cursor = 1;
+        (m, now)
+    }
+
+    #[test]
+    fn with_ux2_reopen_rows_and_the_chosen_one_s_pane_fill_any_width() {
+        let (mut m, _) = reopen_mission();
+        for cols in [240, 160] {
+            let (lines, _, images, _) = drawn(&m, cols, 40);
+            let t = texts(&lines);
+            let row = t
+                .iter()
+                .position(|l| l.contains("api") && l.contains("tab"))
+                .unwrap();
+            assert!(
+                t[row].contains("/w/api") && t[row].contains("✓ landed a3f1c2e"),
+                "{t:#?}"
+            );
+            assert!(
+                t[row].ends_with("1m ago"),
+                "when at the right edge: {:?}",
+                t[row]
+            );
+            assert_eq!(width(&t[row]), cols, "{:?}", t[row]);
+            assert!(t[row + 1].contains("> make the api answer faster"));
+            assert!(
+                t.iter()
+                    .any(|l| l.contains("closed 1m ago · 2 panes · Claude session s1…"))
+            );
+            assert!(t.iter().any(|l| l.contains(
+                "Reopening brings back a tab in /w/api, named as it was, with its Claude resumed."
+            )));
+            let shot = images
+                .iter()
+                .find(|i| matches!(i.shape, Shape::Screen { .. }))
+                .expect("the last screen as a picture");
+            assert!(
+                shot.width as usize > cols / 2,
+                "the picture stretches: {shot:?}"
+            );
+            let facts = t.iter().position(|l| l.contains("41 turns")).unwrap();
+            assert!(
+                (shot.y as usize..(shot.y + shot.height) as usize).contains(&facts),
+                "the facts beside the picture at {cols}"
+            );
+        }
+        // At 120: the facts, the directory and the outcome's words gone,
+        // and the pane behind `i`.
+        let (lines, _, images, _) = drawn(&m, 120, 40);
+        let t = texts(&lines);
+        let row = t
+            .iter()
+            .position(|l| l.contains("api") && l.contains("tab"))
+            .unwrap();
+        assert!(
+            !t[row].contains("/w/api") && !t[row].contains("landed"),
+            "{:?}",
+            t[row]
+        );
+        assert!(
+            t[row].contains('✓') && t[row].ends_with("1m ago"),
+            "{:?}",
+            t[row]
+        );
+        assert!(!t.iter().any(|l| l.contains("Reopening brings back")));
+        assert!(images.is_empty());
+        assert!(
+            t.last().unwrap().contains("i what it brings back"),
+            "{:?}",
+            t.last()
+        );
+        m.reopen_pane = true;
+        let (lines, _, images, _) = drawn(&m, 120, 40);
+        let t = texts(&lines);
+        assert!(t.iter().any(|l| l.contains("Reopening brings back")));
+        let shot = images
+            .iter()
+            .find(|i| matches!(i.shape, Shape::Screen { .. }))
+            .unwrap();
+        let facts = t.iter().position(|l| l.contains("41 turns")).unwrap();
+        assert!(
+            facts >= (shot.y + shot.height) as usize,
+            "the facts under the picture"
+        );
+        // With no row chosen (a view beside it has the focus), the rows.
+        m.cursor = -100;
+        let t = texts(&drawn(&m, 120, 40).0);
+        assert!(
+            t.iter().any(|l| l.contains("api") && l.contains("tab")),
+            "{t:#?}"
+        );
+    }
+
     fn list_view(id: ViewId, title: &str, items: Vec<Item>) -> View {
         View {
             id,
@@ -8008,13 +8172,13 @@ mod tests {
         ];
         let mut m = mission(
             vec![tab(1, "one")],
-            vec![list_view(ViewId::Closed, "Closed", items)],
+            vec![list_view(ViewId::Reopen, "Reopen", items)],
         );
         m.view = 1;
         let (lines, hits) = screen(&m, 120, 12);
         let text = texts(&lines);
         assert!(
-            text[0].contains(" Tabs 1 ") && text[0].contains(" Closed 2 "),
+            text[0].contains(" Tabs 1 ") && text[0].contains(" Reopen 2 "),
             "{}",
             text[0]
         );
@@ -8087,9 +8251,9 @@ mod tests {
         vec![
             list_view(ViewId::Landing, "Landing", vec![]),
             list_view(ViewId::Autopilot, "Autopilot", vec![]),
+            list_view(ViewId::Routines, "Routines", vec![]),
             list_view(ViewId::WorkMap, "Work map", vec![]),
-            list_view(ViewId::Closed, "Closed", vec![]),
-            list_view(ViewId::Sessions, "Sessions", vec![]),
+            list_view(ViewId::Reopen, "Reopen", vec![]),
         ]
     }
 
@@ -8105,7 +8269,7 @@ mod tests {
         let (lines, hits) = screen(&m, 48, 12);
         let t = texts(&lines);
         assert!(t[1].starts_with(" ‹  Autopilot "), "{:?}", t[1]);
-        assert!(t[1].contains(" Sessions "), "{:?}", t[1]);
+        assert!(t[1].contains(" Reopen "), "{:?}", t[1]);
         let last = hits.iter().find(|h| h.spot == Spot::View(5)).unwrap();
         assert!(last.x1 < 48, "{last:?}");
         assert_eq!(
@@ -8113,7 +8277,7 @@ mod tests {
                 .skip(last.x0 as usize)
                 .take((last.x1 - last.x0 + 1) as usize)
                 .collect::<String>(),
-            " Sessions "
+            " Reopen "
         );
         assert!(hits.iter().all(|h| h.spot != Spot::View(0)));
         m.focus = Some(Focus::Filter);

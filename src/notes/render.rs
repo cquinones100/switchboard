@@ -851,6 +851,9 @@ pub enum Chip {
     Plan,
     /// A ticked item's commit, its short hash.
     Landed(String),
+    /// Autopilot has put the item next in its queue (Notes' "Work on this
+    /// item" box), in the landing tone.
+    Next,
 }
 
 /// A tab on a note's item, as the app's background look last found it in
@@ -889,6 +892,7 @@ impl Chip {
             Chip::Choice => "needs a choice".into(),
             Chip::Plan => "plan".into(),
             Chip::Landed(hash) => format!("landed {hash}"),
+            Chip::Next => "next in the queue".into(),
         }
     }
 
@@ -948,6 +952,11 @@ impl Chip {
                 .fg(Color::Indexed(if light { 242 } else { 245 }))
                 .bg(Color::Indexed(if light { 253 } else { 237 })),
             Chip::Landed(_) => landed_style(light),
+            Chip::Next => Style::new().fg(Color::Indexed(5)).bg(if light {
+                Color::Rgb(0xe8, 0xe0, 0xf5)
+            } else {
+                Color::Rgb(0x2a, 0x24, 0x40)
+            }),
         }
     }
 }

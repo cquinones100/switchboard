@@ -2,8 +2,9 @@
 //! keys and commands you use (`habits`, and the `report` of them), what each
 //! tab costs the computer (`resources`), each Claude session's context and
 //! the day's spend and requests (`sessions`, and what UX 2.0's Usage board
-//! draws, `charts`), the tabs that closed
-//! (`closed`), the settings kept in your own files (`own`), and the views
+//! draws, `charts`), the tabs that closed (`closed`, with their last
+//! screens, `shots`) and the Reopen view of them and the past Claude
+//! sessions (`reopen`), the settings kept in your own files (`own`), and the views
 //! plugins bring in (`plugins`, with the built-in `github_plugin`).
 //!
 //! Each part was a file of the sidebar daemon (lib/sidebar/habits.js,
@@ -21,10 +22,12 @@ pub mod github_plugin;
 pub mod habits;
 pub mod own;
 pub mod plugins;
+pub mod reopen;
 pub mod report;
 pub mod resources;
 pub mod serve;
 pub mod sessions;
+pub mod shots;
 
 use std::collections::HashMap;
 use std::time::{Instant, SystemTime};
@@ -63,6 +66,9 @@ pub enum UsageEvent {
     },
     /// The keys pressed in the last seven days, by their notation.
     Keys(HashMap<String, u64>),
+    /// The Claude sessions of the last two weeks, as `wt-revive --sessions`
+    /// read them; `None` when the look failed.
+    Sessions(Option<Vec<crate::cmd::wt_revive::SessionRow>>),
     /// Text to type into a pane: `claude --resume` into a reopened tab's
     /// shell, once it has drawn its prompt.
     Type { pane: PaneId, text: String },
@@ -104,6 +110,15 @@ pub struct Usage {
     surveyed: Option<Instant>,
     /// The tabs as last seen, and the ones closed.
     pub closed: closed::Closed,
+    /// The screen of each tab closing, kept as its last pane went.
+    closing_shots: HashMap<crate::mux::TabId, shots::Shot>,
+    /// The Claude sessions of the last two weeks, when they were last read
+    /// and whether a look is under way.
+    pub sessions: Vec<crate::cmd::wt_revive::SessionRow>,
+    sessions_at: Option<Instant>,
+    /// When the Reopen view last showed, its past sessions wanted.
+    sessions_wanted: Option<Instant>,
+    sessions_busy: bool,
     /// The plugins sidebar.json names, and the file's time when read.
     pub plugins: Vec<plugins::Plugin>,
     plugins_seen: Option<Option<SystemTime>>,

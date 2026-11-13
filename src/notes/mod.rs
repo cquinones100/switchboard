@@ -51,6 +51,7 @@ pub mod jumps;
 pub mod marks;
 pub mod menu;
 pub mod palette;
+pub mod plan;
 pub mod render;
 pub mod serve;
 pub mod sidebar;

@@ -192,6 +192,11 @@ enum ViewAct {
     Pilot(crate::autopilot::Act),
     /// The Work map's rows narrowed to those with a tab, without, or all.
     Scope(Option<Scope>),
+    /// The Reopen view's rows narrowed to tabs, to sessions, or both.
+    ReopenKind(crate::usage::reopen::Kind),
+    /// The Reopen view's chosen row's pane shown over the list, or put
+    /// away, as `i` does.
+    ReopenPane,
     /// The Work map's merged worktrees of a repository shown or folded.
     Merged(String),
     /// A day of the Notifications history unfolded.
@@ -289,7 +294,8 @@ pub enum Opening {
     /// A view by its name, lowercased with dashes for spaces (M-p's
     /// "Mission control: <view>"); the tabs when it is off.
     View(String),
-    /// The Work map as a picker, scoped (M-j, M-o).
+    /// The Work map as a picker, scoped (M-j), or the Reopen view as one
+    /// (M-o).
     Picker(Scope),
 }
 
@@ -355,6 +361,10 @@ impl Server {
         if let Opening::Picker(Scope::Untabbed) = how {
             self.mission_revived(true);
         }
+        if let Opening::Picker(Scope::Reopen) = how {
+            self.want_view(ViewKind::Reopen);
+            self.want_past_sessions();
+        }
         let Some(mut m) = self.take_mission(client) else {
             return;
         };
@@ -406,6 +416,7 @@ impl Server {
             Opening::Tabs => 0,
             Opening::Settings => find(&m, &|v| v.id == ViewId::Settings),
             Opening::View(slug) => find(&m, &|v| v.slug() == *slug),
+            Opening::Picker(Scope::Reopen) => find(&m, &|v| v.id == ViewId::Reopen),
             Opening::Picker(_) => find(&m, &|v| v.id == ViewId::WorkMap),
         };
         // The view opened starts on its list.
@@ -772,6 +783,34 @@ impl Server {
         m.snap.slack_pictures = pictures;
     }
 
+    /// The Reopen view's chosen row's last screen, read from its small file
+    /// once and kept while it stays chosen.
+    fn reopen_extras(&mut self, m: &mut Mission) {
+        let name = m
+            .current()
+            .filter(|v| v.id == ViewId::Reopen && m.snap.rules.ux2)
+            .and_then(|_| m.chosen_item())
+            .and_then(crate::usage::reopen::of)
+            .and_then(|r| r["screen"].as_str())
+            .map(str::to_string);
+        let Some(name) = name else {
+            m.snap.reopen_shot = None;
+            return;
+        };
+        let kept = self
+            .mission
+            .reopen_shot
+            .as_ref()
+            .filter(|(n, _)| *n == name)
+            .map(|(_, shot)| shot.clone());
+        let shot = kept.or_else(|| {
+            let shot = std::sync::Arc::new(crate::usage::shots::read(&paths::state_dir(), &name)?);
+            self.mission.reopen_shot = Some((name, shot.clone()));
+            Some(shot)
+        });
+        m.snap.reopen_shot = shot;
+    }
+
     /// Reads, off the task, the note items that name an event or what it
     /// names, one read at a time; local alone, never sent.
     fn read_calendar_notes(&mut self, id: String, event: &crate::day::calendar::CalEvent) {
@@ -1089,13 +1128,21 @@ impl Server {
                 views::shown(v, if filtered { &text } else { "" }, m.scope, &folds)
             })
             .map(|mut v| {
-                // M-j's and M-o's pickers list rows to pick, with no
-                // repository's heading for Enter to land on.
+                // M-j's picker lists rows to pick, with no repository's
+                // heading for Enter to land on.
                 if m.picker && v.id == ViewId::WorkMap {
                     v.data.items.retain(|i| !views::is_repo_heading(i));
                 }
                 if v.id == ViewId::Resources {
                     m.resources_sort.sort(&mut v.data.items);
+                }
+                if v.id == ViewId::Reopen {
+                    crate::usage::reopen::keep(&mut v.data.items, m.reopen_kind);
+                    // M-o's picker lists rows to pick, with no day's
+                    // heading for Enter to land on.
+                    if m.picker {
+                        v.data.items.retain(|i| !views::is_header(i));
+                    }
                 }
                 // The Slack board lists its messages by section, so each
                 // section's are together, newest first.
@@ -1112,11 +1159,12 @@ impl Server {
         // The Autopilot view orders its items by how far along they are, and
         // CI by whether their checks fail, run or pass, Resources by each
         // tab's CPU or memory, Usage its tabs by their spend, Reminders by
-        // their time, and Landing its waiters by their place in the queue,
-        // so a stage, a check, a reading, a reminder or J and K changed moves
-        // them: the cursor follows the chosen one. So does the Slack board,
-        // whose conversations move up as new messages come and which shows
-        // only the chosen one's section.
+        // their time, Landing its waiters by their place in the queue, and
+        // Reopen its rows by when, the past sessions arriving after the
+        // closings, so a stage, a check, a reading, a reminder, J and K or a
+        // row coming in moves them: the cursor follows the chosen one. So
+        // does the Slack board, whose conversations move up as new messages
+        // come and which shows only the chosen one's section.
         let follows = |id: &ViewId| {
             matches!(
                 id,
@@ -1127,6 +1175,7 @@ impl Server {
                     | ViewId::Reminders
                     | ViewId::Routines
                     | ViewId::Landing
+                    | ViewId::Reopen
             ) || ux2 && *id == ViewId::Slack
         };
         // The Reminders view's chosen reminder, moved to another day, takes
@@ -1208,6 +1257,7 @@ impl Server {
             inbox_links: Default::default(),
             slack_thread: None,
             slack_pictures: Default::default(),
+            reopen_shot: None,
             slack_work,
             slack_thread_failed: None,
             slack_files_failed: Default::default(),
@@ -1245,6 +1295,7 @@ impl Server {
         self.calendar_extras(&mut m);
         self.inbox_extras(&mut m);
         self.slack_board_extras(&mut m);
+        self.reopen_extras(&mut m);
         m.taken_at = Some(self.mission.changes);
         // The view brought to the front: counted, and its source told.
         let now_view = m.current().map(|v| (v.id.clone(), base_title(v)));
@@ -1289,9 +1340,19 @@ impl Server {
                 m.taken_at = None;
             }
         }
-        // The views kept up to date only while one looks at them.
-        if settings::is_on("view_closed") {
-            self.want_view(ViewKind::Closed);
+        // The views kept up to date only while one looks at them; Reopen's
+        // closings whenever mission control is open, for its count on the
+        // bar, its past sessions only while it shows (below) or M-o's
+        // picker lists it.
+        if settings::is_on("view_reopen") || picker {
+            self.want_view(ViewKind::Reopen);
+        }
+        if picker
+            && now_view
+                .as_ref()
+                .is_some_and(|(id, _)| *id == ViewId::Reopen)
+        {
+            self.want_past_sessions();
         }
         // A view shown beside the one in front is kept up to date as it is.
         let mut shown_ids = grid_ids;
@@ -1303,9 +1364,9 @@ impl Server {
         for id in shown_ids {
             match id {
                 ViewId::Resources => self.want_view(ViewKind::Resources),
-                ViewId::Sessions => self.want_view(ViewKind::Sessions),
                 ViewId::Usage => self.want_view(ViewKind::Usage),
                 ViewId::Keys => self.want_key_counts(),
+                ViewId::Reopen => self.want_past_sessions(),
                 ViewId::Slack if settings::is_on("slack_background") => {
                     self.connector_shown("Slack")
                 }
@@ -1366,7 +1427,8 @@ impl Server {
     }
 
     /// Every view after the tabs, each only while its setting is on (the
-    /// Work map for M-j's and M-o's pickers whatever its setting), Landing
+    /// Work map for M-j's picker and Reopen for M-o's whatever their
+    /// settings), Landing
     /// only while something lands or `keep_landing` (the client has it in
     /// front), Autopilot only while it is on or `keep_autopilot`.
     fn mission_views(
@@ -1482,9 +1544,10 @@ impl Server {
             };
             out.push(view(ViewId::Relay, "Slack relay", data, true));
         }
-        if on("view_closed") {
-            let d = self.usage_view(ViewKind::Closed);
-            out.push(view(ViewId::Closed, "Closed", d, true));
+        // M-o's picker lists it with the view turned off too.
+        if on("view_reopen") || picker {
+            let d = self.usage_view(ViewKind::Reopen);
+            out.push(view(ViewId::Reopen, "Reopen", d, true));
         }
         for (id, name, title) in [
             (ViewId::Prs, crate::sources::PRS, "PRs"),
@@ -1522,7 +1585,6 @@ impl Server {
             }
         }
         for (id, kind) in [
-            (ViewId::Sessions, ViewKind::Sessions),
             (ViewId::Resources, ViewKind::Resources),
             (ViewId::Usage, ViewKind::Usage),
         ] {
@@ -2388,7 +2450,7 @@ impl Server {
             self.calendar_day_step(client, m, by);
             return;
         }
-        if landing_key(m, k) {
+        if landing_key(m, k) || reopen_key(m, k) {
             return;
         }
         let count = match m.current() {
@@ -3432,6 +3494,33 @@ impl Server {
                 add("Go to today", ViewAct::RemindToday);
             }
             Some(ViewId::Routines) => add("New routine…", ViewAct::NewRoutine),
+            Some(ViewId::Reopen) => {
+                use crate::usage::reopen::Kind;
+                for (label, kind) in [
+                    ("Show only tabs", Kind::Tabs),
+                    ("Show only sessions", Kind::Sessions),
+                    ("Show both tabs and sessions", Kind::Both),
+                ] {
+                    if m.reopen_kind != kind {
+                        add(label, ViewAct::ReopenKind(kind));
+                    }
+                }
+                // What `i` does on a screen too narrow for the pane.
+                let narrow = (m.laid().0 as usize) < super::reopen_board::PANE_AT;
+                let on_a_row = m
+                    .chosen_item()
+                    .is_some_and(|i| crate::usage::reopen::of(i).is_some());
+                if m.snap.rules.ux2 && narrow && (on_a_row || m.reopen_pane) {
+                    add(
+                        if m.reopen_pane {
+                            "Back to the list"
+                        } else {
+                            "Show what reopening it brings back"
+                        },
+                        ViewAct::ReopenPane,
+                    );
+                }
+            }
             Some(ViewId::Slack)
                 if settings::is_on("slack_background")
                     && crate::connector::connector_down("Slack").is_some() =>
@@ -3530,6 +3619,11 @@ impl Server {
                 m.scope = scope;
                 m.cursor = 0;
             }
+            ViewAct::ReopenKind(kind) => {
+                m.reopen_kind = kind;
+                m.cursor = 0;
+            }
+            ViewAct::ReopenPane => m.reopen_pane = !m.reopen_pane,
             ViewAct::Day(by) => self.calendar_day_step(client, &mut m, by),
             ViewAct::Today => {
                 m.calendar_day = None;
@@ -4266,6 +4360,15 @@ impl Server {
                 self.mission_note(client, "Dismissed.");
             }
             Do::Reopen(key) => match self.reopen_closed(client, &key) {
+                Ok((_, note)) => {
+                    self.mission_close(client);
+                    if let Some(note) = note {
+                        self.say(Some(client), &note);
+                    }
+                }
+                Err(e) => self.mission_note(client, e),
+            },
+            Do::ResumeSession(id) => match self.resume_session(client, &id) {
                 Ok(_) => self.mission_close(client),
                 Err(e) => self.mission_note(client, e),
             },
@@ -6354,6 +6457,29 @@ fn landing_key(m: &mut Mission, k: Key) -> bool {
     false
 }
 
+/// UX 2.0's Reopen view's own key: `i` shows the chosen row's pane (what
+/// reopening brings back, its last screen) over the list on a screen too
+/// narrow to show it under the rows, until `i` or Esc. True when it took
+/// the key.
+fn reopen_key(m: &mut Mission, k: Key) -> bool {
+    if !m.snap.rules.ux2 || !m.current().is_some_and(|v| v.id == ViewId::Reopen) {
+        return false;
+    }
+    if m.reopen_pane && (k.code == KeyCode::Esc || (k.code == KeyCode::Char('i') && plain(&k))) {
+        m.reopen_pane = false;
+        return true;
+    }
+    let narrow = (m.laid().0 as usize) < super::reopen_board::PANE_AT;
+    let on_a_row = m
+        .chosen_item()
+        .is_some_and(|i| crate::usage::reopen::of(i).is_some());
+    if k.code == KeyCode::Char('i') && plain(&k) && narrow && on_a_row {
+        m.reopen_pane = true;
+        return true;
+    }
+    false
+}
+
 /// The Calendar's own keys, with its day drawn: `h` and `l` move a day
 /// (`j` and `k` still walk every event), the days back or forward they
 /// move. What acts on the chosen event is in its menu, which Enter opens.
@@ -6483,8 +6609,11 @@ fn only_moves(m: &Mission, key: Key) -> bool {
     {
         return false;
     }
-    // So does the Inbox's chosen notification, with its ticket.
-    if m.current().is_some_and(|v| inbox_board::shown(m, v)) {
+    // So does the Inbox's chosen notification, with its ticket, and the
+    // Reopen board's chosen row, with its last screen.
+    if m.current()
+        .is_some_and(|v| inbox_board::shown(m, v) || super::reopen_board::shown(m, v))
+    {
         return false;
     }
     let none = plain(&k);
@@ -7208,7 +7337,7 @@ mod tests {
 
     fn list(title: &str, n: usize) -> View {
         View {
-            id: ViewId::Closed,
+            id: ViewId::Reopen,
             title: title.into(),
             data: ViewData {
                 items: (0..n)
@@ -7508,7 +7637,7 @@ mod tests {
 
     #[test]
     fn v_goes_to_a_view_by_the_start_of_its_name_else_by_any_part() {
-        let mut m = mission(1, vec![list("Closed", 1), list("Merge queues", 1)]);
+        let mut m = mission(1, vec![list("Reopen", 1), list("Merge queues", 1)]);
         m.jump = Some(Jump::default());
         for c in "que".chars() {
             jump_key(&mut m, Key::new(KeyCode::Char(c), Mods::NONE));
@@ -7521,7 +7650,7 @@ mod tests {
     #[test]
     fn v_in_a_grid_focuses_a_view_shown_and_leaves_it_for_another() {
         let views = vec![
-            view(ViewId::Closed, "Closed"),
+            view(ViewId::Reopen, "Reopen"),
             view(ViewId::Landing, "Merge queues"),
             view(ViewId::Inbox, "Inbox"),
         ];
@@ -7877,7 +8006,7 @@ mod tests {
 
     #[test]
     fn a_click_on_a_slack_threads_picture_plays_it_with_no_key() {
-        let mut m = mission(1, vec![list("Closed", 1)]);
+        let mut m = mission(1, vec![list("Reopen", 1)]);
         m.view = 1;
         m.size = (120, 20);
         m.filter = Some(Filter {

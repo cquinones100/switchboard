@@ -17,6 +17,7 @@ The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a scre
 A tab and what it shows in Claude's place.
 
 - [1. The workspace: the sidebar with notifications, the tab in focus and its views](https://cquinones100.github.io/switchboard/design/1.html)
+- [75. A pinned tab (M-f): first in Needs you, the flag ⚑ in place of its state's mark](https://cquinones100.github.io/switchboard/design/75.html)
 - [2. M-a: straight to what needs you, answered in Claude's own dialog](https://cquinones100.github.io/switchboard/design/2.html)
 - [4. M-\\: two tabs side by side](https://cquinones100.github.io/switchboard/design/4.html)
 - [6. A tab's history](https://cquinones100.github.io/switchboard/design/6.html)
@@ -62,7 +63,7 @@ The calendar, reminders, Slack and what came in.
 
 - [9. Calendar: the day as a timeline, the event beside it](https://cquinones100.github.io/switchboard/design/9.html)
 - [28. Reminders: every tab's reminder on a month, the months ahead under it](https://cquinones100.github.io/switchboard/design/28.html)
-- [21. Slack: what is new for you, by section as Slack's sidebar lists them, newest first in each](https://cquinones100.github.io/switchboard/design/21.html)
+- [21. Slack: what is new for you, by section as Slack's sidebar lists them; the section one row per thread, the chosen thread whole beside it](https://cquinones100.github.io/switchboard/design/21.html)
 - [53. Slack relay: which messages reach you, and where](https://cquinones100.github.io/switchboard/design/53.html)
 - [22. Inbox: Linear's notifications](https://cquinones100.github.io/switchboard/design/22.html)
 - [23. Notifications: the sidebar's, whole](https://cquinones100.github.io/switchboard/design/23.html)
