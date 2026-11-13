@@ -118,6 +118,8 @@ pub trait Mux {
     /// Gives a tab a name of its own; empty for its own name again.
     fn rename_tab(&self, tab: &str, name: &str) -> Result<()>;
     fn select_tab(&self, tab: &str) -> Result<()>;
+    /// Marks a tab's finished Claude seen, as looking at it does.
+    fn mark_seen(&self, tab: &str) -> Result<()>;
 }
 
 /// The running server, on its socket.
@@ -264,6 +266,10 @@ impl Mux for Server {
 
     fn select_tab(&self, tab: &str) -> Result<()> {
         self.ask(&["select-tab", "-t", tab]).map(|_| ())
+    }
+
+    fn mark_seen(&self, tab: &str) -> Result<()> {
+        self.ask(&["seen", "-t", tab]).map(|_| ())
     }
 }
 

@@ -236,6 +236,47 @@ fn a_finished_tab_clears_once_it_has_been_in_front() {
 }
 
 #[test]
+fn seen_marks_a_finished_tab_seen_from_away() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    session_file(&server.home, pid, json!({"sessionId": "s-1"}));
+    let first = tabs(&server.list())[0]["id"].as_str().unwrap().to_string();
+    // Another tab in front, as when you are away at the phone.
+    server.ok(&["new-tab", "-n", "other"]);
+    client.wait_text("2:other");
+    hook(&server, &pane, "UserPromptSubmit", json!({}));
+    hook(&server, &pane, "Stop", json!({}));
+    assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "done");
+    server.ok(&["seen", "-t", &first]);
+    assert!(pane_of(&server.list(), &pane)["agent"].is_null());
+
+    // A tab working isn't finished, so seeing it changes nothing.
+    hook(&server, &pane, "UserPromptSubmit", json!({}));
+    server.ok(&["seen", "-t", &first]);
+    assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "working");
+
+    // With done_clears at "prompt", it stays until the next prompt.
+    settings(&server, json!({"done_clears": "prompt"}));
+    hook(&server, &pane, "Stop", json!({}));
+    server.ok(&["seen", "-t", &first]);
+    assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "done");
+
+    // A reminder come due is done with, one still to come kept.
+    server.ok(&["set", "-t", &first, "@remind_at", "1"]);
+    server.ok(&["seen", "-t", &first]);
+    assert_eq!(server.ok(&["show", "-t", &first, "@remind_at"]).trim(), "");
+    server.ok(&["set", "-t", &first, "@remind_at", "99999999999"]);
+    server.ok(&["seen", "-t", &first]);
+    assert_eq!(
+        server.ok(&["show", "-t", &first, "@remind_at"]).trim(),
+        "99999999999"
+    );
+}
+
+#[test]
 fn a_claude_parked_behind_a_tool_still_marks_its_tab_and_is_seen_there() {
     let server = TestServer::start();
     settings(&server, json!({}));

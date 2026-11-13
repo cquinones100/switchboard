@@ -2628,6 +2628,52 @@ fn notify_waits_for_the_relay_to_post_a_notice_and_says_when_it_failed() {
 }
 
 #[test]
+fn open_on_the_home_tab_sees_a_finished_tab_as_looking_at_it_does() {
+    let rig = Rig::new();
+    let (done, _) = rig.claude_tab("done");
+    let (waiting, _) = rig.claude_tab("waiting");
+    rig.set_state(&done, "done", "100");
+    rig.set_state(&waiting, "waiting", "100");
+    let dm = rig.cx.state.borrow().dm();
+    let open = |tab: &str| {
+        let pid = rig.pid_of(tab);
+        let press = json!({
+            "type": "block_actions", "user": { "id": "U1", "team_id": "T1" }, "team": { "id": "T1" }, "trigger_id": "TR1",
+            "container": { "type": "view", "view_id": "VHOME" }, "view": { "id": "VHOME", "type": "home" },
+            "actions": [{ "value": json!({ "a": "open", "w": tab, "p": pid }).to_string() }],
+        });
+        let p = press_from(&dm, &press, |_| {}).unwrap();
+        rig.block_on(super::presses::handle_press(&rig.cx, p))
+            .unwrap();
+    };
+    open(&waiting);
+    assert!(
+        rig.mux.seen.borrow().is_empty(),
+        "a tab waiting on you stays waiting"
+    );
+    let (reminded, _) = rig.claude_tab("reminded");
+    rig.set_remind_at(&reminded, util::now_secs() - 60);
+    open(&reminded);
+    assert_eq!(
+        *rig.mux.seen.borrow(),
+        [reminded],
+        "a reminder come due is seen"
+    );
+    rig.mux.seen.borrow_mut().clear();
+    open(&done);
+    assert_eq!(*rig.mux.seen.borrow(), [done]);
+    let home = rig.calls("views.publish").last().unwrap().clone();
+    let headers: Vec<&str> = home["view"]["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|b| b["type"] == "header")
+        .filter_map(|b| b["text"]["text"].as_str())
+        .collect();
+    assert_eq!(headers, ["Claude tabs", "Needs you (1)", "Idle (2)"]);
+}
+
+#[test]
 fn open_on_the_home_tab_opens_a_screen_for_exactly_that_tab_and_only_for_you() {
     let rig = Rig::new();
     let (tab, _) = rig.claude_tab("work");

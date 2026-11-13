@@ -153,6 +153,8 @@ pub struct FakeMux {
     pub sent: RefCell<Vec<String>>,
     pub killed: RefCell<Vec<String>>,
     pub opened: RefCell<Vec<(PathBuf, Option<Vec<String>>)>>,
+    /// Every tab marked seen.
+    pub seen: RefCell<Vec<String>>,
     next: Cell<u32>,
 }
 
@@ -314,6 +316,20 @@ impl Mux for Rc<FakeMux> {
     }
 
     fn select_tab(&self, _tab: &str) -> Result<()> {
+        Ok(())
+    }
+
+    fn mark_seen(&self, tab: &str) -> Result<()> {
+        self.seen.borrow_mut().push(tab.to_string());
+        let mut windows = self.windows.borrow_mut();
+        let (_, panes) = windows
+            .iter_mut()
+            .find(|(w, _)| w.id == tab)
+            .ok_or_else(|| anyhow!("no tab {tab}"))?;
+        for p in panes.iter_mut().filter(|p| p.info.state == "done") {
+            p.info.state = "idle".into();
+            p.info.since = String::new();
+        }
         Ok(())
     }
 }

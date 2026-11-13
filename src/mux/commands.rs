@@ -51,6 +51,9 @@
 //!                                        the pane, Esc going back; fails
 //!                                        where the terminal draws no images
 //!                                        (src/ui/picture.rs)
+//! seen [-t tab]                          the tab seen, as if looked at: its
+//!                                        finished Claude and a reminder come
+//!                                        due (the Slack relay's Open)
 //! tip <name> | tip seen <name> | tip reset
 //!                                        a tip, once; marked shown; all again
 //! hook <event> [--parked pids]           from `switchboard hook`, its JSON on
@@ -96,6 +99,7 @@ pub const NAMES: &[&str] = &[
     "upgrade",
     "say",
     "picture",
+    "seen",
     "tip",
     "press",
     "sidebar-repo",
@@ -171,6 +175,10 @@ pub const USAGE: &[(&str, &str)] = &[
     (
         "picture",
         "picture [-t pane] <file>: the picture shown full size over the pane, Esc going back; fails where the terminal does not draw the server's images",
+    ),
+    (
+        "seen",
+        "seen [-t tab]: the tab seen, as if looked at: its finished Claude and a reminder come due",
     ),
     (
         "tip",
@@ -387,6 +395,12 @@ impl Server {
             }
             "say" => Ok(self.cmd_say(rest, caller)),
             "picture" => Ok(self.cmd_picture(rest, caller)),
+            "seen" => Args::parse(rest, "t")
+                .and_then(|a| self.tab_from(&a, caller))
+                .map(|tab| {
+                    self.mark_seen(tab);
+                    Reply::ok("")
+                }),
             "tip" => Ok(self.cmd_tip(rest, caller)),
             "press" => Ok(self.cmd_press(rest, caller)),
             "sidebar-repo" => self.cmd_sidebar_repo(rest, cwd, caller),

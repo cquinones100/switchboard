@@ -356,6 +356,33 @@ impl Server {
         changed
     }
 
+    /// The tab has been seen, by being in front or from away (`switchboard
+    /// seen`, as the Slack relay says when a tab is opened from the phone):
+    /// its finished panes, unless the done_clears setting keeps the mark
+    /// until the next prompt, and a reminder come due is done with.
+    pub fn mark_seen(&mut self, tab: TabId) {
+        if setting("done_clears") != "prompt" {
+            let panes = self.tab_panes(tab);
+            if self.agents.seen(&panes) {
+                self.redraw_tab(tab);
+            }
+        }
+        // A reminder come due (tmux/remind.sh) is done with once you are
+        // at its tab.
+        let now = util::now_secs();
+        if let Some(t) = self.tabs.get_mut(&tab)
+            && t.opts
+                .get("@remind_at")
+                .and_then(|at| at.trim().parse::<i64>().ok())
+                .is_some_and(|at| at <= now)
+        {
+            for option in ["@remind_at", "@remind_note", "@remind_said"] {
+                t.opts.remove(option);
+            }
+            self.redraw_tab(tab);
+        }
+    }
+
     /// A tab was focused: a second later, if it is still in front, it has
     /// been seen (the pane-focus-in hook's `agent-state.sh seen`).
     pub fn agent_focus(&mut self, tab: TabId) {
@@ -369,26 +396,7 @@ impl Server {
     /// saying so.
     pub fn agent_seen(&mut self, tab: TabId) {
         if self.tab_in_front(tab) {
-            if setting("done_clears") != "prompt" {
-                let panes = self.tab_panes(tab);
-                if self.agents.seen(&panes) {
-                    self.redraw_tab(tab);
-                }
-            }
-            // A reminder come due (tmux/remind.sh) is done with once you are
-            // at its tab.
-            let now = util::now_secs();
-            if let Some(t) = self.tabs.get_mut(&tab)
-                && t.opts
-                    .get("@remind_at")
-                    .and_then(|at| at.trim().parse::<i64>().ok())
-                    .is_some_and(|at| at <= now)
-            {
-                for option in ["@remind_at", "@remind_note", "@remind_said"] {
-                    t.opts.remove(option);
-                }
-                self.redraw_tab(tab);
-            }
+            self.mark_seen(tab);
             // A tab of autopilot, landed and back in the main
             // clone, has been seen, so it closes once you leave it
             // (src/autopilot).

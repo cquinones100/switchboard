@@ -730,6 +730,16 @@ pub async fn handle_screen_press(cx: &Cx, press: &Press, thread: Option<&str>) -
             .await?;
         let view = opened.pointer("/view/id").and_then(Value::as_str);
         remember(cx, view, &tab);
+        // Opening a finished tab, or one whose reminder came due, sees it,
+        // as looking at it on the computer does, so it leaves Needs you here
+        // and in the sidebar.
+        let reminder_due = tab.remind_at.is_some_and(|at| at <= util::now_secs());
+        if tab.state == "done" || reminder_due {
+            match cx.mux.mark_seen(&tab.id) {
+                Ok(()) => refresh_dashboard(cx, Refresh::opened_quick()).await?,
+                Err(e) => cx.log(&format!("couldn't mark tab {} seen: {e}", tab.index)),
+            }
+        }
         // Opened first, since Slack's trigger lasts only a few seconds; a
         // tab with no thread yet gets one now, and its screen the link.
         if let Some(view) = view

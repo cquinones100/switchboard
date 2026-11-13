@@ -1809,7 +1809,7 @@ The app's Home tab opens with when the computer last checked in, a time Slack it
 
 Then every Claude tab, in the sidebar's groups and order (**Needs you**, **Review loop**, **Merged**, **Idle** and the rest), so the Home and the sidebar never place a tab apart. A tab under the sidebar's Reminders is left out, with no Haiku line written for it, until its reminder comes due, and the check-in line ends with how many are ("· 2 tabs waiting on a reminder"); Settings' "Reminder tabs on the Slack Home" (`relay_home_reminders`, off at first) lists them under **Reminders**, last, each saying when ("remind in 2h"). A server too old to say a tab's stage gets the Home's own three groups instead: **Needs you** (waiting on you, then finished and not yet looked at, the longest first), **Working** and **Idle**. Each has its state, for how long, its last activity, and one line from Haiku on what it is doing or, once it has stopped, where it left off, written again when the tab has done something or changed state, at most once a minute. A tab waiting on a prompt shows the prompt's options, which answer it from there. The relay looks every 10 seconds (every minute with Settings' "Look often", `poll_fast`, off) and publishes when anything changed, at least once a minute, and whenever you open the tab. The bottom says what the Haiku calls have cost today, from what `claude -p` reports for each. When the relay stops on purpose, the Home tab says so, since nothing in it is current any more.
 
-**Open** on a tab shows its screen: its state, its last prompt, the end of its last reply, the options of a prompt it waits on as buttons, and these buttons:
+**Open** on a tab shows its screen: its state, its last prompt, the end of its last reply, the options of a prompt it waits on as buttons, and these buttons. Opening a tab that finished, or whose reminder came due, counts as looking at it, as being at it on the computer does (with Settings' `done_clears` at "prompt", a finished mark stays until the next prompt there too), so it leaves Needs you, on the Home and in the sidebar, and `M-a`'s walk; a tab waiting on you stays until you answer it.
 
 | Button | Does |
 | --- | --- |
@@ -2277,6 +2277,9 @@ switchboard say [-t seconds] text...     a message in a box
 switchboard picture [-t pane] <file>     show a picture full size over the
                                          pane, Esc going back; fails where
                                          the terminal draws no images
+switchboard seen [-t tab]                mark the tab seen, as looking at it
+                                         does: a finished Claude and a
+                                         reminder come due
 switchboard tip <name> | tip seen <name> | tip reset
                                          show a tip once, mark it shown, or
                                          show every tip again
