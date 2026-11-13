@@ -652,6 +652,8 @@ fn the_apps_ask_what_the_session_s_terminals_get_and_one_that_gets_neither_shows
         r#"{"ux2": true, "notifications": false, "tips": false, "sidebar": false}"#,
     );
     let mut first = server.attach_as("xterm-256color", 100, 30);
+    // Its session made before its pane is looked for.
+    first.wait_for("the header", |s| s[2].contains("M-c Claude"));
     let pane = first_pane_of(&server);
     let graphics = || {
         server
