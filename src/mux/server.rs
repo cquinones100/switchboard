@@ -255,7 +255,8 @@ impl Session {
 
     /// Where a tab's panes go: its spread, but for a lone pane (one pane,
     /// or zoomed into one of several) at most Settings' `lone_pane_width`
-    /// wide, against the sidebar, while a split shares out the whole width.
+    /// wide when one is chosen (it is off by default), against the
+    /// sidebar, while a split shares out the whole width.
     pub fn area_for(&self, tab: &Tab) -> Rect {
         Self::area_in(
             self.spread_for(tab.zoomed),

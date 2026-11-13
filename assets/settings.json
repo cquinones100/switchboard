@@ -536,7 +536,7 @@
     "key": "lone_pane_width",
     "category": "Tabs and status bar",
     "label": "Widest a lone pane gets",
-    "description": "A tab with one pane (or zoomed into one), and mission control showing one view, is drawn at most this wide, against the sidebar, its program given that width and the columns at its right the sidebar's sunken surface with a rule at the pane's right edge; with two or more panes they share the whole width and may be wider, and several views at once fill it too. Off, a lone pane fills the width",
+    "description": "A tab with one pane (or zoomed into one), and mission control showing one view, is drawn at most this wide, against the sidebar, its program given that width and the columns at its right the sidebar's sunken surface with a rule at the pane's right edge; with two or more panes they share the whole width and may be wider, and several views at once fill it too. Off, as it is unless you choose a width, a lone pane fills the width",
     "choices": [
       {
         "value": "off",
@@ -563,7 +563,7 @@
         "label": "240 columns"
       }
     ],
-    "default": "165"
+    "default": "off"
   },
   {
     "key": "tab_back_forward",

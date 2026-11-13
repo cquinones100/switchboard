@@ -2452,7 +2452,7 @@ fn the_pane_beside_the_tickets_board_resizes_with_the_pane_keys_and_keeps_its_wi
 #[test]
 fn on_a_wide_screen_one_view_is_capped_against_the_sidebar_and_its_side_takes_no_clicks() {
     let server = TestServer::start();
-    settings(&server, json!({}));
+    settings(&server, json!({ "lone_pane_width": "165" }));
     let mut client = server.attach(365, 40);
     client.wait_text("$");
     wait_list(&server, "the settings read", |l| {

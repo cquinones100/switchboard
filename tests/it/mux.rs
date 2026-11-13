@@ -925,8 +925,22 @@ fn widths(list: &serde_json::Value) -> Vec<u64> {
 }
 
 #[test]
-fn a_lone_pane_is_capped_on_a_wide_screen_and_a_split_uses_it_all() {
+fn a_lone_pane_fills_a_wide_screen_with_no_cap_chosen() {
     let server = TestServer::start();
+    let mut client = server.attach(365, 40);
+    client.wait_text("$");
+    client.wait_for("the lone pane across the whole width", |_| {
+        let list = server.list();
+        let side = list["sessions"][0]["sidebar"]["columns"]
+            .as_u64()
+            .unwrap_or(0);
+        widths(&list) == [365 - side]
+    });
+}
+
+#[test]
+fn a_lone_pane_is_capped_on_a_wide_screen_and_a_split_uses_it_all() {
+    let server = TestServer::start_with_settings(r#"{"lone_pane_width": "165"}"#);
     let mut client = server.attach(365, 40);
     client.wait_text("$");
     client.wait_for("the lone pane at 165 columns", |_| {
