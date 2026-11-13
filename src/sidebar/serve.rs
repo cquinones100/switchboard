@@ -2499,7 +2499,7 @@ impl Server {
                     self.sidebar_fold_notices(&session, !folded);
                 }
                 // ← and →: back and forward through the tabs visited, as
-                // M-[ and M-] (mission control, over the tab you are on,
+                // M-{ and M-} (mission control, over the tab you are on,
                 // closed first by its own click); ⊞: mission control, or,
                 // while it is open, closed.
                 Some(Owner::Back) => self.act(client, Action::TabBack),

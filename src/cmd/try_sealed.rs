@@ -42,9 +42,12 @@
 //! `lock_problem`, which takes `Cargo.lock` only as cargo writes it),
 //! since cargo would fetch it from wherever the PR says. They are fetched
 //! into `~/.cache/switchboard/sealed/cargo`, which no sandbox can write,
-//! with no environment or config of yours and from a folder with nothing in
-//! it (cargo reads `.cargo/config.toml` from the folder it runs in and
-//! those above), then copied into the home. A lockfile other than your main
+//! with no environment or config of yours: from an empty folder of the
+//! system's temporary directory, outside your home (cargo reads
+//! `.cargo/config.toml` from the folder it runs in and every one above it,
+//! whatever `HOME` says, so from under your home it would read your
+//! `~/.cargo/config.toml`), with no `rustc-wrapper` either way (`NO_WRAPPER`,
+//! which the build inside passes too), then copied into the home. A lockfile other than your main
 //! clone's is fetched only with `--fetch`, once you have read its change,
 //! as bin/switchboard-try installed lib's packages only with `--npm-ci`.
 //!
@@ -86,8 +89,6 @@ pub const SEALED_OFF: &[(&str, &str)] = &[
     ("chrome_profiles", "false"),
     ("standup_note", "false"),
     ("standup_summary", "false"),
-    ("todo_note", "false"),
-    ("meeting_notes", "false"),
     ("search_everything", "false"),
     ("search_slack", "false"),
     ("diff_order", "false"),
@@ -115,6 +116,16 @@ const CRATES_IO: &[&str] = &[
 
 /// Where the sealed tries' rules and the crates they fetch are kept: in
 /// your cache, which nothing in a try can write.
+/// Cargo's arguments that set no wrapper around rustc, whatever a cargo
+/// config it reaches says, so a wrapper of yours (sccache, say) is neither
+/// run nor looked for on a PATH that hasn't it.
+const NO_WRAPPER: [&str; 4] = [
+    "--config",
+    "build.rustc-wrapper=\"\"",
+    "--config",
+    "build.rustc-workspace-wrapper=\"\"",
+];
+
 fn sealed_dir() -> PathBuf {
     paths::cache_dir().join("sealed")
 }
@@ -862,10 +873,9 @@ impl Sealed {
                 "its Cargo.lock differs from your clone's, so its crates aren't fetched: read the change (switchboard pr-risk lists it), then run again with --fetch, which fetches them from crates.io with their checksums"
             );
         }
-        let cache = sealed_dir();
-        let cargo_home = cache.join("cargo");
-        let empty = cache.join("empty");
+        let cargo_home = sealed_dir().join("cargo");
         fs::create_dir_all(&cargo_home)?;
+        let empty = std::env::temp_dir().join(format!("switchboard-fetch-{}", std::process::id()));
         remove(&empty);
         fs::create_dir_all(&empty)?;
         eprintln!("Fetching its {count} crates from crates.io…");
@@ -874,33 +884,9 @@ impl Sealed {
             "cargo fetch",
             "switchboard try --sealed: the crates",
         );
-        let mut command = Command::new(&self.cargo);
-        command
-            .args(["fetch", "--locked", "--manifest-path"])
-            .arg(self.wt.join("Cargo.toml"))
-            .current_dir(&empty)
-            .env_clear()
-            .env(
-                "PATH",
-                format!("{}:/usr/bin:/bin", self.toolchain.join("bin").display()),
-            )
-            .env("HOME", &empty)
-            .env("CARGO_HOME", &cargo_home)
-            .env("RUSTC", &self.rustc)
-            .stdin(Stdio::null())
-            .stdout(std::io::stderr())
-            .stderr(Stdio::inherit());
-        // A proxy you reach the internet through, and nothing else of yours.
-        for (key, value) in std::env::vars() {
-            let lower = key.to_ascii_lowercase();
-            if matches!(
-                lower.as_str(),
-                "https_proxy" | "http_proxy" | "all_proxy" | "no_proxy"
-            ) {
-                command.env(key, value);
-            }
-        }
-        let status = command.status().context("couldn't run cargo fetch")?;
+        let status = self.fetch(&empty, &cargo_home).status();
+        remove(&empty);
+        let status = status.context("couldn't run cargo fetch")?;
         if !status.success() {
             bail!("cargo fetch failed for {}", self.wt.display());
         }
@@ -915,6 +901,40 @@ impl Sealed {
         Ok(())
     }
 
+    /// `cargo fetch` of the worktree's crates into `cargo_home`, run from
+    /// `empty` (its home too) with no environment of yours but a proxy.
+    fn fetch(&self, empty: &Path, cargo_home: &Path) -> Command {
+        let mut command = Command::new(&self.cargo);
+        command
+            .args(["fetch", "--locked"])
+            .args(NO_WRAPPER)
+            .arg("--manifest-path")
+            .arg(self.wt.join("Cargo.toml"))
+            .current_dir(empty)
+            .env_clear()
+            .env(
+                "PATH",
+                format!("{}:/usr/bin:/bin", self.toolchain.join("bin").display()),
+            )
+            .env("HOME", empty)
+            .env("CARGO_HOME", cargo_home)
+            .env("RUSTC", &self.rustc)
+            .stdin(Stdio::null())
+            .stdout(std::io::stderr())
+            .stderr(Stdio::inherit());
+        // A proxy you reach the internet through, and nothing else of yours.
+        for (key, value) in std::env::vars() {
+            let lower = key.to_ascii_lowercase();
+            if matches!(
+                lower.as_str(),
+                "https_proxy" | "http_proxy" | "all_proxy" | "no_proxy"
+            ) {
+                command.env(key, value);
+            }
+        }
+        command
+    }
+
     /// The worktree built in the sandbox, offline and locked, into the
     /// home's `target`, its progress shown as it comes; then the build's own
     /// setup there, but its rules' repository, which it would fetch.
@@ -923,6 +943,7 @@ impl Sealed {
         let mut cargo = self.command(&profile_file(&self.home), &self.cargo)?;
         cargo
             .args(["build", "--offline", "--locked"])
+            .args(NO_WRAPPER)
             .current_dir(&self.wt)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -1316,5 +1337,62 @@ mod tests {
         assert!(!in_root(Path::new("/var/folders/x/sb-0123abcd")));
         assert!(!is_sealed(Path::new("/var/folders/x/sb-0123abcd")));
         assert!(homes(Path::new("/var/folders/x")).is_empty());
+    }
+
+    /// The fetch runs from the empty folder it is given, its home too, and
+    /// sets no rustc wrapper, so a cargo config of yours with sccache as
+    /// its `rustc-wrapper` can't fail it.
+    #[test]
+    fn the_fetch_runs_from_its_empty_folder_with_no_wrapper() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("sb-fetch-test-{}", std::process::id()));
+        remove(&dir);
+        let empty = dir.join("empty");
+        fs::create_dir_all(&empty).unwrap();
+        let cargo = dir.join("cargo");
+        fs::write(
+            &cargo,
+            "#!/bin/sh\necho \"dir=$(pwd -P)\"\necho \"home=$HOME\"\nfor a; do echo \"arg=$a\"; done\n",
+        )
+        .unwrap();
+        fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
+        let sealed = Sealed {
+            real_real: dir.clone(),
+            home: dir.clone(),
+            home_real: dir.clone(),
+            tmp_real: dir.clone(),
+            wt: dir.join("wt"),
+            git_common: dir.clone(),
+            main_clone: dir.clone(),
+            cargo,
+            rustc: PathBuf::from("/bin/false"),
+            rustdoc: None,
+            toolchain: dir.clone(),
+            user_dir: None,
+            build_path: Vec::new(),
+            build_env: Vec::new(),
+        };
+        let out = sealed
+            .fetch(&empty, &dir.join("cargo-home"))
+            .stdout(Stdio::piped())
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&out.stdout).into_owned();
+        let real = empty.canonicalize().unwrap();
+        remove(&dir);
+        assert!(
+            said.contains(&format!("home={}", empty.display())),
+            "{said}"
+        );
+        assert!(
+            said.lines().any(|l| l == format!("dir={}", real.display())
+                || l == format!("dir={}", empty.display())),
+            "{said}"
+        );
+        assert!(said.contains("arg=build.rustc-wrapper=\"\"\n"), "{said}");
+        assert!(
+            said.contains("arg=build.rustc-workspace-wrapper=\"\""),
+            "{said}"
+        );
     }
 }

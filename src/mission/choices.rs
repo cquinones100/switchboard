@@ -104,8 +104,6 @@ pub enum Do {
     /// A Slack message's video played or picture shown, the thread's next
     /// each time it is picked again.
     SlackPlay(Box<Item>),
-    /// The Work map's repository folded, the cursor on its heading.
-    FoldRepo(String),
     /// A closed tab opened again.
     Reopen(String),
     /// A past Claude session resumed in a new tab, by its id.
@@ -113,8 +111,16 @@ pub enum Do {
     RemoveClosed(String),
     /// A tab in a directory, resuming its Claude there.
     OpenHere(PathBuf),
-    /// A merged worktree removed, asked first.
+    /// A worktree removed, asked first; one with changes not committed is
+    /// kept, saying so.
     RemoveWorktree(PathBuf),
+    /// Worktrees removed together (Reopen's merged ones), asked first,
+    /// naming each.
+    RemoveWorktrees(Vec<PathBuf>),
+    /// Reopen's merged worktrees shown under their fold line, or folded.
+    ShowMerged,
+    /// A closed tab's note opened in Notes, by its file name.
+    OpenTabNote(String),
     /// A suggestion's menu.
     Habit {
         id: String,
@@ -163,6 +169,13 @@ pub enum Do {
     /// A Settings row changed: an on/off flipped, a choice to the next, a
     /// file of yours or a repository's landing typed or picked.
     Change(Box<Item>),
+    /// A Settings option with choices set to one of them, from its menu.
+    SetSetting {
+        key: String,
+        value: serde_json::Value,
+    },
+    /// A Settings option's number typed in (`settings::Typed`).
+    TypeSetting(String),
     /// A Slack relay setting set to one of its values (the Slack relay
     /// view), with the value's words for what is said.
     RelaySet {
@@ -444,6 +457,52 @@ fn choice(key: char, label: impl Into<String>, act: Do) -> Choice {
         label: label.into(),
         act,
     }
+}
+
+/// A Settings option with choices: each choice one pick away in its menu,
+/// from the one after its value round to its value, marked "(now)", then "Columns…" (its `Typed`'s label)
+/// for an option that takes a number typed in, which, with a number
+/// typed in, is the one marked.
+pub fn every_choice(option: &crate::settings::Setting) -> Vec<Choice> {
+    let keys = "123456789abcdefghijklmnopqrstuvwxyz";
+    let choices = option.choices.as_deref().unwrap_or_default();
+    // From the one after its value, so Enter twice moves it on as Enter
+    // once did.
+    let after = choices
+        .iter()
+        .position(|c| c.value == option.value)
+        .map_or(0, |i| i + 1);
+    let mut out: Vec<Choice> = choices
+        .iter()
+        .cycle()
+        .skip(after)
+        .take(choices.len())
+        .enumerate()
+        .map(|(n, c)| {
+            let now = if c.value == option.value {
+                " (now)"
+            } else {
+                ""
+            };
+            choice(
+                keys.chars().nth(n).unwrap_or(' '),
+                format!("{}{now}", c.label),
+                Do::SetSetting {
+                    key: option.key.clone(),
+                    value: c.value.clone(),
+                },
+            )
+        })
+        .collect();
+    if let Some(typed) = &option.typed {
+        let a_choice_has_it = out.iter().any(|c| c.label.ends_with(" (now)"));
+        let label = match typed.number(&option.value) {
+            Some(n) if !a_choice_has_it => format!("{} ({n} {} now)", typed.label, typed.unit),
+            _ => typed.label.clone(),
+        };
+        out.push(choice('#', label, Do::TypeSetting(option.key.clone())));
+    }
+    out
 }
 
 /// A card's menu in Autopilot's view (src/autopilot/view.rs): its tab, its
@@ -1145,46 +1204,12 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
             }
             add_hand_offs(&mut out, handoff("meeting", item, ctx), ctx);
         }
-        // A row of Reopen: a closed tab reopened where it was (a sealed
-        // review with its sealed try beside it), or a past session resumed
-        // in a new tab; forgetting it; copying its directory.
-        ViewId::Reopen => {
-            let key = text(&item.data, "/closed/key");
-            let key = if key.is_empty() {
-                item.id.as_str()
-            } else {
-                key
-            };
-            if crate::usage::reopen::is_session(item) {
-                out.push(choice(
-                    'r',
-                    "Resume it in a new tab",
-                    Do::ResumeSession(item.id.clone()),
-                ));
-            } else {
-                let shell = item.data.get("session").is_none_or(Value::is_null);
-                let sealed = text(&item.data, "/reopen/sealed");
-                out.push(choice(
-                    'r',
-                    if !sealed.is_empty() {
-                        "Reopen it, resuming its Claude, with a sealed try"
-                    } else if shell {
-                        "Reopen it, with a shell"
-                    } else {
-                        "Reopen it, resuming its Claude"
-                    },
-                    Do::Reopen(key.to_string()),
-                ));
-            }
-            out.push(choice('x', "Forget it", Do::RemoveClosed(key.to_string())));
-            if let Target::Dir(d) = &item.target {
-                out.push(choice(
-                    'y',
-                    "Copy its directory",
-                    Do::Copy(d.to_string_lossy().into_owned()),
-                ));
-            }
-        }
+        // A row of Reopen (boards 71 to 74): a closed tab reopened where it
+        // was (a sealed review with its sealed try beside it), a past
+        // session resumed in a new tab, a worktree no tab has open opened
+        // in a tab, or the merged worktrees' fold line shown; then what
+        // else each offers; what removes or forgets last, asking first.
+        ViewId::Reopen => out = reopen_choices(item),
         // A row of the Work map: its tab, or a tab opened there resuming
         // its Claude, then its diff and lazygit (in the tab's pane's place,
         // or for work no tab is in, in a tab of their own there), removing
@@ -1230,6 +1255,140 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
         // A setting's are the server's, which reads the settings file.
         ViewId::Settings | ViewId::Relay => {}
         _ => out = target_choices(item, ctx),
+    }
+    out
+}
+
+/// A Reopen row's menu, by its kind (boards 71 to 74).
+fn reopen_choices(item: &Item) -> Vec<Choice> {
+    use crate::usage::reopen::{self, MERGED, SESSION, WORKTREE};
+    let r = reopen::of(item).cloned().unwrap_or_default();
+    let dir = reopen::dir_of(item).map(Path::to_path_buf);
+    let copy_dir = |out: &mut Vec<Choice>| {
+        if let Some(d) = &dir {
+            out.push(choice(
+                'y',
+                "Copy its directory",
+                Do::Copy(d.to_string_lossy().into_owned()),
+            ));
+        }
+    };
+    let tool = |lazygit| dir.clone().map(|dir| Do::ToolIn { dir, lazygit });
+    let mut out = Vec::new();
+    match reopen::kind_of(item) {
+        SESSION => {
+            out.push(choice(
+                'r',
+                "Resume it in a new tab",
+                Do::ResumeSession(item.id.clone()),
+            ));
+            // Its diff in the worktree it ended in (`mark_sessions`, only
+            // one git still lists), which may not be the folder it resumes
+            // from; else in that folder.
+            let ended = r["diffDir"].as_str().filter(|d| !d.is_empty());
+            let diff = match ended {
+                Some(d) => Some(Do::ToolIn {
+                    dir: PathBuf::from(d),
+                    lazygit: false,
+                }),
+                None => tool(false),
+            };
+            if let Some(diff) = diff {
+                out.push(choice('d', "Open its diff in a tab", diff));
+            }
+            if let Some(url) = r["prUrl"].as_str() {
+                out.push(choice(
+                    'p',
+                    "Open its PR here",
+                    Do::ReadHere(url.to_string()),
+                ));
+            }
+            out.push(choice(
+                's',
+                "Copy its session ID",
+                Do::Copy(item.id.clone()),
+            ));
+            copy_dir(&mut out);
+            if let Some(tree) = r["worktree"].as_str() {
+                out.push(choice(
+                    'x',
+                    "Remove its worktree…",
+                    Do::RemoveWorktree(PathBuf::from(tree)),
+                ));
+            }
+        }
+        WORKTREE => {
+            if let Some(d) = &dir {
+                out.push(choice(
+                    'o',
+                    "Open a tab here and resume its Claude",
+                    Do::OpenHere(d.clone()),
+                ));
+            }
+            if let (Some(diff), Some(lazygit)) = (tool(false), tool(true)) {
+                out.push(choice('d', "Open its diff in a tab", diff));
+                out.push(choice('L', "Open lazygit in a tab", lazygit));
+            }
+            copy_dir(&mut out);
+            if let Some(d) = &dir {
+                out.push(choice(
+                    'x',
+                    "Remove the worktree…",
+                    Do::RemoveWorktree(d.clone()),
+                ));
+            }
+        }
+        MERGED => {
+            let trees: Vec<PathBuf> = r["trees"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|t| t.as_str().map(PathBuf::from))
+                .collect();
+            let label = if r["shown"].as_bool() == Some(true) {
+                "Hide them"
+            } else {
+                "Show them"
+            };
+            out.push(choice('s', label, Do::ShowMerged));
+            let n = trees.len();
+            let label = if n == 1 {
+                "Remove it…".to_string()
+            } else {
+                format!("Remove all {n}…")
+            };
+            out.push(choice('x', label, Do::RemoveWorktrees(trees)));
+        }
+        _ => {
+            let key = text(&item.data, "/closed/key");
+            let key = if key.is_empty() {
+                item.id.as_str()
+            } else {
+                key
+            };
+            let shell = item.data.get("session").is_none_or(Value::is_null);
+            let sealed = text(&item.data, "/reopen/sealed");
+            out.push(choice(
+                'r',
+                if !sealed.is_empty() {
+                    "Reopen it, resuming its Claude, with a sealed try"
+                } else if shell {
+                    "Reopen it, with a shell"
+                } else {
+                    "Reopen it, resuming its Claude"
+                },
+                Do::Reopen(key.to_string()),
+            ));
+            if let Some(note) = r["note"].as_str().filter(|n| !n.is_empty()) {
+                out.push(choice(
+                    'n',
+                    "Open its note",
+                    Do::OpenTabNote(note.to_string()),
+                ));
+            }
+            copy_dir(&mut out);
+            out.push(choice('x', "Forget it…", Do::RemoveClosed(key.to_string())));
+        }
     }
     out
 }
@@ -1510,6 +1669,46 @@ mod tests {
 
     fn keys(choices: &[Choice]) -> String {
         choices.iter().map(|c| c.key).collect()
+    }
+
+    #[test]
+    fn a_setting_with_choices_lists_every_one_the_one_it_has_marked() {
+        let mut lone = crate::settings::schema()
+            .into_iter()
+            .find(|o| o.key == "lone_pane_width")
+            .unwrap();
+        let labels = |o: &crate::settings::Setting| -> Vec<String> {
+            every_choice(o).into_iter().map(|c| c.label).collect()
+        };
+        assert_eq!(
+            labels(&lone),
+            [
+                "200 columns",
+                "240 columns",
+                "off",
+                "120 columns",
+                "140 columns",
+                "165 columns (now)",
+                "Columns…"
+            ]
+        );
+        let picked = every_choice(&lone).swap_remove(0).act;
+        assert!(matches!(
+            picked,
+            Do::SetSetting { ref key, ref value } if key == "lone_pane_width" && value == "200"
+        ));
+        lone.value = json!("230");
+        assert!(lone.valid(&lone.value));
+        assert_eq!(lone.value_words(), "230 columns");
+        let shown = labels(&lone);
+        assert_eq!(shown[0], "off", "none of its choices: from the first");
+        assert!(!shown.iter().any(|l| l.ends_with("(now)")), "{shown:?}");
+        assert_eq!(shown.last().unwrap(), "Columns… (230 columns now)");
+        assert!(matches!(
+            every_choice(&lone).pop().unwrap().act,
+            Do::TypeSetting(ref key) if key == "lone_pane_width"
+        ));
+        assert!(!lone.valid(&json!("79")), "under the least");
     }
 
     fn ctx<'a>(tabs: &'a [TabModel], repo: &'a dyn Fn(&Path) -> Vec<String>) -> Ctx<'a> {
@@ -2191,6 +2390,91 @@ mod tests {
             }
         );
         assert_eq!(choices[3].act, Do::RemoveWorktree(dir));
+    }
+
+    #[test]
+    fn each_kind_of_reopen_row_has_its_board_s_menu_what_removes_last() {
+        let tabs: Vec<TabModel> = Vec::new();
+        let repo = |_: &Path| Vec::new();
+        let c = ctx(&tabs, &repo);
+        let labels = |item: &Item| -> Vec<String> {
+            item_choices(&ViewId::Reopen, item, &[], &c)
+                .into_iter()
+                .map(|c| c.label)
+                .collect()
+        };
+        let dir = PathBuf::from("/w/condensed");
+        let worktree = Item::new("worktree:/w/condensed", "condensed")
+            .target(Target::Dir(dir.clone()))
+            .data(json!({ "reopen": { "kind": "worktree" } }));
+        assert_eq!(
+            labels(&worktree),
+            [
+                "Open a tab here and resume its Claude",
+                "Open its diff in a tab",
+                "Open lazygit in a tab",
+                "Copy its directory",
+                "Remove the worktree…"
+            ]
+        );
+        let choices = item_choices(&ViewId::Reopen, &worktree, &[], &c);
+        assert_eq!(choices[0].act, Do::OpenHere(dir.clone()));
+        assert_eq!(choices[4].act, Do::RemoveWorktree(dir.clone()));
+        let session = Item::new("7c2e", "note-full-titles")
+            .target(Target::Dir("/w/condensed/src".into()))
+            .data(json!({ "reopen": {
+                "kind": "session",
+                "ended": "/w/condensed",
+                "diffDir": "/w/condensed",
+                "worktree": "/w/condensed",
+                "prUrl": "https://github.com/o/r/pull/214",
+            } }));
+        assert_eq!(
+            labels(&session),
+            [
+                "Resume it in a new tab",
+                "Open its diff in a tab",
+                "Open its PR here",
+                "Copy its session ID",
+                "Copy its directory",
+                "Remove its worktree…"
+            ]
+        );
+        let choices = item_choices(&ViewId::Reopen, &session, &[], &c);
+        assert_eq!(
+            choices[1].act,
+            Do::ToolIn {
+                dir: dir.clone(),
+                lazygit: false
+            },
+            "its diff where it ended"
+        );
+        assert_eq!(choices[5].act, Do::RemoveWorktree(dir));
+        let closed = Item::new("a3f1", "design review prep")
+            .target(Target::Dir("/w/api".into()))
+            .data(json!({
+                "session": "a3f1",
+                "closed": { "key": "a3f1" },
+                "reopen": { "kind": "tab", "note": "Plans.md" },
+            }));
+        assert_eq!(
+            labels(&closed),
+            [
+                "Reopen it, resuming its Claude",
+                "Open its note",
+                "Copy its directory",
+                "Forget it…"
+            ]
+        );
+        let fold = Item::new("merged-worktrees", "3 merged worktrees").data(json!({ "reopen": {
+            "kind": "merged",
+            "trees": ["/w/a", "/w/b", "/w/c"],
+        } }));
+        assert_eq!(labels(&fold), ["Show them", "Remove all 3…"]);
+        assert_eq!(
+            item_choices(&ViewId::Reopen, &fold, &[], &c)[1].act,
+            Do::RemoveWorktrees(vec!["/w/a".into(), "/w/b".into(), "/w/c".into()])
+        );
     }
 
     #[test]

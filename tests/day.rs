@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use switchboard::connector::ConnectorError;
 use switchboard::day::calendar::{self, Feed, Look};
 use switchboard::day::{
-    Ask, AskOpts, Connector, Dirs, meetings, new_notes, slack_look, slack_thread, standup, todo,
+    Ask, AskOpts, Connector, Dirs, new_notes, slack_look, slack_thread, standup,
 };
 use switchboard::util;
 
@@ -153,153 +153,6 @@ fn read(path: impl AsRef<Path>) -> String {
 }
 
 #[test]
-fn meeting_notes_write_each_of_your_meetings_once_yours_first_and_wait_for_a_summary() {
-    let home = Home::new("meetings");
-    let dirs = &home.dirs;
-    // Fathom as its connector answers, one meeting someone else's alone.
-    let listed = [
-        "Found 3 meeting(s). Each entry has recording_id and url.",
-        "",
-        "- Plan / review | 2026-10-27 | id: 11 | url: https://fathom.video/calls/111 | recorded by Ann Lee | Me Myself, Bo Park",
-        "  Summary:",
-        "  ## Meeting Purpose cut short...",
-        "  Action items:",
-        "    • [ ] Send the deck — assigned to Bo Park (https://fathom.video/calls/111?timestamp=65.9)",
-        "    • [ ] Fix the bug — assigned to Me Myself (he/him) (https://fathom.video/calls/111?timestamp=600.2)",
-        "    • [ ] Book the room — assigned to Me Myselfson (https://fathom.video/calls/111?timestamp=30)",
-        "    • [ ] Call the vendor — assigned to Ann Me Myself (https://fathom.video/calls/111?timestamp=50)",
-        "    • [ ] Order lunch — assigned to Someone Else (me@example.com) (https://fathom.video/calls/111?timestamp=40)",
-        "- Not mine | 2026-10-27 | id: 12 | url: https://fathom.video/calls/112 | recorded by Ann Lee | Bo Park",
-        "- Just ended | 2026-10-28 | id: 13 | url: https://fathom.video/calls/113 | recorded by me@example.com",
-    ]
-    .join("\n");
-    let fathom = Fake::new(|tool: &str, input: &Value| {
-        if tool.ends_with("list_meetings") {
-            listed.clone()
-        } else if tool.ends_with("get_meeting_summary") {
-            if input["recording_id"] == 13 {
-                String::new()
-            } else {
-                "## Meeting Purpose\n\n[Agree the plan.](https://fathom.video/calls/111?tab=summary&timestamp=0.0)\n\n## Key Takeaways\n\n  - [**Ship it:** on Friday.](https://fathom.video/calls/111?tab=summary&timestamp=9.0)\n\n### A topic\n\n  - [Said once.](https://fathom.video/calls/111?tab=summary&timestamp=3.0)\n".into()
-            }
-        } else {
-            "[00:00](https://fathom.video/calls/111?timestamp=0) Ann Lee: Hello.\n[00:04](https://fathom.video/calls/111?timestamp=4) Bo Park: Hi.".into()
-        }
-    });
-    std::fs::write(
-        dirs.state.join("meetings.json"),
-        json!({ "written": [], "me": ["me@example.com", "Me Myself"] }).to_string(),
-    )
-    .unwrap();
-    let now = at(2026, 10, 28, 10);
-
-    util::block_on(meetings::write_meetings(dirs, &now, &fathom)).unwrap();
-    let written: Vec<String> = std::fs::read_dir(dirs.notes.join("Meetings"))
-        .unwrap()
-        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-        .collect();
-    assert_eq!(
-        written,
-        ["Plan - review 2026-10-27.md"],
-        "mine alone, the one with no summary yet waiting"
-    );
-    assert_eq!(
-        read(dirs.notes.join("Meetings/Plan - review 2026-10-27.md")),
-        "# Plan / review 2026-10-27
-
-[Recording](https://fathom.video/calls/111) · recorded by Ann Lee · Me Myself, Bo Park
-
-## Action items
-
-- [ ] Fix the bug (Me Myself) [10:00](https://fathom.video/calls/111?timestamp=600.2)
-- [ ] Order lunch (Someone Else) [0:40](https://fathom.video/calls/111?timestamp=40)
-- Send the deck (Bo Park) [1:05](https://fathom.video/calls/111?timestamp=65.9)
-- Book the room (Me Myselfson) [0:30](https://fathom.video/calls/111?timestamp=30)
-- Call the vendor (Ann Me Myself) [0:50](https://fathom.video/calls/111?timestamp=50)
-
-## Summary
-
-Agree the plan.
-
-### Key Takeaways
-
-- **Ship it:** on Friday.
-
-#### A topic
-
-- Said once.
-
-## Transcript
-
-[00:00](https://fathom.video/calls/111?timestamp=0) Ann Lee: Hello.
-
-[00:04](https://fathom.video/calls/111?timestamp=4) Bo Park: Hi.
-"
-    );
-    let state: Value = serde_json::from_str(&read(dirs.state.join("meetings.json"))).unwrap();
-    assert_eq!(state["written"], json!([11]));
-    // It is a new note for the sidebar's notifications until Notes shows it.
-    let fresh = new_notes::new_notes(&dirs.state, &dirs.notes);
-    assert_eq!(
-        fresh
-            .iter()
-            .map(|n| (n.path.as_str(), n.title.as_str(), n.source.as_str()))
-            .collect::<Vec<_>>(),
-        [(
-            "Meetings/Plan - review 2026-10-27.md",
-            "Plan / review 2026-10-27",
-            "Fathom"
-        )]
-    );
-    std::fs::write(
-        dirs.notes.join(".notes.json"),
-        r#"{"last":"Meetings/Plan - review 2026-10-27.md"}"#,
-    )
-    .unwrap();
-    assert!(
-        new_notes::new_notes(&dirs.state, &dirs.notes).is_empty(),
-        "read once Notes shows it"
-    );
-
-    // The next look writes nothing twice, and asks again only for the
-    // waiting one.
-    fathom.asked.lock().unwrap().clear();
-    util::block_on(meetings::write_meetings(dirs, &now, &fathom)).unwrap();
-    let asked: Vec<(String, Value)> = fathom.asked.lock().unwrap().clone();
-    assert_eq!(fathom.tools(), ["list_meetings", "get_meeting_summary"]);
-    assert_eq!(asked[1].1["recording_id"], 13);
-
-    let ms = now.timestamp().as_millisecond();
-    assert!(
-        !meetings::meetings_due(&at(2026, 10, 28, 6), 0, &[]),
-        "not before seven"
-    );
-    assert!(
-        !meetings::meetings_due(&now, ms - 60_000, &[]),
-        "nor a minute after looking"
-    );
-    assert!(meetings::meetings_due(&now, 0, &[]));
-    // In the half hour after a meeting on the calendar ends, every five
-    // minutes.
-    let iso = |t: i64| switchboard::day::ical::iso(jiff::Timestamp::from_millisecond(t).unwrap());
-    let ended = |end_ago: i64| calendar::CalEvent {
-        title: "Call".into(),
-        start: Some(iso(ms - 40 * 60_000)),
-        end: Some(iso(ms - end_ago * 60_000)),
-        ..Default::default()
-    };
-    assert!(
-        meetings::meetings_due(&now, ms - 6 * 60_000, &[ended(10)]),
-        "a meeting just ended: again after five minutes"
-    );
-    assert!(!meetings::meetings_due(&now, ms - 4 * 60_000, &[ended(10)]));
-    assert!(
-        !meetings::meetings_due(&now, ms - 6 * 60_000, &[ended(40)]),
-        "over half an hour since, back to every thirty"
-    );
-}
-
-#[test]
 fn the_standups_summary_is_asked_for_a_day_with_work_and_the_note_is_written_without_it_when_claude_cant()
  {
     let home = Home::new("standup");
@@ -405,57 +258,6 @@ fn the_standups_summary_is_asked_for_a_day_with_work_and_the_note_is_written_wit
     );
     let notes = new_notes::new_notes(&dirs.state, &dirs.notes);
     assert!(notes.iter().all(|n| n.source == "the standup") && notes.len() == 3);
-}
-
-#[test]
-fn todays_todo_note_is_written_once_from_the_notes_open_items_and_the_views_by_claude() {
-    let home = Home::new("todo");
-    let dirs = &home.dirs;
-    std::fs::create_dir_all(dirs.notes.join("Work")).unwrap();
-    std::fs::write(
-        dirs.notes.join("Work/Plan.md"),
-        "# Plan\n\n- [ ] Ship the export\n\n## Later\n\n- [ ] Someday thing\n",
-    )
-    .unwrap();
-    let tuesday = at(2026, 11, 3, 9);
-    let claude = FakeAsk::new(|| Ok("## First\n\n- [ ] Ship the export".into()));
-    let sources = todo::Sources {
-        calendar: vec!["9:30 AM Standup".into()],
-        tickets: vec!["ABC-1 Fix it · Todo".into()],
-        missing: vec!["Slack".into()],
-        ..todo::Sources::default()
-    };
-    util::block_on(todo::write_todo(dirs, &[], &sources, &tuesday, &claude)).unwrap();
-    assert_eq!(
-        read(dirs.notes.join("Todos/Today's Todo 2026-11-03.md")),
-        "# Today's Todo 2026-11-03\n\n## First\n\n- [ ] Ship the export\n\n_Left out, since it couldn't be read: Slack._\n"
-    );
-    let asked = claude.asked.lock().unwrap().clone();
-    assert_eq!(asked[0].1, "sonnet");
-    assert!(asked[0].0.contains("Plan:\n  - Ship the export"));
-    assert!(
-        asked[0]
-            .0
-            .contains("## Today's calendar\n```\n9:30 AM Standup")
-    );
-    assert!(!asked[0].0.contains("Someday thing"));
-    assert!(
-        !todo::todo_due(&dirs.notes, &tuesday, 9, 0),
-        "written today"
-    );
-    util::block_on(todo::write_todo(
-        dirs,
-        &[],
-        &todo::Sources::default(),
-        &tuesday,
-        &claude,
-    ))
-    .unwrap();
-    assert_eq!(
-        claude.asked.lock().unwrap().len(),
-        1,
-        "a note already there is never written over, nor asked for again"
-    );
 }
 
 #[test]
@@ -734,7 +536,7 @@ fn the_calendar_view_shows_the_day_today_saved_and_says_when_it_is_out_of_date()
     assert_eq!(
         stale.error.as_deref(),
         Some(
-            "No calendar for today yet (last saved 2020-01-01): opening a Calendar tab to fetch it."
+            "No calendar for today yet (last saved 2020-01-01): resume the Calendar routine in the Routines view to fetch it."
         )
     );
     assert!(calendar::calendar_stale(

@@ -64,6 +64,9 @@ pub struct Entry {
     /// while it runs, with no Claude session.
     pub pid: Option<i64>,
     pub tab: Option<TabId>,
+    /// A waiter reviewing its change again, keeping its turn without
+    /// holding up those behind it (`land-lock requeue`).
+    pub reviewing: bool,
     /// What the landing has recorded of itself (`read_record`).
     pub record: Option<Value>,
 }
@@ -239,6 +242,7 @@ fn entry_of(value: &Value) -> Option<Entry> {
         pane: text("pane"),
         pid: value.get("pid").and_then(Value::as_i64),
         tab: None,
+        reviewing: value.get("reviewing").and_then(Value::as_bool) == Some(true),
         record: None,
     })
 }
@@ -540,6 +544,9 @@ pub fn view_items(
                         Some(phase) => format!("landing · {phase}"),
                         None => "landing".into(),
                     }
+                } else if entry.reviewing {
+                    let phase = tab.and_then(|t| t.phase.as_deref());
+                    format!("{} · keeps its turn", phase.unwrap_or("reviewing again"))
                 } else {
                     "waiting".into()
                 };
@@ -1022,6 +1029,7 @@ mod tests {
             pane: None,
             pid: None,
             tab: Some(TabId(tab)),
+            reviewing: false,
             record,
         };
         let repo = |method: &str| RepoLanding {
@@ -1059,6 +1067,14 @@ mod tests {
         assert_eq!(items[2].data["landing"]["holder"]["name"], "one");
         assert_eq!(items[2].data["landing"]["holder"]["phase"], "testing");
         assert_eq!(items[3].title, "me/direct · merge queue");
+        assert_eq!(items[2].detail, "waiting · tab 2");
+
+        let mut reviewing = repo("direct");
+        reviewing.waiting[0].reviewing = true;
+        let mut again = tabs.clone();
+        again[1].phase = Some("reviewing again".into());
+        let items = view_items(&[reviewing], &queued, &again);
+        assert_eq!(items[2].detail, "reviewing again · keeps its turn · tab 2");
 
         let items = view_items(&[repo("pr")], &queued, &tabs);
         let heading = items.iter().find(|i| i.id.ends_with(":queue")).unwrap();

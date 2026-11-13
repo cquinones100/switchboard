@@ -105,6 +105,7 @@ pub const NAMES: &[&str] = &[
     "press",
     "sidebar-repo",
     "server-version",
+    "autopilot-next",
 ];
 
 /// How each command is used, which `--help` (or `-h`) after its name prints.
@@ -112,7 +113,7 @@ pub const USAGE: &[(&str, &str)] = &[
     ("list", "list: sessions, tabs and panes, as JSON"),
     (
         "sources",
-        "sources [refresh [view]]: mission control's GitHub and Linear views as JSON, or asked for now",
+        "sources [refresh [view]]: mission control's GitHub and Linear views and today's calendar as JSON, or asked for now",
     ),
     (
         "new-tab",
@@ -208,6 +209,10 @@ pub const USAGE: &[(&str, &str)] = &[
     (
         "server-version",
         "server-version: the build the server runs, as switchboard --version names it",
+    ),
+    (
+        "autopilot-next",
+        "autopilot-next <note> <line>: the unticked item on that line of the note autopilot works put next in its queue",
     ),
 ];
 
@@ -409,6 +414,19 @@ impl Server {
                 }),
             "tip" => Ok(self.cmd_tip(rest, caller)),
             "press" => Ok(self.cmd_press(rest, caller)),
+            "autopilot-next" => {
+                let (Some(note), Some(line)) = (
+                    rest.first().filter(|n| crate::notes::serve::in_notes(n)),
+                    rest.get(1).and_then(|l| l.parse::<usize>().ok()),
+                ) else {
+                    return Reply::fail("autopilot-next takes a note and a line number");
+                };
+                let Some(client) = self.press_client(caller) else {
+                    return Reply::fail("autopilot-next: no client is attached to say it in");
+                };
+                self.autopilot_put_next(client, note.clone(), line, None);
+                Ok(Reply::ok(""))
+            }
             "sidebar-repo" => self.cmd_sidebar_repo(rest, cwd, caller),
             "save" => super::persist::save_now(self)
                 .map(|file| Reply::ok(format!("{}\n", file.display())))

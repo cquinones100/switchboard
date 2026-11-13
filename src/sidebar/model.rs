@@ -383,6 +383,12 @@ pub fn by_need(a: &TabModel, b: &TabModel) -> Ordering {
         .then(a.place.cmp(&b.place))
 }
 
+/// By the tab's number, lowest first, then its place: every stage's order
+/// but Needs you's and the queue's.
+fn by_number(a: &TabModel, b: &TabModel) -> Ordering {
+    a.index.cmp(&b.index).then(a.place.cmp(&b.place))
+}
+
 /// In Needs you, the tabs you pinned come first (you marked them yourself),
 /// with the reminders come due.
 fn pinned_first(a: &TabModel, b: &TabModel, r: &Rules) -> Ordering {
@@ -551,14 +557,14 @@ impl Stage {
             Stage::Needs => pinned_first(a, b, r),
             Stage::Queued => queue_order(a, b),
             Stage::Landing => landing_order(a, b),
-            Stage::Later => a.remind_at.cmp(&b.remind_at),
             // By the stage each would have had, then as that stage orders.
             Stage::OtherRepos => {
                 let (sa, sb) = (own_stage(a, r), own_stage(b, r));
                 let rank = |s: Stage| Stage::ALL.iter().position(|x| *x == s);
                 rank(sa).cmp(&rank(sb)).then_with(|| sa.order(a, b, r))
             }
-            _ => by_need(a, b),
+            // By number, so a tab keeps its place as its state changes.
+            _ => by_number(a, b),
         }
     }
 
@@ -1134,7 +1140,7 @@ pub(crate) mod tests {
         working.place = 1;
         let mut bare = tab(3, "no claude", TabState::Idle);
         bare.claude = None;
-        // In their places, whatever their numbers.
+        // By their numbers, whatever their places.
         let mut first = tab(4, "first", TabState::Idle);
         first.place = 2;
         first.index = 9;
@@ -1143,7 +1149,46 @@ pub(crate) mod tests {
             .iter()
             .map(|t| t.name.as_str())
             .collect();
-        assert_eq!(idle, ["first", "later"]);
+        assert_eq!(idle, ["later", "first"]);
+    }
+
+    #[test]
+    fn a_group_lists_its_tabs_by_number_whatever_their_state() {
+        let r = rules();
+        let mut seven = tab(7, "seven", TabState::Working);
+        seven.since = Some(1);
+        seven.place = 1;
+        let mut two = tab(2, "two", TabState::Background);
+        two.since = Some(9);
+        two.place = 3;
+        let mut twelve = tab(12, "twelve", TabState::Working);
+        twelve.since = Some(5);
+        twelve.place = 2;
+        let tabs = vec![seven, two, twelve];
+        assert_eq!(
+            names(&grouped(&tabs, None, &r)),
+            vec![("Working", v(&["two", "seven", "twelve"]))]
+        );
+    }
+
+    #[test]
+    fn reminders_are_listed_by_number() {
+        let r = rules();
+        let now = r.now_secs();
+        let remind = |n, name: &str, at| {
+            let mut t = tab(n, name, TabState::Idle);
+            t.remind_at = Some(now + at);
+            t
+        };
+        let tabs = vec![
+            remind(9, "soonest", 60),
+            remind(3, "latest", 3600),
+            remind(5, "middle", 600),
+        ];
+        assert_eq!(
+            names(&grouped(&tabs, None, &r)),
+            vec![("Reminders", v(&["latest", "middle", "soonest"]))]
+        );
     }
 
     #[test]
@@ -1415,7 +1460,7 @@ pub(crate) mod tests {
             names(&grouped(&tabs, None, &r)),
             vec![
                 ("Needs you", v(&["red asking"])),
-                ("Build failing", v(&["red working", "red idle"])),
+                ("Build failing", v(&["red idle", "red working"])),
                 ("CI loop", v(&["red ci loop"])),
                 ("In merge queue", v(&["red queued"])),
                 ("Idle", v(&["green", "red closed"])),

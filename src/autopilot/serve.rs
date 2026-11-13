@@ -256,7 +256,7 @@ fn landing_words(landing: &str, source: &str) -> String {
 }
 
 /// What said how a repository lands, as words to follow it.
-fn said_by(source: &str) -> &'static str {
+pub fn said_by(source: &str) -> &'static str {
     match source {
         "repos.json" => ", as repos.json says",
         "github" => ", as GitHub's rules say",
@@ -267,7 +267,7 @@ fn said_by(source: &str) -> &'static str {
 
 /// Why `branch` can't be landed on in the repository at `repo`, which
 /// lands through PRs, as `source` says.
-fn target_refused(branch: &str, repo: &Path, source: &str) -> String {
+pub fn target_refused(branch: &str, repo: &Path, source: &str) -> String {
     let name = repo
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -1975,6 +1975,9 @@ impl Server {
             if mode.landed.iter().any(|l| l.id == landed.id) {
                 return;
             }
+            // An item put next is next no more once it lands.
+            mode.next
+                .retain(|x| x.note != landed.note || x.text != landed.item);
             mode.landed.push(landed);
         });
         match written {
@@ -2369,9 +2372,143 @@ impl Server {
     }
 }
 
+impl Server {
+    /// Whether autopilot is on and works `note` (its path in the notes
+    /// directory), for the "Work on this item" box's row putting an item
+    /// next.
+    pub fn autopilot_works(&self, note: &str) -> bool {
+        settings::is_on("autopilot") && self.autopilot.mode.on && self.autopilot.mode.note == note
+    }
+
+    /// `autopilot-next <note> <line>`: the unticked item on that line of
+    /// the note autopilot works put next in its queue, before the rest of
+    /// its settled items, the last one put there first, until it lands. The
+    /// note and its plan are read off the task; what it did, or why it
+    /// couldn't, is said in `client`.
+    pub fn autopilot_put_next(
+        &mut self,
+        client: ClientId,
+        note: String,
+        line: usize,
+        expected: Option<String>,
+    ) {
+        if !self.autopilot_works(&note) {
+            let why = format!("Autopilot isn't working {}.", note_title(&note));
+            self.say(Some(client), &why);
+            return;
+        }
+        let fallback = self.autopilot.mode.note_id.clone();
+        let ready_only = self.autopilot.mode.ready_only;
+        self.off_task(
+            client,
+            move || {
+                next_item(
+                    &worktree_from_note::notes_dir(),
+                    &note,
+                    line,
+                    fallback,
+                    ready_only,
+                )
+                .and_then(|found| match expected {
+                    // The item on the line, as the box showed it: one moved
+                    // there since is another item.
+                    Some(text) if text != found.1 => Err(format!(
+                        "The note changed: “{}” isn't on line {line} any more.",
+                        crate::tabs::title::short_name(&text)
+                    )),
+                    _ => Ok(found),
+                })
+            },
+            |server, client, found| {
+                let said = found.and_then(|(id, text)| {
+                    let written = Mode::update(&paths::state_dir(), |mode| {
+                        // Put next, a skipped item is taken back.
+                        mode.skipped.retain(|x| x.note != id || x.text != text);
+                        mode.next.retain(|x| x.note != id || x.text != text);
+                        mode.next.insert(
+                            0,
+                            mode::Skipped {
+                                note: id.clone(),
+                                text: text.clone(),
+                            },
+                        );
+                    })
+                    .map_err(|e| format!("Couldn't write autopilot's queue: {e}"))?;
+                    server.autopilot.mode = written;
+                    Ok(format!(
+                        "Next in autopilot's queue: {}",
+                        crate::tabs::title::short_name(&text)
+                    ))
+                });
+                match said {
+                    Ok(said) => server.say(Some(client), &said),
+                    Err(why) => server.say(Some(client), &why),
+                }
+            },
+        );
+    }
+}
+
+/// The item on a line of a note autopilot works, as it is put next: its
+/// note's ID (`fallback`, the mode's, when the note has none) and its first
+/// line; refused when it is no unticked top-level item, it or its own plan
+/// still needs a choice, or it has no plan while autopilot takes planned
+/// items only.
+fn next_item(
+    notes: &Path,
+    note: &str,
+    line: usize,
+    fallback: String,
+    ready_only: bool,
+) -> Result<(String, String), String> {
+    let text = std::fs::read_to_string(notes.join(note))
+        .map_err(|_| format!("No note {}.", note_title(note)))?;
+    let item = worktree_from_note::item_at(&text, line)
+        .map_err(|why| format!("Line {line} of {} {why}.", note_title(note)))?;
+    let block = worktree_from_note::item_text(&text, line);
+    if ready_only && !worktree_from_note::has_plan(notes, &block) {
+        return Err(format!(
+            "“{}” has no plan, and autopilot takes planned items only.",
+            crate::tabs::title::short_name(&item.text)
+        ));
+    }
+    let open = worktree_from_note::plan_open(notes, &block);
+    if item.needs_choice || open {
+        return Err(format!(
+            "“{}” needs a choice first.",
+            crate::tabs::title::short_name(&item.text)
+        ));
+    }
+    let id = crate::notes::id::in_text(&text).unwrap_or(fallback);
+    Ok((id, item.text))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_item_put_next_is_refused_while_it_could_not_be_taken() {
+        let dir = std::env::temp_dir().join(format!("sb-next-item-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("Plan - Open.md"),
+            "# Plan - Open\n\n## Decision needed\n\n- [ ] A: one\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("Work.md"),
+            "# Work\n\n- [ ] Bare\n  - [ ] Child\n    Plan: [[Plan - Open]]\n- [ ] Open (chose A)\n  Plan: [[Plan - Open]]\n- [x] Done\n",
+        )
+        .unwrap();
+        let next = |line, ready| next_item(&dir, "Work.md", line, "n-1".into(), ready);
+        assert_eq!(next(3, false), Ok(("n-1".into(), "Bare".into())));
+        assert!(next(3, true).unwrap_err().contains("planned items only"));
+        assert!(next(6, false).unwrap_err().contains("needs a choice"));
+        assert!(next(8, false).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn counts_and_dollars_as_typed() {

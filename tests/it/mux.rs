@@ -46,11 +46,11 @@ fn splitting_tabs_and_closing() {
         s.iter().take(28).any(|l| l.contains('│'))
     });
     assert!(screen.iter().filter(|l| l.contains('$')).count() >= 1);
-    // A new tab from a command, then M-[ back to the first.
+    // A new tab from a command, then M-{ back to the first.
     server.ok(&["new-tab", "-n", "second"]);
     client.wait_text("2:second");
     assert_eq!(tabs(&server.list()), 2);
-    client.type_text(&format!("{ALT}["));
+    client.type_text(&format!("{ALT}{{"));
     client.wait_for("the first tab current", |_| {
         server.list()["sessions"][0]["tabs"][0]["current"] == true
     });
@@ -855,15 +855,15 @@ fn is_current(server: &TestServer, i: usize) -> bool {
 }
 
 #[test]
-fn alt_brackets_go_back_and_forward_through_the_tabs_visited() {
+fn alt_braces_go_back_and_forward_through_the_tabs_visited() {
     let server = TestServer::start();
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     three_tabs_visited(&server);
     for (key, i, what) in [
-        ("[", 2, "back to the third tab"),
-        ("[", 0, "back to the first tab"),
-        ("]", 2, "forward to the third tab"),
+        ("{", 2, "back to the third tab"),
+        ("{", 0, "back to the first tab"),
+        ("}", 2, "forward to the third tab"),
     ] {
         client.type_text(&format!("{ALT}{key}"));
         client.wait_for(what, |_| is_current(&server, i));
@@ -871,12 +871,12 @@ fn alt_brackets_go_back_and_forward_through_the_tabs_visited() {
 }
 
 #[test]
-fn with_tab_back_forward_off_alt_brackets_go_to_the_tab_beside() {
+fn with_tab_back_forward_off_alt_braces_go_to_the_tab_beside() {
     let server = TestServer::start_with_settings(r#"{"tab_back_forward": false}"#);
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     three_tabs_visited(&server);
-    client.type_text(&format!("{ALT}["));
+    client.type_text(&format!("{ALT}{{"));
     client.wait_for("the first tab, on the left", |_| is_current(&server, 0));
 }
 
@@ -958,5 +958,53 @@ fn a_lone_pane_is_capped_on_a_wide_screen_and_a_split_uses_it_all() {
     common::write_settings(&server.home, serde_json::json!({"lone_pane_width": "off"}));
     client.wait_for("off, the pane fills the width", |_| {
         widths(&server.list()) == [365 - side as u64]
+    });
+}
+
+/// Settings' `lone_pane_width` as the server wrote it to the test's file.
+fn lone_setting(server: &TestServer) -> Option<String> {
+    let file = server.home.join(".config/switchboard/settings.json");
+    let text = std::fs::read_to_string(file).ok()?;
+    let settings: serde_json::Value = serde_json::from_str(&text).ok()?;
+    settings["lone_pane_width"].as_str().map(str::to_string)
+}
+
+#[test]
+fn a_lone_panes_edge_drags_and_moves_with_the_resize_keys_for_every_tab() {
+    let server = TestServer::start();
+    let mut client = server.attach(365, 40);
+    client.wait_text("$");
+    client.wait_for("the lone pane at 165 columns", |_| {
+        widths(&server.list()) == [165]
+    });
+    let side = server.list()["sessions"][0]["sidebar"]["columns"]
+        .as_u64()
+        .unwrap_or(0) as usize;
+    // The rule is at column side + 165 from 0; the mouse counts from 1.
+    let (rule, to) = (side + 166, side + 201);
+    client.send(format!("\x1b[<0;{rule};5M\x1b[<32;{to};5M\x1b[<0;{to};5m").as_bytes());
+    client.wait_for("the pane dragged to 200 columns", |_| {
+        widths(&server.list()) == [200]
+    });
+    assert_eq!(lone_setting(&server).as_deref(), Some("200"));
+    client.wait_text("A lone pane is now 200 columns");
+    client.send(b"\x1b");
+    client.wait_for("the message closed", |s| {
+        !s.iter().any(|l| l.contains("A lone pane is now"))
+    });
+    // C-M-S-h moves the edge back 5 columns, as it moves a divider.
+    client.send(b"\x1b[104;8u");
+    client.wait_for("the pane 5 columns narrower", |_| {
+        widths(&server.list()) == [195]
+    });
+    assert_eq!(lone_setting(&server).as_deref(), Some("195"));
+    // C-M-S-l the other way; a new tab with one pane takes the same width.
+    client.send(b"\x1b[108;8u");
+    client.wait_for("the pane 5 columns wider", |_| {
+        widths(&server.list()) == [200]
+    });
+    server.ok(&["new-tab"]);
+    client.wait_for("the new tab's pane as wide", |_| {
+        server.list()["sessions"][0]["tabs"][1]["panes"][0]["cols"].as_u64() == Some(200)
     });
 }

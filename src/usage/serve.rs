@@ -706,6 +706,7 @@ impl Server {
                 .map(|secs| secs * 1000),
             sealed: opt(SEALED_REVIEW),
             sealed_fetch: opt(SEALED_REVIEW_FETCH).is_some_and(|v| v.as_os_str() == "1"),
+            note: opt("@tab_note").map(|n| n.to_string_lossy().into_owned()),
             tab,
             index,
             name: self.tab_label(tab),

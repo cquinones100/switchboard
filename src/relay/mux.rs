@@ -78,7 +78,8 @@ pub struct Window {
     pub focused: bool,
     /// The relay's own tab.
     pub relay: bool,
-    /// A tab looping a skill (`@loop_tab`), whose every tick ends a turn.
+    /// A tab looping a skill (`@loop_tab`), or a routine's (`@routine`),
+    /// whose every tick or run ends a turn.
     pub loop_tab: bool,
     /// A tab autopilot opened (`@autopilot`), not since made yours.
     pub autopilot: bool,
@@ -365,7 +366,8 @@ pub fn windows_of(list: &Value) -> Vec<Window> {
                     .unwrap_or_default(),
                 focused: shown && tab.get("current") == Some(&Value::Bool(true)),
                 relay: opt("@slack_relay").as_deref() == Some("1"),
-                loop_tab: opt("@loop_tab").as_deref() == Some("1"),
+                loop_tab: opt("@loop_tab").as_deref() == Some("1")
+                    || opt(crate::routines::TAB_MARK).is_some_and(|id| !id.is_empty()),
                 autopilot: opt("@autopilot")
                     .and_then(|v| v.trim().parse::<f64>().ok())
                     .is_some_and(|n| n != 0.0)

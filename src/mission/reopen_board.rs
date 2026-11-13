@@ -122,6 +122,184 @@ fn dir_cut(dir: &str, w: usize) -> String {
     format!("…{kept}")
 }
 
+/// A worktree's line (board 18's "Worktrees with no tab"): its name bold,
+/// its repository dim, its PR's and its commits' chips, and when it was
+/// last used at the right edge; or the merged ones' fold line.
+fn worktree_line(
+    item: &Item,
+    r: &Value,
+    cols: usize,
+    chosen: bool,
+    m: &Mission,
+) -> Vec<Span<'static>> {
+    let theme = &m.snap.theme;
+    let caps = m.snap.caps;
+    if s(r, "kind") == reopen::MERGED {
+        let mark = if r["shown"].as_bool() == Some(true) {
+            "▾"
+        } else {
+            "▸"
+        };
+        let folded = if r["shown"].as_bool() == Some(true) {
+            ""
+        } else {
+            ", folded"
+        };
+        let tone = if chosen { Tone::Text } else { Tone::Dim };
+        return vec![
+            Span::raw("   "),
+            Span::styled(format!("{mark} {}{folded}", item.title), tone.bold(theme)),
+            Span::styled(
+                "   Enter: show them, or remove them after asking",
+                Tone::Faint.style(theme),
+            ),
+        ];
+    }
+    let chip_of = |text_key: &str, tone_key: &str| {
+        let words = s(r, text_key);
+        if words.is_empty() {
+            Vec::new()
+        } else {
+            let mut chip = kit::chip(
+                words,
+                super::render::tone_named(s(r, tone_key)),
+                caps,
+                theme,
+            );
+            chip.push(Span::raw(" "));
+            chip
+        }
+    };
+    let mut chips = chip_of("pr", "prTone");
+    chips.extend(chip_of("commits", "commitsTone"));
+    let when = ago(item.time.unwrap_or(0), m.snap.now_secs);
+    let repo = s(r, "repo");
+    let at = kit::columns(
+        &[
+            Col::Fixed {
+                min: 8,
+                natural: width(&item.title),
+                cap: NAME_CAP,
+            },
+            Col::Stretch {
+                weight: 1,
+                min: 0,
+                max: Some(24),
+            },
+            Col::Fixed {
+                min: 0,
+                natural: kit::spans_width(&chips),
+                cap: 56,
+            },
+            Col::Right {
+                natural: width(&when),
+                cap: 12,
+            },
+        ],
+        cols.saturating_sub(4),
+        1,
+        &[1],
+    );
+    let name_style = if chosen {
+        Tone::Text.bold(theme).fg(theme.bright)
+    } else {
+        Tone::Text.bold(theme)
+    };
+    let mut line = vec![Span::raw("   ")];
+    let mut put = |spans: Vec<Span<'static>>, slot: Option<(usize, usize)>| {
+        if let Some((x, w)) = slot {
+            kit::place(&mut line, spans, (x + 3, w));
+        }
+    };
+    put(
+        vec![Span::styled(text::cut(&item.title, NAME_CAP), name_style)],
+        at[0],
+    );
+    if let Some((_, w)) = at[1] {
+        put(
+            vec![Span::styled(text::cut(repo, w), Tone::Dim.style(theme))],
+            at[1],
+        );
+    }
+    put(chips, at[2]);
+    put(vec![Span::styled(when, Tone::Faint.style(theme))], at[3]);
+    line
+}
+
+/// Whether a row is one line (a worktree's, the fold line) rather than two.
+fn one_line(item: &Item) -> bool {
+    matches!(reopen::kind_of(item), reopen::WORKTREE | reopen::MERGED)
+}
+
+/// A worktree's pane: its name, where it is, its branch counted and the
+/// last prompt given there; or the merged ones', each named.
+fn worktree_pane(item: &Item, r: &Value, cols: usize, m: &Mission) -> Vec<Vec<Span<'static>>> {
+    let theme = &m.snap.theme;
+    let inner = cols.saturating_sub(4);
+    if s(r, "kind") == reopen::MERGED {
+        let mut out = kit::pane(
+            &item.title,
+            vec![Span::styled(item.detail.clone(), Tone::Dim.style(theme))],
+            inner,
+            theme,
+        );
+        for t in r["trees"].as_array().into_iter().flatten() {
+            let t = crate::paths::tilde(t.as_str().unwrap_or(""));
+            out.push(vec![Span::styled(
+                dir_cut(&t, inner),
+                Tone::Text.style(theme),
+            )]);
+        }
+        return out;
+    }
+    let when = ago(item.time.unwrap_or(0), m.snap.now_secs);
+    let mut facts = vec![s(r, "dir").to_string(), "no tab".to_string()];
+    if !when.is_empty() {
+        facts.push(format!("last used {when}"));
+    }
+    let mut out = kit::pane(
+        &item.title,
+        vec![Span::styled(facts.join(" · "), Tone::Dim.style(theme))],
+        inner,
+        theme,
+    );
+    let branch = s(r, "branch");
+    if !branch.is_empty() {
+        let mut said = Vec::new();
+        if let Some(n) = r["ahead"].as_u64() {
+            let default = Some(s(r, "default"))
+                .filter(|d| !d.is_empty())
+                .unwrap_or("main");
+            said.push(format!(
+                "{n} commit{} ahead of {default}",
+                if n == 1 { "" } else { "s" }
+            ));
+        }
+        if !s(r, "commits").is_empty() && !s(r, "commits").ends_with("ahead") {
+            said.push(s(r, "commits").to_string());
+        }
+        let mut line = vec![
+            Span::styled("Branch ", Tone::Dim.style(theme)),
+            Span::styled(branch.to_string(), Tone::Text.style(theme)),
+        ];
+        if !said.is_empty() {
+            line.push(Span::styled(
+                format!(" · {}", said.join(" · ")),
+                Tone::Dim.style(theme),
+            ));
+        }
+        out.push(line);
+    }
+    let prompt = s(r, "prompt");
+    if !prompt.is_empty() {
+        out.push(vec![
+            Span::styled("> ", Tone::Faint.style(theme)),
+            Span::styled(prompt.replace('\n', " "), Tone::Dim.style(theme)),
+        ]);
+    }
+    out
+}
+
 /// A row's two lines: its chips, name, directory and when; then its prompt.
 fn row_lines(
     item: &Item,
@@ -223,6 +401,9 @@ fn row_lines(
 type PaneOut = (Vec<Vec<Span<'static>>>, Option<(usize, usize, usize)>);
 
 fn pane_lines(item: &Item, r: &Value, cols: usize, m: &Mission) -> PaneOut {
+    if one_line(item) {
+        return (worktree_pane(item, r, cols, m), None);
+    }
     let theme = &m.snap.theme;
     let inner = cols.saturating_sub(4);
     let kind = s(r, "kind");
@@ -359,7 +540,13 @@ pub fn board(
     // chosen row in sight.
     let heights: Vec<usize> = items
         .iter()
-        .map(|i| if views::is_header(i) { 1 } else { 2 })
+        .map(|i| {
+            if views::is_header(i) || one_line(i) {
+                1
+            } else {
+                2
+            }
+        })
         .collect();
     let mut first = 0;
     while first < cursor && heights[first..=cursor].iter().sum::<usize>() > room {
@@ -393,7 +580,12 @@ pub fn board(
         let Some(r) = reopen::of(item) else {
             continue;
         };
-        for spans in row_lines(item, r, full, is_chosen, m) {
+        let drawn: Vec<Vec<Span<'static>>> = if one_line(item) {
+            vec![worktree_line(item, r, full, is_chosen, m)]
+        } else {
+            row_lines(item, r, full, is_chosen, m).into()
+        };
+        for spans in drawn {
             hits.push(HitBox {
                 y: lines.len() as u16,
                 x0: 0,

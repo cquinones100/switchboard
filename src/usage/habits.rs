@@ -262,7 +262,6 @@ const fn service_view(title: &'static str, key: &'static str, needs: &'static st
 }
 
 pub const VIEWS: &[View] = &[
-    view("Work map", "view_work_map"),
     view("Calendar", "view_calendar"),
     view("Slack", "view_slack"),
     view("Slack relay", "view_relay"),
@@ -323,22 +322,6 @@ pub const TRIES: &[Try] = &[
             )
         },
     },
-    Try {
-        key: "todo_note",
-        keys: &[
-            "M-N",
-            "M-e",
-            "@palette choose-tab-note",
-            "@palette note-tab",
-        ],
-        times: 10,
-        title: "Turn on today's todo note?",
-        body: |n| {
-            format!(
-                "You went to Notes {n} times this week. Each weekday morning a note Todos/Today's Todo <date> would gather your notes' unticked items, today's calendar, and your PRs, tickets and Slack. It sends your notes' unticked items to Claude (Sonnet) to write it."
-            )
-        },
-    },
     // On by default; suggested to one who turned it off and keeps setting
     // reminders to come back to the same work.
     Try {
@@ -378,7 +361,7 @@ pub struct Change {
 /// One suggestion.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Suggestion {
-    /// `key:M-d`, `off:view_calendar`, `on:todo_note`.
+    /// `key:M-d`, `off:view_calendar`, `on:routines`.
     pub id: String,
     pub title: String,
     pub body: String,
@@ -785,7 +768,7 @@ mod tests {
     #[test]
     fn a_feature_that_is_off_is_suggested_once_what_it_helps_with_is_done_often() {
         let now = now();
-        let value = |k: &str| Some(Value::Bool(!["todo_note", "second_status"].contains(&k)));
+        let value = |k: &str| Some(Value::Bool(!["routines", "second_status"].contains(&k)));
         let empty = Tally::of(&[], 3);
         let notes = IndexMap::new();
         let none = HashMap::new();
@@ -801,33 +784,19 @@ mod tests {
                 now,
             })
         };
-        assert!(run(&[("key\tM-N", 9)], &value).is_empty());
-        // M-N picked in M-p is pressed by it too, so 6 presses and 4 picks are 6.
-        assert!(run(&[("key\tM-N", 6), ("palette\tM-N", 4)], &value).is_empty());
-        let todo = run(
-            &[
-                ("key\tM-N", 6),
-                ("key\tM-e", 3),
-                ("palette\t@palette choose-tab-note", 1),
-            ],
-            &value,
-        );
-        assert_eq!(todo[0].id, "on:todo_note");
+        assert!(run(&[("palette\t@palette remind-tab", 4)], &value).is_empty());
+        let routines = run(&[("palette\t@palette remind-tab", 5)], &value);
+        assert_eq!(routines[0].id, "on:routines");
         assert_eq!(
-            todo[0].setting,
+            routines[0].setting,
             Some(Change {
-                key: "todo_note".into(),
+                key: "routines".into(),
                 value: Value::Bool(true),
                 label: "Turn it on".into()
             })
         );
-        assert!(todo[0].body.contains("went to Notes 10 times"));
-        assert!(
-            todo[0]
-                .body
-                .contains("sends your notes' unticked items to Claude"),
-            "says what it sends"
-        );
+        assert!(routines[0].body.contains("set a reminder 5 times"));
+        let on = |_: &str| Some(Value::Bool(true));
         assert!(
             run(&[("key\tM-v", 10)], &on).is_empty(),
             "not once it is on"
