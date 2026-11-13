@@ -41,8 +41,8 @@ The tabs and where each piece of work stands.
 - [16. Autopilot as a kanban board](https://cquinones100.github.io/switchboard/design/16.html)
 - [29. Routines: a prompt of yours on a schedule, in the tab its last run used](https://cquinones100.github.io/switchboard/design/29.html)
 - [30. A new routine: its name, directory, schedule, tab and prompt in one box](https://cquinones100.github.io/switchboard/design/30.html)
-- [17. Work map: every piece of work, with a tab or without](https://cquinones100.github.io/switchboard/design/17.html)
-- [18. Reopen: closed tabs and past Claude sessions in one view](https://cquinones100.github.io/switchboard/design/18.html)
+- [17. Work map, replaced by Reopen (18): every piece of work, with a tab or without](https://cquinones100.github.io/switchboard/design/17.html)
+- [18. Reopen: closed tabs, past sessions and worktrees no tab has open, in one view, in place of the Work map](https://cquinones100.github.io/switchboard/design/18.html)
 
 ## Mission control · code
 

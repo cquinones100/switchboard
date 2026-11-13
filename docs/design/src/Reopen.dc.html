@@ -152,7 +152,7 @@ const sidebar = (sel, opts) => {
 
 // MISSION CONTROL'S BAR: its views grouped by feature. Row 0: the groups, the one in front lit;
 // row 1: that group's views, the one in front lit; row 2: a rule. The content starts at row 3.
-const GROUPS = [['Work', ['Tabs', 'Landing', 'Autopilot', 'Routines', 'Map', 'Reopen']], ['Code', ['PRs', 'Tickets', 'CI']], ['Day', ['Calendar', 'Reminders', 'Slack', 'Inbox', 'Notifications']], ['System', ['Usage', 'Resources', 'Settings', 'Keys']]];
+const GROUPS = [['Work', ['Tabs', 'Landing', 'Autopilot', 'Routines', 'Reopen']], ['Code', ['PRs', 'Tickets', 'CI']], ['Day', ['Calendar', 'Reminders', 'Slack', 'Inbox', 'Notifications']], ['System', ['Usage', 'Resources', 'Settings', 'Keys']]];
 const mcBar = (group, current, right) => {
   fill(35, 0, 125, 1, '3');
   let x = T(36, 0, ['Mission control', 't', 'b', '3']) + 3;
@@ -167,7 +167,7 @@ const mcBar = (group, current, right) => {
 
 // ─── THE BOARD ───────────────────────────────────────────────────────────────
 sidebar(0);
-mcBar('Work', 'Reopen', 'closed tabs and past sessions');
+mcBar('Work', 'Reopen', 'closed tabs, past sessions and worktrees with no tab');
 
 // One list, newest first: a closed tab reopens with its layout and its Claude resumed; a session with no tab resumes in a new one.
 // What each row is, as the kit's chip; what became of it, as a chip in its tone.
@@ -180,35 +180,47 @@ const item = (y, k, name, where, when, prompt, extra, sel) => {
   T(49, y + 1, ['> ', 'f', '', bg], [clip(prompt, 104), 'd', '', bg]);
 };
 
-label(36, 4, 'Today', 'd', 4, 44);
-item(6, 'tab', 'design review prep', '~/code/web-app · main', '12m', 'pull the condensed sidebar plan into the agenda for the 3:00 review', null, true);
-item(9, 'session', 'note-full-titles', '~/switchboard/.claude/worktrees/note-full-titles', '48m', 'fix the two notes tests that failed after the rename', ['tests failed', 'r']);
-item(12, 'tab', 'oncall: sync worker alert', '~/code/oncall-tools · main', '1h', 'watch the sync worker alert and tell me if it fires again tonight');
-item(15, 'session', 'sealed review PR 38', '~/.cache/switchboard/pr-review/acme-switchboard/38', '3h', 'review the community PR for anything that runs without being asked', ['untrusted · resumes sealed', 'y']);
+label(36, 4, 'Today', 'd', 3, 44);
+item(5, 'tab', 'design review prep', '~/code/web-app · main', '12m', 'pull the condensed sidebar plan into the agenda for the 3:00 review', null, true);
+item(8, 'session', 'note-full-titles', '~/switchboard/.claude/worktrees/note-full-titles', '48m', 'fix the two notes tests that failed after the rename', ['tests failed', 'r']);
+item(11, 'tab', 'oncall: sync worker alert', '~/code/oncall-tools · main', '1h', 'watch the sync worker alert and tell me if it fires again tonight');
 
-label(36, 19, 'Earlier this week', 'd', 3, 56);
-item(21, 'tab', 'land without asking', '~/switchboard · main', 'Wed', 'land it once two review rounds come back clean and leak-check finds nothing', ['landed a501ce1', 'g']);
-item(24, 'session', 'web-138-queue-waiter', '~/code/web-app/.claude/worktrees/web-138-queue-waiter', 'Tue', 'Ben asked for changes on 2027; address his comments on the waiter', ['changes asked', 'r']);
-item(27, 'session', 'slack relay', '~/switchboard · main', 'Mon', 'start the slack relay and answer my DMs while I\'m in meetings');
+label(36, 14, 'Earlier this week', 'd', 2, 56);
+item(15, 'session', 'web-138-queue-waiter', '~/code/web-app/.claude/worktrees/web-138-queue-waiter', 'Tue', 'Ben asked for changes on 2027; address his comments on the waiter', ['changes asked', 'r']);
+item(18, 'tab', 'slack relay', '~/switchboard · main', 'Mon', 'start the slack relay and answer my DMs while I\'m in meetings');
+
+// What the Work map held that no other view does: the worktrees no tab has open, one line each, with where their work stands.
+label(36, 21, 'Worktrees with no tab', 'd', 4, 60);
+R(158, 21, 'Enter opens a tab there and resumes its Claude', 'd');
+const wt = (y, name, repo, chips, when) => {
+  T(38, y, [name, 't', 'b'], ['   ' + repo, 'd']);
+  let x = 92; for (const [t, tone] of chips) x += chip(x, y, t, tone);
+  R(158, y, when, 'd');
+};
+wt(22, 'web-131-rate-limits', 'web-app', [['PR 2019 · approved', 'g'], ['2 commits to push', 'y']], 'last week');
+wt(23, 'condensed-sidebar', 'switchboard', [['no PR', 'd'], ['4 commits ahead', 'd']], 'Oct 30');
+wt(24, 'oncall-digest', 'oncall-tools', [['PR 88 · ✕ 1 failing', 'r']], 'Oct 27');
+wt(25, 'spike-ghostty-images', 'switchboard', [['no PR', 'd'], ['nothing to push', 'd']], 'Oct 12');
+T(38, 26, ['▸ 3 merged worktrees, folded', 'd'], ['   Enter: show them, or remove them after asking', 'f']);
 
 // The chosen row, as the kit's pane: what reopening it brings back.
-rule(35, 30, 125);
-pane(36, 31, 123, 'design review prep', 'closed 12m ago · 2 panes · Claude session a3f1…');
-T(36, 34, ['Reopening brings back ', 'd'], ['its panes and their layout, its note, and Claude resumed where it stopped', 't']);
-label(36, 35, 'Last screen');
+rule(35, 28, 125);
+pane(36, 29, 123, 'design review prep', 'closed 12m ago · 2 panes · Claude session a3f1…');
+T(36, 32, ['Reopening brings back ', 'd'], ['its panes and their layout, its note, and Claude resumed where it stopped', 't']);
+label(36, 34, 'Last screen');
 // The tab's last screen as the kit's picture: a thumbnail of the pane, so you know which one it was at a glance.
-picture(36, 36, 58, 7.5);
-K(37, 36.4, 40, 0.5, 'background:#262b40;border-radius:2px');
-K(37, 37.2, 54, 0.32, 'background:#565b6e;border-radius:2px;opacity:.7');
-K(37, 37.7, 48, 0.32, 'background:#565b6e;border-radius:2px;opacity:.7');
-K(37, 38.4, 30, 0.32, 'background:#7fd18b;border-radius:2px;opacity:.7');
-K(37, 39.1, 52, 0.32, 'background:#565b6e;border-radius:2px;opacity:.7');
-K(37, 39.6, 44, 0.32, 'background:#565b6e;border-radius:2px;opacity:.7');
-K(37, 40.3, 36, 0.32, 'background:#e0896b;border-radius:2px;opacity:.7');
-K(37, 41.6, 56, 0.06, 'background:#3a3f52');
-K(37, 42.0, 6, 0.32, 'background:#c9cdd9;border-radius:2px;opacity:.6');
-T(96, 37, ['Opened 10:02 · closed 2:03 · 41 turns', 'd']);
-T(96, 39, ['M-o picks one of these from any tab', 'd']);
+picture(36, 35, 58, 7.5);
+K(37, 35.4, 40, 0.5, 'background:#262b40;border-radius:2px');
+K(37, 36.2, 54, 0.32, 'background:#565b6e;border-radius:2px;opacity:.7');
+K(37, 36.7, 48, 0.32, 'background:#565b6e;border-radius:2px;opacity:.7');
+K(37, 37.4, 30, 0.32, 'background:#7fd18b;border-radius:2px;opacity:.7');
+K(37, 38.1, 52, 0.32, 'background:#565b6e;border-radius:2px;opacity:.7');
+K(37, 38.6, 44, 0.32, 'background:#565b6e;border-radius:2px;opacity:.7');
+K(37, 39.3, 36, 0.32, 'background:#e0896b;border-radius:2px;opacity:.7');
+K(37, 40.6, 56, 0.06, 'background:#3a3f52');
+K(37, 41.0, 6, 0.32, 'background:#c9cdd9;border-radius:2px;opacity:.6');
+T(96, 36, ['Opened 10:02 · closed 2:03 · 41 turns', 'd']);
+T(96, 38, ['M-o picks one of these from any tab', 'd']);
 
 keys(36, 44, [['j/k', 'move'], ['Enter', 'actions'], ['m', 'view actions'], ['/', 'filter']]);
 // ─────────────────────────────────────────────────────────────────────────────

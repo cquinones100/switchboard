@@ -86,7 +86,7 @@
       "page": "design"
     },
     "Reopen.dc.html": {
-      "title": "18. Reopen: closed tabs and past Claude sessions in one view",
+      "title": "18. Reopen: closed tabs, past sessions and worktrees no tab has open, in one view, in place of the Work map",
       "page": "design"
     },
     "Resources.dc.html": {
@@ -126,7 +126,7 @@
       "page": "design"
     },
     "WorkMap.dc.html": {
-      "title": "17. Work map: every piece of work, with a tab or without",
+      "title": "17. Work map, replaced by Reopen (18): every piece of work, with a tab or without",
       "page": "design"
     },
     "TabPicker.dc.html": {
