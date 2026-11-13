@@ -427,7 +427,7 @@ On a screen too short for every tab, the session's line at the top and the notif
 
 ### Groups
 
-Each tab is in one group, the same as its stage in mission control's Tabs view, and the groups come in this order:
+Each tab is in one group, the same as its stage in mission control's Tabs view, and the groups come in this order. Within a group the tabs are in the order of their numbers, lowest first, so a tab keeps its place as what it is doing changes; Needs you, In merge queue and Landing order theirs as the table says, and Other repos lists its tabs by the group each would otherwise be in, each of those in its own order.
 
 | Group | What puts a tab there |
 | --- | --- |
