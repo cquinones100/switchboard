@@ -21,6 +21,8 @@
 //! - `render`: a note drawn as Notes shows it (render.lua).
 //! - `format`: the Format menu's commands and the typing it does
 //!   (format.lua); `table` (table.lua), `fold` (fold.lua).
+//! - `marks`: a note's marks; `jumps`: the jump list across notes, both
+//!   Neovim's, new here.
 //! - `editor`: Vim's keys.
 //! - `sync`: notes changed from outside (sync.lua).
 //! - `images`: pictures pasted and drawn (images.lua).
@@ -45,6 +47,8 @@ pub mod fold;
 pub mod format;
 pub mod id;
 pub mod images;
+pub mod jumps;
+pub mod marks;
 pub mod menu;
 pub mod palette;
 pub mod render;

@@ -70,6 +70,7 @@ use super::editor::{self, Editor, Effect, Mode};
 use super::format::{self, Selection};
 use super::id;
 use super::images::{self, Images};
+use super::jumps::{Jump, Jumps};
 use super::menu::{self, Act as FormatAct, Ask, FormatMenu, Progress};
 use super::palette::{self, Act as PaletteAct};
 use super::render::{self, Kind};
@@ -453,6 +454,10 @@ pub const NOTE_KEYS: &[(&str, &str)] = &[
     ),
     ("Ctrl-F", "find a note"),
     ("Ctrl-B", "show or put away the list of notes"),
+    (
+        "Ctrl-O  Ctrl-I",
+        "back, forward through the places jumped from, across notes",
+    ),
     ("Ctrl-V", "paste the clipboard's image, while typing"),
     ("Enter", "carry the list on, while typing"),
     (
@@ -573,6 +578,12 @@ pub struct App {
     /// Each note left while the app runs: its undo history and folds, put
     /// back when it opens again.
     kept: HashMap<PathBuf, super::editor::Kept>,
+    /// The jump list, across notes (Ctrl-O, Ctrl-I), and the open note's
+    /// text its entries were last carried to (`follow_jumps`).
+    jumps: Jumps,
+    jumps_seen: Text,
+    /// Ctrl-O or Ctrl-I opening another note, which isn't a jump of its own.
+    jumping: bool,
     titles: HashSet<String>,
     pub quit: bool,
     /// UX 2.0's "Add an item" input while it is typed into (`ga`, or a
@@ -671,6 +682,9 @@ impl App {
             opening: None,
             cursors: HashMap::new(),
             kept: HashMap::new(),
+            jumps: Jumps::default(),
+            jumps_seen: Text::default(),
+            jumping: false,
             titles: HashSet::new(),
             quit: false,
             adding: None,
@@ -848,6 +862,18 @@ impl App {
             return;
         };
         let (text, note_id) = self.give_id(path, text);
+        self.follow_jumps();
+        if let Some(o) = &self.open
+            && !self.jumping
+            && o.path != path
+        {
+            self.jumps.record(Jump {
+                note: o.path.clone(),
+                row: self.editor.doc.row,
+                col: self.editor.doc.col,
+            });
+            self.editor.leave_as_jump();
+        }
         if let Some(o) = &self.open {
             let left = o.path.clone();
             let kept = self.editor.put_away();
@@ -863,6 +889,7 @@ impl App {
                 }
             }
         }
+        self.jumps_seen = self.editor.seen().clone();
         self.adding = None;
         self.open = Some(Open {
             path: path.to_path_buf(),
@@ -880,7 +907,7 @@ impl App {
             self.editor.clamp();
         }
         // Its tables lined up, as one change.
-        self.editor.change(table::align_all);
+        self.editor.change_outside(table::align_all);
         if self.modified() {
             self.save_due = Some(Instant::now() + AUTOSAVE);
         }
@@ -1042,7 +1069,11 @@ impl App {
             None => new,
         };
         let new_text = Text::from_file(&new);
-        self.editor.change(|doc| doc.text = new_text);
+        // Followed on its own, as a key's change is, so a later change
+        // from outside can't make a gone line look changed.
+        self.follow_lines();
+        self.editor.change_outside(|doc| doc.text = new_text);
+        self.follow_lines();
         self.editor.clamp();
         if let Some(o) = &mut self.open {
             o.base = Some(disk.clone());
@@ -1053,7 +1084,7 @@ impl App {
         let mut rows = sync::changed_rows(&before, &after);
         if self.opts.move_checked_to_bottom && !rows.is_empty() {
             rows.sort_unstable_by(|a, b| b.cmp(a));
-            let changed = self.editor.change(|doc| {
+            let changed = self.editor.change_outside(|doc| {
                 for row in rows {
                     format::sort_checked(doc, row);
                 }
@@ -1143,7 +1174,7 @@ impl App {
         let lines = self.editor.doc.text.lines();
         if id::any_in(&lines) {
             let kept = Text::from_lines(&id::without_ids(&lines));
-            self.editor.change(|doc| doc.text = kept);
+            self.editor.change_outside(|doc| doc.text = kept);
             self.editor.clamp();
         }
         // A title lost in the editor is always written to the file, so the
@@ -1271,6 +1302,8 @@ impl App {
         if let Some(k) = self.kept.remove(from) {
             self.kept.insert(to.to_path_buf(), k);
         }
+        self.jumps
+            .rekey(&|p: &Path| (p == from).then(|| to.to_path_buf()));
     }
 
     /// A folder renamed: the open note and the marks under it follow.
@@ -1289,6 +1322,7 @@ impl App {
         }
         rekey(&mut self.cursors, &follow);
         rekey(&mut self.kept, &follow);
+        self.jumps.rekey(&follow);
         for p in &mut self.planning {
             if let Some(n) = follow(&p.note) {
                 p.note = n;
@@ -1302,6 +1336,7 @@ impl App {
         // Its history goes with it, so a note made later by its name starts
         // with none.
         self.kept.remove(path);
+        self.jumps.forget(path);
         if self.current_path() != Some(path) {
             return;
         }
@@ -2322,9 +2357,12 @@ impl App {
     /// Leaving Insert mode: an empty pair of markers put in to type into
     /// goes, and the table the cursor is in lines up again.
     fn after_insert(&mut self) {
-        format::drop_empty(&mut self.editor.doc);
-        let row = self.editor.doc.row;
-        table::align(&mut self.editor.doc, row);
+        // Tidying of the app's own, which the change list leaves out.
+        self.editor.tidy(|doc| {
+            format::drop_empty(doc);
+            let row = doc.row;
+            table::align(doc, row);
+        });
         self.editor.clamp();
     }
 
@@ -2428,8 +2466,16 @@ impl App {
     pub fn input(&mut self, input: Input) {
         match input {
             Input::Key(key) => self.key(key),
-            Input::Mouse(m) => self.mouse(m),
-            Input::Paste(text) => self.paste(&text),
+            Input::Mouse(m) => {
+                self.follow_lines();
+                self.mouse(m);
+                self.follow_lines();
+            }
+            Input::Paste(text) => {
+                self.follow_lines();
+                self.paste(&text);
+                self.follow_lines();
+            }
             Input::FocusIn => {
                 // The notes_images setting read again, as changing it in
                 // Settings takes the focus away.
@@ -2448,7 +2494,16 @@ impl App {
         }
     }
 
+    /// A key, wherever it goes (the note, a prompt, a box), with what is
+    /// kept by line followed across an outside change before it and its
+    /// own edit after, each on its own, so no line takes a gone one's place.
     pub fn key(&mut self, key: Key) {
+        self.follow_lines();
+        self.key_inner(key);
+        self.follow_lines();
+    }
+
+    fn key_inner(&mut self, key: Key) {
         if self.locked_by.is_some() {
             if matches!(key.code, KeyCode::Char('q' | 'Q') | KeyCode::Esc) {
                 self.quit = true;
@@ -2868,7 +2923,9 @@ impl App {
             self.after_insert();
         } else if self.editor.mode == Mode::Normal && self.editor.idle() {
             let row = self.editor.doc.row;
-            table::align(&mut self.editor.doc, row);
+            self.editor.tidy(|doc| {
+                table::align(doc, row);
+            });
             self.editor.clamp();
         }
         if let Some(before) = self.editor.end() {
@@ -2885,6 +2942,28 @@ impl App {
 
     /// The keys of a change just ended kept for `.` to make again: the last
     /// change, not an undo or a redo.
+    /// What was typed before Insert mode's Ctrl-O and a jump kept for `.`
+    /// as the insert it was, the Ctrl-O, its count and the jump key left
+    /// off, before the jump moves away.
+    fn finish_typing_before_jump(&mut self) {
+        if let Some((keys, _)) = &mut self.recording {
+            keys.pop();
+            while keys
+                .last()
+                .is_some_and(|k| matches!(k.code, KeyCode::Char('0'..='9')) && k.mods.is_empty())
+            {
+                keys.pop();
+            }
+            if keys
+                .last()
+                .is_some_and(|k| k.mods.ctrl && k.code == KeyCode::Char('o'))
+            {
+                keys.pop();
+            }
+        }
+        self.finish_recording();
+    }
+
     fn finish_recording(&mut self) {
         if self.replaying {
             return;
@@ -2931,6 +3010,47 @@ impl App {
         }
         let ctrl = key.mods.ctrl && !key.mods.alt;
         let idle = !self.editor.pending();
+        let jump_key = if ctrl && key.code == KeyCode::Char('o') {
+            Some(true)
+        } else if (ctrl && key.code == KeyCode::Char('i'))
+            || (key.code == KeyCode::Tab && key.mods.is_empty())
+        {
+            Some(false)
+        } else {
+            None
+        };
+        if mode == Mode::Normal
+            && let Some(back) = jump_key
+        {
+            // Insert mode's Ctrl-O waits for a command with no keys typed.
+            let count = if idle || self.editor.no_keys() {
+                Some(1)
+            } else {
+                self.editor.take_count()
+            };
+            if let Some(count) = count {
+                let typing = self.editor.one_command();
+                if typing {
+                    self.finish_typing_before_jump();
+                }
+                self.jump(back, count);
+                if typing && !self.editor.one_command() && self.editor.mode == Mode::Normal {
+                    // Another note opened, which starts in Normal mode:
+                    // typing goes on at the place gone to.
+                    let col = self.editor.col();
+                    self.editor.insert_at(col);
+                } else {
+                    self.editor.command_done();
+                }
+                if typing && self.editor.mode == Mode::Insert {
+                    // What is typed from here is what `.` makes again, as
+                    // an insert started where the jump went, not the jump.
+                    let i = Key::new(KeyCode::Char('i'), Mods::NONE);
+                    self.recording = Some((vec![i], self.editor.doc.text.clone()));
+                }
+                return;
+            }
+        }
         if mode == Mode::Normal && key.code == KeyCode::Char('.') && key.mods.is_empty() {
             if idle {
                 return self.repeat(None);
@@ -3152,6 +3272,10 @@ impl App {
         self.replaying = true;
         for key in keys {
             self.note_key_inner(key);
+            // Each replayed key followed on its own, as a typed one is,
+            // a jump it made recorded before the next key edits the text.
+            self.effects();
+            self.follow_lines();
         }
         if self.editor.is_typing() {
             self.editor.key(Key::new(KeyCode::Esc, Mods::NONE));
@@ -3245,6 +3369,64 @@ impl App {
         }
     }
 
+    /// The open note's jump list entries carried across whatever changed
+    /// its text since they last were, before the list is read or added to.
+    fn follow_jumps(&mut self) {
+        let Some(o) = &self.open else { return };
+        if self.jumps_seen == self.editor.doc.text {
+            return;
+        }
+        self.jumps.follow(
+            &o.path,
+            &self.jumps_seen.lines(),
+            &self.editor.doc.text.lines(),
+        );
+        self.jumps_seen = self.editor.doc.text.clone();
+    }
+
+    /// The marks, the change list and the jump list carried across what
+    /// changed the open note's text since they last were: called around
+    /// each key, paste and click, so each change is followed on its own.
+    fn follow_lines(&mut self) {
+        self.editor.catch_up();
+        self.follow_jumps();
+    }
+
+    /// Ctrl-O (`back`) and Ctrl-I or Tab: `count` places through the jump
+    /// list, in the open note or another.
+    fn jump(&mut self, back: bool, count: usize) {
+        self.follow_jumps();
+        let Some(o) = &self.open else { return };
+        let exists = |p: &Path| p.is_file();
+        let to = if back {
+            let now = Jump {
+                note: o.path.clone(),
+                row: self.editor.doc.row,
+                col: self.editor.doc.col,
+            };
+            self.jumps.back(count, now, exists)
+        } else {
+            self.jumps.forward(count, exists)
+        };
+        let Some(to) = to else { return };
+        if o.path != to.note {
+            // Another note's text in place isn't a change for `.` to make
+            // again.
+            self.recording = None;
+            self.jumping = true;
+            self.open_note(&to.note, false, false);
+            self.jumping = false;
+            // Its entries carried across a change made to its file while
+            // it was away, before the one gone to is read again.
+            self.follow_jumps();
+        }
+        if self.current_path() == Some(to.note.as_path())
+            && let Some(at) = self.jumps.current().filter(|j| j.note == to.note)
+        {
+            self.editor.go_to(at.row, at.col);
+        }
+    }
+
     fn effects(&mut self) {
         for effect in self.editor.effects() {
             match effect {
@@ -3268,6 +3450,16 @@ impl App {
                 Effect::Window(dir) => self.window_move(dir),
                 Effect::WorkOnItem => self.work_on_item(),
                 Effect::AddItem => self.start_adding(),
+                Effect::Jump { from: (row, col) } => {
+                    self.follow_jumps();
+                    if let Some(o) = &self.open {
+                        self.jumps.record(Jump {
+                            note: o.path.clone(),
+                            row,
+                            col,
+                        });
+                    }
+                }
             }
         }
     }

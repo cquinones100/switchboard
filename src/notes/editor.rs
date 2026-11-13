@@ -1,8 +1,9 @@
 //! Vim's keys on a note, in place of the Neovim the plugin ran in: Normal,
-//! Insert, Replace and Visual modes, motions, operators and text objects, counts,
-//! registers, undo and redo, and search, enough of Vim that a note edits
-//! the way it did. What a note added on top (Enter ticking a box, the Format
-//! menu, the leader keys) is the app's; this is the editing underneath.
+//! Insert, Replace and Visual modes, motions, operators and text objects,
+//! counts, registers, undo and redo, search, marks and the change list,
+//! enough of Vim that a note edits the way it did. What a note added on top
+//! (Enter ticking a box, the Format menu, the leader keys) is the app's;
+//! this is the editing underneath.
 //!
 //! The settings are the ones nvim/init.lua gave every buffer: Space as the
 //! leader (taken by the app), `shiftwidth` 2 with spaces, `autoindent`,
@@ -18,8 +19,9 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use super::fold::Folds;
+use super::fold::{Folds, Places};
 use super::format::{Block, Doc, Insert, Selection};
+use super::marks::Marks;
 use super::render;
 use super::text::Text;
 use crate::mux::input::{Key, KeyCode};
@@ -59,6 +61,11 @@ pub enum Effect {
     WorkOnItem,
     /// `ga`: UX 2.0's "Add an item" input at the bottom, typed into.
     AddItem,
+    /// The cursor jumped (a search, `G`, `%`, a mark, ...) from `from`,
+    /// for the app's jump list.
+    Jump {
+        from: (usize, usize),
+    },
 }
 
 /// A register's text, and whether it holds whole lines or a block (a
@@ -115,6 +122,9 @@ struct Snap {
     text: Text,
     row: usize,
     col: usize,
+    /// The marks then, so undoing a deletion brings back the marks it
+    /// took, as Vim's undo does.
+    marks: Marks,
 }
 
 /// A note's history and folds while another is open (`Editor::put_away`).
@@ -123,8 +133,15 @@ pub struct Kept {
     undo: Vec<Snap>,
     redo: Vec<Snap>,
     folds: Folds,
+    marks: Marks,
+    changes: Vec<(usize, usize)>,
+    change_at: Option<usize>,
+    change_between: bool,
     text: Text,
 }
+
+/// As many changes as Neovim's change list keeps.
+const MOST_CHANGES: usize = 100;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Motion {
@@ -132,21 +149,44 @@ enum Motion {
     Right,
     Down,
     Up,
-    Word { big: bool },
-    Back { big: bool },
-    End { big: bool },
-    EndBack { big: bool },
+    Word {
+        big: bool,
+    },
+    Back {
+        big: bool,
+    },
+    End {
+        big: bool,
+    },
+    EndBack {
+        big: bool,
+    },
     LineStart,
     FirstNonBlank,
     LineEnd,
-    Goto { first: bool },
-    Find { c: char, back: bool, till: bool },
-    RepeatFind { reverse: bool },
+    Goto {
+        first: bool,
+    },
+    Find {
+        c: char,
+        back: bool,
+        till: bool,
+    },
+    RepeatFind {
+        reverse: bool,
+    },
     ParagraphFwd,
     ParagraphBack,
     Match,
     Screen(u8),
-    Next { reverse: bool },
+    Next {
+        reverse: bool,
+    },
+    /// `` `a `` to a mark, `'a` to its line; `` `` `` and `''` the context mark.
+    Mark {
+        name: char,
+        line: bool,
+    },
     NextLine,
     PrevLine,
     CurrentLine,
@@ -163,6 +203,22 @@ impl Motion {
                 | Motion::NextLine
                 | Motion::PrevLine
                 | Motion::CurrentLine
+                | Motion::Mark { line: true, .. }
+        )
+    }
+
+    /// A motion that records where the cursor jumped from, as Vim's
+    /// jump motions do.
+    fn jumps(self) -> bool {
+        matches!(
+            self,
+            Motion::Goto { .. }
+                | Motion::Match
+                | Motion::ParagraphFwd
+                | Motion::ParagraphBack
+                | Motion::Next { .. }
+                | Motion::Screen(_)
+                | Motion::Mark { .. }
         )
     }
 
@@ -242,6 +298,20 @@ pub struct Editor {
     /// The column j and k try to keep, in characters.
     want: Option<usize>,
     pub folds: Folds,
+    pub marks: Marks,
+    /// The change list: where each change left the cursor, oldest first,
+    /// and the entry `g;` and `g,` last went to (none past the newest).
+    changes: Vec<(usize, usize)>,
+    change_at: Option<usize>,
+    /// The entry `g;` and `g,` last went to went with its line, so
+    /// `change_at` is the one after it, which `g,` goes to next.
+    change_between: bool,
+    /// The text an outside change left during a step nothing had been typed
+    /// into yet, so the step ending there isn't a change of the person's.
+    outside_only: Option<Text>,
+    /// The text the marks and the change list were last carried to, so an
+    /// edit is followed once whatever made it (`catch_up`).
+    seen: Text,
     /// The first row on the screen and how many the window has, for H, M,
     /// L and the scrolling keys; the app keeps them.
     pub top: usize,
@@ -403,6 +473,7 @@ fn first_non_blank(line: &str) -> usize {
 impl Editor {
     pub fn new(text: Text) -> Editor {
         Editor {
+            seen: text.clone(),
             doc: Doc::new(text),
             mode: Mode::Normal,
             anchor: (0, 0),
@@ -416,6 +487,11 @@ impl Editor {
             search: None,
             want: None,
             folds: Folds::default(),
+            marks: Marks::default(),
+            changes: Vec::new(),
+            change_at: None,
+            change_between: false,
+            outside_only: None,
             top: 0,
             height: 20,
             center: false,
@@ -436,15 +512,24 @@ impl Editor {
     /// the text they end at, to be put back when it opens again (`take_back`),
     /// as Neovim kept a buffer per note; a change under way ends here.
     pub fn put_away(&mut self) -> Kept {
+        let typed = self.typed_in_step();
         if let Some(group) = self.group.take()
             && group.text != self.doc.text
         {
             self.undo.push(group);
+            if typed {
+                self.record_change();
+            }
         }
+        self.catch_up();
         Kept {
             undo: std::mem::take(&mut self.undo),
             redo: std::mem::take(&mut self.redo),
             folds: std::mem::take(&mut self.folds),
+            marks: std::mem::take(&mut self.marks),
+            changes: std::mem::take(&mut self.changes),
+            change_at: self.change_at.take(),
+            change_between: std::mem::take(&mut self.change_between),
             text: self.doc.text.clone(),
         }
     }
@@ -457,9 +542,13 @@ impl Editor {
         self.undo = kept.undo;
         self.redo = kept.redo;
         self.folds = kept.folds;
+        self.marks = kept.marks;
+        self.changes = kept.changes;
+        self.change_at = kept.change_at;
+        self.change_between = kept.change_between;
         if text != self.doc.text {
             let before = self.doc.text.lines();
-            self.change(|doc| doc.text = text);
+            self.change_outside(|doc| doc.text = text);
             let after = self.doc.text.lines();
             self.folds.follow(&before, &after);
         }
@@ -480,8 +569,146 @@ impl Editor {
         self.redo.clear();
         self.group = None;
         self.folds = Folds::default();
+        self.marks = Marks::default();
+        self.changes.clear();
+        self.change_at = None;
+        self.change_between = false;
+        self.outside_only = None;
+        self.seen = self.doc.text.clone();
         self.top = 0;
         self.want = None;
+    }
+
+    /// The text the marks were last carried to, which the app's jump list
+    /// for the note starts from as it opens.
+    pub fn seen(&self) -> &Text {
+        &self.seen
+    }
+
+    /// The marks and the change list carried across whatever changed the
+    /// text since they last were, before they are read or added to.
+    pub fn catch_up(&mut self) {
+        if self.seen == self.doc.text {
+            return;
+        }
+        let (before, after) = (self.seen.lines(), self.doc.text.lines());
+        self.marks.follow(&before, &after);
+        let places = Places::new(&before, &after);
+        let mut at = None;
+        let mut kept = Vec::with_capacity(self.changes.len());
+        for (i, place) in std::mem::take(&mut self.changes).into_iter().enumerate() {
+            let moved = places.of(place);
+            if Some(i) == self.change_at {
+                // The entry visited last, or the place between the ones
+                // either side of it when it went.
+                at = Some(kept.len());
+                self.change_between |= moved.is_none();
+            }
+            if let Some(place) = moved {
+                kept.push(place);
+            }
+        }
+        self.changes = kept;
+        self.change_at = at.filter(|&a| a < self.changes.len());
+        self.seen = self.doc.text.clone();
+    }
+
+    /// A change made: where it left the cursor is the change list's newest
+    /// entry, replacing one on the same line, as Vim keeps changes close
+    /// together as one.
+    fn record_change(&mut self) {
+        self.catch_up();
+        let at = (self.doc.row, self.doc.col);
+        if self.changes.last().is_some_and(|&(r, _)| r == at.0) {
+            self.changes.pop();
+        }
+        self.changes.push(at);
+        if self.changes.len() > MOST_CHANGES {
+            self.changes.remove(0);
+        }
+        self.change_at = None;
+        self.change_between = false;
+    }
+
+    /// `g;` (`back`) and `g,`: through the change list, `count` entries.
+    fn visit_change(&mut self, count: usize, back: bool) {
+        self.catch_up();
+        let len = self.changes.len();
+        if len == 0 {
+            self.say("E664: changelist is empty");
+            return;
+        }
+        let count = count.max(1);
+        let to = match (self.change_at, back) {
+            (None, true) => len.checked_sub(count),
+            (Some(i), true) => i.checked_sub(count),
+            (None, false) => {
+                self.say("E663: At end of changelist");
+                return;
+            }
+            (Some(i), false) => Some(i.saturating_add(count) - usize::from(self.change_between))
+                .filter(|&t| t < len),
+        };
+        let to = match to {
+            Some(t) => t,
+            None if back => {
+                self.say("E662: At start of changelist");
+                if self.change_at == Some(0) {
+                    return;
+                }
+                0
+            }
+            None => {
+                self.say("E663: At end of changelist");
+                if self.change_at == Some(len - 1) && !self.change_between {
+                    return;
+                }
+                len - 1
+            }
+        };
+        self.change_at = Some(to);
+        self.change_between = false;
+        let (r, c) = self.changes[to];
+        self.want = None;
+        self.set_shown(r, c);
+    }
+
+    /// The cursor jumping to `(row, col)`: where it was is the context
+    /// mark and the app's jump list's. With `open`, the folds hiding the
+    /// place open, as Vim's default `foldopen` opens them for a mark, `%`
+    /// and a search, though not for `G` and the rest.
+    fn jump_to(&mut self, row: usize, col: usize, open: bool) {
+        self.catch_up();
+        let from = (self.doc.row, self.doc.col);
+        self.marks.set_context(from);
+        self.out.push(Effect::Jump { from });
+        if open {
+            self.set_shown(row, col);
+        } else {
+            self.set(row, col);
+        }
+    }
+
+    /// The cursor put on a place a jump or a change list keeps, its folds
+    /// opened.
+    fn set_shown(&mut self, row: usize, col: usize) {
+        self.set(row, col);
+        let kinds = render::kinds(&self.doc.text.lines());
+        self.folds.reveal(&kinds, self.doc.row);
+    }
+
+    /// The cursor leaving the note for another as a jump: where it is,
+    /// the context mark that `''` goes back to.
+    pub fn leave_as_jump(&mut self) {
+        self.catch_up();
+        self.marks.set_context((self.doc.row, self.doc.col));
+    }
+
+    /// The cursor put somewhere with nothing recorded, for Ctrl-O and
+    /// Ctrl-I.
+    pub fn go_to(&mut self, row: usize, col: usize) {
+        self.want = None;
+        self.set_shown(row, col);
     }
 
     pub fn effects(&mut self) -> Vec<Effect> {
@@ -495,6 +722,11 @@ impl Editor {
     /// Whether a Normal mode command is half typed.
     pub fn idle(&self) -> bool {
         self.keys.is_empty() && self.mode == Mode::Normal && self.waiting.is_none()
+    }
+
+    /// Whether no keys of a command are typed yet, whatever is waiting.
+    pub fn no_keys(&self) -> bool {
+        self.keys.is_empty()
     }
 
     /// Whether keys are waiting for the rest of a command: a Normal mode
@@ -528,17 +760,33 @@ impl Editor {
     // ── Undo ──────────────────────────────────────────────────────────────
 
     fn snap(&self) -> Snap {
+        let mut marks = self.marks.clone();
+        marks.follow(&self.seen.lines(), &self.doc.text.lines());
         Snap {
             text: self.doc.text.clone(),
             row: self.doc.row,
             col: self.doc.col,
+            marks,
         }
+    }
+
+    /// The text put back by undo or redo, the marks it had that the change
+    /// took brought back.
+    fn put_back(&mut self, snap: Snap) {
+        self.catch_up();
+        self.doc.text = snap.text;
+        self.doc.row = snap.row.min(self.doc.text.len() - 1);
+        self.doc.col = snap.col;
+        self.clamp();
+        self.catch_up();
+        self.marks.restore(&snap.marks);
     }
 
     /// Before a key: a change it starts is remembered from here.
     pub fn begin(&mut self) {
         if self.group.is_none() && self.idle() {
             self.group = Some(self.snap());
+            self.outside_only = None;
         }
     }
 
@@ -549,6 +797,7 @@ impl Editor {
         if !self.idle() {
             return None;
         }
+        let typed = self.typed_in_step();
         let group = self.group.take()?;
         if group.text == self.doc.text {
             return None;
@@ -556,7 +805,16 @@ impl Editor {
         let before = group.text.clone();
         self.undo.push(group);
         self.redo.clear();
+        if typed {
+            self.record_change();
+        }
         Some(before)
+    }
+
+    /// Whether the step ending changed anything beyond what came from
+    /// outside.
+    fn typed_in_step(&mut self) -> bool {
+        self.outside_only.take().as_ref() != Some(&self.doc.text)
     }
 
     /// A step to undo starts here whatever the mode, for a paste that comes
@@ -571,13 +829,50 @@ impl Editor {
     /// outside), as one step to undo, or part of the key's when one is
     /// under way.
     pub fn change(&mut self, edit: impl FnOnce(&mut Doc)) -> bool {
+        let own_step = self.group.is_none();
+        let changed = self.make_change(edit, false);
+        if changed && own_step {
+            self.record_change();
+        }
+        changed
+    }
+
+    /// `change` for a change the person didn't make here (a file changed
+    /// from outside, the tables lined up as a note opens), which the change
+    /// list leaves out.
+    pub fn change_outside(&mut self, edit: impl FnOnce(&mut Doc)) -> bool {
+        self.make_change(edit, true)
+    }
+
+    /// The app's own tidying (a table lined up, empty markers dropped):
+    /// part of the step under way, which it doesn't make a change of the
+    /// person's, or, with none, left out of the history as before.
+    pub fn tidy(&mut self, edit: impl FnOnce(&mut Doc)) {
+        if self.group.is_some() {
+            self.make_change(edit, true);
+        } else {
+            edit(&mut self.doc);
+        }
+    }
+
+    /// A change made outside a key, the person's or from `outside`, as one
+    /// step to undo or part of the key's.
+    fn make_change(&mut self, edit: impl FnOnce(&mut Doc), outside: bool) -> bool {
         let before = self.snap();
         edit(&mut self.doc);
         if before.text == self.doc.text {
             return false;
         }
-        if self.group.is_none() {
-            self.undo.push(before);
+        match &self.group {
+            None => self.undo.push(before),
+            Some(group)
+                if outside
+                    && (group.text == before.text
+                        || self.outside_only.as_ref() == Some(&before.text)) =>
+            {
+                self.outside_only = Some(self.doc.text.clone());
+            }
+            Some(_) => {}
         }
         self.redo.clear();
         true
@@ -596,10 +891,7 @@ impl Editor {
             col: snap.col,
             ..now
         });
-        self.doc.text = snap.text;
-        self.doc.row = snap.row.min(self.doc.text.len() - 1);
-        self.doc.col = snap.col;
-        self.clamp();
+        self.put_back(snap);
         true
     }
 
@@ -610,10 +902,7 @@ impl Editor {
             return false;
         };
         self.undo.push(self.snap());
-        self.doc.text = snap.text;
-        self.doc.row = snap.row.min(self.doc.text.len() - 1);
-        self.doc.col = snap.col;
-        self.clamp();
+        self.put_back(snap);
         true
     }
 
@@ -942,6 +1231,29 @@ impl Editor {
                 (r, first_non_blank(&self.doc.line(r)))
             }
             Motion::Next { reverse } => self.search_next(reverse, count)?,
+            Motion::Mark { name, line } => {
+                self.catch_up();
+                let at = match name {
+                    'a'..='z' => self.marks.get(name),
+                    '`' | '\'' => self.marks.context,
+                    _ => None,
+                };
+                let Some((r, c)) = at else {
+                    self.say("E20: Mark not set");
+                    return None;
+                };
+                let r = r.min(last_row);
+                let to = self.doc.line(r);
+                if line {
+                    (r, first_non_blank(&to))
+                } else {
+                    let mut c = c.min(to.len());
+                    while !to.is_char_boundary(c) {
+                        c -= 1;
+                    }
+                    (r, c)
+                }
+            }
             Motion::NextLine => {
                 let r = (row + count).min(last_row);
                 (r, first_non_blank(&self.doc.line(r)))
@@ -1029,7 +1341,7 @@ impl Editor {
         }
         if let Some(p) = self.search_next(false, 1) {
             self.want = None;
-            self.set(p.0, p.1);
+            self.jump_to(p.0, p.1, true);
         }
     }
 
@@ -1079,7 +1391,7 @@ impl Editor {
         }
         self.search = Some((format!(r"\b{}\b", regex::escape(&line[s..e])), forward));
         if let Some(p) = self.search_next(false, 1) {
-            self.set(p.0, p.1);
+            self.jump_to(p.0, p.1, true);
         }
     }
 
@@ -1758,6 +2070,13 @@ impl Editor {
     /// The prompt a command asked for is done (run or canceled): Ctrl-O's
     /// command with it, so typing goes on.
     pub fn prompt_done(&mut self) {
+        self.command_done();
+    }
+
+    /// A command the app ran for Insert mode's Ctrl-O (Ctrl-O or Ctrl-I
+    /// through the jump list) done: Insert mode again, as `key` goes back
+    /// after one of the editor's own.
+    pub fn command_done(&mut self) {
         if self.mode == Mode::Normal && self.keys.is_empty() {
             self.back_to_insert();
         }
@@ -1873,6 +2192,21 @@ impl Editor {
                         '+' => Motion::NextLine,
                         '-' => Motion::PrevLine,
                         '_' => Motion::CurrentLine,
+                        '`' | '\'' => {
+                            let Some(target) = keys.get(i + 1) else {
+                                return Err(true);
+                            };
+                            let Some(name) = typed(target) else {
+                                return Err(false);
+                            };
+                            return Ok((
+                                Motion::Mark {
+                                    name,
+                                    line: c == '\'',
+                                },
+                                2,
+                            ));
+                        }
                         'f' | 'F' | 't' | 'T' => {
                             let Some(target) = keys.get(i + 1) else {
                                 return Err(true);
@@ -1995,10 +2329,9 @@ impl Editor {
                     None => Parse::Invalid,
                 },
             },
-            // Marks, macros and the rest of the two-key commands: the second
-            // key read, so it isn't taken for a command of its own.
-            'z' | 'Z' | 'g' | 'm' | '`' | '\'' | 'q' | '@' => match keys.get(i + 1).and_then(typed)
-            {
+            // A mark set, macros and the rest of the two-key commands: the
+            // second key read, so it isn't taken for a command of its own.
+            'z' | 'Z' | 'g' | 'm' | 'q' | '@' => match keys.get(i + 1).and_then(typed) {
                 None if keys.get(i + 1).is_none() => Parse::More,
                 Some(t) => Parse::Done(Command::Two(c, t, count)),
                 None => Parse::Invalid,
@@ -2075,7 +2408,13 @@ impl Editor {
                     self.want = None;
                 }
                 if let Some((r, c)) = self.target(m, count, counted) {
-                    self.set(r, c);
+                    if m.jumps() {
+                        let open =
+                            matches!(m, Motion::Mark { .. } | Motion::Match | Motion::Next { .. });
+                        self.jump_to(r, c, open);
+                    } else {
+                        self.set(r, c);
+                    }
                 }
             }
             Command::Operate(op, n, target) => {
@@ -2148,6 +2487,12 @@ impl Editor {
             ('g', 'i') => self.mode = Mode::Insert,
             ('g', 'w') => self.out.push(Effect::WorkOnItem),
             ('g', 'a') => self.out.push(Effect::AddItem),
+            ('g', ';') => self.visit_change(count, true),
+            ('g', ',') => self.visit_change(count, false),
+            ('m', name @ 'a'..='z') => {
+                self.catch_up();
+                self.marks.set(name, (row, self.doc.col));
+            }
             _ => {}
         }
         if a == 'z' {
@@ -2507,12 +2852,17 @@ impl Editor {
             _ if ctrl(&key, 'r') => self.waiting = Some(Waiting::Register),
             _ if ctrl(&key, 'o') => {
                 // What was typed so far is a step of its own, as Vim breaks
-                // the undo there, so the command can undo it.
+                // the undo there, so the command can undo it, and a change
+                // to visit with `g;`.
+                let typed = self.typed_in_step();
                 if let Some(group) = self.group.take()
                     && group.text != self.doc.text
                 {
                     self.undo.push(group);
                     self.redo.clear();
+                    if typed {
+                        self.record_change();
+                    }
                 }
                 // The command and what is typed after it are the next.
                 self.group = Some(self.snap());
@@ -3350,7 +3700,7 @@ impl Editor {
         if let Ok(n) = command.parse::<usize>() {
             let r = n.saturating_sub(1).min(self.doc.text.len() - 1);
             let fnb = first_non_blank(&self.doc.line(r));
-            self.set(r, fnb);
+            self.jump_to(r, fnb, false);
             return;
         }
         static SUB: LazyLock<Regex> = LazyLock::new(|| {
@@ -4067,5 +4417,216 @@ mod tests {
             "a key typed over a selection replaces it"
         );
         assert_eq!(e.mode, Mode::Insert);
+    }
+
+    fn messages(e: &mut Editor) -> Vec<String> {
+        e.effects()
+            .into_iter()
+            .filter_map(|x| match x {
+                Effect::Message(m) => Some(m),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_mark_takes_the_cursor_back_to_its_place_or_its_line() {
+        let mut e = editor(&["one", "  two words", "three", "four"]);
+        press(&mut e, "jwlma");
+        assert_eq!((e.row(), e.col()), (1, 3));
+        press(&mut e, "G`a");
+        assert_eq!((e.row(), e.col()), (1, 3), "back to the exact place");
+        press(&mut e, "G'a");
+        assert_eq!((e.row(), e.col()), (1, 2), "to the line's first non-blank");
+        press(&mut e, "`b");
+        assert_eq!(messages(&mut e), vec!["E20: Mark not set".to_string()]);
+    }
+
+    #[test]
+    fn a_jump_into_a_closed_section_opens_it() {
+        let mut e = editor(&["# T", "## A", "a1", "a2", "## B", "b1"]);
+        press(&mut e, "3Gmakzc`a");
+        assert_eq!(e.row(), 2);
+        assert!(!e.folds.is_closed(1), "the section opened");
+    }
+
+    #[test]
+    fn backticks_twice_go_back_where_the_cursor_jumped_from_and_forward_again() {
+        let mut e = editor(&["one", "two", "three", "four"]);
+        press(&mut e, "jlG");
+        assert_eq!(e.row(), 3);
+        press(&mut e, "``");
+        assert_eq!((e.row(), e.col()), (1, 1));
+        press(&mut e, "``");
+        assert_eq!(e.row(), 3, "pressed again it comes back");
+        press(&mut e, "''");
+        assert_eq!((e.row(), e.col()), (1, 0), "'' to the line");
+    }
+
+    #[test]
+    fn an_operator_reaches_a_mark() {
+        let mut e = editor(&["one", "two", "three", "four"]);
+        press(&mut e, "jmajjd'a");
+        assert_eq!(lines(&e), vec!["one"]);
+        let mut e = editor(&["one two three"]);
+        press(&mut e, "wmawd`a");
+        assert_eq!(lines(&e), vec!["one three"]);
+    }
+
+    #[test]
+    fn undoing_a_deletion_brings_back_its_marks() {
+        let mut e = editor(&["one", "two", "three"]);
+        press(&mut e, "jmaddu'a");
+        assert!(messages(&mut e).is_empty());
+        assert_eq!(e.row(), 1);
+        press(&mut e, "kJu'a");
+        assert_eq!(e.row(), 1, "back on its own line once a join is undone");
+        press(&mut e, "ggmaxjmau'a");
+        assert_eq!(e.row(), 1, "a mark set again since stays where it was set");
+        press(&mut e, "Gkddu``");
+        assert!(messages(&mut e).is_empty(), "the context mark back too");
+        assert_eq!(e.row(), 1);
+    }
+
+    #[test]
+    fn a_mark_moves_with_its_line_and_goes_when_the_line_does() {
+        let mut e = editor(&["one", "two", "three"]);
+        press(&mut e, "jmaggOnew<Esc>G'a");
+        assert_eq!(e.row(), 2, "a line put above moved it down");
+        press(&mut e, "dd'a");
+        assert_eq!(messages(&mut e), vec!["E20: Mark not set".to_string()]);
+    }
+
+    #[test]
+    fn a_jump_says_where_it_left_and_a_step_does_not() {
+        let mut e = editor(&["one", "two", "three"]);
+        press(&mut e, "jl");
+        assert!(e.effects().is_empty());
+        press(&mut e, "G");
+        assert_eq!(e.effects(), vec![Effect::Jump { from: (1, 1) }]);
+        e.search_for("one", true);
+        assert_eq!(e.effects(), vec![Effect::Jump { from: (2, 0) }]);
+        press(&mut e, "dG");
+        assert!(
+            !e.effects().iter().any(|x| matches!(x, Effect::Jump { .. })),
+            "an operator over a jump moves nothing"
+        );
+    }
+
+    #[test]
+    fn an_outside_change_while_nothing_is_typed_is_no_change_to_visit() {
+        let mut e = editor(&["one", "two"]);
+        press(&mut e, "i");
+        e.change_outside(|doc| doc.text = Text::from_lines(&["one", "two", "three"]));
+        press(&mut e, "<Esc>g;");
+        assert_eq!(
+            messages(&mut e),
+            vec!["E664: changelist is empty".to_string()]
+        );
+        press(&mut e, "ix");
+        e.change_outside(|doc| doc.text = Text::from_lines(&["xone", "two"]));
+        press(&mut e, "<Esc>g;");
+        assert!(messages(&mut e).is_empty(), "typing before it still counts");
+    }
+
+    #[test]
+    fn a_change_made_during_a_key_is_one_to_visit() {
+        let mut e = editor(&["one", "two"]);
+        e.begin();
+        e.change(|doc| doc.text = Text::from_lines(&["one", "TWO"]));
+        e.end();
+        press(&mut e, "g;");
+        assert!(messages(&mut e).is_empty());
+    }
+
+    #[test]
+    fn typing_before_insert_modes_ctrl_o_is_a_change_to_visit() {
+        let mut e = editor(&["one", "two"]);
+        press(&mut e, "iX<C-o>j<Esc>g;");
+        assert!(messages(&mut e).is_empty());
+        assert_eq!(e.row(), 0);
+    }
+
+    #[test]
+    fn typing_under_way_as_the_note_is_put_away_is_a_change_to_visit() {
+        let mut e = editor(&["one", "two", "three"]);
+        press(&mut e, "jAx");
+        let kept = e.put_away();
+        e.take_back(Text::from_lines(&["one", "twox", "three"]), kept);
+        press(&mut e, "ggg;");
+        assert_eq!(e.row(), 1);
+    }
+
+    #[test]
+    fn the_change_visited_stays_the_one_visited_when_earlier_ones_go() {
+        let mut e = editor(&["aa", "bb", "cc", "dd", "ee"]);
+        press(&mut e, "xjxjxjxjx2g;");
+        assert_eq!(e.row(), 3);
+        e.change_outside(|doc| doc.text = Text::from_lines(&["d", "e"]));
+        press(&mut e, "g,");
+        assert_eq!(e.row(), 1, "on to the newest, the one after it");
+        let mut e = editor(&["aa", "bb", "cc"]);
+        press(&mut e, "xjxjx3g;");
+        assert_eq!(e.row(), 0);
+        e.change_outside(|doc| doc.text = Text::from_lines(&["b", "c"]));
+        press(&mut e, "g,");
+        assert_eq!(e.row(), 0, "the oldest gone, on to the one after it");
+        press(&mut e, "g,");
+        assert_eq!(e.row(), 1);
+        let mut e = editor(&["aa", "bb", "cc"]);
+        press(&mut e, "xjxjx3g;");
+        e.change_outside(|doc| doc.text = Text::from_lines(&["b", "c"]));
+        press(&mut e, "ma");
+        e.change_outside(|doc| doc.text = Text::from_lines(&["new", "b", "c"]));
+        press(&mut e, "g,");
+        assert_eq!(e.row(), 1, "still before the one after it, which moved");
+    }
+
+    #[test]
+    fn g_semicolon_and_g_comma_visit_the_changes() {
+        let rows: Vec<String> = (0..10).map(|i| format!("line {i}")).collect();
+        let rows: Vec<&str> = rows.iter().map(String::as_str).collect();
+        let mut e = editor(&rows);
+        press(&mut e, "g;");
+        assert_eq!(
+            messages(&mut e),
+            vec!["E664: changelist is empty".to_string()]
+        );
+        press(&mut e, "2Gx3jx3jA!<Esc>gg");
+        press(&mut e, "g;");
+        assert_eq!(e.row(), 7);
+        press(&mut e, "g;");
+        assert_eq!(e.row(), 4);
+        messages(&mut e);
+        press(&mut e, "2g;");
+        assert_eq!(e.row(), 1);
+        assert_eq!(
+            messages(&mut e),
+            vec!["E662: At start of changelist".to_string()]
+        );
+        press(&mut e, "g,");
+        assert_eq!(e.row(), 4);
+        press(&mut e, "2g;99g,");
+        assert_eq!(e.row(), 7, "a count past the newest goes to it");
+        press(&mut e, "g;");
+        messages(&mut e);
+        press(&mut e, "g,g,");
+        assert_eq!(e.row(), 7);
+        assert_eq!(
+            messages(&mut e),
+            vec!["E663: At end of changelist".to_string()]
+        );
+        press(&mut e, "x");
+        assert_eq!(
+            e.changes.len(),
+            3,
+            "a change on the newest's line replaces it"
+        );
+        press(&mut e, "ggdd");
+        assert_eq!(
+            e.changes.iter().map(|c| c.0).collect::<Vec<_>>(),
+            vec![0, 3, 6, 0],
+            "every entry moved up with its line"
+        );
     }
 }

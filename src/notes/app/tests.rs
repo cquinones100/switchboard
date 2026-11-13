@@ -871,12 +871,16 @@ fn a_note_keeps_its_undo_history_and_folds_while_another_is_open() {
     app.start();
     app.open_note(&first, false, false);
     keys(&mut app, "Goadded<Esc>");
-    keys(&mut app, "ggjjza");
+    let added = app.editor.row();
+    keys(&mut app, "ggjmajza");
     let folds = app.editor.folds.clone();
     assert_ne!(folds, Default::default(), "a section folded");
     app.open_note(&second, false, false);
     app.open_note(&first, false, false);
     assert_eq!(app.editor.folds, folds, "still folded");
+    assert_eq!(app.editor.marks.get('a'), Some((1, 0)), "its mark kept");
+    keys(&mut app, "g;");
+    assert_eq!(app.editor.row(), added, "and its change found again");
     keys(&mut app, "u");
     assert!(
         !lines(&app).contains(&"added".to_string()),
@@ -893,6 +897,202 @@ fn a_note_keeps_its_undo_history_and_folds_while_another_is_open() {
         lines(&app).contains(&"## Part".to_string()),
         "{:?}",
         lines(&app)
+    );
+}
+
+#[test]
+fn ctrl_o_and_ctrl_i_go_back_and_forward_through_the_places_jumped_from_across_notes() {
+    let (_dir, mut store) = temp("jumps");
+    let first = store.create("", Some("Alpha"));
+    write(&first, "# Alpha\n\none\ntwo\nfind me\nsee [[Beta]]\nlast\n");
+    let second = store.create("", Some("Beta"));
+    write(&second, "# Beta\n\nbody\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&first, false, false);
+    keys(&mut app, "G/find<CR>");
+    assert_eq!(app.editor.row(), 4);
+    keys(&mut app, "jfB<CR>");
+    assert_eq!(
+        app.current_path(),
+        Some(second.as_path()),
+        "the link followed"
+    );
+    keys(&mut app, "<C-o>");
+    assert_eq!(app.current_path(), Some(first.as_path()));
+    assert_eq!(app.editor.row(), 5, "back on the link's line");
+    assert_eq!(
+        app.editor.marks.context.map(|(r, _)| r),
+        Some(5),
+        "'' goes back to where it left the note"
+    );
+    keys(&mut app, "<C-o>");
+    assert_eq!(app.editor.row(), 6, "back where the search started");
+    keys(&mut app, "2<C-i>");
+    assert_eq!(
+        app.current_path(),
+        Some(second.as_path()),
+        "forward to Beta"
+    );
+    let at = (app.editor.row(), app.editor.col());
+    keys(&mut app, "<Tab>");
+    assert_eq!(app.current_path(), Some(second.as_path()));
+    assert_eq!((app.editor.row(), app.editor.col()), at, "nothing forward");
+}
+
+#[test]
+fn a_jumps_line_deleted_and_another_put_in_its_place_is_not_gone_back_to() {
+    let (_dir, mut store) = temp("jumps-replaced");
+    let first = store.create("", Some("Alpha"));
+    write(&first, "# Alpha\nB\nC\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&first, false, false);
+    keys(&mut app, "jGkddOX<Esc>j<C-o>");
+    assert_eq!(app.editor.line(), "C", "B's entry went with it");
+}
+
+#[test]
+fn a_mark_whose_line_went_from_outside_is_not_taken_by_a_new_line() {
+    let (_dir, mut store) = temp("mark-outside");
+    let first = store.create("", Some("Alpha"));
+    write(&first, "# Alpha\nA\nB\nC\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&first, false, false);
+    keys(&mut app, "jjma");
+    write(&first, "# Alpha\nA\nC\n");
+    app.check();
+    keys(&mut app, "OX<Esc>gg`a");
+    assert_eq!(app.editor.row(), 0, "the mark went with B");
+}
+
+#[test]
+fn two_outside_changes_in_a_row_are_followed_each_on_its_own() {
+    let (_dir, mut store) = temp("mark-outside-twice");
+    let first = store.create("", Some("Alpha"));
+    write(&first, "# Alpha\nA\nB\nC\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&first, false, false);
+    keys(&mut app, "jjmagg");
+    write(&first, "# Alpha\nA\nC\n");
+    app.check();
+    write(&first, "# Alpha\nA\nX\nC\n");
+    app.check();
+    keys(&mut app, "`a");
+    assert_eq!(app.editor.row(), 0, "the mark went with B");
+}
+
+#[test]
+fn insert_modes_ctrl_o_then_a_jump_goes_back_to_typing() {
+    let (_dir, mut store) = temp("jumps-insert");
+    let first = store.create("", Some("Alpha"));
+    write(&first, "# Alpha\none\ntwo\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&first, false, false);
+    keys(&mut app, "jGi<C-o>1<C-o>x");
+    assert_eq!(app.editor.mode, Mode::Insert);
+    assert_eq!(app.editor.line(), "xone", "x typed where it went back to");
+    keys(&mut app, "<Esc>Gi<C-o><C-o>y");
+    assert_eq!(app.editor.mode, Mode::Insert);
+    assert_eq!(app.editor.row(), 1, "an uncounted one goes back too");
+    keys(&mut app, "<Esc>j.");
+    assert_eq!(
+        app.editor.line(),
+        "ytwo",
+        ". types what was typed after the jump"
+    );
+    keys(&mut app, "xiW<C-o><C-o><Esc>j0.");
+    assert!(
+        app.editor.line().starts_with('W'),
+        ". types what was typed before a jump with nothing after it: {}",
+        app.editor.line()
+    );
+    let second = app.store.create("", Some("Beta"));
+    write(&second, "# Beta\n");
+    keys(&mut app, "<Esc>");
+    app.open_note(&second, false, false);
+    keys(&mut app, "i<C-o>1<C-o>z");
+    assert_eq!(app.current_path(), Some(first.as_path()));
+    assert_eq!(
+        app.editor.mode,
+        Mode::Insert,
+        "typing goes on in the note gone to"
+    );
+}
+
+#[test]
+fn a_mark_on_a_line_dot_deletes_goes_with_it() {
+    let (_dir, mut store) = temp("mark-dot");
+    let first = store.create("", Some("Alpha"));
+    write(&first, "# T\nA\nB\nC\nD\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&first, false, false);
+    keys(&mut app, "ji<C-o>ddX<Esc>jma.gg`a");
+    assert_eq!(app.editor.row(), 0, "the mark went with C");
+}
+
+#[test]
+fn a_mark_on_an_item_goes_with_it_as_ticking_sorts_it_down() {
+    let (_dir, mut store) = temp("mark-tick");
+    let first = store.create("", Some("Alpha"));
+    write(&first, "# T\n\n- [ ] alpha\n- [ ] beta\n- [ ] gamma\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&first, false, false);
+    keys(&mut app, "jjma<CR>gg'a");
+    assert!(
+        app.editor.line().ends_with("alpha"),
+        "{}",
+        app.editor.line()
+    );
+}
+
+#[test]
+fn a_table_lined_up_as_the_cursor_moves_into_it_is_no_change_to_visit() {
+    let (_dir, mut store) = temp("table-tidy");
+    let first = store.create("", Some("Alpha"));
+    write(&first, "# Alpha\n\none\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&first, false, false);
+    write(
+        &first,
+        "# Alpha\n\none\n| a | bb |\n|---|---|\n| ccc | d |\n",
+    );
+    app.check();
+    keys(&mut app, "Gg;");
+    assert!(
+        app.message
+            .as_ref()
+            .is_some_and(|(m, _)| m.contains("E664")),
+        "the change list is empty: {:?}",
+        app.message
+    );
+}
+
+#[test]
+fn ctrl_o_back_to_a_note_changed_meanwhile_finds_the_line_where_it_went() {
+    let (_dir, mut store) = temp("jumps-moved");
+    let first = store.create("", Some("Alpha"));
+    write(&first, "# Alpha\n\none\nsee [[Beta]]\n");
+    let second = store.create("", Some("Beta"));
+    write(&second, "# Beta\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&first, false, false);
+    keys(&mut app, "4GfB<CR>");
+    assert_eq!(app.current_path(), Some(second.as_path()));
+    write(&first, "# Alpha\n\nnew\nlines\none\nsee [[Beta]]\n");
+    keys(&mut app, "<C-o>");
+    assert_eq!(app.current_path(), Some(first.as_path()));
+    assert_eq!(
+        app.editor.line(),
+        "see [[Beta]]",
+        "on the link's line as it moved"
     );
 }
 
