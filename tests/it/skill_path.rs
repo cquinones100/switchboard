@@ -480,6 +480,38 @@ fn a_landing_whose_tests_run_in_ci_checks_for_leaks_pushes_its_own_branch_waits_
     );
 }
 
+// A hands-free tab's review loop runs to 20 rounds, still asking at the cap.
+#[test]
+fn review_loop_runs_twenty_rounds_hands_free_and_five_otherwise() {
+    let all = skills();
+    let (_, text) = all.iter().find(|(name, _)| name == "review-loop").unwrap();
+    let rounds = text
+        .split("## Each round (at most 5, or 20 hands-free)\n")
+        .nth(1)
+        .and_then(|rest| rest.split("\n1. ").next())
+        .expect("the rounds' section");
+    assert!(
+        regex::Regex::new(
+            r"20 rounds .*`switchboard show @autopilot_handsfree` prints `1`.* 5 rounds otherwise"
+        )
+        .unwrap()
+        .is_match(rounds),
+        "{rounds}"
+    );
+    let report = text
+        .split("## Final report\n")
+        .nth(1)
+        .and_then(|rest| rest.split("\n## ").next())
+        .expect("the report");
+    assert!(report.contains("\"the round cap, 20 hands-free\""));
+    assert!(
+        regex::Regex::new(r"cap ended the loop with findings still open.*hands-free tab, ask it with `AskUserQuestion` headed `\[always ask\]`")
+            .unwrap()
+            .is_match(report),
+        "{report}"
+    );
+}
+
 #[test]
 fn review_loop_reviews_someone_elses_pr_from_outside_its_worktree_and_only_reports() {
     let all = skills();

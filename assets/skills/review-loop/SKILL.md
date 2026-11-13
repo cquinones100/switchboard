@@ -46,7 +46,9 @@ Arguments: `all` means also ask about low-severity findings from the first round
 4. Record the starting commit with `git rev-parse HEAD` so the final report can show `git log <start>..HEAD`.
 5. Run a security review of the branch, once, before the first round, so its fixes go through the rounds like any other change. Skip it when Settings turns it off, read as Settings reads it: `switchboard setting review_security` prints `off`. Otherwise run Claude Code's `security-review` skill in a subagent (the Agent tool, asked to invoke that skill with the Skill tool on this repository and return its report), never with the Skill tool here: the skill ends by asking for a final reply that is its report and nothing else, which, run in this conversation, ends the turn and stops the loop before its first round. If the subagent says it has no such skill, say so in a line and go on. It reviews what the branch adds to the remote's default branch and takes no base, so when the rounds are given `--base` (commits already pushed, or a PR whose base isn't the default branch), it can't cover that range: say so in the final report rather than count it as run. Triage what it reports as step 3 of a round says, reading the code each finding points at: a critical or high one you agree with fixed without asking, a medium or low one asked about, a wrong one disputed in the notes file, a left one a `Known gap`, and a fix only in this repository. Commit the fixes, then start the rounds. The final report lists its findings under **Security review**.
 
-## Each round (at most 5)
+## Each round (at most 5, or 20 hands-free)
+
+The round cap is 20 rounds in a tab of autopilot's hands-free mode, where `switchboard show @autopilot_handsfree` prints `1`, read once before the first round, and 5 rounds otherwise, so a hands-free tab gets as far as it can before it has to wait for the user. The stop rule is the same either way: a loop that comes clean sooner ends sooner.
 
 1. Run the reviewer:
 
@@ -86,7 +88,7 @@ Arguments: `all` means also ask about low-severity findings from the first round
 
 ## Final report
 
-Say which of these ended the loop: two consecutive clean rounds, the round cap, or a blocker, and which reviewer ran (the JSON's `reviewer`). Then give:
+Say which of these ended the loop: two consecutive clean rounds, the round cap (naming which, "the round cap, 20 hands-free" or "the round cap, 5"), or a blocker, and which reviewer ran (the JSON's `reviewer`). Then give:
 
 - **Rounds run** and the commits added, from `git log <start>..HEAD --oneline`.
 - **Fixed**: each finding acted on, one line each.
@@ -97,7 +99,7 @@ Say which of these ended the loop: two consecutive clean rounds, the round cap, 
 - **Outside this repository**: each finding in a file of another repository, with the file and that repository, left for the user.
 - **PR description**: whether it changed and how.
 
-Then ask whether to push. Never run `git push` without the user's explicit approval, even in auto mode. The one approval given ahead is queue-and-clean's landing without asking (its step 7), which runs this loop with its push question left out. If the cap ended the loop with findings still open, list them and let the user decide whether to keep going.
+Then ask whether to push. Never run `git push` without the user's explicit approval, even in auto mode. The one approval given ahead is queue-and-clean's landing without asking (its step 7), which runs this loop with its push question left out. If the cap ended the loop with findings still open, list them and let the user decide whether to keep going; in a hands-free tab, ask it with `AskUserQuestion` headed `[always ask]`, the open findings in the question, so hands-free mode still asks it rather than deciding for the user.
 
 ## Squashing the loop's commits
 
