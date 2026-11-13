@@ -62,7 +62,7 @@ The calendar, reminders, Slack and what came in.
 
 - [9. Calendar: the day as a timeline, the event beside it](https://cquinones100.github.io/switchboard/design/9.html)
 - [28. Reminders: every tab's reminder on a month, the months ahead under it](https://cquinones100.github.io/switchboard/design/28.html)
-- [21. Slack: what is new for you, by section as Slack's sidebar lists them, newest first in each](https://cquinones100.github.io/switchboard/design/21.html)
+- [21. Slack: what is new for you, by section as Slack's sidebar lists them; the section one row per thread, the chosen thread whole beside it](https://cquinones100.github.io/switchboard/design/21.html)
 - [53. Slack relay: which messages reach you, and where](https://cquinones100.github.io/switchboard/design/53.html)
 - [22. Inbox: Linear's notifications](https://cquinones100.github.io/switchboard/design/22.html)
 - [23. Notifications: the sidebar's, whole](https://cquinones100.github.io/switchboard/design/23.html)
