@@ -2,5 +2,12 @@
   "name": "Calendar",
   "when": "every 30m",
   "model": "",
-  "prompt": "Each run, run the today skill (/today), which saves today's events for mission control's Calendar view. Reply with one line: the meetings left today."
+  "prompt": "Each run, read the file `switchboard skill-path today` prints and follow it (the today skill), which saves today's events for mission control's Calendar view. When the Google Calendar connector isn't connected or refuses, reply `Google Calendar isn't connected: connect it with /mcp` and stop. Reply with one line: the meetings left today.",
+  "tools": [
+    "Bash(switchboard skill-path:*)",
+    "Read",
+    "ToolSearch",
+    "mcp__claude_ai_Google_Calendar__list_events",
+    "Bash(switchboard today-save:*)"
+  ]
 }

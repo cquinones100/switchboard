@@ -4528,10 +4528,11 @@ impl Server {
                 use crate::routines::Act;
                 let note = match act {
                     Act::RunNow => self.routine_run_now(client, &id),
-                    Act::GoToTab => {
-                        self.routine_go(client, &id);
+                    Act::OpenSession => {
+                        self.routine_open_session(client, &id);
                         None
                     }
+                    Act::AllowNeeded => self.routine_allow_needed(client, &id),
                     Act::Edit => {
                         self.routine_edit(client, &id);
                         None
@@ -4922,8 +4923,8 @@ impl Server {
     // ── Routines ────────────────────────────────────────────────────────────
 
     /// The Routines view's keys: n a new routine; on the chosen one, r
-    /// runs it now, e changes it, p pauses or resumes it, o goes to its
-    /// tab, x deletes it after asking; i the chosen one in the list's
+    /// runs it now, e changes it, p pauses or resumes it, o opens its
+    /// last session in a tab, x deletes it after asking; i the chosen one in the list's
     /// place on a narrow screen, Esc back. True when it took the key.
     fn routines_key(&mut self, client: ClientId, m: &mut Mission, k: Key) -> bool {
         if !on_routines(m) || !plain(&k) {
@@ -4962,7 +4963,7 @@ impl Server {
             }
             KeyCode::Char('p') => self.routine_pause(&id, None),
             KeyCode::Char('o') => {
-                self.routine_go(client, &id);
+                self.routine_open_session(client, &id);
                 None
             }
             KeyCode::Char('x') => {

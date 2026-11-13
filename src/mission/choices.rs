@@ -890,8 +890,10 @@ fn target_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
     }
 }
 
-/// A routine's menu in the Routines view: run it now, its tab while it
-/// is open, change, pause or resume, delete.
+/// A routine's menu in the Routines view (board 76): allowing what its
+/// last run needed and running it again, first while there is something;
+/// its last session opened in a tab, once it has one; run it now, edit,
+/// pause or resume, delete.
 fn routine_choices(item: &Item) -> Vec<Choice> {
     use crate::routines::Act;
     let Some(id) = crate::routines::view::id_of(item).map(str::to_string) else {
@@ -901,19 +903,33 @@ fn routine_choices(item: &Item) -> Vec<Choice> {
         id: id.clone(),
         act,
     };
-    let mut out = vec![choice('r', "Run it now", act(Act::RunNow))];
-    if matches!(item.target, Target::Tab(_)) {
-        out.push(choice('o', "Go to its tab", act(Act::GoToTab)));
+    let needs: Vec<&str> = item
+        .data
+        .get("needs")
+        .and_then(Value::as_array)
+        .map(|n| n.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    // No letter keys (board 76): moved with ↑↓ or /, chosen with Enter or
+    // a click.
+    let plain = |label: &str, what: Act| choice(' ', label, act(what));
+    let mut out = Vec::new();
+    if !needs.is_empty() {
+        let label = format!("Allow {} and run it again", needs.join(", "));
+        out.push(plain(&label, Act::AllowNeeded));
     }
-    out.push(choice('e', "Change it", act(Act::Edit)));
+    if item.data.get("session").and_then(Value::as_bool) == Some(true) {
+        out.push(plain("Open its last session in a tab", Act::OpenSession));
+    }
+    out.push(plain("Run it now", Act::RunNow));
+    out.push(plain("Edit it", Act::Edit));
     let paused = item.data.get("paused").and_then(Value::as_bool) == Some(true);
     out.push(if paused {
-        choice('p', "Resume it", act(Act::Resume))
+        plain("Resume it", Act::Resume)
     } else {
-        choice('p', "Pause it", act(Act::Pause))
+        plain("Pause it", Act::Pause)
     });
-    // Not x, which puts its notification away.
-    out.push(choice('d', "Delete it", act(Act::Delete)));
+    // Asks first; Claude Code keeps its sessions.
+    out.push(plain("Delete it…", Act::Delete));
     out
 }
 
@@ -1635,9 +1651,13 @@ pub fn led_to_words(
             ..
         } => "you ran it again".into(),
         Do::Routine {
-            act: crate::routines::Act::GoToTab,
+            act: crate::routines::Act::OpenSession,
             ..
-        } => "you went to its tab".into(),
+        } => "you opened its session".into(),
+        Do::Routine {
+            act: crate::routines::Act::AllowNeeded,
+            ..
+        } => "you allowed what it needed and ran it again".into(),
         _ => format!("you chose \"{label}\""),
     };
     Some(words)
