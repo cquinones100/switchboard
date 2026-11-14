@@ -1150,7 +1150,7 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
                 out.push(choice(
                     'x',
                     "Dismiss it, until its thread gets a reply",
-                    Do::SlackDismiss(vec![item.clone()]),
+                    Do::SlackDismiss(super::slack_board::members(item)),
                 ));
                 out.push(choice(
                     'X',
@@ -1159,7 +1159,7 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
                         shown
                             .iter()
                             .filter(|i| i.data.get("message").is_some())
-                            .cloned()
+                            .flat_map(super::slack_board::members)
                             .collect(),
                     ),
                 ));

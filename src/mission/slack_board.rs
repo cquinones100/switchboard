@@ -3,11 +3,14 @@
 //! a column of sections as Slack's own sidebar lists them (Mentions,
 //! Threads, each direct message by its people, each channel by its name),
 //! each with its count, bold in the accent while it holds something new;
-//! beside it the chosen section's messages, newest first, new and seen
-//! together, each with its sender's Large avatar
-//! (`kit::avatar`), where and how long ago, its reply count or "↩
-//! replied", two lines of its text and its pictures; and beside the list,
-//! the chosen message's whole thread, each message with its sender's Large
+//! beside it the chosen section one row per thread (`in_order`), so a
+//! thread with several new replies is one row and nothing shows twice
+//! beside the thread pane, the rows by when each last moved, new and seen
+//! together: who started it, with their Large avatar (`kit::avatar`),
+//! "started <day>" when that was before the look, and when it last moved;
+//! its first message on one line; and for a thread its people as Small
+//! avatars, its replies and an "N new" chip; and beside the list, the
+//! chosen row's whole thread, each message with its sender's Large
 //! avatar, replies since you last looked marked with a bar and a "new" chip, its pictures and videos' first frames, then
 //! "From your work": the tickets the thread names, with their state and the
 //! tab on them, and today's events it names, with how soon. New with UX
@@ -18,7 +21,7 @@
 //! comes from `slack-threads.json` (`day::slack_thread`) by way of the
 //! snapshot, and its pictures from those the server has read and decoded,
 //! so drawing reads nothing. The cursor stays the view's own, on a
-//! message: the section in front is the chosen message's, as the Keys
+//! row: the section in front is the chosen row's, as the Keys
 //! board's group is its chosen key's, so the filter and Enter work as on
 //! the plain list (`in_order` puts each section's messages together).
 //! Laid out as board 45 says (`kit::columns`): the sections at a fixed
@@ -152,14 +155,16 @@ pub enum Kind {
 }
 
 /// A section of the column: what it holds, its name, a direct message's
-/// person (for their avatar), its messages' places in the view's items,
-/// newest first, and whether any of them is new.
+/// person (for their avatar), its rows' places in the view's items,
+/// newest first, how many messages they stand for, and whether any of them
+/// is new.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Section {
     pub kind: Kind,
     pub title: String,
     pub user: String,
     pub items: Vec<usize>,
+    pub messages: usize,
     pub new: bool,
 }
 
@@ -186,10 +191,17 @@ fn when(item: &Item) -> f64 {
     get(item, "ts").parse::<f64>().unwrap_or(0.0)
 }
 
-/// The messages in the order the board draws them: by section (Mentions,
+/// The board's rows in the order it draws them: by section (Mentions,
 /// Threads, then the direct messages and the channels, each by its newest
-/// message), each section's newest first, new and seen together.
-pub fn in_order(items: &mut [Item]) {
+/// message), each section's threads by their newest message, new and seen
+/// together. A thread is one row however many of its messages the look
+/// brought, so nothing shows twice beside the thread pane: its newest
+/// message, kept by its section and thread so the cursor stays on it as
+/// replies come and old ones go, with every message it stands for in
+/// `members` (`members`), a thread of one message too.
+/// With Settings' `slack_threads` off (`by_thread` false) no thread is
+/// read and no pane shows one, so each message stays a row of its own.
+pub fn in_order(items: &mut Vec<Item>, by_thread: bool) {
     let mut newest: HashMap<(Kind, String), f64> = HashMap::new();
     for i in items.iter() {
         let at = newest.entry(section_key(i)).or_insert(f64::MIN);
@@ -202,6 +214,79 @@ pub fn in_order(items: &mut [Item]) {
             .then(ka.1.cmp(&kb.1))
             .then(when(b).total_cmp(&when(a)))
     });
+    if !by_thread {
+        return;
+    }
+    let mut rows: Vec<Vec<Item>> = Vec::new();
+    let mut place: HashMap<((Kind, String), String), usize> = HashMap::new();
+    for item in items.drain(..) {
+        let thread = get(&item, "thread").to_string();
+        if thread.is_empty() {
+            rows.push(vec![item]);
+            continue;
+        }
+        match place.entry((section_key(&item), thread)) {
+            std::collections::hash_map::Entry::Occupied(at) => rows[*at.get()].push(item),
+            std::collections::hash_map::Entry::Vacant(at) => {
+                at.insert(rows.len());
+                rows.push(vec![item]);
+            }
+        }
+    }
+    items.extend(rows.into_iter().map(thread_row));
+}
+
+fn is_old(item: &Item) -> bool {
+    item.data.get("old").and_then(Value::as_bool) == Some(true)
+}
+
+/// One row for a thread's messages, newest first.
+fn thread_row(mut messages: Vec<Item>) -> Item {
+    let thread = get(&messages[0], "thread").to_string();
+    if thread.is_empty() {
+        return messages.remove(0);
+    }
+    let fresh = messages.iter().filter(|m| !is_old(m)).count();
+    // Its newest message whole (its words, sender, title and link, which
+    // its menu quotes and hands to a tab), new while any of them is.
+    let mut row = messages[0].clone();
+    if fresh > 0
+        && is_old(&row)
+        && let Some(new) = messages.iter().find(|m| !is_old(m))
+    {
+        row.state = new.state;
+        row.title = row.title.trim_end_matches(" · seen").to_string();
+    }
+    let (kind, conversation) = section_key(&row);
+    row.id = format!("slack-thread:{kind:?}:{conversation}:{thread}");
+    if let Some(data) = row.data.as_object_mut() {
+        data.insert("old".into(), Value::Bool(fresh == 0));
+        data.insert("fresh".into(), fresh.into());
+        data.insert(
+            "members".into(),
+            serde_json::to_value(&messages).unwrap_or_default(),
+        );
+    }
+    row
+}
+
+/// The messages a row stands for: a thread's, or the message itself.
+pub fn members(item: &Item) -> Vec<Item> {
+    item.data
+        .get("members")
+        .and_then(|m| serde_json::from_value(m.clone()).ok())
+        .unwrap_or_else(|| vec![item.clone()])
+}
+
+/// How many messages a row stands for, and how many of them are new.
+fn counts(item: &Item) -> (usize, usize) {
+    match item.data.get("members").and_then(Value::as_array) {
+        Some(all) => (
+            all.len(),
+            item.data.get("fresh").and_then(Value::as_u64).unwrap_or(0) as usize,
+        ),
+        None => (1, usize::from(!is_old(item))),
+    }
 }
 
 /// The column's sections, from items `in_order` put in order.
@@ -215,6 +300,7 @@ pub fn sections(items: &[Item]) -> Vec<Section> {
             && *k == key
         {
             s.items.push(n);
+            s.messages += counts(item).0;
             s.new |= new;
             continue;
         }
@@ -243,6 +329,7 @@ pub fn sections(items: &[Item]) -> Vec<Section> {
                 title,
                 user,
                 items: vec![n],
+                messages: counts(item).0,
                 new,
             },
         ));
@@ -306,14 +393,20 @@ pub fn column(cols: usize) -> bool {
 }
 
 /// The people the board draws, for their photos: the senders of the
-/// listed messages and of the chosen thread's.
+/// listed messages, who started each row's thread and who is in it, and
+/// the chosen thread's senders.
 pub fn people(view: &View, thread: Option<&Thread>) -> Vec<Who> {
     let mut out: Vec<Who> = Vec::new();
     let users = view
         .data
         .items
         .iter()
-        .map(|i| get(i, "user").to_string())
+        .flat_map(|i| {
+            // A row draws its thread's starter and its people too.
+            let mut users = vec![get(i, "user").to_string(), root_of(i).0.user];
+            users.extend(people_of(i).into_iter().map(|(user, _)| user));
+            users
+        })
         .chain(
             thread
                 .into_iter()
@@ -481,7 +574,18 @@ pub fn board(view: &View, look: &Look) -> (Vec<Line>, Vec<HitBox>, Vec<Image>) {
                         .and_then(Value::as_i64)
                         .unwrap_or(0),
                 );
-            thread_lines(item, look, w, seen)
+            let seen_alone: Vec<String> = view
+                .data
+                .head
+                .get("seen_alone")
+                .and_then(Value::as_array)
+                .map(|all| {
+                    all.iter()
+                        .filter_map(|k| k.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            thread_lines(item, look, w, seen, &seen_alone)
         }
         (Some(_), None) => vec![
             Vec::new(),
@@ -747,8 +851,8 @@ fn put(
     kit::place(line, spans, (x0, w));
 }
 
-/// The chosen section's messages: its name and facts, then each message,
-/// newest first, a blank line after each; which item each line belongs
+/// The chosen section's rows: its name and facts, then each row (a thread,
+/// or a message with no replies), newest first, a blank line after each; which item each line belongs
 /// to, and the first line shown so the chosen message is on the screen.
 fn list_lines(
     view: &View,
@@ -770,22 +874,25 @@ fn list_lines(
     };
     let mut out: Vec<Vec<Run>> = Vec::new();
     let mut owners = Vec::new();
-    let fresh = section
-        .items
+    let listed: Vec<&Item> = section.items.iter().map(|i| &view.data.items[*i]).collect();
+    let fresh: usize = listed.iter().map(|r| counts(r).1).sum();
+    // Threads with new replies: rows standing for a new reply.
+    // Each thread once, as with threads off its messages are rows apart.
+    let threads = listed
         .iter()
-        .filter(|i| {
-            view.data.items[**i]
-                .data
-                .get("old")
-                .and_then(Value::as_bool)
-                != Some(true)
-        })
-        .count();
+        .filter(|r| members(r).iter().any(|m| !is_old(m) && is_reply(m)))
+        .map(|r| get(r, "thread"))
+        .collect::<std::collections::HashSet<_>>()
+        .len();
     let mut facts = Vec::new();
+    match threads {
+        0 => {}
+        1 => facts.push("1 thread with new replies".to_string()),
+        n => facts.push(format!("{n} threads with new replies")),
+    }
     if fresh > 0 {
         facts.push(format!("{fresh} new"));
     }
-    facts.push(format!("{} today", section.items.len()));
     facts.push("newest first".into());
     let title = match section.kind {
         Kind::Channel => format!("#{}", section.title),
@@ -887,7 +994,7 @@ fn section_lines(
         } else {
             Tone::Dim.style(theme)
         };
-        let count = s.items.len().to_string();
+        let count = s.messages.to_string();
         let count_style = if s.new {
             Tone::Accent.bold(theme)
         } else {
@@ -1005,7 +1112,7 @@ fn section_line(
         } else {
             format!("{mark} ")
         };
-        width(&format!(" {mark}{name} {} ", s.items.len())) + 1
+        width(&format!(" {mark}{name} {} ", s.messages)) + 1
     };
     while start < from && secs[start..=from].iter().map(piece).sum::<usize>() + 8 > cols {
         start += 1;
@@ -1050,7 +1157,7 @@ fn section_line(
         } else {
             Tone::Dim.style(theme)
         };
-        piece_spans.push(Span::styled(format!(" {}", s.items.len()), on(count_style)));
+        piece_spans.push(Span::styled(format!(" {}", s.messages), on(count_style)));
         piece_spans.push(Span::styled(" ", on(Style::new())));
         x += piece_spans.iter().map(|s| width(&s.content)).sum::<usize>();
         at.push((x0, x, s.items[0]));
@@ -1134,35 +1241,144 @@ fn body(
         .collect()
 }
 
-/// A message of the list: its sender's photo and name, where and how long
-/// ago, its reply count or "↩ replied" at the right; two lines of its
-/// text; its pictures. The chosen one on the chosen surface with the bar.
+/// When a thread started before the look: its day ("Tue"), or how long
+/// ago when that was today.
+fn started(ts: &str, look: &Look) -> String {
+    let secs = ts.parse::<f64>().unwrap_or(0.0) as i64;
+    let day = |s: i64| {
+        jiff::Timestamp::from_second(s)
+            .ok()
+            .map(|t| t.to_zoned(look.tz.clone()).date())
+    };
+    match (day(secs), day(look.now_ms.div_euclid(1000))) {
+        (Some(then), Some(now)) if then != now => then.strftime("%a").to_string(),
+        _ => format!("{} ago", ago(ts, look.now_ms)),
+    }
+}
+
+/// Who started a row's thread and what they wrote first: the thread's first
+/// message once it is read, which may be older than the look, else the
+/// oldest message the row stands for; and whether it started before the
+/// look brought anything of it.
+fn root_of(item: &Item) -> (Said, bool) {
+    let all = members(item);
+    let listed = said_of(&all[all.len() - 1]);
+    match item
+        .data
+        .get("root")
+        .and_then(|r| serde_json::from_value::<Said>(r.clone()).ok())
+    {
+        Some(root) => {
+            let before = !all.iter().any(|m| get(m, "ts") == root.ts);
+            (root, before)
+        }
+        None => (listed, false),
+    }
+}
+
+/// A message of the view as a thread's message.
+fn said_of(item: &Item) -> Said {
+    Said {
+        user: get(item, "user").to_string(),
+        from: get(item, "from").to_string(),
+        text: item.lines.join("\n"),
+        ts: get(item, "ts").to_string(),
+        files: Vec::new(),
+        refs: Vec::new(),
+    }
+}
+
+/// A message that answers another in its thread.
+fn is_reply(item: &Item) -> bool {
+    item.data
+        .pointer("/message/thread")
+        .and_then(Value::as_str)
+        .is_some_and(|t| !t.is_empty() && t != get(item, "ts"))
+}
+
+/// Who is in a row's thread, `(user, name)` each once: everyone in it
+/// as it was read, then whoever wrote the messages the row stands for that
+/// the read didn't have.
+fn people_of(item: &Item) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = item
+        .data
+        .get("people")
+        .and_then(Value::as_array)
+        .map(|all| {
+            all.iter()
+                .map(|p| {
+                    let s = |k: &str| p.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+                    (s("user"), s("from"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    for m in members(item).iter().rev() {
+        let who = (get(m, "user").to_string(), get(m, "from").to_string());
+        if !out.iter().any(|(user, _)| *user == who.0) {
+            out.push(who);
+        }
+    }
+    out
+}
+
+/// A row of the list, as board 21 draws it: who started its thread (their
+/// Large avatar and name), "started <day>" when that was before the look,
+/// and when it last moved at the right, in the accent while something in
+/// it is new; its first message on one line; and for a thread, who is in
+/// it (Small avatars), its replies, how many are new, and "↩ replied" when
+/// you wrote after it; then its pictures. The chosen one on the chosen
+/// surface with the bar.
 fn message_lines(item: &Item, look: &Look, w: usize, chosen: bool, lit: bool) -> Vec<Vec<Run>> {
     let theme = look.theme;
     let old = item.data.get("old").and_then(Value::as_bool) == Some(true);
     let tone = if old { Tone::Dim } else { Tone::Text };
-    let from = match get(item, "from") {
+    let (listed, fresh) = counts(item);
+    // With threads off no row stands for a thread: each is its message.
+    let (root, before) = if look.threads_on {
+        root_of(item)
+    } else {
+        (said_of(item), false)
+    };
+    let from = match root.from.as_str() {
         "" => "Someone",
         f => f,
     };
-    let place = get(item, "where");
-    let when = ago(get(item, "ts"), look.now_ms);
-    let right = if item.data.get("answered").and_then(Value::as_bool) == Some(true) {
-        "↩ replied".to_string()
-    } else {
-        match item.data.get("replies").and_then(Value::as_u64) {
-            Some(0) | None => String::new(),
-            Some(1) => "1 reply".into(),
-            Some(n) => format!("{n} replies"),
-        }
+    // Slack's count when the thread was read, with the replies a look
+    // saved since; until it is read, the replies the row stands for.
+    let read_to = item.data.get("read_to").and_then(Value::as_f64);
+    let saved_after = |from: f64| {
+        members(item)
+            .iter()
+            .filter(|m| is_reply(m) && when(m) > from)
+            .count()
     };
+    let replies = match item.data.get("replies").and_then(Value::as_u64) {
+        Some(n) => n as usize + read_to.map_or(0, saved_after),
+        None => saved_after(f64::MIN),
+    };
+    let is_thread = replies > 0 || listed > 1;
+    let place = match get(item, "kind") {
+        "mention" | "thread" if look.cols >= NAMES_AT => get(item, "where"),
+        _ => "",
+    };
+    let mut facts = Vec::new();
+    if !place.is_empty() {
+        facts.push(place.to_string());
+    }
+    if before {
+        facts.push(format!("started {}", started(&root.ts, look)));
+    }
+    let answered = item.data.get("answered").and_then(Value::as_bool) == Some(true);
+    // A message with no replies says you answered it among its facts.
+    if answered && !is_thread {
+        facts.push("↩ replied".into());
+    }
+    let facts = facts.join(" · ");
     let wide = look.cols >= NAMES_AT;
-    let where_when = if wide && !place.is_empty() {
-        format!("{place} · {when}")
-    } else {
-        when
-    };
-    // The bar's column, the avatar, the sender, where and when, the count.
+    let when = ago(get(item, "ts"), look.now_ms);
+    // The bar's column, the avatar, who started it, where and when it
+    // started, when it last moved.
     let inner = w.saturating_sub(1);
     let at = kit::columns(
         &[
@@ -1178,7 +1394,7 @@ fn message_lines(item: &Item, look: &Look, w: usize, chosen: bool, lit: bool) ->
             },
             Col::Fixed {
                 min: 0,
-                natural: width(&where_when),
+                natural: width(&facts),
                 cap: WHERE_CAP,
             },
             Col::Stretch {
@@ -1187,15 +1403,14 @@ fn message_lines(item: &Item, look: &Look, w: usize, chosen: bool, lit: bool) ->
                 max: None,
             },
             Col::Right {
-                natural: width(&right),
+                natural: width(&when),
                 cap: 12,
             },
         ],
         inner,
         1,
-        &[2, 4],
+        &[2],
     );
-    let user = get(item, "user");
     let mut first: Vec<Run> = vec![bar(chosen, theme)];
     let mut x = 0;
     let pad_to = |runs: &mut Vec<Run>, to: usize, x: &mut usize| {
@@ -1207,7 +1422,7 @@ fn message_lines(item: &Item, look: &Look, w: usize, chosen: bool, lit: bool) ->
     if let Some((ax, _)) = at[0] {
         pad_to(&mut first, ax, &mut x);
         first.push(large_avatar(
-            (!user.is_empty()).then(|| Who::new(Service::Slack, user)),
+            (!root.user.is_empty()).then(|| Who::new(Service::Slack, &root.user)),
             from,
         ));
         x += kit::AvatarSize::Large.cols();
@@ -1220,32 +1435,73 @@ fn message_lines(item: &Item, look: &Look, w: usize, chosen: bool, lit: bool) ->
     }
     if let Some((px, pw)) = at[2] {
         pad_to(&mut first, px, &mut x);
-        let words = cut(&where_when, pw);
+        let words = cut(&facts, pw);
         x += width(&words);
         first.push(Run::Text(Span::styled(words, Tone::Dim.style(theme))));
     }
     if let Some((rx, rw)) = at[4] {
         pad_to(&mut first, rx, &mut x);
-        let words = cut(&right, rw);
-        let style = if right.starts_with('↩') {
-            Tone::Done.style(theme)
-        } else {
-            Tone::Dim.style(theme)
-        };
-        first.push(Run::Text(Span::styled(words, style)));
+        let tone = if fresh > 0 { Tone::Accent } else { Tone::Dim };
+        first.push(Run::Text(Span::styled(cut(&when, rw), tone.style(theme))));
     }
     let mut out = vec![first];
-    let text = item.lines.join("\n");
-    // Its words beside the avatar's second row, which stays blank when
-    // there are none.
+    // Its first message on one line, beside the avatar's second row, which
+    // stays blank when there are no words.
     let indent = at[1].map_or(kit::SAID_INDENT, |(fx, _)| fx);
-    let mut words = body(&text, inner, 2, indent, tone, theme);
+    let mut words = body(&root.text, inner, 1, indent, tone, theme);
     if words.is_empty() {
         words.push(Vec::new());
     }
     for line in words {
         let mut runs = vec![bar(chosen, theme)];
         runs.extend(line);
+        out.push(runs);
+    }
+    if is_thread {
+        let mut runs = vec![bar(chosen, theme), Run::Text(Span::raw(" ".repeat(indent)))];
+        let mut x = indent;
+        let reply_words = if replies == 1 {
+            "1 reply".to_string()
+        } else {
+            format!("{replies} replies")
+        };
+        // As many of its people as leave room for its counts.
+        let room = inner.saturating_sub(indent + width(&reply_words) + 12);
+        for (user, name) in people_of(item) {
+            if x + kit::AvatarSize::Small.cols() > indent + room {
+                break;
+            }
+            runs.push(Run::Avatar {
+                who: (!user.is_empty()).then(|| Who::new(Service::Slack, &user)),
+                name: if name.is_empty() {
+                    "Someone".into()
+                } else {
+                    name
+                },
+                size: kit::AvatarSize::Small,
+                rows: kit::AvatarSize::Small.rows(),
+            });
+            x += kit::AvatarSize::Small.cols();
+        }
+        if x > indent {
+            runs.push(Run::Text(Span::raw(" ")));
+        }
+        runs.push(Run::Text(Span::styled(reply_words, Tone::Dim.style(theme))));
+        if fresh > 0 {
+            runs.push(Run::Text(Span::raw("  ")));
+            runs.extend(texts(kit::chip(
+                &format!("{fresh} new"),
+                Tone::Accent,
+                look.caps,
+                theme,
+            )));
+        }
+        if answered {
+            runs.push(Run::Text(Span::styled(
+                "  ↩ replied",
+                Tone::Done.style(theme),
+            )));
+        }
         out.push(runs);
     }
     // Its pictures, those read, three at most, their names beside them on
@@ -1333,7 +1589,13 @@ fn brought_by(kind: &str) -> &'static str {
 /// message with its sender's photo, how long ago and its text, replies
 /// since you last looked marked; its pictures and videos; then From your
 /// work.
-fn thread_lines(item: &Item, look: &Look, w: usize, seen: i64) -> Vec<Vec<Run>> {
+fn thread_lines(
+    item: &Item,
+    look: &Look,
+    w: usize,
+    seen: i64,
+    seen_alone: &[String],
+) -> Vec<Vec<Run>> {
     let theme = look.theme;
     let dim = Tone::Dim.style(theme);
     let place = match get(item, "where") {
@@ -1341,40 +1603,78 @@ fn thread_lines(item: &Item, look: &Look, w: usize, seen: i64) -> Vec<Vec<Run>> 
         p => p,
     };
     let kind = get(item, "kind");
-    let mut facts = Vec::new();
-    match look.thread {
-        Some(t) if t.replies > 0 => facts.push(format!(
-            "thread · {} repl{}",
-            t.replies,
-            if t.replies == 1 { "y" } else { "ies" }
-        )),
-        Some(_) => facts.push("no replies".into()),
-        None => {}
+    let fresh_after = |m: &Said| (m.ts.parse::<f64>().unwrap_or(0.0) * 1000.0) as i64 > seen;
+    // The thread as read, with every message the row stands for after it
+    // (all of them until it is read, newer replies a look saved since),
+    // oldest first, so none of them is out of sight.
+    let at = |m: &Said| m.ts.parse::<f64>().unwrap_or(0.0);
+    let mut listed: Vec<Said> = look.thread.map(|t| t.messages.clone()).unwrap_or_default();
+    let read_to = listed.iter().map(at).fold(f64::MIN, f64::max);
+    let mut saved_since = 0;
+    for m in members(item).iter().rev() {
+        let said = said_of(m);
+        if at(&said) > read_to {
+            listed.push(said);
+            saved_since += 1;
+        }
     }
-    facts.push(brought_by(kind).into());
+    listed.sort_by(|a, b| at(a).total_cmp(&at(b)));
+    let messages: &[Said] = &listed;
+    let first_is_root = look.thread.is_some() || !members(item).last().is_some_and(is_reply);
+    // A message seen on its own (acted on from its menu) isn't new,
+    // whatever its time, in any section: the look's, then this row's.
+    let channel = item
+        .data
+        .pointer("/message/channel")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let mut seen_alone: Vec<String> = seen_alone
+        .iter()
+        .filter_map(|k| k.strip_prefix(&format!("{channel}:")).map(str::to_string))
+        .collect();
+    seen_alone.extend(
+        members(item)
+            .iter()
+            .filter(|m| is_old(m))
+            .map(|m| get(m, "ts").to_string()),
+    );
+    let fresh_after = |m: &Said| fresh_after(m) && !seen_alone.contains(&m.ts);
+    let replies = messages.len() - usize::from(first_is_root);
+    // Slack's count when it knows more than are kept, with the replies a
+    // look saved since, as the row counts them.
+    let replies = look
+        .thread
+        .map_or(replies, |t| replies.max(t.replies as usize + saved_since));
+    let mut facts = Vec::new();
+    if replies > 0 {
+        let fresh = messages
+            .iter()
+            .skip(usize::from(first_is_root))
+            .filter(|m| fresh_after(m))
+            .count();
+        let mut words = format!(
+            "thread · {replies} repl{}",
+            if replies == 1 { "y" } else { "ies" }
+        );
+        if fresh > 0 {
+            words.push_str(&format!(", {fresh} new"));
+        }
+        facts.push(words);
+    } else {
+        // A message with none says what brought it.
+        if look.thread.is_some() {
+            facts.push("no replies".into());
+        }
+        facts.push(brought_by(kind).to_string());
+    }
     let mut out: Vec<Vec<Run>> = Vec::new();
     out.extend(
         kit::pane(place, vec![Span::styled(facts.join(" · "), dim)], w, theme)
             .into_iter()
             .map(texts),
     );
-    let alone;
-    let messages: &[Said] = match look.thread {
-        Some(t) => &t.messages,
-        None => {
-            alone = [Said {
-                user: get(item, "user").to_string(),
-                from: get(item, "from").to_string(),
-                text: item.lines.join("\n"),
-                ts: get(item, "ts").to_string(),
-                files: Vec::new(),
-                refs: Vec::new(),
-            }];
-            &alone
-        }
-    };
     for (n, m) in messages.iter().enumerate() {
-        let fresh = n > 0 && (m.ts.parse::<f64>().unwrap_or(0.0) * 1000.0) as i64 > seen;
+        let fresh = (n > 0 || !first_is_root) && fresh_after(m);
         let mark = if fresh {
             Run::Text(Span::styled("▎", Tone::Accent.style(theme)))
         } else {
@@ -1715,6 +2015,16 @@ mod tests {
         open: bool,
         work: &[View],
     ) -> (Vec<String>, Vec<Image>) {
+        draw_of(&view(), cols, thread, open, work)
+    }
+
+    fn draw_of(
+        view: &View,
+        cols: usize,
+        thread: Option<&Thread>,
+        open: bool,
+        work: &[View],
+    ) -> (Vec<String>, Vec<Image>) {
         let tz = TimeZone::UTC;
         let pictures = HashMap::new();
         let look = Look {
@@ -1741,7 +2051,7 @@ mod tests {
             hover_section: None,
             sections_focused: false,
         };
-        let (lines, _, images) = board(&view(), &look);
+        let (lines, _, images) = board(view, &look);
         for l in &lines {
             assert!(
                 width(&l.text()) <= cols,
@@ -1750,6 +2060,353 @@ mod tests {
             );
         }
         (texts(&lines), images)
+    }
+
+    /// A reply in the thread `C1:<root>` of #dev.
+    fn reply(from: &str, text: &str, ago_s: i64, root: &str, old: bool) -> Item {
+        let mut item = message(
+            "channel",
+            from,
+            text,
+            ago_s,
+            json!({ "thread": format!("C1:{root}"), "old": old }),
+        );
+        item.data["message"]["thread"] = json!(root);
+        item
+    }
+
+    fn channel(items: Vec<Item>) -> View {
+        channel_by(items, true)
+    }
+
+    fn channel_by(items: Vec<Item>, by_thread: bool) -> View {
+        let mut items = items;
+        in_order(&mut items, by_thread);
+        View {
+            id: ViewId::Slack,
+            title: "Slack".into(),
+            data: ViewData {
+                items,
+                at: Some(NOW - 60_000),
+                head: json!({ "seen": NOW - 3_600_000 }),
+                ..ViewData::default()
+            },
+            loaded: true,
+        }
+    }
+
+    #[test]
+    fn a_threads_new_replies_are_one_row_with_its_people_newest_first() {
+        let root = ts(900);
+        let view = channel(vec![
+            message(
+                "channel",
+                "Ana",
+                "standalone note",
+                600,
+                json!({ "replies": 0 }),
+            ),
+            reply("Ben", "first reply", 500, &root, false),
+            reply("Cy", "second reply", 120, &root, false),
+            reply("Ben", "third reply", 60, &root, false),
+        ]);
+        assert_eq!(view.data.items.len(), 2, "the thread is one row");
+        let mut alone = vec![
+            reply("Ben", "first reply", 500, &root, false),
+            reply("Cy", "second reply", 120, &root, false),
+        ];
+        in_order(&mut alone, false);
+        assert_eq!(alone.len(), 2, "with no threads read, a row a message");
+        let (apart, _) = draw_of(&channel_by(alone, false), 200, None, false, &[]);
+        assert!(
+            apart
+                .iter()
+                .any(|l| l.contains("1 thread with new replies")),
+            "each thread counted once: {}",
+            apart.join("\n")
+        );
+        // A row is its newest message whole, new while any message is.
+        let mut seen_newest = vec![
+            reply("Ada", "older, unread", 300, &root, false),
+            reply("Ben", "newer, seen", 100, &root, true),
+        ];
+        seen_newest[1].title = "Ben · #dev · seen".into();
+        let (lines, _) = draw_of(&channel(seen_newest.clone()), 200, None, false, &[]);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("thread · 2 replies, 1 new")),
+            "a reply seen on its own isn't new beside: {}",
+            lines.join("\n")
+        );
+        let rows = channel(seen_newest).data.items;
+        assert_eq!(rows[0].title, "Ben · #dev");
+        assert_eq!(get(&rows[0], "from"), "Ben");
+        assert!(!is_old(&rows[0]));
+        // An unread first message with its replies seen is no thread with
+        // new replies.
+        let mut first = message("channel", "Ana", "the question", 900, json!({}));
+        first.data["thread"] = json!(format!("C1:{root}"));
+        let (lines, _) = draw_of(
+            &channel(vec![first, reply("Ben", "seen reply", 100, &root, true)]),
+            200,
+            None,
+            false,
+            &[],
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("thread with new")),
+            "{}",
+            lines.join("\n")
+        );
+        let row = &view.data.items[0];
+        assert_eq!(get(row, "ts"), ts(60), "by its latest reply, first");
+        assert_eq!(
+            row.id,
+            format!("slack-thread:Channel:C1:C1:{root}"),
+            "kept by its section and thread"
+        );
+        assert_eq!(members(row).len(), 3);
+        assert_eq!(sections(&view.data.items)[0].messages, 4);
+        let (lines, images) = draw_of(&view, 200, None, false, &[]);
+        let all = lines.join("\n");
+        assert!(
+            all.contains("1 thread with new replies · 4 new · newest first"),
+            "{all}"
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|l| {
+                    l.split('│')
+                        .nth(1)
+                        .is_some_and(|r| r.contains("second") || r.contains("third"))
+                })
+                .count(),
+            0,
+            "a row shows its thread's first message, not each reply: {all}"
+        );
+        let counts = lines.iter().find(|l| l.contains("3 replies")).unwrap();
+        assert!(
+            counts.contains("3 replies") && counts.contains("3 new"),
+            "{counts}"
+        );
+        let small = |who: &str| {
+            images.iter().any(|i| {
+                matches!(&i.shape, Shape::Avatar { label, .. } if label == who) && i.height == 1
+            })
+        };
+        assert!(small("Ben") && small("Cy"), "its people, small");
+        // A thread read before the last reply came takes it in.
+        let older = Thread {
+            messages: vec![
+                Said {
+                    user: "UAna".into(),
+                    from: "Ana".into(),
+                    text: "the question".into(),
+                    ts: root.clone(),
+                    ..Said::default()
+                },
+                Said {
+                    user: "UBen".into(),
+                    from: "Ben".into(),
+                    text: "first reply".into(),
+                    ts: ts(500),
+                    ..Said::default()
+                },
+            ],
+            replies: 1,
+            read: NOW,
+        };
+        let (beside, _) = draw_of(&view, 200, Some(&older), false, &[]);
+        let pane = |l: &String| l.split('│').nth(2).unwrap_or("").to_string();
+        assert!(
+            beside.iter().any(|l| pane(l).contains("third reply")),
+            "{}",
+            beside.join("\n")
+        );
+        assert!(
+            beside
+                .iter()
+                .any(|l| pane(l).contains("thread · 3 replies, 3 new")),
+            "its header counts the replies saved since: {}",
+            beside.join("\n")
+        );
+        for words in ["first reply", "second reply", "third reply"] {
+            assert!(
+                lines
+                    .iter()
+                    .any(|l| l.split('│').nth(2).is_some_and(|p| p.contains(words))),
+                "until the thread is read, its messages beside: {all}"
+            );
+        }
+        // The standalone message: who, when, its words, and nothing under.
+        let at = lines
+            .iter()
+            .position(|l| l.contains("standalone note"))
+            .unwrap();
+        assert!(lines[at - 1].contains("Ana") && lines[at - 1].contains("10m"));
+        assert!(
+            lines[at + 1].split('│').nth(1).unwrap().trim().is_empty(),
+            "two lines: {all}"
+        );
+    }
+
+    #[test]
+    fn a_rows_reply_count_takes_in_replies_saved_since_its_thread_was_read() {
+        let root = ts(900);
+        let read: f64 = ts(500).parse().unwrap();
+        let mut all = vec![
+            reply("Ben", "first reply", 500, &root, false),
+            reply("Cy", "second reply", 120, &root, false),
+            reply("Ben", "third reply", 60, &root, false),
+        ];
+        for m in &mut all {
+            m.data["replies"] = json!(1);
+            m.data["read_to"] = json!(read);
+        }
+        let all_again = all;
+        let (lines, _) = draw_of(
+            &channel(vec![reply("Ben", "a lone reply", 60, &root, false)]),
+            200,
+            None,
+            false,
+            &[],
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("1 thread with new replies")),
+            "a lone new reply is a thread with new replies: {}",
+            lines.join("\n")
+        );
+        let (lines, _) = draw_of(&channel(all_again), 200, None, false, &[]);
+        assert!(
+            lines.iter().any(|l| l.contains("3 replies")),
+            "{}",
+            lines.join("\n")
+        );
+    }
+
+    #[test]
+    fn the_photos_wanted_are_every_rows_starter_and_people() {
+        let root = ts(900);
+        let mut first = reply("Ben", "a reply", 60, &root, false);
+        first.data["root"] = json!({ "user": "ULee", "from": "Lee", "text": "q", "ts": root });
+        first.data["people"] =
+            json!([{ "user": "ULee", "from": "Lee" }, { "user": "UMaya", "from": "Maya" }]);
+        let wanted = people(&channel(vec![first]), None);
+        for user in ["UBen", "ULee", "UMaya"] {
+            assert!(wanted.contains(&Who::new(Service::Slack, user)), "{user}");
+        }
+    }
+
+    #[test]
+    fn a_reply_seen_on_its_own_in_another_section_isnt_new_beside() {
+        let root = ts(900);
+        let said = |from: &str, at: String| Said {
+            user: format!("U{from}"),
+            from: from.into(),
+            text: format!("{from} says"),
+            ts: at,
+            ..Said::default()
+        };
+        let thread = Thread {
+            messages: vec![
+                said("Ana", root.clone()),
+                said("Ada", ts(120)),
+                said("Ben", ts(60)),
+            ],
+            replies: 2,
+            read: NOW,
+        };
+        let mut view = channel(vec![reply("Ben", "Ben says", 60, &root, false)]);
+        view.data.head["seen_alone"] = json!([format!("C1:{}", ts(120))]);
+        let (lines, _) = draw_of(&view, 200, Some(&thread), false, &[]);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("thread · 2 replies, 1 new")),
+            "{}",
+            lines.join("\n")
+        );
+    }
+
+    #[test]
+    fn a_direct_message_you_answered_says_so() {
+        let mut dm = message(
+            "dm",
+            "Bo",
+            "lunch?",
+            300,
+            json!({ "answered": true, "replies": 0 }),
+        );
+        dm.data["where"] = json!("Bo");
+        let (lines, _) = draw_of(&channel(vec![dm]), 200, None, false, &[]);
+        let all = lines.join("\n");
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("Bo") && l.contains("↩ replied")),
+            "{all}"
+        );
+    }
+
+    #[test]
+    fn a_thread_started_before_the_look_is_headed_by_its_first_message() {
+        let root = ts(3 * 86_400);
+        let mut first = reply("Ben", "a new reply", 60, &root, false);
+        first.data["root"] = json!({
+            "user": "ULee", "from": "Lee", "text": "Retry banner copy?", "ts": root,
+        });
+        first.data["replies"] = json!(7);
+        let view = channel(vec![first, reply("Cy", "an old reply", 300, &root, true)]);
+        let thread = Thread {
+            messages: vec![
+                Said {
+                    user: "ULee".into(),
+                    from: "Lee".into(),
+                    text: "Retry banner copy?".into(),
+                    ts: root.clone(),
+                    ..Said::default()
+                },
+                Said {
+                    user: "UCy".into(),
+                    from: "Cy".into(),
+                    text: "an old reply".into(),
+                    ts: ts(7200),
+                    ..Said::default()
+                },
+                Said {
+                    user: "UBen".into(),
+                    from: "Ben".into(),
+                    text: "a new reply".into(),
+                    ts: ts(60),
+                    ..Said::default()
+                },
+            ],
+            replies: 7,
+            read: NOW,
+        };
+        let (lines, _) = draw_of(&view, 200, Some(&thread), false, &[]);
+        let all = lines.join("\n");
+        let head = lines.iter().find(|l| l.contains("Lee")).unwrap();
+        let list = head.split('│').nth(1).unwrap();
+        assert!(list.contains("started Tue"), "{head}");
+        assert!(all.contains("Retry banner copy?"), "{all}");
+        assert!(all.contains("7 replies") && all.contains("1 new"), "{all}");
+        // Beside it, the thread whole, its new reply marked.
+        assert!(all.contains("thread · 7 replies, 1 new"), "{all}");
+        let ben = lines
+            .iter()
+            .find(|l| l.split('│').nth(2).is_some_and(|p| p.contains("Ben")))
+            .unwrap();
+        assert!(ben.contains("▎") && ben.contains("new"), "{ben}");
+        let cy = lines
+            .iter()
+            .find(|l| l.split('│').nth(2).is_some_and(|p| p.contains("Cy")))
+            .unwrap();
+        assert!(!cy.split('│').nth(2).unwrap().contains("new"), "{cy}");
     }
 
     #[test]
@@ -1772,17 +2429,25 @@ mod tests {
             column.trim_end().ends_with('1'),
             "its count at the right: {mentions}"
         );
-        assert!(all.contains("1 new · 1 today · newest first"), "{all}");
+        assert!(
+            all.contains(" 1 new · newest first") && !all.contains("thread with new"),
+            "{all}"
+        );
         assert!(all.contains("Older messages stay in Slack."));
         let ada = lines
             .iter()
             .find(|l| l.contains("Ada") && l.contains("#dev"))
             .unwrap();
-        assert!(ada.contains("3 replies"));
         let list = ada.split('│').nth(1).unwrap();
         assert!(
-            list.trim_end().ends_with("3 replies") && list.ends_with(" "),
-            "at the list's right edge: {ada}"
+            list.trim_end().ends_with("2m") && list.ends_with(" "),
+            "when it last moved at the list's right edge: {ada}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("3 replies") && l.contains("1 new")),
+            "its replies and how many are new under its words: {all}"
         );
         assert!(
             !lines.iter().any(|l| l.contains("lunch?")),
@@ -1852,10 +2517,7 @@ mod tests {
         let thread = thread();
         let (lines, _) = draw(200, Some(&thread), false, &[tickets]);
         let all = lines.join("\n");
-        assert!(
-            all.contains("thread · 2 replies · opened from your mention"),
-            "{all}"
-        );
+        assert!(all.contains("thread · 2 replies, 1 new"), "{all}");
         let dee = lines.iter().find(|l| l.contains("Dee")).unwrap();
         assert!(!dee.contains("new"), "seen before: {dee}");
         let ed = lines.iter().find(|l| l.contains("Ed ")).unwrap();
@@ -1970,7 +2632,7 @@ mod tests {
             in_place("dm", "Bo", "D1", "Bo", 700, true),
             in_place("channel", "Fay", "C2", "#ops", 10, true),
         ];
-        in_order(&mut items);
+        in_order(&mut items, true);
         items
     }
 
@@ -2071,21 +2733,14 @@ mod tests {
             assert!(at[1].abs_diff(half) <= 1, "{cols}: the rule at {}", at[1]);
             assert!(lines[1].starts_with(" @ Mentions"), "{cols}: {}", lines[1]);
             assert!(
-                lines
-                    .iter()
-                    .any(|l| l.contains("Ada") && l.contains("#dev ·")),
+                lines.iter().any(|l| l.contains("Ada  #dev")),
                 "where, at {cols}"
             );
         }
         // Narrower the thread is behind i and where goes.
         let (lines, _) = draw(110, Some(&thread), false, &[]);
         assert_eq!(rules(&lines[2]), [SECTIONS_W], "no pane: {}", lines[2]);
-        assert!(
-            !lines
-                .iter()
-                .any(|l| l.contains("Ada") && l.contains("#dev ·")),
-            "no where"
-        );
+        assert!(!lines.iter().any(|l| l.contains("Ada  #dev")), "no where");
         assert!(
             lines.iter().any(|l| l.contains("Ada") && l.contains("2m")),
             "how long ago kept"
@@ -2150,7 +2805,7 @@ mod tests {
             message("mention", "Ada", "hi", 60, json!({})),
             message("channel", "Cy", "yo", 30, json!({ "where": long })),
         ];
-        in_order(&mut items);
+        in_order(&mut items, true);
         let secs = sections(&items);
         let tz = TimeZone::UTC;
         let pictures = HashMap::new();

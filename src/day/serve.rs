@@ -554,12 +554,15 @@ impl Server {
     /// A Slack message acted on from its menu (an item of the Slack view or
     /// of the "slack" notifications): seen, on its own.
     pub fn slack_item_acted(&mut self, item: &Item) {
-        let (_, id) = crate::mission::choices::notice_of(item);
-        self.notice_history_mark("slack", &id, crate::sidebar::history::Sidebar::Read, false);
         let dirs = Dirs::here();
-        if let Some(m) = item.data.get("message") {
-            let get = |k: &str| m.get(k).and_then(Value::as_str).unwrap_or("");
-            slack::mark_item_seen(&dirs.state, get("channel"), get("ts"), util::now_ms());
+        // A thread's row on the Slack board, every message it stands for.
+        for item in crate::mission::slack_board::members(item) {
+            let (_, id) = crate::mission::choices::notice_of(&item);
+            self.notice_history_mark("slack", &id, crate::sidebar::history::Sidebar::Read, false);
+            if let Some(m) = item.data.get("message") {
+                let get = |k: &str| m.get(k).and_then(Value::as_str).unwrap_or("");
+                slack::mark_item_seen(&dirs.state, get("channel"), get("ts"), util::now_ms());
+            }
         }
         self.day_views(&dirs, &util::local_now());
     }

@@ -734,12 +734,12 @@ impl Server {
             .cloned();
         if let Some(v) = cell {
             let first = super::slack_board::shown(&v.data.items, -1);
-            m.slack_viewed
-                .get_or_insert_default()
-                .extend(first.into_iter().map(|i| {
-                    let item = &v.data.items[i];
-                    (item.id.clone(), item.clone())
-                }));
+            m.slack_viewed.get_or_insert_default().extend(
+                first
+                    .into_iter()
+                    .flat_map(|i| super::slack_board::members(&v.data.items[i]))
+                    .map(|item| (item.id.clone(), item)),
+            );
         }
         let Some(view) = m
             .current()
@@ -758,14 +758,15 @@ impl Server {
             }
             return;
         };
-        // What the board shows has been shown.
+        // What the board shows has been shown, every message of a thread's
+        // row.
         let shown = slack_shown(m, &view);
-        m.slack_viewed
-            .get_or_insert_default()
-            .extend(shown.into_iter().map(|i| {
-                let item = &view.data.items[i];
-                (item.id.clone(), item.clone())
-            }));
+        m.slack_viewed.get_or_insert_default().extend(
+            shown
+                .into_iter()
+                .flat_map(|i| super::slack_board::members(&view.data.items[i]))
+                .map(|item| (item.id.clone(), item)),
+        );
         let extras = self.slack_extras(m.chosen_item());
         let (thread, pictures) = (extras.thread, extras.pictures);
         m.snap.slack_thread_failed = extras.failed;
@@ -1148,7 +1149,10 @@ impl Server {
                 // The Slack board lists its messages by section, so each
                 // section's are together, newest first.
                 if ux2 && v.id == ViewId::Slack {
-                    super::slack_board::in_order(&mut v.data.items);
+                    super::slack_board::in_order(
+                        &mut v.data.items,
+                        settings::is_on("slack_threads"),
+                    );
                 }
                 v
             })
