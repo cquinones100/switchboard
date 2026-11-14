@@ -32,9 +32,9 @@ both have to be in place.
 
 3. **Install the skill.** `switchboard setup plugin` writes it, with
    Switchboard's other skills, hooks and instructions, into a Claude Code
-   plugin, `~/.local/share/switchboard/plugin`, which Claude in
+   plugin, `~/.local/share/switchboard/claude/plugin`, which Claude in
    Switchboard's panes loads. Elsewhere, load it for a session with
-   `claude --plugin-dir ~/.local/share/switchboard/plugin` (its skill is
+   `claude --plugin-dir ~/.local/share/switchboard/claude/plugin` (its skill is
    then `/switchboard:review-loop`, or `/review-loop` while nothing else has
    that name), or copy its `skills/review-loop` folder into
    `~/.claude/skills/`. With Settings' "Load Switchboard as a plugin" off,

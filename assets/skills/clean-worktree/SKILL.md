@@ -3,6 +3,12 @@ name: clean-worktree
 description: Remove a git worktree and its local branch once nothing in them would be lost, with no uncommitted changes and every commit on GitHub, then prune the deleted remote branches. Queue-and-clean runs it once a PR has merged; run it yourself to clear away a worktree whose work is merged, closed or pushed.
 argument-hint: "[worktree path or branch]"
 disable-model-invocation: true
+allowed-tools:
+  - Bash(switchboard skill-path *)
+  - Bash(git rev-parse *)
+  - Bash(git worktree list*)
+  - Bash(git branch --show-current)
+  - Bash(gh pr view*)
 ---
 
 # Clean worktree

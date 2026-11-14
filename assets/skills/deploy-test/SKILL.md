@@ -3,6 +3,13 @@ name: deploy-test
 description: Wait until a merged PR has deployed, test the feature it adds on the deployed site in a real browser, record a captioned video of the test, and ask you to approve it. Queue-and-clean runs it before removing a worktree; run it yourself to test any merged PR.
 argument-hint: "[PR number]"
 disable-model-invocation: true
+allowed-tools:
+  - Bash(node ~/.local/share/switchboard/claude/plugin/skills/*)
+  - Bash(switchboard skill-path *)
+  - Bash(switchboard wait-deploy *)
+  - Bash(gh pr view*)
+  - Bash(gh pr diff*)
+  - Bash(gh run list*)
 ---
 
 # Deploy test

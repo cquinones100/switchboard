@@ -829,7 +829,7 @@ fn a_pane_s_claude_loads_switchboard_s_plugin_while_the_setting_is_on() {
     // build run by hand) shares your home, so it leaves the plugin your
     // workspace's panes load as it is, though its panes name it.
     let own = TestServer::start();
-    let plugin = own.home.join(".local/share/switchboard/plugin");
+    let plugin = own.home.join(".local/share/switchboard/claude/plugin");
     assert_eq!(
         plugin_dirs_in_a_pane(&own),
         format!("dirs=[{}]", plugin.display())
@@ -839,7 +839,7 @@ fn a_pane_s_claude_loads_switchboard_s_plugin_while_the_setting_is_on() {
 
     // Yours writes it as it starts.
     let server = TestServer::start_in_home();
-    let plugin = server.home.join(".local/share/switchboard/plugin");
+    let plugin = server.home.join(".local/share/switchboard/claude/plugin");
     let deadline = common::deadline(std::time::Duration::from_secs(10));
     while !plugin.join(".claude-plugin/plugin.json").is_file() {
         assert!(Instant::now() < deadline, "no plugin: {}", server.log());
