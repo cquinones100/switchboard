@@ -19,8 +19,10 @@
 //! connection is refused and no other server starts in between; what each
 //! pane's Claude was doing; the pictures each pane's program gave the
 //! terminal, which a program gives once and the new build may have to
-//! draw as sixel (src/mux/sixel); and the connection of the `switchboard
-//! upgrade` that asked, which the new build answers.
+//! draw as sixel (src/mux/sixel), by their file's path or, for those given
+//! inline, their data, up to 64 MB of it, the newest first; and the
+//! connection of the `switchboard upgrade` that asked, which the new build
+//! answers.
 //!
 //! Attached terminals stay attached without noticing: each connection is
 //! handed over by descriptor too, with its session and size. A connection
@@ -146,7 +148,8 @@ pub struct Handover {
     #[serde(default)]
     pub next_tab: u32,
     /// The pictures each pane's program gave the terminal (src/mux/sixel),
-    /// given once, which the new build draws as sixel.
+    /// given once, which the new build draws as sixel: by a file's path, or
+    /// their data when given inline.
     #[serde(default)]
     pub images: Vec<(PaneId, Vec<crate::mux::sixel::kitty::Handed>)>,
     /// A cell's size in pixels as the terminal answered when asked.
@@ -1166,13 +1169,24 @@ mod tests {
             next_tab: 4,
             images: vec![(
                 PaneId(4),
-                vec![crate::mux::sixel::kitty::Handed {
-                    id: 77,
-                    path: "/tmp/notes/.attachments/a.png".into(),
-                    placed: true,
-                    cols: Some(30),
-                    rows: Some(6),
-                }],
+                vec![
+                    crate::mux::sixel::kitty::Handed {
+                        id: 77,
+                        path: "/tmp/notes/.attachments/a.png".into(),
+                        placed: true,
+                        cols: Some(30),
+                        rows: Some(6),
+                        data: None,
+                    },
+                    crate::mux::sixel::kitty::Handed {
+                        id: 78,
+                        path: String::new(),
+                        placed: true,
+                        cols: Some(10),
+                        rows: Some(2),
+                        data: Some("iVBORw0KGgo=".into()),
+                    },
+                ],
             )],
             asked_cell: Some((10, 20)),
             given: vec![(PaneId(4), vec!["https://a.example/1".into()])],

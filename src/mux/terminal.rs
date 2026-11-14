@@ -176,6 +176,19 @@ pub fn cell_of(cols: u16, rows: u16, xpixel: u16, ypixel: u16) -> Option<(u16, u
         .then(|| (xpixel / cols, ypixel / rows))
 }
 
+/// What a terminal's answer to "what are you" (DA1, `CSI ? <class> ; <attr>
+/// … c`) says of sixel: whether it lists attribute 4, which a terminal
+/// that draws sixel does (Windows Terminal from 1.22, foot, WezTerm, xterm
+/// with sixel, mlterm); `None` for bytes that aren't such an answer.
+pub fn draws_sixel(raw: &[u8]) -> Option<bool> {
+    let body = raw.strip_prefix(b"\x1b[?")?.strip_suffix(b"c")?;
+    let body = std::str::from_utf8(body).ok()?;
+    if !body.bytes().all(|b| b.is_ascii_digit() || b == b';') {
+        return None;
+    }
+    Some(body.split(';').skip(1).any(|attr| attr == "4"))
+}
+
 /// Whether bytes are a terminal's answer to "what are you" (DA1,
 /// `CSI ? … c`), which every terminal gives.
 fn is_attributes(raw: &[u8]) -> bool {
@@ -305,6 +318,21 @@ impl Server {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_terminal_s_answer_says_whether_it_draws_sixel() {
+        // Windows Terminal 1.22, and one from before it.
+        let wt = b"\x1b[?61;4;6;7;14;21;22;23;24;28;32;42c";
+        assert_eq!(draws_sixel(wt), Some(true));
+        assert_eq!(draws_sixel(b"\x1b[?61;6;7;22;23;24;28;32;42c"), Some(false));
+        assert_eq!(draws_sixel(b"\x1b[?62;4;22c"), Some(true), "foot");
+        assert_eq!(draws_sixel(b"\x1b[?62;22c"), Some(false), "Ghostty");
+        // The class is not an attribute: a VT132 is no sixel terminal.
+        assert_eq!(draws_sixel(b"\x1b[?4;6c"), Some(false));
+        assert_eq!(draws_sixel(b"\x1b[?1;2c"), Some(false));
+        assert_eq!(draws_sixel(b"\x1b[>1;4000;0c"), None, "DA2");
+        assert_eq!(draws_sixel(b"\x1b[12;40R"), None);
+    }
 
     #[test]
     fn a_cell_is_the_window_s_pixels_over_its_cells() {

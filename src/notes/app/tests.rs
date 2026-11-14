@@ -2124,7 +2124,7 @@ fn a_picture_under_an_item_with_chips_scrolls_with_them_in_one_piece() {
             .collect();
         let drawn = place::Drawn::of(&buf, vec![(PaneId(1), buf.area)]);
         let bottom = buf.area.height;
-        let pieces = place::find(&mut buf, &drawn, bottom);
+        let pieces = place::find(&mut buf, &drawn, &Default::default(), bottom);
         (rows, pieces)
     };
     // Each piece a picture from its first row, ten cells wide, under its

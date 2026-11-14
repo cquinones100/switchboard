@@ -14,7 +14,8 @@
 //!
 //! Dark is drawn in the UX 2.0 canvas's own colors (`Palette::DARK_TRUE`,
 //! `ui::Theme::DARK_TRUE`) for a terminal that draws truecolor, by what it
-//! attached as (`draws_truecolor`), and in the 256-color palette for one
+//! attached as (src/mux/graphics.rs's `truecolor`, which takes Windows
+//! Terminal by the word its client adds), and in the 256-color palette for one
 //! that doesn't: the server draws each client inside `drawing_for`, so
 //! `palette` and `theme` answer for the client being drawn.
 //!
@@ -187,16 +188,6 @@ thread_local! {
     static TRUECOLOR: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Whether a terminal, by what it attached as (`TERM`, `TERM_PROGRAM` and
-/// `COLORTERM`), draws truecolor: it says `truecolor` or `24bit`, or it is
-/// Ghostty or kitty, which always do.
-pub fn draws_truecolor(term: &str) -> bool {
-    let term = term.to_lowercase();
-    ["truecolor", "24bit", "ghostty", "kitty"]
-        .iter()
-        .any(|w| term.contains(w))
-}
-
 /// Whether what is drawn now is for a terminal that draws truecolor.
 pub fn truecolor() -> bool {
     TRUECOLOR.with(Cell::get)
@@ -293,16 +284,6 @@ mod tests {
         assert_eq!(Palette::LIGHT.button_bg, Color::Indexed(250));
         assert_eq!(Palette::DARK.inactive_bg, Color::Indexed(236));
         assert_eq!(Palette::DARK.button_fg, Color::Indexed(255));
-    }
-
-    #[test]
-    fn a_truecolor_terminal_is_told_by_its_names() {
-        assert!(draws_truecolor("xterm-256color  truecolor"));
-        assert!(draws_truecolor("xterm-256color  24bit"));
-        assert!(draws_truecolor("xterm-ghostty"));
-        assert!(draws_truecolor("xterm-kitty"));
-        assert!(!draws_truecolor("xterm-256color Apple_Terminal"));
-        assert!(!draws_truecolor(""));
     }
 
     #[test]

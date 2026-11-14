@@ -46,8 +46,10 @@ pub enum ClientMsg {
         session: Option<String>,
         cols: u16,
         rows: u16,
-        /// `TERM`, `TERM_PROGRAM` and `COLORTERM`, a space between each
-        /// (`TERM` alone, or without `COLORTERM`, from an older client).
+        /// `TERM`, `TERM_PROGRAM` and `COLORTERM`, and `WindowsTerminal`
+        /// where `WT_SESSION` is set, a space between each
+        /// (`client::attaching_as`; `TERM` alone, or without the later
+        /// ones, from an older client).
         term: String,
         #[serde(default)]
         xpixel: u16,

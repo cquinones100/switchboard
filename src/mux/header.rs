@@ -216,7 +216,8 @@ const HISTORY: (&str, &str) = ("M-h", "History");
 /// Draws the header into `area` (its full width, `ROWS` high), and gives
 /// where each key and the button went.
 /// What is under the mouse, with hover_highlight on, is lit. `caps`: the
-/// terminal draws the kit's half circles (`kit::caps`). `palette`: the
+/// kit's half circles are written (src/mux/graphics.rs's `round_ends`).
+/// `palette`: the
 /// palette is open, which lights the button.
 pub fn draw(
     buf: &mut Buffer,

@@ -14,8 +14,8 @@
 //! the output of the pane allowed to send them (`Scanner`), whole however
 //! the reads split them, and sends each on to the clients showing that
 //! pane's session; with Settings' "Image protocol" on sixel it keeps them
-//! instead and draws the pictures itself (src/mux/sixel), for a terminal
-//! without kitty's. Only the notes app's pane (`@notes_pane`) or one marked
+//! too and draws the pictures itself (src/mux/sixel) for each terminal
+//! without kitty's (src/mux/graphics.rs). Only the notes app's pane (`@notes_pane`) or one marked
 //! `@allow_passthrough` (as Notes marks its own, however it was started) is
 //! allowed: a command can have the terminal read any file of yours, so
 //! never any program's.
@@ -166,8 +166,9 @@ impl Scanner {
 
 impl Server {
     /// Sends graphics commands from a pane in `tab` to every client showing
-    /// its session, so the picture is there whichever tab the client shows
-    /// when its placeholders are drawn.
+    /// its session that takes them (all but those the server draws the
+    /// panes' pictures for as sixel, src/mux/graphics.rs), so the picture is
+    /// there whichever tab the client shows when its placeholders are drawn.
     pub(super) fn pass_graphics(&mut self, tab: TabId, commands: Vec<Vec<u8>>) {
         if commands.is_empty() {
             return;
@@ -176,7 +177,11 @@ impl Server {
             return;
         };
         let bytes: Vec<u8> = commands.concat();
-        for c in self.clients.values().filter(|c| c.session == session) {
+        let takes_them = |c: &&super::server::Client| {
+            c.session == session
+                && super::graphics::for_panes(&c.term) == super::graphics::Protocol::Kitty
+        };
+        for c in self.clients.values().filter(takes_them) {
             let _ = c.tx.send(ServerMsg::Output(bytes.clone()));
         }
     }

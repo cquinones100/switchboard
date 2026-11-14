@@ -328,7 +328,7 @@ impl Server {
             Some(at) => record.shot_settled(at).map(|s| s.lines.clone()),
         };
         let header = crate::status::top() > 0 && !self.tabs.get(&tab).is_some_and(|t| t.zoomed);
-        let caps = crate::ui::kit::caps(&c.term);
+        let caps = crate::mux::graphics::round_ends(&c.term);
         let c = self.clients.get_mut(&id).expect("checked above");
         if let Some(view) = c.overlays.find_mut::<HistoryView>() {
             view.area = Some(area);

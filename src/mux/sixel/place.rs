@@ -2,7 +2,9 @@
 //! (U+10EEEE) after everything is drawn, the panes' text and whatever
 //! boxes are over it, read as kitty reads them, and gathered into
 //! rectangles of one picture each, so the server can draw each as sixel
-//! (src/mux/sixel/mod.rs).
+//! (src/mux/sixel/mod.rs). A picture is a pane's (Notes', a view's), read
+//! inside its pane, or one of the server's own (src/ui/images.rs), read
+//! anywhere in the frame by the ids the frame's images have.
 //!
 //! A placeholder cell names its image by its foreground colour (24-bit, or
 //! a 256-colour index), with a third combining mark for the id's highest
@@ -16,12 +18,14 @@
 //! picture scrolled half off, under UX 2.0's header among them, is a piece
 //! starting at the row it is cut at, which is the pane's first.
 //!
-//! A cell is read only while it is still what its pane drew there
-//! (`Drawn`, noted once the panes are drawn and before anything is drawn
-//! over them): something drawn over a pane may copy a pane's cells,
+//! A cell is read as a pane's only while it is still what its pane drew
+//! there (`Drawn`, noted once the panes are drawn and before anything is
+//! drawn over them): something drawn over a pane may copy a pane's cells,
 //! placeholders and all, as UX 2.0's mission control cards show each tab's
 //! last lines and a peek shows a tab's screen, and such a copy is no place
-//! the pane's picture is.
+//! the pane's picture is. Any other cell naming one of the server's images
+//! is that image's: the server writes its images' cells itself, where
+//! they go, and copies none.
 //!
 //! Every placeholder cell in the frame is blanked (a space on its own
 //! background), wherever it is, since a terminal without kitty's pictures
@@ -31,7 +35,7 @@
 //! line gone: a sixel reaching it would scroll the screen, so a picture
 //! there loses that row.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::Rect;
@@ -40,11 +44,12 @@ use ratatui::style::{Color, Modifier};
 use crate::mux::PaneId;
 use crate::notes::images::{MARKS, PLACEHOLDER};
 
-/// A part of a picture a frame shows: which pane's image, where on the
-/// screen, and the picture's column and row of its top left cell.
+/// A part of a picture a frame shows: which pane's image (`None`, the
+/// server's own), where on the screen, and the picture's column and row of
+/// its top left cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Piece {
-    pub pane: PaneId,
+    pub pane: Option<PaneId>,
     pub id: u32,
     pub area: Rect,
     pub col: u16,
@@ -77,6 +82,16 @@ fn is_placeholder(cell: &Cell) -> bool {
 pub struct Drawn {
     panes: Vec<(PaneId, Rect)>,
     cells: HashMap<(u16, u16), Cell>,
+    /// The half circles at the ends of kit's objects (U+E0B6, U+E0B4) the
+    /// panes drew, and whether by a pane allowed pictures (Switchboard's
+    /// own apps) or another (a program of yours, a powerline prompt).
+    ends: HashMap<(u16, u16), (Cell, bool)>,
+}
+
+/// Whether a cell holds one of the half circles kit ends its objects with.
+pub fn is_end(cell: &Cell) -> bool {
+    let s = cell.symbol();
+    s == crate::ui::kit::CAP_LEFT || s == crate::ui::kit::CAP_RIGHT
 }
 
 impl Drawn {
@@ -84,6 +99,7 @@ impl Drawn {
     /// `buf`) drew.
     pub fn of(buf: &Buffer, panes: Vec<(PaneId, Rect)>) -> Drawn {
         let mut cells = HashMap::new();
+        let mut ends = HashMap::new();
         for (_, area) in &panes {
             let area = area.intersection(buf.area);
             for y in area.top()..area.bottom() {
@@ -91,11 +107,30 @@ impl Drawn {
                     let cell = &buf[(x, y)];
                     if is_placeholder(cell) {
                         cells.insert((x, y), cell.clone());
+                    } else if is_end(cell) {
+                        ends.insert((x, y), (cell.clone(), true));
                     }
                 }
             }
         }
-        Drawn { panes, cells }
+        Drawn { panes, cells, ends }
+    }
+
+    /// With the half circles the panes not allowed pictures drew in
+    /// `others`, their areas of `buf`.
+    pub fn with_others(mut self, buf: &Buffer, others: &[Rect]) -> Drawn {
+        for area in others {
+            let area = area.intersection(buf.area);
+            for y in area.top()..area.bottom() {
+                for x in area.left()..area.right() {
+                    let cell = &buf[(x, y)];
+                    if is_end(cell) {
+                        self.ends.insert((x, y), (cell.clone(), false));
+                    }
+                }
+            }
+        }
+        self
     }
 
     /// Whether the cell at `x`, `y` is still what its pane drew there.
@@ -103,6 +138,17 @@ impl Drawn {
         self.cells
             .get(&(x, y))
             .is_some_and(|c| c.symbol() == cell.symbol() && c.fg == cell.fg)
+    }
+
+    /// Whether the half circle at `x`, `y` is still the one a pane drew
+    /// there, and if so whether that pane is allowed pictures (one of
+    /// Switchboard's apps). By the character alone, since a box standing
+    /// out dims the colors behind it (`ui::dim_behind`).
+    pub fn end_by(&self, x: u16, y: u16, cell: &Cell) -> Option<bool> {
+        self.ends
+            .get(&(x, y))
+            .filter(|(c, _)| c.symbol() == cell.symbol())
+            .map(|(_, allowed)| *allowed)
     }
 }
 
@@ -168,71 +214,113 @@ fn read(cell: &Cell, left: Option<Mark>) -> Option<Option<Mark>> {
 }
 
 /// A cell as a blank on its own background.
-fn blank(cell: &mut Cell) {
+fn blank_cell(cell: &mut Cell) {
     cell.set_symbol(" ");
     cell.fg = Color::Reset;
     cell.modifier = Modifier::empty();
 }
 
-/// The pieces of pictures in each pane's area of `buf`, from the cells
-/// still as the pane drew them (`drawn`), none at or below row `bottom`;
-/// every placeholder in `buf`, wherever it is, blanked.
-pub fn find(buf: &mut Buffer, drawn: &Drawn, bottom: u16) -> Vec<Piece> {
+/// The pieces of pictures in `buf`, none at or below row `bottom`: in
+/// each pane's area, from the cells still as the pane drew them (`drawn`),
+/// and anywhere else, those of the server's own images, by their ids
+/// (`server`); every placeholder in `buf`, wherever it is, blanked.
+pub fn find(buf: &mut Buffer, drawn: &Drawn, server: &HashSet<u32>, bottom: u16) -> Vec<Piece> {
     let mut done: Vec<Piece> = Vec::new();
     for (pane, area) in &drawn.panes {
         let area = area.intersection(buf.area);
-        // The pieces that reached the row above, which a run may go on.
-        let mut open: Vec<Piece> = Vec::new();
-        for y in area.top()..area.bottom() {
-            let mut next: Vec<Piece> = Vec::new();
-            let mut left: Option<Mark> = None;
-            let mut run: Option<Piece> = None;
-            for x in area.left()..area.right() {
-                let cell = &buf[(x, y)];
-                let found = drawn.still(x, y, cell).then(|| read(cell, left)).flatten();
-                let mark = match found {
-                    None => {
-                        left = None;
-                        end_run(&mut run, &mut open, &mut next);
-                        continue;
-                    }
-                    Some(mark) => mark,
-                };
-                left = mark;
-                let Some(mark) = mark.filter(|_| y < bottom) else {
-                    end_run(&mut run, &mut open, &mut next);
-                    continue;
-                };
-                let goes_on = run.is_some_and(|r| {
-                    r.id == mark.id && r.row == mark.row && r.col + r.area.width == mark.col
-                });
-                if goes_on {
-                    if let Some(r) = &mut run {
-                        r.area.width += 1;
-                    }
-                } else {
-                    end_run(&mut run, &mut open, &mut next);
-                    run = Some(Piece {
-                        pane: *pane,
-                        id: mark.id,
-                        area: Rect::new(x, y, 1, 1),
-                        col: mark.col,
-                        row: mark.row,
-                    });
-                }
-            }
-            end_run(&mut run, &mut open, &mut next);
-            done.append(&mut open);
-            open = next;
-        }
-        done.append(&mut open);
+        done.extend(pieces_in(
+            buf,
+            area,
+            bottom,
+            Some(*pane),
+            |x, y, cell, left| drawn.still(x, y, cell).then(|| read(cell, left)).flatten(),
+        ));
     }
+    if !server.is_empty() {
+        done.extend(pieces_in(
+            buf,
+            buf.area,
+            bottom,
+            None,
+            |x, y, cell, left| {
+                let mark = read(cell, left)?;
+                (!drawn.still(x, y, cell)).then(|| mark.filter(|m| server.contains(&m.id)))
+            },
+        ));
+    }
+    self::blank(buf);
+    done.sort_by_key(|p| (p.area.y, p.area.x));
+    done
+}
+
+/// Every placeholder cell in `buf` blanked: for sixel once its pieces are
+/// found, and for a terminal that draws no pictures, which would show
+/// each as a box.
+pub fn blank(buf: &mut Buffer) {
     for cell in buf.content.iter_mut() {
         if is_placeholder(cell) {
-            blank(cell);
+            blank_cell(cell);
         }
     }
-    done.sort_by_key(|p| (p.area.y, p.area.x));
+}
+
+/// The pieces in `area` of `buf`, none at or below row `bottom`, of the
+/// pane `pane` (`None`, the server's): each run of a row's cells of one
+/// picture, its columns in order, joined with the runs under it that go
+/// on from its rows over the same columns. `mark_at` reads a cell with the
+/// mark of the one to its left: `None` for one that is no placeholder here,
+/// `Some(None)` for one naming no picture.
+fn pieces_in(
+    buf: &Buffer,
+    area: Rect,
+    bottom: u16,
+    pane: Option<PaneId>,
+    mark_at: impl Fn(u16, u16, &Cell, Option<Mark>) -> Option<Option<Mark>>,
+) -> Vec<Piece> {
+    let mut done: Vec<Piece> = Vec::new();
+    // The pieces that reached the row above, which a run may go on.
+    let mut open: Vec<Piece> = Vec::new();
+    for y in area.top()..area.bottom() {
+        let mut next: Vec<Piece> = Vec::new();
+        let mut left: Option<Mark> = None;
+        let mut run: Option<Piece> = None;
+        for x in area.left()..area.right() {
+            let mark = match mark_at(x, y, &buf[(x, y)], left) {
+                None => {
+                    left = None;
+                    end_run(&mut run, &mut open, &mut next);
+                    continue;
+                }
+                Some(mark) => mark,
+            };
+            left = mark;
+            let Some(mark) = mark.filter(|_| y < bottom) else {
+                end_run(&mut run, &mut open, &mut next);
+                continue;
+            };
+            let goes_on = run.is_some_and(|r| {
+                r.id == mark.id && r.row == mark.row && r.col + r.area.width == mark.col
+            });
+            if goes_on {
+                if let Some(r) = &mut run {
+                    r.area.width += 1;
+                }
+            } else {
+                end_run(&mut run, &mut open, &mut next);
+                run = Some(Piece {
+                    pane,
+                    id: mark.id,
+                    area: Rect::new(x, y, 1, 1),
+                    col: mark.col,
+                    row: mark.row,
+                });
+            }
+        }
+        end_run(&mut run, &mut open, &mut next);
+        done.append(&mut open);
+        open = next;
+    }
+    done.append(&mut open);
     done
 }
 
@@ -285,12 +373,12 @@ mod tests {
     /// the panes drew.
     fn find_now(buf: &mut Buffer, panes: &[(PaneId, Rect)], bottom: u16) -> Vec<Piece> {
         let drawn = Drawn::of(buf, panes.to_vec());
-        find(buf, &drawn, bottom)
+        find(buf, &drawn, &HashSet::new(), bottom)
     }
 
     fn piece(id: u32, area: Rect, col: u16, row: u16) -> Piece {
         Piece {
-            pane: PANE,
+            pane: Some(PANE),
             id,
             area,
             col,
@@ -319,7 +407,7 @@ mod tests {
         // A box over its middle: rows 2 and 3, columns 3 to 6.
         buf.set_string(3, 2, "╭──╮", Style::new());
         buf.set_string(3, 3, "╰──╯", Style::new());
-        let found = find(&mut buf, &drawn, 9);
+        let found = find(&mut buf, &drawn, &HashSet::new(), 9);
         assert_eq!(
             found,
             vec![
@@ -403,7 +491,7 @@ mod tests {
         // One of the pane's own cells drawn over in another colour (a
         // copy of a cell of the picture at its own place, a dimmed box).
         buf[(5, 2)].set_style(Style::new().fg(Color::Rgb(0, 0, 43)));
-        let found = find(&mut buf, &drawn, 11);
+        let found = find(&mut buf, &drawn, &HashSet::new(), 11);
         assert_eq!(
             found,
             vec![piece(42, Rect::new(0, 2, 5, 1), 0, 0)],
@@ -425,5 +513,51 @@ mod tests {
         let found = find_now(&mut buf, &[(PANE, pane)], 9);
         assert_eq!(found, vec![piece(7, Rect::new(3, 7, 4, 2), 0, 0)]);
         assert_eq!(buf[(3, 9)].symbol(), " ", "its last row blank");
+    }
+
+    #[test]
+    fn the_server_s_images_are_read_anywhere_by_their_ids_and_cut_by_what_covers_them() {
+        // A pane's picture, as it drew it, and two of the server's images
+        // drawn over the frame after it: one over the pane, part of it
+        // covered by a box, and one outside any pane.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 30, 12));
+        let pane = Rect::new(0, 0, 30, 6);
+        draw(&mut buf, 42, (0, 0), 0, 2, 4);
+        let drawn = Drawn::of(&buf, vec![(PANE, pane)]);
+        let (meter, switch) = (0x80_1234, 0x80_5678);
+        draw(&mut buf, meter, (10, 2), 0, 1, 10);
+        buf.set_string(14, 2, "╭╮", Style::new());
+        draw(&mut buf, switch, (2, 8), 0, 1, 4);
+        // A placeholder naming an image the frame doesn't have.
+        draw(&mut buf, 0x80_0001, (20, 9), 0, 1, 2);
+        let server: HashSet<u32> = [meter, switch].into_iter().collect();
+        let found = find(&mut buf, &drawn, &server, 11);
+        let theirs = |id, area, col| Piece {
+            pane: None,
+            id,
+            area,
+            col,
+            row: 0,
+        };
+        assert_eq!(
+            found,
+            vec![
+                piece(42, Rect::new(0, 0, 4, 2), 0, 0),
+                theirs(meter, Rect::new(10, 2, 4, 1), 0),
+                theirs(meter, Rect::new(16, 2, 4, 1), 6),
+                theirs(switch, Rect::new(2, 8, 4, 1), 0),
+            ]
+        );
+        for y in 0..12 {
+            for x in 0..30 {
+                assert!(!is_placeholder(&buf[(x, y)]), "{x}, {y} blanked");
+            }
+        }
+        // A pane's cell still as it drew it is the pane's, whatever its id.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 10, 2));
+        draw(&mut buf, meter, (0, 0), 0, 1, 3);
+        let drawn = Drawn::of(&buf, vec![(PANE, buf.area)]);
+        let found = find(&mut buf, &drawn, &server, 2);
+        assert_eq!(found, vec![piece(meter, Rect::new(0, 0, 3, 1), 0, 0)]);
     }
 }
