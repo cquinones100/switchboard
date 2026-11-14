@@ -21,7 +21,8 @@
 //! panes allowed to send them, as before, and keeps what each image is
 //! (`kitty`: its path or its PNG's data, and its placement), forgetting it
 //! as they delete it, never forwarding them to a terminal that gets sixel.
-//! A picture given inline is taken in only where sixel may draw it, kept as
+//! A picture given inline is taken in unless kitty's protocol is chosen for
+//! every terminal (a terminal getting sixel may attach later), kept as
 //! it was sent until its pane deletes it, and named by its transmission
 //! (`Source::Data`), its data handed to the work that decodes and fits it
 //! off the task beside the name (`Make`), so no cache's key keeps it
@@ -575,14 +576,10 @@ impl Server {
         if commands.is_empty() {
             return;
         }
-        // A picture given inline is kept only where sixel may draw it:
-        // with sixel chosen, or a terminal attached that gets it or may
-        // (Windows Terminal before its answer to DA1 is in).
-        let inline = graphics::chosen() == graphics::Chosen::Sixel
-            || self
-                .clients
-                .values()
-                .any(|c| graphics::may_get_sixel(&c.term));
+        // A picture given inline is kept unless kitty's protocol is chosen
+        // for every terminal: under auto a terminal that gets sixel may
+        // attach after the picture was given, and the program gives it once.
+        let inline = graphics::chosen() != graphics::Chosen::Kitty;
         for command in &commands {
             let Some(c) = kitty::parse(command) else {
                 continue;
