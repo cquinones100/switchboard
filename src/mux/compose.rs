@@ -18,13 +18,18 @@
 //! (a box, mission control) takes its link away (`Frame::cover_links`), so
 //! no box is clickable as the link under it.
 //!
-//! Pictures drawn as sixel (src/mux/sixel) ride beside the cells the same
-//! way (`Frame::pictures`), each written after the frame's text at its
-//! top left: again whenever any of its cells is sent, since text written
-//! over a sixel takes it away, and when it is new or moved. The cells of
-//! one shown before and not now are erased (`ECH`, which a terminal's
-//! picture goes with) and sent again, so nothing of it stays behind. No
-//! picture reaches the last row, where a sixel would scroll the screen.
+//! Pictures ride beside the cells too, in the form src/mux/graphics.rs
+//! chose for the client (`Frame::graphics`): the server's images placed
+//! by kitty's protocol are sent by the client's `ImageCache` before the
+//! cells, and those drawn as sixel (src/mux/sixel, the panes' and the
+//! server's own alike) are `Frame::pictures`, each written after the
+//! frame's text at its top left: again whenever any of its cells is sent,
+//! since text written over a sixel takes it away, and when it is new or
+//! moved. The cells of one shown before and not now are erased (`ECH`,
+//! which a terminal's picture goes with) and sent again, so nothing of it
+//! stays behind. No picture reaches the last row, where a sixel would
+//! scroll the screen. A sixel's bytes come from the pipeline alone: a
+//! `Placed` can be made only in src/mux.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -105,12 +110,12 @@ const PICTURES_MOST: usize = 40 << 20;
 
 /// A picture drawn over cells as sixel: where, which piece of which
 /// picture (`key`, to tell one from another), and the string that draws
-/// it from its top left.
+/// it from its top left, which only the pipeline makes (src/mux/sixel).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Placed {
-    pub area: Rect,
-    pub key: u64,
-    pub sixel: Arc<[u8]>,
+    pub(in crate::mux) area: Rect,
+    pub(in crate::mux) key: u64,
+    pub(in crate::mux) sixel: Arc<[u8]>,
 }
 
 /// One client's frame: what to show, and where the cursor goes (hidden when
@@ -123,9 +128,10 @@ pub struct Frame {
     pub cursor_style: Option<cursor::SetCursorStyle>,
     /// The cells that are part of a hyperlink.
     pub links: Links,
-    /// The cell's size in pixels when the client's terminal draws the
-    /// server's images (src/ui/images.rs), `None` where they are text.
-    pub graphics: Option<(u16, u16)>,
+    /// How the server's images (src/ui/images.rs) reach the client's
+    /// terminal, and the cell's size in the pixels they are rastered at
+    /// (src/mux/graphics.rs); `None` where they are text.
+    pub graphics: Option<super::graphics::Graphics>,
     /// The images the frame places.
     pub images: Vec<crate::ui::images::Placed>,
     /// The pictures drawn over its cells as sixel.
@@ -186,8 +192,8 @@ pub struct Screen {
     /// The pictures last sent: where, and which.
     prev_pictures: Vec<(Rect, u64)>,
     style: Option<cursor::SetCursorStyle>,
-    /// The images the terminal holds.
-    images: crate::ui::images::ImageCache,
+    /// The images the terminal holds by kitty's protocol.
+    images: super::graphics::ImageCache,
 }
 
 impl Screen {
@@ -218,11 +224,18 @@ impl Screen {
         };
         // Drawn again whole, the terminal may have lost the images: all
         // sent again, after the screen is cleared, so a placement under the
-        // text isn't cleared with it.
+        // text isn't cleared with it. Those placed by kitty's protocol only;
+        // with any other, any it holds are deleted.
         if full {
             out.extend(self.images.forget());
         }
-        out.extend(self.images.commands(&frame.images));
+        let by_kitty = frame
+            .graphics
+            .is_some_and(|g| g.protocol == super::graphics::Protocol::Kitty);
+        out.extend(
+            self.images
+                .commands(if by_kitty { &frame.images } else { &[] }),
+        );
         // A picture shown before and not now, the same in the same place:
         // its cells erased, with whatever of it the terminal shows, and
         // sent again.
@@ -991,8 +1004,9 @@ mod tests {
 
     #[test]
     fn a_meter_reaches_a_ghostty_client_as_placeholders_and_one_image_and_others_as_text() {
+        use crate::mux::graphics::Graphics;
         use crate::ui::images;
-        let draw = |graphics: Option<(u16, u16)>| {
+        let draw = |graphics: Option<Graphics>| {
             let mut frame = Frame::new(20, 2);
             frame.graphics = graphics;
             images::meter(
@@ -1005,16 +1019,24 @@ mod tests {
             );
             frame
         };
+        let kitty = Some(Graphics::kitty((8, 16)));
         let mut screen = Screen::default();
-        let out = String::from_utf8_lossy(&screen.render(&draw(Some((8, 16))))).into_owned();
+        let out = String::from_utf8_lossy(&screen.render(&draw(kitty))).into_owned();
         assert_eq!(out.matches("\x1b_Ga=T").count(), 1);
         assert!(out.contains(images::PLACEHOLDER));
-        let again = String::from_utf8_lossy(&screen.render(&draw(Some((8, 16))))).into_owned();
+        let again = String::from_utf8_lossy(&screen.render(&draw(kitty))).into_owned();
         assert!(!again.contains("\x1b_G"), "{again:?}");
         // Drawn whole again, the image is sent again.
         screen.invalidate();
-        let whole = String::from_utf8_lossy(&screen.render(&draw(Some((8, 16))))).into_owned();
+        let whole = String::from_utf8_lossy(&screen.render(&draw(kitty))).into_owned();
         assert_eq!(whole.matches("\x1b_Ga=T").count(), 1);
+        // Turned to sixel, no kitty command but the one deleting what the
+        // terminal held: the frame's sixels are the pipeline's to add.
+        screen.invalidate();
+        let sixel = String::from_utf8_lossy(&screen.render(&draw(Some(Graphics::sixel((10, 20))))))
+            .into_owned();
+        assert_eq!(sixel.matches("\x1b_G").count(), 1, "{sixel:?}");
+        assert!(sixel.contains("\x1b_Ga=d,d=I,"), "{sixel:?}");
 
         let mut plain = Screen::default();
         let out = String::from_utf8_lossy(&plain.render(&draw(None))).into_owned();

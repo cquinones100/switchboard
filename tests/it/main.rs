@@ -18,6 +18,7 @@ mod codex_review;
 mod demo;
 mod design_docs;
 mod diff;
+mod graphics;
 mod headless;
 mod land_lock;
 mod leak_check;

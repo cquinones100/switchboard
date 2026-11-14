@@ -216,7 +216,7 @@ impl Options {
             hover: on("hover_highlight"),
             palette: on("notes_palette"),
             ctrl_v_image: on("notes_ctrl_v_image"),
-            images: on("notes_images") && images::terminal_can(),
+            images: on("notes_images") && crate::mux::graphics::apps_draw(),
             light: all
                 .iter()
                 .any(|s| s.key == "theme" && crate::status::theme::light_for(&s.value)),
@@ -230,11 +230,7 @@ impl Options {
             item_chips: on("notes_item_chips"),
             scroll_bars: on("scroll_bars"),
             recent: on("notes_recent"),
-            caps: crate::ui::kit::caps(&format!(
-                "{} {}",
-                std::env::var("TERM").unwrap_or_default(),
-                std::env::var("TERM_PROGRAM").unwrap_or_default()
-            )),
+            caps: crate::mux::graphics::apps_round_ends(),
             ..Options::default()
         }
     }
@@ -2573,7 +2569,7 @@ impl App {
             Input::FocusIn => {
                 // The notes_images setting read again, as changing it in
                 // Settings takes the focus away.
-                if images::terminal_can() {
+                if crate::mux::graphics::apps_draw() {
                     self.images.on = settings::read_settings()
                         .iter()
                         .find(|s| s.key == "notes_images")

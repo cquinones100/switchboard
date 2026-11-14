@@ -31,10 +31,13 @@
 //! column.
 //!
 //! Objects are rounded and structure is square: a chip, a cell, a keycap
-//! and an input end in half circles (U+E0B6 and U+E0B4) where the terminal
-//! draws them itself (Ghostty, `caps`), and in a space of their fill
-//! elsewhere, which the terminal would take from a font that may not have
-//! them; either way the object keeps its width, so nothing moves. Boxes
+//! and an input end in half circles (U+E0B6 and U+E0B4) when the atom is
+//! given `caps`, and in a space of their fill otherwise; either way the
+//! object keeps its width, so nothing moves. Whether a terminal gets the
+//! half circles is never decided here: src/mux/graphics.rs says (`ends`),
+//! the glyphs where the terminal draws them itself (Ghostty), pictures of
+//! them drawn by the server for one that gets sixel, a space of the fill
+//! for any other, whose font may not have them. Boxes
 //! and a board's cards have arc corners; the Tabs view's cards are open, a
 //! rule along the top and a bar down the left; rules, bars, chosen rows, tables and the calendar's
 //! events stay square.
@@ -55,12 +58,6 @@ use crate::sidebar::text::{Badge, SPINNER};
 /// The half circle that opens a rounded object, and the one that closes it.
 pub const CAP_LEFT: &str = "\u{E0B6}";
 pub const CAP_RIGHT: &str = "\u{E0B4}";
-
-/// Whether a terminal, by the name it attached with (`TERM`), draws the
-/// half circles itself: Ghostty does, so they never depend on a font.
-pub fn caps(term: &str) -> bool {
-    term.contains("ghostty")
-}
 
 fn light(theme: &Theme) -> bool {
     *theme == Theme::LIGHT
@@ -1895,13 +1892,6 @@ mod tests {
         assert_eq!(with[0].style.fg, Some(Tone::Failed.tint(&T)));
         assert_eq!(without[0].style.bg, Some(Tone::Failed.tint(&T)));
         assert_eq!(with[1].style.bg, Some(Color::Indexed(52)));
-    }
-
-    #[test]
-    fn caps_follow_the_terminal() {
-        assert!(caps("xterm-ghostty"));
-        assert!(!caps("xterm-256color"));
-        assert!(!caps(""));
     }
 
     #[test]
