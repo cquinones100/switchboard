@@ -48,7 +48,7 @@ pub struct Paths {
     pub state_dir: PathBuf,
     /// `~/.claude`.
     pub claude_dir: PathBuf,
-    /// Switchboard's plugin for Claude Code, `~/.local/share/switchboard/plugin`.
+    /// Switchboard's plugin for Claude Code, `~/.local/share/switchboard/claude/plugin`.
     pub plugin_dir: PathBuf,
     /// Where the statusline writes each session's context use
     /// (`context/<session>`): Switchboard's state directory, then where

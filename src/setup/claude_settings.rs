@@ -1,28 +1,40 @@
 //! The `claude` part: Switchboard's part of Claude Code's settings
 //! (`assets/claude-settings.json`: the hooks that run `switchboard hook`,
 //! the statusline, and the permissions its skills and loops need to run
-//! unattended) merged into your own `~/.claude/settings.json`. Ported from
-//! setup.sh's `claude_settings`, whose jq this follows step for step.
+//! unattended) in your own `~/.claude/settings.json`, as the way setup puts
+//! Switchboard (src/setup/way.rs) has it. Ported from setup.sh's
+//! `claude_settings`, whose jq this follows step for step.
 //!
-//! A plugin can't carry a statusline or permission rules, so those are
-//! merged in whichever way setup puts Switchboard (src/setup/way.rs). The
-//! hooks follow the way. Loaded as a plugin, Switchboard's plugin carries
-//! them (src/setup/plugin.rs) for the Claude sessions in its panes alone,
-//! so they are taken out of your file where earlier versions added them:
-//! any hook running one of their commands, or one the tmux version's setup
-//! added (those running `agent-state.sh`), the groups and events that
-//! leaves empty with it, and your other hooks kept; left in, they would run
-//! twice in a pane. The old way, they replace any hook running the same
-//! command, and any the tmux version's setup added, for every Claude of
-//! yours.
+//! The old way, all three are merged in, for every Claude of yours. The
+//! hooks replace any hook running the same command, and any the tmux
+//! version's setup added (those running `agent-state.sh`). The statusline
+//! takes the place of none, of Switchboard's own, or of the tmux version's
+//! (`tmux_versions`), recognised by the link its setup made into a
+//! Switchboard clone, never by the script's name, which Claude Code's
+//! `/statusline` gives a script of yours too; any other statusline is yours,
+//! kept for every Claude outside Switchboard's panes, with `switchboard
+//! statusline` run in them (`IN_PANES`), since Claude Code gives a
+//! session's context, cost and limits to its statusline alone. The
+//! permissions are added to yours.
+//!
+//! Loaded as a plugin, Switchboard adds nothing to your file: its plugin
+//! carries the hooks and draws the statusline in its panes
+//! (src/setup/plugin.rs), for the Claude sessions there alone. This part
+//! then takes out what earlier versions added: any hook running one of the
+//! asset's commands or the tmux version's, with the groups and events that
+//! leaves empty, your other hooks kept, since left in they would run twice
+//! in a pane; and the statusline they wrote, Switchboard's own or the tmux
+//! version's taken out and `IN_PANES` taken off one of yours. The
+//! permissions earlier versions added stay, though the plugin carries them
+//! now (src/setup/permissions.rs): one of them can't be told from the same
+//! rule of yours, which Claude Code's "always allow" writes there too. As a
+//! plugin, the
+//! guided setup runs this part only on a file holding some of that
+//! (`set_up`), and a new build's first run only on one holding the hooks
+//! (`has_hooks`).
 //!
 //! Your file is never a link and stays yours: Claude Code writes `/model`
-//! and "always allow" there, and nothing else in it is touched. The
-//! statusline takes the place of none, of the old `statusline-command.sh`
-//! or of Switchboard's own; a statusline of yours is kept for every Claude
-//! outside Switchboard's panes, with `switchboard statusline` run in them
-//! (`IN_PANES`), since Claude Code gives a session's context, cost and
-//! limits to its statusline alone; the permissions are added to yours. So running
+//! and "always allow" there, and nothing else in it is touched. So running
 //! it again changes nothing, and a copy of the file before is left beside
 //! it. A settings file that is a link into a clone's `claude/settings.json`,
 //! as the whole setup once made it, becomes your own file with what it held
@@ -38,7 +50,7 @@ use anyhow::{Result, bail};
 use serde_json::{Map, Value};
 
 use super::way::Way;
-use super::{Report, home_tilde, is_link, stamp};
+use super::{Report, exists, home_tilde, is_link, leftovers, stamp};
 use crate::{paths, util, worktree};
 
 /// Switchboard's part, as compiled in, and the hooks the plugin carries.
@@ -102,29 +114,17 @@ fn with_yours(yours: &Value) -> Value {
 
 /// Whether `settings` has Switchboard's part, or what an earlier version
 /// added: set up before, so the guided setup and a new build bring it up to
-/// date without asking. Its statusline, a permission naming a `switchboard`
-/// command, or a hook of an earlier version.
+/// date without asking the old way, and take it out as a plugin. Its
+/// statusline, which the old way always leaves running `switchboard
+/// statusline` in the panes, or a hook of an earlier version. Not a
+/// permission naming a `switchboard` command, which Claude Code's "always
+/// allow" may have written there for you.
 pub fn has_ours(settings: &Value) -> bool {
-    let ours = ours();
-    let hooks = hook_commands(&ours["hooks"]);
+    let hooks = hook_commands(&ours()["hooks"]);
     let statusline = settings["statusLine"]["command"]
         .as_str()
         .is_some_and(is_ours);
-    let allowed = settings["permissions"]["allow"]
-        .as_array()
-        .is_some_and(|mine| {
-            ours["permissions"]["allow"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|p| {
-                    p.as_str()
-                        .is_some_and(|p| p.starts_with("Bash(switchboard "))
-                })
-                .any(|p| mine.contains(p))
-        });
     statusline
-        || allowed
         || hook_commands(&settings["hooks"])
             .iter()
             .any(|c| retired(c) || hooks.contains(c))
@@ -133,6 +133,30 @@ pub fn has_ours(settings: &Value) -> bool {
 /// Whether your settings file has Switchboard's part.
 pub fn set_up() -> bool {
     util::read_json(settings_file()).is_some_and(|s| has_ours(&s))
+}
+
+/// What your settings file links to when that isn't there, so Claude Code
+/// reads none of your settings, and whether it is the tmux version's link
+/// into a Switchboard clone's `claude/settings.json`
+/// (`leftovers::is_clone`), which this part makes your own from what it
+/// held. Said by the guided setup as a plugin, which changes it only when
+/// you ask.
+pub fn dead_link() -> Option<(PathBuf, bool)> {
+    let file = settings_file();
+    if file.exists() {
+        return None;
+    }
+    let target = fs::read_link(&file).ok()?;
+    // A relative link leads from the folder it is in.
+    let full = file
+        .parent()
+        .map_or(target.clone(), |dir| dir.join(&target));
+    let into_clone = full.ends_with("claude/settings.json")
+        && full
+            .parent()
+            .and_then(Path::parent)
+            .is_some_and(leftovers::is_clone);
+    Some((target, into_clone))
 }
 
 /// Whether your settings file has Switchboard's hooks, or the tmux
@@ -234,40 +258,85 @@ fn with_ours(current: Option<&Value>, ours: &Value) -> Map<String, Value> {
     hooks
 }
 
-/// Your settings with Switchboard's merged in the way given: its statusline
-/// and permissions either way, and its hooks added the old way, taken out
-/// as a plugin.
-pub fn merge(current: &Map<String, Value>, ours: &Value, way: Way) -> Map<String, Value> {
-    let mut out = current.clone();
-
-    match way {
-        Way::Old => {
-            let hooks = with_ours(out.get("hooks"), ours);
-            out.insert("hooks".into(), Value::Object(hooks));
-        }
-        Way::Plugin => {
-            if let Some(Value::Object(hooks)) = out.get("hooks") {
-                let (left, any) = without_ours(hooks, ours);
-                if any {
-                    if left.is_empty() {
-                        out.shift_remove("hooks");
-                    } else {
-                        out.insert("hooks".into(), Value::Object(left));
-                    }
-                }
-            }
-        }
-    }
-
-    // The statusline: Switchboard's, or yours run outside its panes.
-    let command = out
+/// Your statusline without what Switchboard wrote there: its own, and the
+/// tmux version's, taken out, and `IN_PANES` taken off one of yours, whose
+/// other fields (`padding`) stay. One written by hand around `switchboard
+/// statusline` is yours, and stays.
+fn without_our_statusline(settings: &mut Map<String, Value>, tmux_versions: impl Fn(&str) -> bool) {
+    let Some(command) = settings
         .get("statusLine")
         .and_then(|s| s.get("command"))
         .and_then(Value::as_str)
-        .unwrap_or("statusline-command.sh");
+    else {
+        return;
+    };
     let yours = command.strip_prefix(IN_PANES).unwrap_or(command);
-    let is_old = !is_ours(yours) && yours.contains("statusline-command.sh");
-    if command.trim() == "switchboard statusline" || is_old {
+    if yours.trim() == "switchboard statusline" || tmux_versions(yours) {
+        settings.shift_remove("statusLine");
+    } else if yours.len() < command.len() {
+        let yours = Value::String(yours.to_string());
+        settings["statusLine"]["command"] = yours;
+    }
+}
+
+/// Your settings with Switchboard's merged in the way given. The old way,
+/// its hooks, statusline and permissions added; as a plugin, which carries
+/// the hooks and the statusline itself, nothing added, and the hooks and
+/// statusline earlier versions added taken out. `tmux_versions` says
+/// whether a statusline command is the tmux version's, which gives way to
+/// Switchboard's.
+pub fn merge(
+    current: &Map<String, Value>,
+    ours: &Value,
+    way: Way,
+    tmux_versions: impl Fn(&str) -> bool,
+) -> Map<String, Value> {
+    merge_for(current, ours, way, true, tmux_versions)
+}
+
+/// `merge`, as a plugin taking out the statusline an earlier version added
+/// only when `statusline` says to: a new build's first run takes out the
+/// hooks alone.
+fn merge_for(
+    current: &Map<String, Value>,
+    ours: &Value,
+    way: Way,
+    statusline: bool,
+    tmux_versions: impl Fn(&str) -> bool,
+) -> Map<String, Value> {
+    let mut out = current.clone();
+
+    if way == Way::Plugin {
+        if let Some(Value::Object(hooks)) = out.get("hooks") {
+            let (left, any) = without_ours(hooks, ours);
+            if any {
+                if left.is_empty() {
+                    out.shift_remove("hooks");
+                } else {
+                    out.insert("hooks".into(), Value::Object(left));
+                }
+            }
+        }
+        if statusline {
+            without_our_statusline(&mut out, tmux_versions);
+        }
+        return out;
+    }
+
+    let hooks = with_ours(out.get("hooks"), ours);
+    out.insert("hooks".into(), Value::Object(hooks));
+
+    // The statusline: Switchboard's in place of none, its own or the tmux
+    // version's, else yours run outside its panes.
+    let command = out
+        .get("statusLine")
+        .and_then(|s| s.get("command"))
+        .and_then(Value::as_str);
+    let replaced = command.is_none_or(|command| {
+        let yours = command.strip_prefix(IN_PANES).unwrap_or(command);
+        command.trim() == "switchboard statusline" || (!is_ours(yours) && tmux_versions(yours))
+    });
+    if replaced {
         out.insert("statusLine".into(), ours["statusLine"].clone());
     } else if let Some(yours) = out.get("statusLine") {
         let wrapped = with_yours(yours);
@@ -346,23 +415,67 @@ fn held_by_link(target: &Path) -> Option<Vec<u8>> {
     })
 }
 
-/// The part.
-/// Whether `~/.claude/statusline-command.sh` is a script of your own: a
-/// file, or a link anywhere but into a clone's `claude/`, where the tmux
-/// version's setup linked its own. Missing, it is no one's.
-fn own_statusline_script() -> bool {
+/// The statusline the tmux version's settings had, run from the link its
+/// setup made at `~/.claude/statusline-command.sh` into its clone.
+const TMUX_STATUSLINE: &str = "bash ~/.claude/statusline-command.sh";
+
+/// Whether a statusline command runs the tmux version's script. It names
+/// `~/.claude/statusline-command.sh` (from `~/`, `$HOME/`, `${HOME}/` or in
+/// full), and that is still the link the tmux version's setup made into a
+/// Switchboard clone's `claude/` (`leftovers::is_clone`), leading somewhere
+/// or, the clone pulled past the rewrite, nowhere; or nothing is there any
+/// more (the `leftovers` part removes that link) and the command is the one
+/// its settings had, which now runs nothing. The script's name alone counts
+/// for nothing: Claude Code's `/statusline` writes a script of yours by the
+/// same name, and a file, or a link anywhere else (your dotfiles'), is
+/// yours.
+fn tmux_versions(command: &str) -> bool {
     let script = paths::claude_dir().join("statusline-command.sh");
-    if is_link(&script) {
-        return fs::read_link(&script).is_ok_and(|target| {
-            !target
-                .to_string_lossy()
-                .ends_with("/claude/statusline-command.sh")
-        });
+    let full = script.to_string_lossy();
+    let named = [
+        "~/.claude/statusline-command.sh",
+        "$HOME/.claude/statusline-command.sh",
+        "${HOME}/.claude/statusline-command.sh",
+        &full,
+    ]
+    .iter()
+    .any(|name| command.contains(name));
+    if !named {
+        return false;
     }
-    script.exists()
+    if let Ok(target) = fs::read_link(&script) {
+        // A relative link leads from the folder it is in.
+        let target = script
+            .parent()
+            .map_or(target.clone(), |dir| dir.join(&target));
+        return target
+            .file_name()
+            .is_some_and(|name| name == "statusline-command.sh")
+            && target
+                .parent()
+                .filter(|dir| dir.file_name().is_some_and(|name| name == "claude"))
+                .and_then(Path::parent)
+                .is_some_and(leftovers::is_clone);
+    }
+    let command = command.trim();
+    !exists(&script) && (command == TMUX_STATUSLINE || command == format!("bash {full}"))
 }
 
+/// The part.
 pub fn run(r: &mut Report) -> Result<()> {
+    run_taking(r, true)
+}
+
+/// As a plugin, only the hooks an earlier version added taken out, which
+/// would otherwise run twice in a pane: what a new build's first run does,
+/// changing your file no further unasked. The old way, the whole part.
+pub fn take_out_hooks(r: &mut Report) -> Result<()> {
+    run_taking(r, false)
+}
+
+/// The part, as a plugin taking out the statusline an earlier version added
+/// too when `statusline` says to.
+fn run_taking(r: &mut Report, statusline: bool) -> Result<()> {
     let file = settings_file();
     let shown = home_tilde(&file);
     if is_link(&file)
@@ -394,15 +507,7 @@ pub fn run(r: &mut Report) -> Result<()> {
         Err(e) => bail!("{shown} can't be read: {e}"),
     };
     let way = super::way::current();
-    let mut merged = merge(&current, &ours(), way);
-    // A statusline-command.sh of your own stays yours outside Switchboard's
-    // panes: Claude Code's /statusline writes its script under that name,
-    // which only the tmux version's had as a link into its clone.
-    if own_statusline_script()
-        && let Some(own) = current.get("statusLine")
-    {
-        merged.insert("statusLine".into(), with_yours(own));
-    }
+    let merged = merge_for(&current, &ours(), way, statusline, tmux_versions);
     if merged == current {
         return Ok(());
     }
@@ -425,14 +530,9 @@ pub fn run(r: &mut Report) -> Result<()> {
             "take the hooks earlier versions added out of {shown}, since Switchboard's plugin runs them in its panes"
         ));
     }
-    let rest = |m: &Map<String, Value>| {
-        let mut m = m.clone();
-        m.shift_remove("hooks");
-        m
-    };
-    if rest(&merged) != rest(&current) {
+    if merged.get("statusLine") != current.get("statusLine") {
         r.change(format!(
-            "add Switchboard's statusline and permissions to {shown}"
+            "take the statusline earlier versions added out of {shown}, a statusline of yours kept, since Switchboard's plugin draws its own in its panes"
         ));
     }
     Ok(())
@@ -445,6 +545,11 @@ mod tests {
 
     fn object(v: Value) -> Map<String, Value> {
         v.as_object().cloned().unwrap()
+    }
+
+    /// No statusline is the tmux version's.
+    fn no_tmux(_: &str) -> bool {
+        false
     }
 
     /// Yours: a model, permissions, a statusline, a hook of your own beside
@@ -496,7 +601,7 @@ mod tests {
     fn the_old_way_adds_switchboard_s_hooks_once_keeping_yours() {
         let product = ours();
         let yours = yours(&product);
-        let merged = merge(&yours, &product, Way::Old);
+        let merged = merge(&yours, &product, Way::Old, no_tmux);
         statusline_and_permissions_merged(&merged, &product);
         let mut stop = vec![json!({ "hooks": [{ "type": "command", "command": "say done" }] })];
         stop.extend(product["hooks"]["Stop"].as_array().unwrap().iter().cloned());
@@ -510,7 +615,7 @@ mod tests {
             product["hooks"]["PreToolUse"]
         );
         assert_eq!(
-            merge(&merged, &product, Way::Old),
+            merge(&merged, &product, Way::Old, no_tmux),
             merged,
             "a second merge changes nothing"
         );
@@ -522,8 +627,16 @@ mod tests {
     fn as_a_plugin_the_hooks_earlier_versions_added_are_taken_out_and_yours_kept() {
         let product = ours();
         let yours = yours(&product);
-        let merged = merge(&yours, &product, Way::Plugin);
-        statusline_and_permissions_merged(&merged, &product);
+        let merged = merge(&yours, &product, Way::Plugin, no_tmux);
+        assert_eq!(merged["model"], "sonnet");
+        assert_eq!(
+            merged["statusLine"], yours["statusLine"],
+            "a statusline of yours left as it is"
+        );
+        assert_eq!(
+            merged["permissions"], yours["permissions"],
+            "nothing added to your permissions"
+        );
         assert_eq!(
             merged["hooks"],
             json!({
@@ -533,41 +646,98 @@ mod tests {
             "your hook kept, the old setup's and Switchboard's gone, an event of yours left empty kept"
         );
         assert_eq!(
-            merge(&merged, &product, Way::Plugin),
+            merge(&merged, &product, Way::Plugin, no_tmux),
             merged,
             "a second merge changes nothing"
         );
         assert!(
-            has_ours(&Value::Object(merged.clone())),
-            "by its permissions"
+            !has_ours(&Value::Object(merged.clone())),
+            "nothing of Switchboard's left to take out"
         );
+        // A permission of Switchboard's alone, as "always allow" writes it,
+        // isn't its part.
+        assert!(!has_ours(
+            &json!({ "permissions": { "allow": ["Bash(switchboard tabs)"] } })
+        ));
+        // Nothing of Switchboard's at all: nothing added.
+        for before in [json!({}), json!({ "model": "opus" })] {
+            assert_eq!(
+                merge(&object(before.clone()), &product, Way::Plugin, no_tmux),
+                object(before)
+            );
+        }
 
         // Nothing left of the hooks but Switchboard's: no hooks at all.
         let only = object(json!({ "hooks": { "Stop": product["hooks"]["Stop"].clone() } }));
-        assert!(merge(&only, &product, Way::Plugin).get("hooks").is_none());
+        assert!(
+            merge(&only, &product, Way::Plugin, no_tmux)
+                .get("hooks")
+                .is_none()
+        );
         // None to start with: none added.
         assert!(
-            merge(&Map::new(), &product, Way::Plugin)
+            merge(&Map::new(), &product, Way::Plugin, no_tmux)
                 .get("hooks")
                 .is_none()
         );
         // And back the old way, Switchboard's again.
-        let back = merge(&merged, &product, Way::Old);
+        let back = merge(&merged, &product, Way::Old, no_tmux);
         assert_eq!(back["hooks"]["PreToolUse"], product["hooks"]["PreToolUse"]);
     }
 
     #[test]
-    fn the_old_statusline_and_none_are_replaced() {
+    fn none_and_the_tmux_version_s_are_replaced_and_one_by_its_script_s_name_alone_kept() {
         let product = ours();
-        for way in [Way::Old, Way::Plugin] {
-            for before in [
-                json!({}),
-                json!({ "statusLine": { "type": "command", "command": "bash ~/.claude/statusline-command.sh" } }),
-            ] {
-                let merged = merge(&object(before), &product, way);
-                assert_eq!(merged["statusLine"]["command"], "switchboard statusline");
-            }
+        let tmux = |c: &str| c == TMUX_STATUSLINE;
+        let switchboard_s_or_the_tmux_version_s = [
+            json!({ "statusLine": { "type": "command", "command": "switchboard statusline" } }),
+            json!({ "statusLine": { "type": "command", "command": TMUX_STATUSLINE } }),
+            json!({ "statusLine": { "type": "command", "command": format!("{IN_PANES}{TMUX_STATUSLINE}") } }),
+        ];
+        for before in std::iter::once(json!({})).chain(switchboard_s_or_the_tmux_version_s.clone())
+        {
+            let merged = merge(&object(before), &product, Way::Old, tmux);
+            assert_eq!(merged["statusLine"]["command"], "switchboard statusline");
         }
+        // As a plugin, which draws its own, they are taken out.
+        for before in switchboard_s_or_the_tmux_version_s {
+            let merged = merge(&object(before), &product, Way::Plugin, tmux);
+            assert!(merged.get("statusLine").is_none(), "{merged:?}");
+        }
+        // The name Claude Code's /statusline gives a script of yours.
+        for command in [
+            TMUX_STATUSLINE,
+            "bash \"$HOME/.claude/statusline-command.sh\"",
+        ] {
+            let before = object(json!({ "statusLine": { "type": "command", "command": command } }));
+            let merged = merge(&before, &product, Way::Old, no_tmux);
+            assert_eq!(
+                merged["statusLine"]["command"],
+                format!("{IN_PANES}{command}"),
+                "yours, outside Switchboard's panes"
+            );
+            assert_eq!(merge(&merged, &product, Way::Old, no_tmux), merged);
+            // Moved into the plugin, it is yours again as it was.
+            assert_eq!(
+                merge(&merged, &product, Way::Plugin, no_tmux)["statusLine"],
+                before["statusLine"]
+            );
+            assert_eq!(merge(&before, &product, Way::Plugin, no_tmux), before);
+        }
+    }
+
+    #[test]
+    fn as_a_plugin_the_hooks_alone_can_be_taken_out() {
+        let product = ours();
+        let before = object(json!({
+            "statusLine": { "type": "command", "command": "switchboard statusline" },
+            "hooks": { "Stop": product["hooks"]["Stop"].clone() }
+        }));
+        let kept = merge_for(&before, &product, Way::Plugin, false, no_tmux);
+        assert_eq!(kept["statusLine"], before["statusLine"]);
+        assert!(kept.get("hooks").is_none(), "the hooks go either way");
+        let taken = merge_for(&before, &product, Way::Plugin, true, no_tmux);
+        assert!(taken.get("statusLine").is_none());
     }
 
     #[test]
@@ -584,9 +754,16 @@ mod tests {
             let before = object(json!({
                 "statusLine": { "type": "command", "command": command, "padding": 0 }
             }));
-            let merged = merge(&before, &product, Way::Plugin);
+            let merged = merge(&before, &product, Way::Old, no_tmux);
             assert_eq!(merged["statusLine"], before["statusLine"]);
             assert!(has_ours(&Value::Object(before)));
+        }
+        // Written by hand, it is yours as a plugin too.
+        for command in [by_hand, piped, "switchboard statusline | my-formatter"] {
+            let before = object(json!({
+                "statusLine": { "type": "command", "command": command, "padding": 0 }
+            }));
+            assert_eq!(merge(&before, &product, Way::Plugin, no_tmux), before);
         }
     }
 
@@ -595,10 +772,14 @@ mod tests {
         let before = object(json!({
             "statusLine": { "type": "command", "command": "a | b", "padding": 2 }
         }));
-        let merged = merge(&before, &ours(), Way::Plugin);
+        let merged = merge(&before, &ours(), Way::Old, no_tmux);
         assert_eq!(
             merged["statusLine"],
             json!({ "type": "command", "command": format!("{IN_PANES}a | b"), "padding": 2 })
+        );
+        assert_eq!(
+            merge(&merged, &ours(), Way::Plugin, no_tmux)["statusLine"],
+            before["statusLine"]
         );
     }
 

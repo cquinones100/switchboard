@@ -10,7 +10,7 @@
 //! `~/.claude/skills/<name>/SKILL.md`, when it is Switchboard's (written
 //! there the old way, src/setup/way.rs, or a copy of it made yours,
 //! `skills::switchboard_s`), else the plugin's,
-//! `~/.local/share/switchboard/plugin/skills/<name>/SKILL.md`
+//! `~/.local/share/switchboard/claude/plugin/skills/<name>/SKILL.md`
 //! (src/setup/plugin.rs). Outside a git repository, Switchboard's own alone.
 //! It prints nothing and exits 1 when there is none.
 //!

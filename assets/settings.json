@@ -990,6 +990,20 @@
     "default": true
   },
   {
+    "key": "pane_statusline",
+    "category": "Sessions",
+    "label": "Switchboard's statusline in its panes",
+    "description": "With Switchboard loaded as a plugin, Claude in its panes draws Switchboard's statusline, which keeps each session's context and spend for mission control's Usage view, and your own statusline is drawn everywhere else; nothing is written to your Claude Code settings either way. Off, the plugin leaves the statusline alone, so a Claude started in a pane after the change draws yours too, and that view gets nothing from it",
+    "default": true
+  },
+  {
+    "key": "pane_permissions",
+    "category": "Sessions",
+    "label": "Switchboard's permissions in its panes",
+    "description": "With Switchboard loaded as a plugin, Claude in its panes runs the few of Switchboard's own commands its instructions name (switchboard tabs, show, set and the like) without asking, unless a rule of yours says otherwise, and is refused reading .env files and running git pull; nothing is written to your Claude Code settings either way. Its skills allow their own commands themselves, whatever this says. Off, a Claude started in a pane after the change asks for those commands as for any other, and refuses nothing for Switchboard",
+    "default": true
+  },
+  {
     "key": "review_rules",
     "category": "Safety",
     "label": "Rules in reviews",

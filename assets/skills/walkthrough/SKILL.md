@@ -2,6 +2,13 @@
 name: walkthrough
 description: Record a captioned video of a feature, reached the way a person would reach it, and hand back an MP4 to share - in a real browser, with every click, highlight and the page's address shown, or in a terminal app on Switchboard's demo, with every key pressed shown. Use when asked for a walkthrough, a demo video, a screen recording of a feature, or a video to put in a PR, a ticket or Slack, and to show a change to Switchboard itself as a video. Its browser recorder is the one /deploy-test and /preview-test record their tests with.
 argument-hint: "[what to show, a PR number, a URL, or terminal]"
+allowed-tools:
+  - Bash(node ~/.local/share/switchboard/claude/plugin/skills/*)
+  - Bash(switchboard skill-path *)
+  - Bash(switchboard wait-deploy *)
+  - Bash(gh pr view*)
+  - Bash(gh pr diff*)
+  - Bash(gh run list*)
 ---
 
 # Walkthrough
@@ -31,7 +38,7 @@ A walkthrough shows a feature with realistic data in it. Seed it first only wher
 
 ## Recording
 
-The scripts need their packages (`record-terminal.js` too, since the captions are drawn with Playwright): if `~/.local/share/switchboard/plugin/skills/walkthrough/scripts/node_modules` is missing, run `npm ci --prefix ~/.local/share/switchboard/plugin/skills/walkthrough/scripts`. Recording needs Playwright's own ffmpeg too; if a run says it is missing, run `node ~/.local/share/switchboard/plugin/skills/walkthrough/scripts/node_modules/playwright/cli.js install ffmpeg`. The video (its address bar and captions, the MP4) and the contact sheet need the system's `ffmpeg`; without it the recorder stops before recording and says so (`brew install ffmpeg`, or the system's package manager on Linux).
+The scripts need their packages (`record-terminal.js` too, since the captions are drawn with Playwright): if `~/.local/share/switchboard/claude/plugin/skills/walkthrough/scripts/node_modules` is missing, run `npm ci --prefix ~/.local/share/switchboard/claude/plugin/skills/walkthrough/scripts`. Recording needs Playwright's own ffmpeg too; if a run says it is missing, run `node ~/.local/share/switchboard/claude/plugin/skills/walkthrough/scripts/node_modules/playwright/cli.js install ffmpeg`. The video (its address bar and captions, the MP4) and the contact sheet need the system's `ffmpeg`; without it the recorder stops before recording and says so (`brew install ffmpeg`, or the system's package manager on Linux).
 
 1. **Write the steps** for a browser in the session's scratchpad, `<scratchpad>/walkthrough-<slug>/steps.js`, exporting one async function given `{ page, step, highlight, expect }` (`record.js` has an example):
    - Start each part with `step("<what this shows>")`, which captions it in a strip under the page, kept across navigations.
@@ -45,7 +52,7 @@ The scripts need their packages (`record-terminal.js` too, since the captions ar
 2. **Record it** in a browser:
 
    ```
-   node ~/.local/share/switchboard/plugin/skills/walkthrough/scripts/record.js <scratchpad>/walkthrough-<slug>/steps.js \
+   node ~/.local/share/switchboard/claude/plugin/skills/walkthrough/scripts/record.js <scratchpad>/walkthrough-<slug>/steps.js \
      --url <site root> --out <scratchpad>/walkthrough-<slug> --pace demo \
      --name "<what it shows>"
    ```
@@ -62,7 +69,7 @@ The scripts need their packages (`record-terminal.js` too, since the captions ar
    Record it with:
 
    ```
-   node ~/.local/share/switchboard/plugin/skills/walkthrough/scripts/record-terminal.js <scratchpad>/walkthrough-<slug>/steps.js \
+   node ~/.local/share/switchboard/claude/plugin/skills/walkthrough/scripts/record-terminal.js <scratchpad>/walkthrough-<slug>/steps.js \
      --out <scratchpad>/walkthrough-<slug> --pace demo --name "<what it shows>" \
      --bin "$home/.local/bin/switchboard" [--size <cols>x<rows>]
    ```
@@ -70,7 +77,7 @@ The scripts need their packages (`record-terminal.js` too, since the captions ar
    It records at the size of your workspace's screen (160x45 outside Switchboard), raised to the least size at which no view's panes stack (`switchboard headless --min-size` of the build recorded), so leave `--size` out unless a size is asked for; one under that least size is noted in the log as "panes stack below <size>". A frame wider than 2560 pixels is scaled down to that width in the video.
 
    It starts a demo of its own, attaches a client with no terminal (`switchboard headless`), takes a picture of the screen for each step and key, ends and removes the demo, and prints the same JSON as `record.js`, `timeline` holding each frame's second, caption and keys.
-4. **Signing in.** Each site keeps its own Chrome profile under `~/.cache/deploy-test/profiles/`. If the recording lands on a sign-in page, ask the user to sign in, then run `node ~/.local/share/switchboard/plugin/skills/walkthrough/scripts/record.js --login --url <url>` (with the same `--profile`, if any) in the background: it opens a visible window, and they close it once signed in. Then record again. Never type a password or a code yourself.
+4. **Signing in.** Each site keeps its own Chrome profile under `~/.cache/deploy-test/profiles/`. If the recording lands on a sign-in page, ask the user to sign in, then run `node ~/.local/share/switchboard/claude/plugin/skills/walkthrough/scripts/record.js --login --url <url>` (with the same `--profile`, if any) in the background: it opens a visible window, and they close it once signed in. Then record again. Never type a password or a code yourself.
 
 ## Reviewing the video
 

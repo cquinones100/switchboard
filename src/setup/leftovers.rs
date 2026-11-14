@@ -288,8 +288,9 @@ fn put_back(link: &Path, held: &[Held]) -> Result<()> {
 
 /// A Switchboard clone: the tmux version's (setup.sh and tmux.conf), the
 /// Rust version's (Cargo.toml and the skills it compiles in), or one gone
-/// whose folder had a clone's name.
-fn is_clone(dir: &Path) -> bool {
+/// whose folder had a clone's name. The `claude` part asks it too, to tell
+/// the tmux version's statusline, and its settings link, from yours.
+pub(super) fn is_clone(dir: &Path) -> bool {
     if dir.exists() {
         return (dir.join("setup.sh").is_file() && dir.join("tmux/tmux.conf").is_file())
             || (dir.join("Cargo.toml").is_file() && dir.join("assets/skills").is_dir());

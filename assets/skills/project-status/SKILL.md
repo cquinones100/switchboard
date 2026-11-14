@@ -1,6 +1,25 @@
 ---
 name: project-status
 description: Say where the project this session is working on stands, from Linear (its tickets, milestones and status updates) and Slack (what the team said about it lately). Use when the user asks for the project's status, how a project is going, what is left on it, whether it is on track, or runs /project-status, optionally with a project name or a ticket ID.
+allowed-tools:
+  - Bash(switchboard skill-path *)
+  - Bash(switchboard tabs)
+  - Bash(switchboard show *)
+  - Bash(git branch --show-current)
+  - mcp__claude_ai_Slack__slack_read_channel
+  - mcp__claude_ai_Slack__slack_read_thread
+  - mcp__claude_ai_Slack__slack_search_public
+  - mcp__claude_ai_Slack__slack_search_public_and_private
+  - mcp__claude_ai_Slack__slack_search_channels
+  - mcp__claude_ai_Slack__slack_search_users
+  - mcp__claude_ai_Slack__slack_read_user_profile
+  - mcp__claude_ai_Linear__get_issue
+  - mcp__claude_ai_Linear__list_issues
+  - mcp__claude_ai_Linear__list_comments
+  - mcp__claude_ai_Linear__get_team
+  - mcp__claude_ai_Linear__list_teams
+  - mcp__claude_ai_Linear__list_issue_statuses
+  - mcp__claude_ai_Linear__get_user
 ---
 
 # Project status

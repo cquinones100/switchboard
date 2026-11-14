@@ -1970,7 +1970,7 @@ fn wt_s_claude_function_takes_the_plugin_as_the_setting_says_at_each_launch() {
     common::stand_in::Claude::new()
         .answer("echo \"dirs=${CLAUDE_CODE_PLUGIN_DIRS-unset}\"")
         .install(&bin);
-    let plugin = home.join(".local/share/switchboard/plugin");
+    let plugin = home.join(".local/share/switchboard/claude/plugin");
     let ours = plugin.to_string_lossy().into_owned();
     let settings = dir.path().join("settings.json");
     // A shell's value from before the setting changed, with a folder of

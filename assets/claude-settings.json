@@ -5,7 +5,7 @@
   },
   "permissions": {
     "allow": [
-      "Bash(node ~/.local/share/switchboard/plugin/skills/*)",
+      "Bash(node ~/.local/share/switchboard/claude/plugin/skills/*)",
       "Bash(switchboard codex-review)",
       "Bash(switchboard codex-review *)",
       "Bash(switchboard skill-path *)",
@@ -48,7 +48,6 @@
       "Bash(git branch --show-current)",
       "Bash(gh pr view*)",
       "Bash(gh pr checks *)",
-      "Bash(gh pr list*)",
       "Bash(gh pr diff*)",
       "Bash(gh run view *)",
       "Bash(gh run list*)",

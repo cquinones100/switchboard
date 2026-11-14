@@ -2,6 +2,10 @@
 name: diff-screenshots
 description: Render a branch's or PR's diff with git delta, side by side and in colour, as PNG screenshots, one set per file, ordered core code first and tests last with a numbered label for each, then open them in Preview. Use whenever the user wants to see, share, review, present or attach a diff, a branch's changes or a PR as images or screenshots, even if they don't say "delta" or "screenshot" (for example "show me the diff as pictures", "make images of this PR for the deck", "I want to look over the changes in Preview").
 argument-hint: "[base ref or PR number] [unified]"
+allowed-tools:
+  - Bash(node ~/.local/share/switchboard/claude/plugin/skills/*)
+  - Bash(switchboard skill-path *)
+  - Bash(git diff *)
 ---
 
 # Diff screenshots
@@ -12,7 +16,7 @@ Turn a diff into readable images: each changed file rendered by delta with the u
 
 ## 1. Choose the diff and plan it
 
-The scripts need their packages, which aren't kept with the skill. If `~/.local/share/switchboard/plugin/skills/diff-screenshots/scripts/node_modules` is missing, install them first, at the versions the lockfile pins: `npm ci --prefix ~/.local/share/switchboard/plugin/skills/diff-screenshots/scripts`.
+The scripts need their packages, which aren't kept with the skill. If `~/.local/share/switchboard/claude/plugin/skills/diff-screenshots/scripts/node_modules` is missing, install them first, at the versions the lockfile pins: `npm ci --prefix ~/.local/share/switchboard/claude/plugin/skills/diff-screenshots/scripts`.
 
 
 Arguments, all optional: a base ref (`origin/main`, a SHA, `v1.2`), or a PR number (`123` or `#123`), and `unified` if the user asked for a unified diff instead of side-by-side.
@@ -22,7 +26,7 @@ Run, from the repository being diffed, with the output going to the session's sc
 ```bash
 OUT=<scratchpad>/diff-screenshots-<short name>
 mkdir -p "$OUT"
-node ~/.local/share/switchboard/plugin/skills/diff-screenshots/scripts/plan.js [--base <ref> | --pr <number>] > "$OUT/plan.json"
+node ~/.local/share/switchboard/claude/plugin/skills/diff-screenshots/scripts/plan.js [--base <ref> | --pr <number>] > "$OUT/plan.json"
 ```
 
 With neither flag, the diff is the current branch against its merge base with `main` (`main...HEAD`, or `master` where there is no main). For a PR, the script fetches its head and base by SHA with `gh`, without checking anything out or adding refs. An empty `files` list means there is nothing to show: say so and stop.
@@ -43,7 +47,7 @@ A label says what the change does, not just which file it is in; the path is sho
 ## 3. Render and screenshot
 
 ```bash
-node ~/.local/share/switchboard/plugin/skills/diff-screenshots/scripts/render.js "$OUT/plan.json" --out "$OUT" [--unified] > "$OUT/shots.json"
+node ~/.local/share/switchboard/claude/plugin/skills/diff-screenshots/scripts/render.js "$OUT/plan.json" --out "$OUT" [--unified] > "$OUT/shots.json"
 ```
 
 For each file, it runs `git diff <range> -- <file> | delta --paging=never --width <w>`, so delta reads the user's gitconfig, which already turns on side-by-side, line numbers and navigate. Then it converts delta's ANSI colour to an HTML page (dark background, the label as a heading, a `<pre>` in 13px Menlo at `max-content` width, so nothing reflows), and screenshots it at a 1900px viewport and 2x scale, one PNG per file however long, so a file scrolls as one image.
@@ -58,7 +62,7 @@ Playwright comes from the diffed repo's own `@playwright/test` when it has one, 
 
 ## 4. Check the images
 
-Before reporting, look at the images with Read: at least the first one, and a test file if there is one. Read can't show an image much taller than a screen, so for a tall one, cut out its top and its end and look at those: `node ~/.local/share/switchboard/plugin/skills/diff-screenshots/scripts/crop.js <png> --out "$OUT/check-<n>.png" [--top -1800]`. Check that:
+Before reporting, look at the images with Read: at least the first one, and a test file if there is one. Read can't show an image much taller than a screen, so for a tall one, cut out its top and its end and look at those: `node ~/.local/share/switchboard/claude/plugin/skills/diff-screenshots/scripts/crop.js <png> --out "$OUT/check-<n>.png" [--top -1800]`. Check that:
 
 - the colours rendered (green and red line backgrounds, syntax colours), not plain grey text or escape codes;
 - lines don't wrap, apart from ones longer than the widest width, or prose in docs;

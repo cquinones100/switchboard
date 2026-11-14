@@ -384,7 +384,7 @@ fn claude_reviews_without_switchboard_s_plugin_from_the_pane() {
             sh_quote(&said.to_string_lossy())
         ))
         .install(&bin);
-    let plugin = home.join(".local/share/switchboard/plugin");
+    let plugin = home.join(".local/share/switchboard/claude/plugin");
     let run = |dirs: &str| {
         let mut cmd = Command::new(BIN);
         cmd.args(["codex-review", "--reviewer", "claude", "--no-rules"])

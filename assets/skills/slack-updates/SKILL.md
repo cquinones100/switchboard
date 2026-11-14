@@ -1,6 +1,19 @@
 ---
 name: slack-updates
 description: Gather what is new for the user on Slack since the last look (mentions, direct messages, replies in threads they started, and the channels they chose) and save it for mission control's Slack view. Meant to run from the Slack starter routine every 15 minutes; run it by hand to refresh the view.
+allowed-tools:
+  - Bash(switchboard skill-path *)
+  - Bash(switchboard setting slack_threads)
+  - Bash(switchboard setting ux2)
+  - Bash(switchboard slack-updates-save)
+  - Bash(switchboard slack-updates-save *)
+  - mcp__claude_ai_Slack__slack_read_channel
+  - mcp__claude_ai_Slack__slack_read_thread
+  - mcp__claude_ai_Slack__slack_search_public
+  - mcp__claude_ai_Slack__slack_search_public_and_private
+  - mcp__claude_ai_Slack__slack_search_channels
+  - mcp__claude_ai_Slack__slack_search_users
+  - mcp__claude_ai_Slack__slack_read_user_profile
 ---
 
 # Slack updates
