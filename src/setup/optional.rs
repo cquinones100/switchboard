@@ -65,7 +65,7 @@ pub fn all() -> Vec<Optional> {
     all.push(line(
         platform::secret(day::calendar::SECRET).is_some(),
         "your calendar's address (the Calendar view)",
-        "your calendar's address, for the Calendar view without a Calendar tab: switchboard platform secret-set google-calendar-ical, then paste Google Calendar's secret address in iCal format",
+        "your calendar's address, for the Calendar view without the Calendar routine: switchboard platform secret-set google-calendar-ical, then paste Google Calendar's secret address in iCal format",
     ));
     let relay = relay::slack::token(relay::slack::BOT_TOKEN_SERVICE).is_some()
         && relay::slack::token(relay::slack::APP_TOKEN_SERVICE).is_some()

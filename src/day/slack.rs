@@ -1,6 +1,7 @@
 //! Mission control's Slack view: what is new for you on Slack in the last
 //! day, newest first, as the server's own look (`slack_look`, the
-//! slack_background setting) or the /slack-updates skill in a Slack tab last
+//! slack_background setting) or the /slack-updates skill in the Slack
+//! routine's tab last
 //! saved it (`slack.json` in the state directory): direct messages and
 //! mentions marked as needing you, then replies in your threads and the
 //! channels you chose. Ported from lib/sidebar/slack.js, and the saving from
@@ -25,7 +26,8 @@ use serde_json::{Map, Value, json};
 use crate::items::{Item, State, Target, ViewData};
 use crate::util;
 
-pub const STALE_MS: i64 = 15 * 60_000;
+/// Past the Slack routine's 15 minutes between looks, with time for a look.
+pub const STALE_MS: i64 = 20 * 60_000;
 const DISMISS_KEEP_MS: i64 = 2 * 24 * 60 * 60_000;
 /// Messages over a day old are let go.
 pub const KEEP_MS: i64 = 24 * 60 * 60_000;
@@ -264,9 +266,11 @@ pub struct Look<'a> {
 /// look is coming. Each item's `lines` are the message as written (for
 /// drawing as Slack does), its `detail` the same on one line, its `data`
 /// `{ kind, old, message: { channel, thread, ts }, user, from, where, ts,
-/// thread, answered, replies }` (`thread` its thread's key, `answered` when
-/// you wrote after it there, `replies` its thread's reply count once read,
-/// `slack_thread`); seen ones below the
+/// thread, answered, replies, root, people, read_to }` (`thread` its thread's key,
+/// `answered` when you wrote after it there, and once its thread is read
+/// (`slack_thread`): `replies` its reply count, `root` its first message's
+/// `{ user, from, text, ts }`, `people` everyone in it, `{ user, from }`
+/// in the order they first wrote, and `read_to` its newest message's ts); seen ones below the
 /// new, faded (`State::Idle`), with "· seen" after the title. With nothing to
 /// list, `at` says when it last looked (`empty_words`).
 pub fn slack_view(look: &Look) -> ViewData {
@@ -278,7 +282,7 @@ pub fn slack_view(look: &Look) -> ViewData {
         } else if look.looping {
             "Nothing saved yet: the Slack tab is looking.".into()
         } else {
-            "Nothing saved yet: going to this view opens a Slack tab, which looks every 5 minutes."
+            "Nothing saved yet: resume the Slack routine in mission control's Routines view, which looks every 15 minutes, or turn on Settings' \"Slack without a tab\"."
                 .into()
         };
         return ViewData {
@@ -341,6 +345,21 @@ pub fn slack_view(look: &Look) -> ViewData {
                 "thread": m.thread_key(),
                 "answered": answered,
                 "replies": threads.get(&m.thread_key()).map(|t| t.replies),
+                "root": threads.get(&m.thread_key()).and_then(|t| t.messages.first()).map(|r| json!({
+                    "user": r.user, "from": r.from, "text": r.text, "ts": r.ts,
+                })),
+                "people": threads.get(&m.thread_key()).map(|t| people(&t.messages)),
+                // How far it was read, so the board counts replies saved since.
+                "read_to": threads.get(&m.thread_key()).map(|t| {
+                    t.messages.iter().filter_map(|s| s.ts.parse::<f64>().ok()).fold(0.0, f64::max)
+                }),
+                // The Slack board heads a thread's row with its first
+                // message, so `/` finds the row by it too.
+                "search": threads
+                    .get(&m.thread_key())
+                    .and_then(|t| t.messages.first())
+                    .map(|r| format!("{} {}", r.from, r.text.split_whitespace().collect::<Vec<_>>().join(" ")))
+                    .unwrap_or_default(),
             }));
             item.lines = m.text.split('\n').map(str::to_string).collect();
             if let Some(link) = &m.link {
@@ -353,9 +372,9 @@ pub fn slack_view(look: &Look) -> ViewData {
     let catching = if look.background {
         "mission control looks every minute while you're here"
     } else if look.looping {
-        "the Slack tab looks every 5 minutes"
+        "the Slack routine looks every 15 minutes"
     } else {
-        "opening a Slack tab to catch up"
+        "resume the Slack routine in the Routines view to catch up"
     };
     // Its connector down says so first: nothing else will fix it.
     let error = look.down.clone().filter(|_| look.background).or_else(|| {
@@ -374,6 +393,9 @@ pub fn slack_view(look: &Look) -> ViewData {
         // the threads read since on their own.
         head: json!({
             "seen": seen,
+            // The messages seen on their own, `<channel>:<ts>`, for the
+            // thread beside the list.
+            "seen_alone": acted.keys().filter(|k| !k.starts_with("thread:")).collect::<Vec<_>>(),
             "read_threads": acted
                 .iter()
                 .filter_map(|(k, at)| Some((k.strip_prefix("thread:")?.to_string(), at.clone())))
@@ -381,6 +403,18 @@ pub fn slack_view(look: &Look) -> ViewData {
         }),
         ..ViewData::default()
     }
+}
+
+/// Who is in a thread, in the order they first wrote, each once.
+fn people(messages: &[super::slack_thread::Said]) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    for m in messages {
+        let who = json!({ "user": m.user, "from": m.from });
+        if !out.contains(&who) {
+            out.push(who);
+        }
+    }
+    out
 }
 
 /// Saved more than `STALE_MS` ago.

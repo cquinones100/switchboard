@@ -183,6 +183,8 @@ pub enum Mark {
     Pending,
     Reminder,
     Later,
+    /// A tab you pinned (M-f), in place of its state's mark.
+    Pinned,
     Mention,
     Note,
     Comment,
@@ -196,7 +198,8 @@ impl Mark {
     /// The mark a tab's badge state is shown with.
     pub fn of_badge(b: Badge) -> Mark {
         match b {
-            Badge::Waiting | Badge::Pinned => Mark::Needs,
+            Badge::Waiting => Mark::Needs,
+            Badge::Pinned => Mark::Pinned,
             Badge::Done | Badge::Merged => Mark::Passed,
             Badge::Working
             | Badge::Background
@@ -227,6 +230,7 @@ impl Mark {
             Mark::Pending => ("◌", Tone::Needs),
             Mark::Reminder => ("◷", Tone::Needs),
             Mark::Later => ("◷", Tone::Dim),
+            Mark::Pinned => ("⚑", Tone::Needs),
             Mark::Mention => ("@", Tone::Working),
             Mark::Note => ("✎", Tone::Landing),
             Mark::Comment => ("◇", Tone::Working),
@@ -2199,6 +2203,7 @@ mod tests {
             Mark::Passed,
             Mark::Pending,
             Mark::Reminder,
+            Mark::Pinned,
             Mark::Mention,
             Mark::Note,
             Mark::Comment,
@@ -2213,6 +2218,7 @@ mod tests {
         assert_eq!(mark(Mark::Needs, 0, &T).content, "●");
         assert_eq!(mark(Mark::Working, 1, &T).content, SPINNER[1]);
         assert_eq!(Mark::of_badge(Badge::Waiting), Mark::Needs);
+        assert_eq!(Mark::of_badge(Badge::Pinned), Mark::Pinned);
         assert_eq!(Mark::of_badge(Badge::Review), Mark::Working);
         assert_eq!(Mark::of_badge(Badge::Merged), Mark::Passed);
         assert!(spins(Badge::Scheduled, true) && !spins(Badge::Scheduled, false));

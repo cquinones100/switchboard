@@ -213,8 +213,6 @@ impl Server {
                 vec!["setup".into(), "--check".into()],
             ),
             Command::SetupPart => self.setup_part(client),
-            Command::CalendarTab => self.loop_tab(client, "Calendar", "30m", "/today"),
-            Command::SlackTab => self.loop_tab(client, "Slack", "5m", "/slack-updates"),
             Command::OpenPrNumber => self.open_pr_number(client, pane),
             Command::OpenTicketId => self.open_ticket_id_typed(client, pane),
             Command::AwsLogin => {
@@ -735,26 +733,6 @@ impl Server {
                 server.run_setup(client, &title, args);
             });
         });
-    }
-
-    // ── The loop tabs ───────────────────────────────────────────────────────
-
-    /// "Open a Calendar tab" and "Open a Slack tab": the tab the Calendar or
-    /// Slack view opens in the background when it is out of date, opened in
-    /// front (loop-tab.sh without `--background`).
-    fn loop_tab(&mut self, client: ClientId, name: &str, every: &str, skill: &str) {
-        let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
-            return;
-        };
-        if let Err(e) = self.start_loop_tab(
-            &session,
-            name,
-            every,
-            skill,
-            crate::mux::server::Opened::Front,
-        ) {
-            self.say(Some(client), &format!("Couldn't open a {name} tab: {e}"));
-        }
     }
 
     // ── A PR or a ticket by number ──────────────────────────────────────────

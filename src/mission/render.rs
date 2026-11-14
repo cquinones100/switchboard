@@ -2891,10 +2891,6 @@ fn list(
         }
         return;
     }
-    if snap.rules.ux2 && view.id == ViewId::WorkMap && !m.picker {
-        work_map_rows(view, cols, rows, m, top_row, lines, hits);
-        return;
-    }
     // `i`'s output over the list, whether the board or the list is drawn.
     if snap.rules.ux2
         && view.id == ViewId::Landing
@@ -3212,212 +3208,8 @@ fn list(
     }
 }
 
-/// With UX 2.0, the Work map as the board draws it: the columns' heads once
-/// at the top over a dashed rule, each repository's heading (`▾ name`, where
-/// it is and how it lands, its worktrees and how many are open at the
-/// right), its rows in columns at fixed places (the worktree's column the
-/// first to give way on a narrow screen), its fold line of merged work, and,
-/// on a screen of `WORK_PANE_AT` rows or more, the chosen row's pane under
-/// the map: its path and tab, its last prompt and its branch counted.
-fn work_map_rows(
-    view: &View,
-    cols: usize,
-    rows: usize,
-    m: &Mission,
-    top_row: usize,
-    lines: &mut Vec<Line>,
-    hits: &mut Vec<HitBox>,
-) {
-    let snap = &m.snap;
-    let theme = &snap.theme;
-    let items = &view.data.items;
-    let cursor = (m.cursor.max(0) as usize).min(items.len().saturating_sub(1));
-    let chosen_row = items.get(cursor).filter(|i| !views::is_header(i));
-    let pane = if rows >= WORK_PANE_AT {
-        chosen_row.map(|i| work_pane(i, m, cols))
-    } else {
-        None
-    };
-    // The rule, its two lines, and a window on its fields.
-    let pane_h = pane.as_ref().map_or(0, |_| 3 + WORK_PANE_BODY);
-    let budget = rows.saturating_sub(1 + lines.len());
-    let room = budget.saturating_sub(2 + pane_h).max(1);
-    // The rows a column narrower while the scroll bar is beside them.
-    let full = cols;
-    let cols = if snap.rules.scroll_bars && items.len() > room && cols > 1 {
-        cols - 1
-    } else {
-        cols
-    };
-    let widths = work_widths(cols);
-    // The columns' heads.
-    let heads = [
-        "worktree",
-        "ticket",
-        "tab",
-        "PR",
-        "where it stands",
-        "checks",
-        "used",
-    ];
-    let mut head = vec![Span::raw("  ")];
-    for (c, h) in heads.iter().enumerate() {
-        if widths[c] == 0 {
-            continue;
-        }
-        head.push(Span::styled(
-            work_cell(h, widths[c], c == WORK_USED),
-            fg(theme.dim),
-        ));
-    }
-    lines.push(Line {
-        spans: kit::fit(head, cols, Style::new()),
-        fill: None,
-    });
-    lines.push(Line {
-        spans: vec![kit::head_rule(cols, theme)],
-        fill: None,
-    });
-    let first = (cursor + 1).saturating_sub(room);
-    let rows_from = lines.len();
-    for (index, item) in items.iter().enumerate().skip(first).take(room) {
-        let chosen = index == cursor && m.cursor >= 0;
-        let hovered = !chosen && m.hover == Some(Spot::Index(index as isize));
-        hits.push(HitBox {
-            y: (top_row + lines.len()) as u16,
-            x0: 0,
-            x1: cols.saturating_sub(1) as u16,
-            spot: Spot::Index(index as isize),
-        });
-        let spans = if views::is_repo_heading(item) {
-            work_heading(item, cols, theme)
-        } else if views::is_fold_line(item) {
-            vec![Span::styled(format!("   {}", item.title), fg(theme.dim))]
-        } else {
-            work_row(item, &widths, chosen, m)
-        };
-        lines.push(Line {
-            spans: kit::row(spans, cols, chosen, theme),
-            fill: hovered.then_some(theme.panel),
-        });
-    }
-    rows_bar(&mut lines[rows_from..], (items.len(), first, room), full, m);
-    let cols = full;
-    if let Some((head, body)) = pane {
-        while lines.len() + pane_h < rows.saturating_sub(1) {
-            lines.push(Row::default().line(cols, None));
-        }
-        lines.push(Line {
-            spans: vec![kit::rule(cols, theme)],
-            fill: None,
-        });
-        // Its fields scroll with J and K and the wheel over it, as a pane
-        // beside a board does.
-        let last = body.len().saturating_sub(WORK_PANE_BODY);
-        let top = m.side_top().min(last);
-        let shown: Vec<Vec<Span<'static>>> = head
-            .into_iter()
-            .chain(body.into_iter().skip(top).take(WORK_PANE_BODY))
-            .collect();
-        for l in shown {
-            hits.push(HitBox {
-                y: (top_row + lines.len()) as u16,
-                x0: 0,
-                x1: cols.saturating_sub(1) as u16,
-                spot: Spot::Side(last),
-            });
-            let mut spans = vec![Span::raw("  ")];
-            spans.extend(l);
-            lines.push(Line {
-                spans: kit::fit(spans, cols, Style::new()),
-                fill: None,
-            });
-        }
-    }
-}
-
-/// From what height the Work map shows the chosen row's pane under it, and
-/// how many lines of its fields it shows at once.
-const WORK_PANE_AT: usize = 30;
-const WORK_PANE_BODY: usize = 4;
-/// The Work map's columns: the worktree, the ticket, the tab, the PR, where
-/// it stands, its checks and when it was last used.
-const WORK_USED: usize = 6;
-
-/// Each of the Work map's columns' widths, a space after each included: the
-/// ticket's none with the linear setting off, the PR's and the checks' none
-/// with the github setting off; the worktree takes what is left, down to
-/// 12. On a narrower screen (one beside the sidebar), the others give way
-/// in steps until they fit: the tab's and the standing's narrower, the
-/// ticket left out (the worktree's branch names it), then the tab's name
-/// to a few letters, the rest to their shortest words, and last the checks
-/// and when it was used left out.
-fn work_widths(cols: usize) -> [usize; 7] {
-    let linear = crate::settings::is_on("linear");
-    let github = crate::settings::is_on("github");
-    let mut w = [
-        0,
-        if linear { 11 } else { 0 },
-        24,
-        if github { 8 } else { 0 },
-        26,
-        if github { 13 } else { 0 },
-        6,
-    ];
-    let rest = |w: &[usize; 7]| w[1..].iter().sum::<usize>();
-    let room = cols.saturating_sub(3);
-    let steps: [fn(&mut [usize; 7]); 6] = [
-        |w| {
-            w[2] = 16;
-            w[4] = 20;
-        },
-        |w| w[1] = 0,
-        |w| w[2] = 11,
-        |w| {
-            w[3] = w[3].min(7);
-            w[4] = 17;
-            w[5] = w[5].min(11);
-            w[6] = 5;
-        },
-        |w| w[5] = 0,
-        |w| w[6] = 0,
-    ];
-    for step in steps {
-        if room >= rest(&w) + 12 {
-            break;
-        }
-        step(&mut w);
-    }
-    w[0] = room.saturating_sub(rest(&w)).max(10);
-    w
-}
-
-#[cfg(test)]
-#[test]
-fn the_work_map_s_columns_fit_beside_the_sidebar_on_a_100_column_screen() {
-    // 100 columns less the sidebar's 34.
-    let w = work_widths(66);
-    assert!(2 + w.iter().sum::<usize>() <= 66, "{w:?}");
-    assert!(w[3] > 0 && w[5] > 0 && w[6] > 0, "{w:?}");
-    assert_eq!(work_widths(160)[2], 24, "a wide screen keeps them whole");
-    // The sidebar's narrowest window, 90 columns less its 35.
-    let w = work_widths(55);
-    assert!(2 + w.iter().sum::<usize>() <= 55, "{w:?}");
-}
-
-/// A cell's text cut or padded to `cols` with a space after it, or
-/// right-aligned with none (the last column).
-fn work_cell(text: &str, cols: usize, right: bool) -> String {
-    if right {
-        let t = text::cut(text, cols);
-        return format!("{}{t}", " ".repeat(cols.saturating_sub(width(&t))));
-    }
-    let inner = cols.saturating_sub(1);
-    format!("{} ", text::pad(&text::cut(text, inner), inner))
-}
-
 /// A tone by the name src/mission/views.rs gives it.
-fn tone_named(name: &str) -> Tone {
+pub(super) fn tone_named(name: &str) -> Tone {
     match name {
         "needs" => Tone::Needs,
         "working" => Tone::Working,
@@ -3428,176 +3220,6 @@ fn tone_named(name: &str) -> Tone {
         "text" => Tone::Text,
         _ => Tone::Faint,
     }
-}
-
-/// A repository's heading: `▾ name` bold, where it is and how it lands dim,
-/// its worktrees and how many are open at the right.
-fn work_heading(item: &Item, cols: usize, theme: &Theme) -> Vec<Span<'static>> {
-    let d = &item.data;
-    let about: Vec<&str> = [d["place"].as_str(), d["lands"].as_str()]
-        .into_iter()
-        .flatten()
-        .filter(|s| !s.is_empty())
-        .collect();
-    let counts = d["counts"].as_str().unwrap_or("").to_string();
-    let mut left = vec![Span::styled(format!(" {}", item.title), bold(theme.bright))];
-    if !about.is_empty() {
-        left.push(Span::styled(
-            format!("   {}", about.join(" · ")),
-            fg(theme.dim),
-        ));
-    }
-    let right_at = cols.saturating_sub(width(&counts) + 3);
-    let mut out = kit::fit(left, right_at, Style::new());
-    out.push(Span::raw(" "));
-    out.push(Span::styled(counts, fg(theme.dim)));
-    out
-}
-
-/// A row of the Work map in its columns.
-fn work_row(item: &Item, widths: &[usize; 7], chosen: bool, m: &Mission) -> Vec<Span<'static>> {
-    let theme = &m.snap.theme;
-    let d = &item.data;
-    let s = |k: &str| d[k].as_str().unwrap_or("").to_string();
-    let name = if chosen {
-        bold(theme.bright)
-    } else {
-        fg(theme.text)
-    };
-    let mut out = vec![Span::raw(" ")];
-    out.push(Span::styled(
-        work_cell(&s("worktree"), widths[0], false),
-        name,
-    ));
-    if widths[1] > 0 {
-        out.push(Span::styled(
-            work_cell(&s("ticket"), widths[1], false),
-            fg(theme.dim),
-        ));
-    }
-    let tab = match item.target {
-        crate::items::Target::Tab(id) => {
-            // Every tab, a filter typed or not.
-            let tabs = if m.snap.all_tabs.is_empty() {
-                &m.snap.tabs
-            } else {
-                &m.snap.all_tabs
-            };
-            tabs.iter().find(|t| t.id == id)
-        }
-        _ => None,
-    };
-    match tab {
-        Some(t) => {
-            let mark = kit::mark(
-                Mark::of_badge(model::badge_state(t, &m.snap.rules)),
-                m.snap.frame,
-                theme,
-            );
-            let number = format!(" {} ", t.index);
-            let color = t.color.map(Color::from).unwrap_or(theme.bright);
-            let left = widths[2].saturating_sub(1 + width(&number));
-            out.push(mark);
-            out.push(Span::styled(number, bold(color)));
-            out.push(Span::styled(
-                work_cell(&t.name, left, false),
-                fg(theme.text),
-            ));
-        }
-        None => out.push(Span::styled(
-            work_cell("no tab", widths[2], false),
-            fg(theme.faint),
-        )),
-    }
-    if widths[3] > 0 {
-        out.push(Span::styled(
-            work_cell(&s("pr"), widths[3], false),
-            fg(theme.text),
-        ));
-    }
-    out.push(Span::styled(
-        work_cell(&s("standing"), widths[4], false),
-        tone_named(&s("standingTone")).style(theme),
-    ));
-    if widths[5] > 0 {
-        out.push(Span::styled(
-            work_cell(&s("checks"), widths[5], false),
-            tone_named(&s("checksTone")).style(theme),
-        ));
-    }
-    out.push(Span::styled(
-        work_cell(&s("used"), widths[6], true),
-        fg(theme.dim),
-    ));
-    out
-}
-
-/// A pane's lines.
-type PaneLines = Vec<Vec<Span<'static>>>;
-
-/// The chosen row's pane under the Work map: its worktree's name and
-/// the tab it is open in, then its fields, each wrapped to the width:
-/// its path, its last prompt and its branch, with the commits ahead of the default
-/// branch and those to push once counted.
-fn work_pane(item: &Item, m: &Mission, cols: usize) -> (PaneLines, PaneLines) {
-    let theme = &m.snap.theme;
-    let d = &item.data;
-    let s = |k: &str| d[k].as_str().unwrap_or("").to_string();
-    let inner = cols.saturating_sub(4);
-    let tab = d["tab"]["index"]
-        .as_u64()
-        .map_or_else(|| "no tab".into(), |i| format!("open in tab {i}"));
-    let facts = vec![Span::styled(tab, fg(theme.dim))];
-    let mut head = kit::pane(&s("worktree"), facts, inner, theme);
-    head.pop();
-    let mut body = Vec::new();
-    let mut field = |name: &str, value: &str, tone: Color| {
-        for (at, l) in text::wrap(value, inner.saturating_sub(13).max(10))
-            .into_iter()
-            .enumerate()
-        {
-            let label = if at == 0 { name } else { "" };
-            body.push(vec![
-                Span::styled(text::pad(label, 13), fg(theme.dim)),
-                Span::styled(l, fg(tone)),
-            ]);
-        }
-    };
-    field("path", &s("place"), theme.text);
-    let prompt = s("prompt");
-    if prompt.trim().is_empty() {
-        field("last prompt", "none", theme.faint);
-    } else {
-        field("last prompt", &prompt.replace('\n', " "), theme.text);
-    }
-    field("branch", &work_branch(item), theme.text);
-    (head, body)
-}
-
-/// The pane's branch line: the branch, then, once counted, how far ahead of
-/// the default branch it is and what it has to push.
-pub(super) fn work_branch(item: &Item) -> String {
-    let d = &item.data;
-    let branch = d["branch"]
-        .as_str()
-        .or(d["worktree"].as_str())
-        .unwrap_or("")
-        .to_string();
-    let c = &d["counts"];
-    let Some(ahead) = c["ahead"].as_u64() else {
-        return branch;
-    };
-    let commits = |n: u64| format!("{n} commit{}", if n == 1 { "" } else { "s" });
-    let push = match c["toPush"].as_u64() {
-        Some(0) => "nothing to push".to_string(),
-        Some(n) => format!("{} to push", commits(n)),
-        None => "no upstream".to_string(),
-    };
-    format!(
-        "{branch} · {} ahead of {} · {push}",
-        commits(ahead),
-        c["default"].as_str().unwrap_or("")
-    )
 }
 
 /// UX 2.0's Landing view, as board 5 draws it and board 45 lays it out:
@@ -6790,93 +6412,6 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_the_work_map_is_a_table_per_repository_with_the_chosen_row_s_pane_under_it() {
-        let tree = |path: &str, branch: &str, main| views::Worktree {
-            path: path.into(),
-            branch: Some(branch.into()),
-            main,
-            repo: "/r".into(),
-        };
-        let trees = vec![
-            tree("/r", "main", true),
-            tree("/r/wt/ab-1", "AB-1-fix", false),
-        ];
-        let revived = vec![views::Revived {
-            tree: "/r/wt/ab-1".into(),
-            repo: "/r".into(),
-            branch: "AB-1-fix".into(),
-            prompt: "fix the login".into(),
-            ..views::Revived::default()
-        }];
-        let facts = views::MapFacts {
-            landings: std::collections::HashMap::from([(
-                "/r".into(),
-                "lands straight on main".into(),
-            )]),
-            counts: std::collections::HashMap::from([(
-                "/r/wt/ab-1".into(),
-                views::Counts {
-                    head: "a b".into(),
-                    default: "main".into(),
-                    ahead: Some(3),
-                    to_push: Some(0),
-                    ..views::Counts::default()
-                },
-            )]),
-            now_secs: 0,
-        };
-        let items = views::work_map(&[], &trees, &revived, &|_| None, &facts);
-        let map = views::shown(
-            &list_view(ViewId::WorkMap, "Work map", items),
-            "",
-            None,
-            &views::Folds::default(),
-        );
-        let mut m = mission(Vec::new(), vec![map]);
-        m.snap.rules.ux2 = true;
-        m.view = 1;
-        m.cursor = 1;
-        let (lines, hits) = screen(&m, 140, 36);
-        let t = texts(&lines);
-        let heads: Vec<&String> = t
-            .iter()
-            .filter(|l| l.contains("worktree") && l.contains("where it stands"))
-            .collect();
-        assert_eq!(heads.len(), 1, "the heads once: {t:#?}");
-        let heading = t.iter().find(|l| l.contains("▾ r")).unwrap();
-        assert!(
-            heading.contains("/r · lands straight on main"),
-            "{heading:?}"
-        );
-        assert!(heading.ends_with("1 worktree · 0 open"), "{heading:?}");
-        let row = t.iter().find(|l| l.contains("AB-1-fix ")).unwrap();
-        assert!(row.contains("AB-1") && row.contains("no tab") && row.contains("no PR"));
-        for said in [
-            "path         /r/wt/ab-1",
-            "last prompt  fix the login",
-            "branch       AB-1-fix · 3 commits ahead of main · nothing to push",
-        ] {
-            assert!(t.iter().any(|l| l.contains(said)), "{said}: {t:#?}");
-        }
-        let z = hits
-            .iter()
-            .find(|h| h.spot == Spot::Key(crate::mux::input::Key::parse("m").unwrap()))
-            .expect("m on the footer is a click");
-        assert!(
-            hits.iter().any(|h| matches!(h.spot, Spot::Side(_))),
-            "the pane scrolls with J and K"
-        );
-        assert_eq!(
-            &t[z.y as usize]
-                .chars()
-                .skip(z.x0 as usize)
-                .take(1)
-                .collect::<String>(),
-            "m"
-        );
-    }
-
-    #[test]
     fn a_filter_being_typed_leads_the_keys_line() {
         let mut m = mission(vec![tab(1, "one"), tab(2, "two")], Vec::new());
         m.filter = Some(crate::sidebar::render::Filter {
@@ -7686,11 +7221,11 @@ mod tests {
             dir: "/work/api".into(),
             when: String::new(),
             schedule,
-            tab_policy: crate::routines::TabPolicy::SameTab,
-            when_busy: crate::routines::WhenBusy::Wait,
             when_missed: crate::routines::WhenMissed::OnWaking,
             prompt: "Read the new issues and sort them by area.".into(),
             model: String::new(),
+            tools: vec!["Read".into(), "Glob".into(), "Grep".into()],
+            needs: Vec::new(),
             paused: false,
             session: "s1".into(),
             session_dir: "/work/api".into(),
@@ -7737,7 +7272,6 @@ mod tests {
         let live = HashMap::new();
         let facts = crate::routines::view::Facts {
             now,
-            tabs: vec![("r1".into(), Some(TabId(9)), "9".into())],
             live: &live,
             runs: &runs,
         };
@@ -7761,17 +7295,20 @@ mod tests {
             "ONCE",
             "Morning triage",
             "Every day at 8:45 AM",
-            "tab 9 · open",
+            "Read, Glob, Grep",
             "THIS WEEK",
             "PROMPT",
             "added to Claude's system prompt",
-            "Run now",
-            "WHERE IT RUNS",
+            "run now, edit, pause or delete it",
+            "ALLOWED TOOLS",
+            "another tool fails the run, naming it",
+            "HOW IT RUNS",
+            "A headless Claude in its directory, opening no tab.",
             "RUNS TODAY",
             "Sorted four new issues",
-            "tab 9  1m  $0.12",
+            "1m  $0.12",
             "2 routines · next at",
-            "– missed or busy, so skipped",
+            "– missed or still running, so skipped",
         ] {
             assert!(text.contains(want), "{want}: {text}");
         }
@@ -7818,12 +7355,11 @@ mod tests {
             "the last chosen shows the week: {text}"
         );
 
-        // Under 160: each run's tab, then the rows' schedule go.
+        assert!(!text.contains("tab 9"), "no run names a tab: {text}");
+
+        // Under 160: the rows' schedule goes.
         let (text, _) = draw(150, false);
-        assert!(
-            text.contains("1m  $0.12") && !text.contains("tab 9  1m"),
-            "{text}"
-        );
+        assert!(text.contains("1m  $0.12"), "{text}");
         assert!(!text.contains("Every day at 8:45 AM  "), "{text}");
         assert!(text.contains("PROMPT"), "{text}");
 
@@ -7833,10 +7369,63 @@ mod tests {
         assert!(text.contains("i the chosen routine"), "{text}");
         let (text, _) = draw(120, true);
         assert!(
-            text.contains("PROMPT") && text.contains("Run now"),
+            text.contains("PROMPT") && text.contains("run now, edit, pause or delete it"),
             "{text}"
         );
         assert!(!text.contains("THIS WEEK"), "{text}");
+
+        // A run that reached for a tool off its list: failed, naming it, in
+        // the row's chip, the pane's runs and Enter's keycap (board 29).
+        let mut needing = routine(
+            "r1",
+            "Morning triage",
+            Schedule::Days {
+                days: Days::ALL,
+                at: 8 * 60 + 45,
+            },
+        );
+        needing.needs = vec!["Bash".into()];
+        // A long list of tools, as the starters have, leaves room for it.
+        needing.tools = (0..10)
+            .map(|i| format!("mcp__claude_ai_Slack__slack_tool_{i}"))
+            .collect();
+        let failed = HashMap::from([(
+            "r1".to_string(),
+            vec![Run {
+                due: now_secs - 600,
+                ran: now_secs - 600,
+                tab: String::new(),
+                secs: 22,
+                cost: 0.02,
+                outcome: Outcome::Failed,
+                words: "needs Bash".into(),
+            }],
+        )]);
+        let facts = crate::routines::view::Facts {
+            now: facts.now.clone(),
+            live: &live,
+            runs: &failed,
+        };
+        let items = crate::routines::view::items(&[needing], &facts);
+        let view = list_view(ViewId::Routines, "Routines", items);
+        let mut m = mission(vec![nine.clone()], vec![view]);
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.size = (240, 44);
+        let (lines, _, _, _) = drawn(&m, 240, 44);
+        let text = texts(&lines).join("\n");
+        assert!(
+            text.contains("· failed: needs Bash"),
+            "the row's chip: {text}"
+        );
+        assert!(
+            text.contains("✕ failed: needs Bash"),
+            "the pane's run: {text}"
+        );
+        assert!(
+            text.contains("actions: allow Bash and run it again first"),
+            "{text}"
+        );
     }
 
     /// The Reopen view with UX 2.0: a closed tab that landed, chosen, with
@@ -7887,6 +7476,66 @@ mod tests {
         m.view = 1;
         m.cursor = 1;
         (m, now)
+    }
+
+    #[test]
+    fn with_ux2_reopen_s_worktrees_are_a_line_each_the_merged_ones_folded() {
+        let (mut m, now) = reopen_mission();
+        let row = |tree: &str, pr: Option<&str>, standing: &str, merged: bool| {
+            Item::new(tree, tree)
+                .target(crate::items::Target::Dir(tree.into()))
+                .data(serde_json::json!({
+                    "worktree": tree.trim_start_matches("/w/"),
+                    "repo": "/code/web-app",
+                    "branch": tree.trim_start_matches("/w/"),
+                    "pr": pr,
+                    "standing": standing,
+                    "standingTone": "done",
+                    "merged": merged,
+                    "when": now / 1000 - 3600,
+                    "prompt": "draw the condensed sidebar",
+                    "counts": if merged { serde_json::Value::Null } else {
+                        serde_json::json!({ "default": "main", "ahead": 4, "toPush": 0 })
+                    },
+                }))
+        };
+        let map = vec![
+            row("/w/condensed", None, "no PR", false),
+            row("/w/rate-limits", Some("#12345"), "Approved", false),
+            row("/w/retry", Some("#12345"), "Merged", true),
+        ];
+        let mut items = m.snap.views[0].data.items.clone();
+        items.extend(crate::usage::reopen::worktrees(&map));
+        crate::usage::reopen::fold_merged(&mut items, false);
+        crate::usage::reopen::keep(&mut items, crate::usage::reopen::Kind::Both);
+        let chosen = items.iter().position(|i| i.title == "condensed").unwrap();
+        m.snap.views[0].data.items = items;
+        m.cursor = chosen as isize;
+        let t = texts(&drawn(&m, 160, 40).0);
+        let at = t
+            .iter()
+            .position(|l| l.contains("condensed") && l.contains("web-app"))
+            .unwrap();
+        assert!(
+            t[at].contains("no PR")
+                && t[at].contains("4 commits ahead")
+                && t[at].ends_with("1h ago"),
+            "{:?}",
+            t[at]
+        );
+        assert_eq!(width(&t[at]), 160, "{:?}", t[at]);
+        assert!(t[at + 1].contains("rate-limits") && t[at + 1].contains("PR 12345 · approved"));
+        assert!(
+            t[at + 2].contains("▸ 1 merged worktree, folded"),
+            "{:?}",
+            t[at + 2]
+        );
+        assert!(!t.iter().any(|l| l.contains("retry")));
+        assert!(
+            t.iter()
+                .any(|l| l.contains("Branch condensed · 4 commits ahead of main"))
+        );
+        assert!(t.iter().any(|l| l.contains("> draw the condensed sidebar")));
     }
 
     #[test]
@@ -9668,6 +9317,70 @@ mod tests {
             text[rule + 1].contains("Give notes stable IDs"),
             "{text:#?}"
         );
+    }
+
+    #[test]
+    fn a_view_with_a_pane_beside_its_list_is_not_capped_as_a_lone_one() {
+        let rows = vec![pilot_row(3, "Give notes stable IDs", TabState::Working)];
+        let list = crate::autopilot::view::items(
+            &pilot_summary(),
+            "",
+            &rows,
+            &[],
+            &[],
+            &[],
+            &std::collections::HashMap::from([(
+                "Give notes stable IDs".to_string(),
+                crate::cmd::worktree_from_note::PlanNote {
+                    name: "Plan - Stable IDs".into(),
+                    text: Some("## Today\n\nNotes are found by name.".into()),
+                },
+            )]),
+        );
+        let chosen = list
+            .iter()
+            .position(|i| i.title == "Give notes stable IDs")
+            .unwrap();
+        let pr = Item {
+            id: "pr:1".into(),
+            title: "Port the PR board".into(),
+            data: serde_json::json!({ "column": "review", "body": "Ports it." }),
+            ..Item::default()
+        };
+        let mut m = mission(
+            Vec::new(),
+            vec![
+                list_view(ViewId::Autopilot, "Autopilot", list),
+                list_view(ViewId::Prs, "PRs", vec![pr]),
+                list_view(ViewId::Settings, "Settings", vec![Item::default()]),
+            ],
+        );
+        m.snap.rules.ux2 = true;
+        m.lone = Some(165);
+        let spread = ratatui::layout::Rect::new(35, 0, 365, 40);
+        let width = |m: &Mission| m.view_area(spread).width;
+        m.view = 1;
+        m.cursor = chosen as isize;
+        assert_eq!(width(&m), 365, "Autopilot with a card chosen");
+        m.size = (width(&m), 40);
+        let text = texts(&drawn(&m, 365, 40).0).join("\n");
+        assert!(text.contains("Notes are found by name."), "{text}");
+        assert!(
+            description_beside(&m).is_some(),
+            "the plan beside the board"
+        );
+        m.cursor = -1;
+        assert_eq!(width(&m), 165, "nothing chosen, no pane");
+        m.view = 2;
+        m.cursor = 0;
+        assert_eq!(width(&m), 365, "the PRs view with a PR chosen");
+        m.view = 3;
+        assert_eq!(width(&m), 165, "Settings has no pane beside");
+        m.view = 0;
+        assert_eq!(width(&m), 165, "the Tabs cards");
+        m.view = 2;
+        m.snap.rules.ux2 = false;
+        assert_eq!(width(&m), 165, "no pane beside the list with UX 2.0 off");
     }
 
     #[test]

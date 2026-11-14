@@ -339,6 +339,11 @@ pub const COMMANDS: &[Command] = &[
         about: "The notes app: your notes in $NOTES_DIR or ~/Notes, drawn as Notes shows them and edited with Vim's keys",
     },
     Command {
+        name: "new-note",
+        run: crate::day::new_notes::main,
+        about: "Put a note just written for you (its path in your notes) in the notifications until you read it, as the todo note and meeting notes routines do",
+    },
+    Command {
         name: "notifications",
         run: crate::sidebar::notices::main,
         about: "The Notifications window's pane, which the workspace draws its list over (started for you)",

@@ -209,7 +209,7 @@ pub struct Session {
     pub tabs: Vec<TabId>,
     pub current: TabId,
     pub last: Option<TabId>,
-    /// The tabs visited before and after the current one, for M-[ and M-].
+    /// The tabs visited before and after the current one, for M-{ and M-}.
     pub trail: Trail,
     /// The size its tabs are laid out for: its latest client's.
     pub cols: u16,
@@ -267,12 +267,18 @@ impl Session {
     }
 
     fn area_in(spread: Rect, tab: &Tab, cap: Option<u16>) -> Rect {
-        let lone = tab.zoomed || matches!(tab.layout, super::layout::Layout::Pane(_));
-        if lone {
+        if tab.lone() {
             super::layout::capped(spread, cap)
         } else {
             spread
         }
+    }
+}
+
+impl Tab {
+    /// Whether it shows one pane: it has one, or is zoomed into one.
+    pub fn lone(&self) -> bool {
+        self.zoomed || matches!(self.layout, super::layout::Layout::Pane(_))
     }
 }
 
@@ -347,6 +353,15 @@ enum Drag {
         after: PaneId,
         vertical: bool,
         at: u16,
+    },
+    /// A capped lone pane's right edge, the rule beside it, moved with the
+    /// mouse: its tab, the left column and the width of the spread it is
+    /// capped in, and Settings' `lone_pane_width` as the press found it.
+    Edge {
+        tab: TabId,
+        left: u16,
+        spread: u16,
+        from: Option<u16>,
     },
 }
 
@@ -1938,7 +1953,7 @@ impl Server {
     }
 
     /// Goes `steps` back (or forward) through the tabs a session visited,
-    /// as M-[ (or M-]) pressed that many times would, setting the trail's
+    /// as M-{ (or M-}) pressed that many times would, setting the trail's
     /// place on the way; nothing with no tab that way.
     pub fn trail_step(&mut self, session: &str, back: bool, steps: usize) {
         let to = self.session_mut(session).and_then(|s| {
@@ -2561,6 +2576,9 @@ impl Server {
         if let Some(Drag::Border { vertical, .. }) = c.drag {
             return Pointer::border(vertical);
         }
+        if matches!(c.drag, Some(Drag::Edge { .. })) {
+            return Pointer::border(true);
+        }
         let look = *c.overlays.look();
         let over = c
             .overlays
@@ -2606,6 +2624,9 @@ impl Server {
                 Some(_) => Pointer::Hand,
                 None => Pointer::Arrow,
             };
+        }
+        if self.lone_edge_at(id, col, row).is_some() {
+            return Pointer::border(true);
         }
         let border = self
             .session(&c.session)
@@ -2755,7 +2776,7 @@ impl Server {
     }
 
     pub fn act(&mut self, id: ClientId, action: Action) {
-        // Off in Settings, M-[ and M-] go to the tab on either side.
+        // Off in Settings, M-{ and M-} go to the tab on either side.
         let action = match action {
             Action::TabBack if !crate::settings::is_on("tab_back_forward") => Action::PrevTab,
             Action::TabForward if !crate::settings::is_on("tab_back_forward") => Action::NextTab,
@@ -2875,6 +2896,23 @@ impl Server {
                 }
                 self.relayout(current_tab);
                 self.dirty_tab(current_tab);
+            }
+            Action::Resize(dir @ (Direction::Left | Direction::Right), cells)
+                if self.tabs.get(&current_tab).is_some_and(Tab::lone) =>
+            {
+                // A lone pane has no divider: the keys move its right edge.
+                let Some((spread, area)) = self.tabs.get(&current_tab).and_then(|t| {
+                    let s = self.session(&session)?;
+                    Some((s.spread_for(t.zoomed), s.area_for(t)))
+                }) else {
+                    return;
+                };
+                let by = i32::from(cells) * if dir == Direction::Right { 1 } else { -1 };
+                let cap = super::layout::lone_moved(i32::from(area.width) + by, spread.width);
+                // Said only when it fails, since a box would take the next press.
+                if let Err(e) = self.set_lone_width(cap) {
+                    self.say(Some(id), &e);
+                }
             }
             Action::Resize(dir, cells) => {
                 let area = self.session(&session).map(Session::main_area);
@@ -3306,6 +3344,29 @@ impl Server {
                 }
                 return;
             }
+            (
+                MouseKind::Drag,
+                Some(Drag::Edge {
+                    tab, left, spread, ..
+                }),
+            ) => {
+                let cap = super::layout::lone_moved(i32::from(m.col) - i32::from(left), spread);
+                crate::settings::hold("lone_pane_width", super::layout::lone_value(cap));
+                self.relayout(tab);
+                self.dirty_tab(tab);
+                return;
+            }
+            (MouseKind::Release, Some(Drag::Edge { from, .. })) => {
+                if let Some(c) = self.clients.get_mut(&id) {
+                    c.drag = None;
+                }
+                let cap = super::layout::lone_width();
+                if cap != from {
+                    let words = self.set_lone_width(cap).unwrap_or_else(|e| e);
+                    self.say(Some(id), &words);
+                }
+                return;
+            }
             (MouseKind::Drag, Some(Drag::Select(pane))) => {
                 if let Some((col, row)) = self.held_cell(id, pane, m.col, m.row)
                     && let Some(slot) = self.panes.get_mut(&pane)
@@ -3473,8 +3534,58 @@ impl Server {
         })
     }
 
-    /// A press on a line between panes, which a drag then moves.
+    /// The rule at the right edge of the current tab's capped lone pane,
+    /// when (`col`, `row`) is on it: the tab, and the spread it is capped in.
+    fn lone_edge_at(&self, id: ClientId, col: u16, row: u16) -> Option<(TabId, Rect)> {
+        let s = self.session(&self.clients.get(&id)?.session)?;
+        let tab = self.tabs.get(&s.current)?;
+        let spread = s.spread_for(tab.zoomed);
+        let area = s.area_for(tab);
+        let on_rule = area != spread && col == area.right() && row >= area.y && row < area.bottom();
+        on_rule.then_some((tab.id, spread))
+    }
+
+    /// Writes a lone pane's widest width (none for off) to Settings'
+    /// `lone_pane_width`, and lays every tab out with it at once; gives
+    /// what to say about it, or why it couldn't.
+    pub(crate) fn set_lone_width(&mut self, cap: Option<u16>) -> Result<String, String> {
+        let value = super::layout::lone_value(cap);
+        let written = crate::settings::write_setting("lone_pane_width", value);
+        // Failed, the width the file holds comes back, which a drag held
+        // aside from it, so the tabs are laid out again either way.
+        crate::settings::reload_settings();
+        let tabs: Vec<TabId> = self.tabs.keys().copied().collect();
+        for tab in tabs {
+            self.relayout(tab);
+        }
+        for c in self.clients.values_mut() {
+            c.dirty = true;
+        }
+        self.mission_changed();
+        if let Err(e) = written {
+            return Err(format!("Couldn't set a lone pane's width: {e}"));
+        }
+        Ok(match cap {
+            Some(n) => format!("A lone pane is now {n} columns"),
+            None => "A lone pane now fills the width".to_string(),
+        })
+    }
+
+    /// A press on a line between panes, which a drag then moves, or on the
+    /// rule at a capped lone pane's right edge, which a drag moves too.
     fn press_border(&mut self, id: ClientId, col: u16, row: u16) {
+        if let Some((tab, spread)) = self.lone_edge_at(id, col, row) {
+            let drag = Drag::Edge {
+                tab,
+                left: spread.x,
+                spread: spread.width,
+                from: super::layout::lone_width(),
+            };
+            if let Some(c) = self.clients.get_mut(&id) {
+                c.drag = Some(drag);
+            }
+            return;
+        }
         let Some(s) = self.clients.get(&id).and_then(|c| self.session(&c.session)) else {
             return;
         };

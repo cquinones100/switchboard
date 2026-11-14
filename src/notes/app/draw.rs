@@ -187,7 +187,6 @@ impl App {
             RowLook::Open => Style::new().bg(c(24, 153)).fg(c(255, 232)),
             RowLook::Title => Style::new().add_modifier(Modifier::BOLD),
             RowLook::Detail | RowLook::Faint => Style::new().fg(c(244, 243)),
-            RowLook::Tag => Hl::Tag.style(light),
             RowLook::Rule => Style::new().fg(c(238, 250)),
             RowLook::Plain => Style::new(),
         }
@@ -249,7 +248,18 @@ impl App {
                     Style::new().bg(style.bg.unwrap_or(bg)),
                 );
             }
-            buf.set_stringn(r.x, y, &row.text, r.width as usize, style);
+            match row.dim_at.filter(|&at| row.text.is_char_boundary(at)) {
+                Some(at) => {
+                    let (left, right) = row.text.split_at(at);
+                    let (x, _) = buf.set_stringn(r.x, y, left, r.width as usize, style);
+                    let dim = style.patch(self.list_style(RowLook::Detail));
+                    let room = r.right().saturating_sub(x) as usize;
+                    buf.set_stringn(x, y, right, room, dim);
+                }
+                None => {
+                    buf.set_stringn(r.x, y, &row.text, r.width as usize, style);
+                }
+            }
         }
     }
 

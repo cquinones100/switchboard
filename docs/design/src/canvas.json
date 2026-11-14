@@ -94,11 +94,11 @@
       "page": "design"
     },
     "RoutineNew.dc.html": {
-      "title": "30. A new routine: its name, directory, schedule, tab and prompt in one box",
+      "title": "30. A new routine: its name, directory, schedule, allowed tools and prompt in one box",
       "page": "design"
     },
     "Routines.dc.html": {
-      "title": "29. Routines: a prompt of yours on a schedule, in the tab its last run used",
+      "title": "29. Routines: a prompt of yours on a schedule, run headless with the tools it allows, opening no tab; a run that needed another tool failed",
       "page": "design"
     },
     "Settings.dc.html": {
@@ -315,6 +315,10 @@
     },
     "PinnedTab.dc.html": {
       "title": "75. A pinned tab (M-f): first in Needs you, the flag ⚑ in place of its state's mark",
+      "page": "design"
+    },
+    "RoutineMenu.dc.html": {
+      "title": "76. Enter on a routine whose run failed for a tool: allow it and run again, open its session in a tab, or edit it",
       "page": "design"
     }
   }

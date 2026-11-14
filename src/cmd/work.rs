@@ -779,7 +779,8 @@ impl Server {
 
     /// The palette's "Review a contributor's PR", pressed in `pane`: the
     /// open PRs from forks of the repository the pane is in, the most
-    /// recently updated first (a number typed taken too), then the PR's
+    /// recently updated first, the drafts after the rest, dimmed and not
+    /// taken (a number typed taken too, but not a draft's), then the PR's
     /// review tab (`review_tab`). Never in the PR's own worktree.
     pub(crate) fn review_pr(&mut self, client: ClientId, pane: Option<PaneId>) {
         let here = pane.and_then(|p| self.pane_dir(p));
@@ -807,24 +808,35 @@ impl Server {
                         return;
                     }
                 };
-                // Its author wrote the title, which may hold what a
-                // terminal acts on: shown without control characters.
-                let items = prs
+                // The ready PRs first, then the drafts, shown dimmed and
+                // not taken, each group most recently updated first. Its
+                // author wrote the title, which may hold what a terminal
+                // acts on: shown without control characters.
+                let titles: Vec<(u64, String)> = prs
                     .iter()
-                    .map(|p| PickItem {
+                    .map(|p| {
+                        let title = p.pr.title.chars().filter(|c| !c.is_control()).collect();
+                        (p.pr.number, title)
+                    })
+                    .collect();
+                let (ready, drafts): (Vec<_>, Vec<_>) =
+                    prs.iter().zip(&titles).partition(|(p, _)| !p.pr.is_draft);
+                let items = ready
+                    .into_iter()
+                    .chain(drafts)
+                    .map(|(p, (number, title))| PickItem {
                         text: format!(
-                            "#{} {}",
-                            p.pr.number,
-                            p.pr.title
-                                .chars()
-                                .filter(|c| !c.is_control())
-                                .collect::<String>()
+                            "#{number} {title}{}",
+                            if p.pr.is_draft { " · draft" } else { "" }
                         ),
                         tags: format!("@{}", p.author),
-                        value: p.pr.number.to_string(),
+                        value: number.to_string(),
+                        off: p.pr.is_draft,
                         ..PickItem::default()
                     })
                     .collect();
+                let listed: Vec<(u64, bool)> =
+                    prs.iter().map(|p| (p.pr.number, p.pr.is_draft)).collect();
                 let title = if prs.is_empty() {
                     "No open PRs from forks: a PR number to review"
                 } else {
@@ -845,9 +857,57 @@ impl Server {
                         );
                         return;
                     };
-                    server.review_tab(client, repo, number);
+                    match listed.iter().find(|(n, _)| *n == number) {
+                        Some((_, true)) => server.say_draft(client, number),
+                        Some(_) => {
+                            let title = titles
+                                .into_iter()
+                                .find(|(n, _)| *n == number)
+                                .map(|(_, title)| title);
+                            server.review_tab(client, repo, number, title);
+                        }
+                        // A number the list doesn't hold (an older PR, or
+                        // one from a branch of the repository's own) is
+                        // asked about first, so a draft is never reviewed.
+                        None => {
+                            let at = repo.clone();
+                            server.off_task(
+                                client,
+                                move || {
+                                    tokio::runtime::Handle::current().block_on(async {
+                                        let found = github::repo_of(&at).await?;
+                                        github::pr_by_number(&found, number, "M-p review a PR")
+                                            .await
+                                    })
+                                },
+                                move |server, client, found| match found {
+                                    Ok(Some(pr)) if pr.is_draft => server.say_draft(client, number),
+                                    Ok(Some(_)) => server.review_tab(client, repo, number, None),
+                                    Ok(None) => server.say(
+                                        Some(client),
+                                        &format!("No PR #{number} in this repository"),
+                                    ),
+                                    Err(e) => server.say(
+                                        Some(client),
+                                        &format!(
+                                            "Couldn't ask GitHub whether #{number} is a draft: {e}"
+                                        ),
+                                    ),
+                                },
+                            );
+                        }
+                    }
                 });
             },
+        );
+    }
+
+    /// Says PR `number` is a draft, which "Review a contributor's PR"
+    /// doesn't take.
+    fn say_draft(&mut self, client: ClientId, number: u64) {
+        self.say(
+            Some(client),
+            &format!("#{number} is a draft: it can be reviewed once it is ready"),
         );
     }
 
@@ -856,8 +916,10 @@ impl Server {
     /// with `/review-pr <number>` in the main clone `repo`, nothing of the
     /// worktree's loaded, while the tab is about the worktree (`TAB_DIR`):
     /// named, colored and given its PR from it, and M-v, M-m and M-d there
-    /// show the PR's.
-    fn review_tab(&mut self, client: ClientId, repo: PathBuf, number: u64) {
+    /// show the PR's. It is named "Review PR" and the PR's `title` from the
+    /// list it was picked from, without control characters; a number typed
+    /// that isn't in the list has no title, so just "Review PR".
+    fn review_tab(&mut self, client: ClientId, repo: PathBuf, number: u64, title: Option<String>) {
         self.say(
             Some(client),
             &format!("Checking out PR #{number} to review…"),
@@ -888,7 +950,11 @@ impl Server {
                 if let Some(tab) = server.work_tab(client, &repo, command, Opened::Front)
                     && let Some(t) = server.tabs.get_mut(&tab)
                 {
-                    t.opts.insert("@tab_name".into(), "Review PR".to_string());
+                    let name = match title.as_deref().map(str::trim) {
+                        Some(title) if !title.is_empty() => format!("Review PR {title}"),
+                        _ => "Review PR".to_string(),
+                    };
+                    t.opts.insert("@tab_name".into(), name);
                     t.opts.insert(
                         crate::mux::server::TAB_DIR.into(),
                         worktree.to_string_lossy().into_owned(),
@@ -988,6 +1054,7 @@ impl Server {
                 // `--with-nth=2`; its line is what picking it gives.
                 rows.extend(items.iter().map(|i| {
                     PickItem {
+                        off: false,
                         text: i.text.clone(),
                         tags: [
                             i.needs_choice.then(|| "(needs a choice)".to_string()),

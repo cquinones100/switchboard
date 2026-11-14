@@ -1,16 +1,15 @@
 //! Your day, as the sidebar daemon kept it: today's calendar and what
 //! changed on it, what is new for you on Slack, the next meeting, and the
-//! notes written for you (each Fathom meeting's, the morning's standup,
-//! today's to-do list), with the notifications each gives. Ported from
-//! lib/sidebar/'s calendar.js, calendar-feed.js, calendar-changes.js,
-//! slack.js, slack-look.js, meetings.js, standup.js, todo.js and
+//! notes written for you (the morning's standup), with the notifications
+//! each gives. Ported from lib/sidebar/'s calendar.js, calendar-feed.js,
+//! calendar-changes.js, slack.js, slack-look.js, standup.js and
 //! new-notes.js, and the scripts the /today and /slack-updates skills save
 //! with.
 //!
 //! The server keeps a `Day` and calls `Server::day_tick` on every tick:
-//! anything that reaches out (the calendar feed, Slack and Fathom through
-//! Claude's connectors, GitHub and Linear for the standup, `claude -p` for
-//! a summary or a list, git for your commits) runs in a background task
+//! anything that reaches out (the calendar feed, Slack through Claude's
+//! connector, GitHub and Linear for the standup, `claude -p` for its
+//! summary, git for your commits) runs in a background task
 //! that answers with `Event::Day`, and what mission control and the sidebar
 //! read (the Calendar and Slack views' `ViewData`, the notifications) is
 //! worked out on the tick from small files and kept, so nothing on the
@@ -22,7 +21,8 @@
 //! - `changes`: what changed on today's calendar since you last looked.
 //! - `slack`, `slack_look`: the Slack view, its saved look, and the look.
 //! - `slack_thread`: the chosen message's thread and its pictures.
-//! - `meetings`, `standup`, `todo`: the notes written for you.
+//! - `standup`: the note written for you. Today's todo note and the
+//!   meeting notes are starter routines now (src/routines/starters.rs).
 //! - `new_notes`: the notifications for them until you read them.
 //! - `serve`: the server's side: the tick, the events, what mission control
 //!   calls.
@@ -30,7 +30,6 @@
 pub mod calendar;
 pub mod changes;
 pub mod ical;
-pub mod meetings;
 pub mod new_notes;
 pub mod rrule;
 mod serve;
@@ -38,7 +37,6 @@ pub mod slack;
 pub mod slack_look;
 pub mod slack_thread;
 pub mod standup;
-pub mod todo;
 
 use std::future::Future;
 use std::io::Write;
@@ -48,9 +46,9 @@ use std::time::Duration;
 use serde_json::Value;
 
 use crate::connector::ConnectorError;
-use crate::{paths, util};
+use crate::{paths, requests, util};
 
-pub use serve::{Answered, Day, DayEvent};
+pub use serve::{Day, DayEvent};
 
 /// Where the day's files are: the state directory, the notes directory
 /// (`NOTES_DIR`, else `~/Notes`), your own config, and the Slack relay's
@@ -133,7 +131,7 @@ pub trait Ask: Sync {
     ) -> impl Future<Output = anyhow::Result<String>> + Send;
 }
 
-/// `claude -p`, as `todo::ask_claude` runs it.
+/// `claude -p`, as `ask_claude` runs it.
 pub struct ClaudeAsk;
 
 impl Ask for ClaudeAsk {
@@ -142,7 +140,70 @@ impl Ask for ClaudeAsk {
         prompt: String,
         opts: AskOpts,
     ) -> impl Future<Output = anyhow::Result<String>> + Send {
-        todo::ask_claude(prompt, opts)
+        ask_claude(prompt, opts)
+    }
+}
+
+/// Claude's answer to `prompt`: `claude -p` with the prompt on its stdin,
+/// no tools, no MCP servers, no slash commands and no session kept, since
+/// the prompt carries other people's words; run with no `SWITCHBOARD_PANE`,
+/// so its hooks mark no tab.
+async fn ask_claude(prompt: String, opts: AskOpts) -> anyhow::Result<String> {
+    let path = format!(
+        "{}:{}",
+        std::env::var("PATH").unwrap_or_default(),
+        paths::home_join(".local/bin").display()
+    );
+    let mut cmd = tokio::process::Command::new("claude");
+    cmd.args([
+        "-p",
+        "--model",
+        opts.model,
+        "--no-session-persistence",
+        "--restricted",
+        "--tools",
+        "",
+        "--strict-mcp-config",
+        "--disable-slash-commands",
+        "--output-format",
+        "text",
+    ])
+    .current_dir(std::env::temp_dir())
+    .env("PATH", path)
+    .env_remove("SWITCHBOARD_PANE")
+    .env_remove("SWITCHBOARD")
+    .stdin(std::process::Stdio::piped())
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::null())
+    .kill_on_drop(true);
+    crate::setup::plugin::headless(&mut cmd);
+    let mut child = cmd.spawn().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            anyhow::anyhow!("Claude Code isn't installed")
+        } else {
+            anyhow::anyhow!("{e}")
+        }
+    })?;
+    requests::count("Anthropic", "claude -p", opts.source);
+    if let Some(mut stdin) = child.stdin.take() {
+        use tokio::io::AsyncWriteExt;
+        let _ = stdin.write_all(prompt.as_bytes()).await;
+    }
+    let out = tokio::time::timeout(opts.timeout, child.wait_with_output())
+        .await
+        .map_err(|_| anyhow::anyhow!("Claude didn't write {} (it took too long)", opts.what))??;
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    if out.status.success() && (opts.looks)(&text) {
+        Ok(text.trim().to_string())
+    } else {
+        anyhow::bail!(
+            "Claude didn't write {} (exit {})",
+            opts.what,
+            out.status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "null".into())
+        )
     }
 }
 

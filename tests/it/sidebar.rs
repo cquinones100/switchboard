@@ -528,13 +528,14 @@ fn with_half_page_scrolling_off_the_wheel_moves_a_tab_at_a_time() {
     );
     let mut client = short_screen_of_tabs(&server);
     // One wheel-down moves the cursor one tab, as j does, the list not
-    // scrolled.
+    // scrolled: to t2, the next by number, though t8 opened beside the first.
     client.send(b"\x1b[<65;6;5M");
     wait_list(&server, "the next tab", |l| focused(l) && in_front(l) > 0);
     std::thread::sleep(Duration::from_millis(100) * common::patience());
-    assert_eq!(in_front(&server.list()), 1);
-    let screen = client.wait_for("the cursor on t8", |s| {
-        s.iter().any(|l| left(l, 34).contains("▌ ○  8 t8"))
+    let list = server.list();
+    assert_eq!(tabs(&list)[in_front(&list)]["name"], "t2");
+    let screen = client.wait_for("the cursor on t2", |s| {
+        s.iter().any(|l| left(l, 34).contains("▌ ○  2 t2"))
     });
     assert!(!left(&screen[1], 34).contains("▲"), "{}", screen.join("\n"));
 }
@@ -2022,8 +2023,8 @@ fn with_ux2_the_mission_control_button_opens_and_closes_it_and_its_right_click_l
     press(&mut client, 0, settings);
     client.wait_text("MISSION CONTROL");
     client.wait_text("INTEGRATIONS");
-    // With mission control open, M-[ closes it and steps back.
-    client.type_text(&format!("{ALT}["));
+    // With mission control open, M-{ closes it and steps back.
+    client.type_text(&format!("{ALT}{{"));
     client.wait_for("mission control closed", |s| {
         !s.iter().any(|l| l.contains("MISSION CONTROL"))
     });
@@ -2075,7 +2076,7 @@ fn with_ux2_the_notifications_window_on_the_trail_is_named_by_the_buttons_and_th
     wait_list(&server, "the Notifications window in front", |l| {
         notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == true)
     });
-    client.type_text(&format!("{ALT}["));
+    client.type_text(&format!("{ALT}{{"));
     wait_list(&server, "the first tab in front", |l| {
         notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == false)
     });

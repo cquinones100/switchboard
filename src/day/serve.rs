@@ -1,6 +1,8 @@
 //! The server's side of the day: what the sidebar daemon's timers did for
-//! it (lib/sidebar/daemon.js's `feed`, `slackLook`, `standup`, `todo`,
-//! `meetings`, `keepUp` and the notifications), run from the server's tick.
+//! it (lib/sidebar/daemon.js's `feed`, `slackLook`, `standup` and the
+//! notifications), run from the server's tick. Its `todo`, `meetings` and
+//! `keepUp` (the Calendar and Slack tabs) are starter routines now
+//! (src/routines/starters.rs).
 //! Each lookup starts in a background task, at most one of a kind at a
 //! time, and answers with `Event::Day`; the views and notifications are
 //! worked out on the tick from what was last answered and from small files,
@@ -8,8 +10,7 @@
 //!
 //! The calendar feed and the Slack look pause while you're away, but for
 //! their first look after starting (`Server::away`), and both run on your
-//! return; the notes (standup, meetings) carry on, and today's to-do list
-//! waits for you, as before.
+//! return; the standup carries on.
 //!
 //! The connectors down are asked about again here too, as soon as `/mcp`
 //! writes Claude Code's config, and every minute while the Slack view shows
@@ -24,22 +25,12 @@ use serde_json::Value;
 
 use super::calendar::{self, CalEvent, Feed, Fetched, SavedDay};
 use super::{
-    Claude, ClaudeAsk, Dirs, changes, log, meetings, new_notes, slack, slack_look, slack_thread,
-    standup, todo,
+    Claude, ClaudeAsk, Dirs, changes, log, new_notes, slack, slack_look, slack_thread, standup,
 };
 use crate::connector::Connection;
 use crate::items::{Item, ViewData};
 use crate::mux::server::{ClientId, Event, Server};
 use crate::{connector, settings, util};
-
-/// A view's last answer, as the sources report it for today's to-do list
-/// (`Day::answered`): the day it answered, its lines, and whether it failed.
-#[derive(Clone, Debug, Default)]
-pub struct Answered {
-    pub day: String,
-    pub lines: Vec<String>,
-    pub failed: bool,
-}
 
 /// What the background tasks answer with.
 #[derive(Debug)]
@@ -78,8 +69,6 @@ pub enum DayEvent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Job {
     Standup,
-    Todo,
-    Meetings,
 }
 
 /// What the server keeps of your day.
@@ -89,31 +78,19 @@ pub struct Day {
     pub calendar: ViewData,
     /// The Slack view, as last worked out.
     pub slack: ViewData,
-    /// The other views' last answers, by name ("prs", "ci", "tickets",
-    /// "inbox"), which the sources report through `answered` for today's
-    /// to-do list.
-    pub views: HashMap<String, Answered>,
     pub(crate) feed: Feed,
     saved: calendar::Saved,
     started: Option<i64>,
     away: bool,
     feed_asked: Option<i64>,
     feed_busy: bool,
-    /// The day the feed (or its absence) last answered.
-    feed_answered: String,
     slack_asked: Option<i64>,
     slack_busy: bool,
-    slack_looked: String,
-    slack_failed: bool,
     minute: Option<i64>,
     standup_tried: i64,
-    todo_tried: i64,
-    todo_due_since: i64,
-    meetings_tried: i64,
     busy: Vec<Job>,
     calendar_kept: bool,
     slack_kept: bool,
-    opened: HashMap<&'static str, i64>,
     /// The Slack threads kept (`slack-threads.json`), as last read.
     slack_threads: BTreeMap<String, slack_thread::Thread>,
     slack_threads_at: Option<std::time::SystemTime>,
@@ -176,9 +153,6 @@ const SLACK_PICTURES: usize = 32;
 const FEED_FIRST_MS: i64 = 3_000;
 const SLACK_FIRST_MS: i64 = 11_000;
 const MINUTE_MS: i64 = 60_000;
-/// How long today's to-do list waits for a view that hasn't answered today,
-/// before naming it as left out.
-const TODO_WAIT_MS: i64 = 30 * 60_000;
 // Going to the Slack view asks for a look when the last is older than this.
 const SLACK_NOW_MS: i64 = 60_000;
 /// How long a view showing a connector missing counts as in front after
@@ -193,23 +167,8 @@ fn due(last: Option<i64>, every: i64, started: i64, first: i64, now: i64) -> boo
 }
 
 impl Day {
-    /// A view's answer, for today's to-do list: `name` is "prs", "ci",
-    /// "tickets" or "inbox"; `lines` what the list should know of it (each
-    /// item's title and detail, and its link); `failed` when the last look
-    /// failed, so it is named as left out rather than used.
-    pub fn answered(&mut self, name: &str, lines: Vec<String>, failed: bool) {
-        self.views.insert(
-            name.to_string(),
-            Answered {
-                day: util::ymd(&util::local_now()),
-                lines,
-                failed,
-            },
-        );
-    }
-
     /// Today's events, from the feed or /today, for the parts that want them
-    /// (the meeting notes' timing).
+    /// (the next meeting, the notifications).
     pub fn today(&mut self, dirs: &Dirs, now: &Zoned) -> Option<SavedDay> {
         let saved = self.saved.read(&dirs.state).cloned();
         calendar::read_day(&self.feed, saved.as_ref(), &util::ymd(now))
@@ -288,12 +247,9 @@ impl Server {
                     log(&dirs.state, why);
                 }
                 self.day.feed.take(fetched, util::now_ms());
-                self.day.feed_answered = util::ymd(&util::local_now());
             }
             DayEvent::SlackLooked(result) => {
                 self.day.slack_busy = false;
-                self.day.slack_looked = util::ymd(&util::local_now());
-                self.day.slack_failed = result.is_err();
                 let looked = result.is_ok();
                 match result {
                     Ok(line) => log(&dirs.state, &line),
@@ -486,8 +442,8 @@ impl Server {
     }
 
     /// Going to the Slack view asks for a look now, when the last is over a
-    /// minute old: the server's own look, or, with slack_background off, a
-    /// Slack tab opened (or the one there asked to look between its ticks).
+    /// minute old: the server's own look, or, with slack_background off, the
+    /// Slack routine run now (or its tab, open, asked to look between runs).
     pub fn slack_opened(&mut self) {
         let dirs = Dirs::here();
         let ms = util::now_ms();
@@ -503,8 +459,16 @@ impl Server {
             self.look_at_slack();
             return;
         }
+        // The Slack routine, which keeps its own pause and setting; else a
+        // tab named Slack that is no routine's (one the server opened looping
+        // /slack-updates before the starters, beside which the starter was
+        // made paused) is asked as before.
+        if self.routine_run_starter(crate::routines::starters::Kind::Slack) == Some(true) {
+            self.day.slack_asked = Some(ms);
+            log(&dirs.state, "slack: ran the Slack routine");
+            return;
+        }
         if !self.day.slack_kept {
-            self.open_loop_tab("Slack", "5m", "/slack-updates", &dirs);
             return;
         }
         // The Slack tab's Claude, idle between its ticks (or with only its
@@ -517,6 +481,11 @@ impl Server {
             .sidebar_all_tabs()
             .into_iter()
             .filter(|t| self.tab_own_name(t.id).unwrap_or(&t.name) == "Slack")
+            .filter(|t| {
+                self.tabs
+                    .get(&t.id)
+                    .is_none_or(|tab| !tab.opts.contains_key(crate::routines::TAB_MARK))
+            })
             .filter(|t| t.claude.is_some())
             .filter(|t| matches!(t.state, TabState::Idle | TabState::Background))
             .find_map(|t| t.claude_pane);
@@ -585,12 +554,15 @@ impl Server {
     /// A Slack message acted on from its menu (an item of the Slack view or
     /// of the "slack" notifications): seen, on its own.
     pub fn slack_item_acted(&mut self, item: &Item) {
-        let (_, id) = crate::mission::choices::notice_of(item);
-        self.notice_history_mark("slack", &id, crate::sidebar::history::Sidebar::Read, false);
         let dirs = Dirs::here();
-        if let Some(m) = item.data.get("message") {
-            let get = |k: &str| m.get(k).and_then(Value::as_str).unwrap_or("");
-            slack::mark_item_seen(&dirs.state, get("channel"), get("ts"), util::now_ms());
+        // A thread's row on the Slack board, every message it stands for.
+        for item in crate::mission::slack_board::members(item) {
+            let (_, id) = crate::mission::choices::notice_of(&item);
+            self.notice_history_mark("slack", &id, crate::sidebar::history::Sidebar::Read, false);
+            if let Some(m) = item.data.get("message") {
+                let get = |k: &str| m.get(k).and_then(Value::as_str).unwrap_or("");
+                slack::mark_item_seen(&dirs.state, get("channel"), get("ts"), util::now_ms());
+            }
         }
         self.day_views(&dirs, &util::local_now());
     }
@@ -1035,8 +1007,8 @@ impl Server {
         })
     }
 
-    // Once a minute: the notes due, and the tabs that keep a view out of
-    // date with no feed or look of its own.
+    // Once a minute: the standup when due, and whether a tab keeps the
+    // Calendar and Slack views.
     fn day_minute(&mut self, dirs: &Dirs, now: &Zoned) {
         let ms = now.timestamp().as_millisecond();
         self.day.calendar_kept = self.keeps("Calendar");
@@ -1061,30 +1033,6 @@ impl Server {
                 }
             });
         }
-        // Meeting notes, one look at a time, since a transcript can take
-        // minutes.
-        let events = self
-            .day
-            .today(dirs, now)
-            .map(|d| d.events)
-            .unwrap_or_default();
-        if settings::is_on("meeting_notes")
-            && !self.day.busy.contains(&Job::Meetings)
-            && meetings::meetings_due(now, self.day.meetings_tried, &events)
-        {
-            self.day.meetings_tried = ms;
-            self.spawn_note(Job::Meetings, async move {
-                let (dirs, now) = (Dirs::here(), util::local_now());
-                match meetings::write_meetings(&dirs, &now, &Claude).await {
-                    Ok(lines) => lines,
-                    Err(e) => vec![format!("meetings: {e}")],
-                }
-            });
-        }
-        if !self.day.away {
-            self.todo_minute(dirs, now);
-        }
-        self.keep_up(dirs, now);
     }
 
     fn spawn_note(
@@ -1100,259 +1048,12 @@ impl Server {
         });
     }
 
-    // Today's to-do list, each weekday from the hour todo_note_time names,
-    // with the todo_note setting on, once every view it reads from has
-    // answered today (or `TODO_WAIT_MS` has passed, when it is named as
-    // left out), so a note written once a day isn't written from nothing or
-    // from yesterday.
-    fn todo_minute(&mut self, dirs: &Dirs, now: &Zoned) {
-        let ms = now.timestamp().as_millisecond();
-        let hour = settings::cached("todo_note_time")
-            .map(|v| util::js_string(&v))
-            .and_then(|v| v.parse::<i8>().ok())
-            .unwrap_or(9);
-        if !settings::is_on("todo_note")
-            || self.day.busy.contains(&Job::Todo)
-            || !todo::todo_due(&dirs.notes, now, hour, self.day.todo_tried)
-        {
-            return;
-        }
-        let today = util::ymd(now);
-        if util::ymd(&util::local_at_ms(self.day.todo_due_since)) != today {
-            self.day.todo_due_since = ms;
-        }
-        let waited_out = ms - self.day.todo_due_since >= TODO_WAIT_MS;
-        let (github, linear) = (settings::is_on("github"), settings::is_on("linear"));
-        let mut sources = todo::Sources {
-            github,
-            ..todo::Sources::default()
-        };
-        let mut waiting = false;
-        let views = [
-            (
-                "prs",
-                github && settings::is_on("pr_board"),
-                "your pull requests",
-            ),
-            ("ci", github && settings::is_on("view_ci"), "failing checks"),
-            (
-                "tickets",
-                linear && settings::is_on("ticket_board"),
-                "Linear tickets",
-            ),
-            (
-                "inbox",
-                linear && settings::is_on("view_inbox"),
-                "the Linear inbox",
-            ),
-        ];
-        for (name, on, words) in views {
-            if !on {
-                continue;
-            }
-            let lines = match self.day.views.get(name).filter(|a| a.day == today) {
-                Some(a) if a.failed => {
-                    sources.missing.push(words.into());
-                    continue;
-                }
-                Some(a) => a.lines.clone(),
-                None if waited_out => {
-                    sources.missing.push(words.into());
-                    continue;
-                }
-                None => {
-                    waiting = true;
-                    continue;
-                }
-            };
-            match name {
-                "prs" => sources.prs = lines,
-                "ci" => sources.failing = lines,
-                "tickets" => sources.tickets = lines,
-                _ => sources.inbox = lines,
-            }
-        }
-        let calendar_on = settings::is_on("view_calendar");
-        let slack_on = settings::is_on("view_slack");
-        let background = settings::is_on("slack_background");
-        if calendar_on && self.day.feed_answered != today && !waited_out {
-            waiting = true;
-        }
-        let saved_slack = slack::read(&dirs.state);
-        let slack_today = saved_slack
-            .as_ref()
-            .is_some_and(|s| util::ymd(&util::local_at_ms(s.checked)) == today);
-        if slack_on
-            && !waited_out
-            && ((background && self.day.slack_looked != today) || (!background && !slack_today))
-        {
-            waiting = true;
-        }
-        if waiting {
-            return;
-        }
-        self.day.todo_tried = ms;
-        let tz = now.time_zone();
-        let day = calendar_on.then(|| self.day.today(dirs, now)).flatten();
-        if let Some(day) = day.as_ref().filter(|d| d.date == today) {
-            sources.calendar = day
-                .events
-                .iter()
-                .map(|e| {
-                    let when = if e.all_day {
-                        "all day".to_string()
-                    } else {
-                        e.starts(tz)
-                            .map(|t| {
-                                let z = t.to_zoned(tz.clone());
-                                let h = if z.hour() % 12 == 0 {
-                                    12
-                                } else {
-                                    z.hour() % 12
-                                };
-                                format!(
-                                    "{h}:{:02} {}",
-                                    z.minute(),
-                                    if z.hour() < 12 { "AM" } else { "PM" }
-                                )
-                            })
-                            .unwrap_or_default()
-                    };
-                    let you = if e.going() {
-                        String::new()
-                    } else {
-                        format!(" ({})", e.you)
-                    };
-                    format!("{when} {}{you}", e.title)
-                })
-                .collect();
-        } else if calendar_on && self.day.feed_error().is_some() {
-            sources.missing.push("today's calendar".into());
-        }
-        let slack_failed = self.day.slack.error.is_some() || (background && self.day.slack_failed);
-        if slack_on {
-            if slack_failed {
-                sources.missing.push("Slack".into());
-            } else {
-                sources.slack = self
-                    .day
-                    .slack
-                    .items
-                    .iter()
-                    .filter(|i| i.state == crate::items::State::Attention)
-                    .map(|i| {
-                        let mut line = [i.title.as_str(), i.detail.as_str()]
-                            .iter()
-                            .filter(|s| !s.is_empty())
-                            .copied()
-                            .collect::<Vec<_>>()
-                            .join(" · ");
-                        if let crate::items::Target::Url(u) = &i.target {
-                            line.push(' ');
-                            line.push_str(u);
-                        }
-                        line
-                    })
-                    .collect();
-            }
-        }
-        let tab_dirs = self.day_tab_dirs();
-        self.spawn_note(Job::Todo, async move {
-            let (dirs, now) = (Dirs::here(), util::local_now());
-            match todo::write_todo(&dirs, &tab_dirs, &sources, &now, &ClaudeAsk).await {
-                Ok(line) => line.into_iter().collect(),
-                Err(e) => vec![format!("todo: {e}")],
-            }
-        });
-    }
-
-    // The Calendar or Slack view out of date with no tab keeping it: its
-    // tab, opened in the background, at most every `REOPEN_MS` each.
-    fn keep_up(&mut self, dirs: &Dirs, now: &Zoned) {
-        let today = util::ymd(now);
-        let ms = now.timestamp().as_millisecond();
-        let saved = self.day.saved.read(&dirs.state).cloned();
-        if !self.day.calendar_kept
-            && calendar::calendar_stale(&self.day.feed, saved.as_ref(), &today, ms)
-        {
-            self.open_loop_tab("Calendar", "30m", "/today", dirs);
-        }
-        if !self.day.slack_kept
-            && !settings::is_on("slack_background")
-            && slack::stale(slack::read(&dirs.state).as_ref(), ms)
-        {
-            self.open_loop_tab("Slack", "5m", "/slack-updates", dirs);
-        }
-    }
-
-    // A tab running one skill on a loop, `claude "/loop <every> <skill>"` in
-    // your home directory under the tab name `name`, opened without taking
-    // you there (tmux/loop-tab.sh --background). Marked `@loop_tab`, so the
-    // Slack relay alerts on its waits but not on each tick it finishes.
-    fn open_loop_tab(&mut self, name: &'static str, every: &str, skill: &str, dirs: &Dirs) {
-        let ms = util::now_ms();
-        if self
-            .day
-            .opened
-            .get(name)
-            .is_some_and(|at| ms - at < calendar::REOPEN_MS)
-        {
-            return;
-        }
-        self.day.opened.insert(name, ms);
-        let session = self
-            .latest_client()
-            .and_then(|c| self.clients.get(&c))
-            .map(|c| c.session.clone())
-            .or_else(|| self.sessions.first().map(|s| s.name.clone()));
-        let Some(session) = session else {
-            return;
-        };
-        log(
-            &dirs.state,
-            &format!("{name}: out of date with no tab keeping it; opening one"),
-        );
-        if let Err(e) = self.start_loop_tab(
-            &session,
-            name,
-            every,
-            skill,
-            crate::mux::server::Opened::Background,
-        ) {
-            log(&dirs.state, &format!("{name}: couldn't open its tab: {e}"));
-        }
-    }
-
-    /// The tab itself, in `session`, from an interactive shell of yours for
-    /// your PATH, left at that shell when Claude exits; in front unless
-    /// `background` (M-p's "Open a Calendar tab" and "Open a Slack tab"
-    /// bring it there, as loop-tab.sh did without `--background`).
-    pub(crate) fn start_loop_tab(
-        &mut self,
-        session: &str,
-        name: &str,
-        every: &str,
-        skill: &str,
-        opened: crate::mux::server::Opened,
-    ) -> anyhow::Result<crate::mux::TabId> {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-        let command = vec![
-            shell.clone(),
-            "-i".into(),
-            "-c".into(),
-            format!("claude '/loop {every} {skill}'; exec {shell} -i"),
-        ];
-        let (tab, _) = self.new_tab(
-            session,
-            Some(crate::paths::home()),
-            Some(command),
-            Some(name.into()),
-            opened,
-        )?;
-        if let Some(t) = self.tabs.get_mut(&tab) {
-            t.opts.insert("@loop_tab".into(), "1".into());
-        }
-        Ok(tab)
+    /// Whether the Calendar view needs a tab to keep it, as the starter
+    /// Calendar routine is made (`starters::Was`): no feed (known to be
+    /// none) and a day /today saved.
+    pub(crate) fn calendar_needs_tab(&mut self) -> bool {
+        let dirs = Dirs::here();
+        self.day.feed.unconfigured() && self.day.saved.read(&dirs.state).is_some()
     }
 
     // ── The views and notifications ─────────────────────────────────────────

@@ -61,10 +61,6 @@ pub enum Command {
     CheckSetup,
     /// "Run a part of Switchboard's setup, or only check it".
     SetupPart,
-    /// "Open a Calendar tab".
-    CalendarTab,
-    /// "Open a Slack tab".
-    SlackTab,
     /// "Open a PR in the browser by number or URL".
     OpenPrNumber,
     /// "Open a Linear ticket in the browser by ID, number or URL".
@@ -102,8 +98,6 @@ impl Command {
                 Command::UpdateTarget,
                 Command::CheckSetup,
                 Command::SetupPart,
-                Command::CalendarTab,
-                Command::SlackTab,
                 Command::OpenPrNumber,
                 Command::OpenTicketId,
                 Command::AwsLogin,
@@ -132,8 +126,6 @@ impl Command {
             Command::UpdateTarget => "update-target".into(),
             Command::CheckSetup => "check-setup".into(),
             Command::SetupPart => "setup-part".into(),
-            Command::CalendarTab => "calendar-tab".into(),
-            Command::SlackTab => "slack-tab".into(),
             Command::OpenPrNumber => "open-pr-number".into(),
             Command::OpenTicketId => "open-ticket-id".into(),
             Command::AwsLogin => "aws-login".into(),
@@ -186,12 +178,6 @@ impl Command {
                 "Check Switchboard's setup: say what isn't in place, changing nothing"
             }
             Command::SetupPart => "Run a part of Switchboard's setup, or only check it",
-            Command::CalendarTab => {
-                "Open a Calendar tab that keeps today's events in view (/loop 30m /today)"
-            }
-            Command::SlackTab => {
-                "Open a Slack tab that keeps what is new for you on Slack in view (/loop 5m /slack-updates)"
-            }
             Command::OpenPrNumber => "Open a PR in the browser by number or URL",
             Command::OpenTicketId => "Open a Linear ticket in the browser by ID, number or URL",
             Command::AwsLogin => "Log in to AWS (aws sso login) in your Chrome profile",
@@ -239,12 +225,6 @@ impl Command {
             Command::SetupPart => {
                 "Lists the parts switchboard setup --parts names and every part at once, Tab marking several, then asks whether to run them or only check them. What it printed shows in a box."
             }
-            Command::CalendarTab => {
-                "The tab the Calendar view opens in the background when its day is out of date, here in front: Claude in your home directory, reading the calendar through its Google Calendar connector."
-            }
-            Command::SlackTab => {
-                "The tab the Slack view opens in the background when it is out of date, here in front, in your home directory. With Settings' \"Slack without a tab\" (slack_background) on, mission control looks without it."
-            }
             Command::OpenPrNumber => {
                 "Typed in a box that starts with the clipboard's PR; empty is this tab's PR, and a bare number is one of the pane's repository. Then the browser, or a new tab working on it (wtpr). Needs GitHub."
             }
@@ -264,7 +244,7 @@ impl Command {
                 "v in the sidebar; Space or a click selects each, Enter opens what to do with them. The focus goes into the sidebar with the tab in front selected, and Close these tabs asks once before closing them all. Settings' \"Select several tabs\" (sidebar_select)."
             }
             Command::TabTrail => {
-                "The menu a right click on the sidebar's ← or → opens: the tabs forward, the one you are on, then the tabs back, each with its steps away; a choice goes there as that many M-[ or M-] would. Settings' \"M-[ and M-] go back and forward\" (tab_back_forward)."
+                "The menu a right click on the sidebar's ← or → opens: the tabs forward, the one you are on, then the tabs back, each with its steps away; a choice goes there as that many M-{ or M-} would. Settings' \"M-{ and M-} go back and forward\" (tab_back_forward)."
             }
             Command::MissionViews => {
                 "The menu a right click on the sidebar's ⊞ opens: each view that is on, by group, the Tabs view with how many tabs need you; a choice opens mission control on it."
@@ -289,8 +269,6 @@ impl Command {
             Command::UpdateMain => &["git", "main", "sync"],
             Command::UpdateTarget => &["git", "autopilot", "sync"],
             Command::CheckSetup | Command::SetupPart => &["switchboard", "setup"],
-            Command::CalendarTab => &["calendar", "claude", "tabs", "new"],
-            Command::SlackTab => &["slack", "claude", "tabs", "new"],
             Command::OpenPrNumber => &["github", "pr", "browser"],
             Command::OpenTicketId => &["linear", "ticket", "browser"],
             Command::AwsLogin => &["aws", "login", "sso"],

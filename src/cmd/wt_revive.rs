@@ -36,7 +36,7 @@
 //! transcript has changed, so a press reads only the few that have.
 //!
 //! The panes' directories come from the server (`switchboard list`) where
-//! tmux's `list-panes` gave them. Mission control's Work map runs
+//! tmux's `list-panes` gave them. Mission control's Reopen view runs
 //! `wt-revive --json ~` off the server's task, as the daemon ran
 //! bin/wt-revive, keeping the rows it had when a look fails.
 
@@ -64,7 +64,7 @@ const PROMPT_TAILS: [u64; 3] = [256 * 1024, 2 * 1024 * 1024, u64::MAX];
 /// repository's directory stays one, but a plain directory can become one.
 const NOT_A_REPO_MS: i64 = 24 * 60 * 60 * 1000;
 
-/// A worktree with no tab, as the Work map lists it and `--json` prints it.
+/// A worktree with no tab, as Reopen lists it and `--json` prints it.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct Row {
     /// When it was last used, in seconds since the epoch.

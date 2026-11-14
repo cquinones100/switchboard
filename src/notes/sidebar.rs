@@ -1,8 +1,13 @@
 //! The list on the left, as in Notes, ported from
-//! notes/lua/notes/sidebar.lua: folders, tags, then the notes in what is
+//! notes/lua/notes/sidebar.lua: the notes opened lately (Recent, while
+//! Settings' `notes_recent` is on), the folders, then the notes in what is
 //! chosen, pinned ones first, then newest first, each as its title and a
 //! line of when it changed and how it starts. A click or Enter on a folder
-//! or a tag shows its notes; on a note, opens it.
+//! shows its notes; on a note, opens it. There is no All Notes and no list
+//! of tags, which grew long and went unused: `/` searches every note, and a
+//! `#tag` followed in a note (or typed into `/`) lists the notes that have
+//! it. A click or Enter on Recent's heading ("all 20 ›"), or "Open a recent
+//! note" in the palette, opens the whole history in the finder's box.
 //!
 //! ```text
 //!   n  new note here          N  new folder        dd  delete (to Recently Deleted)
@@ -32,11 +37,11 @@ pub const MIN_WIDTH: u16 = 24;
 /// What a row of the list does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Item {
-    /// A folder: `None` for All Notes, "" for the top folder, `TRASH` for
-    /// Recently Deleted.
-    Folder(Option<String>),
-    Tag(String),
+    /// A folder: "" for the top folder, `TRASH` for Recently Deleted.
+    Folder(String),
     Note(PathBuf),
+    /// Every note opened lately, in the finder's box (Recent's heading).
+    Recent,
 }
 
 /// How a row is drawn.
@@ -45,13 +50,12 @@ pub enum Look {
     Plain,
     Header,
     Section,
-    /// The folder or tag shown.
+    /// The folder shown.
     Current,
     /// The note open.
     Open,
     Title,
     Detail,
-    Tag,
     Rule,
     Faint,
 }
@@ -61,16 +65,37 @@ pub struct Row {
     pub text: String,
     pub look: Look,
     pub item: Option<Item>,
+    /// Where the text turns dim, for what is at a row's right (a recent
+    /// note's folder).
+    pub dim_at: Option<usize>,
 }
 
-/// What is shown: a folder, or the notes with a tag, or those matching a
-/// search; and the notes marked with s for squashing, in the order marked.
+impl Row {
+    /// The note a row of the notes shown is for: its title's row, never
+    /// its detail line or its row under Recent, so the cursor put on a note
+    /// lands where the view lists it.
+    pub fn listed(&self) -> Option<&Path> {
+        match &self.item {
+            Some(Item::Note(path)) if matches!(self.look, Look::Title | Look::Open) => Some(path),
+            _ => None,
+        }
+    }
+}
+
+/// How many of the notes opened lately the list shows under Recent.
+pub const RECENT_ROWS: usize = 8;
+
+/// What is shown: a folder ("" the top one, which the list opens on), or
+/// the notes with a tag, or those matching a search, which keep the folder
+/// to come back to; the notes marked with s for squashing, in the order
+/// marked; and whether Recent is listed (`notes_recent`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct State {
-    pub folder: Option<String>,
+    pub folder: String,
     pub tag: Option<String>,
     pub query: Option<String>,
     pub marked: Vec<PathBuf>,
+    pub recent: bool,
 }
 
 /// When a note changed, as Notes says it: the time today, Yesterday, the
@@ -129,11 +154,10 @@ impl State {
         if let Some(t) = &self.tag {
             return format!("#{t}");
         }
-        match self.folder.as_deref() {
-            None => "All Notes".into(),
-            Some("") => "Notes".into(),
-            Some(TRASH) => "Recently Deleted".into(),
-            Some(f) => f.rsplit('/').next().unwrap_or(f).to_string(),
+        match self.folder.as_str() {
+            "" => "Notes".into(),
+            TRASH => "Recently Deleted".into(),
+            f => f.rsplit('/').next().unwrap_or(f).to_string(),
         }
     }
 
@@ -145,33 +169,32 @@ impl State {
         if let Some(t) = &self.tag {
             return store.tagged(t);
         }
-        match self.folder.as_deref() {
-            Some("") => store
+        match self.folder.as_str() {
+            "" => store
                 .notes(None)
                 .into_iter()
                 .filter(|n| n.folder.is_empty())
                 .collect(),
-            f => store.notes(f),
+            f => store.notes(Some(f)),
         }
     }
 
-    /// Shows a folder, a tag or a search.
+    /// Shows a folder (`None` keeps the one shown), a tag or a search.
     pub fn show(&mut self, folder: Option<String>, tag: Option<String>, query: Option<String>) {
-        self.folder = folder;
+        if let Some(folder) = folder {
+            self.folder = folder;
+        }
         self.tag = tag;
         self.query = query;
     }
 
     /// The folder a new note goes in: the one shown, or the top folder for
-    /// All Notes, a tag, a search or Recently Deleted.
+    /// a tag, a search or Recently Deleted.
     pub fn here(&self) -> String {
-        if self.tag.is_some() || self.query.is_some() {
+        if self.tag.is_some() || self.query.is_some() || self.folder == TRASH {
             return String::new();
         }
-        match self.folder.as_deref() {
-            None | Some(TRASH) => String::new(),
-            Some(f) => f.to_string(),
-        }
+        self.folder.clone()
     }
 
     /// The list's rows for a list `cols` wide, the note open (`current`)
@@ -184,27 +207,55 @@ impl State {
                 text: format!(" {text}"),
                 look,
                 item,
+                dim_at: None,
             });
         };
         let all = store.notes(None);
         let plain = self.tag.is_none() && self.query.is_none();
         let current_if = |on: bool| if on { Look::Current } else { Look::Plain };
+        let recent = if self.recent {
+            store.recent()
+        } else {
+            Vec::new()
+        };
+        if !recent.is_empty() {
+            let all = format!("all {} ›", recent.len());
+            add(
+                &mut rows,
+                format!(
+                    "Recent{}",
+                    " ".repeat(w.saturating_sub(6 + width(&all))) + &all
+                ),
+                Look::Header,
+                Some(Item::Recent),
+            );
+            for note in recent.iter().take(RECENT_ROWS) {
+                let folder = if note.folder.is_empty() {
+                    "Notes"
+                } else {
+                    note.folder.rsplit('/').next().unwrap_or(&note.folder)
+                };
+                let marked = self.marked.contains(&note.path);
+                let (text, dim_at) = beside(&note.title, folder, marked, w);
+                rows.push(Row {
+                    text: format!(" {text}"),
+                    look: Look::Plain,
+                    item: Some(Item::Note(note.path.clone())),
+                    dim_at: dim_at.map(|at| at + 1),
+                });
+            }
+            add(&mut rows, String::new(), Look::Plain, None);
+        }
         add(&mut rows, "Folders".into(), Look::Header, None);
-        add(
-            &mut rows,
-            counted("  All Notes", all.len(), w),
-            current_if(plain && self.folder.is_none()),
-            Some(Item::Folder(None)),
-        );
         let top = all.iter().filter(|n| n.folder.is_empty()).count();
         add(
             &mut rows,
             counted("  Notes", top, w),
-            current_if(plain && self.folder.as_deref() == Some("")),
-            Some(Item::Folder(Some(String::new()))),
+            current_if(plain && self.folder.is_empty()),
+            Some(Item::Folder(String::new())),
         );
         for folder in store.folders() {
-            let on = plain && self.folder.as_deref() == Some(folder.rel.as_str());
+            let on = plain && self.folder == folder.rel;
             add(
                 &mut rows,
                 counted(
@@ -213,32 +264,15 @@ impl State {
                     w,
                 ),
                 current_if(on),
-                Some(Item::Folder(Some(folder.rel))),
+                Some(Item::Folder(folder.rel)),
             );
         }
         add(
             &mut rows,
             counted("  Recently Deleted", store.notes(Some(TRASH)).len(), w),
-            current_if(plain && self.folder.as_deref() == Some(TRASH)),
-            Some(Item::Folder(Some(TRASH.into()))),
+            current_if(plain && self.folder == TRASH),
+            Some(Item::Folder(TRASH.into())),
         );
-        let tags = store.tags();
-        if !tags.is_empty() {
-            add(&mut rows, String::new(), Look::Plain, None);
-            add(&mut rows, "Tags".into(), Look::Header, None);
-            for (name, count) in tags {
-                let on = self
-                    .tag
-                    .as_deref()
-                    .is_some_and(|t| t.to_lowercase() == name.to_lowercase());
-                add(
-                    &mut rows,
-                    counted(&format!("  #{name}"), count, w),
-                    if on { Look::Current } else { Look::Tag },
-                    Some(Item::Tag(name)),
-                );
-            }
-        }
         add(&mut rows, String::new(), Look::Plain, None);
         add(&mut rows, "─".repeat(w), Look::Rule, None);
         let notes = self.notes(store);
@@ -301,7 +335,7 @@ impl State {
                 (Some(_), Some(m)) => m.clone(),
                 _ => note.preview.clone(),
             };
-            if plain && self.folder.is_none() && !note.folder.is_empty() {
+            if !plain && !note.folder.is_empty() {
                 detail = format!("▸ {}  {detail}", note.folder);
             }
             add(
@@ -316,6 +350,26 @@ impl State {
     }
 }
 
+/// A recent note's row, as board 69 draws it: its title (its first 20
+/// columns) on the left and, dim at the right, its folder, cut to the room
+/// left, a ✓ before it when it is marked for squashing. The text, and the
+/// byte the dim part starts at.
+fn beside(title: &str, folder: &str, marked: bool, cols: usize) -> (String, Option<usize>) {
+    let mark = if marked { "✓ " } else { "  " };
+    let shown = format!("{mark}{}", fit(title, 20));
+    let room = cols.saturating_sub(width(&shown) + 2);
+    let place = fit(folder, room);
+    if place.is_empty() {
+        return (shown, None);
+    }
+    let left = format!(
+        "{shown}{}",
+        " ".repeat(cols.saturating_sub(width(&shown) + width(&place)))
+    );
+    let at = left.len();
+    (format!("{left}{place}"), Some(at))
+}
+
 /// The note shown after `path` goes from the list: the next one listed.
 pub fn next_note(notes: &[NoteEntry], path: &Path) -> Option<PathBuf> {
     notes
@@ -326,7 +380,10 @@ pub fn next_note(notes: &[NoteEntry], path: &Path) -> Option<PathBuf> {
 
 /// The list's keys, for `?` and mission control's Keys view.
 pub const KEYS: &[(&str, &str)] = &[
-    ("Enter or click", "open a note, folder or tag"),
+    (
+        "Enter or click",
+        "open a note or folder, or Recent's history",
+    ),
     ("n", "new note in this folder"),
     ("N", "new folder"),
     ("dd", "delete (to Recently Deleted)"),
@@ -391,7 +448,7 @@ mod tests {
     use crate::notes::store::tests::temp;
 
     #[test]
-    fn the_list_shows_folders_tags_and_the_notes_in_what_is_chosen() {
+    fn the_list_shows_folders_and_the_notes_in_what_is_chosen() {
         let (_dir, mut s) = temp("sidebar");
         let a = s.create("", Some("Groceries"));
         std::fs::write(&a, "# Groceries\n\n- [ ] eggs #food\n").unwrap();
@@ -400,19 +457,27 @@ mod tests {
         let rows = state.build(&s, Some(&a), WIDTH);
         let text: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
         assert!(
-            text.iter()
-                .any(|l| l.starts_with("   All Notes") && l.ends_with(" 2")),
-            "{text:?}"
+            !text.iter().any(|l| l.contains("All Notes")
+                || l.contains("Tags")
+                || l.trim_start().starts_with('#')),
+            "no All Notes and no tags: {text:?}"
         );
+        let top = rows
+            .iter()
+            .find(|r| r.item == Some(Item::Folder(String::new())))
+            .unwrap();
+        assert_eq!(top.look, Look::Current, "it opens on the top folder");
+        assert!(top.text.ends_with(" 1"));
         assert!(text.iter().any(|l| l.contains("Work") && l.ends_with(" 1")));
-        assert!(text.iter().any(|l| l.contains("#food")));
         let open = rows.iter().find(|r| r.look == Look::Open).unwrap();
         assert!(open.text.contains("Groceries"));
+        state.show(None, None, Some("plan".into()));
+        let rows = state.build(&s, None, WIDTH);
         let detail = rows.iter().find(|r| r.text.contains("▸ Work")).unwrap();
         assert_eq!(
             detail.look,
             Look::Detail,
-            "in All Notes, which folder a note is in"
+            "in a search, which folder a note is in"
         );
         state.show(None, Some("food".into()), None);
         let rows = state.build(&s, None, WIDTH);
@@ -427,13 +492,95 @@ mod tests {
         assert_eq!(state.here(), "");
         state.show(Some("Work".into()), None, None);
         assert_eq!(state.here(), "Work");
+        state.show(None, Some("food".into()), None);
+        state.show(None, None, None);
+        assert_eq!(
+            state.folder, "Work",
+            "clearing a tag goes back to the folder"
+        );
+    }
+
+    #[test]
+    fn recent_lists_the_notes_opened_lately_newest_first() {
+        let (_dir, mut s) = temp("recent");
+        let a = s.create("", Some("Groceries"));
+        let b = s.create("Work", Some("Plan"));
+        let c = s.create("", Some("Trip"));
+        for path in [&a, &b, &c, &a] {
+            s.opened(&s.relative(path));
+        }
+        let mut state = State {
+            recent: true,
+            ..State::default()
+        };
+        let recent = |state: &State, s: &Store| -> Vec<Row> {
+            let rows = state.build(s, None, WIDTH);
+            let Some(at) = rows
+                .iter()
+                .position(|r| r.look == Look::Header && r.text.trim().starts_with("Recent"))
+            else {
+                return Vec::new();
+            };
+            rows[at + 1..]
+                .iter()
+                .take_while(|r| r.item.is_some())
+                .cloned()
+                .collect()
+        };
+        let rows = recent(&state, &s);
+        let titles: Vec<String> = rows
+            .iter()
+            .map(|r| r.text.split("  ").nth(1).unwrap_or("").trim().to_string())
+            .collect();
+        assert_eq!(
+            titles,
+            ["Groceries", "Trip", "Plan"],
+            "newest first, each once"
+        );
+        assert!(rows[0].text.ends_with("Notes"), "the top folder named");
+        let heading = state.build(&s, None, WIDTH);
+        let heading = heading
+            .iter()
+            .find(|r| r.look == Look::Header && r.text.trim().starts_with("Recent"))
+            .unwrap();
+        assert_eq!(
+            heading.item,
+            Some(Item::Recent),
+            "a click on it opens the history"
+        );
+        assert!(heading.text.ends_with("all 3 ›"));
+        state.marked.push(b.clone());
+        let rows = recent(&state, &s);
+        assert!(rows[2].text.starts_with(" ✓ Plan"), "marked for squashing");
+        state.marked.clear();
+        s.set_pinned(&s.relative(&b), true);
+        assert!(
+            s.recent().iter().any(|n| n.path == b && n.pinned),
+            "a pinned note keeps its pin in the history"
+        );
+        let plan = &rows[2];
+        let at = plan.dim_at.expect("its folder at the right");
+        assert_eq!(plan.text[at..].trim(), "Work");
+        s.delete(&c);
+        assert_eq!(recent(&state, &s).len(), 2, "a deleted note dropped");
+        let trashed = s.absolute(".trash/Trip.md");
+        for _ in 0..crate::notes::store::RECENT + 1 {
+            s.opened(&s.relative(&trashed));
+        }
+        let stored = s.meta()["recent"].to_string();
+        assert!(
+            !stored.contains(".trash"),
+            "nothing in Recently Deleted kept in the history: {stored}"
+        );
+        state.recent = false;
+        assert!(recent(&state, &s).is_empty(), "notes_recent off: no Recent");
     }
 
     #[test]
     fn the_lists_keys_read_in_two_columns_a_long_one_wrapped_under_itself() {
         let text = help_text();
         let lines: Vec<&str> = text.lines().collect();
-        assert_eq!(lines[0], "Enter or click   open a note, folder or tag");
+        assert_eq!(lines[0], "Enter or click   open a note or folder, or");
         let at = lines.iter().position(|l| l.starts_with("Ctrl-B")).unwrap();
         assert_eq!(
             lines[at],

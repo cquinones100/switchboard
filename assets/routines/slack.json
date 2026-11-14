@@ -1,0 +1,19 @@
+{
+  "name": "Slack",
+  "when": "every 15m",
+  "model": "",
+  "prompt": "Each run, read the file `switchboard skill-path slack-updates` prints and follow it (the slack-updates skill), which saves what is new for you on Slack for mission control's Slack view. When the Slack connector isn't connected or refuses, reply `Slack isn't connected: connect it with /mcp` and stop. Reply with one line: what it found.",
+  "tools": [
+    "Bash(switchboard skill-path:*)",
+    "Read",
+    "ToolSearch",
+    "mcp__claude_ai_Slack__slack_search_public_and_private",
+    "mcp__claude_ai_Slack__slack_search_public",
+    "mcp__claude_ai_Slack__slack_read_channel",
+    "mcp__claude_ai_Slack__slack_read_thread",
+    "mcp__claude_ai_Slack__slack_read_user_profile",
+    "Bash(switchboard slack-updates-save:*)",
+    "Bash(switchboard setting slack_threads)",
+    "Bash(switchboard setting ux2)"
+  ]
+}

@@ -1,5 +1,6 @@
 //! Routines (UX 2.0 boards 29 and 30): a prompt of yours run on a
-//! schedule, each run a turn of Claude in a tab of its own, its prompt
+//! schedule, each run a headless Claude (`claude -p`) in its directory
+//! that opens no tab, allowed only the routine's own tools, its prompt
 //! added to Claude's system prompt and the turn saying "Run <name>". New;
 //! the tmux version had nothing like it, only a tab's reminder
 //! (src/mission/remind.rs), which starts nothing.
@@ -11,44 +12,45 @@
 //! - `view`: mission control's Routines view, its items and, with UX 2.0,
 //!   its board (board 29).
 //! - `form`: the box a routine is made and changed in (board 30).
-//! - `serve`: the server's side: the runs on the tick, the hooks that end
-//!   them, the view's keys and the palette's commands.
+//! - `headless`: a run's `claude -p`, its arguments and its JSON read.
+//! - `starters`: the routines Switchboard starts you with (today's todo
+//!   note, meeting notes, the Slack and Calendar views kept up to date),
+//!   made once, each with the tools it needs.
+//! - `serve`: the server's side: the runs on the tick and their answers,
+//!   the view's keys and the palette's commands.
 
 pub mod form;
+pub mod headless;
 pub mod routine;
 pub mod schedule;
 mod serve;
+pub mod starters;
 pub mod view;
 
 use std::collections::HashMap;
 use std::time::SystemTime;
 
 use crate::items::Item;
-use crate::mux::{PaneId, TabId};
-pub use routine::{Outcome, Routine, Run, TabPolicy, WhenBusy, WhenMissed};
+pub use routine::{Outcome, Routine, Run, WhenMissed};
 
-/// The tab option marking a routine's tab with its id, saved with the
-/// layout so a restart still finds it.
+/// The tab option a build before runs were headless marked a routine's tab
+/// with, saved with the layout: such a tab, brought back, is still taken
+/// for a tab kept for a routine (the relay and the Slack view pass it over).
 pub const TAB_MARK: &str = "@routine";
-/// The tab option holding when its routine runs next (seconds), for the
-/// sidebar's "routine · next 2:30".
+/// The tab option such a build kept when its routine runs next, for the
+/// sidebar's "routine · next 2:30", taken off any tab still carrying it.
 pub const TAB_NEXT: &str = "@routine_next";
 
-/// A run waits on a busy tab at most this long, in seconds.
-pub const WAIT_BUSY: i64 = 30 * 60;
 /// A gap this long between two ticks (seconds) is the computer having
 /// slept: a run due before the ticks went on again was missed, as one due
 /// before the server started was.
 pub const SLEPT_AFTER: i64 = 60;
-/// A run's Claude not running this long (seconds) after the run started
-/// has exited, Stop hook or none.
-pub const START_GRACE: i64 = 60;
 /// A missed run is run on waking only this late at most, in seconds.
 pub const LATE_BY: i64 = 3600;
 /// How many days of runs the server keeps for the view.
 pub const KEEP_DAYS: i64 = 8;
 
-/// A run under way, or waiting on its tab.
+/// A run under way.
 #[derive(Clone, Debug)]
 pub struct Live {
     /// When it was due.
@@ -57,22 +59,22 @@ pub struct Live {
     pub late: bool,
     /// Asked for with r or Run now, which runs whatever the schedule says.
     pub by_hand: bool,
-    /// When it became due, which a wait on a busy tab counts from.
-    pub asked: i64,
-    /// When its turn started, 0 while it waits on a busy tab.
+    /// When its Claude started, 0 while its directory is checked.
     pub started: i64,
-    pub tab: Option<TabId>,
-    pub pane: Option<PaneId>,
-    /// Its session's cost when the turn started.
-    pub cost_before: f64,
+    /// Its Claude's process, 0 until it has started, and when that
+    /// process started (`headless::Started::born`).
+    pub pid: u32,
+    pub born: u64,
+    /// The directory it runs in, where its session is made.
+    pub dir: String,
+    /// When (seconds) it was told to end, having run past its limit or its
+    /// routine being deleted; 0 while it runs. It is watched until it has.
+    pub stopping: i64,
+    /// Its Claude ended, and its answer is being read off the task.
+    pub collecting: bool,
     /// Its directory being checked for someone else's PR, off the task,
     /// before anything starts.
     pub checking: bool,
-    /// Until when (seconds) a SessionEnd is the Claude it replaced ending.
-    pub quiet_until: i64,
-    /// The session its own pane's hooks named, which its cost is read
-    /// from; empty before one.
-    pub session: String,
 }
 
 /// What the server keeps for them.
@@ -82,25 +84,11 @@ pub struct Routines {
     pub list: Vec<Routine>,
     /// Each routine's runs of the last `KEEP_DAYS`, by its id.
     pub runs: HashMap<String, Vec<Run>>,
-    /// The runs under way or waiting, by routine id.
+    /// The runs under way, by routine id.
     pub live: HashMap<String, Live>,
     /// A run that failed or was skipped, by routine id, until put away,
     /// for the notifications.
     pub said: HashMap<String, Item>,
-    /// The prompt's hash and the directory each pane's Claude was started with here
-    /// (`Routine::prompt_hash`). Kept in memory alone: a tab brought back
-    /// by a restart resumes its Claude without the prompt, so its next run
-    /// starts it again with it.
-    pub started: HashMap<PaneId, (String, String)>,
-    /// The panes whose Claude a run just started, until when (seconds):
-    /// their SessionStart is that Claude's, any other a Claude started
-    /// otherwise, which never had the prompt.
-    pub(crate) expect: HashMap<PaneId, i64>,
-    /// The session each routine pane's hooks last named, with the
-    /// directory it was made in, so a run that types into a pane counts its
-    /// cost from that pane's own session, and one that starts its Claude
-    /// again resumes it only there.
-    pub(crate) pane_sessions: HashMap<PaneId, (String, String)>,
     /// The last tick (seconds), and since when the ticks have gone on
     /// without a gap of `SLEPT_AFTER`: a run due before that was missed.
     pub(crate) ticked: i64,
@@ -108,6 +96,8 @@ pub struct Routines {
     /// The folder's modified time when last read.
     pub(crate) seen: Option<SystemTime>,
     pub(crate) read: bool,
+    /// Whether the runs a server before this one left going were taken up.
+    pub(crate) taken_up: bool,
 }
 
 impl Routines {
@@ -128,13 +118,29 @@ pub enum RoutinesEvent {
         dir: String,
         untrusted: bool,
     },
+    /// A run's Claude started, its process id, or why it didn't.
+    Started {
+        id: String,
+        /// When it started, which tells it from a later run.
+        started: i64,
+        pid: Result<u32, String>,
+    },
+    /// A run's answer, read from its files once its Claude ended.
+    Answered {
+        id: String,
+        started: i64,
+        answer: Result<headless::Reply, String>,
+    },
 }
 
 /// What a routine's menu does (`mission::choices::Do::Routine`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Act {
     RunNow,
-    GoToTab,
+    /// Its session opened in a tab, `claude --resume`.
+    OpenSession,
+    /// The tools its last run needed added to its own, and run again.
+    AllowNeeded,
     Edit,
     Pause,
     Resume,
@@ -165,7 +171,7 @@ impl Command {
     pub fn about(self) -> &'static str {
         match self {
             Command::New => {
-                "New routine: a prompt of yours run on a schedule, each run in a Claude tab of its own"
+                "New routine: a prompt of yours run on a schedule by a headless Claude, opening no tab"
             }
         }
     }
@@ -174,7 +180,7 @@ impl Command {
     pub fn detail(self) -> &'static str {
         match self {
             Command::New => {
-                "Asks its name, its directory, when it runs (weekdays at 8:45, every 30m 9-6, nov 20 3pm), which tab, what to do when that tab is busy or the computer slept, and the prompt added to Claude's system prompt. Mission control's Routines view lists them. Settings' \"Routines\" (routines)."
+                "Asks its name, its directory, when it runs (weekdays at 8:45, every 30m 9-6, nov 20 3pm), the tools a run may use, what to do when the computer slept, and the prompt added to Claude's system prompt. Mission control's Routines view lists them. Settings' \"Routines\" (routines)."
             }
         }
     }

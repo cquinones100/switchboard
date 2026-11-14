@@ -3,7 +3,8 @@
 //! keys): M-Space opens it over the whole screen, `]` moves to the next
 //! view, Enter on a tab's card opens its menu and "Go to tab" goes there,
 //! the Settings view changes a setting in the settings file, M-j opens the
-//! Work map as a picker of the open tabs, and q closes it. With UX 2.0 and
+//! Work map as a picker of the open tabs, Reopen lists the worktrees no tab
+//! has open and its menus open and remove them, and q closes it. With UX 2.0 and
 //! many tabs, moving about leaves what it shows standing, while a tab's new
 //! output and a tab closing still show. With UX 2.0, the Resources board ends
 //! a tab's busy process from its menu after a yes, and a number on a card
@@ -28,7 +29,6 @@ fn settings(server: &TestServer, extra: Value) {
         "sidebar": false,
         "github": false,
         "linear": false,
-        "view_work_map": false,
         "view_calendar": false,
         "view_slack": false,
         "view_relay": false,
@@ -39,7 +39,6 @@ fn settings(server: &TestServer, extra: Value) {
         // The Reminders view too, which a test of reminders turns on.
         "reminders": false,
         "standup_note": false,
-        "meeting_notes": false,
         "new_notes": false,
     });
     for (k, v) in extra.as_object().unwrap() {
@@ -569,54 +568,105 @@ fn m_j_picks_an_open_tab_from_the_work_map() {
     });
 }
 
+/// Runs git in `cwd`, with none of your own config.
+fn git(cwd: &std::path::Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@e")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@e")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {out:?}");
+}
+
 #[test]
-fn with_ux2_the_work_map_s_menus_scope_fold_and_go() {
+fn reopen_lists_the_worktrees_no_tab_has_open_and_its_menus_open_and_remove_them() {
     let server = TestServer::start();
-    settings(&server, json!({ "ux2": true, "view_work_map": true }));
-    let mut client = server.attach(140, 36);
+    settings(&server, json!({ "ux2": true, "view_reopen": true }));
+    let repo = server.dir.path().join("repo");
+    git(server.dir.path(), &["init", "-q", repo.to_str().unwrap()]);
+    git(&repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "start"]);
+    let clean = server.dir.path().join("wt-clean");
+    let dirty = server.dir.path().join("wt-dirty");
+    let opened = server.dir.path().join("wt-opened");
+    for (dir, branch) in [
+        (&clean, "feat-clean"),
+        (&dirty, "feat-dirty"),
+        (&opened, "feat-opened"),
+    ] {
+        git(
+            &repo,
+            &["worktree", "add", "-q", "-b", branch, dir.to_str().unwrap()],
+        );
+    }
+    std::fs::write(dirty.join("new.txt"), "work").unwrap();
+    let mut client = server.attach(160, 40);
     client.wait_text("$");
-    server.ok(&["new-tab", "-n", "second"]);
-    wait_list(&server, "two tabs named", |l| {
-        tabs(l).len() == 2
-            && tabs(l)
-                .iter()
-                .all(|t| t["name"].as_str().is_some_and(|n| !n.is_empty()))
-    });
+    server.ok(&["new-tab", "-c", repo.to_str().unwrap()]);
+    // Reopen lists them under their heading, with no Work map in the bar.
     open(&mut client);
-    client.type_text("vwork\r");
-    // The tabs in no repository under a heading of their own, the keys on
-    // the footer.
-    client.wait_text("▾ Other tabs");
-    client.wait_text("m view actions");
-    // The view's menu shows only the work with no tab, which leaves
-    // nothing; then all.
-    client.type_text("m");
-    pick(&mut client, "Show only the rows with no tab");
-    client.wait_for("nothing without a tab", |s| {
-        !s.iter().any(|l| l.contains("Other tabs"))
-    });
-    client.type_text("m");
-    pick(&mut client, "Show every row");
-    client.wait_text("▾ Other tabs");
-    // Enter on the heading folds it and opens it again; z is no key.
-    client.type_text("\r");
-    client.wait_text("▸ Other tabs");
-    client.type_text("z");
-    client.type_text("\r");
-    client.wait_text("▾ Other tabs");
-    // A row's menu folds its repository too, the cursor on its heading,
-    // where Enter opens it again.
-    client.type_text("j\r");
-    pick(&mut client, "Fold its repository");
-    client.wait_text("▸ Other tabs");
-    client.type_text("\r");
-    client.wait_text("▾ Other tabs");
-    // Enter on a row opens its menu, going to its tab first.
-    client.type_text("j\r");
-    client.wait_text("Go to tab");
-    client.type_text("\r");
+    client.type_text("vreopen\r");
+    let screen = client.wait_text("feat-clean");
+    let all = screen.join("\n");
+    assert!(
+        all.to_lowercase().contains("worktrees with no tab"),
+        "{all}"
+    );
+    assert!(
+        all.contains("feat-dirty") && all.contains("feat-opened"),
+        "{all}"
+    );
+    assert!(!all.contains("Map ") && !all.contains("Work map"), "{all}");
+    client.type_text("q");
     client.wait_for("mission control closed", |s| {
         !s.iter().any(|l| l.contains("MISSION CONTROL"))
+    });
+    // M-o's picker: a clean worktree removed after a yes.
+    let menu = |client: &mut TestClient, name: &str| {
+        client.type_text(&format!("{ALT}o"));
+        client.wait_text(name);
+        client.type_text(name);
+        client.type_text("\r");
+        client.wait_text("Open a tab here and resume its Claude");
+    };
+    menu(&mut client, "feat-clean");
+    pick(&mut client, "Remove the worktree…");
+    client.wait_text("[Y/n]");
+    client.type_text("\r");
+    let deadline = common::deadline(Duration::from_secs(10));
+    while clean.exists() {
+        assert!(Instant::now() < deadline, "the clean worktree removed");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // One with a change is kept, saying so.
+    client.type_text("\x1b");
+    menu(&mut client, "feat-dirty");
+    pick(&mut client, "Remove the worktree…");
+    client.wait_text("[Y/n]");
+    client.type_text("\r");
+    client.wait_text("changes not committed");
+    assert!(dirty.exists());
+    // Its first option opens a tab there.
+    client.type_text("\x1b");
+    menu(&mut client, "feat-opened");
+    client.type_text("\r");
+    let want = opened.canonicalize().unwrap();
+    wait_list(&server, "a tab in the worktree", |l| {
+        tabs(l).iter().any(|t| {
+            t["path"]
+                .as_str()
+                .is_some_and(|p| std::path::Path::new(p).canonicalize().ok() == Some(want.clone()))
+        })
+    });
+    // M-j still picks an open tab, its view named Map in UX 2.0's bar.
+    client.type_text(&format!("{ALT}j"));
+    client.wait_for("M-j's picker of the open tabs", |s| {
+        s.iter().any(|l| l.contains(" Map ")) && s.iter().any(|l| l.contains("tab 1"))
     });
 }
 
@@ -1333,6 +1383,90 @@ fn the_slack_views_sections_choose_the_messages_beside_them() {
         let all = s.join("\n");
         all.contains("dm words") && !all.contains("mention words")
     });
+}
+
+// Board 21 lists a section one row per thread: three new replies in one
+// thread are one row, headed by its first message, while the thread
+// beside it shows each reply, and Enter on the row opens its menu.
+#[test]
+fn the_slack_board_lists_a_threads_replies_as_one_row() {
+    let server = TestServer::start();
+    std::fs::create_dir_all(&server.state).unwrap();
+    let secs = switchboard::util::now_ms() / 1000;
+    let ts = |ago: i64| format!("{}.000100", secs - ago);
+    let root = ts(900);
+    let reply = |from: &str, text: &str, ago: i64| {
+        json!({ "kind": "channel", "channel": "C1", "where": "#dev", "from": from,
+            "user": format!("U{from}"), "text": text, "ts": ts(ago), "thread": root,
+            "link": "https://slack.example/m" })
+    };
+    std::fs::write(
+        server.state.join("slack.json"),
+        json!({ "checked": secs * 1000, "items": [
+            reply("Ben", "reply one", 300),
+            reply("Cy", "reply two", 200),
+            reply("Ben", "reply three", 100),
+        ] })
+        .to_string(),
+    )
+    .unwrap();
+    let said = |from: &str, text: &str, at: &str| json!({ "user": format!("U{from}"), "from": from, "text": text, "ts": at });
+    std::fs::write(
+        server.state.join("slack-threads.json"),
+        json!({ format!("C1:{root}"): {
+            "messages": [
+                said("Ana", "the question", &root),
+                said("Ben", "reply one", &ts(300)),
+                said("Cy", "reply two", &ts(200)),
+                said("Ben", "reply three", &ts(100)),
+            ],
+            "replies": 3,
+            "read": secs * 1000,
+        } })
+        .to_string(),
+    )
+    .unwrap();
+    settings(
+        &server,
+        json!({ "view_slack": true, "ux2": true, "slack_threads": true, "slack_background": false, "photos": false }),
+    );
+    let mut client = server.attach(180, 40);
+    client.wait_text("$");
+    open(&mut client);
+    client.wait_for("the bar grouped", |s| {
+        s.iter()
+            .any(|l| l.contains("Work") && l.contains("Day") && l.contains("System"))
+    });
+    client.type_text("vslack\r");
+    let screen = client.wait_text("reply three");
+    let all = screen.join("\n");
+    let list = |l: &String| l.split('│').nth(1).unwrap_or("").to_string();
+    let listed: Vec<String> = screen.iter().map(list).collect();
+    assert!(listed.iter().any(|l| l.contains("the question")), "{all}");
+    assert!(
+        !listed
+            .iter()
+            .any(|l| l.contains("reply one") || l.contains("reply three")),
+        "the replies aren't rows of their own: {all}"
+    );
+    assert!(
+        listed
+            .iter()
+            .any(|l| l.contains("3 replies") && l.contains("3 new")),
+        "{all}"
+    );
+    let beside: Vec<String> = screen
+        .iter()
+        .map(|l| l.split('│').nth(2).unwrap_or("").to_string())
+        .collect();
+    for words in ["reply one", "reply two", "reply three"] {
+        assert!(
+            beside.iter().any(|l| l.contains(words)),
+            "{words} beside: {all}"
+        );
+    }
+    client.type_text("\r");
+    client.wait_text("Dismiss it, until its thread gets a reply");
 }
 
 // The Slack board shows one section at a time, so leaving it marks seen
@@ -2072,7 +2206,7 @@ fn views_row(s: &[String]) -> String {
 }
 
 #[test]
-fn with_ux2_braces_move_between_groups_and_m_brackets_close_it_and_step_back() {
+fn with_ux2_braces_and_m_brackets_move_between_groups_and_m_braces_close_it_and_step_back() {
     let (server, mut client) = two_tabs_ux2();
     let screen = open(&mut client);
     assert!(views_row(&screen).contains("Tabs"), "{}", screen.join("\n"));
@@ -2086,8 +2220,13 @@ fn with_ux2_braces_move_between_groups_and_m_brackets_close_it_and_step_back() {
         true,
         "the tab unchanged"
     );
-    // M-[ closes it and goes back through the tabs, to the first.
+    // M-] and M-[ move between the groups too, mission control left open.
+    client.type_text(&format!("{ALT}]"));
+    client.wait_for("Day's views", |s| views_row(s).contains("Reminders"));
     client.type_text(&format!("{ALT}["));
+    client.wait_for("Work's views", |s| views_row(s).contains("Tabs"));
+    // M-{ closes it and goes back through the tabs, to the first.
+    client.type_text(&format!("{ALT}{{"));
     client.wait_for("mission control closed", closed);
     wait_list(&server, "the first tab in front", |l| {
         tabs(l)[0]["current"] == true
@@ -2472,6 +2611,27 @@ fn on_a_wide_screen_one_view_is_capped_against_the_sidebar_and_its_side_takes_no
     client.send(b"\x1b[<0;340;10M\x1b[<0;340;10m");
     std::thread::sleep(Duration::from_millis(300) * common::patience());
     assert_eq!(client.screen().join("\n"), before);
+}
+
+#[test]
+fn the_resize_keys_move_a_lone_views_right_edge_and_set_the_lone_width() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(365, 40);
+    client.wait_text("$");
+    wait_list(&server, "the settings read", |l| {
+        l["sessions"][0]["sidebar"]["columns"] == 0
+    });
+    open(&mut client);
+    let rule_at =
+        |screen: &[String], col: usize| screen.iter().any(|row| row.chars().nth(col) == Some('│'));
+    client.wait_for("the view against its rule", |s| rule_at(s, 165));
+    // C-M-S-l, with no pane beside the list, moves the view's edge.
+    client.send(b"\x1b[108;8u");
+    client.wait_for("the rule 5 columns further", |s| rule_at(s, 170));
+    wait_saved(&server, "the lone width", |saved| {
+        saved["lone_pane_width"] == "170"
+    });
 }
 
 /// The settings file as written, once `pred` holds of it.

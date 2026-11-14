@@ -18,6 +18,9 @@ use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit, Place};
 use crate::ui::{Look, Outcome, Overlay, Picked, Step};
 
 pub struct Finder {
+    /// Its title: "Find a note", or "Recent notes" for the notes opened
+    /// lately.
+    title: &'static str,
     notes: Vec<NoteEntry>,
     query: String,
     shown: Vec<usize>,
@@ -44,8 +47,9 @@ fn haystack(n: &NoteEntry) -> String {
 }
 
 impl Finder {
-    pub fn new(notes: Vec<NoteEntry>) -> Finder {
+    pub fn new(notes: Vec<NoteEntry>, title: &'static str) -> Finder {
         let mut f = Finder {
+            title,
             shown: (0..notes.len()).collect(),
             notes,
             query: String::new(),
@@ -128,7 +132,7 @@ impl Overlay for Finder {
 
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
         let mut lines = vec![BoxLine::spans(vec![
-            Span::styled(" Find a note: ", Style::new().fg(draw::EDGE)),
+            Span::styled(format!(" {}: ", self.title), Style::new().fg(draw::EDGE)),
             Span::styled(self.query.clone(), look.bright()),
             Span::styled("▏", look.dim()),
         ])];
@@ -136,7 +140,7 @@ impl Overlay for Finder {
             format!("   {}/{}", self.shown.len(), self.notes.len()),
             look.dim(),
         ));
-        let mut spec = BoxSpec::new("Find a note", &[]);
+        let mut spec = BoxSpec::new(self.title, &[]);
         spec.place = Place::Share {
             cols_pct: 85,
             rows_pct: 80,
@@ -361,7 +365,7 @@ mod tests {
         s.create("", Some("Groceries"));
         let gone = s.create("", Some("Gone"));
         s.delete(&gone);
-        let mut f = Finder::new(s.notes(None));
+        let mut f = Finder::new(s.notes(None), "Find a note");
         assert_eq!(
             f.shown(),
             ["Groceries", "Standup"],

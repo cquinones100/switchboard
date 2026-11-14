@@ -197,7 +197,7 @@ impl Action {
     /// the extras'
     /// (`rename-tab`, `go-to-tab`, `pane-nav`, `mission-<view>`,
     /// `notifications`, `habits-report`, `send-reply`, `update-main`,
-    /// `check-setup`, `setup-part`, `calendar-tab`, `slack-tab`,
+    /// `check-setup`, `setup-part`,
     /// `open-pr-number`, `open-ticket-id`, `aws-login`), and
     /// `work-note-continuously`.
     pub fn parse(name: &str) -> Option<Action> {
@@ -596,13 +596,13 @@ impl Action {
                 "Drawn as the PR image draws a PR, a page at a time; j, k and Space page, q closes it.".into()
             }
             Action::MissionControl => {
-                "Every tab of every session as a card, then the views (Work map, PRs, CI, tickets, your day, Settings) named in the bar across the top.".into()
+                "Every tab of every session as a card, then the views (Reopen, PRs, CI, tickets, your day, Settings) named in the bar across the top.".into()
             }
             Action::FindTab => {
                 "The Work map with the open tabs alone, a filter already typing; Enter opens the chosen tab's menu, so Enter twice goes to it.".into()
             }
             Action::ReviveWorktree => {
-                "The Work map with the worktrees no tab has open; Enter twice opens a tab in the chosen one and resumes its Claude. Untrusted worktrees are left out.".into()
+                "The Reopen view as a picker: closed tabs, past Claude sessions and the worktrees no tab has open; Enter opens the chosen row's menu, its first option reopening or resuming it. Untrusted worktrees are left out.".into()
             }
             Action::Settings => {
                 "Mission control's Settings view: every option by category, then your own files' settings. What you change is kept in ~/.config/switchboard/settings.json.".into()
@@ -852,8 +852,8 @@ impl Default for Bindings {
         bind("M-Right", SelectPane(Right));
         bind("M-Up", SelectPane(Up));
         bind("M-Down", SelectPane(Down));
-        bind("M-[", TabBack);
-        bind("M-]", TabForward);
+        bind("M-{", TabBack);
+        bind("M-}", TabForward);
         bind("M-Tab", LastTab);
         for n in 1..=9 {
             bind(&format!("M-{n}"), SelectTab(n));
@@ -1042,6 +1042,15 @@ impl Bindings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn m_braces_go_back_and_forward_and_m_brackets_are_free() {
+        let b = Bindings::default();
+        assert_eq!(b.root.get(&key("M-{")), Some(&Action::TabBack));
+        assert_eq!(b.root.get(&key("M-}")), Some(&Action::TabForward));
+        assert_eq!(b.root.get(&key("M-[")), None);
+        assert_eq!(b.root.get(&key("M-]")), None);
+    }
 
     #[test]
     fn action_names_round_trip() {
