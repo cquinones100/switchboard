@@ -537,7 +537,9 @@ fn first_pane(server: &TestServer) -> String {
 #[test]
 fn graphics_commands_reach_the_terminal_only_from_a_pane_allowed_them() {
     let server = TestServer::start();
-    let mut client = server.attach(100, 30);
+    // A terminal that draws what a pane passes on: one that gets no
+    // pictures has their cells blank (src/mux/graphics.rs).
+    let mut client = server.attach_as("xterm-ghostty", 100, 30);
     client.wait_text("$");
     let pane = first_pane(&server);
     // Written with printf's octal escapes, so the line typed holds no ESC,

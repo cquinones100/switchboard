@@ -24,6 +24,12 @@ use crate::views::markdown::{Markdown, Wanted};
 /// The most memory the ready diagrams hold together.
 const HELD: usize = 64 * 1024 * 1024;
 
+/// The widest cell, in pixels, a diagram is kept for: more than any
+/// terminal's (a Retina Ghostty's is about 18, Windows Terminal's sixel's
+/// 10), so the one copy every terminal attached draws from, each scaling
+/// it to its own cells, is sharp in all of them.
+pub const WIDEST_CELL: u32 = 24;
+
 /// A diagram ready to draw: its picture, and a key made of its pixels once
 /// (`ui::images::picture_key`), so a draw hashes nothing.
 #[derive(Clone, Debug)]
@@ -61,7 +67,8 @@ pub fn sources(description: &str, place: &str) -> Vec<String> {
 }
 
 /// A diagram made no wider than `width` pixels, its shape kept: the side
-/// pane's width, so the server holds no more of it than it shows.
+/// pane's width at the widest cell (`WIDEST_CELL`), so the server holds no
+/// more of it than a terminal shows.
 pub fn fitted(img: RgbaImage, width: u32) -> RgbaImage {
     let (w, h) = img.dimensions();
     let width = width.max(1);

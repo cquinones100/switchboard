@@ -94,6 +94,16 @@ fn with_ux2_a_ghostty_terminal_gets_half_circles_and_another_gets_spaces() {
 
 // ── Pictures drawn as sixel ─────────────────────────────────────────────────
 
+/// The pictures drawn as sixel in what a client was sent, leaving out the
+/// one-cell sixels that round the ends of the header's and mission
+/// control's pills (src/mux/graphics.rs's `Ends::Pictures`).
+fn pictures(raw: &[u8]) -> Vec<((usize, usize), (u32, u32))> {
+    common::sixels(raw)
+        .into_iter()
+        .filter(|(_, (w, _))| *w > 13)
+        .collect()
+}
+
 /// A server with UX 2.0 on and pictures drawn as sixel, and a terminal
 /// attached that answered its cell is 13 by 25 pixels; gives the first
 /// pane, allowed to send pictures.
@@ -190,7 +200,7 @@ fn with_ux2_a_picture_drawn_as_sixel_is_cut_under_the_header_and_short_of_the_la
     assert_eq!(screen[29], "Q7", "the last row's cells blank: {screen:?}");
     // Nothing ever drawn over the header or reaching the last row (its
     // cells 25 pixels tall), and no placeholder sent.
-    let drawn = common::sixels(&client.raw);
+    let drawn = pictures(&client.raw);
     for ((line, _), (_, height)) in &drawn {
         assert!(*line >= 4, "over the header: {drawn:?}");
         let rows = (*height as usize).div_ceil(25);
@@ -222,9 +232,9 @@ fn with_ux2_mission_control_s_cards_show_a_picture_s_cells_blank_and_draw_no_pie
         s.iter().filter(|l| l.contains("▎ Q7")).count() == 2
     });
     assert!(
-        common::sixels(&client.raw[before..]).is_empty(),
+        pictures(&client.raw[before..]).is_empty(),
         "no piece of it drawn over mission control: {:?}\n{}",
-        common::sixels(&client.raw[before..]),
+        pictures(&client.raw[before..]),
         screen.join("\n")
     );
     assert!(!common::sent(&client.raw, "\u{10EEEE}".as_bytes()));

@@ -551,8 +551,10 @@ impl Server {
         if sources.is_empty() {
             return;
         }
-        let cell = self.terminal.cell.unwrap_or(crate::mux::pane::CELL);
-        let width = super::render::ABOUT_COLS as u32 * cell.0 as u32;
+        // Fitted to a cell wider than any terminal's, not the asker's, since
+        // every terminal shares what is kept and each picture is scaled to
+        // its own cells as it is drawn (`ui::images::raster_picture`).
+        let width = super::render::ABOUT_COLS as u32 * super::diagrams::WIDEST_CELL;
         let tx = self.tx.clone();
         tokio::task::spawn_blocking(move || {
             let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
@@ -1240,16 +1242,13 @@ impl Server {
             caps: self
                 .clients
                 .get(&client)
-                .is_some_and(|c| crate::ui::kit::caps(&c.term)),
+                .is_some_and(|c| crate::mux::graphics::round_ends(&c.term)),
             cell: self
                 .clients
                 .get(&client)
-                .filter(|c| {
-                    // With sixel chosen every placeholder is blanked for the
-                    // panes' pictures (src/mux/sixel), so the text stays.
-                    c.graphics() && settings::is_on("view_images") && !crate::mux::sixel::chosen()
-                })
-                .map(|_| self.terminal.cell.unwrap_or(crate::mux::pane::CELL)),
+                .filter(|_| settings::is_on("view_images"))
+                .and_then(|c| self.graphics_of(c))
+                .map(|g| g.cell),
             diagrams: self.mission.diagrams.ready(crate::status::theme::light()),
             notice_counts: Self::notice_history_on().then(|| {
                 super::history::counts(
@@ -3927,7 +3926,7 @@ impl Server {
         let caps = self
             .clients
             .get(&client)
-            .is_some_and(|c| crate::ui::kit::caps(&c.term));
+            .is_some_and(|c| crate::mux::graphics::round_ends(&c.term));
         self.open(
             client,
             Box::new(super::find_key::FindKey::new(lookup, caps)),

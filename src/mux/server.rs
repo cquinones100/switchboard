@@ -85,7 +85,9 @@ pub enum Event {
         session: Option<String>,
         cols: u16,
         rows: u16,
-        /// What the terminal says it is (its `TERM`, `TERM_PROGRAM` and `COLORTERM`).
+        /// What the terminal says it is (its `TERM`, `TERM_PROGRAM` and
+        /// `COLORTERM`, and `WindowsTerminal` in Windows Terminal,
+        /// `client::attaching_as`).
         term: String,
         /// Where the terminal's `switchboard` ran: a session made for it
         /// starts there.
@@ -372,7 +374,9 @@ pub struct Client {
     pub cols: u16,
     pub rows: u16,
     /// What its terminal says it is, as it attached (`TERM`,
-    /// `TERM_PROGRAM` and `COLORTERM`).
+    /// `TERM_PROGRAM` and `COLORTERM`, and `WindowsTerminal` in Windows
+    /// Terminal, `client::attaching_as`), by which src/mux/graphics.rs
+    /// decides how anything terminal-dependent is drawn for it.
     pub term: String,
     parser: Parser,
     prefix: bool,
@@ -406,24 +410,18 @@ pub struct Client {
 }
 
 impl Client {
-    /// Whether the server draws its images in this client's terminal
-    /// (src/ui/images.rs): one that speaks kitty's graphics protocol, with
-    /// the `server_images` setting on.
-    pub fn graphics(&self) -> bool {
-        crate::ui::images::speaks_kitty(&self.term) && crate::settings::is_on("server_images")
-    }
-
     /// Whether the mouse pointer's shape follows what is under it in this
-    /// client's terminal (src/ui/pointer.rs): Ghostty or kitty, with the
-    /// `hover_highlight` setting on.
+    /// client's terminal (src/ui/pointer.rs): one that takes the shapes
+    /// (src/mux/graphics.rs), with the `hover_highlight` setting on.
     pub fn takes_pointer(&self) -> bool {
-        crate::ui::pointer::takes(&self.term) && crate::settings::is_on("hover_highlight")
+        super::graphics::pointer_shapes(&self.term) && crate::settings::is_on("hover_highlight")
     }
 
     /// Whether its terminal draws truecolor, so the dark theme is drawn in
-    /// the canvas's colors for it (src/status/theme.rs).
+    /// the canvas's colors for it (src/status/theme.rs), as
+    /// src/mux/graphics.rs says.
     pub fn truecolor(&self) -> bool {
-        crate::status::theme::draws_truecolor(&self.term)
+        super::graphics::truecolor(&self.term)
     }
 
     /// Tells its terminal's client to end with `message`, putting the
@@ -436,7 +434,7 @@ impl Client {
             let put_back = crate::status::theme::PUT_COLORS_BACK.to_vec();
             let _ = self.tx.send(ServerMsg::Output(put_back));
         }
-        if crate::ui::pointer::takes(&self.term) {
+        if super::graphics::pointer_shapes(&self.term) {
             let beam = crate::ui::pointer::Pointer::Text.osc();
             let _ = self.tx.send(ServerMsg::Output(beam));
         }
@@ -2158,7 +2156,7 @@ impl Server {
         };
         // Its colours, for the panes' programs that ask (src/mux/terminal.rs),
         // the background's for the `system` theme too (src/status).
-        Server::ask_background(&client.tx);
+        Server::ask_background(&client.tx, &client.term);
         self.clients.insert(id, client);
         self.terminal_colors_sync();
         self.size_session_to(id);
@@ -2218,7 +2216,7 @@ impl Server {
             let put_back = crate::status::theme::PUT_COLORS_BACK.to_vec();
             let _ = otx.send(ServerMsg::Output(put_back));
         }
-        Server::ask_background(&otx);
+        Server::ask_background(&otx, &term);
         let client = Client {
             id,
             tx: otx,
@@ -2645,6 +2643,12 @@ impl Server {
         // are the server's (src/mux/terminal.rs, and the background's for
         // the theme in src/status), whatever is up.
         if parsed.input == Input::Unknown {
+            // Its answer to "what are you", asked as it attached, says
+            // whether it draws sixel (src/mux/graphics.rs).
+            if let Some(sixel) = super::terminal::draws_sixel(&parsed.raw) {
+                self.terminal_answered(id, sixel);
+                return;
+            }
             let colour = self.terminal_reply(&parsed.raw);
             if self.status_reply(&parsed.raw) || colour {
                 self.mission_changed();
@@ -3696,25 +3700,46 @@ impl Server {
             return;
         };
         let mut frame = Frame::new(c.cols.max(1), c.rows.max(1));
-        if c.graphics() {
-            frame.graphics = Some(self.terminal.cell.unwrap_or(super::pane::CELL));
-        }
+        frame.graphics = self.graphics_of(c);
         let session = c.session.clone();
         let (hits, side, header_keys, panes) = match self.session(&c.session) {
             Some(s) => self.compose(&mut frame, s, c),
             None => Default::default(),
         };
-        // With sixel chosen, the pictures' cells as the panes drew them,
-        // before anything is drawn over them (src/mux/sixel).
-        let pictures = self.pictures_drawn(&frame, &panes);
+        // How pictures and pill ends reach this terminal
+        // (src/mux/graphics.rs).
+        use super::graphics;
+        let term = self
+            .clients
+            .get(&id)
+            .map(|c| c.term.clone())
+            .unwrap_or_default();
+        let way = graphics::for_panes(&term);
+        let ends = graphics::ends(&term);
+        // Where a terminal needs them, the pictures' and the half circles'
+        // cells as the panes drew them, before anything is drawn over them
+        // (src/mux/sixel).
+        let pictures = self.pictures_drawn(&frame, &panes, way, ends);
         let c = self.clients.get_mut(&id).expect("checked above");
         frame.cover_links(|frame| c.overlays.draw(frame));
         c.status_hits = hits;
         c.header_keys = header_keys;
         c.dirty = false;
-        // Pictures as sixel where the panes' own placeholders still show,
-        // once everything over the panes is drawn.
-        self.place_pictures(&mut frame, pictures);
+        // Pictures as sixel where their placeholders still show (the
+        // panes' own, and the server's images'), once everything over the
+        // panes is drawn.
+        if let Some(drawn) = &pictures {
+            self.fix_ends(&mut frame, drawn, ends);
+        }
+        self.place_pictures(
+            &mut frame,
+            pictures.filter(|_| way == graphics::Protocol::Sixel),
+        );
+        // A terminal that draws no pictures gets their cells blank, never
+        // as the placeholder's box (src/mux/graphics.rs).
+        if graphics::pictures_blank(&term) {
+            super::sixel::place::blank(&mut frame.buf);
+        }
         let c = self.clients.get_mut(&id).expect("checked above");
         let bytes = c.screen.render(&frame);
         let _ = c.tx.send(ServerMsg::Output(bytes));
@@ -3873,7 +3898,7 @@ impl Server {
                 &header,
                 c.header_hover,
                 palette,
-                crate::ui::kit::caps(&c.term),
+                super::graphics::round_ends(&c.term),
                 c.overlays
                     .layers
                     .iter()
