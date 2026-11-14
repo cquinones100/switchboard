@@ -331,7 +331,7 @@ pub const TRIES: &[Try] = &[
         title: "Turn Routines back on?",
         body: |n| {
             format!(
-                "You set a reminder {n} times this week. A routine runs a prompt of yours on a schedule (weekdays at 8:45, every 30m 9-6) in a Claude tab of its own, its runs and their cost in mission control's Routines view."
+                "You set a reminder {n} times this week. A routine runs a prompt of yours on a schedule (weekdays at 8:45, every 30m 9-6) by a headless Claude allowed only the tools you name, its runs and their cost in mission control's Routines view."
             )
         },
     },

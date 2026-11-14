@@ -721,7 +721,7 @@
     "key": "slack_background",
     "category": "Mission control",
     "label": "Slack without a tab",
-    "description": "Mission control looks at Slack itself every minute, through cheap headless Haiku calls, instead of the Slack routine running /slack-updates",
+    "description": "Mission control looks at Slack itself every minute, through cheap headless Haiku calls, instead of the Slack routine following the slack-updates skill",
     "default": true
   },
   {
@@ -784,7 +784,7 @@
     "key": "routines",
     "category": "Mission control",
     "label": "Routines",
-    "description": "Prompts of yours on a schedule, each run in a Claude tab of its own, and the Routines view in mission control; off, no routine runs and the view is gone, the routines kept",
+    "description": "Prompts of yours on a schedule, each run by a headless Claude allowed only the routine's tools, opening no tab, and the Routines view in mission control; off, no routine runs and the view is gone, the routines kept",
     "default": true
   },
   {

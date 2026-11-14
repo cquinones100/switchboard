@@ -3,12 +3,14 @@
 //! names. Name; Directory, with a directory of your tabs that starts with
 //! what is typed shown dim after it, → taking it; When, read back as it is
 //! typed ("✓ Monday to Friday at 8:45 AM", or what it couldn't read) with
-//! examples and the next three runs as chips; Runs in, If it's busy and If
-//! it's missed as options; Prompt, several lines; Model.
+//! examples and the next three runs as chips; Allowed tools, a chip each
+//! with its × and "+ Add a tool"; If it's missed as options; Prompt,
+//! several lines; Model. It opens no tab, so it asks nothing about tabs.
 //!
 //! Tab and Shift-Tab move between the fields and the keycaps, Enter moves
-//! to the next field (and adds a line in Prompt), ← → or Space change an
-//! option, M-Enter saves from any field, M-r saves and runs it now, and Esc
+//! to the next field (and adds a line in Prompt, or adds the tool typed
+//! in Allowed tools, where Backspace with nothing typed takes the last one
+//! off), ← → or Space change an option, M-Enter saves from any field, M-r saves and runs it now, and Esc
 //! cancels, asking first (a second Esc) when anything was typed. Each field
 //! and option takes a click, the box gets easy mode's ×.
 //!
@@ -23,7 +25,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 use serde::{Deserialize, Serialize};
 
-use super::routine::{Routine, TabPolicy, WhenBusy, WhenMissed};
+use super::routine::{Routine, WhenMissed};
 use super::schedule::{EXAMPLES, Schedule};
 use super::view::when_words;
 use crate::mux::input::{Key, KeyCode, Mods, Mouse};
@@ -46,11 +48,11 @@ pub struct Draft {
     pub name: String,
     pub dir: String,
     pub when: String,
-    pub tab_policy: TabPolicy,
-    pub when_busy: WhenBusy,
     pub when_missed: WhenMissed,
     pub prompt: String,
     pub model: String,
+    /// The tools a run may use.
+    pub tools: Vec<String>,
 }
 
 impl Default for Draft {
@@ -59,11 +61,10 @@ impl Default for Draft {
             name: String::new(),
             dir: String::new(),
             when: String::new(),
-            tab_policy: TabPolicy::SameTab,
-            when_busy: WhenBusy::Wait,
             when_missed: WhenMissed::OnWaking,
             prompt: String::new(),
             model: String::new(),
+            tools: super::headless::DEFAULT_TOOLS.map(String::from).to_vec(),
         }
     }
 }
@@ -75,11 +76,10 @@ impl Draft {
             name: r.name.clone(),
             dir: crate::paths::tilde(Path::new(&r.dir)),
             when: r.when.clone(),
-            tab_policy: r.tab_policy,
-            when_busy: r.when_busy,
             when_missed: r.when_missed,
             prompt: r.prompt.clone(),
             model: r.model.clone(),
+            tools: r.tools.clone(),
         }
     }
 }
@@ -87,24 +87,18 @@ impl Draft {
 /// A field with options.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Choice {
-    RunsIn,
-    IfBusy,
     IfMissed,
 }
 
 impl Choice {
     fn label(self) -> &'static str {
         match self {
-            Choice::RunsIn => "Runs in",
-            Choice::IfBusy => "If it's busy",
             Choice::IfMissed => "If it's missed",
         }
     }
 
     fn options(self) -> [&'static str; 2] {
         match self {
-            Choice::RunsIn => ["The same tab each run", "A new tab each run"],
-            Choice::IfBusy => ["Wait for its turn to end, up to 30 minutes", "Skip the run"],
             Choice::IfMissed => ["Run when the computer wakes, up to an hour late", "Skip it"],
         }
     }
@@ -116,6 +110,11 @@ enum Part {
     Name,
     Dir,
     When,
+    /// Allowed tools: what is typed there adds one.
+    Tools,
+    /// A tool's ×, by its place.
+    RemoveTool(usize),
+    AddTool,
     Pick(Choice),
     /// An option of a field, by its place.
     Option(Choice, usize),
@@ -129,6 +128,9 @@ enum Part {
 
 /// A part on a line: the line's index, its first and last column, the part.
 type Placed = (usize, u16, u16, Part);
+
+/// A part on a line being built: its first and last column, the part.
+type PartAt = (usize, usize, Part);
 
 pub struct RoutineForm {
     title: String,
@@ -146,6 +148,8 @@ pub struct RoutineForm {
     hover: Option<Part>,
     /// What saving found wrong, under the field it is about.
     wrong: Option<(Part, String)>,
+    /// The tool being typed in Allowed tools.
+    adding: String,
     /// Esc pressed once with something typed.
     leaving: bool,
     drawn: Option<Drawn>,
@@ -177,6 +181,7 @@ impl RoutineForm {
             focus: Part::Name,
             hover: None,
             wrong: None,
+            adding: String::new(),
             leaving: false,
             drawn: None,
             parts: Vec::new(),
@@ -193,20 +198,20 @@ impl RoutineForm {
         self.fixed.clone().unwrap_or_else(crate::util::local_now)
     }
 
-    fn stops(look: &Look) -> Vec<Part> {
-        let mut out = vec![
-            Part::Name,
-            Part::Dir,
-            Part::When,
-            Part::Pick(Choice::RunsIn),
-            Part::Pick(Choice::IfBusy),
+    /// The Tab stops: each field, each tool's × (Enter or Space takes it
+    /// off), the options and the keycaps.
+    fn stops(&self, look: &Look) -> Vec<Part> {
+        let mut out = vec![Part::Name, Part::Dir, Part::When];
+        out.extend((0..self.draft.tools.len()).map(Part::RemoveTool));
+        out.extend([
+            Part::Tools,
             Part::Pick(Choice::IfMissed),
             Part::Prompt,
             Part::Model,
             Part::Save,
             Part::SaveRun,
             Part::Cancel,
-        ];
+        ]);
         if look.close {
             out.push(Part::Close);
         }
@@ -214,7 +219,7 @@ impl RoutineForm {
     }
 
     fn step_focus(&mut self, by: isize, look: &Look) {
-        let stops = Self::stops(look);
+        let stops = self.stops(look);
         let at = stops.iter().position(|p| *p == self.focus).unwrap_or(0) as isize;
         self.focus = stops[(at + by).rem_euclid(stops.len() as isize) as usize];
     }
@@ -224,6 +229,7 @@ impl RoutineForm {
             Part::Name => Some(&mut self.draft.name),
             Part::Dir => Some(&mut self.draft.dir),
             Part::When => Some(&mut self.draft.when),
+            Part::Tools => Some(&mut self.adding),
             Part::Prompt => Some(&mut self.draft.prompt),
             Part::Model => Some(&mut self.draft.model),
             _ => None,
@@ -232,22 +238,29 @@ impl RoutineForm {
 
     fn chosen(&self, c: Choice) -> usize {
         match c {
-            Choice::RunsIn => (self.draft.tab_policy == TabPolicy::NewTab) as usize,
-            Choice::IfBusy => (self.draft.when_busy == WhenBusy::Skip) as usize,
             Choice::IfMissed => (self.draft.when_missed == WhenMissed::Skip) as usize,
         }
     }
 
     fn choose(&mut self, c: Choice, i: usize) {
         match c {
-            Choice::RunsIn => {
-                self.draft.tab_policy = [TabPolicy::SameTab, TabPolicy::NewTab][i.min(1)]
-            }
-            Choice::IfBusy => self.draft.when_busy = [WhenBusy::Wait, WhenBusy::Skip][i.min(1)],
             Choice::IfMissed => {
                 self.draft.when_missed = [WhenMissed::OnWaking, WhenMissed::Skip][i.min(1)]
             }
         }
+    }
+
+    /// The tool typed in Allowed tools added, once; whether there was one.
+    fn add_tool(&mut self) -> bool {
+        let tool = self.adding.trim().to_string();
+        self.adding.clear();
+        if tool.is_empty() {
+            return false;
+        }
+        if !self.draft.tools.contains(&tool) {
+            self.draft.tools.push(tool);
+        }
+        true
     }
 
     /// The directory suggested after what is typed: the first of the
@@ -308,6 +321,8 @@ impl RoutineForm {
     }
 
     fn save(&mut self, run_now: bool) -> Step {
+        // A tool typed and not yet added counts.
+        self.add_tool();
         if let Some((part, why)) = self.check() {
             self.focus = part;
             self.wrong = Some((part, why));
@@ -321,7 +336,8 @@ impl RoutineForm {
     }
 
     fn cancel(&mut self) -> Step {
-        if self.draft != self.opened && !self.leaving {
+        let typed = self.draft != self.opened || !self.adding.trim().is_empty();
+        if typed && !self.leaving {
             self.leaving = true;
             return Step::Redraw;
         }
@@ -333,6 +349,18 @@ impl RoutineForm {
             Part::Option(c, i) => {
                 self.choose(c, i);
                 self.focus = Part::Pick(c);
+                Step::Redraw
+            }
+            Part::RemoveTool(i) => {
+                if i < self.draft.tools.len() {
+                    self.draft.tools.remove(i);
+                }
+                self.focus = Part::Tools;
+                Step::Redraw
+            }
+            Part::AddTool => {
+                self.add_tool();
+                self.focus = Part::Tools;
                 Step::Redraw
             }
             Part::Save => self.save(false),
@@ -495,8 +523,69 @@ impl RoutineForm {
         }
         lines.push(BoxLine::blank());
 
+        // Allowed tools: a chip each with its ×, then what is being typed
+        // and "+ Add a tool", on as many lines as they take.
+        let on = self.focus == Part::Tools;
+        let mut pieces: Vec<(Vec<Span<'static>>, Option<Part>)> = Vec::new();
+        for (i, tool) in self.draft.tools.iter().enumerate() {
+            let part = Part::RemoveTool(i);
+            let lit = self.hover == Some(part) || self.focus == part;
+            let tone = if lit { Tone::Failed } else { Tone::Dim };
+            pieces.push((
+                kit::chip(&format!("{tool} ×"), tone, false, theme),
+                Some(part),
+            ));
+        }
+        if on || !self.adding.is_empty() {
+            let mut typed = vec![Span::styled(self.adding.clone(), Tone::Text.style(theme))];
+            if on {
+                typed.push(Span::styled("▏", Tone::Accent.style(theme)));
+            }
+            pieces.push((typed, None));
+        }
+        let lit = on || self.hover == Some(Part::AddTool);
+        let add = kit::chip(
+            "+ Add a tool",
+            if lit { Tone::Accent } else { Tone::Dim },
+            false,
+            theme,
+        );
+        pieces.push((add, Some(Part::AddTool)));
+        let mut rows: Vec<(Vec<Span<'static>>, Vec<PartAt>)> = vec![Default::default()];
+        for (spans, part) in pieces {
+            let w = kit::spans_width(&spans);
+            let row = rows.last_mut().expect("a row");
+            if kit::spans_width(&row.0) > 0 && kit::spans_width(&row.0) + w > fw {
+                rows.push(Default::default());
+            }
+            let row = rows.last_mut().expect("a row");
+            let x = fx + kit::spans_width(&row.0);
+            if let Some(part) = part {
+                row.1.push((x, x + w.saturating_sub(1), part));
+            }
+            row.0.extend(spans);
+            row.0.push(Span::raw(" "));
+        }
+        for (i, (spans, hits)) in rows.into_iter().enumerate() {
+            parts.push((lines.len(), 0, inner as u16, Part::Tools));
+            for (x0, x1, part) in hits {
+                parts.push((lines.len(), x0 as u16, x1 as u16, part));
+            }
+            let line = if i == 0 {
+                at_field("Allowed tools", on, spans)
+            } else {
+                under(spans)
+            };
+            lines.push(BoxLine::spans(line).clickable());
+        }
+        lines.push(BoxLine::spans(under(vec![Span::styled(
+            "a run may use these alone; one that reaches for another stops and fails, naming it",
+            Tone::Faint.style(theme),
+        )])));
+        lines.push(BoxLine::blank());
+
         // The options.
-        for c in [Choice::RunsIn, Choice::IfBusy, Choice::IfMissed] {
+        for c in [Choice::IfMissed] {
             let on = self.focus == Part::Pick(c);
             let chosen = self.chosen(c);
             let mut spans = Vec::new();
@@ -622,7 +711,7 @@ impl RoutineForm {
             self.focus == Part::Model,
             text_field(
                 &self.draft.model,
-                "Claude Code's default (opus, sonnet, haiku)",
+                "the default for routines (opus, sonnet, haiku)",
                 Part::Model,
                 Vec::new(),
             ),
@@ -703,7 +792,7 @@ impl Overlay for RoutineForm {
         self.parts = parts;
         let mut spec = BoxSpec::new(&self.title, &lines);
         spec.keys = Some(
-            "tab next field  ←→ an option  ↵ next (a line in Prompt)  M-↵ save  M-r save and run  esc cancel",
+            "tab next field  ←→ an option  ↵ next (a line in Prompt, a tool in Allowed tools)  M-↵ save  M-r save and run  esc cancel",
         );
         spec.width = inner as u16;
         spec.close_lit = self.focus == Part::Close || self.hover == Some(Part::Close);
@@ -729,14 +818,19 @@ impl Overlay for RoutineForm {
                 return Step::Redraw;
             }
             KeyCode::Enter => {
+                if self.focus == Part::Tools && self.add_tool() {
+                    return Step::Redraw;
+                }
                 return match self.focus {
                     Part::Prompt => {
                         self.draft.prompt.push('\n');
                         Step::Redraw
                     }
-                    Part::Save | Part::SaveRun | Part::Cancel | Part::Close => {
-                        self.press(self.focus)
-                    }
+                    Part::Save
+                    | Part::SaveRun
+                    | Part::Cancel
+                    | Part::Close
+                    | Part::RemoveTool(_) => self.press(self.focus),
                     _ => {
                         self.step_focus(1, look);
                         Step::Redraw
@@ -764,11 +858,17 @@ impl Overlay for RoutineForm {
         }
         if matches!(
             self.focus,
-            Part::Save | Part::SaveRun | Part::Cancel | Part::Close
+            Part::Save | Part::SaveRun | Part::Cancel | Part::Close | Part::RemoveTool(_)
         ) {
             return match k.code {
                 KeyCode::Char(' ') => self.press(self.focus),
                 _ => Step::Same,
+            };
+        }
+        if self.focus == Part::Tools && k.code == KeyCode::Backspace && self.adding.is_empty() {
+            return match self.draft.tools.pop() {
+                Some(_) => Step::Redraw,
+                None => Step::Same,
             };
         }
         if self.focus == Part::Dir && k.code == KeyCode::Right && self.take_suggestion() {
@@ -892,15 +992,21 @@ mod tests {
             "Name",
             "Directory",
             "When",
-            "Runs in",
-            "If it's busy",
+            "Allowed tools",
             "If it's missed",
             "Prompt",
             "Model",
         ] {
             assert!(text.contains(field), "{field}: {text}");
         }
-        assert!(text.contains("● The same tab each run"), "{text}");
+        assert!(
+            text.contains("Read ×") && text.contains("+ Add a tool"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("Runs in") && !text.contains("If it's busy"),
+            "{text}"
+        );
         assert!(text.contains("Save and run now"), "{text}");
         assert!(
             text.contains("weekdays at 8:45 · mondays 10:00"),
@@ -934,8 +1040,14 @@ mod tests {
         type_in(&mut f, "Sort them.");
         f.key(key(KeyCode::Enter), &look);
         type_in(&mut f, "By area.");
-        // Skip it when busy.
-        f.focus = Part::Pick(Choice::IfBusy);
+        // Grep taken off, Bash added.
+        f.focus = Part::Tools;
+        f.key(key(KeyCode::Backspace), &look);
+        type_in(&mut f, "Bash(gh pr list:*)");
+        f.key(key(KeyCode::Enter), &look);
+        assert_eq!(f.focus, Part::Tools, "Enter adds the tool, staying");
+        // Skip it when missed.
+        f.focus = Part::Pick(Choice::IfMissed);
         f.key(key(KeyCode::Right), &look);
         match f.key(alt_enter, &look) {
             Step::Close(Outcome::Picked(p)) => {
@@ -944,13 +1056,37 @@ mod tests {
                 assert_eq!(d.name, "Triage");
                 assert_eq!(d.when, "weekdays at 8:45");
                 assert_eq!(d.prompt, "Sort them.\nBy area.");
-                assert_eq!(d.when_busy, WhenBusy::Skip);
-                assert_eq!(d.tab_policy, TabPolicy::SameTab);
+                assert_eq!(d.when_missed, WhenMissed::Skip);
+                assert_eq!(d.tools, ["Read", "Glob", "Bash(gh pr list:*)"]);
             }
             other => panic!("{other:?}"),
         }
         let alt_r = Key::new(KeyCode::Char('r'), Mods::ALT);
         assert!(matches!(f.key(alt_r, &look), Step::Close(Outcome::Picked(p)) if p.index == 1));
+    }
+
+    #[test]
+    fn many_tools_wrap_and_each_one_s_x_is_a_tab_stop() {
+        let look = Look::default();
+        let tools: Vec<String> = (0..12)
+            .map(|i| format!("mcp__claude_ai_Slack__slack_tool_{i}"))
+            .collect();
+        let draft = Draft {
+            tools: tools.clone(),
+            ..Draft::default()
+        };
+        let mut f = RoutineForm::new(true, draft, Vec::new(), None).at_time(now());
+        let text = text_of(&f, WIDTH);
+        for t in &tools {
+            assert!(text.contains(&format!("{t} ×")), "{t}: {text}");
+        }
+        assert!(text.contains("+ Add a tool"), "{text}");
+        // From When, Tab reaches the first tool's ×, and Enter takes it off.
+        f.focus = Part::When;
+        f.key(key(KeyCode::Tab), &look);
+        assert_eq!(f.focus, Part::RemoveTool(0));
+        f.key(key(KeyCode::Enter), &look);
+        assert_eq!(f.draft.tools, tools[1..]);
     }
 
     #[test]

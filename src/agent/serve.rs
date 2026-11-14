@@ -188,11 +188,6 @@ impl Server {
             self.name_tab(tab);
         }
         self.history_hook(pane, &hook, &payload);
-        // The conversation's own hooks, a backgrounded one's (`--parked`)
-        // found its pane too, end a routine's run; a subagent's don't.
-        if hook.agent.is_empty() {
-            self.routines_hook(pane, tab, &hook.event, &payload);
-        }
         self.links_hook(pane, &hook, &payload);
         if changed {
             // A pane that has gone back to a shell keeps no state, so a
