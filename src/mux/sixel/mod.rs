@@ -4,12 +4,12 @@
 //! "Image protocol" (`image_protocol`) chooses, as src/mux/graphics.rs
 //! reads it: by the terminal (`auto`, the default), one whose answer to
 //! "what are you" (DA1) says it draws sixel gets it; `sixel` gives it to
-//! every terminal that doesn't speak kitty's; `kitty` to none. For a
-//! terminal that gets it, the server keeps the panes' graphics commands
-//! here rather than passing them on (src/mux/passthrough.rs) and draws
-//! every picture itself, the panes' and its own alike; any other is passed
-//! the panes' commands and sent the server's own images by kitty's
-//! protocol where it speaks it.
+//! every terminal, as chosen; `kitty` to none. For a terminal that gets
+//! it, the server keeps the panes' graphics commands here rather than
+//! passing them on (src/mux/passthrough.rs) and draws every picture
+//! itself, the panes' and its own alike; any other is passed the panes'
+//! commands and sent the server's own images by kitty's protocol where it
+//! gets kitty's.
 //!
 //! The apps stay as they are. Notes and the image view give the terminal
 //! each picture's PNG by its path as a kitty virtual placement, and the

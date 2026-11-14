@@ -2,11 +2,13 @@
 //! chooses: no other file in src/ writes out kitty's graphics commands or
 //! a sixel in its source (or any DCS, tmux's passthrough among them), so a
 //! picture added later doesn't speak one protocol and miss the other; and
-//! with Settings' "Image protocol" on sixel, the server's own pictures (the
-//! image atoms, the picture shown full size) reach a terminal that doesn't
-//! speak kitty's as sixel, never as kitty's, which Windows Terminal doesn't
-//! draw, while one that does keeps kitty's. The emulator the tests read the
-//! screen through draws neither, so these read the bytes.
+//! Settings' "Image protocol" is every terminal's way when it names one:
+//! on sixel, the server's own pictures (the image atoms, the picture shown
+//! full size) and the panes' reach every terminal as sixel, never as
+//! kitty's, Ghostty's too, and on kitty by kitty's protocol, Windows
+//! Terminal's too; only by the terminal (`auto`) does a terminal's answer
+//! decide. The emulator the tests read the screen through draws neither,
+//! so these read the bytes.
 
 use std::collections::HashSet;
 use std::fs;
@@ -290,28 +292,48 @@ fn with_sixel_a_box_s_shadow_is_its_text_form() {
 }
 
 #[test]
-fn with_sixel_chosen_a_kitty_terminal_still_gets_kitty_s_way() {
+fn with_sixel_chosen_a_kitty_terminal_gets_sixel_too() {
     let server = TestServer::start_with_settings(
         r#"{"image_protocol": "sixel", "notifications": false, "tips": false}"#,
     );
     let mut ghostty = server.attach_as("xterm-ghostty", 100, 30);
     ghostty.wait_text("$");
-    // The server's images by kitty's protocol: the shadow under the text.
-    server.ok(&["press", "palette"]);
-    ghostty.wait_sent("the shadow placed under the text", b"z=-1,C=1");
-    ghostty.type_text("\x1b");
-    // A pane's picture passed on as it came, its placeholders kept.
-    let pane = server.list()["sessions"][0]["tabs"][0]["panes"][0]["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    ghostty.wait_sent("asked for its sixel cell", b"\x1b[16t");
+    ghostty.send(b"\x1b[6;25;13t");
+    // A pane's picture drawn by the server as sixel, as chosen, not passed
+    // on: four cells of 13 pixels wide, two of 25 tall made whole bands.
+    let pane = first_pane_of(&server);
     server.ok(&["set", "-t", &pane, "@allow_passthrough", "1"]);
-    server.show_picture(&mut ghostty, &pane);
-    ghostty.wait_sent("the picture passed on", b"\x1b_Ga=T,U=1,f=100,t=f");
-    assert!(common::sent(&ghostty.raw, "\u{10EEEE}".as_bytes()));
-    assert!(common::sixels(&ghostty.raw).is_empty(), "no sixel");
+    let (line, col) = server.show_picture(&mut ghostty, &pane);
+    let at = format!("\x1b[{};{}H\x1bP0;1;0q\"1;1;52;48", line + 1, col + 1);
+    ghostty.wait_sent("the picture drawn as sixel", at.as_bytes());
+    // The server's own images as sixel too: no shadow under the text.
+    server.ok(&["press", "palette"]);
+    ghostty.wait_for("the palette", |s| s.iter().any(|l| l.contains('╭')));
+    assert!(!kitty_sent(&ghostty.raw), "nothing of kitty's sent");
+}
+
+#[test]
+fn with_kitty_chosen_a_terminal_that_answers_sixel_gets_kitty_s_way() {
+    let server = TestServer::start_with_settings(
+        r#"{"image_protocol": "kitty", "notifications": false, "tips": false}"#,
+    );
+    let mut wt = server.attach_as("xterm-256color WindowsTerminal", 100, 30);
+    wt.wait_text("$");
+    wt.wait_sent("asked what it is", b"\x1b[c");
+    wt.send(b"\x1b[?61;4;6;7c");
+    // A pane's picture passed on as it came, its placeholders kept, and
+    // the server's images by kitty's protocol: the shadow under the text.
+    let pane = first_pane_of(&server);
+    server.ok(&["set", "-t", &pane, "@allow_passthrough", "1"]);
+    server.show_picture(&mut wt, &pane);
+    wt.wait_sent("the picture passed on", b"\x1b_Ga=T,U=1,f=100,t=f");
+    assert!(common::sent(&wt.raw, "\u{10EEEE}".as_bytes()));
+    server.ok(&["press", "palette"]);
+    wt.wait_sent("the shadow placed under the text", b"z=-1,C=1");
+    assert!(common::sixels(&wt.raw).is_empty(), "no sixel");
     assert!(
-        !common::sent(&ghostty.raw, b"\x1b[16t"),
+        !common::sent(&wt.raw, b"\x1b[16t"),
         "not asked for a sixel cell"
     );
 }
@@ -394,7 +416,7 @@ fn ends_on(raw: &[u8], line: usize) -> usize {
 }
 
 #[test]
-fn with_sixel_the_pills_rounded_ends_are_one_cell_sixels_and_ghostty_keeps_its_glyphs() {
+fn with_sixel_the_pills_rounded_ends_are_one_cell_sixels_in_ghostty_too() {
     let (server, mut client) = sixel_server(140, 30);
     // UX 2.0's header, its keycaps rounded at both ends, on line 2.
     let deadline = common::deadline(std::time::Duration::from_secs(10));
@@ -408,19 +430,25 @@ fn with_sixel_the_pills_rounded_ends_are_one_cell_sixels_and_ghostty_keeps_its_g
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     assert!(!half_circles_sent(&client.raw), "no half circle as a glyph");
-    // Ghostty draws the glyphs itself, whatever is chosen.
+    // Ghostty draws the glyphs itself, but sixel is chosen: sixel there too.
     let mut ghostty = server.attach_as("xterm-ghostty", 140, 30);
     ghostty.wait_for("the header", |s| s[2].contains("Claude"));
+    ghostty.wait_sent("asked for its sixel cell", b"\x1b[16t");
+    ghostty.send(b"\x1b[6;25;13t");
     let deadline = common::deadline(std::time::Duration::from_secs(10));
-    while !half_circles_sent(&ghostty.raw) {
+    while ends_on(&ghostty.raw, 2) < 4 {
         ghostty.screen();
         assert!(
             std::time::Instant::now() < deadline,
-            "no glyphs for Ghostty"
+            "no rounded ends drawn as sixel for Ghostty: {:?}",
+            common::sixels(&ghostty.raw)
         );
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
-    assert_eq!(ends_on(&ghostty.raw, 2), 0, "and no sixel");
+    assert!(
+        !half_circles_sent(&ghostty.raw),
+        "no half circle as a glyph"
+    );
 }
 
 #[test]

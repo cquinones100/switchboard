@@ -16,45 +16,47 @@
 //! ride in the frame as text, so it is placed, scrolled, cut off and
 //! covered exactly as they are.
 //!
-//! Which way it reaches a terminal is chosen here, never by a caller, for
-//! each terminal attached by what it says it is (`for_terminal`):
+//! Which way it reaches a terminal is chosen here, never by a caller, by
+//! Settings' "Image protocol" (`image_protocol`, `for_terminal`): `kitty`
+//! or `sixel` gives every terminal that way, as chosen, whatever it is;
+//! `auto`, the default and the only choice that looks at the terminal,
+//! gives each attached the way it says it takes: kitty's where it speaks
+//! it (Ghostty, kitty), sixel where it says it draws sixel when asked as it
+//! attaches (its DA1 answer), as Windows Terminal from 1.22 and the
+//! VT340's other heirs do, and neither elsewhere.
 //!
-//! - kitty (`Protocol::Kitty`), for Ghostty and kitty whatever is chosen:
-//!   the panes' commands passed on as they came, and the server's images
-//!   sent inline (`t=d`) by each client's `ImageCache`, placed by their
-//!   placeholders, which the terminal draws them on, or, for the shadow
-//!   under a box, directly under the text (`z=-1`);
-//! - sixel (`Protocol::Sixel`), for any other terminal that says it draws
-//!   sixel when asked as it attaches (its DA1 answer, `Chosen::Auto`, the
-//!   default), as Windows Terminal from 1.22 and the VT340's other heirs
-//!   do, or whatever it says with Settings' "Image protocol"
-//!   (`image_protocol`) on `sixel`: the panes' commands kept rather than
+//! - kitty (`Protocol::Kitty`): the panes' commands passed on as they came,
+//!   and the server's images sent inline (`t=d`) by each client's
+//!   `ImageCache`, placed by their placeholders, which the terminal draws
+//!   them on, or, for the shadow under a box, directly under the text
+//!   (`z=-1`);
+//! - sixel (`Protocol::Sixel`): the panes' commands kept rather than
 //!   passed on, and every picture of either kind drawn by the server as
 //!   sixel where its placeholders still show once everything is drawn,
 //!   beside the frame's cells, the placeholders blanked (src/mux/sixel). A
 //!   sixel is drawn over its cells and can't sit under text, so the shadow
 //!   under a box is its text form there, half blocks along the box's edges;
-//! - neither: each of the server's images is its text form (any other
-//!   terminal, or Settings' `server_images` off), a picture's cells blank
-//!   rather than the placeholder's box where the terminal is known never to
-//!   draw kitty's (`pictures_blank`), the
-//!   panes' commands are still passed on, as a terminal drops a string it
-//!   doesn't know, and the apps in panes draw their pictures as text
-//!   (`apps_draw`).
+//! - neither (`auto`, for a terminal that takes neither): each of the
+//!   server's images is its text form (as with Settings' `server_images`
+//!   off), a picture's cells blank rather than the placeholder's box
+//!   (`pictures_blank`), the panes' commands are still passed on, as a
+//!   terminal drops a string it doesn't know, and the apps in panes draw
+//!   their pictures as text (`apps_draw`).
 //!
-//! So a Ghostty and a Windows Terminal attached at once each get the
-//! pictures their own way, and a reader of the screen that takes kitty's
-//! (`switchboard headless`) still does with sixel chosen.
+//! So with `auto` a Ghostty and a Windows Terminal attached at once each
+//! get the pictures their own way. `switchboard headless`, which reads
+//! kitty's alone, says it is Ghostty, so it shows them with `auto` or
+//! `kitty` chosen.
 //!
 //! Everything else drawn one way for one terminal and another for the rest
 //! is decided here too, so a terminal without a feature gets a stand-in
 //! rather than whatever a caller assumed: the rounded ends of kit's objects
 //! (a chip, a keycap, a cell, an input), the half circles U+E0B6 and
-//! U+E0B4, as the glyphs where the terminal draws them itself (Ghostty),
-//! as sixel pictures of them for a terminal that gets sixel (the frame's
-//! glyphs read back and drawn as pictures once it is drawn, as its images
-//! are, src/mux/sixel), and as a space of the object's fill elsewhere
-//! (`ends`); the mouse pointer's shapes, sent only to a terminal that takes
+//! U+E0B4, as sixel pictures of them for a terminal that gets sixel (the
+//! frame's glyphs read back and drawn as pictures once it is drawn, as its
+//! images are, src/mux/sixel), as the glyphs for one that draws them
+//! itself (Ghostty) otherwise, and as a space of the object's fill
+//! elsewhere (`ends`); the mouse pointer's shapes, sent only to a terminal that takes
 //! them (`pointer_shapes`); and the canvas's truecolor, for a terminal that
 //! draws it, Windows Terminal among them by the word its client adds when
 //! `WT_SESSION` is set, else the 256-color palette (`truecolor`). Callers
@@ -137,15 +139,15 @@ impl Graphics {
 /// What Settings' "Image protocol" (`image_protocol`) chooses.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Chosen {
-    /// By the terminal: kitty's protocol where it speaks it, sixel where
-    /// its answer to "what are you" (DA1) says it draws sixel (Windows
-    /// Terminal from 1.22, foot, WezTerm, xterm with sixel, mlterm),
-    /// neither elsewhere.
+    /// By the terminal, the only choice that looks at it: kitty's protocol
+    /// where it speaks it (Ghostty, kitty), sixel where its answer to
+    /// "what are you" (DA1) says it draws sixel (Windows Terminal from
+    /// 1.22, foot, WezTerm, xterm with sixel, mlterm), neither elsewhere.
     #[default]
     Auto,
-    /// Kitty's protocol where the terminal speaks it, neither elsewhere.
+    /// Kitty's protocol for every terminal, as chosen.
     Kitty,
-    /// Sixel for every terminal that doesn't speak kitty's protocol.
+    /// Sixel for every terminal, as chosen.
     Sixel,
 }
 
@@ -176,29 +178,41 @@ pub const ANSWERS_SIXEL: &str = "answers-sixel";
 /// The word added once that answer says it doesn't.
 pub const ANSWERS_NO_SIXEL: &str = "answers-no-sixel";
 
-/// Whether a terminal that doesn't speak kitty's protocol gets sixel: with
-/// sixel chosen, or, chosen by the terminal, where its DA1 answer said it
-/// draws sixel.
-fn wants_sixel(term: &str, chosen: Chosen) -> bool {
+/// Whether what a client attached as carries `word` (`ANSWERS_SIXEL`,
+/// `ANSWERS_NO_SIXEL`).
+fn says(term: &str, word: &str) -> bool {
+    term.split_whitespace().any(|w| w == word)
+}
+
+/// How pictures reach a terminal that says it is `term`, with `chosen`:
+/// `kitty` or `sixel` that way for every terminal, as chosen; only `auto`
+/// goes by the terminal, kitty's where it speaks it, sixel where its DA1
+/// answer said it draws sixel, neither elsewhere.
+fn way(term: &str, chosen: Chosen) -> Option<Protocol> {
     match chosen {
-        Chosen::Sixel => true,
-        Chosen::Auto => term.split_whitespace().any(|w| w == ANSWERS_SIXEL),
-        Chosen::Kitty => false,
+        Chosen::Kitty => Some(Protocol::Kitty),
+        Chosen::Sixel => Some(Protocol::Sixel),
+        Chosen::Auto if speaks_kitty(term) => Some(Protocol::Kitty),
+        Chosen::Auto if says(term, ANSWERS_SIXEL) => Some(Protocol::Sixel),
+        Chosen::Auto => None,
     }
 }
 
-/// The guess an app in a pane falls back on when the server is too old to
-/// say what the session's terminals get (`workspace_draws`), since it can't
-/// see their answers: chosen by the terminal, Windows Terminal (by the
-/// `WT_SESSION` the panes keep) is taken to draw sixel. Also the server's
-/// own count of a Windows Terminal that hasn't answered yet
-/// (`may_get_sixel`).
-fn apps_want_sixel(term: &str, chosen: Chosen) -> bool {
-    wants_sixel(term, chosen)
-        || (chosen == Chosen::Auto
+/// The way an app in a pane guesses for its terminal when the server is
+/// too old to say what the session's terminals get (`workspace_draws`),
+/// since it can't see their answers: `way`, and, with `auto`, sixel for
+/// Windows Terminal (by the `WT_SESSION` the panes keep) unless it answered
+/// that it doesn't draw it. Also the server's own count of a Windows
+/// Terminal that hasn't answered yet (`may_get_sixel`).
+fn guessed_way(term: &str, chosen: Chosen) -> Option<Protocol> {
+    way(term, chosen).or_else(|| {
+        (chosen == Chosen::Auto
+            && !says(term, ANSWERS_NO_SIXEL)
             && term
                 .to_lowercase()
                 .contains(&WINDOWS_TERMINAL.to_lowercase()))
+        .then_some(Protocol::Sixel)
+    })
 }
 
 /// What the terminal an app runs in says it is, as a client attaching from
@@ -216,14 +230,11 @@ pub fn speaks_kitty(term: &str) -> bool {
 }
 
 /// Whether a terminal gets sixel or may once it answers DA1: one that does,
-/// or, chosen by the terminal, Windows Terminal (`apps_want_sixel`), whose
-/// answer comes a moment after it attaches, by when a view may already have
-/// given a picture again, which would otherwise be dropped.
+/// or, with `auto`, Windows Terminal (`guessed_way`), whose answer comes a
+/// moment after it attaches, by when a view may already have given a
+/// picture again, which would otherwise be dropped.
 pub fn may_get_sixel(term: &str) -> bool {
-    for_panes(term) == Protocol::Sixel
-        || (!speaks_kitty(term)
-            && apps_want_sixel(term, chosen())
-            && !term.split_whitespace().any(|w| w == ANSWERS_NO_SIXEL))
+    guessed_way(term, chosen()) == Some(Protocol::Sixel)
 }
 
 /// Whether a terminal's picture cells are blanked rather than sent as the
@@ -237,24 +248,10 @@ pub fn pictures_blank(term: &str) -> bool {
 }
 
 /// How pictures reach a terminal that says it is `term` (what it attached
-/// as): by kitty's protocol where it speaks it, whatever is chosen; else as
-/// sixel where that is chosen (`Chosen::Sixel`) or the terminal is Windows
-/// Terminal and it is chosen by the terminal (`Chosen::Auto`, the
-/// default); else neither.
+/// as), by Settings' "Image protocol" (`way`): the protocol chosen, or,
+/// with `auto`, the default, the one the terminal takes.
 pub fn for_terminal(term: &str) -> Option<Protocol> {
-    way(speaks_kitty(term), wants_sixel(term, chosen()))
-}
-
-/// The way for a terminal that speaks kitty's protocol or not, with sixel
-/// chosen or not.
-fn way(kitty: bool, sixel: bool) -> Option<Protocol> {
-    if kitty {
-        Some(Protocol::Kitty)
-    } else if sixel {
-        Some(Protocol::Sixel)
-    } else {
-        None
-    }
+    way(term, chosen())
 }
 
 /// How the pictures of the panes allowed to send them reach a terminal:
@@ -293,20 +290,20 @@ fn workspace_draws() -> Option<String> {
 /// Whether an app (Notes, the views) draws its pictures: in the workspace,
 /// where a terminal showing its pane's session gets them, kitty's or sixel,
 /// as the server says, since only it has the terminals' answers; outside
-/// it, or with a server too old to say, where the terminal it runs in
-/// speaks kitty's protocol (Ghostty or kitty, by `$TERM` or
-/// `$TERM_PROGRAM`, which the panes keep as the workspace's), or, in a
-/// pane, gets sixel by its guess (`apps_want_sixel`).
+/// it, or with a server too old to say, by the way the terminal it runs in
+/// gets (`guessed_way`, from `$TERM` and `$TERM_PROGRAM`, which the panes
+/// keep as the workspace's): kitty's, which the app writes itself, or
+/// sixel in a pane, which the workspace draws from what the app gives it.
 pub fn apps_draw() -> bool {
     match workspace_draws() {
         Some(said) => said
             .split_whitespace()
             .any(|w| w == "kitty" || w == "sixel"),
-        None => {
-            let term = this_terminal();
-            speaks_kitty(&term)
-                || (super::socket::in_pane() && apps_want_sixel(&term, chosen_now()))
-        }
+        None => match guessed_way(&this_terminal(), chosen_now()) {
+            Some(Protocol::Kitty) => true,
+            Some(Protocol::Sixel) => super::socket::in_pane(),
+            None => false,
+        },
     }
 }
 
@@ -338,13 +335,13 @@ pub fn pointer_shapes(term: &str) -> bool {
 /// a cell, an input), the half circles U+E0B6 and U+E0B4, reach a terminal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ends {
-    /// The glyphs, which the terminal draws itself, never from a font that
-    /// may not have them: Ghostty.
-    Glyphs,
     /// Sixel pictures of the half circles, drawn by the server where the
     /// frame's glyphs are once it is drawn (src/mux/sixel): a terminal that
-    /// gets sixel.
+    /// gets sixel, by Image protocol.
     Pictures,
+    /// The glyphs, which the terminal draws itself, never from a font that
+    /// may not have them: Ghostty, where it doesn't get sixel.
+    Glyphs,
     /// A space of the object's fill, square, the object keeping its width:
     /// any other.
     Spaces,
@@ -352,19 +349,22 @@ pub enum Ends {
 
 /// How the rounded ends reach a terminal that says it is `term`.
 pub fn ends(term: &str) -> Ends {
-    ends_way(
-        term.to_lowercase().contains("ghostty"),
-        for_panes(term) == Protocol::Sixel,
-    )
+    ends_way(draws_half_circles(term), for_panes(term) == Protocol::Sixel)
 }
 
-/// The way for a terminal that draws the half circles itself or not, and
-/// that gets sixel or not.
+/// Whether a terminal draws the half circles itself: Ghostty does.
+fn draws_half_circles(term: &str) -> bool {
+    term.to_lowercase().contains("ghostty")
+}
+
+/// The way for a terminal that gets sixel or not, and that draws the half
+/// circles itself or not: as sixel wherever pictures go as sixel, as
+/// Image protocol says.
 fn ends_way(draws_them: bool, sixel: bool) -> Ends {
-    if draws_them {
-        Ends::Glyphs
-    } else if sixel {
+    if sixel {
         Ends::Pictures
+    } else if draws_them {
+        Ends::Glyphs
     } else {
         Ends::Spaces
     }
@@ -388,8 +388,8 @@ pub fn apps_round_ends() -> bool {
     }
     let term = this_terminal();
     ends_way(
-        term.to_lowercase().contains("ghostty"),
-        super::socket::in_pane() && !speaks_kitty(&term) && apps_want_sixel(&term, chosen_now()),
+        draws_half_circles(&term),
+        super::socket::in_pane() && guessed_way(&term, chosen_now()) == Some(Protocol::Sixel),
     ) != Ends::Spaces
 }
 
@@ -645,15 +645,19 @@ mod tests {
     }
 
     #[test]
-    fn a_kitty_terminal_keeps_kitty_s_way_and_another_gets_sixel_only_when_chosen() {
-        assert_eq!(way(true, false), Some(Protocol::Kitty));
-        assert_eq!(
-            way(true, true),
-            Some(Protocol::Kitty),
-            "Ghostty with sixel chosen"
-        );
-        assert_eq!(way(false, true), Some(Protocol::Sixel), "Windows Terminal");
-        assert_eq!(way(false, false), None);
+    fn a_chosen_protocol_is_every_terminal_s_and_only_auto_goes_by_the_terminal() {
+        let ghostty = "xterm-ghostty";
+        let wt = "xterm-256color WindowsTerminal answers-sixel";
+        let plain = "xterm-256color";
+        for term in [ghostty, wt, plain] {
+            assert_eq!(way(term, Chosen::Kitty), Some(Protocol::Kitty), "{term}");
+            assert_eq!(way(term, Chosen::Sixel), Some(Protocol::Sixel), "{term}");
+            assert_eq!(guessed_way(term, Chosen::Kitty), Some(Protocol::Kitty));
+            assert_eq!(guessed_way(term, Chosen::Sixel), Some(Protocol::Sixel));
+        }
+        assert_eq!(way(ghostty, Chosen::Auto), Some(Protocol::Kitty));
+        assert_eq!(way(wt, Chosen::Auto), Some(Protocol::Sixel));
+        assert_eq!(way(plain, Chosen::Auto), None);
     }
 
     #[test]
@@ -684,7 +688,11 @@ mod tests {
             assert!(!pointer_shapes(term), "{term}");
         }
         assert_eq!(ends_way(true, false), Ends::Glyphs);
-        assert_eq!(ends_way(true, true), Ends::Glyphs, "Ghostty with sixel");
+        assert_eq!(
+            ends_way(true, true),
+            Ends::Pictures,
+            "Ghostty with sixel chosen"
+        );
         assert_eq!(ends_way(false, true), Ends::Pictures, "Windows Terminal");
         assert_eq!(ends_way(false, false), Ends::Spaces);
     }
@@ -693,21 +701,14 @@ mod tests {
     fn chosen_by_the_terminal_one_that_answers_sixel_gets_it() {
         let wt = "xterm-256color WindowsTerminal";
         let answered = "xterm-256color WindowsTerminal answers-sixel";
-        assert!(wants_sixel(answered, Chosen::Auto));
-        assert!(
-            !wants_sixel(wt, Chosen::Auto),
-            "an older one, until it says"
-        );
-        assert!(!wants_sixel("xterm-256color", Chosen::Auto));
-        assert!(!wants_sixel(answered, Chosen::Kitty));
-        assert!(wants_sixel("xterm-256color", Chosen::Sixel));
+        assert_eq!(way(answered, Chosen::Auto), Some(Protocol::Sixel));
+        assert_eq!(way(wt, Chosen::Auto), None, "an older one, until it says");
         let no = "xterm-256color WindowsTerminal answers-no-sixel";
-        assert!(!wants_sixel(no, Chosen::Auto));
+        assert_eq!(way(no, Chosen::Auto), None);
         // An app can't see the answer: Windows Terminal is its guess.
-        assert!(apps_want_sixel(wt, Chosen::Auto));
-        assert!(!apps_want_sixel(wt, Chosen::Kitty));
-        assert!(!apps_want_sixel("xterm-256color", Chosen::Auto));
-        assert!(!wants_sixel("", Chosen::Kitty));
+        assert_eq!(guessed_way(wt, Chosen::Auto), Some(Protocol::Sixel));
+        assert_eq!(guessed_way(no, Chosen::Auto), None);
+        assert_eq!(guessed_way("xterm-256color", Chosen::Auto), None);
         assert_eq!(chosen_of(None), Chosen::Auto);
         assert_eq!(chosen_of(Some("auto".into())), Chosen::Auto);
         assert_eq!(chosen_of(Some("kitty".into())), Chosen::Kitty);
