@@ -114,21 +114,35 @@ function readRule(rule) {
 
 // A rule `Bash(<command>)` refused wherever the command starts one of a
 // shell line's commands: after an operator, a path to the program, variables
-// set before it, and options between the program and its subcommand (`git
-// -C dir pull`) allowed.
+// set before it, a wrapper running it (`env git pull`, `command git pull`),
+// and options between the program and its subcommand (`git -C dir pull`)
+// allowed.
 function bashDenyRule(rule) {
   const r = bashRule(rule);
   if (!r) return null;
   const [program, ...rest] = r.start;
-  let source = `(^|[;&|(\\n\`]|\\$\\()\\s*(\\w+=\\S*\\s+)*(\\S*/)?${escape(program)}`;
+  const wrapper = `(\\S*/)?(${[...BEFORE].join('|')})(\\s+-\\S+)*`;
+  let source = `(^|[;&|(\\n\`]|\\$\\()\\s*((\\w+=\\S*|${wrapper})\\s+)*(\\S*/)?${escape(program)}`;
   source += '(\\s+-\\S+(\\s+[^-\\s;&|()]\\S*)?)*';
   for (const w of rest) source += `\\s+${escape(w)}`;
   if (r.more !== 'prefix') source += '(?=\\s|$|[;&|)`])';
   return { rule, test: new RegExp(source) };
 }
 
+// What may stand before a command's program.
+const BEFORE = new Set(['sudo', 'env', 'command', 'exec', 'nice', 'time', 'xargs']);
+
 const READS = DENY.map(readRule).filter(Boolean);
 const RUNS = DENY.map(bashDenyRule).filter(Boolean);
+
+// Readers whose first argument that isn't an option is a pattern or a
+// program (`grep .env README.md`), not a file, unless one was given by an
+// option; an `-e`/`--regexp`/`--expression` option's value is one too.
+const PATTERN_FIRST = new Set([
+  'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'sed', 'awk', 'gawk', 'jq', 'yq',
+]);
+const PATTERN_OPTIONS = new Set(['-e', '--regexp', '--expression']);
+const PROGRAM_FILE_OPTIONS = new Set(['-f', '--file', '--from-file']);
 
 // Programs whose file arguments are read and shown.
 const READERS = new Set([
@@ -137,8 +151,6 @@ const READERS = new Set([
   'cut', 'sort', 'uniq', 'strings', 'xxd', 'od', 'hexdump', 'base64',
   'diff', 'cmp', 'jq', 'yq',
 ]);
-// What may stand before a command's program.
-const BEFORE = new Set(['sudo', 'env', 'command', 'exec', 'nice', 'time', 'xargs']);
 
 const last = (path) => String(path).replace(/\/+$/, '').split('/').pop();
 // Quotes taken out, as the shell takes them out: `.e""nv` is `.env`.
@@ -162,9 +174,24 @@ function shellReadOf(command) {
     const tokens = part.trim().split(/\s+/).filter(Boolean);
     let i = 0;
     while (i < tokens.length && (/^\w+=/.test(tokens[i]) || BEFORE.has(tokens[i]))) i++;
-    if (!READERS.has(last(unquote(tokens[i] ?? '')))) continue;
-    for (const token of tokens.slice(i + 1)) {
-      const value = unquote(token);
+    const reader = last(unquote(tokens[i] ?? ''));
+    if (!READERS.has(reader)) continue;
+    const args = tokens.slice(i + 1).map(unquote);
+    const patternGiven = args.some(
+      (a) => PATTERN_OPTIONS.has(a.split('=')[0]) || PROGRAM_FILE_OPTIONS.has(a.split('=')[0]),
+    );
+    let patternLeft = PATTERN_FIRST.has(reader) && !patternGiven;
+    for (let k = 0; k < args.length; k++) {
+      const value = args[k];
+      if (PATTERN_FIRST.has(reader) && PATTERN_OPTIONS.has(value)) {
+        k++;
+        continue;
+      }
+      if (PATTERN_FIRST.has(reader) && PATTERN_OPTIONS.has(value.split('=')[0])) continue;
+      if (patternLeft && !value.startsWith('-')) {
+        patternLeft = false;
+        continue;
+      }
       const r = readOf(value.startsWith('-') && value.includes('=') ? value.slice(value.indexOf('=') + 1) : value);
       if (r) return r;
     }
