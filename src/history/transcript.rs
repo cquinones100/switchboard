@@ -277,11 +277,11 @@ pub fn read_from(file: &Path, offset: u64) -> Option<(String, u64)> {
 /// An entry you typed, by its origin: none, or `human`, never a background
 /// task's notification or a subagent's report (`peer`), which Claude Code
 /// writes as user entries and queues the same way.
-fn by_you(kind: Option<&Value>) -> bool {
+pub(crate) fn by_you(kind: Option<&Value>) -> bool {
     kind.and_then(Value::as_str).is_none_or(|k| k == "human")
 }
 
-fn seconds(entry: &Value) -> i64 {
+pub(crate) fn seconds(entry: &Value) -> i64 {
     entry
         .get("timestamp")
         .and_then(Value::as_str)
@@ -290,7 +290,7 @@ fn seconds(entry: &Value) -> i64 {
         .unwrap_or(0)
 }
 
-fn str_of(v: Option<&Value>) -> &str {
+pub(crate) fn str_of(v: Option<&Value>) -> &str {
     v.and_then(Value::as_str).unwrap_or("")
 }
 

@@ -257,6 +257,25 @@ impl Server {
         self.history_read(pane);
     }
 
+    /// Search everything's tab found in its conversation: the tab, with its
+    /// history open at `at`, the moment it was said; the tab alone when it
+    /// has no history.
+    pub fn history_at(&mut self, client: ClientId, tab: TabId, at: i64) {
+        self.mission_go(client, tab);
+        self.open_history(client);
+        let Some(c) = self.clients.get_mut(&client) else {
+            return;
+        };
+        if let Some(view) = c.overlays.find_mut::<HistoryView>()
+            && view.tab == tab
+        {
+            // Kept as asked: a history seeded just now reads its transcript
+            // after this, and only then knows where it starts.
+            view.shown = Some(at);
+            c.dirty = true;
+        }
+    }
+
     /// The tab's Claude pane, of those with a history.
     fn history_pane(&self, tab: TabId) -> Option<PaneId> {
         let panes = self.tab_panes(tab);

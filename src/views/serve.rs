@@ -762,10 +762,13 @@ impl Server {
                 _ => return,
             };
             let typed = picked.query.trim().to_lowercase();
-            if let Some((tab, at)) = search::tab_of(&picked.value) {
-                match at.filter(|_| browser) {
-                    Some(pane) => server.mission_go_to_match(client, tab, pane, &typed),
-                    None => server.mission_go(client, tab),
+            if let Some(at) = search::tab_of(&picked.value) {
+                match (at.pane, at.said, browser) {
+                    (_, Some(said), false) => server.history_at(client, at.tab, said),
+                    (Some(pane), None, true) => {
+                        server.mission_go_to_match(client, at.tab, pane, &typed)
+                    }
+                    _ => server.mission_go(client, at.tab),
                 }
                 return;
             }
@@ -835,9 +838,14 @@ impl Server {
                 Source::Tabs => {
                     let (open, copies) = self.tabs_to_search(pane);
                     let text = q.trim().to_lowercase();
+                    let files: Vec<PathBuf> = open
+                        .iter()
+                        .filter_map(|t| Some(t.claude.as_ref()?.1.clone()))
+                        .collect();
                     tokio::task::spawn_blocking(move || {
                         let found = crate::mission::pane_search::search(&copies, &text);
-                        send(search::tabs(&open, &text, &found))
+                        let said = super::conversation::search(&files, &text);
+                        send(search::tabs(&open, &text, &found, &said, util::now_secs()))
                     });
                 }
                 Source::Notes => {
@@ -862,11 +870,30 @@ impl Server {
         }
     }
 
+    /// A tab's Claude pane and its session's transcript, as the hooks or
+    /// the sidebar's last read named it, the tab's active pane first.
+    fn transcript_in(&self, tab: TabId) -> Option<(PaneId, PathBuf)> {
+        let active = self.tabs.get(&tab).map(|t| t.active);
+        self.tab_panes(tab)
+            .into_iter()
+            .filter_map(|p| {
+                let file = self
+                    .history
+                    .get(p)
+                    .and_then(|r| r.transcript.clone())
+                    .or_else(|| self.sidebar.panes.get(&p)?.transcript.clone())?;
+                Some((p, file))
+            })
+            .max_by_key(|(p, _)| Some(*p) == active)
+    }
+
     /// What search everything's Tabs source reads, copied on the server's
     /// task to be searched off it: the open tabs in the order they are
-    /// listed, but the one `from` is in and the Notifications window, and,
-    /// with `tab_search_panes` on, their panes' screens and the last
-    /// `tab_search_lines` of their scrollback, as M-j's picker reads them.
+    /// listed, the one `from` is in marked, but not the Notifications
+    /// window, with `tab_search_conversation` on each one's Claude
+    /// transcript, and with `tab_search_panes` on their panes' screens and
+    /// the last `tab_search_lines` of their scrollback, as M-j's picker
+    /// reads them.
     fn tabs_to_search(
         &self,
         from: Option<PaneId>,
@@ -875,15 +902,18 @@ impl Server {
         Vec<crate::mission::pane_search::Copied>,
     ) {
         let here = from.and_then(|p| self.panes.get(&p)).map(|s| s.tab);
+        let conversations = settings::is_on("tab_search_conversation");
         let open: Vec<search::OpenTab> = self
             .sessions
             .iter()
             .flat_map(|s| s.tabs.iter().copied())
-            .filter(|t| Some(*t) != here && self.tab_number(*t) != 0)
+            .filter(|t| self.tab_number(*t) != 0)
             .map(|tab| search::OpenTab {
                 tab,
                 number: self.tab_number(tab),
                 label: self.tab_label(tab),
+                here: Some(tab) == here,
+                claude: conversations.then(|| self.transcript_in(tab)).flatten(),
             })
             .collect();
         if !settings::is_on("tab_search_panes") {

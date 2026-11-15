@@ -2940,9 +2940,12 @@ fn m_f_finds_tabs_by_name_and_by_what_their_panes_show() {
         "the named tab first, then the one its pane shows it: {}",
         screen.join("\n")
     );
+    let here = screen
+        .iter()
+        .position(|l| l.contains("2 second · this tab"));
     assert!(
-        !screen.iter().any(|l| l.contains("2 second")),
-        "not the tab it was opened from: {}",
+        here.is_some() && by_pane < here,
+        "the tab it was opened from last, marked: {}",
         screen.join("\n")
     );
     // Enter goes to the tab chosen.
@@ -2969,6 +2972,89 @@ fn m_f_brings_up_a_tab_at_its_match_on_ctrl_o() {
                 })
             })
     });
+}
+
+/// One tab whose Claude's transcript holds `zebraword` in a prompt, older
+/// than anything its pane shows, and a tool's output holding `yakword`,
+/// with the hooks having named it; M-F asked for `query` from that tab.
+fn search_this_tabs_conversation(
+    extra: Value,
+    query: &str,
+) -> (TestServer, TestClient, Vec<String>) {
+    let mut extra = extra;
+    for off in ["linear", "github", "search_slack"] {
+        extra[off] = json!(false);
+    }
+    let server = TestServer::start();
+    settings(&server, extra);
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    wait_list(&server, "the settings read", |l| {
+        l["sessions"][0]["sidebar"]["columns"] == 0
+    });
+    let pane = tabs(&server.list())[0]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let now = jiff::Timestamp::now().as_second();
+    let at = |ago: i64| jiff::Timestamp::from_second(now - ago).unwrap().to_string();
+    let lines = [
+        json!({"type": "user", "timestamp": at(3 * 3600), "message": {"content": "is the zebraword set?"}}),
+        json!({"type": "assistant", "timestamp": at(3 * 3600 - 5), "message": {"content": [
+            {"type": "text", "text": "Looking."},
+            {"type": "tool_use", "id": "c1", "name": "Bash", "input": {"command": "ls"}}]}}),
+        json!({"type": "user", "timestamp": at(3 * 3600 - 4), "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "c1", "content": "yakword"}]}}),
+    ];
+    let transcript = server.home.join("t.jsonl");
+    let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    std::fs::write(&transcript, text).unwrap();
+    let payload = json!({"session_id": "s1", "transcript_path": transcript, "cwd": server.home});
+    hook(&server, &pane, "SessionStart", payload.clone());
+    hook(&server, &pane, "UserPromptSubmit", payload);
+    client.type_text(&format!("{ALT}F"));
+    client.wait_text("Search everything");
+    client.type_text(&format!("{query}\r"));
+    let screen = client.wait_for("the sources answered", |s| {
+        s.iter().any(|l| l.contains(" found")) && !s.iter().any(|l| l.contains("searching…"))
+    });
+    (server, client, screen)
+}
+
+#[test]
+fn m_f_finds_this_tab_by_what_was_said_in_its_conversation() {
+    let (_server, mut client, _) = search_this_tabs_conversation(json!({}), "zebraword");
+    let screen = client.wait_for("this tab, found in its conversation", |s| {
+        s.iter()
+            .any(|l| l.contains("1 home · this tab") && l.contains("said 3h 0m ago: is the"))
+    });
+    assert!(
+        !screen.iter().any(|l| l.contains("No results")),
+        "{}",
+        screen.join("\n")
+    );
+    // Enter opens the tab's history at the moment it was said.
+    client.type_text("\r");
+    client.wait_for("the history at that moment", |s| {
+        s.iter().any(|l| l.contains("h/l move in time")) && s.iter().any(|l| l.contains("viewing "))
+    });
+}
+
+#[test]
+fn m_f_leaves_out_tool_output_and_conversations_with_their_setting_off() {
+    let (_server, _client, screen) = search_this_tabs_conversation(json!({}), "yakword");
+    assert!(
+        !screen.iter().any(|l| l.contains("this tab")),
+        "a tool's output isn't the conversation: {}",
+        screen.join("\n")
+    );
+    let (_server, _client, screen) =
+        search_this_tabs_conversation(json!({"tab_search_conversation": false}), "zebraword");
+    assert!(
+        !screen.iter().any(|l| l.contains("said 3h")),
+        "{}",
+        screen.join("\n")
+    );
 }
 
 /// `note: zebraword` asks the notes alone: Linear's stand-in, running and

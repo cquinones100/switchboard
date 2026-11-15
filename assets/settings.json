@@ -547,6 +547,13 @@
     "default": true
   },
   {
+    "key": "tab_search_conversation",
+    "category": "Integrations",
+    "label": "Search tabs' conversations",
+    "description": "Search everything (M-S-f) finds a tab by what was said in its Claude conversation as well, your prompts and Claude's replies (not its tool calls), read from the session's transcript where Claude Code wrote it on this computer and kept in memory, never sent anywhere; Enter on a tab found that way opens its history (M-h) at the moment it was said. Off, search everything finds tabs by their names and what their panes show alone",
+    "default": true
+  },
+  {
     "key": "tab_search_lines",
     "category": "Tabs and status bar",
     "label": "Lines searched in each pane",

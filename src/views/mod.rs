@@ -39,6 +39,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 pub mod board;
+pub mod conversation;
 pub mod given;
 pub mod image;
 pub mod markdown;

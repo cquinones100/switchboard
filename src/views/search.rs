@@ -5,10 +5,14 @@
 //! the pane, in the link view, a note as its Markdown; a Slack message,
 //! which can't be read here, opens in the browser; a tab is gone to.
 //!
-//! Tabs: the open tabs but the one the search started from, by their label
-//! and, with `tab_search_panes` on, by what their panes show, matched and
-//! ranked by M-j's picker's search (`mission::pane_search`) on copies the
-//! server made of the panes, searched off its task; new with the Rust port.
+//! Tabs: the open tabs, the one the search started from among them (last
+//! of those found the same way, marked "this tab"), by their label, with
+//! `tab_search_panes` on by what their panes show, matched and ranked by
+//! M-j's picker's search (`mission::pane_search`) on copies the server made
+//! of the panes, and with `tab_search_conversation` on by what was said in
+//! their Claude's conversation (`conversation`), all searched off its task;
+//! new with the Rust port. A tab found in its conversation is gone to with
+//! its history (M-h) at the moment it was said.
 //!
 //! Notes: every Markdown note in `$NOTES_DIR` or `~/Notes` (nothing hidden,
 //! so not `.trash`) holding every word, newest first, read here and sent
@@ -38,6 +42,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::{Value, json};
 
+use super::conversation;
 use crate::integrations::{github, linear};
 use crate::mission::pane_search;
 use crate::mux::{PaneId, TabId};
@@ -274,76 +279,147 @@ fn markdown_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// An open tab as the Tabs source reads it: its id, its number and its
-/// label, in the order the tabs are listed.
+/// An open tab as the Tabs source reads it: its id, its number, its label,
+/// whether the search started from it, and its Claude's pane with that
+/// session's transcript, in the order the tabs are listed.
 #[derive(Clone, Debug)]
 pub struct OpenTab {
     pub tab: TabId,
     pub number: usize,
     pub label: String,
+    pub here: bool,
+    pub claude: Option<(PaneId, PathBuf)>,
 }
 
-/// A tab result's link: the tab, and the pane its match is in (none for a
-/// tab found by its name alone).
-pub fn tab_link(tab: TabId, pane: Option<PaneId>) -> String {
-    match pane {
-        Some(p) => format!("{TAB_LINK}{}/{}", tab.0, p.0),
-        None => format!("{TAB_LINK}{}", tab.0),
+/// Where in a tab a result points: the pane its match is in (none for a
+/// tab found by its name alone), and, for a match in its conversation,
+/// when that was said.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TabAt {
+    pub tab: TabId,
+    pub pane: Option<PaneId>,
+    pub said: Option<i64>,
+}
+
+/// A tab result's link.
+pub fn tab_link(at: TabAt) -> String {
+    let mut link = format!("{TAB_LINK}{}", at.tab.0);
+    if let Some(p) = at.pane {
+        link.push_str(&format!("/{}", p.0));
+        if let Some(said) = at.said {
+            link.push_str(&format!("@{said}"));
+        }
     }
+    link
 }
 
-/// The tab and the pane of a tab result's link; `None` for any other link.
-pub fn tab_of(link: &str) -> Option<(TabId, Option<PaneId>)> {
+/// Where a tab result's link points; `None` for any other link.
+pub fn tab_of(link: &str) -> Option<TabAt> {
     let rest = link.strip_prefix(TAB_LINK)?;
     let (tab, pane) = match rest.split_once('/') {
-        Some((t, p)) => (t, Some(PaneId(p.parse().ok()?))),
+        Some((t, p)) => (t, Some(p)),
         None => (rest, None),
     };
-    Some((TabId(tab.parse().ok()?), pane))
+    let (pane, said) = match pane.map(|p| p.split_once('@').unwrap_or((p, ""))) {
+        Some((p, "")) => (Some(PaneId(p.parse().ok()?)), None),
+        Some((p, s)) => (Some(PaneId(p.parse().ok()?)), Some(s.parse().ok()?)),
+        None => (None, None),
+    };
+    Some(TabAt {
+        tab: TabId(tab.parse().ok()?),
+        pane,
+        said,
+    })
 }
 
 const TAB_LINK: &str = "switchboard-tab:";
 
-/// The open tabs whose label holds `query` or whose panes show it (`found`,
-/// from `pane_search::search`), ranked as M-j's picker ranks them: those
-/// found by name first, in the tabs' order, then those found only in their
-/// panes, the most matching lines first. Each shows its number and label,
-/// and the last line holding the query, or "by name".
+/// The open tabs whose label holds `query`, whose panes show it (`found`,
+/// from `pane_search::search`) or whose Claude said it or was told it
+/// (`said`, by transcript, from `conversation::search`), ranked as M-j's
+/// picker ranks them: those found by name first, in the tabs' order, then
+/// those found on their panes, the most matching lines first, then those
+/// found only in their conversation, the latest first; in each, the tab
+/// the search started from comes last, marked "this tab". Each shows its
+/// number and label, and the last line holding the query (for one found
+/// in its conversation, after "said" and how long ago, first so a narrow
+/// column cuts the line rather than when), or "by name".
 pub fn tabs(
     open: &[OpenTab],
     query: &str,
     found: &HashMap<TabId, pane_search::Found>,
+    said: &HashMap<PathBuf, conversation::Hit>,
+    now: i64,
 ) -> Vec<Found> {
     let text = query.trim().to_lowercase();
     if text.is_empty() {
         return Vec::new();
     }
-    let mut by_name = Vec::new();
-    let mut by_content: Vec<(usize, Found)> = Vec::new();
-    for t in open {
+    // (group, here, order within the group, row)
+    let mut rows: Vec<(u8, bool, i64, Found)> = Vec::new();
+    for (i, t) in open.iter().enumerate() {
         let named = t.label.to_lowercase().contains(&text);
-        let hit = found.get(&t.tab);
-        let detail = match hit.and_then(|f| f.lines.last()) {
-            Some(line) => clean(line),
-            None if named => "by name".to_string(),
-            None => continue,
+        let on_screen = found.get(&t.tab);
+        // A tab found by name is gone to as one, whatever its
+        // conversation holds.
+        let in_talk = t
+            .claude
+            .as_ref()
+            .filter(|_| !named)
+            .and_then(|(pane, file)| Some((*pane, said.get(file)?)));
+        let (group, order, detail, at) = match (on_screen, in_talk) {
+            (Some(f), _) => (
+                1,
+                -(f.count as i64),
+                f.lines.last().map(|l| clean(l)).unwrap_or_default(),
+                TabAt {
+                    tab: t.tab,
+                    pane: Some(f.pane),
+                    said: None,
+                },
+            ),
+            (None, Some((pane, hit))) => (
+                2,
+                -hit.at,
+                format!(
+                    "said {} ago: {}",
+                    crate::history::timeline::span_words(now - hit.at),
+                    clean(&hit.line)
+                ),
+                TabAt {
+                    tab: t.tab,
+                    pane: Some(pane),
+                    said: Some(hit.at),
+                },
+            ),
+            (None, None) if named => (
+                0,
+                0,
+                "by name".to_string(),
+                TabAt {
+                    tab: t.tab,
+                    pane: None,
+                    said: None,
+                },
+            ),
+            (None, None) => continue,
         };
-        let row = Found {
-            source: Source::Tabs,
-            text: clean(&format!("{} {}", t.number, t.label)),
-            detail,
-            link: tab_link(t.tab, hit.map(|f| f.pane)),
-        };
-        if named {
-            by_name.push(row);
-        } else {
-            by_content.push((hit.map_or(0, |f| f.count), row));
-        }
+        let (group, order) = if named { (0, i as i64) } else { (group, order) };
+        let mark = if t.here { " · this tab" } else { "" };
+        rows.push((
+            group,
+            t.here,
+            order,
+            Found {
+                source: Source::Tabs,
+                text: clean(&format!("{} {}{mark}", t.number, t.label)),
+                detail,
+                link: tab_link(at),
+            },
+        ));
     }
-    by_content.sort_by_key(|(count, _)| std::cmp::Reverse(*count));
-    by_name.extend(by_content.into_iter().map(|(_, r)| r));
-    by_name.truncate(LIMIT);
-    by_name
+    rows.sort_by_key(|(group, here, order, _)| (*group, *here, *order));
+    rows.into_iter().take(LIMIT).map(|(.., r)| r).collect()
 }
 
 static ITEM_MARK: LazyLock<Regex> =
@@ -766,6 +842,8 @@ mod tests {
             tab: TabId(tab),
             number: tab as usize,
             label: label.to_string(),
+            here: false,
+            claude: None,
         };
         let tabs_open = [
             open(1, "alpha"),
@@ -784,7 +862,8 @@ mod tests {
                 },
             );
         }
-        let rows = tabs(&tabs_open, " ZEBRA ", &found);
+        let none = HashMap::new();
+        let rows = tabs(&tabs_open, " ZEBRA ", &found, &none, 0);
         let shown: Vec<(&str, &str)> = rows
             .iter()
             .map(|r| (r.text.as_str(), r.detail.as_str()))
@@ -797,10 +876,84 @@ mod tests {
                 ("1 alpha", "a zebra 1")
             ]
         );
-        assert_eq!(tab_of(&rows[0].link), Some((TabId(2), None)));
-        assert_eq!(tab_of(&rows[1].link), Some((TabId(3), Some(PaneId(13)))));
+        let at = |tab, pane: Option<u32>, said| TabAt {
+            tab: TabId(tab),
+            pane: pane.map(PaneId),
+            said,
+        };
+        assert_eq!(tab_of(&rows[0].link), Some(at(2, None, None)));
+        assert_eq!(tab_of(&rows[1].link), Some(at(3, Some(13), None)));
         assert_eq!(tab_of("https://example.com"), None);
-        assert!(tabs(&tabs_open, "  ", &found).is_empty());
+        assert!(tabs(&tabs_open, "  ", &found, &none, 0).is_empty());
+    }
+
+    #[test]
+    fn tabs_found_in_their_conversation_come_after_and_this_tab_last() {
+        let open = |tab: u32, here: bool| OpenTab {
+            tab: TabId(tab),
+            number: tab as usize,
+            label: format!("tab {tab}"),
+            here,
+            claude: Some((PaneId(tab + 10), PathBuf::from(format!("/t{tab}.jsonl")))),
+        };
+        let tabs_open = [
+            open(1, true),
+            open(2, false),
+            open(3, false),
+            open(4, false),
+        ];
+        let mut found = HashMap::new();
+        for tab in [1, 4] {
+            found.insert(
+                TabId(tab),
+                pane_search::Found {
+                    pane: PaneId(tab + 10),
+                    lines: vec![format!("node on screen {tab}")],
+                    count: 1,
+                },
+            );
+        }
+        let mut said = HashMap::new();
+        for (tab, at) in [(1, 900), (2, 500), (3, 800)] {
+            said.insert(
+                PathBuf::from(format!("/t{tab}.jsonl")),
+                conversation::Hit {
+                    at,
+                    line: format!("asked about node in {tab}"),
+                    count: 1,
+                },
+            );
+        }
+        let rows = tabs(&tabs_open, "node", &found, &said, 1000);
+        let shown: Vec<(&str, &str)> = rows
+            .iter()
+            .map(|r| (r.text.as_str(), r.detail.as_str()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("4 tab 4", "node on screen 4"),
+                ("1 tab 1 · this tab", "node on screen 1"),
+                ("3 tab 3", "said 3m ago: asked about node in 3"),
+                ("2 tab 2", "said 8m ago: asked about node in 2"),
+            ]
+        );
+        assert_eq!(
+            tab_of(&rows[2].link),
+            Some(TabAt {
+                tab: TabId(3),
+                pane: Some(PaneId(13)),
+                said: Some(800)
+            })
+        );
+        // Found only in its conversation, this tab still comes last.
+        found.clear();
+        let rows = tabs(&tabs_open, "node", &found, &said, 1000);
+        assert_eq!(rows.last().unwrap().text, "1 tab 1 · this tab");
+        // Found by name, a tab is gone to as one, its conversation aside.
+        let rows = tabs(&tabs_open, "tab 2", &found, &said, 1000);
+        assert_eq!(rows[0].detail, "by name");
+        assert_eq!(tab_of(&rows[0].link).unwrap().said, None);
     }
 
     #[test]
