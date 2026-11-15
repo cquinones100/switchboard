@@ -446,14 +446,19 @@ fn a_landing_whose_tests_run_in_ci_checks_for_leaks_pushes_its_own_branch_waits_
     );
     let leak = at("`switchboard leak-check <base>..HEAD`");
     let push = at("`git push --force origin HEAD:refs/heads/ci/land-<id>`");
-    let wait = at("`switchboard wait-ci --repo <owner/name> --sha \"$(git rev-parse HEAD)\"`");
+    let wait = at(
+        "`switchboard wait-ci --repo <owner/name> --sha \"$(git rev-parse HEAD)\" --same-as \"$(git merge-base HEAD origin/<name>)\"`",
+    );
     assert!(
         leak < push && push < wait,
         "leak-check, then the push, then the wait"
     );
     for said in [
         "- `passed <sha>`",
-        "- `failed <sha> <run id> <job names>`",
+        "- `base-failing <sha> <run id> <job names>`",
+        "- `change-failing <sha> <run id> <job names>`",
+        "- `mixed <sha> <run id> <job names>`",
+        "go on as for `base-failing`; otherwise as for `change-failing`",
         "`gh run view <run id> --log-failed`",
         "- `none`: no CI ran on the branch, or every job it has was skipped there. Say so in a line and run the tests here",
         "- `timeout`: a failure",

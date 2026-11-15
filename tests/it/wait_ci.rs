@@ -2,7 +2,8 @@
 //! test's own on 127.0.0.1 (`SWITCHBOARD_GITHUB_API` moved there, a dummy
 //! token, a temporary HOME): a commit whose check runs finish one by one
 //! passing, a failing job named with its run, no check run within the grace
-//! period, nothing settling before the timeout, and the usage.
+//! period, nothing settling before the timeout, the usage, and `--same-as`
+//! telling a failure from the default branch's by its jobs' logs.
 
 #![cfg(feature = "net")]
 
@@ -302,4 +303,345 @@ fn now_says_what_one_look_sees_passed_failed_running_or_none() {
     });
     assert_eq!(said(&now(&fake)), "none\n");
     assert_eq!(fake.seen.lock().unwrap().len(), 2);
+}
+
+const BASE_CHECK_RUNS: &str = "/repos/o/r/commits/base1/check-runs?per_page=100";
+const BASE_STATUSES: &str = "/repos/o/r/commits/base1/status?per_page=100";
+
+/// A failed job of run `run`, job `job`, whose log is the job's own.
+fn failed_job(name: &str, run: u32, job: u32) -> Value {
+    json!({
+        "name": name,
+        "status": "completed",
+        "conclusion": "failure",
+        "details_url": format!("https://github.com/o/r/actions/runs/{run}/job/{job}"),
+    })
+}
+
+fn nextest_log(failing: &[&str]) -> (u16, Value) {
+    let lines: Vec<String> = failing
+        .iter()
+        .map(|t| format!("2026-11-15T10:00:00.1Z         FAIL [   1.204s] switchboard::it {t}"))
+        .collect();
+    (200, Value::String(lines.join("\n")))
+}
+
+/// The landing's run (abc123) failing `Tests` with `landing`'s tests, beside
+/// a default branch (base1) whose `Tests` ends as `base`.
+fn landing_beside(
+    landing: &'static [&'static str],
+    base: Value,
+    base_log: &'static [&'static str],
+) -> Fake {
+    Fake::start(move |path, _| match path {
+        STATUSES | BASE_STATUSES => no_statuses(),
+        CHECK_RUNS => runs(vec![
+            check("Formatting", "completed", json!("success")),
+            failed_job("Tests", 77, 5),
+        ]),
+        BASE_CHECK_RUNS => runs(vec![
+            check("Formatting", "completed", json!("success")),
+            base.clone(),
+        ]),
+        "/repos/o/r/actions/jobs/5/logs" => nextest_log(landing),
+        "/repos/o/r/actions/jobs/6/logs" => nextest_log(base_log),
+        _ => (404, json!({ "message": "Not Found" })),
+    })
+}
+
+#[test]
+fn same_as_tells_a_landing_s_failure_from_the_default_branch_s() {
+    let ask = |fake: &Fake, now: bool| {
+        let mut args = vec!["--repo", "o/r", "--sha", "abc123", "--same-as", "base1"];
+        if now {
+            args.insert(0, "--now");
+        }
+        said(&wait_ci(fake, &args))
+    };
+    let fake = landing_beside(
+        &["wait_ci::same_as"],
+        failed_job("Tests", 88, 6),
+        &["wait_ci::same_as"],
+    );
+    assert_eq!(ask(&fake, false), "base-failing abc123 77 Tests\n");
+    assert_eq!(ask(&fake, true), "base-failing abc123 77 Tests\n");
+
+    let fake = landing_beside(
+        &["wait_ci::same_as"],
+        check("Tests", "completed", json!("success")),
+        &[],
+    );
+    assert_eq!(
+        ask(&fake, false),
+        "change-failing abc123 77 Tests\n",
+        "the job passed on the default branch"
+    );
+
+    let fake = landing_beside(
+        &["wait_ci::same_as", "tabs::names_a_tab"],
+        failed_job("Tests", 88, 6),
+        &["wait_ci::same_as"],
+    );
+    assert_eq!(
+        ask(&fake, false),
+        "mixed abc123 77 Tests\n",
+        "one test failing on both, one on the landing alone"
+    );
+
+    let fake = landing_beside(
+        &["wait_ci::same_as"],
+        check("Tests", "in_progress", Value::Null),
+        &[],
+    );
+    assert_eq!(
+        ask(&fake, false),
+        "mixed abc123 77 Tests\n",
+        "the default branch's job still running can't be told yet"
+    );
+}
+
+#[test]
+fn same_as_waits_for_the_landing_s_other_jobs_before_blaming_the_default_branch() {
+    // Linux fails a test the default branch fails too, while macOS still
+    // runs, then fails a test of the change's own.
+    let fake = Fake::start(|path, before| match (path, before) {
+        (STATUSES | BASE_STATUSES, _) => no_statuses(),
+        (CHECK_RUNS, 0) => runs(vec![
+            failed_job("Tests (Linux)", 77, 5),
+            check("Tests (macOS)", "in_progress", Value::Null),
+        ]),
+        (CHECK_RUNS, _) => runs(vec![
+            failed_job("Tests (Linux)", 77, 5),
+            failed_job("Tests (macOS)", 77, 7),
+        ]),
+        (BASE_CHECK_RUNS, _) => runs(vec![
+            failed_job("Tests (Linux)", 88, 6),
+            failed_job("Tests (macOS)", 88, 8),
+        ]),
+        (
+            "/repos/o/r/actions/jobs/5/logs"
+            | "/repos/o/r/actions/jobs/6/logs"
+            | "/repos/o/r/actions/jobs/8/logs",
+            _,
+        ) => nextest_log(&["wait_ci::same_as"]),
+        ("/repos/o/r/actions/jobs/7/logs", _) => nextest_log(&["tabs::names_a_tab"]),
+        _ => (404, json!({ "message": "Not Found" })),
+    });
+    let out = wait_ci(
+        &fake,
+        &["--repo", "o/r", "--sha", "abc123", "--same-as", "base1"],
+    );
+    assert_eq!(
+        said(&out),
+        "mixed abc123 77 Tests (Linux), Tests (macOS)\n",
+        "the base's failure alone, said once the job still running failed too"
+    );
+}
+
+#[test]
+fn same_as_with_no_such_job_on_the_default_branch_can_t_tell() {
+    let fake = landing_beside(
+        &["wait_ci::same_as"],
+        check("Lint", "completed", json!("success")),
+        &[],
+    );
+    assert_eq!(
+        said(&wait_ci(
+            &fake,
+            &["--repo", "o/r", "--sha", "abc123", "--same-as", "base1"]
+        )),
+        "mixed abc123 77 Tests\n"
+    );
+    let fake = landing_beside(
+        &["wait_ci::same_as"],
+        check("Tests", "completed", json!("skipped")),
+        &[],
+    );
+    assert_eq!(
+        said(&wait_ci(
+            &fake,
+            &["--repo", "o/r", "--sha", "abc123", "--same-as", "base1"]
+        )),
+        "mixed abc123 77 Tests\n",
+        "a job skipped on the default branch says nothing of its tests"
+    );
+}
+
+#[test]
+fn same_as_finds_a_test_the_default_branch_failed_in_another_partition() {
+    let fake = Fake::start(|path, _| match path {
+        STATUSES | BASE_STATUSES => no_statuses(),
+        CHECK_RUNS => runs(vec![
+            check("Tests (1/2)", "completed", json!("success")),
+            failed_job("Tests (2/2)", 77, 5),
+        ]),
+        BASE_CHECK_RUNS => runs(vec![
+            failed_job("Tests (1/2)", 88, 6),
+            check("Tests (2/2)", "completed", json!("success")),
+        ]),
+        "/repos/o/r/actions/jobs/5/logs" | "/repos/o/r/actions/jobs/6/logs" => {
+            nextest_log(&["wait_ci::same_as"])
+        }
+        _ => (404, json!({ "message": "Not Found" })),
+    });
+    assert_eq!(
+        said(&wait_ci(
+            &fake,
+            &["--repo", "o/r", "--sha", "abc123", "--same-as", "base1"]
+        )),
+        "base-failing abc123 77 Tests (2/2)\n",
+        "a test moved to the other partition by the tests the change added"
+    );
+}
+
+#[test]
+fn same_as_can_t_blame_the_change_while_a_partition_of_the_default_branch_still_runs() {
+    let fake = Fake::start(|path, _| match path {
+        STATUSES | BASE_STATUSES => no_statuses(),
+        CHECK_RUNS => runs(vec![
+            check("Tests (1/2)", "completed", json!("success")),
+            failed_job("Tests (2/2)", 77, 5),
+        ]),
+        BASE_CHECK_RUNS => runs(vec![
+            check("Tests (1/2)", "in_progress", Value::Null),
+            check("Tests (2/2)", "completed", json!("success")),
+        ]),
+        "/repos/o/r/actions/jobs/5/logs" => nextest_log(&["wait_ci::same_as"]),
+        _ => (404, json!({ "message": "Not Found" })),
+    });
+    assert_eq!(
+        said(&wait_ci(
+            &fake,
+            &["--repo", "o/r", "--sha", "abc123", "--same-as", "base1"]
+        )),
+        "mixed abc123 77 Tests (2/2)\n",
+        "the partition still running may fail the same test"
+    );
+}
+
+#[test]
+fn same_as_keeps_one_platform_s_failures_from_explaining_another_s() {
+    let fake = Fake::start(|path, _| match path {
+        STATUSES | BASE_STATUSES => no_statuses(),
+        CHECK_RUNS => runs(vec![failed_job("Tests (Linux)", 77, 5)]),
+        BASE_CHECK_RUNS => runs(vec![
+            check("Tests (Linux)", "completed", json!("success")),
+            failed_job("Tests (macOS)", 88, 6),
+        ]),
+        "/repos/o/r/actions/jobs/5/logs" | "/repos/o/r/actions/jobs/6/logs" => {
+            nextest_log(&["wait_ci::same_as"])
+        }
+        _ => (404, json!({ "message": "Not Found" })),
+    });
+    assert_ne!(
+        said(&wait_ci(
+            &fake,
+            &["--repo", "o/r", "--sha", "abc123", "--same-as", "base1"]
+        )),
+        "base-failing abc123 77 Tests (Linux)\n",
+        "the test failing on the default branch's macOS says nothing of Linux"
+    );
+}
+
+#[test]
+fn same_as_blames_the_change_whatever_another_family_of_jobs_skipped() {
+    let fake = Fake::start(|path, _| match path {
+        STATUSES | BASE_STATUSES => no_statuses(),
+        CHECK_RUNS => runs(vec![failed_job("Tests", 77, 5)]),
+        BASE_CHECK_RUNS => runs(vec![
+            check("Tests", "completed", json!("success")),
+            check("Publish the release", "completed", json!("skipped")),
+        ]),
+        "/repos/o/r/actions/jobs/5/logs" => nextest_log(&["wait_ci::same_as"]),
+        _ => (404, json!({ "message": "Not Found" })),
+    });
+    assert_eq!(
+        said(&wait_ci(
+            &fake,
+            &["--repo", "o/r", "--sha", "abc123", "--same-as", "base1"]
+        )),
+        "change-failing abc123 77 Tests\n",
+        "a release job skipped on the default branch says nothing of its tests"
+    );
+}
+
+#[test]
+fn same_as_can_t_tell_a_failure_whose_log_it_can_t_read() {
+    let fake = Fake::start(|path, _| match path {
+        STATUSES | BASE_STATUSES => no_statuses(),
+        CHECK_RUNS => runs(vec![failed_job("Tests", 77, 5)]),
+        BASE_CHECK_RUNS => runs(vec![check("Tests", "completed", json!("success"))]),
+        _ => (404, json!({ "message": "Not Found" })),
+    });
+    assert_eq!(
+        said(&wait_ci(
+            &fake,
+            &["--repo", "o/r", "--sha", "abc123", "--same-as", "base1"]
+        )),
+        "mixed abc123 77 Tests\n"
+    );
+}
+
+#[test]
+fn same_as_can_t_blame_the_change_for_an_unread_failure_while_its_family_failed_there() {
+    let fake = Fake::start(|path, _| match path {
+        STATUSES | BASE_STATUSES => no_statuses(),
+        CHECK_RUNS => runs(vec![
+            failed_job("Tests (1/2)", 77, 5),
+            check("Tests (2/2)", "completed", json!("success")),
+        ]),
+        BASE_CHECK_RUNS => runs(vec![
+            check("Tests (1/2)", "completed", json!("success")),
+            failed_job("Tests (2/2)", 88, 6),
+        ]),
+        "/repos/o/r/actions/jobs/5/logs" => (
+            200,
+            Value::String("error[E0425]: cannot find value `x`".into()),
+        ),
+        "/repos/o/r/actions/jobs/6/logs" => nextest_log(&["wait_ci::same_as"]),
+        _ => (404, json!({ "message": "Not Found" })),
+    });
+    let ask = |fake: &Fake| {
+        said(&wait_ci(
+            fake,
+            &["--repo", "o/r", "--sha", "abc123", "--same-as", "base1"],
+        ))
+    };
+    assert_eq!(ask(&fake), "mixed abc123 77 Tests (1/2)\n");
+    let fake = Fake::start(|path, _| match path {
+        STATUSES | BASE_STATUSES => no_statuses(),
+        CHECK_RUNS => runs(vec![failed_job("Clippy", 77, 5)]),
+        BASE_CHECK_RUNS => runs(vec![check("Clippy", "completed", json!("success"))]),
+        "/repos/o/r/actions/jobs/5/logs" => {
+            (200, Value::String("error: unused variable: `x`".into()))
+        }
+        _ => (404, json!({ "message": "Not Found" })),
+    });
+    assert_eq!(
+        ask(&fake),
+        "change-failing abc123 77 Clippy\n",
+        "a lint the default branch passed"
+    );
+}
+
+#[test]
+fn same_as_can_t_blame_the_change_while_a_partition_of_the_default_branch_is_missing() {
+    let fake = Fake::start(|path, _| match path {
+        STATUSES | BASE_STATUSES => no_statuses(),
+        CHECK_RUNS => runs(vec![
+            failed_job("Tests (1/2)", 77, 5),
+            check("Tests (2/2)", "completed", json!("success")),
+        ]),
+        BASE_CHECK_RUNS => runs(vec![check("Tests (1/2)", "completed", json!("success"))]),
+        "/repos/o/r/actions/jobs/5/logs" => nextest_log(&["wait_ci::same_as"]),
+        _ => (404, json!({ "message": "Not Found" })),
+    });
+    assert_eq!(
+        said(&wait_ci(
+            &fake,
+            &["--repo", "o/r", "--sha", "abc123", "--same-as", "base1"]
+        )),
+        "mixed abc123 77 Tests (1/2)\n",
+        "the partition not made there yet may fail the same test"
+    );
 }
