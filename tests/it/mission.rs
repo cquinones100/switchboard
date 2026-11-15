@@ -2971,6 +2971,80 @@ fn m_f_brings_up_a_tab_at_its_match_on_ctrl_o() {
     });
 }
 
+/// `note: zebraword` asks the notes alone: Linear's stand-in, running and
+/// asked by the same search without the prefix, hears nothing of it.
+#[test]
+fn m_f_scoped_to_notes_asks_no_other_source() {
+    use common::http::{Fake, Reply};
+    let linear = Fake::linear("test-key", |request| {
+        request.text().contains("searchIssues").then(|| {
+            Reply::json(
+                200,
+                json!({ "data": { "searchIssues": { "nodes": [
+                    { "identifier": "ABC-9", "title": "Zebraword in Linear",
+                      "url": "https://linear.app/acme/issue/ABC-9", "state": { "name": "Todo" } }
+                ] } } }),
+            )
+        })
+    });
+    let server = TestServer::start_with_env(&[
+        ("LINEAR_API_KEY", "test-key"),
+        ("SWITCHBOARD_LINEAR_API", &linear.graphql_url()),
+    ]);
+    settings(
+        &server,
+        json!({ "linear": true, "github": false, "search_slack": false }),
+    );
+    let notes = server.home.join("Notes");
+    std::fs::create_dir_all(&notes).unwrap();
+    std::fs::write(
+        notes.join("Zebra plan.md"),
+        "# Zebra plan\n\nthe zebraword here\n",
+    )
+    .unwrap();
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    let searched = || {
+        linear
+            .seen()
+            .iter()
+            .filter(|r| r.text().contains("searchIssues"))
+            .count()
+    };
+    client.type_text(&format!("{ALT}F"));
+    client.wait_text("Search the tabs, notes");
+    client.type_text("NOTE: zebraword\r");
+    let screen = client.wait_for("the note found", |s| {
+        s.iter().any(|l| l.contains("Search notes: \"zebraword\""))
+            && s.iter().any(|l| l.contains("Zebra plan"))
+    });
+    assert!(
+        !screen.iter().any(|l| l.contains("still looking")),
+        "{}",
+        screen.join("\n")
+    );
+    std::thread::sleep(Duration::from_millis(500) * common::patience());
+    assert_eq!(searched(), 0, "Linear isn't asked");
+    // Unscoped, the same search asks Linear too.
+    client.type_text("\x1b");
+    client.wait_for("the box closed", |s| {
+        !s.iter().any(|l| l.contains("Zebra plan"))
+    });
+    client.type_text(&format!("{ALT}F"));
+    client.wait_text("Search the tabs, notes");
+    client.type_text("zebraword\r");
+    client.wait_text("Zebraword in Linear");
+    assert_eq!(searched(), 1);
+}
+
+/// M-p's "Search notes" opens M-F's box with the notes' prefix typed.
+#[test]
+fn search_notes_opens_the_box_with_its_prefix_typed() {
+    let (server, mut client) = two_tabs(json!({}));
+    server.ok(&["press", "search-notes"]);
+    client.wait_text("Search the tabs, notes, Linear, GitHub and Slack: note: ");
+}
+
 #[test]
 fn m_f_matches_tab_names_alone_with_the_panes_search_off() {
     let (_server, _client, screen) =

@@ -20,6 +20,10 @@
 //! seconds. GitHub and Linear refuse while their settings are off; Slack is
 //! asked only with search_slack on.
 //!
+//! A query may open with the sources to ask, each a word and a colon
+//! (`note: slack: deploy`, `scope`), so a note search doesn't wait beside
+//! Slack's; with none, every source is asked.
+//!
 //! The rows are kept in the sources' order, whatever order they answer in,
 //! each link once (`merge`), so the list doesn't reshuffle under the cursor
 //! as a slow source arrives the way fzf's appended rows could.
@@ -69,6 +73,61 @@ impl Source {
             Source::Slack => "Slack",
         }
     }
+
+    /// Its name in a search's title while a scope names it.
+    pub fn scoped_name(self) -> &'static str {
+        match self {
+            Source::Tabs => "tabs",
+            Source::Notes => "notes",
+            other => other.name(),
+        }
+    }
+
+    /// The prefix that scopes a search to it, as the palette types it.
+    pub fn prefix(self) -> &'static str {
+        match self {
+            Source::Tabs => "tab: ",
+            Source::Notes => "note: ",
+            Source::Linear => "linear: ",
+            Source::GitHub => "gh: ",
+            Source::Slack => "slack: ",
+        }
+    }
+
+    /// The source a prefix's word names, whatever its case.
+    fn named(word: &str) -> Option<Source> {
+        match word.to_lowercase().as_str() {
+            "tab" | "tabs" => Some(Source::Tabs),
+            "note" | "notes" => Some(Source::Notes),
+            "linear" => Some(Source::Linear),
+            "gh" | "github" => Some(Source::GitHub),
+            "slack" => Some(Source::Slack),
+            _ => None,
+        }
+    }
+}
+
+/// The sources a query's opening prefixes name (`note: slack: deploy`), in
+/// the sources' order, and the query after them; no prefix names every
+/// source. A word before a colon that names no source (`fix:`) stays part
+/// of the query.
+pub fn scope(query: &str) -> (Vec<Source>, &str) {
+    let mut named = Vec::new();
+    let mut rest = query.trim_start();
+    while let Some((word, after)) = rest.split_once(':')
+        && !word.contains(char::is_whitespace)
+        && let Some(source) = Source::named(word)
+    {
+        if !named.contains(&source) {
+            named.push(source);
+        }
+        rest = after.trim_start();
+    }
+    if named.is_empty() {
+        return (Source::ALL.to_vec(), query.trim());
+    }
+    named.sort();
+    (named, rest.trim())
 }
 
 /// One result: what it is, a word about it, and the link it reads (empty
@@ -81,13 +140,14 @@ pub struct Found {
     pub link: String,
 }
 
-/// A search under way on a client: its number, what was asked, the rows so
-/// far, the sources still looking, and the pane its results are read
-/// beside.
+/// A search under way on a client: its number, what was asked (its scope's
+/// prefixes taken off), the sources its scope names, the rows so far, the
+/// sources still looking, and the pane its results are read beside.
 #[derive(Clone, Debug, Default)]
 pub struct Running {
     pub id: u64,
     pub query: String,
+    pub scope: Vec<Source>,
     pub rows: Vec<Found>,
     pub waiting: Vec<Source>,
     pub pane: Option<PaneId>,
@@ -503,6 +563,42 @@ mod tests {
             detail: String::new(),
             link: link.to_string(),
         }
+    }
+
+    #[test]
+    fn a_querys_prefixes_scope_it_to_their_sources() {
+        assert_eq!(
+            scope("deploy freeze"),
+            (Source::ALL.to_vec(), "deploy freeze")
+        );
+        assert_eq!(scope("note: deploy"), (vec![Source::Notes], "deploy"));
+        assert_eq!(
+            scope("  Slack: NOTE:deploy  "),
+            (vec![Source::Notes, Source::Slack], "deploy"),
+            "two, in the sources' order, any case, no space needed"
+        );
+        assert_eq!(
+            scope("gh: github: x"),
+            (vec![Source::GitHub], "x"),
+            "a source named twice is asked once"
+        );
+        assert_eq!(scope("tabs: linear: y").0, [Source::Tabs, Source::Linear]);
+        assert_eq!(
+            scope("fix: the build"),
+            (Source::ALL.to_vec(), "fix: the build"),
+            "an unknown word stays in the query"
+        );
+        assert_eq!(
+            scope("note: fix: it"),
+            (vec![Source::Notes], "fix: it"),
+            "prefixes end at the first that names no source"
+        );
+        assert_eq!(scope("note:"), (vec![Source::Notes], ""));
+        assert_eq!(
+            scope("deploy note: x"),
+            (Source::ALL.to_vec(), "deploy note: x"),
+            "only at the start"
+        );
     }
 
     #[test]

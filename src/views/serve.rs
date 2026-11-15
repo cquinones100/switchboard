@@ -96,8 +96,13 @@ fn rows(found: &[Shown]) -> Vec<PickItem> {
         .collect()
 }
 
-fn search_title(query: &str, waiting: &[Source]) -> String {
-    let mut title = format!("Search: \"{query}\"");
+fn search_title(query: &str, scope: &[Source], waiting: &[Source]) -> String {
+    let mut title = if scope == Source::ALL {
+        format!("Search: \"{query}\"")
+    } else {
+        let names: Vec<&str> = scope.iter().map(|s| s.scoped_name()).collect();
+        format!("Search {}: \"{query}\"", names.join(", "))
+    };
     if !waiting.is_empty() {
         let names: Vec<&str> = waiting.iter().map(|s| s.name()).collect();
         title.push_str(&format!(" · {} still looking", names.join(", ")));
@@ -131,7 +136,12 @@ impl Server {
             Command::OpenRepo => self.open_on_github(client, true),
             Command::OpenTicket => self.open_ticket(client),
             Command::PrReady => self.pr_ready(client),
-            Command::Search => self.search_everything(client),
+            Command::Search => self.search_everything(client, ""),
+            Command::SearchTabs => self.search_everything(client, Source::Tabs.prefix()),
+            Command::SearchNotes => self.search_everything(client, Source::Notes.prefix()),
+            Command::SearchLinear => self.search_everything(client, Source::Linear.prefix()),
+            Command::SearchGitHub => self.search_everything(client, Source::GitHub.prefix()),
+            Command::SearchSlack => self.search_everything(client, Source::Slack.prefix()),
             Command::ReadLink => self.ask_link(client),
             Command::OpenLinkRead => self.open_link_read(client),
             Command::OpenLink => self.pick_link(client, false),
@@ -728,8 +738,9 @@ impl Server {
         }
     }
 
-    /// M-S-f: asks what to search for, then searches.
-    fn search_everything(&mut self, client: ClientId) {
+    /// M-S-f: asks what to search for, then searches; `typed` is a scope's
+    /// prefix the palette's per-source commands start the box with.
+    fn search_everything(&mut self, client: ClientId, typed: &str) {
         if !settings::is_on("search_everything") {
             self.say(
                 Some(client),
@@ -741,7 +752,8 @@ impl Server {
         let picker = Picker::new("Search everything", Vec::new())
             .named("search-query")
             .prompt("Search the tabs, notes, Linear, GitHub and Slack: ")
-            .free();
+            .free()
+            .query(typed);
         self.pick(client, picker, move |server, client, picked| {
             let Some(picked) = picked else {
                 return;
@@ -758,29 +770,36 @@ impl Server {
     /// opens a web link in the browser instead, as search.sh's did. A tab
     /// chosen is gone to, Ctrl-O bringing up copy mode on its match.
     fn start_search(&mut self, client: ClientId, pane: Option<PaneId>, query: String) {
+        let (scope, rest) = search::scope(&query);
+        let query = rest.to_string();
+        if query.is_empty() {
+            return;
+        }
         self.views.searches += 1;
         let id = self.views.searches;
-        let mut waiting = vec![Source::Tabs, Source::Notes];
-        if settings::is_on("linear") {
-            waiting.push(Source::Linear);
-        }
-        if settings::is_on("github") {
-            waiting.push(Source::GitHub);
-        }
-        if search::asks_slack() {
-            waiting.push(Source::Slack);
-        }
+        // Each source the scope names, unless its own setting is off.
+        let waiting: Vec<Source> = scope
+            .iter()
+            .copied()
+            .filter(|s| match s {
+                Source::Tabs | Source::Notes => true,
+                Source::Linear => settings::is_on("linear"),
+                Source::GitHub => settings::is_on("github"),
+                Source::Slack => search::asks_slack(),
+            })
+            .collect();
         self.views.found.insert(
             client,
             Running {
                 id,
                 query: query.clone(),
+                scope: scope.clone(),
                 rows: Vec::new(),
                 waiting: waiting.clone(),
                 pane,
             },
         );
-        let picker = Picker::new(search_title(&query, &waiting), Vec::new())
+        let picker = Picker::new(search_title(&query, &scope, &waiting), Vec::new())
             .named("search")
             .prompt("Narrow: ")
             .also(
@@ -928,7 +947,7 @@ impl Server {
         search::merge(&mut running.rows, source, rows);
         running.waiting.retain(|s| *s != source);
         let items: Vec<PickItem> = running.rows.iter().map(item).collect();
-        let title = search_title(&running.query, &running.waiting);
+        let title = search_title(&running.query, &running.scope, &running.waiting);
         if let Some(c) = self.clients.get_mut(&client)
             && let Some(picker) = c.overlays.find_mut::<Picker>()
             && picker.kind() == "search"
@@ -1381,9 +1400,14 @@ mod tests {
     #[test]
     fn a_search_says_which_sources_are_still_looking() {
         assert_eq!(
-            search_title("deploy", &[Source::GitHub, Source::Slack]),
+            search_title("deploy", &Source::ALL, &[Source::GitHub, Source::Slack]),
             "Search: \"deploy\" · GitHub, Slack still looking"
         );
-        assert_eq!(search_title("x", &[]), "Search: \"x\"");
+        assert_eq!(search_title("x", &Source::ALL, &[]), "Search: \"x\"");
+        assert_eq!(
+            search_title("x", &[Source::Notes, Source::Slack], &[Source::Slack]),
+            "Search notes, Slack: \"x\" · Slack still looking",
+            "a scope says what is searched"
+        );
     }
 }

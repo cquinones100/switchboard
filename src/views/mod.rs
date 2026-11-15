@@ -72,6 +72,12 @@ pub enum Command {
     PrReady,
     /// M-S-f: the open tabs, notes, Linear, GitHub and Slack searched at once.
     Search,
+    /// M-S-f with one source's prefix typed (`search::scope`).
+    SearchTabs,
+    SearchNotes,
+    SearchLinear,
+    SearchGitHub,
+    SearchSlack,
     /// A link, asked for (or chosen from the pane's), read beside the pane.
     ReadLink,
     /// The link read beside this pane, in the browser.
@@ -107,7 +113,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 21] = [
+    pub const ALL: [Command; 26] = [
         Command::PrView,
         Command::TicketView,
         Command::OpenPr,
@@ -115,6 +121,11 @@ impl Command {
         Command::OpenTicket,
         Command::PrReady,
         Command::Search,
+        Command::SearchTabs,
+        Command::SearchNotes,
+        Command::SearchLinear,
+        Command::SearchGitHub,
+        Command::SearchSlack,
         Command::ReadLink,
         Command::OpenLinkRead,
         Command::OpenLink,
@@ -141,6 +152,11 @@ impl Command {
             Command::OpenTicket => "open-ticket",
             Command::PrReady => "pr-ready",
             Command::Search => "search-everything",
+            Command::SearchTabs => "search-tabs",
+            Command::SearchNotes => "search-notes",
+            Command::SearchLinear => "search-linear",
+            Command::SearchGitHub => "search-github",
+            Command::SearchSlack => "search-slack",
             Command::ReadLink => "read-link",
             Command::OpenLinkRead => "open-link-being-read",
             Command::OpenLink => "open-link",
@@ -178,6 +194,11 @@ impl Command {
             Command::Search => {
                 "Search the open tabs, notes, Linear, GitHub and Slack at once, and read a result beside the pane or go to the tab"
             }
+            Command::SearchTabs => "Search the open tabs",
+            Command::SearchNotes => "Search notes",
+            Command::SearchLinear => "Search Linear",
+            Command::SearchGitHub => "Search GitHub",
+            Command::SearchSlack => "Search Slack",
             Command::ReadLink => {
                 "Read a link in a pane beside this one, typed or one this pane shows"
             }
@@ -228,6 +249,13 @@ impl Command {
             }
             Command::Search => {
                 "Each source's results show as it answers, Slack's through Claude's connector about 15 seconds after the rest; notes are read on this computer and sent nowhere. Ctrl-O opens a result in the browser instead."
+            }
+            Command::SearchTabs
+            | Command::SearchNotes
+            | Command::SearchLinear
+            | Command::SearchGitHub
+            | Command::SearchSlack => {
+                "Opens M-F's search with this source's prefix typed (tab:, note:, linear:, gh:, slack:), so only it is asked. Prefixes can be typed in M-F too, more than one at a time."
             }
             Command::ReadLink => {
                 "A PR or ticket reads as its view lays it out, a Notion page or Google Doc through Claude's connectors, any other page as its main text. It replaces a link read beside before; Ctrl-O opens it in the browser."
@@ -285,6 +313,11 @@ impl Command {
             Command::OpenTicket => &["linear", "ticket", "browser"],
             Command::PrReady => &["github", "pr", "merge", "checks"],
             Command::Search => &["search", "find", "notes"],
+            Command::SearchTabs => &["search", "find", "tabs"],
+            Command::SearchNotes => &["search", "find", "notes"],
+            Command::SearchLinear => &["linear", "search", "find"],
+            Command::SearchGitHub => &["github", "search", "find"],
+            Command::SearchSlack => &["search", "find", "slack"],
             Command::ReadLink => &["links", "read", "browser"],
             Command::OpenLinkRead => &["links", "browser"],
             Command::OpenLink => &["links", "browser"],
@@ -310,6 +343,11 @@ impl Command {
             Command::PrReady => Some("M-m"),
             Command::Search => Some("M-F"),
             Command::OpenRepo
+            | Command::SearchTabs
+            | Command::SearchNotes
+            | Command::SearchLinear
+            | Command::SearchGitHub
+            | Command::SearchSlack
             | Command::ReadLink
             | Command::OpenLinkRead
             | Command::OpenLink
