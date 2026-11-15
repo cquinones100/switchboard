@@ -406,3 +406,159 @@ fn claude_reviews_without_switchboard_s_plugin_from_the_pane() {
     assert_eq!(run(&plugin.to_string_lossy()), "unset");
     common::stand_in::assert_none_refused(&bin);
 }
+
+/// A review run by a stand-in Claude that answers what `answer` holds.
+fn review_answering(home: &Path, work: &Path, answer: &Path, args: &[&str]) -> Output {
+    let bin = home.join("bin");
+    Claude::new()
+        .answer(&format!(
+            "cat >/dev/null\ncat {}",
+            sh_quote(&answer.to_string_lossy())
+        ))
+        .install(&bin);
+    let mut cmd = Command::new(BIN);
+    cmd.args(["codex-review", "--reviewer", "claude", "--no-rules"])
+        .args(args)
+        .current_dir(work)
+        .stdin(Stdio::null());
+    env(&mut cmd, home);
+    let path = std::env::var("PATH").unwrap_or_default();
+    cmd.env("PATH", format!("{}:{path}", bin.display()));
+    cmd.output().unwrap()
+}
+
+#[test]
+fn two_clean_rounds_record_the_review_and_one_does_not() {
+    let tmp = TempDir::new("cr-record");
+    let home = tmp.path();
+    let work = clone(home);
+    fs::write(work.join("a.txt"), "a\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "Pushed already"]);
+    git(home, &work, &["push", "-q", "origin", "main"]);
+    fs::write(work.join("b.txt"), "b\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "A change"]);
+    let answer = home.join("answer.json");
+    let clean = r#"{"structured_output":{"summary":"ok","findings":[]}}"#;
+    let found = r#"{"structured_output":{"summary":"no","findings":[{"title":"t","severity":"medium","file":"b.txt","line":1,"body":"b"}]}}"#;
+    let round = |said: &str, args: &[&str]| {
+        fs::write(&answer, said).unwrap();
+        let out = review_answering(home, &work, &answer, args);
+        assert!(out.status.success(), "{}", text(&out.stderr));
+    };
+    let recorded = || review(home, &work, &["--recorded"]);
+
+    round(clean, &[]);
+    round(found, &["--include-low"]);
+    round(clean, &["--include-low"]);
+    assert_eq!(
+        recorded().status.code(),
+        Some(1),
+        "a round with findings between the clean ones records nothing"
+    );
+
+    round(clean, &["--include-low"]);
+    let out = recorded();
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let line = text(&out.stdout);
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    let head = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&work)
+        .output()
+        .unwrap();
+    assert_eq!(fields.len(), 3, "{line}");
+    assert_eq!(fields[0], text(&head.stdout).trim(), "the reviewed commit");
+
+    // A commit of the same tree on the same base takes its place; another
+    // tree doesn't.
+    git(
+        home,
+        &work,
+        &["commit", "-q", "--amend", "-m", "A change, squashed"],
+    );
+    let squashed = text(
+        &Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&work)
+            .output()
+            .unwrap()
+            .stdout,
+    );
+    let out = review(home, &work, &["--record-squash", squashed.trim()]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let moved = text(&recorded().stdout);
+    assert!(moved.starts_with(squashed.trim()), "{moved}");
+    assert_eq!(
+        moved.split_whitespace().skip(1).collect::<Vec<_>>(),
+        fields[1..]
+    );
+    fs::write(work.join("c.txt"), "c\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "More"]);
+    let refused = review(home, &work, &["--record-squash", "HEAD"]);
+    assert_eq!(refused.status.code(), Some(1));
+    assert_eq!(text(&recorded().stdout), moved, "left as it was");
+
+    // The same tree in the end, but with history the review never saw on
+    // the way: a file added and taken out again.
+    git(home, &work, &["reset", "-q", "--hard", squashed.trim()]);
+    fs::write(work.join("secret.txt"), "s\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "Add"]);
+    git(home, &work, &["rm", "-q", "secret.txt"]);
+    git(home, &work, &["commit", "-q", "-m", "Take out"]);
+    let refused = review(home, &work, &["--record-squash", "HEAD"]);
+    assert_eq!(refused.status.code(), Some(1), "{}", text(&refused.stderr));
+    assert_eq!(text(&recorded().stdout), moved, "left as it was");
+
+    // Nor a commit on top that changes nothing but carries a message.
+    git(home, &work, &["reset", "-q", "--hard", squashed.trim()]);
+    git(
+        home,
+        &work,
+        &["commit", "-q", "--allow-empty", "-m", "Unreviewed words"],
+    );
+    let refused = review(home, &work, &["--record-squash", "HEAD"]);
+    assert_eq!(refused.status.code(), Some(1), "{}", text(&refused.stderr));
+    assert_eq!(text(&recorded().stdout), moved, "left as it was");
+
+    // Nor a merge of the reviewed tree whose second parent brings history
+    // of its own.
+    let base = format!("{}^", squashed.trim());
+    git(home, &work, &["checkout", "-q", "-b", "side", &base]);
+    fs::write(work.join("secret.txt"), "s\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "Side"]);
+    git(home, &work, &["checkout", "-q", "--detach", &base]);
+    git(
+        home,
+        &work,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "--no-commit",
+            "-s",
+            "ours",
+            "side",
+        ],
+    );
+    git(
+        home,
+        &work,
+        &["read-tree", "-u", "--reset", squashed.trim()],
+    );
+    git(home, &work, &["commit", "-q", "-m", "Merge"]);
+    let refused = review(home, &work, &["--record-squash", "HEAD"]);
+    assert_eq!(refused.status.code(), Some(1), "{}", text(&refused.stderr));
+    assert_eq!(text(&recorded().stdout), moved, "left as it was");
+
+    // A later round with findings takes the record back, -C naming this
+    // checkout too.
+    git(home, &work, &["checkout", "-q", "main"]);
+    git(home, &work, &["reset", "-q", "--hard", squashed.trim()]);
+    round(found, &["-C", "."]);
+    assert_eq!(recorded().status.code(), Some(1), "taken back");
+}

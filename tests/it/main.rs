@@ -20,6 +20,7 @@ mod demo;
 mod design_docs;
 mod diff;
 mod graphics;
+mod guard_hooks;
 mod headless;
 mod land_lock;
 mod leak_check;

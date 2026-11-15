@@ -58,6 +58,20 @@
 //! worked out here (`patch_id_of`), so a git older than 2.39, which hasn't
 //! `--verbatim`, gives it too.
 //!
+//! It keeps the record a repository's pre-push hook may ask for (Switchboard's
+//! does, for main), so no session writes it by hand, and none can say a
+//! review was clean that wasn't: a round with no findings notes its commit,
+//! base and patch in the clone's `review-loop-streak`, a round with findings
+//! takes that away, and a round run with `--include-low` (review-loop's
+//! confirmation round) that finds nothing on the same commit, base and patch
+//! as the clean round before it writes `<commit> <base> <patchId>` to
+//! `review-loop-clean`, both at `git rev-parse --git-path`. A review of
+//! another repository (`-C`) keeps neither. `codex-review --recorded` prints
+//! the record, and `codex-review --record-squash <commit>` records a commit in
+//! the reviewed one's place when it is the same tree making the same change on
+//! the same base (review-loop's squash), so the skills read and move the
+//! record without touching the file.
+//!
 //! When Codex isn't there, Claude Code reviews in its place with the same
 //! prompt and schema (`claude_args`), so the JSON is the same either way, its
 //! `reviewer` field saying which ran.
@@ -156,6 +170,8 @@ fn schema() -> Value {
 
 const USAGE: &str = "Usage: codex-review [-C <dir>] [--pr <number|url>] [--base <ref>] [--notes <file>] [--include-low] [--no-rules] [--reviewer <codex|claude>] [--model <name>] [--dry-run]
        codex-review --patch-id <from> <to>
+       codex-review --recorded
+       codex-review --record-squash <commit>
 
 Runs Codex (or Claude, when Codex isn't available) as a skeptical, read-only static
 reviewer of the current branch and prints its findings as JSON.
@@ -169,7 +185,9 @@ reviewer of the current branch and prints its findings as JSON.
   --reviewer <name>  codex or claude (default: codex, else claude)
   --model <name>     the reviewer's model
   --dry-run          print the prompt and command without running the reviewer
-  --patch-id         print the patch between two commits as one hash, and review nothing";
+  --patch-id         print the patch between two commits as one hash, and review nothing
+  --recorded         print the clean review recorded for the pre-push hook: commit, base, patch
+  --record-squash    record <commit> in place of the reviewed commit it squashes, same change and base";
 
 fn usage() -> ExitCode {
     eprintln!("{USAGE}");
@@ -1366,6 +1384,23 @@ pub fn main(args: Vec<String>) -> ExitCode {
             }
         };
     }
+    let answered = |result: Reviewed<()>| match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(ReviewError(e)) => {
+            eprintln!("codex-review: {e}");
+            ExitCode::from(1)
+        }
+    };
+    match args.first().map(String::as_str) {
+        Some("--recorded") if args.len() == 1 => {
+            return answered(
+                recorded().map(|(commit, base, patch)| println!("{commit} {base} {patch}")),
+            );
+        }
+        Some("--record-squash") if args.len() == 2 => return answered(record_squash(&args[1])),
+        Some("--recorded" | "--record-squash") => return usage(),
+        _ => {}
+    }
     let opts = match parse_args(&args) {
         Ok(opts) => opts,
         Err(code) => return code,
@@ -1389,6 +1424,8 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
                 .join(n),
         )
     });
+    // The checkout this runs in, which keeps the review's record (below).
+    let own_root = try_run("git", &["rev-parse", "--show-toplevel"]);
     // -C: the repository at <dir>, as git's own -C reads it, a relative
     // one from where this runs.
     if let Some(dir) = &opts.dir
@@ -1690,12 +1727,120 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
     // exactly this change counts as reviewed on whatever base it lands.
     set(&mut review, "patchId", json!(patch));
     set(&mut review, "warnings", json!(warnings));
+    // Kept only for the checkout you are in (-C naming it too), never one
+    // reviewed from outside with -C, whose git directory is someone else's
+    // worktree.
+    if opts.dir.is_none() || own_root.as_deref() == Some(root.as_str()) {
+        let clean = review["findings"].as_array().is_some_and(Vec::is_empty);
+        keep_record(
+            clean,
+            opts.include_low,
+            &format!("{head} {merge_base} {patch}"),
+        )?;
+    }
 
     for warning in &warnings {
         eprintln!("codex-review: warning: {warning}");
     }
     println!("{}", util::json_pretty(&Value::Object(review)));
     Ok(ExitCode::SUCCESS)
+}
+
+// ── The clean review's record ──────────────────────────────────────────────
+
+/// Where git keeps one of the record's files for the checkout this runs in.
+fn record_path(name: &str) -> Reviewed<PathBuf> {
+    Ok(PathBuf::from(git(&["rev-parse", "--git-path", name])?))
+}
+
+fn write_record(path: &Path, line: &str) -> Reviewed<()> {
+    util::write_atomic(path, format!("{line}\n"))
+        .map_err(|e| ReviewError(format!("could not write {}: {e}", path.display())))
+}
+
+/// The streak of clean rounds and, after a confirming one, the record the
+/// pre-push hook reads; `reviewed` is `<commit> <base> <patchId>`.
+fn keep_record(clean: bool, confirming: bool, reviewed: &str) -> Reviewed<()> {
+    let streak = record_path("review-loop-streak")?;
+    // A round with findings ends the streak and takes back the record, so a
+    // push waits for two clean rounds again.
+    if !clean {
+        let _ = fs::remove_file(&streak);
+        let _ = fs::remove_file(record_path("review-loop-clean")?);
+        return Ok(());
+    }
+    let previous = fs::read_to_string(&streak).unwrap_or_default();
+    if confirming && previous.trim() == reviewed {
+        write_record(&record_path("review-loop-clean")?, reviewed)?;
+    }
+    write_record(&streak, reviewed)
+}
+
+/// The recorded clean review: its commit, base and patch.
+fn recorded() -> Reviewed<(String, String, String)> {
+    let text = fs::read_to_string(record_path("review-loop-clean")?).unwrap_or_default();
+    match text.split_whitespace().collect::<Vec<_>>()[..] {
+        [commit, base, patch] => Ok((commit.into(), base.into(), patch.into())),
+        _ => fail("no clean review is recorded here"),
+    }
+}
+
+/// Records `commit` in place of the reviewed commit, only when it is the same
+/// change: the reviewed commit's tree, on the reviewed base, with the
+/// reviewed patch.
+fn record_squash(commit: &str) -> Reviewed<()> {
+    let (reviewed, base, patch) = recorded()?;
+    let squashed = git(&["rev-parse", "--verify", &format!("{commit}^{{commit}}")])?;
+    let tree = |c: &str| git(&["rev-parse", &format!("{c}^{{tree}}")]);
+    if tree(&squashed)? != tree(&reviewed)? {
+        return fail(format!(
+            "{squashed} has a different tree from the reviewed {reviewed}; nothing recorded"
+        ));
+    }
+    let on_base = Command::new("git")
+        .args(["merge-base", "--is-ancestor", &base, &squashed])
+        .stdin(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if !on_base || patch_id(&base, &squashed).map_err(ReviewError)? != patch {
+        return fail(format!(
+            "{squashed} isn't the reviewed change on the reviewed base {base}; nothing recorded"
+        ));
+    }
+    // Nor any history the review didn't see on the way: a squash replaces
+    // the reviewed commit rather than building on it, and every commit it
+    // leaves below itself is one the review covered, so nothing was added
+    // and taken out again, nor a commit added with a message of its own.
+    let is_ancestor = |a: &str, b: &str| {
+        Command::new("git")
+            .args(["merge-base", "--is-ancestor", a, b])
+            .stdin(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    };
+    if squashed != reviewed && is_ancestor(&reviewed, &squashed) {
+        return fail(format!(
+            "{squashed} adds commits on top of the reviewed {reviewed}; nothing recorded"
+        ));
+    }
+    let parents = git(&["rev-list", "--parents", "-n", "1", &squashed])?;
+    if parents.split_whitespace().count() != 2 {
+        return fail(format!(
+            "{squashed} isn't a commit with one parent; nothing recorded"
+        ));
+    }
+    let below = format!("{base}..{squashed}");
+    for hash in git(&["rev-list", &below])?.lines() {
+        if hash != squashed && !is_ancestor(hash, &reviewed) {
+            return fail(format!(
+                "{hash} is history the review didn't cover, between {base} and {squashed}; nothing recorded"
+            ));
+        }
+    }
+    write_record(
+        &record_path("review-loop-clean")?,
+        &format!("{squashed} {base} {patch}"),
+    )
 }
 
 #[cfg(test)]

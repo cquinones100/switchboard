@@ -3,6 +3,18 @@
     "allow": [
       "Bash(cargo build --release --locked)",
       "Bash(install -m 755 target/release/switchboard ~/.local/bin/)"
+    ],
+    "deny": [
+      "Edit(/.githooks/**)",
+      "Write(/.githooks/**)",
+      "Edit(/.claude/hooks/**)",
+      "Write(/.claude/hooks/**)",
+      "Edit(/.claude/settings.json)",
+      "Write(/.claude/settings.json)",
+      "Edit(**/review-loop-clean)",
+      "Write(**/review-loop-clean)",
+      "Edit(**/review-loop-streak)",
+      "Write(**/review-loop-streak)"
     ]
   },
   "hooks": {
