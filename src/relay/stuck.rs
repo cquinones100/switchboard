@@ -95,9 +95,15 @@ pub async fn stuck_tabs(cx: &Cx, tabs: &[Tab]) {
             } else {
                 name.clone()
             };
+            // The tab's name and its state once each, so the facts line,
+            // which would say both again, gives only its turn.
+            let so_far = facts
+                .turn_so_far
+                .as_deref()
+                .map(|turn| format!(" {}{}.", turn[..1].to_uppercase(), &turn[1..]))
+                .unwrap_or_default();
             let body = format!(
-                "🤖 {who} may be stuck: it's marked working, but nothing has happened for {idle}. {}.{lastly}{}",
-                facts.facts,
+                "🤖 {who} may be stuck: working, but nothing has happened for {idle}.{so_far}{lastly}{}",
                 tabs::on_screen(cx, &tab.id, "")
             );
             let note = post(cx, &body, home.as_deref(), PostOpts::buttons(stuck_buttons(tab))).await?;

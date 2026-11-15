@@ -2124,8 +2124,14 @@ fn a_working_tab_with_nothing_new_for_ten_minutes_is_noted_once_per_stall() {
         "the thread, the note, and a line in the main DM, once"
     );
     assert!(posts[1].body.starts_with(
-        "🤖 Claude may be stuck: it's marked working, but nothing has happened for 11m."
+        "🤖 Claude may be stuck: working, but nothing has happened for 11m. On a turn started 11m ago, 1 tool so far.\n"
     ));
+    assert_eq!(
+        posts[1].body.matches("work").count(),
+        1,
+        "its state once, and its name not at all in its own thread: {}",
+        posts[1].body
+    );
     assert!(posts[2].body.contains(&format!("tab {index}, work")));
     assert!(
         posts[1]

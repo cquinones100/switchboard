@@ -286,6 +286,9 @@ pub fn activity_of(after: &[Value]) -> Vec<String> {
 /// What the relay can tell about a tab without asking it.
 pub struct Facts {
     pub facts: String,
+    /// The turn's part of `facts` alone, without the tab's name, its state
+    /// or its last activity: "on a turn started 20m ago, 3 tools so far".
+    pub turn_so_far: Option<String>,
     pub turn: Option<LastPrompt>,
     pub activity: Vec<String>,
     pub last_at: Option<i64>,
@@ -307,25 +310,32 @@ pub fn tab_facts(cx: &Relay, tab: &Tab) -> Facts {
         .unwrap_or_default();
     let last_at = file.and_then(|f| tabs::last_activity_at(cx, f));
     let mut facts = format!("{} is {words}", label(tab.index, &tab.name));
+    let mut turn_so_far = None;
     if let Some(t) = &turn {
         let tools = activity
             .iter()
             .filter(|l| !l.starts_with("Claude: ") && !l.starts_with("(that failed"))
             .count();
+        let tools = format!("{tools} tool{} so far", if tools == 1 { "" } else { "s" });
         let now = util::now_ms();
-        if let Some(sent) = t.sent_at {
-            facts.push_str(&format!(", on a turn started {}", relative(now - sent)));
+        let started = t
+            .sent_at
+            .map(|sent| format!("a turn started {}", relative(now - sent)));
+        if let Some(started) = &started {
+            facts.push_str(&format!(", on {started}"));
         }
         if let Some(at) = last_at {
             facts.push_str(&format!(", last activity {}", relative(now - at)));
         }
-        facts.push_str(&format!(
-            ", {tools} tool{} so far",
-            if tools == 1 { "" } else { "s" }
-        ));
+        facts.push_str(&format!(", {tools}"));
+        turn_so_far = Some(match started {
+            Some(started) => format!("on {started}, {tools}"),
+            None => tools,
+        });
     }
     Facts {
         facts,
+        turn_so_far,
         turn,
         activity,
         last_at,
