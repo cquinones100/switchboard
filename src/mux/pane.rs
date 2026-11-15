@@ -1201,6 +1201,36 @@ impl Pane {
         }
     }
 
+    /// Copy mode brought up on the last match of `pattern` from the bottom
+    /// of the screen up, smart case as `copy_search`, its cursor there and
+    /// the match selected (M-j's picker's "Go to the match"). Gives
+    /// whether there was one, copy mode ending when there wasn't.
+    pub fn copy_find(&mut self, pattern: &str) -> bool {
+        self.copy_begin();
+        let Ok(mut search) = RegexSearch::new(pattern) else {
+            self.copy_end();
+            return false;
+        };
+        let bottom = GridPoint::new(self.term.bottommost_line(), self.term.last_column());
+        match self
+            .term
+            .search_next(&mut search, bottom, SearchWay::Left, Side::Right, None)
+        {
+            Some(found) => {
+                self.term.vi_goto_point(*found.start());
+                let mut selection =
+                    Selection::new(SelectionType::Simple, *found.start(), Side::Left);
+                selection.update(*found.end(), Side::Right);
+                self.term.selection = Some(selection);
+                true
+            }
+            None => {
+                self.copy_end();
+                false
+            }
+        }
+    }
+
     /// The last `lines` lines of the screen and scrollback as text, trailing
     /// blanks trimmed: what tmux's `capture-pane -p -S -<lines>` gave.
     ///
@@ -2409,6 +2439,20 @@ mod tests {
         run.pane.select_start(0, 0, false);
         run.pane.select_extend(4, 0);
         assert_eq!(run.pane.selection_text().as_deref(), Some("bravo"));
+    }
+
+    #[test]
+    fn copy_find_selects_the_last_match_from_the_bottom() {
+        let mut run = idle(20, 4);
+        run.pane
+            .process(b"zebra one\r\nnothing\r\nthe ZEBRA two\r\nlast");
+        assert!(run.pane.copy_find("zebra"));
+        assert!(run.pane.copying());
+        assert_eq!(run.pane.copy_cursor(), Some((4, 2)));
+        assert_eq!(run.pane.selection_text().as_deref(), Some("ZEBRA"));
+        run.pane.copy_end();
+        assert!(!run.pane.copy_find("absent"));
+        assert!(!run.pane.copying(), "copy mode ends with no match");
     }
 
     #[test]

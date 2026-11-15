@@ -519,6 +519,34 @@
     "default": true
   },
   {
+    "key": "tab_search_panes",
+    "category": "Tabs and status bar",
+    "label": "Search what panes show",
+    "description": "M-j's picker (and M-b w) finds a tab by what its panes show as well as by its name: each pane's screen and the last lines of its scrollback (Lines searched in each pane) are read in the server's memory as you type, never written anywhere, and each tab found that way shows its matching lines under its row, the tabs found by name first; its row's menu can go to the match in copy mode. Off, the picker matches the tabs' names alone",
+    "default": true
+  },
+  {
+    "key": "tab_search_lines",
+    "category": "Tabs and status bar",
+    "label": "Lines searched in each pane",
+    "description": "How far back Search what panes show reads each pane's scrollback, above its screen: 200 lines, 1000, or all the pane keeps",
+    "choices": [
+      {
+        "value": "200",
+        "label": "200 lines"
+      },
+      {
+        "value": "1000",
+        "label": "1000 lines"
+      },
+      {
+        "value": "all",
+        "label": "all kept"
+      }
+    ],
+    "default": "1000"
+  },
+  {
     "key": "lone_pane_width",
     "category": "Tabs and status bar",
     "label": "Widest a lone pane gets",

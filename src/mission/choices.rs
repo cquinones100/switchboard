@@ -30,6 +30,13 @@ use crate::worktree;
 pub enum Do {
     /// Mission control closes and the tab comes to the front.
     GoTo(TabId),
+    /// The tab, its pane scrolled back to the last line showing `text` in
+    /// copy mode, the match selected (M-j's picker's search of the panes).
+    GoToMatch {
+        tab: TabId,
+        pane: PaneId,
+        text: String,
+    },
     /// Its prompt answered, or a message sent to it.
     Answer(TabId),
     /// A look at it without going there.
@@ -1243,6 +1250,17 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
             out = first;
             match &item.target {
                 Target::Tab(t) => {
+                    if let Some((pane, text)) = super::pane_search::match_of(item) {
+                        out.push(choice(
+                            'f',
+                            "Go to the match",
+                            Do::GoToMatch {
+                                tab: *t,
+                                pane,
+                                text,
+                            },
+                        ));
+                    }
                     out.push(choice('d', "Its diff (M-d)", Do::Diff(*t)));
                     out.push(choice('L', "lazygit", Do::Lazygit(*t)));
                 }

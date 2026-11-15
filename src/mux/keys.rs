@@ -599,7 +599,7 @@ impl Action {
                 "Every tab of every session as a card, then the views (Reopen, PRs, CI, tickets, your day, Settings) named in the bar across the top.".into()
             }
             Action::FindTab => {
-                "The Work map with the open tabs alone, a filter already typing; Enter opens the chosen tab's menu, so Enter twice goes to it.".into()
+                "The Work map with the open tabs alone, a filter already typing, which finds a tab by its name or by what its panes show (Search what panes show), its matching lines under its row; Enter opens the chosen tab's menu, so Enter twice goes to it, and Go to the match there scrolls its pane back to the match.".into()
             }
             Action::ReviveWorktree => {
                 "The Reopen view as a picker: closed tabs, past Claude sessions and the worktrees no tab has open; Enter opens the chosen row's menu, its first option reopening or resuming it. Untrusted worktrees are left out.".into()

@@ -28,6 +28,7 @@
 //! (`render`), and the keys are handled with the whole server at hand.
 //!
 //! - `views`: the views after the tabs, Reopen and Settings among them; the Work map is M-j's picker.
+//! - `pane_search`: M-j's picker finding tabs by what their panes show.
 //! - `keymap`: the Keys view, every key Switchboard binds (M-/).
 //! - `keys_board`: with UX 2.0, the Keys view as a board: the groups, the
 //!   keyboard as a heatmap of the week's presses, the chosen key, the
@@ -79,6 +80,7 @@ pub mod history;
 pub mod inbox_board;
 pub mod keymap;
 pub mod keys_board;
+pub mod pane_search;
 pub mod relay_board;
 pub mod remind;
 pub mod remind_box;
@@ -496,6 +498,13 @@ pub struct Mission {
     /// When `C-w` was pressed (ms), its second key awaited until
     /// `WINDOW_WAIT_MS` after it.
     pub window_key: Option<i64>,
+    /// M-j's picker's search of what the panes show (`tab_search_panes`):
+    /// the text last searched for and what it found, the text a search is
+    /// running for, and each pane's copied text with its `version` and
+    /// the lines read, kept while the pane's output stands.
+    pub panes_found: Option<(String, HashMap<TabId, pane_search::Found>)>,
+    pub panes_searching: Option<String>,
+    pub(crate) pane_copies: HashMap<PaneId, (u64, usize, Arc<Vec<String>>)>,
 }
 
 /// A view's panes from left to right, as Vim's windows: a side panel (the
@@ -571,6 +580,9 @@ impl Mission {
             slack_all: Default::default(),
             pane: None,
             window_key: None,
+            panes_found: None,
+            panes_searching: None,
+            pane_copies: HashMap::new(),
         }
     }
 
@@ -1363,6 +1375,12 @@ pub enum MissionEvent {
         source: String,
         light: bool,
         image: Option<image::RgbaImage>,
+    },
+    /// What M-j's picker's search of the panes found for a text.
+    PanesSearched {
+        client: ClientId,
+        text: String,
+        found: HashMap<TabId, pane_search::Found>,
     },
     /// Haiku's sentence on a turn, by its session and when its prompt was
     /// given; `None` when the run failed.

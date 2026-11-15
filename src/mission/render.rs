@@ -2534,6 +2534,35 @@ pub struct Picture {
     pub shown: u16,
 }
 
+/// The matching lines under a row of M-j's picker found by what its
+/// tab's panes show: each cut around its match to the row's width, dim,
+/// the match in the accent, the last saying how many more the tab holds.
+fn found_lines(item: &Item, needle: &str, cols: usize, theme: &Theme) -> Vec<Vec<Span<'static>>> {
+    let (found, more) = super::pane_search::shown_lines(item);
+    let indent = "      ";
+    let last = found.len().saturating_sub(1);
+    found
+        .iter()
+        .enumerate()
+        .map(|(at, line)| {
+            let more = if at == last && more > 0 {
+                format!("  {more} more in this tab")
+            } else {
+                String::new()
+            };
+            let room = cols.saturating_sub(width(indent) + width(&more) + 1);
+            let (before, hit, after) = super::pane_search::cut(line, needle, room);
+            vec![
+                Span::raw(indent),
+                Span::styled(before, Tone::Dim.style(theme)),
+                Span::styled(hit, Tone::Accent.bold(theme)),
+                Span::styled(after, Tone::Dim.style(theme)),
+                Span::styled(more, Tone::Faint.style(theme)),
+            ]
+        })
+        .collect()
+}
+
 /// The pane beside a board: its lines, and the diagrams placed over them,
 /// each by its place among the lines.
 #[derive(Clone, Debug, Default)]
@@ -2920,14 +2949,25 @@ fn list(
         .saturating_sub(if footer { 2 } else { 0 })
         .max(1);
     let cursor = m.cursor.max(0) as usize;
-    let first = (cursor + 1).saturating_sub(room);
+    // M-j's picker's rows found by what their panes show take a row for
+    // each matching line under them.
+    let heights: Vec<usize> = data.items.iter().map(super::pane_search::height).collect();
+    let (first, count) = if heights.iter().any(|h| *h > 1) {
+        super::pane_search::window(&heights, cursor, room)
+    } else {
+        ((cursor + 1).saturating_sub(room), room)
+    };
     let shown: Vec<(usize, &Item)> = data
         .items
         .iter()
         .enumerate()
         .skip(first)
-        .take(room)
+        .take(count)
         .collect();
+    // The scroll bar counts rows, so it shows what the matching lines push
+    // out of sight.
+    let total_rows: usize = heights.iter().sum();
+    let rows_above: usize = heights.iter().take(first).sum();
     // A table's columns are as wide as their widest cell or name; the first,
     // the name, takes no more than it needs, leaving the chosen row room for
     // its `more` after the figures.
@@ -3055,7 +3095,7 @@ fn list(
     };
     // The rows a column narrower while the scroll bar is beside them.
     let full = cols;
-    let cols = if snap.rules.scroll_bars && data.items.len() > room && cols > 1 {
+    let cols = if snap.rules.scroll_bars && total_rows > room && cols > 1 {
         cols - 1
     } else {
         cols
@@ -3156,6 +3196,23 @@ fn list(
                 row.put(format!("  {more}"), fg(theme.dim));
             }
             lines.push(row.line(cols, fill));
+            let needle = m
+                .filter
+                .as_ref()
+                .map(|f| f.text.trim().to_lowercase())
+                .unwrap_or_default();
+            for found in found_lines(item, &needle, cols, theme) {
+                hits.push(HitBox {
+                    y: (top_row + lines.len()) as u16,
+                    x0: 0,
+                    x1: cols.saturating_sub(1) as u16,
+                    spot: Spot::Index(index as isize),
+                });
+                lines.push(Line {
+                    spans: kit::fit(found, cols, Style::new()),
+                    fill,
+                });
+            }
             continue;
         }
         // A kept notification says what it led to and whether the sidebar
@@ -3182,7 +3239,7 @@ fn list(
     }
     rows_bar(
         &mut lines[rows_from..],
-        (data.items.len(), first, room),
+        (total_rows, rows_above, room),
         full,
         m,
     );

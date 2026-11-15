@@ -2758,3 +2758,129 @@ fn c_w_j_and_k_move_between_the_sections_a_view_stacks() {
     client.type_text("\x17k\r");
     client.wait_text("─ GitHub ─");
 }
+
+/// Runs a command in a tab's first pane, by its place, and waits for the
+/// pane to show `done` at the end of its output.
+fn run_in(server: &TestServer, tab: usize, command: &str, done: &str) {
+    let pane = tabs(&server.list())[tab]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["send-keys", "-t", &pane, "-l", command]);
+    server.ok(&["send-keys", "-t", &pane, "Enter"]);
+    let deadline = common::deadline(Duration::from_secs(10));
+    while !server
+        .ok(&["capture-pane", "-t", &pane])
+        .lines()
+        .any(|l| l.trim() == done)
+    {
+        assert!(Instant::now() < deadline, "{done} not shown");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn m_j_finds_a_tab_by_what_its_panes_show() {
+    let (server, mut client) = two_tabs(json!({}));
+    // Printed by halves, so the command typed doesn't hold the word.
+    run_in(
+        &server,
+        0,
+        "printf 'a zeb%sword here\\n' ra; seq 1 100",
+        "100",
+    );
+    client.type_text(&format!("{ALT}j"));
+    client.wait_text("Work map · open tabs");
+    client.type_text("zebraword");
+    // The first tab found by its pane, the line under its row.
+    let screen = client.wait_text("a zebraword here");
+    assert!(
+        !screen.iter().any(|l| l.contains("second")),
+        "only the tab that shows it: {}",
+        screen.join("\n")
+    );
+    // Its menu goes to the match: the pane scrolled back in copy mode.
+    client.type_text("\r");
+    pick(&mut client, "Go to the match");
+    client.wait_for("mission control closed", |s| {
+        !s.iter().any(|l| l.contains("MISSION CONTROL"))
+    });
+    wait_list(&server, "the first tab in front", |l| {
+        tabs(l)[0]["current"] == true
+    });
+    client.wait_for("the match in sight, scrolled back", |s| {
+        s.iter().any(|l| l.contains("a zebraword here"))
+            && s.iter().any(|l| {
+                l.split('[').skip(1).any(|r| {
+                    r.split_once(']')
+                        .is_some_and(|(n, _)| n.parse::<u32>().is_ok_and(|n| n > 0))
+                })
+            })
+    });
+}
+
+#[test]
+fn m_j_ranks_a_tab_found_by_name_above_one_found_by_its_panes() {
+    let (server, mut client) = two_tabs(json!({}));
+    run_in(&server, 0, "printf 'sec%s\\n' ond", "second");
+    client.type_text(&format!("{ALT}j"));
+    client.wait_text("Work map · open tabs");
+    client.type_text("second");
+    let screen = client.wait_for("both tabs found", |s| {
+        s.iter().any(|l| l.contains("tab 1")) && s.iter().any(|l| l.contains("tab 2"))
+    });
+    let named = screen.iter().position(|l| l.contains("tab 2"));
+    let by_pane = screen.iter().position(|l| l.contains("tab 1"));
+    assert!(
+        named.is_some() && by_pane.is_some() && named < by_pane,
+        "{}",
+        screen.join("\n")
+    );
+}
+
+#[test]
+fn m_j_matches_names_alone_with_the_panes_search_off() {
+    let (server, mut client) = two_tabs(json!({ "tab_search_panes": false }));
+    run_in(&server, 0, "printf 'zeb%sword\\n' ra", "zebraword");
+    client.type_text(&format!("{ALT}j"));
+    client.wait_text("Work map · open tabs");
+    client.type_text("zebraword");
+    client.wait_for("no row", |s| {
+        !s.iter().any(|l| l.contains("tab 1") || l.contains("tab 2"))
+    });
+    std::thread::sleep(Duration::from_millis(500) * common::patience());
+    let screen = client.screen();
+    assert!(
+        !screen.iter().any(|l| l.contains("tab 1")),
+        "{}",
+        screen.join("\n")
+    );
+}
+
+#[test]
+fn m_j_reads_only_the_lines_set_back_in_each_pane() {
+    let (server, mut client) = two_tabs(json!({ "tab_search_lines": "200" }));
+    run_in(
+        &server,
+        0,
+        "printf 'old%sword\\n' zebra; seq 1 500; printf 'new%sword\\n' zebra",
+        "newzebraword",
+    );
+    client.type_text(&format!("{ALT}j"));
+    client.wait_text("Work map · open tabs");
+    client.type_text("newzebra");
+    client.wait_text("newzebraword");
+    // The word 500 lines back is past the 200 read.
+    for _ in 0.."newzebra".len() {
+        client.type_text("\x7f");
+    }
+    client.type_text("oldzebra");
+    client.wait_text("oldzebra");
+    std::thread::sleep(Duration::from_millis(500) * common::patience());
+    let screen = client.screen();
+    assert!(
+        !screen.iter().any(|l| l.contains("oldzebraword")),
+        "{}",
+        screen.join("\n")
+    );
+}

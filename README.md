@@ -64,7 +64,7 @@ runs the workspace on made-up data, in a home of its own under `/tmp` that links
 | `M-A` | Go to the next idle tab, in the sidebar's Idle order |
 | `M-Space` | Mission control: every tab as a card, Reopen, PRs, CI, tickets, your day, Settings |
 | `M-t` | New tab running Claude, in a directory you pick |
-| `M-j` | Find a tab by typing its name |
+| `M-j` | Find a tab by its name or what its panes show |
 | `M-F` | Search your notes, Linear, GitHub and Slack at once |
 | `M-s` | Into the sidebar and back out; there, `m` (or `S-F10` anywhere) opens the chosen row's menu, as a right click does |
 | `M-c` | Into the pane running Claude in this tab |

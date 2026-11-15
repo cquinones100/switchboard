@@ -170,6 +170,14 @@ pub(super) const KEYS: &[(&str, &str)] = &[
 
 /// The view menu's way to autopilot: its settings box with UX 2.0
 /// (`autopilot_menu`), else its menu.
+/// Whether M-j's picker searches what the panes show for this filter.
+fn searches_panes(m: &Mission, text: &str) -> bool {
+    m.picker
+        && m.scope == Some(Scope::Tabs)
+        && !text.is_empty()
+        && settings::is_on("tab_search_panes")
+}
+
 fn autopilot_label() -> &'static str {
     if crate::sidebar::text::ux2() {
         "Autopilot's settings…"
@@ -1121,9 +1129,22 @@ impl Server {
         } else {
             m.folds.clone()
         };
+        // M-j's picker with a filter finds tabs by what their panes show
+        // too: what the search for this text found, or while it runs, what
+        // the last one found that still holds it.
+        let panes_searched = searches_panes(&m, &text).then(|| match &m.panes_found {
+            Some((was, found)) if *was == text => found.clone(),
+            Some((_, found)) => super::pane_search::narrowed(found, &text),
+            None => std::collections::HashMap::new(),
+        });
         let views: Vec<View> = all
             .iter()
             .map(|v| {
+                if let Some(found) = panes_searched.as_ref().filter(|_| v.id == ViewId::WorkMap) {
+                    let mut shown = views::shown(v, "", m.scope, &folds);
+                    shown.data.items = super::pane_search::found_items(&v.data.items, &text, found);
+                    return shown;
+                }
                 let filtered = !gridded || focused_id.as_ref() == Some(&v.id);
                 views::shown(v, if filtered { &text } else { "" }, m.scope, &folds)
             })
@@ -1302,6 +1323,7 @@ impl Server {
         self.inbox_extras(&mut m);
         self.slack_board_extras(&mut m);
         self.reopen_extras(&mut m);
+        self.search_panes(client, &mut m, &text);
         m.taken_at = Some(self.mission.changes);
         // The view brought to the front: counted, and its source told.
         let now_view = m.current().map(|v| (v.id.clone(), base_title(v)));
@@ -2119,6 +2141,20 @@ impl Server {
                     self.mission_redraw();
                 }
             }
+            MissionEvent::PanesSearched {
+                client,
+                text,
+                found,
+            } => {
+                if let Some(c) = self.clients.get_mut(&client) {
+                    c.dirty = true;
+                }
+                if let Some(m) = self.mission_mut(client) {
+                    m.panes_searching = None;
+                    m.panes_found = Some((text, found));
+                    m.taken_at = None;
+                }
+            }
             MissionEvent::Counted(tree, counts) => {
                 self.mission.counting = None;
                 self.mission.counts.insert(tree, counts);
@@ -2861,6 +2897,64 @@ impl Server {
         tokio::task::spawn_blocking(move || {
             let counts = count_branch(&tree, head);
             let _ = tx.send(Event::Mission(MissionEvent::Counted(tree, counts)));
+        });
+    }
+
+    /// Searches what the open tabs' panes show for M-j's picker's filter
+    /// (`tab_search_panes`), off the server's task: each pane's screen and
+    /// the last `tab_search_lines` of its scrollback copied as plain lines
+    /// (a pane parked behind a tool left out),
+    /// a copy kept while its pane's output stands. One search runs at a
+    /// time; the filter typed on while it runs is searched for once it
+    /// answers.
+    fn search_panes(&mut self, client: ClientId, m: &mut Mission, text: &str) {
+        if !searches_panes(m, text) {
+            m.panes_found = None;
+            m.pane_copies.clear();
+            return;
+        }
+        let searched = m.panes_found.as_ref().is_some_and(|(was, _)| was == text);
+        if searched || m.panes_searching.is_some() {
+            return;
+        }
+        if tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        let lines =
+            super::pane_search::lines_setting(settings::cached("tab_search_lines").as_ref());
+        let mut copies = Vec::new();
+        let mut kept = std::collections::HashMap::new();
+        for (id, slot) in &self.panes {
+            // A pane parked behind a tool in its place (M-d's diff) can't
+            // be shown at its match, so it isn't searched.
+            if !self.tabs.contains_key(&slot.tab) || self.parked(*id) {
+                continue;
+            }
+            let version = slot.pane.version();
+            let copied = match m.pane_copies.get(id) {
+                Some((v, n, copy)) if *v == version && *n == lines => copy.clone(),
+                _ => {
+                    std::sync::Arc::new(slot.pane.text(lines).lines().map(str::to_string).collect())
+                }
+            };
+            kept.insert(*id, (version, lines, copied.clone()));
+            copies.push(super::pane_search::Copied {
+                tab: slot.tab,
+                pane: *id,
+                lines: copied,
+            });
+        }
+        m.pane_copies = kept;
+        m.panes_searching = Some(text.to_string());
+        let text = text.to_string();
+        let tx = self.tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let found = super::pane_search::search(&copies, &text);
+            let _ = tx.send(Event::Mission(MissionEvent::PanesSearched {
+                client,
+                text,
+                found,
+            }));
         });
     }
 
@@ -4043,6 +4137,7 @@ impl Server {
     pub(crate) fn mission_do(&mut self, client: ClientId, act: Do, label: &str) {
         match act {
             Do::GoTo(tab) => self.mission_go(client, tab),
+            Do::GoToMatch { tab, pane, text } => self.mission_go_to_match(client, tab, pane, &text),
             Do::Answer(tab) => self.open_answer(client, tab, None),
             Do::Peek(tab) => self.mission_peek(client, tab),
             Do::TabTitle(tab) => self.show_tab_title(client, tab),
@@ -4702,6 +4797,27 @@ impl Server {
         {
             self.switch_client(client, &s);
         }
+    }
+
+    /// The tab, and its pane in copy mode on the last line showing `text`,
+    /// the match selected; with the pane gone or the text no longer there,
+    /// the tab alone, saying so.
+    fn mission_go_to_match(&mut self, client: ClientId, tab: TabId, pane: PaneId, text: &str) {
+        self.mission_go(client, tab);
+        let Some(slot) = self.panes.get_mut(&pane).filter(|s| s.tab == tab) else {
+            return;
+        };
+        let pattern = regex::escape(text);
+        if !slot.pane.copy_find(&pattern) {
+            self.say(Some(client), "That match is no longer in the pane.");
+            return;
+        }
+        slot.copy = Some(crate::mux::server::CopyMode {
+            exit_at_bottom: false,
+            search: Some((pattern, false)),
+        });
+        self.focus_pane(pane);
+        self.dirty_tab(tab);
     }
 
     /// A look at a tab without going there; Enter in it goes there.

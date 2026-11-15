@@ -27,12 +27,14 @@ fn run(name: &str, input: &str, path: &str) -> Option<i32> {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(input.as_bytes())
-        .unwrap();
+    // A hook that refuses before reading its input (no jq) may have
+    // exited by the time it is written: what it says is its exit code.
+    let written = child.stdin.take().unwrap().write_all(input.as_bytes());
+    if let Err(e) = written
+        && e.kind() != std::io::ErrorKind::BrokenPipe
+    {
+        panic!("writing the hook's input: {e}");
+    }
     child.wait().unwrap().code()
 }
 
