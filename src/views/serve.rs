@@ -84,6 +84,10 @@ fn is_readable(url: &str) -> bool {
     shown::safe(url) && (url.starts_with("file://") || links::host_of(url).is_some())
 }
 
+/// How a list marks a link that comes from the note open in the tab, as
+/// it marks one you gave Claude (`given::LABEL`).
+const IN_THE_NOTE: &str = "in the note";
+
 /// The rows of a list of what a pane shows, each giving its address.
 fn rows(found: &[Shown]) -> Vec<PickItem> {
     found
@@ -870,29 +874,65 @@ impl Server {
         }
     }
 
-    /// The links a pane shows: the note's, top to bottom, in the notes
-    /// pane while it shows one; else the screen's and its scrollback's,
-    /// newest first, then those in what you sent its Claude that it
-    /// doesn't show (`prompt_links`). Why there are none, when there are
-    /// none.
-    fn pane_links(&self, pane: PaneId) -> Result<Vec<Shown>, String> {
-        let Some(slot) = self.panes.get(&pane) else {
-            return Err("No pane here".into());
-        };
-        let notes = slot
-            .opts
-            .get("@notes_pane")
-            .is_some_and(|v| !v.is_empty() && v != "0");
-        if notes && let Some(rel) = crate::notes::serve::shown() {
-            let file = crate::notes::store::notes_dir().join(&rel);
-            if let Some(text) = util::read_text(&file) {
-                let found = shown::note_links(&text);
-                if found.is_empty() {
-                    return Err(format!("No links in {}", rel.trim_end_matches(".md")));
-                }
-                return Ok(found);
-            }
+    /// Whether a pane is the notes app's (`@notes_pane`).
+    fn is_notes_pane(&self, pane: PaneId) -> bool {
+        self.panes.get(&pane).is_some_and(|slot| {
+            slot.opts
+                .get("@notes_pane")
+                .is_some_and(|v| !v.is_empty() && v != "0")
+        })
+    }
+
+    /// Whether the pane commands read past the pane they run from: the
+    /// note open in the tab from another pane, the tab's other panes from
+    /// the notes pane (Settings' `pane_commands_read_note`).
+    fn reads_tab(&self) -> bool {
+        settings::is_on("pane_commands_read_note")
+    }
+
+    /// The tab's panes other than `pane` and the notes pane, while the
+    /// pane commands read past their own pane.
+    fn other_panes(&self, pane: PaneId, tab: TabId) -> Vec<PaneId> {
+        if !self.reads_tab() {
+            return Vec::new();
         }
+        self.tab_panes(tab)
+            .into_iter()
+            .filter(|p| *p != pane && !self.is_notes_pane(*p))
+            .collect()
+    }
+
+    /// The note open in a pane's tab: its name, its text and its folder
+    /// (which a picture pasted into it is named from), when a pane of
+    /// that tab is the notes pane and the notes app shows a note; nothing
+    /// from a note closed or open in another tab, nor, but in the notes
+    /// pane itself, with Settings' `pane_commands_read_note` off.
+    fn tab_note_text(&self, pane: PaneId) -> Option<(String, String, PathBuf)> {
+        if !self.is_notes_pane(pane) && !self.reads_tab() {
+            return None;
+        }
+        let tab = self.panes.get(&pane)?.tab;
+        if !self
+            .tab_panes(tab)
+            .into_iter()
+            .any(|p| self.is_notes_pane(p))
+        {
+            return None;
+        }
+        let rel = crate::notes::serve::shown()?;
+        let file = crate::notes::store::notes_dir().join(&rel);
+        let text = util::read_text(&file)?;
+        let folder = file.parent()?.to_path_buf();
+        Some((rel.trim_end_matches(".md").to_string(), text, folder))
+    }
+
+    /// A pane's own links: its screen's and its scrollback's, newest
+    /// first, then those in what you sent its Claude that it doesn't show
+    /// (`prompt_links`).
+    fn screen_links(&self, pane: PaneId) -> Vec<Shown> {
+        let Some(slot) = self.panes.get(&pane) else {
+            return Vec::new();
+        };
         let (text, hyperlinks) = slot.pane.text_and_links(3000);
         let mut found = shown::links_in(&text, &hyperlinks);
         if settings::is_on("prompt_links") {
@@ -902,8 +942,64 @@ impl Server {
                 }
             }
         }
+        found
+    }
+
+    /// The links a pane shows: in the notes pane while it shows a note,
+    /// the note's, top to bottom, then the tab's other panes'; in any
+    /// other pane its own (`screen_links`), then those of the note open
+    /// in its tab, marked as the note's. Each once, and why there are none,
+    /// when there are none.
+    fn pane_links(&self, pane: PaneId) -> Result<Vec<Shown>, String> {
+        let Some(slot) = self.panes.get(&pane) else {
+            return Err("No pane here".into());
+        };
+        let note = self.tab_note_text(pane);
+        let mut found = Vec::new();
+        let add = |found: &mut Vec<Shown>, more: Vec<Shown>| {
+            for link in more {
+                if !found.iter().any(|s: &Shown| s.url == link.url) {
+                    found.push(link);
+                }
+            }
+        };
+        if self.is_notes_pane(pane)
+            && let Some((name, text, _)) = &note
+        {
+            add(&mut found, shown::note_links(text));
+            for other in self.other_panes(pane, slot.tab) {
+                add(&mut found, self.screen_links(other));
+            }
+            if found.is_empty() {
+                return Err(if self.reads_tab() {
+                    format!("No links in {name} or this tab")
+                } else {
+                    format!("No links in {name}")
+                });
+            }
+            return Ok(found);
+        }
+        add(&mut found, self.screen_links(pane));
+        if let Some((_, text, _)) = &note {
+            let marked = shown::note_links(text)
+                .into_iter()
+                .map(|link| Shown {
+                    text: if link.text.is_empty() {
+                        IN_THE_NOTE.into()
+                    } else {
+                        format!("{} · {IN_THE_NOTE}", link.text)
+                    },
+                    url: link.url,
+                })
+                .collect();
+            add(&mut found, marked);
+        }
         if found.is_empty() {
-            return Err("No links in this pane".into());
+            return Err(if note.is_some() {
+                "No links in this pane or its note".into()
+            } else {
+                "No links in this pane".into()
+            });
         }
         Ok(found)
     }
@@ -966,26 +1062,41 @@ impl Server {
         });
     }
 
-    /// The open tabs a pane's text names by number, newest first, its own
-    /// tab left out: the note's in the notes pane while it shows one, else
-    /// the screen's and its scrollback's, as `pane_links` reads them.
+    /// The open tabs a pane's text names by number, newest first, each
+    /// once, its own tab left out: the pane's screen and scrollback, then
+    /// the note open in its tab; in the notes pane, the note first, then
+    /// the tab's other panes'.
     fn mentioned_tabs(&self, pane: PaneId) -> Vec<TabId> {
         let Some(slot) = self.panes.get(&pane) else {
             return Vec::new();
         };
-        let notes = slot
-            .opts
-            .get("@notes_pane")
-            .is_some_and(|v| !v.is_empty() && v != "0");
-        let note = crate::notes::serve::shown()
-            .filter(|_| notes)
-            .and_then(|rel| util::read_text(crate::notes::store::notes_dir().join(rel)));
-        let text = note.unwrap_or_else(|| slot.pane.text_and_links(3000).0);
-        shown::tabs_in(&text)
-            .into_iter()
-            .filter_map(|n| self.tab_numbered(n))
-            .filter(|t| *t != slot.tab)
-            .collect()
+        let note = self.tab_note_text(pane).map(|(_, text, _)| text);
+        let mut texts: Vec<String> = Vec::new();
+        if self.is_notes_pane(pane)
+            && let Some(note) = note
+        {
+            texts.push(note);
+            for other in self.other_panes(pane, slot.tab) {
+                if let Some(s) = self.panes.get(&other) {
+                    texts.push(s.pane.text_and_links(3000).0);
+                }
+            }
+        } else {
+            texts.push(slot.pane.text_and_links(3000).0);
+            texts.extend(note);
+        }
+        let mut tabs: Vec<TabId> = Vec::new();
+        for text in texts {
+            for tab in shown::tabs_in(&text)
+                .into_iter()
+                .filter_map(|n| self.tab_numbered(n))
+            {
+                if tab != slot.tab && !tabs.contains(&tab) {
+                    tabs.push(tab);
+                }
+            }
+        }
+        tabs
     }
 
     /// M-p's "Go to a tab this pane mentions" (`copy` false) and "Copy the
@@ -1092,11 +1203,45 @@ impl Server {
         let Some(slot) = self.panes.get(&pane) else {
             return;
         };
-        let text = slot.pane.text(3000);
         let links = self.pane_links(pane).unwrap_or_default();
-        let found = shown::media_in(&text, &dir, &paths::home(), &links);
+        let home = paths::home();
+        let note = self.tab_note_text(pane);
+        // Where the files are named, each with the folder a relative path
+        // starts from: the pane, then the note open in its tab; from the
+        // notes pane, the note's Markdown, then the tab's other panes.
+        let mut sources = Vec::new();
+        match &note {
+            Some((_, note, folder)) if self.is_notes_pane(pane) => {
+                sources.push((note.clone(), folder.clone()));
+                for other in self.other_panes(pane, slot.tab) {
+                    if let Some(s) = self.panes.get(&other) {
+                        let dir = self.pane_own_dir(other).unwrap_or_else(paths::home);
+                        sources.push((s.pane.text(3000), dir));
+                    }
+                }
+            }
+            Some((_, note, folder)) => {
+                sources.push((slot.pane.text(3000), dir));
+                sources.push((note.clone(), folder.clone()));
+            }
+            None => sources.push((slot.pane.text(3000), dir)),
+        }
+        let mut found: Vec<Shown> = Vec::new();
+        for (text, dir) in &sources {
+            for file in shown::media_in(text, dir, &home, &[]) {
+                if !found.iter().any(|s| s.url == file.url) {
+                    found.push(file);
+                }
+            }
+        }
+        found.extend(links.into_iter().filter(|l| shown::is_media(&l.url)));
         if found.is_empty() {
-            return self.say(Some(client), "No image or video in this pane");
+            let why = if note.is_some() && self.reads_tab() {
+                "No image or video in this pane or its note"
+            } else {
+                "No image or video in this pane"
+            };
+            return self.say(Some(client), why);
         }
         let picker = Picker::new("Images and videos", rows(&found))
             .named("media")

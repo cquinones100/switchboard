@@ -758,13 +758,167 @@ fn the_link_commands_list_what_the_pane_shows_and_copy_read_or_open_it() {
     let id = first["id"].as_str().unwrap();
     server.ok(&["set", "-t", id, "@notes_pane", "1"]);
     server.ok(&["press", "read-link"]);
-    // One of one in the picker, whatever the pane shows beside its box.
+    // The note's first, chosen as the list opens, the tab's other panes'
+    // after it.
     let screen = client.wait_text("the RFC  https://rfc.example/1");
     assert!(
-        screen.iter().any(|l| l.contains("│   1/1 ")),
-        "the note's links alone:\n{}",
+        screen
+            .iter()
+            .any(|l| l.contains("› the RFC  https://rfc.example/1")),
+        "the note's link first:\n{}",
         screen.join("\n")
     );
+}
+
+#[test]
+fn the_link_and_tab_commands_read_the_note_open_in_the_tab_too() {
+    let server = TestServer::start();
+    settings(&server, json!({"sidebar": false}));
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    for _ in 0..2 {
+        server.ok(&["new-tab", "-d"]);
+    }
+    // A note in a folder, whose pictures are named from that folder.
+    let notes = server.home.join("Notes");
+    std::fs::create_dir_all(notes.join("Work")).unwrap();
+    std::fs::write(notes.join(".notes.json"), r#"{"last": "Work/Plan.md"}"#).unwrap();
+    // Nothing listens on port 9, and nothing here reads a link anyway.
+    std::fs::write(
+        notes.join("Work/Plan.md"),
+        "# Plan\n\n- [ ] Read [the RFC](http://127.0.0.1:9/rfc) before tab 3, see pic.png\n",
+    )
+    .unwrap();
+    std::fs::write(notes.join("Work/pic.png"), b"png").unwrap();
+    let shot = server.dir.path().join("shot.png");
+    std::fs::write(&shot, b"png").unwrap();
+    let first = panes(&server)[0]["id"].as_str().unwrap().to_string();
+    client.type_text(&format!(
+        "printf 'see http://127.0.0.1:9/pane and tab 2, {}\\n'\r",
+        shot.display()
+    ));
+    client.wait_text("see http://127.0.0.1:9/pane and tab 2");
+    let notes_pane = server.ok(&["split", "-d", "-t", &first]).trim().to_string();
+    server.ok(&["set", "-t", &notes_pane, "@notes_pane", "1"]);
+
+    // From the other pane: its own link first, then the note's, marked.
+    server.ok(&["press", "copy-link"]);
+    let screen = client.wait_text("the RFC · in the note  http://127.0.0.1:9/rfc");
+    assert!(
+        screen.iter().any(|l| l.contains("   2/2 "))
+            && screen
+                .iter()
+                .any(|l| l.contains("› http://127.0.0.1:9/pane")),
+        "the pane's link, then the note's:\n{}",
+        screen.join("\n")
+    );
+    client.type_text("\x1b");
+    client.wait_for("the list closed", |s| {
+        !s.iter().any(|l| l.contains("Copy a link"))
+    });
+
+    // The tabs: the pane's first, then the note's.
+    server.ok(&["press", "go-to-mentioned-tab"]);
+    client.wait_text("Go to a tab");
+    let screen = client.wait_text("   2/2 ");
+    assert!(
+        screen.iter().any(|l| l.contains("› 2 ")),
+        "the pane's tab first:\n{}",
+        screen.join("\n")
+    );
+    client.type_text("\x1b");
+    client.wait_for("the list closed", |s| {
+        !s.iter().any(|l| l.contains("Go to a tab"))
+    });
+
+    // A picture the note names, from the notes folder.
+    server.ok(&["press", "open-media"]);
+    client.wait_text("Images and videos");
+    client.wait_text("~/Notes/Work/pic.png");
+    client.type_text("\x1b");
+    client.wait_for("the list closed", |s| {
+        !s.iter().any(|l| l.contains("Images and videos"))
+    });
+
+    // From the notes pane: the note's link first, then the other pane's.
+    server.ok(&["select-pane", "-t", &notes_pane]);
+    server.ok(&["press", "copy-link"]);
+    let screen = client.wait_text("   2/2 ");
+    assert!(
+        screen
+            .iter()
+            .any(|l| l.contains("› the RFC  http://127.0.0.1:9/rfc")),
+        "the note's link first:\n{}",
+        screen.join("\n")
+    );
+    client.type_text("\x1b");
+    client.wait_for("the list closed", |s| {
+        !s.iter().any(|l| l.contains("Copy a link"))
+    });
+
+    // And the pictures the tab's other panes name.
+    server.ok(&["press", "open-media"]);
+    client.wait_text("Images and videos");
+    client.wait_text("~/Notes/Work/pic.png");
+    client.wait_for("the other pane's picture listed", |s| {
+        s.iter()
+            .any(|l| l.contains(&shot.display().to_string()) && !l.contains("see http"))
+    });
+    client.type_text("\x1b");
+    client.wait_for("the list closed", |s| {
+        !s.iter().any(|l| l.contains("Images and videos"))
+    });
+
+    // A note open in another tab adds nothing.
+    server.ok(&["set", "-u", "-t", &notes_pane, "@notes_pane"]);
+    let elsewhere = server.list()["sessions"][0]["tabs"][1]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["set", "-t", &elsewhere, "@notes_pane", "1"]);
+    server.ok(&["select-pane", "-t", &first]);
+    server.ok(&["press", "go-to-mentioned-tab"]);
+    client.wait_text("Went to tab 2");
+    close_message(&mut client, "Went to tab 2");
+
+    // With the setting off, the notes pane still lists its note's links,
+    // and no other pane's. The server reads the settings again a moment
+    // after they change, so a list that still holds both is asked again.
+    server.ok(&["set", "-u", "-t", &elsewhere, "@notes_pane"]);
+    server.ok(&["set", "-t", &notes_pane, "@notes_pane", "1"]);
+    server.ok(&["select-pane", "-t", &notes_pane]);
+    settings(
+        &server,
+        json!({"sidebar": false, "pane_commands_read_note": false}),
+    );
+    let deadline = common::deadline(Duration::from_secs(10));
+    loop {
+        server.ok(&["press", "copy-link"]);
+        let screen = client.wait_for("the list", |s| {
+            s.iter()
+                .any(|l| l.contains("   1/1 ") || l.contains("   2/2 "))
+        });
+        if screen.iter().any(|l| l.contains("   1/1 ")) {
+            assert!(
+                screen
+                    .iter()
+                    .any(|l| l.contains("› the RFC  http://127.0.0.1:9/rfc")),
+                "the note's link alone:\n{}",
+                screen.join("\n")
+            );
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "still the other pane's:\n{}",
+            screen.join("\n")
+        );
+        client.type_text("\x1b");
+        client.wait_for("the list closed", |s| {
+            !s.iter().any(|l| l.contains("Copy a link"))
+        });
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 /// Runs `switchboard hook <event>` in `pane` of the test's server with

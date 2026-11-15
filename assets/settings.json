@@ -1088,6 +1088,13 @@
     "default": true
   },
   {
+    "key": "pane_commands_read_note",
+    "category": "Palette",
+    "label": "Pane commands read the tab's note",
+    "description": "M-p's link, picture and mentioned-tab commands also read the note open in the tab (M-e): from Claude's pane its links, files and tabs after the pane's, and from the notes pane the tab's other panes' after the note's. Off, each reads only the pane it runs from",
+    "default": true
+  },
+  {
     "key": "palette_button",
     "category": "Palette",
     "label": "Commands button",
