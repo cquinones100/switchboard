@@ -152,6 +152,14 @@ pub fn is_home(cx: &Relay, ts: &str) -> bool {
     cx.state.borrow().homes.values().any(|h| h.ts == ts)
 }
 
+/// Whether a message posted in `thread` lands in the tab `id`'s own
+/// thread and not also in the main DM: there the thread's header names the
+/// tab, so the message calls it Claude rather than repeating its number and
+/// name.
+pub fn in_own_thread(cx: &Relay, id: &str, thread: Option<&str>, broadcast: bool) -> bool {
+    !broadcast && thread.is_some() && home_thread(cx, id).as_deref() == thread
+}
+
 /// A tab's thread, if it has one yet.
 pub fn home_thread(cx: &Relay, id: &str) -> Option<String> {
     let state = cx.state.borrow();

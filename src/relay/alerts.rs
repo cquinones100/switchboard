@@ -13,7 +13,7 @@ use futures_util::future::LocalBoxFuture;
 
 use super::buttons::{dialog_buttons, option_buttons, turn_buttons};
 use super::followups::{Event, context_footer, warn_context};
-use super::homes::{close_home, home_of};
+use super::homes::{close_home, home_of, in_own_thread};
 use super::post::{Button, PostOpts, offer_choice, post, settle_choice};
 use super::sending::{self, Kind, Send, Sent};
 use super::state::Target;
@@ -424,10 +424,13 @@ async fn alert(cx: &Cx, due: Due) {
             closed: false,
         };
         let context = tabs::context_of(&cx.paths, transcript.as_deref());
+        let who = if in_own_thread(cx, &tab.id, home.as_deref(), false) {
+            "Claude".to_string()
+        } else {
+            format!("**Tab {}, {}**", tab.index, tab.name)
+        };
         let text = format!(
-            "🤖 **Tab {}, {}** {what}. Reply here to answer it.\n\n{turn}{shown}{}",
-            tab.index,
-            tab.name,
+            "🤖 {who} {what}. Reply here to answer it.\n\n{turn}{shown}{}",
             context_footer(context.as_ref())
         );
         if found.is_some() {
@@ -567,9 +570,13 @@ async fn dialogs(cx: &Cx, tabs: &[Tab]) {
                 thread: home.clone(),
                 closed: false,
             };
+            let who = if in_own_thread(cx, &tab.id, home.as_deref(), false) {
+                "Claude".to_string()
+            } else {
+                format!("**Tab {}, {}**", tab.index, tab.name)
+            };
             let mut text = format!(
-                "🤖 **Tab {}, {}** is showing a dialog before its session starts, **waiting on you**:\n\n",
-                tab.index, tab.name
+                "🤖 {who} is showing a dialog before its session starts, **waiting on you**:\n\n"
             );
             if !dialog.question.is_empty() {
                 text.push_str(&format!("**{}**\n", dialog.question));

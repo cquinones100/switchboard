@@ -619,6 +619,33 @@ fn a_finished_turn_is_reported_once_in_the_requests_thread() {
 }
 
 #[test]
+fn a_turn_reported_in_the_tabs_own_thread_leaves_out_its_name() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    let t = tabs::tab(&rig.cx, &tab).unwrap();
+    let home = rig
+        .block_on(super::homes::home_of(&rig.cx, &t))
+        .unwrap()
+        .unwrap();
+    let transcript = rig.transcript(&tab, "followed", &[
+        json!({ "type": "user", "message": { "content": "deploy it" } }),
+        json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "Deployed." }] } }),
+    ]);
+    rig.events(&[
+        json!({ "event": "done", "time": util::now_secs(), "transcript_path": transcript }),
+    ]);
+    rig.cx.state.borrow_mut().following.insert(
+        tab.clone(),
+        follow(Some(&home), rig.index_of(&tab), "deploy it"),
+    );
+    ticks(&rig);
+    ticks(&rig);
+    let last = rig.posts().pop().unwrap();
+    assert_eq!(last.thread.as_deref(), Some(home.as_str()));
+    assert_eq!(last.body, "🤖 Claude is done:\n> deploy it\n\nDeployed.");
+}
+
+#[test]
 fn a_wait_shows_the_screen_so_a_permission_prompt_can_be_answered() {
     let rig = Rig::new();
     let (tab, _) = rig.claude_tab("work");
@@ -677,9 +704,8 @@ fn alerts_come_once_per_state_change_with_the_screen_for_a_wait() {
     assert!(posts[0].body.contains("This is its thread"));
     assert!(rig.cx.state.borrow().threads.contains_key(home));
     assert!(
-        posts[1]
-            .body
-            .starts_with(&format!("🤖 **Tab {index}, work** is **waiting on you**"))
+        posts[1].body.starts_with("🤖 Claude is **waiting on you**"),
+        "its thread names the tab already"
     );
     assert!(posts[1].body.contains("> edit the config"));
     assert!(
@@ -1681,9 +1707,13 @@ fn a_dialog_before_a_session_starts_is_alerted_once_and_answered_with_arrow_keys
         3,
         "the thread, the alert in it, and a notice in the main DM, once"
     );
-    assert!(posts[1].body.starts_with(&format!(
-        "🤖 **Tab {index}, work** is showing a dialog before its session starts"
-    )));
+    assert!(
+        posts[1]
+            .body
+            .starts_with("🤖 Claude is showing a dialog before its session starts"),
+        "its thread names the tab already"
+    );
+    assert!(posts[2].body.contains(&format!("Tab {index}, work")));
     assert!(posts[1].body.contains(
         "**Is this a project you trust?**\n1. No, exit (selected)\n2. Yes, I trust this folder\n"
     ));
@@ -1963,7 +1993,6 @@ fn a_finished_turn_that_asks_gets_quick_replies_and_a_stale_one_isnt_typed() {
 fn milestones_ping_a_tabs_thread_on_a_commit_and_a_push() {
     let rig = Rig::new();
     let (tab, _) = rig.claude_tab("work");
-    let index = rig.index_of(&tab);
     let transcript = rig.transcript(
         &tab,
         "shipping",
@@ -1995,8 +2024,8 @@ fn milestones_ping_a_tabs_thread_on_a_commit_and_a_push() {
     assert_eq!(
         bodies,
         [
-            format!("🤖 tab {index}, work: committed `abc1234` Add two on `feature`"),
-            format!("🤖 tab {index}, work: pushed `feature`"),
+            "🤖 Committed `abc1234` Add two on `feature`",
+            "🤖 Pushed `feature`",
         ],
         "a failing test run isn't news"
     );
@@ -2094,9 +2123,10 @@ fn a_working_tab_with_nothing_new_for_ten_minutes_is_noted_once_per_stall() {
         3,
         "the thread, the note, and a line in the main DM, once"
     );
-    assert!(posts[1].body.starts_with(&format!(
-        "🤖 tab {index}, work may be stuck: it's marked working, but nothing has happened for 11m."
-    )));
+    assert!(posts[1].body.starts_with(
+        "🤖 Claude may be stuck: it's marked working, but nothing has happened for 11m."
+    ));
+    assert!(posts[2].body.contains(&format!("tab {index}, work")));
     assert!(
         posts[1]
             .body
@@ -4675,7 +4705,8 @@ fn an_autopilot_tab_under_landings_posts_its_waits_but_not_its_turns() {
         .filter(|p| p.body.contains("has finished"))
         .collect();
     assert_eq!(finished.len(), 1);
-    assert!(finished[0].body.contains("mine"));
+    let mine_home = rig.cx.state.borrow().homes[&mine].ts.clone();
+    assert_eq!(finished[0].thread.as_deref(), Some(mine_home.as_str()));
     rig.set_state(&pilot, "waiting", "200");
     alert_now(&rig);
     assert!(

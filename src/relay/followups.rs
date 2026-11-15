@@ -21,7 +21,7 @@ use serde_json::Value;
 
 use super::buttons::{compact_button, option_buttons, turn_buttons, working_buttons};
 use super::config::{FOLLOW_UP_LIMIT_MS, PICKUP_WARN_MS, QUIET_SCREEN_MS, REPLY_WAIT_MS};
-use super::homes::is_home;
+use super::homes::{in_own_thread, is_home};
 use super::post::{PostOpts, offer_choice, post, react, remove, settle_choice, unreact};
 use super::state::{Ended, Follow, Target};
 use super::tabs::{self, Context, Tab};
@@ -150,9 +150,14 @@ pub async fn post_context_warning(cx: &Cx, tab: &Tab, context: &Context, thread:
     if send == Send::Off {
         return;
     }
+    let who = if in_own_thread(cx, &tab.id, thread, false) {
+        "Claude".to_string()
+    } else {
+        format!("**Tab {}, {}**", tab.index, tab.name)
+    };
     let body = format!(
-        "🤖 **Tab {}, {}** has used **{}%** of its context. Compact it before it runs out.",
-        tab.index, tab.name, context.percent
+        "🤖 {who} has used **{}%** of its context. Compact it before it runs out.",
+        context.percent
     );
     let posted = post(
         cx,
@@ -218,7 +223,12 @@ pub async fn follow_ups(cx: &Cx, current: &[Tab], events: &mut [Event]) {
             continue;
         };
         let tab = current.iter().find(|t| t.id == id).cloned();
-        let name = tabs::label(follow.index, &follow.name);
+        let label = tabs::label(follow.index, &follow.name);
+        let name = if in_own_thread(cx, &id, follow.thread.as_deref(), follow.broadcast) {
+            "Claude".to_string()
+        } else {
+            label.clone()
+        };
         // The surest signal: a hook said a session finished a turn, or
         // started waiting, and that session's last prompt is the text the
         // relay typed.
@@ -351,7 +361,7 @@ pub async fn follow_ups(cx: &Cx, current: &[Tab], events: &mut [Event]) {
                 &id,
                 &follow,
                 None,
-                &format!("{name} has closed."),
+                &format!("{label} has closed."),
                 Finish::Plain,
             )
             .await;

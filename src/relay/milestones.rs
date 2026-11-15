@@ -16,7 +16,7 @@ use serde_json::Value;
 
 use super::Cx;
 use super::alerts::notify;
-use super::homes::home_of;
+use super::homes::{home_of, in_own_thread};
 use super::post::{PostOpts, post};
 use super::sending::{self, Kind, Send, Sent};
 use super::state::Target;
@@ -217,9 +217,17 @@ pub async fn ping(
     ));
     let away = cx.presence.away();
     let text = format!("🤖 {name}: {line}");
+    // In the tab's own thread, the line alone, which the header names.
+    let in_thread = if in_own_thread(cx, &tab.id, home.as_deref(), broadcast && away) {
+        let mut chars = line.chars();
+        let first = chars.next().map(|c| c.to_uppercase().collect::<String>());
+        format!("🤖 {}{}", first.unwrap_or_default(), chars.as_str())
+    } else {
+        text.clone()
+    };
     let ts = post(
         cx,
-        &text,
+        &in_thread,
         home.as_deref(),
         PostOpts::broadcast(broadcast && away),
     )

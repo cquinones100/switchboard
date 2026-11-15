@@ -12,7 +12,7 @@
 use super::Cx;
 use super::alerts::notify;
 use super::buttons::stuck_buttons;
-use super::homes::home_of;
+use super::homes::{home_of, in_own_thread};
 use super::post::{PostOpts, post};
 use super::sending::{self, Kind, Send, Sent};
 use super::state::Target;
@@ -90,8 +90,13 @@ pub async fn stuck_tabs(cx: &Cx, tabs: &[Tab]) {
                 thread: home.clone(),
                 closed: false,
             };
+            let who = if in_own_thread(cx, &tab.id, home.as_deref(), false) {
+                "Claude".to_string()
+            } else {
+                name.clone()
+            };
             let body = format!(
-                "🤖 {name} may be stuck: it's marked working, but nothing has happened for {idle}. {}.{lastly}{}",
+                "🤖 {who} may be stuck: it's marked working, but nothing has happened for {idle}. {}.{lastly}{}",
                 facts.facts,
                 tabs::on_screen(cx, &tab.id, "")
             );
