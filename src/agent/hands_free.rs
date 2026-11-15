@@ -20,6 +20,15 @@
 //!
 //! Anything that isn't one of those answers nothing, so an unmarked tab, a
 //! subagent's hook, or a server that doesn't answer leaves Claude asking.
+//!
+//! One more answer holds in every tab autopilot opened, hands-free or not:
+//! the landing's push, `git push <remote> HEAD:<branch>`, which wtn's push
+//! rule allows for the tab's session, is asked (`ask_push`) while the tab's
+//! "Land without asking" (`@autopilot_land`) is off, so the rule lets it
+//! through only in a tab that lands without asking. A tab that does is
+//! left to queue-and-clean's checks and the repository's pre-push hook,
+//! since whether the change pushed is the one reviewed takes git, which
+//! the server's task never runs.
 
 use serde_json::{Value, json};
 
@@ -53,6 +62,37 @@ pub fn block_stop() -> String {
         "Hands-free (autopilot): don't wait for an answer. Carry on with what you recommend; write `Decided hands-free: <question> → <choice>` under the item in its plan note (with no plan, indented under the item in its note); then go on to land it. {EXCEPTIONS} For one of those, stop again with `{ALWAYS_ASK}` in your message, saying which rule or skill says it must be asked."
     );
     json!({ "decision": "block", "reason": reason }).to_string()
+}
+
+/// The ask for the landing's push in a tab that doesn't land without
+/// asking, as PreToolUse's output: Claude Code asks it whatever an allow
+/// rule says.
+pub fn ask_push() -> String {
+    json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "ask",
+            "permissionDecisionReason": "Autopilot: this tab's \"Land without asking\" is off, so its push to the branch it lands on is asked.",
+        }
+    })
+    .to_string()
+}
+
+/// Whether a Bash call runs the push autopilot's rule allows,
+/// `git push <remote> HEAD:<branch>`, as a command of its own or chained
+/// to others; any other push is no rule's and is judged as before.
+pub fn is_landing_push(payload: &Value) -> bool {
+    let Some(command) = payload
+        .pointer("/tool_input/command")
+        .and_then(Value::as_str)
+    else {
+        return false;
+    };
+    command.split(['\n', ';', '&', '|', '(', ')']).any(|part| {
+        let words: Vec<&str> = part.split_whitespace().collect();
+        matches!(words.as_slice(), ["git", "push", remote, to]
+            if !remote.starts_with('-') && to.starts_with("HEAD:"))
+    })
 }
 
 /// Whether a question box marks one of its questions always asked.
@@ -116,6 +156,23 @@ fn is_option(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_landing_push_is_one() {
+        let bash = |c: &str| json!({"tool_input": {"command": c}});
+        assert!(is_landing_push(&bash("git push origin HEAD:main")));
+        assert!(is_landing_push(&bash(
+            "git fetch && git push  origin HEAD:main"
+        )));
+        assert!(!is_landing_push(&bash(
+            "git push --force origin HEAD:refs/heads/ci/land-ab12"
+        )));
+        assert!(!is_landing_push(&bash(
+            "git push origin --delete ci/land-ab12"
+        )));
+        assert!(!is_landing_push(&bash("git push")));
+        assert!(!is_landing_push(&json!({})));
+    }
 
     #[test]
     fn a_question_marked_always_asked_goes_through() {

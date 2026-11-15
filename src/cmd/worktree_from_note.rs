@@ -1467,8 +1467,9 @@ fn refused_in_autopilot(why: &str) {
 /// Only in a tab autopilot opened (`@autopilot`), in a repository landing
 /// straight on a branch that is on a remote, with `autopilot_push_rule` on:
 /// every other tab and push is judged as before. Whether the tab lands
-/// without asking isn't read, since that is turned on and off while it
-/// works and the landing reads it just before the push.
+/// without asking isn't read here, since that is turned on and off while
+/// it works: the server asks the push at its PreToolUse hook while it is
+/// off (src/agent/hands_free.rs's `ask_push`).
 fn push_rule(path: &Path, root: &Path, start: &str, target: Option<&str>) -> Option<String> {
     if !crate::settings::is_on("autopilot_push_rule") {
         return None;

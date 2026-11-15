@@ -646,6 +646,23 @@ fn a_backgrounded_conversation_marks_the_tab_it_came_from() {
     );
     assert_eq!(got, (0, String::new(), String::new()));
     assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "done");
+
+    // Autopilot's landing push is asked there too while the tab doesn't
+    // land without asking.
+    let tab = tabs(&server.list())[0]["id"].as_str().unwrap().to_string();
+    server.ok(&["set", "-t", &tab, "@autopilot", "1"]);
+    let push = json!({"session_id": "job", "tool_name": "Bash",
+        "tool_input": {"command": "git push origin HEAD:main"}});
+    let (code, out, _) = run_hook(
+        &server.home,
+        &server.state,
+        None,
+        "PreToolUse",
+        &push.to_string(),
+    );
+    assert_eq!(code, 0);
+    let asked: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(asked["hookSpecificOutput"]["permissionDecision"], "ask");
 }
 
 #[test]
@@ -1187,6 +1204,47 @@ fn a_hands_free_tab_has_its_questions_answered_for_claude() {
         hook_says(&server, &pane, "Stop", asking_stop),
         "",
         "back in the main clone"
+    );
+}
+
+#[test]
+fn an_autopilot_tab_has_its_landing_push_asked_unless_it_lands_without_asking() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    session_file(&server.home, pid, json!({"sessionId": "s-1"}));
+    let tab = tabs(&server.list())[0]["id"].as_str().unwrap().to_string();
+    let bash = |command: &str| json!({"session_id": "s-1", "tool_name": "Bash", "tool_input": {"command": command}});
+    let push = || bash("git push origin HEAD:main");
+
+    assert_eq!(
+        hook_says(&server, &pane, "PreToolUse", push()),
+        "",
+        "a tab autopilot didn't open is left alone"
+    );
+
+    server.ok(&["set", "-t", &tab, "@autopilot", "1"]);
+    let asked: Value =
+        serde_json::from_str(&hook_says(&server, &pane, "PreToolUse", push())).unwrap();
+    assert_eq!(asked["hookSpecificOutput"]["permissionDecision"], "ask");
+    assert_eq!(
+        hook_says(
+            &server,
+            &pane,
+            "PreToolUse",
+            bash("git push --force origin HEAD:refs/heads/ci/land-ab12")
+        ),
+        "",
+        "another push is judged as before"
+    );
+
+    server.ok(&["set", "-t", &tab, "@autopilot_land", "1"]);
+    assert_eq!(
+        hook_says(&server, &pane, "PreToolUse", push()),
+        "",
+        "a tab that lands without asking pushes"
     );
 }
 

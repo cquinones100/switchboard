@@ -12,7 +12,9 @@
 //! The one exception is autopilot's hands-free mode (src/agent/hands_free.rs):
 //! for PreToolUse and Stop in a pane, the server may answer with a JSON
 //! object for Claude Code to read (a question denied, a stop blocked), which
-//! is printed as it came; any other answer prints nothing. A Stop in a pane
+//! is printed as it came; any other answer prints nothing. The landing's push
+//! in a tab of autopilot's that doesn't land without asking is answered too
+//! (an ask), in a pane or in a conversation moved into the background. A Stop in a pane
 //! is told to the Slack relay only after the server's answer, and not at
 //! all when the server blocked it.
 
@@ -72,7 +74,10 @@ fn run(args: &[String]) {
     let pane = std::env::var("SWITCHBOARD_PANE")
         .ok()
         .filter(|p| !p.is_empty());
-    let answers = pane.is_some() && matches!(event.as_str(), "PreToolUse" | "Stop");
+    // A conversation moved into the background is answered PreToolUse too,
+    // for autopilot's landing push (`ask_push`), which the server asks
+    // wherever the conversation runs; the hands-free answers stay a pane's.
+    let answers = event == "PreToolUse" || (pane.is_some() && event == "Stop");
     // A Stop the server may block is told to the relay only once it stands,
     // so a hands-free turn sent back to carry on isn't reported done.
     let stop_waits = answers && event == "Stop";

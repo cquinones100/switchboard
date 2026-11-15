@@ -125,7 +125,18 @@ impl Server {
                 },
             );
         }
-        let answer = if caller.is_some() && hook.agent.is_empty() {
+        // The landing's push asked in a tab that doesn't land without
+        // asking; the wait it makes is marked as any permission's is.
+        let asks_push = hook.event == "PreToolUse"
+            && hook.tool == "Bash"
+            && hands_free::is_landing_push(&payload)
+            && self.tabs.get(&tab).is_some_and(|t| {
+                use crate::autopilot::{LAND, OPENED};
+                t.opts.contains_key(OPENED) && t.opts.get(LAND).is_none_or(|v| v != "1")
+            });
+        let answer = if asks_push {
+            None
+        } else if caller.is_some() && hook.agent.is_empty() {
             self.hands_free_answer(tab, &hook, &payload)
         } else {
             None
@@ -225,6 +236,9 @@ impl Server {
             if setting_on("one_claude_per_tab") {
                 self.one_claude(pane);
             }
+        }
+        if asks_push {
+            return Reply::ok(hands_free::ask_push());
         }
         Reply::ok(answer.unwrap_or_default())
     }
