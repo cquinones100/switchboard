@@ -1666,7 +1666,6 @@ impl Server {
             util::now_ms(),
             mtime,
             here.as_deref(),
-            &notes,
         );
         let changed = self.autopilot.mode != mode || self.autopilot.pilot.counts != counts;
         let lost_said = mode.said.starts_with("Can't find the note");

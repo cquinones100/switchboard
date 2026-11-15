@@ -18,6 +18,7 @@ pub mod codex_review;
 pub mod demo;
 pub mod diff_story;
 pub mod headless;
+pub mod item_done;
 pub mod land_lock;
 pub mod land_push;
 pub mod landing;
@@ -266,6 +267,11 @@ pub const COMMANDS: &[Command] = &[
         about: "Run a command holding one of a kind's slots in the queue for heavy work (build, tests, js), waiting in line for one",
     },
     Command {
+        name: "item-done",
+        run: item_done::main,
+        about: "Tick the item a landed worktree was started for, with its Done line, then remove the worktree and its branch",
+    },
+    Command {
         name: "landing",
         run: landing::main,
         about: "How the repository here lands its work: through a PR or straight on its default branch, and a direct landing's steps",
@@ -384,6 +390,7 @@ const OWN_HELP: &[&str] = &[
     "skill-path",
     "slack-relay",
     "update-main",
+    "item-done",
     "worktree-done",
     "worktree-from-branch",
     "worktree-from-note",

@@ -353,7 +353,7 @@ const LOCK_WAIT: Duration = Duration::from_secs(5);
 /// Runs `f` holding a lock on `key` (a note, or a repository), in the
 /// temporary directory, named for the key's real path, so every process
 /// giving the same note its ID takes the same lock.
-fn locked<T>(key: &Path, f: impl FnOnce() -> T) -> T {
+pub fn locked<T>(key: &Path, f: impl FnOnce() -> T) -> T {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(real(key).to_string_lossy().as_bytes());
     let name: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();

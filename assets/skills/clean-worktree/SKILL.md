@@ -47,4 +47,4 @@ If a command in steps 3 to 5 errors, stop there and reply `clean-worktree: fail:
 
 ## From queue-and-clean
 
-`/queue-and-clean` records the paths in step 1 before it watches, while the worktree certainly exists, and follows steps 2 to 5 once the PR has merged and the user has approved its test, with the PR's number for step 2. It turns this skill's `fail` into its own, and closes out the ticket and note between steps 2 and 3, once step 2 has found nothing would be lost and before the worktree is removed.
+`/queue-and-clean` records the paths in step 1 before it watches, while the worktree certainly exists, and once the work has landed runs Switchboard's `item-done` command in place of steps 2 to 5: it makes the same checks, ticks the note's item the branch was started for between step 2 and step 3, and then removes the worktree, deletes the branch and prunes, as those steps do. Run on its own, this skill ticks nothing, since a worktree it clears away may hold work that was closed rather than landed.

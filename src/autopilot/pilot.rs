@@ -10,9 +10,9 @@
 //! the new Claude sessions don't race. An item is never taken again while
 //! a tab of the mode's is open for it (`held`, from `@autopilot_item`), nor
 //! for `RECENT_MS` after it was opened (`recent`), before `wtn` has made its
-//! branch, which is what claims it, nor, once its tab has landed and left,
-//! until the note shows it ticked or for `LANDED_MS` (`landed`), since
-//! queue-and-clean may remove the worktree a moment before it ticks it; a tab whose `wtn` failed before making
+//! branch, which is what claims it. A tab that landed and left holds
+//! nothing: `switchboard item-done` ticks its item before it removes the
+//! worktree, so the note shows it landed by then. A tab whose `wtn` failed before making
 //! its branch holds its item until it is closed. A note changed in the last
 //! `SETTLE_MS` isn't taken from, since an item being typed is saved as it
 //! is typed and its first words would be opened as an item. A note found
@@ -70,9 +70,6 @@ pub const GAP_MS: i64 = 5_000;
 pub const RECENT_MS: i64 = 60_000;
 /// A note changed this recently isn't taken from.
 pub const SETTLE_MS: i64 = 60_000;
-/// A landed tab's item is held until the note shows it ticked, or this
-/// long, so a tick that never comes doesn't hold it for good.
-pub const LANDED_MS: i64 = 10 * 60_000;
 /// The next item is read again at most this often, and when the note, the
 /// items skipped or the kind of items taken change.
 pub const QUEUE_MS: i64 = 30_000;
@@ -387,11 +384,6 @@ pub struct Pilot {
     missing_said: String,
     /// The items of its tabs still open, never taken again while there.
     held: Vec<Key>,
-    /// The items of its tabs that landed and left, and when each was first
-    /// found so (ms).
-    landed: HashMap<Key, i64>,
-    /// The note's unticked items as last read, and the time it was read for.
-    unticked: (Option<i64>, HashSet<String>),
     /// How many of its tabs work and how many are open, at the last check.
     pub counts: (usize, usize),
     /// When each landed tab was first found in front (ms), for `SEEN_MS`.
@@ -424,8 +416,6 @@ impl Default for Pilot {
             spent: None,
             missing_said: String::new(),
             held: Vec::new(),
-            landed: HashMap::new(),
-            unticked: (None, HashSet::new()),
             counts: (0, 0),
             fronts: HashMap::new(),
             gap_ms: GAP_MS,
@@ -492,9 +482,7 @@ impl Pilot {
     /// and fewer than `cap` are open, looks for the next item to open. `on`
     /// is the autopilot setting, `away` whether you're away, `mtime` when
     /// the note last changed (ms), `None` when it isn't there, `here` the ID
-    /// the note at its path holds, and `notes` the notes directory, whose
-    /// note is read for its ticked items only while a landed tab's item is
-    /// held.
+    /// and the note at its path holds.
     #[allow(clippy::too_many_arguments)]
     pub fn check(
         &mut self,
@@ -506,7 +494,6 @@ impl Pilot {
         now_ms: i64,
         mtime: Option<i64>,
         here: Option<&str>,
-        notes: &Path,
     ) -> Check {
         let mut out = Check::default();
         if !mode.set_up() {
@@ -574,43 +561,12 @@ impl Pilot {
         }
         out.marks = marks;
         self.fronts.retain(|t, _| mine.iter().any(|m| m.tab == *t));
-        // A landed tab stays marked until it closes, so its item's time is
-        // when it was first found left, forgotten once its note shows it
-        // ticked (only the mode's note is read), or once past LANDED_MS with
-        // its tab gone.
-        let left: HashSet<Key> = placed
-            .iter()
-            .filter(|(_, kind)| *kind == Kind::Left)
-            .filter_map(|(m, _)| key_of(m))
-            .collect();
-        for key in &left {
-            self.landed.entry(key.clone()).or_insert(now_ms);
-        }
-        if !self.landed.is_empty() {
-            if self.unticked.0 != mtime || mtime.is_none() {
-                let text = std::fs::read_to_string(notes.join(&mode.note)).unwrap_or_default();
-                let open = text
-                    .lines()
-                    .filter_map(|l| l.strip_prefix("- [ ] "))
-                    .map(|l| l.trim().to_string())
-                    .collect();
-                self.unticked = (mtime, open);
-            }
-            let open = &self.unticked.1;
-            let ticked = |key: &Key| key.0 == mode.note_id && !open.contains(&key.1);
-            self.landed
-                .retain(|key, at| !ticked(key) && (now_ms - *at < LANDED_MS || left.contains(key)));
-        }
+        // A tab that landed and left holds nothing: its item was ticked
+        // before its worktree went (`switchboard item-done`).
         self.held = placed
             .iter()
             .filter(|(_, kind)| *kind != Kind::Left)
             .filter_map(|(m, _)| key_of(m))
-            .chain(
-                self.landed
-                    .iter()
-                    .filter(|(_, at)| now_ms - **at < LANDED_MS)
-                    .map(|(item, _)| item.clone()),
-            )
             .collect();
         let open = placed.iter().filter(|(_, k)| *k != Kind::Left).count();
         let busy = placed.iter().filter(|(_, k)| *k == Kind::Busy).count();
@@ -957,7 +913,6 @@ mod tests {
                 self.now,
                 Some(self.mtime),
                 self.here.as_deref(),
-                Path::new("/nowhere"),
             );
             if let Some(keep) = &check.keep {
                 self.pilot.kept(&Kept::default(), keep.follows(), self.now);
@@ -1162,7 +1117,6 @@ mod tests {
     #[test]
     fn it_opens_nothing_while_away_or_past_the_spend_limit_and_says_a_missing_note_once() {
         let mut w = World::new();
-        let none = Path::new("/nowhere");
         let check = w.pilot.check(
             &w.mode,
             true,
@@ -1172,7 +1126,6 @@ mod tests {
             w.now,
             Some(w.mtime),
             Some(ID),
-            none,
         );
         assert_eq!(check.open, None, "away");
         let check = w.pilot.check(
@@ -1184,7 +1137,6 @@ mod tests {
             w.now,
             Some(w.mtime),
             Some(ID),
-            none,
         );
         assert_eq!(check.open, None, "the setting off");
 
@@ -1198,7 +1150,6 @@ mod tests {
             w.now,
             Some(w.mtime),
             Some(ID),
-            none,
         );
         let job = check.open.expect("a look, which sums the spend");
         assert_eq!(job.spend_limit, 5.0);
@@ -1217,7 +1168,6 @@ mod tests {
             later,
             Some(w.mtime),
             Some(ID),
-            none,
         );
         assert_eq!(check.open, None, "not summed again today");
         w.mode.spend_limit = 50.0;
@@ -1230,7 +1180,6 @@ mod tests {
             later,
             Some(w.mtime),
             Some(ID),
-            none,
         );
         assert!(check.open.is_some(), "a new limit is looked at again");
         w.pilot.cancel();
@@ -1241,7 +1190,7 @@ mod tests {
         let missing = |w: &mut World, at: i64| {
             let check = w
                 .pilot
-                .check(&w.mode, true, None, &[], false, at, None, None, none);
+                .check(&w.mode, true, None, &[], false, at, None, None);
             assert_eq!(check.open, None, "nothing opened while it is missing");
             if let Some(keep) = &check.keep {
                 assert!(keep.find && keep.note_id == ID, "{keep:?}");
@@ -1287,7 +1236,6 @@ mod tests {
                     now,
                     Some(w.mtime),
                     Some(ID),
-                    Path::new("/nowhere"),
                 )
                 .marks
                 .into_iter()
@@ -1339,7 +1287,6 @@ mod tests {
                     now,
                     Some(w.mtime),
                     Some(ID),
-                    Path::new("/nowhere"),
                 )
                 .marks
                 .into_iter()
@@ -1371,17 +1318,8 @@ mod tests {
         fn look(w: &mut World, at: &mut i64, here: Option<&str>) -> Check {
             *at += 1_000;
             let mtime = Some(w.mtime);
-            w.pilot.check(
-                &w.mode,
-                true,
-                None,
-                &[],
-                false,
-                *at,
-                mtime,
-                here,
-                Path::new("/nowhere"),
-            )
+            w.pilot
+                .check(&w.mode, true, None, &[], false, *at, mtime, here)
         }
         let mut w = World::new();
         let mut at = w.now;
@@ -1465,7 +1403,6 @@ mod tests {
             now,
             Some(w.mtime),
             Some(ID),
-            Path::new("/nowhere"),
         );
         assert_eq!(
             check.marks,
@@ -1492,7 +1429,6 @@ mod tests {
             now + 1_000,
             Some(w.mtime),
             Some(ID),
-            Path::new("/nowhere"),
         );
         assert!(again.keep.is_none(), "asked once");
     }
@@ -1575,14 +1511,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // test/tmux-sidebar.test.js's "a tab that left keeps its item held until
-    // the note shows it ticked, or for ten minutes".
+    // A tab that landed and left holds nothing: item-done ticked its item
+    // before its worktree went, so the queue no longer lists it.
     #[test]
-    fn a_landed_tabs_item_is_held_until_the_note_ticks_it_or_ten_minutes_pass() {
-        let dir = std::env::temp_dir().join(format!("sb-autopilot-held-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("Work.md"), "- [ ] item 1\n- [ ] item 2\n").unwrap();
+    fn a_landed_tab_holds_its_item_only_while_it_is_open_in_its_worktree() {
         let mut pilot = Pilot::default();
         let mode = Mode {
             on: true,
@@ -1592,27 +1524,19 @@ mod tests {
         };
         let now = 1_700_000_000_000_i64;
         let mut tab = mine(1, (now / 1000) as f64 - 3_600.0, TabState::Idle, false);
-        tab.was_in = true;
-        let mut check = |tabs: &[Mine], at: i64, mtime: i64| {
-            pilot.check(&mode, true, None, tabs, false, at, Some(mtime), None, &dir);
+        let mut check = |tabs: &[Mine], at: i64| {
+            pilot.check(&mode, true, None, tabs, false, at, Some(1), None);
             pilot.skip(&mode, at)
         };
         assert!(
-            check(std::slice::from_ref(&tab), now, 1).contains("item 1"),
-            "held as it leaves"
+            check(std::slice::from_ref(&tab), now).contains("item 1"),
+            "held while its tab works in its worktree"
         );
-        assert!(check(&[], now + 60_000, 1).contains("item 1"), "and after");
+        tab.was_in = true;
         assert!(
-            !check(&[], now + LANDED_MS, 1).contains("item 1"),
-            "for ten minutes at most"
+            !check(std::slice::from_ref(&tab), now + 1_000).contains("item 1"),
+            "not once it has left"
         );
-        assert!(check(std::slice::from_ref(&tab), now + LANDED_MS, 1).contains("item 1"));
-        std::fs::write(dir.join("Work.md"), "- [ ] item 2\n- [x] item 1\n").unwrap();
-        assert!(
-            !check(&[], now + LANDED_MS + 1_000, 2).contains("item 1"),
-            "or until the note shows it ticked"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // test/tmux-sidebar.test.js's "a landed tab of autopilot
@@ -1641,7 +1565,6 @@ mod tests {
                     at,
                     None,
                     None,
-                    Path::new("/nowhere"),
                 )
                 .marks
         };
@@ -1740,7 +1663,6 @@ mod tests {
                     at,
                     None,
                     None,
-                    Path::new("/nowhere"),
                 )
                 .marks
         };

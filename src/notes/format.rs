@@ -607,7 +607,7 @@ fn is_done(line: &str) -> bool {
     render::line_kind(line, false).done()
 }
 
-fn has_text(line: &str) -> bool {
+pub fn has_text(line: &str) -> bool {
     !line.trim().is_empty()
 }
 

@@ -71,7 +71,7 @@ fn target_at(dir: &Path) -> Value {
 }
 
 /// When `wtn` started the branch's item, as the module's opening says.
-fn started_at(dir: &Path) -> Option<i64> {
+pub fn started_at(dir: &Path) -> Option<i64> {
     let branch = branch_at(dir)?;
     worktree::git_at(
         dir,

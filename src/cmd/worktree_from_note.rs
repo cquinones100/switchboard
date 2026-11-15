@@ -1546,12 +1546,11 @@ fn push_settings() -> String {
 /// an item can sit in a note while the code moves under it. A stale one stops
 /// short of landing, so autopilot's tab, which runs `wtn` too, waits on you
 /// rather than building it; in a hands-free tab, one already done on the
-/// target is ticked and its tab freed instead, since nothing is left to
+/// target is ticked (`switchboard item-done --already-on`) and its tab freed instead, since nothing is left to
 /// decide, and starting it there asked for its worktree's removal once done.
 fn check_first(hands_free: bool) -> String {
     let done = if hands_free {
-        "If it is already done on the branch it lands on, and `switchboard show @autopilot_handsfree` still prints 1 when you find it so (otherwise hands-free was turned off: tell me with the evidence and stop, as usual), tick it in the note, as the note's rules say, with an indented `Done: <short hash of the commit that did it>, already on <that branch>. <what it does now>` line under it, \
-         then land it as below, which finds the work already there and cleans up, without asking me; what you built beyond what that branch has (a test, a doc) lands as the item's change instead. \
+        "If it is already done on the branch it lands on, and `switchboard show @autopilot_handsfree` still prints 1 when you find it so (otherwise hands-free was turned off: tell me with the evidence and stop, as usual), land it as below without asking me, which finds the work already there, ticks the item with `switchboard item-done --already-on <that branch> --hash <short hash of the commit that did it> --says '<what it does now>'` and cleans up; what you built beyond what that branch has (a test, a doc) lands as the item's change instead. \
          If it no longer applies, tell me so with the evidence (the code, or the commit that did it) and stop there, without building, landing or ticking it, so I decide. \
          Starting this item hands-free is my ask to remove its worktree and branch once its work has landed: don't ask about that cleanup when nothing would be lost. "
     } else {
@@ -1585,6 +1584,7 @@ mod tests {
         let hands_free = check_first(true);
         assert!(hands_free.contains("If it is already done on the branch it lands on, and `switchboard show @autopilot_handsfree` still prints 1"));
         assert!(hands_free.contains("don't ask about that cleanup when nothing would be lost"));
+        assert!(hands_free.contains("`switchboard item-done --already-on <that branch>"));
         assert!(!hands_free.contains("If it is already done or no longer applies"));
         let asking = check_first(false);
         assert!(
