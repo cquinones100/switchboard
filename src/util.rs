@@ -5,7 +5,7 @@
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -72,7 +72,6 @@ pub fn which(command: &str) -> Option<PathBuf> {
 }
 
 fn is_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
     fs::metadata(path)
         .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
         .unwrap_or(false)
@@ -256,11 +255,12 @@ pub fn read_json_object(path: impl AsRef<Path>) -> serde_json::Map<String, Value
 }
 
 /// Writes a file whole: to `<file>.<pid>.tmp` beside it, then renamed into
-/// place, so a reader never sees half of it. Its directory is made first.
+/// place, so a reader never sees half of it. Its directory is made first,
+/// as `make_dirs` makes it.
 pub fn write_atomic(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) -> io::Result<()> {
     let path = path.as_ref();
     if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir)?;
+        make_dirs(dir)?;
     }
     let tmp = tmp_beside(path);
     fs::write(&tmp, contents)?;
@@ -296,12 +296,41 @@ pub fn write_private(
     file.write_all(contents.as_ref())
 }
 
+/// Makes a directory and whatever is missing above it, each folder it makes
+/// its owner's alone (0700), so the state, cache and config folders other
+/// users could otherwise list and read are private from the start.
+pub fn make_dirs(dir: impl AsRef<Path>) -> io::Result<()> {
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+}
+
+/// Makes each of `dirs` its owner's alone (0700), for the server as it
+/// starts: one that is missing is made so, as `make_dirs` makes it, since a
+/// part may later make a folder inside with `create_dir_all`; one an earlier
+/// build made open to other users is tightened. A link, or someone else's
+/// folder, is left as it is.
+pub fn make_private(dirs: &[PathBuf]) {
+    // SAFETY: geteuid only reads the process's user id.
+    let me = unsafe { libc::geteuid() };
+    for dir in dirs {
+        let Ok(meta) = dir.symlink_metadata() else {
+            let _ = make_dirs(dir);
+            continue;
+        };
+        if meta.is_dir() && meta.uid() == me && meta.mode() & 0o077 != 0 {
+            let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
+        }
+    }
+}
+
 /// Appends a line to a file, making its directory first, ignoring failure:
 /// for the nudge files other parts watch.
 pub fn append_quietly(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) {
     let path = path.as_ref();
     if let Some(dir) = path.parent() {
-        let _ = fs::create_dir_all(dir);
+        let _ = make_dirs(dir);
     }
     if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = f.write_all(contents.as_ref());
@@ -433,6 +462,45 @@ pub fn unbase64(text: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mode_of(path: &Path) -> u32 {
+        fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn folders_made_for_a_file_are_the_owners_alone() {
+        let top = std::env::temp_dir().join(format!("sbutil-private-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&top);
+        write_atomic(top.join("state/switchboard/file.json"), "{}").unwrap();
+        append_quietly(top.join("cache/switchboard/nudge"), "x\n");
+        for dir in [
+            "",
+            "state",
+            "state/switchboard",
+            "cache",
+            "cache/switchboard",
+        ] {
+            assert_eq!(mode_of(&top.join(dir)), 0o700, "{dir}");
+        }
+        let _ = fs::remove_dir_all(&top);
+    }
+
+    #[test]
+    fn make_private_makes_and_tightens_your_folders_and_passes_over_links() {
+        let top = std::env::temp_dir().join(format!("sbutil-tighten-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&top);
+        let (open, target) = (top.join("open"), top.join("target"));
+        fs::create_dir_all(&open).unwrap();
+        fs::create_dir_all(&target).unwrap();
+        fs::set_permissions(&open, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
+        std::os::unix::fs::symlink(&target, top.join("link")).unwrap();
+        make_private(&[open.clone(), top.join("link"), top.join("missing")]);
+        assert_eq!(mode_of(&open), 0o700);
+        assert_eq!(mode_of(&top.join("missing")), 0o700, "a missing one made");
+        assert_eq!(mode_of(&target), 0o755, "a link's folder is left");
+        let _ = fs::remove_dir_all(&top);
+    }
 
     #[test]
     fn nearest_existing_climbs_out_of_a_removed_directory() {

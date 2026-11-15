@@ -572,6 +572,11 @@ pub fn main(args: Vec<String>) -> ExitCode {
 
 async fn run(handover: Option<PathBuf>) -> Result<()> {
     super::upgrade::remember_binary();
+    crate::util::make_private(&[
+        crate::paths::config_dir(),
+        crate::paths::state_dir(),
+        crate::paths::cache_dir(),
+    ]);
     let (listener, handed) = match handover {
         None => (socket::bind()?, None),
         Some(file) => {

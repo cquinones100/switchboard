@@ -114,7 +114,7 @@ A version bump on main is a release: when `Cargo.toml`'s version there has no re
 - Each module opens with a comment saying what it is and why it works as it does; a part ported from a Node, shell or Lua file names that file, so its history can be followed.
 - Behavior matches the tmux version unless that depended on tmux or macOS; where it changes, the comment says so.
 - No tmux, no Node, no external program but Claude Code and git (and the platform's own tools in `src/platform/`). Desktop differences go through `src/platform/`.
-- Files written whole go through `util::write_atomic`; JSON numbers through `util::js_number`, so files read as they did.
+- Files written whole go through `util::write_atomic`; JSON numbers through `util::js_number`, so files read as they did. The folders it (and `append_quietly`) makes are their owner's alone (`util::make_dirs`, 0700), and the server makes the config, state and cache folders so as it starts, tightening those an earlier build left open (`util::make_private`).
 - Server state is touched only by the server task; anything slow runs elsewhere and reports back with an `Event`.
 - Tests: unit tests beside the code; integration tests in `tests/` with a temporary home and a server of their own, never the real one.
 

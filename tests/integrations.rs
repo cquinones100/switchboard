@@ -419,6 +419,24 @@ fn without_a_token_it_says_how_to_get_one() {
     stand_in::assert_none_refused(&env.home.join("bin"));
 }
 
+#[test]
+fn a_secret_saved_on_a_mac_reads_back() {
+    if switchboard::platform::NAME != "macOS" {
+        return;
+    }
+    let env = Env::new("set-secret");
+    let keychain = env.home.join("keychain");
+    stand_in::security(&env.home.join("bin"), &keychain);
+    // Through security's stdin, never its arguments, quotes and all.
+    let secret = r#"lin a"b\c$d"#;
+    switchboard::platform::set_secret("linear-api-key", "me", secret).unwrap();
+    assert_eq!(
+        switchboard::platform::secret_for("linear-api-key", "me").as_deref(),
+        Some(secret)
+    );
+    stand_in::assert_none_refused(&env.home.join("bin"));
+}
+
 /// A stand-in gh in the test's PATH that writes a line to `runs` each time
 /// `gh auth token` runs, then does `then` (sh).
 fn gh_counting(env: &Env, then: &str) -> PathBuf {

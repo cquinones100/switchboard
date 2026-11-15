@@ -1155,3 +1155,17 @@ fn a_lone_panes_edge_drags_and_moves_with_the_resize_keys_for_every_tab() {
         server.list()["sessions"][0]["tabs"][1]["panes"][0]["cols"].as_u64() == Some(200)
     });
 }
+
+#[test]
+fn the_state_and_config_folders_are_the_owners_alone() {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    // The test made the state folder open (umask's 0755) before the server
+    // started, as an earlier build would have; settings.json's folder was
+    // made through util::write_atomic.
+    let server = TestServer::start_in_home();
+    assert_eq!(mode(&server.state), 0o700, "{}", server.log());
+    assert_eq!(mode(&server.home.join(".config/switchboard")), 0o700);
+    // The cache, missing, is made so, for the parts that make folders in it.
+    assert_eq!(mode(&server.home.join(".cache/switchboard")), 0o700);
+}

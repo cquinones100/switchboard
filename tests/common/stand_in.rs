@@ -1456,6 +1456,13 @@ check() {
           -a) account=$2 ;;
           -s) service=$2 ;;
           -w) password=$2 got_password=1 ;;
+          -X)
+            password= got_password=1 hex=$2
+            while [ -n "$hex" ]; do
+              byte=${hex%"${hex#??}"}
+              hex=${hex#??}
+              password=$password$(printf "\\$(printf %o "0x$byte")")
+            done ;;
         esac
         shift ;;
       find-generic-password:-g) ;;
@@ -1479,6 +1486,36 @@ check() {
     exit 1
   fi
 }
+# security -i: a command on stdin, its words in double quotes with \" and \\
+# escaped, as security's own parser reads them (set_secret sends one, the
+# secret as hex with -X, which is decoded above).
+if [ "${1-}" = -i ] && [ $# -eq 1 ]; then
+  IFS= read -r rest || exit 0
+  set --
+  word= in_word= quoted= escaped=
+  while [ -n "$rest" ]; do
+    c=${rest%"${rest#?}"}
+    rest=${rest#?}
+    if [ -n "$escaped" ]; then
+      word=$word$c escaped=
+    elif [ -n "$quoted" ]; then
+      case $c in
+        '\') escaped=1 ;;
+        '"') quoted= ;;
+        *) word=$word$c ;;
+      esac
+    else
+      case $c in
+        ' ')
+          if [ -n "$in_word" ]; then set -- "$@" "$word"; fi
+          word= in_word= ;;
+        '"') quoted=1 in_word=1 ;;
+        *) word=$word$c in_word=1 ;;
+      esac
+    fi
+  done
+  if [ -n "$in_word" ]; then set -- "$@" "$word"; fi
+fi
 @CHECKED@
 # An item's line, by its service and (when given) account.
 found() {

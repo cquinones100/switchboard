@@ -736,6 +736,23 @@ fn security_keeps_a_keychain_and_refuses_what_security_refuses() {
         took(&run(&["find-generic-password", "-s", "github-token", "-w"])),
         "from-keychain\n"
     );
+    took(&self::run(
+        &security,
+        &["-i"],
+        Some("add-generic-password -U -a \"m e\" -s \"quoted\" -X 6120625c6324\n"),
+        dir.path(),
+    ));
+    assert_eq!(
+        took(&run(&[
+            "find-generic-password",
+            "-a",
+            "m e",
+            "-s",
+            "quoted",
+            "-w"
+        ])),
+        "a b\\c$\n"
+    );
     refused(
         &run(&["find-generic-password", "-s", "linear-api-key", "-w"]),
         44,

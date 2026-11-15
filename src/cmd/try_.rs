@@ -69,7 +69,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Write};
-use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt, symlink};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -645,6 +645,7 @@ impl Try {
     pub fn lay_out(&self, bin: &Path) -> Result<Vec<String>> {
         let (real, home) = (&self.real, &self.home);
         let mut notes = Vec::new();
+        claim_home(home)?;
         for dir in [
             "Library",
             ".config",
@@ -1214,6 +1215,33 @@ fn resolve_gone(path: &Path) -> PathBuf {
     out
 }
 
+/// Makes the try's home, its owner's alone, or takes the one there,
+/// refusing one that is a link or another user's: /tmp is everyone's, so
+/// anyone could have made /tmp/sb-<hash> first, to read or plant what the
+/// try puts there.
+fn claim_home(home: &Path) -> Result<()> {
+    if let Some(root) = home.parent() {
+        fs::create_dir_all(root).with_context(|| format!("could not make {}", root.display()))?;
+    }
+    match fs::DirBuilder::new().mode(0o700).create(home) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists && is_own_folder(home) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => bail!(
+            "{} is in the way of the try's home: it is a link, or not a folder of yours; remove it and try again",
+            home.display()
+        ),
+        Err(e) => Err(e).with_context(|| format!("could not make {}", home.display())),
+    }
+}
+
+/// Whether a path is a folder of yours itself, not a link to one.
+fn is_own_folder(dir: &Path) -> bool {
+    // SAFETY: geteuid only reads the process's user id.
+    let me = unsafe { libc::geteuid() };
+    dir.symlink_metadata()
+        .is_ok_and(|m| m.is_dir() && m.uid() == me)
+}
+
 /// Whether a folder in the root is one of your tries' homes: `sb-` and eight
 /// hex digits, a folder of yours (not a link), with the link to its
 /// worktree.
@@ -1222,12 +1250,7 @@ pub fn is_try_home(dir: &Path) -> bool {
     let hex = name
         .strip_prefix("sb-")
         .is_some_and(|h| h.len() == 8 && h.bytes().all(|b| b.is_ascii_hexdigit()));
-    // SAFETY: geteuid only reads the process's user id.
-    let me = unsafe { libc::geteuid() };
-    hex && dir
-        .symlink_metadata()
-        .is_ok_and(|m| m.is_dir() && m.uid() == me)
-        && crate::setup::is_link(&dir.join("switchboard"))
+    hex && is_own_folder(dir) && crate::setup::is_link(&dir.join("switchboard"))
 }
 
 /// `--clean-all`: every try of yours in the root.
@@ -1284,6 +1307,24 @@ mod tests {
     fn write(path: &Path, text: &str) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, text).unwrap();
+    }
+
+    #[test]
+    fn a_home_that_is_a_link_is_refused() {
+        let t = Temp::new("claim");
+        let theirs = t.0.join("theirs");
+        fs::create_dir_all(&theirs).unwrap();
+        let home = t.0.join("sb-12345678");
+        symlink(&theirs, &home).unwrap();
+        let err = claim_home(&home).unwrap_err().to_string();
+        assert!(err.contains("in the way"), "{err}");
+        assert!(!is_own_folder(&home));
+        fs::remove_file(&home).unwrap();
+        claim_home(&home).unwrap();
+        assert!(is_own_folder(&home));
+        let mode = fs::metadata(&home).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        claim_home(&home).unwrap();
     }
 
     #[test]

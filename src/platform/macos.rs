@@ -21,22 +21,66 @@ pub fn secret(service: &str, account: Option<&str>) -> Option<String> {
     util::try_run("security", args)
 }
 
+/// Saves a secret through `security`'s interactive mode, the command on its
+/// stdin, so the secret is never an argument any user's `ps` could read.
+/// That mode exits 0 whatever a command does, saying a failure on stderr.
 pub fn set_secret(service: &str, account: &str, value: &str) -> Result<String> {
-    util::run(
-        "security",
-        [
-            "add-generic-password",
-            "-U",
-            "-a",
-            account,
-            "-s",
-            service,
-            "-w",
-            value,
-        ],
-    )?;
+    use std::io::Write;
+    let line = keychain_line(service, account, value)?;
+    let mut child = Command::new("security")
+        .arg("-i")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| anyhow!("security: could not start: {e}"))?;
+    {
+        let mut stdin = child.stdin.take().expect("stdin piped");
+        let _ = stdin.write_all(line.as_bytes());
+    }
+    let output = child.wait_with_output()?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() || !stderr.trim().is_empty() {
+        return Err(anyhow!(
+            "security failed: {}",
+            stderr.lines().next().unwrap_or("").trim()
+        ));
+    }
     Ok(format!("the Keychain, as {service}"))
 }
+
+/// The line `security -i` reads to save a secret: the secret as hex
+/// (`-X`), so any byte of it, a line break included, is kept as it is, and
+/// the account and service in double quotes, a quote or backslash in them
+/// escaped, as its own parser reads them. A line break in either would end
+/// the command, so one holding one is refused. `security` reads a line of at
+/// most `KEYCHAIN_LINE` bytes, taking the rest as another command, so a
+/// longer one (a secret of about 2000 bytes) is refused too.
+fn keychain_line(service: &str, account: &str, value: &str) -> Result<String> {
+    if [service, account].iter().any(|v| v.contains(['\n', '\r'])) {
+        return Err(anyhow!("a Keychain item's name can't hold a line break"));
+    }
+    if value.is_empty() {
+        return Err(anyhow!("there is no secret to store"));
+    }
+    let quoted = |v: &str| format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""));
+    let hex: String = value.bytes().map(|b| format!("{b:02x}")).collect();
+    let line = format!(
+        "add-generic-password -U -a {} -s {} -X {hex}",
+        quoted(account),
+        quoted(service),
+    );
+    if line.len() > KEYCHAIN_LINE {
+        return Err(anyhow!(
+            "the secret is too long for the Keychain's security command to take on its input"
+        ));
+    }
+    Ok(line + "\n")
+}
+
+/// The longest line `security -i` reads as one command, its line break left
+/// out (macOS 26).
+const KEYCHAIN_LINE: usize = 4095;
 
 pub fn copy(text: &str) -> Result<()> {
     util::run_with_input(&mut Command::new("pbcopy"), text.as_bytes())
@@ -382,4 +426,22 @@ pub fn set_option_as_alt(app: super::TerminalApp) -> Result<()> {
         }
     }
     prefs.import()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_keychain_line_quotes_what_security_would_split() {
+        assert_eq!(
+            keychain_line("linear-api-key", r#"m"e\"#, "a\nb").unwrap(),
+            "add-generic-password -U -a \"m\\\"e\\\\\" -s \"linear-api-key\" -X 610a62\n"
+        );
+        assert!(keychain_line("linear-api-key", "m\ne", "x").is_err());
+        assert!(keychain_line("linear-api-key", "me", "").is_err());
+        let fits = KEYCHAIN_LINE - "add-generic-password -U -a \"me\" -s \"s\" -X ".len();
+        assert!(keychain_line("s", "me", &"a".repeat(fits / 2)).is_ok());
+        assert!(keychain_line("s", "me", &"a".repeat(fits / 2 + 1)).is_err());
+    }
 }

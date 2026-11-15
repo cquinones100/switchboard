@@ -16,7 +16,8 @@
 //! - the clipboard (`pbcopy`/`pbpaste`, `wl-copy`/`wl-paste`, `xclip`): the
 //!   demo's own `clipboard` file.
 //! - `security`: `find-generic-password` reads the demo's `secrets.json`,
-//!   never your Keychain; `add-generic-password` writes it.
+//!   never your Keychain; `add-generic-password` writes it, as an argument
+//!   or, as Switchboard saves one, on `security -i`'s input with `-X`.
 //! - `caffeinate` and `qlmanage`: do nothing.
 
 use std::fs;
@@ -169,10 +170,55 @@ fn secrets_file() -> PathBuf {
     home().join(".config/switchboard/secrets.json")
 }
 
+/// A line of `security -i`'s input as its words: split at spaces, a double
+/// quoted part kept whole, a backslash in it taking the next character.
+fn security_words(line: &str) -> Vec<String> {
+    let (mut words, mut word) = (Vec::new(), String::new());
+    let (mut in_word, mut quoted, mut chars) = (false, false, line.chars());
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if quoted => word.extend(chars.next()),
+            '"' => (quoted, in_word) = (!quoted, true),
+            ' ' if !quoted => {
+                if in_word {
+                    words.push(std::mem::take(&mut word));
+                }
+                in_word = false;
+            }
+            c => {
+                word.push(c);
+                in_word = true;
+            }
+        }
+    }
+    if in_word {
+        words.push(word);
+    }
+    words
+}
+
+/// Text from `-X`'s hex, or `None` when it isn't hex of UTF-8.
+fn from_hex(hex: &str) -> Option<String> {
+    let bytes: Option<Vec<u8>> = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
+        .collect();
+    String::from_utf8(bytes?).ok()
+}
+
 /// `security find-generic-password [-a account] -s service -w` from the
 /// demo's `secrets.json`, exiting 44 (`errSecItemNotFound`'s exit) for a
-/// secret it hasn't; `add-generic-password` keeps one there.
+/// secret it hasn't; `add-generic-password` keeps one there. With `-i`,
+/// the command is read from stdin, its words split as `security` splits
+/// them (src/platform/macos.rs's `keychain_line` writes it).
 fn security(args: &[String]) -> ExitCode {
+    if args == ["-i"] {
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_err() {
+            return ExitCode::FAILURE;
+        }
+        return security(&security_words(line.trim_end_matches(['\n', '\r'])));
+    }
     let value_of = |flag: &str| {
         args.iter()
             .position(|a| a == flag)
@@ -195,8 +241,13 @@ fn security(args: &[String]) -> ExitCode {
             }
         },
         Some("add-generic-password") => {
-            let Some(value) = value_of("-w") else {
-                return refuse("security", args, "no -w value");
+            let value = match (value_of("-w"), value_of("-X")) {
+                (Some(value), _) => value,
+                (None, Some(hex)) => match from_hex(&hex) {
+                    Some(value) => value,
+                    None => return refuse("security", args, "-X isn't hex"),
+                },
+                (None, None) => return refuse("security", args, "no -w or -X value"),
             };
             secrets.insert(service, Value::String(value));
             match util::write_atomic(secrets_file(), util::json_pretty(&Value::Object(secrets))) {
@@ -210,5 +261,32 @@ fn security(args: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         _ => refuse("security", args, "the demo has no Keychain"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_save_on_securitys_input_reads_as_its_words() {
+        let words =
+            security_words(r#"add-generic-password -U -a "m\"e\\" -s "linear-api-key" -X 610a62"#);
+        assert_eq!(
+            words,
+            [
+                "add-generic-password",
+                "-U",
+                "-a",
+                "m\"e\\",
+                "-s",
+                "linear-api-key",
+                "-X",
+                "610a62"
+            ]
+        );
+        assert_eq!(from_hex("610a62").as_deref(), Some("a\nb"));
+        assert_eq!(from_hex("6"), None);
+        assert_eq!(from_hex("zz"), None);
     }
 }

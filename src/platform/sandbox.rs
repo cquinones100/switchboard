@@ -113,6 +113,12 @@ fn found_above(tmp: &Path) -> String {
     )
 }
 
+/// The tests' own folders, as tests/common names them: a name, its process
+/// and a number, under /tmp; a regex's start, matching the folder's path.
+fn test_homes(tmp: &Path) -> String {
+    format!("^{}/[A-Za-z][A-Za-z0-9_-]*-[0-9]+-[0-9]+", regex_of(tmp))
+}
+
 fn denied_services() -> String {
     let names: Vec<String> = SERVICES
         .iter()
@@ -135,6 +141,11 @@ pub fn profile(r: &Rules) -> String {
     no_write.push(found_above(tmp));
     no_write.push(subpath(&r.real_home));
     no_write.extend(r.unwritable.iter().map(|p| subpath(p)));
+    // Your tests' homes, which the try's code could plant a program or a
+    // socket in; only its own tests (`--run`) make and use them there.
+    if !r.run {
+        no_write.push(format!("(regex #\"{}(/|$)\")", test_homes(tmp)));
+    }
     let readable: Vec<String> = r.readable.iter().map(|p| subpath(p)).collect();
     let home = subpath(&r.home);
     let mut lines = vec![
@@ -166,8 +177,8 @@ pub fn profile(r: &Rules) -> String {
         // The tests' own folders, as tests/common names them: a name, its
         // process and a number, under /tmp.
         lines.push(format!(
-            "(allow network-outbound (remote unix-socket (path-regex #\"^{}/[A-Za-z][A-Za-z0-9_-]*-[0-9]+-[0-9]+/\")))",
-            regex_of(tmp)
+            "(allow network-outbound (remote unix-socket (path-regex #\"{}/\")))",
+            test_homes(tmp)
         ));
         lines.push("(allow network-outbound (remote ip \"localhost:*\"))".to_string());
         lines.push("(allow network-bind network-inbound (local ip \"localhost:*\"))".to_string());
@@ -345,6 +356,21 @@ mod tests {
         assert!(
             !tests.is_match("/private/tmp/tmux-501/default"),
             "not your tmux"
+        );
+    }
+
+    #[test]
+    fn without_run_it_never_writes_your_tests_homes() {
+        let rule = "(regex #\"^/private/tmp/[A-Za-z][A-Za-z0-9_-]*-[0-9]+-[0-9]+(/|$)\")";
+        let p = profile(&rules(false));
+        let deny_write = at(
+            &p,
+            "(deny file-write* (subpath \"/private/tmp/claude-501\")",
+        );
+        assert!(p.lines().nth(deny_write).unwrap().contains(rule), "{p}");
+        assert!(
+            !profile(&rules(true)).contains(rule),
+            "its own tests make them"
         );
     }
 
