@@ -769,6 +769,137 @@ fn copy_mode_selects_with_the_keyboard_and_copies_through_the_clipboard() {
 }
 
 #[test]
+fn only_the_pane_in_front_puts_text_on_the_clipboard() {
+    let server = TestServer::start();
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    let osc = |text: &str| {
+        format!(
+            "\x1b]52;c;{}\x07",
+            switchboard::util::base64(text.as_bytes())
+        )
+    };
+    // A program in a tab behind copies, then says it did.
+    let behind = format!(
+        "printf '{}'; echo copied-behind; sleep 30",
+        osc("from-behind")
+            .replace('\x1b', "\\033")
+            .replace('\x07', "\\007")
+    );
+    server.ok(&["new-tab", "-d", "-n", "behind", "--", "sh", "-c", &behind]);
+    let pane = |i: usize| {
+        server.list()["sessions"][0]["tabs"][i]["panes"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let (front, back) = (pane(0), pane(1));
+    let deadline = common::deadline(std::time::Duration::from_secs(10));
+    while !server
+        .ok(&["capture-pane", "-t", &back])
+        .contains("copied-behind")
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the tab behind never ran"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // The pane in front copies.
+    let print = |text: &str| {
+        server.ok(&[
+            "send-keys",
+            "-t",
+            &front,
+            "-l",
+            &format!(
+                "printf '\\033]52;c;%s\\007' {}; echo printed-{text}",
+                switchboard::util::base64(text.as_bytes())
+            ),
+        ]);
+        server.ok(&["send-keys", "-t", &front, "Enter"]);
+    };
+    print("from-front");
+    wait_copied(&mut client, "from-front");
+    assert!(
+        !sent(&client.raw, osc("from-behind").as_bytes()),
+        "a tab behind never reaches the clipboard"
+    );
+
+    // Nor does the pane in front while it is in copy mode, its live output
+    // out of sight.
+    // Typing into the pane leaves copy mode, so the program waits for a
+    // file to copy once copy mode is on.
+    let go = server.home.join("go-copy");
+    server.ok(&[
+        "send-keys",
+        "-t",
+        &front,
+        "-l",
+        &format!(
+            "while [ ! -e '{}' ]; do sleep 0.05; done; printf '\\033]52;c;%s\\007' {}; echo printed-in-copy-mode",
+            go.display(),
+            switchboard::util::base64(b"in-copy-mode")
+        ),
+    ]);
+    server.ok(&["send-keys", "-t", &front, "Enter"]);
+    client.type_text(&format!("{ALT}b"));
+    client.type_text("[");
+    client.wait_text("[0]");
+    std::fs::write(&go, "").unwrap();
+    let deadline = common::deadline(std::time::Duration::from_secs(10));
+    while !server
+        .ok(&["capture-pane", "-t", &front])
+        .lines()
+        .any(|l| l == "printed-in-copy-mode")
+    {
+        assert!(std::time::Instant::now() < deadline, "never printed");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    client.type_text("q");
+    client.wait_for("copy mode left", |s| !s.iter().any(|l| l.contains("[0]")));
+    assert!(!sent(&client.raw, osc("in-copy-mode").as_bytes()));
+
+    // Nor does the pane in front while mission control is over it.
+    client.type_text(&format!("{ALT} "));
+    client.wait_text("MISSION CONTROL");
+    print("under-mission");
+    let deadline = common::deadline(std::time::Duration::from_secs(10));
+    while !server
+        .ok(&["capture-pane", "-t", &front])
+        .lines()
+        .any(|l| l == "printed-under-mission")
+    {
+        assert!(std::time::Instant::now() < deadline, "never printed");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    client.type_text("\x1b");
+    client.wait_for("mission control closed", |s| {
+        !s.iter().any(|l| l.contains("MISSION CONTROL"))
+    });
+    assert!(!sent(&client.raw, osc("under-mission").as_bytes()));
+
+    // Off, the pane in front's copy is ignored too. The sidebar going shows
+    // the settings were read again.
+    assert_ne!(server.list()["sessions"][0]["sidebar"]["columns"], 0);
+    common::write_settings(
+        &server.home,
+        serde_json::json!({"pane_clipboard": false, "sidebar": false}),
+    );
+    let deadline = common::deadline(std::time::Duration::from_secs(10));
+    while server.list()["sessions"][0]["sidebar"]["columns"] != 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the settings weren't read"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    print("while-off");
+    client.wait_for("printed", |s| s.iter().any(|l| l == "printed-while-off"));
+    assert!(!sent(&client.raw, osc("while-off").as_bytes()));
+}
+
+#[test]
 fn a_panes_program_asking_the_terminals_colours_is_told_its_own() {
     let server = TestServer::start();
     let mut client = server.attach(100, 30);

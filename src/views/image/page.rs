@@ -215,13 +215,29 @@ fn unescape(text: &str) -> String {
 /// A picture in HTML: the tag up to its `src`, and the link.
 static IMG_SRC: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?i)(<img\b[^>]*?\ssrc=")([^"]*)""#).unwrap());
-/// A picture in Markdown, `![words](link)`, or as HTML in it.
-static MD_IMAGE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r#"!\[[^\]]*\]\(\s*<?(https://[^\s)>]+)|(?i:<img\b[^>]*?\ssrc=["']?(https://[^"'\s>]+))"#,
-    )
-    .unwrap()
-});
+/// A picture written as HTML in Markdown.
+static MD_HTML_IMG: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?i)<img\b[^>]*?\ssrc=["']?(https://[^"'\s>]+)"#).unwrap());
+
+/// A ticket's pictures, read as Markdown is (`marked` draws it in the
+/// page): inline and by reference, with their escapes, and those written
+/// as HTML in it.
+fn markdown_pictures(text: &str) -> Vec<String> {
+    use pulldown_cmark::{Event, Options, Parser, Tag};
+    let options =
+        Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
+    let mut found = Vec::new();
+    for event in Parser::new_ext(text, options) {
+        match event {
+            Event::Start(Tag::Image { dest_url, .. }) => found.push(dest_url.to_string()),
+            Event::Html(html) | Event::InlineHtml(html) => {
+                found.extend(MD_HTML_IMG.captures_iter(&html).map(|c| unescape(&c[1])))
+            }
+            _ => {}
+        }
+    }
+    found
+}
 
 /// The pictures the page shows, by their links as the browser reads them,
 /// each once: a PR's from its HTML, a ticket's from its Markdown. Only
@@ -232,12 +248,7 @@ pub fn pictures(parts: &Parts) -> Vec<String> {
         .map(|c| unescape(&c[2]))
         .collect();
     for text in &parts.markdown {
-        found.extend(
-            MD_IMAGE
-                .captures_iter(text)
-                .filter_map(|c| c.get(1).or_else(|| c.get(2)))
-                .map(|m| m.as_str().to_string()),
-        );
+        found.extend(markdown_pictures(text));
     }
     let mut seen = std::collections::HashSet::new();
     found.retain(|url| url.starts_with("https://") && seen.insert(url.clone()));
@@ -262,12 +273,17 @@ pub fn with_local_pictures(html: &str, local: &Local) -> String {
 /// What runs once the scripts have loaded: the Markdown drawn and cleaned
 /// in place of the elements that name it (so its paragraphs are the page's
 /// own blocks, which pages break between), its pictures kept here named by
-/// their copies before they are part of the page (and so before they
+/// their copies (by their links as written, or as marked spells them)
+/// before they are part of the page (and so before they
 /// load), each diagram drawn, and then, once everything has loaded or
 /// failed, the page measured.
 const RUN: &str = r#"
 const sources = JSON.parse(document.getElementById("markdown").textContent);
 const local = JSON.parse(document.getElementById("local").textContent);
+// marked writes a picture's link as its cleanUrl does (encodeURI, a % left
+// as it was), so a copy is looked up by that spelling too.
+const marked_spelling = (url) => { try { return encodeURI(url).replace(/%25/g, "%"); } catch { return url; } };
+for (const [url, copy] of Object.entries(local)) local[marked_spelling(url)] ??= copy;
 const safe = typeof marked !== "undefined" && typeof DOMPurify !== "undefined";
 document.querySelectorAll("[data-md]").forEach((el) => {
   const source = sources[Number(el.dataset.md)] ?? "";
@@ -343,6 +359,18 @@ pub fn band_label(page: usize, total: usize) -> String {
     )
 }
 
+/// The page's policy: it loads the pinned files (their copies here, or the
+/// CDN's at their exact links) and pictures only from this computer (the
+/// copies `super::cache` fetched, `data:`), and nothing else, so a PR's or
+/// ticket's picture that wasn't kept here, a video, a frame or a font of
+/// someone else's reaches no server as the page draws, and is left out.
+static POLICY: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "default-src 'none'; script-src 'unsafe-inline' file: {} {} {}; style-src 'unsafe-inline' file: {}; img-src data: file:; font-src data:",
+        MARKED.url, PURIFY.url, MERMAID.url, STYLESHEET.url
+    )
+});
+
 /// The page, `width` CSS pixels wide, a diagram no taller than `fit`, with
 /// the strips when there are several pages, naming the copies in `local`
 /// in place of their links.
@@ -379,6 +407,7 @@ pub fn html(
     let [r, g, b] = BACKGROUND;
     format!(
         r#"<!doctype html><html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="{policy}">
 {css}
 <style>
 html {{ overflow: hidden; }}
@@ -402,6 +431,7 @@ pre.mermaid svg {{ max-height: {fit}px; max-width: 100%; height: auto; }}
 {mermaid}
 <script>{run}</script>
 </body></html>"#,
+        policy = POLICY.as_str(),
         css = stylesheet(local),
         title = escape(&parts.title),
         number = escape(&parts.number),
@@ -584,6 +614,42 @@ mod tests {
     }
 
     #[test]
+    fn the_page_loads_pictures_only_from_this_computer() {
+        let page = html(
+            &Parts::default(),
+            600,
+            400,
+            30,
+            &Bands::default(),
+            &Local::new(),
+        );
+        let policy = Regex::new(r#"<meta http-equiv="Content-Security-Policy" content="([^"]+)">"#)
+            .unwrap()
+            .captures(&page)
+            .expect("the page has a policy")[1]
+            .to_string();
+        let rules: Vec<&str> = policy.split("; ").collect();
+        assert!(rules.contains(&"default-src 'none'"));
+        assert!(rules.contains(&"img-src data: file:"));
+        assert!(rules.contains(&"font-src data:"));
+        let script = rules.iter().find(|r| r.starts_with("script-src ")).unwrap();
+        let style = rules.iter().find(|r| r.starts_with("style-src ")).unwrap();
+        for pin in [MARKED, PURIFY, MERMAID] {
+            assert!(
+                script.split(' ').any(|s| s == pin.url),
+                "{} allowed",
+                pin.url
+            );
+        }
+        assert!(style.split(' ').any(|s| s == STYLESHEET.url));
+        assert!(
+            !policy.contains("https://cdn.jsdelivr.net ") && !policy.contains("https:;"),
+            "only the pinned files' links, not their host"
+        );
+        assert!(page.find("Content-Security-Policy").unwrap() < page.find("<link").unwrap());
+    }
+
+    #[test]
     fn the_page_names_the_copies_kept_here_in_place_of_their_links() {
         let mut local = Local::new();
         for pin in PINS {
@@ -611,12 +677,16 @@ mod tests {
         assert!(page.contains(r#"<img src="file:///c/a.png" alt="a">"#));
         assert!(
             page.contains(r#"<img src="https://example.com/b.png">"#),
-            "a picture with no copy is loaded as before"
+            "a picture with no copy is left for the page's policy to refuse"
         );
         // A ticket's pictures are named by their copies in the page's script,
         // after DOMPurify has cleaned the Markdown.
         assert!(page.contains(&format!(r#""{picture}":"file:///c/a.png""#)));
         assert!(page.contains("const copy = local[img.getAttribute(\"src\")]"));
+        assert!(
+            page.contains("local[marked_spelling(url)] ??= copy;"),
+            "a copy is found by the link as marked writes it too"
+        );
         let cleaned = page.find("DOMPurify.sanitize(").unwrap();
         assert!(page.find("img.setAttribute(\"src\", copy)").unwrap() > cleaned);
     }
@@ -633,6 +703,8 @@ mod tests {
             markdown: vec![
                 "See ![shot](https://uploads.linear.app/x/y.png?signature=s) and [a link](https://x.example)".into(),
                 r#"<img width="20" src='https://img.example/r.gif'> ![](<https://img.example/s.png>)"#.into(),
+                "![one][Shot  A] ![two][] ![Two] and [a link][Shot a]\n\n[shot a]: https://img.example/t.png\n  [two]: <https://img.example/u.png> \"title\"\n[unused]: https://img.example/v.png".into(),
+                "<img src=\"https://img.example/y.png?v=1&amp;s=2\"> ![w](https://img.example/w(1).png) ![x]\n\n[x]:\n  https://img.example/x.png".into(),
             ],
             ..Parts::default()
         };
@@ -644,6 +716,11 @@ mod tests {
                 "https://uploads.linear.app/x/y.png?signature=s",
                 "https://img.example/r.gif",
                 "https://img.example/s.png",
+                "https://img.example/t.png",
+                "https://img.example/u.png",
+                "https://img.example/y.png?v=1&s=2",
+                "https://img.example/w(1).png",
+                "https://img.example/x.png",
             ]
         );
         assert_eq!(

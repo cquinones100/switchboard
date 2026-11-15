@@ -17,7 +17,7 @@
     "key": "image_cache",
     "category": "Integrations",
     "label": "Cache PR and ticket images",
-    "description": "Keeps the pictures, stylesheet, scripts and drawn pages of the PR and ticket image views on this computer, up to 300 MB, so one opened again shows at once; off, everything is fetched and drawn each time",
+    "description": "Keeps the pictures, stylesheet, scripts and drawn pages of the PR and ticket image views on this computer, up to 300 MB, so one opened again shows at once; off, everything is fetched and drawn each time, and the pictures are left out, since the page loads a picture only from a copy on this computer",
     "default": true
   },
   {
@@ -935,6 +935,13 @@
     "category": "Sessions",
     "label": "Copy Claude's reply",
     "description": "M-y copies the latest reply of the tab's Claude to the clipboard, read from its session transcript; off, the key reaches the pane",
+    "default": true
+  },
+  {
+    "key": "pane_clipboard",
+    "category": "Sessions",
+    "label": "Programs in panes copy",
+    "description": "A program in the pane in front of you can put text on the clipboard (OSC 52), as Claude Code's /copy and Neovim do; one in a pane you aren't looking at never can. Off, every pane's copy is ignored, and only Switchboard's own copies (copy mode, M-y) reach the clipboard",
     "default": true
   },
   {

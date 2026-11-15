@@ -1290,7 +1290,7 @@ impl Server {
                 let mut graphics = Vec::new();
                 for notice in notices {
                     match notice {
-                        TermNotice::Clipboard(text) => self.to_clipboard(None, &text),
+                        TermNotice::Clipboard(text) => self.pane_to_clipboard(id, &text),
                         TermNotice::Graphics(command) => graphics.push(command),
                         TermNotice::Title(_) | TermNotice::Bell => {}
                     }
@@ -1426,7 +1426,7 @@ impl Server {
             let tab = slot.tab;
             for notice in notices {
                 if let TermNotice::Clipboard(text) = notice {
-                    self.to_clipboard(None, &text);
+                    self.pane_to_clipboard(id, &text);
                 }
             }
             self.dirty_tab(tab);
@@ -2413,6 +2413,33 @@ impl Server {
         tokio::task::spawn_blocking(move || {
             let _ = crate::platform::copy(&text);
         });
+    }
+
+    /// Puts what a pane's program stores (OSC 52) on the clipboard, only
+    /// from the pane that has the focus as the client acting now draws it
+    /// (the one in front, the sidebar and anything that takes the keys,
+    /// mission control or a menu, not over it), showing its live output
+    /// (not in copy mode or scrolled back), and while Settings'
+    /// `pane_clipboard` is on, so a program in a pane you aren't looking
+    /// at (a command in a background tab, output a build prints) can't
+    /// change what you paste next.
+    fn pane_to_clipboard(&mut self, pane: PaneId, text: &str) {
+        let client = self.latest_client();
+        let has_focus = client.is_some_and(|id| {
+            let Some(c) = self.clients.get(&id) else {
+                return false;
+            };
+            c.overlays.lets_through()
+                && !self.sidebar.focused(&c.session)
+                && self.current_pane(id) == Some(pane)
+        });
+        let live = self
+            .panes
+            .get(&pane)
+            .is_some_and(|s| s.copy.is_none() && s.pane.scrolled() == 0);
+        if has_focus && live && crate::settings::is_on("pane_clipboard") {
+            self.to_clipboard(client, text);
+        }
     }
 
     // ── Input ────────────────────────────────────────────────────────────────
