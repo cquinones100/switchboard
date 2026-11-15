@@ -3642,3 +3642,66 @@ fn an_item_put_next_in_autopilot_s_queue_has_its_chip() {
     assert!(text.contains("next in the queue"), "{text}");
     let _ = path;
 }
+
+#[test]
+fn opening_a_note_again_checks_its_id_only_once_its_file_or_the_notes_changed() {
+    let (dir, mut app) = started("ids_checked");
+    let first = dir.path.join("First.md");
+    let other = dir.path.join("Other.md");
+    write(&first, "# First\n\nwords\n");
+    write(&other, "# Other\n\nmore\n");
+    set_mtime(&first, crate::util::now_secs() - 100);
+    set_mtime(&other, crate::util::now_secs() - 200);
+    app.open_note(&first, false, false);
+    app.open_note(&other, false, false);
+    let first_id = id::of_file(&first).unwrap();
+    // Other given First's ID while keeping an older time: a check would now
+    // take First for the copy, so First keeping its ID on opening again
+    // shows it wasn't read for.
+    let other_text = fs::read_to_string(&other).unwrap();
+    write(&other, &id::with(&id::body_of(&other_text), &first_id));
+    set_mtime(&other, crate::util::now_secs() - 200);
+    app.open_note(&first, false, false);
+    assert_eq!(
+        id::of_file(&first).as_deref(),
+        Some(first_id.as_str()),
+        "a note opened again with its file unchanged isn't checked again"
+    );
+    // Its file changed: checked again, and the copy it now reads as gets an
+    // ID of its own.
+    app.editor.doc.text = Text::from_file("# First\n\nwords, typed\n");
+    app.save();
+    set_mtime(&first, crate::util::now_secs() - 100);
+    app.open_note(&other, false, false);
+    app.open_note(&first, false, false);
+    assert_ne!(
+        id::of_file(&first).as_deref(),
+        Some(first_id.as_str()),
+        "a note whose file changed is checked again"
+    );
+}
+
+#[test]
+fn a_copy_made_while_notes_runs_is_found_when_the_original_opens_again() {
+    let (dir, mut app) = started("ids_copy");
+    let old = dir.path.join("Old.md");
+    let other = dir.path.join("Other.md");
+    write(&old, "# Old\n\nwords\n");
+    write(&other, "# Other\n\nmore\n");
+    set_mtime(&old, crate::util::now_secs() - 100);
+    app.open_note(&old, false, false);
+    app.open_note(&other, false, false);
+    let old_id = id::of_file(&old).unwrap();
+    // A copy holding the same ID, made earlier than the original's last
+    // change, so the original is the one that reads as the copy.
+    let copy = dir.path.join("Old copy.md");
+    fs::copy(&old, &copy).unwrap();
+    set_mtime(&copy, crate::util::now_secs() - 300);
+    app.open_note(&old, false, false);
+    assert_ne!(
+        id::of_file(&old).as_deref(),
+        Some(old_id.as_str()),
+        "a new note file has every note checked again"
+    );
+    assert_eq!(id::of_file(&copy).as_deref(), Some(old_id.as_str()));
+}

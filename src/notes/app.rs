@@ -260,6 +260,14 @@ struct Open {
 }
 
 /// A file's device and inode.
+/// A file's modified time and length, which change when it is written.
+type FileStamp = (std::time::SystemTime, u64);
+
+fn file_stamp(path: &Path) -> Option<FileStamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
 fn file_key(path: &Path) -> Option<(u64, u64)> {
     use std::os::unix::fs::MetadataExt;
     std::fs::metadata(path).ok().map(|m| (m.dev(), m.ino()))
@@ -554,6 +562,12 @@ pub struct App {
     pub item_tabs: HashMap<String, render::ItemTab>,
     /// The items autopilot has put next, as `Msg::Next` hands them.
     pub next_items: HashSet<String>,
+    /// What spares opening a note from reading every note again for a copy
+    /// holding its ID: the notes directory's note files, and each note's
+    /// file stamp when its ID was last found to be its own. A new note file
+    /// (a copy among them) clears it, and a note whose file changed is
+    /// checked again.
+    ids_checked: (Vec<PathBuf>, HashMap<PathBuf, FileStamp>),
     look: Look,
     cols: u16,
     rows: u16,
@@ -709,6 +723,7 @@ impl App {
             watch_due: None,
             item_tabs: HashMap::new(),
             next_items: HashSet::new(),
+            ids_checked: Default::default(),
             squash_pid: None,
             squash_paths: Vec::new(),
             squash_cancelled: false,
@@ -1012,10 +1027,23 @@ impl App {
         if self.store.in_trash(path) {
             return (text, held);
         }
+        let files = id::note_files(self.store.root());
+        if self.ids_checked.0 != files {
+            self.ids_checked = (files, HashMap::new());
+        }
+        let stamp = file_stamp(path);
+        let checked_since_written =
+            stamp.is_some() && self.ids_checked.1.get(path) == stamp.as_ref();
+        if held.is_some() && checked_since_written {
+            return (text, held);
+        }
         let copy = held
             .as_deref()
             .and_then(|held| id::copy_of(path, held, self.store.root()));
         if held.is_some() && copy.is_none() {
+            if let Some(stamp) = stamp {
+                self.ids_checked.1.insert(path.to_path_buf(), stamp);
+            }
             return (text, held);
         }
         let fresh = id::new();
@@ -1039,6 +1067,9 @@ impl App {
                 name(path),
                 name(&original)
             ));
+        }
+        if let Some(stamp) = file_stamp(path) {
+            self.ids_checked.1.insert(path.to_path_buf(), stamp);
         }
         (given, Some(fresh))
     }
@@ -1241,6 +1272,8 @@ impl App {
     /// longer reads as the title is written as it is, for a rename asked for.
     fn save_with(&mut self, keep_title: bool) {
         self.save_due = None;
+        let on_disk = |app: &Self| app.open.as_ref().map(|o| (o.path.clone(), o.base.clone()));
+        let before = on_disk(self);
         if self.open.is_none() || !self.check() {
             return;
         }
@@ -1327,7 +1360,12 @@ impl App {
             };
             self.store.relink(&|_| None, Some(&retitled));
         }
-        self.rebuild();
+        // The list read again only when the note's file changed, here or
+        // outside, or moved: opening another note saves the one left, and
+        // reading every note for a list that is the same made it pause.
+        if on_disk(self) != before {
+            self.rebuild();
+        }
     }
 
     /// A title lost in the editor (its line emptied or deleted) put back from
