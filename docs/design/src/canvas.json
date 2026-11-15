@@ -324,6 +324,10 @@
     "RoutineMenu.dc.html": {
       "title": "76. Enter on a routine whose run failed for a tool: allow it and run again, open its session in a tab, or edit it",
       "page": "design"
+    },
+    "SearchChips.dc.html": {
+      "title": "78. M-F: search everything, a chip per source to search, its count once it answers",
+      "page": "design"
     }
   }
 }

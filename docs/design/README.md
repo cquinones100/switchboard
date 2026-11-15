@@ -111,6 +111,7 @@ The dialogs the views open, each over its view.
 - [36. Working on a note's item: its repository, the branch it lands on, or autopilot's queue](https://cquinones100.github.io/switchboard/design/36.html)
 - [54. Enter in any mission control view: the chosen item's actions in a menu, here a calendar event's](https://cquinones100.github.io/switchboard/design/54.html)
 - [55. m in any mission control view: the view's own actions in a menu, here Calendar's](https://cquinones100.github.io/switchboard/design/55.html)
+- [78. M-F: search everything, a chip per source to search, its count once it answers](https://cquinones100.github.io/switchboard/design/78.html)
 
 ## Core and extras
 
