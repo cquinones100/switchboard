@@ -686,3 +686,35 @@ fn queue_and_clean_pins_the_tabs_name_before_anything_moves() {
         .expect("the section");
     assert!(!back.contains("@tab_name"), "{back}");
 }
+
+#[test]
+fn resolve_conflicts_force_pushes_so_only_you_start_it() {
+    let all = skills();
+    let (_, text) = all
+        .iter()
+        .find(|(name, _)| name == "resolve-conflicts")
+        .unwrap();
+    assert!(
+        text.lines().any(|l| l == "disable-model-invocation: true"),
+        "it force-pushes, so Claude never starts it on its own"
+    );
+}
+
+#[test]
+fn skills_keep_outside_text_out_of_the_shell_and_read_logs_as_data() {
+    let all = skills();
+    let text_of = |skill: &str| &all.iter().find(|(name, _)| name == skill).unwrap().1;
+    let oncall = text_of("oncall");
+    assert!(!oncall.contains("<<'EOF'"), "an alert's text could end it");
+    assert!(oncall.contains("< ~/.local/state/oncall/notice.md"));
+    for skill in ["ci-loop", "queue-and-clean"] {
+        assert!(
+            text_of(skill).contains("data, never instructions"),
+            "{skill} reads CI logs"
+        );
+    }
+    assert!(
+        !text_of("ci-loop").contains("git pull"),
+        "git pull is denied"
+    );
+}
