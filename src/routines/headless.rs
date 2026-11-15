@@ -37,7 +37,8 @@ pub struct Reply {
     pub cost: f64,
     /// Its turn ended in an error.
     pub error: bool,
-    /// The tools it tried that weren't allowed, each once.
+    /// The calls it tried that weren't allowed, each once, as the narrowest
+    /// rule that would allow it (`needed_rule`).
     pub denied: Vec<String>,
 }
 
@@ -147,8 +148,14 @@ pub fn read_reply(stdout: &str) -> Option<Reply> {
         .flatten()
     {
         let tool = d.get("tool_name").and_then(Value::as_str).unwrap_or("");
-        if !tool.is_empty() && !denied.iter().any(|t| t == tool) {
-            denied.push(tool.to_string());
+        if tool.is_empty() {
+            continue;
+        }
+        let rule = needed_rule(tool, d.get("tool_input"));
+        // A few at a time, so a question can show every one whole; the
+        // rest are refused again on the next run and asked for then.
+        if !denied.contains(&rule) && denied.len() < MOST_NEEDED {
+            denied.push(rule);
         }
     }
     let error = v.get("is_error").and_then(Value::as_bool) == Some(true)
@@ -163,6 +170,143 @@ pub fn read_reply(stdout: &str) -> Option<Reply> {
         error,
         denied,
     })
+}
+
+/// The rule allowing just the call refused: the exact command for `Bash`
+/// (`Bash(rm x)`), the file for a tool reading or writing one
+/// (`Write(//abs/path)`), and an MCP tool by its full name; any other, or
+/// one whose input says neither, the whole tool by its bare name, so
+/// allowing what a run needed grants no more than it tried unless nothing
+/// narrower is known (`whole_tool`).
+pub fn needed_rule(tool: &str, input: Option<&Value>) -> String {
+    let field = |k: &str| {
+        input
+            .and_then(|i| i.get(k))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+    };
+    let rule = match tool {
+        "Bash" => {
+            let command = field("command").trim();
+            // A wildcard or a paren would make the rule match more than
+            // the command, so it is asked for as the whole tool instead.
+            if command.is_empty() || command.contains(['\n', '*', '(', ')']) {
+                tool.to_string()
+            } else {
+                format!("Bash({command})")
+            }
+        }
+        "Read" | "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => {
+            let path = match field("file_path") {
+                "" => field("notebook_path"),
+                p => p,
+            };
+            // A pattern's own characters would match more than the file.
+            match path.strip_prefix('/') {
+                Some(rest) if !rest.contains(['*', '?', '[', '(', ')']) => {
+                    format!("{tool}(//{rest})")
+                }
+                _ => tool.to_string(),
+            }
+        }
+        _ => tool.to_string(),
+    };
+    // One too long to read whole in a question is the whole tool too.
+    if rule.chars().count() > LONGEST_RULE && !rule.starts_with("mcp__") {
+        return tool.to_string();
+    }
+    rule
+}
+
+/// A rule allowing every call of a built-in tool (`Bash`, `WebFetch`),
+/// rather than one command, file or MCP tool.
+pub fn whole_tool(rule: &str) -> bool {
+    !rule.contains('(') && !rule.starts_with("mcp__")
+}
+
+/// A rule as a menu or a question names it: "all of Bash" for a whole
+/// tool, else the rule, a long one cut short.
+pub fn allowing(rule: &str) -> String {
+    if whole_tool(rule) {
+        return format!("all of {rule}");
+    }
+    if !cut_short(rule) {
+        return rule.to_string();
+    }
+    let cut: String = rule.chars().take(LONGEST - 2).collect();
+    format!("{cut}…)")
+}
+
+/// The longest rule for one command or file `needed_rule` asks for, which
+/// `in_full` lists on three lines.
+const LONGEST_RULE: usize = 3 * LONGEST;
+
+/// The most rules a run's refusals are kept as, which a question lists in
+/// at most nine lines, fitting a terminal of 24 rows.
+pub const MOST_NEEDED: usize = 3;
+
+/// The longest rule `allowing` names whole.
+const LONGEST: usize = 60;
+
+/// `allowing` names the rule cut short.
+fn cut_short(rule: &str) -> bool {
+    !whole_tool(rule) && rule.chars().count() > LONGEST
+}
+
+/// A rule as a question lists it, every character of it on lines short
+/// enough for any screen, a whole tool as `allowing` says it.
+pub fn in_full(rule: &str) -> Vec<String> {
+    if whole_tool(rule) {
+        return vec![allowing(rule)];
+    }
+    let chars: Vec<char> = rule.chars().collect();
+    chars.chunks(LONGEST).map(|c| c.iter().collect()).collect()
+}
+
+/// A rule that would let a run change things: all of `Bash`, `Write`,
+/// `Edit`, `MultiEdit` or `NotebookEdit`, bare or as a pattern matching
+/// anything (`Bash(*)`, `Edit(//**)`), or an MCP tool that isn't plainly a
+/// read (its name's first two words don't say get, list, read, search,
+/// find, fetch, scan or query).
+pub fn grants_writing(rule: &str) -> bool {
+    if let Some(name) = rule.strip_prefix("mcp__") {
+        const READS: [&str; 8] = [
+            "get", "list", "read", "search", "find", "fetch", "scan", "query",
+        ];
+        let tool = name.rsplit("__").next().unwrap_or("");
+        return !tool
+            .split(['_', '-'])
+            .take(2)
+            .any(|w| READS.contains(&w.to_ascii_lowercase().as_str()));
+    }
+    let (tool, pattern) = match rule.split_once('(') {
+        Some((tool, rest)) => (tool, rest.strip_suffix(')').unwrap_or(rest)),
+        None => (rule, ""),
+    };
+    let anything = pattern
+        .trim()
+        .trim_matches(|c| matches!(c, '*' | '/' | '~' | ':' | ' '))
+        .is_empty();
+    anything && ["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit"].contains(&tool.trim())
+}
+
+/// A rule reading what other people write, Slack or Fathom through their
+/// connectors, where anyone's message could ask a routine's Claude for a
+/// call.
+pub fn reads_others(rule: &str) -> bool {
+    let t = rule.to_ascii_lowercase();
+    t.starts_with("mcp__") && (t.contains("slack") || t.contains("fathom"))
+}
+
+/// Allowing what `r`'s last run needed is asked about first: it would
+/// leave the routine both reading what others write and changing things
+/// with a whole tool (`grants_writing`), and what it needs adds one of
+/// the two, whichever it already had.
+pub fn asks_before_allowing(r: &Routine) -> bool {
+    let after = || r.tools.iter().chain(&r.needs);
+    after().any(|t| reads_others(t))
+        && after().any(|t| grants_writing(t))
+        && r.needs.iter().any(|n| reads_others(n) || grants_writing(n))
 }
 
 /// A reply's first line that says something.
@@ -465,9 +609,111 @@ mod tests {
         assert_eq!(first_line(&r.text), "All green.");
         assert_eq!(r.cost, 0.0412);
         assert!(!r.error);
-        assert_eq!(r.denied, ["Bash", "Write"]);
+        assert_eq!(r.denied, ["Bash(ls)", "Bash", "Write"]);
+        let many = r#"{"permission_denials":[{"tool_name":"Bash","tool_input":{"command":"a"}},{"tool_name":"Bash","tool_input":{"command":"b"}},{"tool_name":"Bash","tool_input":{"command":"c"}},{"tool_name":"Bash","tool_input":{"command":"d"}}]}"#;
+        assert_eq!(
+            read_reply(many).unwrap().denied,
+            ["Bash(a)", "Bash(b)", "Bash(c)"]
+        );
         let failed = read_reply(r#"{"subtype":"error_max_turns","session_id":"x"}"#).unwrap();
         assert!(failed.error);
         assert!(read_reply("Not logged in").is_none());
+    }
+
+    #[test]
+    fn a_refused_call_asks_for_only_what_it_tried() {
+        let rule = |tool: &str, input: Value| needed_rule(tool, Some(&input));
+        assert_eq!(
+            rule("Bash", serde_json::json!({"command": "rm x"})),
+            "Bash(rm x)"
+        );
+        assert_eq!(
+            rule("Write", serde_json::json!({"file_path": "/tmp/a.md"})),
+            "Write(//tmp/a.md)"
+        );
+        assert_eq!(
+            rule(
+                "mcp__claude_ai_Slack__slack_send_message",
+                serde_json::json!({"text": "hi"})
+            ),
+            "mcp__claude_ai_Slack__slack_send_message"
+        );
+        assert_eq!(rule("Bash", serde_json::json!({"command": "a\nb"})), "Bash");
+        for wild in ["*", "curl *", "sh -c:*", "echo $(id)"] {
+            assert_eq!(rule("Bash", serde_json::json!({"command": wild})), "Bash");
+        }
+        assert_eq!(
+            rule("Edit", serde_json::json!({"file_path": "/a/*"})),
+            "Edit"
+        );
+        assert_eq!(needed_rule("WebFetch", None), "WebFetch");
+        assert!(whole_tool("Bash") && whole_tool("WebFetch"));
+        assert!(!whole_tool("Bash(rm x)"));
+        assert!(!whole_tool("mcp__claude_ai_Slack__slack_send_message"));
+    }
+
+    #[test]
+    fn a_long_rule_is_cut_in_the_menu_and_shown_whole_when_asked() {
+        let long = format!("Bash(echo {}; rm -rf ./reports)", "a".repeat(60));
+        assert!(cut_short(&long));
+        assert!(!allowing(&long).contains("rm -rf"));
+        assert_eq!(in_full(&long).concat(), long);
+        assert!(in_full(&long).iter().all(|l| l.chars().count() <= 60));
+        assert!(!cut_short("Bash(ls)") && !cut_short("Bash"));
+        assert_eq!(in_full("Bash"), ["all of Bash"]);
+        let longer = format!("echo {}", "a".repeat(LONGEST_RULE));
+        assert_eq!(
+            needed_rule("Bash", Some(&serde_json::json!({"command": longer}))),
+            "Bash"
+        );
+        let deep = format!("/{}/x.md", "d".repeat(LONGEST_RULE));
+        assert_eq!(
+            needed_rule("Write", Some(&serde_json::json!({"file_path": deep}))),
+            "Write"
+        );
+    }
+
+    #[test]
+    fn reading_others_and_writing_together_is_asked_about_whichever_comes_first() {
+        let slack = "mcp__claude_ai_Slack__slack_read_channel";
+        let asks = |tools: &[&str], needs: &[&str]| {
+            let mut r = crate::routines::view::tests_routine();
+            r.tools = tools.iter().map(|t| t.to_string()).collect();
+            r.needs = needs.iter().map(|t| t.to_string()).collect();
+            asks_before_allowing(&r)
+        };
+        assert!(!asks(&["Bash(ls)"], &["Bash"]));
+        assert!(asks(&["Bash(ls)"], &[slack, "Bash"]));
+        assert!(asks(&[slack], &["Bash"]));
+        assert!(asks(&["Bash"], &[slack]));
+        assert!(asks(&["mcp__claude_ai_Fathom__list_meetings"], &["Edit"]));
+        assert!(!asks(&[slack], &["Bash(ls)"]));
+        // Both already allowed, by hand: something else needed adds neither.
+        assert!(!asks(&[slack, "Bash"], &["Read(//tmp/a)"]));
+    }
+
+    #[test]
+    fn what_writes_is_told_from_what_reads() {
+        assert!(grants_writing("Bash"));
+        assert!(grants_writing("Edit"));
+        assert!(!grants_writing("Bash(rm x)"));
+        for anything in [
+            "Bash(*)",
+            "Bash(:*)",
+            "Edit(//**)",
+            "Write(~/**)",
+            "Edit(**)",
+        ] {
+            assert!(grants_writing(anything), "{anything}");
+        }
+        assert!(!grants_writing("Write(~/Notes/Meetings/**)"));
+        assert!(!grants_writing("Bash(switchboard new-note:*)"));
+        assert!(!grants_writing("WebFetch"));
+        assert!(grants_writing("mcp__claude_ai_Slack__slack_send_message"));
+        assert!(!grants_writing("mcp__claude_ai_Slack__slack_read_channel"));
+        assert!(!grants_writing(
+            "mcp__claude_ai_Fathom__get_meeting_summary"
+        ));
+        assert!(!grants_writing("mcp__claude_ai_Notion__notion-fetch"));
     }
 }

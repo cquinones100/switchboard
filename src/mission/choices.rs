@@ -914,7 +914,13 @@ fn routine_choices(item: &Item) -> Vec<Choice> {
     let plain = |label: &str, what: Act| choice(' ', label, act(what));
     let mut out = Vec::new();
     if !needs.is_empty() {
-        let label = format!("Allow {} and run it again", needs.join(", "));
+        // A whole tool is said as one ("all of Bash"), never as a rule.
+        let allowing: Vec<String> = needs
+            .iter()
+            .map(|n| crate::routines::headless::allowing(n))
+            .collect();
+        // Asks first, with each rule whole.
+        let label = format!("Allow {} and run it again…", allowing.join(", "));
         out.push(plain(&label, Act::AllowNeeded));
     }
     if item.data.get("session").and_then(Value::as_bool) == Some(true) {

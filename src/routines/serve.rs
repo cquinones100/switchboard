@@ -1006,15 +1006,72 @@ impl Server {
         }
     }
 
-    /// Allow what its last run needed: the tools added to its own, and a
-    /// run now. What it did, for mission control's footer.
+    /// Allow what its last run needed: the rules added to its own, and a
+    /// run now. What it did, for mission control's footer. Asks first,
+    /// listing every rule whole, since the menu may name them cut short;
+    /// warning when that would leave it reading Slack or Fathom, where
+    /// anyone's message could ask its Claude for a call, and writing with a
+    /// whole tool (`headless::asks_before_allowing`); its answer said in
+    /// the footer.
     pub fn routine_allow_needed(&mut self, client: ClientId, id: &str) -> Option<String> {
         let mut r = self.routines.get(id).cloned()?;
         if r.needs.is_empty() {
             return self.routine_run_now(client, id);
         }
-        let needs = std::mem::take(&mut r.needs);
-        for tool in &needs {
+        // A few at a time, as a run keeps them, the rest asked for once
+        // these are allowed (a routine an older version saved kept more).
+        r.needs.truncate(headless::MOST_NEEDED);
+        // Lines short enough for an 80-column screen, since a box cuts
+        // what is past its edge, and few enough for 24 rows: the name, the
+        // warning's four, three rules of three lines each
+        // (`headless::MOST_NEEDED`) and the box's own four.
+        let mut lines: Vec<String> = vec![format!("For {}:", r.name)];
+        if headless::asks_before_allowing(&r) {
+            lines.extend(
+                [
+                    "It would read Slack or Fathom, where anyone's",
+                    "message could ask it for a call, and change",
+                    "things with a whole tool.",
+                    "",
+                ]
+                .map(String::from),
+            );
+        }
+        lines.extend(r.needs.iter().flat_map(|n| headless::in_full(n)));
+        let question = Confirm::new("Allow these for every run?").list(lines);
+        let id = id.to_string();
+        let shown = r.needs.clone();
+        self.ask(client, question, move |server, client, yes| {
+            if !yes {
+                return;
+            }
+            // A run while it was asked may have needed something else,
+            // which yes never saw.
+            let now = server.routines.get(&id).map(|r| r.needs.clone());
+            if !now.is_some_and(|n| n.starts_with(&shown)) {
+                let note =
+                    "Its last run needed something else meanwhile: open its menu again to see it.";
+                server.mission_note(client, note);
+                return;
+            }
+            if let Some(note) = server.routine_allow_now(client, &id, &shown) {
+                server.mission_note(client, note);
+            }
+        });
+        None
+    }
+
+    /// `needs`, as the question showed them, added to its rules and taken
+    /// from what it needs, and a run now.
+    fn routine_allow_now(
+        &mut self,
+        client: ClientId,
+        id: &str,
+        needs: &[String],
+    ) -> Option<String> {
+        let mut r = self.routines.get(id).cloned()?;
+        r.needs.retain(|n| !needs.contains(n));
+        for tool in needs {
             if !r.tools.contains(tool) {
                 r.tools.push(tool.clone());
             }
@@ -1026,7 +1083,11 @@ impl Server {
         Some(format!(
             "{} may use {} now. {}",
             r.name,
-            needs.join(", "),
+            needs
+                .iter()
+                .map(|n| headless::allowing(n))
+                .collect::<Vec<_>>()
+                .join(", "),
             ran.unwrap_or_default()
         ))
     }

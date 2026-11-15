@@ -232,6 +232,51 @@ fn a_run_still_going_when_the_server_starts_again_is_taken_up() {
 }
 
 #[test]
+fn all_of_bash_for_a_routine_reading_slack_is_asked_about_first() {
+    let (server, mut client, work) = set_up();
+    let slack = "mcp__claude_ai_Slack__slack_read_channel";
+    // A refusal naming no command can only be allowed as the whole tool.
+    reply(
+        &server,
+        json!({"permission_denials": [{"tool_name": "Bash", "tool_use_id": "t1"}]}),
+    );
+    write_routine(&server, &work, now() + 1, json!({"tools": ["Read", slack]}));
+    wait(&server, "the failed run", || {
+        runs(&server).contains("\tfailed\tneeds Bash")
+    });
+    assert_eq!(routine(&server)["needs"], json!(["Bash"]));
+
+    // Said as the whole tool, and asked about: no leaves it as it was.
+    server.ok(&["press", "mission-routines"]);
+    client.wait_text("Daily check");
+    client.type_text("\r");
+    client.wait_text("Allow all of Bash and run it again");
+    client.type_text("\r");
+    client.wait_text("It would read Slack or Fathom");
+    let runs_so_far = starts(&server).len();
+    client.type_text("n");
+    client.wait_for("the question gone", |s| {
+        !s.iter()
+            .any(|l| l.contains("It would read Slack or Fathom"))
+    });
+    assert_eq!(routine(&server)["tools"], json!(["Read", slack]));
+    assert_eq!(routine(&server)["needs"], json!(["Bash"]));
+    assert_eq!(starts(&server).len(), runs_so_far);
+
+    // Yes allows it and runs it again.
+    reply(&server, json!({"result": "Ran with Bash."}));
+    client.type_text("\r");
+    client.wait_text("Allow all of Bash and run it again");
+    client.type_text("\r");
+    client.wait_text("It would read Slack or Fathom");
+    client.type_text("y");
+    wait(&server, "the run allowed", || {
+        runs(&server).contains("Ran with Bash.")
+    });
+    assert_eq!(routine(&server)["tools"], json!(["Read", slack, "Bash"]));
+}
+
+#[test]
 fn a_run_that_reaches_for_a_tool_not_allowed_fails_naming_it_until_allowed() {
     let (server, mut client, work) = set_up();
     reply(
@@ -242,23 +287,26 @@ fn a_run_that_reaches_for_a_tool_not_allowed_fails_naming_it_until_allowed() {
     wait(&server, "the failed run", || {
         runs(&server).contains("\tfailed\tneeds Bash")
     });
-    assert_eq!(routine(&server)["needs"], json!(["Bash"]));
+    // The call refused, not the whole tool.
+    assert_eq!(routine(&server)["needs"], json!(["Bash(ls)"]));
 
     // Its menu's first option allows it and runs it again.
     reply(&server, json!({"result": "Ran with Bash."}));
     server.ok(&["press", "mission-routines"]);
     client.wait_text("Daily check");
     client.type_text("\r");
-    client.wait_text("Allow Bash and run it again");
+    client.wait_text("Allow Bash(ls) and run it again…");
     client.type_text("\r");
+    client.wait_text("Allow these for every run?");
+    client.type_text("y");
     wait(&server, "the run allowed", || {
         runs(&server).contains("Ran with Bash.")
     });
-    assert_eq!(routine(&server)["tools"], json!(["Read", "Bash"]));
+    assert_eq!(routine(&server)["tools"], json!(["Read", "Bash(ls)"]));
     assert_eq!(routine(&server)["needs"], json!([]));
     let last = starts(&server).pop().unwrap();
     assert_eq!(after(&last, "--allowedTools"), Some("Read"));
-    assert!(last.contains(&"Bash".to_string()), "{last:?}");
+    assert!(last.contains(&"Bash(ls)".to_string()), "{last:?}");
 
     // Its last session opens in a tab of its own, in its directory.
     let tabs = tab_count(&server);
