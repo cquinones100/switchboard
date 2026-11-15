@@ -6895,6 +6895,8 @@ fn window_key(m: &mut Mission, k: Key) -> bool {
         KeyCode::Char('l') | KeyCode::Right if either => (1, false),
         KeyCode::Char('w') if either => (1, true),
         KeyCode::Char('W') if plain(&k) => (-1, true),
+        KeyCode::Char('j') | KeyCode::Down if either => return section_step(m, 1),
+        KeyCode::Char('k') | KeyCode::Up if either => return section_step(m, -1),
         _ => return false,
     };
     let panes = m.panes();
@@ -6907,6 +6909,34 @@ fn window_key(m: &mut Mission, k: Key) -> bool {
     if let Some(to) = to {
         m.pane = Some((m.view, panes[to as usize]));
         // The pane takes the keys at once, from a control Tab's focus was on.
+        if m.focus.is_some() {
+            m.focus = Some(Focus::Item);
+        }
+    }
+    true
+}
+
+/// `C-w j` and `C-w k`: the cursor to the first item of the next or
+/// previous section a view stacks in its list, staying put with none that
+/// way; false, the key taken as itself, in a view of one section. Nothing
+/// in a pane other than the list.
+fn section_step(m: &mut Mission, by: isize) -> bool {
+    let starts = m.sections();
+    if starts.is_empty() {
+        return false;
+    }
+    if m.pane_now() != Pane::List {
+        return true;
+    }
+    let cursor = m.cursor.max(0) as usize;
+    let at = starts.iter().rposition(|&s| s <= cursor).unwrap_or(0) as isize;
+    let to = if cursor < starts[0] && by > 0 {
+        0
+    } else {
+        at + by
+    };
+    if let Some(&start) = usize::try_from(to).ok().and_then(|to| starts.get(to)) {
+        m.cursor = start as isize;
         if m.focus.is_some() {
             m.focus = Some(Focus::Item);
         }
@@ -8354,6 +8384,154 @@ mod tests {
         assert_eq!(m.pane_now(), Pane::List);
         m.view = 0;
         assert_eq!(m.pane_now(), Pane::List, "another view has its list");
+    }
+
+    fn usage_mission() -> Mission {
+        let still = |id: &str| Item::new(id, id).data(serde_json::json!({ "still": true }));
+        let row = |id: &str| Item::new(id, id);
+        let view = View {
+            id: ViewId::Usage,
+            title: "Usage".into(),
+            data: ViewData {
+                items: vec![
+                    still("spent"),
+                    still("limit:week"),
+                    row("tab:a"),
+                    row("tab:b"),
+                    row("requests:github"),
+                    row("requests:linear"),
+                    row("session:1"),
+                    row("session:2"),
+                ],
+                ..ViewData::default()
+            },
+            loaded: true,
+        };
+        let mut m = mission(1, vec![view]);
+        m.view = 1;
+        m.cursor = 3;
+        m
+    }
+
+    #[test]
+    fn usage_sections_are_its_tabs_services_and_sessions() {
+        assert_eq!(usage_mission().sections(), vec![2, 4, 6]);
+    }
+
+    #[test]
+    fn c_w_j_and_k_move_between_a_views_stacked_sections() {
+        let key = |k: &str| Key::parse(k).unwrap();
+        let mut m = usage_mission();
+        assert!(window_key(&mut m, key("j")));
+        assert_eq!(m.cursor, 4, "the first service");
+        assert!(window_key(&mut m, key("C-j")));
+        assert_eq!(m.cursor, 6, "the first session");
+        assert!(window_key(&mut m, key("j")));
+        assert_eq!(m.cursor, 6, "no section further down");
+        m.cursor = 7;
+        assert!(window_key(&mut m, key("k")));
+        assert_eq!(m.cursor, 4, "the section before the one it is in");
+        assert!(window_key(&mut m, key("k")));
+        assert!(window_key(&mut m, key("k")));
+        assert_eq!(m.cursor, 2, "no section further up");
+        let mut one = mission(1, vec![list("Reopen", 3)]);
+        one.view = 1;
+        assert!(one.sections().is_empty());
+        assert!(
+            !window_key(&mut one, key("j")),
+            "a view of one section takes it as itself"
+        );
+    }
+
+    #[test]
+    fn sections_follow_headings_and_groups() {
+        let head = |id: &str| Item::new(id, id).data(serde_json::json!({ "header": true }));
+        let in_group = |id: &str, g: &str| {
+            let mut i = Item::new(id, id);
+            i.group = Some(g.into());
+            i
+        };
+        let view = View {
+            id: ViewId::Reopen,
+            title: "Reopen".into(),
+            data: ViewData {
+                items: vec![
+                    in_group("a", "Tabs"),
+                    in_group("b", "Tabs"),
+                    in_group("c", "Sessions"),
+                ],
+                ..ViewData::default()
+            },
+            loaded: true,
+        };
+        let mut m = mission(1, vec![view]);
+        m.view = 1;
+        assert_eq!(m.sections(), vec![0, 2]);
+        let view = View {
+            id: ViewId::Notifications,
+            title: "Notifications".into(),
+            data: ViewData {
+                items: vec![
+                    head("header:x"),
+                    Item::new("a", "a"),
+                    head("header:y"),
+                    Item::new("b", "b"),
+                ],
+                ..ViewData::default()
+            },
+            loaded: true,
+        };
+        m.snap.views = vec![view];
+        assert_eq!(m.sections(), vec![1, 3]);
+        // The Work map's repositories are headings the cursor rests on: a
+        // folded one, with nothing under it, is a section of its own, and
+        // the line merged work folds under stays in its repository's.
+        let view = View {
+            id: ViewId::WorkMap,
+            title: "Work map".into(),
+            data: ViewData {
+                items: vec![
+                    head("repo:a"),
+                    Item::new("a1", "a1"),
+                    head("merged:a"),
+                    head("repo:b"),
+                    head("repo:c"),
+                    Item::new("c1", "c1"),
+                ],
+                ..ViewData::default()
+            },
+            loaded: true,
+        };
+        m.snap.views = vec![view];
+        assert_eq!(m.sections(), vec![0, 3, 4]);
+    }
+
+    #[test]
+    fn the_inbox_board_s_sections_are_its_days() {
+        let day = 86_400_000;
+        let at = |id: &str, t: i64| {
+            let mut i = Item::new(id, id);
+            i.time = Some(t);
+            i
+        };
+        let view = View {
+            id: ViewId::Inbox,
+            title: "Inbox".into(),
+            data: ViewData {
+                items: vec![
+                    at("a", 10 * day + 1_000),
+                    at("b", 10 * day + 2_000),
+                    at("c", 9 * day + 1_000),
+                ],
+                ..ViewData::default()
+            },
+            loaded: true,
+        };
+        let mut m = mission(1, vec![view]);
+        m.snap.rules.ux2 = true;
+        m.snap.tz = jiff::tz::TimeZone::UTC;
+        m.view = 1;
+        assert_eq!(m.sections(), vec![0, 2]);
     }
 
     #[test]

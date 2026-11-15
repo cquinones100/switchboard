@@ -220,6 +220,14 @@ fn row_columns(w: usize, ticket: usize, what: usize, when: usize) -> Vec<Option<
     )
 }
 
+/// The day a notification came, on this computer's clock, which the list
+/// heads a section with; none for one with no time, under "Earlier".
+pub fn day_of(item: &Item, tz: &jiff::tz::TimeZone) -> Option<jiff::civil::Date> {
+    item.time
+        .and_then(|t| jiff::Timestamp::from_millisecond(t).ok())
+        .map(|t| t.to_zoned(tz.clone()).date())
+}
+
 /// The list's lines: each day's label and count, each notification's two
 /// rows, the foot; and the line the chosen one starts on.
 fn list_lines(view: &View, w: usize, m: &Mission, roomy: bool) -> (Vec<Drawn>, usize) {
@@ -231,11 +239,7 @@ fn list_lines(view: &View, w: usize, m: &Mission, roomy: bool) -> (Vec<Drawn>, u
         .unwrap_or(jiff::Timestamp::UNIX_EPOCH)
         .to_zoned(tz.clone())
         .date();
-    let day_of = |item: &Item| {
-        item.time
-            .and_then(|t| jiff::Timestamp::from_millisecond(t).ok())
-            .map(|t| t.to_zoned(tz.clone()).date())
-    };
+    let day_of = |item: &Item| day_of(item, tz);
     let mut counts: HashMap<Option<jiff::civil::Date>, usize> = HashMap::new();
     for item in &view.data.items {
         *counts.entry(day_of(item)).or_default() += 1;

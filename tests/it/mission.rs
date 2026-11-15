@@ -2734,3 +2734,27 @@ fn with_ux2_the_slack_relay_view_sets_what_reaches_you() {
         s["relay_send_milestones"] == "notify"
     });
 }
+
+#[test]
+fn c_w_j_and_k_move_between_the_sections_a_view_stacks() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(160, 40);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("vsett\r");
+    client.wait_text("INTEGRATIONS");
+    // While C-w waits, the footer names j and k for a view of sections.
+    client.type_text("\x17");
+    client.wait_text("next, last section");
+    // C-w j: the next section's first option, its menu naming it.
+    client.type_text("j\r");
+    client.wait_text("─ Push notifications ─");
+    client.type_text("\x1b");
+    client.wait_for("the menu closed", |s| {
+        !s.iter().any(|l| l.contains("─ Push notifications ─"))
+    });
+    // C-w k: back to the first section's first option.
+    client.type_text("\x17k\r");
+    client.wait_text("─ GitHub ─");
+}

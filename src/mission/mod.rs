@@ -936,6 +936,80 @@ impl Mission {
         }
     }
 
+    /// The first item of each section the view in front stacks in its list,
+    /// where `C-w j` and `C-w k` go: the items between headings, or with
+    /// none of the same group (Usage's by kind: its tabs, services and
+    /// sessions), each section's first the cursor can rest on. Empty for
+    /// the tabs, a view of one section, and a board whose sections stand
+    /// side by side or in a panel of their own, where `h` and `l` or the
+    /// panel reach them.
+    pub fn sections(&self) -> Vec<usize> {
+        let Some(view) = self.current() else {
+            return Vec::new();
+        };
+        let cols = self.laid().0 as usize;
+        let side_by_side = view.columns().is_some()
+            || view.id == ViewId::Autopilot
+                && self.snap.rules.ux2
+                && cols >= render::PILOT_BOARD_AT
+            || view.id == ViewId::Settings && render::settings_board_shown(self)
+            || render::slack_board_shown(self, view)
+            || render::keys_board_shown(self, view, cols)
+            || view.id == ViewId::Routines && crate::routines::view::is_board(self)
+            || view.id == ViewId::Reminders && reminders::is_month(self);
+        if side_by_side {
+            return Vec::new();
+        }
+        let kind = |item: &crate::items::Item| -> Option<String> {
+            if view.id == ViewId::Usage {
+                return item.id.split_once(':').map(|(kind, _)| kind.to_string());
+            }
+            if inbox_board::shown(self, view) {
+                return inbox_board::day_of(item, &self.snap.tz).map(|d| d.to_string());
+            }
+            item.group.clone()
+        };
+        let mut starts = Vec::new();
+        // The kind of the row before, none at the top or after a heading
+        // the cursor passes over (a new section); a heading it rests on
+        // (the Work map's repositories, a folded one with nothing under it)
+        // starts its section itself, its rows going on with it.
+        let mut last: Option<Option<String>> = None;
+        let mut under_heading = false;
+        for (i, item) in view.data.items.iter().enumerate() {
+            // The line a repository's merged work folds under is one of
+            // its rows.
+            let heading = views::is_header(item) && !views::is_fold_line(item);
+            if self.passes_over(item) {
+                if heading {
+                    last = None;
+                    under_heading = false;
+                }
+                continue;
+            }
+            if heading {
+                starts.push(i);
+                last = None;
+                under_heading = true;
+                continue;
+            }
+            let this = kind(item);
+            let new_section = match &last {
+                None => !under_heading,
+                Some(kind) => *kind != this,
+            };
+            if new_section {
+                starts.push(i);
+            }
+            under_heading = false;
+            last = Some(this);
+        }
+        if starts.len() < 2 {
+            starts.clear();
+        }
+        starts
+    }
+
     /// Whether `C-w` waits for its second key, at `now` (ms).
     pub fn window_waits(&self, now: i64) -> bool {
         self.window_key

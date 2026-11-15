@@ -5082,11 +5082,15 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool, resizes: bool) -> Vec<(
     };
     // After `C-w`, its second key.
     if m.window_waits(crate::util::now_ms()) {
-        return pairs(&[
+        let mut out = pairs(&[
             ("C-w", ""),
             ("h l", "left, right pane"),
             ("w W", "next, last pane"),
         ]);
+        if !m.sections().is_empty() {
+            out.extend(pairs(&[("j k", "next, last section")]));
+        }
+        return out;
     }
     // Several views at once: Tab goes between them, Esc back to one; the
     // focused view's pane beside, when it has the focus, scrolls.
