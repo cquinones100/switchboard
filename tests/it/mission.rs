@@ -2826,8 +2826,11 @@ fn m_j_ranks_a_tab_found_by_name_above_one_found_by_its_panes() {
     client.type_text(&format!("{ALT}j"));
     client.wait_text("Work map · open tabs");
     client.type_text("second");
+    // Both tabs show before the filter is taken up too, so wait for it.
     let screen = client.wait_for("both tabs found", |s| {
-        s.iter().any(|l| l.contains("tab 1")) && s.iter().any(|l| l.contains("tab 2"))
+        s.iter().any(|l| l.contains("/second"))
+            && s.iter().any(|l| l.contains("tab 1"))
+            && s.iter().any(|l| l.contains("tab 2"))
     });
     let named = screen.iter().position(|l| l.contains("tab 2"));
     let by_pane = screen.iter().position(|l| l.contains("tab 1"));
@@ -2880,6 +2883,100 @@ fn m_j_reads_only_the_lines_set_back_in_each_pane() {
     let screen = client.screen();
     assert!(
         !screen.iter().any(|l| l.contains("oldzebraword")),
+        "{}",
+        screen.join("\n")
+    );
+}
+
+/// Two tabs and a third named `zebraword`, the second in front again, the
+/// first tab's pane showing "a zebraword here" and the second's the word
+/// too; M-F asked for it, its Tabs answered.
+fn search_everything_for_tabs(extra: Value) -> (TestServer, TestClient, Vec<String>) {
+    let mut extra = extra;
+    for off in ["linear", "github", "search_slack"] {
+        extra[off] = json!(false);
+    }
+    let (server, mut client) = two_tabs(extra);
+    server.ok(&["new-tab", "-n", "zebraword"]);
+    wait_list(&server, "the third tab in front", |l| {
+        tabs(l).len() == 3 && tabs(l)[2]["current"] == true
+    });
+    let second = tabs(&server.list())[1]["id"].as_str().unwrap().to_string();
+    server.ok(&["select-tab", "-t", &second]);
+    wait_list(&server, "the second tab in front", |l| {
+        tabs(l)[1]["current"] == true
+    });
+    // Printed by halves, so the command typed doesn't hold the word.
+    run_in(
+        &server,
+        0,
+        "printf 'a zeb%sword here\\n' ra; seq 1 100",
+        "100",
+    );
+    run_in(
+        &server,
+        1,
+        "printf 'in the zeb%sword tab\\n' ra",
+        "in the zebraword tab",
+    );
+    client.type_text(&format!("{ALT}F"));
+    client.wait_text("Search the tabs, notes");
+    client.type_text("zebraword\r");
+    let screen = client.wait_for("the tabs found", |s| {
+        s.iter()
+            .any(|l| l.contains("Search: \"zebraword\"") && !l.contains("Tab,"))
+            && s.iter().any(|l| l.contains("by name"))
+    });
+    (server, client, screen)
+}
+
+#[test]
+fn m_f_finds_tabs_by_name_and_by_what_their_panes_show() {
+    let (server, mut client, screen) = search_everything_for_tabs(json!({}));
+    let named = screen.iter().position(|l| l.contains("by name"));
+    let by_pane = screen.iter().position(|l| l.contains("a zebraword here"));
+    assert!(
+        named.is_some() && by_pane.is_some() && named < by_pane,
+        "the named tab first, then the one its pane shows it: {}",
+        screen.join("\n")
+    );
+    assert!(
+        !screen.iter().any(|l| l.contains("2 second")),
+        "not the tab it was opened from: {}",
+        screen.join("\n")
+    );
+    // Enter goes to the tab chosen.
+    client.type_text("\r");
+    wait_list(&server, "the named tab in front", |l| {
+        tabs(l)[2]["current"] == true
+    });
+}
+
+#[test]
+fn m_f_brings_up_a_tab_at_its_match_on_ctrl_o() {
+    let (server, mut client, _) = search_everything_for_tabs(json!({}));
+    // Down to the tab found by its pane, and Ctrl-O.
+    client.type_text("\x1b[B\x0f");
+    wait_list(&server, "the first tab in front", |l| {
+        tabs(l)[0]["current"] == true
+    });
+    client.wait_for("the match in sight, scrolled back", |s| {
+        s.iter().any(|l| l.contains("a zebraword here"))
+            && s.iter().any(|l| {
+                l.split('[').skip(1).any(|r| {
+                    r.split_once(']')
+                        .is_some_and(|(n, _)| n.parse::<u32>().is_ok_and(|n| n > 0))
+                })
+            })
+    });
+}
+
+#[test]
+fn m_f_matches_tab_names_alone_with_the_panes_search_off() {
+    let (_server, _client, screen) =
+        search_everything_for_tabs(json!({ "tab_search_panes": false }));
+    assert!(
+        !screen.iter().any(|l| l.contains("a zebraword here")),
         "{}",
         screen.join("\n")
     );

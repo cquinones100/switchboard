@@ -1,9 +1,14 @@
 //! Search everything (M-S-f; tmux/search.sh and lib/search.js): one query
-//! asked of your notes, Linear, GitHub and Slack at once, each source's
-//! results shown as soon as it answers, so the quick ones are there while
-//! Slack is still looking. Enter reads the chosen one beside the pane, in
-//! the link view, a note as its Markdown; a Slack message, which can't be
-//! read here, opens in the browser.
+//! asked of the open tabs, your notes, Linear, GitHub and Slack at once,
+//! each source's results shown as soon as it answers, so the quick ones are
+//! there while Slack is still looking. Enter reads the chosen one beside
+//! the pane, in the link view, a note as its Markdown; a Slack message,
+//! which can't be read here, opens in the browser; a tab is gone to.
+//!
+//! Tabs: the open tabs but the one the search started from, by their label
+//! and, with `tab_search_panes` on, by what their panes show, matched and
+//! ranked by M-j's picker's search (`mission::pane_search`) on copies the
+//! server made of the panes, searched off its task; new with the Rust port.
 //!
 //! Notes: every Markdown note in `$NOTES_DIR` or `~/Notes` (nothing hidden,
 //! so not `.trash`) holding every word, newest first, read here and sent
@@ -19,6 +24,7 @@
 //! each link once (`merge`), so the list doesn't reshuffle under the cursor
 //! as a slow source arrives the way fzf's appended rows could.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -26,7 +32,8 @@ use regex::Regex;
 use serde_json::{Value, json};
 
 use crate::integrations::{github, linear};
-use crate::mux::PaneId;
+use crate::mission::pane_search;
+use crate::mux::{PaneId, TabId};
 use crate::{connector, settings};
 
 /// Results each source gives at most.
@@ -36,6 +43,7 @@ const SOURCE: &str = "search";
 /// Where a result comes from, in the order they are listed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Source {
+    Tabs,
     Notes,
     Linear,
     GitHub,
@@ -43,11 +51,18 @@ pub enum Source {
 }
 
 impl Source {
-    pub const ALL: [Source; 4] = [Source::Notes, Source::Linear, Source::GitHub, Source::Slack];
+    pub const ALL: [Source; 5] = [
+        Source::Tabs,
+        Source::Notes,
+        Source::Linear,
+        Source::GitHub,
+        Source::Slack,
+    ];
 
     /// Its name in the list's last column.
     pub fn name(self) -> &'static str {
         match self {
+            Source::Tabs => "Tab",
             Source::Notes => "Note",
             Source::Linear => "Linear",
             Source::GitHub => "GitHub",
@@ -134,6 +149,78 @@ fn markdown_files(dir: &Path, out: &mut Vec<PathBuf>) {
             _ => {}
         }
     }
+}
+
+/// An open tab as the Tabs source reads it: its id, its number and its
+/// label, in the order the tabs are listed.
+#[derive(Clone, Debug)]
+pub struct OpenTab {
+    pub tab: TabId,
+    pub number: usize,
+    pub label: String,
+}
+
+/// A tab result's link: the tab, and the pane its match is in (none for a
+/// tab found by its name alone).
+pub fn tab_link(tab: TabId, pane: Option<PaneId>) -> String {
+    match pane {
+        Some(p) => format!("{TAB_LINK}{}/{}", tab.0, p.0),
+        None => format!("{TAB_LINK}{}", tab.0),
+    }
+}
+
+/// The tab and the pane of a tab result's link; `None` for any other link.
+pub fn tab_of(link: &str) -> Option<(TabId, Option<PaneId>)> {
+    let rest = link.strip_prefix(TAB_LINK)?;
+    let (tab, pane) = match rest.split_once('/') {
+        Some((t, p)) => (t, Some(PaneId(p.parse().ok()?))),
+        None => (rest, None),
+    };
+    Some((TabId(tab.parse().ok()?), pane))
+}
+
+const TAB_LINK: &str = "switchboard-tab:";
+
+/// The open tabs whose label holds `query` or whose panes show it (`found`,
+/// from `pane_search::search`), ranked as M-j's picker ranks them: those
+/// found by name first, in the tabs' order, then those found only in their
+/// panes, the most matching lines first. Each shows its number and label,
+/// and the last line holding the query, or "by name".
+pub fn tabs(
+    open: &[OpenTab],
+    query: &str,
+    found: &HashMap<TabId, pane_search::Found>,
+) -> Vec<Found> {
+    let text = query.trim().to_lowercase();
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let mut by_name = Vec::new();
+    let mut by_content: Vec<(usize, Found)> = Vec::new();
+    for t in open {
+        let named = t.label.to_lowercase().contains(&text);
+        let hit = found.get(&t.tab);
+        let detail = match hit.and_then(|f| f.lines.last()) {
+            Some(line) => clean(line),
+            None if named => "by name".to_string(),
+            None => continue,
+        };
+        let row = Found {
+            source: Source::Tabs,
+            text: clean(&format!("{} {}", t.number, t.label)),
+            detail,
+            link: tab_link(t.tab, hit.map(|f| f.pane)),
+        };
+        if named {
+            by_name.push(row);
+        } else {
+            by_content.push((hit.map_or(0, |f| f.count), row));
+        }
+    }
+    by_content.sort_by_key(|(count, _)| std::cmp::Reverse(*count));
+    by_name.extend(by_content.into_iter().map(|(_, r)| r));
+    by_name.truncate(LIMIT);
+    by_name
 }
 
 static ITEM_MARK: LazyLock<Regex> =
@@ -512,6 +599,49 @@ mod tests {
             ]
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tabs_found_by_name_come_first_then_by_their_panes() {
+        let open = |tab: u32, label: &str| OpenTab {
+            tab: TabId(tab),
+            number: tab as usize,
+            label: label.to_string(),
+        };
+        let tabs_open = [
+            open(1, "alpha"),
+            open(2, "Zebra work"),
+            open(3, "gamma"),
+            open(4, "delta"),
+        ];
+        let mut found = HashMap::new();
+        for (tab, count) in [(1, 1), (3, 4)] {
+            found.insert(
+                TabId(tab),
+                pane_search::Found {
+                    pane: PaneId(tab + 10),
+                    lines: vec!["first zebra".into(), format!("a  zebra {tab}")],
+                    count,
+                },
+            );
+        }
+        let rows = tabs(&tabs_open, " ZEBRA ", &found);
+        let shown: Vec<(&str, &str)> = rows
+            .iter()
+            .map(|r| (r.text.as_str(), r.detail.as_str()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("2 Zebra work", "by name"),
+                ("3 gamma", "a zebra 3"),
+                ("1 alpha", "a zebra 1")
+            ]
+        );
+        assert_eq!(tab_of(&rows[0].link), Some((TabId(2), None)));
+        assert_eq!(tab_of(&rows[1].link), Some((TabId(3), Some(PaneId(13)))));
+        assert_eq!(tab_of("https://example.com"), None);
+        assert!(tabs(&tabs_open, "  ", &found).is_empty());
     }
 
     #[test]

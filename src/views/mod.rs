@@ -70,7 +70,7 @@ pub enum Command {
     OpenTicket,
     /// M-m: whether the branch's PR is ready to merge.
     PrReady,
-    /// M-S-f: notes, Linear, GitHub and Slack searched at once.
+    /// M-S-f: the open tabs, notes, Linear, GitHub and Slack searched at once.
     Search,
     /// A link, asked for (or chosen from the pane's), read beside the pane.
     ReadLink,
@@ -176,7 +176,7 @@ impl Command {
             Command::OpenTicket => "Open the branch's Linear ticket in the browser",
             Command::PrReady => "Check whether the branch's PR is ready to merge",
             Command::Search => {
-                "Search notes, Linear, GitHub and Slack at once, and read a result beside the pane"
+                "Search the open tabs, notes, Linear, GitHub and Slack at once, and read a result beside the pane or go to the tab"
             }
             Command::ReadLink => {
                 "Read a link in a pane beside this one, typed or one this pane shows"

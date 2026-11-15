@@ -319,7 +319,7 @@
     "key": "search_everything",
     "category": "Integrations",
     "label": "Search everything",
-    "description": "M-S-f asks for a search and lists what your notes, Linear, GitHub and Slack hold for it, each read beside the pane with Enter",
+    "description": "M-S-f asks for a search and lists the open tabs that name or show it and what your notes, Linear, GitHub and Slack hold for it, each read beside the pane with Enter, a tab gone to",
     "default": true
   },
   {
@@ -522,7 +522,7 @@
     "key": "tab_search_panes",
     "category": "Tabs and status bar",
     "label": "Search what panes show",
-    "description": "M-j's picker (and M-b w) finds a tab by what its panes show as well as by its name: each pane's screen and the last lines of its scrollback (Lines searched in each pane) are read in the server's memory as you type, never written anywhere, and each tab found that way shows its matching lines under its row, the tabs found by name first; its row's menu can go to the match in copy mode. Off, the picker matches the tabs' names alone",
+    "description": "M-j's picker (and M-b w) finds a tab by what its panes show as well as by its name: each pane's screen and the last lines of its scrollback (Lines searched in each pane) are read in the server's memory as you type, never written anywhere, and each tab found that way shows its matching lines under its row, the tabs found by name first; its row's menu can go to the match in copy mode. Search everything (M-S-f) finds tabs by what their panes show the same way. Off, the picker and search everything match the tabs' names alone",
     "default": true
   },
   {

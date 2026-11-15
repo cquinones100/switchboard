@@ -2924,23 +2924,18 @@ impl Server {
             super::pane_search::lines_setting(settings::cached("tab_search_lines").as_ref());
         let mut copies = Vec::new();
         let mut kept = std::collections::HashMap::new();
-        for (id, slot) in &self.panes {
-            // A pane parked behind a tool in its place (M-d's diff) can't
-            // be shown at its match, so it isn't searched.
-            if !self.tabs.contains_key(&slot.tab) || self.parked(*id) {
-                continue;
-            }
+        for (id, slot) in self.searchable_panes() {
             let version = slot.pane.version();
-            let copied = match m.pane_copies.get(id) {
+            let copied = match m.pane_copies.get(&id) {
                 Some((v, n, copy)) if *v == version && *n == lines => copy.clone(),
                 _ => {
                     std::sync::Arc::new(slot.pane.text(lines).lines().map(str::to_string).collect())
                 }
             };
-            kept.insert(*id, (version, lines, copied.clone()));
+            kept.insert(id, (version, lines, copied.clone()));
             copies.push(super::pane_search::Copied {
                 tab: slot.tab,
-                pane: *id,
+                pane: id,
                 lines: copied,
             });
         }
@@ -2956,6 +2951,18 @@ impl Server {
                 found,
             }));
         });
+    }
+
+    /// The panes a search of what the tabs show reads (M-j's picker, M-F's
+    /// Tabs): every open tab's, but one parked behind a tool in its place
+    /// (M-d's diff), which can't be shown at its match.
+    pub(crate) fn searchable_panes(
+        &self,
+    ) -> impl Iterator<Item = (PaneId, &crate::mux::server::PaneSlot)> {
+        self.panes
+            .iter()
+            .filter(|(id, slot)| self.tabs.contains_key(&slot.tab) && !self.parked(**id))
+            .map(|(id, slot)| (*id, slot))
     }
 
     /// Closes mission control from inside a key's handling, where its state
@@ -4802,7 +4809,13 @@ impl Server {
     /// The tab, and its pane in copy mode on the last line showing `text`,
     /// the match selected; with the pane gone or the text no longer there,
     /// the tab alone, saying so.
-    fn mission_go_to_match(&mut self, client: ClientId, tab: TabId, pane: PaneId, text: &str) {
+    pub(crate) fn mission_go_to_match(
+        &mut self,
+        client: ClientId,
+        tab: TabId,
+        pane: PaneId,
+        text: &str,
+    ) {
         self.mission_go(client, tab);
         let Some(slot) = self.panes.get_mut(&pane).filter(|s| s.tab == tab) else {
             return;

@@ -721,7 +721,7 @@ impl Server {
         let pane = self.current_pane(client);
         let picker = Picker::new("Search everything", Vec::new())
             .named("search-query")
-            .prompt("Search notes, Linear, GitHub and Slack: ")
+            .prompt("Search the tabs, notes, Linear, GitHub and Slack: ")
             .free();
         self.pick(client, picker, move |server, client, picked| {
             let Some(picked) = picked else {
@@ -736,11 +736,12 @@ impl Server {
 
     /// Asks each source, the list filled in as they answer; Enter reads
     /// the one chosen beside the pane the search started from, and Ctrl-O
-    /// opens a web link in the browser instead, as search.sh's did.
+    /// opens a web link in the browser instead, as search.sh's did. A tab
+    /// chosen is gone to, Ctrl-O bringing up copy mode on its match.
     fn start_search(&mut self, client: ClientId, pane: Option<PaneId>, query: String) {
         self.views.searches += 1;
         let id = self.views.searches;
-        let mut waiting = vec![Source::Notes];
+        let mut waiting = vec![Source::Tabs, Source::Notes];
         if settings::is_on("linear") {
             waiting.push(Source::Linear);
         }
@@ -763,12 +764,23 @@ impl Server {
         let picker = Picker::new(search_title(&query, &waiting), Vec::new())
             .named("search")
             .prompt("Narrow: ")
-            .also("read it beside the pane", "open it in the browser");
+            .also(
+                "read it, or go to the tab",
+                "open it in the browser, or the tab at its match",
+            );
+        let typed = query.trim().to_lowercase();
         self.pick_also(client, picker, move |server, client, picked| {
             let running = server.views.found.remove(&client);
             let Some((picked, browser)) = picked.filter(|(p, _)| !p.value.is_empty()) else {
                 return;
             };
+            if let Some((tab, at)) = search::tab_of(&picked.value) {
+                match at.filter(|_| browser) {
+                    Some(pane) => server.mission_go_to_match(client, tab, pane, &typed),
+                    None => server.mission_go(client, tab),
+                }
+                return;
+            }
             let web = picked.value.starts_with("https://") || picked.value.starts_with("http://");
             // What can't be read here (a Slack message) opens instead.
             if (browser && web)
@@ -816,6 +828,14 @@ impl Server {
                 }]
             };
             match source {
+                Source::Tabs => {
+                    let (open, copies) = self.tabs_to_search(pane);
+                    let text = q.trim().to_lowercase();
+                    tokio::task::spawn_blocking(move || {
+                        let found = crate::mission::pane_search::search(&copies, &text);
+                        send(search::tabs(&open, &text, &found))
+                    });
+                }
                 Source::Notes => {
                     let dir = page::notes_dir();
                     tokio::task::spawn_blocking(move || send(search::notes(&dir, &q)));
@@ -836,6 +856,50 @@ impl Server {
                 }
             }
         }
+    }
+
+    /// What search everything's Tabs source reads, copied on the server's
+    /// task to be searched off it: the open tabs in the order they are
+    /// listed, but the one `from` is in and the Notifications window, and,
+    /// with `tab_search_panes` on, their panes' screens and the last
+    /// `tab_search_lines` of their scrollback, as M-j's picker reads them.
+    fn tabs_to_search(
+        &self,
+        from: Option<PaneId>,
+    ) -> (
+        Vec<search::OpenTab>,
+        Vec<crate::mission::pane_search::Copied>,
+    ) {
+        let here = from.and_then(|p| self.panes.get(&p)).map(|s| s.tab);
+        let open: Vec<search::OpenTab> = self
+            .sessions
+            .iter()
+            .flat_map(|s| s.tabs.iter().copied())
+            .filter(|t| Some(*t) != here && self.tab_number(*t) != 0)
+            .map(|tab| search::OpenTab {
+                tab,
+                number: self.tab_number(tab),
+                label: self.tab_label(tab),
+            })
+            .collect();
+        if !settings::is_on("tab_search_panes") {
+            return (open, Vec::new());
+        }
+        let lines = crate::mission::pane_search::lines_setting(
+            settings::cached("tab_search_lines").as_ref(),
+        );
+        let copies = self
+            .searchable_panes()
+            .filter(|(_, slot)| open.iter().any(|t| t.tab == slot.tab))
+            .map(|(pane, slot)| crate::mission::pane_search::Copied {
+                tab: slot.tab,
+                pane,
+                lines: std::sync::Arc::new(
+                    slot.pane.text(lines).lines().map(str::to_string).collect(),
+                ),
+            })
+            .collect();
+        (open, copies)
     }
 
     fn search_found(&mut self, client: ClientId, id: u64, source: Source, rows: Vec<Found>) {
