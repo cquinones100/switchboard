@@ -64,13 +64,62 @@ pub fn former_plugin_dir() -> PathBuf {
     home_join(FORMER_PLUGIN)
 }
 
-/// A path with the home directory's first occurrence shown as `~`, as the
-/// Node scripts wrote `file.replace(os.homedir(), "~")`.
+/// A path under the home directory written from `~` (`~/code/web`, or `~`
+/// for the home itself), any other path as it is. The home's real path
+/// counts too, since a worktree's root is read canonical: under a home in
+/// `/tmp` on macOS it starts `/private/tmp`. The Node scripts wrote
+/// `file.replace(os.homedir(), "~")`, which also matched the home inside
+/// that real path (`/private~/code`).
 pub fn tilde(path: impl AsRef<Path>) -> String {
-    let text = path.as_ref().to_string_lossy().into_owned();
-    let home = home().to_string_lossy().into_owned();
-    if home.is_empty() || home == "/" {
-        return text;
+    let path = path.as_ref();
+    let home = home();
+    if home.as_os_str().is_empty() || home == Path::new("/") {
+        return path.display().to_string();
     }
-    text.replacen(&home, "~", 1)
+    let rest = match path.strip_prefix(&home) {
+        Ok(rest) => Some(rest),
+        Err(_) => real_home(&home).and_then(|r| path.strip_prefix(r).ok()),
+    };
+    match rest {
+        Some(rest) if rest.as_os_str().is_empty() => "~".into(),
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
+    }
+}
+
+/// The home's real path, read once per home and kept, since `tilde` runs
+/// on the drawing path, which never waits on the file system again.
+fn real_home(home: &Path) -> Option<&'static Path> {
+    static KNOWN: std::sync::Mutex<Vec<(PathBuf, Option<&'static Path>)>> =
+        std::sync::Mutex::new(Vec::new());
+    let mut known = KNOWN.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, real)) = known.iter().find(|(h, _)| h == home) {
+        return *real;
+    }
+    let real = home
+        .canonicalize()
+        .ok()
+        .filter(|r| r != home)
+        .map(|r| &*Box::leak(r.into_boxed_path()));
+    known.push((home.to_path_buf(), real));
+    real
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tilde_writes_paths_under_the_home_from_tilde() {
+        let home = home();
+        assert_eq!(tilde(home.join("code/web")), "~/code/web");
+        assert_eq!(tilde(&home), "~");
+        assert_eq!(tilde("/opt/elsewhere"), "/opt/elsewhere");
+        // A sibling whose name starts with the home's is not under it.
+        let sibling = format!("{}-other/x", home.display());
+        assert_eq!(tilde(&sibling), sibling);
+        if let Ok(real) = home.canonicalize() {
+            assert_eq!(tilde(real.join("code")), "~/code");
+        }
+    }
 }

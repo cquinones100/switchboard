@@ -1184,7 +1184,7 @@ fn call(home: &Path, what: &str) -> Result<()> {
 /// makes one, or the server stopped.
 pub fn call_main(args: &[String]) -> ExitCode {
     let result = match args {
-        [what, socket] if what == "session" => try_::make_session(Path::new(socket)),
+        [what, socket] if what == "session" => try_::make_session(Path::new(socket), None),
         [what, socket] if what == "stop" => {
             try_::stop_server(Path::new(socket));
             Ok(())

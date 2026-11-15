@@ -108,6 +108,14 @@ fn the_demo_runs_on_made_up_data_and_cleans_up_after_itself() {
         1
     );
     assert!(named(&tabs, "Notes").is_some());
+    // The first tab, the shell, starts in the demo's ~/code, so nothing
+    // names it for the demo's home folder.
+    let first_dir = tabs[0]["panes"][0]["cwd"].as_str().unwrap_or_default();
+    assert_eq!(
+        std::fs::canonicalize(first_dir).ok(),
+        std::fs::canonicalize(d.home.join("code")).ok(),
+        "{first_dir}"
+    );
 
     // The stand-in Claude asks you something within its first turn, and
     // takes a digit alone as its answer, as mission control sends one.
@@ -223,6 +231,17 @@ fn the_tour_saves_a_board_for_each_step() {
             "{}",
             step.name
         );
+    }
+    // No board shows the demo's temporary home: its paths are written from `~`.
+    for step in demo::tour::STEPS {
+        let board = std::fs::read_to_string(tour.join(format!("{}.txt", step.name))).unwrap();
+        for temporary in ["/private", "sb-demo"] {
+            assert!(
+                !board.contains(temporary),
+                "{} shows {temporary}: {board}",
+                step.name
+            );
+        }
     }
     let code_prs = std::fs::read_to_string(tour.join("code-prs.txt")).unwrap();
     assert!(code_prs.contains("Rate-limit the login"), "{code_prs}");

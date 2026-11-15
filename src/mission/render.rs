@@ -3782,7 +3782,7 @@ fn landing_detail(
     lines.push(fact("then", &then_words(landing)));
     lines.push(fact(
         "worktree",
-        landing["root"].as_str().unwrap_or_default(),
+        &crate::paths::tilde(landing["root"].as_str().unwrap_or_default()),
     ));
     let keys = landing_keys(landing, narrow);
     if !keys.is_empty() {
@@ -9932,6 +9932,24 @@ mod tests {
         // Narrow enough for the plain list, it still shows over it.
         let text = texts(&screen(&m, 70, 50).0).join("\n");
         assert!(text.contains("test line 30 ... ok"), "{text}");
+    }
+
+    #[test]
+    fn with_ux2_a_landing_s_worktree_under_the_home_is_written_from_tilde() {
+        let mut m = landing_board();
+        let landing = m
+            .snap
+            .views
+            .iter_mut()
+            .find(|v| v.id == ViewId::Landing)
+            .unwrap();
+        let root = crate::paths::home().join("code/api/.claude/worktrees/stable-ids");
+        landing.data.items[1].data["landing"]["root"] = root.to_string_lossy().into();
+        let text = texts(&screen(&m, 160, 50).0).join("\n");
+        assert!(
+            text.contains("~/code/api/.claude/worktrees/stable-ids"),
+            "{text}"
+        );
     }
 
     #[test]

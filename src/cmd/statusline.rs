@@ -198,7 +198,7 @@ pub fn line(
     // the context is hidden for the Usage view's Sessions to show); in a plain
     // terminal this is the only place they appear.
     if !in_workspace {
-        output.push_str(&format!(" | {accent}{}{RESET}", tilde_start(&raw_cwd)));
+        output.push_str(&format!(" | {accent}{}{RESET}", paths::tilde(&raw_cwd)));
         if let Some(p) = &place {
             output.push_str(&format!(" | {accent}{}{RESET}", p.branch));
         }
@@ -232,15 +232,6 @@ fn context_color(used: f64) -> &'static str {
         40..60 => "\x1b[38;5;178m",
         60..80 => "\x1b[38;5;208m",
         _ => "\x1b[38;5;160m",
-    }
-}
-
-/// The directory with a leading home written `~`, as `sed "s|^$HOME|~|"`.
-fn tilde_start(dir: &str) -> String {
-    let home = paths::home().to_string_lossy().into_owned();
-    match dir.strip_prefix(&home) {
-        Some(rest) if !home.is_empty() => format!("~{rest}"),
-        _ => dir.to_string(),
     }
 }
 

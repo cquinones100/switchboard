@@ -881,7 +881,8 @@ pub fn start_server(home: &Path, bin: &Path, env: &[(String, String)]) -> Result
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    crate::cmd::try_::make_session(&socket)?;
+    // Its first tab in ~/code, so nothing names the home folder for it.
+    crate::cmd::try_::make_session(&socket, Some(&home.join("code")))?;
     for (name, dir, program) in tabs(home, bin) {
         let mut args = vec![
             "new-tab".to_string(),

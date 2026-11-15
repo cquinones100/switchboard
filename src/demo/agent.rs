@@ -461,7 +461,7 @@ pub fn run(name: &str) -> ExitCode {
     let mut s = Session::start();
     out(&format!(
         "{ORANGE}✻{RESET} {BOLD}Welcome to Claude Code{RESET} {DIM}(the demo's stand-in){RESET}\n\n  {DIM}cwd: {}{RESET}\n",
-        s.cwd
+        crate::paths::tilde(&s.cwd)
     ));
     s.hook("SessionStart", json!({ "source": "startup" }));
     let turns = script(name);

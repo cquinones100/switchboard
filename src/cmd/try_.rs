@@ -487,13 +487,14 @@ fn start_detached(env: &Env, bin: &Path, home: &Path, wt: &Path) -> Result<()> {
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    make_session(&socket)
+    make_session(&socket, None)
 }
 
 /// Gives the server on `socket` a session by attaching and leaving at once,
-/// as `tmux new -d` does. A sealed try's runs in a sandbox of its own
-/// (try_sealed.rs's `call`), since its server is the try's code.
-pub(crate) fn make_session(socket: &Path) -> Result<()> {
+/// as `tmux new -d` does, its first tab in `cwd` (else the home). A sealed
+/// try's runs in a sandbox of its own (try_sealed.rs's `call`), since its
+/// server is the try's code.
+pub(crate) fn make_session(socket: &Path, cwd: Option<&Path>) -> Result<()> {
     let mut stream = UnixStream::connect(socket).context("its server doesn't answer")?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.write_all(&proto::encode_client(&ClientMsg::Attach {
@@ -504,7 +505,7 @@ pub(crate) fn make_session(socket: &Path) -> Result<()> {
         // No terminal: its cell's size in pixels is unknown.
         xpixel: 0,
         ypixel: 0,
-        cwd: None,
+        cwd: cwd.map(|d| d.to_string_lossy().into_owned()),
     }))?;
     // The first thing drawn says the session is there.
     match proto::read_server(&mut stream) {
