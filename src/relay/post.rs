@@ -110,6 +110,25 @@ pub fn as_markdown(body: &str, buttons: &[Button]) -> Value {
     json!({ "text": body, "blocks": blocks })
 }
 
+/// A message from `as_markdown` that mentions `owner` first: a rich text
+/// block, the one Slack's own clients send a mention in, and the same
+/// mention at the front of `text`.
+pub fn with_mention(md: Value, owner: &str) -> Value {
+    let mention = json!({
+        "type": "rich_text",
+        "elements": [{
+            "type": "rich_text_section",
+            "elements": [{ "type": "user", "user_id": owner }],
+        }],
+    });
+    let mut blocks = vec![mention];
+    blocks.extend(md["blocks"].as_array().cloned().unwrap_or_default());
+    json!({
+        "text": format!("<@{owner}> {}", md["text"].as_str().unwrap_or_default()),
+        "blocks": blocks,
+    })
+}
+
 /// Text longer than Slack shows in one message, as several, split at
 /// paragraph breaks (or lines, or anywhere as a last resort), each under
 /// `MAX_POST_CHARS`. A code block split across two is closed in the first
@@ -176,25 +195,27 @@ fn channel(cx: &Relay) -> String {
 
 /// Posts one message and gives its ts. Links aren't expanded into
 /// previews, which would bury a short reply under a PR's card.
-/// `broadcast` also shows a thread reply in the main DM, linked to its
-/// thread.
+/// `mention` starts a thread reply with a mention of the owner, which is
+/// what makes Slack notify you of a reply in a thread you don't follow (a
+/// thread the relay started), without also sending it to the main DM.
 pub async fn post_one(
     cx: &Relay,
     body: &str,
     thread: Option<&str>,
-    broadcast: bool,
+    mention: bool,
     buttons: &[Button],
 ) -> Result<String> {
     let mut params = json!({ "channel": channel(cx) });
-    let md = as_markdown(body, buttons);
-    params["text"] = md["text"].clone();
-    params["blocks"] = md["blocks"].clone();
+    let mut md = as_markdown(body, buttons);
     if let Some(t) = thread {
         params["thread_ts"] = json!(t);
-        if broadcast {
-            params["reply_broadcast"] = json!(true);
+        let owner = cx.state.borrow().dm().user;
+        if mention && !owner.is_empty() {
+            md = with_mention(md, &owner);
         }
     }
+    params["text"] = md["text"].clone();
+    params["blocks"] = md["blocks"].clone();
     params["unfurl_links"] = json!(false);
     params["unfurl_media"] = json!(false);
     let sent = cx.slack.api("chat.postMessage", params).await?;
@@ -208,21 +229,21 @@ pub async fn post_one(
 /// Options for `post`.
 #[derive(Clone, Debug, Default)]
 pub struct PostOpts {
-    pub broadcast: bool,
+    pub mention: bool,
     pub buttons: Vec<Button>,
 }
 
 impl PostOpts {
     pub fn buttons(buttons: Vec<Button>) -> PostOpts {
         PostOpts {
-            broadcast: false,
+            mention: false,
             buttons,
         }
     }
 
-    pub fn broadcast(broadcast: bool) -> PostOpts {
+    pub fn mention(mention: bool) -> PostOpts {
         PostOpts {
-            broadcast,
+            mention,
             buttons: Vec::new(),
         }
     }
@@ -238,7 +259,7 @@ pub async fn post(cx: &Relay, text: &str, thread: Option<&str>, opts: PostOpts) 
         cx,
         &parts[0],
         thread,
-        opts.broadcast,
+        opts.mention,
         if only { &opts.buttons } else { &[] },
     )
     .await?;
@@ -270,13 +291,13 @@ pub async fn post(cx: &Relay, text: &str, thread: Option<&str>, opts: PostOpts) 
         }
     }
     // Where it went says whether Slack notified you: the main DM does, a
-    // thread reply only when also sent to the main DM.
+    // thread reply only when it mentions you.
     let length = text.encode_utf16().count();
     cx.log(&format!(
         "posted {length} characters {}",
-        match (thread, opts.broadcast) {
+        match (thread, opts.mention) {
             (None, _) => "in the main DM (notifies)",
-            (Some(_), true) => "in a thread and the main DM (notifies)",
+            (Some(_), true) => "in a thread, mentioning you (notifies)",
             (Some(_), false) => "in a thread",
         }
     ));
@@ -484,6 +505,22 @@ mod tests {
             assert!(part.encode_utf16().count() <= MAX_POST_CHARS);
         }
         assert_eq!(parts.concat(), text);
+    }
+
+    #[test]
+    fn a_mention_comes_first_as_a_user_and_keeps_the_message_after_it() {
+        let md = with_mention(
+            as_markdown("Waiting", &[Button::new("Go", json!({}))]),
+            "U1",
+        );
+        assert_eq!(md["text"], "<@U1> Waiting");
+        assert_eq!(md["blocks"][0]["type"], "rich_text");
+        assert_eq!(
+            md["blocks"][0]["elements"][0]["elements"][0]["user_id"],
+            "U1"
+        );
+        assert_eq!(md["blocks"][1]["type"], "markdown");
+        assert_eq!(md["blocks"][2]["type"], "actions");
     }
 
     #[test]

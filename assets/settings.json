@@ -1252,7 +1252,7 @@
     "key": "relay_send_prompts",
     "category": "Slack relay",
     "label": "Prompts and questions",
-    "description": "A permission prompt, a question or a wait, with buttons that answer it. Notify me puts it in the tab's thread with a line in the main DM, which is what Slack notifies you for; Thread only puts it in the thread alone. It can't be turned off, since only Slack may be there to answer it. The tab's thread keeps a record only of what is sent.",
+    "description": "A permission prompt, a question or a wait, with buttons that answer it. Notify me puts it in the tab's thread with a line there mentioning you, which is what Slack notifies you for; Thread only puts it in the thread alone. It can't be turned off, since only Slack may be there to answer it. The tab's thread keeps a record only of what is sent.",
     "choices": [
       {
         "value": "notify",
@@ -1269,7 +1269,7 @@
     "key": "relay_send_dialogs",
     "category": "Slack relay",
     "label": "Dialogs before a session starts",
-    "description": "A trust or sign-in dialog Claude Code shows before its session starts. Notify me puts it in the tab's thread with a line in the main DM; Thread only in the thread alone. It can't be turned off, since only Slack may be there to answer it. The tab's thread keeps a record only of what is sent.",
+    "description": "A trust or sign-in dialog Claude Code shows before its session starts. Notify me puts it in the tab's thread with a line there mentioning you; Thread only in the thread alone. It can't be turned off, since only Slack may be there to answer it. The tab's thread keeps a record only of what is sent.",
     "choices": [
       {
         "value": "notify",
@@ -1286,7 +1286,7 @@
     "key": "relay_send_finished",
     "category": "Slack relay",
     "label": "Finished turns",
-    "description": "Claude's last message of each turn. Notify me puts it in the tab's thread with a line in the main DM; Thread only in the thread alone; Don't send leaves it in the tab. A turn that answers a message you sent the tab from Slack always reaches you where you asked, whatever this says. The tab's thread keeps a record only of what is sent.",
+    "description": "Claude's last message of each turn. Notify me puts it in the tab's thread with a line there mentioning you; Thread only in the thread alone; Don't send leaves it in the tab. A turn that answers a message you sent the tab from Slack always reaches you where you asked, whatever this says. The tab's thread keeps a record only of what is sent.",
     "choices": [
       {
         "value": "notify",
@@ -1314,7 +1314,7 @@
     "key": "relay_send_stuck",
     "category": "Slack relay",
     "label": "Tabs that may be stuck",
-    "description": "A tab marked working that has gone quiet. Notify me puts it in the tab's thread with a line in the main DM; Thread only in the thread alone; Don't send leaves it unsaid. The tab's thread keeps a record only of what is sent.",
+    "description": "A tab marked working that has gone quiet. Notify me puts it in the tab's thread with a line there mentioning you; Thread only in the thread alone; Don't send leaves it unsaid. The tab's thread keeps a record only of what is sent.",
     "choices": [
       {
         "value": "notify",
@@ -1335,7 +1335,7 @@
     "key": "relay_send_milestones",
     "category": "Slack relay",
     "label": "Commits, pushes and pull requests",
-    "description": "Each commit, push and pull request a tab makes. Notify me puts it in the tab's thread with a line in the main DM; Thread only in the thread alone; Don't send leaves it unsaid. The tab's thread keeps a record only of what is sent.",
+    "description": "Each commit, push and pull request a tab makes. Notify me puts it in the tab's thread with a line there mentioning you; Thread only in the thread alone; Don't send leaves it unsaid. The tab's thread keeps a record only of what is sent.",
     "choices": [
       {
         "value": "notify",
@@ -1356,7 +1356,7 @@
     "key": "relay_send_failures",
     "category": "Slack relay",
     "label": "Failed commits, pushes and pull requests",
-    "description": "A commit, push or pull request that failed, with the reason. Notify me puts it in the tab's thread with a line in the main DM; Thread only in the thread alone; Don't send leaves it unsaid. The tab's thread keeps a record only of what is sent.",
+    "description": "A commit, push or pull request that failed, with the reason. Notify me puts it in the tab's thread with a line there mentioning you; Thread only in the thread alone; Don't send leaves it unsaid. The tab's thread keeps a record only of what is sent.",
     "choices": [
       {
         "value": "notify",
@@ -1377,7 +1377,7 @@
     "key": "relay_send_context",
     "category": "Slack relay",
     "label": "Full context",
-    "description": "A tab past 90% of its context, with a button to compact it. Notify me puts it in the tab's thread with a line in the main DM; Thread only in the thread alone; Don't send leaves it unsaid. The tab's thread keeps a record only of what is sent.",
+    "description": "A tab past 90% of its context, with a button to compact it. Notify me puts it in the tab's thread with a line there mentioning you; Thread only in the thread alone; Don't send leaves it unsaid. The tab's thread keeps a record only of what is sent.",
     "choices": [
       {
         "value": "notify",
@@ -1649,7 +1649,7 @@
     "key": "relay_quiet_prompts",
     "category": "Slack relay",
     "label": "Prompts notify in quiet hours",
-    "description": "Prompts, questions and dialogs still notify you during quiet hours. Off, during quiet hours they go to their tab's thread alone, with no line in the main DM, as the other kinds do",
+    "description": "Prompts, questions and dialogs still notify you during quiet hours. Off, during quiet hours they go to their tab's thread alone, with no line mentioning you, as the other kinds do",
     "default": true
   }
 ]

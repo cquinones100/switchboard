@@ -5,7 +5,7 @@
 //! screen is locked. It is read every `CHECK_MS`, in the background, so
 //! asking costs nothing.
 //!
-//! The lines the relay puts in the main DM on its own (a tab waiting on
+//! The lines mentioning you the relay posts on its own (a tab waiting on
 //! you, a dialog, a stall, a failure) are what notify you, and while you're
 //! at the computer the workspace already shows them. So `deliver` sends one
 //! at once only when you're away, and otherwise holds it, in order, until

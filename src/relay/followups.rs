@@ -224,7 +224,7 @@ pub async fn follow_ups(cx: &Cx, current: &[Tab], events: &mut [Event]) {
         };
         let tab = current.iter().find(|t| t.id == id).cloned();
         let label = tabs::label(follow.index, &follow.name);
-        let name = if in_own_thread(cx, &id, follow.thread.as_deref(), follow.broadcast) {
+        let name = if in_own_thread(cx, &id, follow.thread.as_deref(), follow.mention) {
             "Claude".to_string()
         } else {
             label.clone()
@@ -287,7 +287,7 @@ pub async fn follow_ups(cx: &Cx, current: &[Tab], events: &mut [Event]) {
                         "🤖 _Working on it._",
                         follow.thread.as_deref(),
                         PostOpts {
-                            broadcast: follow.broadcast,
+                            mention: follow.mention,
                             buttons: working_buttons(t),
                         },
                     )
@@ -482,7 +482,7 @@ async fn finish(cx: &Cx, id: &str, follow: &Follow, tab: Option<&Tab>, body: &st
             &format!("🤖 {body}{}", context_footer(context.as_ref())),
             follow.thread.as_deref(),
             PostOpts {
-                broadcast: follow.broadcast,
+                mention: follow.mention,
                 buttons: buttons.clone(),
             },
         )
@@ -536,10 +536,10 @@ async fn finish(cx: &Cx, id: &str, follow: &Follow, tab: Option<&Tab>, body: &st
         if let Some(n) = &now {
             warn_context(cx, n, context.as_ref(), Some(&under)).await;
         }
-        // Otherwise, in a tab's home thread, a wait gets a line in the main
-        // DM.
+        // Otherwise, in a tab's home thread, a wait gets a line there
+        // mentioning you.
         if waiting
-            && !follow.broadcast
+            && !follow.mention
             && let Some(thread) = &follow.thread
             && is_home(cx, thread)
         {
@@ -552,7 +552,7 @@ async fn finish(cx: &Cx, id: &str, follow: &Follow, tab: Option<&Tab>, body: &st
                 &notice,
                 Some(thread),
                 PostOpts {
-                    broadcast: true,
+                    mention: true,
                     buttons: if found.is_some() {
                         buttons.clone()
                     } else {

@@ -4,8 +4,8 @@
 //!
 //! Everything the relay says by itself about a tab is of a `Kind`, and
 //! each kind has a setting in the "Slack relay" category
-//! (`relay_send_<kind>`): Notify (the tab's thread and a line in the main
-//! DM, which is what Slack notifies you for), Thread (the thread alone) or
+//! (`relay_send_<kind>`): Notify (the tab's thread, with a line there
+//! mentioning you, which is what Slack notifies you for), Thread (the thread alone) or
 //! Off (nothing posted, though the message still counts as reported, so
 //! turning the kind back on doesn't post a backlog). `relay_send_autopilot`
 //! keeps a tab autopilot opened to its prompts, dialogs and failures, and
@@ -109,7 +109,7 @@ impl Kind {
 /// Where a message goes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Send {
-    /// The tab's thread and a line in the main DM.
+    /// The tab's thread, with a line there mentioning you.
     Notify,
     /// The tab's thread alone.
     Thread,
@@ -238,7 +238,7 @@ pub fn sent_file(state_dir: &Path, day: &str) -> PathBuf {
 
 /// One message sent: its kind, its tab's number and name (none for a
 /// notice), whether the tab is autopilot's, and whether this is the line
-/// in the main DM that notified you about it, recorded only once posted
+/// mentioning you that notified you about it, recorded only once posted
 /// (a message is one line; the notice that it reached you, another).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sent {

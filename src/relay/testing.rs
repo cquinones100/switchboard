@@ -361,7 +361,7 @@ impl Haiku for Rc<FakeHaiku> {
 pub struct Post {
     pub body: String,
     pub thread: Option<String>,
-    pub broadcast: bool,
+    pub mention: bool,
     pub ts: String,
     pub buttons: Vec<Value>,
 }
@@ -605,14 +605,28 @@ impl Rig {
             .filter(|c| c.method == "chat.postMessage")
             .enumerate()
         {
+            assert!(
+                c.params.get("reply_broadcast").is_none(),
+                "no post is also sent to the main DM: {}",
+                c.params
+            );
+            let blocks = c.params["blocks"].as_array().cloned().unwrap_or_default();
+            let mention = blocks.first().is_some_and(|b| {
+                b["type"] == "rich_text" && b["elements"][0]["elements"][0]["user_id"] == "U1"
+            });
+            let text = c.params["text"].as_str().unwrap_or("");
+            let body = match text.strip_prefix("<@U1> ") {
+                Some(rest) if mention => rest,
+                _ => text,
+            };
             out.push(Post {
-                body: c.params["text"].as_str().unwrap_or("").to_string(),
+                body: body.to_string(),
                 thread: c.params["thread_ts"].as_str().map(str::to_string),
-                broadcast: c.params["reply_broadcast"] == true,
+                mention,
                 ts: posted.get(i).cloned().unwrap_or_default(),
-                buttons: c.params["blocks"]
-                    .as_array()
-                    .and_then(|b| b.get(1))
+                buttons: blocks
+                    .iter()
+                    .find(|b| b["type"] == "actions")
                     .and_then(|b| b["elements"].as_array())
                     .cloned()
                     .unwrap_or_default(),

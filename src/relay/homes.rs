@@ -1,9 +1,9 @@
 //! Each tab's home thread (lib/slack-relay/homes.js). Each Claude tab has
 //! one thread in the DM, its home: its alerts, answers and milestones go
-//! there, and whatever you reply there is typed into it. The main DM only
-//! gets one-line notices, posted in the home thread and also sent to the
-//! conversation (Slack's "also send to channel"), so tapping one opens the
-//! thread. A home is started the first time there's something to say about
+//! there, and whatever you reply there is typed into it. What should notify
+//! you is posted in the home thread mentioning you, since Slack notifies
+//! no one of a reply in a thread they don't follow, and nothing in a home
+//! thread is also sent to the main DM. A home is started the first time there's something to say about
 //! a tab. It belongs to the tab, checked by its Claude pane's process, since
 //! tab ids are used again after a restart; a tab that has closed has none,
 //! and its news goes to the top level.
@@ -157,11 +157,12 @@ pub fn is_home(cx: &Relay, ts: &str) -> bool {
 }
 
 /// Whether a message posted in `thread` lands in the tab `id`'s own
-/// thread and not also in the main DM: there the thread's header names the
-/// tab, so the message calls it Claude rather than repeating its number and
-/// name.
-pub fn in_own_thread(cx: &Relay, id: &str, thread: Option<&str>, broadcast: bool) -> bool {
-    !broadcast && thread.is_some() && home_thread(cx, id).as_deref() == thread
+/// thread and is read only there: the thread's header names the tab, so the
+/// message calls it Claude rather than repeating its number and name. One
+/// that mentions you is also read as the notification, away from the
+/// thread, so it keeps the tab's name.
+pub fn in_own_thread(cx: &Relay, id: &str, thread: Option<&str>, mention: bool) -> bool {
+    !mention && thread.is_some() && home_thread(cx, id).as_deref() == thread
 }
 
 /// A tab's thread, if it has one yet.

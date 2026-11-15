@@ -1,7 +1,7 @@
 //! Tabs that may be stuck (lib/slack-relay/stuck.js). A tab marked working
 //! whose transcript hasn't changed for `STUCK_MS` may be stuck (or running
 //! something long, which the screen usually shows), so its thread gets a
-//! note with what it did last and its screen, and the main DM a line. Once
+//! note with what it did last and its screen, and a line mentioning you. Once
 //! per stall: it is noted again only after it has moved on and stalled
 //! anew. The quiet is counted from the later of its last activity and when
 //! it was marked working: the prompt hook marks a tab working a moment
@@ -119,7 +119,7 @@ pub async fn stuck_tabs(cx: &Cx, tabs: &[Tab]) {
                 cx.log(&format!("stuck: {name}"));
                 return Ok(());
             }
-            // The note is in the thread at once; the line in the main DM,
+            // The note is in the thread at once; the line mentioning you,
             // which notifies you, waits while you're at the computer.
             notify(
                 cx,

@@ -44,14 +44,14 @@ pub const HELP: &str = "**What I understand**\n\
 - `help`: this list\n\
 - `stop`: end the relay";
 
-/// Where an answer goes: posted in a thread (or the main DM), also sent to
-/// the main DM with `broadcast`; or a tab's screen drawn again with it at
+/// Where an answer goes: posted in a thread (or the main DM), mentioning
+/// you with `mention`; or a tab's screen drawn again with it at
 /// the bottom.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Reply {
     Post {
         thread: Option<String>,
-        broadcast: bool,
+        mention: bool,
     },
     Screen {
         view: String,
@@ -63,7 +63,7 @@ impl Reply {
     pub fn to(thread: Option<&str>) -> Reply {
         Reply::Post {
             thread: thread.map(str::to_string),
-            broadcast: false,
+            mention: false,
         }
     }
 }
@@ -71,12 +71,12 @@ impl Reply {
 /// Says `body` where `to` says, giving the post's ts.
 pub async fn say(cx: &Cx, to: &Reply, body: &str, buttons: Vec<Button>) -> Result<Option<String>> {
     match to {
-        Reply::Post { thread, broadcast } => post(
+        Reply::Post { thread, mention } => post(
             cx,
             &format!("🤖 {body}"),
             thread.as_deref(),
             PostOpts {
-                broadcast: *broadcast,
+                mention: *mention,
                 buttons,
             },
         )
@@ -487,8 +487,8 @@ fn join(text: &str, more: &str) -> String {
 /// or the picker's tab button. It goes straight to that tab, never through
 /// a thread's link to one, which another message may have repointed. Sent
 /// from a thread, the conversation stays there; sent at the top level, it
-/// goes on in the tab's home thread, and its answer is also sent to the
-/// main DM. `?` (or nothing) answers where it was asked.
+/// goes on in the tab's home thread, and its answer there mentions you.
+/// `?` (or nothing) answers where it was asked.
 pub async fn for_tab(
     cx: &Cx,
     tab: &Tab,
@@ -509,10 +509,10 @@ pub async fn for_tab(
     if let Some(c) = &conversation {
         cx.state.borrow_mut().watch_thread(c, util::now_ms());
     }
-    let broadcast = thread.is_none() && conversation.as_deref() != request;
+    let mention = thread.is_none() && conversation.as_deref() != request;
     let reply = Reply::Post {
         thread: conversation.clone(),
-        broadcast,
+        mention,
     };
     to_tab(
         cx,
@@ -521,7 +521,7 @@ pub async fn for_tab(
         tab,
         text,
         &reply,
-        broadcast,
+        mention,
     )
     .await
 }
@@ -640,7 +640,7 @@ pub struct Waiting {
     pub request: Option<String>,
     pub text: String,
     pub reply: Reply,
-    pub broadcast: bool,
+    pub mention: bool,
 }
 
 /// The message waiting on each tab's draft, by tab: a second one for the
@@ -656,7 +656,7 @@ pub async fn to_tab(
     tab: &Tab,
     text: &str,
     reply: &Reply,
-    broadcast: bool,
+    mention: bool,
 ) -> Result<Option<String>> {
     send_to_tab(
         cx,
@@ -665,7 +665,7 @@ pub async fn to_tab(
         tab,
         text,
         reply,
-        broadcast,
+        mention,
         OverDraft::Ask,
     )
     .await
@@ -698,7 +698,7 @@ pub async fn send_waiting(
         tab,
         &waiting.text,
         &waiting.reply,
-        waiting.broadcast,
+        waiting.mention,
         over,
     )
     .await?;
@@ -793,7 +793,7 @@ async fn send_to_tab(
     tab: &Tab,
     text: &str,
     reply: &Reply,
-    broadcast: bool,
+    mention: bool,
     over: OverDraft,
 ) -> Result<Option<String>> {
     let name = label(tab.index, &tab.name);
@@ -970,7 +970,7 @@ async fn send_to_tab(
                 request: request.map(str::to_string),
                 text: text.to_string(),
                 reply: reply.clone(),
-                broadcast,
+                mention,
             };
             // The thread belongs to the tab already, so a reply while you
             // decide reaches it, taking the waiting message's place.
@@ -1020,7 +1020,7 @@ async fn send_to_tab(
             name: tab.name.clone(),
             text: text.to_string(),
             request: request.map(str::to_string),
-            broadcast,
+            mention,
             sent_at: util::now_ms(),
             screen: before,
             ..Follow::default()

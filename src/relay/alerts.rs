@@ -1,8 +1,8 @@
 //! What the relay says by itself when a tab needs you or has finished
 //! (lib/slack-relay/alerts.js): an alert in the tab's thread carrying what
 //! `?` would show, so the answer or the question is readable without asking
-//! for it, and for a wait, a line in the main DM, which is what notifies
-//! you and which waits while you're at the computer (see presence.rs). A
+//! for it, and for a wait, a line in the thread mentioning you, which is
+//! what notifies you and which waits while you're at the computer (see presence.rs). A
 //! dialog before a session starts, which no hook reports, is read off the
 //! screen.
 
@@ -95,8 +95,8 @@ fn mark_closed(cx: &Relay, tabs: &[Tab]) {
     cx.save();
 }
 
-/// A line in the main DM pointing at a tab's thread, which is what
-/// notifies you; it waits while you're at the computer. A notice for a
+/// A line in a tab's thread mentioning you (in the main DM for a tab with
+/// no thread), which is what notifies you; it waits while you're at the computer. A notice for a
 /// prompt carries the prompt's buttons, so it can be answered from the
 /// notice itself, as long as the prompt is still showing when the notice
 /// goes out (`still`), since it may have waited for you to step away.
@@ -129,7 +129,7 @@ pub async fn notify(
             &text,
             home.as_deref(),
             PostOpts {
-                broadcast: true,
+                mention: true,
                 buttons: if live { buttons } else { Vec::new() },
             },
         )
@@ -469,7 +469,7 @@ async fn alert(cx: &Cx, due: Due) {
             notified: false,
         };
         sending::record(cx, &sent);
-        // The line in the main DM, which notifies you, as its kind says.
+        // The line mentioning you, which notifies you, as its kind says.
         if send == Send::Notify {
             let (id, since) = (tab.id.clone(), tab.since.clone());
             let still: Box<dyn Fn(&Relay) -> bool> = Box::new(move |cx: &Relay| {

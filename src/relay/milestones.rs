@@ -188,19 +188,13 @@ pub struct Memory {
     followed: HashMap<String, Seen>,
 }
 
-/// A tab's news goes in its thread at once. With `broadcast` it also goes
-/// to the main DM, which notifies you: while you're away, as the same
-/// message; while you're at the computer, as a line that waits until you're
-/// away.
-/// Each message is counted as sent, and as notifying once its line in the
-/// main DM is posted.
-pub async fn ping(
-    cx: &Cx,
-    tab: &Tab,
-    line: &str,
-    kind: Kind,
-    broadcast: bool,
-) -> anyhow::Result<()> {
+/// A tab's news goes in its thread at once. With `mention` it also
+/// notifies you, by mentioning you: while you're away, in the same
+/// message; while you're at the computer, in a second line that waits
+/// until you're away.
+/// Each message is counted as sent, and as notifying once the message
+/// mentioning you is posted.
+pub async fn ping(cx: &Cx, tab: &Tab, line: &str, kind: Kind, mention: bool) -> anyhow::Result<()> {
     let home = home_of(cx, tab).await?;
     let target = Target {
         window: tab.id.clone(),
@@ -218,7 +212,7 @@ pub async fn ping(
     let away = cx.presence.away();
     let text = format!("🤖 {name}: {line}");
     // In the tab's own thread, the line alone, which the header names.
-    let in_thread = if in_own_thread(cx, &tab.id, home.as_deref(), broadcast && away) {
+    let in_thread = if in_own_thread(cx, &tab.id, home.as_deref(), mention && away) {
         let mut chars = line.chars();
         let first = chars.next().map(|c| c.to_uppercase().collect::<String>());
         format!("🤖 {}{}", first.unwrap_or_default(), chars.as_str())
@@ -229,7 +223,7 @@ pub async fn ping(
         cx,
         &in_thread,
         home.as_deref(),
-        PostOpts::broadcast(broadcast && away),
+        PostOpts::mention(mention && away),
     )
     .await?;
     cx.state.borrow_mut().alerts.insert(ts, target.clone());
@@ -241,7 +235,7 @@ pub async fn ping(
         notified: false,
     };
     sending::record(cx, &sent);
-    if broadcast && away {
+    if mention && away {
         sending::record(
             cx,
             &Sent {
@@ -249,7 +243,7 @@ pub async fn ping(
                 ..sent
             },
         );
-    } else if broadcast {
+    } else if mention {
         notify(
             cx,
             text,

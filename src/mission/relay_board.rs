@@ -153,7 +153,7 @@ pub(crate) fn items_of(
     sent: &[Sent],
     running: Option<&Running>,
 ) -> Vec<Item> {
-    // A message is a line, and its line in the main DM, once posted, one
+    // A message is a line, and its line mentioning you, once posted, one
     // more marked notified.
     let notified = sent.iter().filter(|s| s.notified).count();
     let posted = sent.iter().filter(|s| !s.notified).count();

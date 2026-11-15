@@ -102,8 +102,9 @@ pub struct Follow {
     pub text: String,
     #[serde(default, deserialize_with = "lenient")]
     pub request: Option<String>,
-    #[serde(default, deserialize_with = "lenient")]
-    pub broadcast: bool,
+    // "broadcast" in a file from before the answer mentioned you instead.
+    #[serde(default, alias = "broadcast", deserialize_with = "lenient")]
+    pub mention: bool,
     #[serde(default, deserialize_with = "lenient")]
     pub sent_at: i64,
     #[serde(default, deserialize_with = "lenient")]

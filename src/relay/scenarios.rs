@@ -100,7 +100,7 @@ fn a_top_level_message_sent_with_the_picker_goes_on_in_the_tabs_home_thread() {
         .unwrap();
     assert!(rig.screen(&tab).contains("hello from slack"));
     // The tab's home thread starts; nothing else is posted until the
-    // answer, which goes there and to the main DM.
+    // answer, which goes there, mentioning you.
     let posts = rig.posts();
     assert_eq!(posts.len(), 2);
     let home = posts[1].ts.clone();
@@ -110,7 +110,7 @@ fn a_top_level_message_sent_with_the_picker_goes_on_in_the_tabs_home_thread() {
     assert_eq!(state.homes[&tab].ts, home);
     assert_eq!(state.alerts[&home].window, tab);
     let f = &state.following[&tab];
-    assert!(f.broadcast);
+    assert!(f.mention);
     assert_eq!(f.text, "hello from slack");
     assert_eq!(f.thread.as_deref(), Some(home.as_str()));
     assert_eq!(f.request.as_deref(), Some(ts.as_str()));
@@ -694,8 +694,8 @@ fn alerts_come_once_per_state_change_with_the_screen_for_a_wait() {
     run(&rig);
     rig.set_state(&tab, "done", "200");
     run(&rig);
-    // The home thread, then each alert in it with a one-line notice also in
-    // the main DM.
+    // The home thread, then each alert in it with a one-line notice
+    // after it mentioning you, in the same thread.
     let posts = rig.posts();
     assert_eq!(posts.len(), 4);
     let home = &posts[0].ts;
@@ -719,17 +719,17 @@ fn alerts_come_once_per_state_change_with_the_screen_for_a_wait() {
             .contains("On screen now:\n```\nAllow this edit? 1. Yes 2. No")
     );
     assert_eq!(posts[1].thread.as_ref(), Some(home));
-    assert!(!posts[1].broadcast);
+    assert!(!posts[1].mention);
     assert_eq!(
         posts[2].body,
         format!("🤖 **Tab {index}, work** is **waiting on you**.")
     );
-    assert!(posts[2].broadcast);
+    assert!(posts[2].mention);
     assert!(posts[3].body.contains("has finished"));
     assert!(!posts[3].body.contains("On screen now:"));
     assert!(
-        !posts[3].broadcast,
-        "a finished turn gets no line in the main DM"
+        !posts[3].mention,
+        "a finished turn gets no line mentioning you"
     );
 }
 
@@ -1710,7 +1710,7 @@ fn a_dialog_before_a_session_starts_is_alerted_once_and_answered_with_arrow_keys
     assert_eq!(
         posts.len(),
         3,
-        "the thread, the alert in it, and a notice in the main DM, once"
+        "the thread, the alert in it, and a notice mentioning you, once"
     );
     assert!(
         posts[1]
@@ -1722,7 +1722,7 @@ fn a_dialog_before_a_session_starts_is_alerted_once_and_answered_with_arrow_keys
     assert!(posts[1].body.contains(
         "**Is this a project you trust?**\n1. No, exit (selected)\n2. Yes, I trust this folder\n"
     ));
-    assert!(posts[2].broadcast);
+    assert!(posts[2].mention);
     rig.block_on(handle(
         &rig.cx,
         message(&now_ts(21), "yes", posts[1].thread.as_deref()),
@@ -2038,7 +2038,7 @@ fn milestones_ping_a_tabs_thread_on_a_commit_and_a_push() {
     assert!(
         posts[1..]
             .iter()
-            .all(|p| p.thread.as_deref() == Some(home.as_str()) && !p.broadcast)
+            .all(|p| p.thread.as_deref() == Some(home.as_str()) && !p.mention)
     );
 }
 
@@ -2069,8 +2069,8 @@ fn while_youre_at_the_computer_threads_get_everything_and_only_the_main_dms_line
     ))
     .unwrap();
     assert!(
-        rig.posts().iter().all(|p| !p.broadcast),
-        "nothing in the main DM yet"
+        rig.posts().iter().all(|p| !p.mention),
+        "nothing mentions you yet"
     );
     assert_eq!(
         rig.cx.presence.held.borrow().len(),
@@ -2082,13 +2082,13 @@ fn while_youre_at_the_computer_threads_get_everything_and_only_the_main_dms_line
     let lines: Vec<String> = rig
         .posts()
         .into_iter()
-        .filter(|p| p.broadcast)
+        .filter(|p| p.mention)
         .map(|p| p.body)
         .collect();
     assert_eq!(lines.len(), 2);
     assert!(lines[0].ends_with("is **waiting on you**."));
     assert!(lines[1].contains("a push failed"));
-    // Away: a failure is one message, in the thread and the main DM at once.
+    // Away: a failure is one message, in the thread, mentioning you.
     rig.block_on(super::milestones::ping(
         &rig.cx,
         &t,
@@ -2097,7 +2097,7 @@ fn while_youre_at_the_computer_threads_get_everything_and_only_the_main_dms_line
         true,
     ))
     .unwrap();
-    assert!(rig.posts().last().unwrap().broadcast);
+    assert!(rig.posts().last().unwrap().mention);
 }
 
 #[test]
@@ -2126,7 +2126,7 @@ fn a_working_tab_with_nothing_new_for_ten_minutes_is_noted_once_per_stall() {
     assert_eq!(
         posts.len(),
         3,
-        "the thread, the note, and a line in the main DM, once"
+        "the thread, the note, and a line mentioning you, once"
     );
     assert!(posts[1].body.starts_with(
         "🤖 Claude may be stuck: working, but nothing has happened for 11m. On a turn started 11m ago, 1 tool so far.\n"
@@ -2148,7 +2148,7 @@ fn a_working_tab_with_nothing_new_for_ten_minutes_is_noted_once_per_stall() {
             .body
             .contains("On screen now:\n```\n✻ Running pnpm test")
     );
-    assert!(posts[2].broadcast);
+    assert!(posts[2].mention);
     assert!(
         posts[2]
             .body
@@ -3345,12 +3345,12 @@ fn an_alert_whose_line_in_the_main_dm_failed_while_away_is_sent_again() {
         let tabs = tabs::claude_tabs(&rig.cx);
         rig.block_on(alerts::alert_tabs(&rig.cx, &tabs, &[]));
     };
-    // Only the line also sent to the main DM fails.
+    // Only the line mentioning you fails.
     let posted = rig.slack.clone();
     rig.slack.answers.borrow_mut().insert(
         "chat.postMessage".into(),
         Box::new(move |params| {
-            if params["reply_broadcast"] == true {
+            if params["blocks"][0]["type"] == "rich_text" {
                 return Err(anyhow::anyhow!("chat.postMessage: fatal_error"));
             }
             let n = posted.posted_ts.borrow().len();
@@ -3365,7 +3365,7 @@ fn an_alert_whose_line_in_the_main_dm_failed_while_away_is_sent_again() {
     rig.slack.calls.borrow_mut().clear();
     rig.slack.posted_ts.borrow_mut().clear();
     run(&rig);
-    let lines: Vec<_> = rig.posts().into_iter().filter(|p| p.broadcast).collect();
+    let lines: Vec<_> = rig.posts().into_iter().filter(|p| p.mention).collect();
     assert_eq!(lines.len(), 1);
     assert!(lines[0].body.ends_with("is **waiting on you**."));
     assert!(rig.cx.state.borrow().reported.contains_key(&tab));
@@ -3478,7 +3478,7 @@ fn a_turn_you_asked_for_from_slack_is_posted_once_not_also_alerted() {
             tab.clone(),
             Follow {
                 taken: true,
-                broadcast: true,
+                mention: true,
                 ..follow(Some(home), index, "how does it work")
             },
         );
@@ -3566,7 +3566,7 @@ fn the_answer_to_a_request_from_the_main_dm_goes_to_the_main_dm_too() {
         state.following.insert(
             tab.clone(),
             Follow {
-                broadcast: true,
+                mention: true,
                 ..follow(Some(&home), index, "ship it")
             },
         );
@@ -3579,7 +3579,7 @@ fn the_answer_to_a_request_from_the_main_dm_goes_to_the_main_dm_too() {
         format!("🤖 tab {index}, work is done:\n> ship it\n\nShipped.")
     );
     assert_eq!(posts[0].thread.as_deref(), Some(home.as_str()));
-    assert!(posts[0].broadcast);
+    assert!(posts[0].mention);
 }
 
 #[test]
@@ -3599,7 +3599,7 @@ fn a_waiting_tabs_notice_carries_its_options_and_one_answer_clears_the_rest() {
         .find(|p| p.body.contains("is **waiting on you**. Reply here"))
         .unwrap()
         .clone();
-    let notice = posts.iter().find(|p| p.broadcast).unwrap().clone();
+    let notice = posts.iter().find(|p| p.mention).unwrap().clone();
     let names: Vec<&str> = notice
         .buttons
         .iter()
@@ -3608,7 +3608,7 @@ fn a_waiting_tabs_notice_carries_its_options_and_one_answer_clears_the_rest() {
     assert_eq!(
         names,
         ["1. Yes", "2. No"],
-        "the notice in the main DM has the buttons too"
+        "the notice mentioning you has the buttons too"
     );
     // Tapped on the notice: typed, and the alert in the thread loses its
     // buttons.
@@ -3656,7 +3656,7 @@ fn a_waiting_tabs_notice_carries_its_options_and_one_answer_clears_the_rest() {
     rig.set_state(&tab, "waiting", "1791500300");
     rig.cx.state.borrow_mut().following.clear();
     run(&rig);
-    let second = rig.posts().into_iter().rfind(|p| !p.broadcast).unwrap().ts;
+    let second = rig.posts().into_iter().rfind(|p| !p.mention).unwrap().ts;
     rig.set_state(&tab, "working", "1791500310");
     run(&rig);
     let gone = rig
@@ -4687,7 +4687,7 @@ fn a_prompt_set_to_its_thread_posts_no_line_in_the_main_dm() {
     let posts = rig.posts();
     assert_eq!(posts.len(), 2, "the thread and the alert in it");
     assert!(posts[1].body.contains("is **waiting on you**"));
-    assert!(posts.iter().all(|p| !p.broadcast));
+    assert!(posts.iter().all(|p| !p.mention));
     // Recorded as sent, not notified.
     let day = util::ymd(&util::local_now());
     let text =
@@ -4707,7 +4707,7 @@ fn a_finished_turn_set_to_notify_gets_a_line_in_the_main_dm() {
     alert_now(&rig);
     let posts = rig.posts();
     assert_eq!(posts.len(), 3);
-    assert!(posts[2].broadcast);
+    assert!(posts[2].mention);
     assert_eq!(
         posts[2].body,
         format!("🤖 **Tab {index}, work** has finished.")
@@ -4736,7 +4736,7 @@ fn an_autopilot_tab_under_landings_posts_its_waits_but_not_its_turns() {
     assert!(
         rig.posts()
             .iter()
-            .any(|p| p.broadcast && p.body.contains("pilot** is **waiting on you**."))
+            .any(|p| p.mention && p.body.contains("pilot** is **waiting on you**."))
     );
 }
 
@@ -4868,7 +4868,7 @@ fn a_held_line_is_sent_as_its_kind_says_when_it_goes_out_and_counted_then() {
         .insert("relay_send_prompts".into(), json!("thread"));
     rig.set_reading(Some(super::presence::AWAY_AFTER_MS), Some(false));
     rig.block_on(super::presence::flush(&rig.cx));
-    assert!(rig.posts().iter().all(|p| !p.broadcast));
+    assert!(rig.posts().iter().all(|p| !p.mention));
     assert_eq!(notified(), 0);
     // Left to notify, it is counted once posted.
     settings
@@ -4879,7 +4879,7 @@ fn a_held_line_is_sent_as_its_kind_says_when_it_goes_out_and_counted_then() {
     alert_now(&rig);
     rig.set_reading(Some(super::presence::AWAY_AFTER_MS), Some(false));
     rig.block_on(super::presence::flush(&rig.cx));
-    assert!(rig.posts().iter().any(|p| p.broadcast));
+    assert!(rig.posts().iter().any(|p| p.mention));
     assert_eq!(notified(), 1);
 }
 
