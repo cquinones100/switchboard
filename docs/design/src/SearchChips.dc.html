@@ -175,8 +175,9 @@ tint(35, 159, 1);
 // A chip is a click and a Tab stop that turns its source on or off for this search; All turns every one back on.
 // The set is remembered for the next M-F. A typed prefix (tab:, note:, linear:, gh:, slack:) narrows it the same way:
 // typed, it leaves the query and the chips agree with it, and the prompt names the scope.
+// The box carries no instructions: no hints row and no explanation, so the results get the room.
 const X = 46, W = 92;
-box(X, 5, W, 24, 'Search everything');
+box(X, 5, W, 16, 'Search everything');
 input(X + 1, 7, W - 2, '', '', null);
 put(X + 4, 7, 'Search notes, Slack:', 'd', '', '2'); { const n = put(X + 25, 7, 'fixture', 't', '', '2'); put(X + 25 + n, 7, '▏', 'a', '', '2'); }
 R(X + W - 3, 7, '4 so far', 'd', '', '2');
@@ -188,7 +189,6 @@ cx += src(cx, 9, 'Notes 4', true, false);
 cx += src(cx, 9, 'Linear', false);
 cx += src(cx, 9, 'GitHub', false);
 cx += src(cx, 9, 'Slack ⋯', true, false);
-R(X + W - 3, 9, 'from slack: note: typed', 'd', '', 'E');
 rule(X + 1, 10, W - 2);
 const hit = (y, text, at, right, chosen) => { option(X, y, W, '', '', chosen); const bg = chosen ? '4' : 'E'; put(X + 4, y, text, 't', chosen ? 'b' : '', bg); if (at) { const i = text.toLowerCase().indexOf('fixture'); put(X + 4 + i, y, text.slice(i, i + 7), 'a', 'bu', bg); } R(X + W - 3, y, right, 'd', '', bg); };
 label(X + 2, 11, 'Notes', 'd', 4, X + W - 3);
@@ -198,11 +198,6 @@ hit(14, 'Standup 2026-11-12: large.json fixture', true, 'Standups · Thu');
 hit(15, 'Pairing: fixture sizes for the bench', true, 'Notes · Oct 30');
 label(X + 2, 17, 'Slack', 'd');
 T(X + 4, 18, ['◌ searching your workspace…', 'f', '', 'E']);
-T(X + 2, 21, ['A chip turns its source on or off for this search, by a click or Tab and Space; ', 'd', '', 'E']);
-T(X + 2, 22, ['All turns every one back on. The next M-F starts with the same set.', 'd', '', 'E']);
-T(X + 2, 24, ['Typed first, ', 'd', '', 'E'], ['tab: note: linear: gh: slack:', 'a', '', 'E'], [' narrow it the same way, and the chips follow.', 'd', '', 'E']);
-T(X + 2, 25, ['Only the sources Settings has on get a chip.', 'd', '', 'E']);
-keys(X + 2, 27, [['↑↓', 'move'], ['↵', 'choose'], ['Tab', 'the sources'], ['esc', 'close']]);
 backdrop();
 }
 
