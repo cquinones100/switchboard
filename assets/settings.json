@@ -629,8 +629,8 @@
   {
     "key": "notes_recent",
     "category": "Notes",
-    "label": "Recent notes in the list",
-    "description": "Notes' list shows the notes you opened last under Recent, above the folders. Off, the list shows only the folders.",
+    "label": "Recent notes in the sidebar",
+    "description": "Notes' sidebar shows the notes you opened last under Recent, above the folders. Off, the sidebar shows only the folders.",
     "default": true
   },
   {

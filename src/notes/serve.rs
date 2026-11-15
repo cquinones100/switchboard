@@ -125,7 +125,7 @@ impl Command {
                 "There is only one Notes, since two would save the same notes over each other, so it is found wherever it has moved. A new one opens at the end of the tabs, named Notes."
             }
             Command::Beside => {
-                "The one Notes moves there, showing this tab's own note, and its own tab says which tab has it. Its list is put away beside another tab (Settings' \"Hide the sidebar beside a tab\")."
+                "The one Notes moves there, showing this tab's own note, and its own tab says which tab has it. Its sidebar is put away beside another tab (Settings' \"Hide the sidebar beside a tab\")."
             }
             Command::NoteTab => {
                 "With no tab linked, it asks which open tab is the note's, or opens a new one in a directory you pick. Notes then moves beside that tab's Claude (Settings' \"Notes beside a note's tab\")."

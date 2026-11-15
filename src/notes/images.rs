@@ -421,7 +421,7 @@ mod tests {
                 .unwrap();
         assert!(
             pattern.is_match(&rel),
-            "beside the note, in a folder the list leaves out, with no space in its path: {rel}"
+            "beside the note, in a folder the sidebar leaves out, with no space in its path: {rel}"
         );
         let name = rel.rsplit('/').next().unwrap().trim_end_matches(".png");
         assert_eq!(

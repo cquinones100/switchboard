@@ -6,9 +6,9 @@
 //! In a note:
 //!
 //! ```text
-//!   Ctrl-F             find a note (in the list too)
-//!   Ctrl-B             show or put away the list (in the list too)
-//!   Ctrl-Shift-P       every command, in a palette (in the list too); in the
+//!   Ctrl-F             find a note (in the sidebar too)
+//!   Ctrl-B             show or put away the sidebar (in the sidebar too)
+//!   Ctrl-Shift-P       every command, in a palette (in the sidebar too); in the
 //!                      workspace, its M-p, which lists them
 //!   Enter              tick a checklist item, fold a heading, follow a link
 //!   a click            the same, on a ☐, a heading's ▾ or a link
@@ -400,7 +400,7 @@ enum BarDrag {
 /// A note shown when there are none: what a note can do.
 pub const WELCOME: &str = "# Welcome to Notes
 
-This note shows what a note can do. Change it, or delete it from the list on the left with `dd`. Press Ctrl-P for the Format menu.
+This note shows what a note can do. Change it, or delete it from the sidebar on the left with `dd`. Press Ctrl-P for the Format menu.
 
 ## Formatting
 
@@ -469,7 +469,7 @@ pub const NOTE_KEYS: &[(&str, &str)] = &[
         "with UX 2.0: Add an item, Enter adding it to the top list, M-Enter having a new tab plan it",
     ),
     ("Ctrl-F", "find a note"),
-    ("Ctrl-B", "show or put away the list of notes"),
+    ("Ctrl-B", "show or put away the sidebar"),
     (
         "Ctrl-O  Ctrl-I",
         "back, forward through the places jumped from, across notes",
@@ -507,7 +507,7 @@ pub fn key_groups(easy: bool) -> Vec<(&'static str, Vec<(String, String)>)> {
     }
     vec![
         ("Notes: a note", note),
-        ("Notes: the list", owned(sidebar::KEYS)),
+        ("Notes: the sidebar", owned(sidebar::KEYS)),
     ]
 }
 
@@ -3012,7 +3012,7 @@ impl App {
             | PaletteAct::Restore
             | PaletteAct::Mark => {
                 if !on_note(self) {
-                    return self.say("notes: couldn't find the open note in the list");
+                    return self.say("notes: couldn't find the open note in the sidebar");
                 }
                 match act {
                     PaletteAct::Rename => self.rename(),

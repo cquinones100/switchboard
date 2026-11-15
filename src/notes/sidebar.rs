@@ -397,7 +397,7 @@ pub const KEYS: &[(&str, &str)] = &[
     ("Ctrl-F", "find a note"),
     (
         "Ctrl-B",
-        "put the list away (Ctrl-B again in a note shows it)",
+        "put the sidebar away (Ctrl-B again in a note shows it)",
     ),
     ("Ctrl-Shift-P", "every command, in a palette"),
     ("x", "clear the search or tag"),
@@ -582,11 +582,8 @@ mod tests {
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines[0], "Enter or click   open a note or folder, or");
         let at = lines.iter().position(|l| l.starts_with("Ctrl-B")).unwrap();
-        assert_eq!(
-            lines[at],
-            "Ctrl-B           put the list away (Ctrl-B again"
-        );
-        assert_eq!(lines[at + 1], "                 in a note shows it)");
+        assert_eq!(lines[at], "Ctrl-B           put the sidebar away (Ctrl-B");
+        assert_eq!(lines[at + 1], "                 again in a note shows it)");
         assert_eq!(
             lines.last(),
             Some(&"In a note, Ctrl-P opens the Format menu.")

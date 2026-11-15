@@ -98,7 +98,7 @@ fn command(
 pub fn commands(from_list: bool, in_note: bool, ux2: bool) -> Vec<Command> {
     let mut list = vec![
         command(
-            "Show or put away the list",
+            "Show or put away the sidebar",
             "Ctrl-B",
             "view",
             Act::ToggleList,
@@ -111,15 +111,15 @@ pub fn commands(from_list: bool, in_note: bool, ux2: bool) -> Vec<Command> {
             if from_list {
                 "Go to the note"
             } else {
-                "Go to the list"
+                "Go to the sidebar"
             },
             "Tab",
             "view",
             Act::OtherWindow,
         ),
-        command("Show the list's keys", "?", "view", Act::ListHelp),
+        command("Show the sidebar's keys", "?", "view", Act::ListHelp),
         command(
-            "Open what the list's cursor is on",
+            "Open what the sidebar's cursor is on",
             "Enter",
             "view",
             Act::OpenListItem,
@@ -325,13 +325,13 @@ mod tests {
             !from_list
                 .iter()
                 .any(|c| c.name.starts_with("Paragraph: Title")),
-            "no Format menu from the list"
+            "no Format menu from the sidebar"
         );
         remember(&file, "Find a note");
-        remember(&file, "Show or put away the list");
+        remember(&file, "Show or put away the sidebar");
         let shown = items(&from_note, &recent(&file));
         assert_eq!(
-            shown[0].text, "Show or put away the list",
+            shown[0].text, "Show or put away the sidebar",
             "the one picked last first"
         );
         assert_eq!(

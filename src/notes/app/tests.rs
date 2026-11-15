@@ -1634,19 +1634,19 @@ fn the_palette_runs_the_command_picked_where_it_was_opened() {
         "## Ship it",
         "the Format menu's Heading, on the cursor's line"
     );
-    keys(&mut app, "<Esc><C-S-p>Show or put away the list<CR>");
+    keys(&mut app, "<Esc><C-S-p>Show or put away the sidebar<CR>");
     assert!(!app.list_shown, "the list put away from a note");
     keys(&mut app, "<C-S-p>");
     let shown = screen(&mut app);
     assert!(
         shown
             .iter()
-            .any(|l| l.contains("Show or put away the list") && l.contains("Ctrl-B")),
+            .any(|l| l.contains("Show or put away the sidebar") && l.contains("Ctrl-B")),
         "the one picked last first, with its key"
     );
     keys(&mut app, "<Esc>");
     let recent = palette::recent(&app.recent_file);
-    assert_eq!(recent[0], "Show or put away the list");
+    assert_eq!(recent[0], "Show or put away the sidebar");
 }
 
 #[test]
@@ -2247,7 +2247,7 @@ fn ga_adds_an_item_to_the_end_of_the_top_list() {
     );
     assert_eq!(app.adding.as_deref(), Some("draft"));
     assert_eq!(
-        app.request(socket::Request::Run("Go to the list".into())),
+        app.request(socket::Request::Run("Go to the sidebar".into())),
         "ok"
     );
     assert_eq!(app.adding, None);
@@ -3114,7 +3114,7 @@ fn a_paste_with_the_plan_focused_and_going_to_the_list_leave_the_note_alone() {
     app.paste("pasted");
     assert!(!lines(&app).iter().any(|l| l.contains("pasted")));
     assert_eq!(
-        app.request(socket::Request::Run("Go to the list".into())),
+        app.request(socket::Request::Run("Go to the sidebar".into())),
         "ok"
     );
     assert!(app.beside.is_none());

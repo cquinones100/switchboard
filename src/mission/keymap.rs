@@ -489,7 +489,7 @@ mod tests {
         assert!(at("Sidebar") < at("Mission control"));
         assert!(at("Mission control") < at("M-d's diff"));
         assert!(at("M-d's diff") < at("Notes: a note"));
-        assert!(at("Notes: a note") < at("Notes: the list"));
+        assert!(at("Notes: a note") < at("Notes: the sidebar"));
         let bold = all.iter().find(|i| key_of(i) == Some("Space b")).unwrap();
         assert!(bold.title.starts_with("Bold"));
         assert!(!all.iter().any(|i| key_of(i) == Some("⌘S")));

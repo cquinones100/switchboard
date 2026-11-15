@@ -108,7 +108,7 @@ pub fn toolbar(x: u16, y: u16, cols: u16) -> Vec<(usize, Rect)> {
 pub fn key_help(mode: HelpMode) -> &'static str {
     match mode {
         HelpMode::Normal => {
-            "i type · Shift+arrows select · Ctrl-P format · Enter tick, fold or follow · Ctrl-F find · Ctrl-B list · Cmd-Z undo · Cmd-S save"
+            "i type · Shift+arrows select · Ctrl-P format · Enter tick, fold or follow · Ctrl-F find · Ctrl-B sidebar · Cmd-Z undo · Cmd-S save"
         }
         HelpMode::Insert => {
             "Esc stop typing · Shift+arrows select · Ctrl-P format · Tab indent · Enter next item · Cmd-Z undo"
