@@ -11,7 +11,7 @@
 //! as tmux's `window-size latest` did.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
@@ -1652,9 +1652,15 @@ impl Server {
             sidebar: self.sidebar_columns(cols),
         };
         let area = super::layout::capped(session.main_area(), super::layout::lone_width());
-        // In the directory asked from, while it is still there, else home.
+        // In the directory asked from, while it is still there, else home
+        // (or Settings' `new_tab_home` in its place).
         let dir = cwd.filter(|d| d.is_dir()).unwrap_or_else(paths::home);
-        let pane = self.spawn_pane(tab, Some(dir), None, area.width, area.height)?;
+        let dir = in_place_of_home(
+            Some(dir),
+            &paths::home(),
+            crate::settings::folder("new_tab_home"),
+        );
+        let pane = self.spawn_pane(tab, dir, None, area.width, area.height)?;
         self.tabs.insert(tab, new_tab(tab, pane));
         self.sessions.push(session);
         self.number_tabs();
@@ -1724,7 +1730,15 @@ impl Server {
             .get(&target)
             .map(|s| s.tab)
             .ok_or_else(|| anyhow!("no pane {target}"))?;
-        let cwd = cwd.or_else(|| self.pane_own_dir(target));
+        // A directory asked for is kept; one taken from the pane is a fresh
+        // start, which Settings' `new_tab_home` moves off home.
+        let cwd = cwd.or_else(|| {
+            in_place_of_home(
+                self.pane_own_dir(target),
+                &paths::home(),
+                crate::settings::folder("new_tab_home"),
+            )
+        });
         let area = self
             .session_of_tab(tab_id)
             .map(Session::main_area)
@@ -2886,7 +2900,14 @@ impl Server {
                 }
             }
             Action::NewTab => {
-                let cwd = pane.and_then(|p| self.pane_own_dir(p));
+                // A fresh start, so Settings' `new_tab_home` moves it off
+                // home; a tab reopened or resumed keeps the directory it
+                // names (`new_tab` itself changes none).
+                let cwd = in_place_of_home(
+                    pane.and_then(|p| self.pane_own_dir(p)),
+                    &paths::home(),
+                    crate::settings::folder("new_tab_home"),
+                );
                 if let Err(e) = self.new_tab(&session, cwd, None, None, Opened::Front) {
                     self.say(Some(id), &format!("Couldn't open a tab: {e}"));
                 }
@@ -4045,6 +4066,17 @@ fn fill_numbers(have: &[usize]) -> Vec<usize> {
         .collect()
 }
 
+/// Where a fresh tab or pane starts (`M-b c`, a split, the first tab):
+/// `dir`, unless it is the home folder and
+/// Settings' `new_tab_home` names a folder (`chosen`), since Claude Code
+/// never keeps its trust for the home folder and asks again each time.
+fn in_place_of_home(dir: Option<PathBuf>, home: &Path, chosen: Option<PathBuf>) -> Option<PathBuf> {
+    match (&dir, chosen) {
+        (Some(d), Some(chosen)) if d == home => Some(chosen),
+        _ => dir,
+    }
+}
+
 pub(super) fn new_tab(id: TabId, pane: PaneId) -> Tab {
     Tab {
         id,
@@ -4064,8 +4096,29 @@ pub(super) fn new_tab(id: TabId, pane: PaneId) -> Tab {
 
 #[cfg(test)]
 mod tests {
-    use super::{PaneId, Rect, Session, TabId, fill_numbers, new_tab};
+    use super::{PaneId, Rect, Session, TabId, fill_numbers, in_place_of_home, new_tab};
     use crate::mux::Direction;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn only_a_start_at_home_moves_to_the_chosen_folder() {
+        let home = Path::new("/home/me");
+        let chosen = || Some(PathBuf::from("/home/me/code"));
+        assert_eq!(
+            in_place_of_home(Some(home.into()), home, chosen()),
+            chosen()
+        );
+        let elsewhere = Some(PathBuf::from("/home/me/notes"));
+        assert_eq!(
+            in_place_of_home(elsewhere.clone(), home, chosen()),
+            elsewhere
+        );
+        assert_eq!(
+            in_place_of_home(Some(home.into()), home, None),
+            Some(home.into())
+        );
+        assert_eq!(in_place_of_home(None, home, chosen()), None);
+    }
 
     #[test]
     fn tabs_keep_their_numbers_and_the_rest_take_the_smallest_free() {

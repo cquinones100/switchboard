@@ -6,7 +6,7 @@
 //! here, and the server reads them again whenever the file changes.
 //!
 //! An option is on/off (a boolean default) or one of its `choices`, or for
-//! one with `typed` a number from its least typed in. A value in
+//! one with `typed` a number from its least, or a folder, typed in. A value in
 //! the file that is neither is ignored, and the default used. A setting
 //! renamed since it was saved (`RENAMED`) is read once as its new key and
 //! dropped from the file when the server starts (`migrate`), as the sidebar
@@ -31,22 +31,70 @@ pub struct Choice {
     pub label: String,
 }
 
-/// A whole number an option with choices also takes when typed in
-/// (`lone_pane_width`'s columns): the least it takes, the label of the
-/// menu option that asks for it, and the words after the number when it is
-/// shown ("columns").
+/// A value an option with choices also takes when typed in: a whole number
+/// (`lone_pane_width`'s columns) or a folder (`new_tab_home`). The kind,
+/// the least number it takes, the label of the menu option that asks for
+/// it, and the words after a number when it is shown ("columns").
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Typed {
+    #[serde(default)]
+    pub kind: TypedKind,
+    #[serde(default)]
     pub least: u64,
     pub label: String,
+    #[serde(default)]
     pub unit: String,
+}
+
+/// What a typed-in value is.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum TypedKind {
+    #[default]
+    Number,
+    /// A folder, written `~/...` or as an absolute path.
+    Folder,
 }
 
 impl Typed {
     /// The number `value` holds, written as the choices are (a string of
     /// digits), when it is one this takes.
     pub fn number(&self, value: &Value) -> Option<u64> {
+        if self.kind != TypedKind::Number {
+            return None;
+        }
         value.as_str()?.parse().ok().filter(|n| *n >= self.least)
+    }
+
+    /// The folder `value` names (`~/` read as the home), when this takes
+    /// a folder and it is written `~/...` or as an absolute path; whether
+    /// it is there is the caller's to ask.
+    pub fn folder(&self, value: &Value) -> Option<PathBuf> {
+        if self.kind != TypedKind::Folder {
+            return None;
+        }
+        let text = value.as_str()?.trim();
+        match text.strip_prefix("~/") {
+            Some(rest) => Some(paths::home().join(rest)),
+            None if text == "~" => Some(paths::home()),
+            None => Some(PathBuf::from(text)).filter(|p| p.is_absolute()),
+        }
+    }
+
+    /// Whether `value` is one this takes typed in.
+    pub fn takes(&self, value: &Value) -> bool {
+        self.number(value).is_some() || self.folder(value).is_some()
+    }
+
+    /// `value` as shown: the number and its unit, or the folder as written.
+    pub fn words(&self, value: &Value) -> Option<String> {
+        match self.kind {
+            TypedKind::Number => Some(format!("{} {}", self.number(value)?, self.unit)),
+            TypedKind::Folder => {
+                self.folder(value)?;
+                value.as_str().map(|t| t.trim().to_string())
+            }
+        }
     }
 }
 
@@ -77,10 +125,7 @@ impl Setting {
         match &self.choices {
             Some(choices) => {
                 choices.iter().any(|c| &c.value == value)
-                    || self
-                        .typed
-                        .as_ref()
-                        .is_some_and(|t| t.number(value).is_some())
+                    || self.typed.as_ref().is_some_and(|t| t.takes(value))
             }
             None => value.is_boolean(),
         }
@@ -108,10 +153,7 @@ impl Setting {
                 .iter()
                 .find(|c| c.value == self.value)
                 .map(|c| c.label.clone())
-                .or_else(|| {
-                    let typed = self.typed.as_ref()?;
-                    Some(format!("{} {}", typed.number(&self.value)?, typed.unit))
-                })
+                .or_else(|| self.typed.as_ref()?.words(&self.value))
                 .unwrap_or_else(|| util::js_string(&self.value)),
             None => if util::truthy(&self.value) {
                 "on"
@@ -267,6 +309,20 @@ pub fn cached(key: &str) -> Option<Value> {
         .iter()
         .find(|o| o.key == key)
         .map(|o| o.value.clone())
+}
+
+/// The folder a folder option names, from the cache, while it is one
+/// (`new_tab_home`): `None` while it is left at its default, or names
+/// something that isn't a folder.
+pub fn folder(key: &str) -> Option<PathBuf> {
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let settings = cache.get_or_insert_with(read_settings);
+    let option = settings.iter().find(|o| o.key == key)?;
+    option
+        .typed
+        .as_ref()?
+        .folder(&option.value)
+        .filter(|d| d.is_dir())
 }
 
 /// Gives one option `value` in the cache alone, not the file, for what is

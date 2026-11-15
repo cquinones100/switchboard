@@ -496,8 +496,8 @@ pub fn every_choice(option: &crate::settings::Setting) -> Vec<Choice> {
         .collect();
     if let Some(typed) = &option.typed {
         let a_choice_has_it = out.iter().any(|c| c.label.ends_with(" (now)"));
-        let label = match typed.number(&option.value) {
-            Some(n) if !a_choice_has_it => format!("{} ({n} {} now)", typed.label, typed.unit),
+        let label = match typed.words(&option.value) {
+            Some(now) if !a_choice_has_it => format!("{} ({now} now)", typed.label),
             _ => typed.label.clone(),
         };
         out.push(choice('#', label, Do::TypeSetting(option.key.clone())));

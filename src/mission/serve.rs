@@ -5332,24 +5332,30 @@ impl Server {
         self.mission_redraw();
     }
 
-    /// A setting's number typed in, starting from the one it has, for an
-    /// option that takes one besides its choices (`settings::Typed`).
+    /// A setting's number or folder typed in, starting from the one it
+    /// has, for an option that takes one besides its choices
+    /// (`settings::Typed`).
     fn type_setting(&mut self, client: ClientId, key: String) {
+        use settings::TypedKind;
         let Some(option) = settings::read_settings().into_iter().find(|o| o.key == key) else {
             return;
         };
         let Some(typed) = option.typed.clone() else {
             return;
         };
-        let now = typed
-            .number(&option.value)
-            .map(|n| n.to_string())
-            .unwrap_or_default();
-        let ask = Ask::new(
-            format!("{} ({})", option.label, typed.unit),
-            format!("A number from {}.", typed.least),
-        )
-        .text(now);
+        let (title, hint, now) = match typed.kind {
+            TypedKind::Number => (
+                format!("{} ({})", option.label, typed.unit),
+                format!("A number from {}.", typed.least),
+                typed.number(&option.value).map(|n| n.to_string()),
+            ),
+            TypedKind::Folder => (
+                option.label.clone(),
+                "A folder, as ~/... or an absolute path.".to_string(),
+                typed.words(&option.value),
+            ),
+        };
+        let ask = Ask::new(title, hint).text(now.unwrap_or_default());
         self.open(
             client,
             Box::new(ask),
@@ -5357,16 +5363,18 @@ impl Server {
                 let Outcome::Picked(p) = outcome else {
                     return;
                 };
-                let value = Value::from(p.value.trim());
-                if typed.number(&value).is_none() {
-                    server.mission_note(
-                        client,
-                        format!(
-                            "Not saved: {} isn't a number from {}",
-                            p.value.trim(),
-                            typed.least
-                        ),
-                    );
+                let given = p.value.trim();
+                let value = Value::from(given);
+                let refused = match typed.kind {
+                    TypedKind::Number => typed
+                        .number(&value)
+                        .is_none()
+                        .then(|| format!("Not saved: {given} isn't a number from {}", typed.least)),
+                    TypedKind::Folder => (!typed.folder(&value).is_some_and(|d| d.is_dir()))
+                        .then(|| format!("Not saved: {given} isn't a folder")),
+                };
+                if let Some(refused) = refused {
+                    server.mission_note(client, refused);
                     return;
                 }
                 server.set_setting_shown(client, &key, value);

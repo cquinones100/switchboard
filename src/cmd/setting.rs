@@ -89,7 +89,12 @@ fn value_of(option: &settings::Setting, given: &str) -> Option<Value> {
             .map(|c| c.value.clone())
             .or_else(|| {
                 let value = Value::from(given);
-                option.valid(&value).then_some(value)
+                let a_missing_folder = option
+                    .typed
+                    .as_ref()
+                    .and_then(|t| t.folder(&value))
+                    .is_some_and(|d| !d.is_dir());
+                (option.valid(&value) && !a_missing_folder).then_some(value)
             }),
     }
 }
@@ -105,6 +110,9 @@ fn takes(option: &settings::Setting) -> String {
                 .collect::<Vec<_>>()
                 .join(", ");
             match &option.typed {
+                Some(typed) if typed.kind == settings::TypedKind::Folder => {
+                    format!("{listed}, or a folder, ~/... or absolute")
+                }
                 Some(typed) => format!("{listed}, or a number from {}", typed.least),
                 None => listed,
             }
@@ -162,5 +170,16 @@ mod tests {
             "{}",
             takes(lone)
         );
+    }
+
+    #[test]
+    fn the_folder_for_new_tabs_takes_a_folder_that_is_there() {
+        let schema = settings::schema();
+        let home = schema.iter().find(|o| o.key == "new_tab_home").unwrap();
+        assert_eq!(value_of(home, "/"), Some(Value::from("/")));
+        assert_eq!(value_of(home, ""), Some(Value::from("")), "home again");
+        assert_eq!(value_of(home, "/no/such/folder/here"), None);
+        assert_eq!(value_of(home, "code"), None, "neither ~/ nor absolute");
+        assert!(takes(home).ends_with("or a folder, ~/... or absolute"));
     }
 }

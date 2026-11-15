@@ -188,7 +188,7 @@ The rest follow the prefix, `M-b`. While it waits for the next key, a `^` shows 
 |---|---|
 | `M-b d` | Detach, leaving everything running |
 | `M-b [` | Copy mode: scroll back through the pane's history, select and copy with the keyboard |
-| `M-b c` | New tab, a shell in the current pane's directory |
+| `M-b c` | New tab, a shell in the current pane's directory (from a pane at home, Settings' `new_tab_home` folder when one is set) |
 | `M-b x` | Close the pane |
 | `M-b z` | Zoom the pane in or out |
 | `M-b %` | Split the pane to the right |
@@ -2069,7 +2069,7 @@ What Switchboard keeps for itself is in `~/.local/state/switchboard/` (the socke
 
 ## Every setting
 
-Mission control's Settings view (`M-p`, then "Settings: turn the workspace's options on and off") lists every option below under its category; Enter or Space twice flips an on/off one, an option of choices listing every choice in its menu, and `/` filters them. A new feature comes with a setting, on unless it sends something of yours somewhere, so each part can be turned off for a plain workspace. `switchboard setting <key>` prints one's value, `switchboard setting <key> <value>` changes it (`on` or `off`, or one of its choices, or for `lone_pane_width` a number from 80; anything else is refused), and `--reset` gives it its default back.
+Mission control's Settings view (`M-p`, then "Settings: turn the workspace's options on and off") lists every option below under its category; Enter or Space twice flips an on/off one, an option of choices listing every choice in its menu, and `/` filters them. A new feature comes with a setting, on unless it sends something of yours somewhere, so each part can be turned off for a plain workspace. `switchboard setting <key>` prints one's value, `switchboard setting <key> <value>` changes it (`on` or `off`, or one of its choices, or for `lone_pane_width` a number from 80, or for `new_tab_home` a folder, `~/...` or absolute, that is there; anything else is refused), and `--reset` gives it its default back.
 
 ### Integrations
 
@@ -2211,6 +2211,7 @@ With UX 2.0 on, this category is named "Tabs and header".
 | Project colors (`accent_colors`) | on | A color of its own for each project's tab, made from its directory; off, every tab is gray |
 | Tab colors (`tab_colors`) | soft | The colors tabs take from their project, in the tab bar, the sidebar, the header and Claude's statusline: soft pastels, as the UX 2.0 canvas draws them, or the stronger colors from before. Each tab keeps its own hue either way |
 | A color a tab (`tab_colors_apart`) | on | Each tab gets the hue farthest from the open tabs' as it opens, a deeper shade of it when it is close to one, kept while it is open and through restarts, so tabs, and the Usage view's spend chart, tell apart. Off, a tab wears its directory's color, the same for every tab of one checkout |
+| Folder for new tabs instead of home (`new_tab_home`) | Home | A new tab, or a split, that would start in your home folder starts in this folder instead, as does the first tab when the workspace starts, while it is a folder: Claude Code asks whether to trust the home folder every time a session starts there, and a folder here is asked about once. A tab opened from a pane in another folder keeps that folder, and a session reopened or resumed keeps the folder it started in. Its menu's Folder… takes a folder typed in, `~/...` or absolute, refusing one that isn't there, as `switchboard setting new_tab_home <folder>` does. Home, the default, starts them at home |
 | Health light (`health_light`) | on | A red mark in the status bar when saves, the sidebar or the Slack relay quietly stop |
 
 ### Notes

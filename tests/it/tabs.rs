@@ -732,3 +732,100 @@ fn claude_s_statusline_draws_its_tab_s_hue() {
         "{line:?}"
     );
 }
+
+/// Settings' `new_tab_home`: a new tab (`M-b c`) from a pane at home
+/// starts in the folder it names instead, while that is a folder, since
+/// Claude Code asks to trust the home folder every time; one from a pane in
+/// another folder keeps it, and a tab asked for at home (a session resumed
+/// where it started) stays there.
+#[test]
+fn a_new_tab_from_home_starts_in_the_chosen_folder() {
+    let server =
+        TestServer::start_with_settings(r#"{"notifications": false, "new_tab_home": "~/code"}"#);
+    let home = server.home.canonicalize().unwrap();
+    let elsewhere = server.dir.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let elsewhere = elsewhere.canonicalize().unwrap();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+
+    client.type_text(&format!("cd {}\r", home.display()));
+    wait_current_dir(&server, &home);
+    assert_eq!(
+        pressed_new_tab_dir(&server),
+        home,
+        "while the folder is missing, home as before"
+    );
+    std::fs::create_dir_all(home.join("code")).unwrap();
+    assert_eq!(pressed_new_tab_dir(&server), home.join("code"));
+    client.type_text(&format!("cd {}\r", elsewhere.display()));
+    wait_current_dir(&server, &elsewhere);
+    assert_eq!(pressed_new_tab_dir(&server), elsewhere);
+
+    let out = server.ok(&["new-tab", "-d", "-c", home.to_str().unwrap()]);
+    let pane = out.split_whitespace().nth(1).unwrap().to_string();
+    assert_eq!(pane_dir(&server, &pane), home, "asked for at home");
+}
+
+/// Every pane in `list`, with whether it is the current tab's active one.
+fn panes(server: &TestServer) -> Vec<(Value, bool)> {
+    let list = server.list();
+    let mut out = Vec::new();
+    for s in list["sessions"].as_array().into_iter().flatten() {
+        for t in s["tabs"].as_array().into_iter().flatten() {
+            for p in t["panes"].as_array().into_iter().flatten() {
+                let current = t["current"] == true && p["active"] == true;
+                out.push((p.clone(), current));
+            }
+        }
+    }
+    out
+}
+
+/// Waits for the current pane to be in `dir`.
+fn wait_current_dir(server: &TestServer, dir: &Path) {
+    let deadline = common::deadline(Duration::from_secs(15));
+    while !panes(server)
+        .iter()
+        .any(|(p, current)| *current && p["cwd"] == dir.to_str().unwrap())
+    {
+        assert!(Instant::now() < deadline, "the current pane in {dir:?}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// The directory of the tab `press new-tab` opens from the current pane.
+fn pressed_new_tab_dir(server: &TestServer) -> PathBuf {
+    let before: Vec<Value> = panes(server)
+        .into_iter()
+        .map(|(p, _)| p["id"].clone())
+        .collect();
+    server.ok(&["press", "new-tab"]);
+    let deadline = common::deadline(Duration::from_secs(15));
+    loop {
+        if let Some((p, _)) = panes(server)
+            .into_iter()
+            .find(|(p, _)| !before.contains(&p["id"]))
+        {
+            return pane_dir(server, p["id"].as_str().unwrap());
+        }
+        assert!(Instant::now() < deadline, "the new tab");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// The directory pane `pane` is in, once `list` knows it.
+fn pane_dir(server: &TestServer, pane: &str) -> PathBuf {
+    let deadline = common::deadline(Duration::from_secs(15));
+    loop {
+        if let Some(cwd) = panes(server)
+            .into_iter()
+            .find(|(p, _)| p["id"] == pane)
+            .and_then(|(p, _)| p["cwd"].as_str().map(PathBuf::from))
+        {
+            return cwd;
+        }
+        assert!(Instant::now() < deadline, "pane {pane}'s directory");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}

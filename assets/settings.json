@@ -840,6 +840,23 @@
     "default": true
   },
   {
+    "key": "new_tab_home",
+    "category": "Tabs and status bar",
+    "label": "Folder for new tabs instead of home",
+    "description": "A new tab, or a split, that would start in your home folder starts in this folder instead, as does the first tab when the workspace starts, while it is a folder: Claude Code asks whether to trust the home folder every time a session starts there, and a folder here is asked about once. A tab opened from a pane in another folder keeps that folder. Home, the default, starts them at home",
+    "choices": [
+      {
+        "value": "",
+        "label": "Home"
+      }
+    ],
+    "typed": {
+      "kind": "folder",
+      "label": "Folder…"
+    },
+    "default": ""
+  },
+  {
     "key": "health_light",
     "category": "Tabs and status bar",
     "label": "Health light",
