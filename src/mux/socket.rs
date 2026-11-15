@@ -132,6 +132,7 @@ pub fn run_command(args: Vec<String>) -> ExitCode {
         cwd,
         pane,
         stdin,
+        by_hand: true,
     };
     let code = run_command_at(
         &socket_path(),
@@ -185,6 +186,7 @@ pub fn ask_within(
         cwd,
         pane,
         stdin,
+        by_hand: false,
     };
     exchange(&mut stream, &msg).ok()
 }
@@ -209,6 +211,7 @@ pub fn ask(args: &[&str]) -> Result<(i32, String, String)> {
         cwd,
         pane,
         stdin: None,
+        by_hand: false,
     };
     let (code, stdout, stderr) = exchange(&mut stream, &msg)?;
     Ok((
@@ -791,6 +794,7 @@ mod tests {
             cwd: PathBuf::from("/home/someone/repo"),
             pane: Some("%3".into()),
             stdin: Some(b"{\"hook_event_name\":\"Stop\"}".to_vec()),
+            by_hand: false,
         }
     }
 

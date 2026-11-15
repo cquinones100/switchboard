@@ -12,6 +12,7 @@ mod apply_actions;
 mod autopilot;
 mod awake;
 mod batch_tabs;
+mod by_hand;
 mod claude_here;
 mod claude_reply;
 mod codex_review;

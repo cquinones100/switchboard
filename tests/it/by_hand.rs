@@ -1,0 +1,103 @@
+// What a command typed by hand in a pane (by you in a shell, or by Claude's
+// Bash tool, which may run `switchboard set` and `switchboard respawn`
+// without asking) may do: set options on its own tab but Switchboard's own
+// marks, name another tab, and respawn its own tab's pane as one of the
+// worktree commands or Claude resuming a session; Switchboard's own programs
+// asking the same keep doing what they need.
+
+use crate::common::TestServer;
+
+/// The new tab's pane, from `new-tab`'s answer (`@<tab> %<pane>`).
+fn new_tab(server: &TestServer, name: &str) -> (String, String) {
+    let out = server.ok(&["new-tab", "-d", "-n", name]);
+    let mut ids = out.split_whitespace().map(str::to_string);
+    (ids.next().unwrap(), ids.next().unwrap())
+}
+
+fn shown(server: &TestServer, target: &str, name: &str) -> String {
+    server.ok(&["show", "-t", target, name]).trim().to_string()
+}
+
+#[test]
+fn a_command_typed_in_a_pane_sets_its_own_tab_and_no_marks_of_switchboards() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (_, mine) = new_tab(&server, "mine");
+    let (other_tab, other) = new_tab(&server, "other");
+
+    for (option, value) in [
+        ("@autopilot_land", "1"),
+        ("@autopilot_handsfree", "1"),
+        ("@allow_passthrough", "on"),
+        ("@notes_pane", "1"),
+    ] {
+        let (code, _, err) = server.typed_in(&mine, &["set", option, value]);
+        assert_eq!(code, 1, "{option}: {err}");
+        assert!(err.contains("Switchboard's own"), "{option}: {err}");
+        assert_eq!(shown(&server, &mine, option), "", "{option}");
+    }
+    client.wait_text("Switchboard's own");
+    let (code, _, err) = server.typed_in(&mine, &["set", "-u", "@autopilot_land"]);
+    assert_eq!(code, 1, "{err}");
+
+    // The landing's own mark, and anything else on its own tab, it sets.
+    server.typed_in(&mine, &["set", "@autopilot_pushed", "abc1234"]);
+    assert_eq!(shown(&server, &mine, "@autopilot_pushed"), "abc1234");
+    let (code, _, err) = server.typed_in(&mine, &["set", "@tab_note", "Mine.md"]);
+    assert_eq!(code, 0, "{err}");
+
+    // Another tab: its name alone.
+    let (code, _, err) = server.typed_in(&mine, &["set", "-t", &other_tab, "@tab_name", "x"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(shown(&server, &other_tab, "@tab_name"), "x");
+    for target in [other_tab.as_str(), other.as_str()] {
+        let (code, _, err) = server.typed_in(&mine, &["set", "-t", target, "@tab_note", "N.md"]);
+        assert_eq!(code, 1, "{target}: {err}");
+        assert!(err.contains("own tab only"), "{err}");
+    }
+    assert_eq!(shown(&server, &other_tab, "@tab_note"), "");
+
+    // Switchboard's own programs ask without typing it, as Notes marks its
+    // pane and sets another tab's note.
+    server.ok(&["set", "-t", &mine, "@allow_passthrough", "1"]);
+    server.ok(&["set", "-t", &other_tab, "@tab_note", "N.md"]);
+    assert_eq!(shown(&server, &other_tab, "@tab_note"), "N.md");
+}
+
+#[test]
+fn a_respawn_typed_in_a_pane_starts_only_the_worktree_commands_or_claude_resuming() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (_, mine) = new_tab(&server, "mine");
+    let (_, other) = new_tab(&server, "other");
+
+    let program = |words: &[&str]| {
+        let mut args = vec!["respawn-program", "-t"];
+        args.extend_from_slice(words);
+        args.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+    };
+    let typed = |words: Vec<String>| {
+        let words: Vec<&str> = words.iter().map(String::as_str).collect();
+        server.typed_in(&mine, &words)
+    };
+
+    let (code, _, err) = typed(program(&[&mine, "--", "sh", "-c", "echo pwned"]));
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("starts only wt, wtn, wtb or claude"), "{err}");
+    let (code, _, err) = typed(program(&[&other, "--", "claude", "--resume", "abc"]));
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("its own tab only"), "{err}");
+    // The raw command reaches no program typed in a pane either.
+    let (code, _, err) = server.typed_in(&mine, &["respawn-pane", "-k", "--", "sh", "-c", "id"]);
+    assert_eq!(code, 1, "{err}");
+    assert!(
+        !server.ok(&["capture-pane", "-t", &mine]).contains("pwned"),
+        "nothing it refused ran"
+    );
+
+    // Claude resuming a session, in its own tab, it starts.
+    let (code, _, err) = typed(program(&[&mine, "--", "claude", "--resume", "abc"]));
+    assert_eq!(code, 0, "{err}");
+}

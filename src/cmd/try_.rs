@@ -1149,6 +1149,7 @@ pub(crate) fn stop_server(socket: &Path) {
             cwd: PathBuf::from("/"),
             pane: None,
             stdin: None,
+            by_hand: false,
         }));
         let _ = proto::read_server(&mut stream);
         let deadline = Instant::now() + Duration::from_secs(3);

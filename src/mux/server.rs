@@ -109,6 +109,7 @@ pub enum Event {
         cwd: PathBuf,
         pane: Option<String>,
         stdin: Option<Vec<u8>>,
+        by_hand: bool,
         reply: oneshot::Sender<Answer>,
     },
     /// Time for a client's held ESC to count as the Escape key.
@@ -854,6 +855,7 @@ async fn connection(stream: tokio::net::UnixStream, tx: mpsc::UnboundedSender<Ev
             cwd,
             pane,
             stdin,
+            by_hand,
         } => {
             let (rtx, rrx) = oneshot::channel();
             if tx
@@ -862,6 +864,7 @@ async fn connection(stream: tokio::net::UnixStream, tx: mpsc::UnboundedSender<Ev
                     cwd,
                     pane,
                     stdin,
+                    by_hand,
                     reply: rtx,
                 })
                 .is_err()
@@ -1184,6 +1187,7 @@ impl Server {
                 cwd,
                 pane,
                 stdin,
+                by_hand,
                 reply,
             } => {
                 // Answered once the build it restarts on has taken over.
@@ -1199,7 +1203,7 @@ impl Server {
                     self.restore_layout_asked(super::persist::Asker::Command(reply), file);
                     return;
                 }
-                let answer = self.command(&args, &cwd, pane.as_deref(), stdin.as_deref());
+                let answer = self.command(&args, &cwd, pane.as_deref(), stdin.as_deref(), by_hand);
                 let _ = reply.send(Answer::Reply(answer));
             }
             Event::FlushInput(id) => {

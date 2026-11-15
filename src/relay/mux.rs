@@ -149,6 +149,7 @@ impl Server {
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
             pane: None,
             stdin: None,
+            by_hand: false,
         };
         stream.write_all(&proto::encode_client(&msg))?;
         loop {

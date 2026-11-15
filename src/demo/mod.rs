@@ -786,6 +786,7 @@ pub fn ask(home: &Path, args: &[&str]) -> Result<String> {
         cwd: home.to_path_buf(),
         pane: None,
         stdin: None,
+        by_hand: false,
     };
     let (mut out, mut err) = (Vec::new(), Vec::new());
     let code = crate::mux::socket::run_command_at(&socket_of(home), &msg, &mut out, &mut err);

@@ -345,6 +345,7 @@ impl TestServer {
                     cwd: PathBuf::from("/"),
                     pane: None,
                     stdin: None,
+                    by_hand: false,
                 }))
             });
             // Waits for it to end, killing it only past the deadline, so a
@@ -434,11 +435,23 @@ impl TestServer {
     /// the test's temporary directory and no pane: its code, what it printed
     /// and what it said went wrong, as the binary would exit and print them.
     pub fn ask(&self, args: &[&str]) -> (i32, String, String) {
+        self.ask_as(None, false, args)
+    }
+
+    /// A server command as `switchboard <args>` typed by hand in `pane`, by
+    /// a person in a shell or by Claude's Bash tool: its code, what it
+    /// printed and what it said went wrong.
+    pub fn typed_in(&self, pane: &str, args: &[&str]) -> (i32, String, String) {
+        self.ask_as(Some(pane), true, args)
+    }
+
+    fn ask_as(&self, pane: Option<&str>, by_hand: bool, args: &[&str]) -> (i32, String, String) {
         let msg = ClientMsg::Command {
             args: args.iter().map(|a| a.to_string()).collect(),
             cwd: self.dir.path().to_path_buf(),
-            pane: None,
+            pane: pane.map(str::to_string),
             stdin: None,
+            by_hand,
         };
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let code =

@@ -289,6 +289,18 @@ impl Args {
     }
 }
 
+/// Whether an option is one of Switchboard's own marks, which a command run
+/// by hand in a pane may not set or unset: autopilot's (`@autopilot_land`
+/// lets a landing push without asking, `@autopilot_handsfree` answers its
+/// questions), but `@autopilot_pushed`, which queue-and-clean sets once it
+/// has pushed, and what a pane's program may do (`respawn::PROGRAM_MARKS`:
+/// `@allow_passthrough` and `@notes_pane` pass its graphics commands, which
+/// can have the terminal read any file, to the terminal).
+pub fn own_mark(option: &str) -> bool {
+    super::respawn::PROGRAM_MARKS.contains(&option)
+        || (option.starts_with("@autopilot") && option != "@autopilot_pushed")
+}
+
 /// What a `-t` names.
 enum Target {
     Pane(PaneId),
@@ -296,13 +308,16 @@ enum Target {
 }
 
 impl Server {
-    /// Runs one command; `pane` is the caller's `SWITCHBOARD_PANE`.
+    /// Runs one command; `pane` is the caller's `SWITCHBOARD_PANE`, and
+    /// `by_hand` whether it was run as `switchboard <command>` from a
+    /// command line rather than asked by one of Switchboard's programs.
     pub fn command(
         &mut self,
         args: &[String],
         cwd: &Path,
         pane: Option<&str>,
         stdin: Option<&[u8]>,
+        by_hand: bool,
     ) -> Reply {
         let Some((name, rest)) = args.split_first() else {
             return Reply::fail("no command given");
@@ -315,6 +330,13 @@ impl Server {
         let caller = pane
             .and_then(|p| p.parse::<PaneId>().ok())
             .filter(|p| self.panes.contains_key(p));
+        // `respawn-program` is asked only by `switchboard respawn`, which is
+        // run by hand, whatever program asks it.
+        let typed_in_a_pane = pane.is_some() && (by_hand || name == "respawn-program");
+        if typed_in_a_pane && let Err(refusal) = self.refuse_by_hand(name, rest, caller) {
+            self.say(None, &refusal);
+            return Reply::fail(refusal);
+        }
         let result = match name.as_str() {
             "list" => Ok(Reply::ok(format!("{}\n", self.list()))),
             "sources" => Ok(self.sources_command(rest)),
@@ -328,6 +350,7 @@ impl Server {
             "new-tab" => self.cmd_new_tab(rest, cwd, caller),
             "split" => self.cmd_split(rest, cwd, caller),
             "respawn-pane" => self.cmd_respawn(rest, cwd, caller),
+            "respawn-program" => self.cmd_respawn_program(rest, cwd, caller),
             "send-keys" => self.cmd_send_keys(rest, caller),
             "capture-pane" => self.cmd_capture(rest, caller),
             "select-pane" => self.cmd_select_pane(rest, caller),
@@ -812,6 +835,90 @@ impl Server {
         Ok(Reply::ok(""))
     }
 
+    /// `respawn-program [-t pane] [-c dir] <program> [args...]`, what
+    /// `switchboard respawn` asks: the pane's program ended and `program`
+    /// started in its place, the worktree commands as their shell functions
+    /// (`respawn::command_for`), so the server knows which program it starts
+    /// and can hold one asked from a pane to those `respawn::allowed` names.
+    fn cmd_respawn_program(
+        &mut self,
+        rest: &[String],
+        cwd: &Path,
+        caller: Option<PaneId>,
+    ) -> Result<Reply, String> {
+        let a = Args::parse(rest, "tc")?;
+        let pane = self.pane_from(&a, caller)?;
+        let dir = a.value('c').map(|d| resolve(cwd, d));
+        let (program, args) = a.rest.split_first().ok_or("respawn: which program?")?;
+        let command = crate::cmd::respawn::command_for(program, args);
+        self.respawn_pane(pane, dir, Some(command), true)
+            .map_err(|e| format!("{e:#}"))?;
+        Ok(Reply::ok(""))
+    }
+
+    /// What a command run by hand in a pane, by you in a shell or by Claude
+    /// through its Bash tool, may not do, since Claude may run `switchboard
+    /// set` and `switchboard respawn` without asking: set Switchboard's own
+    /// marks (`own_mark`), set any option on another tab but its name, or
+    /// start any program but those `respawn::allowed` names, or in another
+    /// tab. Switchboard's own programs (Notes, the worktree commands, the
+    /// landing lock, the Slack relay) ask without `by_hand` and keep doing
+    /// what they need.
+    fn refuse_by_hand(
+        &self,
+        name: &str,
+        rest: &[String],
+        caller: Option<PaneId>,
+    ) -> Result<(), String> {
+        let own_tab = caller.and_then(|p| self.panes.get(&p)).map(|slot| slot.tab);
+        let tab_of = |pane: PaneId| self.panes.get(&pane).map(|slot| slot.tab);
+        match name {
+            "set" => {
+                let a = Args::parse(rest, "t")?;
+                let Some(option) = a.rest.first() else {
+                    return Ok(());
+                };
+                if own_mark(option) {
+                    return Err(format!(
+                        "switchboard set: {option} is Switchboard's own to set, not a command's typed in a pane"
+                    ));
+                }
+                let tab = match self.option_target(&a, caller, option)? {
+                    Target::Pane(p) => tab_of(p),
+                    Target::Tab(t) => Some(t),
+                };
+                if tab != own_tab && option != "@tab_name" {
+                    return Err(format!(
+                        "switchboard set: a command typed in a pane sets {option} on its own tab only (another tab's @tab_name alone)"
+                    ));
+                }
+                Ok(())
+            }
+            "respawn-pane" | "respawn-program" => {
+                let a = Args::parse(rest, "tc")?;
+                if tab_of(self.pane_from(&a, caller)?) != own_tab {
+                    return Err(
+                        "switchboard respawn: a command typed in a pane respawns a pane of its own tab only"
+                            .into(),
+                    );
+                }
+                let allowed = match a.rest.split_first() {
+                    None => true,
+                    Some(_) if name == "respawn-pane" => false,
+                    Some((program, args)) => crate::cmd::respawn::allowed(program, args),
+                };
+                if !allowed {
+                    return Err(format!(
+                        "switchboard respawn: a command typed in a pane starts only {}",
+                        crate::cmd::respawn::ALLOWED
+                    ));
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
     fn cmd_send_keys(&mut self, rest: &[String], caller: Option<PaneId>) -> Result<Reply, String> {
         let a = Args::parse(rest, "t")?;
         let pane = self.pane_from(&a, caller)?;
@@ -1036,6 +1143,27 @@ fn resolve(cwd: &Path, dir: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn switchboards_own_marks_are_autopilots_but_the_landings_and_a_programs() {
+        for mark in [
+            "@autopilot_land",
+            "@autopilot_handsfree",
+            "@autopilot",
+            "@allow_passthrough",
+            "@notes_pane",
+        ] {
+            assert!(own_mark(mark), "{mark}");
+        }
+        for option in [
+            "@autopilot_pushed",
+            "@tab_name",
+            "@tab_note",
+            "@agent_phase",
+        ] {
+            assert!(!own_mark(option), "{option}");
+        }
+    }
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()

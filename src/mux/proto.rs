@@ -79,6 +79,13 @@ pub enum ClientMsg {
         cwd: PathBuf,
         pane: Option<String>,
         stdin: Option<Vec<u8>>,
+        /// Whether it was run by hand as `switchboard <command>` from a
+        /// command line, a person's or Claude's, rather than asked by one of
+        /// Switchboard's own programs: one run so from a pane can't set
+        /// Switchboard's own marks or reach another tab
+        /// (`commands::refuse_by_hand`). An older client never says so.
+        #[serde(default)]
+        by_hand: bool,
     },
 }
 
@@ -105,6 +112,7 @@ pub fn encode_client(msg: &ClientMsg) -> Vec<u8> {
             cwd,
             pane,
             stdin,
+            by_hand,
         } if cwd.to_str().is_none() => {
             // JSON has no way to carry a path that isn't UTF-8, and serde
             // refuses one rather than guess, so a directory with such a name
@@ -115,6 +123,7 @@ pub fn encode_client(msg: &ClientMsg) -> Vec<u8> {
                 cwd: PathBuf::from(cwd.to_string_lossy().into_owned()),
                 pane: pane.clone(),
                 stdin: stdin.clone(),
+                by_hand: *by_hand,
             };
             frame(TAG_JSON, &json(&lossy))
         }
@@ -342,12 +351,14 @@ mod tests {
                 cwd: PathBuf::from("/home/someone/repo é"),
                 pane: Some("%12".into()),
                 stdin: Some(b"{\"session_id\":\"x\"}\n".to_vec()),
+                by_hand: false,
             },
             ClientMsg::Command {
                 args: Vec::new(),
                 cwd: PathBuf::from("/"),
                 pane: None,
                 stdin: None,
+                by_hand: false,
             },
         ]
     }
@@ -643,6 +654,7 @@ mod tests {
             cwd,
             pane: None,
             stdin: None,
+            by_hand: false,
         };
         let back = read_client(&mut Cursor::new(encode_client(&msg))).unwrap();
         match back {
