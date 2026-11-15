@@ -3,7 +3,9 @@
 //! its key does. The list is read from the bindings, not kept anywhere: each
 //! action's note (`Action::note`, its words and `#tags`) is what the palette
 //! shows, its keys in a column of their own, Shift spelled out (`M-S-L`), and
-//! actions no key is bound to (`Action::palette_only`) are listed with none.
+//! actions no key is bound to (`Action::palette_only`) are listed with none,
+//! and so is a default key's action that keys.json unbinds or binds its key
+//! over, so changing a default never takes a command out of the palette.
 //!
 //! The commands picked last come first, newest first (`recent`, the last
 //! six); the rest follow by description. As you type, a command picked
@@ -160,6 +162,10 @@ pub fn entries(
     }
     for action in Action::palette_only() {
         add(&action, None, false);
+    }
+    let defaults = Bindings::default();
+    for action in defaults.root.values().chain(defaults.prefix.values()) {
+        add(action, None, false);
     }
     by_action.extend(plugins.iter().map(|p| {
         let action = Action::Extra(crate::extras::Command::Mission(ViewId::Plugin(
@@ -454,6 +460,19 @@ mod tests {
         list.iter()
             .map(|(v, t)| (v.to_string(), t.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn a_default_keys_action_stays_listed_when_keys_json_takes_its_key() {
+        let mut bindings = Bindings::default();
+        let read = Action::View(crate::views::Command::ReadLink);
+        bindings.apply(&serde_json::json!({"root": {"M-u": null}}));
+        let all = entries(&bindings, true, true, &[]);
+        let entry = all.iter().find(|e| e.action == read).unwrap();
+        assert!(entry.keys.is_empty(), "{:?}", entry.keys);
+        bindings.apply(&serde_json::json!({"root": {"M-u": "new-tab"}}));
+        let all = entries(&bindings, true, true, &[]);
+        assert!(all.iter().any(|e| e.action == read));
     }
 
     #[test]

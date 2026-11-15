@@ -8,7 +8,8 @@
 //! with no tmux-version file behind it.
 //!
 //! Each key is the one bound now (keys.json over the defaults); a thing
-//! no key is bound to shows its name alone. The PR's and the ticket's
+//! no key is bound to (a default keys.json unbinds) shows its name alone,
+//! from where the keys start, so no blank key column reads as a key missing. The PR's and the ticket's
 //! rows show only when the tab has one (the ticket as M-i finds it) and its
 //! service is on. A row does what its key does, and is a
 //! click, lit under the mouse, through the header's keys
@@ -141,10 +142,10 @@ pub fn draw(
     let widest = keyed
         .iter()
         .map(|(beside, key)| {
-            let key = key
-                .as_deref()
-                .map_or(0, |k| kit::spans_width(&cap(k, caps, theme)));
-            (key + 1).max(KEY_COLS) + crate::ui::draw::width(beside.label())
+            let label = crate::ui::draw::width(beside.label());
+            key.as_deref().map_or(label, |k| {
+                (kit::spans_width(&cap(k, caps, theme)) + 1).max(KEY_COLS) + label
+            })
         })
         .max()
         .unwrap_or(0)
@@ -180,13 +181,12 @@ pub fn draw(
         let y = top + 2 + 2 * i as u16;
         let lit = hover == Some(*beside);
         let mut spans = vec![Span::raw(" ")];
-        let mut used = 0;
         if let Some(key) = key {
             let keycap = cap(key, caps, theme);
-            used = kit::spans_width(&keycap);
+            let used = kit::spans_width(&keycap);
             spans.extend(keycap);
+            spans.push(Span::raw(" ".repeat(KEY_COLS.saturating_sub(used).max(1))));
         }
-        spans.push(Span::raw(" ".repeat(KEY_COLS.saturating_sub(used).max(1))));
         let text = if lit {
             Tone::Text.bold(theme)
         } else {
@@ -237,7 +237,7 @@ mod tests {
         let mut bindings = Bindings::default();
         let (keyed, last) = lines(&bindings, &rows(false, false));
         assert_eq!(keyed[0].1.as_deref(), Some("M-e"));
-        assert_eq!(keyed[2].1, None, "reading a link has no key");
+        assert_eq!(keyed[2].1.as_deref(), Some("M-u"));
         assert!(last.contains("C-M-S-l"), "{last}");
         bindings.apply(&serde_json::json!({"root": {"M-e": null, "M-n": "notes-beside"}}));
         let (keyed, _) = lines(&bindings, &rows(false, false));
@@ -246,6 +246,34 @@ mod tests {
             .apply(&serde_json::json!({"root": {"M-n": null}, "prefix": {"e": "notes-beside"}}));
         let (keyed, _) = lines(&bindings, &rows(false, false));
         assert_eq!(keyed[0].1.as_deref(), Some("M-b e"));
+    }
+
+    #[test]
+    fn a_row_with_no_key_starts_its_label_where_the_keys_start() {
+        let bindings = Bindings::default();
+        let (mut keyed, last) = lines(&bindings, &rows(false, false));
+        keyed[2].1 = None;
+        let mut buf = Buffer::empty(Rect::new(0, 0, 120, 40));
+        let hits = draw(
+            &mut buf,
+            Rect::new(40, 0, 80, 40),
+            &keyed,
+            &last,
+            None,
+            true,
+            &Theme::DARK,
+        );
+        let row = |i: usize| {
+            let at = hits[i].0;
+            (at.x..at.right())
+                .map(|x| buf[(x, at.y)].symbol().to_string())
+                .collect::<String>()
+        };
+        let note = row(0);
+        let link = row(2);
+        let keys_start = note.find(|c: char| c != ' ').unwrap();
+        assert!(note[keys_start..].contains("M-e"), "{note}");
+        assert_eq!(link.find("Read a link").unwrap(), keys_start, "{link}");
     }
 
     #[test]

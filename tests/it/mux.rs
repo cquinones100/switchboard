@@ -1159,7 +1159,8 @@ fn the_spare_columns_beside_a_capped_pane_list_what_can_open_there() {
     assert!(screen[note_y].contains("M-e"), "{}", screen[note_y]);
     assert!(note_x > side + 166);
     assert!(cell_of(&screen, "The PR").is_none());
-    assert!(cell_of(&screen, "Read a link beside it").is_some());
+    let (_, link_y) = cell_of(&screen, "Read a link beside it").unwrap();
+    assert!(screen[link_y].contains("M-u"), "{}", screen[link_y]);
     assert!(cell_of(&screen, "C-M-S-l to widen").is_some());
     // A click on a row does what its key does.
     let (sx, sy) = cell_of(&screen, "Split to the right").unwrap();

@@ -4,7 +4,7 @@
 //! next idle tab, M-c to the tab's Claude, M-y to copy its latest reply,
 //! M-f to pin a tab), M-h for the tab's history (new with UX 2.0,
 //! src/history), M-s into the sidebar and the views'
-//! (M-v, M-i, M-r, M-l, M-m, M-S-f, src/views), M-d (src/diff) and Notes'
+//! (M-v, M-i, M-r, M-l, M-m, M-S-f, M-u, src/views), M-d (src/diff) and Notes'
 //! M-N and M-e (src/notes/serve.rs), M-0 and C-w (src/extras), under the
 //! same keys, with the prefix `M-b` for the rest;
 //! `~/.config/switchboard/keys.json` adds to or changes them:
@@ -138,8 +138,8 @@ pub enum Action {
     /// The tab closed most recently opened again, as a browser's
     /// Cmd-Shift-T does (M-T; src/usage/serve.rs's `reopen_last`).
     ReopenLastTab,
-    /// What the views do: M-v, M-i, M-r, M-l, M-m, M-S-f and the link
-    /// commands (src/views).
+    /// What the views do: M-v, M-i, M-r, M-l, M-m, M-S-f, M-u and the
+    /// link commands (src/views).
     View(crate::views::Command),
     /// What the diff does: M-d, and the palette's commands for a tool in a
     /// pane's place and for the diff open in it (src/diff).

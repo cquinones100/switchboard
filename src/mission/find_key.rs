@@ -623,11 +623,11 @@ mod tests {
         assert!(shown.contains("default"), "{shown}");
         assert!(shown.contains("212 this week"), "{shown}");
         assert!(!shown.contains("Before it"), "{shown}");
-        f.key(key("M-u"), &look);
+        f.key(key("M-g"), &look);
         f.key(key("M-j"), &look);
         let shown = text(&mut f);
         assert!(
-            shown.contains("Before it, M-u: nothing bound; keys.json can bind it"),
+            shown.contains("Before it, M-g: nothing bound; keys.json can bind it"),
             "{shown}"
         );
     }

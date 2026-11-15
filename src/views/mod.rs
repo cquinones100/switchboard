@@ -345,13 +345,13 @@ impl Command {
             Command::OpenTicket => Some("M-l"),
             Command::PrReady => Some("M-m"),
             Command::Search => Some("M-F"),
+            Command::ReadLink => Some("M-u"),
             Command::OpenRepo
             | Command::SearchTabs
             | Command::SearchNotes
             | Command::SearchLinear
             | Command::SearchGitHub
             | Command::SearchSlack
-            | Command::ReadLink
             | Command::OpenLinkRead
             | Command::OpenLink
             | Command::CopyLink
