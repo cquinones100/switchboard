@@ -725,7 +725,13 @@ fn alerts_come_once_per_state_change_with_the_screen_for_a_wait() {
         format!("🤖 **Tab {index}, work** is **waiting on you**.")
     );
     assert!(posts[2].mention);
-    assert!(posts[3].body.contains("has finished"));
+    assert!(
+        posts[3]
+            .body
+            .starts_with("Finished.\n\n> edit the config\n\nEdited.")
+    );
+    assert!(!posts[3].body.contains("Reply here"));
+    assert_eq!(posts[3].thread.as_ref(), Some(home));
     assert!(!posts[3].body.contains("On screen now:"));
     assert!(
         !posts[3].mention,
@@ -767,7 +773,7 @@ fn with_other_turns_on_a_turn_another_tabs_message_started_is_posted_with_who_se
     let finished: Vec<_> = rig
         .posts()
         .into_iter()
-        .filter(|p| p.body.contains("has finished"))
+        .filter(|p| p.body.starts_with("Finished."))
         .collect();
     assert_eq!(finished.len(), 1);
     let body = &finished[0].body;
@@ -803,7 +809,7 @@ fn alert_run(rig: &Rig) {
 fn finished_posts(rig: &Rig) -> usize {
     rig.posts()
         .iter()
-        .filter(|p| p.body.contains("has finished"))
+        .filter(|p| p.body.starts_with("Finished."))
         .count()
 }
 
@@ -1944,7 +1950,7 @@ fn a_finished_turn_that_asks_gets_quick_replies_and_a_stale_one_isnt_typed() {
     let turn = rig
         .posts()
         .into_iter()
-        .find(|p| p.body.contains("has finished"))
+        .find(|p| p.body.starts_with("Finished."))
         .unwrap();
     let names: Vec<&str> = turn
         .buttons
@@ -2187,7 +2193,7 @@ fn a_turn_ending_in_the_tab_in_front_of_you_still_goes_in_its_thread_once() {
     let finished: Vec<_> = rig
         .posts()
         .into_iter()
-        .filter(|p| p.body.contains("has finished"))
+        .filter(|p| p.body.starts_with("Finished."))
         .collect();
     assert_eq!(finished.len(), 1);
     assert!(finished[0].body.contains("> look\n\nLooked."));
@@ -2198,7 +2204,7 @@ fn a_turn_ending_in_the_tab_in_front_of_you_still_goes_in_its_thread_once() {
     assert_eq!(
         rig.posts()
             .iter()
-            .filter(|p| p.body.contains("has finished"))
+            .filter(|p| p.body.starts_with("Finished."))
             .count(),
         1
     );
@@ -3415,7 +3421,7 @@ fn a_turn_says_how_full_its_context_is_and_past_90_its_thread_is_told_once() {
     let finished = rig
         .posts()
         .into_iter()
-        .find(|p| p.body.contains("has finished"))
+        .find(|p| p.body.starts_with("Finished."))
         .unwrap();
     assert!(
         finished
@@ -3533,7 +3539,7 @@ fn a_turn_in_a_tab_you_arent_looking_at_is_posted_once() {
     assert_eq!(
         rig.posts()
             .iter()
-            .filter(|p| p.body.contains("has finished"))
+            .filter(|p| p.body.starts_with("Finished."))
             .count(),
         1
     );
@@ -4726,7 +4732,7 @@ fn an_autopilot_tab_under_landings_posts_its_waits_but_not_its_turns() {
     let finished: Vec<_> = rig
         .posts()
         .into_iter()
-        .filter(|p| p.body.contains("has finished"))
+        .filter(|p| p.body.starts_with("Finished."))
         .collect();
     assert_eq!(finished.len(), 1);
     let mine_home = rig.cx.state.borrow().homes[&mine].ts.clone();
@@ -4795,7 +4801,7 @@ fn a_full_context_is_warned_of_with_finished_turns_off() {
     rig.set_state(&tab, "done", "100");
     alert_now(&rig);
     let posts = rig.posts();
-    assert!(posts.iter().all(|p| !p.body.contains("has finished")));
+    assert!(posts.iter().all(|p| !p.body.starts_with("Finished.")));
     assert!(
         posts
             .iter()

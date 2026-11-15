@@ -424,13 +424,21 @@ async fn alert(cx: &Cx, due: Due) {
             closed: false,
         };
         let context = tabs::context_of(&cx.paths, transcript.as_deref());
-        let who = if in_own_thread(cx, &tab.id, home.as_deref(), false) {
-            "Claude".to_string()
+        let own_thread = in_own_thread(cx, &tab.id, home.as_deref(), false);
+        // A finished turn in its tab's own thread, whose header already names
+        // the tab, leads with its reply; a wait still says what it waits on.
+        let heading = if own_thread && !waiting {
+            "Finished.".to_string()
         } else {
-            format!("**Tab {}, {}**", tab.index, tab.name)
+            let who = if own_thread {
+                "Claude".to_string()
+            } else {
+                format!("**Tab {}, {}**", tab.index, tab.name)
+            };
+            format!("🤖 {who} {what}. Reply here to answer it.")
         };
         let text = format!(
-            "🤖 {who} {what}. Reply here to answer it.\n\n{turn}{shown}{}",
+            "{heading}\n\n{turn}{shown}{}",
             context_footer(context.as_ref())
         );
         if found.is_some() {
