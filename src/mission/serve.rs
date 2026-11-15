@@ -5995,8 +5995,7 @@ impl Server {
                         let kept = tokio::task::spawn_blocking(move || {
                             let mut kept = Vec::new();
                             for path in paths {
-                                let text = path.to_string_lossy().into_owned();
-                                let Some((main, _)) = text.split_once("/.claude/worktrees/") else {
+                                let Some((main, path)) = merged_worktree(&path) else {
                                     continue;
                                 };
                                 let mut git = std::process::Command::new("git");
@@ -6034,6 +6033,44 @@ impl Server {
             },
         );
     }
+}
+
+/// A merged tab's worktree and the directory its removal is run from,
+/// asked of git while it is there, wherever it was made (a repository's
+/// `.claude/worktrees`, a folder `wt` was given, the demo's
+/// `~/code/worktrees`) and wherever its git directory is (a clone made with
+/// `--separate-git-dir` too): the repository's shared git directory, which
+/// `git worktree remove` runs from, and the top of the worktree the tab is
+/// in; else, gone already, from a `.claude/worktrees` path, which is pruned.
+/// `None` for a tab in the main clone, whose git directory is the shared
+/// one, so it is never removed. Runs git, so only off the server's task.
+fn merged_worktree(path: &Path) -> Option<(PathBuf, PathBuf)> {
+    if path.exists() {
+        let out = util::output_of(std::process::Command::new("git").arg("-C").arg(path).args([
+            // No --path-format=absolute, which git before 2.31 lacks: a
+            // relative answer is resolved against the folder asked.
+            "rev-parse",
+            "--show-toplevel",
+            "--git-dir",
+            "--git-common-dir",
+        ]))
+        .ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        let real = |p: &str| {
+            let p = path.join(p.trim());
+            p.canonicalize().unwrap_or(p)
+        };
+        let mut lines = text.lines();
+        let (root, own, common) = (
+            real(lines.next()?),
+            real(lines.next()?),
+            real(lines.next()?),
+        );
+        return (own != common).then_some((common, root));
+    }
+    let text = path.to_string_lossy();
+    text.split_once("/.claude/worktrees/")
+        .map(|(main, _)| (PathBuf::from(main), path.to_path_buf()))
 }
 
 /// An error's first line, for a note.
@@ -7557,6 +7594,95 @@ mod tests {
     use crate::mux::TabId;
     use crate::sidebar::model::TabModel;
     use crate::sidebar::model::tests::rules;
+
+    #[test]
+    fn a_merged_tabs_worktree_is_found_from_git_wherever_it_was_made() {
+        let dir = std::env::temp_dir().join(format!("sb-merged-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let main = dir.join("repo");
+        let elsewhere = dir.join("worktrees/abc-1-thing");
+        std::fs::create_dir_all(&main).unwrap();
+        let git = |at: &Path, args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .arg("-C")
+                .arg(at)
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+                .args(args)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&main, &["init", "-q", "-b", "main"]);
+        git(&main, &["commit", "-q", "--allow-empty", "-m", "start"]);
+        git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "abc-1",
+                &elsewhere.to_string_lossy(),
+            ],
+        );
+        std::fs::create_dir_all(elsewhere.join("src")).unwrap();
+        let real = |p: &Path| p.canonicalize().unwrap();
+
+        // A worktree outside .claude/worktrees, from its top or a folder in it.
+        let expected = Some((real(&main.join(".git")), real(&elsewhere)));
+        assert_eq!(merged_worktree(&elsewhere), expected);
+        assert_eq!(merged_worktree(&elsewhere.join("src")), expected);
+        // The main clone itself is never removed.
+        assert_eq!(merged_worktree(&main), None);
+        // A clone whose git directory is kept apart from it.
+        let apart = dir.join("apart");
+        let meta = dir.join("apart-meta");
+        let apart_wt = apart.join(".claude/worktrees/abc-3");
+        std::fs::create_dir_all(&apart).unwrap();
+        git(
+            &dir,
+            &[
+                "init",
+                "-q",
+                "-b",
+                "main",
+                "--separate-git-dir",
+                &meta.to_string_lossy(),
+                &apart.to_string_lossy(),
+            ],
+        );
+        git(&apart, &["commit", "-q", "--allow-empty", "-m", "start"]);
+        git(
+            &apart,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "abc-3",
+                &apart_wt.to_string_lossy(),
+            ],
+        );
+        assert_eq!(
+            merged_worktree(&apart_wt),
+            Some((real(&meta), real(&apart_wt)))
+        );
+        assert_eq!(merged_worktree(&apart), None);
+        // git removes each from the directory given.
+        for wt in [&elsewhere, &apart_wt] {
+            let (from, top) = merged_worktree(wt).unwrap();
+            git(&from, &["worktree", "remove", &top.to_string_lossy()]);
+            assert!(!wt.exists(), "{}", wt.display());
+        }
+        // A worktree already gone is pruned from its .claude/worktrees path.
+        let gone = main.join(".claude/worktrees/abc-2-gone");
+        assert_eq!(merged_worktree(&gone), Some((main.clone(), gone.clone())));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn calendar_mission() -> Mission {
         let event = |id: &str, title: &str, h: i64, extra: serde_json::Value| {

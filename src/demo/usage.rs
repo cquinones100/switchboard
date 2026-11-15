@@ -68,16 +68,19 @@ struct Tab {
     weight: f64,
 }
 
-/// The demo's tabs that run Claude, as `super::tabs` opens them (its home
-/// tab is 1), and one closed before today.
+/// The demo's tabs that run its agent, numbered as `super::tabs` opens
+/// them (its shell tab is 1, so the first of them is 2), and one closed
+/// before today, numbered past the last.
 fn tabs(home: &Path) -> Vec<Tab> {
-    let weights = [1.0, 0.7, 0.35];
-    let mut out: Vec<Tab> = super::tabs(home, Path::new("switchboard"))
+    let weights = [1.0, 0.7, 0.35, 0.6, 0.45, 0.3, 0.25, 0.2];
+    let opened = super::tabs(home, Path::new("switchboard"));
+    let closed_index = opened.len() + 2;
+    let mut out: Vec<Tab> = opened
         .into_iter()
-        .filter(|(_, _, program)| program.first().is_some_and(|p| p == "claude"))
-        .zip(weights)
         .enumerate()
-        .map(|(i, ((name, dir, _), weight))| Tab {
+        .filter(|(_, (_, _, program))| program.first().is_some_and(|p| p == "claude"))
+        .zip(weights.into_iter().cycle())
+        .map(|((i, (name, dir, _)), weight)| Tab {
             index: i + 2,
             name,
             color: accent_color_of(&dir, Shade::of(None)).hex(),
@@ -85,13 +88,16 @@ fn tabs(home: &Path) -> Vec<Tab> {
         })
         .collect();
     out.push(Tab {
-        index: out.len() + 3,
-        name: "Fix the avatar upload on Safari".into(),
+        index: closed_index,
+        name: CLOSED.into(),
         color: "#9ad1b5".into(),
         weight: 0.5,
     });
     out
 }
+
+/// The tab closed before today.
+const CLOSED: &str = "Trim the onboarding checklist";
 
 /// Lays out the usage files under the state directory, `now_ms` being
 /// when the demo is laid out.
@@ -157,10 +163,10 @@ pub fn lay_out(state: &Path, home: &Path, now_ms: i64) -> Result<()> {
         for tab in &tabs {
             // The closed tab ran early in the week, the dark mode tab only
             // these last days.
-            let ran = if tab.index > open.len() + 1 {
+            let ran = if tab.name == CLOSED {
                 back >= 3
             } else {
-                tab.index != 3 || back <= 3
+                tab.name != "Dark mode toggle" || back <= 3
             };
             if !ran {
                 continue;

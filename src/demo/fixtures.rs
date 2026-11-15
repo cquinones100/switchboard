@@ -138,6 +138,38 @@ pub const PRS: &[Pr] = &[
     },
     Pr {
         repo: "api",
+        number: 130,
+        title: "Unstick the password reset email queue",
+        branch: "abc-20-reset-email-queue",
+        state: "OPEN",
+        draft: false,
+        review: "REVIEW_REQUIRED",
+        checks: Checks::Passing,
+        queued: None,
+        additions: 64,
+        deletions: 12,
+        reviewers: &["jonas"],
+        body: "The email worker retries a failed send after a minute rather than holding the queue.\n\nCloses ABC-20.",
+        hours_ago: 1,
+    },
+    Pr {
+        repo: "web",
+        number: 345,
+        title: "Export the billing history as CSV",
+        branch: "abc-21-billing-csv",
+        state: "OPEN",
+        draft: false,
+        review: "REVIEW_REQUIRED",
+        checks: Checks::Running,
+        queued: None,
+        additions: 142,
+        deletions: 8,
+        reviewers: &["priya"],
+        body: "A button on the billing page that downloads every invoice as CSV.\n\nCloses ABC-21.",
+        hours_ago: 2,
+    },
+    Pr {
+        repo: "api",
         number: 121,
         title: "Move sessions to Redis",
         branch: "abc-9-sessions-redis",
@@ -184,7 +216,28 @@ pub const PRS: &[Pr] = &[
         body: "Safari sends the file without a type; it is read from its first bytes instead.",
         hours_ago: 22,
     },
+    Pr {
+        repo: "web",
+        number: 336,
+        title: "Show the invoice number on receipts",
+        branch: "abc-8-invoice-numbers",
+        state: "MERGED",
+        draft: false,
+        review: "APPROVED",
+        checks: Checks::Passing,
+        queued: None,
+        additions: 34,
+        deletions: 3,
+        reviewers: &["theo"],
+        body: "Each receipt shows its invoice number under the total.\n\nCloses ABC-8.",
+        hours_ago: 48,
+    },
 ];
+
+/// The branches a tab works on that have no PR, each landing straight on
+/// main: (repository, branch, what it does).
+pub const BRANCHES: &[(&str, &str, &str)] =
+    &[("docs", "abc-19-changelog-page", "Add a changelog page")];
 
 /// A made-up ticket.
 pub struct Ticket {
@@ -234,8 +287,8 @@ pub const TICKETS: &[Ticket] = &[
     Ticket {
         number: 20,
         title: "Password reset emails arrive late",
-        kind: "unstarted",
-        state: "Todo",
+        kind: "started",
+        state: "In Progress",
         priority: 1,
         project: "Security review",
         description: "Some reset emails take ten minutes; the queue's worker looks stuck.",
@@ -244,12 +297,32 @@ pub const TICKETS: &[Ticket] = &[
     Ticket {
         number: 21,
         title: "Export the billing history as CSV",
-        kind: "unstarted",
-        state: "Todo",
+        kind: "started",
+        state: "In Progress",
         priority: 4,
         project: "Settings refresh",
         description: "A button on the billing page that downloads every invoice as CSV.",
         hours_ago: 50,
+    },
+    Ticket {
+        number: 9,
+        title: "Move sessions to Redis",
+        kind: "started",
+        state: "In Progress",
+        priority: 3,
+        project: "Security review",
+        description: "Sessions kept in Redis, so a deploy signs nobody out.",
+        hours_ago: 72,
+    },
+    Ticket {
+        number: 19,
+        title: "Add a changelog page",
+        kind: "started",
+        state: "In Progress",
+        priority: 4,
+        project: "Developer docs",
+        description: "A page listing each release's changes, newest first.",
+        hours_ago: 5,
     },
     Ticket {
         number: 11,
@@ -260,6 +333,16 @@ pub const TICKETS: &[Ticket] = &[
         project: "Settings refresh",
         description: "Safari sends no file type.",
         hours_ago: 22,
+    },
+    Ticket {
+        number: 8,
+        title: "Invoice number on receipts",
+        kind: "completed",
+        state: "Done",
+        priority: 3,
+        project: "Settings refresh",
+        description: "Receipts should name the invoice they are for.",
+        hours_ago: 48,
     },
     Ticket {
         number: 7,
@@ -857,8 +940,8 @@ mod tests {
                 .map(|n| n["number"].as_u64().unwrap())
                 .collect()
         };
-        assert_eq!(numbers("open"), [342]);
-        assert_eq!(numbers("merged"), [338]);
+        assert_eq!(numbers("open"), [342, 345]);
+        assert_eq!(numbers("merged"), [338, 336]);
     }
 
     #[test]

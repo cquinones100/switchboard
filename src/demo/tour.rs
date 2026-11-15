@@ -4,7 +4,9 @@
 //! keys that reach a board from the workspace, the text that says it has
 //! drawn, and the keys that leave it again; then mission control's groups
 //! are walked with `}` and each group's views with `]`, by the names it
-//! shows, one picture each, `<group>-<view>`.
+//! shows, one picture each, `<group>-<view>`; then the boxes its menus
+//! open (`LAST`). Boxes a word of text reaches are typed into (`M-p`'s
+//! search), and what only the mouse opens isn't in it.
 //!
 //! Each picture is `<dir>/<step>.png`, drawn by headless Chrome, with the
 //! screen as text beside it (`<step>.txt`), which is all that is written
@@ -24,7 +26,9 @@ const CAP_RIGHT: char = '\u{E0B4}';
 /// A board of the tour.
 pub struct Step {
     pub name: &'static str,
-    /// The keys that reach it from the workspace's first tab.
+    /// The keys that reach it from the workspace's first tab; a word
+    /// `@wait:<text>` waits for the text instead (`press`), so a key
+    /// meant for a box isn't sent before the box is open.
     pub keys: &'static [&'static str],
     /// Text on the screen once it has drawn.
     pub wait: &'static str,
@@ -36,7 +40,7 @@ pub const STEPS: &[Step] = &[
     Step {
         name: "workspace",
         keys: &["M-2"],
-        wait: "⎿",
+        wait: "└",
         leave: &[],
     },
     Step {
@@ -63,7 +67,173 @@ pub const STEPS: &[Step] = &[
         wait: "feature.ts",
         leave: &["q"],
     },
+    Step {
+        name: "history",
+        keys: &["M-2", "M-h"],
+        wait: "move in time",
+        leave: &["Escape"],
+    },
+    Step {
+        name: "pr-view",
+        keys: &["M-v"],
+        wait: "Closes ABC-12",
+        leave: &["M-c"],
+    },
+    Step {
+        name: "ticket-view",
+        keys: &["M-i"],
+        wait: "opened it",
+        leave: &["M-c"],
+    },
+    Step {
+        name: "next-needing-you",
+        keys: &["M-a"],
+        wait: "Add a Python",
+        leave: &["M-2"],
+    },
+    Step {
+        name: "palette",
+        keys: &["M-p"],
+        wait: "Actions",
+        leave: &["Escape"],
+    },
+    Step {
+        name: "tab-picker",
+        keys: &["M-j"],
+        wait: "no PR",
+        leave: &["Escape"],
+    },
+    Step {
+        name: "sidebar-filtered",
+        keys: &[
+            "M-p",
+            "sidebar to a repo",
+            "@wait:Filter the sidebar to a repository",
+            "Enter",
+            "@wait:Every repository",
+            "api",
+            "@wait:repository> api",
+            "Enter",
+        ],
+        wait: "OTHER REPOS",
+        leave: &[],
+    },
+    // The picker again, the filter on, cleared by typing once it shows.
+    Step {
+        name: "repository-picker",
+        keys: &[
+            // M-p right after the filter changes is lost; going to a tab first
+            // takes it.
+            "M-2",
+            "M-p",
+            "sidebar to a repo",
+            "@wait:Filter the sidebar to a repository",
+            "Enter",
+        ],
+        wait: "Every repository",
+        leave: &[
+            "Every",
+            "@wait:repository> Every",
+            "Enter",
+            "@wait:10 tabs",
+            // The first key after the picker closes is lost, as above.
+            "M-2",
+        ],
+    },
+    // Notes' list, its finder opened from Recent's header. A note item's
+    // plan and its work box aren't in the tour: they need the cursor on a
+    // given line, and Enter on the line before it ticks an item.
+    Step {
+        name: "notes-finder",
+        keys: &["M-5", "@wait:Demo Notes", "M-Left", "g", "g", "Enter"],
+        wait: "Recent notes:",
+        leave: &["Escape", "M-Right", "M-2"],
+    },
 ];
+
+/// The boxes mission control's menus open, walked after its views, each
+/// from mission control opened afresh (on Tabs) and closed again. Several
+/// views at once comes last, since showing them changes what mission
+/// control opens on.
+pub const LAST: &[Step] = &[
+    Step {
+        name: "item-menu",
+        keys: &["M-Space", "@wait:MISSION CONTROL", "Enter"],
+        wait: "Go to tab",
+        leave: &["Escape", "Escape"],
+    },
+    Step {
+        name: "reminder-box",
+        keys: &[
+            "M-Space",
+            "@wait:MISSION CONTROL",
+            "Enter",
+            "@wait:Go to tab",
+            "/",
+            "Remind",
+            "@wait:Remind me about it later",
+            "Enter",
+        ],
+        wait: "WHEN",
+        leave: &["Escape", "Escape", "Escape"],
+    },
+    Step {
+        name: "view-menu",
+        keys: &["M-Space", "@wait:MISSION CONTROL", "m"],
+        wait: "view actions",
+        leave: &["Escape", "Escape"],
+    },
+    Step {
+        name: "find-key",
+        keys: &[
+            // M-/ opens the Keys view itself: M-[ (Escape, then [) followed by [
+            // can be read as one escape sequence.
+            "M-/",
+            "@wait:WORKSPACE",
+            "m",
+            "@wait:view actions",
+            "Enter",
+        ],
+        wait: "Press a key",
+        leave: &["Escape", "Escape", "Escape"],
+    },
+    Step {
+        name: "autopilot-settings",
+        keys: &[
+            "M-Space",
+            "@wait:MISSION CONTROL",
+            "]",
+            "]",
+            "m",
+            "@wait:view actions",
+            "Enter",
+        ],
+        wait: "another note",
+        leave: &["Escape", "Escape", "Escape"],
+    },
+    Step {
+        name: "several-views-box",
+        keys: &[
+            "M-Space",
+            "@wait:MISSION CONTROL",
+            "m",
+            "@wait:view actions",
+            "Enter",
+        ],
+        wait: "LAYOUT",
+        leave: &[],
+    },
+    Step {
+        name: "several-views",
+        keys: &["Enter"],
+        wait: "views at once",
+        leave: &["Escape", "Escape"],
+    },
+];
+
+/// How long a step waits for its board, or a box, to show: long enough for
+/// a busy computer, since a step that misses it fails the tour.
+const WAIT: Duration = Duration::from_secs(20);
 
 /// The most groups, and views in a group, the tour walks.
 const MOST: usize = 12;
@@ -134,6 +304,41 @@ fn words(keys: &[&str]) -> Vec<String> {
     keys.iter().map(|k| k.to_string()).collect()
 }
 
+/// Takes each of `steps` in turn, saving its board; gives whether a PNG
+/// was drawn, and fails at a step whose board never shows its text, rather
+/// than saving another screen in its name.
+fn walk(client: &mut Client, dir: &Path, steps: &[Step], saved: &mut Vec<String>) -> Result<bool> {
+    let mut drew_png = false;
+    for step in steps {
+        press(client, step.keys).with_context(|| format!("the {} board", step.name))?;
+        if !step.wait.is_empty() && !client.wait_text(step.wait, WAIT) {
+            anyhow::bail!("the {} board never showed \"{}\"", step.name, step.wait);
+        }
+        drew_png |= save(client, dir, step.name)?;
+        saved.push(step.name.to_string());
+        press(client, step.leave).with_context(|| format!("leaving the {} board", step.name))?;
+    }
+    Ok(drew_png)
+}
+
+/// Sends `keys`, waiting at each `@wait:<text>` (at most `WAIT`) for
+/// the text to show, and failing when it doesn't.
+fn press(client: &mut Client, keys: &[&str]) -> Result<()> {
+    for key in keys {
+        match key.strip_prefix("@wait:") {
+            // A box that never opened would take the next keys meant for it
+            // somewhere else, so the tour stops there.
+            Some(text) => {
+                if !client.wait_text(text, WAIT) {
+                    anyhow::bail!("\"{text}\" never showed");
+                }
+            }
+            None => client.keys(&words(&[key]))?,
+        }
+    }
+    Ok(())
+}
+
 /// Walks the tour on the server on `server`, saving into `dir`; gives the
 /// names saved.
 pub fn run(server: &Path, dir: &Path, cols: u16, rows: u16) -> Result<Vec<String>> {
@@ -141,15 +346,7 @@ pub fn run(server: &Path, dir: &Path, cols: u16, rows: u16) -> Result<Vec<String
     let mut client = Client::attach(server, cols, rows, None, headless::TERM)?;
     let mut saved = Vec::new();
     let mut drew_png = false;
-    for step in STEPS {
-        client.keys(&words(step.keys))?;
-        if !step.wait.is_empty() {
-            client.wait_text(step.wait, Duration::from_secs(10));
-        }
-        drew_png |= save(&client, dir, step.name)?;
-        saved.push(step.name.to_string());
-        client.keys(&words(step.leave))?;
-    }
+    drew_png |= walk(&mut client, dir, STEPS, &mut saved)?;
     client.keys(&words(&["M-Space"]))?;
     if !client.wait_text("MISSION CONTROL", Duration::from_secs(10)) {
         anyhow::bail!("mission control didn't open");
@@ -171,6 +368,7 @@ pub fn run(server: &Path, dir: &Path, cols: u16, rows: u16) -> Result<Vec<String
         }
     }
     client.keys(&words(&["q"]))?;
+    drew_png |= walk(&mut client, dir, LAST, &mut saved)?;
     client.detach();
     if !drew_png {
         eprintln!(

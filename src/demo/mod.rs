@@ -50,6 +50,7 @@ pub mod services;
 pub mod stand_in;
 pub mod tour;
 pub mod usage;
+mod views;
 
 use std::fs;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
@@ -86,6 +87,12 @@ pub const SETTINGS: &[(&str, &str)] = &[
     ("build_before_restart", "false"),
     ("chrome_profiles", "false"),
     ("tips", "false"),
+    // Its services are on this computer, so its lookups cost nothing:
+    // asked often, and not paused with no terminal attached, so a
+    // detached demo (a tour, a headless client) shows a tab opened after
+    // the first look with its PR.
+    ("pause_when_away", "false"),
+    ("poll_fast", "true"),
 ];
 
 /// How often the services' process writes the day's data again: inside
@@ -120,12 +127,15 @@ pub const STAND_INS: &[&str] = &[
 ];
 
 /// Where the demos' homes are made: `/tmp`, or `SWITCHBOARD_DEMO_ROOT`
-/// (the tests' own folder).
+/// (the tests' own folder), by its real path (macOS's `/tmp` is
+/// `/private/tmp`), so the home a pane's directory is under is the one its
+/// `HOME` names and the workspace writes it `~`.
 pub fn root() -> PathBuf {
-    match std::env::var_os("SWITCHBOARD_DEMO_ROOT") {
+    let root = match std::env::var_os("SWITCHBOARD_DEMO_ROOT") {
         Some(r) if !r.is_empty() => PathBuf::from(r),
         _ => PathBuf::from("/tmp"),
-    }
+    };
+    fs::canonicalize(&root).unwrap_or(root)
 }
 
 /// Your demo's home in `root`: `sb-demo-<uid>`.
@@ -171,9 +181,21 @@ pub fn check_home(home: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Whether the demo's home has been laid out.
+/// Whether the demo's home has been laid out, by any build.
 pub fn laid_out(home: &Path) -> bool {
     home.join(".local/state/demo/laid-out").is_file()
+}
+
+/// The layout a demo's home is laid out in, written in its `laid-out`
+/// marker: raised whenever what `lay_out` makes changes in a way a home
+/// laid out before can't be run as (where the worktrees are), so such a
+/// home is laid out again rather than its tabs opened in folders it lacks.
+/// A marker from before the layout was written is empty.
+pub const LAYOUT: &str = "2";
+
+/// Whether the demo's home is laid out in this build's layout.
+pub fn laid_out_now(home: &Path) -> bool {
+    util::read_text(home.join(".local/state/demo/laid-out")).is_some_and(|t| t.trim() == LAYOUT)
 }
 
 /// Lays the demo's home out from nothing, for the binary at `bin`.
@@ -265,9 +287,10 @@ pub fn lay_out(home: &Path, bin: &Path) -> Result<()> {
     }
     notes(home)?;
     let now = util::now_ms();
+    views::lay_out(home, now)?;
     day(home, jiff::Zoned::now(), now)?;
     usage::lay_out(&home.join(".local/state/switchboard"), home, now)?;
-    util::write_atomic(own_state(home).join("laid-out"), "")?;
+    util::write_atomic(own_state(home).join("laid-out"), LAYOUT)?;
     Ok(())
 }
 
@@ -301,8 +324,9 @@ fn file_of(repo: &str, name: &str, line: &str) -> String {
 
 /// A made-up repository in `~/code`, with a short history on main, its
 /// origin a bare repository in the home that git reaches by the GitHub
-/// address `.gitconfig` sends there, and a worktree for each of its PRs'
-/// branches that a tab works in.
+/// address `.gitconfig` sends there, and a worktree (`worktree`) for each
+/// of its PRs' branches and the other branches a tab works on
+/// (`fixtures::BRANCHES`).
 fn make_repo(home: &Path, repo: &fixtures::Repo) -> Result<()> {
     let dir = home.join("code").join(repo.name);
     let origin = home.join("code/.origin").join(format!("{}.git", repo.name));
@@ -335,10 +359,7 @@ fn make_repo(home: &Path, repo: &fixtures::Repo) -> Result<()> {
         dir.join("README.md"),
         format!("# acme/{}\n\n{}.\n", repo.name, repo.about),
     )?;
-    util::write_atomic(
-        dir.join(".gitignore"),
-        ".claude/worktrees/\nnode_modules/\n",
-    )?;
+    util::write_atomic(dir.join(".gitignore"), "node_modules/\n")?;
     let history = [
         ("src/index.ts", "version = 1", "Start the project"),
         (
@@ -356,11 +377,13 @@ fn make_repo(home: &Path, repo: &fixtures::Repo) -> Result<()> {
         git(home, &dir, &["commit", "-q", "-m", message])?;
     }
     git(home, &dir, &["push", "-q", "-u", "origin", "main"])?;
-    for pr in fixtures::PRS
+    let branches = fixtures::PRS
         .iter()
-        .filter(|p| p.repo == repo.name && p.state == "OPEN")
-    {
-        let wt = dir.join(".claude/worktrees").join(pr.branch);
+        .map(|p| (p.repo, p.branch, p.title))
+        .chain(fixtures::BRANCHES.iter().copied())
+        .filter(|(r, _, _)| *r == repo.name);
+    for (_, branch, title) in branches {
+        let wt = worktree(home, branch);
         git(
             home,
             &dir,
@@ -369,38 +392,45 @@ fn make_repo(home: &Path, repo: &fixtures::Repo) -> Result<()> {
                 "add",
                 "-q",
                 "-b",
-                pr.branch,
+                branch,
                 &wt.to_string_lossy(),
                 "main",
             ],
         )?;
         let file = wt.join("src/feature.ts");
-        util::write_atomic(&file, file_of(repo.name, pr.title, "enabled = true"))?;
+        util::write_atomic(&file, file_of(repo.name, title, "enabled = true"))?;
         git(home, &wt, &["add", "-A"])?;
-        git(home, &wt, &["commit", "-q", "-m", pr.title])?;
+        git(home, &wt, &["commit", "-q", "-m", title])?;
         // A change not committed yet, for the diff to show.
         util::write_atomic(
             &file,
             format!(
                 "{}export const limit = 10;\n",
-                file_of(repo.name, pr.title, "enabled = true")
+                file_of(repo.name, title, "enabled = true")
             ),
         )?;
-        git(home, &wt, &["push", "-q", "-u", "origin", pr.branch])?;
+        git(home, &wt, &["push", "-q", "-u", "origin", branch])?;
     }
     Ok(())
 }
+
+/// The demo note's stable ID (src/notes/id.rs), which autopilot follows it
+/// by.
+const NOTE_ID: &str = "n-0de0d0de0001";
 
 /// The notes: a checklist note with an item a tab works on, and its plan.
 fn notes(home: &Path) -> Result<()> {
     let notes = home.join("Notes");
     util::write_atomic(
         notes.join("Demo Notes.md"),
-        "# Demo Notes\n\n\
+        format!(
+            "# Demo Notes\n\n\
          - [ ] FEAT: Rate-limit the login endpoint\n  Plan: [[Plan - Rate-limit the login endpoint]]\n\
          - [ ] BUG: Password reset emails arrive late\n\
          - [ ] FEAT: Export the billing history as CSV\n\n\
-         - [x] BUG: Avatar upload fails on Safari\n",
+         - [x] BUG: Avatar upload fails on Safari\n\n\
+         <!-- note-id: {NOTE_ID} -->\n"
+        ),
     )?;
     util::write_atomic(
         notes.join("Demo Plans/Plan - Rate-limit the login endpoint.md"),
@@ -738,6 +768,9 @@ fn refresh_day(home: &Path) {
     if let Err(e) = usage::limits(&home.join(".local/state/switchboard"), laid_out, now) {
         eprintln!("switchboard demo-services: the rate limits: {e:#}");
     }
+    if let Err(e) = views::landing_today(home, now) {
+        eprintln!("switchboard demo-services: autopilot's landing: {e:#}");
+    }
 }
 
 /// Today, at the time of day `laid_out` was, here.
@@ -800,36 +833,64 @@ pub fn ask(home: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
+/// Where a branch's worktree is: `~/code/worktrees/<branch>`, beside the
+/// repositories rather than under any one, in a folder that names no
+/// agent, since the demo's agent is a generic one.
+pub fn worktree(home: &Path, branch: &str) -> PathBuf {
+    home.join("code/worktrees").join(branch)
+}
+
 /// The tabs the demo opens: (name, directory under the home, the program
 /// and its arguments).
 pub fn tabs(home: &Path, bin: &Path) -> Vec<(String, PathBuf, Vec<String>)> {
-    let wt = |repo: &str, branch: &str| {
-        home.join("code")
-            .join(repo)
-            .join(".claude/worktrees")
-            .join(branch)
-    };
     let claude = |script: &str| vec!["claude".to_string(), "--demo-script".into(), script.into()];
     vec![
         (
             "Rate-limit the login endpoint".into(),
-            wt("api", "abc-12-rate-limit-login"),
+            worktree(home, "abc-12-rate-limit-login"),
             claude("rate-limit"),
         ),
         (
             "Dark mode toggle".into(),
-            wt("web", "abc-15-dark-mode-toggle"),
+            worktree(home, "abc-15-dark-mode-toggle"),
             claude("dark-mode"),
         ),
         (
             "API quickstart guide".into(),
-            wt("docs", "abc-18-api-guide"),
+            worktree(home, "abc-18-api-guide"),
             claude("api-guide"),
         ),
         (
             "Notes".into(),
             home.join("Notes"),
             vec![bin.to_string_lossy().into_owned(), "notes".into()],
+        ),
+        // After Notes, so the tabs above keep the numbers the tour's keys
+        // reach them by. One in each of the sidebar's other groups.
+        (
+            "Sessions in Redis".into(),
+            worktree(home, "abc-9-sessions-redis"),
+            claude("redis"),
+        ),
+        (
+            "Password reset email queue".into(),
+            worktree(home, "abc-20-reset-email-queue"),
+            claude("review"),
+        ),
+        (
+            "Billing history CSV".into(),
+            worktree(home, "abc-21-billing-csv"),
+            claude("ci"),
+        ),
+        (
+            "Changelog page".into(),
+            worktree(home, "abc-19-changelog-page"),
+            claude("landing"),
+        ),
+        (
+            "Avatar upload on Safari".into(),
+            worktree(home, "abc-11-safari-avatar"),
+            claude("merged"),
         ),
     ]
 }
@@ -871,7 +932,9 @@ pub fn start_server(home: &Path, bin: &Path, env: &[(String, String)]) -> Result
         .stderr(log);
     detach(&mut c);
     c.spawn().context("couldn't start the demo's server")?;
-    let deadline = Instant::now() + Duration::from_secs(10);
+    // A busy computer can take a while to start a server; this only waits
+    // while it hasn't answered.
+    let deadline = Instant::now() + Duration::from_secs(30);
     while UnixStream::connect(&socket).is_err() {
         if Instant::now() >= deadline {
             bail!(
@@ -881,8 +944,15 @@ pub fn start_server(home: &Path, bin: &Path, env: &[(String, String)]) -> Result
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    // Its first tab in ~/code, so nothing names the home folder for it.
+    // Its first tab in ~/code, so nothing names the home folder for it,
+    // a shell named plainly.
     crate::cmd::try_::make_session(&socket, Some(&home.join("code")))?;
+    let listed: Value = serde_json::from_str(&ask(home, &["list"])?)?;
+    let mut ids = Vec::new();
+    if let Some(first) = listed["sessions"][0]["tabs"][0]["id"].as_str() {
+        ask(home, &["set", "-t", first, "@tab_name", "Shell"])?;
+        ids.push(("Shell".to_string(), first.to_string()));
+    }
     for (name, dir, program) in tabs(home, bin) {
         let mut args = vec![
             "new-tab".to_string(),
@@ -895,8 +965,13 @@ pub fn start_server(home: &Path, bin: &Path, env: &[(String, String)]) -> Result
         ];
         args.extend(program);
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        ask(home, &args)?;
+        // `new-tab` prints the tab's id and its pane's.
+        let made = ask(home, &args)?;
+        if let Some(id) = made.split_whitespace().next() {
+            ids.push((args[6].to_string(), id.to_string()));
+        }
     }
+    views::after_tabs(home, &ids, util::now_ms())?;
     Ok(())
 }
 

@@ -194,6 +194,84 @@ fn the_demo_runs_on_made_up_data_and_cleans_up_after_itself() {
 }
 
 #[test]
+fn the_demos_sidebar_has_a_tab_in_every_group_and_its_agent_keeps_the_input_box_at_the_bottom() {
+    let d = Demo::new();
+    let out = d.run(&["demo", "--detached"]);
+    assert!(
+        out.status.success(),
+        "demo --detached failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stage_of = |tabs: &[Value], name: &str| {
+        named(tabs, name)
+            .and_then(|t| t["stage"]["key"].as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let wanted = [
+        ("API quickstart guide", "needs"),
+        ("Sessions in Redis", "working"),
+        ("Password reset email queue", "review"),
+        ("Billing history CSV", "ci"),
+        ("Changelog page", "landing"),
+        ("Avatar upload on Safari", "merged"),
+    ];
+    let tabs = d.wait_for("a tab in each of the sidebar's groups", |tabs| {
+        wanted
+            .iter()
+            .all(|(name, stage)| stage_of(tabs, name) == *stage)
+    });
+
+    // The stand-in drawn as a generic coding agent: its tool calls after
+    // `●`, the result under `└`, and the input box in the pane's bottom
+    // rows, its hint at most third from the bottom with the statusline under it,
+    // however little the conversation above fills.
+    let tab = named(&tabs, "Sessions in Redis").unwrap();
+    let working = tab["id"].as_str().unwrap().to_string();
+    let rows = tab["panes"][0]["rows"].as_u64().unwrap() as usize;
+    let deadline = common::deadline(Duration::from_secs(30));
+    loop {
+        let screen = demo::ask(&d.home, &["capture-pane", "-t", &working]).unwrap();
+        let lines: Vec<&str> = screen.lines().collect();
+        let hint_row = lines.iter().position(|l| l.contains("? for shortcuts"));
+        let drawn = ["Coding agent", "●", "└", "│ >"]
+            .iter()
+            .all(|w| screen.contains(w));
+        if let Some(hint_row) = hint_row.filter(|_| drawn) {
+            assert!(hint_row + 3 >= rows, "{screen}");
+            assert!(!screen.contains("Claude"), "{screen}");
+            assert!(!screen.contains("stand-in"), "{screen}");
+            break;
+        }
+        assert!(Instant::now() < deadline, "the stand-in's screen: {screen}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+#[test]
+fn a_demo_laid_out_by_an_older_layout_is_laid_out_again() {
+    let d = Demo::new();
+    let first = d.run(&["demo", "--detached"]);
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    // As a build from before the layout was written left it: an empty
+    // marker, and none of this layout's worktrees.
+    let marker = demo::own_state(&d.home).join("laid-out");
+    std::fs::write(&marker, "").unwrap();
+    let worktree = demo::worktree(&d.home, "abc-15-dark-mode-toggle");
+    std::fs::remove_dir_all(&worktree).unwrap();
+    let again = d.run(&["demo", "--detached"]);
+    let said = String::from_utf8_lossy(&again.stderr);
+    assert!(again.status.success(), "{said}");
+    assert!(said.contains("laid out by an older build"), "{said}");
+    assert!(worktree.is_dir(), "{said}");
+    assert_eq!(std::fs::read_to_string(&marker).unwrap(), demo::LAYOUT);
+}
+
+#[test]
 fn a_demo_home_that_is_a_link_is_refused() {
     let d = Demo::new();
     std::os::unix::fs::symlink(d.dir.path().join("elsewhere"), &d.home).unwrap();
@@ -225,12 +303,21 @@ fn the_tour_saves_a_board_for_each_step() {
         "demo --tour failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    for step in demo::tour::STEPS {
-        assert!(
-            tour.join(format!("{}.txt", step.name)).is_file(),
-            "{}",
-            step.name
-        );
+    // Each step reached its board: the text it waits for is on it.
+    for step in demo::tour::STEPS.iter().chain(demo::tour::LAST) {
+        let board =
+            std::fs::read_to_string(tour.join(format!("{}.txt", step.name))).unwrap_or_default();
+        assert!(board.contains(step.wait), "{}: {board}", step.name);
+    }
+    // The views that have nothing to show without the demo's own data.
+    for (board, text) in [
+        ("work-routines", "Triage new tickets"),
+        ("work-reopen", "Spike: a GraphQL gateway"),
+        ("work-autopilot", "Password reset"),
+        ("day-reminders", "2 reminders"),
+    ] {
+        let shown = std::fs::read_to_string(tour.join(format!("{board}.txt"))).unwrap_or_default();
+        assert!(shown.contains(text), "{board}: {shown}");
     }
     // No board shows the demo's temporary home: its paths are written from `~`.
     for step in demo::tour::STEPS {

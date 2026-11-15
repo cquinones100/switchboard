@@ -113,7 +113,10 @@ fn run(mode: Mode, reset: bool, size: (u16, u16)) -> Result<ExitCode> {
         .and_then(|b| b.canonicalize())
         .map_err(|e| anyhow!("can't find the binary running: {e}"))?;
     demo::check_home(&home)?;
-    if reset || !demo::laid_out(&home) {
+    if reset || !demo::laid_out_now(&home) {
+        if demo::laid_out(&home) && !reset {
+            eprintln!("The demo was laid out by an older build; laying it out again for this one.");
+        }
         if home.exists() {
             crate::cmd::try_::stop_server(&demo::socket_of(&home));
             demo::stop_services(&home);
