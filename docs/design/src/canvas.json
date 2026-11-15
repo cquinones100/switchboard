@@ -237,6 +237,10 @@
       "title": "81. Proposed: autopilot on the Home tab, working, paused by you and paused by its spend limit, edited in place",
       "page": "design"
     },
+    "SlackJump.dc.html": {
+      "title": "82. Proposed: jump from Home to a tab's thread, its name and a Thread › button opening it at the newest message",
+      "page": "design"
+    },
     "Relay.dc.html": {
       "title": "53. Slack relay: which messages reach you, and where",
       "page": "design"
