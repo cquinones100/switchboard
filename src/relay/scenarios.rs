@@ -104,9 +104,7 @@ fn a_top_level_message_sent_with_the_picker_goes_on_in_the_tabs_home_thread() {
     let posts = rig.posts();
     assert_eq!(posts.len(), 2);
     let home = posts[1].ts.clone();
-    assert!(posts[1].body.starts_with(&format!(
-        "🤖 **Tab {index}, work**\n⚪ Idle\n\nThis is its thread"
-    )));
+    assert_eq!(posts[1].body, format!("**Tab {index}, work**\n⚪ Idle"));
     assert_eq!(posts[1].thread, None);
     let state = rig.cx.state.borrow();
     assert_eq!(state.homes[&tab].ts, home);
@@ -701,7 +699,14 @@ fn alerts_come_once_per_state_change_with_the_screen_for_a_wait() {
     let posts = rig.posts();
     assert_eq!(posts.len(), 4);
     let home = &posts[0].ts;
-    assert!(posts[0].body.contains("This is its thread"));
+    assert!(
+        posts[0].body.starts_with(&format!(
+            "**Tab {index}, work**\n🔴 **Waiting on you** since "
+        )),
+        "{}",
+        posts[0].body
+    );
+    assert_eq!(posts[0].body.lines().count(), 2, "{}", posts[0].body);
     assert!(rig.cx.state.borrow().threads.contains_key(home));
     assert!(
         posts[1].body.starts_with("🤖 Claude is **waiting on you**"),
@@ -3321,7 +3326,7 @@ fn an_alert_whose_thread_couldnt_be_started_goes_out_on_the_next_tick() {
     rig.slack.calls.borrow_mut().clear();
     run(&rig);
     let posts = rig.posts();
-    assert!(posts[0].body.contains("This is its thread"));
+    assert!(posts[0].body.starts_with("**Tab "));
     assert!(posts[1].body.contains("is **waiting on you**"));
     assert_eq!(
         posts[1].thread.as_ref(),
@@ -3771,9 +3776,10 @@ fn a_tabs_thread_header_follows_its_name_and_state_and_says_when_it_has_ended() 
     refresh(&rig);
     let updated = rig.calls("chat.update")[0].clone();
     assert_eq!(updated["ts"], home);
-    assert!(updated["text"].as_str().unwrap().starts_with(&format!(
-        "🤖 **Tab {index}, ABC-214: Make the thing**\n⚪ Idle\n\nThis is its thread"
-    )));
+    assert_eq!(
+        updated["text"],
+        format!("**Tab {index}, ABC-214: Make the thing**\n⚪ Idle")
+    );
     let names: Vec<&str> = updated["blocks"][1]["elements"]
         .as_array()
         .unwrap()
@@ -3788,13 +3794,25 @@ fn a_tabs_thread_header_follows_its_name_and_state_and_says_when_it_has_ended() 
         .as_str()
         .unwrap()
         .to_string();
-    assert!(text.contains("\n🔴 **Waiting on you** since "), "{text}");
+    assert!(
+        text.starts_with(&format!(
+            "**Tab {index}, ABC-214: Make the thing**\n🔴 **Waiting on you** since "
+        )),
+        "{text}"
+    );
+    assert_eq!(text.lines().count(), 2, "{text}");
     // The tab now runs another session: the old thread is marked closed.
     rig.cx.state.borrow_mut().homes.get_mut(&tab).unwrap().pid = "999999".into();
     refresh(&rig);
     let closed = rig.calls("chat.update").last().unwrap().clone();
-    assert!(closed["text"].as_str().unwrap().starts_with("🤖 ~~Tab "));
-    assert!(closed["text"].as_str().unwrap().contains("⚫ Closed at "));
+    let closed_text = closed["text"].as_str().unwrap();
+    assert!(
+        closed_text.starts_with(&format!(
+            "⚫ Tab {index}, ABC-214: Make the thing, closed at "
+        )),
+        "{closed_text}"
+    );
+    assert_eq!(closed_text.lines().count(), 1, "{closed_text}");
     let buttons = closed["blocks"][1]["elements"].as_array().unwrap();
     let names: Vec<&str> = buttons
         .iter()
@@ -4972,5 +4990,36 @@ fn control_characters_in_a_message_are_never_typed() {
     assert_eq!(
         rig.mux.sent.borrow()[0],
         format!("{pane} paste one[201~\ntwo")
+    );
+}
+
+#[test]
+fn a_thread_started_with_the_old_header_gets_the_short_one() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    let index = rig.index_of(&tab);
+    let home = "1791500000.000400";
+    let t = tabs::tab(&rig.cx, &tab).unwrap();
+    {
+        let mut state = rig.cx.state.borrow_mut();
+        state.threads.insert(home.into(), home.into());
+        state.homes.insert(
+            tab.clone(),
+            Home {
+                ts: home.into(),
+                pid: t.pid.clone(),
+                label: format!("{index}, work"),
+                // The key a relay before the short header kept.
+                shown: format!("{}|{}|{}|{}", t.index, t.name, t.state, t.since),
+            },
+        );
+    }
+    let tabs = tabs::claude_tabs(&rig.cx);
+    rig.block_on(super::homes::refresh_homes(&rig.cx, &tabs));
+    let updated = rig.calls("chat.update");
+    assert_eq!(updated.len(), 1, "the header is sent again");
+    assert_eq!(
+        updated[0]["text"],
+        format!("**Tab {index}, work**\n⚪ Idle")
     );
 }

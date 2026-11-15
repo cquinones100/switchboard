@@ -8,11 +8,12 @@
 //! tab ids are used again after a restart; a tab that has closed has none,
 //! and its news goes to the top level.
 //!
-//! The thread's first message is its header: the tab's name, what it is
-//! doing and since when, and buttons for what you'd ask of it. Slack's list
-//! of threads shows it, so that list shows every tab's state; it is edited
-//! whenever the tab is renamed, renumbered or changes state, and says so
-//! when its session has ended.
+//! The thread's first message is its header: the tab's name, then its
+//! state's one mark, what it is doing and since when, and buttons for what
+//! you'd ask of it, nothing more, since Slack's list of threads shows it and
+//! so shows every tab's state at a glance; it is edited whenever the tab is
+//! renamed, renumbered or changes state, and once its session has ended is
+//! one line saying when the tab closed.
 
 use futures_util::FutureExt;
 use futures_util::future::LocalBoxFuture;
@@ -52,7 +53,7 @@ pub fn home_text(tab: &Tab) -> String {
         String::new()
     };
     format!(
-        "🤖 **Tab {}, {}**\n{}{since}\n\nThis is its thread: everything about it goes here, and what you reply here is typed into it.",
+        "**Tab {}, {}**\n{}{since}",
         tab.index,
         tab.name,
         header_words(&tab.state)
@@ -61,14 +62,17 @@ pub fn home_text(tab: &Tab) -> String {
 
 pub fn closed_text(home: &Home) -> String {
     format!(
-        "🤖 ~~Tab {}~~\n⚫ Closed at {}. Its Claude session has ended.",
+        "⚫ Tab {}, closed at {}",
         home.label,
         when(util::now_ms() as f64 / 1000.0)
     )
 }
 
+/// What the header last sent shows, so it is edited only when that changes.
+/// Its leading version is bumped whenever `home_text`'s wording changes, so
+/// a thread a relay before it started gets the new header on the next tick.
 pub fn header_key(tab: &Tab) -> String {
-    format!("{}|{}|{}|{}", tab.index, tab.name, tab.state, tab.since)
+    format!("2|{}|{}|{}|{}", tab.index, tab.name, tab.state, tab.since)
 }
 
 /// A tab's home thread, started if it has none yet: one per tab, however
