@@ -1178,8 +1178,10 @@ fn open_a_tab_for_it_starts_claude_told_about_the_notification() {
     let notes = common::TempDir::new("sbtf");
     std::fs::write(notes.path().join("Plan.md"), "# Plan\nsecret words\n").unwrap();
     let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
+    // Its args written aside and moved into place, so the wait for the file
+    // finds it whole.
     Claude::new()
-        .answer("for a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$HOME/claude-args\"\nexec sleep 30")
+        .answer("for a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$HOME/claude-args.part\"\nmv \"$HOME/claude-args.part\" \"$HOME/claude-args\"\nexec sleep 30")
         .install(&server.home.join("bin"));
     std::fs::create_dir_all(&server.state).unwrap();
     std::fs::write(

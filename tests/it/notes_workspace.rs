@@ -294,9 +294,10 @@ fn notes_left_alone_in_a_tab_it_was_brought_beside_goes_home() {
 #[test]
 fn press_runs_an_action_by_name_and_opens_a_notes_tab() {
     let rig = Rig::new();
-    // A stand-in Claude that keeps what it was started with.
+    // A stand-in Claude that keeps what it was started with, written aside
+    // and moved into place, so the wait for the file finds it whole.
     Claude::new()
-        .answer("for a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$HOME/claude-args\"\nexec sleep 30")
+        .answer("for a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$HOME/claude-args.part\"\nmv \"$HOME/claude-args.part\" \"$HOME/claude-args\"\nexec sleep 30")
         .install(&rig.server.home.join("bin"));
     let mut client = rig.server.attach(140, 36);
     client.wait_text("$");
