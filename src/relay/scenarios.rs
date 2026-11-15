@@ -1774,13 +1774,20 @@ fn a_dialog_before_a_session_starts_is_alerted_once_and_answered_with_arrow_keys
         message(&now_ts(21), "yes", posts[1].thread.as_deref()),
     ))
     .unwrap();
-    assert!(
-        rig.posts()
-            .last()
-            .unwrap()
-            .body
-            .starts_with("🤖 Chose \"Yes, I trust this folder\" in tab")
-    );
+    assert_eq!(rig.posts().len(), 3, "nothing posted for the answer");
+    for asked in &posts[1..] {
+        let edited = rig
+            .calls("chat.update")
+            .into_iter()
+            .rfind(|u| u["ts"] == asked.ts.as_str())
+            .unwrap();
+        assert!(
+            edited["text"]
+                .as_str()
+                .unwrap()
+                .ends_with("_Chose 2. Yes, I trust this folder._")
+        );
+    }
     let sent = rig.mux.sent.borrow().clone();
     assert_eq!(
         sent,
@@ -1858,17 +1865,25 @@ fn a_waiting_tabs_alert_shows_its_options_as_buttons_alone_and_a_number_answers_
     assert!(!sent.body.contains("1. Yes"), "no numbered list");
     assert!(!sent.body.contains("Reply here"), "one instruction");
     assert_eq!(sent.buttons.len(), 2);
+    let posted = rig.posts().len();
     rig.block_on(handle(
         &rig.cx,
         message(&now_ts(20), "2", sent.thread.as_deref().or(Some(&sent.ts))),
     ))
     .unwrap();
-    let answered = rig.posts().last().unwrap().body.clone();
+    assert_eq!(rig.posts().len(), posted, "the alert says what was chosen");
+    let answered = rig
+        .calls("chat.update")
+        .into_iter()
+        .rfind(|u| u["ts"] == sent.ts.as_str())
+        .unwrap();
     assert!(
-        answered.starts_with("🤖 Chose"),
+        answered["text"]
+            .as_str()
+            .unwrap()
+            .ends_with("_Chose 2. No._"),
         "a reply of 2 answers it: {answered}"
     );
-    assert!(answered.contains("No"), "{answered}");
     assert!(!rig.mux.sent.borrow().is_empty());
 }
 
@@ -1928,9 +1943,11 @@ fn a_waiting_tabs_alert_has_its_options_as_buttons_and_a_press_answers_only_that
             .contains("That choice isn't showing any more")
     );
     assert!(!rig.screen(&tab).ends_with('1'));
+    let posted = rig.posts().len();
     rig.block_on(super::presses::handle_press(&rig.cx, press(yes)))
         .unwrap();
     assert!(rig.screen(&tab).ends_with("\n1"));
+    assert_eq!(rig.posts().len(), posted, "nothing posted for the answer");
     let edited = rig
         .calls("chat.update")
         .into_iter()
@@ -1940,13 +1957,104 @@ fn a_waiting_tabs_alert_has_its_options_as_buttons_and_a_press_answers_only_that
         edited["text"]
             .as_str()
             .unwrap()
-            .ends_with("_Chose **1. Yes**._")
+            .ends_with("_Chose 1. Yes._")
     );
     assert_eq!(
         edited["blocks"].as_array().unwrap().len(),
         1,
         "no buttons left to press twice"
     );
+}
+
+#[test]
+fn a_reply_to_an_alert_in_parts_edits_the_part_with_the_buttons() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    let long: String = (0..120)
+        .map(|i| format!("Line {i} of what Claude found before asking."))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    rig.transcript(
+        &tab,
+        "cleanup",
+        &[
+            json!({ "type": "user", "message": { "content": "clean the build" } }),
+            json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": long }] } }),
+        ],
+    );
+    rig.set_screen(&tab, "Allow rm -rf build?\n❯ 1. Yes\n  2. No\n");
+    rig.set_state(&tab, "waiting", "1791500200");
+    let tabs_now = tabs::claude_tabs(&rig.cx);
+    rig.block_on(alerts::alert_tabs(&rig.cx, &tabs_now, &[]));
+    let first = rig
+        .posts()
+        .into_iter()
+        .find(|p| p.body.contains("is **waiting on you**") && !p.mention)
+        .unwrap();
+    let last = rig
+        .posts()
+        .into_iter()
+        .rfind(|p| !p.buttons.is_empty() && !p.mention && p.thread == first.thread)
+        .unwrap();
+    assert_ne!(first.ts, last.ts, "the alert went in parts");
+    let posted = rig.posts().len();
+    rig.block_on(handle(
+        &rig.cx,
+        message(&now_ts(30), "1", first.thread.as_deref()),
+    ))
+    .unwrap();
+    assert_eq!(rig.posts().len(), posted, "nothing posted for the answer");
+    let edited = rig
+        .calls("chat.update")
+        .into_iter()
+        .rfind(|u| u["ts"] == last.ts.as_str())
+        .unwrap();
+    assert!(
+        edited["text"]
+            .as_str()
+            .unwrap()
+            .ends_with("_Chose 1. Yes._")
+    );
+    assert_eq!(edited["blocks"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn a_reply_naming_an_alerts_option_edits_the_alert_and_posts_nothing() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    rig.set_screen(&tab, "Allow rm -rf build?\n❯ 1. Yes\n  2. No\n");
+    rig.set_state(&tab, "waiting", "1791500200");
+    let tabs_now = tabs::claude_tabs(&rig.cx);
+    rig.block_on(alerts::alert_tabs(&rig.cx, &tabs_now, &[]));
+    let asked: Vec<_> = rig
+        .posts()
+        .into_iter()
+        .filter(|p| p.body.contains("is **waiting on you**"))
+        .collect();
+    let alert = asked.iter().find(|p| !p.mention).unwrap().clone();
+    let posted = rig.posts().len();
+    rig.block_on(handle(
+        &rig.cx,
+        message(&now_ts(30), "1", alert.thread.as_deref()),
+    ))
+    .unwrap();
+    assert!(rig.screen(&tab).ends_with("\n1"));
+    assert_eq!(rig.posts().len(), posted, "nothing posted for the answer");
+    for message in &asked {
+        let edited = rig
+            .calls("chat.update")
+            .into_iter()
+            .rfind(|u| u["ts"] == message.ts.as_str())
+            .unwrap();
+        assert!(
+            edited["text"]
+                .as_str()
+                .unwrap()
+                .ends_with("_Chose 1. Yes._")
+        );
+        assert_eq!(edited["blocks"].as_array().unwrap().len(), 1);
+    }
+    assert!(rig.cx.state.borrow().following[&tab].taken);
 }
 
 #[test]
@@ -2005,10 +2113,11 @@ fn a_button_made_for_one_tab_answers_that_tab_even_in_a_thread_linked_to_another
         .value
         .clone()
         .unwrap();
+    let pressed = now_ts(401);
     let press = super::slack::Press {
         value: yes,
         message: Some(super::slack::Pressed {
-            ts: now_ts(401),
+            ts: pressed.clone(),
             thread_ts: Some(thread),
             text: "🤖 Tab, waiting".into(),
         }),
@@ -2021,12 +2130,16 @@ fn a_button_made_for_one_tab_answers_that_tab_even_in_a_thread_linked_to_another
         "the tab it was made for got the answer"
     );
     assert!(!rig.screen(&other).contains('1'));
+    let edited = rig
+        .calls("chat.update")
+        .into_iter()
+        .rfind(|u| u["ts"] == pressed.as_str())
+        .unwrap();
     assert!(
-        rig.posts()
-            .last()
+        edited["text"]
+            .as_str()
             .unwrap()
-            .body
-            .contains(&format!("in tab {}, ", rig.index_of(&mine)))
+            .ends_with("_Chose 1. Yes._")
     );
 }
 
@@ -3736,7 +3849,7 @@ fn a_waiting_tabs_notice_carries_its_options_and_one_answer_clears_the_rest() {
         cleared["text"]
             .as_str()
             .unwrap()
-            .ends_with("_Answered: 1. Yes_")
+            .ends_with("_Chose 1. Yes._")
     );
     assert_eq!(
         cleared["blocks"].as_array().unwrap().len(),
@@ -3747,12 +3860,7 @@ fn a_waiting_tabs_notice_carries_its_options_and_one_answer_clears_the_rest() {
         .iter()
         .find(|u| u["ts"] == notice.ts.as_str())
         .unwrap();
-    assert!(
-        chose["text"]
-            .as_str()
-            .unwrap()
-            .ends_with("_Chose **1. Yes**._")
-    );
+    assert!(chose["text"].as_str().unwrap().ends_with("_Chose 1. Yes._"));
     // The next prompt is answered at the computer: its buttons go.
     rig.set_screen(&tab, "Allow rm -rf dist?\n❯ 1. Yes\n  2. No\n");
     rig.set_state(&tab, "waiting", "1791500300");

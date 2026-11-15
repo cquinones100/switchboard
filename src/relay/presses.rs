@@ -14,7 +14,7 @@ use super::buttons::{WELCOME_COMMANDS, still_showing};
 use super::cleanup::{cleanup_note, closed_threads, delete_threads};
 use super::commands::{OverDraft, Reply, close_tab, for_tab, handle, interrupt, send_waiting};
 use super::dashboard::{Refresh, refresh_dashboard};
-use super::post::{PostOpts, post, settle_choice, update};
+use super::post::{PostOpts, offer_choice, post, update};
 use super::quickreplies::still_asking;
 use super::screens::handle_screen_press;
 use super::slack::{Message, Press};
@@ -138,24 +138,18 @@ pub async fn handle_press(cx: &Cx, press: Press) -> Result<()> {
                 return Ok(());
             };
             link(cx);
-            // The other messages showing this prompt lose their buttons;
-            // this one is edited to say what was chosen.
-            settle_choice(
-                cx,
-                &tab.id,
-                &format!("Answered: {}", option.said),
-                Some(&message.ts),
-            )
-            .await;
-            if let Err(e) = update(
-                cx,
-                &message.ts,
-                &format!("{}\n\n_Chose **{}**._", message.text, option.said),
-                &[],
-            )
-            .await
-            {
-                cx.log(&format!("couldn't update the pressed message: {e}"));
+            // Answered as a reply naming the option is: every message
+            // showing this prompt, the pressed one among them, loses its
+            // buttons and says what was chosen, and nothing more is posted.
+            let offered = cx
+                .state
+                .borrow()
+                .choices
+                .get(&tab.id)
+                .is_some_and(|o| o.messages.iter().any(|m| m.ts == message.ts));
+            if !offered {
+                let kind = if a == "dialog" { "dialog" } else { "wait" };
+                offer_choice(cx, &tab.id, kind, &message.ts, &message.text);
             }
             for_tab(
                 cx,

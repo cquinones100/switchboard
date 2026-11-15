@@ -823,7 +823,7 @@ async fn send_to_tab(
         tabs::answer_prompt(cx, &pane, prompt, answer).await;
         let did = tabs::answer_said(answer);
         cx.log(&format!("→ {name}: {did}"));
-        settle_choice(cx, &tab.id, &format!("{did}."), None).await;
+        let noted = settle_choice(cx, &tab.id, &format!("{did}."), None).await;
         if let Some(t) = thread {
             cx.state
                 .borrow_mut()
@@ -881,6 +881,10 @@ async fn send_to_tab(
                 ..Follow::default()
             },
         );
+        // The alert that asked already says what was chosen.
+        if noted {
+            return Ok(None);
+        }
         let ts = say(
             cx,
             reply,
@@ -913,14 +917,11 @@ async fn send_to_tab(
                 .alerts
                 .insert(t.to_string(), aimed.clone());
         }
-        settle_choice(cx, &tab.id, &format!("Answered: {}", picked.label), None).await;
-        let ts = say(
-            cx,
-            reply,
-            &format!("Chose \"{}\" in {name}.", picked.label),
-            vec![],
-        )
-        .await?;
+        let did = format!("Chose {}. {}", picked.n, picked.label);
+        if settle_choice(cx, &tab.id, &format!("{did}."), None).await {
+            return Ok(None);
+        }
+        let ts = say(cx, reply, &format!("{did} in {name}."), vec![]).await?;
         if let Some(ts) = &ts {
             cx.state.borrow_mut().alerts.insert(ts.clone(), aimed);
         }

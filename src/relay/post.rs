@@ -436,6 +436,12 @@ pub async fn upload_files(
 /// replaced, clears them all, so no button is left that would only be
 /// refused.
 pub fn offer_choice(cx: &Relay, tab: &str, kind: &str, ts: &str, text: &str) {
+    // A long message went in parts, its buttons under the last, so that
+    // part is the one an answer edits.
+    let (ts, text) = match cx.mem.borrow().post.last_parts.get(ts) {
+        Some((last, part)) if last != ts => (last.clone(), part.clone()),
+        _ => (ts.to_string(), text.to_string()),
+    };
     let mut state = cx.state.borrow_mut();
     let offered = state
         .choices
@@ -448,22 +454,23 @@ pub fn offer_choice(cx: &Relay, tab: &str, kind: &str, ts: &str, text: &str) {
         offered.kind = kind.to_string();
         offered.messages.clear();
     }
-    offered.messages.push(OfferedMessage {
-        ts: ts.to_string(),
-        text: text.to_string(),
-    });
+    offered.messages.push(OfferedMessage { ts, text });
 }
 
-pub async fn settle_choice(cx: &Relay, tab: &str, note: &str, except: Option<&str>) {
+/// Takes the buttons off every message offering a tab's choice but
+/// `except`, noting what was answered, and gives whether any of them now
+/// says so, so an answer noted there needn't be posted as well.
+pub async fn settle_choice(cx: &Relay, tab: &str, note: &str, except: Option<&str>) -> bool {
     let Some(offered) = cx.state.borrow_mut().choices.shift_remove(tab) else {
-        return;
+        return false;
     };
+    let mut noted = false;
     for message in offered
         .messages
         .iter()
         .filter(|m| Some(m.ts.as_str()) != except)
     {
-        if let Err(e) = update(
+        match update(
             cx,
             &message.ts,
             &format!("{}\n\n_{note}_", message.text),
@@ -471,9 +478,11 @@ pub async fn settle_choice(cx: &Relay, tab: &str, note: &str, except: Option<&st
         )
         .await
         {
-            cx.log(&format!("couldn't clear a prompt's buttons: {e}"));
+            Ok(_) => noted = true,
+            Err(e) => cx.log(&format!("couldn't clear a prompt's buttons: {e}")),
         }
     }
+    noted
 }
 
 #[cfg(test)]
