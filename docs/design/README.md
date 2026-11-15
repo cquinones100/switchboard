@@ -130,7 +130,7 @@ What a newcomer starts on and turns on.
 
 The relay's DM, threads and Home tab.
 
-- [46. Slack on a phone: the DM, one line for each thing that needs you](https://cquinones100.github.io/switchboard/design/46.html)
+- [46. Slack on a phone: the DM, the welcome and each tab's thread header, its alerts kept in its thread](https://cquinones100.github.io/switchboard/design/46.html)
 - [47. A tab's thread on a phone: a permission prompt answered with buttons](https://cquinones100.github.io/switchboard/design/47.html)
 - [48. The Home tab on a phone, grouped as the sidebar](https://cquinones100.github.io/switchboard/design/48.html)
 - [49. A tab's screen, opened from Home](https://cquinones100.github.io/switchboard/design/49.html)
