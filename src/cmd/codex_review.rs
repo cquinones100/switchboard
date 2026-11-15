@@ -1232,6 +1232,12 @@ fn codex_args(
         "--strict-config",
         "-c",
         "mcp_servers={}",
+        // Nor web search or ChatGPT's apps, which reach outside the
+        // computer with what the reviewed branch says.
+        "-c",
+        "web_search=\"disabled\"",
+        "-c",
+        "features.apps=false",
         // Approval rules let matching commands run outside the sandbox
         // without asking. A reviewer never needs that.
         "--ignore-rules",
@@ -1695,6 +1701,24 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_reviews_with_no_mcp_web_search_or_apps() {
+        let args = codex_args("/r", Path::new("/s"), Path::new("/o"), None);
+        let overrides: Vec<&str> = args
+            .windows(2)
+            .filter(|w| w[0] == "-c")
+            .map(|w| w[1].as_str())
+            .collect();
+        for off in [
+            "mcp_servers={}",
+            "web_search=\"disabled\"",
+            "features.apps=false",
+        ] {
+            assert!(overrides.contains(&off), "{off} in {overrides:?}");
+        }
+        assert!(args.iter().any(|a| a == "--ignore-user-config"));
+    }
 
     /// The patch ID worked out here is git's own, for each kind of change
     /// a diff holds: compared with `git patch-id --stable` (the same, with

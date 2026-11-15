@@ -64,6 +64,8 @@ pub fn command(program: &Path, model: &str) -> Command {
         model,
         "--tools",
         "",
+        // `--tools` leaves MCP servers' tools; none is loaded.
+        "--strict-mcp-config",
         "--no-session-persistence",
         PROMPT,
     ]);
@@ -231,7 +233,9 @@ mod tests {
         );
         let given = std::fs::read_to_string(&asked).unwrap();
         assert!(
-            given.starts_with("-p\n--model\nsonnet\n--tools\n\n--no-session-persistence\n"),
+            given.starts_with(
+                "-p\n--model\nsonnet\n--tools\n\n--strict-mcp-config\n--no-session-persistence\n"
+            ),
             "{given}"
         );
         assert!(regex::Regex::new(r#"<note 1 changed="2026-01-01T00:00:00Z">\n# Groceries[\s\S]*<note 2 changed="\d{4}-[^"]+">\n# Errands"#).unwrap().is_match(&given), "each note with when it was last changed");

@@ -50,6 +50,7 @@
 
 use std::collections::HashSet;
 use std::fmt;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -498,25 +499,21 @@ fn content_parts(stdout: &str) -> Vec<Value> {
         .collect()
 }
 
-/// One run of the headless Haiku: the tool's result, or `None` when it never
-/// called the tool.
-async fn call(
-    tool: &str,
-    input: &Value,
-    timeout: Duration,
-) -> Result<Option<String>, ConnectorError> {
+/// The headless Haiku's arguments: tool search and the one tool, and no
+/// settings file loaded, so none of its permission rules, hooks or plugins
+/// come along (a plugin directory you set yourself still loads, as
+/// `plugin::headless` keeps it, its tools denied too). dontAsk denies every tool but the two allowed rather than
+/// asking or, under an auto default mode, letting a result lead it to
+/// another (Slack's send among them). `--strict-mcp-config` can't narrow it
+/// to the one server: it drops claude.ai's connectors, which no MCP config
+/// names.
+fn args(tool: &str, input: &Value) -> Vec<String> {
     let prompt = format!(
         "Load {tool} with ToolSearch (query \"select:{tool}\"), then call it once, with exactly this input: {}. Then reply \"done\".",
         util::json_compact(input)
     );
-    let path = format!(
-        "{}:{}",
-        std::env::var("PATH").unwrap_or_default(),
-        paths::home_join(".local/bin").display()
-    );
     let allowed = format!("ToolSearch,{tool}");
-    let mut cmd = tokio::process::Command::new("claude");
-    cmd.args([
+    [
         "-p",
         "--model",
         "haiku",
@@ -528,21 +525,44 @@ async fn call(
         "ToolSearch",
         "--allowedTools",
         &allowed,
+        "--permission-mode",
+        "dontAsk",
+        "--setting-sources",
+        "",
         "--max-turns",
         "4",
         &prompt,
-    ])
-    .current_dir(std::env::temp_dir())
-    .env("PATH", path)
-    .env("ENABLE_TOOL_SEARCH", "true")
-    // Waits for claude.ai's connectors before the first turn, which `-p`
-    // otherwise starts while they are still connecting.
-    .env("MCP_CONNECTION_NONBLOCKING", "false")
-    .env("MAX_MCP_OUTPUT_TOKENS", "200000")
-    .stdin(std::process::Stdio::null())
-    .stdout(std::process::Stdio::piped())
-    .stderr(std::process::Stdio::piped())
-    .kill_on_drop(true);
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
+/// One run of the headless Haiku: the tool's result, or `None` when it never
+/// called the tool.
+async fn call(
+    tool: &str,
+    input: &Value,
+    timeout: Duration,
+) -> Result<Option<String>, ConnectorError> {
+    let path = format!(
+        "{}:{}",
+        std::env::var("PATH").unwrap_or_default(),
+        paths::home_join(".local/bin").display()
+    );
+    let mut cmd = tokio::process::Command::new("claude");
+    cmd.args(args(tool, input))
+        .current_dir(std::env::temp_dir())
+        .env("PATH", path)
+        .env("ENABLE_TOOL_SEARCH", "true")
+        // Waits for claude.ai's connectors before the first turn, which `-p`
+        // otherwise starts while they are still connecting.
+        .env("MCP_CONNECTION_NONBLOCKING", "false")
+        .env("MAX_MCP_OUTPUT_TOKENS", "200000")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
     crate::setup::plugin::headless(&mut cmd);
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -654,11 +674,14 @@ async fn call(
     };
     // Claude Code says where it put a result too large to show, as text or as
     // the result's content blocks in JSON; the file is read and removed,
-    // being this call's alone.
+    // being this call's alone. Only from Claude Code's own tool-results
+    // folder: the text is the connector's, so a message in it could name
+    // any file of yours.
     if let Some(saved) = SAVED.captures(&text)
-        && let Ok(raw) = std::fs::read_to_string(&saved[1])
+        && let Some(file) = saved_result(Path::new(&saved[1]), &tool_results_root())
+        && let Ok(raw) = std::fs::read_to_string(&file)
     {
-        let _ = std::fs::remove_file(&saved[1]);
+        let _ = std::fs::remove_file(&file);
         if &saved[2] == "json" {
             if let Ok(Value::Array(blocks)) = serde_json::from_str::<Value>(&raw) {
                 return Ok(Some(blocks.iter().map(block_text).collect()));
@@ -681,6 +704,29 @@ async fn call(
         });
     }
     Ok(Some(text))
+}
+
+/// Where Claude Code keeps its sessions, whose `<session>/tool-results/`
+/// folders hold the results too large to show: `CLAUDE_CONFIG_DIR`'s
+/// `projects`, else `~/.claude/projects`.
+fn tool_results_root() -> PathBuf {
+    std::env::var_os("CLAUDE_CONFIG_DIR")
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(paths::claude_dir)
+        .join("projects")
+}
+
+/// The file a result says it was saved to, by its real path, when that is a
+/// file directly in a `tool-results` folder under `root`.
+fn saved_result(named: &Path, root: &Path) -> Option<PathBuf> {
+    let real = named.canonicalize().ok()?;
+    let root = root.canonicalize().ok()?;
+    let in_tool_results = real
+        .parent()
+        .and_then(Path::file_name)
+        .is_some_and(|n| n == "tool-results");
+    (in_tool_results && real.starts_with(&root) && real.is_file()).then_some(real)
 }
 
 /// A result's content block as text: its text, or an image (as
@@ -885,5 +931,53 @@ mod tests {
         .join("\n");
         let parts = content_parts(&stream);
         assert_eq!(parts.len(), 2);
+    }
+
+    #[test]
+    fn a_saved_result_is_taken_only_from_claude_codes_tool_results() {
+        let home = crate::mux::socket::testing::TempDir::new();
+        let root = home.path().join("projects");
+        let folder = root.join("-tmp/session/tool-results");
+        std::fs::create_dir_all(&folder).unwrap();
+        let saved = folder.join("t1.txt");
+        std::fs::write(&saved, "big").unwrap();
+        assert_eq!(
+            saved_result(&saved, &root),
+            Some(saved.canonicalize().unwrap())
+        );
+
+        let yours = home.path().join("notes.txt");
+        std::fs::write(&yours, "yours").unwrap();
+        assert_eq!(saved_result(&yours, &root), None, "outside the root");
+        let elsewhere = home.path().join("tool-results");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("a.json"), "{}").unwrap();
+        assert_eq!(
+            saved_result(&elsewhere.join("a.json"), &root),
+            None,
+            "a tool-results folder outside the root"
+        );
+        let up = folder.join("../../../../notes.txt");
+        assert_eq!(saved_result(&up, &root), None, "climbing out");
+        let link = folder.join("link.txt");
+        std::os::unix::fs::symlink(&yours, &link).unwrap();
+        assert_eq!(saved_result(&link, &root), None, "a link out");
+        assert!(yours.exists());
+    }
+
+    #[test]
+    fn the_haiku_loads_no_settings_and_is_allowed_only_its_tool() {
+        let args = args("mcp__claude_ai_Slack__slack_search_public", &json!({}));
+        let after = |flag: &str| {
+            let i = args.iter().position(|a| a == flag).unwrap();
+            args[i + 1].as_str()
+        };
+        assert_eq!(after("--tools"), "ToolSearch");
+        assert_eq!(
+            after("--allowedTools"),
+            "ToolSearch,mcp__claude_ai_Slack__slack_search_public"
+        );
+        assert_eq!(after("--permission-mode"), "dontAsk");
+        assert_eq!(after("--setting-sources"), "");
     }
 }
