@@ -315,6 +315,25 @@ impl Server {
         })
     }
 
+    /// Whether M-i has a ticket to open, as `ticket_here` finds one, from
+    /// what the server holds alone: the branch tab naming last read, else
+    /// the tab's names. For the drawing path, which reads no file.
+    pub(crate) fn ticket_known(&self, tab: TabId) -> bool {
+        let branch = self
+            .tab_path(tab)
+            .and_then(|d| self.tab_names.names.branch(d))
+            .and_then(linear::ticket_in);
+        branch.is_some()
+            || self.tabs.get(&tab).is_some_and(|t| {
+                t.opts
+                    .get("@tab_name")
+                    .and_then(|n| ticket::id_in_name(n))
+                    .or_else(|| ticket::id_in_name(&t.name))
+                    .or_else(|| ticket::id_in_name(&self.tab_label(tab)))
+                    .is_some()
+            })
+    }
+
     /// M-i: the ticket view to the right, or closed.
     fn toggle_ticket_view(&mut self, client: ClientId) {
         let Some((pane, tab, dir)) = self.here(client) else {

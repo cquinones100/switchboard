@@ -585,6 +585,13 @@
     "default": "off"
   },
   {
+    "key": "spare_hints",
+    "category": "Tabs and status bar",
+    "label": "Hints beside a narrow pane",
+    "description": "The columns right of a lone pane narrowed by Widest a lone pane gets list, centered in them, what the pane can open, each its key and a click that does what the key does: the tab's note, a split to the right, the PR and the ticket when the tab has one (in Claude's place with UX 2.0 on), and a link read beside the pane, with how to widen the pane under them; nothing shows where they don't fit. Off, those columns are the plain sunken surface",
+    "default": true
+  },
+  {
     "key": "tab_back_forward",
     "category": "Tabs and status bar",
     "label": "M-{ and M-} go back and forward",

@@ -3826,6 +3826,7 @@ impl Server {
         let side_focused = self.sidebar.focused(&s.name);
         let mut cursor = None;
         let mut drawn = Vec::new();
+        let mut spare_keys = Vec::new();
         if let Some(tab) = self.tabs.get(&s.current) {
             let area = s.area_for(tab);
             let main = area.intersection(frame.area());
@@ -3928,7 +3929,29 @@ impl Server {
             }
             let spread = s.spread_for(tab.zoomed);
             if spread != area {
-                compose::draw_spare(&mut frame.buf, spread, area, &c.overlays.look().theme);
+                let theme = c.overlays.look().theme;
+                compose::draw_spare(&mut frame.buf, spread, area, &theme);
+                if crate::settings::is_on("spare_hints")
+                    && let Some(spare) = super::beside::spare_of(spread, area)
+                {
+                    let pr = crate::settings::is_on("github") && self.tab_pr(s.current).is_some();
+                    let ticket = crate::settings::is_on("linear") && self.ticket_known(s.current);
+                    let rows = super::beside::rows(pr, ticket);
+                    let (keyed, last) = super::beside::lines(&self.bindings, &rows);
+                    let hover = match c.header_hover {
+                        Some(super::header::Button::Beside(b)) => Some(b),
+                        _ => None,
+                    };
+                    spare_keys = super::beside::draw(
+                        &mut frame.buf,
+                        spare,
+                        &keyed,
+                        &last,
+                        hover,
+                        super::graphics::round_ends(&c.term),
+                        &theme,
+                    );
+                }
             }
         }
         // UX 2.0's header over the tab's panes (src/mux/header.rs); a
@@ -3963,6 +3986,11 @@ impl Server {
                     .any(|l| l.overlay.kind() == "palette"),
             );
         }
+        header_keys.extend(
+            spare_keys
+                .into_iter()
+                .map(|(r, b)| (r, super::header::Button::Beside(b))),
+        );
         let side = self.sidebar_draw(&mut frame.buf, s, c.id);
         let hits = self.draw_status_rows(frame, s);
         // The prefix's mark at the status line's right end, or with none

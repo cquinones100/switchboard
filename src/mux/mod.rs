@@ -37,6 +37,7 @@
 //! - `latest`: M-p's restart building the checkout first, and telling
 //!   whether there is anything new to restart on.
 
+pub mod beside;
 pub mod build_row;
 pub mod client;
 pub mod commands;

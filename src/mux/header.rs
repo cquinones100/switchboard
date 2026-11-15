@@ -132,6 +132,9 @@ pub enum Button {
     /// M-h, the tab's history (src/history).
     History,
     Commands,
+    /// A row of the hints in the spare columns beside a lone pane
+    /// (src/mux/beside.rs), which go where the header's keys go.
+    Beside(super::beside::Beside),
 }
 
 impl Button {
@@ -145,6 +148,7 @@ impl Button {
             Button::Show(shown) => shown.action(),
             Button::History => Action::History,
             Button::Commands => Action::Palette,
+            Button::Beside(beside) => beside.action(),
         }
     }
 }

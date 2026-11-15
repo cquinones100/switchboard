@@ -242,6 +242,11 @@ impl Server {
         self.tab_names.shown.get(&tab)?.pr
     }
 
+    /// The tab's Linear ticket ID, as its name's facts say.
+    pub fn tab_ticket(&self, tab: TabId) -> Option<&str> {
+        title::ticket_of(&self.tab_names.shown.get(&tab)?.label)
+    }
+
     /// The repository the tab's PR is in, when its lookup said: origin's,
     /// or in a fork's clone the project upstream names.
     pub fn tab_pr_repo(&self, tab: TabId) -> Option<&Repo> {
@@ -295,10 +300,7 @@ impl Server {
             (Some(whole), None) => whole,
             (None, _) => label,
         };
-        let shown = self.tab_names.shown.get(&tab);
-        let ticket = shown
-            .and_then(|s| title::ticket_of(&s.label))
-            .map(str::to_string);
+        let ticket = self.tab_ticket(tab).map(str::to_string);
         let facts = title::facts(
             branch.as_deref(),
             path.as_deref().map(paths::tilde).as_deref(),

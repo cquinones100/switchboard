@@ -1108,6 +1108,77 @@ fn a_lone_pane_is_capped_on_a_wide_screen_and_a_split_uses_it_all() {
     });
 }
 
+/// Where `text` is on the screen, as (column, row) in cells.
+fn cell_of(screen: &[String], text: &str) -> Option<(usize, usize)> {
+    screen.iter().enumerate().find_map(|(y, row)| {
+        let at = row.find(text)?;
+        Some((row[..at].chars().count(), y))
+    })
+}
+
+#[test]
+fn the_spare_columns_beside_a_capped_pane_list_what_can_open_there() {
+    let server = TestServer::start_with_settings(r#"{"lone_pane_width": "165"}"#);
+    let mut client = server.attach(365, 40);
+    client.wait_text("$");
+    let side = server.list()["sessions"][0]["sidebar"]["columns"]
+        .as_u64()
+        .unwrap_or(0) as usize;
+    // Centered right of the rule, each row its bound key; the tab has no
+    // PR or ticket, so neither row shows.
+    let screen = client.wait_text("BESIDE THIS PANE");
+    let (x, _) = cell_of(&screen, "BESIDE THIS PANE").unwrap();
+    let spare = 365 - (side + 166);
+    let middle = side + 166 + spare / 2;
+    assert!(
+        x > side + 166 && x < middle,
+        "at {x}:\n{}",
+        screen.join("\n")
+    );
+    let (note_x, note_y) = cell_of(&screen, "Open the tab's note").unwrap();
+    assert!(screen[note_y].contains("M-e"), "{}", screen[note_y]);
+    assert!(note_x > side + 166);
+    assert!(cell_of(&screen, "The PR").is_none());
+    assert!(cell_of(&screen, "Read a link beside it").is_some());
+    assert!(cell_of(&screen, "C-M-S-l to widen").is_some());
+    // A click on a row does what its key does.
+    let (sx, sy) = cell_of(&screen, "Split to the right").unwrap();
+    let (col, row) = (sx + 1, sy + 1);
+    client.send(format!("\x1b[<0;{col};{row}M\x1b[<0;{col};{row}m").as_bytes());
+    client.wait_for("split, the hints gone", |s| {
+        widths(&server.list()).len() == 2 && cell_of(s, "BESIDE THIS PANE").is_none()
+    });
+    let second = server.list()["sessions"][0]["tabs"][0]["panes"][1]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["kill-pane", "-t", &second]);
+    client.wait_text("BESIDE THIS PANE");
+    // A ticket the tab's name gives, as M-i finds it, gets its row.
+    let tab = server.list()["sessions"][0]["tabs"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["set", "-t", &tab, "@tab_name", "ABC-123 settings page"]);
+    client.wait_text("The ticket");
+    // A key rebound in keys.json is the one shown.
+    let config = server.home.join(".config/switchboard");
+    std::fs::write(
+        config.join("keys.json"),
+        r#"{"root": {"M-e": null, "M-n": "notes-beside"}}"#,
+    )
+    .unwrap();
+    client.wait_for("the rebound key", |s| {
+        cell_of(s, "Open the tab's note").is_some_and(|(_, y)| s[y].contains("M-n"))
+    });
+    // Off, the spare columns are plain.
+    common::write_settings(
+        &server.home,
+        serde_json::json!({"lone_pane_width": "165", "spare_hints": false}),
+    );
+    client.wait_for("no hints", |s| cell_of(s, "BESIDE THIS PANE").is_none());
+}
+
 /// Settings' `lone_pane_width` as the server wrote it to the test's file.
 fn lone_setting(server: &TestServer) -> Option<String> {
     let file = server.home.join(".config/switchboard/settings.json");
