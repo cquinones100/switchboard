@@ -49,11 +49,12 @@ const LEAVE: &[u8] = b"\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?1004l\x
 
 /// Asked of the terminal after `ENTER` while the `extended_keys` setting is
 /// on, as tmux's `extended-keys on` asked it: xterm's modifyOtherKeys at
-/// level 2, and the kitty keyboard protocol's flag that tells keys apart,
+/// level 2, and the kitty keyboard protocol's flags that tell keys apart
+/// and report the shifted key (`CSI 91:123;4u` for Alt+Shift+[, `M-{`),
 /// pushed onto its stack for the alternate screen. A terminal that knows
 /// both uses kitty's; one that knows neither ignores them, and the keys
 /// come as before. Either way the server reads every form (`input`).
-const KEYS_ON: &[u8] = b"\x1b[>4;2m\x1b[>1u";
+const KEYS_ON: &[u8] = b"\x1b[>4;2m\x1b[>5u";
 
 /// What `KEYS_ON` asked taken back: the flags popped off the alternate
 /// screen's stack (so before `LEAVE` leaves it), modifyOtherKeys reset.

@@ -331,6 +331,39 @@ impl Key {
     }
 }
 
+/// What Shift types with an ASCII digit or punctuation key on a US layout,
+/// for a terminal that sends Alt+Shift+[ as Shift and `[` (the kitty
+/// protocol without its alternate keys), so it matches `M-{`.
+fn us_shifted(c: char) -> Option<char> {
+    const PAIRS: [(char, char); 21] = [
+        ('`', '~'),
+        ('1', '!'),
+        ('2', '@'),
+        ('3', '#'),
+        ('4', '$'),
+        ('5', '%'),
+        ('6', '^'),
+        ('7', '&'),
+        ('8', '*'),
+        ('9', '('),
+        ('0', ')'),
+        ('-', '_'),
+        ('=', '+'),
+        ('[', '{'),
+        (']', '}'),
+        ('\\', '|'),
+        (';', ':'),
+        ('\'', '"'),
+        (',', '<'),
+        ('.', '>'),
+        ('/', '?'),
+    ];
+    PAIRS
+        .iter()
+        .find(|(base, _)| *base == c)
+        .map(|&(_, shifted)| shifted)
+}
+
 /// The one character a case mapping gives, or `None` when it gives several
 /// (`ß` to `SS`), which isn't a key.
 fn single(mut chars: impl Iterator<Item = char>) -> Option<char> {
@@ -929,8 +962,33 @@ fn csi_u(p: &Params) -> Option<Input> {
     if !matches!(p.get(1, 1), None | Some(1) | Some(2)) {
         return None;
     }
-    let key = code_key(p.get(0, 0)?)?;
-    Some(Input::Key(Key::new(key.code, key.mods.union(mods))))
+    let code = p.get(0, 0)?;
+    let key = code_key(code)?;
+    let mods = key.mods.union(mods);
+    // The kitty form names a shifted key by its unshifted code and Shift,
+    // so the character Shift typed is the key, as a terminal without the
+    // protocol sends it: Alt+Shift+[ is `M-{`. With the alternate keys
+    // asked for, `code:shifted` names it whatever the layout; without them,
+    // a US layout's pairs do, for the main keys alone: the keypad's codes
+    // read as `/` or `1` too, but Shift doesn't change what they type. A
+    // letter is left to `normalized`, which keeps Shift when Ctrl is held
+    // too (`C-S-a`).
+    let typed_on_main_keys = code < 0x80;
+    let typed_shifted = match key.code {
+        KeyCode::Char(c) if mods.shift && !mods.ctrl && !c.is_alphabetic() => p
+            .get(0, 1)
+            .and_then(char::from_u32)
+            .or_else(|| us_shifted(c).filter(|_| typed_on_main_keys)),
+        _ => None,
+    };
+    if let Some(c) = typed_shifted {
+        let mods = Mods {
+            shift: false,
+            ..mods
+        };
+        return Some(Input::Key(Key::new(KeyCode::Char(c), mods)));
+    }
+    Some(Input::Key(Key::new(key.code, mods)))
 }
 
 /// The key a Unicode code point names in the kitty and modifyOtherKeys forms:
@@ -1696,6 +1754,16 @@ mod tests {
             (b"\x1b[13;5u", "C-Enter"),
             (b"\x1b[106;4u", "M-J"),
             (b"\x1b[106:74;4u", "M-J"),
+            (b"\x1b[91:123;4u", "M-{"),
+            (b"\x1b[93:125;4u", "M-}"),
+            (b"\x1b[47:63;4u", "M-?"),
+            // Without the alternate key, through the US layout's pairs.
+            (b"\x1b[91;4u", "M-{"),
+            (b"\x1b[49;2u", "!"),
+            // The keypad's divide and 1 keep what they type with Shift.
+            (b"\x1b[57410;2u", "S-/"),
+            (b"\x1b[57400;4u", "M-S-1"),
+            (b"\x1b[97:65;6u", "C-S-a"),
             (b"\x1b[97;5u", "C-a"),
             (b"\x1b[97;6u", "C-S-a"),
             (b"\x1b[115;8u", "C-M-S-s"),

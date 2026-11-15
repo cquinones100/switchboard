@@ -66,6 +66,22 @@ fn splitting_tabs_and_closing() {
 }
 
 #[test]
+fn alt_shift_bracket_in_the_kitty_form_goes_back_and_forward() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-n", "second"]);
+    client.wait_text("2:second");
+    let current = |i: usize| server.list()["sessions"][0]["tabs"][i]["current"] == true;
+    // Ghostty's Alt+Shift+[ without the alternate key: Shift and `[`.
+    client.type_text("\x1b[91;4u");
+    client.wait_for("the first tab current", |_| current(0));
+    // With the alternate key, as the client asks for: `]` shifted to `}`.
+    client.type_text("\x1b[93:125;4u");
+    client.wait_for("the second tab current again", |_| current(1));
+}
+
+#[test]
 fn new_tab_comes_to_the_front_and_with_d_stays_behind() {
     let server = TestServer::start();
     let mut client = server.attach(100, 30);
