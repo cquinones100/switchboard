@@ -1,12 +1,12 @@
 //! The landings autopilot's tabs made without asking (its menu's
-//! "Land without asking"), for the notifications: what queue-and-clean's
-//! `switchboard land-lock autolanded <short hash> [--plan <file>] <item>` adds
-//! once such a landing has pushed, `autolanded.json` in the state directory,
+//! "Land without asking"), for the notifications: what `switchboard
+//! land-lock push` adds through `land-lock autolanded` once such a landing
+//! has pushed, `autolanded.json` in the state directory,
 //! `[{ hash, item, tab, at, plan, decided, notApplied }]`, `plan` the item's
 //! plan note by its path within the notes directory, `decided` how many
 //! `Decided hands-free` lines it holds (autopilot's hands-free mode) and
 //! `notApplied` what the change needs to take effect that a hands-free tab
-//! left for you rather than ask (`--not-applied`, queue-and-clean saying the
+//! left for you rather than ask (`--apply-range`, queue-and-clean saying the
 //! landing again once it knows), the last `KEPT`, each until it is dismissed. Ported
 //! from autopilot.js's `readLanded` and `dismissLanded` and land-lock.js's
 //! `autolanded`, the tab named by its id where tmux named its window.

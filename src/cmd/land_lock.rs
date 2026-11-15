@@ -67,17 +67,24 @@
 //!                     branch, with Settings' target_follows_default on, it
 //!                     opens a tab running `update-target` for each branch
 //!                     items land on (src/cmd/update_target.rs)
-//! land-lock autolanded <short hash> [--plan <file> | --decided <n>] [--not-applied <labels>] [item]
+//! land-lock autolanded <short hash> [--plan <file>] [--apply-range <from> <to>] [item]
 //!                     says this tab landed without asking (autopilot's
-//!                     "Land without asking"): marks the tab
-//!                     @autopilot_autoland with the hash, which the sidebar
-//!                     shows, and adds the landing to the notifications
-//!                     (autolanded.json in the state directory), with the
-//!                     count of its plan's `Decided hands-free` lines (or,
-//!                     for an item with no plan, the count given), and
-//!                     what the change needs to take effect that a
-//!                     hands-free tab left for you (`--not-applied`); said
-//!                     again for the same hash, it updates that landing
+//!                     "Land without asking"), as `land-lock push` does
+//!                     once it pushed: marks the tab @autopilot_autoland
+//!                     with the hash, which the sidebar shows, and adds the
+//!                     landing to the notifications (autolanded.json in the
+//!                     state directory), the item the tab's
+//!                     @autopilot_item when not given, with the count of
+//!                     its plan's `Decided hands-free` lines (the tab's
+//!                     plan when not given, else the lines under the item
+//!                     in the tab's note), and what the change needs to
+//!                     take effect that a hands-free tab left for you (the
+//!                     actions `apply-actions` lists for <from>..<to> in
+//!                     the main clone); said again for the same hash, it
+//!                     updates that landing, keeping what it doesn't say;
+//!                     said by `land-lock push`, with
+//!                     autopilot_landing_notices on, the Slack relay sends
+//!                     it too
 //! land-lock record clear | <tests|review|leak> <json> | found <json> | output <tests|review> <file>
 //!                     keeps what this landing has done for the Landing
 //!                     view's cells and detail, in landing.json in the
@@ -143,7 +150,7 @@ const MUTEX_TRIES: u32 = 500;
 /// `requeue`'s mark, in the worktree's own git directory.
 const REQUEUED: &str = "land-requeued";
 
-const USAGE: &str = "usage: land-lock [--target <branch>] take|wait|release|requeue|leave|holder|queue|move|phase [words]|record ...|push [--asked]|landed <short hash> <branch>|autolanded <short hash> [--plan <file> | --decided <n>] [--not-applied <labels>] [item]";
+const USAGE: &str = "usage: land-lock [--target <branch>] take|wait|release|requeue|leave|holder|queue|move|phase [words]|record ...|push [--asked]|landed <short hash> <branch>|autolanded <short hash> [--plan <file>] [--apply-range <from> <to>] [item]";
 
 pub fn main(mut args: Vec<String>) -> ExitCode {
     let mut given_target = None;
@@ -425,12 +432,13 @@ pub(crate) fn landed(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// A landing made without asking, said: the caller's tab marked
-/// `@autopilot_autoland` with the hash (its tab whether a tool stands in for
-/// Claude's pane or not, since a parked pane keeps its tab), and the landing
-/// added to `autolanded.json`, which the server reads into the
-/// notifications ("Landed <hash>: <item>"), naming the tab while it is
-/// open.
+const AUTOLANDED_USAGE: &str =
+    "usage: land-lock autolanded <short hash> [--plan <file>] [--apply-range <from> <to>] [item]";
+
+/// `land-lock autolanded`: a landing made without asking, said, as
+/// `say_autolanded` says it, `--apply-range` naming what the main clone
+/// moved by, whose actions (`switchboard apply-actions`) a hands-free tab
+/// left for you.
 pub(crate) fn autolanded(args: &[String]) -> ExitCode {
     let mut args = args.to_vec();
     let mut plan_file = None;
@@ -440,66 +448,167 @@ pub(crate) fn autolanded(args: &[String]) -> ExitCode {
         plan_file = Some(PathBuf::from(args.remove(at + 1)));
         args.remove(at);
     }
-    // With no plan, the count of the decisions written under the item.
-    let mut decided_given = None;
-    if let Some(at) = args.iter().position(|a| a == "--decided")
-        && at + 1 < args.len()
-    {
-        decided_given = args.remove(at + 1).parse::<usize>().ok();
+    let mut range = None;
+    if let Some(at) = args.iter().position(|a| a == "--apply-range") {
+        if at + 2 >= args.len() {
+            eprintln!("{AUTOLANDED_USAGE}");
+            return ExitCode::from(2);
+        }
+        let to = args.remove(at + 2);
+        let from = args.remove(at + 1);
         args.remove(at);
+        range = Some((from, to));
     }
-    // What a hands-free tab left for you to apply, rather than ask.
-    let mut not_applied = String::new();
-    if let Some(at) = args.iter().position(|a| a == "--not-applied")
-        && at + 1 < args.len()
-    {
-        not_applied = worktree::one_line(&args.remove(at + 1));
-        args.remove(at);
-    }
-    let notes = crate::notes::store::notes_dir();
-    // Both resolved, since wtn names the plan by its real path and the
-    // notes directory may be a link.
-    let notes = notes.canonicalize().unwrap_or(notes);
-    let real_plan = plan_file.as_ref().and_then(|f| f.canonicalize().ok());
-    let plan = real_plan
-        .as_ref()
-        .and_then(|f| f.strip_prefix(&notes).ok())
-        .map(|rel| rel.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let decided = plan_file
-        .and_then(|f| fs::read_to_string(f).ok())
-        .map(|text| crate::autopilot::landed::decided_in(&text))
-        .or(decided_given)
-        .unwrap_or(0);
     let Some(hash) = args.first().filter(|h| !h.is_empty()).cloned() else {
-        eprintln!(
-            "usage: land-lock autolanded <short hash> [--plan <file> | --decided <n>] [--not-applied <labels>] [item]"
-        );
+        eprintln!("{AUTOLANDED_USAGE}");
         return ExitCode::from(2);
     };
-    let mut tab = String::new();
-    if socket::in_pane() {
-        let _ = socket::ask(&["set", "@autopilot_autoland", &hash]);
-        tab = socket::ask_ok(&["display", "tab"])
-            .map(|t| t.trim().to_string())
-            .unwrap_or_default();
+    let mut not_applied = None;
+    if let Some((from, to)) = range {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let clone = crate::cmd::work::main_clone(&cwd).unwrap_or(cwd);
+        match crate::cmd::apply_actions::for_range(&clone, &from, &to) {
+            Ok(list) => {
+                let labels: Vec<String> = list.into_iter().map(|a| a.label).collect();
+                not_applied = Some(labels.join(", "));
+            }
+            Err(e) => {
+                eprintln!("land-lock: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
     }
-    let landing = crate::autopilot::landed::Landing {
-        hash,
-        item: worktree::one_line(&args[1..].join(" ")),
-        tab,
-        at: util::now_ms(),
-        plan,
-        decided,
-        not_applied,
-    };
-    match crate::autopilot::landed::add(&crate::paths::state_dir(), landing) {
+    let item = worktree::one_line(&args[1..].join(" "));
+    match say_autolanded(&hash, item, plan_file, not_applied, None) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("land-lock: couldn't keep the landing: {e}");
             ExitCode::FAILURE
         }
     }
+}
+
+/// A landing made without asking, said: the caller's tab marked
+/// `@autopilot_autoland` with the hash (its tab whether a tool stands in for
+/// Claude's pane or not, since a parked pane keeps its tab), and the landing
+/// added to `autolanded.json`, which the server reads into the
+/// notifications ("Landed <hash>: <item>"), naming the tab while it is
+/// open. What isn't given comes from the tab: the item from
+/// `@autopilot_item`, and its decisions from its plan (`@tab_plan_note`,
+/// else the one the item links in `@tab_note`), else the `Decided
+/// hands-free` lines under the item. Said again for the same hash, it
+/// updates that landing, keeping what this time doesn't know. Said by the
+/// landing's push (`onto`, the branch it pushed to), with
+/// `autopilot_landing_notices` on, the Slack relay sends it too, once: an
+/// update never does, even of a landing whose notification was dismissed.
+pub(crate) fn say_autolanded(
+    hash: &str,
+    item: String,
+    plan_file: Option<PathBuf>,
+    not_applied: Option<String>,
+    onto: Option<&str>,
+) -> io::Result<()> {
+    use crate::autopilot::landed;
+    let item = if item.is_empty() {
+        super::land_push::tab_option(crate::autopilot::ITEM)
+    } else {
+        item
+    };
+    let (plan_file, decided_under) = match plan_file {
+        Some(file) => (Some(file), 0),
+        None => tab_plan(&item),
+    };
+    let notes = crate::notes::store::notes_dir();
+    // Both resolved, since wtn names the plan by its real path and the
+    // notes directory may be a link.
+    let notes = notes.canonicalize().unwrap_or(notes);
+    let plan = plan_file
+        .as_ref()
+        .and_then(|f| f.canonicalize().ok())
+        .and_then(|f| f.strip_prefix(&notes).ok().map(Path::to_path_buf))
+        .map(|rel| rel.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let decided = plan_file
+        .and_then(|f| fs::read_to_string(f).ok())
+        .map_or(decided_under, |text| landed::decided_in(&text));
+    let mut tab = String::new();
+    if socket::in_pane() {
+        let _ = socket::ask(&["set", "@autopilot_autoland", hash]);
+        tab = socket::ask_ok(&["display", "tab"])
+            .map(|t| t.trim().to_string())
+            .unwrap_or_default();
+    }
+    let state = crate::paths::state_dir();
+    let before = landed::read(&state).into_iter().find(|l| l.hash == hash);
+    let mut landing = landed::Landing {
+        hash: hash.to_string(),
+        item,
+        tab,
+        at: util::now_ms(),
+        plan,
+        decided,
+        not_applied: String::new(),
+    };
+    if let Some(before) = before {
+        let knew_nothing = landing.plan.is_empty() && landing.decided == 0;
+        let keep = |now: &mut String, then: String| {
+            if now.is_empty() {
+                *now = then;
+            }
+        };
+        keep(&mut landing.item, before.item);
+        keep(&mut landing.tab, before.tab);
+        keep(&mut landing.plan, before.plan);
+        landing.not_applied = before.not_applied;
+        if knew_nothing {
+            landing.decided = before.decided;
+        }
+        landing.at = before.at;
+    }
+    // A range that needs nothing says so, in place of what was left before.
+    if let Some(left) = not_applied {
+        landing.not_applied = worktree::one_line(&left);
+    }
+    let item = if landing.item.is_empty() {
+        "a change"
+    } else {
+        &landing.item
+    };
+    let words = onto.map(|onto| format!("Landed {hash} on {onto} without asking: {item}"));
+    landed::add(&state, landing)?;
+    if let Some(words) = words
+        && crate::settings::is_on("autopilot_landing_notices")
+    {
+        // The relay not running is no failure: the notifications have it.
+        let paths = crate::relay::Paths::current();
+        let wait = crate::relay::outbox::NOTIFY_WAIT;
+        let _ = crate::relay::outbox::notify(&paths, &words, Some("landing"), wait);
+    }
+    Ok(())
+}
+
+/// The tab's plan for `item` (`@tab_plan_note`, else the one the item
+/// links in `@tab_note`), else the count of `Decided hands-free` lines
+/// under the item in its note.
+fn tab_plan(item: &str) -> (Option<PathBuf>, usize) {
+    use super::land_push::tab_option;
+    let notes = crate::notes::store::notes_dir();
+    let plan = tab_option(crate::notes::serve::PLAN_NOTE);
+    if !plan.is_empty() && notes.join(&plan).is_file() {
+        return (Some(notes.join(plan)), 0);
+    }
+    let note = tab_option("@tab_note");
+    let text = (!note.is_empty() && !item.is_empty())
+        .then(|| fs::read_to_string(notes.join(&note)).ok())
+        .flatten()
+        .unwrap_or_default();
+    if let Some(file) = crate::cmd::worktree_from_note::item_plan_file(&notes, &text, item) {
+        return (Some(file), 0);
+    }
+    (
+        None,
+        crate::cmd::worktree_from_note::item_decided(&text, item),
+    )
 }
 
 /// The lock and queue of one repository, from one of its worktrees.

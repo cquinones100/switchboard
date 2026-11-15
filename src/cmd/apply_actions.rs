@@ -400,11 +400,13 @@ pub fn is_switchboard(dir: &Path) -> bool {
 }
 
 fn names(repo: &Path, from: &str, to: &str, added: bool) -> Result<Vec<String>, String> {
+    let from = commit_of(repo, from)?;
+    let to = commit_of(repo, to)?;
     let mut args = vec!["diff", "--name-only"];
     if added {
         args.push("--diff-filter=A");
     }
-    args.extend([from, to, "--"]);
+    args.extend([from.as_str(), to.as_str(), "--"]);
     worktree::git_at(repo, &args)
         .map(|out| {
             out.lines()
@@ -415,6 +417,30 @@ fn names(repo: &Path, from: &str, to: &str, added: bool) -> Result<Vec<String>, 
         .map_err(|e| e.to_string())
 }
 
+/// The commit a revision names, as its full hash, so what reaches `git diff`
+/// is never an option (`--output=<file>` would have git write a file, which
+/// Claude's permissions deny for git itself and allow for this command).
+fn commit_of(repo: &Path, rev: &str) -> Result<String, String> {
+    if rev.starts_with('-') {
+        return Err(format!("not a revision: {rev}"));
+    }
+    let named = format!("{rev}^{{commit}}");
+    worktree::git_at(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            &named,
+        ],
+    )
+    .map(|out| out.trim().to_string())
+    .ok()
+    .filter(|hash| !hash.is_empty())
+    .ok_or_else(|| format!("not a revision: {rev}"))
+}
+
 const USAGE: &str = "usage: switchboard apply-actions <repo> <from> <to>";
 
 /// `switchboard apply-actions`.
@@ -423,14 +449,27 @@ pub fn main(args: Vec<String>) -> ExitCode {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
-    let repo = std::path::absolute(repo).unwrap_or_else(|_| PathBuf::from(repo));
-    let (changed, added) = match (names(&repo, from, to, false), names(&repo, from, to, true)) {
-        (Ok(c), Ok(a)) => (c, a),
-        (Err(e), _) | (_, Err(e)) => {
-            eprintln!("apply-actions: {e}");
-            return ExitCode::from(1);
+    match for_range(Path::new(repo), from, to) {
+        Ok(list) => {
+            for action in list {
+                println!("{}", action.line());
+            }
+            ExitCode::SUCCESS
         }
-    };
+        Err(e) => {
+            eprintln!("apply-actions: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// What the range `<from>..<to>` of the clone `repo` needs to take effect,
+/// as `switchboard apply-actions` lists it, which `land-lock autolanded
+/// --apply-range` reads too.
+pub fn for_range(repo: &Path, from: &str, to: &str) -> Result<Vec<Action>, String> {
+    let repo = std::path::absolute(repo).unwrap_or_else(|_| repo.to_path_buf());
+    let changed = names(&repo, from, to, false)?;
+    let added = names(&repo, from, to, true)?;
     let cx = Context {
         switchboard: is_switchboard(&repo),
         release: update::is_release_build(),
@@ -441,10 +480,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
         changed,
         added,
     };
-    for action in actions(&cx) {
-        println!("{}", action.line());
-    }
-    ExitCode::SUCCESS
+    Ok(actions(&cx))
 }
 
 // ── Doing Switchboard's part ────────────────────────────────────────────────

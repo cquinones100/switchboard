@@ -181,7 +181,7 @@ fn this_program(here: &Path, args: &[&str]) -> Option<std::process::Output> {
 }
 
 /// What the tab this runs in has an option set to, empty outside a pane.
-fn tab_option(option: &str) -> String {
+pub(crate) fn tab_option(option: &str) -> String {
     if !socket::in_pane() {
         return String::new();
     }
@@ -394,18 +394,7 @@ pub(crate) fn main(
         }
     }
     if !asked {
-        let (item, said_of) = landing_item();
-        let mut said = vec![short.clone()];
-        said.extend(said_of);
-        said.push(item.clone());
-        let _ = land_lock::autolanded(&said);
-        if crate::settings::is_on("autopilot_landing_notices") {
-            let words = format!("Landed {short} on {} without asking: {item}", onto.name);
-            let _ = this_program(
-                here,
-                &["slack-relay", "notify", "--from", "landing", &words],
-            );
-        }
+        let _ = land_lock::say_autolanded(&short, String::new(), None, None, Some(&onto.name));
     }
     let main_clone = follow(common, &onto, &head, clone_before);
     let _ = lock.release();
@@ -415,35 +404,6 @@ pub(crate) fn main(
         println!("{left}");
     }
     ExitCode::SUCCESS
-}
-
-/// The tab's item, and what `autolanded` is told of its decisions: its
-/// plan (`--plan <file>`), else the count of `Decided hands-free` lines
-/// under the item in its note (`--decided <n>`), else nothing.
-fn landing_item() -> (String, Vec<String>) {
-    let item = tab_option(crate::autopilot::ITEM);
-    let notes = crate::notes::store::notes_dir();
-    let plan = tab_option(crate::notes::serve::PLAN_NOTE);
-    if !plan.is_empty() && notes.join(&plan).is_file() {
-        let file = notes.join(plan).to_string_lossy().into_owned();
-        return (item, vec!["--plan".into(), file]);
-    }
-    let note = tab_option("@tab_note");
-    let text = (!note.is_empty() && !item.is_empty())
-        .then(|| std::fs::read_to_string(notes.join(&note)).ok())
-        .flatten()
-        .unwrap_or_default();
-    if let Some(file) = crate::cmd::worktree_from_note::item_plan_file(&notes, &text, &item) {
-        let file = file.to_string_lossy().into_owned();
-        return (item, vec!["--plan".into(), file]);
-    }
-    let decided = crate::cmd::worktree_from_note::item_decided(&text, &item);
-    let said = if decided > 0 {
-        vec!["--decided".into(), decided.to_string()]
-    } else {
-        Vec::new()
-    };
-    (item, said)
 }
 
 /// A failure: said, the lock let go, exit 1.

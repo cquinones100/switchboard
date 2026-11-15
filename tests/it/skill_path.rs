@@ -396,7 +396,7 @@ fn a_tab_of_the_work_a_note_mode_lands_without_asking_only_once_leak_check_finds
     assert!(
         hands_free.contains("switchboard show @autopilot_handsfree")
             && hands_free.contains("ask nothing")
-            && hands_free.contains("--not-applied"),
+            && hands_free.contains("--apply-range \"$before\" HEAD"),
         "a hands-free tab leaves applying to the user: {hands_free}"
     );
     let ask = step("4. **Ask** with `AskUserQuestion`");

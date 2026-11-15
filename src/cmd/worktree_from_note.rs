@@ -1675,6 +1675,18 @@ mod tests {
     }
 
     #[test]
+    fn an_item_with_no_plan_counts_the_decisions_written_under_it() {
+        let note = "# Work\n\n- [ ] Make X\n  Decided hands-free: A → B\n\n  - Decided hands-free: C → D\n- [ ] Make Y\n  Decided hands-free: E → F\nDecided hands-free: at the top level\n";
+        assert_eq!(item_decided(note, "Make X"), 2, "blank lines between kept");
+        assert_eq!(
+            item_decided(note, "Make Y"),
+            1,
+            "up to the next top-level line"
+        );
+        assert_eq!(item_decided(note, "Not an item"), 0);
+    }
+
+    #[test]
     fn a_decision_section_with_its_choice_made_counts_as_settled() {
         let dir = std::env::temp_dir().join(format!("sb-settled-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);

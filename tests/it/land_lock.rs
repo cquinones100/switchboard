@@ -628,10 +628,10 @@ fn a_landing_without_asking_marks_its_tab_and_shows_in_the_notifications_until_a
         .as_str()
         .unwrap()
         .to_string();
-    let inside = |args: &[&str]| {
+    let inside_at = |dir: &Path, args: &[&str]| {
         Command::new(BIN)
             .args(args)
-            .current_dir(server.dir.path())
+            .current_dir(dir)
             .env("HOME", &server.home)
             .env("SWITCHBOARD_STATE_DIR", &server.state)
             .env("SWITCHBOARD", server.socket())
@@ -640,6 +640,8 @@ fn a_landing_without_asking_marks_its_tab_and_shows_in_the_notifications_until_a
             .output()
             .unwrap()
     };
+    let inside = |args: &[&str]| inside_at(server.dir.path(), args);
+    let notices = relay_stand_in(&server.home);
     // The mode's switch on its tab, as queue-and-clean reads it from its
     // pane.
     server.ok(&["set", "-t", &tab, "@autopilot_land", "1"]);
@@ -660,27 +662,79 @@ fn a_landing_without_asking_marks_its_tab_and_shows_in_the_notifications_until_a
         "its tab marked"
     );
     client.wait_text("Landed abc1234: Make the thing");
+    assert!(
+        notices.lock().unwrap().is_empty(),
+        "only the landing's push sends the Slack notice"
+    );
 
-    // Said again by a hands-free tab, with what it left for you to apply:
-    // the same notification, carrying it.
-    let again = inside(&[
-        "land-lock",
-        "autolanded",
-        "abc1234",
-        "--not-applied",
-        "Build Switchboard",
-        "Make",
-        "the",
-        "thing",
-    ]);
-    assert!(again.status.success());
+    // Said again by a hands-free tab, with the range the main clone moved
+    // by: the same notification, carrying what that range needs, the item
+    // kept.
+    let repo = repo(server.dir.path());
+    std::fs::write(repo.join(".env.example"), "A=1\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-q", "-m", "env"]);
+    let again = inside_at(
+        &repo,
+        &[
+            "land-lock",
+            "autolanded",
+            "abc1234",
+            "--apply-range",
+            "HEAD~1",
+            "HEAD",
+        ],
+    );
+    assert!(
+        again.status.success(),
+        "{}",
+        String::from_utf8_lossy(&again.stderr)
+    );
     let kept: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(server.state.join("autolanded.json")).unwrap(),
     )
     .unwrap();
     assert_eq!(kept.as_array().unwrap().len(), 1, "one landing: {kept}");
-    assert_eq!(kept[0]["notApplied"], "Build Switchboard");
+    assert_eq!(
+        kept[0]["notApplied"],
+        "Copy what's new in .env.example into your .env"
+    );
     assert_eq!(kept[0]["item"], "Make the thing");
+    // A range that needs nothing clears what was left.
+    let empty = inside_at(
+        &repo,
+        &[
+            "land-lock",
+            "autolanded",
+            "abc1234",
+            "--apply-range",
+            "HEAD",
+            "HEAD",
+        ],
+    );
+    assert!(empty.status.success());
+    let kept: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(server.state.join("autolanded.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(kept[0]["notApplied"], "");
+    assert_eq!(kept[0]["item"], "Make the thing");
+    // A range that is an option never reaches git.
+    let written = server.dir.path().join("written");
+    let option = format!("--output={}", written.display());
+    let refused = inside_at(
+        &repo,
+        &[
+            "land-lock",
+            "autolanded",
+            "abc1234",
+            "--apply-range",
+            &option,
+            "HEAD",
+        ],
+    );
+    assert!(!refused.status.success());
+    assert!(!written.exists(), "git wrote no file");
 
     // A second tab in front; Enter on the notification opens mission
     // control's Notifications view with its menu over it, which goes back
@@ -727,6 +781,7 @@ fn a_landing_without_asking_stays_out_of_the_sidebar_with_its_notifications_off(
         .as_str()
         .unwrap()
         .to_string();
+    let notices = relay_stand_in(&server.home);
     let said = Command::new(BIN)
         .args(["land-lock", "autolanded", "abc1234", "Make", "the", "thing"])
         .current_dir(server.dir.path())
@@ -748,6 +803,10 @@ fn a_landing_without_asking_stays_out_of_the_sidebar_with_its_notifications_off(
             .trim(),
         "abc1234",
         "its tab marked"
+    );
+    assert!(
+        notices.lock().unwrap().is_empty(),
+        "nothing sent to Slack with the setting off"
     );
     let history = server.state.join("notifications");
     let dismissed = || {
@@ -783,6 +842,46 @@ fn a_landing_without_asking_stays_out_of_the_sidebar_with_its_notifications_off(
         "not in the sidebar: {}",
         screen.join("\n")
     );
+}
+
+/// The Slack relay, as `slack-relay notify` finds it: its lock naming this
+/// test's process, and a thread answering each notice queued in its outbox
+/// as posted. The notices' words, as they were queued.
+fn relay_stand_in(home: &Path) -> std::sync::Arc<std::sync::Mutex<Vec<String>>> {
+    let state = home.join(".local/state/slack-relay");
+    let outbox = state.join("outbox");
+    std::fs::create_dir_all(&outbox).unwrap();
+    std::fs::write(
+        state.join("relay.lock"),
+        format!("{} test", std::process::id()),
+    )
+    .unwrap();
+    let notices = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = notices.clone();
+    std::thread::spawn(move || {
+        loop {
+            let Ok(entries) = std::fs::read_dir(&outbox) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_none_or(|e| e != "json") {
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                let notice: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+                seen.lock()
+                    .unwrap()
+                    .push(notice["text"].as_str().unwrap_or_default().to_string());
+                let _ = std::fs::remove_file(&path);
+                let _ = std::fs::write(path.with_extension("sent"), "1.2");
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    });
+    notices
 }
 
 /// `switchboard landing`, as queue-and-clean asks it how a repository lands.
@@ -1411,6 +1510,11 @@ fn the_landing_push_lands_without_asking_through_its_gate_and_does_the_bookkeepi
     l.server.ok(&["set", "-t", &l.tab, "@autopilot_land", "1"]);
     l.server
         .ok(&["set", "-t", &l.tab, "@autopilot_item", "Add the feature"]);
+    common::write_settings(
+        &l.server.home,
+        json!({ "tips": false, "github": false, "autopilot_landing_notices": true, "target_follows_default": false }),
+    );
+    let notices = relay_stand_in(&l.server.home);
     // Nothing but `--asked` follows it, so no rule naming it reaches that.
     let extra = l.run(&["land-lock", "push", "Add", "--asked"]);
     assert_eq!(code(&extra), 2, "{}", stdout(&extra));
@@ -1447,8 +1551,31 @@ fn the_landing_push_lands_without_asking_through_its_gate_and_does_the_bookkeepi
             .is_empty(),
         "filed as landed"
     );
-    // The landing kept with its item, which the server, with "Notify when
-    // autopilot lands" off, moves into the notifications' history.
+    assert_eq!(
+        *notices.lock().unwrap(),
+        [format!(
+            "Landed {pushed} on main without asking: Add the feature"
+        )],
+        "the Slack relay sends it"
+    );
+    // Dismissed, then updated with what the change needs: no second notice.
+    std::fs::write(l.server.state.join("autolanded.json"), "[]").unwrap();
+    let updated = l.run(&[
+        "land-lock",
+        "autolanded",
+        pushed,
+        "--apply-range",
+        "HEAD",
+        "HEAD",
+    ]);
+    assert_eq!(
+        code(&updated),
+        0,
+        "{}",
+        String::from_utf8_lossy(&updated.stderr)
+    );
+    assert_eq!(notices.lock().unwrap().len(), 1, "sent once");
+    // The landing kept with its item.
     let kept = || {
         let pending =
             std::fs::read_to_string(l.server.state.join("autolanded.json")).unwrap_or_default();
