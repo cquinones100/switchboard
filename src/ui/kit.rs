@@ -586,6 +586,39 @@ pub fn chip(text: &str, tone: Tone, caps: bool, theme: &Theme) -> Vec<Span<'stat
     out
 }
 
+/// A chip that turns something on or off (search everything's sources,
+/// board 78): dark and bold on the accent while on, faint on the neutral
+/// tint while off, underlined while it has Tab's focus or the mouse is
+/// over it (`lit`); a column after it.
+pub fn switch_chip(
+    text: &str,
+    on: bool,
+    lit: bool,
+    caps: bool,
+    theme: &Theme,
+) -> Vec<Span<'static>> {
+    let (style, fill) = if on {
+        (
+            Style::new()
+                .fg(on_color(theme))
+                .add_modifier(Modifier::BOLD),
+            accent(theme),
+        )
+    } else if lit {
+        (Tone::Text.style(theme), Tone::Faint.tint(theme))
+    } else {
+        (Tone::Faint.style(theme), Tone::Faint.tint(theme))
+    };
+    let style = if lit {
+        style.add_modifier(Modifier::UNDERLINED)
+    } else {
+        style
+    };
+    let mut out = rounded(vec![Span::styled(text.to_string(), style)], fill, caps);
+    out.push(Span::raw(" "));
+    out
+}
+
 /// How one of the workspace's own buttons (back, forward, mission
 /// control) is drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1396,12 +1429,29 @@ pub fn input_beside(
     theme: &Theme,
     caps: bool,
 ) -> Vec<Span<'static>> {
+    input_prompted("", text, placeholder, cols, right, theme, caps)
+}
+
+/// A field as `input_beside` draws it, with a dim prompt before what is
+/// typed (search everything's scope, board 78).
+pub fn input_prompted(
+    prompt: &str,
+    text: &str,
+    placeholder: &str,
+    cols: usize,
+    right: Vec<Span<'static>>,
+    theme: &Theme,
+    caps: bool,
+) -> Vec<Span<'static>> {
     let inner = cols.saturating_sub(2);
-    let mut typed = vec![
-        Span::styled("› ", Tone::Accent.bold(theme)),
+    let mut typed = vec![Span::styled("› ", Tone::Accent.bold(theme))];
+    if !prompt.is_empty() {
+        typed.push(Span::styled(prompt.to_string(), Tone::Dim.style(theme)));
+    }
+    typed.extend([
         Span::styled(text.to_string(), Tone::Text.style(theme)),
         Span::styled("▏", Tone::Accent.style(theme)),
-    ];
+    ]);
     if text.is_empty() {
         typed.push(Span::styled(
             placeholder.to_string(),

@@ -340,7 +340,7 @@
     "key": "search_everything",
     "category": "Integrations",
     "label": "Search everything",
-    "description": "M-S-f asks for a search and lists the open tabs that name or show it and what your notes, Linear, GitHub and Slack hold for it, each read beside the pane with Enter, a tab gone to",
+    "description": "M-S-f opens a box that searches, with a chip to turn each source on or off, and lists the open tabs that name or show it and what your notes, Linear, GitHub and Slack hold for it, each read beside the pane with Enter, a tab gone to",
     "default": true
   },
   {

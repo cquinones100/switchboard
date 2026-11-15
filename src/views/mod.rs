@@ -27,6 +27,7 @@
 //!   place (pr-image.js).
 //! - `page`: what a link holds (link-view.sh's `show`, lib/link-view.js).
 //! - `search`: search everything's sources (lib/search.js).
+//! - `search_box`: M-F's box, its query, source chips and results.
 //! - `shown`: the links, images and videos a pane shows, for M-p's link
 //!   commands (link-view.sh's `links_of` and `media_of`).
 //! - `given`: the links in what you sent each pane's Claude, pasted text
@@ -48,6 +49,7 @@ pub mod pictures;
 pub mod pr;
 pub mod ready;
 pub mod search;
+pub mod search_box;
 mod serve;
 pub mod shown;
 pub mod ticket;
@@ -390,6 +392,17 @@ pub enum ViewsEvent {
         client: ClientId,
         answer: Result<ready::Answer, String>,
     },
+    /// M-F's box asks sources for a query (`search_box`), the Tabs
+    /// source leaving out `pane`'s tab.
+    Ask {
+        client: ClientId,
+        search: u64,
+        query: String,
+        sources: Vec<search::Source>,
+        pane: Option<crate::mux::PaneId>,
+    },
+    /// M-F's chips set: the sources turned off, kept for the next M-F.
+    Chips { off: Vec<search::Source> },
     /// A search's source answered.
     Found {
         client: ClientId,
@@ -399,13 +412,10 @@ pub enum ViewsEvent {
     },
 }
 
-/// What the server keeps for the views: each client's search, its rows so
-/// far and the sources still looking; and the links in what you sent each
-/// pane's Claude.
+/// What the server keeps for the views: the links in what you sent each
+/// pane's Claude. A search's rows are its box's (`search_box`).
 #[derive(Default)]
 pub struct Views {
-    pub(crate) searches: u64,
-    pub(crate) found: std::collections::HashMap<ClientId, search::Running>,
     pub(crate) given: given::Given,
 }
 

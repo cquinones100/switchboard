@@ -27,14 +27,15 @@ use std::path::PathBuf;
 use serde_json::Value;
 
 use super::ready::{self, Choice, ReadyBox};
-use super::search::{self, Found, Running, Source};
+use super::search::{self, Found, Source};
+use super::search_box::SearchBox;
 use super::shown::{self, Shown};
 use super::{Command, ViewsEvent, page, ticket};
 use crate::integrations::{github, linear};
 use crate::mux::server::{ClientId, Event, Server};
 use crate::mux::{Direction, PaneId, TabId};
 use crate::net::{self, ErrorKind};
-use crate::ui::{Outcome, Overlay, PickItem, Picker};
+use crate::ui::{Outcome, PickItem, Picker};
 use crate::{links, paths, settings, util};
 
 /// The options marking the panes the views open.
@@ -94,30 +95,6 @@ fn rows(found: &[Shown]) -> Vec<PickItem> {
         .iter()
         .map(|f| PickItem::new(f.row(), f.url.clone()))
         .collect()
-}
-
-fn search_title(query: &str, scope: &[Source], waiting: &[Source]) -> String {
-    let mut title = if scope == Source::ALL {
-        format!("Search: \"{query}\"")
-    } else {
-        let names: Vec<&str> = scope.iter().map(|s| s.scoped_name()).collect();
-        format!("Search {}: \"{query}\"", names.join(", "))
-    };
-    if !waiting.is_empty() {
-        let names: Vec<&str> = waiting.iter().map(|s| s.name()).collect();
-        title.push_str(&format!(" · {} still looking", names.join(", ")));
-    }
-    title
-}
-
-fn item(found: &Found) -> PickItem {
-    PickItem {
-        off: false,
-        text: found.text.clone(),
-        tags: found.detail.clone(),
-        key: found.source.name().to_string(),
-        value: found.link.clone(),
-    }
 }
 
 impl Server {
@@ -189,6 +166,18 @@ impl Server {
                 // As pr-ready.sh did: mission control's PR views ask GitHub
                 // again too, so they agree with this answer.
                 util::append_quietly(paths::state_dir().join("github"), "\n");
+            }
+            ViewsEvent::Ask {
+                client,
+                search,
+                query,
+                sources,
+                pane,
+            } => self.search_ask(client, search, query, sources, pane),
+            ViewsEvent::Chips { off } => {
+                if let Err(e) = search::write_off(&off) {
+                    self.say(None, &format!("Couldn't keep the search's sources: {e}"));
+                }
             }
             ViewsEvent::Found {
                 client,
@@ -738,8 +727,12 @@ impl Server {
         }
     }
 
-    /// M-S-f: asks what to search for, then searches; `typed` is a scope's
-    /// prefix the palette's per-source commands start the box with.
+    /// M-S-f: M-F's box (`SearchBox`), its chips as the last M-F left
+    /// them; `typed` is a scope's prefix the palette's per-source commands
+    /// start it with. Enter on a row reads it beside the pane the search
+    /// started from, and Ctrl-O opens a web link in the browser instead,
+    /// as search.sh's did. A tab chosen is gone to, Ctrl-O bringing up copy
+    /// mode on its match.
     fn search_everything(&mut self, client: ClientId, typed: &str) {
         if !settings::is_on("search_everything") {
             self.say(
@@ -749,69 +742,26 @@ impl Server {
             return;
         }
         let pane = self.current_pane(client);
-        let picker = Picker::new("Search everything", Vec::new())
-            .named("search-query")
-            .prompt("Search the tabs, notes, Linear, GitHub and Slack: ")
-            .free()
-            .query(typed);
-        self.pick(client, picker, move |server, client, picked| {
-            let Some(picked) = picked else {
-                return;
-            };
-            let query = picked.value.trim().to_string();
-            if !query.is_empty() {
-                server.start_search(client, pane, query);
-            }
-        });
-    }
-
-    /// Asks each source, the list filled in as they answer; Enter reads
-    /// the one chosen beside the pane the search started from, and Ctrl-O
-    /// opens a web link in the browser instead, as search.sh's did. A tab
-    /// chosen is gone to, Ctrl-O bringing up copy mode on its match.
-    fn start_search(&mut self, client: ClientId, pane: Option<PaneId>, query: String) {
-        let (scope, rest) = search::scope(&query);
-        let query = rest.to_string();
-        if query.is_empty() {
-            return;
-        }
-        self.views.searches += 1;
-        let id = self.views.searches;
-        // Each source the scope names, unless its own setting is off.
-        let waiting: Vec<Source> = scope
-            .iter()
-            .copied()
-            .filter(|s| match s {
-                Source::Tabs | Source::Notes => true,
-                Source::Linear => settings::is_on("linear"),
-                Source::GitHub => settings::is_on("github"),
-                Source::Slack => search::asks_slack(),
-            })
-            .collect();
-        self.views.found.insert(
+        let caps = self
+            .clients
+            .get(&client)
+            .is_some_and(|c| crate::mux::graphics::round_ends(&c.term));
+        let search_box = SearchBox::new(
             client,
-            Running {
-                id,
-                query: query.clone(),
-                scope: scope.clone(),
-                rows: Vec::new(),
-                waiting: waiting.clone(),
-                pane,
-            },
+            self.tx.clone(),
+            pane,
+            search::available(),
+            &search::read_off(),
+            typed,
+            caps,
         );
-        let picker = Picker::new(search_title(&query, &scope, &waiting), Vec::new())
-            .named("search")
-            .prompt("Narrow: ")
-            .also(
-                "read it, or go to the tab",
-                "open it in the browser, or the tab at its match",
-            );
-        let typed = query.trim().to_lowercase();
-        self.pick_also(client, picker, move |server, client, picked| {
-            let running = server.views.found.remove(&client);
-            let Some((picked, browser)) = picked.filter(|(p, _)| !p.value.is_empty()) else {
-                return;
+        let then: crate::ui::Then = Box::new(move |server, client, outcome| {
+            let (picked, browser) = match outcome {
+                Outcome::Picked(p) => (p, false),
+                Outcome::PickedAlso(p) => (p, true),
+                _ => return,
             };
+            let typed = picked.query.trim().to_lowercase();
             if let Some((tab, at)) = search::tab_of(&picked.value) {
                 match at.filter(|_| browser) {
                     Some(pane) => server.mission_go_to_match(client, tab, pane, &typed),
@@ -827,24 +777,40 @@ impl Server {
                 server.open_link(client, picked.value);
                 return;
             }
-            let pane = running
-                .and_then(|r| r.pane)
+            let pane = pane
                 .filter(|p| server.panes.contains_key(p))
                 .or_else(|| server.current_pane(client));
             if let Some(pane) = pane {
                 server.read_beside(pane, &picked.value);
             }
         });
+        self.open(client, Box::new(search_box), Some(then));
+    }
+
+    /// Asks each source M-F's box names for `query`, each answering with
+    /// `ViewsEvent::Found` as it is done; a source whose setting is off is
+    /// sent nothing, whatever the box asks.
+    fn search_ask(
+        &mut self,
+        client: ClientId,
+        id: u64,
+        query: String,
+        sources: Vec<Source>,
+        pane: Option<PaneId>,
+    ) {
+        let on = search::available();
         // The repositories the tabs are in, for GitHub's.
         let mut dirs: Vec<PathBuf> = Vec::new();
-        for pane in self.panes.keys() {
-            if let Some(dir) = self.pane_dir(*pane)
-                && !dirs.contains(&dir)
-            {
-                dirs.push(dir);
+        if sources.contains(&Source::GitHub) {
+            for p in self.panes.keys() {
+                if let Some(dir) = self.pane_dir(*p)
+                    && !dirs.contains(&dir)
+                {
+                    dirs.push(dir);
+                }
             }
         }
-        for source in waiting {
+        for source in sources.into_iter().filter(|s| on.contains(s)) {
             let tx = self.tx.clone();
             let q = query.clone();
             let send = move |rows: Vec<Found>| {
@@ -941,19 +907,10 @@ impl Server {
     }
 
     fn search_found(&mut self, client: ClientId, id: u64, source: Source, rows: Vec<Found>) {
-        let Some(running) = self.views.found.get_mut(&client).filter(|r| r.id == id) else {
-            return;
-        };
-        search::merge(&mut running.rows, source, rows);
-        running.waiting.retain(|s| *s != source);
-        let items: Vec<PickItem> = running.rows.iter().map(item).collect();
-        let title = search_title(&running.query, &running.scope, &running.waiting);
         if let Some(c) = self.clients.get_mut(&client)
-            && let Some(picker) = c.overlays.find_mut::<Picker>()
-            && picker.kind() == "search"
+            && let Some(b) = c.overlays.find_mut::<SearchBox>()
+            && b.answered(id, source, rows)
         {
-            picker.set_items(items);
-            picker.set_title(title);
             c.dirty = true;
         }
     }
@@ -1390,24 +1347,5 @@ impl Server {
             Some(url) => self.open_link(client, url),
             None => self.say(Some(client), "No link is being read in this tab"),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_search_says_which_sources_are_still_looking() {
-        assert_eq!(
-            search_title("deploy", &Source::ALL, &[Source::GitHub, Source::Slack]),
-            "Search: \"deploy\" · GitHub, Slack still looking"
-        );
-        assert_eq!(search_title("x", &Source::ALL, &[]), "Search: \"x\"");
-        assert_eq!(
-            search_title("x", &[Source::Notes, Source::Slack], &[Source::Slack]),
-            "Search notes, Slack: \"x\" · Slack still looking",
-            "a scope says what is searched"
-        );
     }
 }

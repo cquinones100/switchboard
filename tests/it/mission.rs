@@ -2920,11 +2920,11 @@ fn search_everything_for_tabs(extra: Value) -> (TestServer, TestClient, Vec<Stri
         "in the zebraword tab",
     );
     client.type_text(&format!("{ALT}F"));
-    client.wait_text("Search the tabs, notes");
+    client.wait_text("Search everything");
     client.type_text("zebraword\r");
     let screen = client.wait_for("the tabs found", |s| {
-        s.iter()
-            .any(|l| l.contains("Search: \"zebraword\"") && !l.contains("Tab,"))
+        s.iter().any(|l| l.contains(" found"))
+            && !s.iter().any(|l| l.contains("searching…"))
             && s.iter().any(|l| l.contains("by name"))
     });
     (server, client, screen)
@@ -3012,14 +3012,14 @@ fn m_f_scoped_to_notes_asks_no_other_source() {
             .count()
     };
     client.type_text(&format!("{ALT}F"));
-    client.wait_text("Search the tabs, notes");
+    client.wait_text("Search everything");
     client.type_text("NOTE: zebraword\r");
     let screen = client.wait_for("the note found", |s| {
-        s.iter().any(|l| l.contains("Search notes: \"zebraword\""))
+        s.iter().any(|l| l.contains("Search notes: zebraword"))
             && s.iter().any(|l| l.contains("Zebra plan"))
     });
     assert!(
-        !screen.iter().any(|l| l.contains("still looking")),
+        !screen.iter().any(|l| l.contains("searching…")),
         "{}",
         screen.join("\n")
     );
@@ -3031,10 +3031,110 @@ fn m_f_scoped_to_notes_asks_no_other_source() {
         !s.iter().any(|l| l.contains("Zebra plan"))
     });
     client.type_text(&format!("{ALT}F"));
-    client.wait_text("Search the tabs, notes");
+    client.wait_text("Search everything");
     client.type_text("zebraword\r");
     client.wait_text("Zebraword in Linear");
     assert_eq!(searched(), 1);
+}
+
+/// A server whose Linear stand-in finds "Zebraword in Linear", with GitHub
+/// and Slack off, and how many searches Linear was sent.
+fn search_with_linear() -> (TestServer, TestClient, common::http::Fake) {
+    use common::http::{Fake, Reply};
+    let linear = Fake::linear("test-key", |request| {
+        request.text().contains("searchIssues").then(|| {
+            Reply::json(
+                200,
+                json!({ "data": { "searchIssues": { "nodes": [
+                    { "identifier": "ABC-9", "title": "Zebraword in Linear",
+                      "url": "https://linear.app/acme/issue/ABC-9", "state": { "name": "Todo" } }
+                ] } } }),
+            )
+        })
+    });
+    let server = TestServer::start_with_env(&[
+        ("LINEAR_API_KEY", "test-key"),
+        ("SWITCHBOARD_LINEAR_API", &linear.graphql_url()),
+    ]);
+    settings(
+        &server,
+        json!({ "linear": true, "github": false, "search_slack": false }),
+    );
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    wait_list(&server, "the settings read", |l| {
+        l["sessions"][0]["sidebar"]["columns"] == 0
+    });
+    (server, client, linear)
+}
+
+fn linear_searches(linear: &common::http::Fake) -> usize {
+    linear
+        .seen()
+        .iter()
+        .filter(|r| r.text().contains("searchIssues"))
+        .count()
+}
+
+/// A click on Linear's chip drops its rows and leaves it unasked by the
+/// next search, and the chips stay as they were for the next M-F.
+#[test]
+fn m_f_a_chip_clicked_off_leaves_its_source_unasked_and_is_kept() {
+    let (server, mut client, linear) = search_with_linear();
+    client.type_text(&format!("{ALT}F"));
+    client.wait_text("Search everything");
+    client.type_text("zebraword\r");
+    let screen = client.wait_text("Zebraword in Linear");
+    assert_eq!(linear_searches(&linear), 1);
+    // The chips' line holds All, then a chip per source Settings has on.
+    let (row, col) = find_on(&screen, "Linear 1").expect("Linear's chip with its count");
+    assert!(
+        screen[row].contains("All") && screen[row].contains("Notes"),
+        "{}",
+        screen.join("\n")
+    );
+    click(&mut client, (row, col + 1));
+    client.wait_for("Linear's rows gone", |s| {
+        s.iter().any(|l| l.contains("Search tabs, notes:"))
+            && !s.iter().any(|l| l.contains("Zebraword in Linear"))
+    });
+    // Searched again, Linear is sent nothing.
+    client.type_text("s\r");
+    client.wait_text("zebrawords");
+    client.wait_for("the search done", |s| {
+        s.iter().any(|l| l.contains(" found"))
+    });
+    std::thread::sleep(Duration::from_millis(500) * common::patience());
+    assert_eq!(linear_searches(&linear), 1, "Linear isn't asked");
+    // The next M-F opens with Linear's chip off.
+    client.type_text("\x1b");
+    client.wait_for("the box closed", |s| {
+        !s.iter().any(|l| l.contains("Search everything"))
+    });
+    client.type_text(&format!("{ALT}F"));
+    client.wait_text("Search tabs, notes:");
+    let kept = std::fs::read_to_string(server.state.join("search.json")).unwrap();
+    assert!(kept.contains("linear"), "{kept}");
+}
+
+/// Tab reaches each chip from the field, Space turns the one it is on off,
+/// and All turns every one back on.
+#[test]
+fn m_f_tab_reaches_each_chip() {
+    let (_server, mut client, _linear) = search_with_linear();
+    client.type_text(&format!("{ALT}F"));
+    client.wait_text("Search everything");
+    // Field, All, Tabs, Notes, Linear.
+    client.type_text("\t\t\t\t ");
+    client.wait_text("Search tabs, notes:");
+    // Notes, off too.
+    client.type_text("\x1b[Z ");
+    client.wait_text("Search tabs:");
+    // Tabs, then All.
+    client.type_text("\x1b[Z\x1b[Z ");
+    client.wait_for("every source lit by All", |s| {
+        s.iter().any(|l| l.contains("Search: ")) && !s.iter().any(|l| l.contains("Search tabs"))
+    });
 }
 
 /// M-p's "Search notes" opens M-F's box with the notes' prefix typed.
@@ -3042,7 +3142,7 @@ fn m_f_scoped_to_notes_asks_no_other_source() {
 fn search_notes_opens_the_box_with_its_prefix_typed() {
     let (server, mut client) = two_tabs(json!({}));
     server.ok(&["press", "search-notes"]);
-    client.wait_text("Search the tabs, notes, Linear, GitHub and Slack: note: ");
+    client.wait_text("Search notes: ");
 }
 
 #[test]

@@ -20,9 +20,12 @@
 //! seconds. GitHub and Linear refuse while their settings are off; Slack is
 //! asked only with search_slack on.
 //!
-//! A query may open with the sources to ask, each a word and a colon
-//! (`note: slack: deploy`, `scope`), so a note search doesn't wait beside
-//! Slack's; with none, every source is asked.
+//! Which sources are asked is M-F's chips' (src/views/search_box.rs): a
+//! chip per source Settings has on (`available`), those turned off kept
+//! for the next M-F in `~/.local/state/switchboard/search.json`
+//! (`read_off`, `write_off`). A query may open with the sources to ask,
+//! each a word and a colon (`note: slack: deploy`, `scope`), which lights
+//! those chips alone, so a note search doesn't wait beside Slack's.
 //!
 //! The rows are kept in the sources' order, whatever order they answer in,
 //! each link once (`merge`), so the list doesn't reshuffle under the cursor
@@ -94,6 +97,11 @@ impl Source {
         }
     }
 
+    /// Its word in the file the chips are kept in.
+    fn word(self) -> &'static str {
+        self.prefix().trim_end().trim_end_matches(':')
+    }
+
     /// The source a prefix's word names, whatever its case.
     fn named(word: &str) -> Option<Source> {
         match word.to_lowercase().as_str() {
@@ -105,6 +113,17 @@ impl Source {
             _ => None,
         }
     }
+}
+
+/// Whether `text` is the start of a word naming a source (`sl`, `not`),
+/// whatever its case, as a prefix is typed a letter at a time.
+pub fn starts_a_source(text: &str) -> bool {
+    let text = text.to_lowercase();
+    [
+        "tab", "tabs", "note", "notes", "linear", "gh", "github", "slack",
+    ]
+    .iter()
+    .any(|w| w.starts_with(&text))
 }
 
 /// The sources a query's opening prefixes name (`note: slack: deploy`), in
@@ -140,17 +159,61 @@ pub struct Found {
     pub link: String,
 }
 
-/// A search under way on a client: its number, what was asked (its scope's
-/// prefixes taken off), the sources its scope names, the rows so far, the
-/// sources still looking, and the pane its results are read beside.
-#[derive(Clone, Debug, Default)]
-pub struct Running {
-    pub id: u64,
-    pub query: String,
-    pub scope: Vec<Source>,
-    pub rows: Vec<Found>,
-    pub waiting: Vec<Source>,
-    pub pane: Option<PaneId>,
+/// The sources Settings has on, a chip each in M-F's box: the tabs and the
+/// notes always, Linear and GitHub with their settings, Slack with
+/// search_slack.
+pub fn available() -> Vec<Source> {
+    Source::ALL
+        .into_iter()
+        .filter(|s| match s {
+            Source::Tabs | Source::Notes => true,
+            Source::Linear => settings::is_on("linear"),
+            Source::GitHub => settings::is_on("github"),
+            Source::Slack => asks_slack(),
+        })
+        .collect()
+}
+
+/// Where the chips turned off in the last M-F are kept.
+fn chips_file() -> PathBuf {
+    crate::paths::state_dir().join("search.json")
+}
+
+/// The sources whose chips were turned off in the last M-F; none when the
+/// file is missing or can't be read.
+pub fn read_off() -> Vec<Source> {
+    let Ok(text) = std::fs::read_to_string(chips_file()) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&text) else {
+        return Vec::new();
+    };
+    value
+        .get("off")
+        .and_then(Value::as_array)
+        .map(|off| {
+            off.iter()
+                .filter_map(Value::as_str)
+                .filter_map(Source::named)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Keeps the sources whose chips are off for the next M-F.
+pub fn write_off(off: &[Source]) -> std::io::Result<()> {
+    let words: Vec<&str> = off.iter().map(|s| s.word()).collect();
+    let file = chips_file();
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    crate::util::write_atomic(
+        file,
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&json!({ "off": words }))?
+        ),
+    )
 }
 
 /// A source's answer taken into the rows: in the sources' order, each
