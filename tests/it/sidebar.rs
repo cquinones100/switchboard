@@ -982,7 +982,7 @@ fn with_ux2_k_from_the_first_tab_goes_up_onto_the_notifications() {
     // a later setting would be the classic sidebar's, below the tab.
     let server = TestServer::start_with_env_and_settings(
         &[("NOTES_DIR", notes.path().to_str().unwrap())],
-        r#"{"notifications": false, "tips": false, "ux2": true}"#,
+        r#"{"notifications": false, "tips": false, "ux2": true, "sidebar_wrap": false}"#,
     );
     std::fs::create_dir_all(&server.state).unwrap();
     std::fs::write(
@@ -993,7 +993,8 @@ fn with_ux2_k_from_the_first_tab_goes_up_onto_the_notifications() {
     let mut client = server.attach(140, 36);
     client.wait_text("New note: Plan");
 
-    // j from the only tab stays on it: the notifications are above.
+    // With wrapping off, j from the only tab stays on it: the
+    // notifications are above.
     client.type_text(&format!("{ALT}s"));
     wait_list(&server, "the sidebar focused", focused);
     client.type_text("j");
@@ -1012,6 +1013,136 @@ fn with_ux2_k_from_the_first_tab_goes_up_onto_the_notifications() {
     client.type_text("j");
     wait_list(&server, "the tab in front", |l| {
         tabs(l)[0]["current"] == true
+    });
+}
+
+#[test]
+fn up_and_down_wrap_around_the_tabs() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-n", "second"]);
+    server.ok(&["new-tab", "-n", "third"]);
+    client.wait_text("3:third");
+    wait_list(&server, "the third tab in front", |l| {
+        tabs(l)[2]["current"] == true
+    });
+
+    // j on the last tab: round to the first; k on the first: round to the
+    // last.
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("j");
+    wait_list(&server, "the first tab in front", |l| {
+        tabs(l)[0]["current"] == true && focused(l)
+    });
+    client.type_text("k");
+    wait_list(&server, "the last tab in front", |l| {
+        tabs(l)[2]["current"] == true && focused(l)
+    });
+}
+
+#[test]
+fn with_wrapping_off_up_and_down_stop_at_the_ends() {
+    let server = TestServer::start_with_settings(
+        r#"{"notifications": false, "tips": false, "sidebar_wrap": false}"#,
+    );
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-n", "second"]);
+    server.ok(&["new-tab", "-n", "third"]);
+    client.wait_text("3:third");
+    wait_list(&server, "the third tab in front", |l| {
+        tabs(l)[2]["current"] == true
+    });
+
+    // j on the last stays, so k goes up to the second rather than staying
+    // on the first.
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("j");
+    client.type_text("k");
+    wait_list(&server, "the second tab in front", |l| {
+        tabs(l)[1]["current"] == true && focused(l)
+    });
+}
+
+#[test]
+fn the_wheel_stops_at_the_last_tab_while_the_keys_wrap() {
+    let server = TestServer::start_with_settings(
+        r#"{"notifications": false, "tips": false, "sidebar_half_page": false}"#,
+    );
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-n", "second"]);
+    server.ok(&["new-tab", "-n", "third"]);
+    client.wait_text("3:third");
+    wait_list(&server, "the third tab in front", |l| {
+        tabs(l)[2]["current"] == true
+    });
+
+    // Down on the last tab stays, so up goes to the second rather than
+    // staying on the first.
+    client.send(b"\x1b[<65;6;5M");
+    wait_list(&server, "the sidebar focused", focused);
+    client.send(b"\x1b[<64;6;5M");
+    wait_list(&server, "the second tab in front", |l| {
+        tabs(l)[1]["current"] == true && focused(l)
+    });
+}
+
+#[test]
+fn j_from_the_last_kind_of_notification_goes_round_to_the_first_tab() {
+    let (server, _notes) = two_kinds_of_notification(r#"{"notifications": false, "tips": false}"#);
+    let mut client = server.attach(140, 36);
+    client.wait_text("2 new on Slack");
+    client.wait_text("New note: Plan");
+
+    // k from the only tab: round to the last kind, the note's.
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("k");
+    wait_list(&server, "the Notifications window in front", |l| {
+        notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == true) && focused(l)
+    });
+    wait_chosen(&mut client, "Plan");
+    // j: round to the tab.
+    client.type_text("j");
+    wait_list(&server, "the tab in front", |l| {
+        tabs(l)[0]["current"] == true && focused(l)
+    });
+    // j, j, j: Slack, the note, and round to the tab again.
+    client.type_text("j");
+    wait_chosen(&mut client, "DM Ada");
+    client.type_text("j");
+    wait_chosen(&mut client, "Plan");
+    client.type_text("j");
+    wait_list(&server, "the tab in front again", |l| {
+        tabs(l)[0]["current"] == true && focused(l)
+    });
+}
+
+#[test]
+fn with_ux2_j_from_the_last_tab_goes_round_to_the_first_kind_of_notification() {
+    let (server, _notes) =
+        two_kinds_of_notification(r#"{"notifications": false, "tips": false, "ux2": true}"#);
+    let mut client = server.attach(140, 36);
+    client.wait_text("2 new on Slack");
+    client.wait_text("New note: Plan");
+
+    // j from the only tab: round to the top, the Slack line.
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("j");
+    wait_list(&server, "the Notifications window in front", |l| {
+        notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == true) && focused(l)
+    });
+    wait_chosen(&mut client, "DM Ada");
+    // k from the first kind: round to the bottom, the tab.
+    client.type_text("k");
+    wait_list(&server, "the tab in front", |l| {
+        tabs(l)[0]["current"] == true && focused(l)
     });
 }
 

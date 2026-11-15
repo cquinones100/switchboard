@@ -1459,6 +1459,35 @@ impl Server {
         self.dirty_session(session);
     }
 
+    /// Whether up and down go round the list's ends: the keys do with
+    /// sidebar_wrap on; the mouse, stepping as they do, never does.
+    fn sidebar_wraps(&self) -> bool {
+        settings::is_on("sidebar_wrap") && !self.sidebar.stepping_by_mouse
+    }
+
+    /// The wheel or a press on the scroll bar stepping as Down or Up do,
+    /// stopping at the list's ends whatever sidebar_wrap says.
+    fn sidebar_step_by_mouse(&mut self, client: ClientId, session: &str, down: bool) {
+        let code = if down { KeyCode::Down } else { KeyCode::Up };
+        self.sidebar.stepping_by_mouse = true;
+        self.sidebar_key_in(client, session, Key::new(code, Mods::NONE), &[]);
+        self.sidebar.stepping_by_mouse = false;
+    }
+
+    /// Up or down one stop from `at` of `count` (the tabs, then the
+    /// notifications' rows): past either end round to the other
+    /// (sidebar_wrap), else held at it as `sidebar_move` holds it.
+    fn sidebar_step(&mut self, session: &str, at: isize, by: isize, count: usize) {
+        let to = at + by;
+        let past_an_end = to < 0 || to >= count as isize;
+        let to = if past_an_end && count > 1 && self.sidebar_wraps() {
+            to.rem_euclid(count as isize)
+        } else {
+            to
+        };
+        self.sidebar_move(session, to);
+    }
+
     /// Tab and Shift-Tab on the notifications with the Notifications
     /// window: the next or last of them one by one, the window following; up
     /// from the first goes back to the last tab, and down from the last stays.
@@ -1480,8 +1509,9 @@ impl Server {
 
     /// j and k with UX 2.0, whose notifications sit above the tabs: up
     /// from the first tab onto the last kind of notification, down from the
-    /// last kind onto the first tab, and no further either way, a kind's row
-    /// at a time, the Notifications window on that kind's first.
+    /// last kind onto the first tab, a kind's row at a time, the
+    /// Notifications window on that kind's first; past the top or the
+    /// bottom round to the other end (sidebar_wrap), else no further.
     fn sidebar_step_ux2(
         &mut self,
         session: &str,
@@ -1491,17 +1521,27 @@ impl Server {
         by: isize,
     ) {
         let notices = self.sidebar_notice_stops(session).len();
+        let wrap = self.sidebar_wraps();
+        let last_tab = tabs.max(1) as isize - 1;
         match on_notice {
             None if by < 0 && at == 0 && notices > 0 => {
                 self.sidebar_move(session, (tabs + notices) as isize - 1);
             }
-            None => self.sidebar_move(session, (at + by).clamp(0, tabs.max(1) as isize - 1)),
+            // Down from the last tab round to the top: the first kind of
+            // notification, or the first tab when there are none.
+            None if wrap && by > 0 && at >= last_tab => {
+                self.sidebar_move(session, if notices > 0 { tabs as isize } else { 0 });
+            }
+            None if wrap && by < 0 && at == 0 => self.sidebar_move(session, last_tab),
+            None => self.sidebar_move(session, (at + by).clamp(0, last_tab)),
             Some(i) => {
                 let to = i as isize + by;
                 if to >= notices as isize {
                     self.sidebar_move(session, 0);
                 } else if to >= 0 {
                     self.sidebar_move(session, tabs as isize + to);
+                } else if wrap {
+                    self.sidebar_move(session, last_tab);
                 }
             }
         }
@@ -1570,10 +1610,10 @@ impl Server {
         // Esc clears it.
         if side.filter.as_ref().is_some_and(|f| f.typing) {
             match k.code {
-                KeyCode::Up if none => self.sidebar_move(session, at - 1),
-                KeyCode::Down if none => self.sidebar_move(session, at + 1),
-                KeyCode::Char('p') if ctrl => self.sidebar_move(session, at - 1),
-                KeyCode::Char('n') if ctrl => self.sidebar_move(session, at + 1),
+                KeyCode::Up if none => self.sidebar_step(session, at, -1, stops),
+                KeyCode::Down if none => self.sidebar_step(session, at, 1, stops),
+                KeyCode::Char('p') if ctrl => self.sidebar_step(session, at, -1, stops),
+                KeyCode::Char('n') if ctrl => self.sidebar_step(session, at, 1, stops),
                 KeyCode::Tab | KeyCode::BackTab if tab_focus && stops > 0 => {
                     let n = stops as isize;
                     let by = if k.code == KeyCode::Tab { 1 } else { -1 };
@@ -1687,10 +1727,14 @@ impl Server {
         match k.code {
             // On the notifications, j and k step a kind at a time, the
             // Notifications window following onto the kind's first.
-            KeyCode::Char('j') | KeyCode::Down if none => self.sidebar_move(session, at + 1),
-            KeyCode::Char('n') if ctrl => self.sidebar_move(session, at + 1),
-            KeyCode::Char('k') | KeyCode::Up if none => self.sidebar_move(session, at - 1),
-            KeyCode::Char('p') if ctrl => self.sidebar_move(session, at - 1),
+            KeyCode::Char('j') | KeyCode::Down if none => {
+                self.sidebar_step(session, at, 1, stops + notices.len())
+            }
+            KeyCode::Char('n') if ctrl => self.sidebar_step(session, at, 1, stops + notices.len()),
+            KeyCode::Char('k') | KeyCode::Up if none => {
+                self.sidebar_step(session, at, -1, stops + notices.len())
+            }
+            KeyCode::Char('p') if ctrl => self.sidebar_step(session, at, -1, stops + notices.len()),
             KeyCode::Char('g') | KeyCode::Home if none => self.sidebar_move(session, 0),
             KeyCode::Char('G') | KeyCode::End if none => {
                 self.sidebar_move(session, stops as isize - 1)
@@ -2421,8 +2465,7 @@ impl Server {
                 if half_page && on_tab_short_of_the_edge {
                     self.sidebar_scroll_click(client, &session, down);
                 } else {
-                    let code = if down { KeyCode::Down } else { KeyCode::Up };
-                    self.sidebar_key_in(client, &session, Key::new(code, Mods::NONE), &[]);
+                    self.sidebar_step_by_mouse(client, &session, down);
                 }
             }
             // A press on the line beside the list, where its scroll bar is,
@@ -2447,8 +2490,7 @@ impl Server {
                         if !self.sidebar.focused(&session) {
                             self.sidebar_enter(&session, None);
                         }
-                        let code = if down { KeyCode::Down } else { KeyCode::Up };
-                        self.sidebar_key_in(client, &session, Key::new(code, Mods::NONE), &[]);
+                        self.sidebar_step_by_mouse(client, &session, down);
                     }
                 }
             }

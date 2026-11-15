@@ -73,6 +73,13 @@
     "default": true
   },
   {
+    "key": "sidebar_wrap",
+    "category": "Sidebar",
+    "label": "Up and down wrap around",
+    "description": "In the sidebar, j, k, the arrows, C-n and C-p go round from the last row to the first and from the first to the last, the notifications included; off, they stop at the list's ends. g, G and the wheel go to an end and stay either way",
+    "default": true
+  },
+  {
     "key": "sidebar_repo_filter",
     "category": "Sidebar",
     "label": "Sidebar repository filter",

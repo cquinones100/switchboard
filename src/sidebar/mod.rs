@@ -144,6 +144,9 @@ pub struct Sidebar {
     /// Each client's last half-screen move by the wheel: its direction
     /// (down) and when, so the rest of one flick is let go.
     pub wheel: HashMap<ClientId, (bool, Instant)>,
+    /// The mouse (the wheel, the scroll bar) is stepping as j and k do,
+    /// which never wraps round the list (sidebar_wrap is the keys' alone).
+    pub stepping_by_mouse: bool,
     /// Where each client's sidebar was last drawn.
     pub drawn: HashMap<ClientId, Drawn>,
     /// The spinner's frame, and whether its next turn is timed.
