@@ -344,7 +344,7 @@ pub async fn tab_tick(cx: &Cx) {
 pub fn welcome_text(restarted: &str) -> String {
     if restarted.is_empty() {
         format!(
-            "🤖 **Relay listening** since {}\n\nEach tab has its own thread here; reply in it to talk to that tab. **Home** shows every tab at a glance, and Open on one gives its controls; **Help** lists every command.",
+            "🤖 **Relay listening** since {}\n\nEach tab has its own thread here; reply in it to talk to that tab. **Home** shows every tab at a glance, links to each one's thread, and Screen on one gives its controls; **Help** lists every command.",
             clock(util::now_ms())
         )
     } else {

@@ -1328,20 +1328,34 @@ fn the_home_tab_is_published_then_again_only_when_it_changes_or_you_open_it() {
         .position(|b| {
             b["text"]["text"]
                 .as_str()
-                .is_some_and(|t| t.starts_with(&format!("*{index}*")))
+                .is_some_and(|t| t.contains(&format!("|*{index}*  work>")))
         })
         .unwrap();
+    let thread = "https://example.slack.com/archives/D1/p1791500000000300?thread_ts=1791500000.000300&cid=D1";
+    let text = blocks[at]["text"]["text"].as_str().unwrap();
     assert!(
-        blocks[at]["text"]["text"]
-            .as_str()
-            .unwrap()
-            .contains("✅ finished for 2m")
+        text.starts_with(&format!("<{thread}|*{index}*  work>")),
+        "its name links to its thread: {text}"
     );
-    assert_eq!(
-        blocks[at + 1]["elements"].as_array().unwrap().len(),
-        1,
-        "only Open"
-    );
+    assert!(text.contains("✅ finished for 2m"));
+    assert!(!text.contains("No thread yet"));
+    let accessory = &blocks[at]["accessory"];
+    assert_eq!(accessory["text"]["text"], "Thread ›");
+    assert_eq!(accessory["url"], thread);
+    assert!(accessory.get("value").is_none(), "a link, not a press");
+    let elements = blocks[at + 1]["elements"].as_array().unwrap();
+    assert_eq!(elements.len(), 1, "only Screen");
+    assert_eq!(elements[0]["text"]["text"], "Screen");
+    let screen: Value = serde_json::from_str(elements[0]["value"].as_str().unwrap()).unwrap();
+    assert_eq!(screen["a"], "open", "Screen opens the screen as Open did");
+    // A tap on Thread › is Slack's to open: the relay has nothing to do.
+    let dm = rig.cx.state.borrow().dm();
+    let tap = json!({
+        "type": "block_actions", "user": { "id": "U1", "team_id": "T1" }, "team": { "id": "T1" }, "trigger_id": "TR1",
+        "container": { "type": "view", "view_id": "VHOME" }, "view": { "id": "VHOME", "type": "home" },
+        "actions": [{ "action_id": "relay-thread", "url": thread }],
+    });
+    assert!(press_from(&dm, &tap, |_| {}).is_none());
     // The tab's screen has its thread and Close.
     let t = tabs::tab(&rig.cx, &tab).unwrap();
     let screen = super::screens::tab_screen(&rig.cx, &t, None);
@@ -3917,6 +3931,41 @@ fn a_waiting_tabs_notice_carries_its_options_and_one_answer_clears_the_rest() {
 }
 
 #[test]
+fn a_tab_with_no_thread_yet_has_no_link_to_one_on_the_home_tab() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    let index = rig.index_of(&tab);
+    rig.cx.state.borrow_mut().dm.as_mut().unwrap().url = Some("https://example.slack.com/".into());
+    rig.block_on(refresh_dashboard(
+        &rig.cx,
+        Refresh {
+            quick: true,
+            ..Refresh::default()
+        },
+    ))
+    .unwrap();
+    let view = rig.calls("views.publish").last().unwrap()["view"].clone();
+    let section = view["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| {
+            b["text"]["text"]
+                .as_str()
+                .is_some_and(|t| t.starts_with(&format!("*{index}*  work")))
+        })
+        .unwrap()
+        .clone();
+    let text = section["text"]["text"].as_str().unwrap();
+    assert!(!text.contains("<https://"), "{text}");
+    assert!(
+        text.ends_with("\nNo thread yet: it starts with its first message."),
+        "{text}"
+    );
+    assert!(section.get("accessory").is_none());
+}
+
+#[test]
 fn a_waiting_tabs_options_are_on_its_home_tab_row_and_a_tap_there_answers_it() {
     let rig = Rig::new();
     let (tab, _) = rig.claude_tab("work");
@@ -3949,7 +3998,7 @@ fn a_waiting_tabs_options_are_on_its_home_tab_row_and_a_tap_there_answers_it() {
         .iter()
         .map(|b| b["text"]["text"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["Open", "1. Yes", "2. No"]);
+    assert_eq!(names, ["Screen", "1. Yes", "2. No"]);
     let yes: Value = serde_json::from_str(row["elements"][1]["value"].as_str().unwrap()).unwrap();
     assert_eq!(yes["a"], "home-opt");
     let dm = rig.cx.state.borrow().dm();

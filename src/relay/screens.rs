@@ -1,4 +1,4 @@
-//! A tab's screen (lib/slack-relay/screens.js). Tapping Open on a tab in
+//! A tab's screen (lib/slack-relay/screens.js). Tapping Screen on a tab in
 //! the Home tab opens a modal for it: where it stands, its last prompt and
 //! the end of its last reply, the options of a prompt it is waiting on, and
 //! what you can do (message it, run a skill, open its thread, ask its
@@ -637,7 +637,7 @@ fn link_to(cx: &Relay, home: Option<&str>) -> String {
     }
 }
 
-/// A press on the Home tab's Open or New tab, on a button in a tab's
+/// A press on the Home tab's Screen or New tab, on a button in a tab's
 /// screen, or on Skill or Rename under a message in a tab's thread.
 pub async fn handle_screen_press(cx: &Cx, press: &Press, thread: Option<&str>) -> Result<()> {
     let value = &press.value;

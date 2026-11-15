@@ -1,8 +1,9 @@
 //! The app's Home tab (lib/slack-relay/dashboard.js): every Claude tab, its
 //! state, for how long, when it last did anything, and one line on what it
 //! is doing or, once it has stopped, where it left off, written by the
-//! same tool-less Haiku as `progress`, with an Open button for its screen
-//! (see screens.rs). It is looked at every `DASHBOARD_MS` (`HEARTBEAT_MS`
+//! same tool-less Haiku as `progress`, with its name and a Thread › button
+//! linking to its thread in the DM (board 82), and a Screen button for its
+//! screen (see screens.rs). It is looked at every `DASHBOARD_MS` (`HEARTBEAT_MS`
 //! with the poll_fast setting off) and published when something changed,
 //! when you open the Home tab, and at least every `HEARTBEAT_MS`, and opens
 //! with when the computer last checked in, so you can tell when the relay
@@ -20,6 +21,7 @@ use serde_json::{Value, json};
 use super::Cx;
 use super::buttons::{dialog_buttons, option_buttons};
 use super::cleanup::{cleanup_button, closed_threads};
+use super::homes::{home_thread, thread_url};
 use super::post::{Button, button_element, remove};
 use super::state::Doing;
 use super::summaries::{activity_of, haiku_today, summarize};
@@ -129,13 +131,17 @@ fn flat(text: &str) -> String {
 /// reminder.
 pub fn dashboard_view(cx: &Cx, rows: &[Row], reminded: usize, stopped_at: Option<i64>) -> Value {
     let time = |ms: i64| super::lifecycle::clock(ms);
+    // A tab's name and its Thread › button open its thread in the DM at
+    // its newest message, a link Slack opens itself, with no round trip to
+    // the relay. A tab with no thread yet has neither, and says so.
     let section = |r: &Row| {
-        let mut text = format!(
-            "*{}*  {}\n{}",
-            r.tab.index,
-            flat(&r.tab.name),
-            home_words(&flat(&r.tab.state))
-        );
+        let url = home_thread(cx, &r.tab.id).and_then(|t| thread_url(cx, &t));
+        let name = format!("*{}*  {}", r.tab.index, flat(&r.tab.name));
+        let mut text = match &url {
+            Some(url) => format!("<{url}|{}>", link_label(&name)),
+            None => name,
+        };
+        text.push_str(&format!("\n{}", home_words(&flat(&r.tab.state))));
         if !r.lasted.is_empty() {
             text.push_str(&format!(" for {}", r.lasted));
         }
@@ -159,14 +165,20 @@ pub fn dashboard_view(cx: &Cx, rows: &[Row], reminded: usize, stopped_at: Option
         if !r.doing.is_empty() {
             text.push_str(&format!("\n_{}_", flat(&r.doing)));
         }
-        json!({ "type": "section", "text": { "type": "mrkdwn", "text": text } })
+        if url.is_none() {
+            text.push_str("\nNo thread yet: it starts with its first message.");
+        }
+        let mut block = json!({ "type": "section", "text": { "type": "mrkdwn", "text": text } });
+        if let Some(url) = url {
+            block["accessory"] = button_element(&Button::link("Thread ›", url), "thread");
+        }
+        block
     };
-    // Under each tab: Open, for its screen, which has its thread, Close and
-    // the rest. A tab waiting on a prompt also gets the prompt's options,
+    // Under each tab: Screen, for its screen, with Close and the rest. A tab waiting on a prompt also gets the prompt's options,
     // which answer it from here.
     let actions = |r: &Row| {
         let mut buttons = vec![Button::new(
-            "Open",
+            "Screen",
             json!({ "a": "open", "w": r.tab.id, "p": r.tab.pid }),
         )];
         if r.choices.is_empty() {
@@ -203,7 +215,7 @@ pub fn dashboard_view(cx: &Cx, rows: &[Row], reminded: usize, stopped_at: Option
     let mut blocks = vec![
         json!({ "type": "header", "text": { "type": "plain_text", "text": "Claude tabs" } }),
         checkin,
-        json!({ "type": "context", "elements": [{ "type": "mrkdwn", "text": "Open a tab to message it, answer it, see its progress, and rename, stop or close it." }] }),
+        json!({ "type": "context", "elements": [{ "type": "mrkdwn", "text": "A tab's name or Thread › goes to its thread; Screen messages it, answers it, shows its progress, and renames, stops or closes it." }] }),
     ];
     if stopped_at.is_none() {
         let mut buttons = vec![Button::new("New tab", json!({ "a": "new" }))];
@@ -252,6 +264,15 @@ pub fn dashboard_view(cx: &Cx, rows: &[Row], reminded: usize, stopped_at: Option
         ) }],
     }));
     json!({ "type": "home", "blocks": blocks })
+}
+
+/// A link's text in mrkdwn, where `|` would end the address early and
+/// `<`, `>` and `&` are escaped.
+fn link_label(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('|', "¦")
 }
 
 fn reminded_words(reminded: usize) -> String {

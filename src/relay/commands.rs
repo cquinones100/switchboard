@@ -35,7 +35,7 @@ use crate::util;
 pub const HELP: &str = "**What I understand**\n\
 - a reply in a tab's thread: typed into that tab\n\
 - in a tab's thread, `progress`, `esc`, `rename <name>` (`rename` alone clears it): just for that tab\n\
-- the Home tab: every tab, and Open for one's screen, to message, answer, stop, rename or close it\n\
+- the Home tab: every tab, a link to its thread, and Screen for its screen, to message, answer, stop, rename or close it\n\
 - `new: …`: a new Claude tab, or `new <repo, ticket or ~/path>: …` to pick where\n\
 - `progress`: what every tab is doing\n\
 - `cleanup`: delete the threads of closed tabs (asks first)\n\

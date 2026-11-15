@@ -88,7 +88,7 @@ pub async fn handle_press(cx: &Cx, press: Press) -> Result<()> {
         .message
         .as_ref()
         .map(|m| m.thread_ts.clone().unwrap_or_else(|| m.ts.clone()));
-    // The Home tab's Open and New tab, the buttons on the screens they
+    // The Home tab's Screen and New tab, the buttons on the screens they
     // open, and Skill and Rename under a message, which open screens.
     if matches!(
         a.as_str(),
