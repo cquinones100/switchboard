@@ -280,7 +280,16 @@ impl Server {
         }
         match hook.event.as_str() {
             "PreToolUse" if hook.tool == "AskUserQuestion" => {
-                (!hands_free::always_asked(payload)).then(hands_free::deny_question)
+                let place = self.decided_place(tab);
+                if hands_free::always_asked(payload) {
+                    let questions = hands_free::asked_questions(payload);
+                    self.record_decided(place, hands_free::Change::TakeBack(questions));
+                    return None;
+                }
+                let chosen = hands_free::choose(payload);
+                let answer = hands_free::deny_question(&chosen, place.is_some());
+                self.record_decided(place, hands_free::Change::Decide(chosen));
+                Some(answer)
             }
             "Stop" if hands_free::sends_back(payload) => {
                 let nudged: u32 = t.opts.get(NUDGED).and_then(|n| n.parse().ok()).unwrap_or(0);
@@ -293,6 +302,57 @@ impl Server {
             }
             _ => None,
         }
+    }
+
+    /// Where a hands-free tab's decided lines go, from its options; none
+    /// for a tab with no item, whose Claude writes them.
+    fn decided_place(&self, tab: TabId) -> Option<hands_free::Place> {
+        use crate::autopilot::{ITEM, NOTE};
+        Some(hands_free::Place {
+            notes: crate::notes::store::notes_dir(),
+            plan: self.tab_opt(tab, crate::notes::serve::PLAN_NOTE),
+            note_id: self.tab_opt(tab, NOTE),
+            note: self.tab_opt(tab, "@tab_note"),
+            item: self.tab_opt(tab, ITEM)?,
+        })
+    }
+
+    /// Writes a change to a hands-free tab's decided lines off the task.
+    fn record_decided(&self, place: Option<hands_free::Place>, change: hands_free::Change) {
+        let Some(place) = place else {
+            return;
+        };
+        // What was decided, said whole when it can't be written, since
+        // Claude was told not to write it.
+        let decided = match &change {
+            hands_free::Change::Decide(chosen) => Some(
+                chosen
+                    .iter()
+                    .map(|(q, c)| hands_free::decided_line(q, c))
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            ),
+            hands_free::Change::TakeBack(_) => None,
+        };
+        let item = place.item.clone();
+        self.notes_off_task(
+            move || hands_free::record(&place, &change),
+            move |server, written| {
+                let why = match written {
+                    Ok(true) => return,
+                    Ok(false) => "neither its plan nor its note holds the item".to_string(),
+                    Err(e) => e.to_string(),
+                };
+                if let Some(decided) = decided {
+                    server.say(
+                        None,
+                        &format!(
+                            "Hands-free couldn't write what it decided for \"{item}\" ({why}): {decided}"
+                        ),
+                    );
+                }
+            },
+        );
     }
 
     /// The pane in front of the first of these processes: the tab's parked

@@ -4,11 +4,21 @@
 //! from a hook's output, which `switchboard hook` prints, the one output it
 //! ever makes:
 //!
-//! - PreToolUse for `AskUserQuestion` is denied, its reason telling Claude
-//!   to take the recommended option and write the decision into the item's
-//!   plan, unless a question is marked `[always ask]` at the start of its
-//!   header or its text (what a skill marks as a question that must reach
-//!   you), which goes through to be asked as usual.
+//! - PreToolUse for `AskUserQuestion` is denied, the server choosing each
+//!   question's option labeled (Recommended), else its first (`choose`),
+//!   and its reason naming the choices for Claude to go on with, unless a
+//!   question is marked `[always ask]` at the start of its header or its
+//!   text (what a skill marks as a question that must reach you), which goes
+//!   through to be asked as usual. The server writes each choice's
+//!   `Decided hands-free: <question> → <choice>` line itself (`record`),
+//!   off its task: at the end of the item's plan note, or, with no plan,
+//!   indented under the item in its note, read and written under the note
+//!   ID's lock with its modified time kept (`id::rewrite`), so the open
+//!   Notes app takes it in as any change made from outside. Those lines are
+//!   what the landing counts as decided hands-free
+//!   (src/autopilot/landed.rs's `decided_in`), so the server, not Claude,
+//!   keeps that record; a question asked again marked `[always ask]`, one
+//!   Claude found it must ask after all, takes its line back.
 //! - Stop, on a turn whose last message asks something without saying
 //!   `[always ask]` (what Claude says of a question a rule or skill says
 //!   must reach you), is blocked, its
@@ -33,7 +43,15 @@
 //! pushed is the one reviewed takes git, which the server's task never
 //! runs.
 
+use std::io;
+use std::path::{Path, PathBuf};
+
+use std::sync::LazyLock;
+
+use regex::Regex;
 use serde_json::{Value, json};
+
+use crate::notes::id;
 
 /// What marks a question a skill says must always reach you.
 pub const ALWAYS_ASK: &str = "[always ask]";
@@ -44,10 +62,66 @@ pub const NUDGES: u32 = 3;
 /// What still stops a hands-free tab, in both reasons.
 const EXCEPTIONS: &str = "Only what must be asked still stops: what the user's or the repository's CLAUDE.md says to ask about (deleting data, end-to-end tests, a push anywhere but the landing), a decision that approves a design board (one naming a board, or waiting until it is reviewed), a question a skill you follow says to stop and ask (an unclear conflict, a failure the branch didn't cause, untracked files of someone else's, or one it heads `[always ask]`), whatever its wording, and a permission that was denied.";
 
-/// The deny for a question box, as PreToolUse's output.
-pub fn deny_question() -> String {
+/// A checklist item, ticked or not, and its first line.
+static ITEM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^- \[[ xX]\] (.*\S.*)$").unwrap());
+
+/// What marks the option a question box recommends.
+const RECOMMENDED: &str = "(Recommended)";
+
+/// A question box's questions with the option the server takes for each:
+/// the one labeled (Recommended), else the first. A question with no
+/// options is left out.
+pub fn choose(payload: &Value) -> Vec<(String, String)> {
+    let label = |o: &Value| o.get("label").and_then(Value::as_str).map(str::to_string);
+    questions(payload)
+        .iter()
+        .filter_map(|q| {
+            let question = q.get("question").and_then(Value::as_str)?.trim();
+            let options = q.get("options").and_then(Value::as_array)?;
+            let chosen = options
+                .iter()
+                .find(|o| label(o).is_some_and(|l| l.contains(RECOMMENDED)))
+                .or_else(|| options.first())
+                .and_then(label)?;
+            Some((one_line(question), one_line(&chosen)))
+        })
+        .collect()
+}
+
+/// A question box's questions, as Claude Code passes them.
+fn questions(payload: &Value) -> &[Value] {
+    payload
+        .pointer("/tool_input/questions")
+        .and_then(Value::as_array)
+        .map_or(&[], Vec::as_slice)
+}
+
+/// Text on one line, as a note's line holds it.
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The line recording a choice, which the landing counts.
+pub fn decided_line(question: &str, choice: &str) -> String {
+    format!("Decided hands-free: {question} → {choice}")
+}
+
+/// The deny for a question box, as PreToolUse's output: the server's
+/// choices, which it writes into the item's notes itself while it
+/// `writes`, else (a tab with no item to write under) left for Claude to.
+pub fn deny_question(chosen: &[(String, String)], writes: bool) -> String {
+    let choices = chosen
+        .iter()
+        .map(|(q, c)| format!("{q} → {c}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let record = if writes {
+        "The server writes each `Decided hands-free: <question> → <choice>` line into the item's plan note (with no plan, under the item in its note) itself: don't write it."
+    } else {
+        "Write `Decided hands-free: <question> → <choice>` under the item in its plan note (with no plan, indented under the item in its note)."
+    };
     let reason = format!(
-        "Hands-free (autopilot): don't ask. Take the option marked (Recommended), else the first; write `Decided hands-free: <question> → <choice>` under the item in its plan note (with no plan, indented under the item in its note); then go on. {EXCEPTIONS} For one of those, ask again with `{ALWAYS_ASK}` as the question's header."
+        "Hands-free (autopilot): don't ask. Chose: {choices}. {record} Go on with these choices. {EXCEPTIONS} For one of those, ask again with `{ALWAYS_ASK}` as the question's header, which takes the decided line back."
     );
     json!({
         "hookSpecificOutput": {
@@ -131,18 +205,183 @@ pub fn is_old_landing_push(payload: &Value) -> bool {
 
 /// Whether a question box marks one of its questions always asked.
 pub fn always_asked(payload: &Value) -> bool {
-    payload
-        .pointer("/tool_input/questions")
-        .and_then(Value::as_array)
-        .is_some_and(|qs| {
-            qs.iter().any(|q| {
-                ["header", "question"].iter().any(|k| {
-                    q.get(*k)
-                        .and_then(Value::as_str)
-                        .is_some_and(|t| t.trim_start().starts_with(ALWAYS_ASK))
-                })
-            })
+    questions(payload).iter().any(|q| {
+        ["header", "question"].iter().any(|k| {
+            q.get(*k)
+                .and_then(Value::as_str)
+                .is_some_and(|t| t.trim_start().starts_with(ALWAYS_ASK))
         })
+    })
+}
+
+/// A question box's questions, the `[always ask]` mark taken off, as a
+/// decided line names them.
+pub fn asked_questions(payload: &Value) -> Vec<String> {
+    questions(payload)
+        .iter()
+        .filter_map(|q| q.get("question").and_then(Value::as_str))
+        .map(|q| one_line(q.trim_start().trim_start_matches(ALWAYS_ASK)))
+        .collect()
+}
+
+/// Where a tab's decided lines go: the notes directory, the tab's plan
+/// note (`@tab_plan_note`, a path in it), the ID of the item's note
+/// (`@autopilot_note`), the tab's note (`@tab_note`), and the item's
+/// first line (`@autopilot_item`).
+pub struct Place {
+    pub notes: PathBuf,
+    pub plan: Option<String>,
+    pub note_id: Option<String>,
+    pub note: Option<String>,
+    pub item: String,
+}
+
+/// What `record` does to the decided lines.
+pub enum Change {
+    /// Adds a line for each choice.
+    Decide(Vec<(String, String)>),
+    /// Takes back the lines of these questions, asked after all.
+    TakeBack(Vec<String>),
+}
+
+/// Writes a change to the decided lines into the item's plan note, else
+/// under the item in its note: whether there was a place for it (a plan, or
+/// a note still holding the item), so a decision with nowhere to go is
+/// said rather than lost. Reads the notes directory, so it runs off the
+/// server's task.
+pub fn record(place: &Place, change: &Change) -> io::Result<bool> {
+    let inside = |rel: &String| crate::notes::serve::in_notes(rel).then(|| place.notes.join(rel));
+    let note = place
+        .note_id
+        .as_deref()
+        .and_then(|i| id::find_by_id(i, &place.notes))
+        .or_else(|| place.note.as_ref().and_then(inside))
+        .filter(|f| f.is_file());
+    let plan = place
+        .plan
+        .as_ref()
+        .and_then(inside)
+        .filter(|f| f.is_file())
+        .or_else(|| {
+            let text = std::fs::read_to_string(note.as_ref()?).ok()?;
+            crate::cmd::worktree_from_note::item_plan_file(&place.notes, &text, &place.item)
+        });
+    let (file, under): (&Path, Option<&str>) = match (&plan, &note) {
+        (Some(plan), _) => (plan, None),
+        (None, Some(note)) => (note, Some(&place.item)),
+        (None, None) => return Ok(false),
+    };
+    if let Some(item) = under {
+        let text = std::fs::read_to_string(file)?;
+        if item_block(&text.split('\n').collect::<Vec<_>>(), item).is_none() {
+            return Ok(false);
+        }
+    }
+    id::rewrite(file, |text| match change {
+        Change::Decide(chosen) => {
+            let lines: Vec<String> = chosen.iter().map(|(q, c)| decided_line(q, c)).collect();
+            match under {
+                None => with_decided_at_end(text, &lines),
+                Some(item) => with_decided_under_item(text, item, &lines),
+            }
+        }
+        Change::TakeBack(questions) => without_decided(text, under, questions),
+    })?;
+    Ok(true)
+}
+
+/// A plan note's text with `lines` added as items at its end, before its
+/// ID; `None` when it holds them all already.
+pub fn with_decided_at_end(text: &str, lines: &[String]) -> Option<String> {
+    let mut body: Vec<String> = id::lines_of(&id::body_of(text))
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    let new: Vec<String> = lines
+        .iter()
+        .map(|l| format!("- {l}"))
+        .filter(|l| !body.contains(l))
+        .collect();
+    if new.is_empty() {
+        return None;
+    }
+    while body.last().is_some_and(|l| l.trim().is_empty()) {
+        body.pop();
+    }
+    body.extend(new);
+    Some(match id::in_text(text) {
+        Some(note_id) => id::file_of(&body, &note_id),
+        None => format!("{}\n", body.join("\n")),
+    })
+}
+
+/// A note's text with `lines` indented under the item whose first line is
+/// `item`, after what is indented under it already; `None` when the item
+/// isn't there or holds them all.
+pub fn with_decided_under_item(text: &str, item: &str, lines: &[String]) -> Option<String> {
+    let mut all: Vec<String> = text.split('\n').map(str::to_string).collect();
+    let (at, end) = item_block(&all, item)?;
+    let under = &all[at + 1..end];
+    let new: Vec<String> = lines
+        .iter()
+        .map(|l| format!("  - {l}"))
+        .filter(|l| !under.contains(l))
+        .collect();
+    if new.is_empty() {
+        return None;
+    }
+    all.splice(end..end, new);
+    Some(all.join("\n"))
+}
+
+/// The item whose first line is `item` among a note's lines: its row, and
+/// the row past what is indented under it, trailing blank lines left out.
+fn item_block<S: AsRef<str>>(lines: &[S], item: &str) -> Option<(usize, usize)> {
+    let at = lines.iter().position(|l| {
+        ITEM.captures(l.as_ref())
+            .is_some_and(|m| m[1].trim() == item)
+    })?;
+    let mut end = at + 1;
+    while lines.get(end).is_some_and(|l| {
+        let l = l.as_ref();
+        l.trim().is_empty() || l.starts_with(char::is_whitespace)
+    }) {
+        end += 1;
+    }
+    while end > at + 1 && lines[end - 1].as_ref().trim().is_empty() {
+        end -= 1;
+    }
+    Some((at, end))
+}
+
+/// A note's text without the decided lines of `questions`, only those under
+/// the item whose first line is `under` when it names one, so another
+/// item's decisions stay; `None` when it holds none.
+pub fn without_decided(text: &str, under: Option<&str>, questions: &[String]) -> Option<String> {
+    let prefixes: Vec<String> = questions
+        .iter()
+        .map(|q| format!("- {}", decided_line(q, "")))
+        .collect();
+    let lines: Vec<&str> = text.split('\n').collect();
+    let (from, to) = match under {
+        Some(item) => {
+            let (at, end) = item_block(&lines, item)?;
+            (at + 1, end)
+        }
+        None => (0, lines.len()),
+    };
+    let kept: Vec<&str> = lines
+        .iter()
+        .enumerate()
+        .filter(|(i, l)| {
+            !((from..to).contains(i)
+                && prefixes
+                    .iter()
+                    .any(|p| l.trim_start().starts_with(p.as_str())))
+        })
+        .map(|(_, l)| *l)
+        .collect();
+    (kept.len() < lines.len()).then(|| kept.join("\n"))
 }
 
 /// Whether a turn's last message is one to send back: it ends on a
@@ -231,6 +470,70 @@ mod tests {
     }
 
     #[test]
+    fn the_recommended_option_is_chosen_else_the_first() {
+        let payload = json!({"tool_input": {"questions": [
+            {"header": "Way", "question": "Which way?", "options": [{"label": "A"}, {"label": "B (Recommended)"}]},
+            {"header": "Name", "question": "Which\nname?", "options": [{"label": "X"}, {"label": "Y"}]},
+            {"header": "None", "question": "Nothing to pick?", "options": []},
+        ]}});
+        assert_eq!(
+            choose(&payload),
+            [
+                ("Which way?".to_string(), "B (Recommended)".to_string()),
+                ("Which name?".to_string(), "X".to_string()),
+            ]
+        );
+        assert!(choose(&json!({})).is_empty());
+        let asked = json!({"tool_input": {"questions": [
+            {"header": "[always ask]", "question": "[always ask] Push to main?"},
+        ]}});
+        assert_eq!(asked_questions(&asked), ["Push to main?"]);
+    }
+
+    #[test]
+    fn a_decided_line_goes_at_the_plan_s_end_before_its_id() {
+        let line = vec![decided_line("Which way?", "B")];
+        let plan = "# Plan\n\n## Steps\n\n1. Do it.\n\n<!-- note-id: n-0123456789ab -->\n";
+        let written = with_decided_at_end(plan, &line).unwrap();
+        assert_eq!(
+            written,
+            "# Plan\n\n## Steps\n\n1. Do it.\n- Decided hands-free: Which way? → B\n\n<!-- note-id: n-0123456789ab -->\n"
+        );
+        assert_eq!(with_decided_at_end(&written, &line), None, "once only");
+        assert_eq!(
+            with_decided_at_end("# Plan\n1. Do it.\n", &line).unwrap(),
+            "# Plan\n1. Do it.\n- Decided hands-free: Which way? → B\n"
+        );
+        let back = without_decided(&written, None, &["Which way?".to_string()]).unwrap();
+        assert_eq!(
+            back,
+            "# Plan\n\n## Steps\n\n1. Do it.\n\n<!-- note-id: n-0123456789ab -->\n"
+        );
+        assert_eq!(
+            without_decided(&back, None, &["Which way?".to_string()]),
+            None
+        );
+    }
+
+    #[test]
+    fn with_no_plan_a_decided_line_goes_under_its_item() {
+        let line = vec![decided_line("Which way?", "B")];
+        let note =
+            "# Notes\n- [ ] FEAT: Other\n- [ ] FEAT: Build X\n  - Seen today\n\n- [x] Done\n";
+        assert_eq!(
+            with_decided_under_item(note, "FEAT: Build X", &line).unwrap(),
+            "# Notes\n- [ ] FEAT: Other\n- [ ] FEAT: Build X\n  - Seen today\n  - Decided hands-free: Which way? → B\n\n- [x] Done\n"
+        );
+        assert_eq!(with_decided_under_item(note, "FEAT: Missing", &line), None);
+        let two = "- [x] FEAT: Old\n  - Decided hands-free: Which way? → A\n- [ ] FEAT: Build X\n  - Decided hands-free: Which way? → B\n";
+        assert_eq!(
+            without_decided(two, Some("FEAT: Build X"), &["Which way?".to_string()]).unwrap(),
+            "- [x] FEAT: Old\n  - Decided hands-free: Which way? → A\n- [ ] FEAT: Build X\n",
+            "another item's decision stays"
+        );
+    }
+
+    #[test]
     fn a_question_marked_always_asked_goes_through() {
         let ask = |header: &str, question: &str| {
             json!({"tool_input": {"questions": [
@@ -283,14 +586,15 @@ mod tests {
 
     #[test]
     fn the_answers_are_what_claude_code_reads() {
-        let deny: Value = serde_json::from_str(&deny_question()).unwrap();
+        let deny: Value =
+            serde_json::from_str(&deny_question(&[("Q?".into(), "A".into())], true)).unwrap();
         assert_eq!(deny["hookSpecificOutput"]["permissionDecision"], "deny");
         assert_eq!(deny["hookSpecificOutput"]["hookEventName"], "PreToolUse");
         assert!(
             deny["hookSpecificOutput"]["permissionDecisionReason"]
                 .as_str()
                 .unwrap()
-                .contains("Decided hands-free")
+                .contains("Chose: Q? → A.")
         );
         let block: Value = serde_json::from_str(&block_stop()).unwrap();
         assert_eq!(block["decision"], "block");

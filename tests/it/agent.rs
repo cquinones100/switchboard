@@ -1227,6 +1227,117 @@ fn a_hands_free_tab_has_its_questions_answered_for_claude() {
     );
 }
 
+/// Waits until the file at `path` satisfies `pred`, giving its text.
+fn wait_file(path: &Path, what: &str, pred: impl Fn(&str) -> bool) -> String {
+    let deadline = common::deadline(Duration::from_secs(10));
+    loop {
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        if pred(&text) {
+            return text;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {what}: {text}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn a_hands_free_tab_s_choices_are_written_into_its_plan_by_the_server() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    session_file(&server.home, pid, json!({"sessionId": "s-1"}));
+    let tab = tabs(&server.list())[0]["id"].as_str().unwrap().to_string();
+    let notes = server.home.join("Notes");
+    std::fs::create_dir_all(notes.join("Plans")).unwrap();
+    let note = notes.join("Work.md");
+    let plan = notes.join("Plans/Plan - X.md");
+    std::fs::write(&note, "# Work\n\n- [ ] FEAT: Build X\n  - Seen today\n").unwrap();
+    std::fs::write(
+        &plan,
+        "# Plan - X\n\n## Steps\n\n1. Build it.\n\n<!-- note-id: n-0123456789ab -->\n",
+    )
+    .unwrap();
+    let plan_time = std::fs::metadata(&plan).unwrap().modified().unwrap();
+    for (name, value) in [
+        ("@autopilot", "1"),
+        ("@autopilot_handsfree", "1"),
+        ("@autopilot_item", "FEAT: Build X"),
+        ("@tab_note", "Work.md"),
+        ("@tab_plan_note", "Plans/Plan - X.md"),
+    ] {
+        server.ok(&["set", "-t", &tab, name, value]);
+    }
+    let ask = |header: &str, question: &str| {
+        json!({"session_id": "s-1", "tool_name": "AskUserQuestion", "tool_input": {"questions": [
+            {"header": header, "question": question, "options": [{"label": "A"}, {"label": "B (Recommended)"}]}
+        ]}})
+    };
+
+    let denied: Value = serde_json::from_str(&hook_says(
+        &server,
+        &pane,
+        "PreToolUse",
+        ask("Way", "Which way?"),
+    ))
+    .unwrap();
+    let reason = denied["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .unwrap();
+    assert!(
+        reason.contains("Chose: Which way? → B (Recommended)."),
+        "{reason}"
+    );
+    assert!(reason.contains("don't write it"), "{reason}");
+    let written = wait_file(&plan, "the decided line", |t| {
+        t.contains("Decided hands-free")
+    });
+    assert_eq!(
+        written,
+        "# Plan - X\n\n## Steps\n\n1. Build it.\n- Decided hands-free: Which way? → B (Recommended)\n\n<!-- note-id: n-0123456789ab -->\n",
+        "at the plan's end, its ID kept last"
+    );
+    assert_eq!(
+        std::fs::metadata(&plan).unwrap().modified().unwrap(),
+        plan_time,
+        "its modified time kept"
+    );
+    assert!(!std::fs::read_to_string(&note).unwrap().contains("Decided"));
+
+    // Asked again as one that must be asked: the line is taken back.
+    assert_eq!(
+        hook_says(
+            &server,
+            &pane,
+            "PreToolUse",
+            ask("[always ask]", "Which way?")
+        ),
+        ""
+    );
+    wait_file(&plan, "the line taken back", |t| {
+        !t.contains("Decided hands-free")
+    });
+
+    // With no plan, under the item in its note.
+    std::fs::remove_file(&plan).unwrap();
+    hook_says(&server, &pane, "PreToolUse", ask("Name", "Which name?"));
+    wait_file(&note, "the line under the item", |t| {
+        t == "# Work\n\n- [ ] FEAT: Build X\n  - Seen today\n  - Decided hands-free: Which name? → B (Recommended)\n"
+    });
+    // An item renamed under it: nowhere to write, which is said.
+    std::fs::write(&note, "# Work\n\n- [ ] FEAT: Build Y\n").unwrap();
+    hook_says(&server, &pane, "PreToolUse", ask("Again", "Which again?"));
+    client.wait_text("Hands-free couldn't write");
+    assert_eq!(
+        std::fs::read_to_string(&note).unwrap(),
+        "# Work\n\n- [ ] FEAT: Build Y\n"
+    );
+}
+
 #[test]
 fn the_landing_push_after_a_yes_is_asked_unless_the_tab_lands_without_asking() {
     let server = TestServer::start();

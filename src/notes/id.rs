@@ -305,6 +305,24 @@ pub fn give_id(file: &Path, id: &str) -> io::Result<()> {
     write_id(file, &text, id)
 }
 
+/// A note rewritten by `edit`, which gives its new text or `None` to leave
+/// it, read and written under the note's ID lock with its modified time
+/// kept, as `give_id` writes: hands-free's decided lines
+/// (src/agent/hands_free.rs), which the open app takes in as any change
+/// made from outside. Whether it was written.
+pub fn rewrite(file: &Path, edit: impl FnOnce(&str) -> Option<String>) -> io::Result<bool> {
+    locked(file, || {
+        let meta = fs::metadata(file)?;
+        let text = fs::read_to_string(file)?;
+        let Some(new) = edit(&text) else {
+            return Ok(false);
+        };
+        util::write_atomic(file, new)?;
+        keep_times(file, &meta)?;
+        Ok(true)
+    })
+}
+
 /// The note's ID, given one when it has none, or a new one when it is a
 /// copy of another note holding the same. `dir` is the notes directory.
 pub fn ensure_id(file: &Path, dir: &Path) -> io::Result<String> {
