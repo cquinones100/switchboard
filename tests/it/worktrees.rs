@@ -162,6 +162,20 @@ impl World {
     }
 }
 
+/// A commit someone else wrote, on what `dir` has checked out.
+fn commit_as_them(w: &World, dir: &Path) {
+    let out = w
+        .command("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["commit", "-q", "--allow-empty", "-m", "theirs"])
+        .env("GIT_AUTHOR_EMAIL", "them@e")
+        .env("GIT_COMMITTER_EMAIL", "them@e")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+}
+
 fn read(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_default()
 }
@@ -310,6 +324,46 @@ fn a_branch_only_the_remote_has_is_checked_out_tracking_it_and_a_rerun_reuses_th
         read(&cd).trim(),
         worktree.to_str().unwrap(),
         "the same worktree, from inside it"
+    );
+}
+
+#[test]
+fn a_branch_with_someone_elses_commits_starts_no_claude_until_it_is_trusted() {
+    let w = World::new("wtb-theirs");
+    let (_, clone) = w.origin_and_clone();
+    w.git(&clone, &["checkout", "-q", "-b", "theirs"]);
+    commit_as_them(&w, &clone);
+    w.git(&clone, &["push", "-q", "origin", "theirs"]);
+    w.git(&clone, &["checkout", "-q", "main"]);
+    w.git(&clone, &["branch", "-q", "-D", "theirs"]);
+
+    let cd = w.path("cd");
+    let args = |trusted: bool| {
+        let mut args = vec!["worktree-from-branch", "--no-claude", "--cd-file"];
+        args.push(cd.to_str().unwrap());
+        if trusted {
+            args.push("--trusted");
+        }
+        args.push("theirs");
+        args
+    };
+    let refused = w.run(&clone, &args(false));
+    assert_eq!(refused.status.code(), Some(1));
+    let said = stderr(&refused);
+    assert!(
+        said.contains("them@e") && said.contains("--trusted"),
+        "{said}"
+    );
+    assert!(
+        read(&cd).is_empty(),
+        "no shell goes there, no Claude starts"
+    );
+
+    w.ok(&clone, &args(true));
+    assert_eq!(
+        read(&cd).trim(),
+        clone.join(".claude/worktrees/theirs").to_str().unwrap(),
+        "opened as your own once you say so"
     );
 }
 
@@ -864,6 +918,57 @@ fn any_pr_opens_untrusted_when_asked_and_the_wtpr_function_goes_nowhere() {
 }
 
 #[test]
+fn a_prs_commits_someone_else_wrote_open_it_untrusted_as_a_forks_would() {
+    let (w, _fake) = github_world("wtpr-theirs");
+    let origin = w.path("origin.git");
+    std::fs::write(
+        w.path(".gitconfig"),
+        format!(
+            "[url \"{}\"]\n\tinsteadOf = git@github.com:o/r.git\n",
+            origin.display()
+        ),
+    )
+    .unwrap();
+    let clone = w.path("clone");
+    w.init(&origin, true);
+    w.clone_into("git@github.com:o/r.git", &clone);
+    w.git(&clone, &["commit", "-q", "--allow-empty", "-m", "start"]);
+    w.git(&clone, &["push", "-q", "origin", "main"]);
+    commit_as_them(&w, &clone);
+    let last = w.git(&clone, &["rev-parse", "HEAD"]);
+    w.git(&clone, &["push", "-q", "origin", "HEAD:feat"]);
+    w.git(&origin, &["update-ref", "refs/pull/7/head", &last]);
+    w.git(&origin, &["branch", "-q", "-D", "feat"]);
+    w.git(&clone, &["reset", "-q", "--hard", "HEAD~1"]);
+
+    let cd = w.path("cd");
+    let out = w.run(
+        &clone,
+        &[
+            "worktree-from-pr",
+            "--no-claude",
+            "--cd-file",
+            cd.to_str().unwrap(),
+            "7",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(3), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("not all yours (them@e)"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(read(&cd).is_empty());
+    let worktree = w.path(".cache/switchboard/pr-review/o-r/7");
+    assert_eq!(w.git(&worktree, &["rev-parse", "HEAD"]), last);
+    assert_eq!(
+        w.git(&worktree, &["config", "switchboard.untrusted"]),
+        "true"
+    );
+    assert!(!clone.join(".claude/worktrees/pr-7-feat").exists());
+}
+
+#[test]
 fn with_the_hooks_path_in_full_a_worktree_runs_the_clones_hooks_never_its_branchs() {
     // Why CLAUDE.md has every clone set core.hooksPath to its .githooks by
     // its full path: a relative one is read from each worktree's top.
@@ -1063,6 +1168,56 @@ fn a_tickets_branch_starts_from_origins_fetched_main_or_its_branch_on_origin_and
         stderr(&offline)
     );
     assert!(!clone.join(".claude/worktrees/eng-4-offline").exists());
+}
+
+#[test]
+fn a_tickets_branch_a_teammate_started_starts_no_claude_until_it_is_trusted() {
+    let mut w = World::new("wt-theirs");
+    let fake = Fake::linear(started_answer);
+    w.set("SWITCHBOARD_LINEAR_API", &fake.graphql());
+    w.set("LINEAR_API_KEY", "lin_test");
+    let (_, clone) = w.origin_and_clone();
+    w.git(&clone, &["checkout", "-q", "-b", "eng-2-started"]);
+    commit_as_them(&w, &clone);
+    w.git(&clone, &["push", "-q", "origin", "eng-2-started"]);
+    w.git(&clone, &["checkout", "-q", "main"]);
+    w.git(&clone, &["branch", "-q", "-D", "eng-2-started"]);
+
+    let cd = w.path("cd");
+    let at = cd.to_str().unwrap();
+    let refused = w.run(
+        &clone,
+        &[
+            "worktree-from-ticket",
+            "--no-claude",
+            "--cd-file",
+            at,
+            "ENG-2",
+        ],
+    );
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(stderr(&refused).contains("them@e"), "{}", stderr(&refused));
+    assert!(read(&cd).is_empty());
+
+    w.ok(
+        &clone,
+        &[
+            "worktree-from-ticket",
+            "--no-claude",
+            "--cd-file",
+            at,
+            "--trusted",
+            "ENG-2",
+        ],
+    );
+    assert!(
+        read(&cd).starts_with(
+            clone
+                .join(".claude/worktrees/eng-2-started")
+                .to_str()
+                .unwrap()
+        )
+    );
 }
 
 // ── worktree-resume and worktree-done ───────────────────────────────────────

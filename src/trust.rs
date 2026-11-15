@@ -16,7 +16,14 @@
 //!   remote and were written and committed under your git email, and which
 //!   isn't partway through bringing in other commits; else one listed.
 //!   `switchboard try` asks it before building, as bin/switchboard-try's
-//!   checks did (moved here from src/cmd/try_.rs).
+//!   checks did (moved here from src/cmd/try_.rs), as does `switchboard
+//!   apply install` of `~/switchboard`.
+//! - **Your own branch** (`branch_yours_or_listed`, `others_on`): every
+//!   commit beyond the default branch written and committed under your git
+//!   email, so a teammate's branch on origin is someone else's, as it isn't
+//!   for `yours_or_listed`; else the worktree listed. `wt` and `wtb` ask it
+//!   before starting Claude, and `wtpr` of a PR's commits before opening a
+//!   same-repository PR as your own.
 //! - **Someone else's PR** (`is_untrusted`): a worktree `wtpr --untrusted`
 //!   made, the default for a fork's PR, under `~/.cache/switchboard/
 //!   pr-review/`, with `switchboard.untrusted` set in its own worktree
@@ -272,21 +279,21 @@ pub fn yours_or_listed(real: &Path, wt: &Path) -> Result<(), String> {
         }
         // Nor partway through bringing in other commits, whose files are in
         // the tree before any of them is in HEAD.
-        for op in MIDWAY {
-            // Relative to the worktree, as git gives it: --path-format is
-            // newer than the git some still have.
-            if let Some(path) = git(wt, &["rev-parse", "--git-path", op])
-                && wt.join(path).exists()
-            {
-                midway = Some(*op);
-                own = false;
-            }
+        if let Some(op) = midway_in(wt) {
+            midway = Some(op);
+            own = false;
         }
         // And written and committed under your git email, since a PR
         // fetched straight to a local branch, or a fork's ref pruned since,
         // leaves no ref.
         let me = git(wt, &["config", "user.email"]).unwrap_or_default();
-        let mut args = vec!["log", "--format=%ae%n%ce", "HEAD", "--not"];
+        let mut args = vec![
+            "log",
+            "--no-show-signature",
+            "--format=%ae%n%ce",
+            "HEAD",
+            "--not",
+        ];
         args.extend(ours.iter().map(String::as_str));
         args.push("--");
         if me.is_empty() || git_lines(wt, &args).iter().any(|e| *e != me) {
@@ -311,6 +318,134 @@ pub fn yours_or_listed(real: &Path, wt: &Path) -> Result<(), String> {
     Err(format!(
         "{wt}'s .git doesn't lead back to it, so whose code it holds can't be told; list it in ~/.config/switchboard/trusted-dirs to try it"
     ))
+}
+
+/// The operation partway through bringing other commits' files into the
+/// worktree before any of them is in HEAD, by git's file for it.
+fn midway_in(wt: &Path) -> Option<&'static str> {
+    MIDWAY.iter().copied().find(|op| {
+        // Relative to the worktree, as git gives it: --path-format is
+        // newer than the git some still have.
+        git(wt, &["rev-parse", "--git-path", op]).is_some_and(|path| wt.join(path).exists())
+    })
+}
+
+/// The refusal for a worktree partway through bringing in other commits,
+/// whose files HEAD's commits don't account for, before Claude starts there.
+pub fn midway_refusal(wt: &Path) -> Result<(), String> {
+    match midway_in(wt) {
+        Some(op) => Err(format!(
+            "{} is partway through bringing in other commits (git's {op} is there), whose files Claude would load; finish or abort it first, or run it again with --trusted",
+            paths::tilde(wt)
+        )),
+        None => Ok(()),
+    }
+}
+
+/// The committer GitHub names on what it commits for you on the web (a
+/// merge of the base into a branch, say), whoever pressed the button.
+const GITHUB_WEB: &str = "noreply@github.com";
+
+/// Whether the branch checked out at `wt` is yours to start Claude on, whose
+/// `CLAUDE.md`, `.claude/settings.json`, hooks and skills it loads: every
+/// commit it has beyond the default branch written and committed under
+/// your git email, or the worktree listed in trusted-dirs. A teammate's
+/// branch on origin counts as someone else's here, as it doesn't for
+/// `yours_or_listed`, since Claude would run what they put there. The
+/// refusal names who else wrote them and how to open it anyway.
+pub fn branch_yours_or_listed(real: &Path, wt: &Path) -> Result<(), String> {
+    if listed(real, wt) {
+        return Ok(());
+    }
+    midway_refusal(wt)?;
+    let others = others_on(wt, "HEAD", None)?;
+    if others.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "{}'s branch has commits beyond the default branch by someone else ({}), whose CLAUDE.md, settings and hooks Claude would load, so Claude isn't started there.\n\
+         Read them, then run it again with --trusted to open it as your own.",
+        paths::tilde(wt),
+        others.join(", ")
+    ))
+}
+
+/// Who besides you wrote or committed the commits `tip` has beyond `base`
+/// when given (a PR's), else the default branch (origin's or the first
+/// remote's; the local main or master only with no remote), by email, each once; an error when git can't say. You are git's own idea of your
+/// email (`git var`, so `GIT_AUTHOR_EMAIL` counts as it does for a commit)
+/// and `user.email`.
+pub fn others_on(dir: &Path, tip: &str, base: Option<&str>) -> Result<Vec<String>, String> {
+    let email = |var: &str| {
+        git(dir, &["var", var]).and_then(|ident| {
+            let (_, rest) = ident.split_once('<')?;
+            Some(rest.split_once('>')?.0.to_string())
+        })
+    };
+    let me: Vec<String> = ["GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"]
+        .iter()
+        .filter_map(|v| email(v))
+        .chain(git(dir, &["config", "user.email"]))
+        .filter(|e| !e.is_empty())
+        .collect();
+    // One branch, never a union: a local main can hold commits the
+    // remote's lacks. The remote the worktree commands branch from: origin,
+    // else the first.
+    // A local main stands in only with no remote at all; a remote whose
+    // default branch isn't there leaves nothing to tell by.
+    let remote = crate::worktree::default_remote(dir);
+    let candidates: Vec<String> = match &remote {
+        Some(r) => ["HEAD", "main", "master"]
+            .map(|b| format!("refs/remotes/{r}/{b}"))
+            .to_vec(),
+        None => ["refs/heads/main", "refs/heads/master"]
+            .map(str::to_string)
+            .to_vec(),
+    };
+    let base = match base {
+        Some(b) => Some(b.to_string()),
+        None => candidates
+            .into_iter()
+            .find(|r| git(dir, &["rev-parse", "--verify", "--quiet", r]).is_some()),
+    };
+    if base.is_none()
+        && let Some(r) = &remote
+    {
+        return Err(format!(
+            "{r}'s default branch isn't in {}, so whose commits it holds can't be told; fetch it first",
+            paths::tilde(dir)
+        ));
+    }
+    let mut args = vec![
+        "log",
+        "--no-show-signature",
+        "--format=%ae %ce",
+        tip,
+        "--not",
+    ];
+    args.extend(base.as_deref());
+    args.push("--");
+    let Some(emails) = git(dir, &args) else {
+        return Err(format!(
+            "could not read {tip}'s commits in {}",
+            paths::tilde(dir)
+        ));
+    };
+    let mine = |e: &str| me.iter().any(|m| m == e);
+    // GitHub as committer counts only on a commit you wrote, since anyone
+    // can name it.
+    let mut others: Vec<String> = emails
+        .lines()
+        .filter_map(|l| l.split_once(' '))
+        .flat_map(|(author, committer)| {
+            let ok = |e: &str| mine(e) || (e == GITHUB_WEB && mine(author));
+            [author, committer].into_iter().filter(move |e| !ok(e))
+        })
+        .map(|e| if e.is_empty() { "(none)" } else { e }.to_string())
+        .collect();
+    others.sort();
+    others.dedup();
+    Ok(others)
 }
 
 /// Whether the worktree's git directory is its repository's own for exactly
@@ -471,6 +606,38 @@ mod tests {
     }
 
     #[test]
+    fn a_branchs_commits_are_yours_only_when_you_wrote_them_github_committing_for_you_alone() {
+        let t = Temp::new("branch");
+        let real = t.0.join("real");
+        fs::create_dir_all(&real).unwrap();
+        let wt = t.0.join("wt");
+        fs::create_dir_all(&wt).unwrap();
+        clone_of(&wt, "me@example.com");
+        sh(&wt, &["branch", "-q", "-m", "main"]);
+        sh(&wt, &["checkout", "-q", "-b", "feature"]);
+        let commit = |author: &str, committer: &str| {
+            let ok = Command::new("git")
+                .arg("-C")
+                .arg(&wt)
+                .args(["commit", "-q", "--allow-empty", "-m", "c"])
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_AUTHOR_EMAIL", author)
+                .env("GIT_COMMITTER_EMAIL", committer)
+                .output()
+                .unwrap();
+            assert!(ok.status.success());
+        };
+        commit("me@example.com", GITHUB_WEB);
+        assert_eq!(branch_yours_or_listed(&real, &wt), Ok(()));
+        commit(GITHUB_WEB, GITHUB_WEB);
+        let why = branch_yours_or_listed(&real, &wt).unwrap_err();
+        assert!(
+            why.contains(GITHUB_WEB) && why.contains("--trusted"),
+            "{why}"
+        );
+    }
+
+    #[test]
     fn a_worktree_partway_through_a_merge_is_refused() {
         let t = Temp::new("midway");
         let wt = t.0.join("wt");
@@ -482,6 +649,11 @@ mod tests {
         );
         let why = yours_or_listed(&t.0, &wt).unwrap_err();
         assert!(why.contains("MERGE_HEAD"), "{why}");
+        let why = branch_yours_or_listed(&t.0, &wt).unwrap_err();
+        assert!(
+            why.contains("MERGE_HEAD") && why.contains("--trusted"),
+            "{why}"
+        );
     }
 
     #[test]

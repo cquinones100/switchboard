@@ -51,7 +51,7 @@ Shared by every part:
 | `connector` | One call to a Claude connector through a headless Haiku |
 | `integrations` | GitHub and Linear over their APIs, refused while their setting is off but in a program you run yourself (`codex-review`, `wt`, `wtpr`, ...); a branch's PR looked for in the repository `gh repo set-default` names, else in origin and, in a fork's clone, the project its `upstream` remote names, in one query, origin's winning |
 | `worktree` | What the worktree commands share |
-| `trust` | Whose code a directory holds, the one place that decides: the directories listed in `trusted-dirs`, a worktree whose code is your own (what `switchboard try` builds), and someone else's PR checked out untrusted, which nothing starts Claude in, lists to reopen or builds |
+| `trust` | Whose code a directory holds, the one place that decides: the directories listed in `trusted-dirs`, a worktree whose code is your own (what `switchboard try` builds), a branch whose commits are your own (what `wt`, `wtb` and `wtpr` start Claude on), and someone else's PR checked out untrusted, which nothing starts Claude in, lists to reopen or builds |
 | `facts`, `items` | What GitHub and the landing queue say of each tab; the one shape every view's items take |
 | `repos` | Your settings for each repository, `repos.json`, by its origin's `owner/name`: how its work lands (through a PR or straight on its default branch, worked out from GitHub's rules and its CLAUDE.md when not set) and what a landed change needs |
 

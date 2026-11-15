@@ -10,7 +10,11 @@
 //! nest its worktree inside a shared directory. `init zsh` prints the `wtb`
 //! function, which works as `wt` does (worktree_from_ticket.rs). A branch
 //! already checked out in a worktree of someone else's PR, checked out
-//! untrusted, is refused (src/trust.rs).
+//! untrusted, is refused (src/trust.rs), and so is Claude on a branch with
+//! commits beyond the default branch that someone else wrote
+//! (`trust::branch_yours_or_listed`), unless `--trusted` opens it as your
+//! own: the worktree is made, but nothing is linked into it, no shell moved
+//! into it and no Claude started.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -21,11 +25,12 @@ const SOURCE: &str = "wtb: fetch the branch";
 
 fn usage() -> ExitCode {
     eprintln!(
-        "Usage: worktree-from-branch [path] <branch>\n       \
+        "Usage: worktree-from-branch [--trusted] [path] <branch>\n       \
          worktree-from-branch init <zsh|bash>\n\n\
          Examples:\n  \
          worktree-from-branch fix-login-redirect\n  \
-         worktree-from-branch .worktrees fix-login-redirect\n\n\
+         worktree-from-branch .worktrees fix-login-redirect\n  \
+         worktree-from-branch --trusted their-branch   a branch with someone else's commits, as your own\n\n\
          Path defaults to {} under the repo root.",
         worktree::DEFAULT_WORKTREE_DIR
     );
@@ -145,18 +150,24 @@ pub fn main(args: Vec<String>) -> ExitCode {
     if given.help {
         return usage();
     }
-    let (target, branch) = match given.positional.as_slice() {
+    let trusted = given.positional.iter().any(|a| a == "--trusted");
+    let positional: Vec<&String> = given
+        .positional
+        .iter()
+        .filter(|a| *a != "--trusted")
+        .collect();
+    let (target, branch) = match positional.as_slice() {
         [branch] => (worktree::DEFAULT_WORKTREE_DIR, branch.as_str()),
         [path, branch, ..] => (path.as_str(), branch.as_str()),
         [] => return usage(),
     };
-    match run(&given, target, branch) {
+    match run(&given, trusted, target, branch) {
         Ok(code) => code,
         Err(e) => worktree::fail(&e),
     }
 }
 
-fn run(given: &Given, target: &str, branch: &str) -> Result<ExitCode, String> {
+fn run(given: &Given, trusted: bool, target: &str, branch: &str) -> Result<ExitCode, String> {
     let here = std::env::current_dir().map_err(|e| e.to_string())?;
     if !worktree::git_ok(&here, &["check-ref-format", "--branch", branch]) {
         return Err(format!("not a valid branch name: {branch}"));
@@ -194,6 +205,17 @@ fn run(given: &Given, target: &str, branch: &str) -> Result<ExitCode, String> {
     eprintln!("Worktree: {}", finished.display());
     if existing.is_none() {
         create_worktree(&path, branch, &root)?;
+    }
+    if !trusted {
+        // Against the default branch as it is now, so teammates' work merged
+        // since the last fetch isn't taken for this branch's; offline, as it
+        // was last fetched.
+        if let Some(remote) = worktree::default_remote(&root)
+            && let Some(base) = default_branch(&root, &remote)
+        {
+            worktree::fetch_branch(&root, &remote, &base, SOURCE);
+        }
+        crate::trust::branch_yours_or_listed(&crate::paths::home(), &finished)?;
     }
     worktree::link_local_settings(&root, &finished).map_err(|e| e.to_string())?;
     if let Some(cd_file) = &given.cd_file {

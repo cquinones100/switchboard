@@ -292,3 +292,81 @@ fn apply_builds_only_your_own_clone_or_a_trusted_one() {
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("isn't running"));
 }
+
+#[test]
+fn apply_builds_your_switchboard_clone_only_while_its_commits_and_files_are_yours() {
+    let r = Repo::new();
+    std::os::unix::fs::symlink(&r.repo, r.home.join("switchboard")).unwrap();
+    git(&r.repo, &["config", "user.email", "t@e"]);
+    r.commit(&[("README.md", "mine\n")]);
+    let install = || {
+        let out = Command::new(BIN)
+            .args(["apply", "install", r.repo.to_str().unwrap()])
+            .env("HOME", &r.home)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env_remove("SWITCHBOARD")
+            .env_remove("SWITCHBOARD_PANE")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1));
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    };
+
+    // A file no commit holds has no author to check.
+    std::fs::write(r.repo.join("stray.rs"), "fn main() {}\n").unwrap();
+    let said = install();
+    assert!(
+        said.contains("stray.rs") && said.contains("isn't built"),
+        "{said}"
+    );
+    std::fs::remove_file(r.repo.join("stray.rs")).unwrap();
+    // Nor has a change to a file a commit holds, alone in the status.
+    std::fs::write(r.repo.join("README.md"), "changed\n").unwrap();
+    let said = install();
+    assert!(said.contains("(README.md)"), "{said}");
+    git(&r.repo, &["checkout", "-q", "--", "README.md"]);
+
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(&r.repo)
+        .args(["commit", "-q", "--allow-empty", "-m", "theirs"])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "them")
+        .env("GIT_AUTHOR_EMAIL", "them@e")
+        .env("GIT_COMMITTER_NAME", "them")
+        .env("GIT_COMMITTER_EMAIL", "them@e")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let said = install();
+    assert!(
+        said.contains("aren't yours") && said.contains("isn't built"),
+        "{said}"
+    );
+
+    // Theirs on a branch of origin's, which counts origin's branches as
+    // yours, is still theirs beyond the default branch.
+    let origin = r.home.join("origin.git");
+    git(&r.home, &["init", "-q", "--bare", origin.to_str().unwrap()]);
+    git(
+        &r.repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(
+        &r.repo,
+        &[
+            "push",
+            "-q",
+            "origin",
+            "HEAD~1:refs/heads/main",
+            "HEAD:refs/heads/theirs",
+        ],
+    );
+    git(&r.repo, &["fetch", "-q", "origin"]);
+    let said = install();
+    assert!(
+        said.contains("someone else wrote (them@e)") && said.contains("isn't built"),
+        "{said}"
+    );
+}

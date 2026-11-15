@@ -22,6 +22,11 @@
 //! pipe, and anything interactive downstream would see no terminal. tmux's
 //! function named the tabs again once it had cd'd; Switchboard's server
 //! names every tab on its own, so the function doesn't.
+//!
+//! A ticket's branch someone else started (a teammate's, on origin) holds
+//! their `CLAUDE.md`, settings and hooks, so Claude isn't started on it
+//! unless `--trusted` says it is yours to open
+//! (`trust::branch_yours_or_listed`).
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -34,13 +39,14 @@ use crate::worktree::{self, Given, Purpose};
 
 fn usage() -> ExitCode {
     eprintln!(
-        "Usage: worktree-from-ticket [path] <linear-ticket-id-or-url> [--prompt <text>]\n       \
+        "Usage: worktree-from-ticket [--trusted] [path] <linear-ticket-id-or-url> [--prompt <text>]\n       \
          worktree-from-ticket init <zsh|bash>\n\n\
          Examples:\n  \
          worktree-from-ticket ABC-123\n  \
          worktree-from-ticket .worktrees ABC-123\n  \
          worktree-from-ticket ABC-123 --prompt \"start with the migration\"\n\n\
          Path defaults to {} under the repo root.\n\
+         --trusted opens a branch someone else started on the ticket as your own.\n\
          --prompt adds to the prompt Claude starts with. The wt function also takes\n\
          it from WT_PROMPT, which it clears, so /wt can hand its text over.",
         worktree::DEFAULT_WORKTREE_DIR
@@ -238,7 +244,13 @@ pub fn main(args: Vec<String>) -> ExitCode {
     }
     let extra = worktree::one_line(&given.all("--prompt").join(" "));
     // One positional is the ticket; two means a path came first.
-    let (target, ticket) = match given.positional.as_slice() {
+    let trusted = given.positional.iter().any(|a| a == "--trusted");
+    let positional: Vec<&String> = given
+        .positional
+        .iter()
+        .filter(|a| *a != "--trusted")
+        .collect();
+    let (target, ticket) = match positional.as_slice() {
         [ticket] => (worktree::DEFAULT_WORKTREE_DIR, ticket.as_str()),
         [path, ticket, ..] => (path.as_str(), ticket.as_str()),
         [] => return usage(),
@@ -299,8 +311,18 @@ pub fn main(args: Vec<String>) -> ExitCode {
     if let Err(e) = worktree::ensure_worktree(&path, &branch, &purpose) {
         return worktree::fail(&e.to_string());
     }
-    if start.is_some_and(|s| s.tracks) {
+    if start.as_ref().is_some_and(|s| s.tracks) {
         worktree::set_upstream(&root, &branch, "origin", &branch);
+    }
+    // A teammate's start on the ticket is their code: Claude loads its
+    // CLAUDE.md, settings and hooks only once you say so (src/trust.rs).
+    // Against the default branch as it is now; offline, as last fetched.
+    if !trusted && start.as_ref().is_none_or(|s| s.tracks) {
+        let _ = worktree::default_start(&root, "wt: fetch the base");
+    }
+    if !trusted && let Err(why) = crate::trust::branch_yours_or_listed(&crate::paths::home(), &path)
+    {
+        return worktree::fail(&why);
     }
     if let Err(e) = worktree::link_local_settings(&root, &path) {
         return worktree::fail(&e.to_string());

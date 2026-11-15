@@ -479,9 +479,12 @@ pub fn apply_main(args: Vec<String>) -> ExitCode {
 }
 
 /// Builds the clone, puts the build in place of the running binary and runs
-/// its setup's refresh. Only your own clone, or one in trusted-dirs, since
-/// a build runs the clone's code, and never someone else's PR checked out
-/// untrusted (src/trust.rs).
+/// its setup's refresh. Only your own clone (`~/switchboard`, holding
+/// only your own commits, as `switchboard try` asks, and no change no
+/// commit holds), or one in
+/// trusted-dirs, since a build runs the clone's code, and never someone
+/// else's PR checked out untrusted (src/trust.rs). Built `--locked`, so the
+/// crates are the ones `Cargo.lock` names.
 fn install(repo: &Path) -> Result<String, String> {
     let repo = repo
         .canonicalize()
@@ -493,21 +496,55 @@ fn install(repo: &Path) -> Result<String, String> {
             paths::tilde(&repo)
         ));
     }
-    if !is_switchboard(&repo) && !crate::trust::trusted(&paths::home(), &repo) {
+    if is_switchboard(&repo) {
+        crate::trust::yours_or_listed(&paths::home(), &repo)
+            .map_err(|why| format!("{why}; so its code isn't built"))?;
+        // A teammate's branch fetched from origin passes that check, which
+        // counts origin's branches as yours: its commits beyond the default
+        // branch are read too.
+        if !crate::trust::listed(&paths::home(), &repo) {
+            let others = crate::trust::others_on(&repo, "HEAD", None)?;
+            if !others.is_empty() {
+                return Err(format!(
+                    "{} has commits beyond the default branch that someone else wrote ({}), so its code isn't built; read them, then list it in ~/.config/switchboard/trusted-dirs",
+                    paths::tilde(&repo),
+                    others.join(", ")
+                ));
+            }
+        }
+        // Files no commit holds have no author to check, and a landing
+        // leaves the main clone with none: built, they would run unread.
+        let status = worktree::git_at(&repo, &["status", "--porcelain", "--untracked-files=all"])
+            .map_err(|e| format!("git status in {}: {e}", paths::tilde(&repo)))?;
+        // The output comes trimmed, so a line's status is read up to its
+        // first space rather than by its width.
+        let files: Vec<&str> = status
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| l.trim_start().split_once(' ').map_or(l, |(_, f)| f.trim()))
+            .collect();
+        if !files.is_empty() {
+            return Err(format!(
+                "{} has changes no commit holds ({}), so its code isn't built; commit or remove them first",
+                paths::tilde(&repo),
+                files.join(", ")
+            ));
+        }
+    } else if !crate::trust::trusted(&paths::home(), &repo) {
         return Err(format!(
             "{} is neither ~/switchboard nor in ~/.config/switchboard/trusted-dirs, so its code isn't built",
             paths::tilde(&repo)
         ));
     }
     let built = Command::new("cargo")
-        .args(["build", "--release"])
+        .args(["build", "--release", "--locked"])
         .current_dir(&repo)
         .stdin(Stdio::null())
         .stdout(std::io::stderr())
         .status()
         .map_err(|e| format!("cargo: {e}"))?;
     if !built.success() {
-        return Err("cargo build --release failed".into());
+        return Err("cargo build --release --locked failed".into());
     }
     let build = repo.join("target/release/switchboard");
     let target = update::install::installed_binary().map_err(|e| e.to_string())?;

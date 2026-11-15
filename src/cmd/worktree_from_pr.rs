@@ -17,9 +17,11 @@
 //! prints the `wtpr` function, which works as `wt` does
 //! (worktree_from_ticket.rs).
 //!
-//! A fork's PR is someone else's code, so by default it is opened
-//! `--untrusted` (any PR can be, with the flag; `--trusted` opens a fork's
-//! as your own, a collaborator's you know), as bin/worktree-from-pr came to:
+//! A fork's PR is someone else's code, and so is a PR of the repository's
+//! own with a commit beyond the default branch that someone else wrote
+//! (`trust::others_on`, on the commits GitHub keeps for it), so by default
+//! each is opened `--untrusted` (any PR can be, with the flag; `--trusted`
+//! opens one as your own, a collaborator's you know), as bin/worktree-from-pr came to:
 //! in `~/.cache/switchboard/pr-review/<owner>-<repo>/<n>`, outside the
 //! clone, on a local branch `pr-review/<n>` made from the commits GitHub
 //! keeps for it (`refs/pull/<n>/head`), with no remote added. Its own
@@ -443,8 +445,8 @@ pub fn main(args: Vec<String>) -> ExitCode {
     }
 }
 
-/// Whether the PR was asked for as trusted or not: by default a fork's is
-/// untrusted and any other trusted.
+/// Whether the PR was asked for as trusted or not: by default a fork's, or
+/// one with someone else's commits, is untrusted and any other trusted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Asked {
     Default,
@@ -505,6 +507,22 @@ fn run(given: &Given, asked: Asked, target: &str, input: &str) -> Result<ExitCod
     let fork = pr.is_cross_repository;
     if asked == Asked::Untrusted || (fork && asked != Asked::Trusted) {
         return untrusted(given, &pr, &repo, &root);
+    }
+    // A teammate's PR is their code too: Claude would load its CLAUDE.md,
+    // settings and hooks, so it opens untrusted unless all its commits are
+    // yours (src/trust.rs).
+    let mut checked_against = None;
+    if asked == Asked::Default {
+        let (others, against) = others_on_pr(&pr, &repo, &root)?;
+        if !others.is_empty() {
+            eprintln!(
+                "Commits:  not all yours ({}), so it opens untrusted; wtpr --trusted {} opens it as your own.",
+                others.join(", "),
+                pr.number
+            );
+            return untrusted(given, &pr, &repo, &root);
+        }
+        checked_against = Some(against);
     }
     let wanted = settings::setting("wtpr_prompt") != Some(serde_json::Value::Bool(false));
     let me = if wanted {
@@ -587,6 +605,21 @@ fn run(given: &Given, asked: Asked, target: &str, input: &str) -> Result<ExitCod
         };
         create_worktree(&path, &checkout, &root, pr.number)?;
     }
+    // What is checked out may not be the PR's commits (a worktree or local
+    // branch kept from before, with commits of its own): checked too.
+    if let Some(against) = &checked_against {
+        trust::midway_refusal(&finished)?;
+        let others = trust::others_on(&finished, "HEAD", against.as_deref())?;
+        if !others.is_empty() {
+            return Err(format!(
+                "{} holds commits beyond the default branch by someone else ({}), whose CLAUDE.md, settings and hooks Claude would load, so Claude isn't started there.\n\
+                 Read them, then run wtpr --trusted {} to open it as your own.",
+                paths::tilde(&finished),
+                others.join(", "),
+                pr.number
+            ));
+        }
+    }
     worktree::link_local_settings(&root, &finished).map_err(|e| e.to_string())?;
 
     let prompt = if wanted {
@@ -610,6 +643,69 @@ fn run(given: &Given, asked: Asked, target: &str, input: &str) -> Result<ExitCod
 }
 
 // ── Someone else's PR ───────────────────────────────────────────────────────
+
+/// Who besides you wrote the PR's commits beyond the default branch, from the commits
+/// GitHub keeps for it (`refs/pull/<n>/head`), fetched as
+/// `untrusted_worktree` fetches them.
+fn others_on_pr(
+    pr: &PrDetails,
+    repo: &Repo,
+    root: &Path,
+) -> Result<(Vec<String>, Option<String>), String> {
+    let Some(base) = remote_for(root, &repo.to_string()).or_else(|| worktree::default_remote(root))
+    else {
+        return Err("repository has no remotes".into());
+    };
+    let mut head = format!("refs/remotes/{base}/pr/{}", pr.number);
+    worktree::count_fetch(root, &base, FETCH);
+    let kept = worktree::git_loud(
+        root,
+        &[
+            "fetch",
+            &base,
+            &format!("+refs/pull/{}/head:{head}", pr.number),
+        ],
+        false,
+    );
+    // A remote that isn't GitHub's keeps no refs/pull: the PR's branch, then.
+    if !kept {
+        if !worktree::fetch_branch(root, &base, &pr.head_ref_name, FETCH) {
+            return Err(format!(
+                "could not fetch PR #{} from {base} to see whose commits it holds",
+                pr.number
+            ));
+        }
+        head = format!("refs/remotes/{base}/{}", pr.head_ref_name);
+    }
+    // The default branch of the PR's repository alone, fetched now: a
+    // stacked PR's base is a branch like any other, whose commits are
+    // checked with the PR's. Never another remote's, which may hold them.
+    let named = worktree::git_at(
+        root,
+        &[
+            "symbolic-ref",
+            "--short",
+            &format!("refs/remotes/{base}/HEAD"),
+        ],
+    )
+    .ok()
+    .and_then(|d| d.strip_prefix(&format!("{base}/")).map(str::to_string));
+    let candidates: Vec<String> = match named {
+        Some(name) => vec![name],
+        None => vec!["main".into(), "master".into()],
+    };
+    let Some(default) = candidates
+        .into_iter()
+        .find(|d| worktree::fetch_branch(root, &base, d, FETCH))
+    else {
+        return Err(format!(
+            "could not fetch {base}'s default branch to see whose commits PR #{} holds; wtpr --untrusted {} or --trusted {} says which it is",
+            pr.number, pr.number, pr.number
+        ));
+    };
+    let against = Some(format!("refs/remotes/{base}/{default}"));
+    Ok((trust::others_on(root, &head, against.as_deref())?, against))
+}
 
 /// A PR opened untrusted: its review worktree made or moved to the PR's
 /// newest commit, and what to know about it printed. Exit code 3 for the
