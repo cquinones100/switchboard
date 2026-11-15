@@ -32,6 +32,12 @@
 //! and the `tab_note_context` setting turns it off. The server is asked
 //! with `send_quiet`'s bound, so one that has stopped answering costs the
 //! session start a second at most, and the session gets the part alone.
+//!
+//! A session in a pane is told its tab's number too, as `switchboard tabs`
+//! numbers it, and the tab's label: Claude Code's own name for a session
+//! (`switchboard-66`) ends in digits of its own, which a session that
+//! didn't know its tab's number took for one, and a message to another tab
+//! says which tab it comes from by that number.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -43,6 +49,7 @@ use crate::agent::sessions;
 use crate::mux::socket;
 use crate::notes::{serve::in_notes, store};
 use crate::settings;
+use crate::util;
 
 /// Switchboard's part, as compiled in.
 pub const PART: &str = include_str!("../../assets/switchboard.md");
@@ -56,16 +63,22 @@ pub fn part() -> std::borrow::Cow<'static, str> {
 const INPUT_MAX: u64 = 1 << 20;
 
 /// The hook's answer: the part as SessionStart's added context, with the
+/// tab's number and label after it when the session is in a tab, and the
 /// tab's note pointed at when it has one.
-pub fn answer(note: Option<&Path>) -> String {
-    let part = part();
+pub fn answer(tab: Option<(&str, &str)>, note: Option<&Path>) -> String {
+    let mut part = part().into_owned();
+    if let Some((number, label)) = tab {
+        part.push_str(&format!(
+            "\n# This tab\n\nThis session is in tab {number}, {label}. Say so by that number when you write to another tab.\n"
+        ));
+    }
     let context = match note {
         Some(note) => format!(
             "{part}\n# This tab's note\n\nThis tab's note is `{}`. Read it before your first reply: \
              the standing rules it keeps apply to this session too, whatever repository it works in.\n",
             note.display()
         ),
-        None => part.into_owned(),
+        None => part,
     };
     json!({
         "hookSpecificOutput": {
@@ -91,6 +104,46 @@ fn tab_note() -> Option<PathBuf> {
         let rel = String::from_utf8_lossy(&out).trim().to_string();
         if code == 0 && in_notes(&rel) && dir.join(&rel).is_file() {
             return Some(dir.join(rel));
+        }
+    }
+    None
+}
+
+/// The number and label of the tab this pane is in: the tab the server says
+/// owns the pane (`display tab`, which finds a pane parked behind the diff
+/// too), then its number and label from `list`, as `switchboard tabs` reads
+/// them. Nothing outside a pane or when the server doesn't answer.
+fn this_tab() -> Option<(String, String)> {
+    if !socket::in_pane() {
+        return None;
+    }
+    let pane = std::env::var("SWITCHBOARD_PANE").ok()?;
+    let (code, out, _) = socket::ask_quiet(
+        vec!["display".into(), "tab".into()],
+        Some(pane.clone()),
+        None,
+    )?;
+    let tab = String::from_utf8_lossy(&out).trim().to_string();
+    if code != 0 || tab.is_empty() {
+        return None;
+    }
+    let (code, out, _) = socket::ask_quiet(vec!["list".into()], Some(pane), None)?;
+    if code != 0 {
+        return None;
+    }
+    tab_of(&serde_json::from_slice(&out).ok()?, &tab)
+}
+
+/// The number and label of the tab `id` (`@3`) in the server's `list`.
+fn tab_of(list: &Value, id: &str) -> Option<(String, String)> {
+    let tabs = list["sessions"]
+        .as_array()?
+        .iter()
+        .flat_map(|session| session["tabs"].as_array().into_iter().flatten());
+    for tab in tabs {
+        if tab["id"] == id {
+            let label = tab["label"].as_str().unwrap_or_default();
+            return Some((util::js_string(&tab["index"]), label.replace('\n', " ")));
         }
     }
     None
@@ -129,7 +182,9 @@ pub fn main(_args: Vec<String>) -> ExitCode {
             return;
         }
         let mut out = std::io::stdout().lock();
-        let _ = out.write_all(answer(tab_note().as_deref()).as_bytes());
+        let tab = this_tab();
+        let tab = tab.as_ref().map(|(n, l)| (n.as_str(), l.as_str()));
+        let _ = out.write_all(answer(tab, tab_note().as_deref()).as_bytes());
         let _ = out.write_all(b"\n");
         let _ = out.flush();
     });
@@ -142,7 +197,7 @@ mod tests {
 
     #[test]
     fn the_answer_is_session_start_s_context_holding_the_whole_part() {
-        let answer: Value = serde_json::from_str(&answer(None)).expect("JSON");
+        let answer: Value = serde_json::from_str(&answer(None, None)).expect("JSON");
         assert_eq!(
             answer["hookSpecificOutput"]["hookEventName"],
             "SessionStart"
@@ -163,7 +218,7 @@ mod tests {
     #[test]
     fn a_tab_with_a_note_has_it_pointed_at_after_the_part() {
         let answer: Value =
-            serde_json::from_str(&answer(Some(Path::new("/n/Plans/A b.md")))).expect("JSON");
+            serde_json::from_str(&answer(None, Some(Path::new("/n/Plans/A b.md")))).expect("JSON");
         let context = answer["hookSpecificOutput"]["additionalContext"]
             .as_str()
             .unwrap();
@@ -174,6 +229,33 @@ mod tests {
         );
         assert!(added.contains("before your first reply"), "{added}");
         assert!(context.chars().count() < 10_000);
+    }
+
+    #[test]
+    fn a_session_in_a_tab_is_told_its_number_and_label() {
+        let answer: Value =
+            serde_json::from_str(&answer(Some(("6", "Design")), None)).expect("JSON");
+        let context = answer["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        let added = context.strip_prefix(PART).expect("the part first");
+        assert!(
+            added.contains("This session is in tab 6, Design."),
+            "{added}"
+        );
+    }
+
+    #[test]
+    fn the_tab_is_found_by_its_id() {
+        let list = json!({"sessions": [{"tabs": [
+            {"id": "@1", "index": 1, "label": "One"},
+            {"id": "@66", "index": 6, "label": "switchboard"},
+        ]}]});
+        assert_eq!(
+            tab_of(&list, "@66"),
+            Some(("6".to_string(), "switchboard".to_string()))
+        );
+        assert_eq!(tab_of(&list, "@3"), None);
     }
 
     #[test]

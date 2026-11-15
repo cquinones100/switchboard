@@ -1076,6 +1076,26 @@ fn a_session_starting_in_a_tab_with_a_note_is_pointed_at_it() {
     assert!(!context_in(&server, &pane).contains("This tab's note"));
 }
 
+#[test]
+fn a_session_starting_in_a_tab_is_told_its_number() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-n", "other"]);
+    client.wait_text("2:other");
+    let second = tabs(&server.list())[1].clone();
+    let pane = second["panes"][0]["id"].as_str().unwrap().to_string();
+    let context = context_in(&server, &pane);
+    assert!(
+        context.contains(&format!(
+            "This session is in tab {}, other.",
+            second["index"]
+        )),
+        "{context}"
+    );
+    assert!(context.contains("This session is in tab 2,"), "{context}");
+}
+
 /// A hook in `pane`, which must succeed, giving what it printed.
 fn hook_says(server: &TestServer, pane: &str, event: &str, input: Value) -> String {
     let (code, out, err) = run_hook(
