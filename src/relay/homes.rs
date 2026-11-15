@@ -19,7 +19,7 @@ use futures_util::FutureExt;
 use futures_util::future::LocalBoxFuture;
 
 use super::buttons::{delete_thread_button, header_buttons};
-use super::post::{PostOpts, post, update};
+use super::post::{PostOpts, post, tab_notice, update_noticed};
 use super::state::{ClosedHome, Home, Target};
 use super::tabs::Tab;
 use super::{Cx, Relay};
@@ -60,6 +60,11 @@ pub fn home_text(tab: &Tab) -> String {
     )
 }
 
+/// The header's notification line: the tab's name and its state.
+pub fn home_notice(tab: &Tab) -> String {
+    tab_notice(&tab.name, &header_words(&tab.state))
+}
+
 pub fn closed_text(home: &Home) -> String {
     format!(
         "⚫ Tab {}, closed at {}",
@@ -72,7 +77,7 @@ pub fn closed_text(home: &Home) -> String {
 /// Its leading version is bumped whenever `home_text`'s wording changes, so
 /// a thread a relay before it started gets the new header on the next tick.
 pub fn header_key(tab: &Tab) -> String {
-    format!("2|{}|{}|{}|{}", tab.index, tab.name, tab.state, tab.since)
+    format!("3|{}|{}|{}|{}", tab.index, tab.name, tab.state, tab.since)
 }
 
 /// A tab's home thread, started if it has none yet: one per tab, however
@@ -104,7 +109,7 @@ pub async fn home_of(cx: &Cx, tab: &Tab) -> anyhow::Result<Option<String>> {
                     &cx2,
                     &home_text(&tab2),
                     None,
-                    PostOpts::buttons(header_buttons(&tab2)),
+                    PostOpts::buttons(header_buttons(&tab2)).notice(home_notice(&tab2)),
                 )
                 .await;
                 cx2.homing.borrow_mut().remove(&tab2.id);
@@ -213,10 +218,15 @@ pub async fn close_home(cx: &Relay, id: &str) {
         },
     );
     cx.save();
-    if let Err(e) = update(
+    let name = home
+        .label
+        .split_once(", ")
+        .map_or(home.label.as_str(), |(_, name)| name);
+    if let Err(e) = update_noticed(
         cx,
         &home.ts,
         &closed_text(&home),
+        &tab_notice(name, "closed"),
         &[delete_thread_button(&home.ts)],
     )
     .await
@@ -248,7 +258,15 @@ pub async fn refresh_homes(cx: &Relay, tabs: &[Tab]) {
             h.label = format!("{}, {}", tab.index, tab.name);
             h.shown = key;
         }
-        if let Err(e) = update(cx, &home.ts, &home_text(tab), &header_buttons(tab)).await {
+        if let Err(e) = update_noticed(
+            cx,
+            &home.ts,
+            &home_text(tab),
+            &home_notice(tab),
+            &header_buttons(tab),
+        )
+        .await
+        {
             cx.log(&format!(
                 "updating tab {}'s thread header failed: {e}",
                 tab.index

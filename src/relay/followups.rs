@@ -22,7 +22,9 @@ use serde_json::Value;
 use super::buttons::{compact_button, option_buttons, turn_buttons, working_buttons};
 use super::config::{FOLLOW_UP_LIMIT_MS, PICKUP_WARN_MS, QUIET_SCREEN_MS, REPLY_WAIT_MS};
 use super::homes::{in_own_thread, is_home};
-use super::post::{PostOpts, offer_choice, post, react, remove, settle_choice, unreact};
+use super::post::{
+    PostOpts, offer_choice, post, react, remove, settle_choice, tab_notice, unreact,
+};
 use super::state::{Ended, Follow, Target};
 use super::tabs::{self, Context, Tab};
 use super::{Cx, Relay};
@@ -159,11 +161,15 @@ pub async fn post_context_warning(cx: &Cx, tab: &Tab, context: &Context, thread:
         "🤖 {who} has used **{}%** of its context. Compact it before it runs out.",
         context.percent
     );
+    let notice = tab_notice(
+        &tab.name,
+        &format!("{}% of its context used", context.percent),
+    );
     let posted = post(
         cx,
         &body,
         thread,
-        PostOpts::buttons(vec![compact_button(tab)]),
+        PostOpts::buttons(vec![compact_button(tab)]).notice(notice.clone()),
     )
     .await;
     if let Err(e) = posted {
@@ -193,6 +199,7 @@ pub async fn post_context_warning(cx: &Cx, tab: &Tab, context: &Context, thread:
         let sent = super::alerts::notify(
             cx,
             line,
+            notice,
             thread.map(str::to_string),
             target,
             Vec::new(),
@@ -210,7 +217,8 @@ pub async fn post_context_warning(cx: &Cx, tab: &Tab, context: &Context, thread:
 /// How a follow-up ends.
 #[derive(Clone, Copy, PartialEq)]
 enum Finish {
-    Plain,
+    Closed,
+    StillGoing,
     Waiting,
     Done,
 }
@@ -289,6 +297,7 @@ pub async fn follow_ups(cx: &Cx, current: &[Tab], events: &mut [Event]) {
                         PostOpts {
                             mention: follow.mention,
                             buttons: working_buttons(t),
+                            notice: Some(tab_notice(&t.name, "working on your message")),
                         },
                     )
                     .await
@@ -309,7 +318,14 @@ pub async fn follow_ups(cx: &Cx, current: &[Tab], events: &mut [Event]) {
                     PICKUP_WARN_MS / 1000,
                     tabs::on_screen(cx, &id, "")
                 );
-                if let Err(e) = post(cx, &body, follow.thread.as_deref(), PostOpts::default()).await
+                let notice = tab_notice(&follow.name, "hasn't taken your message");
+                if let Err(e) = post(
+                    cx,
+                    &body,
+                    follow.thread.as_deref(),
+                    PostOpts::default().notice(notice),
+                )
+                .await
                 {
                     cx.log(&format!("pickup warning failed: {e}"));
                 }
@@ -356,7 +372,7 @@ pub async fn follow_ups(cx: &Cx, current: &[Tab], events: &mut [Event]) {
                 &follow,
                 None,
                 &format!("{label} has closed."),
-                Finish::Plain,
+                Finish::Closed,
             )
             .await;
             continue;
@@ -405,7 +421,7 @@ pub async fn follow_ups(cx: &Cx, current: &[Tab], events: &mut [Event]) {
             let body = format!(
                 "{name} is still going after an hour, so I stopped watching it. `?` here shows its screen."
             );
-            finish(cx, &id, &follow, Some(&tab), &body, Finish::Plain).await;
+            finish(cx, &id, &follow, Some(&tab), &body, Finish::StillGoing).await;
         }
     }
 }
@@ -501,6 +517,15 @@ async fn finish(cx: &Cx, id: &str, follow: &Follow, tab: Option<&Tab>, body: &st
             PostOpts {
                 mention: follow.mention,
                 buttons: buttons.clone(),
+                notice: Some(tab_notice(
+                    &follow.name,
+                    match how {
+                        Finish::Waiting => "waiting on you",
+                        Finish::Done => "finished",
+                        Finish::Closed => "closed",
+                        Finish::StillGoing => "still going after an hour, no longer watched",
+                    },
+                )),
             },
         )
         .await?;
@@ -575,6 +600,7 @@ async fn finish(cx: &Cx, id: &str, follow: &Follow, tab: Option<&Tab>, body: &st
                     } else {
                         Vec::new()
                     },
+                    notice: Some(tab_notice(&follow.name, "waiting on you")),
                 },
             )
             .await?;

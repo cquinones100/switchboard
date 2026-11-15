@@ -17,7 +17,7 @@ use serde_json::Value;
 use super::Cx;
 use super::alerts::notify;
 use super::homes::{home_of, in_own_thread};
-use super::post::{PostOpts, post};
+use super::post::{PostOpts, post, tab_notice};
 use super::sending::{self, Kind, Send, Sent};
 use super::state::Target;
 use super::tabs::{Tab, label};
@@ -219,11 +219,12 @@ pub async fn ping(cx: &Cx, tab: &Tab, line: &str, kind: Kind, mention: bool) -> 
     } else {
         text.clone()
     };
+    let notice = tab_notice(&tab.name, line);
     let ts = post(
         cx,
         &in_thread,
         home.as_deref(),
-        PostOpts::mention(mention && away),
+        PostOpts::mention(mention && away).notice(notice.clone()),
     )
     .await?;
     cx.state.borrow_mut().alerts.insert(ts, target.clone());
@@ -247,6 +248,7 @@ pub async fn ping(cx: &Cx, tab: &Tab, line: &str, kind: Kind, mention: bool) -> 
         notify(
             cx,
             text,
+            notice,
             home,
             target,
             Vec::new(),

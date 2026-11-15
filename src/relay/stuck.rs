@@ -13,7 +13,7 @@ use super::Cx;
 use super::alerts::notify;
 use super::buttons::stuck_buttons;
 use super::homes::{home_of, in_own_thread};
-use super::post::{PostOpts, post};
+use super::post::{PostOpts, post, tab_notice};
 use super::sending::{self, Kind, Send, Sent};
 use super::state::Target;
 use super::summaries::tab_facts;
@@ -106,7 +106,14 @@ pub async fn stuck_tabs(cx: &Cx, tabs: &[Tab]) {
                 "🤖 {who} may be stuck: working, but nothing has happened for {idle}.{so_far}{lastly}{}",
                 tabs::on_screen(cx, &tab.id, "")
             );
-            let note = post(cx, &body, home.as_deref(), PostOpts::buttons(stuck_buttons(tab))).await?;
+            let notice = tab_notice(&tab.name, &format!("may be stuck, nothing new for {idle}"));
+            let note = post(
+                cx,
+                &body,
+                home.as_deref(),
+                PostOpts::buttons(stuck_buttons(tab)).notice(notice.clone()),
+            )
+            .await?;
             cx.state.borrow_mut().alerts.insert(note, target.clone());
             let sent = Sent {
                 kind: Kind::Stuck,
@@ -124,6 +131,7 @@ pub async fn stuck_tabs(cx: &Cx, tabs: &[Tab]) {
             notify(
                 cx,
                 format!("🤖 {name} may be stuck: nothing new for {idle}."),
+                notice,
                 home,
                 target,
                 Vec::new(),

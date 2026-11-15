@@ -14,7 +14,7 @@ use futures_util::future::LocalBoxFuture;
 use super::buttons::{dialog_buttons, option_buttons, turn_buttons};
 use super::followups::{Event, context_footer, warn_context};
 use super::homes::{close_home, home_of, in_own_thread};
-use super::post::{Button, PostOpts, offer_choice, post, settle_choice};
+use super::post::{Button, PostOpts, offer_choice, post, settle_choice, tab_notice};
 use super::sending::{self, Kind, Send, Sent};
 use super::state::Target;
 use super::tabs::{self, Tab, label};
@@ -102,11 +102,13 @@ fn mark_closed(cx: &Relay, tabs: &[Tab]) {
 /// goes out (`still`), since it may have waited for you to step away.
 /// `sent` is what the line is about: as it goes out, its kind's setting
 /// is read again (it may have changed, or quiet hours begun, while it was
-/// held), and it is counted as notifying only once it is posted.
+/// held), and it is counted as notifying only once it is posted. `notice`
+/// is the notification's plain line (`tab_notice`).
 #[allow(clippy::too_many_arguments)]
 pub async fn notify(
     cx: &Cx,
     text: String,
+    notice: String,
     home: Option<String>,
     target: Target,
     buttons: Vec<Button>,
@@ -131,6 +133,7 @@ pub async fn notify(
             PostOpts {
                 mention: true,
                 buttons: if live { buttons } else { Vec::new() },
+                notice: Some(notice),
             },
         )
         .await?;
@@ -393,6 +396,14 @@ async fn alert(cx: &Cx, due: Due) {
     } else {
         "has finished"
     };
+    let notice = tab_notice(
+        &tab.name,
+        if waiting {
+            "waiting on you"
+        } else {
+            "finished"
+        },
+    );
     let turn = due
         .turn
         .clone()
@@ -455,7 +466,7 @@ async fn alert(cx: &Cx, due: Due) {
             cx,
             &text,
             home.as_deref(),
-            PostOpts::buttons(buttons.clone()),
+            PostOpts::buttons(buttons.clone()).notice(notice.clone()),
         )
         .await?;
         cx.state
@@ -493,6 +504,7 @@ async fn alert(cx: &Cx, due: Due) {
             notify(
                 cx,
                 format!("🤖 **Tab {}, {}** {what}.", tab.index, tab.name),
+                notice,
                 home.clone(),
                 target,
                 if found.is_some() {
@@ -595,11 +607,12 @@ async fn dialogs(cx: &Cx, tabs: &[Tab]) {
                 dialog.text()
             );
             settle_choice(cx, &tab.id, PROMPT_GONE, None).await;
+            let notice = tab_notice(&tab.name, "showing a dialog, waiting on you");
             let ts = post(
                 cx,
                 &text,
                 home.as_deref(),
-                PostOpts::buttons(dialog_buttons(tab, &dialog)),
+                PostOpts::buttons(dialog_buttons(tab, &dialog)).notice(notice.clone()),
             )
             .await?;
             cx.state
@@ -623,6 +636,7 @@ async fn dialogs(cx: &Cx, tabs: &[Tab]) {
                         "🤖 **Tab {}, {}** is showing a dialog, **waiting on you**.",
                         tab.index, tab.name
                     ),
+                    notice,
                     home,
                     target,
                     dialog_buttons(tab, &dialog),

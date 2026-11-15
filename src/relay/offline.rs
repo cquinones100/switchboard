@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use super::Relay;
 use super::lifecycle::clock;
-use super::post::{PostOpts, as_markdown, post};
+use super::post::{PostOpts, as_markdown, notice_line, post};
 use super::state::OfflineNote;
 use crate::util;
 
@@ -99,7 +99,8 @@ async fn sweep(cx: &Relay, keep: Option<&str>, old: Option<&str>) {
 pub async fn renew_offline_note(cx: &Relay) -> Result<()> {
     let now = util::now_ms();
     let schedule = || async {
-        let md = as_markdown(&offline_text(now), &[]);
+        let text = offline_text(now);
+        let md = as_markdown(&text, &notice_line(&text), &[]);
         cx.slack
             .api(
                 "chat.scheduleMessage",

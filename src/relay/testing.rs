@@ -360,6 +360,9 @@ impl Haiku for Rc<FakeHaiku> {
 #[derive(Clone, Debug)]
 pub struct Post {
     pub body: String,
+    /// The message's `text`, what a notification shows, without the
+    /// mention.
+    pub notice: String,
     pub thread: Option<String>,
     pub mention: bool,
     pub ts: String,
@@ -615,12 +618,26 @@ impl Rig {
                 b["type"] == "rich_text" && b["elements"][0]["elements"][0]["user_id"] == "U1"
             });
             let text = c.params["text"].as_str().unwrap_or("");
-            let body = match text.strip_prefix("<@U1> ") {
+            let notice = match text.strip_prefix("<@U1> ") {
                 Some(rest) if mention => rest,
                 _ => text,
             };
+            let body = blocks
+                .iter()
+                .find(|b| b["type"] == "markdown")
+                .and_then(|b| b["text"].as_str())
+                .unwrap_or(notice);
+            let one_plain_line = !notice.contains('\n')
+                && !notice.contains("**")
+                && !notice.starts_with('>')
+                && notice.chars().count() <= super::post::NOTICE_CHARS;
+            assert!(
+                one_plain_line,
+                "a notification's text is one plain line: {notice:?}"
+            );
             out.push(Post {
                 body: body.to_string(),
+                notice: notice.to_string(),
                 thread: c.params["thread_ts"].as_str().map(str::to_string),
                 mention,
                 ts: posted.get(i).cloned().unwrap_or_default(),

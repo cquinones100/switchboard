@@ -78,6 +78,7 @@ pub async fn say(cx: &Cx, to: &Reply, body: &str, buttons: Vec<Button>) -> Resul
             PostOpts {
                 mention: *mention,
                 buttons,
+                notice: None,
             },
         )
         .await

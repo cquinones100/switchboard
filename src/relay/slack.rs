@@ -481,7 +481,16 @@ pub fn press_from(dm: &super::state::Dm, payload: &Value, log: impl FnOnce(&str)
                 .unwrap_or_default()
                 .to_string(),
             thread_ts: text("/message/thread_ts").map(str::to_string),
-            text: text("/message/text").unwrap_or_default().to_string(),
+            // The message's Markdown, which an answer's edit writes back
+            // with a line added; its `text` is only the notification's.
+            text: payload
+                .pointer("/message/blocks")
+                .and_then(Value::as_array)
+                .and_then(|blocks| blocks.iter().find(|b| b["type"] == "markdown"))
+                .and_then(|b| b["text"].as_str())
+                .or_else(|| text("/message/text"))
+                .unwrap_or_default()
+                .to_string(),
         }),
     })
 }
@@ -730,7 +739,21 @@ mod tests {
         let v = r#"{"a":"cmd","w":"@1","c":"progress"}"#;
         let got = press_from(&dm(), &press("U1", "D1", v), |_| {}).unwrap();
         assert_eq!(got.value["c"], "progress");
-        assert_eq!(got.message.unwrap().ts, "5.5");
+        let pressed = got.message.unwrap();
+        assert_eq!(pressed.ts, "5.5");
+        assert_eq!(pressed.text, "hi", "with no Markdown block, its text");
+        // Its body is the Markdown block's, not the notification's line.
+        let mut posted = press("U1", "D1", v);
+        posted["message"]["text"] = json!("work: waiting on you");
+        posted["message"]["blocks"] = json!([
+            { "type": "markdown", "text": "🤖 **Tab 1, work** is waiting.\n\n> go on?" },
+            { "type": "actions", "elements": [] }
+        ]);
+        let got = press_from(&dm(), &posted, |_| {}).unwrap();
+        assert_eq!(
+            got.message.unwrap().text,
+            "🤖 **Tab 1, work** is waiting.\n\n> go on?"
+        );
         let mut why = String::new();
         assert!(press_from(&dm(), &press("U2", "D1", v), |l| why = l.to_string()).is_none());
         assert!(why.contains("not the relay's owner"));

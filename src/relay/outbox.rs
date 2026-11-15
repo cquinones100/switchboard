@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 
 use super::Relay;
 use super::config::Paths;
-use super::post::{chunks, post_one};
+use super::post::{chunks, notice_line, post_one};
 use crate::util;
 
 /// How long `notify` waits for the relay to post, which it does within a
@@ -149,9 +149,10 @@ pub async fn deliver_outbox(cx: &Relay) {
         }
         let posted: Result<String> = async {
             let parts = chunks(&format!("🔔 **{from}**\n{text}"));
-            let ts = post_one(cx, &parts[0], None, false, &[]).await?;
+            let notice = notice_line(&parts[0]);
+            let ts = post_one(cx, &parts[0], None, false, &notice, &[]).await?;
             for part in &parts[1..] {
-                post_one(cx, part, Some(&ts), false, &[]).await?;
+                post_one(cx, part, Some(&ts), false, &notice, &[]).await?;
             }
             Ok(ts)
         }

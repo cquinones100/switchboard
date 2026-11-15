@@ -6,8 +6,10 @@
 //! Everything the relay posts is standard Markdown, the way Claude writes,
 //! sent as a markdown block, which Slack renders: headings, **bold**,
 //! [links](url), lists, tables and code. Slack's older mrkdwn would show
-//! most of that as raw symbols. `text` is the same words, for
-//! notifications and previews.
+//! most of that as raw symbols. `text`, what a phone's notification and
+//! the DM's preview show, is one plain line instead: the tab's name and
+//! what happened where the message is about a tab, else the body's first
+//! paragraph with its marks dropped.
 
 use anyhow::Result;
 use indexmap::IndexMap;
@@ -99,9 +101,62 @@ pub fn button_element(b: &Button, id: &str) -> Value {
     element
 }
 
-/// A message's `text` and `blocks`: the Markdown, and its buttons in a row
-/// under it.
-pub fn as_markdown(body: &str, buttons: &[Button]) -> Value {
+/// The most a notification's line holds.
+pub const NOTICE_CHARS: usize = 100;
+
+/// Markdown as the one plain line a notification shows: the words of its
+/// first paragraph or heading (a code block passed over, unless code is
+/// all there is), with no marks, quotes or line breaks, cut to
+/// `NOTICE_CHARS`.
+pub fn notice_line(md: &str) -> String {
+    use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+    let mut words = String::new();
+    let mut code = String::new();
+    let mut in_code = false;
+    for event in Parser::new(md) {
+        match event {
+            Event::Start(Tag::CodeBlock(_)) => in_code = true,
+            Event::End(TagEnd::CodeBlock) => in_code = false,
+            Event::Text(t) if in_code => code.push_str(&t),
+            Event::Text(t) | Event::Code(t) => words.push_str(&t),
+            Event::SoftBreak | Event::HardBreak => words.push(' '),
+            Event::End(TagEnd::Paragraph | TagEnd::Heading(_)) if !words.trim().is_empty() => {
+                break;
+            }
+            _ => {}
+        }
+    }
+    let words = if words.trim().is_empty() { code } else { words };
+    cut_to(
+        &words.split_whitespace().collect::<Vec<_>>().join(" "),
+        NOTICE_CHARS,
+    )
+}
+
+/// `line` in at most `most` characters, an ellipsis ending one cut short.
+fn cut_to(line: &str, most: usize) -> String {
+    if line.chars().count() > most {
+        let cut: String = line.chars().take(most.saturating_sub(1)).collect();
+        format!("{}…", cut.trim_end())
+    } else {
+        line.to_string()
+    }
+}
+
+/// A notification's line for a message about a tab: its name and what
+/// happened ("Relay notices: waiting on you"), a long name cut so what
+/// happened still fits.
+pub fn tab_notice(name: &str, what: &str) -> String {
+    let what = notice_line(what);
+    let room = NOTICE_CHARS
+        .saturating_sub(what.chars().count() + 2)
+        .max(NOTICE_CHARS / 3);
+    notice_line(&format!("{}: {what}", cut_to(&notice_line(name), room)))
+}
+
+/// A message's `text` and `blocks`: the plain `notice` line, and the
+/// Markdown with its buttons in a row under it.
+pub fn as_markdown(body: &str, notice: &str, buttons: &[Button]) -> Value {
     let mut blocks = vec![json!({ "type": "markdown", "text": body })];
     if !buttons.is_empty() {
         blocks.push(json!({
@@ -113,7 +168,7 @@ pub fn as_markdown(body: &str, buttons: &[Button]) -> Value {
                 .collect::<Vec<_>>(),
         }));
     }
-    json!({ "text": body, "blocks": blocks })
+    json!({ "text": notice, "blocks": blocks })
 }
 
 /// A message from `as_markdown` that mentions `owner` first: a rich text
@@ -187,10 +242,12 @@ pub fn chunks(text: &str) -> Vec<String> {
 
 /// What this module keeps: the last part of each recent post, by its first
 /// part's ts, where its buttons are, for adding more later (see
-/// quickreplies.rs).
+/// quickreplies.rs); and the notification's line of each recent part, by
+/// its ts, so an edit keeps the tab's name and what happened.
 #[derive(Default)]
 pub struct Memory {
     pub last_parts: IndexMap<String, (String, String)>,
+    pub notices: IndexMap<String, String>,
 }
 
 const LAST_PARTS_KEPT: usize = 100;
@@ -209,10 +266,11 @@ pub async fn post_one(
     body: &str,
     thread: Option<&str>,
     mention: bool,
+    notice: &str,
     buttons: &[Button],
 ) -> Result<String> {
     let mut params = json!({ "channel": channel(cx) });
-    let mut md = as_markdown(body, buttons);
+    let mut md = as_markdown(body, notice, buttons);
     if let Some(t) = thread {
         params["thread_ts"] = json!(t);
         let owner = cx.state.borrow().dm().user;
@@ -232,26 +290,33 @@ pub async fn post_one(
         .to_string())
 }
 
-/// Options for `post`.
+/// Options for `post`. `notice` is the notification's line (`tab_notice`);
+/// without one, each part's `notice_line` is.
 #[derive(Clone, Debug, Default)]
 pub struct PostOpts {
     pub mention: bool,
     pub buttons: Vec<Button>,
+    pub notice: Option<String>,
 }
 
 impl PostOpts {
     pub fn buttons(buttons: Vec<Button>) -> PostOpts {
         PostOpts {
-            mention: false,
             buttons,
+            ..PostOpts::default()
         }
     }
 
     pub fn mention(mention: bool) -> PostOpts {
         PostOpts {
             mention,
-            buttons: Vec::new(),
+            ..PostOpts::default()
         }
+    }
+
+    pub fn notice(mut self, notice: String) -> PostOpts {
+        self.notice = Some(notice);
+        self
     }
 }
 
@@ -261,11 +326,13 @@ impl PostOpts {
 pub async fn post(cx: &Relay, text: &str, thread: Option<&str>, opts: PostOpts) -> Result<String> {
     let parts = chunks(text);
     let only = parts.len() == 1;
+    let notice_of = |part: &str| opts.notice.clone().unwrap_or_else(|| notice_line(part));
     let ts = post_one(
         cx,
         &parts[0],
         thread,
         opts.mention,
+        &notice_of(&parts[0]),
         if only { &opts.buttons } else { &[] },
     )
     .await?;
@@ -276,7 +343,7 @@ pub async fn post(cx: &Relay, text: &str, thread: Option<&str>, opts: PostOpts) 
         } else {
             &[]
         };
-        last = post_one(cx, part, thread, false, buttons).await?;
+        last = post_one(cx, part, thread, false, &notice_of(part), buttons).await?;
     }
     {
         let mut mem = cx.mem.borrow_mut();
@@ -287,6 +354,17 @@ pub async fn post(cx: &Relay, text: &str, thread: Option<&str>, opts: PostOpts) 
         );
         while kept.len() > LAST_PARTS_KEPT {
             kept.shift_remove_index(0);
+        }
+        // A line of its own outlives an edit, which would otherwise take
+        // one from the edited body; the first part and the one with the
+        // buttons are the ones edited.
+        if let Some(notice) = &opts.notice {
+            let notices = &mut mem.post.notices;
+            notices.insert(ts.clone(), notice.clone());
+            notices.insert(last.clone(), notice.clone());
+            while notices.len() > LAST_PARTS_KEPT {
+                notices.shift_remove_index(0);
+            }
         }
     }
     {
@@ -351,15 +429,37 @@ pub async fn remove(cx: &Relay, ts: &str) -> Result<Value> {
         .await
 }
 
-/// Edits a message the relay posted, in place.
+/// Edits a message the relay posted, in place, keeping the notification's
+/// line it was posted with while that is remembered.
 pub async fn update(cx: &Relay, ts: &str, body: &str, buttons: &[Button]) -> Result<Value> {
-    let md = as_markdown(body, buttons);
+    let kept = cx.mem.borrow().post.notices.get(ts).cloned();
+    let md = as_markdown(body, &kept.unwrap_or_else(|| notice_line(body)), buttons);
     cx.slack
         .api(
             "chat.update",
             json!({ "channel": channel(cx), "ts": ts, "text": md["text"], "blocks": md["blocks"] }),
         )
         .await
+}
+
+/// Edits a message the relay posted, its notification's line now `notice`
+/// (a header whose tab changed state), which later edits keep.
+pub async fn update_noticed(
+    cx: &Relay,
+    ts: &str,
+    body: &str,
+    notice: &str,
+    buttons: &[Button],
+) -> Result<Value> {
+    {
+        let mut mem = cx.mem.borrow_mut();
+        let notices = &mut mem.post.notices;
+        notices.insert(ts.to_string(), notice.to_string());
+        while notices.len() > LAST_PARTS_KEPT {
+            notices.shift_remove_index(0);
+        }
+    }
+    update(cx, ts, body, buttons).await
 }
 
 /// A file to upload.
@@ -525,7 +625,7 @@ mod tests {
     #[test]
     fn a_mention_comes_first_as_a_user_and_keeps_the_message_after_it() {
         let md = with_mention(
-            as_markdown("Waiting", &[Button::new("Go", json!({}))]),
+            as_markdown("**Waiting**", "Waiting", &[Button::new("Go", json!({}))]),
             "U1",
         );
         assert_eq!(md["text"], "<@U1> Waiting");
@@ -539,12 +639,13 @@ mod tests {
     }
 
     #[test]
-    fn posts_and_edits_go_out_as_markdown_blocks_with_the_same_words() {
+    fn posts_and_edits_go_out_as_markdown_blocks_with_a_plain_notice() {
         let md = as_markdown(
             "**Hi**",
+            "Hi",
             &[Button::new("Go", json!({ "a": "cmd" })).style("primary")],
         );
-        assert_eq!(md["text"], "**Hi**");
+        assert_eq!(md["text"], "Hi");
         assert_eq!(
             md["blocks"][0],
             json!({ "type": "markdown", "text": "**Hi**" })
@@ -554,5 +655,38 @@ mod tests {
         assert_eq!(button["style"], "primary");
         let long = button_element(&Button::new("x".repeat(80), json!({})), "0");
         assert_eq!(long["text"]["text"].as_str().unwrap().chars().count(), 75);
+    }
+
+    #[test]
+    fn a_notice_is_the_first_paragraph_as_one_plain_line() {
+        assert_eq!(
+            notice_line(
+                "🤖 **Tab 2, Notes** is **waiting on you**.\n\n> Should I go on?\n\n```\nls\n```"
+            ),
+            "🤖 Tab 2, Notes is waiting on you."
+        );
+        assert_eq!(
+            notice_line("```\ncode\n```\n\n> _Quoted_ `x`\nmore"),
+            "Quoted x more"
+        );
+        assert_eq!(notice_line("# Title\n\nbody"), "Title");
+        assert_eq!(
+            notice_line("```\nline 1\nline 2\n```"),
+            "line 1 line 2",
+            "a part that is only code still says something"
+        );
+        let long = notice_line(&"word ".repeat(60));
+        assert_eq!(long.chars().count(), NOTICE_CHARS);
+        assert!(long.ends_with('…'));
+        assert_eq!(
+            tab_notice("snake_case **tab**", "waiting on you"),
+            "snake_case tab: waiting on you"
+        );
+        let long = tab_notice(&"name ".repeat(30), "may be stuck, nothing new for 11m");
+        assert!(
+            long.ends_with("…: may be stuck, nothing new for 11m"),
+            "{long}"
+        );
+        assert!(long.chars().count() <= NOTICE_CHARS);
     }
 }

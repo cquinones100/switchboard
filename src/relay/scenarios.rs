@@ -737,6 +737,17 @@ fn alerts_come_once_per_state_change_with_the_screen_for_a_wait() {
         !posts[3].mention,
         "a finished turn gets no line mentioning you"
     );
+    // What a notification shows is one plain line naming the tab and its
+    // state, never the Markdown body.
+    let notices: Vec<&str> = posts[1..].iter().map(|p| p.notice.as_str()).collect();
+    assert_eq!(
+        notices,
+        [
+            "work: waiting on you",
+            "work: waiting on you",
+            "work: finished"
+        ]
+    );
 }
 
 #[test]
@@ -1782,7 +1793,7 @@ fn a_dialog_before_a_session_starts_is_alerted_once_and_answered_with_arrow_keys
             .rfind(|u| u["ts"] == asked.ts.as_str())
             .unwrap();
         assert!(
-            edited["text"]
+            edited["blocks"][0]["text"]
                 .as_str()
                 .unwrap()
                 .ends_with("_Chose 2. Yes, I trust this folder._")
@@ -1878,7 +1889,7 @@ fn a_waiting_tabs_alert_shows_its_options_as_buttons_alone_and_a_number_answers_
         .rfind(|u| u["ts"] == sent.ts.as_str())
         .unwrap();
     assert!(
-        answered["text"]
+        answered["blocks"][0]["text"]
             .as_str()
             .unwrap()
             .ends_with("_Chose 2. No._"),
@@ -1954,7 +1965,7 @@ fn a_waiting_tabs_alert_has_its_options_as_buttons_and_a_press_answers_only_that
         .find(|u| u["ts"] == sent.ts.as_str())
         .unwrap();
     assert!(
-        edited["text"]
+        edited["blocks"][0]["text"]
             .as_str()
             .unwrap()
             .ends_with("_Chose 1. Yes._")
@@ -2010,7 +2021,7 @@ fn a_reply_to_an_alert_in_parts_edits_the_part_with_the_buttons() {
         .rfind(|u| u["ts"] == last.ts.as_str())
         .unwrap();
     assert!(
-        edited["text"]
+        edited["blocks"][0]["text"]
             .as_str()
             .unwrap()
             .ends_with("_Chose 1. Yes._")
@@ -2047,7 +2058,7 @@ fn a_reply_naming_an_alerts_option_edits_the_alert_and_posts_nothing() {
             .rfind(|u| u["ts"] == message.ts.as_str())
             .unwrap();
         assert!(
-            edited["text"]
+            edited["blocks"][0]["text"]
                 .as_str()
                 .unwrap()
                 .ends_with("_Chose 1. Yes._")
@@ -2136,7 +2147,7 @@ fn a_button_made_for_one_tab_answers_that_tab_even_in_a_thread_linked_to_another
         .rfind(|u| u["ts"] == pressed.as_str())
         .unwrap();
     assert!(
-        edited["text"]
+        edited["blocks"][0]["text"]
             .as_str()
             .unwrap()
             .ends_with("_Chose 1. Yes._")
@@ -2182,6 +2193,11 @@ fn a_finished_turn_that_asks_gets_quick_replies_and_a_stale_one_isnt_typed() {
         .map(|b| b["text"]["text"].as_str().unwrap())
         .collect();
     assert_eq!(names, ["Squash merge", "Rebase", "Skill"]);
+    assert_eq!(turn.notice, "work: finished");
+    assert_eq!(
+        edit["text"], "work: finished",
+        "an edit keeps the line the turn was posted with"
+    );
     // Claude says more: the reply is out of date.
     rig.transcript(&tab, "asking", &[
         json!({ "type": "user", "message": { "content": "merge it" } }),
@@ -2248,6 +2264,14 @@ fn milestones_ping_a_tabs_thread_on_a_commit_and_a_push() {
             "🤖 Pushed `feature`",
         ],
         "a failing test run isn't news"
+    );
+    let notices: Vec<&str> = posts[1..].iter().map(|p| p.notice.as_str()).collect();
+    assert_eq!(
+        notices,
+        [
+            "work: committed abc1234 Add two on feature",
+            "work: pushed feature"
+        ]
     );
     let home = rig.cx.state.borrow().homes[&tab].ts.clone();
     assert!(
@@ -2369,6 +2393,9 @@ fn a_working_tab_with_nothing_new_for_ten_minutes_is_noted_once_per_stall() {
             .body
             .ends_with("may be stuck: nothing new for 11m.")
     );
+    for post in &posts[1..] {
+        assert_eq!(post.notice, "work: may be stuck, nothing new for 11m");
+    }
     // Not working any more: forgotten.
     rig.set_state(&tab, "done", "");
     run(&rig);
@@ -2783,7 +2810,7 @@ fn a_restart_edits_the_welcome_back_unless_it_is_old_or_the_relay_crashed() {
     let update = rig.calls("chat.update").last().unwrap().clone();
     assert_eq!(update["ts"], recent.as_str());
     assert!(
-        update["text"]
+        update["blocks"][0]["text"]
             .as_str()
             .unwrap()
             .starts_with("🤖 **Relay listening** since ")
@@ -2888,7 +2915,7 @@ fn an_offline_note_stays_scheduled_ahead_and_is_renewed_said_back_or_cancelled()
     let ahead = first["post_at"].as_i64().unwrap() - util::now_secs();
     assert!((595..=605).contains(&ahead), "ten minutes out");
     assert!(
-        first["text"]
+        first["blocks"][0]["text"]
             .as_str()
             .unwrap()
             .contains("**The relay is offline.** Your computer last checked in at ")
@@ -3503,7 +3530,7 @@ fn stop_in_the_dm_marks_the_welcome_stopped_and_ends_the_run() {
     assert!(rig.exited.get());
     assert!(rig.posts()[0].body.contains("**Stopped listening.**"));
     assert!(
-        rig.calls("chat.update")[0]["text"]
+        rig.calls("chat.update")[0]["blocks"][0]["text"]
             .as_str()
             .unwrap()
             .starts_with("🤖 **Relay stopped** at ")
@@ -3846,7 +3873,7 @@ fn a_waiting_tabs_notice_carries_its_options_and_one_answer_clears_the_rest() {
         .rfind(|u| u["ts"] == alert_post.ts.as_str())
         .unwrap();
     assert!(
-        cleared["text"]
+        cleared["blocks"][0]["text"]
             .as_str()
             .unwrap()
             .ends_with("_Chose 1. Yes._")
@@ -3860,7 +3887,12 @@ fn a_waiting_tabs_notice_carries_its_options_and_one_answer_clears_the_rest() {
         .iter()
         .find(|u| u["ts"] == notice.ts.as_str())
         .unwrap();
-    assert!(chose["text"].as_str().unwrap().ends_with("_Chose 1. Yes._"));
+    assert!(
+        chose["blocks"][0]["text"]
+            .as_str()
+            .unwrap()
+            .ends_with("_Chose 1. Yes._")
+    );
     // The next prompt is answered at the computer: its buttons go.
     rig.set_screen(&tab, "Allow rm -rf dist?\n❯ 1. Yes\n  2. No\n");
     rig.set_state(&tab, "waiting", "1791500300");
@@ -3875,7 +3907,7 @@ fn a_waiting_tabs_notice_carries_its_options_and_one_answer_clears_the_rest() {
         .rfind(|u| u["ts"] == second.as_str())
         .unwrap();
     assert!(
-        gone["text"]
+        gone["blocks"][0]["text"]
             .as_str()
             .unwrap()
             .ends_with("_This prompt is no longer showing._")
@@ -3987,9 +4019,10 @@ fn a_tabs_thread_header_follows_its_name_and_state_and_says_when_it_has_ended() 
     let updated = rig.calls("chat.update")[0].clone();
     assert_eq!(updated["ts"], home);
     assert_eq!(
-        updated["text"],
+        updated["blocks"][0]["text"],
         format!("**Tab {index}, ABC-214: Make the thing**\n⚪ Idle")
     );
+    assert_eq!(updated["text"], "ABC-214: Make the thing: ⚪ Idle");
     let names: Vec<&str> = updated["blocks"][1]["elements"]
         .as_array()
         .unwrap()
@@ -4000,7 +4033,7 @@ fn a_tabs_thread_header_follows_its_name_and_state_and_says_when_it_has_ended() 
     // A new state: the header says so, and since when.
     rig.set_state(&tab, "waiting", &util::now_secs().to_string());
     refresh(&rig);
-    let text = rig.calls("chat.update").last().unwrap()["text"]
+    let text = rig.calls("chat.update").last().unwrap()["blocks"][0]["text"]
         .as_str()
         .unwrap()
         .to_string();
@@ -4015,7 +4048,7 @@ fn a_tabs_thread_header_follows_its_name_and_state_and_says_when_it_has_ended() 
     rig.cx.state.borrow_mut().homes.get_mut(&tab).unwrap().pid = "999999".into();
     refresh(&rig);
     let closed = rig.calls("chat.update").last().unwrap().clone();
-    let closed_text = closed["text"].as_str().unwrap();
+    let closed_text = closed["blocks"][0]["text"].as_str().unwrap();
     assert!(
         closed_text.starts_with(&format!(
             "⚫ Tab {index}, ABC-214: Make the thing, closed at "
@@ -4023,6 +4056,7 @@ fn a_tabs_thread_header_follows_its_name_and_state_and_says_when_it_has_ended() 
         "{closed_text}"
     );
     assert_eq!(closed_text.lines().count(), 1, "{closed_text}");
+    assert_eq!(closed["text"], "ABC-214: Make the thing: closed");
     let buttons = closed["blocks"][1]["elements"].as_array().unwrap();
     let names: Vec<&str> = buttons
         .iter()
@@ -5229,7 +5263,14 @@ fn a_thread_started_with_the_old_header_gets_the_short_one() {
     let updated = rig.calls("chat.update");
     assert_eq!(updated.len(), 1, "the header is sent again");
     assert_eq!(
-        updated[0]["text"],
+        updated[0]["blocks"][0]["text"],
         format!("**Tab {index}, work**\n⚪ Idle")
     );
+    // One kept before its notification line was its own is sent again too.
+    rig.cx.state.borrow_mut().homes.get_mut(&tab).unwrap().shown =
+        format!("2|{}|{}|{}|{}", t.index, t.name, t.state, t.since);
+    rig.block_on(super::homes::refresh_homes(&rig.cx, &tabs));
+    let updated = rig.calls("chat.update");
+    assert_eq!(updated.len(), 2, "the header is sent again");
+    assert_eq!(updated[1]["text"], "work: ⚪ Idle");
 }
