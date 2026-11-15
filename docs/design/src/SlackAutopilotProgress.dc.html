@@ -12,9 +12,9 @@
 <link href="https://fonts.googleapis.com/css2?family=Lato:wght@400;700;900&amp;family=JetBrains+Mono:wght@400;700&amp;display=swap" rel="stylesheet">
 <style>
 body{margin:0}
-.board{width:420px;height:880px;box-sizing:border-box;background:#0b0c12;position:relative;font-family:Lato,-apple-system,'Helvetica Neue',sans-serif;-webkit-font-smoothing:antialiased}
+.board{width:1260px;height:910px;box-sizing:border-box;background:#0b0c12;position:relative;font-family:Lato,-apple-system,'Helvetica Neue',sans-serif;-webkit-font-smoothing:antialiased}
 .idx{position:absolute;top:0;right:12px;font:11px/16px 'JetBrains Mono',monospace;color:#8d93a8;text-decoration:none;z-index:3}
-.phone{position:absolute;left:10px;top:12px;width:400px;height:856px;border-radius:52px;background:#000;box-shadow:0 0 0 2px #2a2c33}
+.phone{position:absolute;left:10px;top:42px;width:400px;height:856px;border-radius:52px;background:#000;box-shadow:0 0 0 2px #2a2c33}
 .screen{position:absolute;inset:8px;border-radius:44px;overflow:hidden;background:#1a1d21;color:#d1d2d3;display:flex;flex-direction:column;font-size:15px;line-height:21px}
 .status{height:44px;flex:none;display:flex;align-items:flex-end;justify-content:space-between;padding:0 30px 4px 34px;font-size:15px;color:#fff}
 .status .sig{font-size:11px;letter-spacing:1px}
@@ -87,12 +87,13 @@ code{font-family:'JetBrains Mono',Menlo,monospace;font-size:12.5px;color:#e8912d
 .in-f.multi{min-height:66px}
 .in-f.sel{display:flex;justify-content:space-between}
 .in-h{font-size:12.5px;color:#ababad;margin-top:4px}
+.cap{position:absolute;top:14px;font:12px/16px 'JetBrains Mono',monospace;color:#8d93a8}
 .note{position:absolute;left:14px;right:14px;bottom:-2px;font:11px/14px 'JetBrains Mono',monospace;color:#565b6e}
 </style>
 </helmet>
 <div class="board">
 <a href="Index.dc.html" class="idx">index</a>
-<div class="phone"><div class="screen">
+<div class="cap" style="left:34px">Working</div><div class="phone" style="left:10px"><div class="screen">
 <div class="status"><b>2:15</b><span class="sig">▂▄▆ ᯤ ▮</span></div>
 <div class="top"><span class="back">‹</span><div class="title"><div class="av app sm">⌁</div><div><b>Switchboard</b><span class="sub">App</span></div></div><span class="icons">⌕ ⓘ</span></div><div class="tabs"><span class="">Messages</span><span class="on">Home</span><span class="">About</span></div>
 <div class="home">
@@ -114,18 +115,64 @@ Waiting on you 1  Skipped       1</div>
 <div class="b-sec"><b>2</b>  stable note IDs<br>🟡 <b>waiting on you</b> for 4m · 64% context<br><i>Waiting to push the landed commit to main</i></div><div class="b-act"><span class="btn">Open</span><span class="btn primary">1. Yes</span><span class="btn">2. Yes, and don't ask again…</span></div>
 </div>
 </div></div>
+<div class="cap" style="left:454px">Paused by you</div><div class="phone" style="left:430px"><div class="screen">
+<div class="status"><b>2:15</b><span class="sig">▂▄▆ ᯤ ▮</span></div>
+<div class="top"><span class="back">‹</span><div class="title"><div class="av app sm">⌁</div><div><b>Switchboard</b><span class="sub">App</span></div></div><span class="icons">⌕ ⓘ</span></div><div class="tabs"><span class="">Messages</span><span class="on">Home</span><span class="">About</span></div>
+<div class="home">
+<div class="b-head">Claude tabs</div>
+<div class="b-ctx">🟢 Checked in 1 minute ago · today <b>$8.41</b> · 5-hour <b>42%</b> · week <b>31%</b></div>
+<div class="b-act"><span class="btn primary">Next: 2 stable note IDs ›</span><span class="btn">New tab</span></div>
+<div class="b-div"></div>
+<div class="b-head">⏸ Autopilot, paused by you</div>
+<div class="b-sec">Working <b>Switchboard Design</b> · paused at 2:13 PM<br>5 items left · no finish time while paused</div>
+<div class="b-code">Next up      3    Landing       1
+Working      1    Landed today  4
+Waiting on you 1  Skipped       1</div>
+<div class="b-ctx">Today <b>$7.10</b> of <b>$20.00</b>  ▰▰▰▱▱▱▱▱▱▱ 36%</div>
+<div class="b-sec">🟡 <b>2</b>  stable note IDs · waiting on you 4m <span class="link">thread ›</span><br>🟣 <b>5</b>  benchmark harness · landing, 1st <span class="link">thread ›</span><br>🔵 <b>7</b>  Rust port notes · working 12m <span class="link">thread ›</span></div>
+<div class="b-ctx">Opens no new tab; these 3 go on to their end.</div>
+<div class="b-act"><span class="btn primary">Resume</span><span class="btn">Settings</span></div>
+<div class="b-ctx">As of 2:15 PM</div>
+<div class="b-div"></div>
+<div class="b-head">🟡 Needs you (3)</div>
+<div class="b-sec"><b>2</b>  stable note IDs<br>🟡 <b>waiting on you</b> for 4m · 64% context<br><i>Waiting to push the landed commit to main</i></div><div class="b-act"><span class="btn">Open</span><span class="btn primary">1. Yes</span><span class="btn">2. Yes, and don't ask again…</span></div>
+</div>
+</div></div>
+<div class="cap" style="left:874px">Paused by the spend limit</div><div class="phone" style="left:850px"><div class="screen">
+<div class="status"><b>2:15</b><span class="sig">▂▄▆ ᯤ ▮</span></div>
+<div class="top"><span class="back">‹</span><div class="title"><div class="av app sm">⌁</div><div><b>Switchboard</b><span class="sub">App</span></div></div><span class="icons">⌕ ⓘ</span></div><div class="tabs"><span class="">Messages</span><span class="on">Home</span><span class="">About</span></div>
+<div class="home">
+<div class="b-head">Claude tabs</div>
+<div class="b-ctx">🟢 Checked in 1 minute ago · today <b>$21.30</b> · 5-hour <b>42%</b> · week <b>31%</b></div>
+<div class="b-act"><span class="btn primary">Next: 2 stable note IDs ›</span><span class="btn">New tab</span></div>
+<div class="b-div"></div>
+<div class="b-head">⏸ Autopilot, paused by its limit</div>
+<div class="b-sec">Working <b>Switchboard Design</b><br>🔴 <b>Paused: today's spend reached $20.00</b><br>5 items left · no finish time while paused</div>
+<div class="b-code">Next up      3    Landing       1
+Working      1    Landed today  4
+Waiting on you 1  Skipped       1</div>
+<div class="b-ctx">Today <b style="color:#e01e5a">$20.04</b> of <b>$20.00</b>  <span style="color:#e01e5a">▰▰▰▰▰▰▰▰▰▰</span> 100%</div>
+<div class="b-sec">🟡 <b>2</b>  stable note IDs · waiting on you 4m <span class="link">thread ›</span><br>🟣 <b>5</b>  benchmark harness · landing, 1st <span class="link">thread ›</span><br>🔵 <b>7</b>  Rust port notes · working 12m <span class="link">thread ›</span></div>
+<div class="b-ctx">Opens no new tab; these 3 go on to their end. Starts again tomorrow, or once the limit is raised.</div>
+<div class="b-act"><span class="btn primary">Raise the limit</span><span class="btn">Settings</span></div>
+<div class="b-ctx">As of 2:15 PM</div>
+<div class="b-div"></div>
+<div class="b-head">🟡 Needs you (3)</div>
+<div class="b-sec"><b>2</b>  stable note IDs<br>🟡 <b>waiting on you</b> for 4m · 64% context<br><i>Waiting to push the landed commit to main</i></div><div class="b-act"><span class="btn">Open</span><span class="btn primary">1. Yes</span><span class="btn">2. Yes, and don't ask again…</span></div>
+</div>
+</div></div>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":420,"height":880}}'>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1260,"height":910}}'>
 class Component extends DCLogic {
 renderVals() { return {}; }
 }
 </script>
 <!--
-Autopilot's section of the Home tab (board 50), above Needs you. Views.publish redraws it in place, at most once a minute; no message is posted per change.
+Autopilot's section of the Home tab (board 50), above Needs you, redrawn in place at most once a minute; no message is posted per change.
+Three states. Working: finish time, Pause. Paused by you: the head says so with the time; Resume. Paused by the limit: red reason line and full meter; Raise the limit opens board 52's form at the limit, and the mode starts again once today's spend is under it (or tomorrow); no Resume, which would stop again at once.
+While paused: no finish time, items left and the counts stay as they are, the in-flight lines stay, since paused autopilot opens no new tab and the open ones go on.
 The note's name shows only with Settings' "Notes in Slack" on (board 52), else "your note".
-Counts are the Autopilot view's columns. Done about: the estimate of the planned item that computes it.
-"thread ›" links each item's tab thread (board 51 for a landing). Pause becomes Resume while paused, and reads "Paused: today's spend reached $20.00" when the limit stops it. Settings opens board 52's form.
 Landings and questions still reach the DM by the relay's own settings.
 -->
 </body>
