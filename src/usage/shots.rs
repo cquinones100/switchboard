@@ -3,108 +3,91 @@
 //! behind it.
 //!
 //! As a tab closes, its Claude's pane (else its active one) is kept as a
-//! `Shot`: each line as runs of a width and a color, what the picture atom
-//! draws as rounded bars (`ui::images::raster_screen`), and the text of its
-//! last few lines, its text form where the terminal draws no images. Each
-//! is a file of `closed-screens/` in the state directory, written private,
-//! named after its closing, and taken out with it when the closing leaves
-//! the log (`closed::Closed::push`). It is never sent anywhere.
+//! `Shot`: the text of its last lines, which the view writes as text
+//! (`ui::images::screen`), leaving out the lines that are only a frame, so
+//! it reads as what was said and run. Each is a file of `closed-screens/`
+//! in the state directory, written private, named after its closing, and
+//! taken out with it when the closing leaves the log
+//! (`closed::Closed::push`). It is never sent anywhere. A file an older
+//! build wrote, with each line's runs of color and its width, reads the
+//! same, those left out.
 
 use std::path::{Path, PathBuf};
 
-use ratatui::style::Color;
 use ratatui::text::Span;
 use serde::{Deserialize, Serialize};
 
 use crate::util;
 
-/// The lines of text kept for the text form.
-pub const TEXT_LINES: usize = 8;
-/// The default foreground's color in a shot, the canvas's text.
-const TEXT: [u8; 3] = [0xc9, 0xcd, 0xd9];
+/// The lines of text kept, enough that a screen's frame left out still
+/// leaves the box's rows.
+pub const TEXT_LINES: usize = 16;
 
-/// A screen as kept: how wide it was, and its lines.
+/// A screen as kept: its last lines.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Shot {
-    pub cols: u16,
     pub lines: Vec<ShotLine>,
 }
 
-/// A line of a shot: its runs, each a width in cells and a color (`None` a
-/// gap), and its text when it is among the last `TEXT_LINES`.
+/// A line of a shot: its text, its trailing blanks left out.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ShotLine {
-    #[serde(default)]
-    pub runs: Vec<(u16, Option<[u8; 3]>)>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
 }
 
+/// Whether a character only draws a frame: a box's line or a block.
+fn frame_char(c: char) -> bool {
+    ('\u{2500}'..='\u{259f}').contains(&c)
+}
+
 impl Shot {
-    /// A pane's screen as `Pane::styled_lines` reads it: a run for each
-    /// stretch of written cells of one color (a blank on a background of
-    /// its own is written in that color), a gap for the blanks between.
-    pub fn of(lines: &[Vec<Span<'static>>], cols: u16) -> Shot {
-        let shown = lines.len().saturating_sub(TEXT_LINES);
-        let lines = lines
+    /// A pane's screen as `Pane::styled_lines` reads it: its last
+    /// `TEXT_LINES` lines.
+    pub fn of(lines: &[Vec<Span<'static>>]) -> Shot {
+        let from = lines.len().saturating_sub(TEXT_LINES);
+        let lines = lines[from..]
             .iter()
-            .enumerate()
-            .map(|(at, spans)| {
-                let mut runs: Vec<(u16, Option<[u8; 3]>)> = Vec::new();
-                for span in spans {
-                    for ch in span.content.chars() {
-                        let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0) as u16;
-                        if w == 0 {
-                            continue;
-                        }
-                        let color = if ch != ' ' {
-                            Some(span.style.fg.map_or(TEXT, color_of))
-                        } else {
-                            span.style.bg.filter(|c| *c != Color::Reset).map(color_of)
-                        };
-                        match runs.last_mut() {
-                            Some(last) if last.1 == color => last.0 += w,
-                            _ => runs.push((w, color)),
-                        }
-                    }
-                }
-                if runs.last().is_some_and(|r| r.1.is_none()) {
-                    runs.pop();
-                }
-                let text = if at >= shown {
-                    spans
-                        .iter()
-                        .map(|s| s.content.as_ref())
-                        .collect::<String>()
-                        .trim_end()
-                        .to_string()
-                } else {
-                    String::new()
-                };
-                ShotLine { runs, text }
+            .map(|spans| ShotLine {
+                text: spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string(),
             })
             .collect();
-        Shot { cols, lines }
+        Shot { lines }
     }
 
     /// A pane's screen as it is now; none when it shows nothing.
     pub fn of_pane(pane: &crate::mux::pane::Pane) -> Option<Shot> {
         let lines = pane.styled_lines();
-        (!lines.is_empty()).then(|| Shot::of(&lines, pane.size().0))
+        (!lines.is_empty()).then(|| Shot::of(&lines))
     }
 
-    /// Its last lines of text, for the picture's text form.
-    pub fn last_text(&self, n: usize) -> Vec<&str> {
-        let texts: Vec<&str> = self.lines.iter().map(|l| l.text.as_str()).collect();
-        let from = texts.len().saturating_sub(n);
-        texts[from..].to_vec()
-    }
-}
-
-fn color_of(c: Color) -> [u8; 3] {
-    match c {
-        Color::Reset => TEXT,
-        c => crate::ui::images::rgb(c),
+    /// Its last `n` lines with words, each without the frame at its edges
+    /// (a box's sides, a rule); a line that is only frame or blank is left
+    /// out.
+    pub fn last_words(&self, n: usize) -> Vec<&str> {
+        let words: Vec<&str> = self
+            .lines
+            .iter()
+            .filter_map(|l| {
+                let text = l
+                    .text
+                    .trim_end_matches(|c: char| c.is_whitespace() || frame_char(c));
+                let edged = text.trim_start().starts_with(frame_char);
+                let text = if edged {
+                    text.trim_start_matches(|c: char| c.is_whitespace() || frame_char(c))
+                } else {
+                    text
+                };
+                (!text.trim().is_empty()).then_some(text)
+            })
+            .collect();
+        let from = words.len().saturating_sub(n);
+        words[from..].to_vec()
     }
 }
 
@@ -154,34 +137,34 @@ pub fn remove(state: &Path, name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::style::Style;
 
     #[test]
-    fn a_screen_is_kept_as_runs_of_its_colors_and_its_last_lines() {
-        let red = Style::new().fg(Color::Rgb(255, 0, 0));
-        let lines = vec![
-            vec![Span::styled("ab", red), Span::raw("  "), Span::raw("cd")],
-            vec![Span::styled("  ", Style::new().bg(Color::Rgb(0, 0, 255)))],
-        ];
-        let shot = Shot::of(&lines, 80);
+    fn a_screen_keeps_its_last_lines_and_shows_their_words_without_the_frame() {
+        let mut lines: Vec<Vec<Span<'static>>> = (0..20)
+            .map(|n| vec![Span::raw(format!("line {n}"))])
+            .collect();
+        lines.extend([
+            vec![Span::raw("─".repeat(30))],
+            vec![Span::raw("│ > make it faster   │  ")],
+            vec![Span::raw("╰──────────╯")],
+            vec![Span::raw("   ")],
+            vec![Span::raw("  ? for shortcuts")],
+        ]);
+        let shot = Shot::of(&lines);
+        assert_eq!(shot.lines.len(), TEXT_LINES);
         assert_eq!(
-            shot.lines[0].runs,
-            vec![(2, Some([255, 0, 0])), (2, None), (2, Some(TEXT))]
+            shot.last_words(3),
+            vec!["line 19", "> make it faster", "  ? for shortcuts"]
         );
-        assert_eq!(shot.lines[1].runs, vec![(2, Some([0, 0, 255]))]);
-        assert_eq!(shot.last_text(1), vec![""]);
-        assert_eq!(shot.last_text(2), vec!["ab  cd", ""]);
+        let frame = Shot::of(&[vec![Span::raw("╭──╮")], vec![Span::raw(" ")]]);
+        assert!(frame.last_words(4).is_empty());
     }
 
     #[test]
     fn a_shot_is_written_read_and_removed_by_its_name_alone() {
         let state = std::env::temp_dir().join(format!("sb-shots-{}", std::process::id()));
         let shot = Shot {
-            cols: 10,
-            lines: vec![ShotLine {
-                runs: vec![(3, Some([1, 2, 3]))],
-                text: "abc".into(),
-            }],
+            lines: vec![ShotLine { text: "abc".into() }],
         };
         write(&state, "1-2.json", &shot);
         assert_eq!(read(&state, "1-2.json"), Some(shot));

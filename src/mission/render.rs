@@ -7587,9 +7587,7 @@ mod tests {
         m.snap.rules.ux2 = true;
         m.snap.now_secs = now / 1000;
         m.snap.reopen_shot = Some(std::sync::Arc::new(Shot {
-            cols: 10,
             lines: vec![ShotLine {
-                runs: vec![(4, Some([1, 2, 3]))],
                 text: "$ cargo test".into(),
             }],
         }));
@@ -7689,7 +7687,7 @@ mod tests {
             let shot = images
                 .iter()
                 .find(|i| matches!(i.shape, Shape::Screen { .. }))
-                .expect("the last screen as a picture");
+                .expect("the last screen");
             assert!(
                 shot.width as usize > cols / 2,
                 "the picture stretches: {shot:?}"

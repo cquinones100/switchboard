@@ -208,17 +208,13 @@ rule(35, 28, 125);
 pane(36, 29, 123, 'design review prep', 'closed 12m ago · 2 panes · Claude session a3f1…');
 T(36, 32, ['Reopening brings back ', 'd'], ['its panes and their layout, its note, and Claude resumed where it stopped', 't']);
 label(36, 34, 'Last screen');
-// The tab's last screen as the kit's picture: a thumbnail of the pane, so you know which one it was at a glance.
-picture(36, 35, 58, 7.5);
-K(37, 35.4, 40, 0.5, 'background:#262b40;border-radius:2px');
-K(37, 36.2, 54, 0.32, 'background:#565b6e;border-radius:2px;opacity:.7');
-K(37, 36.7, 48, 0.32, 'background:#565b6e;border-radius:2px;opacity:.7');
-K(37, 37.4, 30, 0.32, 'background:#7fd18b;border-radius:2px;opacity:.7');
-K(37, 38.1, 52, 0.32, 'background:#565b6e;border-radius:2px;opacity:.7');
-K(37, 38.6, 44, 0.32, 'background:#565b6e;border-radius:2px;opacity:.7');
-K(37, 39.3, 36, 0.32, 'background:#e0896b;border-radius:2px;opacity:.7');
-K(37, 40.6, 56, 0.06, 'background:#3a3f52');
-K(37, 41.0, 6, 0.32, 'background:#c9cdd9;border-radius:2px;opacity:.6');
+// The tab's last screen as its last lines of text in a box, so you can read which one it was; the lines that are only a frame or a rule are left out.
+{
+  const lines = ['⏺ The sidebar now condenses to one line per tab under 30 columns.', '⏺ Bash(cargo test --test it sidebar::)', '  ⎿  test result: ok. 48 passed; 0 failed', '> pull the condensed sidebar plan into the agenda', '⏺ Added it under "3:00 review" in the note.', '  ? for shortcuts'];
+  put(36, 35, '╭' + '─'.repeat(56) + '╮', 'L');
+  for (let j = 0; j < 6; j++) { put(36, 36 + j, '│', 'L'); put(93, 36 + j, '│', 'L'); put(38, 36 + j, clip(lines[j], 54), 'd'); }
+  put(36, 42, '╰' + '─'.repeat(56) + '╯', 'L');
+}
 T(96, 36, ['Opened 10:02 · closed 2:03 · 41 turns', 'd']);
 T(96, 38, ['M-j lists these from any tab · M-T reopens the last closed', 'd']);
 

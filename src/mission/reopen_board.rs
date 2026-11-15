@@ -4,8 +4,8 @@
 //! kind's chip (`tab`, `session`), its name bold, its directory dim, what
 //! became of its work as a chip and when at the right edge, then its last
 //! prompt; and under the list the chosen row's pane: its name and facts,
-//! what reopening brings back, and its last screen as a picture
-//! (`Shape::Screen`, `ui::images::screen`) with when it was opened and
+//! what reopening brings back, and its last screen as its last lines of
+//! text in a box (`Shape::Screen`, `ui::images::screen`) with when it was opened and
 //! closed and its turns beside it. Under `PANE_AT` columns the pane shows
 //! over the list while `i` holds it there.
 //!

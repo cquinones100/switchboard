@@ -1256,9 +1256,7 @@ impl Overlay for Mission {
                         photo.map(|p| p.as_ref()),
                     )
                 }
-                render::Shape::Screen { shot } => {
-                    crate::ui::images::screen(frame, &image.name, area, shot)
-                }
+                render::Shape::Screen { shot } => crate::ui::images::screen(frame, area, shot),
                 render::Shape::Picture { key } => {
                     if let Some(p) = self.snap.slack_pictures.get(key) {
                         crate::ui::images::picture_shared(

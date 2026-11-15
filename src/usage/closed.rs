@@ -630,11 +630,7 @@ mod tests {
         let mut closed = Closed::default();
         let now = util::now_ms();
         let shot = super::super::shots::Shot {
-            cols: 4,
-            lines: vec![super::super::shots::ShotLine {
-                runs: vec![(2, Some([1, 2, 3]))],
-                text: "hi".into(),
-            }],
+            lines: vec![super::super::shots::ShotLine { text: "hi".into() }],
         };
         for n in 0..=MAX as u32 {
             closed.seen(
