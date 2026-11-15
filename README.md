@@ -51,17 +51,15 @@ Then start it:
 switchboard
 ```
 
-`switchboard setup` puts in place what Claude Code needs for the workspace. Switchboard's hooks, which tell each tab what its Claude is doing, its instructions (how to read the tabs, the notes app) and the skills that ship with it (`/wt`, `/shape`, `/review-loop` and the rest) are a Claude Code plugin, `~/.local/share/switchboard/claude/plugin`, which only the Claude in Switchboard's panes loads, so Claude elsewhere is as you set it up. The plugin also draws Switchboard's statusline in those panes, which mission control's Usage view reads from, so nothing of Switchboard's goes in your own `~/.claude/settings.json` and your statusline is drawn everywhere else; setup only takes out the statusline and hooks an earlier version added there. The permissions its skills run with aren't added either: each skill allows the commands it runs itself, and the plugin's module lets the few of Switchboard's own commands its instructions use run without asking and keeps Claude there from reading `.env` files or running `git pull` (those an earlier version added to your settings stay). With Settings' "Load Switchboard as a plugin" off, a Claude Code older than 2.1.280, or managed settings of your organization's that set `disableSideloadFlags`, setup puts the hooks, statusline and permissions in your `~/.claude/settings.json`, a `~/.claude/CLAUDE.md` import of Switchboard's part and the skills in `~/.claude` instead, for every Claude of yours, as earlier versions did; an install of an earlier version is asked once which it wants. Setup also offers to make Option act as Alt in a Mac's terminal (in Ghostty, with Notes' easy mode's Cmd keys), to write a lazygit config where lazygit is installed and you have none, so Esc quits it in a pane's place, to tidy the links and `~/.zshrc` lines a tmux version of Switchboard left, and says which optional parts are missing (the GitHub and Linear sign-ins, Chrome, ffmpeg, Codex and the rest), each with what it is for. Run again, it changes only what isn't in place; `switchboard setup --check` only says what would change.
+`switchboard setup` puts in place what Claude Code needs for the workspace. It asks before it changes anything, and run again changes only what isn't in place (`switchboard setup --check` only says what would change):
+
+- **A Claude Code plugin** (`~/.local/share/switchboard/claude/plugin`) holds Switchboard's hooks, which tell each tab what its Claude is doing, its instructions, its statusline and the skills that ship with it (`/wt`, `/shape`, `/review-loop` and the rest). Only the Claude in Switchboard's panes loads it, so Claude elsewhere stays as you set it up.
+- **Your `~/.claude/settings.json` stays yours.** Nothing of Switchboard's goes in it; setup only takes out the statusline and hooks an earlier version added there. Each skill allows the commands it runs itself, and the plugin lets the few Switchboard commands its instructions use run without asking, and keeps Claude from reading `.env` files or running `git pull`.
+- **Without the plugin** (Settings' "Load Switchboard as a plugin" off, Claude Code older than 2.1.280, or your organization's managed settings setting `disableSideloadFlags`), setup puts the hooks, statusline, permissions, an import of Switchboard's part of CLAUDE.md and the skills in `~/.claude` instead, for every Claude of yours. An install of an earlier version is asked once which it wants.
+- **Your terminal and tools:** it offers to make Option act as Alt in a Mac's terminal (in Ghostty, with Notes' easy mode's Cmd keys), to write a lazygit config where lazygit is installed and you have none, and to tidy what a tmux version of Switchboard left.
+- **What's missing:** it lists the optional parts not set up (the GitHub and Linear sign-ins, Chrome, ffmpeg, Codex and the rest), each with what it is for.
 
 As a plugin, a Claude session outside Switchboard runs none of its hooks, so the Slack relay hears only of sessions in the workspace.
-
-## See it first
-
-```
-switchboard demo
-```
-
-runs the workspace on made-up data, in a home of its own under `/tmp` that links nothing of yours and reaches no service: three tabs whose stand-in Claude works, asks and finishes, made-up PRs, tickets, a calendar and Slack messages from stand-ins for GitHub, Linear and Slack on this computer, and a notes folder. It needs nothing set up, not even Claude Code. `switchboard demo --clean` ends it and removes its home; the [guide](docs/guide.md#the-demo) has the rest.
 
 ## First keys
 
@@ -69,28 +67,19 @@ runs the workspace on made-up data, in a home of its own under `/tmp` that links
 
 | Key | What it does |
 |---|---|
-| `M-p` | Find any command by what it does, Settings included; the ⌘ Commands button in the status line (with UX 2.0, the tab header) opens it too; with Notes in front, it lists autopilot working the note and Notes' own commands first |
-| `M-/` | Every key, in mission control's Keys view: the workspace's grouped by what they are about, then the sidebar's, mission control's, `M-d`'s and Notes'; `/` filters, Enter opens a key's menu, which presses a workspace key |
-| `M-a` | Go to the next tab that needs you: pinned, then waiting on you, then finished, then the notifications |
-| `M-A` | Go to the next idle tab, in the sidebar's Idle order |
-| `M-Space` | Mission control: every tab as a card, Reopen, PRs, CI, tickets, your day, Settings |
-| `M-t` | New tab running Claude, in a directory you pick |
+| `M-a` | Go to the next tab that needs you |
 | `M-j` | Find a tab by its name or what its panes show |
-| `M-F` | Search the open tabs, your notes, Linear, GitHub and Slack at once |
-| `M-s` | Into the sidebar and back out; there, `m` (or `S-F10` anywhere) opens the chosen row's menu, as a right click does |
-| `M-c` | Into the pane running Claude in this tab |
-| `M-y` | Copy the latest reply of this tab's Claude |
-| `M-h` | This tab's history: its Claude session on a timeline, the screen as it was at the moment you move to |
-| `M-f` | Pin the tab to the top of Needs you |
-| `M-T` | Reopen the tab closed most recently, with its Claude resumed; again, the one before |
+| `M-{` `M-}`, `M-1` … `M-9` | Back or forward through the tabs you visited, or a tab by its number |
+| `M-t` | New tab, in a directory you pick |
+| `M-T` | Reopen the tab you closed last |
+| `M-s` | Into the sidebar and back out |
+| `M-c` | Into the pane running the tab's agent |
 | `M-Left` `M-Down` `M-Up` `M-Right` | To the pane on that side |
 | `M-H` `M-J` `M-K` `M-L` | Split the pane to that side |
-| `C-M-S-h` `C-M-S-j` `C-M-S-k` `C-M-S-l` | Move the pane's divider that way, growing or shrinking it (Ghostty, kitty) |
-| `M-{` `M-}`, `M-1` … `M-9` | Back or forward through the tabs you visited, or a tab by the number it keeps while open |
 | `M-w` | Close the pane, asking first when something runs in it |
-| `M-v` / `M-i` | The branch's PR description / its Linear ticket, in a pane to the right |
-| `M-d` | The branch's diff against its PR's base, in place of the pane, its changes told as a story, what isn't committed yet included, marked ● and listed last (`R` reads it again); `M-p`'s "Clear this tab's diff cache" makes the next one ask again |
-| `M-N` / `M-e` | Notes in its own tab / beside the pane you are in |
+| `M-f` | Pin the tab to the top of Needs you |
+| `M-Space` | Mission control |
+| `M-p` | Find any command by what it does |
 | `M-b d` | Detach, leaving everything running; `switchboard` attaches again |
 
 `M-b` is the prefix for the rest, and `M-/` (or `M-b ?`) lists every key. Tips in the top-right corner teach the others the first time each would help. Menus and questions take a click too, and a click outside a box closes it.
@@ -103,26 +92,9 @@ A release keeps itself current: each time you attach, and hourly after that, the
 
 ## Making it yours
 
-Everything of your own is in `~/.config/switchboard/`, which nothing writes over but Settings, so an update leaves it be:
+![Mission control's Settings view, its categories and your files beside the Integrations options](docs/images/settings.png)
 
-| File | What it holds |
-|---|---|
-| `settings.json` | What you changed in Settings, only the settings that differ from their defaults; you may edit it by hand |
-| `keys.json` | Keys bound to other actions, or unbound |
-| `CLAUDE.md` | Your own Claude rules, imported into `~/.claude/CLAUDE.md` |
-| `claude.json` | Where your rules come from instead: another file, or a git repository of yours |
-| `browser.json` | The Chrome profile each site's links open in, and the default one |
-| `linear.json` | Your Linear workspace, and the team and labels `/shape` files tickets with |
-| `slack-updates.json` | The Slack channels the Slack view shows in full |
-| `slack-relay.json` | Your Slack member ID, the one person the relay listens to |
-| `oncall.json`, `oncall-rules.md` | The channels `/oncall` watches, and your team's rules |
-| `sidebar.json`, `sidebar-plugins/` | The sidebar's and mission control's sizes, and the plugins that add views |
-| `repos.json` | Each repository's own settings by its origin's `owner/name`: how its work lands, through a PR or straight on its default branch, a direct landing's tests and where they run (here or in CI), squash, review, command before the push and check after a clean rebase (`afterRebase`), and what a change landed there needs to take effect |
-| `leak-check.txt` | Your organization's and company's names, usernames and internal hosts, one a line, which `switchboard leak-check` finds in what a landing would push to a public repository |
-| `trusted-dirs` | The directories whose own scripts may run |
-| `secrets.json` | On Linux with no keyring, the secrets `switchboard platform secret-set` stores, readable only by you |
-
-Settings lists each setting in these files under the file's name, and Enter changes it there. What Switchboard keeps for itself (the socket, the saved layout, tips shown, what it counted) is in `~/.local/state/switchboard/`, its caches in `~/.cache/switchboard/` and `~/.cache/wt-revive/`, and what setup writes for Claude Code (Switchboard's plugin, its part of your CLAUDE.md when that imports it, the clone of your rules' repository) in `~/.local/share/switchboard/`.
+Settings, in mission control's System group (`M-Space`, or `M-p` then Settings), lists every option by category, each with what it does and its default, and every file of your own beside them. Enter changes one, `/` searches them all, and any part of Switchboard can be turned off there. What you change is kept in `~/.config/switchboard/`, which an update never writes over; the [guide](docs/guide.md) lists each file.
 
 ## More
 
