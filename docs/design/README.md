@@ -39,6 +39,7 @@ A tab and what it shows in Claude's place.
 The tabs and where each piece of work stands.
 
 - [3. M-Space: mission control's Tabs: what each tab asks, is doing or did, rather than its screen; a finished tab, loops and reminders too](https://cquinones100.github.io/switchboard/design/3.html)
+- [79. A tab waiting for a slot of the queue for heavy work: ◌ in its sidebar row and its card, its place in line](https://cquinones100.github.io/switchboard/design/79.html)
 - [5. Landing as a pipeline](https://cquinones100.github.io/switchboard/design/5.html)
 - [16. Autopilot as a kanban board](https://cquinones100.github.io/switchboard/design/16.html)
 - [29. Routines: a prompt of yours on a schedule, run headless with the tools it allows, opening no tab; a run that needed another tool failed](https://cquinones100.github.io/switchboard/design/29.html)
@@ -77,6 +78,7 @@ Spend, processes, settings and keys.
 
 - [24. Usage: spend, limits and requests](https://cquinones100.github.io/switchboard/design/24.html)
 - [25. Resources: what each tab's processes take](https://cquinones100.github.io/switchboard/design/25.html)
+- [80. Resources: each kind of slot, how many are held, by which tab and for how long, and who waits in order](https://cquinones100.github.io/switchboard/design/80.html)
 - [26. Settings: every option by category, your files' too](https://cquinones100.github.io/switchboard/design/26.html)
 - [27. Keys: every binding, yours over the defaults](https://cquinones100.github.io/switchboard/design/27.html)
 

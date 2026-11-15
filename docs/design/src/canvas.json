@@ -328,6 +328,14 @@
     "SearchChips.dc.html": {
       "title": "78. M-F: search everything, a chip per source to search, its count once it answers",
       "page": "design"
+    },
+    "QueueWaiting.dc.html": {
+      "title": "79. A tab waiting for a slot of the queue for heavy work: ◌ in its sidebar row and its card, its place in line",
+      "page": "design"
+    },
+    "QueueSlots.dc.html": {
+      "title": "80. Resources: each kind of slot, how many are held, by which tab and for how long, and who waits in order",
+      "page": "design"
     }
   }
 }
