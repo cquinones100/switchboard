@@ -163,7 +163,7 @@ const mcBar = (y, group, current, right) => {
   R(158, y, right || '', 'd', '', '3');
   x = 36;
   for (const v of GROUPS.find((q) => q[0] === group)[1]) { const on = v === current; if (on) { put(x - 1, y + 1, '', '4'); put(x, y + 1, v, 'a', 'b', '4'); put(x + [...v].length, y + 1, '', '4'); } else put(x, y + 1, v, 'd'); x += [...v].length + 3; }
-  let rx = 158; const hint = [['[ ]', 'views'], ['Esc', 'back']];
+  let rx = 158; const hint = [['M-[ M-]', 'groups'], ['[ ]', 'views'], ['Esc', 'back']];
   rx -= hint.reduce((n, [k, w]) => n + k.length + w.length + 3, 0) - 2; keys(rx + 1, y + 1, hint);
   hl(35, y + 2, 125);
 };
