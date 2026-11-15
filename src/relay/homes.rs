@@ -13,7 +13,8 @@
 //! you'd ask of it, nothing more, since Slack's list of threads shows it and
 //! so shows every tab's state at a glance; it is edited whenever the tab is
 //! renamed, renumbered or changes state, and once its session has ended is
-//! one line saying when the tab closed.
+//! one line saying when the tab closed. While the tab lands, its landing
+//! takes the state's place, as board 51 draws it (src/relay/landing.rs).
 
 use futures_util::FutureExt;
 use futures_util::future::LocalBoxFuture;
@@ -47,6 +48,14 @@ pub fn when(seconds: f64) -> String {
 }
 
 pub fn home_text(tab: &Tab) -> String {
+    if let Some(landing) = &tab.landing {
+        return format!(
+            "**Tab {}, {}**\n{}",
+            tab.index,
+            tab.name,
+            super::landing::header_lines(tab, landing)
+        );
+    }
     let since = if !tab.since.is_empty() && tab.since.bytes().all(|b| b.is_ascii_digit()) {
         format!(" since {}", when(tab.since.parse().unwrap_or(0.0)))
     } else {
@@ -62,7 +71,10 @@ pub fn home_text(tab: &Tab) -> String {
 
 /// The header's notification line: the tab's name and its state.
 pub fn home_notice(tab: &Tab) -> String {
-    tab_notice(&tab.name, &header_words(&tab.state))
+    match &tab.landing {
+        Some(landing) => tab_notice(&tab.name, &super::landing::notice_words(landing)),
+        None => tab_notice(&tab.name, &header_words(&tab.state)),
+    }
 }
 
 pub fn closed_text(home: &Home) -> String {
@@ -77,7 +89,15 @@ pub fn closed_text(home: &Home) -> String {
 /// Its leading version is bumped whenever `home_text`'s wording changes, so
 /// a thread a relay before it started gets the new header on the next tick.
 pub fn header_key(tab: &Tab) -> String {
-    format!("3|{}|{}|{}|{}", tab.index, tab.name, tab.state, tab.since)
+    let landing = tab
+        .landing
+        .as_ref()
+        .map(|l| super::landing::header_lines(tab, l))
+        .unwrap_or_default();
+    format!(
+        "4|{}|{}|{}|{}|{landing}",
+        tab.index, tab.name, tab.state, tab.since
+    )
 }
 
 /// A tab's home thread, started if it has none yet: one per tab, however

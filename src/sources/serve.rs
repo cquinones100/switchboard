@@ -968,6 +968,17 @@ fn merging(pr: &PrFacts, queues: &queues::Queues) -> Option<Landing> {
 }
 
 impl Server {
+    /// A tab's direct landing for `list` (`landing::tab_landing`), while
+    /// its facts say it lands straight on its branch, which the landing
+    /// queue's setting decides.
+    pub fn tab_landing(&self, id: TabId) -> Option<Value> {
+        self.facts
+            .get(&id)
+            .and_then(|f| f.landing)
+            .filter(|l| l.method == Method::Direct)?;
+        landing::tab_landing(&self.sources.landing, id)
+    }
+
     /// Mission control's Landing view, with the view_landing setting on:
     /// there only while something lands in a repository a tab is in, while
     /// `keep` (a client has it in front, so it doesn't vanish under you once

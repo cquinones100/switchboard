@@ -5323,3 +5323,107 @@ fn a_thread_started_with_the_old_header_gets_the_short_one() {
     assert_eq!(updated.len(), 2, "the header is sent again");
     assert_eq!(updated[1]["text"], "work: ⚪ Idle");
 }
+
+#[test]
+fn a_landing_tabs_header_shows_its_place_and_steps_and_its_push_question_is_two_buttons() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("benchmark harness");
+    let index = rig.index_of(&tab);
+    {
+        let mut windows = rig.mux.windows.borrow_mut();
+        let (w, panes) = windows.iter_mut().find(|(w, _)| w.id == tab).unwrap();
+        w.landing = Some(super::landing::LandingAt {
+            holding: true,
+            line: 1,
+            since: 0,
+            branch: "main".into(),
+            reviewing: false,
+            record: json!({
+                "tests": { "passed": 412, "failed": 0, "total": 412 },
+                "review": { "round": 2, "clean_rounds": 2 },
+                "leak": { "found": 0 },
+            }),
+            phase: String::new(),
+        });
+        panes[0].info.phase = "pushing".into();
+    }
+    let home = "1791500000.000300";
+    let t = tabs::tab(&rig.cx, &tab).unwrap();
+    {
+        let mut state = rig.cx.state.borrow_mut();
+        state.threads.insert(home.into(), home.into());
+        state.homes.insert(
+            tab.clone(),
+            Home {
+                ts: home.into(),
+                pid: t.pid.clone(),
+                label: format!("{index}, benchmark harness"),
+                shown: String::new(),
+            },
+        );
+    }
+    let tabs_now = tabs::claude_tabs(&rig.cx);
+    rig.block_on(super::homes::refresh_homes(&rig.cx, &tabs_now));
+    let update = rig.calls("chat.update").last().unwrap().clone();
+    assert_eq!(
+        update["text"],
+        "benchmark harness: landing, 1st in the queue"
+    );
+    let header = update["blocks"][0]["text"].as_str().unwrap().to_string();
+    assert_eq!(
+        header,
+        format!(
+            "**Tab {index}, benchmark harness**\n🟣 Landing · 1st in the queue\n✓ rebased · ✓ tests · ✓ review, 2 rounds clean · ✓ leak-check · 🔵 push"
+        )
+    );
+    // queue-and-clean asks before pushing: Yes, push it and No, nothing
+    // pressed until you press one.
+    rig.set_screen(
+        &tab,
+        "Push `Add the harness's warm-up runs` to origin/main?\n❯ 1. Push to main\n  2. Not yet\n",
+    );
+    rig.set_state(&tab, "waiting", "1791500200");
+    let tabs_now = tabs::claude_tabs(&rig.cx);
+    rig.block_on(alerts::alert_tabs(&rig.cx, &tabs_now, &[]));
+    let sent = rig
+        .posts()
+        .into_iter()
+        .find(|p| p.body.contains("asks: **Push to main?**"))
+        .unwrap();
+    assert_eq!(
+        sent.body,
+        "🤖 Claude asks: **Push to main?**\nPush `Add the harness's warm-up runs` to origin/main?\nReviewed clean twice; leak-check found none.\n_As the desktop's [Y/n]: no answer is no, so nothing pushes by itself._"
+    );
+    let names: Vec<&str> = sent
+        .buttons
+        .iter()
+        .map(|b| b["text"]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Yes, push it", "No"]);
+    assert_eq!(sent.buttons[0]["style"], "primary");
+    assert!(rig.mux.sent.borrow().is_empty(), "no press, no answer");
+    rig.block_on(super::homes::refresh_homes(&rig.cx, &tabs_now));
+    let header = rig.calls("chat.update").last().unwrap()["blocks"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(header.ends_with("🟡 push"), "{header}");
+    let yes: Value = serde_json::from_str(sent.buttons[0]["value"].as_str().unwrap()).unwrap();
+    rig.block_on(super::presses::handle_press(
+        &rig.cx,
+        super::slack::Press {
+            value: yes,
+            message: Some(super::slack::Pressed {
+                ts: sent.ts.clone(),
+                thread_ts: sent.thread.clone(),
+                text: sent.body.clone(),
+            }),
+            ..Default::default()
+        },
+    ))
+    .unwrap();
+    assert!(
+        rig.screen(&tab).ends_with("\n1"),
+        "Yes presses Push to main"
+    );
+}

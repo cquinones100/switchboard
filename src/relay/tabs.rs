@@ -69,6 +69,9 @@ pub struct Tab {
     pub remind_at: Option<i64>,
     /// Its Claude's address for another session's messages, or empty.
     pub address: String,
+    /// Its direct landing, with the step its Claude pane last named.
+    pub landing: Option<super::landing::LandingAt>,
+    pub pr: Option<crate::facts::PrFacts>,
 }
 
 /// What this module keeps in memory: each tab's Claude pane as last seen,
@@ -118,6 +121,11 @@ pub fn claude_tabs(cx: &Relay) -> Vec<Tab> {
             stage: w.stage.clone(),
             remind_at: w.remind_at,
             address: chosen.address.clone(),
+            landing: w.landing.clone().map(|l| super::landing::LandingAt {
+                phase: chosen.phase.clone(),
+                ..l
+            }),
+            pr: w.pr.clone(),
         });
     }
     note_senders(&tabs);

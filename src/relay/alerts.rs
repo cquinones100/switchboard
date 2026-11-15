@@ -413,15 +413,19 @@ async fn alert(cx: &Cx, due: Due) {
     let found = waiting
         .then(|| tabs::options_in(&tabs::screen(cx, &tab.id)))
         .flatten();
+    // queue-and-clean's push question, asked as board 51 draws it.
+    let push = found.as_ref().and_then(super::landing::push_question);
     let shown = match &found {
+        Some(f) if push.is_some() => super::landing::push_text(f, tab.landing.as_ref()),
         Some(f) => format!("\n\n{}", tabs::prompt_text(f)),
         None if waiting => tabs::on_screen(cx, &tab.id, &turn),
         None => String::new(),
     };
-    let buttons = match &found {
-        Some(f) => option_buttons(tab, f),
-        None if tab.state == "done" => turn_buttons(tab),
-        None => Vec::new(),
+    let buttons = match (&found, &push) {
+        (Some(f), Some(q)) => super::landing::push_buttons(tab, f, q),
+        (Some(f), None) => option_buttons(tab, f),
+        (None, _) if tab.state == "done" => turn_buttons(tab),
+        (None, _) => Vec::new(),
     };
     let transcript = due.transcript.clone().or_else(|| tab.transcript.clone());
     let result: anyhow::Result<()> = async {
@@ -445,20 +449,24 @@ async fn alert(cx: &Cx, due: Due) {
         };
         // A finished turn in its tab's own thread, whose header already names
         // the tab, leads with its reply; a wait still says what it waits on.
+        let who = if own_thread {
+            "Claude".to_string()
+        } else {
+            format!("**Tab {}, {}**", tab.index, tab.name)
+        };
         let heading = if own_thread && !waiting {
             "Finished.".to_string()
         } else {
-            let who = if own_thread {
-                "Claude".to_string()
-            } else {
-                format!("**Tab {}, {}**", tab.index, tab.name)
-            };
             format!("🤖 {who} {what}.{reply_here}")
         };
-        let text = format!(
-            "{heading}\n\n{turn}{shown}{}",
-            context_footer(context.as_ref())
-        );
+        // The push question is the question alone, what it asks its heading.
+        let text = match &push {
+            Some(q) => format!("🤖 {who} asks: **{}**\n{shown}", q.asks),
+            None => format!(
+                "{heading}\n\n{turn}{shown}{}",
+                context_footer(context.as_ref())
+            ),
+        };
         if found.is_some() {
             settle_choice(cx, &tab.id, PROMPT_GONE, None).await;
         }

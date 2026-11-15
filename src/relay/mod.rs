@@ -37,6 +37,7 @@
 //! - `summaries`: `progress`, written by a tool-less Haiku.
 //! - `followups`, `alerts`, `stuck`, `milestones`: what it reports by itself.
 //! - `homes`: each tab's thread and its header.
+//! - `landing`: a landing in its tab's thread, its steps and push question.
 //! - `dashboard`: the app's Home tab.
 //! - `screens`, `skills`, `places`: a tab's screen and its forms.
 //! - `buttons`, `presses`, `quickreplies`: buttons, and acting on a press.
@@ -64,6 +65,7 @@ pub mod files;
 pub mod followups;
 pub mod homes;
 pub mod http;
+pub mod landing;
 pub mod lifecycle;
 pub mod log;
 pub mod milestones;

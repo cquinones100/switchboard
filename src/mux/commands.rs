@@ -602,6 +602,9 @@ impl Server {
                             "path": self.tab_path(*id).map(|p| p.to_string_lossy().into_owned()),
                             "pr": self.tab_pr(*id),
                             "facts": self.facts.get(id),
+                            // Its direct landing, for the Slack relay's
+                            // thread header: with the landing queue's facts.
+                            "landing": self.tab_landing(*id),
                             "current": *id == s.current,
                             "zoomed": tab.zoomed,
                             "options": tab.opts,

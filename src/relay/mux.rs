@@ -50,6 +50,9 @@ pub struct PaneInfo {
     /// Its Claude's address for another session's messages (`uds:<socket>`,
     /// as `switchboard tabs` shows it), or empty.
     pub address: String,
+    /// The step queue-and-clean last named on it (`land-lock phase`, the
+    /// pane's agent record's `phase`).
+    pub phase: String,
 }
 
 /// A tab's stage as the sidebar groups it (`list`'s `stage`): its key and
@@ -89,6 +92,10 @@ pub struct Window {
     pub stage: Option<TabStage>,
     /// A reminder set on it (`@remind_at`, in seconds).
     pub remind_at: Option<i64>,
+    /// Its direct landing (`list`'s `landing`), its phase left empty.
+    pub landing: Option<super::landing::LandingAt>,
+    /// Its PR, as the server last heard of it.
+    pub pr: Option<crate::facts::PrFacts>,
     pub panes: Vec<PaneInfo>,
 }
 
@@ -348,6 +355,11 @@ pub fn windows_of(list: &Value) -> Vec<Window> {
                             .and_then(Value::as_str)
                             .map(|s| format!("uds:{s}"))
                             .unwrap_or_default(),
+                        phase: agent
+                            .and_then(|a| a.get("phase"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
                     }
                 })
                 .collect();
@@ -386,6 +398,10 @@ pub fn windows_of(list: &Value) -> Vec<Window> {
                 remind_at: opt("@remind_at")
                     .and_then(|v| v.trim().parse::<i64>().ok())
                     .filter(|n| *n != 0),
+                landing: super::landing::landing_of(tab.get("landing")),
+                pr: tab
+                    .pointer("/facts/pr")
+                    .and_then(|p| serde_json::from_value(p.clone()).ok()),
                 panes,
             });
         }
@@ -407,10 +423,15 @@ mod tests {
                     "id": "@1", "index": 1, "name": "work", "label": "#12 ABC-1: Fix it", "current": true,
                     "options": { "@loop_tab": "1", "@claude_pane": "%2", "@tab_name": "mine", "@remind_at": "1800" },
                     "stage": { "key": "later", "title": "Reminders", "rank": 13, "place": 2 },
+                    "landing": { "holding": true, "line": 1, "since": 5000, "branch": "main",
+                                 "reviewing": false, "record": { "leak": { "found": 0 } } },
+                    "facts": { "pr": { "number": 57, "repo": "o/r", "url": "", "state": "OPEN",
+                               "merge": null, "checks": { "pass": 9, "fail": 0, "pending": 0 },
+                               "review_decision": "APPROVED", "additions": 0, "deletions": 0 } },
                     "panes": [
                         { "id": "%1", "pid": 100, "cwd": "/w", "agent": null, "claude": null,
                           "command": "zsh", "active": true },
-                        { "id": "%2", "pid": 200, "agent": { "state": "waiting", "since": 1700 },
+                        { "id": "%2", "pid": 200, "agent": { "state": "waiting", "since": 1700, "phase": "pushing" },
                           "claude": { "session": "s1", "transcript": "/t/s1.jsonl" } },
                         // Claude asking whether to trust its folder, before
                         // its session file is written.
@@ -442,6 +463,19 @@ mod tests {
         assert!(t.panes[1].claude && !t.panes[1].active);
         assert!(t.panes[2].claude && t.panes[2].transcript.is_none());
         assert_eq!(t.panes[1].pid, "200");
+        assert_eq!(t.panes[1].phase, "pushing");
+        let landing = t.landing.as_ref().unwrap();
+        assert_eq!(
+            (
+                landing.holding,
+                landing.line,
+                landing.since,
+                landing.branch.as_str()
+            ),
+            (true, 1, 5000, "main")
+        );
+        assert_eq!(t.pr.as_ref().map(|p| p.number), Some(57));
+        assert!(tabs[1].landing.is_none() && tabs[1].pr.is_none());
         assert_eq!(
             (t.panes[1].state.as_str(), t.panes[1].since.as_str()),
             ("waiting", "1700")

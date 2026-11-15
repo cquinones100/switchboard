@@ -609,10 +609,84 @@ pub fn view_items(
     items
 }
 
+/// A tab's direct landing as `list` gives it, for the Slack relay's thread
+/// header (board 51): whether it holds the lock, its place in the queue
+/// (1 holding), since when it took the lock or joined (ms), the branch it
+/// lands on, and what the landing has recorded of itself. `None` when the
+/// tab neither holds a landing lock nor waits for one.
+pub fn tab_landing(read: &Read, tab: TabId) -> Option<Value> {
+    read.repos.iter().find_map(|r| {
+        let branch = r.target.clone().or_else(|| r.branch.clone());
+        let ahead = u32::from(r.holder.is_some());
+        let shown = |entry: &Entry, holding: bool, line: u32| {
+            serde_json::json!({
+                "holding": holding,
+                "line": line,
+                "since": entry.since,
+                "branch": branch,
+                "reviewing": entry.reviewing,
+                "record": entry.record,
+            })
+        };
+        if let Some(h) = r.holder.as_ref().filter(|h| h.tab == Some(tab)) {
+            return Some(shown(h, true, 1));
+        }
+        r.waiting
+            .iter()
+            .position(|e| e.tab == Some(tab))
+            .map(|at| shown(&r.waiting[at], false, at as u32 + 1 + ahead))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tabs::git::tests::{Scratch, git, repo};
+    use serde_json::json;
+
+    #[test]
+    fn a_tab_s_landing_for_list_names_its_place_since_branch_and_record() {
+        let entry = |path: &str, since: i64, tab: u32| Entry {
+            path: PathBuf::from(path),
+            since,
+            session: None,
+            pane: None,
+            pid: None,
+            tab: Some(TabId(tab)),
+            reviewing: false,
+            record: Some(serde_json::json!({ "leak": { "found": 0 } })),
+        };
+        let read = Read {
+            places: HashMap::new(),
+            repos: vec![RepoLanding {
+                common: PathBuf::from("/r/.git"),
+                repo: None,
+                name: "r".into(),
+                branch: Some("main".into()),
+                target: None,
+                holder: Some(entry("/a", 5, 1)),
+                waiting: vec![entry("/b", 6, 2), entry("/c", 7, 3)],
+                method: None,
+            }],
+        };
+        let held = tab_landing(&read, TabId(1)).unwrap();
+        assert_eq!(
+            (
+                &held["holding"],
+                &held["line"],
+                &held["since"],
+                &held["branch"]
+            ),
+            (&json!(true), &json!(1), &json!(5), &json!("main"))
+        );
+        assert_eq!(held["record"]["leak"]["found"], 0);
+        let third = tab_landing(&read, TabId(3)).unwrap();
+        assert_eq!(
+            (&third["holding"], &third["line"]),
+            (&json!(false), &json!(3))
+        );
+        assert!(tab_landing(&read, TabId(4)).is_none());
+    }
 
     fn at(id: u32, dirs: Vec<PathBuf>) -> TabPlace {
         TabPlace {
