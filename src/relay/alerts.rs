@@ -34,6 +34,67 @@ pub struct Memory {
 
 pub const PROMPT_GONE: &str = "This prompt is no longer showing.";
 
+/// Whether the tab an alert was made for is still open under its id,
+/// running the process it had then (`State::route_pid`): a Claude tab by
+/// its Claude panes, else any pane of the server's windows, asked for once
+/// and only when the Claude tabs don't answer. With the server not
+/// answering, the route is left alone: typing into it fails by itself.
+pub fn route_open(
+    cx: &Relay,
+    ts: &str,
+    alert: &Target,
+    tabs: &[Tab],
+    windows: &mut Option<Option<Vec<super::mux::Window>>>,
+) -> bool {
+    if alert.closed {
+        return false;
+    }
+    let Some(pid) = cx.state.borrow().route_pid(ts, alert) else {
+        return false;
+    };
+    if tabs
+        .iter()
+        .any(|t| t.id == alert.window && t.pids.contains(&pid))
+    {
+        return true;
+    }
+    match windows.get_or_insert_with(|| cx.mux.windows()) {
+        None => true,
+        Some(ws) => ws
+            .iter()
+            .any(|w| w.id == alert.window && w.panes.iter().any(|p| p.pid == pid)),
+    }
+}
+
+/// Marks the alerts whose tab has closed, so a reply under one can't reach
+/// a tab opened later under the same id, and is refused.
+fn mark_closed(cx: &Relay, tabs: &[Tab]) {
+    let alerts: Vec<(String, Target)> = cx
+        .state
+        .borrow()
+        .alerts
+        .iter()
+        .map(|(ts, a)| (ts.clone(), a.clone()))
+        .collect();
+    let mut windows = None;
+    let closed: Vec<String> = alerts
+        .into_iter()
+        .filter(|(ts, a)| !a.closed && !route_open(cx, ts, a, tabs, &mut windows))
+        .map(|(ts, _)| ts)
+        .collect();
+    if closed.is_empty() {
+        return;
+    }
+    let mut state = cx.state.borrow_mut();
+    for ts in &closed {
+        if let Some(a) = state.alerts.get_mut(ts) {
+            a.closed = true;
+        }
+    }
+    drop(state);
+    cx.save();
+}
+
 /// A line in the main DM pointing at a tab's thread, which is what
 /// notifies you; it waits while you're at the computer. A notice for a
 /// prompt carries the prompt's buttons, so it can be answered from the
@@ -145,6 +206,7 @@ pub async fn alert_tabs(cx: &Cx, tabs: &[Tab], events: &[Event]) {
             close_home(cx, &id).await;
         }
     }
+    mark_closed(cx, tabs);
     dialogs(cx, tabs).await;
     // A turn already posted from its hook event (below) whose tab is then
     // marked done, by focusing away from it, counts as reported.
@@ -355,9 +417,11 @@ async fn alert(cx: &Cx, due: Due) {
         let home = home_of(cx, tab).await?;
         let target = Target {
             window: tab.id.clone(),
+            pid: tab.pid.clone(),
             index: tab.index,
             name: tab.name.clone(),
             thread: home.clone(),
+            closed: false,
         };
         let context = tabs::context_of(&cx.paths, transcript.as_deref());
         let text = format!(
@@ -497,9 +561,11 @@ async fn dialogs(cx: &Cx, tabs: &[Tab]) {
             let home = home_of(cx, tab).await?;
             let target = Target {
                 window: tab.id.clone(),
+                pid: tab.pid.clone(),
                 index: tab.index,
                 name: tab.name.clone(),
                 thread: home.clone(),
+                closed: false,
             };
             let mut text = format!(
                 "🤖 **Tab {}, {}** is showing a dialog before its session starts, **waiting on you**:\n\n",

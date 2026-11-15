@@ -1088,13 +1088,24 @@ pub async fn answer_prompt(cx: &Relay, pane: &str, found: &Prompt, answer: &Answ
     press(cx, pane, answer::presses(found, answer)).await;
 }
 
+/// Text from Slack as it may be typed into a pane: without control
+/// characters but line breaks and tabs, since an Escape in it would end a
+/// paste early or start a key sequence of its own, and a carriage return
+/// would press Enter.
+pub fn typeable(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .chars()
+        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+        .collect()
+}
+
 /// Presses keys and text in a pane, a paste given a moment to land.
 pub async fn press(cx: &Relay, pane: &str, presses: Vec<Press>) {
     for p in presses {
         let _ = match p {
             Press::Key(k) => cx.mux.send_keys(pane, &[&k.notation()]),
-            Press::Text(t) => cx.mux.type_text(pane, &t),
-            Press::Paste(t) => cx.mux.paste(pane, &t),
+            Press::Text(t) => cx.mux.type_text(pane, &typeable(&t)),
+            Press::Paste(t) => cx.mux.paste(pane, &typeable(&t)),
             Press::Settle => {
                 tokio::time::sleep(PASTE_SETTLE).await;
                 Ok(())

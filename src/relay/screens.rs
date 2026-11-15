@@ -609,9 +609,11 @@ async fn thread_for(cx: &Cx, tab: &Tab) -> Option<String> {
         .entry(home.clone())
         .or_insert_with(|| super::state::Target {
             window: tab.id.clone(),
+            pid: tab.pid.clone(),
             index: tab.index,
             name: tab.name.clone(),
             thread: None,
+            closed: false,
         });
     Some(home)
 }

@@ -84,9 +84,11 @@ pub async fn stuck_tabs(cx: &Cx, tabs: &[Tab]) {
             let home = home_of(cx, tab).await?;
             let target = Target {
                 window: tab.id.clone(),
+                pid: tab.pid.clone(),
                 index: tab.index,
                 name: tab.name.clone(),
                 thread: home.clone(),
+                closed: false,
             };
             let body = format!(
                 "🤖 {name} may be stuck: it's marked working, but nothing has happened for {idle}. {}.{lastly}{}",

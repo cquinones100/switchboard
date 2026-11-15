@@ -204,9 +204,11 @@ pub async fn ping(
     let home = home_of(cx, tab).await?;
     let target = Target {
         window: tab.id.clone(),
+        pid: tab.pid.clone(),
         index: tab.index,
         name: tab.name.clone(),
         thread: home.clone(),
+        closed: false,
     };
     let name = label(tab.index, &tab.name);
     cx.log(&format!(

@@ -89,10 +89,14 @@ pub async fn say(cx: &Cx, to: &Reply, body: &str, buttons: Vec<Button>) -> Resul
     }
 }
 
-/// A word quoted for the shell, its line breaks made spaces.
+/// A word quoted for the shell, its line breaks made spaces and its other
+/// control characters dropped, so nothing in it acts as a key.
 pub fn shell_quote(text: &str) -> String {
     static BREAK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s*\n\s*").expect("a regex"));
-    format!("'{}'", BREAK.replace_all(text, " ").replace('\'', r"'\''"))
+    let one_line = BREAK
+        .replace_all(&tabs::typeable(text), " ")
+        .replace('\t', " ");
+    format!("'{}'", one_line.replace('\'', r"'\''"))
 }
 
 /// The tab an alert was made for, as it is now: its number moves as the
@@ -120,9 +124,11 @@ pub fn named(cx: &Relay, window: &str, index: i64, name: &str) -> Tab {
 fn target(tab: &Tab, thread: Option<&str>) -> Target {
     Target {
         window: tab.id.clone(),
+        pid: tab.pid.clone(),
         index: tab.index,
         name: tab.name.clone(),
         thread: thread.map(str::to_string),
+        closed: false,
     }
 }
 
@@ -209,6 +215,34 @@ pub async fn handle(cx: &Cx, message: Message) -> Result<Option<String>> {
     let alert = thread
         .as_ref()
         .and_then(|t| cx.state.borrow().alerts.get(t).cloned());
+    // One whose tab has closed since is for nothing open now: another tab
+    // may have its id.
+    let open = thread
+        .as_ref()
+        .zip(alert.as_ref())
+        .map(|(t, a)| super::alerts::route_open(cx, t, a, &tabs::claude_tabs(cx), &mut None));
+    let in_closed_home = thread
+        .as_ref()
+        .is_some_and(|t| cx.state.borrow().closed_homes.contains_key(t));
+    if open == Some(false) || (alert.is_none() && in_closed_home) {
+        if let Some(t) = &thread {
+            if let Some(a) = cx.state.borrow_mut().alerts.get_mut(t) {
+                a.closed = true;
+            }
+            cx.save();
+        }
+        let name = alert
+            .as_ref()
+            .map(|a| format!("Tab {}, {}", a.index, a.name))
+            .unwrap_or_else(|| "This thread's tab".into());
+        return say(
+            cx,
+            &here,
+            &format!("{name} has closed since, so **I didn't send this**."),
+            vec![],
+        )
+        .await;
+    }
     if let Some(alert) = alert {
         let tab = named(cx, &alert.window, alert.index, &alert.name);
         static RENAME: LazyLock<Regex> =
@@ -386,9 +420,11 @@ pub async fn handle(cx: &Cx, message: Message) -> Result<Option<String>> {
             ts.clone(),
             Target {
                 window: window.clone(),
+                pid: pid.clone().unwrap_or_default(),
                 index,
                 name: "new Claude".into(),
                 thread: None,
+                closed: false,
             },
         );
         // Started from the top level, this message is the new tab's home.

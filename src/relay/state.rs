@@ -54,11 +54,19 @@ pub struct Dm {
     pub app_id: Option<String>,
 }
 
-/// Which tab a message was about: a reply under it goes to that tab.
+/// Which tab a message was about: a reply under it goes to that tab, while
+/// the tab still runs the process it had then (`pid`, its Claude pane's),
+/// since tab ids are used again once a tab closes.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Target {
     #[serde(default, deserialize_with = "lenient")]
     pub window: String,
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub pid: String,
     #[serde(default, deserialize_with = "lenient")]
     pub index: i64,
     #[serde(default, deserialize_with = "lenient")]
@@ -69,6 +77,14 @@ pub struct Target {
         skip_serializing_if = "Option::is_none"
     )]
     pub thread: Option<String>,
+    /// Its tab has closed: kept, so a reply under it is refused rather than
+    /// read as a command, for as long as its thread is watched.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub closed: bool,
 }
 
 /// A turn the relay typed into a tab and is waiting to report: where to
@@ -340,6 +356,23 @@ impl State {
         });
     }
 
+    /// The process the tab of the alert at `ts` ran when the alert was made:
+    /// its own, or, from a relay that didn't keep one, its tab's home's while
+    /// the alert is that home or in its thread, so a home a later tab under
+    /// the same id started doesn't claim it; `None` when neither is known,
+    /// which nothing may be typed under.
+    pub fn route_pid(&self, ts: &str, alert: &Target) -> Option<String> {
+        Some(alert.pid.clone())
+            .filter(|p| !p.is_empty())
+            .or_else(|| {
+                self.homes
+                    .get(&alert.window)
+                    .filter(|h| h.ts == ts || alert.thread.as_deref() == Some(h.ts.as_str()))
+                    .map(|h| h.pid.clone())
+            })
+            .filter(|p| !p.is_empty())
+    }
+
     /// The newest message in a thread, yours or the relay's, so a link to
     /// the thread can open at its bottom (state.js's `newestIn`).
     pub fn newest_in(&mut self, thread: &str, ts: &str) {
@@ -414,6 +447,36 @@ mod tests {
         // An old thread that isn't a home goes.
         state.watch_thread("1700000000.000100", now);
         assert!(!state.threads.contains_key("1700000000.000100"));
+    }
+
+    #[test]
+    fn an_older_alert_takes_its_homes_process_only_from_its_own_home() {
+        let mut state = State::default();
+        state.homes.insert(
+            "@1".into(),
+            Home {
+                ts: "2.0".into(),
+                pid: "7".into(),
+                ..Home::default()
+            },
+        );
+        let old = |thread: Option<&str>| Target {
+            window: "@1".into(),
+            thread: thread.map(str::to_string),
+            ..Target::default()
+        };
+        assert_eq!(state.route_pid("2.0", &old(None)).as_deref(), Some("7"));
+        assert_eq!(
+            state.route_pid("3.0", &old(Some("2.0"))).as_deref(),
+            Some("7")
+        );
+        // The home of a later tab under the same id doesn't claim it.
+        assert_eq!(state.route_pid("1.0", &old(None)), None);
+        let kept = Target {
+            pid: "5".into(),
+            ..old(None)
+        };
+        assert_eq!(state.route_pid("1.0", &kept).as_deref(), Some("5"));
     }
 
     #[test]

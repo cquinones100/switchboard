@@ -175,9 +175,11 @@ pub async fn post_context_warning(cx: &Cx, tab: &Tab, context: &Context, thread:
     if send == Send::Notify {
         let target = Target {
             window: tab.id.clone(),
+            pid: tab.pid.clone(),
             index: tab.index,
             name: tab.name.clone(),
             thread: thread.map(str::to_string),
+            closed: false,
         };
         let line = format!(
             "🤖 **Tab {}, {}** has used **{}%** of its context.",
@@ -425,6 +427,11 @@ async fn finish(cx: &Cx, id: &str, follow: &Follow, tab: Option<&Tab>, body: &st
     // What the tab shows now, not when this pass began: the turn has just
     // ended, and the state that says so is the one the alerts would report.
     let now = tabs::tab(cx, id);
+    let route_pid = now
+        .as_ref()
+        .or(tab)
+        .map(|t| t.pid.clone())
+        .unwrap_or_default();
     if let Some(since) = now
         .as_ref()
         .map(|t| t.since.clone())
@@ -500,9 +507,11 @@ async fn finish(cx: &Cx, id: &str, follow: &Follow, tab: Option<&Tab>, body: &st
             ts.clone(),
             Target {
                 window: id.to_string(),
+                pid: route_pid.clone(),
                 index: follow.index,
                 name: follow.name.clone(),
                 thread: follow.thread.clone(),
+                closed: false,
             },
         );
         // Images the turn made go under it.
@@ -544,9 +553,11 @@ async fn finish(cx: &Cx, id: &str, follow: &Follow, tab: Option<&Tab>, body: &st
                 posted.clone(),
                 Target {
                     window: id.to_string(),
+                    pid: route_pid.clone(),
                     index: follow.index,
                     name: follow.name.clone(),
                     thread: Some(thread.clone()),
+                    closed: false,
                 },
             );
             if found.is_some() {

@@ -43,9 +43,11 @@ fn alert(rig: &Rig, tab: &str, index: i64, name: &str) -> String {
         ts.clone(),
         Target {
             window: tab.into(),
+            pid: rig.pid_of(tab),
             index,
             name: name.into(),
             thread: None,
+            closed: false,
         },
     );
     ts
@@ -3926,9 +3928,11 @@ fn answering_one_of_several_questions_posts_the_next_and_ticks_and_submit_press_
         linked.clone(),
         Target {
             window: tab.clone(),
+            pid: rig.pid_of(&tab),
             index,
             name: "work".into(),
             thread: None,
+            closed: false,
         },
     );
     let last = |rig: &Rig| rig.posts().last().unwrap().clone();
@@ -4036,9 +4040,11 @@ fn rename_on_a_thread_header_opens_the_form_there_and_says_the_result_in_the_thr
             home.clone(),
             Target {
                 window: tab.clone(),
+                pid: rig.pid_of(&tab),
                 index,
                 name: "x".into(),
                 thread: None,
+                closed: false,
             },
         );
         state.homes.insert(
@@ -4109,9 +4115,11 @@ fn skill_under_a_finished_turn_opens_a_menu_of_the_tabs_skills_and_run_types_it(
             thread.clone(),
             Target {
                 window: tab.clone(),
+                pid: rig.pid_of(&tab),
                 index: 1,
                 name: "x".into(),
                 thread: None,
+                closed: false,
             },
         );
         state.homes.insert(
@@ -4818,4 +4826,114 @@ fn a_held_line_is_sent_as_its_kind_says_when_it_goes_out_and_counted_then() {
     rig.block_on(super::presence::flush(&rig.cx));
     assert!(rig.posts().iter().any(|p| p.broadcast));
     assert_eq!(notified(), 1);
+}
+
+#[test]
+fn a_reply_under_an_alert_whose_tab_has_closed_since_is_refused() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    let thread = alert(&rig, &tab, rig.index_of(&tab), "work");
+    // The tab closed and another opened under its id: the alert's process
+    // is no longer the one there.
+    rig.cx
+        .state
+        .borrow_mut()
+        .alerts
+        .get_mut(&thread)
+        .unwrap()
+        .pid = "1".into();
+    rig.block_on(handle(
+        &rig.cx,
+        message(&now_ts(2), "go ahead", Some(&thread)),
+    ))
+    .unwrap();
+    assert!(rig.mux.sent.borrow().is_empty(), "nothing typed");
+    assert!(!rig.screen(&tab).contains("go ahead"));
+    assert!(
+        rig.posts()
+            .last()
+            .unwrap()
+            .body
+            .contains("has closed since, so **I didn't send this**")
+    );
+    assert!(rig.cx.state.borrow().alerts[&thread].closed);
+}
+
+#[test]
+fn an_alerts_route_is_closed_once_its_tab_closes_and_refuses_commands() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    let thread = alert(&rig, &tab, rig.index_of(&tab), "work");
+    let tick = |rig: &Rig| {
+        let tabs_now = tabs::claude_tabs(&rig.cx);
+        rig.block_on(alerts::alert_tabs(&rig.cx, &tabs_now, &[]));
+    };
+    tick(&rig);
+    assert!(rig.cx.state.borrow().alerts.contains_key(&thread));
+    assert!(!rig.cx.state.borrow().alerts[&thread].closed);
+    rig.cx.mux.kill_tab(&tab).unwrap();
+    tick(&rig);
+    assert!(rig.cx.state.borrow().alerts[&thread].closed);
+    // A command in its thread is refused, not run.
+    rig.block_on(handle(&rig.cx, message(&now_ts(3), "stop", Some(&thread))))
+        .unwrap();
+    assert!(
+        rig.posts()
+            .last()
+            .unwrap()
+            .body
+            .contains("has closed since, so **I didn't send this**")
+    );
+}
+
+#[test]
+fn a_quick_reply_types_exactly_what_its_button_shows() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    rig.set_state(&tab, "done", "300");
+    rig.transcript(&tab, "asking", &[
+        json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "Which one?" }] } }),
+    ]);
+    let long = format!("Keep it {} and then delete everything", "short ".repeat(15));
+    *rig.haiku.answer.borrow_mut() =
+        Some(json!({ "kind": "choice", "options": [long] }).to_string());
+    let tabs_now = tabs::claude_tabs(&rig.cx);
+    let buttons = rig.block_on(super::quickreplies::quick_replies(
+        &rig.cx,
+        &tabs_now[0],
+        Some("Which one?"),
+    ));
+    let label = &buttons[0].text;
+    assert_eq!(label.chars().count(), 75);
+    assert_eq!(
+        buttons[0].value.as_ref().unwrap()["t"].as_str(),
+        Some(label.as_str())
+    );
+}
+
+#[test]
+fn control_characters_in_a_message_are_never_typed() {
+    let rig = Rig::new();
+    rig.block_on(handle(
+        &rig.cx,
+        message(&now_ts(8), "new: fix\u{1b}[201~ it\r", None),
+    ))
+    .unwrap();
+    {
+        let windows = rig.mux.windows.borrow();
+        let (_, panes) = windows.last().unwrap();
+        assert_eq!(panes[0].screen, "claude 'fix[201~ it'\n");
+    }
+    let (tab, pane) = rig.claude_tab("work");
+    let thread = alert(&rig, &tab, rig.index_of(&tab), "work");
+    rig.mux.sent.borrow_mut().clear();
+    rig.block_on(handle(
+        &rig.cx,
+        message(&now_ts(9), "one\u{1b}[201~\u{7}\ntwo", Some(&thread)),
+    ))
+    .unwrap();
+    assert_eq!(
+        rig.mux.sent.borrow()[0],
+        format!("{pane} paste one[201~\ntwo")
+    );
 }

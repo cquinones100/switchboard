@@ -106,9 +106,11 @@ pub async fn handle_press(cx: &Cx, press: Press) -> Result<()> {
     let tab = tabs::tab(cx, &w);
     let target = tab.as_ref().map(|t| Target {
         window: t.id.clone(),
+        pid: t.pid.clone(),
         index: t.index,
         name: t.name.clone(),
         thread: thread.clone(),
+        closed: false,
     });
     let link = |cx: &Cx| {
         if let (Some(th), Some(t)) = (&thread, &target) {

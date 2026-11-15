@@ -118,7 +118,7 @@ pub async fn home_of(cx: &Cx, tab: &Tab) -> anyhow::Result<Option<String>> {
                         tab2.id.clone(),
                         Home {
                             ts: ts.clone(),
-                            pid,
+                            pid: pid.clone(),
                             label: format!("{}, {}", tab2.index, tab2.name),
                             shown: header_key(&tab2),
                         },
@@ -127,9 +127,11 @@ pub async fn home_of(cx: &Cx, tab: &Tab) -> anyhow::Result<Option<String>> {
                         ts.clone(),
                         Target {
                             window: tab2.id.clone(),
+                            pid: pid.clone(),
                             index: tab2.index,
                             name: tab2.name.clone(),
                             thread: None,
+                            closed: false,
                         },
                     );
                 }
