@@ -604,8 +604,20 @@ fn wait_for<T>(future: impl std::future::Future<Output = T>) -> T {
     }
 }
 
-/// The repository's default branch as GitHub has it now, for `switchboard
-/// landing --json`'s `defaultBranch`.
+/// The repository's default branch, the one answer `switchboard landing
+/// --json`'s `defaultBranch` and `wtn` (its branch's start and its push
+/// rule) both take: GitHub's for origin's repository with the github
+/// setting on, else origin's `HEAD` in the clone, else `main` or `master`,
+/// whichever origin has been fetched for; none when none is known. Runs git
+/// and may ask GitHub, so off the server's task.
+pub fn default_branch(dir: &Path) -> Option<String> {
+    repo_at(dir)
+        .filter(|_| settings::is_on("github"))
+        .and_then(|r| default_branch_on_github(&r).ok())
+        .or_else(|| crate::worktree_sweep::default_branch(dir))
+}
+
+/// The repository's default branch as GitHub has it now.
 pub fn default_branch_on_github(repo: &str) -> Result<String, String> {
     let repo = github::parse_name_with_owner(repo).ok_or("not owner/name")?;
     wait_for(github::default_branch(

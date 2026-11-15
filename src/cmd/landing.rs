@@ -41,7 +41,7 @@ use serde_json::{Value, json};
 
 use crate::cmd::worktree_from_note::tracked;
 use crate::notes::{id, store};
-use crate::{repos, settings, worktree, worktree_sweep};
+use crate::{repos, worktree, worktree_sweep};
 
 /// The branch checked out at `dir`.
 fn branch_at(dir: &Path) -> Option<String> {
@@ -82,13 +82,6 @@ fn started_at(dir: &Path) -> Option<i64> {
     .parse::<i64>()
     .ok()
     .filter(|s| *s > 0)
-}
-
-/// The default branch, as the module's opening says.
-fn default_branch_at(dir: &Path, repo: Option<&str>) -> Option<String> {
-    repo.filter(|_| settings::is_on("github"))
-        .and_then(|r| repos::default_branch_on_github(r).ok())
-        .or_else(|| worktree_sweep::default_branch(dir))
 }
 
 /// The note and item `wtn` started the branch for, as the module's opening
@@ -162,7 +155,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
                 map.insert("why".into(), json!(answer.why));
                 map.insert("repo".into(), json!(answer.repo));
                 let target = target_at(&dir);
-                let default = default_branch_at(&dir, answer.repo.as_deref());
+                let default = repos::default_branch(&dir);
                 let upstream = lands_on(&target, default.as_deref());
                 let (note, item) = note_and_item_at(&dir);
                 map.insert("target".into(), target);

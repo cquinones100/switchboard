@@ -1016,7 +1016,37 @@ fn start_point(root: &Path, target: Option<&str>) -> Result<String, String> {
     if let Some(target) = target {
         return target_start(root, target);
     }
+    if let Some(default) = crate::repos::default_branch(root) {
+        point_origin_head_at(root, &default)?;
+    }
     worktree::default_start(root, "wtn: fetch the base")
+}
+
+/// Points origin's `HEAD` in the clone at `default`, the default branch
+/// `switchboard landing --json` names (`repos::default_branch`), when it
+/// names another, fetching that branch first: the branch then starts where
+/// queue-and-clean lands it, and the push rule, read from the start, allows
+/// the push it makes. A fetch or update that fails stops it, since starting
+/// from the branch `HEAD` still names would bring the mismatch back.
+fn point_origin_head_at(root: &Path, default: &str) -> Result<(), String> {
+    let head = worktree::git_at(
+        root,
+        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    )
+    .ok();
+    let names_another = head.as_deref() != Some(&format!("origin/{default}"));
+    if !names_another || !worktree::remotes(root).iter().any(|r| r == "origin") {
+        return Ok(());
+    }
+    if !worktree::fetch_branch(root, "origin", default, "wtn: fetch the base") {
+        return Err(format!(
+            "couldn't fetch origin's {default}, the default branch the landing names, which the new branch starts from"
+        ));
+    }
+    if !worktree::git_ok(root, &["remote", "set-head", "origin", default]) {
+        return Err(format!("couldn't point origin/HEAD at origin's {default}"));
+    }
+    Ok(())
 }
 
 /// The commit an item's branch starts from when it lands on `target`, a
@@ -1326,8 +1356,7 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
             // branch, cut from origin's as it is now with no target
             // recorded, since that is where its PR goes; any other is
             // refused.
-            let default = crate::tabs::git::locate(&root)
-                .and_then(|p| crate::tabs::git::default_branch(&p.common_dir));
+            let default = crate::repos::default_branch(&root);
             if default.as_deref() != Some(target) {
                 return Err(format!(
                     "{} lands through PRs, so an item cut from {target} would land on the default branch through a PR, carrying {target}'s commits. \
@@ -2154,5 +2183,60 @@ mod tests {
             "- [ ] First thing, a long line\n  - a detail\n\n  Plan: [[Plan - First]]\n"
         );
         assert_eq!(item_text(&note, 8), "- [ ] Second thing\n");
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@e")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@e")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+
+    #[test]
+    fn a_stale_origin_head_follows_the_default_branch_landing_names() {
+        let dir = crate::mux::socket::testing::TempDir::new();
+        let origin = dir.path().join("origin.git");
+        let clone = dir.path().join("repo");
+        let (origin_s, clone_s) = (origin.to_str().unwrap(), clone.to_str().unwrap());
+        git(
+            dir.path(),
+            &["init", "-q", "--bare", "-b", "main", origin_s],
+        );
+        git(dir.path(), &["clone", "-q", origin_s, clone_s]);
+        git(&clone, &["checkout", "-q", "-b", "main"]);
+        git(&clone, &["commit", "-q", "--allow-empty", "-m", "start"]);
+        git(&clone, &["push", "-q", "origin", "main", "main:master"]);
+        git(&clone, &["remote", "set-head", "origin", "master"]);
+        assert_eq!(
+            worktree::default_start(&clone, "test").as_deref(),
+            Ok("refs/remotes/origin/master")
+        );
+
+        // GitHub's answer, which `landing --json`'s `defaultBranch` gives.
+        point_origin_head_at(&clone, "main").unwrap();
+        let start = worktree::default_start(&clone, "test").unwrap();
+        assert_eq!(start, "refs/remotes/origin/main");
+        // What push_rule allows the push to, and landing's answer without
+        // GitHub, now agree with it.
+        assert_eq!(start.strip_prefix("refs/remotes/origin/"), Some("main"));
+        assert_eq!(
+            crate::worktree_sweep::default_branch(&clone).as_deref(),
+            Some("main")
+        );
+
+        assert!(point_origin_head_at(&clone, "gone").is_err());
+        assert_eq!(
+            crate::worktree_sweep::default_branch(&clone).as_deref(),
+            Some("main")
+        );
     }
 }
