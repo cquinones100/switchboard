@@ -956,6 +956,7 @@ fn once_the_tab_takes_your_message_eyes_and_a_working_note_until_the_answer() {
     ticks(&rig);
     ticks(&rig);
     assert_eq!(rig.reactions(), [(request.clone(), "eyes".to_string())]);
+    assert_eq!(rig.reactions_on(&request), ["eyes"]);
     assert!(rig.cx.state.borrow().following[&tab].taken);
     let posts = rig.posts();
     assert_eq!(posts.len(), 1);
@@ -979,7 +980,8 @@ fn once_the_tab_takes_your_message_eyes_and_a_working_note_until_the_answer() {
             ("Stop".into(), "esc".into())
         ]
     );
-    // The answer: the note goes, and the turn is posted with ✅.
+    // The answer: the note goes, the turn is posted, and your message's
+    // 👀 comes off, with no ✅ in its place.
     let mut text = util::read_text(&transcript).unwrap();
     text.push_str(&format!(
         "\n{}",
@@ -993,10 +995,8 @@ fn once_the_tab_takes_your_message_eyes_and_a_working_note_until_the_answer() {
     assert_eq!(rig.calls("chat.delete")[0]["ts"], posts[0].ts.as_str());
     assert!(rig.posts().last().unwrap().body.contains("is done:"));
     assert!(rig.posts().last().unwrap().body.contains("Renamed."));
-    assert!(
-        rig.reactions()
-            .contains(&(request, "white_check_mark".to_string()))
-    );
+    assert!(rig.reactions_on(&request).is_empty());
+    assert_eq!(rig.reactions().len(), 1);
 }
 
 #[test]

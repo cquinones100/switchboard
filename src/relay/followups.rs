@@ -506,11 +506,13 @@ async fn finish(cx: &Cx, id: &str, follow: &Follow, tab: Option<&Tab>, body: &st
                 });
             super::quickreplies::offer_quick_replies(cx, n, &ts, said);
         }
-        // Your message's reaction: ✅ once its turn is answered.
-        if done && let Some(request) = &follow.request {
-            let _ = unreact(cx, request, "eyes").await;
-            if let Err(e) = react(cx, Some(request), "white_check_mark").await {
-                cx.log(&format!("✅ failed: {e}"));
+        // Your message's reaction goes once the follow-up is posted: the
+        // post beside it says how it ended.
+        if let Some(request) = &follow.request {
+            for emoji in ["hourglass_flowing_sand", "eyes"] {
+                if let Err(e) = unreact(cx, request, emoji).await {
+                    cx.log(&format!("taking off {emoji} failed: {e}"));
+                }
             }
         }
         cx.state.borrow_mut().alerts.insert(

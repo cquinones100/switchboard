@@ -633,6 +633,24 @@ impl Rig {
             .collect()
     }
 
+    /// The reactions a message still has: those added, less those taken
+    /// off since.
+    pub fn reactions_on(&self, ts: &str) -> Vec<String> {
+        let mut kept: Vec<String> = Vec::new();
+        for c in self.slack.calls.borrow().iter() {
+            if c.params["timestamp"] != ts {
+                continue;
+            }
+            let name = c.params["name"].as_str().unwrap_or("").to_string();
+            match c.method.as_str() {
+                "reactions.add" if !kept.contains(&name) => kept.push(name),
+                "reactions.remove" => kept.retain(|k| *k != name),
+                _ => {}
+            }
+        }
+        kept
+    }
+
     /// A ts a minute or so ago, as a message's or a thread's.
     pub fn ts_ago(&self, secs: i64, n: u32) -> String {
         format!("{}.{:06}", util::now_secs() - secs, n)
