@@ -604,6 +604,17 @@ fn wait_for<T>(future: impl std::future::Future<Output = T>) -> T {
     }
 }
 
+/// The repository's default branch as GitHub has it now, for `switchboard
+/// landing --json`'s `defaultBranch`.
+pub fn default_branch_on_github(repo: &str) -> Result<String, String> {
+    let repo = github::parse_name_with_owner(repo).ok_or("not owner/name")?;
+    wait_for(github::default_branch(
+        &repo,
+        "landing: the repository's default branch",
+    ))
+    .map_err(|e| e.to_string())
+}
+
 /// Whether GitHub makes the default branch take a pull request: a merge
 /// queue, branch protection asking for one (a review count at all, 0
 /// included, or no push for you), or a ruleset with a pull request or merge

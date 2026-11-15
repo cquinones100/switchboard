@@ -433,7 +433,7 @@ fn a_landing_whose_tests_run_in_ci_checks_for_leaks_pushes_its_own_branch_waits_
             .unwrap_or_else(|| panic!("the section says {said}"))
     };
     assert!(section.starts_with(" With `testIn` `ci`, steps 5 and 9"));
-    at("`git rev-parse --abbrev-ref HEAD | git hash-object --stdin | cut -c1-12`");
+    at("`switchboard landing --json`'s `ciBranch`");
     assert!(
         !queue.contains("ci/<branch>"),
         "the worktree's branch name is never part of what is pushed"

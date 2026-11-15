@@ -797,9 +797,101 @@ fn landing(home: &Path, dir: &Path, args: &[&str]) -> Output {
         .env_remove("SWITCHBOARD_PANE")
         .env_remove("SWITCHBOARD_STATE_DIR")
         .env_remove("SWITCHBOARD_SETTINGS")
+        .env_remove("NOTES_DIR")
         .stdin(Stdio::null())
         .output()
         .unwrap()
+}
+
+// A branch `wtn` opened for a note's item: `landing --json` names the
+// default branch, the note and the item, the landing's CI branch, and
+// whether the change is already on the default branch, which a squash of it
+// landed there by other means makes it.
+#[test]
+fn landing_names_the_default_branch_note_item_and_ci_branch_and_whether_it_has_landed() {
+    let tmp = TempDir::new("landing-names");
+    let home = tmp.path();
+    let repo = repo(home);
+    let origin = home.join("origin.git");
+    git(home, &["init", "-q", "--bare", origin.to_str().unwrap()]);
+    git(
+        &repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(&repo, &["push", "-q", "origin", "main"]);
+    git(&repo, &["fetch", "-q", "origin"]);
+    git(&repo, &["remote", "set-head", "origin", "main"]);
+    let own = home.join(".config/switchboard");
+    std::fs::create_dir_all(&own).unwrap();
+    std::fs::write(own.join("settings.json"), r#"{"github": false}"#).unwrap();
+    std::fs::write(own.join("repos.json"), "{}").unwrap();
+    let notes = home.join("Notes");
+    std::fs::create_dir_all(&notes).unwrap();
+    std::fs::write(
+        notes.join("Work.md"),
+        "# Work\n\n- [ ] FEAT: Do the thing\n\n<!-- note-id: n-0123456789ab -->\n",
+    )
+    .unwrap();
+    let tree = home.join("tree");
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "note/do-the-thing",
+            tree.to_str().unwrap(),
+        ],
+    );
+    git(
+        &repo,
+        &[
+            "config",
+            "branch.note/do-the-thing.wtnItem",
+            "n-0123456789ab: FEAT: Do the thing",
+        ],
+    );
+    std::fs::write(tree.join("thing.txt"), "done\n").unwrap();
+    git(&tree, &["add", "thing.txt"]);
+    git(&tree, &["commit", "-q", "-m", "Do the thing"]);
+    let json_of = || -> serde_json::Value {
+        let out = landing(home, &tree, &["--json"]);
+        assert_eq!(code(&out), 0, "{}", String::from_utf8_lossy(&out.stderr));
+        serde_json::from_str(&stdout(&out)).unwrap()
+    };
+
+    let all = json_of();
+    assert_eq!(all["defaultBranch"], "main");
+    assert!(
+        all["note"].as_str().unwrap().ends_with("Notes/Work.md"),
+        "{}",
+        all["note"]
+    );
+    assert_eq!(all["item"], "FEAT: Do the thing");
+    let ci = all["ciBranch"].as_str().unwrap();
+    let id = ci.strip_prefix("ci/land-").unwrap();
+    assert!(
+        id.len() == 12 && id.chars().all(|c| c.is_ascii_hexdigit()),
+        "{ci}"
+    );
+    assert_eq!(all["alreadyLanded"], false, "main lacks the change");
+
+    // The change landed on main as a commit of its own, as a squash does.
+    std::fs::write(repo.join("thing.txt"), "done\n").unwrap();
+    git(&repo, &["add", "thing.txt"]);
+    git(&repo, &["commit", "-q", "-m", "Squashed: do the thing"]);
+    git(&repo, &["push", "-q", "origin", "main"]);
+    git(&repo, &["fetch", "-q", "origin"]);
+    assert_eq!(json_of()["alreadyLanded"], true);
+
+    // A branch `wtn` didn't open names no note or item.
+    let plain = landing(home, &repo, &["--json"]);
+    let plain: serde_json::Value = serde_json::from_str(&stdout(&plain)).unwrap();
+    assert_eq!(
+        (&plain["note"], &plain["item"]),
+        (&serde_json::Value::Null, &serde_json::Value::Null)
+    );
 }
 
 #[test]

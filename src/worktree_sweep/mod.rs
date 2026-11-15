@@ -236,9 +236,16 @@ pub fn landed(main: &Path, tree: &Path, upstream: &str) -> bool {
         Some(rel) => disposable(main, tree, rel.trim_matches('"')),
         None => l.trim().is_empty(),
     });
-    if !only_disposable || hides_changes(tree) {
-        return false;
-    }
+    only_disposable && !hides_changes(tree) && committed_on(tree, upstream)
+}
+
+/// Whether the commits of the worktree at `tree` are on `upstream`: `HEAD`
+/// an ancestor of it, or merging `HEAD` into it changing nothing, byte for
+/// byte (after a squash or a cherry-pick), with no merge driver that could
+/// have kept `upstream`'s side. What is uncommitted counts for nothing
+/// here; `landed` checks that too. `switchboard landing --json`'s
+/// `alreadyLanded`.
+pub fn committed_on(tree: &Path, upstream: &str) -> bool {
     if git(tree, &["merge-base", "--is-ancestor", "HEAD", upstream]).is_some() {
         return true;
     }
