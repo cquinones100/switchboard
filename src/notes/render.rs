@@ -659,12 +659,15 @@ pub fn inline(line: &str, from: usize) -> Vec<Span> {
     spans
 }
 
-/// The inline span covering a byte of a line, markup included, if any: a
-/// link, a note link, an image or a tag.
+/// The inline span covering a byte of a line, markup included, that leads
+/// somewhere, if any: a link, a note link, an image or a tag, never the
+/// bold or code around one.
 pub fn span_at(line: &str, col: usize) -> Option<Span> {
     inline(line, 0).into_iter().find(|span| {
         let (from, to) = span.whole();
-        col >= from && col < to
+        let leads =
+            span.url.is_some() || span.note.is_some() || span.image.is_some() || span.tag.is_some();
+        leads && col >= from && col < to
     })
 }
 
@@ -1096,6 +1099,23 @@ fn item_end<S: AsRef<str>>(lines: &[S], row: usize, indent: usize) -> usize {
 /// `Plan:` line under it, blank lines between included, past its
 /// sub-items; `None` for any other line, or an item with none.
 pub fn plan_of<S: AsRef<str>>(lines: &[S], kinds: &[Kind], row: usize) -> Option<String> {
+    plan_line_of(lines, kinds, row).map(|(_, title)| title)
+}
+
+/// The unticked item whose plan link (its `Plan: [[...]]` line, as
+/// `plan_of` finds it) is on `row`, if any.
+pub fn item_of_plan_line<S: AsRef<str>>(lines: &[S], kinds: &[Kind], row: usize) -> Option<usize> {
+    let text = lines.get(row)?.as_ref().trim_start();
+    if !text.strip_prefix("- ").unwrap_or(text).starts_with("Plan:") {
+        return None;
+    }
+    (0..row)
+        .rev()
+        .find(|&r| plan_line_of(lines, kinds, r).is_some_and(|(at, _)| at == row))
+}
+
+/// The row of an unticked item's plan link and the note it names.
+fn plan_line_of<S: AsRef<str>>(lines: &[S], kinds: &[Kind], row: usize) -> Option<(usize, String)> {
     let Some(Kind::Check {
         indent,
         done: false,
@@ -1108,7 +1128,7 @@ pub fn plan_of<S: AsRef<str>>(lines: &[S], kinds: &[Kind], row: usize) -> Option
     // A sub-item and what is under it are passed over: a plan there is
     // the sub-item's.
     let mut sub: Option<usize> = None;
-    for (line, k) in lines.iter().zip(kinds).take(end).skip(row + 1) {
+    for (at, (line, k)) in lines.iter().zip(kinds).enumerate().take(end).skip(row + 1) {
         let line = line.as_ref();
         if line.bytes().all(is_space) {
             continue;
@@ -1128,7 +1148,7 @@ pub fn plan_of<S: AsRef<str>>(lines: &[S], kinds: &[Kind], row: usize) -> Option
             && let Some((title, _)) = after.split_once("]]")
             && !title.trim().is_empty()
         {
-            return Some(title.trim().to_string());
+            return Some((at, title.trim().to_string()));
         }
     }
     None

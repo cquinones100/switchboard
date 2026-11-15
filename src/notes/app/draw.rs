@@ -953,7 +953,7 @@ impl App {
         if mode.is_empty() && self.adds() && self.focus == Focus::Note {
             let spans = crate::ui::kit::hints(
                 &[
-                    ("Enter", "its plan or tick"),
+                    ("Enter", "tick or follow"),
                     ("o", "its tab"),
                     ("gw", "work on it"),
                     ("ga", "add"),

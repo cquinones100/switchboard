@@ -404,9 +404,14 @@ impl App {
     /// the note; whether the line is such an item. Its plan note missing,
     /// says so.
     pub(super) fn open_beside(&mut self) -> bool {
+        self.open_beside_at(self.editor.doc.row)
+    }
+
+    /// The plan of the unticked item on `row`, opened beside the note, as
+    /// `open_beside` opens the cursor's.
+    pub(super) fn open_beside_at(&mut self, row: usize) -> bool {
         let lines = self.editor.doc.text.lines();
         let kinds = render::kinds(&lines);
-        let row = self.editor.doc.row;
         if self.editor.folds.closed_at(&kinds, row).is_some() {
             return false;
         }
@@ -440,7 +445,12 @@ impl App {
 
     /// Whether the panel shows the plan of the item on the cursor's line.
     pub(super) fn beside_is_of_cursor(&mut self) -> bool {
-        self.beside.is_some() && self.beside_row() == Some(self.editor.doc.row)
+        self.beside_is_of(self.editor.doc.row)
+    }
+
+    /// Whether the panel shows the plan of the item on `row`.
+    pub(super) fn beside_is_of(&mut self, row: usize) -> bool {
+        self.beside.is_some() && self.beside_row() == Some(row)
     }
 
     /// M-e in Notes' own tab: the plan of the item under the cursor beside

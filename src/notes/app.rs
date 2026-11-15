@@ -597,6 +597,10 @@ pub struct App {
     /// What the message line says while a link opens, which stays until
     /// the browser comes up (`Msg::Opened`).
     opening: Option<String>,
+    /// What a unit test opened, links and images, in place of the
+    /// browser and Quick Look.
+    #[cfg(test)]
+    pub opened: Vec<String>,
     cursors: HashMap<PathBuf, (usize, usize, usize)>,
     /// Each note left while the app runs: its undo history and folds, put
     /// back when it opens again.
@@ -710,6 +714,8 @@ impl App {
             squash_cancelled: false,
             tx,
             opening: None,
+            #[cfg(test)]
+            opened: Vec::new(),
             cursors: HashMap::new(),
             kept: HashMap::new(),
             jumps: Jumps::default(),
@@ -765,8 +771,7 @@ impl App {
             self.say(words.clone());
             self.opening = Some(words.clone());
         }
-        // No unit test opens a browser.
-        if cfg!(test) {
+        if self.stand_in(&url) {
             return;
         }
         let tx = self.tx.clone();
@@ -1921,17 +1926,6 @@ impl App {
         self.beside_is_of_cursor() || self.open_beside()
     }
 
-    /// Enter on an unticked item with a plan: its plan beside the note, or,
-    /// while it shows there already, work started on the item, as `gw`
-    /// does. Whether it had one.
-    fn enter_on_plan(&mut self) -> bool {
-        if self.beside_is_of_cursor() {
-            self.work_on_item();
-            return true;
-        }
-        self.open_beside()
-    }
-
     /// Whether a click on an item's chip does something: its tab's goes to
     /// the tab, its plan's opens the plan.
     fn clickable(chip: &render::Chip) -> bool {
@@ -2384,10 +2378,66 @@ impl App {
 
     // ── Acting on a place in a note ───────────────────────────────────────
 
-    /// Whatever Enter or a click does at a place in a note: tick a checklist
-    /// item, fold a heading, follow a link. `clicked` limits it to the ☐
-    /// and the ▾ themselves. Whether it did something.
-    pub fn act(&mut self, row: usize, col: Option<usize>, clicked: bool) -> bool {
+    /// Normal mode's Enter at a place in a note, the first of these that
+    /// applies: a web address, an image (under the cursor or just right of
+    /// it, its markup hidden) or a #tag under the cursor followed, on a
+    /// folded line too; a closed fold opened; a checklist item ticked or
+    /// unticked; on an item's plan link with UX 2.0, its plan beside the
+    /// note, and while it shows, work started on the item; any other note
+    /// link followed; a heading's section folded. Whether it did
+    /// something; when not, Enter moves down a line.
+    pub fn enter_at(&mut self, row: usize, col: usize) -> bool {
+        let lines = self.editor.doc.text.lines();
+        let kinds = render::kinds(&lines);
+        let Some(line) = lines.get(row) else {
+            return false;
+        };
+        let span = render::span_at(line, col).or_else(|| {
+            render::inline(line, 0)
+                .into_iter()
+                .find(|s| s.image.is_some() && s.whole().0 == col + 1)
+        });
+        if let Some(span) = span.clone().filter(|s| s.note.is_none())
+            && self.open_span(span)
+        {
+            return true;
+        }
+        if let Some((s, _)) = self.editor.folds.closed_at(&kinds, row) {
+            self.editor.folds.open(&kinds, s);
+            return true;
+        }
+        let Some(k) = kinds.get(row).copied() else {
+            return false;
+        };
+        if matches!(k, Kind::Check { .. }) {
+            return self.toggle_item(row);
+        }
+        if self.opts.ux2
+            && let Some(item) = render::item_of_plan_line(&lines, &kinds, row)
+        {
+            if self.beside_is_of(item) {
+                self.editor.doc.row = item;
+                self.editor.doc.col = 0;
+                self.editor.clamp();
+                self.work_on_item();
+            } else {
+                self.open_beside_at(item);
+            }
+            return true;
+        }
+        if let Some(span) = span
+            && self.open_span(span)
+        {
+            return true;
+        }
+        k.level().is_some() && self.editor.folds.toggle(&kinds, row)
+    }
+
+    /// What a click does at a place in a note: a closed fold opened, the ☐
+    /// ticked, the ▾ folding its section, and, while the app's options
+    /// follow links on a click, what is there followed. Whether it did
+    /// something.
+    pub fn click_at(&mut self, row: usize, col: Option<usize>) -> bool {
         let lines = self.editor.doc.text.lines();
         let kinds = render::kinds(&lines);
         if let Some((s, _)) = self.editor.folds.closed_at(&kinds, row) {
@@ -2397,25 +2447,29 @@ impl App {
         let Some(k) = kinds.get(row).copied() else {
             return false;
         };
+        // The ▾ is drawn before the line, so a click on it has no column.
         let at = col.unwrap_or(0);
         if let Kind::Check { indent, marker, .. } = k
-            && (!clicked || (col.is_some() && at >= indent && at < indent + marker))
+            && col.is_some()
+            && at >= indent
+            && at < indent + marker
         {
-            let done = self.editor.change(|doc| {
-                format::toggle_check(doc, row);
-            });
-            if done {
-                self.changed();
-            }
-            return true;
+            return self.toggle_item(row);
         }
-        if k.level().is_some() && (!clicked || (k.marker() > 0 && at < k.marker())) {
+        if k.level().is_some() && k.marker() > 0 && at < k.marker() {
             return self.editor.folds.toggle(&kinds, row);
         }
-        if !clicked || self.opts.follow_links_on_click {
-            return self.follow(row, at);
+        self.opts.follow_links_on_click && self.follow(row, at)
+    }
+
+    /// The checklist item on `row` ticked or unticked.
+    fn toggle_item(&mut self, row: usize) -> bool {
+        if self.editor.change(|doc| {
+            format::toggle_check(doc, row);
+        }) {
+            self.changed();
         }
-        false
+        true
     }
 
     /// Follows what is at a byte of a row: a web address in the browser, an
@@ -2423,21 +2477,46 @@ impl App {
     /// none), a #tag to the notes that have it. Whether there was something.
     pub fn follow(&mut self, row: usize, col: usize) -> bool {
         let line = self.editor.doc.line(row);
-        let Some(span) = render::span_at(&line, col) else {
-            return false;
-        };
+        match render::span_at(&line, col) {
+            Some(span) => self.open_span(span),
+            None => false,
+        }
+    }
+
+    /// A unit test's link or image kept in `opened`, never opened.
+    #[cfg(test)]
+    fn stand_in(&mut self, what: &str) -> bool {
+        self.opened.push(what.to_string());
+        true
+    }
+
+    #[cfg(not(test))]
+    fn stand_in(&mut self, _what: &str) -> bool {
+        false
+    }
+
+    /// What `follow` does with a span of a row.
+    fn open_span(&mut self, span: render::Span) -> bool {
         if let Some(image) = span.image {
             let Some(note) = self.current_path().map(Path::to_path_buf) else {
                 return false;
             };
-            if images::open(&self.store, &note, &image, self.opts.server) {
+            let web = image.starts_with("http://") || image.starts_with("https://");
+            // A picture that isn't there is said, never passed on to what
+            // Enter would do next on the line.
+            if !web && images::resolve(self.store.root(), &note, &image).is_none() {
+                self.say(format!("notes: no picture at {image}"));
                 return true;
             }
-            if image.starts_with("http://") || image.starts_with("https://") {
+            if self.stand_in(&image) || images::open(&self.store, &note, &image, self.opts.server) {
+                return true;
+            }
+            if web {
                 self.open_link(image);
                 return true;
             }
-            return false;
+            self.say(format!("notes: couldn't open {image}"));
+            return true;
         }
         if let Some(url) = span.url {
             self.open_link(url);
@@ -3059,7 +3138,7 @@ impl App {
             }
             PaletteAct::Act => {
                 let (row, col) = (self.editor.doc.row, self.editor.doc.col);
-                self.act(row, Some(col), false);
+                self.enter_at(row, col);
             }
             PaletteAct::Indent | PaletteAct::Outdent => {
                 let step = if act == PaletteAct::Indent { 1 } else { -1 };
@@ -3281,10 +3360,7 @@ impl App {
                         None => self.close_beside(),
                     }
                 }
-                // UX 2.0: an item's plan, its tab, and the note worked.
-                KeyCode::Enter if key.mods.is_empty() && self.opts.ux2 && self.enter_on_plan() => {
-                    return;
-                }
+                // UX 2.0: an item's tab.
                 KeyCode::Char('o')
                     if key.mods.is_empty() && self.opts.ux2 && self.go_to_item_tab() =>
                 {
@@ -3292,7 +3368,7 @@ impl App {
                 }
                 KeyCode::Enter if key.mods.is_empty() => {
                     let (row, col) = (self.editor.doc.row, self.editor.doc.col);
-                    if !self.act(row, Some(col), false) {
+                    if !self.enter_at(row, col) {
                         self.editor.key(key);
                     }
                     return;
@@ -3872,7 +3948,7 @@ impl App {
                     && !dragged
                 {
                     let col = (col != usize::MAX).then_some(col);
-                    self.act(row, col, true);
+                    self.click_at(row, col);
                 }
             }
             _ => {}
