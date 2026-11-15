@@ -218,12 +218,14 @@ fn set_up_with(
 fn with_ux2_it_has_its_own_view_in_place_of_the_line_leading_the_tabs() {
     let (_notes, _note, server, mut client, _repo) = set_up(json!({ "ux2": true }));
     // M-p's command opened mission control on the Autopilot board, its
-    // heading saying what the line said.
-    let screen = client.wait_text("WAITING ON YOU");
+    // heading saying what the line said, and, once the queue is read, when
+    // its ready items should be done.
+    client.wait_text("WAITING ON YOU");
+    let screen = client.wait_text("done by about ");
     assert!(
-        screen
-            .iter()
-            .any(|l| l.contains("AUTO Work") && l.contains("of 5 open · asks before landing")),
+        screen.iter().any(|l| l.contains("AUTO Work")
+            && l.contains("of 5 open · done by about ")
+            && l.contains(" left · asks before landing")),
         "{screen:#?}"
     );
     client.type_text("\x1b");

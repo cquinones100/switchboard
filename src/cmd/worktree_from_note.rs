@@ -503,12 +503,21 @@ pub fn parked_heading(line: &str) -> bool {
 /// The open item the item on a note's line (1-based) waits on, by its
 /// `After:` lines, as `items` reads them, whether the item is parked or not.
 pub fn held_by(text: &str, line: usize) -> Option<String> {
+    held_by_all(text, line).into_iter().next()
+}
+
+/// Every open item the item on a note's line (1-based) waits on, one an
+/// `After:` line, in their order: `held_by` names the first.
+pub fn held_by_all(text: &str, line: usize) -> Vec<String> {
+    let Some(at) = line.checked_sub(1) else {
+        return Vec::new();
+    };
     let lines: Vec<&str> = text.split('\n').collect();
-    let first = lines
-        .get(line.checked_sub(1)?)?
-        .strip_prefix("- [ ] ")?
-        .trim();
-    let after: Vec<String> = item_block(&lines, line - 1)
+    let Some(first) = lines.get(at).and_then(|l| l.strip_prefix("- [ ] ")) else {
+        return Vec::new();
+    };
+    let first = first.trim();
+    let after: Vec<String> = item_block(&lines, at)
         .lines()
         .skip(1)
         .filter_map(|l| AFTER.captures(l).map(|m| m[1].to_string()))
@@ -524,7 +533,10 @@ pub fn held_by(text: &str, line: usize) -> Option<String> {
         .filter(|l| TICKED.is_match(l))
         .map(|l| l[6..].trim())
         .collect();
-    waits_on(&after, &open, &ticked)
+    after
+        .iter()
+        .filter_map(|a| waits_on(std::slice::from_ref(a), &open, &ticked))
+        .collect()
 }
 
 /// A note's unticked top-level items, in its order, leaving out any under a
@@ -2064,6 +2076,9 @@ mod tests {
             None,
             "the item it waits on holds nothing"
         );
+        let two = "- [ ] One\n- [ ] Two\n- [x] Done\n- [ ] Both\n  After: One\n  After: Done\n  After: Two\n";
+        assert_eq!(held_by_all(two, 4), ["One", "Two"], "every open one");
+        assert_eq!(held_by(two, 4).as_deref(), Some("One"));
     }
 
     #[test]

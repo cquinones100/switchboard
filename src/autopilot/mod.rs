@@ -81,6 +81,7 @@
 //! - `serve`: the server's side: setting it up, the check on every tick,
 //!   opening the tabs, the notifications.
 
+pub mod eta;
 pub mod landed;
 pub mod line;
 pub mod mode;
@@ -188,6 +189,8 @@ pub enum AutopilotEvent {
         plans: std::collections::HashMap<String, crate::cmd::worktree_from_note::PlanNote>,
         /// Today's spend, while there is a spend limit.
         spent: f64,
+        /// What is left of the note, for the view's estimate.
+        left: eta::Left,
     },
     /// What looking for the next item to open found, for a note last
     /// changed at `mtime` (ms).

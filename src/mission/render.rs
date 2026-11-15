@@ -9147,6 +9147,7 @@ mod tests {
         let list = crate::autopilot::view::items(
             &pilot_summary(),
             "",
+            "",
             &rows,
             &[],
             &[],
@@ -9185,6 +9186,7 @@ mod tests {
         landed.ended = Some(now - 86_000 + 72 * 60);
         let list = crate::autopilot::view::items(
             &pilot_summary(),
+            "",
             "",
             &[working, landed],
             &[],
@@ -9231,6 +9233,7 @@ mod tests {
         ];
         let list = crate::autopilot::view::items(
             &pilot_summary(),
+            "",
             "",
             &rows,
             &["Third".into(), "Fourth".into()],
@@ -9387,6 +9390,7 @@ mod tests {
         let list = crate::autopilot::view::items(
             &pilot_summary(),
             "",
+            "",
             &rows,
             &["Third".into()],
             &[],
@@ -9416,6 +9420,7 @@ mod tests {
         let rows = vec![pilot_row(3, "Give notes stable IDs", TabState::Working)];
         let list = crate::autopilot::view::items(
             &pilot_summary(),
+            "",
             "",
             &rows,
             &[],
@@ -10187,6 +10192,7 @@ mod tests {
         let rows = vec![pilot_row(3, "Give notes stable IDs", TabState::Working)];
         let list = crate::autopilot::view::items(
             &pilot_summary(),
+            "",
             "",
             &rows,
             &[],

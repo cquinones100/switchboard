@@ -175,6 +175,13 @@
     "default": false
   },
   {
+    "key": "autopilot_eta",
+    "category": "Sessions",
+    "label": "Estimated finish",
+    "description": "Autopilot's view says when the note's ready items should all be done (\"done by about 3:40 PM · 6 left\"), from the median time its recent items took from opening to landing, its slots and its tabs still at work, and how many items wait on you (an open choice it won't take, a design board to review). Off, its heading has no estimate",
+    "default": true
+  },
+  {
     "key": "autopilot_while_away",
     "category": "Sessions",
     "label": "Keep opening tabs while I'm away",

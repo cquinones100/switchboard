@@ -115,6 +115,8 @@ pub struct Next {
     pub plans: HashMap<String, PlanNote>,
     /// Today's spend, read with them while there is a spend limit.
     pub spent: f64,
+    /// What is left of the note, whole, for the view's estimate.
+    pub left: super::eta::Left,
 }
 
 /// The most items of the queue its view lists.
@@ -809,6 +811,7 @@ impl Pilot {
             held: Vec::new(),
             plans: HashMap::new(),
             spent: 0.0,
+            left: super::eta::Left::default(),
         };
     }
 

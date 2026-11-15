@@ -1991,6 +1991,7 @@ mod tests {
                 items: crate::autopilot::view::items(
                     &summary,
                     "",
+                    "",
                     &[row],
                     &["Later".into()],
                     &[],

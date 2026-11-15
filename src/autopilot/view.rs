@@ -32,6 +32,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde_json::{Value, json};
 
+use super::eta;
 use super::line::Summary;
 use super::mode::Landed;
 use super::serve::{LANDED_AT, LEFT, OPENED};
@@ -403,14 +404,78 @@ fn with_plan(mut data: Value, plans: &HashMap<String, PlanNote>, item: &str) -> 
     data
 }
 
+/// When the note's ready items should all be done, for the heading
+/// (`eta::words`): today's landings give the typical time, those the mode
+/// kept (`kept`, of any note, its tabs open or closed) and its open tabs
+/// landed since, each once; of its rows, those still open and not landed are at work, but for those the board
+/// puts under Waiting on you, which free their slot and are counted with
+/// what waits on you, as are the items held after them; `left` is what
+/// of the note it will still take, and holds on you. Those waiting on you,
+/// and those landed and not yet closed, still count toward `cap`, the most tabs open, so the ready items have
+/// the slots it leaves, and no time while it leaves none. No estimate while it is paused
+/// or holds off (while you are away, or past the spend limit), since it
+/// opens nothing then.
+pub fn eta(
+    rows: &[Row],
+    kept: &[Landed],
+    slots: u32,
+    cap: u32,
+    paused: bool,
+    left: &eta::Left,
+    now: &jiff::Zoned,
+) -> String {
+    let secs = now.timestamp().as_second();
+    // Each landing by its tab and opening, as the mode keeps its id.
+    let mut by_id: HashMap<(u32, i64), i64> = HashMap::new();
+    for l in kept {
+        let tab = l.id.split_once('@').and_then(|(t, _)| t.parse().ok());
+        if let (Some(tab), (Some(started), Some(ended))) = (tab, times_of_closed(l)) {
+            by_id.insert((tab, started), ended);
+        }
+    }
+    for r in rows.iter().filter(|r| r.closed.is_none()) {
+        if let (Some(started), Some(ended)) = (r.started, r.ended) {
+            by_id.entry((r.tab.0, started)).or_insert(ended);
+        }
+    }
+    let mut landed: Vec<(i64, i64)> = by_id
+        .into_iter()
+        .map(|((_, started), ended)| (ended, ended - started))
+        .filter(|(ended, _)| crate::autopilot::mode::same_day(ended * 1000, secs * 1000))
+        .collect();
+    landed.sort_unstable();
+    let took: Vec<i64> = landed.into_iter().map(|(_, took)| took).collect();
+    // Its tabs open and not yet back in a main clone, each counting toward
+    // the most open: those under Waiting on you, those landed and not yet
+    // closed, and the rest at work.
+    let open: Vec<&Row> = rows
+        .iter()
+        .filter(|r| r.closed.is_none() && !r.left)
+        .collect();
+    let (asking, others): (Vec<&Row>, Vec<&Row>) =
+        open.iter().partition(|r| column(r, &stages(r)) == 2);
+    let at_work: Vec<&Row> = others.into_iter().filter(|r| r.ended.is_none()).collect();
+    let items: Vec<String> = at_work.iter().map(|r| r.item.clone()).collect();
+    let (ready, on_you) = left.counts(&items);
+    let on_you = on_you + asking.len();
+    let starts: Vec<i64> = at_work.iter().map(|r| r.started.unwrap_or(secs)).collect();
+    let free = slots.min(cap.saturating_sub((open.len() - at_work.len()) as u32));
+    let end = (!paused && (free > 0 || ready == 0))
+        .then(|| eta::estimate(secs, free, &starts, ready, eta::typical(&took)))
+        .flatten();
+    eta::words(end, starts.len() + ready, on_you, now)
+}
+
 /// The view's items: the heading, the next items under a heading the
 /// cursor passes over, those held by an open item after them, a row per tab under one too, in its column's order
 /// and, within a column, the least far along first, then the skipped ones
 /// under a heading, the board's last column. Every item on the board has
 /// its column as its `group`, and the plan its item links (`with_plan`);
 /// the headings, in none, lead the plain list a narrow screen shows.
+#[allow(clippy::too_many_arguments)]
 pub fn items(
     s: &Summary,
+    eta: &str,
     said: &str,
     rows: &[Row],
     next: &[String],
@@ -430,14 +495,18 @@ pub fn items(
     facts.extend([
         format!("{} of {} working", s.busy, s.slots),
         format!("{} of {} open", s.open, s.cap),
-        if s.hands_free {
-            "hands-free".to_string()
-        } else if s.lands_alone {
-            "lands without asking".to_string()
-        } else {
-            "asks before landing".to_string()
-        },
     ]);
+    // When the note's ready items should be done (src/autopilot/eta.rs).
+    if !eta.is_empty() {
+        facts.push(eta.to_string());
+    }
+    facts.push(if s.hands_free {
+        "hands-free".to_string()
+    } else if s.lands_alone {
+        "lands without asking".to_string()
+    } else {
+        "asks before landing".to_string()
+    });
     if s.ready_only {
         facts.push("planned items only".into());
     }
@@ -723,6 +792,7 @@ mod tests {
         let items = items(
             &s,
             "",
+            "",
             &[row(TabState::Working), other],
             &["Next".into()],
             &[],
@@ -773,6 +843,7 @@ mod tests {
         let items = items(
             &s,
             "",
+            "",
             &[row(TabState::Waiting)],
             &["Next".into()],
             &[],
@@ -811,6 +882,7 @@ mod tests {
         assert_eq!(board_columns(&items), COLUMNS);
         let none_skipped = super::items(
             &s,
+            "",
             "",
             &[row(TabState::Waiting)],
             &["Next".into()],
@@ -868,6 +940,7 @@ mod tests {
         let items = items(
             &s,
             "",
+            "",
             &[
                 landed,
                 holding,
@@ -887,6 +960,7 @@ mod tests {
         assert_eq!(held.data["waitsOn"], "The base");
         let review = super::items(
             &s,
+            "",
             "",
             &[],
             &[],
@@ -968,6 +1042,7 @@ mod tests {
         let items = items(
             &summary,
             "",
+            "",
             &[open, closed],
             &[],
             &[],
@@ -1013,6 +1088,7 @@ mod tests {
         };
         let items = items(
             &s,
+            "",
             "Nothing left in the note",
             &[],
             &[],
@@ -1060,6 +1136,136 @@ mod tests {
         assert_eq!(
             times_of_closed(&closed),
             (Some(1_700_000_000), Some(1_700_004_320))
+        );
+    }
+
+    #[test]
+    fn the_heading_says_when_the_ready_items_should_be_done_and_how_many_are_left() {
+        let now = jiff::civil::date(2026, 11, 11)
+            .at(13, 0, 0, 0)
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .unwrap();
+        let secs = now.timestamp().as_second();
+        let at_work = Row {
+            started: Some(secs - 15 * 60),
+            ..row(TabState::Working)
+        };
+        let landed = |n: i64| Row {
+            left: true,
+            started: Some(secs - 70 * 60 + n * 60),
+            ended: Some(secs - 40 * 60 + n * 60),
+            ..row(TabState::Idle)
+        };
+        let rows = [landed(0), landed(1), landed(2), at_work];
+        let left = eta::Left {
+            ready: vec!["A".into(), "B".into(), "C".into()],
+            after: Vec::new(),
+            on_you: 2,
+        };
+        let words = eta(&rows, &[], 2, 5, false, &left, &now);
+        assert_eq!(words, "done by about 2:00 PM · 4 left · 2 wait on you");
+        let s = Summary {
+            note: "Work".into(),
+            busy: 1,
+            open: 1,
+            slots: 2,
+            cap: 4,
+            next: String::new(),
+            paused: false,
+            away: false,
+            ready_only: false,
+            skipped: 0,
+            spend_limit: 0.0,
+            spent: 0.0,
+            lands_alone: false,
+            target: String::new(),
+            drained: false,
+            failing: String::new(),
+            hands_free: false,
+        };
+        let list = items(&s, &words, "", &rows, &[], &[], &[], &HashMap::new());
+        assert!(
+            list[0]
+                .detail
+                .contains("1 of 4 open · done by about 2:00 PM · 4 left · 2 wait on you · asks"),
+            "{}",
+            list[0].detail
+        );
+        // Landings the mode kept count, a closed tab of another note's too,
+        // each once with its open tab: three of ten minutes and the three
+        // of 30 give 20 minutes, so the three ready end at 20, 25 and 40.
+        let kept: Vec<Landed> = (0..3)
+            .map(|n| Landed {
+                id: format!("9@{}", secs - 200 * 60 + n * 60),
+                item: format!("Elsewhere {n}"),
+                note: "other".into(),
+                hash: "abc1234".into(),
+                at: (secs - 190 * 60 + n * 60) * 1000,
+            })
+            .chain(std::iter::once(Landed {
+                id: format!("4@{}", secs - 70 * 60),
+                item: "Give notes stable IDs".into(),
+                note: "work".into(),
+                hash: "def5678".into(),
+                at: (secs - 40 * 60) * 1000,
+            }))
+            .collect();
+        assert_eq!(
+            eta(&rows, &kept, 2, 5, false, &left, &now),
+            "done by about 1:40 PM · 4 left · 2 wait on you"
+        );
+        // Ten-minute landings two days ago don't count: still half an hour.
+        let old = |n: i64| Row {
+            started: Some(secs - 2 * 86_400 + n * 60),
+            ended: Some(secs - 2 * 86_400 + 10 * 60 + n * 60),
+            ..landed(n)
+        };
+        let stale = [old(0), old(1), old(2), rows[3].clone()];
+        assert_eq!(eta(&stale, &[], 2, 5, false, &left, &now), words);
+        // A tab waiting on you frees its slot and waits on you: the three
+        // ready take 30, 30 and 60 minutes in two slots.
+        let asking = Row {
+            started: Some(secs - 15 * 60),
+            ..row(TabState::Waiting)
+        };
+        let with_asking = [landed(0), landed(1), landed(2), asking];
+        assert_eq!(
+            eta(&with_asking, &[], 2, 5, false, &left, &now),
+            "done by about 2:00 PM · 3 left · 3 wait on you"
+        );
+        // One that finished its turn without landing waits on you too.
+        let finished = Row {
+            started: Some(secs - 15 * 60),
+            ..row(TabState::Done)
+        };
+        let with_finished = [landed(0), landed(1), landed(2), finished];
+        assert_eq!(
+            eta(&with_finished, &[], 2, 5, false, &left, &now),
+            "done by about 2:00 PM · 3 left · 3 wait on you"
+        );
+        // One landed and asking whether to apply the change waits on you,
+        // and holds its place among the most open.
+        let applying = Row {
+            started: Some(secs - 50 * 60),
+            ended: Some(secs - 5 * 60),
+            ..row(TabState::Waiting)
+        };
+        let with_applying = [landed(0), landed(1), landed(2), applying];
+        assert_eq!(
+            eta(&with_applying, &[], 2, 1, false, &left, &now),
+            "3 wait on you"
+        );
+        // With the tabs waiting on you filling the most open, nothing starts.
+        assert_eq!(
+            eta(&with_asking, &[], 2, 1, false, &left, &now),
+            "3 wait on you"
+        );
+        let nothing = eta(&rows[..3], &[], 2, 5, false, &eta::Left::default(), &now);
+        assert_eq!(nothing, "", "nothing working or ready");
+        assert_eq!(
+            eta(&rows, &[], 2, 5, true, &eta::Left::default(), &now),
+            "",
+            "paused, it opens nothing"
         );
     }
 }

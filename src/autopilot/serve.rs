@@ -133,6 +133,60 @@ fn head_of(dir: &Path) -> Option<String> {
         })
 }
 
+/// What is left of the note for the view's estimate, off the server's
+/// task, from the queue `job` gave and those it holds: the whole queue;
+/// each item held by open items it builds on, with all of them; and how many wait on you,
+/// those held on a design board's review and, unless hands-free takes
+/// them, those with an open choice, which the queue leaves out. Nothing
+/// with the autopilot_eta setting off.
+fn autopilot_left(
+    job: &Job,
+    notes: &Path,
+    state: &Path,
+    queue: &[Item],
+    held: &[Item],
+) -> super::eta::Left {
+    if !settings::is_on("autopilot_eta") {
+        return super::eta::Left::default();
+    }
+    let text = std::fs::read_to_string(notes.join(&job.note)).unwrap_or_default();
+    let on_review = |i: &Item| {
+        let item = worktree_from_note::item_text(&text, i.line);
+        matches!(
+            worktree_from_note::plan_of(notes, &item),
+            worktree_from_note::Plan::Review(_)
+        )
+    };
+    let (after, reviews): (Vec<&Item>, Vec<&Item>) = held.iter().partition(|i| !on_review(i));
+    let choices = if job.with_choices {
+        0
+    } else {
+        let taken: std::collections::HashSet<&str> =
+            queue.iter().chain(held).map(|i| i.text.as_str()).collect();
+        let all = Job {
+            with_choices: true,
+            ..job.clone()
+        };
+        let (q, h) = all.items_and_held(notes, state).unwrap_or_default();
+        q.iter()
+            .chain(&h)
+            .filter(|i| !taken.contains(i.text.as_str()))
+            .count()
+    };
+    super::eta::Left {
+        ready: queue.iter().map(|i| i.text.clone()).collect(),
+        after: after
+            .into_iter()
+            .map(|i| {
+                let on = worktree_from_note::held_by_all(&text, i.line);
+                (i.text.clone(), on)
+            })
+            .filter(|(_, on)| !on.is_empty())
+            .collect(),
+        on_you: reviews.len() + choices,
+    }
+}
+
 /// When a file last changed, in ms; `None` when it isn't there.
 fn modified_ms(path: &Path) -> Option<i64> {
     let at = std::fs::metadata(path).ok()?.modified().ok()?;
@@ -1530,8 +1584,27 @@ impl Server {
             ..self.autopilot.pilot.summary(mode, self.autopilot_away())
         };
         let skipped: Vec<String> = mode.skipped_here().map(str::to_string).collect();
+        // Paused, away or past today's spend limit, it opens nothing for now.
+        let held_off = summary.paused
+            || summary.away
+            || (summary.spend_limit > 0.0 && summary.spent >= summary.spend_limit);
+        // Stopped, it starts nothing more, so it has nothing to estimate.
+        let eta = if settings::is_on("autopilot_eta") && mode.on {
+            super::view::eta(
+                &rows,
+                &mode.landed,
+                mode.slots,
+                mode.cap,
+                held_off,
+                &self.autopilot.pilot.next.left,
+                &jiff::Zoned::now(),
+            )
+        } else {
+            String::new()
+        };
         Some(super::view::items(
             &summary,
+            &eta,
             &mode.said,
             &rows,
             &self.autopilot.pilot.next.queue,
@@ -2113,6 +2186,7 @@ impl Server {
         let state = paths::state_dir();
         tokio::task::spawn_blocking(move || {
             let (queue, held) = job.items_and_held(&notes, &state).unwrap_or_default();
+            let left = autopilot_left(&job, &notes, &state, &queue, &held);
             let queue: Vec<String> = queue
                 .into_iter()
                 .take(super::pilot::QUEUE_SHOWN)
@@ -2137,6 +2211,7 @@ impl Server {
                 held,
                 plans,
                 spent,
+                left,
             }));
         });
     }
@@ -2168,8 +2243,10 @@ impl Server {
                 held,
                 plans,
                 spent,
+                left,
             } => {
                 let changed = self.autopilot.pilot.next.text != text
+                    || self.autopilot.pilot.next.left != left
                     || self.autopilot.pilot.next.queue != queue
                     || self.autopilot.pilot.next.held != held
                     || self.autopilot.pilot.next.plans != plans
@@ -2179,6 +2256,7 @@ impl Server {
                 self.autopilot.pilot.next.held = held;
                 self.autopilot.pilot.next.plans = plans;
                 self.autopilot.pilot.next.spent = spent;
+                self.autopilot.pilot.next.left = left;
                 if changed {
                     self.autopilot_redraw();
                 }
