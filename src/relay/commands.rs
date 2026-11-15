@@ -938,14 +938,7 @@ async fn send_to_tab(
                 "wait",
             ),
             (None, Some(d)) => (
-                format!(
-                    "{}\n_Tap one, or reply with its number or the start of it._",
-                    d.options
-                        .iter()
-                        .map(|o| format!("{}. {}", o.n, o.label))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                ),
+                d.text(),
                 dialog_buttons(current.as_ref().unwrap_or(tab), d),
                 "dialog",
             ),

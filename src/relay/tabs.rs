@@ -30,8 +30,10 @@ use std::time::{Duration, SystemTime};
 use regex::Regex;
 use serde_json::Value;
 
+use super::buttons::option_text;
 use super::config::{Paths, SCREEN_LINES};
 use super::mux::TabStage;
+use super::post::BUTTON_TEXT;
 use super::{Cx, Relay};
 use crate::mission::answer::{self, Answer, Press, Prompt, PromptOption};
 use crate::util;
@@ -783,6 +785,29 @@ pub fn turn_from(file: &Path, expected: Option<&str>, last: Option<&str>) -> Opt
     )
 }
 
+/// A turn (`turn_from`'s) without the prompt it quotes: an alert for a
+/// tab waiting on you leads with what Claude said and what it asks, not
+/// your own words back. A turn read from the screen is left as it is.
+pub fn unquoted(turn: &str) -> String {
+    let mut lines = turn.split('\n').peekable();
+    let mut out: Vec<&str> = Vec::new();
+    if let Some(first) = lines.next_if(|l| l.starts_with("_(")) {
+        out.push(first);
+    }
+    let mut quoted = false;
+    while lines
+        .next_if(|l| l.starts_with("> ") || *l == ">")
+        .is_some()
+    {
+        quoted = true;
+    }
+    if quoted {
+        lines.next_if(|l| l.is_empty());
+    }
+    out.extend(lines);
+    out.join("\n").trim().to_string()
+}
+
 /// Whether a character draws a rule (box-drawing, ═, —, _, =, ~, ., ·, -).
 fn rule_char(c: char) -> bool {
     ('\u{2500}'..='\u{257F}').contains(&c) || "═—_=~.·-".contains(c)
@@ -890,19 +915,35 @@ pub fn draft(cx: &Relay, pane: &str) -> Option<String> {
     draft_in(&cx.mux.capture(pane, 0)?, &cx.mux.capture_typed(pane)?)
 }
 
-/// What a prompt shows, as Markdown: its question, its options (ticked or
-/// not), and how to answer it from Slack.
+/// What a prompt shows, as Markdown, over its buttons: its question and
+/// one line on how to answer it from Slack. The options are the buttons
+/// alone, each with its number; only one whose label is too long for its
+/// button is written out here too, in full.
 pub fn prompt_text(found: &Prompt) -> String {
-    let boxed = |o: &PromptOption| match o.checked {
-        None => "",
-        Some(true) => "☑ ",
-        Some(false) => "☐ ",
-    };
     let hint = if found.multi {
         "Tap options to tick or untick them, then Submit choices. Or reply with their numbers, and `submit` when you're done."
     } else {
-        "Tap an option, or reply with its number or the start of it."
+        "Tap one, or reply with its number."
     };
+    let too_long = |o: &&PromptOption| option_text(o).chars().count() > BUTTON_TEXT;
+    prompt_with(found, too_long, hint)
+}
+
+/// What a prompt shows in a message without its buttons (a warning that a
+/// tab hasn't taken your message, or may be stuck): its question, every
+/// option, and how to answer it by replying.
+pub fn prompt_listed(found: &Prompt) -> String {
+    let hint = if found.multi {
+        "Reply with their numbers, and `submit` when you're done."
+    } else {
+        "Reply with its number or the start of it."
+    };
+    prompt_with(found, |_| true, hint)
+}
+
+/// A prompt's question, the options `shown` picks, and a line saying how
+/// to answer it.
+fn prompt_with(found: &Prompt, shown: impl Fn(&&PromptOption) -> bool, hint: &str) -> String {
     let mut lines = found.question.split('\n');
     let heading = lines.next().unwrap_or("");
     let mut out = String::new();
@@ -913,19 +954,19 @@ pub fn prompt_text(found: &Prompt) -> String {
         out.push_str(line);
         out.push('\n');
     }
-    out.push_str(
-        &found
-            .options
-            .iter()
-            .map(|o| format!("{}. {}{}", o.n, boxed(o), o.label))
-            .collect::<Vec<_>>()
-            .join("\n"),
-    );
+    for o in found
+        .options
+        .iter()
+        .filter(|o| Some(o.n) != found.free)
+        .filter(shown)
+    {
+        out.push_str(&format!("{}\n", option_text(o)));
+    }
     let free = found
         .free
-        .map(|n| format!(" Anything else you reply is typed in as option {n}, your own answer."))
+        .map(|_| " Anything else you reply is typed in as your own answer.")
         .unwrap_or_default();
-    out.push_str(&format!("\n_{hint}{free}_"));
+    out.push_str(&format!("_{hint}{free}_"));
     out
 }
 
@@ -973,6 +1014,18 @@ pub struct Dialog {
 impl Dialog {
     pub fn hash(&self) -> String {
         prompt_hash(&self.question, &self.options)
+    }
+
+    /// What it shows over its buttons, as a prompt does (`prompt_text`).
+    pub fn text(&self) -> String {
+        prompt_text(&Prompt {
+            question: self.question.clone(),
+            options: self.options.clone(),
+            multi: false,
+            free: None,
+            cursor: None,
+            more: Vec::new(),
+        })
     }
 }
 
@@ -1065,7 +1118,7 @@ pub const PROMPT_LINES: usize = 20;
 pub fn on_screen(cx: &Relay, id: &str, turn: &str) -> String {
     let shown = screen(cx, id);
     if let Some(found) = options_in(&shown) {
-        return format!("\n{}", prompt_text(&found));
+        return format!("\n\n{}", prompt_listed(&found));
     }
     if turn.starts_with("```") {
         return String::new();
@@ -1524,11 +1577,31 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_unquoted_leaves_out_only_the_prompt_it_quotes() {
+        assert_eq!(
+            unquoted(
+                "_(prompt sent 2m ago)_\n> first\n> \n> second\n\nDone.\n> a quote of Claude's"
+            ),
+            "_(prompt sent 2m ago)_\nDone.\n> a quote of Claude's"
+        );
+        assert_eq!(unquoted("> deploy it\n\nDeployed."), "Deployed.");
+        assert_eq!(unquoted("```\nscreen\n```"), "```\nscreen\n```");
+    }
+
+    #[test]
     fn a_prompt_reads_with_its_options_and_how_to_answer() {
         let found = options_in("Do you want to proceed?\n❯ 1. Yes\n  2. No").unwrap();
         assert_eq!(
             prompt_text(&found),
-            "**Do you want to proceed?**\n1. Yes\n2. No\n_Tap an option, or reply with its number or the start of it._"
+            "**Do you want to proceed?**\n_Tap one, or reply with its number._"
+        );
+        let long =
+            "No, and tell Claude what to do differently, since this path is not the one meant";
+        let found = options_in(&format!("Do you want to proceed?\n❯ 1. Yes\n  2. {long}")).unwrap();
+        assert_eq!(
+            prompt_text(&found),
+            format!("**Do you want to proceed?**\n2. {long}\n_Tap one, or reply with its number._"),
+            "only an option too long for its button is written out"
         );
         assert_eq!(hash_of(&found).len(), 16);
     }

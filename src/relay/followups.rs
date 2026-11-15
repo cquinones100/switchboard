@@ -334,13 +334,7 @@ pub async fn follow_ups(cx: &Cx, current: &[Tab], events: &mut [Event]) {
             let turn = tabs::turn_from(transcript, Some(&follow.text), ended.last.as_deref())
                 .unwrap_or_else(|| tabs::last_turn(cx, &id, Some(&follow.text)));
             if ended.event == "waiting" {
-                let shown = if tab.is_some() {
-                    tabs::on_screen(cx, &id, &turn)
-                } else {
-                    String::new()
-                };
-                let body =
-                    format!("{name} is waiting on you. Reply here to answer it:\n{turn}{shown}");
+                let body = waiting_body(cx, &id, &name, &turn, tab.is_some());
                 finish(cx, &id, &follow, tab.as_ref(), &body, Finish::Waiting).await;
             } else if !pending(Some(transcript), ended.at, ended.last.as_deref()) {
                 finish(
@@ -387,9 +381,7 @@ pub async fn follow_ups(cx: &Cx, current: &[Tab], events: &mut [Event]) {
                 }
             } else if tab.state == "waiting" {
                 let turn = tabs::last_turn(cx, &id, Some(&follow.text));
-                let shown = tabs::on_screen(cx, &id, &turn);
-                let body =
-                    format!("{name} is waiting on you. Reply here to answer it:\n{turn}{shown}");
+                let body = waiting_body(cx, &id, &name, &turn, true);
                 finish(cx, &id, &follow, Some(&tab), &body, Finish::Waiting).await;
             } else {
                 keep(cx, &id, &follow);
@@ -414,6 +406,31 @@ pub async fn follow_ups(cx: &Cx, current: &[Tab], events: &mut [Event]) {
                 "{name} is still going after an hour, so I stopped watching it. `?` here shows its screen."
             );
             finish(cx, &id, &follow, Some(&tab), &body, Finish::Plain).await;
+        }
+    }
+}
+
+/// What a followed turn says when its tab waits on you. A prompt on its
+/// screen (`open`) shows as its question over its buttons, with one line on
+/// answering it and without your own prompt quoted back; anything else
+/// shows as the turn and what the screen shows, to be answered here.
+fn waiting_body(cx: &Relay, id: &str, name: &str, turn: &str, open: bool) -> String {
+    match open
+        .then(|| tabs::options_in(&tabs::screen(cx, id)))
+        .flatten()
+    {
+        Some(found) => format!(
+            "{name} is waiting on you:\n{}\n\n{}",
+            tabs::unquoted(turn),
+            tabs::prompt_text(&found)
+        ),
+        None => {
+            let shown = if open {
+                tabs::on_screen(cx, id, turn)
+            } else {
+                String::new()
+            };
+            format!("{name} is waiting on you. Reply here to answer it:\n{turn}{shown}")
         }
     }
 }

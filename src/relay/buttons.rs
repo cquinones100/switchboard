@@ -10,7 +10,18 @@ use super::Relay;
 use super::post::Button;
 use super::state::Dm;
 use super::tabs::{self, Dialog, Tab};
-use crate::mission::answer::Prompt;
+use crate::mission::answer::{Prompt, PromptOption};
+
+/// What an option's button says: its number, its box when it takes a tick,
+/// and its label.
+pub fn option_text(o: &PromptOption) -> String {
+    let boxed = match o.checked {
+        None => "",
+        Some(true) => "☑ ",
+        Some(false) => "☐ ",
+    };
+    format!("{}. {boxed}{}", o.n, o.label)
+}
 
 /// A waiting tab's numbered options. Each records the wait it belongs to
 /// (the tab's `since`) and the prompt it was made for, so a press can only
@@ -26,12 +37,7 @@ pub fn option_buttons(tab: &Tab, found: &Prompt) -> Vec<Button> {
         .iter()
         .filter(|o| Some(o.n) != found.free)
         .map(|o| {
-            let boxed = match o.checked {
-                None => "",
-                Some(true) => "☑ ",
-                Some(false) => "☐ ",
-            };
-            let b = Button::new(format!("{}. {boxed}{}", o.n, o.label), value(o.n));
+            let b = Button::new(option_text(o), value(o.n));
             if o.n == 1 && !found.multi {
                 b.style("primary")
             } else {
@@ -108,10 +114,15 @@ pub fn dialog_buttons(tab: &Tab, dialog: &Dialog) -> Vec<Button> {
         .options
         .iter()
         .map(|o| {
-            Button::new(
-                o.label.clone(),
+            let b = Button::new(
+                option_text(o),
                 json!({ "a": "dialog", "w": tab.id, "n": o.n, "k": key }),
-            )
+            );
+            if o.n == dialog.cursor {
+                b.style("primary")
+            } else {
+                b
+            }
         })
         .collect()
 }

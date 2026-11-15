@@ -397,16 +397,16 @@ async fn alert(cx: &Cx, due: Due) {
         .turn
         .clone()
         .unwrap_or_else(|| tabs::last_turn(cx, &tab.id, None));
-    let shown = if waiting {
-        tabs::on_screen(cx, &tab.id, &turn)
-    } else {
-        String::new()
-    };
     // A wait gets its options as buttons; a finished turn, what you'd send
     // next.
     let found = waiting
         .then(|| tabs::options_in(&tabs::screen(cx, &tab.id)))
         .flatten();
+    let shown = match &found {
+        Some(f) => format!("\n\n{}", tabs::prompt_text(f)),
+        None if waiting => tabs::on_screen(cx, &tab.id, &turn),
+        None => String::new(),
+    };
     let buttons = match &found {
         Some(f) => option_buttons(tab, f),
         None if tab.state == "done" => turn_buttons(tab),
@@ -425,6 +425,13 @@ async fn alert(cx: &Cx, due: Due) {
         };
         let context = tabs::context_of(&cx.paths, transcript.as_deref());
         let own_thread = in_own_thread(cx, &tab.id, home.as_deref(), false);
+        // A prompt's buttons carry their own instruction, and its alert
+        // leaves out your own prompt.
+        let (turn, reply_here) = if found.is_some() {
+            (tabs::unquoted(&turn), "")
+        } else {
+            (turn, " Reply here to answer it.")
+        };
         // A finished turn in its tab's own thread, whose header already names
         // the tab, leads with its reply; a wait still says what it waits on.
         let heading = if own_thread && !waiting {
@@ -435,7 +442,7 @@ async fn alert(cx: &Cx, due: Due) {
             } else {
                 format!("**Tab {}, {}**", tab.index, tab.name)
             };
-            format!("🤖 {who} {what}. Reply here to answer it.")
+            format!("🤖 {who} {what}.{reply_here}")
         };
         let text = format!(
             "{heading}\n\n{turn}{shown}{}",
@@ -583,28 +590,10 @@ async fn dialogs(cx: &Cx, tabs: &[Tab]) {
             } else {
                 format!("**Tab {}, {}**", tab.index, tab.name)
             };
-            let mut text = format!(
-                "🤖 {who} is showing a dialog before its session starts, **waiting on you**:\n\n"
+            let text = format!(
+                "🤖 {who} is showing a dialog before its session starts, **waiting on you**:\n\n{}",
+                dialog.text()
             );
-            if !dialog.question.is_empty() {
-                text.push_str(&format!("**{}**\n", dialog.question));
-            }
-            text.push_str(
-                &dialog
-                    .options
-                    .iter()
-                    .map(|o| {
-                        format!(
-                            "{}. {}{}",
-                            o.n,
-                            o.label,
-                            if o.n == dialog.cursor { " (selected)" } else { "" }
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            );
-            text.push_str("\n_Tap an option, or reply with its number or the start of it, and I'll move to it and press Enter._");
             settle_choice(cx, &tab.id, PROMPT_GONE, None).await;
             let ts = post(
                 cx,
@@ -613,7 +602,10 @@ async fn dialogs(cx: &Cx, tabs: &[Tab]) {
                 PostOpts::buttons(dialog_buttons(tab, &dialog)),
             )
             .await?;
-            cx.state.borrow_mut().alerts.insert(ts.clone(), target.clone());
+            cx.state
+                .borrow_mut()
+                .alerts
+                .insert(ts.clone(), target.clone());
             offer_choice(cx, &tab.id, "dialog", &ts, &text);
             let send = sending::send_now(cx, Kind::Dialogs, tab.autopilot);
             let sent = Sent {
@@ -625,20 +617,22 @@ async fn dialogs(cx: &Cx, tabs: &[Tab]) {
             sending::record(cx, &sent);
             let (id, wanted) = (tab.id.clone(), key.clone());
             if send == Send::Notify {
-            notify(
-                cx,
-                format!(
-                    "🤖 **Tab {}, {}** is showing a dialog, **waiting on you**.",
-                    tab.index, tab.name
-                ),
-                home,
-                target,
-                dialog_buttons(tab, &dialog),
-                "dialog",
-                Box::new(move |cx: &Relay| cx.state.borrow().reported.get(&id) == Some(&wanted)),
-                sent,
-            )
-            .await?;
+                notify(
+                    cx,
+                    format!(
+                        "🤖 **Tab {}, {}** is showing a dialog, **waiting on you**.",
+                        tab.index, tab.name
+                    ),
+                    home,
+                    target,
+                    dialog_buttons(tab, &dialog),
+                    "dialog",
+                    Box::new(move |cx: &Relay| {
+                        cx.state.borrow().reported.get(&id) == Some(&wanted)
+                    }),
+                    sent,
+                )
+                .await?;
             }
             cx.log(&format!("alert: {} dialog", label(tab.index, &tab.name)));
             Ok(())

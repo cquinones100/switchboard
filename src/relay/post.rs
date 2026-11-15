@@ -67,10 +67,16 @@ impl Button {
     }
 }
 
+/// The most a button's text can hold in Slack; a longer one is cut.
+pub const BUTTON_TEXT: usize = 75;
+
 /// A button as Block Kit wants it, its action named by its place.
 pub fn button_element(b: &Button, id: &str) -> Value {
-    let text: String = if b.text.chars().count() > 75 {
-        format!("{}…", b.text.chars().take(74).collect::<String>())
+    let text: String = if b.text.chars().count() > BUTTON_TEXT {
+        format!(
+            "{}…",
+            b.text.chars().take(BUTTON_TEXT - 1).collect::<String>()
+        )
     } else {
         b.text.clone()
     };

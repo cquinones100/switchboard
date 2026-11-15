@@ -1033,6 +1033,33 @@ fn an_idle_tab_that_hasnt_taken_the_message_is_reported_once_with_its_screen() {
 }
 
 #[test]
+fn a_warning_without_buttons_lists_the_options_of_a_prompt_on_screen() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    rig.set_screen(&tab, "Allow cleanup?\n❯ 1. Yes\n  2. No\n");
+    let request = rig.ts_ago(40, 100);
+    rig.cx.state.borrow_mut().following.insert(
+        tab.clone(),
+        Follow {
+            request: Some(request.clone()),
+            sent_at: util::now_ms() - PICKUP_WARN_MS - 1_000,
+            ..follow(Some(&request), rig.index_of(&tab), "start")
+        },
+    );
+    ticks(&rig);
+    let posts = rig.posts();
+    assert_eq!(posts.len(), 1);
+    assert!(posts[0].buttons.is_empty());
+    assert!(
+        posts[0].body.ends_with(
+            "**Allow cleanup?**\n1. Yes\n2. No\n_Reply with its number or the start of it._"
+        ),
+        "{}",
+        posts[0].body
+    );
+}
+
+#[test]
 fn esc_presses_escape_only_in_a_tab_in_the_middle_of_something() {
     let rig = Rig::new();
     let (tab, _) = rig.claude_tab("work");
@@ -1641,7 +1668,11 @@ fn a_reply_that_isnt_one_of_a_waiting_prompts_options_types_nothing() {
     assert!(posts[0].body.contains(
         "is showing a choice, and that isn't one of its options, so I didn't type anything"
     ));
-    assert!(posts[0].body.contains("1. Yes\n2. No, and tell Claude"));
+    assert!(
+        posts[0]
+            .body
+            .ends_with("**Allow rm -rf build?**\n_Tap one, or reply with its number._")
+    );
     assert_eq!(
         posts[0].buttons.len(),
         2,
@@ -1725,9 +1756,18 @@ fn a_dialog_before_a_session_starts_is_alerted_once_and_answered_with_arrow_keys
         "its thread names the tab already"
     );
     assert!(posts[2].body.contains(&format!("Tab {index}, work")));
-    assert!(posts[1].body.contains(
-        "**Is this a project you trust?**\n1. No, exit (selected)\n2. Yes, I trust this folder\n"
-    ));
+    assert!(
+        posts[1]
+            .body
+            .ends_with("**Is this a project you trust?**\n_Tap one, or reply with its number._")
+    );
+    let names: Vec<&str> = posts[1]
+        .buttons
+        .iter()
+        .map(|b| b["text"]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["1. No, exit", "2. Yes, I trust this folder"]);
+    assert_eq!(posts[1].buttons[0]["style"], "primary", "the selected one");
     assert!(posts[2].mention);
     rig.block_on(handle(
         &rig.cx,
@@ -1777,6 +1817,62 @@ fn a_tab_with_no_state_is_checked_for_a_dialog_every_few_seconds_not_every_secon
 }
 
 #[test]
+fn a_waiting_tabs_alert_shows_its_options_as_buttons_alone_and_a_number_answers_it() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    rig.transcript(
+        &tab,
+        "cleanup",
+        &[
+            json!({ "type": "user", "message": { "content": "clean the build" } }),
+            json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "Removing it." }] } }),
+        ],
+    );
+    rig.set_screen(&tab, "Allow rm -rf build?\n❯ 1. Yes\n  2. No\n");
+    rig.set_state(&tab, "waiting", "1791500200");
+    let tabs_now = tabs::claude_tabs(&rig.cx);
+    rig.block_on(alerts::alert_tabs(&rig.cx, &tabs_now, &[]));
+    let sent = rig
+        .posts()
+        .iter()
+        .find(|p| p.body.contains("is **waiting on you**."))
+        .unwrap()
+        .clone();
+    assert!(
+        sent.body
+            .starts_with("🤖 Claude is **waiting on you**.\n\n"),
+        "{}",
+        sent.body
+    );
+    assert!(
+        sent.body.ends_with(
+            "Removing it.\n\n**Allow rm -rf build?**\n_Tap one, or reply with its number._"
+        ),
+        "{}",
+        sent.body
+    );
+    assert!(
+        !sent.body.contains("clean the build"),
+        "no quote of the prompt"
+    );
+    assert!(!sent.body.contains("1. Yes"), "no numbered list");
+    assert!(!sent.body.contains("Reply here"), "one instruction");
+    assert_eq!(sent.buttons.len(), 2);
+    rig.block_on(handle(
+        &rig.cx,
+        message(&now_ts(20), "2", sent.thread.as_deref().or(Some(&sent.ts))),
+    ))
+    .unwrap();
+    let answered = rig.posts().last().unwrap().body.clone();
+    assert!(
+        answered.starts_with("🤖 Chose"),
+        "a reply of 2 answers it: {answered}"
+    );
+    assert!(answered.contains("No"), "{answered}");
+    assert!(!rig.mux.sent.borrow().is_empty());
+}
+
+#[test]
 fn a_waiting_tabs_alert_has_its_options_as_buttons_and_a_press_answers_only_that_prompt() {
     let rig = Rig::new();
     let (tab, _) = rig.claude_tab("work");
@@ -1787,7 +1883,7 @@ fn a_waiting_tabs_alert_has_its_options_as_buttons_and_a_press_answers_only_that
     let posts = rig.posts();
     let sent = posts
         .iter()
-        .find(|p| p.body.contains("is **waiting on you**. Reply here"))
+        .find(|p| p.body.contains("is **waiting on you**."))
         .unwrap()
         .clone();
     let names: Vec<&str> = sent
@@ -1869,7 +1965,7 @@ fn a_press_on_a_prompt_with_a_countdown_answers_it_while_the_countdown_runs() {
     let sent = rig
         .posts()
         .iter()
-        .find(|p| p.body.contains("is **waiting on you**. Reply here"))
+        .find(|p| p.body.contains("is **waiting on you**."))
         .unwrap()
         .clone();
     let yes: Value = serde_json::from_str(sent.buttons[0]["value"].as_str().unwrap()).unwrap();
@@ -3602,7 +3698,7 @@ fn a_waiting_tabs_notice_carries_its_options_and_one_answer_clears_the_rest() {
     let posts = rig.posts();
     let alert_post = posts
         .iter()
-        .find(|p| p.body.contains("is **waiting on you**. Reply here"))
+        .find(|p| p.body.contains("is **waiting on you**."))
         .unwrap()
         .clone();
     let notice = posts.iter().find(|p| p.mention).unwrap().clone();
@@ -4014,7 +4110,7 @@ fn answering_one_of_several_questions_posts_the_next_and_ticks_and_submit_press_
     let next = last(&rig);
     assert!(
         next.body.starts_with(&format!(
-            "🤖 Chose 1. Red in tab {index}, work. It's asking next:\n\n**Toppings?**\n1. ☐ Cheese"
+            "🤖 Chose 1. Red in tab {index}, work. It's asking next:\n\n**Toppings?**\n_Tap options to tick"
         )),
         "{}",
         next.body
