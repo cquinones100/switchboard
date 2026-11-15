@@ -39,7 +39,9 @@
 //!
 //! Its settings turn off what would duplicate your real workspace or spend
 //! on its own (`TURNED_OFF`: the Slack look and view, meeting, standup and
-//! todo notes, banners, the update check, restoring saved tabs); any can be
+//! todo notes, banners, the update check, restoring saved tabs, sweeping
+//! landed worktrees, which a try's server would do knowing none of your
+//! real tabs); any can be
 //! turned back on in its Settings. Linked things are yours: an edit made
 //! through them (a git config, gh signing in again) is made to the real one.
 //!
@@ -98,6 +100,7 @@ pub const TURNED_OFF: &[(&str, &str)] = &[
     ("notifications", "false"),
     ("update_check", "\"off\""),
     ("auto_restore", "false"),
+    ("sweep_landed_worktrees", "false"),
 ];
 
 /// The variables neither the try's setup nor its server gets: your XDG

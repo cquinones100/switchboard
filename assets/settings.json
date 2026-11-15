@@ -129,6 +129,13 @@
     "default": true
   },
   {
+    "key": "sweep_landed_worktrees",
+    "category": "Sessions",
+    "label": "Remove landed worktrees",
+    "description": "Removes a worktree under a repository's .claude/worktrees once everything on its branch is on the default branch, nothing in it is uncommitted, nothing git ignores in it is of its own (tool output and caches, links and copies of the main clone's files go with it), no tab has it open and git hasn't changed its index or HEAD for an hour (a commit, a checkout, a staged file; a read such as git log doesn't count): when a tab in it closes, and hourly for each repository a tab has been in, after fetching the default branch. Its branch is kept, and a message names what went. Off, worktrees stay until you remove them, as Reopen's menu still does",
+    "default": true
+  },
+  {
     "key": "autopilot_close",
     "category": "Sessions",
     "label": "Close a worked note's landed tabs",

@@ -71,6 +71,8 @@
 //!   tabs open, or until you say.
 //! - `routines`: a prompt of yours run on a schedule, each run in a Claude
 //!   tab of its own.
+//! - `worktree_sweep`: a worktree removed on its own once its work has
+//!   landed and no tab has it open, its branch kept.
 //!
 //! - `demo`: `switchboard demo`, a workspace of made-up data reaching no
 //!   service, with the strict stand-in services the tests share
@@ -121,6 +123,7 @@ pub mod usage;
 pub mod util;
 pub mod views;
 pub mod worktree;
+pub mod worktree_sweep;
 
 #[cfg(all(test, feature = "net"))]
 pub(crate) use demo::services as fake_http;

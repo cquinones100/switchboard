@@ -162,6 +162,9 @@ pub enum Event {
     Awake(crate::awake::serve::AwakeEvent),
     /// A routine's directory checked, off the task (src/routines).
     Routines(crate::routines::RoutinesEvent),
+    /// A repository's landed worktrees swept, off the task
+    /// (src/worktree_sweep).
+    Sweep(crate::worktree_sweep::serve::SweepEvent),
     Tick,
     Quit,
 }
@@ -518,6 +521,8 @@ pub struct Server {
     pub autopilot: crate::autopilot::Autopilot,
     /// The computer kept awake while tabs work (src/awake).
     pub awake: crate::awake::Awake,
+    /// The landed worktrees swept (src/worktree_sweep).
+    pub sweep: crate::worktree_sweep::serve::Sweep,
     /// The routines and their runs (src/routines).
     pub routines: crate::routines::Routines,
     /// What the terminal attached last says of itself: its cell's size
@@ -1150,6 +1155,7 @@ impl Server {
             terminal: Default::default(),
             autopilot: Default::default(),
             awake: Default::default(),
+            sweep: Default::default(),
             routines: Default::default(),
             history: Default::default(),
             upgrade: Default::default(),
@@ -1246,6 +1252,7 @@ impl Server {
             Event::History(event) => self.history_event(event),
             Event::Sixel(event) => self.sixel_event(event),
             Event::Awake(event) => self.awake_event(event),
+            Event::Sweep(event) => self.sweep_event(event),
             Event::Routines(event) => self.routines_event(event),
             Event::Tick => {
                 self.reload_settings_if_changed();
@@ -1265,6 +1272,7 @@ impl Server {
                 self.autopilot_tick();
                 self.routines_tick();
                 self.awake_check();
+                self.sweep_tick();
                 self.history_tick();
                 self.notice_history_tick();
             }
@@ -1917,7 +1925,15 @@ impl Server {
         self.remove_tab(tab);
     }
 
+    /// Takes a tab out, then sweeps its repository's landed worktrees
+    /// (src/worktree_sweep), the one it was in among them.
     fn remove_tab(&mut self, tab: TabId) {
+        let closed_in = self.tab_path(tab).map(Path::to_path_buf);
+        self.take_tab_out(tab);
+        self.sweep_after_close(closed_in);
+    }
+
+    fn take_tab_out(&mut self, tab: TabId) {
         self.tab_closing(tab);
         self.tabs.remove(&tab);
         // A tab closed drops out of the sidebar's select mode.
@@ -2554,7 +2570,7 @@ impl Server {
     /// where its Claude last said it works, while that Claude is still in
     /// front, else the directory of its program (`Pane::cwd`), whose
     /// process stays in the directory it started in.
-    fn pane_own_dir_as_said(&self, pane: PaneId) -> Option<PathBuf> {
+    pub(crate) fn pane_own_dir_as_said(&self, pane: PaneId) -> Option<PathBuf> {
         let slot = self.panes.get(&pane)?;
         let said = slot
             .pane

@@ -1868,7 +1868,7 @@ impl Server {
     /// Reads the worktrees of the tabs' repositories again, in the
     /// background, unless a read is under way or one was made within
     /// `WORKTREES_EVERY` (`now` asks regardless of the time).
-    fn mission_worktrees(&mut self, now: bool) {
+    pub(crate) fn mission_worktrees(&mut self, now: bool) {
         if self.mission.worktrees_busy
             || (!now
                 && self
@@ -1956,7 +1956,7 @@ impl Server {
     /// `switchboard wt-revive --json` prints, one JSON row a line, as the
     /// daemon read bin/wt-revive. Until that command gives rows, the map
     /// has the worktrees of the tabs' repositories alone.
-    fn mission_revived(&mut self, now: bool) {
+    pub(crate) fn mission_revived(&mut self, now: bool) {
         if self.mission.revived_busy
             || (!now
                 && self

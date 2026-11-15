@@ -52,6 +52,7 @@ mod wait_deploy;
 mod walkthrough;
 mod watch_note;
 mod work_keys;
+mod worktree_sweep;
 mod worktrees;
 mod wt_jump;
 mod wt_revive;
