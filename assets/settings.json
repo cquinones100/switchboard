@@ -304,7 +304,7 @@
     "key": "todo_note_time",
     "category": "Integrations",
     "label": "Todo note time",
-    "description": "The hour the Today's todo note starter routine starts its weekday runs at, when this version first sets up the routines; after that, change its schedule in mission control's Routines view. Kept for a workspace still running an older Switchboard, which reads this list",
+    "description": "The hour the Today's todo note starter routine runs at each day, when this version first sets up the routines; after that, change its schedule in mission control's Routines view. Kept for a workspace still running an older Switchboard, which reads this list",
     "choices": [
       {
         "value": "7",

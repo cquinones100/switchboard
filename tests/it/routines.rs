@@ -405,11 +405,7 @@ fn the_starter_routines_are_made_once_running_as_what_they_replace_did() {
             ("Calendar".into(), true, "every 30m".into()),
             ("Meeting notes".into(), true, "every 30m 7am-9pm".into()),
             ("Slack".into(), true, "every 15m".into()),
-            (
-                "Today's todo note".into(),
-                false,
-                "every 1h 7-11pm weekdays".into()
-            ),
+            ("Today's todo note".into(), false, "daily 7:00".into()),
         ]
     );
     // One deleted stays deleted: a server started again makes none.
