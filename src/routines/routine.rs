@@ -1,8 +1,8 @@
 //! A routine as it is kept, and its runs: one file a routine,
 //! `routines/<id>.json` in the state directory (state, not a file of your
 //! own, since the Routines view writes it), and a line a run in
-//! `routines/runs-<id>.tsv`: when it was due, when it ran, its tab, how
-//! long it took, its cost, its outcome and the reply's first line (or why
+//! `routines/runs-<id>.tsv`: when it was due, when it ran, its tab (a
+//! run of a build before runs were headless; empty since), how long it took, its cost, its outcome and the reply's first line (or why
 //! it didn't run).
 
 use std::fs;
@@ -14,27 +14,6 @@ use serde::{Deserialize, Serialize};
 use super::schedule::Schedule;
 use crate::{paths, util};
 
-/// Where a run happens.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum TabPolicy {
-    /// The same tab each run, its Claude session resumed once it closed.
-    #[default]
-    SameTab,
-    /// A new tab each run.
-    NewTab,
-}
-
-/// What a run does when its tab's Claude is still working.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum WhenBusy {
-    /// Waits for the turn to end, up to `WAIT_BUSY`.
-    #[default]
-    Wait,
-    Skip,
-}
-
 /// What a run missed while the computer slept does.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,7 +24,9 @@ pub enum WhenMissed {
     Skip,
 }
 
-/// A prompt of yours, run on a schedule in a Claude tab.
+/// A prompt of yours, run on a schedule by a headless Claude. A file from a
+/// build that ran it in a tab (`tabPolicy`, `whenBusy`) is read with
+/// those ignored.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Routine {
@@ -56,16 +37,21 @@ pub struct Routine {
     pub when: String,
     pub schedule: Schedule,
     #[serde(default)]
-    pub tab_policy: TabPolicy,
-    #[serde(default)]
-    pub when_busy: WhenBusy,
-    #[serde(default)]
     pub when_missed: WhenMissed,
-    /// Added to Claude's system prompt in its tab.
+    /// Added to Claude's system prompt in each run.
     pub prompt: String,
     /// Claude's model, empty for Claude Code's own default.
     #[serde(default)]
     pub model: String,
+    /// The tools a run may use, passed as `--allowedTools`; a tool not
+    /// listed is refused, never asked. A file naming none is given them as
+    /// it is read (`load_all`).
+    #[serde(default)]
+    pub tools: Vec<String>,
+    /// The tools its last run tried that `tools` doesn't allow, which
+    /// failed it; empty once a run needs none.
+    #[serde(default)]
+    pub needs: Vec<String>,
     #[serde(default)]
     pub paused: bool,
     /// The Claude session its last run was in, empty before one, and the
@@ -91,7 +77,7 @@ impl Routine {
         }
     }
 
-    /// The words its tab is given for each run.
+    /// The prompt each run is given, its own words in the system prompt.
     pub fn turn(&self) -> String {
         format!("Run {}", self.name)
     }
@@ -99,18 +85,6 @@ impl Routine {
     /// When it is next due.
     pub fn next(&self, tz: &jiff::tz::TimeZone) -> Option<i64> {
         self.schedule.next_after(self.handled, tz)
-    }
-
-    /// Its prompt and model as a short hash, kept for the pane its Claude
-    /// started in (`Routines::started`) to tell when they changed since.
-    /// FNV-1a, so it stays the same from one build to the next.
-    pub fn prompt_hash(&self) -> String {
-        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-        for b in self.prompt.bytes().chain([0]).chain(self.model.bytes()) {
-            h ^= u64::from(b);
-            h = h.wrapping_mul(0x100_0000_01b3);
-        }
-        format!("{h:016x}")
     }
 }
 
@@ -123,9 +97,10 @@ pub enum Outcome {
     Late,
     /// Missed while the computer slept, and skipped.
     Missed,
-    /// Its tab was busy, and it was skipped.
+    /// Its last run was still going, and it was skipped.
     Busy,
-    /// Its turn ended in an error, Claude exited or the tab closed.
+    /// Its turn ended in an error, Claude didn't answer, or it tried a
+    /// tool its list doesn't allow.
     Failed,
     /// Its directory isn't one to run in (someone else's PR).
     Refused,
@@ -263,8 +238,19 @@ pub fn load_all(dir: &Path) -> Vec<Routine> {
         .filter(|e| e.file_name().to_string_lossy().ends_with(".json"))
         .filter_map(|e| {
             let text = fs::read_to_string(e.path()).ok()?;
+            let named_tools = serde_json::from_str::<serde_json::Value>(&text)
+                .is_ok_and(|v| v.get("tools").is_some());
             match serde_json::from_str::<Routine>(&text) {
-                Ok(r) => Some(r),
+                Ok(r) if named_tools => Some(r),
+                // From a build before the allowed tools: given its own once,
+                // a starter's from its file, any other the defaults.
+                Ok(mut r) => {
+                    super::starters::give_tools(dir, &mut r);
+                    if let Err(err) = save(dir, &r) {
+                        eprintln!("routines: couldn't give {} its tools: {err}", r.id);
+                    }
+                    Some(r)
+                }
                 Err(err) => {
                     eprintln!("routines: {} doesn't read: {err}", e.path().display());
                     None
@@ -348,11 +334,11 @@ mod tests {
                 days: super::super::schedule::Days::WEEKDAYS,
                 at: 8 * 60 + 45,
             },
-            tab_policy: TabPolicy::SameTab,
-            when_busy: WhenBusy::Wait,
             when_missed: WhenMissed::OnWaking,
             prompt: "Read the new issues and sort them.".into(),
             model: String::new(),
+            tools: vec!["Read".into(), "Glob".into(), "Grep".into()],
+            needs: Vec::new(),
             paused: false,
             session: String::new(),
             session_dir: String::new(),
@@ -433,18 +419,6 @@ mod tests {
         assert_eq!(load_all(&dir).len(), 1);
         assert!(read_runs(&dir, "r1", 0).is_empty());
         let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn the_prompts_hash_changes_with_its_words_or_model() {
-        let r = routine("r1");
-        let mut changed = r.clone();
-        changed.prompt.push('!');
-        let mut model = r.clone();
-        model.model = "opus".into();
-        assert_ne!(r.prompt_hash(), changed.prompt_hash());
-        assert_ne!(r.prompt_hash(), model.prompt_hash());
-        assert_eq!(r.prompt_hash(), routine("r9").prompt_hash());
     }
 
     #[test]

@@ -3,6 +3,15 @@ name: note-tickets
 description: Read the open checklist items in the notes the user names, check Linear for tickets that already cover each, and suggest tickets for the rest, creating only the ones the user picks.
 argument-hint: "[folder, note title or #tag]"
 disable-model-invocation: true
+allowed-tools:
+  - Bash(switchboard skill-path *)
+  - mcp__claude_ai_Linear__get_issue
+  - mcp__claude_ai_Linear__list_issues
+  - mcp__claude_ai_Linear__list_comments
+  - mcp__claude_ai_Linear__get_team
+  - mcp__claude_ai_Linear__list_teams
+  - mcp__claude_ai_Linear__list_issue_statuses
+  - mcp__claude_ai_Linear__get_user
 ---
 
 # Note tickets

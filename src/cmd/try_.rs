@@ -410,9 +410,10 @@ fn built_binary(messages: &str) -> Option<PathBuf> {
 }
 
 /// The binary's own setup parts, run by name in the try's home, so its
-/// plugin (or, the old way, its hooks, CLAUDE.md and skills), statusline
-/// and permissions are the worktree's. What they say is shown indented; a
-/// failure is said, and the try goes on.
+/// plugin, with the statusline it draws in the try's panes (or, the old
+/// way, its hooks, statusline, permissions, CLAUDE.md and skills), is the
+/// worktree's. What they say is shown indented; a failure is said, and the
+/// try goes on.
 fn run_setup(env: &Env, home: &Path) {
     let bin = home.join(".local/bin/switchboard");
     let mut command = Command::new(&bin);

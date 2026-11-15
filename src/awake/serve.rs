@@ -61,6 +61,7 @@ impl Server {
     /// watches too, which stays Done until seen) or while it waits on you,
     /// whose work the sidebar's model leaves out, as the tab shows the
     /// question; not a /loop between its ticks, which may wait for hours.
+    /// A routine's run, a headless Claude in no tab, counts as one.
     fn awake_working(&self) -> usize {
         let runs_work = |pane: Option<crate::mux::PaneId>| {
             pane.and_then(|p| self.sidebar.panes.get(&p))
@@ -72,6 +73,12 @@ impl Server {
                 t.state == TabState::Working || t.background > 0 || runs_work(t.claude_pane)
             })
             .count()
+            + self
+                .routines
+                .live
+                .values()
+                .filter(|l| l.started > 0)
+                .count()
     }
 
     /// Autopilot's tabs open and not landed, while it is on and not paused.

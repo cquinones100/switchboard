@@ -2,6 +2,11 @@
 name: today
 description: Show today's Google Calendar events as a table, with times, length, where to join and your reply. Use it whenever you're asked what's on the calendar today, what meetings are left, or what the day looks like.
 argument-hint: "[tomorrow | a date]"
+allowed-tools:
+  - Bash(switchboard skill-path *)
+  - Bash(switchboard today-save)
+  - Bash(switchboard today-save *)
+  - mcp__claude_ai_Google_Calendar__list_events
 ---
 
 # Today

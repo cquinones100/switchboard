@@ -3,6 +3,16 @@ name: shape
 description: Shape a Linear ticket with the user. Read the code first, check Linear for tickets that already cover the work, draft the ticket in the team's usual form, and create or update it once the user approves. Given an existing ticket, asks whether to run a review loop on it or keep shaping it. Hands off to /wt afterwards.
 argument-hint: "[idea, or ticket ID or URL and what to do with it]"
 disable-model-invocation: true
+allowed-tools:
+  - Bash(switchboard skill-path *)
+  - Bash(switchboard set *)
+  - mcp__claude_ai_Linear__get_issue
+  - mcp__claude_ai_Linear__list_issues
+  - mcp__claude_ai_Linear__list_comments
+  - mcp__claude_ai_Linear__get_team
+  - mcp__claude_ai_Linear__list_teams
+  - mcp__claude_ai_Linear__list_issue_statuses
+  - mcp__claude_ai_Linear__get_user
 ---
 
 # Shape

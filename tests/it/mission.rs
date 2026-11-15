@@ -1385,6 +1385,90 @@ fn the_slack_views_sections_choose_the_messages_beside_them() {
     });
 }
 
+// Board 21 lists a section one row per thread: three new replies in one
+// thread are one row, headed by its first message, while the thread
+// beside it shows each reply, and Enter on the row opens its menu.
+#[test]
+fn the_slack_board_lists_a_threads_replies_as_one_row() {
+    let server = TestServer::start();
+    std::fs::create_dir_all(&server.state).unwrap();
+    let secs = switchboard::util::now_ms() / 1000;
+    let ts = |ago: i64| format!("{}.000100", secs - ago);
+    let root = ts(900);
+    let reply = |from: &str, text: &str, ago: i64| {
+        json!({ "kind": "channel", "channel": "C1", "where": "#dev", "from": from,
+            "user": format!("U{from}"), "text": text, "ts": ts(ago), "thread": root,
+            "link": "https://slack.example/m" })
+    };
+    std::fs::write(
+        server.state.join("slack.json"),
+        json!({ "checked": secs * 1000, "items": [
+            reply("Ben", "reply one", 300),
+            reply("Cy", "reply two", 200),
+            reply("Ben", "reply three", 100),
+        ] })
+        .to_string(),
+    )
+    .unwrap();
+    let said = |from: &str, text: &str, at: &str| json!({ "user": format!("U{from}"), "from": from, "text": text, "ts": at });
+    std::fs::write(
+        server.state.join("slack-threads.json"),
+        json!({ format!("C1:{root}"): {
+            "messages": [
+                said("Ana", "the question", &root),
+                said("Ben", "reply one", &ts(300)),
+                said("Cy", "reply two", &ts(200)),
+                said("Ben", "reply three", &ts(100)),
+            ],
+            "replies": 3,
+            "read": secs * 1000,
+        } })
+        .to_string(),
+    )
+    .unwrap();
+    settings(
+        &server,
+        json!({ "view_slack": true, "ux2": true, "slack_threads": true, "slack_background": false, "photos": false }),
+    );
+    let mut client = server.attach(180, 40);
+    client.wait_text("$");
+    open(&mut client);
+    client.wait_for("the bar grouped", |s| {
+        s.iter()
+            .any(|l| l.contains("Work") && l.contains("Day") && l.contains("System"))
+    });
+    client.type_text("vslack\r");
+    let screen = client.wait_text("reply three");
+    let all = screen.join("\n");
+    let list = |l: &String| l.split('│').nth(1).unwrap_or("").to_string();
+    let listed: Vec<String> = screen.iter().map(list).collect();
+    assert!(listed.iter().any(|l| l.contains("the question")), "{all}");
+    assert!(
+        !listed
+            .iter()
+            .any(|l| l.contains("reply one") || l.contains("reply three")),
+        "the replies aren't rows of their own: {all}"
+    );
+    assert!(
+        listed
+            .iter()
+            .any(|l| l.contains("3 replies") && l.contains("3 new")),
+        "{all}"
+    );
+    let beside: Vec<String> = screen
+        .iter()
+        .map(|l| l.split('│').nth(2).unwrap_or("").to_string())
+        .collect();
+    for words in ["reply one", "reply two", "reply three"] {
+        assert!(
+            beside.iter().any(|l| l.contains(words)),
+            "{words} beside: {all}"
+        );
+    }
+    client.type_text("\r");
+    client.wait_text("Dismiss it, until its thread gets a reply");
+}
+
 // The Slack board shows one section at a time, so leaving it marks seen
 // only the messages of the sections it showed, not the whole look.
 #[test]

@@ -231,11 +231,15 @@ impl Server {
 
     /// Asks a terminal that has just attached for its colours: its
     /// background's for the `system` theme (`theme::QUERY`), and the rest
-    /// for the panes' programs (src/mux/terminal.rs); and, while pictures
-    /// are drawn as sixel, its cell's size in pixels (src/mux/sixel).
-    pub fn ask_background(tx: &mpsc::UnboundedSender<ServerMsg>) {
+    /// for the panes' programs (src/mux/terminal.rs); and, where pictures
+    /// reach it as sixel (src/mux/graphics.rs, by what it says it is,
+    /// `term`), its cell's size in pixels (src/mux/sixel).
+    pub fn ask_background(tx: &mpsc::UnboundedSender<ServerMsg>, term: &str) {
         let _ = tx.send(ServerMsg::Output(crate::mux::terminal::queries()));
-        if crate::mux::sixel::chosen() {
+        // And "what are you" (DA1), whose answer says whether it draws
+        // sixel (src/mux/graphics.rs, `Server::terminal_answered`).
+        let _ = tx.send(ServerMsg::Output(b"\x1b[c".to_vec()));
+        if crate::mux::graphics::for_panes(term) == crate::mux::graphics::Protocol::Sixel {
             let _ = tx.send(ServerMsg::Output(crate::mux::sixel::CELL_QUERY.to_vec()));
         }
     }

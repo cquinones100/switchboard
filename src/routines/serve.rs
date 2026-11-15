@@ -1,62 +1,65 @@
 //! The routines on the server: read from their folder as the server starts
-//! and again when it changes, each run started on the tick once it is due,
-//! in its tab (the same one each run, its Claude session resumed once the
-//! tab closed, or a new one each run), and ended by that pane's next Stop
-//! hook, which records how long it took, what it cost and the reply's
-//! first line. A run due while the computer slept runs on waking when it
-//! is no more than `LATE_BY` late and the routine says so, else it is
-//! recorded as missed. Nothing here waits or starts a process but the run's
-//! own tab; the files are a routine's few hundred bytes and a line a run.
+//! and again when it changes, each run started on the tick once it is due
+//! as a headless Claude (`headless::run`) off the server's task, opening no
+//! tab, its answer recording how long it took, what it cost and the reply's
+//! first line, or the tools it needed that its list doesn't allow. A run due
+//! while the last one still goes is skipped. A run due while the computer
+//! slept runs on waking when it is no more than `LATE_BY` late and the
+//! routine says so, else it is recorded as missed. Nothing here waits or
+//! starts a process on the server's task; the files are a routine's few
+//! hundred bytes and a line a run.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
 use super::routine::{self, Routine, Run};
 use super::schedule::{Schedule, clock_words};
 use super::{
-    Command, LATE_BY, Live, Outcome, RoutinesEvent, SLEPT_AFTER, START_GRACE, TAB_MARK, TAB_NEXT,
-    TabPolicy, WAIT_BUSY, WhenBusy, WhenMissed,
+    Command, LATE_BY, Live, Outcome, RoutinesEvent, SLEPT_AFTER, TAB_NEXT, WhenMissed, headless,
 };
-use crate::agent::State;
 use crate::items::{Item, State as ItemState};
+use crate::mux::TabId;
 use crate::mux::server::{ClientId, Opened, Server};
-use crate::mux::{PaneId, TabId};
 use crate::ui::confirm::Confirm;
 use crate::ui::{Outcome as UiOutcome, Picked};
 use crate::{settings, util, worktree};
 
-/// A run going this long (seconds) with no Stop is recorded as failed.
-const RUN_LIMIT: i64 = 2 * 3600;
-
-/// How long (seconds) a Claude a run started has to say it started, its
-/// SessionStart then taken as that Claude's rather than another's.
-const EXPECT_FOR: i64 = 120;
-
 /// What a run refused in someone else's PR says.
 const UNTRUSTED: &str = "its directory holds someone else's PR, so it isn't run there";
 
+/// How long (seconds) a run told to end has before it is ended at once.
+const STOP_GRACE: i64 = 30;
+
+/// A run skipped while its last one goes says.
+const STILL_RUNNING: &str = "its last run was still running, so skipped";
+
 /// A run's record, not yet started.
-fn live(
-    due: i64,
-    late: bool,
-    by_hand: bool,
-    tab: Option<TabId>,
-    pane: Option<PaneId>,
-    started: i64,
-) -> Live {
+fn live(due: i64, late: bool, by_hand: bool) -> Live {
     Live {
         due,
         late,
         by_hand,
-        asked: util::now_secs(),
-        started,
-        tab,
-        pane,
-        cost_before: 0.0,
+        started: 0,
         checking: false,
-        quiet_until: 0,
-        session: String::new(),
+        pid: 0,
+        born: 0,
+        dir: String::new(),
+        stopping: 0,
+        collecting: false,
+    }
+}
+
+/// A run that didn't happen, as its line keeps it.
+fn not_run(due: i64, outcome: Outcome, words: impl Into<String>) -> Run {
+    Run {
+        due,
+        ran: 0,
+        tab: String::new(),
+        secs: 0,
+        cost: 0.0,
+        outcome,
+        words: words.into(),
     }
 }
 
@@ -93,35 +96,6 @@ fn clock_at(at: i64) -> String {
         .unwrap_or(jiff::Timestamp::UNIX_EPOCH)
         .to_zoned(jiff::tz::TimeZone::system());
     clock_words(z.hour() as u16 * 60 + z.minute() as u16)
-}
-
-/// Its session's cost so far, as the statusline last wrote it (the third
-/// field of `usage/spend-<session>`), 0 for none.
-fn session_cost(session: &str) -> f64 {
-    if session.is_empty() || !crate::usage::sessions::safe_id(session) {
-        return 0.0;
-    }
-    let file = crate::usage::sessions::usage_dir(&crate::paths::state_dir())
-        .join(format!("spend-{session}"));
-    std::fs::read_to_string(file)
-        .ok()
-        .and_then(|t| t.split('\t').nth(2).and_then(|c| c.trim().parse().ok()))
-        .unwrap_or(0.0)
-}
-
-/// The command a run's Claude starts with: its session resumed when given,
-/// the prompt added to its system prompt, its model, and the turn.
-fn claude_command(r: &Routine, resume: &str) -> Vec<String> {
-    let mut args = Vec::new();
-    if !resume.is_empty() {
-        args.extend(["--resume".to_string(), resume.to_string()]);
-    }
-    args.extend(["--append-system-prompt".to_string(), r.prompt.clone()]);
-    if !r.model.is_empty() {
-        args.extend(["--model".to_string(), r.model.clone()]);
-    }
-    args.push(r.turn());
-    worktree::tab_command("claude \"$@\"", "claude", &args)
 }
 
 impl Server {
@@ -243,123 +217,16 @@ impl Server {
         self.mission_changed();
     }
 
-    /// The tab a routine's runs are in, while it is open.
-    /// With a new tab each run, several may be open: the one its run under
-    /// way is in, else the newest.
-    pub fn routine_tab(&self, id: &str) -> Option<TabId> {
-        let marked = |t: &TabId| {
-            self.tabs
-                .get(t)
-                .is_some_and(|tab| tab.opts.get(TAB_MARK).map(String::as_str) == Some(id))
-        };
-        self.routines
-            .live
-            .get(id)
-            .and_then(|l| l.tab)
-            .filter(marked)
-            .or_else(|| self.tabs.keys().copied().filter(marked).max())
-    }
-
-    /// A tab's number, as its routine's runs name it: the one it keeps
-    /// while open (`Server::tab_number`), empty for none.
-    fn routine_tab_number(&self, tab: TabId) -> String {
-        match self.tab_number(tab) {
-            0 => String::new(),
-            n => n.to_string(),
-        }
-    }
-
-    /// The pane in a tab its Claude runs in: one running Claude, else its
-    /// active pane.
-    fn routine_pane(&self, tab: TabId) -> Option<PaneId> {
-        let panes = self.tab_panes(tab);
-        panes
-            .iter()
-            .copied()
-            .find(|p| self.agents.state(*p).is_some() || self.runs_claude(*p))
-            .or_else(|| self.tabs.get(&tab).map(|t| t.active))
-    }
-
-    /// The session of the Claude running in a pane and the directory it
-    /// runs in, from its session file (Claude Code's `sessions/<pid>.json`).
-    fn pane_claude_session(&self, pane: PaneId) -> Option<(String, String)> {
-        let slot = self.panes.get(&pane)?;
-        let dir = crate::agent::sessions::sessions_dir();
-        slot.pane.foreground_pids().into_iter().find_map(|pid| {
-            let v = crate::util::read_json(dir.join(format!("{pid}.json")))?;
-            let session = v.get("sessionId")?.as_str()?.to_string();
-            let cwd = v
-                .get("cwd")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            (!session.is_empty()).then_some((session, cwd))
-        })
-    }
-
-    /// Whether a pane's Claude is in the middle of a turn or waiting on you.
-    /// A draft of yours unsent in its prompt box counts too: the run's
-    /// Enter would send it.
-    fn claude_busy(&self, pane: PaneId) -> bool {
-        // As is a dialog of Claude's own start (trusting a folder, an MCP
-        // server), which runs no hook: the run would answer or end it.
-        let waits_on_screen = self.panes.get(&pane).is_some_and(|slot| {
-            let screen = slot.pane.text(0);
-            crate::relay::tabs::draft_in(&screen, &slot.pane.typed_text(0)).is_some()
-                || crate::relay::tabs::dialog_in(&screen).is_some()
-        });
-        waits_on_screen
-            || matches!(
-                self.agents.state(pane),
-                Some(State::Working | State::Waiting)
-            )
-    }
-
-    /// Whether its Claude exited and something else of yours runs in the
-    /// pane now (an editor, a build, a script, the diff in its place,
-    /// anything in front but the pane's own shell at its prompt): busy, as a Claude at work is, and
-    /// never ended for a run.
-    fn other_program(&self, pane: PaneId) -> bool {
-        // A tool standing in its place (the diff, lazygit) is in front of
-        // it, whatever runs behind.
-        let covered = self
-            .panes
-            .get(&pane)
-            .is_some_and(|slot| slot.opts.contains_key(crate::diff::in_place::PANE_PARKED));
-        if covered {
-            return true;
-        }
-        // Anything not known to be the shell at its prompt could lose
-        // something if ended.
-        !self.claude_in(pane)
-            && !self
-                .panes
-                .get(&pane)
-                .is_some_and(|slot| crate::mux::persist::at_its_shell(&slot.pane))
-    }
-
-    /// Whether a pane runs Claude, by the process in front (its session
-    /// file, or its name), never by what its hooks last said: a Claude
-    /// gone without a SessionEnd leaves that behind.
-    fn claude_in(&self, pane: PaneId) -> bool {
-        self.runs_claude(pane)
-    }
-
     /// The routines on the tick: read again when changed; each one due
-    /// started, or recorded as missed; each run waiting on a busy tab
-    /// started once it is idle or skipped after `WAIT_BUSY`; a run whose
-    /// tab closed recorded as failed.
+    /// started, recorded as missed, or skipped while its last run goes.
     pub fn routines_tick(&mut self) {
+        // A run under way is seen to its end, routines turned off or not.
+        self.routines_watch();
         if !settings::is_on("routines") {
             return;
         }
         self.routines_read();
-        // A restore still to type its panes' commands (a Claude resumed)
-        // goes first, so a run never starts a pane's Claude over the one
-        // about to be typed there.
-        if self.restore_typing() {
-            return;
-        }
+        self.routines_untab();
         let now = util::now_secs();
         // Ticks with a gap between them: the computer slept.
         if self.routines.ticked == 0 || now - self.routines.ticked > SLEPT_AFTER {
@@ -378,34 +245,12 @@ impl Server {
             if due > now {
                 continue;
             }
-            if self.routines.live.contains_key(&r.id) {
-                // Due again while its last run goes on: skipped, as a busy
-                // tab is, or run once that one ends.
-                // Waited on like a busy tab: skipped once it has waited
-                // `WAIT_BUSY`, the last one still going.
-                if r.when_busy == WhenBusy::Skip || now - due >= WAIT_BUSY {
-                    let latest = latest_due(r, due, now, &tz);
-                    let mut handled = r.clone();
-                    handled.handled = latest;
-                    self.routine_save(&handled);
-                    self.routine_record(
-                        &handled,
-                        Run {
-                            due: latest,
-                            ran: 0,
-                            tab: String::new(),
-                            secs: 0,
-                            cost: 0.0,
-                            outcome: Outcome::Busy,
-                            words: "its last run was still going, so skipped".into(),
-                        },
-                    );
-                }
-                continue;
-            }
             // The todo note's starter waits for you, as the note it writes
             // gathers what is there when you are, and runs on your return.
-            if self.away() && super::starters::is_todo_note(&routine::dir(), r) {
+            if !self.routines.live.contains_key(&r.id)
+                && self.away()
+                && super::starters::is_todo_note(&routine::dir(), r)
+            {
                 continue;
             }
             // The last time it was due, when it missed several.
@@ -413,6 +258,10 @@ impl Server {
             let mut handled = r.clone();
             handled.handled = latest;
             self.routine_save(&handled);
+            if self.routines.live.contains_key(&r.id) {
+                self.routine_record(&handled, not_run(latest, Outcome::Busy, STILL_RUNNING));
+                continue;
+            }
             if super::starters::done_today(&routine::dir(), r)
                 || super::starters::from_another_day(&routine::dir(), r, latest, &tz)
             {
@@ -424,155 +273,29 @@ impl Server {
             } else if r.when_missed == WhenMissed::OnWaking && now - latest <= LATE_BY {
                 self.routine_start(&handled, latest, true, false);
             } else {
-                self.routine_record(
-                    &handled,
-                    Run {
-                        due: latest,
-                        ran: 0,
-                        tab: String::new(),
-                        secs: 0,
-                        cost: 0.0,
-                        outcome: Outcome::Missed,
-                        words: format!("asleep past {}, so skipped", clock_at(latest)),
-                    },
-                );
+                let words = format!("asleep past {}, so skipped", clock_at(latest));
+                self.routine_record(&handled, not_run(latest, Outcome::Missed, words));
             }
         }
-        let panes = &self.panes;
-        self.routines.started.retain(|p, _| panes.contains_key(p));
+        // A run not started whose routine went is let go; one started is
+        // watched to its end, its answer finding no routine.
+        let list = &self.routines.list;
         self.routines
-            .pane_sessions
-            .retain(|p, _| panes.contains_key(p));
-        self.routines
-            .expect
-            .retain(|p, until| panes.contains_key(p) && *until >= now);
-        self.routines_waiting(now);
-        // Its notifications follow its tab opening and closing.
-        if !self.routines.said.is_empty() {
-            self.routines_notices();
-        }
-        self.routines_next_on_tabs(&tz);
-    }
-
-    /// The runs waiting on a busy tab, and those whose tab closed.
-    fn routines_waiting(&mut self, now: i64) {
-        let live: Vec<(String, Live)> = self
-            .routines
             .live
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        for (id, run) in live {
-            let Some(r) = self.routines.get(&id).cloned() else {
-                self.routines.live.remove(&id);
-                continue;
-            };
-            if run.checking {
-                continue;
-            }
-            // Paused meanwhile (its file changed by hand): one not started
-            // goes.
-            if r.paused && run.started == 0 && !run.by_hand {
-                self.routines.live.remove(&id);
-                continue;
-            }
-            let tab_open = run.tab.is_some_and(|t| self.tabs.contains_key(&t));
-            if run.started > 0 {
-                let pane = run
-                    .pane
-                    .or_else(|| run.tab.and_then(|t| self.routine_pane(t)));
-                if !tab_open {
-                    self.routine_end(&r, Outcome::Failed, "its tab closed mid-run".into());
-                } else if now - run.started > START_GRACE
-                    && pane.is_some_and(|p| !self.runs_claude(p))
-                {
-                    // Its Claude gone back to the shell, with no hook said:
-                    // what its hooks left of it goes too, so the next run
-                    // finds the shell idle and starts Claude again.
-                    if let Some(p) = pane {
-                        self.agents.drop_state(p);
-                        self.routines.started.remove(&p);
-                    }
-                    self.routine_end(&r, Outcome::Failed, "Claude exited mid-run".into());
-                } else if now - run.started > RUN_LIMIT
-                    && pane.is_none_or(|p| {
-                        // No hook from it in that long either: a turn at
-                        // work runs hooks with each tool it calls.
-                        let heard = self.agents.get(p).map_or(0, |a| a.heard / 1000);
-                        now - heard > RUN_LIMIT
-                    })
-                {
-                    // A turn that ended with no Stop (an API error) holds
-                    // nothing up past this, nor the working state its last
-                    // hook left, which no Stop will now clear. A question
-                    // or permission prompt still waiting on you stays, so
-                    // no run's Enter answers it.
-                    if let Some(p) = pane.filter(|p| self.agents.state(*p) == Some(State::Working))
-                    {
-                        self.agents.drop_state(p);
-                    }
-                    self.routine_end(&r, Outcome::Failed, "no answer in 2 hours".into());
-                }
-                continue;
-            }
-            // Waiting on a busy tab.
-            let tab = run.tab.filter(|_| tab_open);
-            // A Claude gone without a word is no longer busy.
-            if let Some(p) = tab.and_then(|t| self.routine_pane(t))
-                && !self.claude_in(p)
-                && self.agents.drop_state(p)
-            {
-                self.routines.started.remove(&p);
-            }
-            let idle = tab
-                .and_then(|t| self.routine_pane(t))
-                .is_some_and(|p| !self.claude_busy(p) && !self.other_program(p));
-            // Its 30 minutes are up first, however idle the tab is now (a
-            // computer that slept through the wait).
-            if now - run.asked < WAIT_BUSY && (tab.is_none() || idle) {
-                self.routines.live.remove(&id);
-                self.routine_start(&r, run.due, run.late, run.by_hand);
-            } else if now - run.asked >= WAIT_BUSY {
-                self.routines.live.remove(&id);
-                let number = tab.map(|t| self.routine_tab_number(t)).unwrap_or_default();
-                self.routine_record(
-                    &r,
-                    Run {
-                        due: run.due,
-                        ran: 0,
-                        tab: number.clone(),
-                        secs: 0,
-                        cost: 0.0,
-                        outcome: Outcome::Busy,
-                        words: format!("tab {number} was busy for 30 minutes, so skipped"),
-                    },
-                );
-            }
-        }
+            .retain(|id, l| l.started > 0 || list.iter().any(|r| r.id == *id));
     }
 
-    /// Each routine's tab told when it runs next, for the sidebar.
-    fn routines_next_on_tabs(&mut self, tz: &jiff::tz::TimeZone) {
-        let marks: Vec<(TabId, String)> = self
+    /// Takes off any tab what a build before runs were headless put there
+    /// for the sidebar's "routine · next", which nothing keeps now.
+    fn routines_untab(&mut self) {
+        let marked: Vec<TabId> = self
             .tabs
             .iter()
-            .filter_map(|(t, tab)| tab.opts.get(TAB_MARK).map(|id| (*t, id.clone())))
+            .filter(|(_, t)| t.opts.contains_key(TAB_NEXT))
+            .map(|(id, _)| *id)
             .collect();
-        for (tab, id) in marks {
-            let next = self
-                .routines
-                .get(&id)
-                .filter(|r| !r.paused)
-                .and_then(|r| r.next(tz))
-                .map(|n| n.to_string());
-            let was = self
-                .tabs
-                .get(&tab)
-                .and_then(|t| t.opts.get(TAB_NEXT))
-                .cloned();
-            if was != next {
-                self.set_tab_opt(tab, TAB_NEXT, next.as_deref());
-            }
+        for tab in marked {
+            self.set_tab_opt(tab, TAB_NEXT, None);
         }
     }
 
@@ -586,19 +309,22 @@ impl Server {
                 .canonicalize()
                 .is_ok_and(|real| crate::trust::in_review_dir(&real));
         if in_review {
-            self.routine_refused(r, due, UNTRUSTED.into());
+            self.routine_record(r, not_run(due, Outcome::Refused, UNTRUSTED));
             return;
         }
         if !dir.is_dir() {
-            self.routine_refused(r, due, format!("{} is gone", r.dir));
+            self.routine_record(
+                r,
+                not_run(due, Outcome::Refused, format!("{} is gone", r.dir)),
+            );
             return;
         }
         if tokio::runtime::Handle::try_current().is_err() {
             let untrusted = crate::trust::marked(&dir);
-            self.routine_checked(r, due, late, by_hand, untrusted);
+            self.routine_checked(r, live(due, late, by_hand), untrusted);
             return;
         }
-        let mut held = live(due, late, by_hand, None, None, 0);
+        let mut held = live(due, late, by_hand);
         held.checking = true;
         self.routines.live.insert(r.id.clone(), held);
         let tx = self.tx.clone();
@@ -615,7 +341,7 @@ impl Server {
         });
     }
 
-    /// What was found off the task.
+    /// What was found or answered off the task.
     pub fn routines_event(&mut self, event: RoutinesEvent) {
         match event {
             RoutinesEvent::Checked { id, dir, untrusted } => {
@@ -639,288 +365,274 @@ impl Server {
                     self.routine_start(&r, run.due, run.late, run.by_hand);
                     return;
                 }
-                self.routine_checked(&r, run.due, run.late, run.by_hand, untrusted);
+                self.routine_checked(&r, run, untrusted);
             }
-        }
-    }
-
-    fn routine_refused(&mut self, r: &Routine, due: i64, words: String) {
-        self.routine_record(
-            r,
-            Run {
-                due,
-                ran: 0,
-                tab: String::new(),
-                secs: 0,
-                cost: 0.0,
-                outcome: Outcome::Refused,
-                words,
-            },
-        );
-    }
-
-    /// A run started in its tab as its policy says, held while that tab
-    /// is busy, or skipped; refused when its directory turned out to hold
-    /// someone else's PR.
-    fn routine_checked(
-        &mut self,
-        r: &Routine,
-        due: i64,
-        late: bool,
-        by_hand: bool,
-        untrusted: bool,
-    ) {
-        if untrusted {
-            self.routine_refused(r, due, UNTRUSTED.into());
-            return;
-        }
-        let now = util::now_secs();
-        let dir = PathBuf::from(&r.dir);
-        let live = |tab: Option<TabId>, pane: Option<PaneId>, started: i64| {
-            live(due, late, by_hand, tab, pane, started)
-        };
-        let open = match r.tab_policy {
-            TabPolicy::SameTab => self.routine_tab(&r.id),
-            TabPolicy::NewTab => None,
-        };
-        let Some(tab) = open else {
-            let resume = r.tab_policy == TabPolicy::SameTab;
-            if let Some((tab, pane)) = self.routine_open_tab(r, &dir, resume) {
-                eprintln!("routines: {} runs in a new tab, {tab}", r.id);
-                // Bound to its own pane, so another of the routine's tabs
-                // ending meanwhile isn't taken for it.
-                let mut run = live(Some(tab), Some(pane), now);
-                // From its session's cost so far, which the statusline
-                // carries on across a resume (a new session's is nothing);
-                // a cost gone down by the end is a count started over.
-                run.cost_before = if resume {
-                    session_cost(r.resumable())
-                } else {
-                    0.0
-                };
-                self.routines.live.insert(r.id.clone(), run);
-            } else {
-                // No session to open it in (a server with no workspace
-                // yet), or the tab couldn't start: said, never lost.
-                self.routine_record(
-                    r,
-                    Run {
-                        due,
-                        ran: 0,
-                        tab: String::new(),
-                        secs: 0,
-                        cost: 0.0,
-                        outcome: Outcome::Failed,
-                        words: "couldn't open its tab (no workspace open?), see the server's log"
-                            .into(),
-                    },
-                );
-            }
-            return;
-        };
-        let pane = self.routine_pane(tab);
-        let Some(pane) = pane else {
-            return;
-        };
-        // What the hooks of a Claude gone without a word left behind goes,
-        // so the pane is judged by what runs in it now.
-        if !self.claude_in(pane) && self.agents.drop_state(pane) {
-            self.routines.started.remove(&pane);
-        }
-        let other = self.other_program(pane);
-        if !self.claude_in(pane) && !other {
-            // Its Claude exited to the shell: started again in its pane.
-            let session = self.routine_respawn(r, tab, pane, &dir);
-            eprintln!(
-                "routines: {} starts Claude again in {pane}, which had exited",
-                r.id
-            );
-            let mut run = live(Some(tab), Some(pane), now);
-            // From the resumed session's cost so far (see above).
-            run.cost_before = session_cost(&session);
-            run.session = session;
-            run.quiet_until = now + 10;
-            self.routines.live.insert(r.id.clone(), run);
-            return;
-        }
-        if other || self.claude_busy(pane) {
-            if r.when_busy == WhenBusy::Skip && !by_hand {
-                let number = self.routine_tab_number(tab);
-                self.routine_record(
-                    r,
-                    Run {
-                        due,
-                        ran: 0,
-                        tab: number.clone(),
-                        secs: 0,
-                        cost: 0.0,
-                        outcome: Outcome::Busy,
-                        words: format!("tab {number} was busy, so skipped"),
-                    },
-                );
-            } else {
-                self.routines
+            RoutinesEvent::Started { id, started, pid } => self.routine_started(&id, started, pid),
+            RoutinesEvent::Answered {
+                id,
+                started,
+                answer,
+            } => {
+                let dir = self
+                    .routines
                     .live
-                    .insert(r.id.clone(), live(Some(tab), Some(pane), 0));
-                eprintln!("routines: {} waits on {pane}, busy", r.id);
+                    .get(&id)
+                    .map(|l| l.dir.clone())
+                    .unwrap_or_default();
+                self.routine_ran(&id, started, &dir, answer);
             }
+        }
+    }
+
+    /// A run started as a headless Claude off the task, or refused when
+    /// its directory turned out to hold someone else's PR.
+    fn routine_checked(&mut self, r: &Routine, mut run: Live, untrusted: bool) {
+        if untrusted {
+            self.routine_record(r, not_run(run.due, Outcome::Refused, UNTRUSTED));
             return;
         }
-        let mut run = live(Some(tab), Some(pane), now);
-        if self.routines.started.get(&pane) != Some(&(r.prompt_hash(), r.dir.clone())) {
-            // New words or a new directory, or a Claude this server didn't
-            // start with them (a tab brought back by a restart): started
-            // again with them, resuming its session (a directory changed
-            // left none), so they take.
-            let session = self.routine_respawn(r, tab, pane, &dir);
-            eprintln!(
-                "routines: {} starts Claude again in {pane} with its prompt",
-                r.id
-            );
-            run.quiet_until = now + 10;
-            run.cost_before = session_cost(&session);
-            run.session = session;
-        } else {
-            self.type_into_claude(pane, crate::mission::answer::message_presses(&r.turn()));
-            eprintln!("routines: {} runs in {pane}", r.id);
-            // The session of the Claude typed into, whatever another of the
-            // routine's tabs last named.
-            run.session = self
-                .routines
-                .pane_sessions
-                .get(&pane)
-                .map(|(session, _)| session.clone())
-                .unwrap_or_else(|| r.session.clone());
-            run.cost_before = session_cost(&run.session);
-        }
+        let started = util::now_secs();
+        run.checking = false;
+        run.started = started;
+        run.dir = r.dir.clone();
         self.routines.live.insert(r.id.clone(), run);
-    }
-
-    /// A new tab for a run, in the background at the end of the session
-    /// used last (the first one with no client), named after the routine
-    /// and marked as its.
-    fn routine_open_tab(
-        &mut self,
-        r: &Routine,
-        dir: &Path,
-        resume: bool,
-    ) -> Option<(TabId, PaneId)> {
-        let session = self
-            .latest_client()
-            .and_then(|c| self.clients.get(&c))
-            .map(|c| c.session.clone())
-            .or_else(|| self.sessions.first().map(|s| s.name.clone()))?;
-        let command = claude_command(r, if resume { r.resumable() } else { "" });
-        let (tab, pane) = match self.new_tab(
-            &session,
-            Some(dir.to_path_buf()),
-            Some(command),
-            None,
-            Opened::Background,
-        ) {
-            Ok((tab, pane)) => {
-                self.routines
-                    .started
-                    .insert(pane, (r.prompt_hash(), r.dir.clone()));
-                self.routines
-                    .expect
-                    .insert(pane, util::now_secs() + EXPECT_FOR);
-                (tab, pane)
-            }
-            Err(e) => {
-                eprintln!("routines: couldn't open a tab for {}: {e}", r.id);
-                return None;
-            }
-        };
-        self.tab_to_end(tab);
-        self.routine_mark(r, tab);
-        Some((tab, pane))
-    }
-
-    /// A routine's tab marked as its, named after it.
-    fn routine_mark(&mut self, r: &Routine, tab: TabId) {
-        if let Some(t) = self.tabs.get_mut(&tab) {
-            t.opts.insert(TAB_MARK.into(), r.id.clone());
-            t.opts.insert("@tab_name".into(), r.name.clone());
-            t.opts.insert("@tab_title".into(), r.name.clone());
+        eprintln!("routines: {} runs in {}", r.id, r.dir);
+        let (id, cwd, args, turn, name) = (
+            r.id.clone(),
+            r.dir.clone(),
+            headless::args(r),
+            r.turn(),
+            r.name.clone(),
+        );
+        let start = move || headless::start(&routine::dir(), &id, &cwd, &args, &turn, &name);
+        if tokio::runtime::Handle::try_current().is_err() {
+            let pid = start();
+            self.routine_started(&r.id, started, pid);
+            return;
         }
-        self.name_tab(tab);
-        self.dirty_everywhere(tab);
+        let tx = self.tx.clone();
+        let id = r.id.clone();
+        tokio::task::spawn_blocking(move || {
+            let pid = start();
+            let _ = tx.send(crate::mux::server::Event::Routines(
+                RoutinesEvent::Started { id, started, pid },
+            ));
+        });
     }
 
-    /// Its Claude started again in `pane`, its session resumed.
-    /// Gives the session it resumed: the pane's own, as its hooks last
-    /// named it, while it was started in the routine's directory as it is
-    /// now, else the routine's.
-    fn routine_respawn(&mut self, r: &Routine, tab: TabId, pane: PaneId, dir: &Path) -> String {
-        // What the server remembers of the pane, else (after an upgrade,
-        // which keeps none of it) the session file of the Claude running
-        // there, else the routine's own.
-        let session = self
+    /// A run's Claude started: its process kept, in memory and in its
+    /// `.live` file, for the tick to watch; or the run failed.
+    fn routine_started(&mut self, id: &str, started: i64, pid: Result<u32, String>) {
+        let gone = self.routines.get(id).is_none();
+        let Some(run) = self
             .routines
-            .pane_sessions
-            .get(&pane)
-            .cloned()
-            .or_else(|| self.pane_claude_session(pane))
-            .filter(|(_, made_in)| *made_in == r.dir)
-            .map(|(session, _)| session)
-            .unwrap_or_else(|| r.resumable().to_string());
-        let command = claude_command(r, &session);
-        if let Err(e) = self.respawn_pane(pane, Some(dir.to_path_buf()), Some(command), true) {
-            eprintln!("routines: couldn't start {} again: {e}", r.id);
-            return session;
-        }
-        self.routines
-            .started
-            .insert(pane, (r.prompt_hash(), r.dir.clone()));
-        self.routines
-            .expect
-            .insert(pane, util::now_secs() + EXPECT_FOR);
-        self.routine_mark(r, tab);
-        session
-    }
-
-    /// A run's end recorded, from what the server kept of it.
-    fn routine_end(&mut self, r: &Routine, outcome: Outcome, words: String) {
-        let Some(run) = self.routines.live.remove(&r.id) else {
+            .live
+            .get_mut(id)
+            .filter(|l| l.started == started)
+        else {
             return;
         };
+        // Its routine deleted meanwhile: ended, and watched until it has.
+        if gone && let Ok(pid) = &pid {
+            headless::stop(*pid, 0, false);
+        }
+        match pid {
+            Ok(pid) => {
+                run.pid = pid;
+                run.born = headless::born_of(pid).unwrap_or(0);
+                let kept = headless::Started {
+                    pid,
+                    born: run.born,
+                    started,
+                    due: run.due,
+                    late: run.late,
+                    dir: run.dir.clone(),
+                };
+                let [_, _, live] = headless::files(&routine::dir(), id);
+                if let Err(e) = util::write_atomic(&live, util::json_compact(&json!(kept))) {
+                    eprintln!("routines: couldn't keep the run of {id}: {e}");
+                }
+            }
+            Err(why) => {
+                let run = self.routines.live.remove(id).expect("found above");
+                if let Some(r) = self.routines.get(id).cloned() {
+                    self.routine_record(&r, not_run(run.due, Outcome::Failed, why));
+                }
+            }
+        }
+    }
+
+    /// The runs under way watched on the tick: one whose Claude ended
+    /// recorded from its files, one going past `RUN_LIMIT` ended and
+    /// recorded as failed. A server started again (or an upgrade's) takes
+    /// up the runs the one before left going, from their `.live` files.
+    fn routines_watch(&mut self) {
+        let dir = routine::dir();
+        if !self.routines.taken_up {
+            self.routines.taken_up = true;
+            for (id, kept) in headless::left_going(&dir) {
+                eprintln!("routines: takes up the run of {id}, process {}", kept.pid);
+                self.routines.live.insert(
+                    id,
+                    Live {
+                        due: kept.due,
+                        late: kept.late,
+                        by_hand: false,
+                        started: kept.started,
+                        checking: false,
+                        pid: kept.pid,
+                        born: kept.born,
+                        dir: kept.dir,
+                        stopping: 0,
+                        collecting: false,
+                    },
+                );
+            }
+        }
         let now = util::now_secs();
-        // Its own session's, never what another of the routine's tabs
-        // last named.
-        let session = if run.session.is_empty() {
-            &r.session
-        } else {
-            &run.session
+        let going: Vec<(String, Live)> = self
+            .routines
+            .live
+            .iter()
+            .filter(|(_, l)| l.pid > 0 && !l.collecting)
+            .map(|(id, l)| (id.clone(), l.clone()))
+            .collect();
+        for (id, run) in going {
+            if headless::ended(run.pid, run.born) {
+                // Its files read off the task, of whatever size.
+                let timed_out = run.stopping > 0;
+                let collect = {
+                    let (dir, id) = (dir.clone(), id.clone());
+                    move || {
+                        let answer = headless::answer(&dir, &id);
+                        // One told to end ran out of time, whatever it printed.
+                        if timed_out {
+                            Err("no answer in 2 hours".to_string())
+                        } else {
+                            answer
+                        }
+                    }
+                };
+                if tokio::runtime::Handle::try_current().is_err() {
+                    let answer = collect();
+                    self.routine_ran(&id, run.started, &run.dir, answer);
+                    continue;
+                }
+                if let Some(l) = self.routines.live.get_mut(&id) {
+                    l.collecting = true;
+                }
+                let tx = self.tx.clone();
+                let (id, started) = (id.clone(), run.started);
+                tokio::task::spawn_blocking(move || {
+                    let answer = collect();
+                    let _ = tx.send(crate::mux::server::Event::Routines(
+                        RoutinesEvent::Answered {
+                            id,
+                            started,
+                            answer,
+                        },
+                    ));
+                });
+            } else if run.stopping > 0 {
+                // Still there half a minute after being told: ended at once.
+                if now - run.stopping > STOP_GRACE {
+                    headless::stop(run.pid, run.born, true);
+                }
+            } else if now - run.started > headless::RUN_LIMIT {
+                headless::stop(run.pid, run.born, false);
+                if let Some(l) = self.routines.live.get_mut(&id) {
+                    l.stopping = now;
+                }
+            }
+        }
+    }
+
+    /// A run's answer recorded: its reply, or a failure naming the tools it
+    /// needed, or why Claude gave none; its session kept for the next run.
+    fn routine_ran(
+        &mut self,
+        id: &str,
+        started: i64,
+        dir: &str,
+        answer: Result<headless::Reply, String>,
+    ) {
+        if !self
+            .routines
+            .live
+            .get(id)
+            .is_some_and(|l| l.started == started)
+        {
+            return;
+        }
+        let Some(run) = self.routines.live.remove(id) else {
+            return;
         };
-        // A cost below where it started is a new process's count started
-        // over (the statusline's `next_spend`), counted from nothing.
-        let now_cost = session_cost(session);
-        let cost = if now_cost < run.cost_before {
-            now_cost
-        } else {
-            now_cost - run.cost_before
+        // Recorded below on this same turn of the server's, so a restart
+        // finds either its files or its record.
+        headless::clear(&routine::dir(), id);
+        // As its file has it now, which may have changed while it ran
+        // (routines off, so not read again); deleted meanwhile, nothing is
+        // recorded.
+        let Some(mut r) = routine::load_all(&routine::dir())
+            .into_iter()
+            .find(|r| r.id == id)
+        else {
+            return;
         };
-        let outcome = match outcome {
-            Outcome::Ran if run.late => Outcome::Late,
-            o => o,
+        let was = r.clone();
+        let (outcome, words, cost) = match answer {
+            Ok(reply) => {
+                // Kept only from the directory it is in now, the only one
+                // `--resume` finds it from.
+                if !reply.session.is_empty() && r.dir == dir {
+                    r.session = reply.session.clone();
+                    r.session_dir = r.dir.clone();
+                }
+                r.needs = reply.denied.clone();
+                if !reply.denied.is_empty() {
+                    let words = format!("needs {}", reply.denied.join(", "));
+                    (Outcome::Failed, words, reply.cost)
+                } else if reply.error {
+                    let said = headless::first_line(&reply.text);
+                    let words = if said.is_empty() {
+                        "Claude's turn ended in an error".to_string()
+                    } else {
+                        said
+                    };
+                    (Outcome::Failed, words, reply.cost)
+                } else {
+                    let ran = if run.late {
+                        Outcome::Late
+                    } else {
+                        Outcome::Ran
+                    };
+                    (ran, headless::first_line(&reply.text), reply.cost)
+                }
+            }
+            Err(why) => {
+                // A session Claude Code no longer has is let go, so the
+                // next run starts one.
+                if why.contains("No conversation found") {
+                    r.session.clear();
+                }
+                (Outcome::Failed, why, 0.0)
+            }
         };
+        if r != was {
+            self.routine_save(&r);
+        }
         let words = if run.late && outcome.ran() {
             format!("missed at {}, ran on waking · {words}", clock_at(run.due))
         } else {
             words
         };
-        let tab = run
-            .tab
-            .map(|t| self.routine_tab_number(t))
-            .unwrap_or_default();
         self.routine_record(
-            r,
+            &r,
             Run {
                 due: run.due,
-                ran: run.started,
-                tab,
-                secs: (now - run.started).max(0),
+                ran: started,
+                tab: String::new(),
+                secs: (util::now_secs() - started).max(0),
                 cost: (cost * 100.0).round() / 100.0,
                 outcome,
                 words,
@@ -939,11 +651,16 @@ impl Server {
             eprintln!("routines: couldn't record a run of {}: {e}", r.id);
         }
         if !run.outcome.ran() {
-            let words = format!("Routine {}: {}.", r.name, run.words);
+            let needs = run.outcome == Outcome::Failed && !r.needs.is_empty();
+            let detail = if needs {
+                format!("couldn't run: it needs {}", r.needs.join(", "))
+            } else {
+                run.words.clone()
+            };
             let client = self.latest_client();
-            self.say(client, &words);
+            self.say(client, &format!("Routine {}: {detail}.", r.name));
             let mut item = Item::new(format!("routine:{}", r.id), format!("Routine {}", r.name));
-            item.detail = run.words.clone();
+            item.detail = detail;
             item.time = Some(run.at() * 1000);
             item.state = ItemState::Attention;
             item.data = json!({ "routine": r.id });
@@ -960,17 +677,16 @@ impl Server {
 
     /// The notifications of runs that failed or were skipped.
     /// Each carries what the routine's item in the view does now (whether it
-    /// is paused, its tab), so its menu is that item's.
+    /// is paused, its session, the tools it needs), so its menu is that
+    /// item's.
     fn routines_notices(&mut self) {
         let mut items: Vec<Item> = self.routines.said.values().cloned().collect();
         for item in items.iter_mut() {
             let id = item.data["routine"].as_str().unwrap_or("").to_string();
-            let paused = self.routines.get(&id).is_some_and(|r| r.paused);
-            item.data["paused"] = json!(paused);
-            item.target = self
-                .routine_tab(&id)
-                .map(crate::items::Target::Tab)
-                .unwrap_or_default();
+            let r = self.routines.get(&id);
+            item.data["paused"] = json!(r.is_some_and(|r| r.paused));
+            item.data["session"] = json!(r.is_some_and(|r| !r.resumable().is_empty()));
+            item.data["needs"] = json!(r.map(|r| r.needs.clone()).unwrap_or_default());
         }
         items.sort_by_key(|i| std::cmp::Reverse(i.time));
         if self.notices.get(SOURCE).map(Vec::as_slice).unwrap_or(&[]) == items.as_slice() {
@@ -991,121 +707,6 @@ impl Server {
             self.routines.said.remove(&id);
         }
         self.routines_notices();
-    }
-
-    /// What a hook says of a routine's tab: its session id kept; a Stop
-    /// ending the run under way there; Claude exiting ending it as failed.
-    pub fn routines_hook(&mut self, pane: PaneId, tab: TabId, event: &str, payload: &Value) {
-        let Some(id) = self
-            .tabs
-            .get(&tab)
-            .and_then(|t| t.opts.get(TAB_MARK))
-            .cloned()
-        else {
-            return;
-        };
-        let Some(mut r) = self.routines.get(&id).cloned() else {
-            return;
-        };
-        // A Claude started in its pane by anything but a run (by hand, or a
-        // restart's resume) never had the prompt, and one ending leaves
-        // none: the next run starts it again with the prompt.
-        let source = payload.get("source").and_then(Value::as_str).unwrap_or("");
-        let expected = self
-            .routines
-            .expect
-            .get(&pane)
-            .is_some_and(|until| *until >= util::now_secs());
-        match event {
-            "SessionStart" if matches!(source, "startup" | "resume") => {
-                if expected {
-                    self.routines.expect.remove(&pane);
-                } else {
-                    self.routines.started.remove(&pane);
-                }
-            }
-            "SessionEnd" if !expected => {
-                self.routines.started.remove(&pane);
-            }
-            _ => {}
-        }
-        let session = payload
-            .get("session_id")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        // Where the session was made: the directory a run started this
-        // pane's Claude in; for one started otherwise, the directory its
-        // hooks first said, kept from then on (empty when none did, which
-        // is never resumed).
-        let made_in = match (
-            self.routines.started.get(&pane),
-            self.routines.pane_sessions.get(&pane),
-        ) {
-            (Some((_, dir)), _) => dir.clone(),
-            (None, Some((known, dir))) if known == session => dir.clone(),
-            _ => payload
-                .get("cwd")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string(),
-        };
-        if !session.is_empty() && event != "SessionEnd" {
-            self.routines
-                .pane_sessions
-                .insert(pane, (session.to_string(), made_in));
-        }
-        // Only from a Claude a run started in the routine's directory as
-        // it is now: an older turn in a directory it moved from would put
-        // back a session `--resume` can't find here.
-        let here = self
-            .routines
-            .started
-            .get(&pane)
-            .is_some_and(|(_, dir)| *dir == r.dir);
-        // And only from its one tab while it runs in the same tab each run:
-        // with several open, another's conversation isn't its own.
-        let its_tab = r.tab_policy == TabPolicy::SameTab && self.routine_tab(&id) == Some(tab);
-        if here && its_tab && !session.is_empty() && r.session != session && event != "SessionEnd" {
-            r.session = session.to_string();
-            r.session_dir = r.dir.clone();
-            self.routine_save(&r);
-        }
-        let Some(run) = self.routines.live.get_mut(&id) else {
-            return;
-        };
-        if run.started == 0 {
-            return;
-        }
-        if run.pane.is_none() {
-            run.pane = Some(pane);
-        }
-        if run.pane != Some(pane) {
-            return;
-        }
-        if !session.is_empty() && event != "SessionEnd" {
-            run.session = session.to_string();
-        }
-        let quiet_until = run.quiet_until;
-        match event {
-            "Stop" => {
-                let reply = payload
-                    .get("last_assistant_message")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                let first = reply
-                    .lines()
-                    .map(str::trim)
-                    .find(|l| !l.is_empty())
-                    .unwrap_or("")
-                    .to_string();
-                self.routine_end(&r, Outcome::Ran, first);
-            }
-            // A Claude ended as it started again with new words is no end.
-            "SessionEnd" if util::now_secs() >= quiet_until => {
-                self.routine_end(&r, Outcome::Failed, "Claude exited mid-run".into());
-            }
-            _ => {}
-        }
     }
 
     // ── What you do with them ───────────────────────────────────────────────
@@ -1250,11 +851,17 @@ impl Server {
                 _ => now.timestamp().as_second(),
             },
             schedule,
-            tab_policy: draft.tab_policy,
-            when_busy: draft.when_busy,
             when_missed: draft.when_missed,
             prompt: draft.prompt.trim_end().to_string(),
             model: draft.model.trim().to_string(),
+            tools: draft
+                .tools
+                .iter()
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect(),
+            // What its last run needed stays until a run needs nothing.
+            needs: was.as_ref().map(|w| w.needs.clone()).unwrap_or_default(),
             paused: was.as_ref().is_some_and(|w| w.paused),
             // Kept with where it was made, `resumable` resuming it only there.
             session: was.as_ref().map(|w| w.session.clone()).unwrap_or_default(),
@@ -1264,23 +871,6 @@ impl Server {
                 .unwrap_or_default(),
         };
         self.routine_save(&r);
-        // A run of the schedule before still waiting on a busy tab goes
-        // with it; one under way, or asked for by hand, stays.
-        if was.as_ref().is_some_and(|w| w.schedule != r.schedule)
-            && self
-                .routines
-                .live
-                .get(&r.id)
-                .is_some_and(|l| l.started == 0 && !l.by_hand)
-        {
-            self.routines.live.remove(&r.id);
-        }
-        // A new name shows on its open tab at once.
-        if was.as_ref().is_some_and(|w| w.name != r.name)
-            && let Some(tab) = self.routine_tab(&r.id)
-        {
-            self.routine_mark(&r, tab);
-        }
         let tz = jiff::tz::TimeZone::system();
         let next = r
             .next(&tz)
@@ -1296,8 +886,7 @@ impl Server {
         }
     }
 
-    /// r: a run now, whatever the schedule says, as the schedule's would
-    /// (a busy tab waits, whatever the routine says).
+    /// r: a run now, whatever the schedule says, as the schedule's would.
     /// What it did, for mission control's footer.
     pub fn routine_run_now(&mut self, client: ClientId, id: &str) -> Option<String> {
         if !self.routines_on(client) {
@@ -1322,7 +911,6 @@ impl Server {
         if !settings::is_on("routines") || r.paused || self.routines.live.contains_key(&r.id) {
             return Some(false);
         }
-        // Not by hand: the routine's own rule for a busy tab holds.
         self.routine_start(&r, util::now_secs(), false, false);
         Some(true)
     }
@@ -1344,16 +932,11 @@ impl Server {
             r.handled = r.handled.max(util::now_secs());
         }
         self.routine_save(&r);
-        // A run waiting on its busy tab goes with it; one under way ends
-        // as it would.
-        if r.paused && self.routines.live.get(id).is_some_and(|l| l.started == 0) {
-            self.routines.live.remove(id);
-        }
         let words = if r.paused { "paused" } else { "resumed" };
         Some(format!("Routine {} {words}.", r.name))
     }
 
-    /// x: taken away after asking, its tab left as it is.
+    /// x: taken away after asking, its sessions kept in Claude Code.
     pub fn routine_delete(&mut self, client: ClientId, id: &str) {
         let Some(r) = self.routines.get(id).cloned() else {
             return;
@@ -1367,55 +950,92 @@ impl Server {
             routine::remove(&routine::dir(), &id);
             server.routines.list.retain(|r| r.id != id);
             server.routines.runs.remove(&id);
-            server.routines.live.remove(&id);
+            // A run under way is ended, and watched until it has, so its
+            // process is reaped and its files go; one not started goes.
+            match server.routines.live.get_mut(&id) {
+                Some(l) if l.started > 0 => {
+                    if l.pid > 0 {
+                        headless::stop(l.pid, l.born, false);
+                        l.stopping = util::now_secs();
+                    }
+                }
+                Some(_) => {
+                    server.routines.live.remove(&id);
+                }
+                None => {}
+            }
             server.routines.said.remove(&id);
             server.routines_notices();
             server.routines.seen = routine::stamp(&routine::dir());
-            if let Some(tab) = server.routine_tab(&id)
-                && let Some(t) = server.tabs.get_mut(&tab)
-            {
-                t.opts.remove(TAB_MARK);
-                t.opts.remove(TAB_NEXT);
-            }
             server.mission_changed();
             server.say(Some(client), &format!("Routine {} deleted.", r.name));
         });
     }
 
-    /// o: its tab, while it is open.
-    pub fn routine_go(&mut self, client: ClientId, id: &str) {
-        match self.routine_tab(id) {
-            Some(tab) => self.mission_go(client, tab),
-            None => {
-                let name = self
-                    .routines
-                    .get(id)
-                    .map(|r| r.name.clone())
-                    .unwrap_or_default();
-                self.say(
-                    Some(client),
-                    &format!("{name} has no tab open; r runs it in one."),
-                );
+    /// o: its last session opened in a new tab in its directory, `claude
+    /// --resume`, to read the run or carry on from it.
+    pub fn routine_open_session(&mut self, client: ClientId, id: &str) {
+        let Some(r) = self.routines.get(id).cloned() else {
+            return;
+        };
+        let session = r.resumable().to_string();
+        if session.is_empty() {
+            self.say(
+                Some(client),
+                &format!("{} has no session yet: its first run makes one.", r.name),
+            );
+            return;
+        }
+        let Some(name) = self.clients.get(&client).map(|c| c.session.clone()) else {
+            return;
+        };
+        let command = worktree::tab_command(
+            "claude \"$@\"",
+            "claude",
+            &["--resume".to_string(), session],
+        );
+        match self.new_tab(
+            &name,
+            Some(PathBuf::from(&r.dir)),
+            Some(command),
+            Some(r.name.clone()),
+            Opened::Front,
+        ) {
+            Ok((tab, _)) => self.mission_go(client, tab),
+            Err(e) => self.say(Some(client), &format!("Couldn't open its session: {e}")),
+        }
+    }
+
+    /// Allow what its last run needed: the tools added to its own, and a
+    /// run now. What it did, for mission control's footer.
+    pub fn routine_allow_needed(&mut self, client: ClientId, id: &str) -> Option<String> {
+        let mut r = self.routines.get(id).cloned()?;
+        if r.needs.is_empty() {
+            return self.routine_run_now(client, id);
+        }
+        let needs = std::mem::take(&mut r.needs);
+        for tool in &needs {
+            if !r.tools.contains(tool) {
+                r.tools.push(tool.clone());
             }
         }
+        self.routine_save(&r);
+        self.routines.said.remove(id);
+        self.routines_notices();
+        let ran = self.routine_run_now(client, id);
+        Some(format!(
+            "{} may use {} now. {}",
+            r.name,
+            needs.join(", "),
+            ran.unwrap_or_default()
+        ))
     }
 
     /// The Routines view's items, from what the server holds.
     pub fn routines_items(&self) -> Vec<Item> {
         let now = util::local_now();
-        let tabs: Vec<(String, Option<TabId>, String)> = self
-            .routines
-            .list
-            .iter()
-            .map(|r| {
-                let tab = self.routine_tab(&r.id);
-                let number = tab.map(|t| self.routine_tab_number(t)).unwrap_or_default();
-                (r.id.clone(), tab, number)
-            })
-            .collect();
         let facts = super::view::Facts {
             now,
-            tabs,
             live: &self.routines.live,
             runs: &self.routines.runs,
         };

@@ -397,7 +397,12 @@ impl TestServer {
             // a test gives its own (`start_with_env`).
             .env_remove("GH_TOKEN")
             .env_remove("GITHUB_TOKEN")
-            .env_remove("LINEAR_API_KEY");
+            .env_remove("LINEAR_API_KEY")
+            // The panes' apps don't take the test's runner for Windows
+            // Terminal (src/mux/graphics.rs), so a test draws the same in
+            // it as anywhere; a test gives a terminal by what its client
+            // attaches as.
+            .env_remove("WT_SESSION");
     }
 
     pub fn socket(&self) -> PathBuf {

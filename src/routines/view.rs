@@ -6,13 +6,14 @@
 //! With UX 2.0 it is drawn as the board draws it (`board`): on the left,
 //! Recurring, Once and Ran once, each routine a two-line row (its mark,
 //! its name, its schedule dim and when it runs next at the right; under
-//! it a chip for where it runs and one for its last run in its outcome's
-//! tone), then This week, a row a routine and a column a day with each
+//! it a chip for the tools it may use and one for its last run in its
+//! outcome's tone, a run that reached for a tool off its list failed and
+//! naming it), then This week, a row a routine and a column a day with each
 //! day's runs as their marks (◌ ran late on waking, – skipped), today's
 //! day red; on the right, the chosen routine as the kit's pane: its
-//! schedule and directory, its keys as keycaps, its prompt on a panel,
-//! where it runs, today's runs (earlier ones folded with their spend) and
-//! its next runs. Narrower than `BESIDE_AT`, the pane is behind `i`, in
+//! schedule and directory, Enter's keycap for its menu (board 76), its
+//! prompt on a panel, its allowed tools, how it runs, today's runs
+//! (earlier ones folded with their spend) and its next runs. Narrower than `BESIDE_AT`, the pane is behind `i`, in
 //! the list's place. Without UX 2.0 the view is a plain list.
 
 use std::collections::HashMap;
@@ -24,34 +25,29 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use serde_json::{Value, json};
 
-use super::routine::{Routine, Run, TabPolicy, WhenBusy, WhenMissed};
+use super::routine::{Routine, Run, WhenMissed};
 use super::{LATE_BY, Live};
-use crate::items::{Item, State, Target};
+use crate::items::{Item, State};
 use crate::mission::views::View;
 use crate::mission::{Focus, HitBox, Mission, Spot};
-use crate::mux::TabId;
 use crate::mux::input::{Key, KeyCode, Mods};
-use crate::sidebar::model::{self, TabModel};
 use crate::sidebar::render::Line;
 use crate::sidebar::text::{cut, width, wrap};
 use crate::ui::kit::{self, Col, Mark, Surface, Tone};
 
 /// Narrower than this, the pane is behind `i`.
 pub const BESIDE_AT: usize = 140;
-/// Narrower than this, each run's tab goes, then the rows' schedule.
+/// Narrower than this, the rows' schedule goes.
 const ROOMY_AT: usize = 160;
 /// The pane's share of 160 columns, and its least.
 const PANE_SHARE: usize = 62;
 const PANE_LEAST: usize = 34;
 /// What the view says with no routine.
-pub const EMPTY: &str =
-    "No routines yet. n makes one: a prompt of yours run on a schedule in a Claude tab.";
+pub const EMPTY: &str = "No routines yet. n makes one: a prompt of yours run on a schedule by a headless Claude, opening no tab.";
 
 /// What the server holds that the items are made from.
 pub struct Facts<'a> {
     pub now: Zoned,
-    /// Each routine's id, its tab while open, and that tab's number.
-    pub tabs: Vec<(String, Option<TabId>, String)>,
     pub live: &'a HashMap<String, Live>,
     pub runs: &'a HashMap<String, Vec<Run>>,
 }
@@ -98,12 +94,6 @@ pub fn items(routines: &[Routine], f: &Facts<'_>) -> Vec<Item> {
     sorted
         .into_iter()
         .map(|r| {
-            let (tab, number) = f
-                .tabs
-                .iter()
-                .find(|(id, _, _)| *id == r.id)
-                .map(|(_, t, n)| (*t, n.clone()))
-                .unwrap_or((None, String::new()));
             let next = if r.paused { None } else { r.next(&tz) };
             let upcoming = if r.paused {
                 Vec::new()
@@ -142,12 +132,8 @@ pub fn items(routines: &[Routine], f: &Facts<'_>) -> Vec<Item> {
             } else {
                 detail.push("ran once".into());
             }
-            if !number.is_empty() {
-                detail.push(format!("tab {number}"));
-            }
             item.detail = detail.join(" · ");
             item.time = next.map(|n| n * 1000);
-            item.target = tab.map(Target::Tab).unwrap_or(Target::None);
             item.state = match (live, last.as_ref().and_then(|l| l["mark"].as_str())) {
                 (Some(_), _) => State::Active,
                 (None, Some("✕")) => State::Attention,
@@ -167,10 +153,9 @@ pub fn items(routines: &[Routine], f: &Facts<'_>) -> Vec<Item> {
                 "dir": crate::paths::tilde(std::path::Path::new(&r.dir)),
                 "prompt": r.prompt,
                 "model": r.model,
-                "policy": match r.tab_policy { TabPolicy::SameTab => "same", TabPolicy::NewTab => "new" },
-                "busy": match r.when_busy { WhenBusy::Wait => "wait", WhenBusy::Skip => "skip" },
+                "tools": r.tools,
+                "needs": r.needs,
                 "missed": match r.when_missed { WhenMissed::OnWaking => "waking", WhenMissed::Skip => "skip" },
-                "tab": number,
                 "session": !r.resumable().is_empty(),
                 "live": live,
                 "last": last,
@@ -306,15 +291,7 @@ pub fn board(
     // The pane, from where it was scrolled to.
     let side = chosen
         .filter(|_| pane_w > 0)
-        .map(|i| {
-            pane(
-                &view.data.items[i],
-                m,
-                pane_w,
-                body,
-                beside && cols >= ROOMY_AT,
-            )
-        })
+        .map(|i| pane(&view.data.items[i], m, pane_w, body))
         .unwrap_or_default();
     let last = side.len().saturating_sub(body);
     let side: Vec<Drawn> = side
@@ -465,6 +442,7 @@ fn row(item: &Item, m: &Mission, w: usize, chosen: bool, i: usize, cols: usize) 
         (Some("running"), _) => kit::mark(Mark::Working, m.snap.frame, theme),
         (Some(_), _) => kit::mark(Mark::Pending, m.snap.frame, theme),
         (None, true) => Span::styled("‖", Tone::Dim.bold(theme)),
+        (None, false) if last_failed(item) => kit::mark(Mark::Failed, m.snap.frame, theme),
         (None, false) if section_of(item) == 2 => Span::styled("✓", Tone::Faint.bold(theme)),
         (None, false) if section_of(item) == 1 => kit::mark(Mark::Later, m.snap.frame, theme),
         (None, false) => Span::styled("↻", Tone::Accent.bold(theme)),
@@ -552,27 +530,24 @@ fn row(item: &Item, m: &Mission, w: usize, chosen: bool, i: usize, cols: usize) 
             (c.0 + c.1 - rw, rw),
         );
     }
-    // Where it runs, and its last run.
-    let tab = s(item, "tab");
-    let where_ = match (s(item, "policy"), tab.is_empty(), b(item, "session")) {
-        ("new", _, _) => "a new tab each run".to_string(),
-        (_, false, _) => format!("tab {tab} · open"),
-        (_, true, true) => "tab closed · resumes its session".to_string(),
-        (_, true, false) => "opens its tab on its first run".to_string(),
-    };
+    // The tools it may use, and its last run.
     let mut second = vec![Span::raw("  ")];
-    second.extend(kit::chip(&where_, Tone::Dim, caps, theme));
+    second.extend(kit::chip(&tools_words(item), Tone::Dim, caps, theme));
     if let Some(last) = item.data.get("last").filter(|l| !l.is_null()) {
         let outcome = last["outcome"].as_str().unwrap_or("");
         let at = last["at"].as_i64().unwrap_or(0);
         let now = jiff::Timestamp::from_second(m.snap.now_secs)
             .unwrap_or(jiff::Timestamp::UNIX_EPOCH)
             .to_zoned(m.snap.tz.clone());
-        let words = format!(
+        let mut words = format!(
             "{} {}",
             last["mark"].as_str().unwrap_or(""),
             when_words(at, &now)
         );
+        let said = run_words(last);
+        if !said.is_empty() {
+            words = format!("{words} · {}", cut(&said, 32));
+        }
         second.extend(kit::chip(&words, tone_of(outcome), caps, theme));
     }
     let wrap_row = |spans: Vec<Span<'static>>| {
@@ -730,7 +705,7 @@ fn week(view: &View, m: &Mission, w: usize, chosen: Option<usize>) -> Vec<Drawn>
         keys.push("◌ missed while asleep, ran on waking");
     }
     if late_or_skipped.1 {
-        keys.push("– missed or busy, so skipped");
+        keys.push("– missed or still running, so skipped");
     }
     if !keys.is_empty() {
         out.push(Drawn::of(vec![
@@ -758,7 +733,7 @@ fn length(secs: i64) -> String {
 }
 
 /// The chosen routine, as the kit's pane.
-fn pane(item: &Item, m: &Mission, w: usize, body: usize, roomy: bool) -> Vec<Drawn> {
+fn pane(item: &Item, m: &Mission, w: usize, body: usize) -> Vec<Drawn> {
     let theme = &m.snap.theme;
     let caps = m.snap.caps;
     let now = jiff::Timestamp::from_second(m.snap.now_secs)
@@ -778,39 +753,22 @@ fn pane(item: &Item, m: &Mission, w: usize, body: usize, roomy: bool) -> Vec<Dra
             .into_iter()
             .map(Drawn::of),
     );
-    // Its keys, each a click.
-    let lit = |key: char| match (m.hover, m.focus) {
-        (Some(Spot::Key(k)), _) | (_, Some(Focus::Key(k))) => {
-            k == Key::new(KeyCode::Char(key), Mods::NONE)
-        }
+    // Enter's keycap: its menu, the first option said.
+    let enter = Key::new(KeyCode::Enter, Mods::NONE);
+    let lit = match (m.hover, m.focus) {
+        (Some(Spot::Key(k)), _) | (_, Some(Focus::Key(k))) => k == enter,
         _ => false,
     };
-    let mut caps_line = Drawn::default();
-    let pause = if b(item, "paused") { "Resume" } else { "Pause" };
-    let mut pairs = vec![
-        ('r', "Run now"),
-        ('e', "Edit"),
-        ('p', pause),
-        ('x', "Delete"),
-    ];
-    if !s(item, "tab").is_empty() {
-        pairs.insert(1, ('o', "Its tab"));
-    }
-    for (key, what) in pairs {
-        let x = kit::spans_width(&caps_line.spans);
-        let cap = kit::keycap(&key.to_string(), what, lit(key), caps, theme);
-        let cw = kit::spans_width(&cap);
-        if x + cw > w {
-            break;
-        }
-        caps_line.spans.extend(cap);
-        caps_line.hits.push((
-            x,
-            (x + cw).saturating_sub(2),
-            Spot::Key(Key::new(KeyCode::Char(key), Mods::NONE)),
-        ));
-    }
-    out.push(caps_line);
+    let what = match needs(item).as_slice() {
+        [] => "run now, edit, pause or delete it".to_string(),
+        n => format!("actions: allow {} and run it again first", n.join(", ")),
+    };
+    let cap = kit::keycap("↵", &what, lit, caps, theme);
+    let cw = kit::spans_width(&cap);
+    out.push(Drawn {
+        spans: cap,
+        hits: vec![(0, cw.saturating_sub(2), Spot::Key(enter))],
+    });
     out.push(Drawn::default());
 
     // The prompt, on a panel.
@@ -862,63 +820,68 @@ fn pane(item: &Item, m: &Mission, w: usize, body: usize, roomy: bool) -> Vec<Dra
     }
     out.push(Drawn::default());
 
-    // Where it runs.
+    // The tools it may use.
     out.push(Drawn::of(kit::label(
-        "Where it runs",
+        "Allowed tools",
         Tone::Dim,
         None,
         w,
         theme,
     )));
-    let mut tab_line = vec![Span::raw(" ")];
-    let tab = match item.target {
-        Target::Tab(id) => m
-            .snap
-            .all_tabs
-            .iter()
-            .chain(m.snap.tabs.iter())
-            .find(|t| t.id == id),
-        _ => None,
-    };
-    match tab {
-        Some(t) => tab_line.extend(tab_words(t, m)),
-        None if s(item, "policy") == "new" => {
-            tab_line.push(Span::styled("a new tab each run", Tone::Text.style(theme)))
+    // Each tool a chip, on as many lines as they take.
+    let mut rows: Vec<Vec<Span<'static>>> = vec![vec![Span::raw(" ")]];
+    for tool in tools(item) {
+        let chip = kit::chip(&cut(&tool, w.saturating_sub(4)), Tone::Dim, caps, theme);
+        let row = rows.last_mut().expect("a row");
+        if kit::spans_width(row) > 1 && kit::spans_width(row) + kit::spans_width(&chip) > w {
+            rows.push(vec![Span::raw(" ")]);
         }
-        None => tab_line.push(Span::styled("no tab open", Tone::Dim.style(theme))),
+        rows.last_mut().expect("a row").extend(chip);
     }
-    out.push(Drawn::of(tab_line));
-    let mut rules = Vec::new();
-    rules.push(match (s(item, "policy"), b(item, "session")) {
-        ("new", _) => "Each run opens a tab of its own in its directory.".to_string(),
-        (_, true) => {
-            "The same tab each run; once it is closed, a new one resumes its session.".to_string()
-        }
-        _ => "The same tab each run, opened on its first.".to_string(),
-    });
-    rules.push(match s(item, "busy") {
-        "skip" => "Busy then, the run is skipped.".to_string(),
-        _ => "Busy then, it waits for the turn to end, up to 30 minutes.".to_string(),
-    });
-    rules.push(match s(item, "missed") {
-        "skip" => "Missed while the computer slept, it is skipped.".to_string(),
+    if rows[0].len() == 1 {
+        rows[0].push(Span::styled("none", Tone::Faint.style(theme)));
+    }
+    let note = "another tool fails the run, naming it";
+    let last = rows.last_mut().expect("a row");
+    if kit::spans_width(last) + width(note) + 1 < w {
+        last.push(Span::styled(format!(" {note}"), Tone::Faint.style(theme)));
+    } else {
+        rows.push(vec![Span::styled(
+            format!(" {note}"),
+            Tone::Faint.style(theme),
+        )]);
+    }
+    out.extend(rows.into_iter().map(Drawn::of));
+    out.push(Drawn::default());
+
+    // How it runs.
+    out.push(Drawn::of(kit::label(
+        "How it runs",
+        Tone::Dim,
+        None,
+        w,
+        theme,
+    )));
+    let asleep = match s(item, "missed") {
+        "skip" => "Asleep when due, it is skipped.".to_string(),
         _ => format!(
-            "Missed while the computer slept, it runs on waking, up to {} late.",
+            "Asleep when due, it runs on waking, up to {} late.",
             if LATE_BY == 3600 {
                 "an hour"
             } else {
                 "a while"
             }
         ),
-    });
-    for rule in rules {
-        out.extend(wrap(&rule, w.saturating_sub(2)).into_iter().map(|l| {
-            Drawn::of(vec![
-                Span::raw(" "),
-                Span::styled(l, Tone::Faint.style(theme)),
-            ])
-        }));
-    }
+    };
+    let how = format!(
+        "A headless Claude in its directory, opening no tab. Each run's session is kept; \"Open its last session in a tab\" resumes it. {asleep}"
+    );
+    out.extend(wrap(&how, w.saturating_sub(2)).into_iter().map(|l| {
+        Drawn::of(vec![
+            Span::raw(" "),
+            Span::styled(l, Tone::Dim.style(theme)),
+        ])
+    }));
     out.push(Drawn::default());
 
     // Today's runs, the earlier ones folded with their spend.
@@ -965,7 +928,7 @@ fn pane(item: &Item, m: &Mission, w: usize, body: usize, roomy: bool) -> Vec<Dra
         )]));
     }
     for r in &today {
-        out.push(Drawn::of(run_line(r, m, w, roomy)));
+        out.push(Drawn::of(run_line(r, m, w)));
     }
     if !earlier.is_empty() {
         let spent: f64 = earlier
@@ -1007,32 +970,10 @@ fn pane(item: &Item, m: &Mission, w: usize, body: usize, roomy: bool) -> Vec<Dra
     out
 }
 
-/// A tab as the pane names it: its state's mark, its number in its tab
-/// color, its name and its state in words.
-fn tab_words(t: &TabModel, m: &Mission) -> Vec<Span<'static>> {
-    let theme = &m.snap.theme;
-    let badge = model::badge_state(t, &m.snap.rules);
-    let color = t.color.map(Color::from).unwrap_or(theme.bright);
-    let mut out = vec![
-        kit::mark(Mark::of_badge(badge), m.snap.frame, theme),
-        Span::raw(" "),
-        Span::styled(
-            t.index.to_string(),
-            Style::new().fg(color).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(format!(" {}", t.name), Tone::Text.bold(theme)),
-    ];
-    let state = model::state_only(t, &m.snap.rules);
-    if !state.is_empty() {
-        out.push(Span::styled(format!("  {state}"), Tone::Dim.style(theme)));
-    }
-    out
-}
-
 /// A run's line: its time right-aligned, its mark, the reply's first line
-/// stretching, and its tab, length and cost at the right; the tab goes on
-/// a narrow pane.
-fn run_line(r: &Value, m: &Mission, w: usize, wide: bool) -> Vec<Span<'static>> {
+/// (a failed run's said so) stretching, and its length and cost at the
+/// right.
+fn run_line(r: &Value, m: &Mission, w: usize) -> Vec<Span<'static>> {
     let theme = &m.snap.theme;
     let at = r["at"].as_i64().unwrap_or(0);
     let time = jiff::Timestamp::from_second(at)
@@ -1042,13 +983,9 @@ fn run_line(r: &Value, m: &Mission, w: usize, wide: bool) -> Vec<Span<'static>> 
         .to_string();
     let outcome = r["outcome"].as_str().unwrap_or("");
     let tone = tone_of(outcome);
-    let words = r["words"].as_str().unwrap_or("").to_string();
-    let tab = r["tab"].as_str().unwrap_or("");
+    let words = run_words(r);
     let ran = matches!(outcome, "Ran" | "Late" | "Failed");
     let mut right = Vec::new();
-    if wide && !tab.is_empty() {
-        right.push(format!("tab {tab}"));
-    }
     if ran {
         right.push(length(r["secs"].as_i64().unwrap_or(0)));
         right.push(format!("${:.2}", r["cost"].as_f64().unwrap_or(0.0)));
@@ -1118,6 +1055,87 @@ fn run_line(r: &Value, m: &Mission, w: usize, wide: bool) -> Vec<Span<'static>> 
     line
 }
 
+/// The tools a routine may use, as its item carries them.
+fn tools(item: &Item) -> Vec<String> {
+    item.data
+        .get("tools")
+        .and_then(Value::as_array)
+        .map(|t| {
+            t.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Them as its row's chip says them: "Read, Glob, Grep".
+/// Kept to `TOOLS_MOST` columns, so the last run's chip after it shows:
+/// as many as fit, then how many more ("Read, Glob +9").
+fn tools_words(item: &Item) -> String {
+    let all = tools(item);
+    if all.is_empty() {
+        return "no tools".to_string();
+    }
+    let mut shown = String::new();
+    for (i, tool) in all.iter().enumerate() {
+        let next = if shown.is_empty() {
+            tool.clone()
+        } else {
+            format!("{shown}, {tool}")
+        };
+        let more = all.len() - i - 1;
+        let tail = if more > 0 {
+            width(&format!(" +{more}"))
+        } else {
+            0
+        };
+        if i > 0 && width(&next) + tail > TOOLS_MOST {
+            return format!("{shown} +{}", all.len() - i);
+        }
+        // A first tool too long by itself is cut to fit with the count.
+        shown = if i == 0 && width(&next) + tail > TOOLS_MOST {
+            cut(&next, TOOLS_MOST.saturating_sub(tail))
+        } else {
+            next
+        };
+    }
+    shown
+}
+
+/// The most columns a row's chip of its tools takes.
+const TOOLS_MOST: usize = 28;
+
+/// The tools its last run needed that its list doesn't allow.
+fn needs(item: &Item) -> Vec<String> {
+    item.data
+        .get("needs")
+        .and_then(Value::as_array)
+        .map(|t| {
+            t.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether its last run failed.
+fn last_failed(item: &Item) -> bool {
+    item.data
+        .get("last")
+        .is_some_and(|l| matches!(l["outcome"].as_str(), Some("Failed" | "Refused")))
+}
+
+/// What a run says: its reply's first line, or why it didn't run, a failed
+/// one saying so ("failed: needs Bash").
+fn run_words(run: &Value) -> String {
+    let words = run["words"].as_str().unwrap_or("");
+    match run["outcome"].as_str() {
+        Some("Failed") if !words.is_empty() => format!("failed: {words}"),
+        Some("Failed") => "failed".to_string(),
+        _ => words.to_string(),
+    }
+}
+
 /// The view's own keys for the footer, after moving, Enter and `m`:
 /// n, and on a narrow screen i for the chosen routine; the rest are the
 /// pane's keycaps.
@@ -1148,11 +1166,11 @@ mod tests {
             dir: "/work/api".into(),
             when: String::new(),
             schedule,
-            tab_policy: TabPolicy::SameTab,
-            when_busy: WhenBusy::Wait,
             when_missed: WhenMissed::OnWaking,
             prompt: "Sort the new issues.".into(),
             model: String::new(),
+            tools: vec!["Read".into(), "Glob".into(), "Grep".into()],
+            needs: Vec::new(),
             paused: false,
             session: String::new(),
             session_dir: String::new(),
@@ -1202,14 +1220,12 @@ mod tests {
         let live = HashMap::new();
         let f = Facts {
             now: now.clone(),
-            tabs: vec![("r1".into(), Some(TabId(9)), "9".into())],
             live: &live,
             runs: &runs,
         };
         let items = items(&[gone, soon, daily], &f);
         let names: Vec<&str> = items.iter().map(|i| s(i, "name")).collect();
         assert_eq!(names, ["Triage", "Ship notes", "Old"]);
-        assert_eq!(items[0].target, Target::Tab(TabId(9)));
         assert_eq!(s(&items[0], "nextWords"), "tomorrow 8:45 AM");
         assert_eq!(items[0].data["week"][1], json!(["✓"]));
         assert_eq!(items[0].data["week"][2], json!(["–"]));

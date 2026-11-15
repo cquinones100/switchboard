@@ -3,6 +3,37 @@ name: queue-and-clean
 description: Queue the current branch's PR for merge if it is not queued already, watch it in the background, fix what stops it merging (failing checks, conflicts, being dropped from the merge queue), and once it merges wait for it to deploy, test the feature in a real browser and record a video of the test, and once you approve the test make sure its Linear ticket is done and its item in your notes ticked, then remove this worktree and its local branch. In a repository that lands straight on its default branch, as `switchboard landing` says (~/.config/switchboard/repos.json, else GitHub's rules and the repository's CLAUDE.md), it lands the branch there instead, with the steps it gives, one worktree at a time.
 argument-hint: "[PR number]"
 disable-model-invocation: true
+allowed-tools:
+  - Bash(node ~/.local/share/switchboard/claude/plugin/skills/*)
+  - Bash(switchboard codex-review)
+  - Bash(switchboard codex-review *)
+  - Bash(switchboard skill-path *)
+  - Bash(switchboard slack-relay notify *)
+  - Bash(switchboard show *)
+  - Bash(switchboard set *)
+  - Bash(switchboard setting review_security)
+  - Bash(switchboard setting apply_after_landing)
+  - Bash(switchboard apply-actions *)
+  - Bash(switchboard landing)
+  - Bash(switchboard landing *)
+  - Bash(switchboard respawn *)
+  - Bash(switchboard land-lock *)
+  - Bash(switchboard wait-ci *)
+  - Bash(switchboard wait-deploy *)
+  - Bash(git status)
+  - Bash(git status *)
+  - Bash(git log *)
+  - Bash(git diff *)
+  - Bash(git fetch)
+  - Bash(git fetch *)
+  - Bash(git rev-parse *)
+  - Bash(git worktree list*)
+  - Bash(git branch --show-current)
+  - Bash(gh pr view*)
+  - Bash(gh pr checks *)
+  - Bash(gh pr diff*)
+  - Bash(gh run view *)
+  - Bash(gh run list*)
 ---
 
 # Queue and clean
@@ -52,7 +83,7 @@ The `sed` takes off the `#<PR> ` the label starts with when the branch has a PR,
 
 4. Settle the ticket and the note now, so finishing up later asks nothing:
    - **The ticket**: the Linear ticket the branch names (an ID like `ABC-123` at the start of the branch name), else one the PR's title or body names. None is fine: then there is no ticket to close out.
-   - **The note**: which of the user's notes holds this work's checklist item, settled as `~/.local/share/switchboard/plugin/skills/note-watch/pick-note.md` says, with **No note** as an option, since not every PR has one. For a branch `/wtn` opened, that takes the note its prompt names without asking, as pick-note's step 2 says. Remember the answer; read the note only at "Closing out".
+   - **The note**: which of the user's notes holds this work's checklist item, settled as `~/.local/share/switchboard/claude/plugin/skills/note-watch/pick-note.md` says, with **No note** as an option, since not every PR has one. For a branch `/wtn` opened, that takes the note its prompt names without asking, as pick-note's step 2 says. Remember the answer; read the note only at "Closing out".
    - **The deploy and the test**: settle both as "Settling" in the file `switchboard skill-path deploy-test` prints says, so nothing after the merge has to ask.
 
 ## No PR

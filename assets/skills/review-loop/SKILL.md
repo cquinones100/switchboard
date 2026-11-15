@@ -2,6 +2,17 @@
 name: review-loop
 description: Run the branch through repeated skeptical, read-only Codex reviews (Claude reviews when Codex isn't available), fixing what each round finds, until two consecutive rounds come back clean. Use when the user says a branch or PR is ready for review, asks to "run the review loop", or asks for a Codex review of the branch.
 argument-hint: "[all] [norules] [<worktree of someone else's PR> [<base>]]"
+allowed-tools:
+  - Bash(switchboard codex-review)
+  - Bash(switchboard codex-review *)
+  - Bash(switchboard skill-path *)
+  - Bash(switchboard show *)
+  - Bash(switchboard setting review_security)
+  - Bash(switchboard land-lock *)
+  - Bash(git status)
+  - Bash(git status *)
+  - Bash(git log *)
+  - Bash(git rev-parse *)
 ---
 
 # Review loop
@@ -16,7 +27,7 @@ Working straight on the default branch, with no branch or PR, "the branch" here 
 
 ## Only this repository
 
-The loop changes, commits and pushes only the repository it reviews: the one `git rev-parse --show-toplevel` names from where it started. Never edit, commit or push in any other, even when a finding points there: a skill, hook or script this repository uses may live in another clone (Switchboard's own skills, in `~/.local/share/switchboard/plugin/skills/...` or `~/.claude/skills/...`, are written there by its setup and belong to no repository), and so may a shared library or a sibling service.
+The loop changes, commits and pushes only the repository it reviews: the one `git rev-parse --show-toplevel` names from where it started. Never edit, commit or push in any other, even when a finding points there: a skill, hook or script this repository uses may live in another clone (Switchboard's own skills, in `~/.local/share/switchboard/claude/plugin/skills/...` or `~/.claude/skills/...`, are written there by its setup and belong to no repository), and so may a shared library or a sibling service.
 
 Before editing a file, check that this repository owns it: the repository of its real path, links followed, is the one under review, `git -C "$(dirname "$(realpath <file>)")" rev-parse --show-toplevel` printing that same top level. A path under the top level isn't enough, since a submodule or a clone nested inside it is a repository of its own. When it isn't, make no change there: dispute the finding in the notes file as outside this repository, naming the file and the repository it is in, and list it in the final report under **Outside this repository** for the user to take up there. Run git only on this repository (`git -C <top level>` when in doubt), never `git -C` another.
 

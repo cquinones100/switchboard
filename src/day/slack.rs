@@ -266,9 +266,11 @@ pub struct Look<'a> {
 /// look is coming. Each item's `lines` are the message as written (for
 /// drawing as Slack does), its `detail` the same on one line, its `data`
 /// `{ kind, old, message: { channel, thread, ts }, user, from, where, ts,
-/// thread, answered, replies }` (`thread` its thread's key, `answered` when
-/// you wrote after it there, `replies` its thread's reply count once read,
-/// `slack_thread`); seen ones below the
+/// thread, answered, replies, root, people, read_to }` (`thread` its thread's key,
+/// `answered` when you wrote after it there, and once its thread is read
+/// (`slack_thread`): `replies` its reply count, `root` its first message's
+/// `{ user, from, text, ts }`, `people` everyone in it, `{ user, from }`
+/// in the order they first wrote, and `read_to` its newest message's ts); seen ones below the
 /// new, faded (`State::Idle`), with "· seen" after the title. With nothing to
 /// list, `at` says when it last looked (`empty_words`).
 pub fn slack_view(look: &Look) -> ViewData {
@@ -343,6 +345,21 @@ pub fn slack_view(look: &Look) -> ViewData {
                 "thread": m.thread_key(),
                 "answered": answered,
                 "replies": threads.get(&m.thread_key()).map(|t| t.replies),
+                "root": threads.get(&m.thread_key()).and_then(|t| t.messages.first()).map(|r| json!({
+                    "user": r.user, "from": r.from, "text": r.text, "ts": r.ts,
+                })),
+                "people": threads.get(&m.thread_key()).map(|t| people(&t.messages)),
+                // How far it was read, so the board counts replies saved since.
+                "read_to": threads.get(&m.thread_key()).map(|t| {
+                    t.messages.iter().filter_map(|s| s.ts.parse::<f64>().ok()).fold(0.0, f64::max)
+                }),
+                // The Slack board heads a thread's row with its first
+                // message, so `/` finds the row by it too.
+                "search": threads
+                    .get(&m.thread_key())
+                    .and_then(|t| t.messages.first())
+                    .map(|r| format!("{} {}", r.from, r.text.split_whitespace().collect::<Vec<_>>().join(" ")))
+                    .unwrap_or_default(),
             }));
             item.lines = m.text.split('\n').map(str::to_string).collect();
             if let Some(link) = &m.link {
@@ -376,6 +393,9 @@ pub fn slack_view(look: &Look) -> ViewData {
         // the threads read since on their own.
         head: json!({
             "seen": seen,
+            // The messages seen on their own, `<channel>:<ts>`, for the
+            // thread beside the list.
+            "seen_alone": acted.keys().filter(|k| !k.starts_with("thread:")).collect::<Vec<_>>(),
             "read_threads": acted
                 .iter()
                 .filter_map(|(k, at)| Some((k.strip_prefix("thread:")?.to_string(), at.clone())))
@@ -383,6 +403,18 @@ pub fn slack_view(look: &Look) -> ViewData {
         }),
         ..ViewData::default()
     }
+}
+
+/// Who is in a thread, in the order they first wrote, each once.
+fn people(messages: &[super::slack_thread::Said]) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    for m in messages {
+        let who = json!({ "user": m.user, "from": m.from });
+        if !out.contains(&who) {
+            out.push(who);
+        }
+    }
+    out
 }
 
 /// Saved more than `STALE_MS` ago.

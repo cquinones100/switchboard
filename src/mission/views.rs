@@ -1448,8 +1448,10 @@ pub fn count_words(view: Option<&View>, tabs: usize) -> String {
     let items = &view.data.items;
     match view.id {
         ViewId::Slack => {
+            // Each message of a thread's row on the Slack board.
             let new = items
                 .iter()
+                .flat_map(super::slack_board::members)
                 .filter(|i| i.data.get("old").and_then(Value::as_bool) == Some(false))
                 .count();
             format!("{new} new")
@@ -1543,6 +1545,17 @@ mod tests {
             ],
         );
         assert_eq!(count_words(Some(&slack), 0), "4 new");
+        // A thread's row on the Slack board counts each of its messages.
+        let mut grouped = slack.clone();
+        grouped.data.items = vec![Item::new("row", "row").data(json!({
+            "old": false,
+            "members": [
+                Item::new("a", "a").data(json!({ "old": false })),
+                Item::new("b", "b").data(json!({ "old": false })),
+                Item::new("c", "c").data(json!({ "old": true })),
+            ],
+        }))];
+        assert_eq!(count_words(Some(&grouped), 0), "2 new");
         let model = crate::usage::charts::Model {
             today: crate::usage::charts::SpanSpend {
                 total: 8.414,

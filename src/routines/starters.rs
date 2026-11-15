@@ -17,9 +17,9 @@ use std::path::Path;
 use jiff::Zoned;
 use serde::Deserialize;
 
+use super::WhenMissed;
 use super::routine::{self, Routine};
 use super::schedule::Schedule;
-use super::{TabPolicy, WhenBusy, WhenMissed};
 use crate::{assets, util};
 
 /// The marker in the routines' folder saying the starters were made: a
@@ -34,6 +34,8 @@ pub struct Starter {
     pub when: String,
     pub model: String,
     pub prompt: String,
+    /// The tools its runs need.
+    pub tools: Vec<String>,
 }
 
 /// Which starter, for whether it starts paused.
@@ -144,11 +146,6 @@ pub fn routines(was: &Was, home: &Path, now: &Zoned, taken: &[Routine]) -> Vec<(
             dir: home.display().to_string(),
             when,
             schedule,
-            tab_policy: TabPolicy::SameTab,
-            // A busy tab skips the run: each runs again soon (the todo note
-            // within the hour, and only once you're here, which a run held
-            // for its tab couldn't wait for).
-            when_busy: WhenBusy::Skip,
             when_missed: if once_a_day {
                 WhenMissed::OnWaking
             } else {
@@ -156,6 +153,8 @@ pub fn routines(was: &Was, home: &Path, now: &Zoned, taken: &[Routine]) -> Vec<(
             },
             prompt: s.prompt,
             model: s.model,
+            tools: s.tools,
+            needs: Vec::new(),
             paused: !on,
             session: String::new(),
             session_dir: String::new(),
@@ -237,6 +236,49 @@ pub fn is_todo_note(dir: &Path, r: &Routine) -> bool {
             .any(|(kind, s)| *kind == Kind::TodoNote && s.prompt == r.prompt)
 }
 
+/// The Slack and Calendar starters' prompts before runs were headless,
+/// which ran a skill by its slash command: a headless run has no
+/// Switchboard plugin, so such a prompt is given the one that reads the
+/// skill's file instead (`give_tools`).
+const SLASH_PROMPTS: [(Kind, &str); 2] = [
+    (
+        Kind::Slack,
+        "Each run, run the slack-updates skill (/slack-updates), which saves what is new for you on Slack for mission control's Slack view. Reply with one line: what it found.",
+    ),
+    (
+        Kind::Calendar,
+        "Each run, run the today skill (/today), which saves today's events for mission control's Calendar view. Reply with one line: the meetings left today.",
+    ),
+];
+
+/// A routine from a build before the allowed tools given its own: a
+/// starter's from its file (and, for the Slack and Calendar ones still
+/// with their slash command, the prompt that works headless), any other
+/// `headless::DEFAULT_TOOLS`.
+pub fn give_tools(dir: &Path, r: &mut Routine) {
+    let kind = [
+        Kind::TodoNote,
+        Kind::MeetingNotes,
+        Kind::Slack,
+        Kind::Calendar,
+    ]
+    .into_iter()
+    .find(|k| id_of(dir, *k).as_deref() == Some(r.id.as_str()));
+    let starter = kind.and_then(|k| starters().into_iter().find(|(sk, _)| *sk == k));
+    match starter {
+        Some((kind, s)) => {
+            r.tools = s.tools;
+            if SLASH_PROMPTS
+                .iter()
+                .any(|(k, p)| *k == kind && r.prompt == *p)
+            {
+                r.prompt = s.prompt;
+            }
+        }
+        None => r.tools = super::headless::DEFAULT_TOOLS.map(String::from).to_vec(),
+    }
+}
+
 /// The id a starter was made with, while the marker says.
 pub fn id_of(dir: &Path, kind: Kind) -> Option<String> {
     util::read_json_object(dir.join(MARKER))
@@ -259,6 +301,9 @@ mod tests {
         assert_eq!(starters.len(), FILES.len());
         for (_, s) in &starters {
             assert!(!s.name.is_empty() && !s.prompt.is_empty());
+            assert!(!s.tools.is_empty(), "{} lists the tools it needs", s.name);
+            // A headless run has no plugin, so no skill by its slash command.
+            assert!(!s.prompt.contains("(/"), "{}", s.name);
             Schedule::parse(&s.when, &now()).unwrap_or_else(|e| panic!("{}: {e}", s.name));
         }
         let made = routines(&Was::default(), Path::new("/home/me"), &now(), &[]);
@@ -302,6 +347,31 @@ mod tests {
         let ids: std::collections::HashSet<&str> =
             made.iter().map(|(_, r)| r.id.as_str()).collect();
         assert_eq!(ids.len(), made.len(), "each its own id");
+    }
+
+    #[test]
+    fn one_made_before_the_allowed_tools_is_given_its_starters_or_the_defaults() {
+        let dir = std::env::temp_dir().join(format!(
+            "sb-starter-tools-{}-{}",
+            std::process::id(),
+            util::now_ms()
+        ));
+        let made = make_once(&dir, &Was::default(), Path::new("/home/me"), &now());
+        let mut slack = made[2].clone();
+        slack.tools.clear();
+        slack.prompt = SLASH_PROMPTS[0].1.into();
+        give_tools(&dir, &mut slack);
+        assert_eq!(slack.tools, made[2].tools);
+        assert_eq!(slack.prompt, made[2].prompt, "its slash command replaced");
+        let mut changed = made[3].clone();
+        changed.prompt = "Mine.".into();
+        give_tools(&dir, &mut changed);
+        assert_eq!(changed.prompt, "Mine.", "a prompt of yours kept");
+        let mut yours = made[0].clone();
+        yours.id = "r-yours".into();
+        give_tools(&dir, &mut yours);
+        assert_eq!(yours.tools, ["Read", "Glob", "Grep"]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

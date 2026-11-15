@@ -194,17 +194,17 @@ fn print_sets_a_home_up_and_clean_takes_it_away() {
     assert_eq!(settings["github"], json!(false));
     assert_eq!(settings["meeting_notes"], json!(false));
     assert_eq!(settings["update_check"], json!("off"));
-    // Its setup ran there: the try has its own plugin, with the hooks and
-    // skills its panes' Claude loads, and its Claude settings carry the
-    // statusline; yours are as they were.
+    // Its setup ran there: the try has its own plugin, with the hooks,
+    // skills and statusline its panes' Claude loads, and its Claude
+    // settings are the copy of yours, nothing added; yours are as they were.
     let claude = fs::read_to_string(home.join(".claude/settings.json")).unwrap();
-    assert!(claude.contains("switchboard statusline"), "{claude}");
+    assert!(!claude.contains("switchboard statusline"), "{claude}");
     assert!(!claude.contains("switchboard hook"), "{claude}");
     assert_eq!(
         fs::read_to_string(s.real.join(".claude/settings.json")).unwrap(),
         "{\"model\": \"opus\"}\n"
     );
-    let plugin = home.join(".local/share/switchboard/plugin");
+    let plugin = home.join(".local/share/switchboard/claude/plugin");
     // The skills are the worktree's, the change under trial.
     assert_eq!(
         fs::read_to_string(plugin.join("skills/wt/SKILL.md")).unwrap(),
@@ -214,6 +214,11 @@ fn print_sets_a_home_up_and_clean_takes_it_away() {
         fs::read_to_string(plugin.join("hooks/hooks.json"))
             .unwrap()
             .contains("switchboard hook Stop")
+    );
+    assert!(
+        fs::read_to_string(plugin.join("hooks/statusline.js"))
+            .unwrap()
+            .contains("switchboard statusline")
     );
     assert!(!home.join(".claude/skills/wt").exists());
     assert!(!s.real.join(".claude/skills").exists());

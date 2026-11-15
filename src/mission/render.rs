@@ -7221,11 +7221,11 @@ mod tests {
             dir: "/work/api".into(),
             when: String::new(),
             schedule,
-            tab_policy: crate::routines::TabPolicy::SameTab,
-            when_busy: crate::routines::WhenBusy::Wait,
             when_missed: crate::routines::WhenMissed::OnWaking,
             prompt: "Read the new issues and sort them by area.".into(),
             model: String::new(),
+            tools: vec!["Read".into(), "Glob".into(), "Grep".into()],
+            needs: Vec::new(),
             paused: false,
             session: "s1".into(),
             session_dir: "/work/api".into(),
@@ -7272,7 +7272,6 @@ mod tests {
         let live = HashMap::new();
         let facts = crate::routines::view::Facts {
             now,
-            tabs: vec![("r1".into(), Some(TabId(9)), "9".into())],
             live: &live,
             runs: &runs,
         };
@@ -7296,17 +7295,20 @@ mod tests {
             "ONCE",
             "Morning triage",
             "Every day at 8:45 AM",
-            "tab 9 · open",
+            "Read, Glob, Grep",
             "THIS WEEK",
             "PROMPT",
             "added to Claude's system prompt",
-            "Run now",
-            "WHERE IT RUNS",
+            "run now, edit, pause or delete it",
+            "ALLOWED TOOLS",
+            "another tool fails the run, naming it",
+            "HOW IT RUNS",
+            "A headless Claude in its directory, opening no tab.",
             "RUNS TODAY",
             "Sorted four new issues",
-            "tab 9  1m  $0.12",
+            "1m  $0.12",
             "2 routines · next at",
-            "– missed or busy, so skipped",
+            "– missed or still running, so skipped",
         ] {
             assert!(text.contains(want), "{want}: {text}");
         }
@@ -7353,12 +7355,11 @@ mod tests {
             "the last chosen shows the week: {text}"
         );
 
-        // Under 160: each run's tab, then the rows' schedule go.
+        assert!(!text.contains("tab 9"), "no run names a tab: {text}");
+
+        // Under 160: the rows' schedule goes.
         let (text, _) = draw(150, false);
-        assert!(
-            text.contains("1m  $0.12") && !text.contains("tab 9  1m"),
-            "{text}"
-        );
+        assert!(text.contains("1m  $0.12"), "{text}");
         assert!(!text.contains("Every day at 8:45 AM  "), "{text}");
         assert!(text.contains("PROMPT"), "{text}");
 
@@ -7368,10 +7369,63 @@ mod tests {
         assert!(text.contains("i the chosen routine"), "{text}");
         let (text, _) = draw(120, true);
         assert!(
-            text.contains("PROMPT") && text.contains("Run now"),
+            text.contains("PROMPT") && text.contains("run now, edit, pause or delete it"),
             "{text}"
         );
         assert!(!text.contains("THIS WEEK"), "{text}");
+
+        // A run that reached for a tool off its list: failed, naming it, in
+        // the row's chip, the pane's runs and Enter's keycap (board 29).
+        let mut needing = routine(
+            "r1",
+            "Morning triage",
+            Schedule::Days {
+                days: Days::ALL,
+                at: 8 * 60 + 45,
+            },
+        );
+        needing.needs = vec!["Bash".into()];
+        // A long list of tools, as the starters have, leaves room for it.
+        needing.tools = (0..10)
+            .map(|i| format!("mcp__claude_ai_Slack__slack_tool_{i}"))
+            .collect();
+        let failed = HashMap::from([(
+            "r1".to_string(),
+            vec![Run {
+                due: now_secs - 600,
+                ran: now_secs - 600,
+                tab: String::new(),
+                secs: 22,
+                cost: 0.02,
+                outcome: Outcome::Failed,
+                words: "needs Bash".into(),
+            }],
+        )]);
+        let facts = crate::routines::view::Facts {
+            now: facts.now.clone(),
+            live: &live,
+            runs: &failed,
+        };
+        let items = crate::routines::view::items(&[needing], &facts);
+        let view = list_view(ViewId::Routines, "Routines", items);
+        let mut m = mission(vec![nine.clone()], vec![view]);
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.size = (240, 44);
+        let (lines, _, _, _) = drawn(&m, 240, 44);
+        let text = texts(&lines).join("\n");
+        assert!(
+            text.contains("· failed: needs Bash"),
+            "the row's chip: {text}"
+        );
+        assert!(
+            text.contains("✕ failed: needs Bash"),
+            "the pane's run: {text}"
+        );
+        assert!(
+            text.contains("actions: allow Bash and run it again first"),
+            "{text}"
+        );
     }
 
     /// The Reopen view with UX 2.0: a closed tab that landed, chosen, with

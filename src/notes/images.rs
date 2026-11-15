@@ -19,9 +19,11 @@
 //! (Ghostty, kitty), or, inside the workspace with Settings' "Image
 //! protocol" on sixel, one that draws sixel (Windows Terminal), for which
 //! the server draws the picture where its placeholders are
-//! (src/mux/sixel); elsewhere, or with the notes_images setting off, an
-//! image is its name alone. A picture other than a PNG is made one first,
-//! once for each version of the file, in the cache, as macOS's sips did.
+//! (src/mux/sixel), as src/mux/graphics.rs decides (`apps_draw`), which
+//! also writes the commands; elsewhere, or with the notes_images setting
+//! off, an image is its name alone. A picture other than a PNG is made one
+//! first, once for each version of the file, in the cache, as macOS's sips
+//! did.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -33,6 +35,7 @@ use ratatui::style::Color;
 use super::format::Doc;
 use super::render::{self, Kind};
 use super::store::{self, Store};
+use crate::mux::graphics;
 use crate::{paths, util};
 
 pub use crate::ui::images::{MARKS, PLACEHOLDER};
@@ -236,21 +239,6 @@ fn as_png(file: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Whether pictures can be drawn with kitty's placeholders: the terminal
-/// speaks kitty's graphics protocol with them (Ghostty or kitty, by
-/// `$TERM` or `$TERM_PROGRAM`; the multiplexer's panes keep the terminal
-/// the workspace started in as `TERM_PROGRAM`), or, inside the workspace
-/// with Settings' "Image protocol" on sixel, the server draws them as
-/// sixel where the placeholders are (src/mux/sixel), whatever the
-/// terminal is called.
-pub fn terminal_can() -> bool {
-    crate::ui::images::speaks_kitty(&format!(
-        "{} {}",
-        std::env::var("TERM").unwrap_or_default(),
-        std::env::var("TERM_PROGRAM").unwrap_or_default()
-    )) || (crate::mux::socket::in_pane() && crate::mux::sixel::chosen_now())
-}
-
 /// The terminal's cell in pixels, from its window size, else a common one.
 pub fn cell_size() -> (u32, u32) {
     match crossterm::terminal::window_size() {
@@ -377,18 +365,12 @@ impl Images {
             .copied()
             .collect();
         for id in gone {
-            out.extend(command(&format!("a=d,d=I,i={id},q=2")));
+            out.extend(graphics::take_back(id).into_bytes());
             self.sent.remove(&id);
         }
         for p in near {
             if self.sent.get(&p.id) != Some(&(p.cols, p.rows)) {
-                out.extend(command(&format!(
-                    "a=T,U=1,f=100,t=f,q=2,i={},c={},r={};{}",
-                    p.id,
-                    p.cols,
-                    p.rows,
-                    util::base64(p.png.to_string_lossy().as_bytes())
-                )));
+                out.extend(graphics::by_path(p.id, p.cols, p.rows, &p.png).into_bytes());
                 self.sent.insert(p.id, (p.cols, p.rows));
             }
         }
@@ -398,16 +380,6 @@ impl Images {
     /// Every picture taken back, as the app ends.
     pub fn release_all(&mut self) -> Vec<u8> {
         self.commands(&[])
-    }
-}
-
-/// A kitty graphics command, wrapped for tmux when the app runs inside it.
-fn command(body: &str) -> Vec<u8> {
-    let seq = format!("\x1b_G{body}\x1b\\");
-    if std::env::var_os("TMUX").is_some_and(|t| !t.is_empty()) {
-        format!("\x1bPtmux;{}\x1b\\", seq.replace('\x1b', "\x1b\x1b")).into_bytes()
-    } else {
-        seq.into_bytes()
     }
 }
 

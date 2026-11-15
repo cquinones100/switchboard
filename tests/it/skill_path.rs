@@ -134,7 +134,7 @@ fn skill_path_finds_the_repository_s_copy_then_switchboard_s_personal_one_then_t
     assert!(none.stdout.is_empty());
 
     // Switchboard's plugin's, when there is no other.
-    let file = home.join(".local/share/switchboard/plugin/skills/demo/SKILL.md");
+    let file = home.join(".local/share/switchboard/claude/plugin/skills/demo/SKILL.md");
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(&file, "# demo\n").unwrap();
     let plugin = file.to_string_lossy().into_owned();

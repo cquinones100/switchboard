@@ -143,8 +143,8 @@ pub struct Picker {
     /// by their place in `items`.
     multi: bool,
     marked: Vec<usize>,
-    /// Drawn with UX 2.0's atoms, and whether the terminal draws the
-    /// kit's half circles (`kit::caps`); none for fzf's look.
+    /// Drawn with UX 2.0's atoms, and whether the kit's half circles are
+    /// written (src/mux/graphics.rs's `round_ends`); none for fzf's look.
     kit: Option<bool>,
 }
 

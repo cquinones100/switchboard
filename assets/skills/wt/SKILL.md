@@ -3,6 +3,12 @@ name: wt
 description: Replace this Claude session with `wt <ticket>` in the same Switchboard pane, so the ticket's worktree opens in this tab with a fresh Claude session working on it. For the end of a ticket-shaping conversation.
 argument-hint: "[ticket ID or URL] [what to add to its prompt]"
 disable-model-invocation: true
+allowed-tools:
+  - Bash(switchboard skill-path *)
+  - Bash(switchboard set *)
+  - Bash(switchboard respawn *)
+  - Bash(git status)
+  - Bash(git status *)
 ---
 
 # wt

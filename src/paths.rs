@@ -46,12 +46,22 @@ pub fn cache_dir() -> PathBuf {
 }
 
 /// Where Switchboard's plugin for Claude Code is written (its skills, hooks
-/// and instructions, src/setup/plugin.rs), relative to the home.
-pub const PLUGIN: &str = ".local/share/switchboard/plugin";
+/// and instructions, src/setup/plugin.rs), relative to the home: under
+/// `claude/`, since it is Claude Code's.
+pub const PLUGIN: &str = ".local/share/switchboard/claude/plugin";
 
-/// `~/.local/share/switchboard/plugin`.
+/// `~/.local/share/switchboard/claude/plugin`.
 pub fn plugin_dir() -> PathBuf {
     home_join(PLUGIN)
+}
+
+/// Where earlier builds wrote the plugin, which setup leaves as a link to
+/// `PLUGIN` for the tabs opened before, whose environment still names it.
+pub const FORMER_PLUGIN: &str = ".local/share/switchboard/plugin";
+
+/// `~/.local/share/switchboard/plugin`.
+pub fn former_plugin_dir() -> PathBuf {
+    home_join(FORMER_PLUGIN)
 }
 
 /// A path with the home directory's first occurrence shown as `~`, as the
