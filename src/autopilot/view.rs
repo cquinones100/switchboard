@@ -6,8 +6,8 @@
 //! where it stands (`COLUMNS`: the items it will open next, in the order
 //! it opens them, then its tabs working, waiting on you, landing and
 //! landed, today's landings whose tabs are closed with them, then the ones
-//! skipped), the least far along first, so landed ones come last of the
-//! tabs. Each tab keeps a cell per stage,
+//! skipped, a column only while any is), the least far along first, so
+//! landed ones come last of the tabs. Each tab keeps a cell per stage,
 //! which the board's meter counts and its side panel lists
 //! (src/mission/render.rs).
 //!
@@ -65,6 +65,18 @@ pub const COLUMNS: [&str; 6] = [
     "Landed",
     "Skipped",
 ];
+
+/// The columns the board draws: every one of `COLUMNS` but Skipped while
+/// no item stands in it, so an empty Skipped column takes none of the
+/// width and comes back with the first item skipped.
+pub fn board_columns(items: &[Item]) -> Vec<&'static str> {
+    COLUMNS
+        .into_iter()
+        .filter(|column| {
+            *column != COLUMNS[5] || items.iter().any(|i| i.group.as_deref() == Some(*column))
+        })
+        .collect()
+}
 
 /// One of the mode's tabs as the view needs it.
 #[derive(Clone, Debug, PartialEq)]
@@ -796,6 +808,17 @@ mod tests {
             items[5].group, None,
             "its heading leads only the plain list"
         );
+        assert_eq!(board_columns(&items), COLUMNS);
+        let none_skipped = super::items(
+            &s,
+            "",
+            &[row(TabState::Waiting)],
+            &["Next".into()],
+            &[],
+            &[],
+            &HashMap::new(),
+        );
+        assert_eq!(board_columns(&none_skipped), COLUMNS[..5]);
     }
 
     #[test]

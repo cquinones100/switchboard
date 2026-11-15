@@ -4442,7 +4442,8 @@ fn pilot_board(
     let top = lines.len();
     let side_w = side_width(m, "autopilot", cols);
     let board_w = cols - side_w;
-    let held: Vec<Vec<usize>> = crate::autopilot::view::COLUMNS
+    let columns = crate::autopilot::view::board_columns(items);
+    let held: Vec<Vec<usize>> = columns
         .iter()
         .map(|column| {
             (0..items.len())
@@ -4450,7 +4451,7 @@ fn pilot_board(
                 .collect()
         })
         .collect();
-    let board_columns: Vec<kit::BoardColumn> = crate::autopilot::view::COLUMNS
+    let board_columns: Vec<kit::BoardColumn> = columns
         .iter()
         .zip(&held)
         .map(|(column, indices)| kit::BoardColumn {
@@ -9378,6 +9379,36 @@ mod tests {
             text[rule + 1].contains("Give notes stable IDs"),
             "{text:#?}"
         );
+    }
+
+    #[test]
+    fn with_ux2_autopilot_has_no_skipped_column_while_nothing_is_skipped() {
+        let rows = vec![pilot_row(3, "Give notes stable IDs", TabState::Working)];
+        let list = crate::autopilot::view::items(
+            &pilot_summary(),
+            "",
+            &rows,
+            &["Third".into()],
+            &[],
+            &[],
+            &std::collections::HashMap::new(),
+        );
+        let mut m = mission(
+            Vec::new(),
+            vec![list_view(ViewId::Autopilot, "Autopilot", list)],
+        );
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.size = (200, 30);
+        let text = texts(&drawn(&m, 200, 30).0);
+        let heads = text
+            .iter()
+            .find(|l| l.contains("NEXT UP 1"))
+            .unwrap_or_else(|| panic!("{text:#?}"));
+        for column in &crate::autopilot::view::COLUMNS[..5] {
+            assert!(heads.contains(&column.to_uppercase()), "{heads}");
+        }
+        assert!(!text.iter().any(|l| l.contains("SKIPPED")), "{text:#?}");
     }
 
     #[test]
