@@ -2,7 +2,8 @@
 //! (`SWITCHBOARD_GITHUB_API` moved there, the release's files served from
 //! it too): `switchboard update` swapping a copy of the binary for the
 //! release's and running its setup, a download whose checksum doesn't match
-//! refused with the old binary left, the server's box on attaching and its
+//! or whose signature isn't by a release key refused with the old binary
+//! left, the server's box on attaching and its
 //! hourly look's timing, and install.sh, with `uname` stubbed for each
 //! platform and run whole against the same stand-in.
 //!
@@ -28,6 +29,7 @@ use common::http::{self, Reply, Service};
 use common::stand_in;
 use common::{BIN, TempDir, TestServer};
 use serde_json::{Value, json};
+use ssh_key::{HashAlg, LineEnding, PrivateKey, private::Ed25519Keypair};
 use switchboard::update::{self, Release, install, release};
 
 const INSTALL_SH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/install.sh");
@@ -36,6 +38,30 @@ const TARGETS: [&str; 3] = [
     "x86_64-apple-darwin",
     "aarch64-apple-darwin",
 ];
+
+/// The key the tests' releases are signed with (`TRUSTED`), which a debug
+/// build trusts through `SWITCHBOARD_RELEASE_KEY`, as install.sh does, or
+/// another no build trusts.
+fn signing_key(seed: u8) -> PrivateKey {
+    PrivateKey::from(Ed25519Keypair::from_seed(&[seed; 32]))
+}
+const TRUSTED: u8 = 1;
+const UNTRUSTED: u8 = 2;
+
+fn trusted_key() -> String {
+    signing_key(TRUSTED).public_key().to_openssh().unwrap()
+}
+
+/// What is wrong with a release `Fake::publish` serves.
+#[derive(Clone, Copy, PartialEq)]
+enum Wrong {
+    Nothing,
+    /// Its checksum isn't the archive's.
+    Checksum,
+    /// Its checksum is right, and its signature is by a key no build
+    /// trusts, as a release changed after it was published would be.
+    Signature,
+}
 
 /// Each path's status and body.
 type Routes = Arc<Mutex<HashMap<String, (u16, Vec<u8>)>>>;
@@ -125,9 +151,10 @@ impl Fake {
     }
 
     /// A release `tag` whose archive for every target holds `binary`, each
-    /// with its checksum (or `bad_sum`'s, to show one refused), served at
-    /// the releases list and as the latest; gives its JSON.
-    fn publish(&self, tag: &str, binary: &[u8], bad_sum: bool) -> Value {
+    /// with its checksum and signature (one of them `wrong`, to show it
+    /// refused), served at the releases list and as the latest; gives its
+    /// JSON.
+    fn publish(&self, tag: &str, binary: &[u8], wrong: Wrong) -> Value {
         let version = tag.trim_start_matches('v');
         let mut assets = Vec::new();
         for target in TARGETS {
@@ -136,18 +163,33 @@ impl Fake {
                 &format!("switchboard-{version}-{target}/switchboard"),
                 binary,
             );
-            let sum = if bad_sum {
+            let sum = if wrong == Wrong::Checksum {
                 install::sha256_hex(b"something else")
             } else {
                 install::sha256_hex(&archive)
             };
+            let by = if wrong == Wrong::Signature {
+                UNTRUSTED
+            } else {
+                TRUSTED
+            };
+            let signature = signing_key(by)
+                .sign(install::SIGNATURE_NAMESPACE, HashAlg::Sha512, &archive)
+                .unwrap()
+                .to_pem(LineEnding::LF)
+                .unwrap();
+            self.serve(&format!("/dl/{name}.sig"), 200, signature);
             self.serve(&format!("/dl/{name}"), 200, archive);
             self.serve(
                 &format!("/dl/{name}.sha256"),
                 200,
                 format!("{sum}  {name}\n"),
             );
-            for file in [name.clone(), format!("{name}.sha256")] {
+            for file in [
+                name.clone(),
+                format!("{name}.sha256"),
+                format!("{name}.sig"),
+            ] {
                 assets.push(json!({
                     "name": file,
                     "browser_download_url": format!("{}/dl/{file}", self.url),
@@ -261,6 +303,7 @@ fn command(program: &Path, fake: &Fake, home: &Path) -> Command {
     cmd.env("HOME", home)
         .env("SWITCHBOARD_STATE_DIR", home.join("state"))
         .env("SWITCHBOARD_GITHUB_API", &fake.url)
+        .env("SWITCHBOARD_RELEASE_KEY", trusted_key())
         .env("SB_MARK", home.join("mark"))
         .env("PATH", stand_in::path_with_gh(&home.join("stand-ins")))
         .env_remove("GH_TOKEN")
@@ -273,7 +316,7 @@ fn command(program: &Path, fake: &Fake, home: &Path) -> Command {
 #[test]
 fn update_puts_the_release_in_place_and_runs_its_setup() {
     let fake = Fake::start();
-    fake.publish("v9.9.9", &stub("9.9.9"), false);
+    fake.publish("v9.9.9", &stub("9.9.9"), Wrong::Nothing);
     let dir = TempDir::new("sbu");
     let copy = own_copy(dir.path());
     let before = std::fs::metadata(BIN).unwrap().len();
@@ -320,7 +363,10 @@ fn update_puts_the_release_in_place_and_runs_its_setup() {
         "{said}{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(said.contains("Checked it against"), "{said}");
+    assert!(
+        said.contains("its signature by Switchboard's release key"),
+        "{said}"
+    );
     assert!(said.contains("to switchboard 9.9.9 (stub)"), "{said}");
     assert_eq!(std::fs::read(&copy).unwrap(), stub("9.9.9"));
     assert_eq!(
@@ -339,7 +385,7 @@ fn update_puts_the_release_in_place_and_runs_its_setup() {
 #[test]
 fn a_running_workspace_is_told_how_to_restart_on_the_release() {
     let fake = Fake::start();
-    fake.publish("v9.9.9", &stub("9.9.9"), false);
+    fake.publish("v9.9.9", &stub("9.9.9"), Wrong::Nothing);
     let server = TestServer::start();
     let pid = server.pid();
     let dir = TempDir::new("sbu");
@@ -366,7 +412,8 @@ fn a_running_workspace_is_told_how_to_restart_on_the_release() {
 
 /// A state directory of the test process's own: `install_release` runs in
 /// this process, not in a `switchboard` given a home of its own, and counts
-/// its downloads in the request audit, which would otherwise be yours.
+/// its downloads in the request audit, which would otherwise be yours; and
+/// the tests' release key trusted, as `command` trusts it.
 fn own_state() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
@@ -374,15 +421,18 @@ fn own_state() {
         // SAFETY: set once, before this test reads anything of the
         // environment through the library, and only the tests here run in
         // this process.
-        unsafe { std::env::set_var("SWITCHBOARD_STATE_DIR", dir) };
+        unsafe {
+            std::env::set_var("SWITCHBOARD_STATE_DIR", dir);
+            std::env::set_var("SWITCHBOARD_RELEASE_KEY", trusted_key());
+        }
     });
 }
 
 #[test]
-fn a_download_whose_checksum_is_wrong_changes_nothing() {
+fn a_download_whose_checksum_or_signature_is_wrong_changes_nothing() {
     own_state();
     let fake = Fake::start();
-    let json = fake.publish("v9.9.9", &stub("9.9.9"), true);
+    let json = fake.publish("v9.9.9", &stub("9.9.9"), Wrong::Checksum);
     let dir = TempDir::new("sbu");
     let target = dir.path().join("switchboard");
     let old = stub("0.1.0");
@@ -399,6 +449,19 @@ fn a_download_whose_checksum_is_wrong_changes_nothing() {
     assert_eq!(std::fs::read(&target).unwrap(), old);
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
 
+    // One whose checksum matches and whose signature isn't by a release
+    // key, as an archive and checksum changed after publishing would be:
+    // the same.
+    fake.publish("v9.9.9", &stub("9.9.9"), Wrong::Signature);
+    let err = update::install_release(&chosen, this, &target).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("isn't signed by Switchboard's release key"),
+        "{err}"
+    );
+    assert_eq!(std::fs::read(&target).unwrap(), old);
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+
     // An archive that isn't there: the same.
     let mut gone = chosen.clone();
     for asset in &mut gone.assets {
@@ -408,7 +471,7 @@ fn a_download_whose_checksum_is_wrong_changes_nothing() {
     assert_eq!(std::fs::read(&target).unwrap(), old);
 
     // And the right one goes in.
-    fake.publish("v9.9.9", &stub("9.9.9"), false);
+    fake.publish("v9.9.9", &stub("9.9.9"), Wrong::Nothing);
     let said = update::install_release(&chosen, this, &target).unwrap();
     assert_eq!(said, "9.9.9 (stub)");
     assert_eq!(std::fs::read(&target).unwrap(), stub("9.9.9"));
@@ -425,7 +488,7 @@ fn wait_until(what: &str, timeout: Duration, mut done: impl FnMut() -> bool) {
 #[test]
 fn the_server_offers_a_release_hourly_until_answered_and_again_for_a_newer_one() {
     let fake = Fake::start();
-    fake.publish("v9.9.9", &stub("9.9.9"), false);
+    fake.publish("v9.9.9", &stub("9.9.9"), Wrong::Nothing);
     let server = TestServer::start_with_env(&[
         ("SWITCHBOARD_GITHUB_API", &fake.url),
         ("SWITCHBOARD_UPDATES", "on"),
@@ -484,7 +547,7 @@ fn the_server_offers_a_release_hourly_until_answered_and_again_for_a_newer_one()
     assert!(at > hour_ago);
 
     // A newer release, the next hour, is offered.
-    fake.publish("v9.9.10", &stub("9.9.10"), false);
+    fake.publish("v9.9.10", &stub("9.9.10"), Wrong::Nothing);
     std::fs::write(&checked, format!("{hour_ago}\n")).unwrap();
     client.wait_text("Update now, to 9.9.10");
     assert_eq!(fake.asked(&list), 3);
@@ -524,7 +587,7 @@ fn the_releases_are_read_with_ghs_token_and_without_it_when_refused_spent_or_off
     // gh signed in: the look signs in as gh, so it counts against your own
     // rate limit rather than the 60 an hour your address shares.
     let fake = Fake::start_knowing(Some("gho_stand_in"));
-    fake.publish("v9.9.9", &stub("9.9.9"), false);
+    fake.publish("v9.9.9", &stub("9.9.9"), Wrong::Nothing);
     let home = TempDir::new("sbu-gh");
     gh_signed_in(home.path());
     check(&fake, home.path());
@@ -534,7 +597,7 @@ fn the_releases_are_read_with_ghs_token_and_without_it_when_refused_spent_or_off
     // again at once without it.
     let mut fake = Fake::start_knowing(None);
     fake.http.expect_refusals();
-    fake.publish("v9.9.9", &stub("9.9.9"), false);
+    fake.publish("v9.9.9", &stub("9.9.9"), Wrong::Nothing);
     let home = TempDir::new("sbu-refused");
     gh_signed_in(home.path());
     check(&fake, home.path());
@@ -544,7 +607,7 @@ fn the_releases_are_read_with_ghs_token_and_without_it_when_refused_spent_or_off
     // requests are asked, as they were before gh's token was sent.
     let fake = Fake::start_knowing(Some("gho_stand_in"));
     fake.spent.store(true, Ordering::Relaxed);
-    fake.publish("v9.9.9", &stub("9.9.9"), false);
+    fake.publish("v9.9.9", &stub("9.9.9"), Wrong::Nothing);
     let home = TempDir::new("sbu-spent");
     gh_signed_in(home.path());
     check(&fake, home.path());
@@ -552,7 +615,7 @@ fn the_releases_are_read_with_ghs_token_and_without_it_when_refused_spent_or_off
 
     // With the github setting off, gh isn't asked and no token goes.
     let fake = Fake::start_knowing(Some("gho_stand_in"));
-    fake.publish("v9.9.9", &stub("9.9.9"), false);
+    fake.publish("v9.9.9", &stub("9.9.9"), Wrong::Nothing);
     let home = TempDir::new("sbu-off");
     let runs = gh_signed_in(home.path());
     let settings = home.path().join("settings.json");
@@ -570,7 +633,7 @@ fn the_releases_are_read_with_ghs_token_and_without_it_when_refused_spent_or_off
 #[test]
 fn the_server_doesnt_look_with_the_check_off() {
     let fake = Fake::start();
-    fake.publish("v9.9.9", &stub("9.9.9"), false);
+    fake.publish("v9.9.9", &stub("9.9.9"), Wrong::Nothing);
     // The setting is in place before the server starts, since its first
     // tick would look.
     let settings = TempDir::new("sbs");
@@ -660,6 +723,7 @@ fn run_install(fake: &Fake, dir: &Path, stubs: &Path) -> std::process::Output {
         .env("PATH", with_stubs(stubs))
         .env("SHELL", "/bin/zsh")
         .env("SWITCHBOARD_GITHUB_API", &fake.url)
+        .env("SWITCHBOARD_RELEASE_KEY", trusted_key())
         .env("SB_MARK", dir.join("mark"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -676,8 +740,8 @@ fn run_install(fake: &Fake, dir: &Path, stubs: &Path) -> std::process::Output {
 
 #[test]
 fn install_sh_installs_a_checked_release_and_runs_its_setup() {
-    if !(has("curl") || has("wget")) || !(has("sha256sum") || has("shasum")) {
-        eprintln!("skipped: no curl or wget, or no sha256sum or shasum");
+    if !(has("curl") || has("wget")) || !(has("sha256sum") || has("shasum")) || !has("ssh-keygen") {
+        eprintln!("skipped: no curl or wget, no sha256sum or shasum, or no ssh-keygen");
         return;
     }
     let fake = Fake::start();
@@ -685,7 +749,7 @@ fn install_sh_installs_a_checked_release_and_runs_its_setup() {
     let stubs = stubbed_platform(dir.path(), "Linux", "x86_64", "");
 
     // A checksum that doesn't match installs nothing.
-    fake.publish("v9.9.9", &stub("9.9.9"), true);
+    fake.publish("v9.9.9", &stub("9.9.9"), Wrong::Checksum);
     let out = run_install(&fake, dir.path(), &stubs);
     assert!(
         !out.status.success(),
@@ -700,7 +764,19 @@ fn install_sh_installs_a_checked_release_and_runs_its_setup() {
     );
     assert!(!dir.path().join(".local/bin/switchboard").exists());
 
-    fake.publish("v9.9.9", &stub("9.9.9"), false);
+    // Nor does one whose checksum matches and whose signature isn't by a
+    // release key.
+    fake.publish("v9.9.9", &stub("9.9.9"), Wrong::Signature);
+    let out = run_install(&fake, dir.path(), &stubs);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("isn't signed by Switchboard's release key"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!dir.path().join(".local/bin/switchboard").exists());
+
+    fake.publish("v9.9.9", &stub("9.9.9"), Wrong::Nothing);
     let out = run_install(&fake, dir.path(), &stubs);
     let said = String::from_utf8_lossy(&out.stdout);
     assert!(
@@ -721,7 +797,7 @@ fn install_sh_installs_a_checked_release_and_runs_its_setup() {
         std::fs::read_to_string(dir.path().join("mark")).unwrap(),
         "setup setup\n"
     );
-    assert_eq!(fake.asked(&format!("{}/latest", Fake::list_path())), 2);
+    assert_eq!(fake.asked(&format!("{}/latest", Fake::list_path())), 3);
     stand_in::assert_none_refused(&stubs);
     stand_in::assert_none_refused(&dir.path().join(".local/bin"));
 }

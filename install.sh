@@ -4,21 +4,27 @@
 #   curl -fsSL https://raw.githubusercontent.com/cquinones100/switchboard/main/install.sh | sh
 #
 # It finds the newest release for this computer (x86_64 Linux, or an Intel
-# or Apple silicon Mac), downloads its archive and the SHA-256 published
-# beside it, refuses the archive unless the two agree, and puts `switchboard`
-# in ~/.local/bin, saying how to add that to your PATH when it isn't there.
+# or Apple silicon Mac), downloads its archive over HTTPS with the SHA-256
+# and the signature published beside it, refuses the archive unless the
+# checksum agrees and the signature is by Switchboard's release key (whose
+# public half is below, so a release changed after it was signed is refused
+# even with its checksum changed to match), and puts `switchboard` in
+# ~/.local/bin, saying how to add that to your PATH when it isn't there.
 # Then it runs `switchboard setup`, the guided setup, which asks before it
 # changes anything. Run again, it installs the newest release over the one
 # there; `switchboard update` does the same from then on.
 #
 # It needs only what macOS and common Linux distributions ship: a POSIX sh,
-# curl or wget, tar, and shasum or sha256sum.
+# curl or wget, tar, shasum or sha256sum, and OpenSSH's ssh-keygen (8.1 or
+# newer, from 2019).
 #
 # What changes it (for a release other than the newest, or for the tests):
 #   SWITCHBOARD_VERSION      a release's tag, as v0.2.0, in place of the newest
 #   SWITCHBOARD_BIN_DIR      where the binary goes, in place of ~/.local/bin
 #   SWITCHBOARD_GITHUB_API   GitHub's API, in place of https://api.github.com
 #   SWITCHBOARD_NO_SETUP     set, the setup isn't run
+#   SWITCHBOARD_RELEASE_KEY  a public key trusted beside the release keys, for
+#                            the tests' own releases
 #
 #   sh install.sh --target   prints the release target for this computer and
 #                            stops, changing nothing
@@ -31,6 +37,12 @@ set -eu
 
 # The repository releases come from; src/update/release.rs's REPO.
 REPO=cquinones100/switchboard
+
+# The public halves of the keys a release may be signed with, one OpenSSH
+# key a line; src/update/release-signing-keys.pub's, which the binary
+# carries, and the namespace its signatures are made for.
+RELEASE_KEYS='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHk/NIR8Ueq68RDwrJ3vWpLvcNX85BrMHDf0UBVnk05B switchboard-release'
+NAMESPACE=switchboard-release
 
 say() { printf '%s\n' "$*"; }
 fail() {
@@ -66,10 +78,22 @@ target() {
 }
 
 # A URL's body on stdout (or into a file, with a second argument), with
-# curl, else wget, failing on an HTTP error.
+# curl, else wget, failing on an HTTP error: only from an HTTPS address, and
+# with curl only through HTTPS redirects, or from this computer's own (the
+# tests' stand-ins).
 fetch() {
+  case $1 in
+    *@*) fail "won't download $1, which names a user." ;;
+    https://*) proto='=https' ;;
+    http://127.0.0.1:* | http://127.0.0.1/* | http://localhost:*) proto='=http,https' ;;
+    *) fail "won't download $1, which isn't an HTTPS address." ;;
+  esac
   if command -v curl >/dev/null 2>&1; then
-    if [ $# -gt 1 ]; then curl -fsSL --retry 2 -o "$2" "$1"; else curl -fsSL --retry 2 "$1"; fi
+    if [ $# -gt 1 ]; then
+      curl -fsSL --retry 2 --proto "$proto" --proto-redir "$proto" -o "$2" "$1"
+    else
+      curl -fsSL --retry 2 --proto "$proto" --proto-redir "$proto" "$1"
+    fi
   elif command -v wget >/dev/null 2>&1; then
     if [ $# -gt 1 ]; then wget -q -O "$2" "$1"; else wget -q -O - "$1"; fi
   else
@@ -87,6 +111,24 @@ sha256() {
     fail "neither sha256sum nor shasum is installed, so the download can't be checked."
   fi
   printf '%s\n' "${sum%% *}" | tr 'A-F' 'a-f'
+}
+
+# Refuses the archive at $1 unless $2, its signature as `ssh-keygen -Y
+# sign` writes it, is by one of RELEASE_KEYS (or SWITCHBOARD_RELEASE_KEY).
+check_signature() {
+  command -v ssh-keygen >/dev/null 2>&1 \
+    || fail "ssh-keygen (OpenSSH's) isn't installed, so the download's signature can't be checked."
+  keys=$RELEASE_KEYS
+  if [ -n "${SWITCHBOARD_RELEASE_KEY:-}" ]; then
+    keys="$keys
+$SWITCHBOARD_RELEASE_KEY"
+  fi
+  printf '%s\n' "$keys" \
+    | awk -v ns="$NAMESPACE" 'NF >= 2 { printf "switchboard-release namespaces=\"%s\" %s %s\n", ns, $1, $2 }' \
+    > "$tmp/allowed_signers"
+  ssh-keygen -Y verify -f "$tmp/allowed_signers" -I switchboard-release -n "$NAMESPACE" \
+    -s "$2" < "$1" > /dev/null 2>&1 \
+    || fail "$(basename "$1") isn't signed by Switchboard's release key, so it may not be the file that was published (or this ssh-keygen is older than OpenSSH 8.1). Nothing was installed."
 }
 
 # A string field of GitHub's JSON for a release, one value a line. The JSON
@@ -118,8 +160,9 @@ main() {
   archive="switchboard-$version-$t.tar.gz"
   archive_url=$(printf '%s\n' "$json" | field browser_download_url | grep "/$archive\$" | head -n 1 || true)
   sum_url=$(printf '%s\n' "$json" | field browser_download_url | grep "/$archive.sha256\$" | head -n 1 || true)
-  [ -n "$archive_url" ] && [ -n "$sum_url" ] \
-    || fail "release $tag has no $archive with its checksum."
+  sig_url=$(printf '%s\n' "$json" | field browser_download_url | grep "/$archive.sig\$" | head -n 1 || true)
+  [ -n "$archive_url" ] && [ -n "$sum_url" ] && [ -n "$sig_url" ] \
+    || fail "release $tag has no $archive with its checksum and signature."
 
   tmp=$(mktemp -d 2>/dev/null || mktemp -d -t switchboard)
   trap 'rm -rf "$tmp"' EXIT
@@ -127,6 +170,7 @@ main() {
   say "Downloading Switchboard $version for ${t}…"
   fetch "$archive_url" "$tmp/$archive" || fail "couldn't download $archive."
   fetch "$sum_url" "$tmp/$archive.sha256" || fail "couldn't download $archive.sha256."
+  fetch "$sig_url" "$tmp/$archive.sig" || fail "couldn't download $archive.sig."
 
   # The checksum file is `<hash>  <name>`, as shasum writes it.
   expected=$(sed -n '1s/^[[:space:]]*\([0-9A-Fa-f]\{64\}\).*/\1/p' "$tmp/$archive.sha256" | tr 'A-F' 'a-f')
@@ -134,7 +178,8 @@ main() {
   actual=$(sha256 "$tmp/$archive")
   [ "$actual" = "$expected" ] \
     || fail "$archive isn't the file that was published (its SHA-256 is $actual, the release says $expected). Nothing was installed."
-  say "Checked it against $archive.sha256."
+  check_signature "$tmp/$archive" "$tmp/$archive.sig"
+  say "Checked its checksum, and its signature by Switchboard's release key."
 
   mkdir "$tmp/unpacked"
   tar -xzf "$tmp/$archive" -C "$tmp/unpacked" || fail "couldn't unpack $archive."

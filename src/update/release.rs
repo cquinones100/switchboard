@@ -2,8 +2,12 @@
 //! this computer. Where repo-update.sh fetched origin's main and counted the
 //! commits yours didn't have, an update is now a release: a tag `v<version>`
 //! with an archive per platform, `switchboard-<version>-<target>.tar.gz`,
-//! and its SHA-256 beside it in `<archive>.sha256`, as
-//! `.github/workflows/release.yml` publishes them.
+//! its SHA-256 beside it in `<archive>.sha256` and its signature in
+//! `<archive>.sig`, as `.github/workflows/release.yml` publishes them.
+//!
+//! A release's files are downloaded over HTTPS alone, every redirect
+//! included (`download`), with plain HTTP only to this computer's own
+//! address, where the tests' and the demo's stand-ins answer.
 //!
 //! The releases are read from GitHub's REST API as every GitHub call is
 //! (`github::get_public`): with gh's token when gh is signed in, since the
@@ -137,6 +141,17 @@ pub struct Asset {
     pub url: String,
 }
 
+/// A release's files for one target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Files<'a> {
+    pub archive: &'a Asset,
+    /// `<archive>.sha256`.
+    pub checksum: &'a Asset,
+    /// `<archive>.sig`, the archive signed with the release key
+    /// (`install::verify_signature`).
+    pub signature: &'a Asset,
+}
+
 /// A published release.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Release {
@@ -190,14 +205,17 @@ impl Release {
         })
     }
 
-    /// The archive for a target and the checksum beside it, when this
-    /// release has both.
-    pub fn files_for(&self, target: &str) -> Option<(&Asset, &Asset)> {
+    /// The archive for a target with the checksum and signature beside it,
+    /// when this release has all three: one published before releases were
+    /// signed has no signature, and is never offered.
+    pub fn files_for(&self, target: &str) -> Option<Files<'_>> {
         let name = archive_name(&self.version, target);
-        let sum = format!("{name}.sha256");
-        let archive = self.assets.iter().find(|a| a.name == name)?;
-        let checksum = self.assets.iter().find(|a| a.name == sum)?;
-        Some((archive, checksum))
+        let named = |file: &str| self.assets.iter().find(|a| a.name == file);
+        Some(Files {
+            archive: named(&name)?,
+            checksum: named(&format!("{name}.sha256"))?,
+            signature: named(&format!("{name}.sig"))?,
+        })
     }
 
     /// Its notes as lines to read in a box: a bullet for each of the
@@ -293,19 +311,49 @@ pub async fn list(source: &str) -> Result<Vec<Release>> {
 /// How long a release's file may take to arrive.
 const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 
-/// A release's file, downloaded whole; an error for anything but a success.
+/// The largest file a release may hold.
+const LARGEST: usize = 500 * 1024 * 1024;
+
+/// Whether a release's file may be downloaded from `url`: over HTTPS, or
+/// over plain HTTP from this computer's own address (the tests' and the
+/// demo's stand-ins).
+pub fn downloadable(url: &str) -> bool {
+    let Ok(url) = url::Url::parse(url) else {
+        return false;
+    };
+    let local = matches!(url.host_str(), Some("127.0.0.1" | "localhost"));
+    let no_credentials = url.username().is_empty() && url.password().is_none();
+    no_credentials && (url.scheme() == "https" || (url.scheme() == "http" && local))
+}
+
+/// A release's file, downloaded whole over HTTPS, a redirect followed only
+/// to another HTTPS address (GitHub sends a release's files from another
+/// host); an error for anything but a success.
 pub async fn download(asset: &Asset, source: &str) -> Result<Vec<u8>> {
-    let (status, bytes) = net::get_bytes(
+    if !downloadable(&asset.url) {
+        return Err(anyhow!(
+            "{} isn't offered over HTTPS ({}), so it wasn't downloaded",
+            asset.name,
+            asset.url
+        ));
+    }
+    let file = net::get_file_following(
         &asset.url,
         &[("Accept", "application/octet-stream")],
         DOWNLOAD_TIMEOUT,
         audit(source),
+        |_| true,
+        LARGEST,
     )
     .await?;
-    if !(200..300).contains(&status) {
-        return Err(anyhow!("GitHub answered {status} for {}", asset.name));
+    if !(200..300).contains(&file.status) {
+        return Err(anyhow!(
+            "GitHub answered {} for {}",
+            file.status,
+            asset.name
+        ));
     }
-    Ok(bytes)
+    Ok(file.bytes)
 }
 
 #[cfg(test)]
@@ -357,7 +405,9 @@ mod tests {
         ] {
             let name = format!("switchboard-0.2.0-{target}.tar.gz");
             assets.push(json!({"name": name, "browser_download_url": format!("https://x/{name}")}));
-            assets.push(json!({"name": format!("{name}.sha256"), "browser_download_url": format!("https://x/{name}.sha256")}));
+            for end in ["sha256", "sig"] {
+                assets.push(json!({"name": format!("{name}.{end}"), "browser_download_url": format!("https://x/{name}.{end}")}));
+            }
         }
         let release = Release::from_json(&json!({
             "tag_name": "v0.2.0", "body": "- One\n- Two", "assets": assets,
@@ -370,9 +420,11 @@ mod tests {
             ("macos", "aarch64"),
         ] {
             let target = target_for(os, arch).unwrap();
-            let (archive, sum) = release.files_for(target).unwrap();
-            assert_eq!(archive.name, format!("switchboard-0.2.0-{target}.tar.gz"));
-            assert_eq!(sum.name, format!("{}.sha256", archive.name));
+            let files = release.files_for(target).unwrap();
+            let archive = &files.archive.name;
+            assert_eq!(*archive, format!("switchboard-0.2.0-{target}.tar.gz"));
+            assert_eq!(files.checksum.name, format!("{archive}.sha256"));
+            assert_eq!(files.signature.name, format!("{archive}.sig"));
         }
         assert_eq!(release.files_for("aarch64-unknown-linux-gnu"), None);
         assert_eq!(release.published, Some(1_793_534_400));
@@ -380,13 +432,30 @@ mod tests {
     }
 
     #[test]
-    fn an_archive_without_its_checksum_is_not_offered() {
-        let release = Release::from_json(&json!({
-            "tag_name": "v0.2.0",
-            "assets": [{"name": "switchboard-0.2.0-x86_64-apple-darwin.tar.gz", "browser_download_url": "https://x/a"}]
-        }))
-        .unwrap();
-        assert_eq!(release.files_for("x86_64-apple-darwin"), None);
+    fn an_archive_without_its_checksum_or_signature_is_not_offered() {
+        let name = "switchboard-0.2.0-x86_64-apple-darwin.tar.gz";
+        for ends in [vec![], vec![".sha256"], vec![".sig"]] {
+            let mut assets = vec![json!({"name": name, "browser_download_url": "https://x/a"})];
+            for end in ends {
+                assets.push(
+                    json!({"name": format!("{name}{end}"), "browser_download_url": "https://x/b"}),
+                );
+            }
+            let release =
+                Release::from_json(&json!({"tag_name": "v0.2.0", "assets": assets})).unwrap();
+            assert_eq!(release.files_for("x86_64-apple-darwin"), None);
+        }
+    }
+
+    #[test]
+    fn files_come_over_https_or_from_this_computer() {
+        assert!(downloadable("https://github.com/x/releases/download/v1/a"));
+        assert!(downloadable("http://127.0.0.1:4100/dl/a"));
+        assert!(!downloadable("http://github.com/x/releases/download/v1/a"));
+        assert!(!downloadable("http://127.0.0.1.example.com/a"));
+        assert!(!downloadable("ftp://x/a"));
+        assert!(!downloadable("http://127.0.0.1:80@example.com/a"));
+        assert!(!downloadable("http://localhost:80@example.com/a"));
     }
 
     #[test]

@@ -1,11 +1,27 @@
 # A release, from a version bump on main: the three targets built in release
 # mode, each packed as switchboard-<version>-<target>.tar.gz
 # (a folder of that name holding the binary) with its SHA-256 beside it in
-# <archive>.sha256, and all six published as a GitHub release whose notes are
-# the commits since the tag before (the newest of them and a link to the
-# rest, past what GitHub takes). `switchboard update` and install.sh take
-# the newest release's archive for their computer and refuse it unless its
-# checksum matches.
+# <archive>.sha256 and its signature in <archive>.sig, and all nine
+# published as a GitHub release whose notes are the commits since the tag
+# before (the newest of them and a link to the rest, past what GitHub
+# takes). `switchboard update` and install.sh take the newest release's
+# archive for their computer and refuse it unless its checksum matches and
+# its signature is by a key in src/update/release-signing-keys.pub, whose
+# public halves the binary and install.sh carry: a checksum published in
+# the same release vouches only for a download that arrived whole, where
+# the signature is made with a key the release's files can't change.
+#
+# The signature is OpenSSH's (`ssh-keygen -Y sign`, namespace
+# switchboard-release), made in the publish job, on GitHub's own runner,
+# with the private key in the RELEASE_SIGNING_KEY secret of the
+# repository's `release` environment, which only main may deploy from
+# (CLAUDE.md's release paragraph); a run without it, or with a key whose
+# public half isn't listed, fails before anything is published. Runs start
+# only from main, never from a pushed tag: a tag's run would take this file
+# from the tagged commit, so whoever could push a tag could rewrite it to
+# read the key, and the environment keeps the key from any run but main's. The actions
+# are pinned by commit, so a tag moved in an action's repository changes
+# nothing here.
 #
 # The version is Cargo.toml's `version`, which the binary compares
 # (CARGO_PKG_VERSION) with the releases' to know when one is newer. Bump it
@@ -16,21 +32,14 @@
 # else runs. With none, the commit that set the version is built, tagged
 # `v<version>` once every target has built (so a build that fails leaves no
 # tag) and published; a version tagged and not published, by a run that
-# failed after tagging or a tag pushed by hand whose run was dropped, is
-# built from its tag's commit and published by the next push to main. The
+# failed after tagging, is built from its tag's commit and published by the
+# next push to main, once main is checked to hold that commit. The
 # commit is found from main's history rather than taken to be the one
 # pushed, since the run of a bump waiting behind another release is dropped
 # for the run of a commit pushed after it, which then makes the bump's
-# release. The run of a tag pushed by hand for another version than main's
-# can be dropped the same way, and is run again from GitHub's Actions page. The tag is made here, in the run that
-# publishes, since one a workflow pushes with its own token starts no other
-# workflow.
-#
-# A tag pushed by hand (`git tag v0.2.0 && git push origin v0.2.0`) still
-# releases its commit: one that disagrees with Cargo.toml fails the first
-# job, and one whose release is already published builds nothing. Runs go
-# one at a time, so a push to main that follows a bump closely finds the
-# bump's release published rather than making it a second time.
+# release. The tag is made here, in the run that publishes. Runs go one at
+# a time, so a push to main that follows a bump closely finds the bump's
+# release published rather than making it a second time.
 #
 # The binaries are built with SWITCHBOARD_RELEASE set, which lets the
 # server look for newer releases by itself (src/update); a binary built from
@@ -45,7 +54,6 @@ name: Release
 on:
   push:
     branches: [main]
-    tags: ["v*"]
 
 concurrency:
   group: release
@@ -67,7 +75,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       commit: ${{ steps.version.outputs.commit }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # Main's history, to find the commit that set the version.
           fetch-depth: 0
@@ -80,31 +88,31 @@ jobs:
             echo "::error::Cargo.toml names no version."
             exit 1
           fi
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            version="${GITHUB_REF_NAME#v}"
-            if [ "$version" != "$cargo_version" ]; then
-              echo "::error::The tag says $version and Cargo.toml says $cargo_version; bump Cargo.toml and tag that commit."
-              exit 1
-            fi
+          version="$cargo_version"
+          # The commit its tag names, when it has one (the last line is
+          # the commit of a tag with a message of its own). Asked on a
+          # line of its own, so the job fails when GitHub can't be asked,
+          # rather than taking that for no tag.
+          tagged=$(git ls-remote origin "refs/tags/v$version" "refs/tags/v$version^{}")
+          commit=$(printf '%s\n' "$tagged" | tail -n 1 | cut -f 1)
+          if [ -z "$commit" ]; then
+            # Else the one that set the version: the oldest of main's
+            # latest commits to Cargo.toml that says it.
             commit=$(git rev-parse HEAD)
-          else
-            version="$cargo_version"
-            # The commit its tag names, when it has one (the last line is
-            # the commit of a tag with a message of its own). Asked on a
-            # line of its own, so the job fails when GitHub can't be asked,
-            # rather than taking that for no tag.
-            tagged=$(git ls-remote origin "refs/tags/v$version" "refs/tags/v$version^{}")
-            commit=$(printf '%s\n' "$tagged" | tail -n 1 | cut -f 1)
-            if [ -z "$commit" ]; then
-              # Else the one that set the version: the oldest of main's
-              # latest commits to Cargo.toml that says it.
-              commit=$(git rev-parse HEAD)
-              for changed in $(git rev-list --first-parent HEAD -- Cargo.toml); do
-                said=$(git show "$changed:Cargo.toml" | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n 1)
-                [ "$said" = "$version" ] || break
-                commit="$changed"
-              done
-            fi
+            for changed in $(git rev-list --first-parent HEAD -- Cargo.toml); do
+              said=$(git show "$changed:Cargo.toml" | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n 1)
+              [ "$said" = "$version" ] || break
+              commit="$changed"
+            done
+          fi
+          # Only main's code is signed, whichever way the commit was found: a
+          # tag pushed to a commit main doesn't hold would otherwise get the
+          # release key's signature once main's Cargo.toml reaches its
+          # version, without the commit reaching main.
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          if ! git merge-base --is-ancestor "$commit" origin/main; then
+            echo "::error::v$version names $commit, which main doesn't hold; only main's commits are released."
+            exit 1
           fi
           # Published already, as after any ordinary commit to main: nothing
           # to do. Only GitHub saying there is no such release counts as
@@ -152,7 +160,7 @@ jobs:
       TARGET: ${{ matrix.target }}
       SWITCHBOARD_RELEASE: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.version.outputs.commit }}
       - name: Install rustup in the container
@@ -170,7 +178,7 @@ jobs:
         run: |
           rustup toolchain install
           rustup target add "$TARGET"
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cargo/registry/index
@@ -204,7 +212,7 @@ jobs:
           fi
           cat "$name.tar.gz.sha256"
           rm -r "$name"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ matrix.target }}
           path: dist/*
@@ -213,8 +221,8 @@ jobs:
   tag:
     name: Tag the commit
     needs: [version, build]
-    # A tag pushed by hand is there already; on main, so may this one be.
-    if: needs.version.outputs.release == 'true' && github.ref_type == 'branch'
+    # The tag may be there already, from a run that failed after tagging.
+    if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -246,22 +254,23 @@ jobs:
   publish:
     name: Publish the release
     needs: [version, build, tag]
-    # The tag job is skipped for a tag pushed by hand, which would skip this
-    # one with it.
-    if: ${{ !cancelled() && needs.build.result == 'success' && (needs.tag.result == 'success' || needs.tag.result == 'skipped') }}
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.tag.result == 'success' }}
     runs-on: ubuntu-latest
+    # The environment holds RELEASE_SIGNING_KEY and lets only main deploy, so
+    # no run but main's can read the key.
+    environment: release
     permissions:
       contents: write
     env:
       VERSION: ${{ needs.version.outputs.version }}
       COMMIT: ${{ needs.version.outputs.commit }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.version.outputs.commit }}
           # Every tag and commit, for the notes since the tag before.
           fetch-depth: 0
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: dist
           merge-multiple: true
@@ -271,6 +280,29 @@ jobs:
           ls -l
           [ "$(ls *.tar.gz | wc -l)" -eq 3 ] || { echo "::error::Expected three archives"; exit 1; }
           sha256sum --check *.sha256
+      - name: Sign every archive with the release key
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          if [ -z "$RELEASE_SIGNING_KEY" ]; then
+            echo "::error::The RELEASE_SIGNING_KEY secret isn't set, so the release can't be signed (CLAUDE.md's release paragraph)."
+            exit 1
+          fi
+          key="$RUNNER_TEMP/release-signing-key"
+          (umask 077 && printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key")
+          signed=0
+          ssh-keygen -Y sign -q -f "$key" -n switchboard-release dist/*.tar.gz && signed=1
+          rm -f "$key"
+          [ "$signed" = 1 ] || { echo "::error::Couldn't sign the archives."; exit 1; }
+          # Checked against the keys the binary and install.sh carry, so a
+          # secret that isn't one of them fails here rather than in every
+          # update.
+          awk 'NF >= 2 && $1 !~ /^#/ { printf "switchboard-release namespaces=\"switchboard-release\" %s %s\n", $1, $2 }' \
+            src/update/release-signing-keys.pub > "$RUNNER_TEMP/allowed_signers"
+          for archive in dist/*.tar.gz; do
+            ssh-keygen -Y verify -f "$RUNNER_TEMP/allowed_signers" -I switchboard-release \
+              -n switchboard-release -s "$archive.sig" < "$archive"
+          done
       - name: Write the notes from the commits since the tag before
         run: |
           tag="v$VERSION"

@@ -1,7 +1,14 @@
 //! Putting a downloaded release in the place of the running binary, as
 //! safely as setup.sh's pinned downloads were: the archive is checked
 //! against the SHA-256 published beside it before anything is unpacked
-//! (setup.sh's `font_sha256` and `mermaid_ascii` checks), the binary in it
+//! (setup.sh's `font_sha256` and `mermaid_ascii` checks), and against its
+//! signature, which only the release key makes: the checksum comes from the
+//! same release as the archive, so someone able to change one could change
+//! the other, while the key's public half is compiled into this binary
+//! (`release-signing-keys.pub`), install.sh carrying a copy. The signature
+//! is OpenSSH's (`ssh-keygen -Y sign`, namespace `switchboard-release`),
+//! which install.sh checks with the `ssh-keygen` every Mac and Linux has.
+//! The binary in it
 //! is written beside the old one, as `switchboard` in a folder of its own,
 //! and run once (`--version`) to show it starts on this computer, and only
 //! then renamed over the old one, which
@@ -23,6 +30,16 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use sha2::{Digest, Sha256};
+use ssh_key::{PublicKey, SshSig};
+
+/// The public halves of the keys a release may be signed with, one OpenSSH
+/// key a line: the one the release workflow signs with now, and, while a key
+/// is being replaced, the next. install.sh's `RELEASE_KEYS` holds the same.
+pub const RELEASE_KEYS: &str = include_str!("release-signing-keys.pub");
+
+/// What a release's signature is made for, so no signature the key makes
+/// for anything else counts as one.
+pub const SIGNATURE_NAMESPACE: &str = "switchboard-release";
 
 /// A file's SHA-256, in lower-case hex, as `shasum -a 256` prints it.
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -65,6 +82,41 @@ pub fn verify(archive: &[u8], checksum_file: &str, name: &str) -> Result<()> {
         bail!(
             "{name} isn't the file that was published: its SHA-256 is {actual}, and the release says {expected}. Nothing was changed."
         );
+    }
+    Ok(())
+}
+
+/// The keys a signature may be made with: `RELEASE_KEYS`, and in a debug
+/// build (the tests') `SWITCHBOARD_RELEASE_KEY`'s too, never in a release.
+fn release_keys() -> Result<Vec<PublicKey>> {
+    let mut lines: Vec<String> = RELEASE_KEYS.lines().map(str::to_string).collect();
+    if cfg!(debug_assertions)
+        && let Ok(key) = std::env::var("SWITCHBOARD_RELEASE_KEY")
+    {
+        lines.push(key);
+    }
+    lines
+        .iter()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|l| PublicKey::from_openssh(l).map_err(|e| anyhow!("a release key won't read: {e}")))
+        .collect()
+}
+
+/// Refuses an archive unless `signature` (its `.sig`, as `ssh-keygen -Y
+/// sign` writes it) is a signature of it by one of the release keys.
+pub fn verify_signature(archive: &[u8], signature: &str, name: &str) -> Result<()> {
+    let refused = || {
+        anyhow!(
+            "{name} isn't signed by Switchboard's release key, so it may not be the file that was published. Nothing was changed."
+        )
+    };
+    let signature = SshSig::from_pem(signature.trim()).map_err(|_| refused())?;
+    let signed = release_keys()?
+        .iter()
+        .any(|key| key.verify(SIGNATURE_NAMESPACE, archive, &signature).is_ok());
+    if !signed {
+        return Err(refused());
     }
     Ok(())
 }
@@ -245,6 +297,38 @@ mod tests {
             sha256_hex(b""),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
+    }
+
+    #[test]
+    fn only_the_release_keys_signature_counts() {
+        use ssh_key::{HashAlg, LineEnding, PrivateKey, private::Ed25519Keypair};
+        let other = PrivateKey::from(Ed25519Keypair::from_seed(&[7; 32]));
+        let name = "switchboard-0.2.0-x86_64-apple-darwin.tar.gz";
+        // Made with the release key by `ssh-keygen -Y sign`, as the release
+        // workflow signs, over the text it signed.
+        let archive = b"Signed with the release key, for its test.\n";
+        let by_key = include_str!("release-signing-check.sig");
+        verify_signature(archive, by_key, name).unwrap();
+        assert!(verify_signature(b"another archive", by_key, name).is_err());
+
+        let by_other = other
+            .sign(SIGNATURE_NAMESPACE, HashAlg::Sha512, archive)
+            .unwrap()
+            .to_pem(LineEnding::LF)
+            .unwrap();
+        let bad = verify_signature(archive, &by_other, name).unwrap_err();
+        assert!(bad.to_string().contains("isn't signed by"), "{bad}");
+        assert!(verify_signature(archive, "", name).is_err());
+        assert!(verify_signature(archive, "not a signature", name).is_err());
+        assert!(!release_keys().unwrap().is_empty());
+    }
+
+    #[test]
+    fn install_sh_carries_the_same_release_keys() {
+        let script = include_str!("../../install.sh");
+        for key in RELEASE_KEYS.lines().filter(|l| !l.trim().is_empty()) {
+            assert!(script.contains(key), "install.sh lacks {key}");
+        }
     }
 
     #[test]

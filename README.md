@@ -31,9 +31,9 @@ Nothing else has to be installed. GitHub, Linear, the calendar, Slack and Codex 
 curl -fsSL https://raw.githubusercontent.com/cquinones100/switchboard/main/install.sh | sh
 ```
 
-It downloads the newest release for this computer, refuses it unless it matches the SHA-256 published beside it, puts `switchboard` in `~/.local/bin` (saying how to add that to your PATH when it isn't there), and runs `switchboard setup`, which asks before it changes anything.
+It downloads the newest release for this computer over HTTPS, refuses it unless it matches the SHA-256 published beside it and is signed with Switchboard's release key (checked with OpenSSH's `ssh-keygen`, 8.1 or later, which macOS and Linux distributions ship), puts `switchboard` in `~/.local/bin` (saying how to add that to your PATH when it isn't there), and runs `switchboard setup`, which asks before it changes anything.
 
-Or download a release yourself: each one on the repository's Releases page has `switchboard-<version>-<target>.tar.gz` for `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin` and `x86_64-apple-darwin`, with its `.sha256`. Unpack it, put `switchboard` on your PATH, and run `switchboard setup`.
+Or download a release yourself: each one on the repository's Releases page has `switchboard-<version>-<target>.tar.gz` for `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin` and `x86_64-apple-darwin`, with its `.sha256` and its signature, `.sig`. To check the signature, put the key from [`src/update/release-signing-keys.pub`](src/update/release-signing-keys.pub) in a file as `switchboard-release namespaces="switchboard-release" ssh-ed25519 <key>` and run `ssh-keygen -Y verify -f <that file> -I switchboard-release -n switchboard-release -s <archive>.sig < <archive>`. Unpack it, put `switchboard` on your PATH, and run `switchboard setup`.
 
 Or build it from a clone, with [rustup](https://rustup.rs) and a C compiler (the Rust it needs is pinned in `rust-toolchain.toml`, which rustup installs):
 

@@ -28,7 +28,8 @@
 //!
 //! - `release`: the releases on GitHub, versions, and which archive is this
 //!   computer's.
-//! - `install`: the checksum, the archive unpacked, and the swap.
+//! - `install`: the checksum and signature, the archive unpacked, and the
+//!   swap.
 //! - `serve`: the server's side: the looks, the box, and M-p's commands.
 
 pub mod install;
@@ -347,24 +348,27 @@ fn offer_upgrade(version: &Version) {
     let _ = crate::mux::socket::run_command(vec!["upgrade".to_string()]);
 }
 
-/// Downloads a release's archive for `target` and its checksum, checks one
-/// against the other, and puts the binary in it in place of `binary`,
+/// Downloads a release's archive for `target` with its checksum and
+/// signature, refuses it unless both check out, and puts the binary in it in place of `binary`,
 /// saying what it does as it goes. Whatever fails leaves `binary` as it was.
 pub fn install_release(chosen: &Release, target: &str, binary: &Path) -> Result<String> {
-    let (archive, checksum) = chosen.files_for(target).ok_or_else(|| {
+    let files = chosen.files_for(target).ok_or_else(|| {
         anyhow!(
-            "release {} has no archive for {target} with its checksum",
+            "release {} has no archive for {target} with its checksum and signature",
             chosen.tag
         )
     })?;
-    println!("Downloading {}…", archive.name);
-    let (bytes, sum) = util::block_on(async {
-        let bytes = release::download(archive, "switchboard update").await?;
-        let sum = release::download(checksum, "switchboard update").await?;
-        anyhow::Ok((bytes, sum))
+    let name = &files.archive.name;
+    println!("Downloading {name}…");
+    let (bytes, sum, signature) = util::block_on(async {
+        let bytes = release::download(files.archive, "switchboard update").await?;
+        let sum = release::download(files.checksum, "switchboard update").await?;
+        let signature = release::download(files.signature, "switchboard update").await?;
+        anyhow::Ok((bytes, sum, signature))
     })?;
-    install::verify(&bytes, &String::from_utf8_lossy(&sum), &archive.name)?;
-    println!("Checked it against {}.", checksum.name);
+    install::verify(&bytes, &String::from_utf8_lossy(&sum), name)?;
+    install::verify_signature(&bytes, &String::from_utf8_lossy(&signature), name)?;
+    println!("Checked its checksum, and its signature by Switchboard's release key.");
     let new = install::binary_from(&bytes)?;
     let said = install::replace(binary, &new)?;
     println!("Updated {} to switchboard {said}.", paths::tilde(binary));
@@ -411,9 +415,11 @@ mod tests {
         for target in ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin"] {
             let name = release::archive_name(&version, target);
             assets.push(json!({"name": name, "browser_download_url": "https://x/a"}));
-            assets.push(
-                json!({"name": format!("{name}.sha256"), "browser_download_url": "https://x/b"}),
-            );
+            for end in ["sha256", "sig"] {
+                assets.push(
+                    json!({"name": format!("{name}.{end}"), "browser_download_url": "https://x/b"}),
+                );
+            }
         }
         Release::from_json(&json!({
             "tag_name": tag, "body": notes, "assets": assets,
