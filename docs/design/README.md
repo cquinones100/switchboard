@@ -137,3 +137,4 @@ The relay's DM, threads and Home tab.
 - [50. Proposed: Home with Next, the desktop's state colors and today's usage](https://cquinones100.github.io/switchboard/design/50.html)
 - [51. Proposed: landing in the tab's thread, queue-and-clean's steps and its push question as buttons](https://cquinones100.github.io/switchboard/design/51.html)
 - [52. Proposed: autopilot's settings as a Slack form that also starts it](https://cquinones100.github.io/switchboard/design/52.html)
+- [81. Proposed: autopilot on the Home tab, its note, counts per column, spend against its limit and finish time, edited in place](https://cquinones100.github.io/switchboard/design/81.html)
