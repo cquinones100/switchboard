@@ -145,7 +145,7 @@ pub(super) const KEYS: &[(&str, &str)] = &[
     ("/", "filter the cards and rows (↵ keep, esc clear)"),
     ("1-9", "choose that tab"),
     ("] [", "next, last view (with UX 2.0, in its group)"),
-    ("} { M-] M-[", "with UX 2.0, the next, last group of views"),
+    ("M-] M-[", "with UX 2.0, the next, last group of views"),
     (
         "M-{ M-}",
         "close it, and back, forward through the tabs visited, as outside it",
@@ -2605,13 +2605,7 @@ impl Server {
             KeyCode::BackTab => switch_view(m, -1, false),
             KeyCode::Char(']') if none => switch_view(m, 1, true),
             KeyCode::Char('[') if none => switch_view(m, -1, true),
-            KeyCode::Char('}') if !k.mods.alt && !k.mods.ctrl && m.snap.rules.ux2 => {
-                switch_group(m, 1)
-            }
-            KeyCode::Char('{') if !k.mods.alt && !k.mods.ctrl && m.snap.rules.ux2 => {
-                switch_group(m, -1)
-            }
-            // M-] and M-[ move between the groups as } and { do.
+            // M-] and M-[ move between the groups.
             KeyCode::Char(']') if k.mods.alt && !k.mods.ctrl && m.snap.rules.ux2 => {
                 switch_group(m, 1)
             }

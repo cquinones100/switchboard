@@ -2200,29 +2200,27 @@ fn with_ux2_a_click_on_a_tab_in_the_sidebar_closes_it_and_goes_there() {
 /// The bar's second row, the views of the group in front and its keys.
 fn views_row(s: &[String]) -> String {
     s.iter()
-        .find(|l| l.contains("{ } groups"))
+        .find(|l| l.contains("[ ] views"))
         .cloned()
         .unwrap_or_default()
 }
 
 #[test]
-fn with_ux2_braces_and_m_brackets_move_between_groups_and_m_braces_close_it_and_step_back() {
+fn with_ux2_m_brackets_move_between_groups_braces_do_nothing_and_m_braces_close_it() {
     let (server, mut client) = two_tabs_ux2();
     let screen = open(&mut client);
     assert!(views_row(&screen).contains("Tabs"), "{}", screen.join("\n"));
-    // { round to the last group, System, and } back to Work.
-    client.type_text("{");
-    client.wait_for("System's views", |s| views_row(s).contains("Settings"));
+    // } moves nothing, so M-] after it goes from Work to Day, not to System.
     client.type_text("}");
-    client.wait_for("Work's views", |s| views_row(s).contains("Tabs"));
+    client.type_text(&format!("{ALT}]"));
+    client.wait_for("Day's views", |s| views_row(s).contains("Reminders"));
     assert_eq!(
         tabs(&server.list())[1]["current"],
         true,
         "the tab unchanged"
     );
-    // M-] and M-[ move between the groups too, mission control left open.
-    client.type_text(&format!("{ALT}]"));
-    client.wait_for("Day's views", |s| views_row(s).contains("Reminders"));
+    // { moves nothing either, so M-[ after it goes back to Work.
+    client.type_text("{");
     client.type_text(&format!("{ALT}["));
     client.wait_for("Work's views", |s| views_row(s).contains("Tabs"));
     // M-{ closes it and goes back through the tabs, to the first.
