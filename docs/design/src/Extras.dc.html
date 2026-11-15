@@ -44,8 +44,8 @@ const clip = (s, n) => [...s].length > n ? [...s].slice(0, n - 1).join('').trimE
 // Key hints, one style everywhere: the key in the accent, what it does dim, two spaces between.
 const keys = (x, y, list) => { for (const [k, what] of list) { x += put(x, y, k, 'a'); x += put(x, y, ' ' + what + '  ', 'd'); } return x; };
 // A tab header's view keys (M-c Claude ...), the one shown lit.
-const view = (x, y, k, label, on) => { let n = put(x, y, ' ' + k + ' ', on ? 'k' : 'a', 'b', on ? 'A' : '3'); n += put(x + n, y, ' ' + label + ' ', on ? 't' : 'd', on ? 'b' : '', on ? '4' : '0'); return n + 1; };
-const views = (x, y, on) => { for (const [k, l] of [['M-c', 'Claude'], ['M-d', 'Diff'], ['M-v', 'PR'], ['M-i', 'Ticket'], ['M-e', 'Note']]) x += view(x, y, k, l, l === on); };
+const view = (x, y, k, label, on) => { if (!k) return put(x, y, ' ' + label + ' ', on ? 't' : 'd', on ? 'b' : '', on ? '4' : '0') + 1; let n = put(x, y, ' ' + k + ' ', on ? 'k' : 'a', 'b', on ? 'A' : '3'); n += put(x + n, y, ' ' + label + ' ', on ? 't' : 'd', on ? 'b' : '', on ? '4' : '0'); return n + 1; };
+const views = (x, y, on) => { for (const [k, l] of [['M-c', 'Claude'], ['M-d', 'Diff'], ['M-v', 'PR'], ['', 'Ticket'], ['M-e', 'Note'], ['M-h', 'History'], ['M-\\', 'Beside']]) x += view(x, y, k, l, l === on); };
 
 // KITTY GRAPHICS: what Ghostty draws as images over the cells, in cell units (fractions allowed, so pixels).
 // K(x, y, w, h, css, text) places one; css is any extra CSS (background, border-radius, opacity...).
@@ -96,7 +96,7 @@ const backdrop = () => { for (let y = 0; y < H; y++) for (let x = 0; x < W; x++)
 // OPTION: one choice in a box; the chosen one lit, a yellow › before it. Never a letter key: a menu is moved with ↑↓ (or /), chosen with Enter or a click; what sits at the right is a fact, such as a time.
 const option = (x, y, w, text, key, chosen) => { const bg = chosen ? '4' : 'E'; if (chosen) fill(x + 1, y, w - 2, 1, '4'); put(x + 2, y, chosen ? '›' : ' ', 'y', 'b', bg); put(x + 4, y, text, 't', chosen ? 'b' : '', bg); if (key) R(x + w - 3, y, key, chosen ? 'a' : 'd', '', bg); };
 // KEYCAP: a key you can press or click, with what it does; lit while what it opens is in front.
-const keycap = (x, y, k, what, lit) => { const kb = lit ? 'A' : '3'; let n = put(x, y, '\uE0B6', kb); n += put(x + n, y, k, lit ? 'k' : 'a', 'b', kb); if (lit) { n += put(x + n, y, ' ', 'k', '', kb); n += put(x + n, y, ' ' + what, 't', 'b', '4'); n += put(x + n, y, '\uE0B4', '4'); } else { n += put(x + n, y, '\uE0B4', kb); n += put(x + n, y, ' ' + what + ' ', 'd'); } return n + 1; };
+const keycap = (x, y, k, what, lit) => { if (!k) return put(x, y, ' ' + what + ' ', lit ? 't' : 'd', lit ? 'b' : '', lit ? '4' : '0') + 1; const kb = lit ? 'A' : '3'; let n = put(x, y, '\uE0B6', kb); n += put(x + n, y, k, lit ? 'k' : 'a', 'b', kb); if (lit) { n += put(x + n, y, ' ', 'k', '', kb); n += put(x + n, y, ' ' + what, 't', 'b', '4'); n += put(x + n, y, '\uE0B4', '4'); } else { n += put(x + n, y, '\uE0B4', kb); n += put(x + n, y, ' ' + what + ' ', 'd'); } return n + 1; };
 // CHIP: a short fact about a thing, tinted by its tone.
 const chip = (x, y, text, tone) => { const t = TINT[tone || 'd']; let n = put(x, y, '\uE0B6', t); n += put(x + n, y, text, tone || 'd', '', t); n += put(x + n, y, '\uE0B4', t); return n + 1; };
 // CELL: a step in a pipeline: a chip of fixed width, its text centered, a dim note under it.
@@ -144,7 +144,7 @@ const sidebar = (x0, y0, w, h, count, groups, sel) => {
   vl(x0 + w, y0, h);
 };
 
-// THE TAB HEADER with only core on: its line in the tab's own color, and the views core has (no M-v, M-i or M-e, which are extras').
+// THE TAB HEADER with only core on: its line in the tab's own color, and the views core has (no PR, Ticket or Note, which are extras').
 const header = (x0, y, w, num, state, name, where, right) => {
   fill(x0, y, w, 1, 'H' + num);
   T(x0 + 1, y, [MARK[state][0], 'k', '', 'H' + num], [' ' + num + ' ', 'k', 'b', 'H' + num], [name, 'k', 'b', 'H' + num], ['   ' + where, 'k', '', 'H' + num]);
@@ -163,7 +163,7 @@ const mcBar = (y, group, current, right) => {
   R(158, y, right || '', 'd', '', '3');
   x = 36;
   for (const v of GROUPS.find((q) => q[0] === group)[1]) { const on = v === current; if (on) { put(x - 1, y + 1, '', '4'); put(x, y + 1, v, 'a', 'b', '4'); put(x + [...v].length, y + 1, '', '4'); } else put(x, y + 1, v, 'd'); x += [...v].length + 3; }
-  let rx = 158; const hint = [['{ }', 'groups'], ['[ ]', 'views'], ['Esc', 'back']];
+  let rx = 158; const hint = [['[ ]', 'views'], ['Esc', 'back']];
   rx -= hint.reduce((n, [k, w]) => n + k.length + w.length + 3, 0) - 2; keys(rx + 1, y + 1, hint);
   hl(35, y + 2, 125);
 };
@@ -192,7 +192,7 @@ mcBar(0, 'System', 'Extras', '1 of 7 extras on');
 // Core, on a panel: always on, so no switch
 fill(35, 3, 28, 41, '2'); ruleV(63, 3, 41);
 label(37, 4, 'Core'); R(61, 4, 'always on', 'd', '', '2');
-['Tabs, panes and splits', 'The sidebar\'s tabs', 'M-a M-A M-c M-y M-f', 'Tabs and Reopen', 'Worktrees', 'M-d the diff', 'M-h a tab\'s history', 'M-p the palette', 'Settings and Keys', 'Updates'].forEach((c, i) => T(37, 5 + i, [c, 't', '', '2']));
+['Tabs, panes and splits', 'The sidebar\'s tabs', 'M-a M-c M-f M-T', 'Tabs and Reopen', 'Worktrees', 'M-d the diff', 'M-h a tab\'s history', 'M-p the palette', 'Settings and Keys', 'Updates'].forEach((c, i) => T(37, 5 + i, [c, 't', '', '2']));
 label(37, 16, 'Its skills');
 ['/resolve-conflicts', '/clean-worktree'].forEach((c, i) => T(37, 17 + i, [c, 't', '', '2']));
 T(37, 40, ['An install from before', 'f', '', '2']); T(37, 41, ['extras keeps every one on', 'f', '', '2']);
@@ -200,11 +200,11 @@ T(37, 40, ['An install from before', 'f', '', '2']); T(37, 41, ['extras keeps ev
 // The extras, as board 26 lists options: the chosen one opened under its name
 pane(66, 3, 94, 'Extras', 'One switch each: its views, keys, settings and skills come and go with it');
 const BUNDLES = [
-  ['Notes', true, 'M-N · M-e · 2 skills', 'The notes app in a tab of its own, each tab\'s note beside it, checklists worked in tabs', ['ready', 'g']],
+  ['Notes', true, 'M-e · 2 skills', 'The notes app in a tab of its own, each tab\'s note beside it, checklists worked in tabs', ['ready', 'g']],
   ['Your day', false, 'Calendar · Reminders · 1 skill', 'Today\'s calendar and the next meeting, reminders on tabs, the standup and todo notes', ['needs a calendar address', 'y']],
   ['Slack', false, 'Slack · the relay · 1 skill', 'What is new for you on Slack, and your tabs reached from Slack\'s app', ['needs the Slack app', 'y']],
   ['On call', false, '1 skill', 'Watches your team\'s alert channels and reaches you through the relay', ['needs Slack', 'y']],
-  ['GitHub and Linear', false, 'PRs · Tickets · CI · Inbox · Map', '', ['Linear needs a key', 'y']],
+  ['GitHub and Linear', false, 'PRs · Tickets · CI · Inbox', '', ['Linear needs a key', 'y']],
   ['Autopilot and landing', false, 'Autopilot · Landing · 3 skills', 'Works a note\'s checklist in tabs of its own, reviews and lands what each finishes', ['ready', 'g']],
   ['Usage and Resources', false, 'Usage · Resources', 'What Claude spends by tab against your limits, and what each tab\'s processes take', ['ready', 'g']],
 ];
@@ -216,8 +216,8 @@ BUNDLES.forEach(([name, on, adds, desc, [need, tone]], i) => {
   R(149, y, adds, 'd', '', bg);
   sw(153.5, y, on);
   if (sel) {
-    T(68, y + 1, ['Adds   ', 'd', '', '4'], ['PRs, Tickets and CI as a Code group, the Inbox under Day, the Work map', 't', '', '4']);
-    T(68, y + 2, ['       ', 'd', '', '4'], ['M-v a tab\'s PR, M-i its ticket, M-m ready to merge, the sidebar\'s Build failing', 't', '', '4']);
+    T(68, y + 1, ['Adds   ', 'd', '', '4'], ['PRs, Tickets and CI as a Code group, and the Inbox under Day', 't', '', '4']);
+    T(68, y + 2, ['       ', 'd', '', '4'], ['M-v a tab\'s PR, the header\'s Ticket, the sidebar\'s Build failing', 't', '', '4']);
     T(68, y + 3, ['       ', 'd', '', '4'], ['skills /wt, /shape, /ci-loop, /project-status, /note-tickets', 't', '', '4']);
     T(68, y + 4, ['Needs  ', 'd', '', '4'], ['✓', 'g', '', '4'], [' GitHub: gh is signed in     ', 't', '', '4'], ['✕', 'r', '', '4'], [' Linear: an API key, asked for as it turns on', 't', '', '4']);
     T(68, y + 5, ['Then   ', 'd', '', '4'], ['its settings show under Settings\' Integrations, GitHub and Linear each off alone', 'd', '', '4']);

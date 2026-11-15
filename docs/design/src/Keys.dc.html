@@ -44,8 +44,8 @@ const clip = (s, n) => [...s].length > n ? [...s].slice(0, n - 1).join('').trimE
 // Key hints, one style everywhere: the key in the accent, what it does dim, two spaces between.
 const keys = (x, y, list) => { for (const [k, what] of list) { x += put(x, y, k, 'a'); x += put(x, y, ' ' + what + '  ', 'd'); } return x; };
 // A tab header's view keys (M-c Claude ...), the one shown lit.
-const view = (x, y, k, label, on) => { let n = put(x, y, ' ' + k + ' ', on ? 'k' : 'a', 'b', on ? 'A' : '3'); n += put(x + n, y, ' ' + label + ' ', on ? 't' : 'd', on ? 'b' : '', on ? '4' : '0'); return n + 1; };
-const views = (x, y, on) => { for (const [k, l] of [['M-c', 'Claude'], ['M-d', 'Diff'], ['M-v', 'PR'], ['M-i', 'Ticket'], ['M-e', 'Note']]) x += view(x, y, k, l, l === on); };
+const view = (x, y, k, label, on) => { if (!k) return put(x, y, ' ' + label + ' ', on ? 't' : 'd', on ? 'b' : '', on ? '4' : '0') + 1; let n = put(x, y, ' ' + k + ' ', on ? 'k' : 'a', 'b', on ? 'A' : '3'); n += put(x + n, y, ' ' + label + ' ', on ? 't' : 'd', on ? 'b' : '', on ? '4' : '0'); return n + 1; };
+const views = (x, y, on) => { for (const [k, l] of [['M-c', 'Claude'], ['M-d', 'Diff'], ['M-v', 'PR'], ['', 'Ticket'], ['M-e', 'Note'], ['M-h', 'History'], ['M-\\', 'Beside']]) x += view(x, y, k, l, l === on); };
 
 // KITTY GRAPHICS: what Ghostty draws as images over the cells, in cell units (fractions allowed, so pixels).
 // K(x, y, w, h, css, text) places one; css is any extra CSS (background, border-radius, opacity...).
@@ -96,7 +96,7 @@ const backdrop = () => { for (let y = 0; y < H; y++) for (let x = 0; x < W; x++)
 // OPTION: one choice in a box; the chosen one lit, a yellow › before it. Never a letter key: a menu is moved with ↑↓ (or /), chosen with Enter or a click; what sits at the right is a fact, such as a time.
 const option = (x, y, w, text, key, chosen) => { const bg = chosen ? '4' : 'E'; if (chosen) fill(x + 1, y, w - 2, 1, '4'); put(x + 2, y, chosen ? '›' : ' ', 'y', 'b', bg); put(x + 4, y, text, 't', chosen ? 'b' : '', bg); if (key) R(x + w - 3, y, key, chosen ? 'a' : 'd', '', bg); };
 // KEYCAP: a key you can press or click, with what it does; lit while what it opens is in front.
-const keycap = (x, y, k, what, lit) => { const kb = lit ? 'A' : '3'; let n = put(x, y, '\uE0B6', kb); n += put(x + n, y, k, lit ? 'k' : 'a', 'b', kb); if (lit) { n += put(x + n, y, ' ', 'k', '', kb); n += put(x + n, y, ' ' + what, 't', 'b', '4'); n += put(x + n, y, '\uE0B4', '4'); } else { n += put(x + n, y, '\uE0B4', kb); n += put(x + n, y, ' ' + what + ' ', 'd'); } return n + 1; };
+const keycap = (x, y, k, what, lit) => { if (!k) return put(x, y, ' ' + what + ' ', lit ? 't' : 'd', lit ? 'b' : '', lit ? '4' : '0') + 1; const kb = lit ? 'A' : '3'; let n = put(x, y, '\uE0B6', kb); n += put(x + n, y, k, lit ? 'k' : 'a', 'b', kb); if (lit) { n += put(x + n, y, ' ', 'k', '', kb); n += put(x + n, y, ' ' + what, 't', 'b', '4'); n += put(x + n, y, '\uE0B4', '4'); } else { n += put(x + n, y, '\uE0B4', kb); n += put(x + n, y, ' ' + what + ' ', 'd'); } return n + 1; };
 // CHIP: a short fact about a thing, tinted by its tone.
 const chip = (x, y, text, tone) => { const t = TINT[tone || 'd']; let n = put(x, y, '\uE0B6', t); n += put(x + n, y, text, tone || 'd', '', t); n += put(x + n, y, '\uE0B4', t); return n + 1; };
 // CELL: a step in a pipeline: a chip of fixed width, its text centered, a dim note under it.
@@ -160,7 +160,7 @@ const mcBar = (group, current, right) => {
   R(158, 0, right || '', 'd', '', '3');
   x = 36;
   for (const v of GROUPS.find((q) => q[0] === group)[1]) { const on = v === current; if (on) { put(x - 1, 1, '\uE0B6', '4'); put(x, 1, v, 'a', 'b', '4'); put(x + [...v].length, 1, '\uE0B4', '4'); } else put(x, 1, v, 'd'); x += [...v].length + 3; }
-  let rx = 158; const hint = [['{ }', 'groups'], ['[ ]', 'views'], ['Esc', 'back']];
+  let rx = 158; const hint = [['[ ]', 'views'], ['Esc', 'back']];
   rx -= hint.reduce((n, [k, w]) => n + k.length + w.length + 3, 0) - 2; keys(rx + 1, 1, hint);
   hl(35, 2, 125);
 };
@@ -173,15 +173,15 @@ mcBar('System', 'Keys', 'keys.json: 2 of yours');
 // The groups: the workspace's by tag, then each app's own, on a panel
 fill(35, 3, 28, 41, '2'); ruleV(63, 3, 41);
 label(37, 4, 'Workspace');
-const G = [['tabs', 24], ['panes', 14], ['claude', 8], ['notes', 6], ['pr', 6], ['tickets', 5], ['views', 5], ['git', 4], ['help', 4]];
+const G = [['tabs', 13], ['panes', 14], ['claude', 8], ['notes', 6], ['pr', 6], ['tickets', 5], ['views', 5], ['git', 4], ['help', 4]];
 G.forEach(([g, n], i) => { const y = 5 + i, sel = g === 'tabs', bg = sel ? row(35, y, 28, 1, true) : '2'; T(37, y, ['#' + g, 't', sel ? 'b' : '', bg]); R(61, y, String(n), 'd', '', bg); });
 label(37, 15, 'Each app\'s own');
 [['Sidebar', 18], ['Mission control', 24], ['Diff (M-d)', 31], ['Notes', 140]].forEach(([g, n], i) => { T(37, 16 + i, [g, 't', '', '2']); R(61, 16 + i, String(n), 'd', '', '2'); });
 label(37, 22, 'Through M-p only', 'd', 37, 61);
 
 // NEW ATOM: KEYBOARD: keys drawn where they sit on a keyboard, shaded by how often you press each (a heatmap); no list or chart shows "which key, where".
-const USE = { J: 212, A: 188, T: 64, C: 140, D: 96, V: 41, I: 22, E: 30, P: 120, S: 18, F: 9, O: 7, W: 15, Y: 26, 1: 30, 2: 44, 3: 38, 4: 12, 5: 9 };
-const TABKEYS = 'TJAFOWB123456789';
+const USE = { J: 212, A: 188, T: 64, C: 140, D: 96, V: 41, E: 30, H: 11, P: 120, S: 18, F: 9, 1: 30, 2: 44, 3: 38, 4: 12, 5: 9 };
+const TABKEYS = 'TJAF123456789';
 const KB = ['1234567890', 'QWERTYUIOP', 'ASDFGHJKL', 'ZXCVBNM'];
 const KX = 67, KY = 4.3, CW = 4.4, RH = 1.5;
 KB.forEach((r, ri) => [...r].forEach((ch, i) => {
@@ -192,10 +192,10 @@ KB.forEach((r, ri) => [...r].forEach((ch, i) => {
 T(67, 11, ['Alt keys by how often you pressed them this week; the outlined ones are #tabs', 'd']);
 
 // The key under the cursor, as a pane: its keycap lit, what it does, how often
-keycap(118, 3, 'M-j', 'Search and jump to a tab', true);
-T(118, 5, ['A picker over the Work map\'s open tabs:', 'd']);
-T(118, 6, ['type a name, a ticket or a PR number,', 'd']);
-T(118, 7, ['Enter goes there.', 'd']);
+keycap(118, 3, 'M-j', 'Go to a tab', true);
+T(118, 5, ['A box of the open tabs by state, and the', 'd']);
+T(118, 6, ['worktrees with no tab: type a name, a', 'd']);
+T(118, 7, ['ticket or a PR number, Enter goes there.', 'd']);
 T(118, 9, ['212', 't', 'b'], [' this week · your most used', 'd']);
 
 // The tab group's keys, as a table: column heads as labels, a dashed rule under them
@@ -203,30 +203,19 @@ rule(64, 13, 96);
 label(66, 14, 'Key'); label(80, 14, 'What it does'); label(130, 14, 'Tags'); R(158, 14, 'FROM', 'd', 'b');
 headRule(64, 15, 96);
 const ROWS = [
-  ['M-t  M-n', 'New tab, running Claude, in a directory you pick', '#tabs #claude #new', 'default'],
+  ['M-t', 'New tab, running Claude, in a directory you pick', '#tabs #claude #new', 'default'],
   ['M-g', 'New tab', '#tabs #new', 'yours'],
   ['M-1 … M-9', 'Go to tab 1 to 9', '#tabs #navigate', 'default'],
-  ['M-0', 'Go to a tab by number, for tabs past 9', '#tabs #navigate', 'default'],
-  ['M-[  M-]', 'Previous tab, next tab', '#tabs #navigate', 'default'],
-  ['M-Tab', 'Go back to the previous tab', '#tabs #navigate', 'default'],
-  ['M-j', 'Search and jump to a tab', '#tabs #find', 'default'],
+  ['M-j', 'Go to a tab', '#tabs #find', 'default'],
   ['M-a', 'Go to the next tab that needs you', '#claude #tabs', 'default'],
-  ['M-A', 'Go to the next idle tab', '#tabs #navigate', 'default'],
+  ['M-{  M-}', 'Back, forward, through where you have been', '#tabs #navigate', 'default'],
   ['M-\\', 'Show a tab beside this one', '#tabs #panes', 'default'],
   ['M-f', 'Pin or unpin this tab, keeping it at the top of Needs you', '#tabs #pin', 'default'],
-  ['M-T', 'Show this tab\'s full title', '#tabs', 'default'],
+  ['M-T', 'Reopen the last tab you closed', '#tabs #reopen', 'default'],
   ['M-c', 'Jump to the pane running Claude in this tab', '#claude', 'default'],
-  ['M-y', 'Copy the latest reply of this tab\'s Claude', '#claude #copy', 'default'],
   ['M-s', 'Jump into the sidebar, or back out of it', '#sidebar #tabs', 'default'],
   ['M-Space', 'Open or close mission control', '#overview #tabs', 'default'],
-  ['M-o', 'Reopen a worktree with no tab and resume its Claude', '#worktree #reopen', 'default'],
-  ['M-W', 'Start work on tickets in new tabs (wt)', '#tabs #linear', 'default'],
-  ['M-B', 'Start work on a branch, new or existing, in a new tab (wtb)', '#tabs #git', 'default'],
-  ['M-N', 'Go to Notes, wherever it is open, or open it in its own tab', '#notes #tabs', 'default'],
-  ['M-S', 'Open the Slack relay in its own tab', '#slack #tabs', 'default'],
-  ['M-b &', 'Close the tab, after asking', '#tabs #close', 'default'],
-  ['M-b ,', 'Rename the tab', '#tabs', 'default'],
-  ['M-b c', 'New tab', '#tabs #new', 'default'],
+  ['M-[  M-]', 'Mission control\'s previous group, next group', '#overview', 'default'],
 ];
 ROWS.forEach(([k, what, tags, from], i) => {
   const y = 16 + i, sel = k === 'M-j', bg = row(64, y, 96, 1, sel);

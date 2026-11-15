@@ -58,7 +58,7 @@
       "page": "design"
     },
     "Notes.dc.html": {
-      "title": "7. M-N: Notes, each item showing the tab working it",
+      "title": "7. Notes, each item showing the tab working it",
       "page": "design"
     },
     "NotesPlan.dc.html": {
@@ -110,7 +110,7 @@
       "page": "design"
     },
     "TicketInPlace.dc.html": {
-      "title": "14. M-i: the ticket in Claude's place",
+      "title": "14. The ticket in Claude's place, its view's actions in the m menu",
       "page": "design"
     },
     "Tickets.dc.html": {
@@ -274,23 +274,23 @@
       "page": "design"
     },
     "McNavSidebar.dc.html": {
-      "title": "64. Mission control's views, option 1: while it is open, the sidebar lists its groups and views with what each says",
+      "title": "64. Mission control's views with Settings' \"Keep the tabs sidebar in mission control\" off: while it is open, the sidebar lists its groups and views",
       "page": "design"
     },
     "McNavColumn.dc.html": {
-      "title": "65. Option 2: mission control's own column of groups and views, as Slack's sidebar, the tabs' sidebar kept",
+      "title": "65. With \"Keep the tabs sidebar in mission control\" on: mission control's own column of groups and views, the tabs sidebar beside it",
       "page": "design"
     },
     "McNavOneRow.dc.html": {
-      "title": "66. Option 3: one row, the group you are in open with its views, the others folded to what needs you",
+      "title": "66. Dropped: one row, the group you are in open with its views, the others folded to what needs you",
       "page": "design"
     },
     "McNavHome.dc.html": {
-      "title": "67. Option 4: a home screen, a tile for every view saying what it would show, Enter opening one",
+      "title": "67. Dropped: a home screen, a tile for every view saying what it would show, Enter opening one",
       "page": "design"
     },
     "McNavSwitcher.dc.html": {
-      "title": "68. Option 5: a path for a bar, and M-Space again opening every view in a box to type into",
+      "title": "68. Dropped: a path for a bar, and M-Space again opening every view in a box to type into",
       "page": "design"
     },
     "NotesRecent.dc.html": {

@@ -44,8 +44,8 @@ const clip = (s, n) => [...s].length > n ? [...s].slice(0, n - 1).join('').trimE
 // Key hints, one style everywhere: the key in the accent, what it does dim, two spaces between.
 const keys = (x, y, list) => { for (const [k, what] of list) { x += put(x, y, k, 'a'); x += put(x, y, ' ' + what + '  ', 'd'); } return x; };
 // A tab header's view keys (M-c Claude ...), the one shown lit.
-const view = (x, y, k, label, on) => { let n = put(x, y, ' ' + k + ' ', on ? 'k' : 'a', 'b', on ? 'A' : '3'); n += put(x + n, y, ' ' + label + ' ', on ? 't' : 'd', on ? 'b' : '', on ? '4' : '0'); return n + 1; };
-const views = (x, y, on) => { for (const [k, l] of [['M-c', 'Claude'], ['M-d', 'Diff'], ['M-v', 'PR'], ['M-i', 'Ticket'], ['M-e', 'Note']]) x += view(x, y, k, l, l === on); };
+const view = (x, y, k, label, on) => { if (!k) return put(x, y, ' ' + label + ' ', on ? 't' : 'd', on ? 'b' : '', on ? '4' : '0') + 1; let n = put(x, y, ' ' + k + ' ', on ? 'k' : 'a', 'b', on ? 'A' : '3'); n += put(x + n, y, ' ' + label + ' ', on ? 't' : 'd', on ? 'b' : '', on ? '4' : '0'); return n + 1; };
+const views = (x, y, on) => { for (const [k, l] of [['M-c', 'Claude'], ['M-d', 'Diff'], ['M-v', 'PR'], ['', 'Ticket'], ['M-e', 'Note'], ['M-h', 'History'], ['M-\\', 'Beside']]) x += view(x, y, k, l, l === on); };
 
 // KITTY GRAPHICS: what Ghostty draws as images over the cells, in cell units (fractions allowed, so pixels).
 // K(x, y, w, h, css, text) places one; css is any extra CSS (background, border-radius, opacity...).
@@ -96,7 +96,7 @@ const backdrop = () => { for (let y = 0; y < H; y++) for (let x = 0; x < W; x++)
 // OPTION: one choice in a box; the chosen one lit, a yellow › before it. Never a letter key: a menu is moved with ↑↓ (or /), chosen with Enter or a click; what sits at the right is a fact, such as a time.
 const option = (x, y, w, text, key, chosen) => { const bg = chosen ? '4' : 'E'; if (chosen) fill(x + 1, y, w - 2, 1, '4'); put(x + 2, y, chosen ? '›' : ' ', 'y', 'b', bg); put(x + 4, y, text, 't', chosen ? 'b' : '', bg); if (key) R(x + w - 3, y, key, chosen ? 'a' : 'd', '', bg); };
 // KEYCAP: a key you can press or click, with what it does; lit while what it opens is in front.
-const keycap = (x, y, k, what, lit) => { const kb = lit ? 'A' : '3'; let n = put(x, y, '\uE0B6', kb); n += put(x + n, y, k, lit ? 'k' : 'a', 'b', kb); if (lit) { n += put(x + n, y, ' ', 'k', '', kb); n += put(x + n, y, ' ' + what, 't', 'b', '4'); n += put(x + n, y, '\uE0B4', '4'); } else { n += put(x + n, y, '\uE0B4', kb); n += put(x + n, y, ' ' + what + ' ', 'd'); } return n + 1; };
+const keycap = (x, y, k, what, lit) => { if (!k) return put(x, y, ' ' + what + ' ', lit ? 't' : 'd', lit ? 'b' : '', lit ? '4' : '0') + 1; const kb = lit ? 'A' : '3'; let n = put(x, y, '\uE0B6', kb); n += put(x + n, y, k, lit ? 'k' : 'a', 'b', kb); if (lit) { n += put(x + n, y, ' ', 'k', '', kb); n += put(x + n, y, ' ' + what, 't', 'b', '4'); n += put(x + n, y, '\uE0B4', '4'); } else { n += put(x + n, y, '\uE0B4', kb); n += put(x + n, y, ' ' + what + ' ', 'd'); } return n + 1; };
 // CHIP: a short fact about a thing, tinted by its tone.
 const chip = (x, y, text, tone) => { const t = TINT[tone || 'd']; let n = put(x, y, '\uE0B6', t); n += put(x + n, y, text, tone || 'd', '', t); n += put(x + n, y, '\uE0B4', t); return n + 1; };
 // CELL: a step in a pipeline: a chip of fixed width, its text centered, a dim note under it.
@@ -160,7 +160,7 @@ const mcBar = (group, current, right) => {
   R(158, 0, right || '', 'd', '', '3');
   x = 36;
   for (const v of GROUPS.find((q) => q[0] === group)[1]) { const on = v === current; if (on) { put(x - 1, 1, '\uE0B6', '4'); put(x, 1, v, 'a', 'b', '4'); put(x + [...v].length, 1, '\uE0B4', '4'); } else put(x, 1, v, 'd'); x += [...v].length + 3; }
-  let rx = 158; const hint = [['{ }', 'groups'], ['[ ]', 'views'], ['Esc', 'back']];
+  let rx = 158; const hint = [['[ ]', 'views'], ['Esc', 'back']];
   rx -= hint.reduce((n, [k, w]) => n + k.length + w.length + 3, 0) - 2; keys(rx + 1, 1, hint);
   hl(35, 2, 125);
 };
@@ -217,7 +217,7 @@ const mapBody = (X0, PW, Y0) => {
   T(X0 + 1, py, ['branch       ', 'd'], ['rust-notes · 3 commits ahead of main', 't']);
 };
 
-// OPTION 5: NO BAR, A PATH AND A SWITCHER. One line says where you are; M-Space again (or a click on the path) opens a box
+// DROPPED (was option 5): NO BAR, A PATH AND A SWITCHER. One line says where you are; M-Space again (or a click on the path) opens a box
 // of every view by group, what each says beside it, typed into to narrow, as M-j's tab picker is.
 sidebar(0);
 fill(35, 0, 125, 1, '3'); T(36, 0, ['Mission control', 'd', '', '3'], [' › ', 'f', '', '3'], ['Work', 'd', '', '3'], [' › ', 'f', '', '3'], ['Map', 't', 'b', '3'], ['   3 repositories · 14 worktrees', 'd', '', '3']);

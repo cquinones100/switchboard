@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>M-i ticket in place</title>
+<title>The ticket in place</title>
 <script src="./support.js"></script>
 </head>
 <body>
@@ -44,8 +44,8 @@ const clip = (s, n) => [...s].length > n ? [...s].slice(0, n - 1).join('').trimE
 // Key hints, one style everywhere: the key in the accent, what it does dim, two spaces between.
 const keys = (x, y, list) => { for (const [k, what] of list) { x += put(x, y, k, 'a'); x += put(x, y, ' ' + what + '  ', 'd'); } return x; };
 // A tab header's view keys (M-c Claude ...), the one shown lit.
-const view = (x, y, k, label, on) => { let n = put(x, y, ' ' + k + ' ', on ? 'k' : 'a', 'b', on ? 'A' : '3'); n += put(x + n, y, ' ' + label + ' ', on ? 't' : 'd', on ? 'b' : '', on ? '4' : '0'); return n + 1; };
-const views = (x, y, on) => { for (const [k, l] of [['M-c', 'Claude'], ['M-d', 'Diff'], ['M-v', 'PR'], ['M-i', 'Ticket'], ['M-e', 'Note']]) x += view(x, y, k, l, l === on); };
+const view = (x, y, k, label, on) => { if (!k) return put(x, y, ' ' + label + ' ', on ? 't' : 'd', on ? 'b' : '', on ? '4' : '0') + 1; let n = put(x, y, ' ' + k + ' ', on ? 'k' : 'a', 'b', on ? 'A' : '3'); n += put(x + n, y, ' ' + label + ' ', on ? 't' : 'd', on ? 'b' : '', on ? '4' : '0'); return n + 1; };
+const views = (x, y, on) => { for (const [k, l] of [['M-c', 'Claude'], ['M-d', 'Diff'], ['M-v', 'PR'], ['', 'Ticket'], ['M-e', 'Note'], ['M-h', 'History'], ['M-\\', 'Beside']]) x += view(x, y, k, l, l === on); };
 
 // KITTY GRAPHICS: what Ghostty draws as images over the cells, in cell units (fractions allowed, so pixels).
 // K(x, y, w, h, css, text) places one; css is any extra CSS (background, border-radius, opacity...).
@@ -96,7 +96,7 @@ const backdrop = () => { for (let y = 0; y < H; y++) for (let x = 0; x < W; x++)
 // OPTION: one choice in a box; the chosen one lit, a yellow › before it. Never a letter key: a menu is moved with ↑↓ (or /), chosen with Enter or a click; what sits at the right is a fact, such as a time.
 const option = (x, y, w, text, key, chosen) => { const bg = chosen ? '4' : 'E'; if (chosen) fill(x + 1, y, w - 2, 1, '4'); put(x + 2, y, chosen ? '›' : ' ', 'y', 'b', bg); put(x + 4, y, text, 't', chosen ? 'b' : '', bg); if (key) R(x + w - 3, y, key, chosen ? 'a' : 'd', '', bg); };
 // KEYCAP: a key you can press or click, with what it does; lit while what it opens is in front.
-const keycap = (x, y, k, what, lit) => { const kb = lit ? 'A' : '3'; let n = put(x, y, '\uE0B6', kb); n += put(x + n, y, k, lit ? 'k' : 'a', 'b', kb); if (lit) { n += put(x + n, y, ' ', 'k', '', kb); n += put(x + n, y, ' ' + what, 't', 'b', '4'); n += put(x + n, y, '\uE0B4', '4'); } else { n += put(x + n, y, '\uE0B4', kb); n += put(x + n, y, ' ' + what + ' ', 'd'); } return n + 1; };
+const keycap = (x, y, k, what, lit) => { if (!k) return put(x, y, ' ' + what + ' ', lit ? 't' : 'd', lit ? 'b' : '', lit ? '4' : '0') + 1; const kb = lit ? 'A' : '3'; let n = put(x, y, '\uE0B6', kb); n += put(x + n, y, k, lit ? 'k' : 'a', 'b', kb); if (lit) { n += put(x + n, y, ' ', 'k', '', kb); n += put(x + n, y, ' ' + what, 't', 'b', '4'); n += put(x + n, y, '\uE0B4', '4'); } else { n += put(x + n, y, '\uE0B4', kb); n += put(x + n, y, ' ' + what + ' ', 'd'); } return n + 1; };
 // CHIP: a short fact about a thing, tinted by its tone.
 const chip = (x, y, text, tone) => { const t = TINT[tone || 'd']; let n = put(x, y, '\uE0B6', t); n += put(x + n, y, text, tone || 'd', '', t); n += put(x + n, y, '\uE0B4', t); return n + 1; };
 // CELL: a step in a pipeline: a chip of fixed width, its text centered, a dim note under it.
@@ -160,7 +160,7 @@ const mcBar = (group, current, right) => {
   R(158, 0, right || '', 'd', '', '3');
   x = 36;
   for (const v of GROUPS.find((q) => q[0] === group)[1]) { const on = v === current; if (on) { put(x - 1, 1, '\uE0B6', '4'); put(x, 1, v, 'a', 'b', '4'); put(x + [...v].length, 1, '\uE0B4', '4'); } else put(x, 1, v, 'd'); x += [...v].length + 3; }
-  let rx = 158; const hint = [['{ }', 'groups'], ['[ ]', 'views'], ['Esc', 'back']];
+  let rx = 158; const hint = [['[ ]', 'views'], ['Esc', 'back']];
   rx -= hint.reduce((n, [k, w]) => n + k.length + w.length + 3, 0) - 2; keys(rx + 1, 1, hint);
   hl(35, 2, 125);
 };
@@ -224,7 +224,7 @@ T(117, 19, ['SWB-64', 'd'], '  wtn for a note\'s item');
 label(117, 21, 'Links');
 T(117, 22, ['Plan - Stable note IDs', 'b']);
 
-keys(36, 44, [['j/k', 'scroll'], ['/', 'search'], ['Enter', 'picture full size'], ['M-l', 'in Linear'], ['M-v', 'its PR'], ['M-c', 'back to Claude']]);
+keys(36, 44, [['j/k', 'scroll'], ['/', 'search'], ['Enter', 'picture full size'], ['m', 'view actions'], ['M-c', 'back to Claude']]);
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ⌘ Commands at the right end of the header's keys row: a click opens the palette (M-p), and closes it while open; the palette_button setting takes it away.
@@ -233,6 +233,21 @@ cmd(158);
 // The tab header's first line in the tab's own color (the color its number has in the sidebar), its words dark on it.
 const tint = (x0, x1, n, bg) => { for (let x = x0; x <= x1; x++) { const c = g[0][x]; g[0][x] = { c: c.c, fg: bg ? 't' : 'k', bg: bg || ('H' + n), f: c.f }; } };
 tint(35, 159, 2);
+
+{
+// M IN THE TICKET: the view's own actions in a menu, in place of keys of its own (it had M-l and M-v).
+const X = 114, Y = 24, W = 44;
+box(X, Y, W, 13, 'SWB-88');
+put(X + 2, Y + 1, 'this view\'s actions', 'd', '', 'E');
+option(X, Y + 3, W, 'Open it in Linear', '', true);
+option(X, Y + 4, W, 'Show its PR, #219', '');
+option(X, Y + 5, W, 'Work on it in a new tab', '');
+option(X, Y + 6, W, 'Copy its link', '');
+option(X, Y + 7, W, 'Look again now', '');
+option(X, Y + 9, W, 'Back to Claude', '');
+keys(X + 2, Y + 11, [['↑↓', 'move'], ['↵', 'choose'], ['/', 'search'], ['esc', 'close']]);
+backdrop();
+}
 
 // Lines and blocks are drawn to fill the cell, as Ghostty draws them, not taken from the font.
 const LINE = { '\uE0B6': ['cap', 'l'], '\uE0B4': ['cap', 'r'], '─': ['h', 1], '━': ['h', 2], '┄': ['hd'], '│': ['v'], '┆': ['vd'], '╭': ['arc', 'rb'], '┌': ['c', 'rb'], '╮': ['arc', 'lb'], '┐': ['c', 'lb'], '╰': ['arc', 'rt'], '└': ['c', 'rt'], '╯': ['arc', 'lt'], '┘': ['c', 'lt'], '█': ['f'], '▌': ['lh'], '▁': ['lo'], '▐': ['rh'], '┼': ['x'], '├': ['j', 'r'], '┤': ['j', 'l'], '┬': ['j', 'b'], '┴': ['j', 't'] };

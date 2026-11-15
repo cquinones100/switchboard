@@ -24,7 +24,7 @@ A tab and what it shows in Claude's place.
 - [6. A tab's history](https://cquinones100.github.io/switchboard/design/6.html)
 - [12. M-d: the diff in Claude's place](https://cquinones100.github.io/switchboard/design/12.html)
 - [13. M-v: the PR in Claude's place](https://cquinones100.github.io/switchboard/design/13.html)
-- [14. M-i: the ticket in Claude's place](https://cquinones100.github.io/switchboard/design/14.html)
+- [14. The ticket in Claude's place, its view's actions in the m menu](https://cquinones100.github.io/switchboard/design/14.html)
 - [15. M-p: the palette, every command by what it does](https://cquinones100.github.io/switchboard/design/15.html)
 - [43. The sidebar filtered to one repository, the rest folded under Other repos](https://cquinones100.github.io/switchboard/design/43.html)
 - [44. Filtering the sidebar to a repository: M-p's picker, Every repository to clear](https://cquinones100.github.io/switchboard/design/44.html)
@@ -84,17 +84,17 @@ Spend, processes, settings and keys.
 
 Five ways to show its groups and views, to pick one.
 
-- [64. Mission control's views, option 1: while it is open, the sidebar lists its groups and views with what each says](https://cquinones100.github.io/switchboard/design/64.html)
-- [65. Option 2: mission control's own column of groups and views, as Slack's sidebar, the tabs' sidebar kept](https://cquinones100.github.io/switchboard/design/65.html)
-- [66. Option 3: one row, the group you are in open with its views, the others folded to what needs you](https://cquinones100.github.io/switchboard/design/66.html)
-- [67. Option 4: a home screen, a tile for every view saying what it would show, Enter opening one](https://cquinones100.github.io/switchboard/design/67.html)
-- [68. Option 5: a path for a bar, and M-Space again opening every view in a box to type into](https://cquinones100.github.io/switchboard/design/68.html)
+- [64. Mission control's views with Settings' "Keep the tabs sidebar in mission control" off: while it is open, the sidebar lists its groups and views](https://cquinones100.github.io/switchboard/design/64.html)
+- [65. With "Keep the tabs sidebar in mission control" on: mission control's own column of groups and views, the tabs sidebar beside it](https://cquinones100.github.io/switchboard/design/65.html)
+- [66. Dropped: one row, the group you are in open with its views, the others folded to what needs you](https://cquinones100.github.io/switchboard/design/66.html)
+- [67. Dropped: a home screen, a tile for every view saying what it would show, Enter opening one](https://cquinones100.github.io/switchboard/design/67.html)
+- [68. Dropped: a path for a bar, and M-Space again opening every view in a box to type into](https://cquinones100.github.io/switchboard/design/68.html)
 
 ## Notes
 
 Items, the tabs working them and their plans.
 
-- [7. M-N: Notes, each item showing the tab working it](https://cquinones100.github.io/switchboard/design/7.html)
+- [7. Notes, each item showing the tab working it](https://cquinones100.github.io/switchboard/design/7.html)
 - [8. A note item's plan, and its choice, beside it](https://cquinones100.github.io/switchboard/design/8.html)
 - [69. Notes' list: Recent first, the last 8 notes opened, then Folders opening on Notes, no All Notes or tags](https://cquinones100.github.io/switchboard/design/69.html)
 - [70. All 20 › under Recent, a click or Enter: every note opened lately, the last 20, in the finder's box](https://cquinones100.github.io/switchboard/design/70.html)
