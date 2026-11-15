@@ -99,6 +99,7 @@ const RETIRED_RULES: &[&str] = &[
     "Bash(skill-path *)",
     "Bash(slack-relay notify *)",
     "Bash(switchboard setting *)",
+    "Bash(switchboard land-lock *)",
     "Bash(~/.config/tmux/window-names.sh *)",
     "Bash(tmux show-options *)",
     "Bash(tmux set-option *)",

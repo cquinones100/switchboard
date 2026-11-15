@@ -402,11 +402,17 @@ fn a_tab_of_the_work_a_note_mode_lands_without_asking_only_once_leak_check_finds
     let ask = step("4. **Ask** with `AskUserQuestion`");
     assert!(queue.find(&hands_free).unwrap() < queue.find(&ask).unwrap());
     let step11 = step("11. **Push**");
+    let gated = step11
+        .find("When step 7 took the answer without asking, run `<lock> push`")
+        .expect("the push without asking goes through the command's gate");
     let again = step11
-        .find("read `@autopilot_land` again")
-        .expect("it reads the switch again");
-    let push = step11.find("git push origin HEAD:<name>").unwrap();
-    assert!(again < push, "just before the push");
+        .find("it reads `@autopilot_land` again")
+        .expect("which reads the switch again");
+    assert!(gated < again, "as it pushes");
+    assert!(
+        step11.contains("run `<lock> push --asked`"),
+        "the push after a yes"
+    );
     let review = text("review-loop");
     assert!(
         review.contains(check),
@@ -468,14 +474,13 @@ fn a_landing_whose_tests_run_in_ci_checks_for_leaks_pushes_its_own_branch_waits_
     ] {
         assert!(line(step).contains("with `testIn` `ci`"), "{step}");
     }
-    for way_out in ["11. **Push**", "**Not yet**"] {
-        assert!(
-            line(way_out).contains("delete the landing's `ci/land-<id>`"),
-            "{way_out}"
-        );
-    }
+    assert!(line("**Not yet**").contains("delete the landing's `ci/land-<id>`"));
     assert!(
-        line("11. **Push**").contains("git push origin HEAD:<name>`, never forced"),
+        line("11. **Push**").contains("the landing's `ci/land-<id>` deleted"),
+        "the push deletes it"
+    );
+    assert!(
+        line("11. **Push**").contains("git push origin HEAD:<name>` (never forced"),
         "the landing's own push is never forced"
     );
 }

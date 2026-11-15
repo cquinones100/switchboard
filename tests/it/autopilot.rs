@@ -1025,10 +1025,9 @@ fn its_tab_starts_claude_with_the_landings_one_push_allowed_and_no_other_tab_doe
     client.wait_text("$");
     let tab = server.list()["sessions"][0]["tabs"][0].clone();
     let pane = tab["panes"][0]["id"].as_str().unwrap().to_string();
-    let allowed = |branch: &str| {
-        format!(
-            "--settings\n{{\"permissions\":{{\"allow\":[\"Bash(git push origin HEAD:{branch})\"]}}}}\nWork on this checklist item"
-        )
+    // The landing's command, never a git push.
+    let allowed = |_branch: &str| {
+        "--settings\n{\"permissions\":{\"allow\":[\"Bash(switchboard land-lock push)\"]}}\nWork on this checklist item".to_string()
     };
 
     // A tab autopilot didn't open, and a run outside any pane: no rule.

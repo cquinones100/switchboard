@@ -52,6 +52,11 @@
 //!                     `tests failed [words]` and `review blocked [words]`
 //!                     mark a failed stage, which the Landing view draws red
 //!                     with the words after them
+//! land-lock push [--asked]
+//!                     the landing's push and what follows it, with this
+//!                     worktree holding the lock (src/cmd/land_push.rs):
+//!                     exit 0 landed, 3 the lock not this worktree's, 5
+//!                     the branch moved, 6 asking, 1 a failure
 //! land-lock landed <short hash> <branch>
 //!                     says this tab's work landed straight on <branch>, as
 //!                     every direct landing does once it has pushed: marks
@@ -138,7 +143,7 @@ const MUTEX_TRIES: u32 = 500;
 /// `requeue`'s mark, in the worktree's own git directory.
 const REQUEUED: &str = "land-requeued";
 
-const USAGE: &str = "usage: land-lock [--target <branch>] take|wait|release|requeue|leave|holder|queue|move|phase [words]|record ...|landed <short hash> <branch>|autolanded <short hash> [--plan <file> | --decided <n>] [--not-applied <labels>] [item]";
+const USAGE: &str = "usage: land-lock [--target <branch>] take|wait|release|requeue|leave|holder|queue|move|phase [words]|record ...|push [--asked]|landed <short hash> <branch>|autolanded <short hash> [--plan <file> | --decided <n>] [--not-applied <labels>] [item]";
 
 pub fn main(mut args: Vec<String>) -> ExitCode {
     let mut given_target = None;
@@ -179,6 +184,8 @@ pub fn main(mut args: Vec<String>) -> ExitCode {
     };
     let here = PathBuf::from(here);
     let target = given_target.or_else(|| recorded_target(&here));
+    let push_target = target.clone();
+    let lock_here = here.clone();
     let suffix = target
         .filter(|t| crate::tabs::git::default_branch(&common).as_deref() != Some(t.as_str()))
         .map(|t| file_suffix(&t));
@@ -201,6 +208,13 @@ pub fn main(mut args: Vec<String>) -> ExitCode {
         // Every way out of a landing runs release, so it leaves the queue
         // too: a waiter stopped while its session goes on would otherwise
         // hold up every worktree behind it.
+        "push" => Ok(crate::cmd::land_push::main(
+            &lock,
+            &common,
+            &lock_here,
+            push_target,
+            &args[1..],
+        )),
         "release" => lock.release().map(|()| ExitCode::SUCCESS),
         "requeue" => lock.requeue().map(|()| ExitCode::SUCCESS),
         "leave" => lock
@@ -373,7 +387,7 @@ pub(crate) fn set_phase(words: &str) {
 /// repository (its main clone's git directory), read from git's files where
 /// this runs, which the sidebar files under Merged while the tab is in that
 /// main clone on that branch. Outside a Switchboard pane it does nothing.
-fn landed(args: &[String]) -> ExitCode {
+pub(crate) fn landed(args: &[String]) -> ExitCode {
     let [hash, branch] = args else {
         eprintln!("usage: land-lock landed <short hash> <branch>");
         return ExitCode::from(2);
@@ -417,7 +431,7 @@ fn landed(args: &[String]) -> ExitCode {
 /// added to `autolanded.json`, which the server reads into the
 /// notifications ("Landed <hash>: <item>"), naming the tab while it is
 /// open.
-fn autolanded(args: &[String]) -> ExitCode {
+pub(crate) fn autolanded(args: &[String]) -> ExitCode {
     let mut args = args.to_vec();
     let mut plan_file = None;
     if let Some(at) = args.iter().position(|a| a == "--plan")
@@ -592,6 +606,12 @@ impl Lock {
 
     fn holder(&self) -> Option<Value> {
         util::read_json(&self.holder_file)
+    }
+
+    /// Whether this worktree holds the lock.
+    pub(crate) fn held_here(&self) -> bool {
+        let here = self.here.to_string_lossy();
+        self.dir.exists() && self.holder().as_ref().and_then(holder_path).as_deref() == Some(&*here)
     }
 
     fn hold(&self) -> io::Result<()> {

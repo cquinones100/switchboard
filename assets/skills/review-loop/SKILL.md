@@ -8,7 +8,7 @@ allowed-tools:
   - Bash(switchboard skill-path *)
   - Bash(switchboard show *)
   - Bash(switchboard setting review_security)
-  - Bash(switchboard land-lock *)
+  - Bash(switchboard land-lock record *)
   - Bash(git status)
   - Bash(git status *)
   - Bash(git rev-parse *)

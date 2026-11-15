@@ -75,7 +75,7 @@ fn run(args: &[String]) {
         .ok()
         .filter(|p| !p.is_empty());
     // A conversation moved into the background is answered PreToolUse too,
-    // for autopilot's landing push (`ask_push`), which the server asks
+    // for the landing's push after a yes (`ask_push`), which the server asks
     // wherever the conversation runs; the hands-free answers stay a pane's.
     let answers = event == "PreToolUse" || (pane.is_some() && event == "Stop");
     // A Stop the server may block is told to the relay only once it stands,

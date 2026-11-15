@@ -33,8 +33,8 @@
 //! would land there, carrying the target's commits.
 //!
 //! A tab of autopilot's in a repository landing straight on a branch starts
-//! its Claude with one permission for the session, the landing's own push
-//! (`push_rule`), since Claude Code's auto mode otherwise judges that push
+//! its Claude with one permission for the session, the landing's own push,
+//! `switchboard land-lock push` (`push_rule`), since Claude Code's auto mode otherwise judges that push
 //! itself and may refuse it. It is passed on the command line
 //! (`claude --settings`), so it is in no file and no other session has it;
 //! the `wtn` function, which starts Claude itself, reads it back from
@@ -393,6 +393,18 @@ pub fn item_plan_file(notes: &Path, text: &str, item: &str) -> Option<PathBuf> {
         .position(|line| ITEM.captures(line).is_some_and(|m| m[1].trim() == item))?;
     let name = own_plan(&item_block(&lines, at))?;
     plan_file(notes, &name)
+}
+
+/// How many `Decided hands-free` lines are indented under the item whose
+/// first line is `item`.
+pub fn item_decided(text: &str, item: &str) -> usize {
+    let lines: Vec<&str> = text.split('\n').collect();
+    lines
+        .iter()
+        .position(|line| ITEM.captures(line).is_some_and(|m| m[1].trim() == item))
+        .map_or(0, |at| {
+            crate::autopilot::landed::decided_in(&item_block(&lines, at))
+        })
 }
 
 /// The item's first line, when the line is an unticked item.
@@ -1460,15 +1472,17 @@ fn refused_in_autopilot(why: &str) {
 }
 
 /// The settings a tab of autopilot's starts its Claude with, for that
-/// session alone: the one push queue-and-clean's landing makes, allowed, so
-/// Claude Code's auto mode, which takes an allow rule before its own
-/// judgment, doesn't refuse a push the landing's checks already passed.
+/// session alone: the command that makes queue-and-clean's landing push,
+/// `switchboard land-lock push` (src/cmd/land_push.rs), allowed, so Claude
+/// Code's auto mode, which takes an allow rule before its own judgment,
+/// doesn't refuse a push the command's own gate decides.
 /// Only in a tab autopilot opened (`@autopilot`), in a repository landing
 /// straight on a branch that is on a remote, with `autopilot_push_rule` on:
 /// every other tab and push is judged as before. Whether the tab lands
 /// without asking isn't read here, since that is turned on and off while
-/// it works: the server asks the push at its PreToolUse hook while it is
-/// off (src/agent/hands_free.rs's `ask_push`).
+/// it works: the command reads it as it pushes, and the server asks the
+/// push after your yes (`--asked`) at its PreToolUse hook while it is off
+/// (src/agent/hands_free.rs's `ask_push`).
 fn push_rule(path: &Path, root: &Path, start: &str, target: Option<&str>) -> Option<String> {
     if !crate::settings::is_on("autopilot_push_rule") {
         return None;
@@ -1477,36 +1491,26 @@ fn push_rule(path: &Path, root: &Path, start: &str, target: Option<&str>) -> Opt
     // The default branch on origin, which the item's branch starts from; a
     // target, the remote branch it tracks. With no remote the landing moves
     // a local branch, which needs no rule.
-    let (remote, branch) = match target {
-        Some(target) => tracked(root, target)?,
-        None => (
-            "origin".to_string(),
-            start.strip_prefix("refs/remotes/origin/")?.to_string(),
-        ),
-    };
-    let settings = push_settings(&remote, &branch)?;
+    match target {
+        Some(target) => {
+            tracked(root, target)?;
+        }
+        None => {
+            start.strip_prefix("refs/remotes/origin/")?;
+        }
+    }
     let lands_direct = crate::repos::landing_for(path, false).is_ok_and(|l| l.landing == "direct");
-    lands_direct.then_some(settings)
+    lands_direct.then(push_settings)
 }
 
-/// Claude Code's settings allowing `git push <remote> HEAD:<branch>`, the
-/// command queue-and-clean's step 11 runs, and nothing else; none for a
-/// name a permission rule could read as more than itself (a parenthesis, a
-/// space), which then asks as any push does.
-fn push_settings(remote: &str, branch: &str) -> Option<String> {
-    let plain = |name: &str| {
-        !name.is_empty()
-            && !name.starts_with('-')
-            && name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || "._/-".contains(c))
-    };
-    (plain(remote) && plain(branch)).then(|| {
-        serde_json::json!({
-            "permissions": { "allow": [format!("Bash(git push {remote} HEAD:{branch})")] }
-        })
-        .to_string()
+/// Claude Code's settings allowing `switchboard land-lock push`, the
+/// command queue-and-clean's step 11 runs, exactly so, and nothing else:
+/// no `git push`, and not its `--asked` form, which pushes past its gate.
+fn push_settings() -> String {
+    serde_json::json!({
+        "permissions": { "allow": ["Bash(switchboard land-lock push)"] }
     })
+    .to_string()
 }
 
 /// What Claude does before building, as `wt`'s prompt has it for a ticket:
@@ -1567,23 +1571,11 @@ mod tests {
     }
 
     #[test]
-    fn the_settings_allow_the_landings_one_push_and_none_for_a_name_a_rule_could_widen() {
+    fn the_settings_allow_the_landing_command_and_no_git_push() {
         assert_eq!(
-            push_settings("origin", "main").as_deref(),
-            Some(r#"{"permissions":{"allow":["Bash(git push origin HEAD:main)"]}}"#)
+            push_settings(),
+            r#"{"permissions":{"allow":["Bash(switchboard land-lock push)"]}}"#
         );
-        assert_eq!(
-            push_settings("team", "release/2.x").as_deref(),
-            Some(r#"{"permissions":{"allow":["Bash(git push team HEAD:release/2.x)"]}}"#)
-        );
-        for (remote, branch) in [
-            ("origin", "fix(ui)"),
-            ("origin", "--force"),
-            ("origin", ""),
-            ("my remote", "main"),
-        ] {
-            assert_eq!(push_settings(remote, branch), None, "{remote} {branch}");
-        }
     }
 
     #[test]

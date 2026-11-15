@@ -125,15 +125,23 @@ impl Server {
                 },
             );
         }
-        // The landing's push asked in a tab that doesn't land without
-        // asking; the wait it makes is marked as any permission's is.
+        // The landing's push after your yes asked in any tab but one of
+        // autopilot's that lands without asking; the wait it makes is
+        // marked as any permission's is.
+        // The git push a session started before `land-lock push` still has
+        // allowed is asked as it was, in a tab of autopilot's that doesn't.
+        let (opened, lands) = self.tabs.get(&tab).map_or((false, false), |t| {
+            use crate::autopilot::{LAND, OPENED};
+            (
+                t.opts.contains_key(OPENED),
+                t.opts.get(LAND).is_some_and(|v| v == "1"),
+            )
+        });
         let asks_push = hook.event == "PreToolUse"
             && hook.tool == "Bash"
-            && hands_free::is_landing_push(&payload)
-            && self.tabs.get(&tab).is_some_and(|t| {
-                use crate::autopilot::{LAND, OPENED};
-                t.opts.contains_key(OPENED) && t.opts.get(LAND).is_none_or(|v| v != "1")
-            });
+            && !(opened && lands)
+            && (hands_free::is_landing_push(&payload)
+                || (opened && hands_free::is_old_landing_push(&payload)));
         let answer = if asks_push {
             None
         } else if caller.is_some() && hook.agent.is_empty() {

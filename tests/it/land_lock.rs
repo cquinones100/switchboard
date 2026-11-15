@@ -1221,3 +1221,371 @@ fn the_palette_command_picks_a_branch_other_than_the_default_one() {
     client.wait_text("Which branch takes main's work?");
     client.wait_text("ux");
 }
+
+/// A repository landing straight on main, pushed to a bare `origin`, with a
+/// worktree `one` holding a commit to land, the landing lock taken and a
+/// clean review recorded for it; and a test server whose first pane the
+/// push runs from, as a tab's Claude runs it.
+struct Landing {
+    server: TestServer,
+    _client: common::TestClient,
+    origin: PathBuf,
+    repo: PathBuf,
+    one: PathBuf,
+    tab: String,
+    pane: String,
+}
+
+impl Landing {
+    fn new() -> Landing {
+        let server = TestServer::start();
+        common::write_settings(
+            &server.home,
+            json!({ "tips": false, "github": false, "autopilot_landing_notices": false, "target_follows_default": false }),
+        );
+        let home = server.home.clone();
+        let origin = home.join("origin.git");
+        git(&home, &["init", "-q", "--bare", origin.to_str().unwrap()]);
+        let repo = repo(&home).canonicalize().unwrap();
+        git(
+            &repo,
+            &["remote", "add", "origin", origin.to_str().unwrap()],
+        );
+        git(&repo, &["push", "-q", "origin", "main"]);
+        git(&repo, &["remote", "set-head", "origin", "main"]);
+        std::fs::write(
+            home.join(".config/switchboard/repos.json"),
+            json!({ repo.join(".git").to_str().unwrap(): { "landing": "direct", "test": "true", "review": "review-loop" } })
+                .to_string(),
+        )
+        .unwrap();
+        let one = home.join("one");
+        git(
+            &repo,
+            &["worktree", "add", "-q", "-b", "one", one.to_str().unwrap()],
+        );
+        let one = one.canonicalize().unwrap();
+        std::fs::write(one.join("feature.txt"), "a feature\n").unwrap();
+        git(&one, &["add", "feature.txt"]);
+        git(&one, &["commit", "-q", "-m", "Add the feature"]);
+        let mut client = server.attach(140, 36);
+        client.wait_for("a prompt", |s| s.iter().any(|l| l.contains('$')));
+        let list = server.list();
+        let tab = list["sessions"][0]["tabs"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let pane = list["sessions"][0]["tabs"][0]["panes"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let landing = Landing {
+            server,
+            _client: client,
+            origin,
+            repo,
+            one,
+            tab,
+            pane,
+        };
+        let taken = landing.run(&["land-lock", "take"]);
+        assert_eq!(code(&taken), 0, "{}", stdout(&taken));
+        landing.record_review();
+        let tested = landing.run(&["land-lock", "record", "tests", r#"{"ok":true}"#]);
+        assert_eq!(code(&tested), 0);
+        landing
+    }
+
+    /// This program run in the worktree from the test server's pane.
+    fn run(&self, args: &[&str]) -> Output {
+        Command::new(BIN)
+            .args(args)
+            .current_dir(&self.one)
+            .env("HOME", &self.server.home)
+            .env("SWITCHBOARD_STATE_DIR", &self.server.state)
+            .env("SWITCHBOARD", self.server.socket())
+            .env("SWITCHBOARD_PANE", &self.pane)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@e")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@e")
+            .env_remove("CLAUDE_CODE_SESSION_ID")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    }
+
+    /// Two clean rounds of the worktree's change, the second confirming, by
+    /// a stand-in Claude, which codex-review records.
+    fn record_review(&self) {
+        let bin = self.server.home.join("bin");
+        common::stand_in::Claude::new()
+            .answer(
+                r#"cat >/dev/null; echo '{"structured_output":{"summary":"ok","findings":[]}}'"#,
+            )
+            .install(&bin);
+        for args in [&[][..], &["--include-low"][..]] {
+            let out = Command::new(BIN)
+                .args(["codex-review", "--reviewer", "claude", "--no-rules"])
+                .args(args)
+                .current_dir(&self.one)
+                .env("HOME", &self.server.home)
+                .env("SWITCHBOARD_STATE_DIR", &self.server.state)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("PATH", common::stand_in::path_with_gh(&bin))
+                .env_remove("SWITCHBOARD")
+                .env_remove("SWITCHBOARD_PANE")
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        let recorded = self.run(&["codex-review", "--recorded"]);
+        assert_eq!(
+            code(&recorded),
+            0,
+            "{}",
+            String::from_utf8_lossy(&recorded.stderr)
+        );
+    }
+
+    fn on_origin(&self) -> String {
+        rev(&self.origin, "main")
+    }
+
+    fn holder(&self) -> String {
+        stdout(&self.run(&["land-lock", "holder"]))
+            .trim()
+            .to_string()
+    }
+}
+
+fn rev(dir: &Path, what: &str) -> String {
+    let out = Command::new("git")
+        .args(["rev-parse", what])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+#[test]
+fn the_landing_push_lands_without_asking_through_its_gate_and_does_the_bookkeeping() {
+    let l = Landing::new();
+    let before = l.on_origin();
+    let clone_before = rev(&l.repo, "HEAD");
+
+    // Asking before landing: nothing pushed or run, the lock kept for the
+    // question.
+    std::fs::write(
+        l.server.home.join(".config/switchboard/repos.json"),
+        json!({ l.repo.join(".git").to_str().unwrap(): { "landing": "direct", "test": "true", "review": "review-loop", "beforePush": "touch \"$HOME/before-ran\"" } })
+            .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        l.server.home.join(".config/switchboard/trusted-dirs"),
+        format!("{}\n", l.repo.display()),
+    )
+    .unwrap();
+    let asks = l.run(&["land-lock", "push"]);
+    assert!(
+        !l.server.home.join("before-ran").exists(),
+        "beforePush waits for the answer"
+    );
+    assert_eq!(code(&asks), 6, "{}", String::from_utf8_lossy(&asks.stderr));
+    assert!(
+        stdout(&asks).contains("ask: Add the feature"),
+        "{}",
+        stdout(&asks)
+    );
+    assert!(stdout(&asks).contains("why: the tab doesn't land without asking"));
+    assert_eq!(l.on_origin(), before, "nothing pushed");
+    assert_eq!(l.holder(), l.one.to_str().unwrap(), "the lock kept");
+
+    l.server.ok(&["set", "-t", &l.tab, "@autopilot_land", "1"]);
+    l.server
+        .ok(&["set", "-t", &l.tab, "@autopilot_item", "Add the feature"]);
+    // Nothing but `--asked` follows it, so no rule naming it reaches that.
+    let extra = l.run(&["land-lock", "push", "Add", "--asked"]);
+    assert_eq!(code(&extra), 2, "{}", stdout(&extra));
+    let landed = l.run(&["land-lock", "push"]);
+    assert_eq!(
+        code(&landed),
+        0,
+        "{}{}",
+        stdout(&landed),
+        String::from_utf8_lossy(&landed.stderr)
+    );
+    let head = rev(&l.one, "HEAD");
+    assert!(l.server.home.join("before-ran").exists(), "beforePush ran");
+    assert_eq!(l.on_origin(), head, "pushed");
+    let said = stdout(&landed);
+    assert!(said.starts_with("landed on main: "), "{said}");
+    assert!(said.contains(&format!("before {clone_before}")), "{said}");
+    assert_eq!(rev(&l.repo, "HEAD"), head, "the main clone fast-forwarded");
+    assert_eq!(l.holder(), "", "the lock let go");
+    let pushed = l.server.ok(&["show", "-t", &l.tab, "@autopilot_pushed"]);
+    let pushed = pushed.trim();
+    assert!(!pushed.is_empty() && head.starts_with(pushed), "{pushed}");
+    assert_eq!(
+        l.server
+            .ok(&["show", "-t", &l.tab, "@autopilot_autoland"])
+            .trim(),
+        pushed,
+        "said landed without asking"
+    );
+    assert!(
+        !l.server
+            .ok(&["show", "-t", &l.tab, "@tab_landed"])
+            .trim()
+            .is_empty(),
+        "filed as landed"
+    );
+    // The landing kept with its item, which the server, with "Notify when
+    // autopilot lands" off, moves into the notifications' history.
+    let kept = || {
+        let pending =
+            std::fs::read_to_string(l.server.state.join("autolanded.json")).unwrap_or_default();
+        let history = std::fs::read_dir(l.server.state.join("notifications"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|f| std::fs::read_to_string(f.path()).unwrap_or_default())
+            .collect::<String>();
+        pending.contains("Add the feature") || history.contains("Add the feature")
+    };
+    let deadline = common::deadline(Duration::from_secs(10));
+    while !kept() {
+        assert!(std::time::Instant::now() < deadline, "the landing kept");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let again = l.run(&["land-lock", "push"]);
+    assert_eq!(code(&again), 3, "the lock no longer this worktree's");
+}
+
+#[test]
+fn the_landing_push_asks_on_a_leak_or_a_changed_change_and_rebases_when_main_moved() {
+    let l = Landing::new();
+    l.server.ok(&["set", "-t", &l.tab, "@autopilot_land", "1"]);
+    let before = l.on_origin();
+    let words = l.server.home.join(".config/switchboard/leak-check.txt");
+
+    std::fs::write(&words, "feature\n").unwrap();
+    let leak = l.run(&["land-lock", "push"]);
+    assert_eq!(code(&leak), 6, "{}", stdout(&leak));
+    assert!(stdout(&leak).contains("leak: "), "{}", stdout(&leak));
+    std::fs::remove_file(&words).unwrap();
+
+    // A fix after the review: no longer the change it found clean.
+    std::fs::write(l.one.join("feature.txt"), "a feature, fixed\n").unwrap();
+    git(&l.one, &["commit", "-q", "-am", "Fix the feature"]);
+    let changed = l.run(&["land-lock", "push"]);
+    assert_eq!(code(&changed), 6, "{}", stdout(&changed));
+    assert!(stdout(&changed).contains("isn't the one the review found clean"));
+    assert_eq!(l.on_origin(), before, "nothing pushed");
+
+    // Another landing pushed meanwhile: rebase again, the lock kept.
+    let other = l.server.home.join("other");
+    git(
+        &l.server.home,
+        &[
+            "clone",
+            "-q",
+            "-b",
+            "main",
+            l.origin.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
+    git(&other, &["commit", "-q", "--allow-empty", "-m", "late"]);
+    git(&other, &["push", "-q", "origin", "HEAD:main"]);
+    let moved = l.run(&["land-lock", "push", "--asked"]);
+    assert_eq!(code(&moved), 5, "{}", stdout(&moved));
+    assert_eq!(l.holder(), l.one.to_str().unwrap(), "the lock kept");
+}
+
+#[test]
+fn a_refused_landing_push_leaves_the_remote_and_lets_the_lock_go() {
+    use std::os::unix::fs::PermissionsExt;
+    let l = Landing::new();
+    let before = l.on_origin();
+    let hooks = l.server.home.join("hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    let hook = hooks.join("pre-push");
+    std::fs::write(&hook, "#!/bin/sh\necho no review recorded >&2\nexit 1\n").unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    git(
+        &l.repo,
+        &["config", "core.hooksPath", hooks.to_str().unwrap()],
+    );
+    // Its beforePush, the repository's code, runs only in a worktree of
+    // your own commits or a trusted clone; this one's commits name no one
+    // the computer's git knows.
+    std::fs::write(
+        l.server.home.join(".config/switchboard/repos.json"),
+        json!({ l.repo.join(".git").to_str().unwrap(): { "landing": "direct", "test": "true", "beforePush": "touch \"$HOME/before-ran\"" } })
+            .to_string(),
+    )
+    .unwrap();
+    let untrusted = l.run(&["land-lock", "push", "--asked"]);
+    assert_eq!(code(&untrusted), 1);
+    assert!(String::from_utf8_lossy(&untrusted.stderr).contains("trusted-dirs"));
+    assert!(!l.server.home.join("before-ran").exists(), "nothing ran");
+    assert_eq!(l.holder(), "", "the lock let go");
+    std::fs::write(
+        l.server.home.join(".config/switchboard/trusted-dirs"),
+        format!("{}\n", l.repo.display()),
+    )
+    .unwrap();
+    assert_eq!(code(&l.run(&["land-lock", "take"])), 0);
+
+    let refused = l.run(&["land-lock", "push", "--asked"]);
+    assert!(
+        l.server.home.join("before-ran").exists(),
+        "beforePush ran: {}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert_eq!(code(&refused), 1, "{}", stdout(&refused));
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("no review recorded"),
+        "the hook's words said"
+    );
+    assert_eq!(l.on_origin(), before, "the remote unchanged");
+    assert_eq!(l.holder(), "", "the lock let go");
+}
+
+#[test]
+fn ask_before_landing_chosen_while_before_push_runs_asks_after_all() {
+    let l = Landing::new();
+    l.server.ok(&["set", "-t", &l.tab, "@autopilot_land", "1"]);
+    let before = l.on_origin();
+    // beforePush stands in for you choosing "Ask before landing" meanwhile.
+    std::fs::write(
+        l.server.home.join(".config/switchboard/repos.json"),
+        json!({ l.repo.join(".git").to_str().unwrap(): { "landing": "direct", "test": "true", "review": "review-loop", "beforePush": format!("env -u SWITCHBOARD_PANE '{BIN}' set -t {} @autopilot_land 0", l.tab) } })
+            .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        l.server.home.join(".config/switchboard/trusted-dirs"),
+        format!("{}\n", l.repo.display()),
+    )
+    .unwrap();
+    let asks = l.run(&["land-lock", "push"]);
+    assert_eq!(
+        code(&asks),
+        6,
+        "{}{}",
+        stdout(&asks),
+        String::from_utf8_lossy(&asks.stderr)
+    );
+    assert_eq!(l.on_origin(), before, "nothing pushed");
+    assert_eq!(l.holder(), l.one.to_str().unwrap(), "the lock kept");
+}

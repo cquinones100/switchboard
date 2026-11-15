@@ -21,14 +21,17 @@
 //! Anything that isn't one of those answers nothing, so an unmarked tab, a
 //! subagent's hook, or a server that doesn't answer leaves Claude asking.
 //!
-//! One more answer holds in every tab autopilot opened, hands-free or not:
-//! the landing's push, `git push <remote> HEAD:<branch>`, which wtn's push
-//! rule allows for the tab's session, is asked (`ask_push`) while the tab's
-//! "Land without asking" (`@autopilot_land`) is off, so the rule lets it
-//! through only in a tab that lands without asking. A tab that does is
-//! left to queue-and-clean's checks and the repository's pre-push hook,
-//! since whether the change pushed is the one reviewed takes git, which
-//! the server's task never runs.
+//! One more answer holds in every tab, hands-free or not: the landing's
+//! push after your yes, `switchboard land-lock push --asked`, which no
+//! allow rule names (each names `land-lock push` exactly), is asked
+//! (`ask_push`) as well unless the tab is one of autopilot's with "Land without
+//! asking" (`@autopilot_land`) on, so Claude Code asks it as it asked the
+//! `git push` it replaced. The push without `--asked` needs no ask: the
+//! command pushes only when its own gate passes (src/cmd/land_push.rs),
+//! and exits asking otherwise. A tab that lands without asking is left to
+//! that gate and the repository's pre-push hook, since whether the change
+//! pushed is the one reviewed takes git, which the server's task never
+//! runs.
 
 use serde_json::{Value, json};
 
@@ -72,16 +75,47 @@ pub fn ask_push() -> String {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "ask",
-            "permissionDecisionReason": "Autopilot: this tab's \"Land without asking\" is off, so its push to the branch it lands on is asked.",
+            "permissionDecisionReason": "The landing's push to the branch it lands on is asked, since this tab doesn't land without asking.",
         }
     })
     .to_string()
 }
 
-/// Whether a Bash call runs the push autopilot's rule allows,
-/// `git push <remote> HEAD:<branch>`, as a command of its own or chained
+/// Whether a Bash call runs the landing's push after your yes,
+/// `switchboard land-lock push --asked`, as a command of its own or chained
 /// to others; any other push is no rule's and is judged as before.
 pub fn is_landing_push(payload: &Value) -> bool {
+    let Some(command) = payload
+        .pointer("/tool_input/command")
+        .and_then(Value::as_str)
+    else {
+        return false;
+    };
+    command.split(['\n', ';', '&', '|', '(', ')']).any(|part| {
+        // Words as the shell hands them on, its quotes and escapes gone, so
+        // `'--asked'` is `--asked` here as it is to the command.
+        let words: Vec<String> = part
+            .split_whitespace()
+            .map(|w| {
+                w.chars()
+                    .filter(|c| !matches!(c, '\'' | '"' | '\\'))
+                    .collect()
+            })
+            .collect();
+        let has = |word: &str| words.iter().any(|w| w == word);
+        let program = words.first().map(String::as_str).unwrap_or_default();
+        (program == "switchboard" || program.ends_with("/switchboard"))
+            && words.get(1).map(String::as_str) == Some("land-lock")
+            && has("push")
+            && has("--asked")
+    })
+}
+
+/// Whether a Bash call runs the landing push wtn's push rule allowed before
+/// `land-lock push`, `git push <remote> HEAD:<branch>`, which a session
+/// started then still has allowed after an upgrade: asked, as before, in a
+/// tab of autopilot's while it doesn't land without asking.
+pub fn is_old_landing_push(payload: &Value) -> bool {
     let Some(command) = payload
         .pointer("/tool_input/command")
         .and_then(Value::as_str)
@@ -160,9 +194,31 @@ mod tests {
     #[test]
     fn only_the_landing_push_is_one() {
         let bash = |c: &str| json!({"tool_input": {"command": c}});
-        assert!(is_landing_push(&bash("git push origin HEAD:main")));
+        assert!(is_landing_push(&bash("switchboard land-lock push --asked")));
         assert!(is_landing_push(&bash(
-            "git fetch && git push  origin HEAD:main"
+            "git fetch && switchboard  land-lock push --asked Make it"
+        )));
+        assert!(is_landing_push(&bash(
+            "~/.local/bin/switchboard land-lock --target ux push --asked"
+        )));
+        assert!(
+            !is_landing_push(&bash("switchboard land-lock push")),
+            "the push its own gate decides needs no ask"
+        );
+        assert!(!is_landing_push(&bash("git push origin HEAD:main")));
+        for quoted in [
+            "switchboard land-lock push '--asked'",
+            "switchboard land-lock push \"--asked\"",
+            "switchboard land-lock push \\--asked",
+            "'switchboard' 'land-lock' push --asked",
+        ] {
+            assert!(is_landing_push(&bash(quoted)), "{quoted}");
+        }
+        assert!(is_old_landing_push(&bash(
+            "git fetch && git push origin HEAD:main"
+        )));
+        assert!(!is_old_landing_push(&bash(
+            "git push --force origin HEAD:refs/heads/ci/land-ab12"
         )));
         assert!(!is_landing_push(&bash(
             "git push --force origin HEAD:refs/heads/ci/land-ab12"

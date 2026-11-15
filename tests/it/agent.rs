@@ -647,12 +647,12 @@ fn a_backgrounded_conversation_marks_the_tab_it_came_from() {
     assert_eq!(got, (0, String::new(), String::new()));
     assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "done");
 
-    // Autopilot's landing push is asked there too while the tab doesn't
-    // land without asking.
+    // The landing's push after a yes is asked there too while the tab
+    // doesn't land without asking.
     let tab = tabs(&server.list())[0]["id"].as_str().unwrap().to_string();
     server.ok(&["set", "-t", &tab, "@autopilot", "1"]);
     let push = json!({"session_id": "job", "tool_name": "Bash",
-        "tool_input": {"command": "git push origin HEAD:main"}});
+        "tool_input": {"command": "switchboard land-lock push --asked"}});
     let (code, out, _) = run_hook(
         &server.home,
         &server.state,
@@ -1228,7 +1228,7 @@ fn a_hands_free_tab_has_its_questions_answered_for_claude() {
 }
 
 #[test]
-fn an_autopilot_tab_has_its_landing_push_asked_unless_it_lands_without_asking() {
+fn the_landing_push_after_a_yes_is_asked_unless_the_tab_lands_without_asking() {
     let server = TestServer::start();
     settings(&server, json!({}));
     let mut client = server.attach(100, 30);
@@ -1237,18 +1237,24 @@ fn an_autopilot_tab_has_its_landing_push_asked_unless_it_lands_without_asking() 
     session_file(&server.home, pid, json!({"sessionId": "s-1"}));
     let tab = tabs(&server.list())[0]["id"].as_str().unwrap().to_string();
     let bash = |command: &str| json!({"session_id": "s-1", "tool_name": "Bash", "tool_input": {"command": command}});
-    let push = || bash("git push origin HEAD:main");
+    let push = || bash("switchboard land-lock push --asked");
+    let asks = |payload: Value| {
+        let said: Value =
+            serde_json::from_str(&hook_says(&server, &pane, "PreToolUse", payload)).unwrap();
+        said["hookSpecificOutput"]["permissionDecision"] == "ask"
+    };
 
+    assert!(asks(push()), "a tab autopilot didn't open asks it");
     assert_eq!(
-        hook_says(&server, &pane, "PreToolUse", push()),
+        hook_says(
+            &server,
+            &pane,
+            "PreToolUse",
+            bash("switchboard land-lock push")
+        ),
         "",
-        "a tab autopilot didn't open is left alone"
+        "the push its own gate decides is left to it"
     );
-
-    server.ok(&["set", "-t", &tab, "@autopilot", "1"]);
-    let asked: Value =
-        serde_json::from_str(&hook_says(&server, &pane, "PreToolUse", push())).unwrap();
-    assert_eq!(asked["hookSpecificOutput"]["permissionDecision"], "ask");
     assert_eq!(
         hook_says(
             &server,
@@ -1258,6 +1264,16 @@ fn an_autopilot_tab_has_its_landing_push_asked_unless_it_lands_without_asking() 
         ),
         "",
         "another push is judged as before"
+    );
+
+    server.ok(&["set", "-t", &tab, "@autopilot", "1"]);
+    assert!(
+        asks(push()),
+        "nor one of autopilot's that asks before landing"
+    );
+    assert!(
+        asks(bash("git push origin HEAD:main")),
+        "where a session from before still has the git push allowed"
     );
 
     server.ok(&["set", "-t", &tab, "@autopilot_land", "1"]);
