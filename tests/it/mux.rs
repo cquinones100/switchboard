@@ -918,7 +918,9 @@ fn only_the_pane_in_front_puts_text_on_the_clipboard() {
 #[test]
 fn a_panes_program_asking_the_terminals_colours_is_told_its_own() {
     let server = TestServer::start();
-    let mut client = server.attach(100, 30);
+    // Wide enough that the pane beside the sidebar holds the answer's line
+    // whole.
+    let mut client = server.attach(200, 30);
     client.wait_text("$");
     let script = r#"read -r go; printf '\033]11;?\007\033]4;4;?\007'; IFS= read -rs -d $'\a' bg; IFS= read -rs -d $'\a' blue; echo "bg:${bg#*;} blue:${blue#*;*;}"; sleep 30"#;
     server.ok(&["new-tab", "-n", "ask", "--", "bash", "-c", script]);
@@ -932,7 +934,9 @@ fn a_panes_program_asking_the_terminals_colours_is_told_its_own() {
     // The terminal's answers to the server's questions as it attached.
     client.send(b"\x1b]11;rgb:fafa/f8f8/f0f0\x1b\\\x1b]4;4;rgb:81/a2/be\x1b\\");
     client.type_text("go\r");
-    client.wait_text("bg:rgb:fafa/f8f8/f0f0 blue:rgb:8181/a2a2/bebe");
+    // Each half on its own, so a line wrapped between them still shows it.
+    client.wait_text("bg:rgb:fafa/f8f8/f0f0");
+    client.wait_text("blue:rgb:8181/a2a2/bebe");
 }
 
 #[test]

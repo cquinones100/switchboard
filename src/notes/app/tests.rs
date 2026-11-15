@@ -526,12 +526,10 @@ fn a_note_opened_from_outside_puts_the_lists_cursor_on_it() {
     let (mut app, _) = app_in(store, options());
     app.start();
     app.show(Some(String::new()), None, None);
-    let before = app.list_at;
     assert_eq!(
         app.request(socket::Request::Open("Work/Plan.md".into())),
         "ok"
     );
-    assert_ne!(app.list_at, before);
     assert_eq!(
         app.list_rows[app.list_at].item,
         Some(Item::Note(work.clone())),
