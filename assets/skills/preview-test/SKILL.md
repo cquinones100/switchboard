@@ -4,7 +4,6 @@ description: Wait until an open PR's preview deploy is up, test the feature it a
 argument-hint: "[PR number]"
 disable-model-invocation: true
 allowed-tools:
-  - Bash(node ~/.local/share/switchboard/claude/plugin/skills/*)
   - Bash(switchboard skill-path *)
   - Bash(switchboard wait-deploy *)
   - Bash(gh pr view*)

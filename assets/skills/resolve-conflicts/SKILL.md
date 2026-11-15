@@ -6,10 +6,8 @@ allowed-tools:
   - Bash(switchboard skill-path *)
   - Bash(git status)
   - Bash(git status *)
-  - Bash(git log *)
-  - Bash(git diff *)
   - Bash(git fetch)
-  - Bash(git fetch *)
+  - Bash(git fetch origin)
   - Bash(git rev-parse *)
   - Bash(git branch --show-current)
 ---

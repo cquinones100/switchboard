@@ -6,7 +6,7 @@ disable-model-invocation: true
 allowed-tools:
   - Bash(switchboard skill-path *)
   - Bash(git fetch)
-  - Bash(git fetch *)
+  - Bash(git fetch origin)
   - Bash(git rev-parse *)
   - Bash(gh pr view*)
   - Bash(gh pr checks *)

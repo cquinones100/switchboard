@@ -17,6 +17,12 @@
 //! session's context, cost and limits to its statusline alone. The
 //! permissions are added to yours.
 //!
+//! Either way, the allow rules an earlier version added and Switchboard
+//! dropped (`RETIRED_RULES`: the tmux version's, and the ones that let
+//! Claude run any skill script or fetch from anywhere) are taken out of
+//! your permissions, each only as it was written, so a rule of yours that
+//! differs stays.
+//!
 //! Loaded as a plugin, Switchboard adds nothing to your file: its plugin
 //! carries the hooks and draws the statusline in its panes
 //! (src/setup/plugin.rs), for the Claude sessions there alone. This part
@@ -25,13 +31,14 @@
 //! leaves empty, your other hooks kept, since left in they would run twice
 //! in a pane; and the statusline they wrote, Switchboard's own or the tmux
 //! version's taken out and `IN_PANES` taken off one of yours. The
-//! permissions earlier versions added stay, though the plugin carries them
-//! now (src/setup/permissions.rs): one of them can't be told from the same
-//! rule of yours, which Claude Code's "always allow" writes there too. As a
-//! plugin, the
-//! guided setup runs this part only on a file holding some of that
-//! (`set_up`), and a new build's first run only on one holding the hooks
-//! (`has_hooks`).
+//! permissions earlier versions added and Switchboard still has stay,
+//! though the plugin carries them now (src/setup/permissions.rs): one of
+//! them can't be told from the same rule of yours, which Claude Code's
+//! "always allow" writes there too. As a plugin, the guided setup runs this
+//! part only on a file holding some of that (`set_up`), and a new build's
+//! first run only on one holding the hooks (`has_hooks`). A file holding a
+//! retired rule and nothing else of Switchboard's, either way, has the rule
+//! taken out by a new build's first run and nothing added (`retire_rules`).
 //!
 //! Your file is never a link and stays yours: Claude Code writes `/model`
 //! and "always allow" there, and nothing else in it is touched. So running
@@ -70,6 +77,60 @@ pub fn settings_file() -> PathBuf {
 /// A hook the tmux version's setup added, which Switchboard's replaced.
 fn retired(command: &str) -> bool {
     command.contains("agent-state.sh")
+}
+
+/// The allow rules earlier versions added that Switchboard no longer has:
+/// the tmux version's (its `claude/switchboard-settings.json`, through
+/// every version), and the asset's own that let Claude do more than read:
+/// running any script under the skills (one that loads a file Claude writes,
+/// or a path with `..`), and git log, diff and fetch with any arguments,
+/// whose options write a file, run a program or fetch from any address
+/// (Claude Code runs git's read-only forms without a rule, by its own
+/// checks).
+const RETIRED_RULES: &[&str] = &[
+    "Bash(node ~/.claude/skills/*)",
+    "Bash(node ~/.local/share/switchboard/plugin/skills/*)",
+    "Bash(node ~/.local/share/switchboard/claude/plugin/skills/*)",
+    "Bash(git fetch *)",
+    "Bash(git fetch origin *)",
+    "Bash(git log *)",
+    "Bash(git diff *)",
+    "Bash(codex-review *)",
+    "Bash(skill-path *)",
+    "Bash(slack-relay notify *)",
+    "Bash(switchboard setting *)",
+    "Bash(~/.config/tmux/window-names.sh *)",
+    "Bash(tmux show-options *)",
+    "Bash(tmux set-option *)",
+    "Bash(tmux respawn-pane *)",
+    "Bash(gh pr list*)",
+];
+
+/// Whether `settings` allows one of `RETIRED_RULES`.
+fn has_retired(settings: &Value) -> bool {
+    settings["permissions"]["allow"]
+        .as_array()
+        .is_some_and(|allow| allow.iter().any(is_retired_rule))
+}
+
+fn is_retired_rule(rule: &Value) -> bool {
+    rule.as_str().is_some_and(|r| RETIRED_RULES.contains(&r))
+}
+
+/// Whether your settings file allows one of `RETIRED_RULES`.
+pub fn has_retired_rules() -> bool {
+    util::read_json(settings_file()).is_some_and(|s| has_retired(&s))
+}
+
+/// Your settings without `RETIRED_RULES` in their allow list, the rest of
+/// it in its order.
+fn without_retired_rules(settings: &mut Map<String, Value>) {
+    if let Some(Value::Array(allow)) = settings
+        .get_mut("permissions")
+        .and_then(|p| p.get_mut("allow"))
+    {
+        allow.retain(|rule| !is_retired_rule(rule));
+    }
 }
 
 /// Every hook's command in a `hooks` object: `[.[][].hooks[].command]`.
@@ -118,7 +179,8 @@ fn with_yours(yours: &Value) -> Value {
 /// statusline, which the old way always leaves running `switchboard
 /// statusline` in the panes, or a hook of an earlier version. Not a
 /// permission naming a `switchboard` command, which Claude Code's "always
-/// allow" may have written there for you.
+/// allow" may have written there for you, nor one of `RETIRED_RULES`,
+/// which `retire_rules` takes out alone.
 pub fn has_ours(settings: &Value) -> bool {
     let hooks = hook_commands(&ours()["hooks"]);
     let statusline = settings["statusLine"]["command"]
@@ -282,7 +344,8 @@ fn without_our_statusline(settings: &mut Map<String, Value>, tmux_versions: impl
 /// Your settings with Switchboard's merged in the way given. The old way,
 /// its hooks, statusline and permissions added; as a plugin, which carries
 /// the hooks and the statusline itself, nothing added, and the hooks and
-/// statusline earlier versions added taken out. `tmux_versions` says
+/// statusline earlier versions added taken out. Either way, the retired
+/// allow rules taken out. `tmux_versions` says
 /// whether a statusline command is the tmux version's, which gives way to
 /// Switchboard's.
 pub fn merge(
@@ -305,6 +368,7 @@ fn merge_for(
     tmux_versions: impl Fn(&str) -> bool,
 ) -> Map<String, Value> {
     let mut out = current.clone();
+    without_retired_rules(&mut out);
 
     if way == Way::Plugin {
         if let Some(Value::Object(hooks)) = out.get("hooks") {
@@ -461,14 +525,39 @@ fn tmux_versions(command: &str) -> bool {
     !exists(&script) && (command == TMUX_STATUSLINE || command == format!("bash {full}"))
 }
 
+/// Only `RETIRED_RULES` taken out of your settings file, nothing added:
+/// what a new build's first run does for a file Switchboard isn't set up in.
+pub fn retire_rules(r: &mut Report) -> Result<()> {
+    let file = settings_file();
+    let shown = home_tilde(&file);
+    let Some(Value::Object(current)) = util::read_json(&file) else {
+        return Ok(());
+    };
+    let mut retired = current.clone();
+    without_retired_rules(&mut retired);
+    if retired == current {
+        return Ok(());
+    }
+    if !r.check {
+        let backup = file.with_file_name(format!("settings.json.bak.{}", stamp()));
+        fs::copy(&file, &backup)?;
+        let text = format!("{}\n", util::json_pretty(&Value::Object(retired)));
+        util::write_atomic(&file, text)?;
+    }
+    r.change(format!(
+        "take the allow rules earlier versions added and Switchboard dropped out of {shown}"
+    ));
+    Ok(())
+}
+
 /// The part.
 pub fn run(r: &mut Report) -> Result<()> {
     run_taking(r, true)
 }
 
 /// As a plugin, only the hooks an earlier version added taken out, which
-/// would otherwise run twice in a pane: what a new build's first run does,
-/// changing your file no further unasked. The old way, the whole part.
+/// would otherwise run twice in a pane, and the retired allow rules: what a
+/// new build's first run does, changing your file no further unasked. The old way, the whole part.
 pub fn take_out_hooks(r: &mut Report) -> Result<()> {
     run_taking(r, false)
 }
@@ -530,6 +619,11 @@ fn run_taking(r: &mut Report, statusline: bool) -> Result<()> {
             "take the hooks earlier versions added out of {shown}, since Switchboard's plugin runs them in its panes"
         ));
     }
+    if merged.get("permissions") != current.get("permissions") {
+        r.change(format!(
+            "take the allow rules earlier versions added and Switchboard dropped out of {shown}"
+        ));
+    }
     if merged.get("statusLine") != current.get("statusLine") {
         r.change(format!(
             "take the statusline earlier versions added out of {shown}, a statusline of yours kept, since Switchboard's plugin draws its own in its panes"
@@ -558,7 +652,7 @@ mod tests {
     fn yours(product: &Value) -> Map<String, Value> {
         object(json!({
             "model": "sonnet",
-            "permissions": { "allow": ["Bash(make *)", "Bash(git log *)"] },
+            "permissions": { "allow": ["Bash(make *)", "Bash(git status)"] },
             "statusLine": { "type": "command", "command": "my-statusline" },
             "hooks": {
                 "Stop": [
@@ -581,13 +675,13 @@ mod tests {
             format!("{IN_PANES}my-statusline"),
             "a statusline of your own stays outside Switchboard's panes"
         );
-        let mut allow = vec![json!("Bash(make *)"), json!("Bash(git log *)")];
+        let mut allow = vec![json!("Bash(make *)"), json!("Bash(git status)")];
         allow.extend(
             product["permissions"]["allow"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .filter(|p| *p != "Bash(git log *)")
+                .filter(|p| *p != "Bash(git status)")
                 .cloned(),
         );
         assert_eq!(merged["permissions"]["allow"], Value::Array(allow));

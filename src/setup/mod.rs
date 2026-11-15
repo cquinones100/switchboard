@@ -1081,14 +1081,18 @@ pub fn refresh_now() -> bool {
     }
     let (way, _) = way::settle(false);
     // As a plugin, your settings are changed only to take out the hooks an
-    // earlier version added, which would run twice in a pane; the statusline
-    // it added waits for the guided setup, which says what it takes out.
+    // earlier version added, which would run twice in a pane, and the allow
+    // rules Switchboard dropped; the statusline it added waits for the
+    // guided setup, which says what it takes out.
     match way {
         Way::Old if claude_settings::set_up() => {
             worked &= claude_settings::run(&mut report).is_ok();
         }
         Way::Plugin if claude_settings::has_hooks() => {
             worked &= claude_settings::take_out_hooks(&mut report).is_ok();
+        }
+        _ if claude_settings::has_retired_rules() => {
+            worked &= claude_settings::retire_rules(&mut report).is_ok();
         }
         _ => {}
     }

@@ -520,7 +520,7 @@ fn claude_merges_switchboard_s_settings_into_yours_once_and_makes_a_linked_file_
     // version's, and a statusline of your own.
     let yours = json!({
         "model": "sonnet",
-        "permissions": { "allow": ["Bash(make *)", "Bash(git log *)"] },
+        "permissions": { "allow": ["Bash(make *)", "Bash(git status)"] },
         "statusLine": { "type": "command", "command": "my-statusline" },
         "hooks": { "Stop": [{ "hooks": [
             { "type": "command", "command": "say done" },
@@ -544,13 +544,13 @@ fn claude_merges_switchboard_s_settings_into_yours_once_and_makes_a_linked_file_
         ),
         "a statusline of your own stays outside Switchboard's panes"
     );
-    let mut allow = vec![json!("Bash(make *)"), json!("Bash(git log *)")];
+    let mut allow = vec![json!("Bash(make *)"), json!("Bash(git status)")];
     allow.extend(
         product["permissions"]["allow"]
             .as_array()
             .unwrap()
             .iter()
-            .filter(|p| *p != "Bash(git log *)")
+            .filter(|p| *p != "Bash(git status)")
             .cloned(),
     );
     assert_eq!(
@@ -1329,6 +1329,106 @@ fn a_new_build_writes_the_plugin_and_keeps_an_earlier_install_the_old_way_moving
     fs::write(h.path(".claude/skills/wt/SKILL.md"), "edited\n").unwrap();
     ok(&h.run(&["setup", "--refresh"]));
     assert_eq!(read(&h.path(".claude/skills/wt/SKILL.md")), "edited\n");
+}
+
+#[test]
+fn the_allow_rules_switchboard_dropped_go_once_and_a_rule_of_yours_that_differs_stays() {
+    for old_way in [true, false] {
+        let h = Home::new("setup-retired");
+        if old_way {
+            h.old_way();
+        } else {
+            h.settings(json!({ "claude_plugin": true }));
+        }
+        let file = h.path(".claude/settings.json");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let earlier = json!({
+            "permissions": {
+                "allow": [
+                    "Bash(make *)",
+                    "Bash(tmux respawn-pane *)",
+                    "Bash(node ~/.local/share/switchboard/claude/plugin/skills/*)",
+                    "Bash(node ~/.claude/skills/*)",
+                    "Bash(git fetch *)",
+                    "Bash(switchboard setting *)",
+                    "Bash(tmux respawn-pane -k)",
+                    "Bash(gh pr list --json *)"
+                ],
+                "deny": ["Bash(rm *)"]
+            }
+        });
+        fs::write(&file, earlier.to_string()).unwrap();
+        // As a plugin, a new build's first run takes them out quietly; the
+        // old way, the part asked for by name.
+        if old_way {
+            ok(&h.run(&["setup", "claude"]));
+        } else {
+            fs::create_dir_all(h.path(".local/share/switchboard")).unwrap();
+            fs::write(
+                h.path(".local/share/switchboard/setup-build"),
+                "0.0.1 (old)\n",
+            )
+            .unwrap();
+            assert_eq!(ok(&h.run(&["setup", "--refresh"])), "", "quiet");
+        }
+        let after: Value = serde_json::from_str(&read(&file)).unwrap();
+        let allow: Vec<&str> = after["permissions"]["allow"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        for gone in [
+            "Bash(tmux respawn-pane *)",
+            "Bash(node ~/.local/share/switchboard/claude/plugin/skills/*)",
+            "Bash(node ~/.claude/skills/*)",
+            "Bash(git fetch *)",
+            "Bash(switchboard setting *)",
+        ] {
+            assert!(!allow.contains(&gone), "{gone} stayed: {after}");
+        }
+        assert_eq!(
+            &allow[..3],
+            [
+                "Bash(make *)",
+                "Bash(tmux respawn-pane -k)",
+                "Bash(gh pr list --json *)"
+            ],
+            "yours kept, in order: {after}"
+        );
+        if !old_way {
+            assert_eq!(allow.len(), 3, "nothing added as a plugin: {after}");
+            assert_eq!(after["permissions"]["deny"], json!(["Bash(rm *)"]));
+        }
+        // Once: a second run changes nothing.
+        let settled = read(&file);
+        let copies = backups(&h.path(".claude"), "settings.json.bak.");
+        ok(&h.run(&["setup", "claude"]));
+        assert_eq!(read(&file), settled);
+        assert_eq!(backups(&h.path(".claude"), "settings.json.bak."), copies);
+    }
+
+    // The old way, a file with a retired rule and nothing else of
+    // Switchboard's: a new build's first run takes the rule out and adds
+    // nothing.
+    let h = Home::new("setup-retired-only");
+    h.old_way();
+    let file = h.path(".claude/settings.json");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let yours =
+        json!({ "model": "opus", "permissions": { "allow": ["Bash(make *)", "Bash(git log *)"] } });
+    fs::write(&file, yours.to_string()).unwrap();
+    fs::create_dir_all(h.path(".local/share/switchboard")).unwrap();
+    fs::write(
+        h.path(".local/share/switchboard/setup-build"),
+        "0.0.1 (old)\n",
+    )
+    .unwrap();
+    assert_eq!(ok(&h.run(&["setup", "--refresh"])), "", "quiet");
+    assert_eq!(
+        serde_json::from_str::<Value>(&read(&file)).unwrap(),
+        json!({ "model": "opus", "permissions": { "allow": ["Bash(make *)"] } })
+    );
 }
 
 #[test]

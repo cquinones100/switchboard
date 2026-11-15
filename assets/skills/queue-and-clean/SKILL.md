@@ -4,7 +4,6 @@ description: Queue the current branch's PR for merge if it is not queued already
 argument-hint: "[PR number]"
 disable-model-invocation: true
 allowed-tools:
-  - Bash(node ~/.local/share/switchboard/claude/plugin/skills/*)
   - Bash(switchboard codex-review)
   - Bash(switchboard codex-review *)
   - Bash(switchboard skill-path *)
@@ -22,10 +21,8 @@ allowed-tools:
   - Bash(switchboard wait-deploy *)
   - Bash(git status)
   - Bash(git status *)
-  - Bash(git log *)
-  - Bash(git diff *)
   - Bash(git fetch)
-  - Bash(git fetch *)
+  - Bash(git fetch origin)
   - Bash(git rev-parse *)
   - Bash(git worktree list*)
   - Bash(git branch --show-current)

@@ -11,7 +11,6 @@ allowed-tools:
   - Bash(switchboard land-lock *)
   - Bash(git status)
   - Bash(git status *)
-  - Bash(git log *)
   - Bash(git rev-parse *)
 ---
 
