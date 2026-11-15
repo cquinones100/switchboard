@@ -1088,6 +1088,131 @@
     "default": true
   },
   {
+    "key": "slot_queue",
+    "category": "Sessions",
+    "label": "Queue heavy work",
+    "description": "cargo, npm and pnpm run in a pane put builds, test runs and package installs through a queue, so only as many of each kind go at once as the caps below say, and the cores are shared out between them (CARGO_BUILD_JOBS, RUST_TEST_THREADS); a command waiting says \"Waiting for a build slot (2nd in line)\", and a slot is let go as its command ends or is killed. Off, every command runs at once, as the real program would",
+    "default": true
+  },
+  {
+    "key": "slots_build",
+    "category": "Sessions",
+    "label": "Builds at once",
+    "description": "How many compiles (cargo build, check, clippy, doc, and the compile half of cargo test) go at once across every pane while Queue heavy work is on; auto is a quarter of the cores. Off, compiles don't wait",
+    "choices": [
+      {
+        "value": "auto",
+        "label": "auto"
+      },
+      {
+        "value": "0",
+        "label": "off"
+      },
+      {
+        "value": "1",
+        "label": "1"
+      },
+      {
+        "value": "2",
+        "label": "2"
+      },
+      {
+        "value": "3",
+        "label": "3"
+      },
+      {
+        "value": "4",
+        "label": "4"
+      },
+      {
+        "value": "6",
+        "label": "6"
+      }
+    ],
+    "typed": {
+      "least": 0,
+      "label": "Number…",
+      "unit": "at once"
+    },
+    "default": "auto"
+  },
+  {
+    "key": "slots_tests",
+    "category": "Sessions",
+    "label": "Test runs at once",
+    "description": "How many test runs (the run half of cargo test, cargo nextest run) go at once across every pane while Queue heavy work is on, each given the cores shared out. Off, test runs don't wait",
+    "choices": [
+      {
+        "value": "0",
+        "label": "off"
+      },
+      {
+        "value": "1",
+        "label": "1"
+      },
+      {
+        "value": "2",
+        "label": "2"
+      },
+      {
+        "value": "3",
+        "label": "3"
+      },
+      {
+        "value": "4",
+        "label": "4"
+      },
+      {
+        "value": "6",
+        "label": "6"
+      }
+    ],
+    "typed": {
+      "least": 0,
+      "label": "Number…",
+      "unit": "at once"
+    },
+    "default": "2"
+  },
+  {
+    "key": "slots_js",
+    "category": "Sessions",
+    "label": "Package builds at once",
+    "description": "How many npm ci, npm install, npm run build, pnpm install and pnpm build go at once across every pane while Queue heavy work is on. Off, they don't wait",
+    "choices": [
+      {
+        "value": "0",
+        "label": "off"
+      },
+      {
+        "value": "1",
+        "label": "1"
+      },
+      {
+        "value": "2",
+        "label": "2"
+      },
+      {
+        "value": "3",
+        "label": "3"
+      },
+      {
+        "value": "4",
+        "label": "4"
+      },
+      {
+        "value": "6",
+        "label": "6"
+      }
+    ],
+    "typed": {
+      "least": 0,
+      "label": "Number…",
+      "unit": "at once"
+    },
+    "default": "2"
+  },
+  {
     "key": "review_rules",
     "category": "Safety",
     "label": "Rules in reviews",

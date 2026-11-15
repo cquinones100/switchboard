@@ -483,9 +483,191 @@ pub fn view(
     }
 }
 
+/// Whether an item is one of the queue's slot rows (`with_slots`) rather
+/// than a tab's.
+pub fn is_slot(item: &Item) -> bool {
+    item.data["slot"].is_string()
+}
+
+/// A slot row's tab, as `with_slots` is given it for a pane: the tab, its
+/// number and name.
+pub type SlotTab = (TabId, usize, String);
+
+/// The queue for heavy work over the view (board 80): each kind's cap and
+/// how many are held in `head`'s `slots`, a row heading the items for
+/// each holder in slot order and each waiter in the order it came (which
+/// `m`'s sort leaves first), and on a waiting tab's own row what it waits
+/// for (`waiting`, "cargo build, waiting for a build slot"). Rows from an
+/// earlier call are replaced, so it is called again whenever the slots
+/// change, with nothing read but what the server was told.
+pub fn with_slots(
+    data: &mut ViewData,
+    kinds: &[crate::slots::KindNow],
+    tab_of: impl Fn(crate::mux::PaneId) -> Option<SlotTab>,
+    now_secs: i64,
+) {
+    use crate::slots::Hold;
+    data.items.retain(|i| !is_slot(i));
+    let mut rows = Vec::new();
+    let mut waiting: HashMap<TabId, String> = HashMap::new();
+    let mut heads = Vec::new();
+    for k in kinds {
+        heads.push(json!({
+            "kind": k.kind.name(),
+            "heading": k.kind.heading(),
+            "cap": k.cap,
+            "held": k.holders.len(),
+            "waiting": k.waiters.len(),
+        }));
+        let uses = k
+            .holders
+            .iter()
+            .map(|u| (0, u))
+            .chain(k.waiters.iter().map(|(place, u)| (*place, u)));
+        for (place, u) in uses {
+            let Some((tab, index, name)) = tab_of(u.pane) else {
+                continue;
+            };
+            let waits = u.hold == Hold::Waiting;
+            if waits {
+                waiting.entry(tab).or_insert_with(|| {
+                    format!(
+                        "{}, waiting for a {}",
+                        crate::slots::program_words(&u.command),
+                        k.kind.words()
+                    )
+                });
+            }
+            let title = format!("{index} {name}");
+            let how_long = crate::sidebar::text::ago(Some(u.since), now_secs);
+            let role = if waits {
+                crate::slots::ordinal(place)
+            } else {
+                "holds".to_string()
+            };
+            rows.push(Item {
+                id: format!("slot:{}", u.pid),
+                title: title.clone(),
+                detail: u.command.clone(),
+                state: if waits { State::Active } else { State::Idle },
+                target: Target::Tab(tab),
+                group: Some(k.kind.heading().to_string()),
+                // The table's first column holds it all, its figures'
+                // columns left empty, so the plain table (UX 2.0 off, or
+                // a narrow screen) reads it as a line of its own.
+                cells: vec![
+                    format!(
+                        "{title} · {} · {} · {how_long}",
+                        if waits {
+                            format!("waits for a {}, {role}", k.kind.words())
+                        } else {
+                            format!("holds a {}", k.kind.words())
+                        },
+                        crate::slots::program_words(&u.command)
+                    ),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                ],
+                data: json!({
+                    "slot": k.kind.name(),
+                    "waiting": waits,
+                    "place": place,
+                    "since": u.since,
+                    "command": u.command,
+                    "pid": u.pid,
+                }),
+                ..Item::default()
+            });
+        }
+    }
+    // With the queue off, nothing of it is drawn, so none of it is a row
+    // to choose, and no tab says it waits.
+    let any = kinds.iter().any(|k| k.cap > 0);
+    if !any {
+        rows.clear();
+        waiting.clear();
+    }
+    for item in &mut data.items {
+        let Target::Tab(tab) = item.target else {
+            continue;
+        };
+        if let Some(obj) = item.data.as_object_mut() {
+            match waiting.get(&tab) {
+                Some(words) => obj.insert("waiting".into(), json!(words)),
+                None => obj.remove("waiting"),
+            };
+        }
+    }
+    data.items.splice(0..0, rows);
+    if !data.head.is_object() {
+        data.head = json!({});
+    }
+    data.head["slots"] = if any { json!(heads) } else { json!([]) };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_slots_head_the_items_holders_then_waiters_and_mark_a_waiting_tab() {
+        use crate::mux::PaneId;
+        use crate::slots::{Board, Hold, Kind, Use};
+        let mut board = Board::default();
+        let report = |pid, pane, hold, came| Use {
+            pid,
+            child: None,
+            pane: PaneId(pane),
+            kind: Kind::Build,
+            hold,
+            since: 100,
+            came,
+            command: "cargo build --release".into(),
+        };
+        board.report(report(9, 3, Hold::Waiting, 2));
+        board.report(report(8, 1, Hold::Holding { index: 0, cap: 1 }, 1));
+        let tab_item = |n: u32| Item {
+            id: n.to_string(),
+            title: format!("{n} tab"),
+            target: Target::Tab(TabId(n)),
+            data: json!({ "cpu": 1.0 }),
+            ..Item::default()
+        };
+        let mut data = ViewData {
+            items: vec![tab_item(1), tab_item(3)],
+            ..ViewData::default()
+        };
+        let tab_of = |p: PaneId| Some((TabId(p.0), p.0 as usize, format!("tab {}", p.0)));
+        for _ in 0..2 {
+            with_slots(&mut data, &board.kinds(|_| 1), tab_of, 160);
+        }
+        let ids: Vec<&str> = data.items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["slot:8", "slot:9", "1", "3"],
+            "made once, however often"
+        );
+        assert_eq!(
+            data.items[1].cells[0],
+            "3 tab 3 · waits for a build slot, 1st · cargo build · 1m"
+        );
+        assert!(data.items[1].cells[1..].iter().all(String::is_empty));
+        assert_eq!(
+            data.items[3].data["waiting"],
+            "cargo build, waiting for a build slot"
+        );
+        assert!(data.items[2].data.get("waiting").is_none());
+        assert_eq!(data.head["slots"][0]["held"], 1);
+        assert_eq!(data.head["slots"][0]["heading"], "Builds");
+        // With the queue off, no slot rows are left to choose.
+        with_slots(&mut data, &board.kinds(|_| 0), tab_of, 160);
+        assert!(!data.items.iter().any(is_slot));
+        assert!(data.items.iter().all(|i| i.data.get("waiting").is_none()));
+        board.end(9);
+        with_slots(&mut data, &board.kinds(|_| 1), tab_of, 160);
+        assert!(data.items[2].data.get("waiting").is_none());
+    }
 
     /// A process as the Node version's test gave it in ps's columns: pid,
     /// parent, resident KB, %cpu, command.

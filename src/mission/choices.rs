@@ -165,6 +165,13 @@ pub enum Do {
         pid: u32,
         name: String,
     },
+    /// A command holding or waiting for a slot of the queue for heavy work
+    /// stopped (SIGTERM to the command, or to the stand-in while it
+    /// waits), asked first, and only while it is still the one offered.
+    StopSlot {
+        pid: u32,
+        command: String,
+    },
     /// A waiting tab's question answered with one of its options, as its
     /// number typed into the tab.
     AnswerWith {
@@ -836,6 +843,21 @@ const END_MEMORY: f64 = 100.0 * 1024.0 * 1024.0;
 /// heaviest processes, its CPU or memory in the label.
 fn resource_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
     let mut out = target_choices(item, ctx);
+    // A row of the queue for heavy work: its command stopped.
+    if crate::usage::resources::is_slot(item) {
+        if let Some(pid) = item.data["pid"]
+            .as_u64()
+            .and_then(|p| u32::try_from(p).ok())
+        {
+            let command = text(&item.data, "/command").to_string();
+            out.push(choice(
+                's',
+                format!("Stop {}", crate::slots::program_words(&command)),
+                Do::StopSlot { pid, command },
+            ));
+        }
+        return out;
+    }
     let Target::Tab(tab) = item.target else {
         return out;
     };

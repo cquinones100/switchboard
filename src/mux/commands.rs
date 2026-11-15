@@ -106,6 +106,7 @@ pub const NAMES: &[&str] = &[
     "sidebar-repo",
     "server-version",
     "autopilot-next",
+    "slot-report",
 ];
 
 /// How each command is used, which `--help` (or `-h`) after its name prints.
@@ -213,6 +214,10 @@ pub const USAGE: &[(&str, &str)] = &[
     (
         "autopilot-next",
         "autopilot-next <note> <line>: the unticked item on that line of the note autopilot works put next in its queue",
+    ),
+    (
+        "slot-report",
+        "slot-report wait|hold <kind> <pid> [index cap child] -- command | done <pid>: from the cargo, npm and pnpm stand-ins, a command in the calling pane waiting for, holding or letting go a slot in the queue for heavy work",
     ),
 ];
 
@@ -347,6 +352,7 @@ impl Server {
                 Ok(self.agent_hook(rest, caller, stdin))
             }
             "context" => Ok(self.agent_context(rest, caller)),
+            "slot-report" => Ok(self.cmd_slot_report(rest, caller)),
             "new-tab" => self.cmd_new_tab(rest, cwd, caller),
             "split" => self.cmd_split(rest, cwd, caller),
             "respawn-pane" => self.cmd_respawn(rest, cwd, caller),

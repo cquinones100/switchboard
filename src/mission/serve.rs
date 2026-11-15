@@ -4242,6 +4242,62 @@ impl Server {
                     },
                 );
             }
+            Do::StopSlot { pid, command } => {
+                let words = crate::slots::program_words(&command);
+                self.ask(
+                    client,
+                    Confirm::new(format!("Stop {words}?")),
+                    move |server, client, yes| {
+                        if !yes {
+                            return;
+                        }
+                        // Only the command still reporting the same words:
+                        // its own process while it holds the slot, the
+                        // stand-in while it waits.
+                        let Some(target) = server
+                            .slots
+                            .get(pid)
+                            .filter(|u| u.command == command)
+                            .map(|u| u.child.unwrap_or(u.pid))
+                        else {
+                            server.mission_note(client, format!("{words} had already ended."));
+                            return;
+                        };
+                        // The command and everything it started (a build
+                        // script, a shell's jobs), read off the task.
+                        let label = format!("Stopping {words}");
+                        server.mission_busy(client, &label, None, async move {
+                            let stopped = tokio::task::spawn_blocking(move || {
+                                let list: Vec<(u32, u32)> = crate::mux::procinfo::all_usage()
+                                    .iter()
+                                    .map(|p| (p.pid, p.ppid))
+                                    .collect();
+                                let mut tree = crate::slots::descendants(&list, target);
+                                tree.push(target);
+                                let mut sent = 0;
+                                for pid in tree {
+                                    let Ok(p) = libc::pid_t::try_from(pid) else {
+                                        continue;
+                                    };
+                                    // SAFETY: kill only sends a signal, to the
+                                    // command the stand-in reported just now
+                                    // and the processes under it.
+                                    if unsafe { libc::kill(p, libc::SIGTERM) } == 0 {
+                                        sent += 1;
+                                    }
+                                }
+                                if sent > 0 {
+                                    format!("Stopped {words}.")
+                                } else {
+                                    format!("{words} had already ended.")
+                                }
+                            })
+                            .await;
+                            Some(stopped.unwrap_or_else(|e| format!("Couldn't stop it: {e}")))
+                        });
+                    },
+                );
+            }
             Do::EndProcess { tab, pid, name } => {
                 let index = self
                     .sidebar_all_tabs()

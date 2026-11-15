@@ -2284,3 +2284,49 @@ fn an_escape_in_a_hook_s_file_name_never_reaches_the_terminal() {
     );
     assert!(!common::sent(&client.raw, b"aGk=\x07"));
 }
+
+#[test]
+fn a_tab_whose_command_waits_for_a_slot_says_so_under_working_until_it_holds_one() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    session_file(&server.home, pid, json!({"sessionId": "s-slot"}));
+    hook(&server, &pane, "UserPromptSubmit", json!({}));
+    client.wait_for("Working", |s| {
+        s.iter().any(|l| left(l, 34).contains("WORKING 1"))
+    });
+    // The stand-in reports as it waits, with this test's own process as
+    // its, so the server's check that it still runs keeps it.
+    let me = std::process::id().to_string();
+    let report = |args: &[&str]| {
+        let (code, _, err) = server.typed_in(&pane, args);
+        assert_eq!(code, 0, "{err}");
+    };
+    report(&["slot-report", "wait", "build", &me, "--", "cargo", "build"]);
+    let screen = client.wait_for("the wait in the sidebar", |s| {
+        s.iter()
+            .any(|l| left(l, 34).contains("waits for a build slot, 1st"))
+    });
+    assert!(
+        screen.iter().any(|l| left(l, 34).contains("WORKING 1")),
+        "{}",
+        screen.join("\n")
+    );
+    report(&[
+        "slot-report",
+        "hold",
+        "build",
+        &me,
+        "0",
+        "1",
+        "--",
+        "cargo",
+        "build",
+    ]);
+    client.wait_for("the wait gone once it holds the slot", |s| {
+        !s.iter().any(|l| l.contains("waits for a build slot"))
+    });
+    report(&["slot-report", "done", &me]);
+}

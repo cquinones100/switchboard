@@ -505,6 +505,8 @@ pub enum Badge {
     /// A reminder still to come, and one come due.
     Later,
     Reminder,
+    /// Working, its command waiting for a slot in the queue for heavy work.
+    Slot,
 }
 
 /// A badge's look.
@@ -541,6 +543,7 @@ impl Badge {
             Badge::Waiting => l(220, 232, "!", "waiting on you"),
             Badge::Done => l(41, 232, "✓", "finished"),
             Badge::Working => l(67, 255, "⠋", "working"),
+            Badge::Slot => l(67, 255, "◌", "waits for a slot"),
             Badge::Background => l(60, 255, "⠋", "working in background"),
             Badge::Review => l(97, 255, "⠋", "review loop"),
             Badge::Ci => l(30, 255, "⠋", "CI loop"),

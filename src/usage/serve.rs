@@ -215,13 +215,14 @@ impl Server {
                     own_memory,
                 });
                 self.usage.procs = Some(procs);
-                let data = resources::view(
+                let mut data = resources::view(
                     &tabs,
                     self.usage.procs.as_deref(),
                     Some(util::now_ms()),
                     &self.usage.history,
                     top.as_ref(),
                 );
+                self.usage_with_slots(&mut data);
                 self.usage_set_view(ViewKind::Resources, data);
                 if self.usage_wanted(ViewKind::Resources, Instant::now()) {
                     self.send_later(
@@ -360,6 +361,27 @@ impl Server {
 
     fn usage_in_flight(&self, kind: ViewKind) -> bool {
         self.usage.in_flight.get(&kind).copied().unwrap_or(false)
+    }
+
+    /// The queue for heavy work over the Resources view's data, from what
+    /// the stand-ins told the server (src/slots).
+    fn usage_with_slots(&self, data: &mut ViewData) {
+        let kinds = self.slots.kinds(crate::slots::cap);
+        let tab_of = |pane| {
+            let tab = self.panes.get(&pane)?.tab;
+            Some((tab, self.tab_number(tab), self.tab_label(tab)))
+        };
+        resources::with_slots(data, &kinds, tab_of, util::now_secs());
+    }
+
+    /// The slots changed: the Resources view, once it has data, shows it
+    /// at once rather than at its next reading.
+    pub fn usage_slots_changed(&mut self) {
+        let Some(mut data) = self.usage.views.get(&ViewKind::Resources).cloned() else {
+            return;
+        };
+        self.usage_with_slots(&mut data);
+        self.usage_set_view(ViewKind::Resources, data);
     }
 
     fn usage_set_view(&mut self, kind: ViewKind, data: ViewData) {

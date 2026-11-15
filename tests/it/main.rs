@@ -35,6 +35,7 @@ mod setup;
 mod sidebar;
 mod skill_path;
 mod slack_relay;
+mod slots;
 mod sources;
 mod stand_ins;
 mod status;

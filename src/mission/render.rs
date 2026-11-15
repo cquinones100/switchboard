@@ -1105,6 +1105,10 @@ fn doing_inside(tab: &TabModel, look: &CardLook, r: &Rules, theme: &Theme) -> In
             None,
         ),
     };
+    // Waiting for a slot of the queue for heavy work, its mark is the
+    // slot's and its time how long it has waited (board 79).
+    let waiting = tab.slot.as_ref().filter(|s| s.waiting());
+    let since = waiting.map(|s| s.since).or(since);
     let how_long = since.map_or_else(String::new, |s| text::ago(Some(s), r.now_secs()));
     let at = kit::columns(
         &[
@@ -1134,7 +1138,15 @@ fn doing_inside(tab: &TabModel, look: &CardLook, r: &Rules, theme: &Theme) -> In
     );
     let mut now = Vec::new();
     let parts = [
-        vec![kit::mark(Mark::Working, 0, theme)],
+        vec![kit::mark(
+            if waiting.is_some() {
+                Mark::Slot
+            } else {
+                Mark::Working
+            },
+            0,
+            theme,
+        )],
         vec![Span::styled(tool, Tone::Text.bold(theme))],
         vec![Span::styled(arg, Tone::Dim.style(theme))],
         vec![Span::styled(how_long, Tone::Dim.style(theme))],
@@ -1147,6 +1159,15 @@ fn doing_inside(tab: &TabModel, look: &CardLook, r: &Rules, theme: &Theme) -> In
     lines.push(now);
     if look.chips {
         let mut chips: Vec<Span<'static>> = Vec::new();
+        // The slot it waits for, with its place, or the one it holds, dim.
+        if let Some(slot) = &tab.slot {
+            let tone = if slot.waiting() {
+                Tone::Working
+            } else {
+                Tone::Dim
+            };
+            chips.extend(kit::chip(&slot.chip(), tone, false, theme));
+        }
         if let Some(phase) = tab.phase.as_deref().filter(|p| !p.is_empty()) {
             chips.extend(kit::chip(phase, Tone::Working, false, theme));
         }
@@ -6720,6 +6741,43 @@ mod tests {
     }
 
     #[test]
+    fn a_card_waiting_for_a_slot_shows_its_mark_how_long_and_its_place() {
+        use crate::slots::{Hold, Kind, TabSlot};
+        let now = rules().now_secs();
+        let mut m = board_3();
+        let slot = |hold, place| TabSlot {
+            kind: Kind::Build,
+            hold,
+            place,
+            since: now - 20,
+            command: "cargo build --release".into(),
+        };
+        m.snap.tabs[1].slot = Some(slot(Hold::Waiting, 2));
+        m.snap.tabs[2].slot = Some(TabSlot {
+            kind: Kind::Tests,
+            ..slot(Hold::Holding { index: 0, cap: 2 }, 0)
+        });
+        let (lines, _) = screen(&m, 160, 60);
+        let text = texts(&lines);
+        let now_row = text
+            .iter()
+            .find(|l| l.contains("cargo test --lib mission"))
+            .unwrap_or_else(|| panic!("{text:#?}"));
+        assert!(now_row.contains("◌ Bash"), "{text:#?}");
+        // How long it has waited, rather than how long the call has run (1m).
+        assert!(now_row.contains("<1m"), "how long it has waited: {text:#?}");
+        assert!(
+            text.iter()
+                .any(|l| l.contains("waits for a build slot · 2nd")),
+            "{text:#?}"
+        );
+        assert!(
+            text.iter().any(|l| l.contains("test slot 1 of 2")),
+            "{text:#?}"
+        );
+    }
+
+    #[test]
     fn with_ux2_the_tabs_are_cards_under_their_groups_labels_and_a_shelf_under_them() {
         let mut m = board_3();
         m.cursor = 1;
@@ -8974,6 +9032,129 @@ mod tests {
         );
         assert!(text[2].contains("1 build") && text[2].contains("93.0"));
         assert!(text[10].contains("All tabs"), "{text:#?}");
+    }
+
+    #[test]
+    fn resources_lists_each_kind_of_slot_its_holders_free_slots_and_waiters() {
+        use crate::mux::PaneId;
+        use crate::slots::{Board, Hold, Kind, Use};
+        use crate::usage::resources::{self, History, Proc, TabPanes};
+        let now = rules().now_secs();
+        let tabs = [
+            TabPanes {
+                tab: TabId(7),
+                index: 7,
+                name: "rust notes".into(),
+                pids: vec![700],
+            },
+            TabPanes {
+                tab: TabId(3),
+                index: 3,
+                name: "uncommitted".into(),
+                pids: vec![300],
+            },
+        ];
+        let list = vec![
+            Proc {
+                pid: 700,
+                ppid: 1,
+                name: "zsh".into(),
+                cpu: 0.0,
+                memory: 1 << 20,
+            },
+            Proc {
+                pid: 300,
+                ppid: 1,
+                name: "zsh".into(),
+                cpu: 0.0,
+                memory: 1 << 20,
+            },
+        ];
+        let mut data = resources::view(&tabs, Some(&list), Some(1), &History::default(), None);
+        let mut board = Board::default();
+        let report = |pid, pane, kind, hold, command: &str| Use {
+            pid,
+            child: None,
+            pane: PaneId(pane),
+            kind,
+            hold,
+            since: now - 130,
+            came: pid as i64,
+            command: command.into(),
+        };
+        board.report(report(
+            1,
+            7,
+            Kind::Build,
+            Hold::Holding { index: 0, cap: 1 },
+            "cargo build",
+        ));
+        board.report(report(
+            2,
+            3,
+            Kind::Build,
+            Hold::Waiting,
+            "cargo check --all",
+        ));
+        let tab_of = |p: PaneId| Some((TabId(p.0), p.0 as usize, format!("tab {}", p.0)));
+        resources::with_slots(&mut data, &board.kinds(|_| 1), tab_of, now);
+        let view = View {
+            id: ViewId::Resources,
+            title: "Resources".into(),
+            data,
+            loaded: true,
+        };
+        let mut m = mission(
+            vec![tab(7, "rust notes"), tab(3, "uncommitted")],
+            vec![view],
+        );
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        super::super::resources_board::Sort::Cpu.sort(&mut m.snap.views[0].data.items);
+        m.cursor = 1;
+        let (lines, hits, _, _) = drawn(&m, 160, 30);
+        let text = texts(&lines);
+        let all = text.join("\n");
+        let at = |has: &str| {
+            text.iter()
+                .position(|l| l.contains(has))
+                .unwrap_or_else(|| panic!("{has}: {all}"))
+        };
+        let head = at("BUILDS");
+        assert!(text[head].contains("1 of 1 held"), "{all}");
+        assert!(
+            text[head].contains("TEST RUNS") && text[head].contains("0 of 1 held"),
+            "{all}"
+        );
+        assert!(
+            text[head + 1].contains("7 tab 7") && text[head + 1].contains("cargo build"),
+            "{all}"
+        );
+        assert!(
+            text[head + 1].contains("· a free slot"),
+            "the test runs' free slot: {all}"
+        );
+        let waiter = at("◌ 3 tab 3");
+        assert!(
+            text[waiter].contains("1st") && text[waiter].contains("2m"),
+            "{all}"
+        );
+        assert!(all.contains("nothing waits"), "{all}");
+        // The waiter is the chosen row, and a click on it chooses it.
+        assert!(text[waiter].contains('▌'), "{all}");
+        assert!(
+            hits.iter()
+                .any(|h| h.y as usize == waiter && h.spot == Spot::Index(1))
+        );
+        // Its tab's row in the table says what it waits for.
+        assert!(
+            all.contains("cargo check, waiting for a build slot"),
+            "{all}"
+        );
+        assert!(
+            !all.contains("CPU …"),
+            "no reading of the computer yet: {all}"
+        );
     }
 
     #[test]

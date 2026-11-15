@@ -155,6 +155,44 @@ pub fn interactive(entrypoint: Option<&str>) -> bool {
     entrypoint.is_none_or(|e| e.is_empty() || e == "cli")
 }
 
+/// The line that puts the queue's stand-ins first on the PATH of
+/// Claude's commands.
+pub fn stand_ins_line(bin: &Path) -> String {
+    format!(
+        "export PATH={}:\"$PATH\"\n",
+        crate::worktree::shell_quote(&bin.to_string_lossy())
+    )
+}
+
+/// In a pane, puts the stand-ins for cargo, npm and pnpm (src/cmd/slot.rs)
+/// first on the PATH of every command Claude runs, through the file Claude
+/// Code reads its commands' environment from after your shell's startup
+/// files, which may put the real ones first again (rustup's
+/// `~/.cargo/bin`). Headless sessions too, since a skill's `claude -p`
+/// builds as well. Run by `switchboard hook SessionStart`, which both
+/// ways of setting Claude up (the plugin and `~/.claude`) install.
+pub fn stand_ins_first() {
+    let Some(file) = std::env::var_os("CLAUDE_ENV_FILE") else {
+        return;
+    };
+    let bin = crate::cmd::slot::bin_dir();
+    if std::env::var_os("SWITCHBOARD_PANE").is_none() || !bin.is_dir() {
+        return;
+    }
+    let line = stand_ins_line(&bin);
+    let file = PathBuf::from(file);
+    if std::fs::read_to_string(&file).is_ok_and(|text| text.contains(&line)) {
+        return;
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&file)
+    {
+        let _ = f.write_all(line.as_bytes());
+    }
+}
+
 pub fn main(_args: Vec<String>) -> ExitCode {
     std::panic::set_hook(Box::new(|_| {}));
     let _ = std::panic::catch_unwind(|| {

@@ -59,6 +59,11 @@ fn run(args: &[String]) {
     if event.is_empty() {
         return;
     }
+    // The queue's stand-ins first on the PATH of Claude's commands, in
+    // every session, headless ones too (src/cmd/slot.rs).
+    if event == "SessionStart" {
+        crate::cmd::claude_context::stand_ins_first();
+    }
     let session = text(&payload, "session_id").unwrap_or_default();
     // A headless Claude (a review loop's `claude -p`) inherits the tab's
     // SWITCHBOARD_PANE and runs these hooks too; its turns are not the tab's,

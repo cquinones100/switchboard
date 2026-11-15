@@ -161,6 +161,10 @@ pub struct Handover {
     /// The computer held awake by hand, until you say (src/awake).
     #[serde(default)]
     pub awake_by_hand: bool,
+    /// Who holds and waits for the queue's slots (src/slots), whose
+    /// commands go on running.
+    #[serde(default)]
+    pub slots: crate::slots::Board,
     /// How many panes the layout last saved held, so a layout that lost
     /// panes before the upgrade still holds `persist::SHRINK_HOLD` before
     /// it is written (src/mux/persist.rs); none from an older build.
@@ -808,6 +812,7 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
         asked_cell: server.terminal.asked_cell,
         given: server.views.given.records(),
         awake_by_hand: server.awake.by_hand,
+        slots: server.slots.clone(),
         written_panes: super::persist::written_panes(server),
         clients: held
             .iter()
@@ -984,6 +989,9 @@ pub fn adopt(server: &mut Server, handover: Handover) {
         }
     }
     server.awake.by_hand = handover.awake_by_hand;
+    server.slots = handover.slots;
+    let panes: std::collections::HashSet<PaneId> = server.panes.keys().copied().collect();
+    server.slots.keep_panes(|p| panes.contains(&p));
     super::persist::take_written_panes(server, handover.written_panes);
     // The one used longest ago first, so the one used last sizes its
     // session, as it did.
@@ -1191,6 +1199,20 @@ mod tests {
             asked_cell: Some((10, 20)),
             given: vec![(PaneId(4), vec!["https://a.example/1".into()])],
             awake_by_hand: true,
+            slots: {
+                let mut board = crate::slots::Board::default();
+                board.report(crate::slots::Use {
+                    pid: 42,
+                    child: Some(43),
+                    pane: PaneId(4),
+                    kind: crate::slots::Kind::Build,
+                    hold: crate::slots::Hold::Holding { index: 0, cap: 2 },
+                    since: 100,
+                    came: 100_000,
+                    command: "cargo build".into(),
+                });
+                board
+            },
             written_panes: Some(5),
         }
     }
@@ -1223,6 +1245,7 @@ mod tests {
         assert_eq!(read.images, sample().images);
         assert_eq!(read.asked_cell, Some((10, 20)));
         assert!(read.awake_by_hand);
+        assert_eq!(read.slots, sample().slots, "the queue's slots carried");
         assert_eq!(read.written_panes, Some(5));
         std::fs::remove_dir_all(&dir).unwrap();
     }

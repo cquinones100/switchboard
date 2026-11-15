@@ -192,6 +192,9 @@ pub enum Mark {
     Awake,
     /// A tab selected in the sidebar's select mode.
     Selected,
+    /// A command waiting for a slot in the queue for heavy work, in place
+    /// of the spinner (board 79).
+    Slot,
 }
 
 impl Mark {
@@ -210,6 +213,7 @@ impl Mark {
             | Badge::Scheduled
             | Badge::Monitor => Mark::Working,
             Badge::Queued => Mark::Queued,
+            Badge::Slot => Mark::Slot,
             Badge::Landing => Mark::Landing,
             Badge::Failing => Mark::Failed,
             Badge::Reminder => Mark::Reminder,
@@ -236,6 +240,7 @@ impl Mark {
             Mark::Comment => ("◇", Tone::Working),
             Mark::Awake => ("☕", Tone::Dim),
             Mark::Selected => ("◆", Tone::Accent),
+            Mark::Slot => ("◌", Tone::Working),
         }
     }
 }

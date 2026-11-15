@@ -13,6 +13,8 @@
 //! - `requests`: the request audit for the Usage view.
 //! - `platform`: what differs between macOS and Linux.
 //! - `presence`: whether you're at the computer.
+//! - `slots`: the queue for heavy work, so only so many builds and test
+//!   runs go at once.
 //! - `connector`: one call to a Claude connector.
 //! - `worktree`: what the worktree commands share.
 //! - `net`: HTTPS requests, each counted in the request audit.
@@ -113,6 +115,7 @@ pub mod settings;
 pub mod setup;
 pub mod sidebar;
 pub mod skill_files;
+pub mod slots;
 pub mod sources;
 pub mod status;
 pub mod tabs;

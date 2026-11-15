@@ -701,6 +701,7 @@ impl Server {
             .get(&id)
             .and_then(|shown| shown.repo_dir.clone());
         t.command = read_of(tab.active).and_then(|r| r.command.clone());
+        t.slot = self.slots.of_tab(&panes);
         t.panes = panes;
         t.active = Some(tab.active);
         t.claude_pane = claude_pane;

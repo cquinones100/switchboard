@@ -459,6 +459,9 @@ pub struct Server {
     pub bindings: Bindings,
     /// What each pane's Claude is doing (src/agent).
     pub agents: crate::agent::Agents,
+    /// Who holds and waits for the queue's slots, as the stand-ins in the
+    /// panes told it (src/slots).
+    pub slots: crate::slots::Board,
     /// What GitHub and the landing queue say of each tab (src/facts.rs),
     /// written by the sources, read by the sidebar.
     pub facts: crate::facts::Facts,
@@ -616,6 +619,13 @@ async fn run(handover: Option<PathBuf>) -> Result<()> {
         tokio::task::spawn_blocking(|| {
             if let Err(e) = crate::setup::plugin::write_quietly() {
                 eprintln!("switchboard server: Switchboard's plugin for Claude Code: {e:#}");
+            }
+            // The cargo, npm and pnpm the panes find first, which put heavy
+            // work through the queue (src/cmd/slot.rs); not in a demo,
+            // whose home links nothing outside it and builds nothing.
+            let demo = std::env::var_os("SWITCHBOARD_DEMO").is_some_and(|d| !d.is_empty());
+            if !demo && let Err(e) = crate::cmd::slot::link_stand_ins() {
+                eprintln!("switchboard server: the queue for heavy work's stand-ins: {e:#}");
             }
         });
         tokio::spawn(crate::setup::plugin::follow_clone());
@@ -1129,6 +1139,7 @@ impl Server {
             clients: BTreeMap::new(),
             bindings: Bindings::default(),
             agents: crate::agent::Agents::default(),
+            slots: crate::slots::Board::default(),
             facts: crate::facts::Facts::default(),
             notices: BTreeMap::new(),
             tab_names: Default::default(),
@@ -1264,6 +1275,7 @@ impl Server {
                 self.sources_tick();
                 self.day_tick();
                 self.sidebar_tick();
+                self.slots_tick();
                 super::persist::tick(self);
                 self.usage_tick();
                 self.mission_tick();
@@ -1586,6 +1598,15 @@ impl Server {
                 socket::socket_path().to_string_lossy().into_owned(),
             ),
             ("SWITCHBOARD_PANE".to_string(), id.to_string()),
+            // The stand-ins first, so cargo, npm and pnpm put heavy work
+            // through the queue for heavy work (src/cmd/slot.rs). A shell
+            // whose startup files put the real ones before them still
+            // reaches the stand-ins in Claude's commands, which
+            // `claude-context` puts first again.
+            (
+                "PATH".to_string(),
+                crate::cmd::slot::path_with_stand_ins(&std::env::var("PATH").unwrap_or_default()),
+            ),
         ];
         // gh's `--web`, from any pane, opens in the Chrome profile
         // browser.json gives the site, as every link Switchboard opens does

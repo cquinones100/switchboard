@@ -249,6 +249,9 @@ pub struct TabModel {
     /// Lines added and deleted.
     pub size: Option<(u64, u64)>,
     pub landing: Option<Landing>,
+    /// The slot of the queue for heavy work a command in its panes waits
+    /// for, else holds (src/slots).
+    pub slot: Option<crate::slots::TabSlot>,
 }
 
 impl TabModel {
@@ -310,6 +313,7 @@ impl TabModel {
             review: None,
             size: None,
             landing: None,
+            slot: None,
         }
     }
 }
@@ -757,6 +761,8 @@ pub fn badge_state(tab: &TabModel, r: &Rules) -> Badge {
         Badge::Later
     } else if tab.state == TabState::Idle && build_failing(tab, r) {
         Badge::Failing
+    } else if tab.state.busy() && tab.slot.as_ref().is_some_and(|s| s.waiting()) {
+        Badge::Slot
     } else if monitoring_only(tab) {
         Badge::Monitor
     } else if let Some(l) = tab
@@ -895,6 +901,11 @@ pub fn state_only(tab: &TabModel, r: &Rules) -> String {
                 joined(std::iter::once("monitoring".to_string()).chain(tab.monitors.clone()))
             };
             and(joined([finished, watching]))
+        }
+        TabState::Working | TabState::Background
+            if let Some(slot) = tab.slot.as_ref().filter(|s| s.waiting()) =>
+        {
+            and(slot.line())
         }
         TabState::Working => {
             let working = if since.is_empty() {

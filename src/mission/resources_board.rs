@@ -6,7 +6,9 @@
 //! CPU, memory and process count, red past a core or 4 GB with a ✕ chip
 //! saying why, its heaviest processes on the line under it, and its CPU and
 //! memory over the last two minutes as sparklines at the right; the chosen
-//! row opens to its heaviest processes as a tree.
+//! row opens to its heaviest processes as a tree. Between the two, the
+//! queue for heavy work's slots, a column for each kind (board 80,
+//! `slot_columns`), each holder and waiter one of the view's items.
 //!
 //! Everything comes from the view's data as `usage::resources` worked it
 //! out off the server's task (`head`, and each item's `data`), so drawing
@@ -27,7 +29,7 @@ use crate::sidebar::render::Line;
 use crate::sidebar::text::width;
 use crate::ui::Theme;
 use crate::ui::kit::{self, Col, Surface, Tone};
-use crate::usage::resources::{CPU_HEAVY, MEMORY_HEAVY, bytes};
+use crate::usage::resources::{CPU_HEAVY, MEMORY_HEAVY, bytes, is_slot};
 
 /// The board needs this many columns; under it `list` draws the table.
 pub const BOARD_AT: usize = 136;
@@ -48,14 +50,19 @@ impl Sort {
         }
     }
 
-    /// The items heaviest first by this; the order the view gave breaks a
-    /// tie.
+    /// The tabs heaviest first by this, after the queue's slot rows, which
+    /// keep their order; the order the view gave breaks a tie.
     pub fn sort(self, items: &mut [Item]) {
         let key = |i: &Item| match self {
             Sort::Cpu => i.data["cpu"].as_f64().unwrap_or(0.0),
             Sort::Memory => i.data["memory"].as_f64().unwrap_or(0.0),
         };
-        items.sort_by(|a, b| key(b).total_cmp(&key(a)));
+        items.sort_by(|a, b| match (is_slot(a), is_slot(b)) {
+            (true, true) => std::cmp::Ordering::Equal,
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            (false, false) => key(b).total_cmp(&key(a)),
+        });
     }
 }
 
@@ -229,6 +236,287 @@ fn tree_lines(item: &Item, name_w: usize, theme: &Theme) -> Vec<Vec<Span<'static
     out
 }
 
+/// The queue for heavy work above the table (board 80): a column for each
+/// kind, headed by its name and "N of cap held" (in the working tone when
+/// every slot is held), listing the holders, a line for each free slot,
+/// then who waits in the order they came, else "nothing waits". A holder
+/// or waiter is one of the view's items, chosen, lit and clicked as a row
+/// is; with the queue off nothing is drawn.
+fn slot_columns(
+    view: &View,
+    cols: usize,
+    rows: usize,
+    m: &Mission,
+    lines: &mut Vec<Line>,
+    hits: &mut Vec<HitBox>,
+) {
+    let theme = &m.snap.theme;
+    let Some(kinds) = view.data.head["slots"].as_array().filter(|k| !k.is_empty()) else {
+        return;
+    };
+    let cursor = usize::try_from(m.cursor).ok();
+    let tabs = if m.snap.all_tabs.is_empty() {
+        &m.snap.tabs
+    } else {
+        &m.snap.all_tabs
+    };
+    let now = m.snap.rules.now_secs();
+    // At most a third of the screen under the headings, so the table
+    // keeps its room however many wait.
+    let body = (rows / 3).max(4);
+    let gap = 2;
+    let col_w = cols.saturating_sub(2 + gap * (kinds.len() - 1)) / kinds.len();
+    // Each column's lines: its spans, and the item a click on it chooses.
+    let mut columns: Vec<Vec<(Vec<Span<'static>>, Option<usize>)>> = Vec::new();
+    for k in kinds {
+        let kind = k["kind"].as_str().unwrap_or("");
+        let cap = k["cap"].as_u64().unwrap_or(0) as usize;
+        let held = k["held"].as_u64().unwrap_or(0) as usize;
+        let mut out = Vec::new();
+        let count = format!("{held} of {cap} held");
+        let heading = k["heading"].as_str().unwrap_or("").to_uppercase();
+        let at = kit::columns(
+            &[
+                Col::Stretch {
+                    weight: 1,
+                    min: 0,
+                    max: None,
+                },
+                Col::Right {
+                    natural: width(&count),
+                    cap: 16,
+                },
+            ],
+            col_w.saturating_sub(1),
+            1,
+            &[],
+        );
+        let mut head = Vec::new();
+        if let Some(place) = at[0] {
+            kit::place(
+                &mut head,
+                vec![Span::styled(heading, Tone::Dim.bold(theme))],
+                place,
+            );
+        }
+        if let Some(place) = at[1] {
+            let tone = if held >= cap {
+                Tone::Working
+            } else {
+                Tone::Dim
+            };
+            kit::place(
+                &mut head,
+                vec![Span::styled(count, tone.style(theme))],
+                place,
+            );
+        }
+        out.push((kit::row(head, col_w, false, theme), None));
+        let rows: Vec<(usize, &Item)> = view
+            .data
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| i.data["slot"].as_str() == Some(kind))
+            .collect();
+        let row_of = |at: usize, item: &Item| {
+            let d = &item.data;
+            let waits = d["waiting"].as_bool().unwrap_or(false);
+            let (number, name) = item
+                .title
+                .split_once(' ')
+                .unwrap_or(("", item.title.as_str()));
+            let color = match item.target {
+                crate::items::Target::Tab(t) => {
+                    tabs.iter().find(|x| x.id == t).and_then(|t| t.color)
+                }
+                _ => None,
+            }
+            .map(ratatui::style::Color::from)
+            .unwrap_or(theme.bright);
+            let middle = if waits {
+                Span::styled(
+                    crate::slots::ordinal(d["place"].as_u64().unwrap_or(0) as usize),
+                    Tone::Working.style(theme),
+                )
+            } else {
+                Span::styled(
+                    crate::slots::program_words(d["command"].as_str().unwrap_or("")),
+                    Tone::Dim.style(theme),
+                )
+            };
+            let how_long = crate::sidebar::text::ago(d["since"].as_i64(), now);
+            let at_cols = kit::columns(
+                &[
+                    Col::Fixed {
+                        min: 1,
+                        natural: 1,
+                        cap: 1,
+                    },
+                    Col::Fixed {
+                        min: 1,
+                        natural: width(number),
+                        cap: 4,
+                    },
+                    Col::Stretch {
+                        weight: 1,
+                        min: 4,
+                        max: None,
+                    },
+                    Col::Fixed {
+                        min: 0,
+                        natural: width(&middle.content),
+                        cap: 14,
+                    },
+                    Col::Right {
+                        natural: width(&how_long),
+                        cap: 8,
+                    },
+                ],
+                col_w.saturating_sub(1),
+                1,
+                &[3],
+            );
+            let parts = [
+                vec![kit::mark(
+                    if waits {
+                        kit::Mark::Slot
+                    } else {
+                        kit::Mark::Working
+                    },
+                    0,
+                    theme,
+                )],
+                vec![Span::styled(
+                    number.to_string(),
+                    Style::new().fg(color).add_modifier(Modifier::BOLD),
+                )],
+                vec![Span::styled(name.to_string(), Tone::Text.style(theme))],
+                vec![middle],
+                vec![Span::styled(how_long, Tone::Dim.style(theme))],
+            ];
+            let mut spans = Vec::new();
+            for (part, place) in parts.into_iter().zip(at_cols) {
+                if let Some(place) = place {
+                    kit::place(&mut spans, part, place);
+                }
+            }
+            let chosen = cursor == Some(at);
+            let mut spans = kit::row(spans, col_w, chosen, theme);
+            if m.hover == Some(Spot::Index(at as isize)) && !chosen {
+                let bg = Surface::Panel.color(theme);
+                spans = spans
+                    .into_iter()
+                    .map(|s| Span::styled(s.content, s.style.bg(bg)))
+                    .collect();
+            }
+            (spans, Some(at))
+        };
+        let (waiters, holders): (Vec<_>, Vec<_>) = rows
+            .into_iter()
+            .partition(|(_, i)| i.data["waiting"].as_bool().unwrap_or(false));
+        for &(at, item) in &holders {
+            out.push(row_of(at, item));
+        }
+        // Free and waiting by the whole queue, not the rows a filter left.
+        for _ in held..cap {
+            out.push((
+                kit::row(
+                    vec![Span::styled("· a free slot", Tone::Faint.style(theme))],
+                    col_w,
+                    false,
+                    theme,
+                ),
+                None,
+            ));
+        }
+        for &(at, item) in &waiters {
+            out.push(row_of(at, item));
+        }
+        if k["waiting"].as_u64().unwrap_or(0) == 0 {
+            out.push((
+                kit::row(
+                    vec![Span::styled("nothing waits", Tone::Faint.style(theme))],
+                    col_w,
+                    false,
+                    theme,
+                ),
+                None,
+            ));
+        }
+        columns.push(fit_rows(out, body, cursor, theme, col_w));
+    }
+    let height = columns.iter().map(Vec::len).max().unwrap_or(0);
+    for y in 0..height {
+        let mut line = vec![Span::raw(" ")];
+        for (i, column) in columns.iter().enumerate() {
+            let x = 1 + i * (col_w + gap);
+            if let Some((spans, item)) = column.get(y) {
+                kit::place(&mut line, spans.clone(), (x, col_w));
+                if let Some(at) = item {
+                    hits.push(HitBox {
+                        y: lines.len() as u16,
+                        x0: x as u16,
+                        x1: (x + col_w).saturating_sub(1) as u16,
+                        spot: Spot::Index(*at as isize),
+                    });
+                }
+            }
+        }
+        lines.push(Line {
+            spans: kit::fit(line, cols, Style::new()),
+            fill: None,
+        });
+    }
+    lines.push(Line {
+        spans: vec![kit::rule(cols, theme)],
+        fill: None,
+    });
+}
+
+/// A slot column's lines within `body` lines under its heading: those
+/// round the chosen row when it is in the column, else from the top, and
+/// a faint line saying how many more are past the end.
+fn fit_rows(
+    lines: Vec<(Vec<Span<'static>>, Option<usize>)>,
+    body: usize,
+    cursor: Option<usize>,
+    theme: &Theme,
+    col_w: usize,
+) -> Vec<(Vec<Span<'static>>, Option<usize>)> {
+    if lines.len() <= body + 1 {
+        return lines;
+    }
+    let mut lines = lines.into_iter();
+    let head = lines.next().into_iter();
+    let rest: Vec<_> = lines.collect();
+    let shown = body - 1;
+    let chosen = rest
+        .iter()
+        .position(|(_, at)| at.is_some() && *at == cursor);
+    let first = chosen.map_or(0, |c| (c + 1).saturating_sub(shown));
+    let past = rest.len() - first - shown;
+    let more = if past > 0 {
+        Some((
+            kit::row(
+                vec![Span::styled(
+                    format!("… {past} more"),
+                    Tone::Faint.style(theme),
+                )],
+                col_w,
+                false,
+                theme,
+            ),
+            None,
+        ))
+    } else {
+        None
+    };
+    head.chain(rest.into_iter().skip(first).take(shown))
+        .chain(more)
+        .collect()
+}
+
 /// The board, from the bar down to the footer: `lines` gets its lines,
 /// `hits` where a click on a row lands, and `images` the sparklines and the
 /// meter to place over them.
@@ -248,7 +536,7 @@ pub fn board(
     };
     let head = &view.data.head;
     // The whole computer.
-    if head.is_object() {
+    if head["cores"].is_number() {
         let top = lines.len();
         let cpu = head["cpu"].as_f64();
         let cores = head["cores"].as_u64().unwrap_or(1);
@@ -352,6 +640,7 @@ pub fn board(
         }
         lines.push(line(vec![kit::rule(cols, theme)]));
     }
+    slot_columns(view, cols, rows, m, lines, hits);
     // The table's heads, the sorted column's lit.
     let name_w = cols.saturating_sub(tail_w() + 1);
     let lit = |on: bool| {
@@ -388,6 +677,9 @@ pub fn board(
     let mut entries: Vec<Entry> = Vec::new();
     let mut chosen_end = 0;
     for (at, item) in view.data.items.iter().enumerate() {
+        if is_slot(item) {
+            continue;
+        }
         let chosen = cursor == Some(at);
         let spot = Some(Spot::Index(at as isize));
         let hover = m.hover == Some(Spot::Index(at as isize));
@@ -429,10 +721,14 @@ pub fn board(
             ));
             under.push(Span::raw(" "));
         }
-        under.push(Span::styled(
-            d["busiest"].as_str().unwrap_or("").to_string(),
-            Tone::Dim.style(theme),
-        ));
+        // What it waits for in the queue for heavy work leads what runs.
+        let busiest = d["busiest"].as_str().unwrap_or("");
+        let runs = match d["waiting"].as_str() {
+            Some(waiting) if busiest.is_empty() => waiting.to_string(),
+            Some(waiting) => format!("{waiting} · {busiest}"),
+            None => busiest.to_string(),
+        };
+        under.push(Span::styled(runs, Tone::Dim.style(theme)));
         let under = kit::fit(under, name_w + tail_w() - SPARK_W * 2 - 4, Style::new());
         let shade = |spans: Vec<Span<'static>>| -> Vec<Span<'static>> {
             let spans = kit::row(spans, cols - 1, chosen, theme);
@@ -548,6 +844,33 @@ pub fn board(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_slot_column_shows_a_window_round_the_chosen_row_and_how_many_more() {
+        let theme = Theme::DARK;
+        let line = |n: usize| (vec![Span::raw(format!("row {n}"))], Some(n));
+        let mut column = vec![(vec![Span::raw("BUILDS")], None)];
+        column.extend((0..20).map(line));
+        let text = |lines: &[(Vec<Span<'static>>, Option<usize>)]| -> Vec<String> {
+            lines
+                .iter()
+                .map(|(spans, _)| {
+                    spans
+                        .iter()
+                        .map(|s| s.content.to_string())
+                        .collect::<String>()
+                        .trim()
+                        .to_string()
+                })
+                .collect()
+        };
+        let top = text(&fit_rows(column.clone(), 4, None, &theme, 30));
+        assert_eq!(top, ["BUILDS", "row 0", "row 1", "row 2", "… 17 more"]);
+        let lower = text(&fit_rows(column.clone(), 4, Some(10), &theme, 30));
+        assert_eq!(lower, ["BUILDS", "row 8", "row 9", "row 10", "… 9 more"]);
+        let short = text(&fit_rows(column[..4].to_vec(), 4, None, &theme, 30));
+        assert_eq!(short.len(), 4);
+    }
 
     #[test]
     fn two_minutes_fold_into_the_sparklines_columns_keeping_each_peak() {

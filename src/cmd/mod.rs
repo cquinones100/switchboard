@@ -32,6 +32,7 @@ pub mod shape_note;
 pub mod skill_path;
 pub mod slack_relay;
 pub mod slack_updates_save;
+pub mod slot;
 pub mod statusline;
 pub mod tabs;
 pub mod today_save;
@@ -258,6 +259,11 @@ pub const COMMANDS: &[Command] = &[
         name: "land-lock",
         run: land_lock::main,
         about: "The landing lock and queue",
+    },
+    Command {
+        name: "slot",
+        run: slot::main,
+        about: "Run a command holding one of a kind's slots in the queue for heavy work (build, tests, js), waiting in line for one",
     },
     Command {
         name: "landing",

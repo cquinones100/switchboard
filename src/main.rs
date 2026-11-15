@@ -3,7 +3,9 @@
 //! `wt-jump` linked to the binary), it runs that command; alone, it starts
 //! the workspace or attaches to it. Under any name that isn't a command's,
 //! it is `switchboard`: install.sh and `switchboard update` run a new
-//! binary once under a temporary name before putting it in place.
+//! binary once under a temporary name before putting it in place. Run as
+//! `cargo`, `npm` or `pnpm`, it is the stand-in for that program every pane
+//! finds first on its PATH (src/cmd/slot.rs).
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -35,6 +37,11 @@ fn main() -> ExitCode {
         unsafe {
             libc::signal(libc::SIGPIPE, libc::SIG_DFL);
         }
+    }
+    // The `cargo`, `npm` and `pnpm` first on a pane's PATH: the real one,
+    // through the queue for heavy work when the work is.
+    if switchboard::cmd::slot::STAND_INS.contains(&called.as_str()) {
+        return switchboard::cmd::slot::stand_in(&called, rest);
     }
     if !link {
         let mut rest = rest.into_iter();
