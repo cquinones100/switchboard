@@ -1464,15 +1464,15 @@ fn the_home_tab_puts_what_needs_you_first() {
         order,
         [
             "Claude tabs",
-            "Needs you (4)",
+            "🟡 Needs you (4)",
             "6",
             "4",
             "5",
             "3",
-            "Working (2)",
+            "🔵 Working (2)",
             "2",
             "7",
-            "Idle (1)",
+            "⚪ Idle (1)",
             "1"
         ]
     );
@@ -1551,14 +1551,162 @@ fn the_home_tab_groups_as_the_sidebar_does() {
             "3",
             "Merged (1)",
             "5",
-            "Idle (2)",
+            "⚪ Idle (2)",
             "2",
             "6",
-            "Reminders (2)",
+            "⏰ Reminders (2)",
             "4",
             "1"
         ]
     );
+}
+
+#[test]
+fn the_home_tab_leads_with_next_and_reads_in_the_desktops_colors() {
+    let rig = Rig::new();
+    let row = |index: i64, state: &str, stage: (&str, &str, u64, u64)| super::dashboard::Row {
+        tab: tabs::Tab {
+            id: format!("@{index}"),
+            index,
+            name: format!("tab{index}"),
+            state: state.into(),
+            pid: format!("{index}00"),
+            stage: Some(super::mux::TabStage {
+                key: stage.0.into(),
+                title: stage.1.into(),
+                rank: stage.2,
+                place: stage.3,
+            }),
+            ..Default::default()
+        },
+        lasted: "30m".into(),
+        last: String::new(),
+        context: String::new(),
+        doing: String::new(),
+        choices: Vec::new(),
+    };
+    let rows = vec![
+        row(1, "working", ("working", "Working", 2, 0)),
+        row(2, "waiting", ("needs", "Needs you", 0, 1)),
+        row(3, "working", ("landing", "Landing", 9, 0)),
+        // Pinned, so the sidebar puts it first under Needs you.
+        row(4, "idle", ("needs", "Needs you", 0, 0)),
+        row(5, "idle", ("later", "Reminders", 13, 0)),
+        row(6, "idle", ("idle", "Idle", 12, 0)),
+    ];
+    // Today's spend and the limits, as the statusline writes them.
+    let usage = crate::usage::sessions::usage_dir(&rig.cx.paths.switchboard_state);
+    std::fs::create_dir_all(&usage).unwrap();
+    let today = util::ymd(&util::local_at_ms(util::now_ms()));
+    std::fs::write(usage.join("spend-a"), format!("{today}\t5.25\t5.25\t1\t0")).unwrap();
+    std::fs::write(usage.join("spend-b"), format!("{today}\t3.16\t3.16\t1\t0")).unwrap();
+    let later = util::now_secs() + 3600;
+    std::fs::write(
+        usage.join("limits"),
+        json!({
+            "five_hour": { "used_percentage": 42.4, "resets_at": later },
+            "seven_day": { "used_percentage": 31, "resets_at": later },
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let view = super::dashboard::dashboard_view(&rig.cx, &rows, 0, None);
+    let blocks = view["blocks"].as_array().unwrap();
+    let checkin = blocks.iter().find(|b| b["block_id"] == "checkin").unwrap();
+    assert!(
+        checkin["text"]["text"]
+            .as_str()
+            .unwrap()
+            .ends_with(" · today *$8.41* · 5-hour *42%* · week *31%*"),
+        "{checkin}"
+    );
+    // Next first, for the tab M-a would go to, then New tab.
+    let buttons = &blocks[2]["elements"];
+    assert_eq!(buttons[0]["text"]["text"], "Next: tab4 ›");
+    assert_eq!(buttons[0]["style"], "primary");
+    let value: Value = serde_json::from_str(buttons[0]["value"].as_str().unwrap()).unwrap();
+    assert_eq!(value, json!({ "a": "open", "w": "@4", "p": "400" }));
+    assert_eq!(buttons[1]["text"]["text"], "New tab");
+    assert!(
+        blocks[3]["elements"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("Next goes where M-a goes")
+    );
+    assert_eq!(
+        home_order(&view),
+        [
+            "Claude tabs",
+            "🟡 Needs you (2)",
+            "4",
+            "2",
+            "🔵 Working (1)",
+            "1",
+            "🟣 Landing (1)",
+            "3",
+            "⚪ Idle (1)",
+            "6",
+            "⏰ Reminders (1)",
+            "5"
+        ]
+    );
+    let state_of = |index: i64| {
+        let text = blocks
+            .iter()
+            .filter_map(|b| b["text"]["text"].as_str())
+            .find(|t| t.starts_with(&format!("*{index}*")))
+            .unwrap();
+        text.lines().nth(1).unwrap().to_string()
+    };
+    assert_eq!(state_of(2), "🟡 *waiting on you* for 30m");
+    assert_eq!(state_of(1), "🔵 working for 30m");
+    assert_eq!(state_of(3), "🟣 *landing*");
+    assert_eq!(state_of(6), "⚪ idle for 30m");
+    assert_eq!(state_of(5), "⏰ reminder");
+    // With nothing under Needs you there is no Next.
+    let calm = vec![rows[0].clone(), rows[5].clone()];
+    let view = super::dashboard::dashboard_view(&rig.cx, &calm, 0, None);
+    let buttons = &view["blocks"][2]["elements"];
+    assert_eq!(buttons.as_array().unwrap().len(), 1);
+    assert_eq!(buttons[0]["text"]["text"], "New tab");
+}
+
+#[test]
+fn next_on_the_home_tab_opens_the_tab_m_a_would_go_to() {
+    let rig = Rig::new();
+    let (working, _) = rig.claude_tab("working");
+    rig.set_stage(&working, "working", "Working", 2, 0);
+    let (waiting, _) = rig.claude_tab("waiting");
+    rig.set_stage(&waiting, "needs", "Needs you", 0, 0);
+    rig.set_state(&waiting, "waiting", &(util::now_secs() - 60).to_string());
+    let quick = Refresh {
+        quick: true,
+        ..Refresh::default()
+    };
+    rig.block_on(refresh_dashboard(&rig.cx, quick)).unwrap();
+    let home = rig.calls("views.publish").last().unwrap().clone();
+    let next = &home["view"]["blocks"][2]["elements"][0];
+    assert_eq!(next["text"]["text"], "Next: waiting ›");
+    let dm = rig.cx.state.borrow().dm();
+    let press = json!({
+        "type": "block_actions", "user": { "id": "U1", "team_id": "T1" }, "team": { "id": "T1" }, "trigger_id": "TR1",
+        "container": { "type": "view", "view_id": "VHOME" }, "view": { "id": "VHOME", "type": "home" },
+        "actions": [{ "value": next["value"] }],
+    });
+    let p = press_from(&dm, &press, |_| {}).unwrap();
+    rig.block_on(super::presses::handle_press(&rig.cx, p))
+        .unwrap();
+    let opened = rig.calls("views.open");
+    assert_eq!(opened.len(), 1);
+    let header = opened[0]["view"]["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|b| b["text"]["text"].as_str())
+        .find(|t| t.contains("waiting"))
+        .unwrap()
+        .to_string();
+    assert!(header.contains("waiting"), "{header}");
 }
 
 #[test]
@@ -1591,7 +1739,7 @@ fn a_published_home_leaves_out_the_tabs_waiting_on_a_reminder() {
         home_order(&view),
         [
             "Claude tabs".to_string(),
-            "Working (1)".into(),
+            "🔵 Working (1)".into(),
             rig.index_of(&working).to_string()
         ]
     );
@@ -1631,9 +1779,9 @@ fn a_published_home_lists_a_reminder_tab_under_reminders_after_idle() {
         home_order(&view),
         [
             "Claude tabs".to_string(),
-            "Idle (1)".into(),
+            "⚪ Idle (1)".into(),
             i.to_string(),
-            "Reminders (1)".into(),
+            "⏰ Reminders (1)".into(),
             l.to_string()
         ]
     );
@@ -3083,7 +3231,7 @@ fn open_on_the_home_tab_sees_a_finished_tab_as_looking_at_it_does() {
         .filter(|b| b["type"] == "header")
         .filter_map(|b| b["text"]["text"].as_str())
         .collect();
-    assert_eq!(headers, ["Claude tabs", "Needs you (1)", "Idle (2)"]);
+    assert_eq!(headers, ["Claude tabs", "🟡 Needs you (1)", "⚪ Idle (2)"]);
 }
 
 #[test]
@@ -3986,7 +4134,9 @@ fn a_waiting_tabs_options_are_on_its_home_tab_row_and_a_tap_there_answers_it() {
         .unwrap()
         .iter()
         .find(|b| {
+            // The tab's own row, not Next's at the top.
             b["type"] == "actions"
+                && b["elements"][0]["text"]["text"] == "Screen"
                 && serde_json::from_str::<Value>(b["elements"][0]["value"].as_str().unwrap_or(""))
                     .is_ok_and(|v| v["w"] == tab.as_str())
         })

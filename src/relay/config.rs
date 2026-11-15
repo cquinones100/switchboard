@@ -54,6 +54,9 @@ pub struct Paths {
     /// (`context/<session>`): Switchboard's state directory, then where
     /// claude/statusline-command.sh wrote it for the sidebar daemon.
     pub context_dirs: Vec<PathBuf>,
+    /// Switchboard's state directory, where the statusline also writes
+    /// today's spend and the plan's limits (`usage/`).
+    pub switchboard_state: PathBuf,
 }
 
 impl Paths {
@@ -68,6 +71,7 @@ impl Paths {
                 switchboard_state.join("context"),
                 home.join(".local/state/tmux-sidebar/context"),
             ],
+            switchboard_state: switchboard_state.to_path_buf(),
         }
     }
 

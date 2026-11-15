@@ -14,6 +14,14 @@
 //! under the sidebar's Reminders is left out, with no line written for it,
 //! until its reminder comes due (the relay_home_reminders setting lists
 //! them), and the check-in line says how many are.
+//!
+//! It reads as the sidebar does (UX 2.0 board 50): a Next button first,
+//! for the tab M-a would go to (the first under Needs you, where the
+//! sidebar puts pinned tabs, then reminders come due, then each tab
+//! waiting on you); today's spend and the 5-hour and weekly limits in the
+//! check-in line, from the statusline's files; and each state in the
+//! desktop's color (🟡 waiting, 🔵 working, 🟣 landing, ⚪ idle, ⏰ a
+//! reminder), its group's header wearing its mark.
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -26,6 +34,7 @@ use super::post::{Button, button_element, remove};
 use super::state::Doing;
 use super::summaries::{activity_of, haiku_today, summarize};
 use super::tabs::{self, Tab, lasted, relative};
+use crate::usage::sessions;
 use crate::util;
 
 pub const DASHBOARD_MS: u64 = 10_000;
@@ -35,12 +44,77 @@ pub const DOING_PROMPT: &str = "You tell someone away from their computer what a
 
 pub fn home_words(state: &str) -> String {
     match state {
-        "waiting" => "🔴 *waiting on you*".into(),
+        "waiting" => "🟡 *waiting on you*".into(),
         "done" => "✅ finished".into(),
         "working" => "🔵 working".into(),
         "idle" => "⚪ idle".into(),
         other => other.into(),
     }
+}
+
+/// A tab's state on its Home row: landing or waiting on a reminder as
+/// the sidebar groups it, else Claude's state.
+fn row_words(tab: &Tab) -> String {
+    match tab.stage.as_ref().map(|s| s.key.as_str()) {
+        Some("landing") => "🟣 *landing*".into(),
+        Some("later") => "⏰ reminder".into(),
+        _ => home_words(&flat(&tab.state)),
+    }
+}
+
+/// The mark a group's header wears, in the desktop's colors: its stage's
+/// key, or the Home's own group's title from a server too old to say.
+fn group_mark(key_or_title: &str) -> &'static str {
+    match key_or_title {
+        "needs" | "Needs you" => "🟡 ",
+        "working" | "Working" => "🔵 ",
+        "landing" => "🟣 ",
+        "idle" | "Idle" => "⚪ ",
+        "later" => "⏰ ",
+        _ => "",
+    }
+}
+
+/// The tab M-a would go to from the phone, where no tab is current, among
+/// the Claude tabs the Home lists (a pinned tab with no Claude, which M-a
+/// also walks, has no screen here to open): the first under Needs you, in the sidebar's order (pinned tabs, reminders
+/// come due, then each tab waiting on you or finished), or, from a server
+/// too old to say, the first of the Home's own Needs you.
+pub fn next_tab(rows: &[Row]) -> Option<&Row> {
+    if rows.iter().any(|r| r.tab.stage.is_none()) {
+        return grouped_by_state(rows)
+            .into_iter()
+            .find(|(title, _)| title == "Needs you")
+            .and_then(|(_, members)| members.first().copied());
+    }
+    rows.iter()
+        .filter(|r| r.tab.stage.as_ref().is_some_and(|s| s.key == "needs"))
+        .min_by_key(|r| r.tab.stage.as_ref().map(|s| s.place))
+}
+
+/// Today's spend and the 5-hour and weekly limits, as the Usage view reads
+/// them from the statusline's files, for the check-in line; each left out
+/// while the statusline hasn't written it.
+fn usage_words(state: &std::path::Path, now_ms: i64) -> String {
+    let mut words = String::new();
+    let today = util::ymd(&util::local_at_ms(now_ms));
+    let shares = sessions::shares_today(state, &today);
+    if !shares.is_empty() {
+        let spent = shares.iter().fold(0.0, |all, (_, s)| all + s);
+        words.push_str(&format!(" · today *${spent:.2}*"));
+    }
+    let limits = util::read_json(sessions::usage_dir(state).join("limits")).unwrap_or(Value::Null);
+    for (key, name) in [("five_hour", "5-hour"), ("seven_day", "week")] {
+        let window = &limits[key];
+        let used = window["used_percentage"].as_f64().filter(|u| u.is_finite());
+        let current = window["resets_at"]
+            .as_f64()
+            .is_some_and(|r| r as i64 > now_ms.div_euclid(1000));
+        if let (Some(used), true) = (used, current) {
+            words.push_str(&format!(" · {name} *{}%*", used.round() as i64));
+        }
+    }
+    words
 }
 
 /// A tab's row on the Home tab.
@@ -141,8 +215,11 @@ pub fn dashboard_view(cx: &Cx, rows: &[Row], reminded: usize, stopped_at: Option
             Some(url) => format!("<{url}|{}>", link_label(&name)),
             None => name,
         };
-        text.push_str(&format!("\n{}", home_words(&flat(&r.tab.state))));
-        if !r.lasted.is_empty() {
+        text.push_str(&format!("\n{}", row_words(&r.tab)));
+        // How long Claude has been in its state, which says nothing of
+        // how long a tab has been landing or waiting on a reminder.
+        let stage_words = row_words(&r.tab) != home_words(&flat(&r.tab.state));
+        if !r.lasted.is_empty() && !stage_words {
             text.push_str(&format!(" for {}", r.lasted));
         }
         if !r.last.is_empty() {
@@ -203,7 +280,7 @@ pub fn dashboard_view(cx: &Cx, rows: &[Row], reminded: usize, stopped_at: Option
             "text": match stopped_at {
                 Some(at) => format!("⚪ The relay stopped at {}, so this is out of date until it starts again.", time(at)),
                 None => format!("🟢 Your computer checked in <!date^{}^{{ago}}|at {}>.", now / 1000, time(now)),
-            } + &reminded_words(reminded),
+            } + &usage_words(&cx.paths.switchboard_state, now) + &reminded_words(reminded),
         },
     });
     if stopped_at.is_none() {
@@ -215,10 +292,26 @@ pub fn dashboard_view(cx: &Cx, rows: &[Row], reminded: usize, stopped_at: Option
     let mut blocks = vec![
         json!({ "type": "header", "text": { "type": "plain_text", "text": "Claude tabs" } }),
         checkin,
-        json!({ "type": "context", "elements": [{ "type": "mrkdwn", "text": "A tab's name or Thread › goes to its thread; Screen messages it, answers it, shows its progress, and renames, stops or closes it." }] }),
     ];
+    let next = next_tab(rows).filter(|_| stopped_at.is_none());
     if stopped_at.is_none() {
-        let mut buttons = vec![Button::new("New tab", json!({ "a": "new" }))];
+        let mut buttons = Vec::new();
+        if let Some(r) = next {
+            let name = flat(&r.tab.name);
+            let name = if name.chars().count() > 60 {
+                format!("{}…", name.chars().take(59).collect::<String>())
+            } else {
+                name
+            };
+            buttons.push(
+                Button::new(
+                    format!("Next: {name} ›"),
+                    json!({ "a": "open", "w": r.tab.id, "p": r.tab.pid }),
+                )
+                .style("primary"),
+            );
+        }
+        buttons.push(Button::new("New tab", json!({ "a": "new" })));
         let closed = closed_threads(cx).len();
         if closed > 0 {
             buttons.push(cleanup_button(closed));
@@ -228,6 +321,12 @@ pub fn dashboard_view(cx: &Cx, rows: &[Row], reminded: usize, stopped_at: Option
             "elements": buttons.iter().enumerate().map(|(i, b)| button_element(b, &i.to_string())).collect::<Vec<_>>(),
         }));
     }
+    let mut explain = Vec::new();
+    if next.is_some() {
+        explain.push("Next goes where M-a goes among these Claude tabs: pinned tabs, reminders come due, then each tab waiting on you.");
+    }
+    explain.push("A tab's name or Thread › goes to its thread; Screen messages it, answers it, shows its progress, and renames, stops or closes it.");
+    blocks.push(json!({ "type": "context", "elements": explain.iter().map(|t| json!({ "type": "mrkdwn", "text": t })).collect::<Vec<_>>() }));
     blocks.push(json!({ "type": "divider" }));
     if rows.is_empty() {
         let none = if reminded > 0 {
@@ -238,10 +337,16 @@ pub fn dashboard_view(cx: &Cx, rows: &[Row], reminded: usize, stopped_at: Option
         blocks.push(json!({ "type": "section", "text": { "type": "mrkdwn", "text": none } }));
     } else {
         for (g, (title, members)) in grouped(rows).into_iter().enumerate() {
+            let key = members[0]
+                .tab
+                .stage
+                .as_ref()
+                .map_or(title.as_str(), |s| s.key.as_str());
+            let mark = group_mark(key);
             if g > 0 {
                 blocks.push(json!({ "type": "divider" }));
             }
-            blocks.push(json!({ "type": "header", "text": { "type": "plain_text", "text": format!("{title} ({})", members.len()) } }));
+            blocks.push(json!({ "type": "header", "text": { "type": "plain_text", "text": format!("{mark}{title} ({})", members.len()) } }));
             for (i, r) in members.iter().enumerate() {
                 if i > 0 {
                     blocks.push(json!({ "type": "divider" }));
