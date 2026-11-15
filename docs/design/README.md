@@ -100,6 +100,8 @@ Items, the tabs working them and their plans.
 - [8. A note item's plan, and its choice, beside it](https://cquinones100.github.io/switchboard/design/8.html)
 - [69. Notes' list: Recent first, the last 8 notes opened, then Folders opening on Notes, no All Notes or tags](https://cquinones100.github.io/switchboard/design/69.html)
 - [70. All 20 › under Recent, a click or Enter: every note opened lately, the last 20, in the finder's box](https://cquinones100.github.io/switchboard/design/70.html)
+- [83. Notes draws a Mermaid block as its diagram while the cursor is outside it: subgraphs boxed with their title on the edge, one too wide cut with ›, a pie kept as code](https://cquinones100.github.io/switchboard/design/83.html)
+- [84. The cursor in a Mermaid block shows its code to edit; the Format menu's Show diagram code keeps the note's diagrams as code until Show diagrams](https://cquinones100.github.io/switchboard/design/84.html)
 
 ## Boxes
 

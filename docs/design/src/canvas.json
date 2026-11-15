@@ -309,6 +309,14 @@
       "title": "70. All 20 › under Recent, a click or Enter: every note opened lately, the last 20, in the finder's box",
       "page": "design"
     },
+    "NotesMermaid.dc.html": {
+      "title": "83. Notes draws a Mermaid block as its diagram while the cursor is outside it: subgraphs boxed with their title on the edge, one too wide cut with ›, a pie kept as code",
+      "page": "design"
+    },
+    "NotesMermaidCode.dc.html": {
+      "title": "84. The cursor in a Mermaid block shows its code to edit; the Format menu's Show diagram code keeps the note's diagrams as code until Show diagrams",
+      "page": "design"
+    },
     "ReopenTabMenu.dc.html": {
       "title": "71. Enter on a closed tab in Reopen: reopen it, its note, its directory, or forget it",
       "page": "design"
