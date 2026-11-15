@@ -1986,6 +1986,18 @@ fn recorded() -> Reviewed<(String, String, String)> {
     }
 }
 
+/// The clean review recorded here, `(commit, base, patchId)`, for
+/// `land-lock squash`; none when nothing is recorded.
+pub(crate) fn recorded_review() -> Option<(String, String, String)> {
+    recorded().ok()
+}
+
+/// `--record-squash` for `land-lock squash`: why nothing was recorded, when
+/// it wasn't.
+pub(crate) fn record_squashed(commit: &str) -> Result<(), String> {
+    record_squash(commit).map_err(|e| e.0)
+}
+
 /// Records `commit` in place of the reviewed commit, only when it is the same
 /// change: the reviewed commit's tree, on the reviewed base, with the
 /// reviewed patch.

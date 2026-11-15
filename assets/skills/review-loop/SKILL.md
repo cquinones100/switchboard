@@ -9,6 +9,7 @@ allowed-tools:
   - Bash(switchboard show *)
   - Bash(switchboard setting review_security)
   - Bash(switchboard land-lock record *)
+  - Bash(switchboard land-lock squash *)
   - Bash(git status)
   - Bash(git status *)
   - Bash(git rev-parse *)
@@ -120,13 +121,13 @@ When the loop added commits and none of them is pushed (`git log <start>..HEAD` 
 - **Push as they are.**
 - **Don't push yet.**
 
-To squash, take these steps in order. Where the repository has its own rules for squashing (its CLAUDE.md), they replace only step 2, how the history is rewritten; the checks before it and the record after it are always made:
+To squash, write the squashed commit's message to a file in the scratchpad (the folded commit's own, `git log -1 --format=%B <start>`, with what the fixes did where it should say so; or, for the loop's commits alone, one that says what the fixes did), then run, right before rewriting, since the user may have changed something while the question waited:
 
-1. Right before rewriting, check the tree is clean (`git status --porcelain` prints nothing): the user may have changed something while the question waited. If it isn't, don't squash; say what is uncommitted and ask. Check too that `HEAD` is still the commit the last clean round reviewed (its `reviewedCommit`, and the first field `switchboard codex-review --recorded` prints when it prints one): another session may have committed since. If it isn't, don't squash; say what was added and offer another round. Then make a backup branch at `HEAD` named for it, since other worktrees of the repository may be squashing too (`backup=backup/pre-review-squash-$(git rev-parse --short HEAD)`, `git branch "$backup" HEAD`) and note `HEAD`'s tree (`git rev-parse HEAD^{tree}`).
-2. Rebuild without an interactive rebase: `git reset --soft <the commit to fold into>^` and commit again with that commit's message (or, for the loop's own commit, one that says what the fixes did), or replay any commits that must stay on top with `git cherry-pick`.
-3. Check the new `HEAD`'s tree equals the one noted. If it doesn't, restore the backup (`git reset --hard "$backup"`) and say so.
-4. Squashing makes new commits, which no round reviewed by their hashes, though their content is exactly what was reviewed. When a clean review was recorded (`switchboard codex-review --recorded` prints one), take the squashed commit's hash from the rewrite itself, in the same command as its last commit (`git commit … && squashed=$(git rev-parse HEAD)`), and check it is the rewrite's own: `git rev-list --count <the commit folded into>^.."$squashed"` is the number of commits the rewrite wrote, so nothing another session committed is in it. Then record it in the reviewed commit's place with `switchboard codex-review --record-squash "$squashed"`, which does so only when its tree is the reviewed commit's and it makes the reviewed change on the reviewed base, and otherwise records nothing and says why. It takes only a squash that replaces the reviewed commit and leaves below it only commits the review covered, so a rewrite that replays commits above the fold with `git cherry-pick` records nothing: that one needs a round of its own before the push. A commit made after it then fails the pre-push check, as it should.
-5. Then push, and delete the backup branch (`"$backup"`) once the push succeeds.
+```
+switchboard land-lock squash --message-file <that file> --onto <the commit below the fold>
+```
+
+`<the commit below the fold>` is `<start>^` when folding into `<start>`, and `<start>` when squashing the loop's commits into one of their own. Where the repository has its own rules for squashing (its CLAUDE.md) that this command can't follow, such as commits that must stay on top, follow them instead, with the checks and the record the command makes, as its opening comment (`src/cmd/land_squash.rs` in Switchboard's repository) lists them. The command refuses, changing nothing, when anything is uncommitted or `HEAD` is past the commit the last clean round reviewed (another session may have committed since): it exits 1 saying which, and then don't squash: say what is uncommitted and ask, or say what was added and offer another round. Otherwise it makes a backup branch at `HEAD`, folds the commits after `--onto` into one with the message, checks its tree is `HEAD`'s (restoring the backup and exiting 1 when it isn't, which you say), and, when `HEAD` was the reviewed commit, records the squashed commit in its place (`codex-review --record-squash`). Exit 3 means it squashed but the record stayed where it was, saying why: that commit needs a round of its own before the push. Then push, and once the push succeeds run `switchboard land-lock squash --drop-backup`, which deletes the backup.
 
 ## Stop and ask instead of continuing when
 

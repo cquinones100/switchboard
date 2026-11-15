@@ -21,6 +21,7 @@ pub mod headless;
 pub mod item_done;
 pub mod land_lock;
 pub mod land_push;
+pub mod land_squash;
 pub mod landing;
 pub mod leak_check;
 pub mod platform;

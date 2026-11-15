@@ -85,6 +85,10 @@
 //!                     said by `land-lock push`, with
 //!                     autopilot_landing_notices on, the Slack relay sends
 //!                     it too
+//! land-lock squash --message-file <f> [--onto <commit>] | --drop-backup
+//!                     folds the branch's commits into one before the push,
+//!                     with its checks, backup and review record
+//!                     (src/cmd/land_squash.rs)
 //! land-lock record clear | <tests|review|leak> <json> | found <json> | output <tests|review> <file>
 //!                     keeps what this landing has done for the Landing
 //!                     view's cells and detail, in landing.json in the
@@ -150,7 +154,7 @@ const MUTEX_TRIES: u32 = 500;
 /// `requeue`'s mark, in the worktree's own git directory.
 const REQUEUED: &str = "land-requeued";
 
-const USAGE: &str = "usage: land-lock [--target <branch>] take|wait|release|requeue|leave|holder|queue|move|phase [words]|record ...|push [--asked]|landed <short hash> <branch>|autolanded <short hash> [--plan <file>] [--apply-range <from> <to>] [item]";
+const USAGE: &str = "usage: land-lock [--target <branch>] take|wait|release|requeue|leave|holder|queue|move|phase [words]|record ...|squash ...|push [--asked]|landed <short hash> <branch>|autolanded <short hash> [--plan <file>] [--apply-range <from> <to>] [item]";
 
 pub fn main(mut args: Vec<String>) -> ExitCode {
     let mut given_target = None;
@@ -193,6 +197,10 @@ pub fn main(mut args: Vec<String>) -> ExitCode {
     let target = given_target.or_else(|| recorded_target(&here));
     let push_target = target.clone();
     let lock_here = here.clone();
+    if command == "squash" {
+        let target = || target.or_else(|| crate::tabs::git::default_branch(&common));
+        return super::land_squash::main(&args[1..], &cwd, target);
+    }
     let suffix = target
         .filter(|t| crate::tabs::git::default_branch(&common).as_deref() != Some(t.as_str()))
         .map(|t| file_suffix(&t));

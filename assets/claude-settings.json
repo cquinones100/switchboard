@@ -39,6 +39,7 @@
       "Bash(switchboard land-lock landed *)",
       "Bash(switchboard land-lock autolanded *)",
       "Bash(switchboard land-lock push)",
+      "Bash(switchboard land-lock squash *)",
       "Bash(switchboard wait-ci *)",
       "Bash(switchboard wait-deploy *)",
       "Bash(switchboard watch-note *)",

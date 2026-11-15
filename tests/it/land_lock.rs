@@ -1716,3 +1716,173 @@ fn ask_before_landing_chosen_while_before_push_runs_asks_after_all() {
     assert_eq!(l.on_origin(), before, "nothing pushed");
     assert_eq!(l.holder(), l.one.to_str().unwrap(), "the lock kept");
 }
+
+/// `land-lock squash` run in `repo` with `args`.
+fn squash(home: &Path, repo: &Path, args: &[&str]) -> Output {
+    let mut command = land_lock(home, repo, &["squash"]);
+    command
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@e")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@e");
+    command.output().unwrap()
+}
+
+fn commit_file(repo: &Path, name: &str) {
+    std::fs::write(repo.join(name), format!("{name}\n")).unwrap();
+    git(repo, &["add", name]);
+    git(repo, &["commit", "-q", "-m", name]);
+}
+
+/// The clean review the review loop records, for HEAD on `base`.
+fn record_review(home: &Path, repo: &Path, base: &str) {
+    let patch = Command::new(BIN)
+        .args(["codex-review", "--patch-id", base, "HEAD"])
+        .current_dir(repo)
+        .env("HOME", home)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .unwrap();
+    assert!(
+        patch.status.success(),
+        "{}",
+        String::from_utf8_lossy(&patch.stderr)
+    );
+    let record = repo
+        .join(rev(repo, "--absolute-git-dir"))
+        .join("review-loop-clean");
+    std::fs::write(
+        record,
+        format!(
+            "{} {} {}\n",
+            rev(repo, "HEAD"),
+            rev(repo, base),
+            String::from_utf8_lossy(&patch.stdout).trim()
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn squash_folds_the_branch_into_one_commit_and_moves_the_review_only_when_safe() {
+    let tmp = TempDir::new("land-squash");
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let repo = repo(tmp.path());
+    let base = rev(&repo, "HEAD");
+    for name in ["a", "b", "c"] {
+        commit_file(&repo, name);
+    }
+    let message = tmp.path().join("message.txt");
+    std::fs::write(&message, "One feature\n\nWhat it does.\n").unwrap();
+    let message = message.to_str().unwrap();
+
+    // Commits not under your git email are someone else's, whose commit
+    // hooks it won't run.
+    let out = squash(&home, &repo, &["--message-file", message, "--onto", &base]);
+    assert_eq!(code(&out), 1);
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("isn't yours"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    git(&repo, &["config", "user.email", "t@e"]);
+
+    // Something uncommitted refuses, changing nothing, untracked files
+    // included even where status hides them.
+    git(&repo, &["config", "status.showUntrackedFiles", "no"]);
+    let head = rev(&repo, "HEAD");
+    std::fs::write(repo.join("d"), "d\n").unwrap();
+    let out = squash(&home, &repo, &["--message-file", message, "--onto", &base]);
+    assert_eq!(code(&out), 1, "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(rev(&repo, "HEAD"), head);
+    std::fs::remove_file(repo.join("d")).unwrap();
+
+    // A commit after the reviewed one refuses.
+    record_review(&home, &repo, &base);
+    commit_file(&repo, "late");
+    let out = squash(&home, &repo, &["--message-file", message, "--onto", &base]);
+    assert_eq!(code(&out), 1);
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("past the reviewed commit"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    git(&repo, &["reset", "-q", "--hard", "HEAD^"]);
+
+    // Three commits become one of the same tree, the review moved to it.
+    let tree = rev(&repo, "HEAD^{tree}");
+    let out = squash(&home, &repo, &["--message-file", message, "--onto", &base]);
+    assert_eq!(code(&out), 0, "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(rev(&repo, "HEAD^"), base);
+    assert_eq!(rev(&repo, "HEAD^{tree}"), tree);
+    let record = repo
+        .join(rev(&repo, "--absolute-git-dir"))
+        .join("review-loop-clean");
+    let recorded = std::fs::read_to_string(&record).unwrap();
+    assert!(recorded.starts_with(&rev(&repo, "HEAD")), "{recorded}");
+    let backup = format!("backup/pre-squash-{}", &head[..7]);
+    assert_eq!(rev(&repo, &backup), head, "the backup is the commit before");
+    // The review moved, so the hooks below fold commits no review covers.
+    std::fs::remove_file(&record).unwrap();
+
+    // A commit hook that stages a change and fails has the backup restored.
+    commit_file(&repo, "e");
+    let before = rev(&repo, "HEAD");
+    let hook = repo.join(".git/hooks/pre-commit");
+    std::fs::write(
+        &hook,
+        "#!/bin/sh\necho x > a && git add a && echo hook says no && exit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&hook, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let out = squash(&home, &repo, &["--message-file", message, "--onto", &base]);
+    assert_eq!(code(&out), 1, "{}", String::from_utf8_lossy(&out.stdout));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("the commit failed")
+            && String::from_utf8_lossy(&out.stderr).contains("hook says no"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(rev(&repo, "HEAD"), before);
+    assert_eq!(std::fs::read_to_string(repo.join("a")).unwrap(), "a\n");
+    let dirty = Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=all"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(
+        dirty.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&dirty.stdout)
+    );
+
+    // A commit hook that changes the tree has the backup restored.
+    std::fs::write(&hook, "#!/bin/sh\necho x > extra && git add extra\n").unwrap();
+    std::fs::set_permissions(&hook, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let out = squash(&home, &repo, &["--message-file", message, "--onto", &base]);
+    assert_eq!(code(&out), 1, "{}", String::from_utf8_lossy(&out.stdout));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("tree differs"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(rev(&repo, "HEAD"), before);
+    assert!(!repo.join("extra").exists());
+    std::fs::remove_file(&hook).unwrap();
+
+    // Once pushed, the backups go.
+    let out = squash(&home, &repo, &["--drop-backup"]);
+    assert_eq!(code(&out), 0);
+    let left = Command::new("git")
+        .args(["branch", "--list", "backup/*"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(
+        left.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&left.stdout)
+    );
+}
