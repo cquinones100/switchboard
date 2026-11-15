@@ -1,6 +1,6 @@
 //! `codex-review [-C <dir>] [--pr <number|url>] [--base <ref>] [--notes
-//! <file>] [--include-low] [--no-rules] [--reviewer <codex|claude>] [--model
-//! <name>] [--dry-run]`: Codex as a
+//! <file>] [--include-low] [--round <start|next>] [--no-rules] [--reviewer
+//! <codex|claude>] [--model <name>] [--dry-run]`: Codex as a
 //! skeptical, read-only static reviewer of the current branch, its findings
 //! printed as JSON on stdout. Ported from `bin/codex-review`.
 //!
@@ -42,6 +42,9 @@
 //!                     previous round the author disputes, and known gaps the
 //!                     author has accepted, each with a reason
 //!   --include-low     ask Codex to report low-severity findings too
+//!   --round <step>    run the round as one of review-loop's (`start` its
+//!                     first, `next` each after it), as "The loop's rounds"
+//!                     below says
 //!   --no-rules        leave the rules out of the prompt (see `review_rules`);
 //!                     so does the review_rules setting turned off
 //!   --reviewer <name> codex or claude; defaults to codex, and to claude when
@@ -71,6 +74,26 @@
 //! the reviewed one's place when it is the same tree making the same change on
 //! the same base (review-loop's squash), so the skills read and move the
 //! record without touching the file.
+//!
+//! The loop's rounds: with `--round`, this counts review-loop's rounds and
+//! applies its stop rule from the same streak the record comes from, so the
+//! skill and the record can't disagree on how many clean rounds there were.
+//! The loop's place, `<round> <clean rounds before it>`, is kept in the
+//! clone's `review-loop-round` (`start` begins it again, `next` refuses
+//! when no loop is under way). A round after a clean one is the
+//! confirmation round, run with `--include-low` whether or not it was given.
+//! The cap is 20 rounds in a tab of autopilot's hands-free mode
+//! (`@autopilot_handsfree`), 5 otherwise. The JSON then ends with `round`,
+//! `cap`, `cleanRounds` and `next`: `triage` (findings to work through),
+//! `confirm` (the first clean round: run the next), `done` (two clean rounds,
+//! the record written) or `cap` (the cap reached first), and each finding
+//! carries an `action` from its severity: `fix` (critical and high, and
+//! medium in a tab landing without asking, `@autopilot_land`), `ask`
+//! (medium, and low in a round that reports lows), `gap` (any low in a tab
+//! landing without asking) or `report` (a low no one asked for). Whether a finding is real, and how to fix it, stays the
+//! caller's. Each round also keeps the Landing view's record
+//! (`land-lock record review` and `output review`). A review of another
+//! repository (`-C`) takes no `--round`.
 //!
 //! When Codex isn't there, Claude Code reviews in its place with the same
 //! prompt and schema (`claude_args`), so the JSON is the same either way, its
@@ -115,7 +138,9 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
+use crate::cmd::land_lock;
 use crate::integrations::github::{self, Repo};
+use crate::mux::socket;
 use crate::worktree::{self, PrDetails, normalize};
 use crate::{paths, requests, settings, util};
 
@@ -168,7 +193,7 @@ fn schema() -> Value {
     })
 }
 
-const USAGE: &str = "Usage: codex-review [-C <dir>] [--pr <number|url>] [--base <ref>] [--notes <file>] [--include-low] [--no-rules] [--reviewer <codex|claude>] [--model <name>] [--dry-run]
+const USAGE: &str = "Usage: codex-review [-C <dir>] [--pr <number|url>] [--base <ref>] [--notes <file>] [--include-low] [--round <start|next>] [--no-rules] [--reviewer <codex|claude>] [--model <name>] [--dry-run]
        codex-review --patch-id <from> <to>
        codex-review --recorded
        codex-review --record-squash <commit>
@@ -181,6 +206,7 @@ reviewer of the current branch and prints its findings as JSON.
   --base <ref>       base to diff against (default: the PR's remote base, else origin's default)
   --notes <file>     disputed findings and accepted known gaps, each with a reason
   --include-low      report low-severity findings too
+  --round <step>     a round of review-loop's: start, or next; counts the rounds and says what comes next
   --no-rules         leave the repository's and your own CLAUDE.md rules out of the prompt
   --reviewer <name>  codex or claude (default: codex, else claude)
   --model <name>     the reviewer's model
@@ -213,6 +239,7 @@ struct Opts {
     base: Option<String>,
     notes: Option<String>,
     include_low: bool,
+    round: Option<Step>,
     no_rules: bool,
     dry_run: bool,
     model: Option<String>,
@@ -231,7 +258,15 @@ static PR: LazyLock<Regex> =
 /// sandbox, so the one Codex option with a reason to vary, the model, is
 /// taken on its own. `Err` is the exit for usage.
 fn parse_args(args: &[String]) -> Result<Opts, ExitCode> {
-    const VALUED: [&str; 6] = ["-C", "--pr", "--base", "--notes", "--model", "--reviewer"];
+    const VALUED: [&str; 7] = [
+        "-C",
+        "--pr",
+        "--base",
+        "--notes",
+        "--model",
+        "--reviewer",
+        "--round",
+    ];
     let mut opts = Opts::default();
     for (i, arg) in args.iter().enumerate() {
         if i > 0 && VALUED.contains(&args[i - 1].as_str()) {
@@ -271,6 +306,16 @@ fn parse_args(args: &[String]) -> Result<Opts, ExitCode> {
                     return Err(usage());
                 }
                 opts.reviewer = Some(reviewer);
+            }
+            "--round" => {
+                opts.round = Some(match value()?.as_str() {
+                    "start" => Step::Start,
+                    "next" => Step::Next,
+                    step => {
+                        eprintln!("--round must be start or next, got: {step}");
+                        return Err(usage());
+                    }
+                });
             }
             "--include-low" => opts.include_low = true,
             "--no-rules" => opts.no_rules = true,
@@ -1530,6 +1575,20 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
         }
     };
     let claude = reviewer == "claude";
+    // The review's record is kept only for the checkout you are in (below),
+    // and so is the loop's count of its rounds.
+    let own_checkout = opts.dir.is_none() || own_root.as_deref() == Some(root.as_str());
+    let looping = match opts.round {
+        Some(_) if !own_checkout => {
+            return fail(
+                "--round counts the rounds of the checkout you are in, not one named with -C",
+            );
+        }
+        Some(step) => Some(loop_of(step)?),
+        None => None,
+    };
+    // A round after a clean one confirms it, sweeping the lows too.
+    let include_low = opts.include_low || looping.as_ref().is_some_and(|l| l.clean_before > 0);
 
     let tmp = match TempDir::new() {
         Ok(tmp) => tmp,
@@ -1545,7 +1604,7 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
         pr: pr.as_ref(),
         commits: &commits,
         notes: notes.as_deref(),
-        include_low: opts.include_low,
+        include_low,
         diff_path: claude.then_some(diff_path.as_path()),
         rules: &rules,
     });
@@ -1576,6 +1635,16 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
         println!("# {reviewer} {}\n", shown.join(" "));
         println!("{prompt}");
         return Ok(ExitCode::SUCCESS);
+    }
+    if let Some(at) = &looping {
+        land_lock::record_at(
+            &root_path,
+            &[
+                "review",
+                &json!({ "round": at.round, "reviewer": reviewer, "clean_rounds": at.clean_before })
+                    .to_string(),
+            ],
+        );
     }
     // As text, whatever the branch's .gitattributes say: a -diff there
     // would show a changed file as binary and hide its lines.
@@ -1730,13 +1799,60 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
     // Kept only for the checkout you are in (-C naming it too), never one
     // reviewed from outside with -C, whose git directory is someone else's
     // worktree.
-    if opts.dir.is_none() || own_root.as_deref() == Some(root.as_str()) {
-        let clean = review["findings"].as_array().is_some_and(Vec::is_empty);
-        keep_record(
-            clean,
-            opts.include_low,
-            &format!("{head} {merge_base} {patch}"),
-        )?;
+    let clean = review["findings"].as_array().is_some_and(Vec::is_empty);
+    let recorded_clean =
+        own_checkout && keep_record(clean, include_low, &format!("{head} {merge_base} {patch}"))?;
+    if let Some(at) = &looping {
+        let lands_alone = socket::tab_option(crate::autopilot::LAND).as_deref() == Some("1");
+        let cap = if socket::tab_option(crate::autopilot::HANDS_FREE).as_deref() == Some("1") {
+            HANDS_FREE_CAP
+        } else {
+            CAP
+        };
+        // Done takes two clean rounds of this loop, the second writing the
+        // record: a streak left by an earlier loop counts for the record,
+        // never for this loop's stop rule.
+        let done = clean && at.clean_before > 0 && recorded_clean;
+        let clean_rounds = match (clean, done) {
+            (false, _) => 0,
+            (true, true) => 2,
+            (true, false) => 1,
+        };
+        let next = next_step(clean, done, at.round, cap);
+        if let Some(list) = review.get_mut("findings").and_then(Value::as_array_mut) {
+            for finding in list.iter_mut().filter_map(Value::as_object_mut) {
+                let severity = finding
+                    .get("severity")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let action = action_of(severity, include_low, lands_alone);
+                finding.insert("action".into(), json!(action));
+            }
+        }
+        set(&mut review, "round", json!(at.round));
+        set(&mut review, "cap", json!(cap));
+        set(&mut review, "cleanRounds", json!(clean_rounds));
+        set(&mut review, "next", json!(next));
+        keep_loop(at.round, clean_rounds, next)?;
+        let output = tmp.0.join("round.json");
+        if fs::write(&output, util::json_pretty(&Value::Object(review.clone()))).is_ok() {
+            land_lock::record_at(&root_path, &["output", "review", &output.to_string_lossy()]);
+        }
+        let findings = review["findings"].as_array().map_or(0, Vec::len);
+        land_lock::record_at(
+            &root_path,
+            &[
+                "review",
+                &json!({
+                    "round": at.round,
+                    "reviewer": reviewer,
+                    "findings": findings,
+                    "summary": review.get("summary").cloned().unwrap_or(Value::Null),
+                    "clean_rounds": clean_rounds,
+                })
+                .to_string(),
+            ],
+        );
     }
 
     for warning in &warnings {
@@ -1759,21 +1875,106 @@ fn write_record(path: &Path, line: &str) -> Reviewed<()> {
 }
 
 /// The streak of clean rounds and, after a confirming one, the record the
-/// pre-push hook reads; `reviewed` is `<commit> <base> <patchId>`.
-fn keep_record(clean: bool, confirming: bool, reviewed: &str) -> Reviewed<()> {
+/// pre-push hook reads; `reviewed` is `<commit> <base> <patchId>`. True
+/// when this round wrote the record.
+fn keep_record(clean: bool, confirming: bool, reviewed: &str) -> Reviewed<bool> {
     let streak = record_path("review-loop-streak")?;
     // A round with findings ends the streak and takes back the record, so a
     // push waits for two clean rounds again.
     if !clean {
         let _ = fs::remove_file(&streak);
         let _ = fs::remove_file(record_path("review-loop-clean")?);
-        return Ok(());
+        return Ok(false);
     }
     let previous = fs::read_to_string(&streak).unwrap_or_default();
-    if confirming && previous.trim() == reviewed {
+    let confirmed = confirming && previous.trim() == reviewed;
+    if confirmed {
         write_record(&record_path("review-loop-clean")?, reviewed)?;
     }
-    write_record(&streak, reviewed)
+    write_record(&streak, reviewed)?;
+    Ok(confirmed)
+}
+
+// ── The loop's rounds (`--round`) ─────────────────────────────────────────
+
+/// The round cap, and the one in a tab of autopilot's hands-free mode, which
+/// gets as far as it can before it has to wait for you.
+const CAP: u32 = 5;
+const HANDS_FREE_CAP: u32 = 20;
+
+#[derive(Clone, Copy)]
+enum Step {
+    Start,
+    Next,
+}
+
+/// Where the loop is: the round this one is, and how many clean rounds came
+/// right before it.
+struct Loop {
+    round: u32,
+    clean_before: u32,
+}
+
+fn loop_of(step: Step) -> Reviewed<Loop> {
+    if let Step::Start = step {
+        return Ok(Loop {
+            round: 1,
+            clean_before: 0,
+        });
+    }
+    let text = fs::read_to_string(record_path("review-loop-round")?).unwrap_or_default();
+    let numbers: Vec<u32> = text
+        .split_whitespace()
+        .filter_map(|w| w.parse().ok())
+        .collect();
+    match numbers[..] {
+        [round, clean] => Ok(Loop {
+            round: round + 1,
+            clean_before: clean,
+        }),
+        _ => fail("no review loop is under way here; start one with --round start"),
+    }
+}
+
+/// Keeps the loop's place for its next round, or, once it has ended, takes
+/// it away, so a stray `--round next` starts nothing.
+fn keep_loop(round: u32, clean_rounds: u32, next: &str) -> Reviewed<()> {
+    let path = record_path("review-loop-round")?;
+    if matches!(next, "done" | "cap") {
+        let _ = fs::remove_file(path);
+        return Ok(());
+    }
+    write_record(&path, &format!("{round} {clean_rounds}"))
+}
+
+/// What the loop does after this round.
+fn next_step(clean: bool, done: bool, round: u32, cap: u32) -> &'static str {
+    if done {
+        "done"
+    } else if round >= cap {
+        "cap"
+    } else if clean {
+        "confirm"
+    } else {
+        "triage"
+    }
+}
+
+/// What review-loop's policy does with a finding of `severity`: fixed
+/// without asking, asked about, left as a known gap (any low, in a tab
+/// landing without asking), or only reported.
+/// `sweeping` is a round that reports lows (a confirmation round, or
+/// `--include-low`); `lands_alone` a tab landing without asking, which
+/// waits on no question.
+fn action_of(severity: &str, sweeping: bool, lands_alone: bool) -> &'static str {
+    match severity {
+        "critical" | "high" => "fix",
+        "medium" if lands_alone => "fix",
+        "medium" => "ask",
+        _ if lands_alone => "gap",
+        _ if !sweeping => "report",
+        _ => "ask",
+    }
 }
 
 /// The recorded clean review: its commit, base and patch.
@@ -1990,6 +2191,40 @@ mod tests {
         );
         assert_eq!(patch_id_of(diff(0, 1).as_bytes(), true).len(), 40);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn findings_are_tagged_with_what_the_loop_does_with_them() {
+        for (severity, sweeping, lands_alone, action) in [
+            ("critical", false, false, "fix"),
+            ("high", true, true, "fix"),
+            ("medium", false, false, "ask"),
+            ("medium", true, true, "fix"),
+            ("low", false, false, "report"),
+            ("low", false, true, "gap"),
+            ("low", true, false, "ask"),
+            ("low", true, true, "gap"),
+        ] {
+            assert_eq!(
+                action_of(severity, sweeping, lands_alone),
+                action,
+                "{severity}, sweeping {sweeping}, landing alone {lands_alone}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_loop_goes_on_until_two_clean_rounds_or_the_cap() {
+        assert_eq!(next_step(false, false, 1, CAP), "triage");
+        assert_eq!(next_step(true, false, 1, CAP), "confirm");
+        assert_eq!(next_step(true, true, 2, CAP), "done");
+        assert_eq!(next_step(true, true, CAP, CAP), "done");
+        assert_eq!(next_step(false, false, CAP, CAP), "cap");
+        assert_eq!(next_step(false, false, CAP, HANDS_FREE_CAP), "triage");
+        assert_eq!(
+            next_step(true, false, HANDS_FREE_CAP, HANDS_FREE_CAP),
+            "cap"
+        );
     }
 
     #[test]

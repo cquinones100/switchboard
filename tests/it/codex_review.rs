@@ -562,3 +562,144 @@ fn two_clean_rounds_record_the_review_and_one_does_not() {
     round(found, &["-C", "."]);
     assert_eq!(recorded().status.code(), Some(1), "taken back");
 }
+
+#[test]
+fn rounds_count_to_two_clean_ones_or_the_cap() {
+    let tmp = TempDir::new("cr-round");
+    let home = tmp.path();
+    let work = clone(home);
+    fs::write(work.join("a.txt"), "a\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "Pushed already"]);
+    git(home, &work, &["push", "-q", "origin", "main"]);
+    fs::write(work.join("b.txt"), "b\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "A change"]);
+    let answer = home.join("answer.json");
+    let prompt = home.join("prompt.txt");
+    let clean = r#"{"structured_output":{"summary":"ok","findings":[]}}"#;
+    let found = r#"{"structured_output":{"summary":"no","findings":[{"title":"t","severity":"medium","file":"b.txt","line":1,"body":"b"},{"title":"u","severity":"low","file":"b.txt","line":1,"body":"b"}]}}"#;
+    let round = |said: &str, step: &str| -> serde_json::Value {
+        fs::write(&answer, said).unwrap();
+        let bin = home.join("bin");
+        Claude::new()
+            .answer(&format!(
+                "cat >{}\ncat {}",
+                sh_quote(&prompt.to_string_lossy()),
+                sh_quote(&answer.to_string_lossy())
+            ))
+            .install(&bin);
+        let mut cmd = Command::new(BIN);
+        cmd.args([
+            "codex-review",
+            "--reviewer",
+            "claude",
+            "--no-rules",
+            "--round",
+            step,
+        ])
+        .current_dir(&work)
+        .stdin(Stdio::null());
+        env(&mut cmd, home);
+        let out = cmd.output().unwrap();
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    let sweeps = || {
+        fs::read_to_string(&prompt)
+            .unwrap()
+            .contains("Report low-severity findings too")
+    };
+    let recorded = || review(home, &work, &["--recorded"]).status.success();
+
+    let next = review(home, &work, &["--round", "next", "--reviewer", "claude"]);
+    assert_eq!(next.status.code(), Some(1), "no loop under way");
+    assert!(
+        text(&next.stderr).contains("--round start"),
+        "{}",
+        text(&next.stderr)
+    );
+
+    let first = round(found, "start");
+    assert_eq!(
+        (first["round"].as_u64(), first["next"].as_str()),
+        (Some(1), Some("triage"))
+    );
+    assert_eq!(first["cap"], 5);
+    assert!(!sweeps());
+    let actions: Vec<&str> = first["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["action"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        actions,
+        ["ask", "report"],
+        "outside a tab landing without asking"
+    );
+
+    let second = round(clean, "next");
+    assert_eq!(
+        (second["round"].as_u64(), second["next"].as_str()),
+        (Some(2), Some("confirm"))
+    );
+    assert_eq!(second["cleanRounds"], 1);
+    assert!(!recorded());
+
+    let third = round(found, "next");
+    assert!(
+        sweeps(),
+        "the round after a clean one confirms it, lows and all"
+    );
+    assert_eq!(third["next"], "triage", "a finding resets the streak");
+    assert_eq!(third["cleanRounds"], 0);
+    assert_eq!(
+        third["findings"][1]["action"], "ask",
+        "a low in a sweeping round"
+    );
+
+    round(clean, "next");
+    let done = round(clean, "next");
+    assert_eq!(
+        (done["round"].as_u64(), done["next"].as_str()),
+        (Some(5), Some("done"))
+    );
+    assert_eq!(done["cleanRounds"], 2);
+    assert!(recorded(), "two clean rounds write the record");
+    let after = review(home, &work, &["--round", "next", "--reviewer", "claude"]);
+    assert_eq!(after.status.code(), Some(1), "the loop is over");
+
+    // A clean round alone at the start of a new loop is never done, even on
+    // a commit an earlier loop found clean.
+    let fresh = round(clean, "start");
+    assert_eq!(fresh["next"], "confirm");
+    for _ in 2..5 {
+        assert_eq!(round(found, "next")["next"], "triage");
+    }
+    let capped = round(found, "next");
+    assert_eq!(
+        (capped["round"].as_u64(), capped["next"].as_str()),
+        (Some(5), Some("cap"))
+    );
+
+    // The Landing view's record of the last round.
+    let dir = Command::new("git")
+        .args(["rev-parse", "--git-dir"])
+        .current_dir(&work)
+        .output()
+        .unwrap();
+    let git_dir = work.join(text(&dir.stdout).trim());
+    let landing = fs::read_dir(&git_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .find_map(|e| {
+            let read = fs::read_to_string(e.path()).ok()?;
+            read.contains("\"clean_rounds\"").then_some(read)
+        })
+        .expect("the Landing view's record");
+    let landing: serde_json::Value = serde_json::from_str(&landing).unwrap();
+    assert_eq!(landing["review"]["round"], 5);
+    assert_eq!(landing["review"]["findings"], 2);
+    assert_eq!(landing["output"]["of"], "review");
+}

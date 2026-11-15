@@ -515,7 +515,8 @@ fn a_landing_reviews_again_without_the_lock_and_rebases_again_once_it_has_it() {
     );
 }
 
-// A hands-free tab's review loop runs to 20 rounds, still asking at the cap.
+// A hands-free tab's review loop runs to 20 rounds, counted by codex-review,
+// still asking at the cap.
 #[test]
 fn review_loop_runs_twenty_rounds_hands_free_and_five_otherwise() {
     let all = skills();
@@ -527,7 +528,7 @@ fn review_loop_runs_twenty_rounds_hands_free_and_five_otherwise() {
         .expect("the rounds' section");
     assert!(
         regex::Regex::new(
-            r"20 rounds .*`switchboard show @autopilot_handsfree` prints `1`.* 5 rounds otherwise"
+            r"20 rounds .*`@autopilot_handsfree`.* 5 rounds otherwise.*`switchboard codex-review --round` counts the rounds, applies the cap"
         )
         .unwrap()
         .is_match(rounds),

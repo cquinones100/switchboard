@@ -264,6 +264,20 @@ fn record(args: &[String]) -> ExitCode {
     }
 }
 
+/// `land-lock record <words>` for the checkout at `top`: codex-review's
+/// `--round` keeping the Landing view's record of its rounds. Its failing is
+/// only said, never stopping the round.
+pub fn record_at(top: &Path, words: &[&str]) {
+    let Some(dir) = crate::sources::landing::own_git_dir(top) else {
+        return;
+    };
+    match record_in(&dir, words, util::now_ms()) {
+        Ok(()) => {}
+        Err(RecordError::Usage) => eprintln!("land-lock record: {RECORD_USAGE}"),
+        Err(RecordError::Io(e)) => eprintln!("land-lock record: {e}"),
+    }
+}
+
 enum RecordError {
     Usage,
     Io(io::Error),

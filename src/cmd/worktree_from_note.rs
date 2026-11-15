@@ -1428,19 +1428,6 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
     Ok(worktree::run_in("claude", &args, &path))
 }
 
-/// What the tab this runs in has an option set to, read from the server;
-/// `None` outside a pane, or with it unset.
-fn tab_option(option: &str) -> Option<String> {
-    if !crate::mux::socket::in_pane() {
-        return None;
-    }
-    let pane = std::env::var("SWITCHBOARD_PANE").ok();
-    let (code, out, _) =
-        crate::mux::socket::ask_quiet(vec!["show".into(), option.into()], pane, None)?;
-    let value = String::from_utf8_lossy(&out).trim().to_string();
-    (code == 0 && !value.is_empty()).then_some(value)
-}
-
 /// A yes/no question on the terminal, Enter being yes; no terminal, or one
 /// closed, is no.
 fn open_anyway(question: &str) -> bool {
@@ -1460,14 +1447,14 @@ fn open_anyway(question: &str) -> bool {
 /// Whether the tab this runs in is one of autopilot's, hands-free
 /// (`@autopilot_handsfree`, which autopilot sets as it opens the tab).
 fn in_hands_free_tab() -> bool {
-    tab_option(crate::autopilot::HANDS_FREE).as_deref() == Some("1")
+    crate::mux::socket::tab_option(crate::autopilot::HANDS_FREE).as_deref() == Some("1")
 }
 
 /// In a tab autopilot opened (`@autopilot`), why wtn refused its item, set
 /// as the tab's `@autopilot_refused`, so autopilot skips the item with that
 /// reason and closes the tab rather than leave a slot waiting at a shell.
 fn refused_in_autopilot(why: &str) {
-    if tab_option(crate::autopilot::OPENED).is_some() {
+    if crate::mux::socket::tab_option(crate::autopilot::OPENED).is_some() {
         let _ = crate::mux::socket::ask(&["set", crate::autopilot::REFUSED, why]);
     }
 }
@@ -1486,7 +1473,7 @@ fn push_rule(path: &Path, root: &Path, start: &str, target: Option<&str>) -> Opt
     if !crate::settings::is_on("autopilot_push_rule") {
         return None;
     }
-    tab_option(crate::autopilot::OPENED)?;
+    crate::mux::socket::tab_option(crate::autopilot::OPENED)?;
     // The default branch on origin, which the item's branch starts from; a
     // target, the remote branch it tracks. With no remote the landing moves
     // a local branch, which needs no rule.

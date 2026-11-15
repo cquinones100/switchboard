@@ -242,6 +242,18 @@ pub fn in_pane() -> bool {
     set("SWITCHBOARD") && set("SWITCHBOARD_PANE")
 }
 
+/// What the tab this runs in has an option set to, read from the server;
+/// `None` outside a pane, or with it unset.
+pub fn tab_option(option: &str) -> Option<String> {
+    if !in_pane() {
+        return None;
+    }
+    let pane = std::env::var("SWITCHBOARD_PANE").ok();
+    let (code, out, _) = ask_quiet(vec!["show".into(), option.into()], pane, None)?;
+    let value = String::from_utf8_lossy(&out).trim().to_string();
+    (code == 0 && !value.is_empty()).then_some(value)
+}
+
 /// Whether stdin holds data to read: a pipe, a socket or a file, as a
 /// hook's JSON is given (Claude Code hands it a socket), not a terminal.
 pub fn stdin_is_data() -> bool {
