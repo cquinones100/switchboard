@@ -4,13 +4,17 @@
 //! and Ctrl-I (or Tab) forward. New here, since the plugin left it to
 //! Neovim.
 //!
-//! One list for the app, across notes, as Neovim's spans buffers, kept
-//! while the app runs: an entry names its note, and each note's entries
+//! One list for the app, across notes, as Neovim's spans buffers, kept in
+//! the notes directory's `.notes.json` (`saved`, `from_saved`), as Neovim's
+//! shada keeps it, since Notes ends and starts again as it moves between
+//! tabs: an entry names its note, and each note's entries
 //! follow its edits by the line diff the folds use (`fold::rows_after`),
 //! an entry whose line went dropped, as Neovim drops one. Going back from
 //! the newest records where the cursor is first, so Ctrl-I comes back.
 
 use std::path::{Path, PathBuf};
+
+use serde_json::{Value, json};
 
 use super::fold::Places;
 
@@ -85,6 +89,46 @@ impl Jumps {
         self.at = to;
         self.between = false;
         self.list.get(to).cloned()
+    }
+
+    /// The list as `.notes.json` keeps it, each note named by `rel`, oldest
+    /// first.
+    pub fn saved(&self, rel: impl Fn(&Path) -> String) -> Value {
+        self.list
+            .iter()
+            .map(|j| json!({"note": rel(&j.note), "row": j.row, "col": j.col}))
+            .collect()
+    }
+
+    /// The list `saved` kept, each note's path from `absolute`, an entry
+    /// whose note is gone (`exists`) left out, Ctrl-O starting from the
+    /// newest.
+    pub fn from_saved(
+        saved: &Value,
+        absolute: impl Fn(&str) -> PathBuf,
+        exists: impl Fn(&Path) -> bool,
+    ) -> Jumps {
+        let mut jumps = Jumps::default();
+        for entry in saved.as_array().into_iter().flatten() {
+            let field = |k: &str| entry.get(k).and_then(Value::as_u64).map(|n| n as usize);
+            let (Some(note), Some(row), Some(col)) = (
+                entry.get("note").and_then(Value::as_str),
+                field("row"),
+                field("col"),
+            ) else {
+                continue;
+            };
+            let note = absolute(note);
+            if exists(&note) {
+                jumps.record(Jump { note, row, col });
+            }
+        }
+        jumps
+    }
+
+    /// Whether the entries are those of `other`, wherever each list is.
+    pub fn same_entries(&self, other: &Jumps) -> bool {
+        self.list == other.list
     }
 
     /// The entry Ctrl-O and Ctrl-I last went to.
@@ -209,6 +253,31 @@ mod tests {
         let exists = |p: &Path| p != Path::new("gone");
         assert_eq!(jumps.back(1, at("a", 9), exists), Some(at("a", 1)));
         assert_eq!(jumps.forward(1, exists), Some(at("a", 9)));
+    }
+
+    #[test]
+    fn the_list_saved_comes_back_without_a_gone_note_and_starts_at_the_newest() {
+        let mut jumps = Jumps::default();
+        jumps.record(at("/n/a.md", 3));
+        jumps.record(at("/n/gone.md", 1));
+        jumps.record(at("/n/b.md", 7));
+        let saved = jumps.saved(|p| p.strip_prefix("/n/").unwrap().display().to_string());
+        assert_eq!(saved[0], json!({"note": "a.md", "row": 3, "col": 0}));
+        let mut back = Jumps::from_saved(
+            &saved,
+            |rel| Path::new("/n").join(rel),
+            |p| p != Path::new("/n/gone.md"),
+        );
+        assert_eq!(back.list, vec![at("/n/a.md", 3), at("/n/b.md", 7)]);
+        assert_eq!(back.back(1, at("/n/c.md", 0), all), Some(at("/n/b.md", 7)));
+    }
+
+    #[test]
+    fn a_saved_list_that_isnt_one_comes_back_empty() {
+        for saved in [json!(null), json!("x"), json!([{"note": 1}, {"row": 2}])] {
+            let jumps = Jumps::from_saved(&saved, |s: &str| PathBuf::from(s), all);
+            assert!(jumps.list.is_empty(), "{saved}");
+        }
     }
 
     #[test]

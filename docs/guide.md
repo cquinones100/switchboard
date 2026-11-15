@@ -1198,7 +1198,7 @@ The note is edited with Vim's keys, with the settings a note had before: Space i
 | Undo | `u`, Ctrl-R; each note keeps its history, and its folds, while the app runs, going to another note and back included, a change made to its file meanwhile one more step to undo |
 | Changes visited | `g;` back and `g,` forward through the places the note's changes left the cursor, with a count; a change on the same line as the newest takes its place |
 | Marks | `m` and a letter `a`–`z` sets a mark, `` ` `` and the letter goes back to it and `'` to its line, as a motion too (`d'a`, `` y`a ``, a selection grown to it); ``` `` ``` and `''` go back to where the cursor last jumped from; each note keeps its marks while the app runs, each moving with its line and gone with it |
-| Jumps | Ctrl-O goes back and Ctrl-I or Tab forward, with a count, through the places the cursor jumped from: a search, `n` `N` `*` `#`, `gg` `G`, `:<line>`, `%`, `{` `}`, `H` `M` `L`, a mark, a link followed and a note opened from another, across notes while the app runs |
+| Jumps | Ctrl-O goes back and Ctrl-I or Tab forward, with a count, through the places the cursor jumped from: a search, `n` `N` `*` `#`, `gg` `G`, `:<line>`, `%`, `{` `}`, `H` `M` `L`, a mark, a link followed and a note opened from another (from the list, the finder, a link or the workspace), across notes; the list, and where Notes ended, is kept in the notes directory's `.notes.json`, so Notes opened again (in another tab, after a restart) goes back through it, a note since deleted passed over; past the oldest or the newest, nothing moves |
 | Search | `/` `?` `n` `N` `*` `#` |
 | Scrolling | Ctrl-D Ctrl-U, PageDown PageUp, Ctrl-E Ctrl-Y, `zz` `zt` `zb` |
 | Folds | `za` `zo` `zc` `zM` `zR` |

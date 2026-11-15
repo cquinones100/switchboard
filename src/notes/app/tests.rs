@@ -1044,6 +1044,82 @@ fn ctrl_o_and_ctrl_i_go_back_and_forward_through_the_places_jumped_from_across_n
     assert_eq!((app.editor.row(), app.editor.col()), at, "nothing forward");
 }
 
+/// Alpha with the cursor on its fourth line, ready for Beta to be opened.
+fn in_alpha(name: &str) -> (Dir, App, PathBuf, PathBuf) {
+    let (dir, mut store) = temp(name);
+    let first = store.create("", Some("Alpha"));
+    write(&first, "# Alpha\n\none\ntwo\nthree\n");
+    let second = store.create("", Some("Beta"));
+    write(&second, "# Beta\n\nbody\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&first, false, false);
+    keys(&mut app, "3j");
+    (dir, app, first, second)
+}
+
+/// Ctrl-O from Beta goes back to Alpha's fourth line, and Ctrl-I to Beta.
+fn back_and_forth(app: &mut App, first: &Path, second: &Path, way: &str) {
+    assert_eq!(app.current_path(), Some(second), "{way}: Beta opened");
+    keys(app, "<C-o>");
+    assert_eq!(app.current_path(), Some(first), "{way}: back to Alpha");
+    assert_eq!(app.editor.row(), 3, "{way}: on the line it left");
+    keys(app, "<C-i>");
+    assert_eq!(app.current_path(), Some(second), "{way}: forward to Beta");
+}
+
+#[test]
+fn ctrl_o_and_ctrl_i_move_between_notes_however_the_second_was_opened() {
+    let (_dir, mut app, first, second) = in_alpha("jumps-list");
+    app.show(Some(String::new()), None, None);
+    app.list_at = app
+        .list_rows
+        .iter()
+        .position(|r| r.item == Some(Item::Note(second.clone())))
+        .unwrap();
+    app.focus = Focus::List;
+    app.activate();
+    back_and_forth(&mut app, &first, &second, "the list");
+
+    let (_dir, mut app, first, second) = in_alpha("jumps-finder");
+    keys(&mut app, "<C-f>Beta<CR>");
+    back_and_forth(&mut app, &first, &second, "the finder");
+
+    let (_dir, mut app, first, second) = in_alpha("jumps-outside");
+    assert_eq!(app.request(socket::Request::Open("Beta.md".into())), "ok");
+    back_and_forth(&mut app, &first, &second, "from outside");
+}
+
+#[test]
+fn ctrl_o_goes_back_to_a_note_opened_before_notes_started_again() {
+    let (dir, mut app, first, second) = in_alpha("jumps-kept");
+    app.open_note(&second, false, false);
+    app.stop();
+    let mut store = Store::at(&dir.path);
+    store.state = dir.path.join(".state-for-test");
+    let (mut again, _) = app_in(store, options());
+    again.start();
+    assert_eq!(
+        again.current_path(),
+        Some(second.as_path()),
+        "Beta, open last"
+    );
+    back_and_forth(&mut again, &first, &second, "started again");
+}
+
+#[test]
+fn notes_started_again_on_another_tabs_note_goes_back_to_where_it_ended() {
+    let (dir, mut app, first, second) = in_alpha("jumps-ended");
+    app.stop();
+    let mut store = Store::at(&dir.path);
+    store.state = dir.path.join(".state-for-test");
+    // The workspace opening Notes beside a tab whose note is Beta.
+    store.set_last(Some("Beta.md"));
+    let (mut again, _) = app_in(store, options());
+    again.start();
+    back_and_forth(&mut again, &first, &second, "another tab's note");
+}
+
 #[test]
 fn a_jumps_line_deleted_and_another_put_in_its_place_is_not_gone_back_to() {
     let (_dir, mut store) = temp("jumps-replaced");

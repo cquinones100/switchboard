@@ -92,6 +92,9 @@ use crate::{settings, util};
 mod beside;
 mod draw;
 
+/// The jump list's key in `.notes.json`.
+const JUMPS: &str = "jumps";
+
 /// What the app's work off its own thread reports.
 pub enum Msg {
     /// Bytes from the terminal.
@@ -604,6 +607,8 @@ pub struct App {
     jumps_seen: Text,
     /// Ctrl-O or Ctrl-I opening another note, which isn't a jump of its own.
     jumping: bool,
+    /// The jump list as `.notes.json` last had it (`keep_jumps`).
+    jumps_kept: Jumps,
     titles: HashSet<String>,
     pub quit: bool,
     /// UX 2.0's "Add an item" input while it is typed into (`ga`, or a
@@ -710,6 +715,7 @@ impl App {
             jumps: Jumps::default(),
             jumps_seen: Text::default(),
             jumping: false,
+            jumps_kept: Jumps::default(),
             titles: HashSet::new(),
             quit: false,
             adding: None,
@@ -803,6 +809,9 @@ impl App {
             self.locked_by = Some(pid);
             return;
         }
+        let saved = self.store.meta().remove(JUMPS).unwrap_or_default();
+        self.jumps = Jumps::from_saved(&saved, |rel| self.store.absolute(rel), Path::is_file);
+        self.jumps_kept = self.jumps.clone();
         let mut notes = self.store.notes(None);
         if notes.is_empty() {
             let path = self.store.create("", Some("Welcome to Notes"));
@@ -828,6 +837,17 @@ impl App {
         }
         self.put_title_back();
         self.save();
+        self.follow_jumps();
+        // Where Notes ends is the newest place, as Neovim's shada keeps it,
+        // so Notes started again on another note (a tab's) goes back to it.
+        if let Some(o) = &self.open {
+            self.jumps.record(Jump {
+                note: o.path.clone(),
+                row: self.editor.doc.row,
+                col: self.editor.doc.col,
+            });
+        }
+        self.keep_jumps();
         self.store.unlock();
         let gone = self.images.release_all();
         self.out.extend(gone);
@@ -962,6 +982,20 @@ impl App {
             self.editor.doc.row = 0;
             self.editor.insert_at(len);
         }
+        self.keep_jumps();
+    }
+
+    /// The jump list written to `.notes.json` when it changed, so Notes
+    /// started again (in another tab, after a restart) goes back through
+    /// it.
+    fn keep_jumps(&mut self) {
+        if self.jumps.same_entries(&self.jumps_kept) {
+            return;
+        }
+        let mut meta = self.store.meta();
+        meta.insert(JUMPS.into(), self.jumps.saved(|p| self.store.relative(p)));
+        self.store.save_meta(&meta);
+        self.jumps_kept = self.jumps.clone();
     }
 
     /// A note's ID as it opens: the one its file holds, else a new one,
@@ -3619,6 +3653,7 @@ impl App {
         {
             self.editor.go_to(at.row, at.col);
         }
+        self.keep_jumps();
     }
 
     fn effects(&mut self) {
