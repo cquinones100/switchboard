@@ -6,6 +6,15 @@ Switchboard is its own terminal multiplexer: a server in the background owns eve
 
 It is opinionated: the defaults are how it is meant to be used, and Settings (`M-p`, then Settings) turns off the parts you don't want.
 
+## What's in it
+
+- **The sidebar** lists every tab grouped by what its Claude is doing (Needs you, Working, Review, CI, Landing, Idle and more), and `M-a` goes to the next tab that needs you. Notifications collect what happened while you looked elsewhere.
+- **Mission control** (`M-Space`) holds every view of your work and your day, in groups: Work (Tabs, Landing, Autopilot, Routines, Reopen), Code (PRs, tickets, CI), Day (Calendar, Reminders, Slack, the Linear Inbox, Notifications) and System (Usage, Resources, Settings, Keys).
+- **From idea to merged change:** Notes is a Markdown notes app with Vim's editing; `/plan-item` turns an idea into a checklist item and a plan; `/wtn` (or `/wt` from a Linear ticket) hands a tab an item to build in a worktree of its own; the review loop has Codex or Claude review it until two rounds come back clean; and landing puts it on the default branch one change at a time.
+- **Autopilot** works through a note's checklist on its own, several items at once: each tab builds its item, reviews it, tests it and lands it.
+- **The diff** (`M-d`) shows a branch side by side with its story, and the PR and ticket views (`M-v`, `M-i`) show a branch's PR and Linear ticket beside its tab.
+- **Away from the computer:** the Slack relay gives each tab a thread in a Slack DM, so you can answer a waiting tab from your phone; routines run a prompt of yours on a schedule as a headless Claude; and the computer stays awake while agents work.
+
 ## Requirements
 
 - Linux on x86_64 (another architecture builds from source), or macOS on Apple silicon or Intel. On Linux it uses the desktop's keyring, notifications and idle time where there are any, and does without them where there aren't.
