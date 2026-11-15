@@ -113,14 +113,15 @@ fn a_working_tab_keeps_the_computer_awake_until_a_grace_after_it_idles() {
         );
         // A turn between its tool calls doesn't let go.
         server.ok(&["set", "-u", "-t", &pane, "@agent_state"]);
-        wait_awake(&server, "nothing working", |a| a["why"].is_null());
-        assert_eq!(
-            server.list()["awake"]["holding"],
-            true,
-            "held through the grace"
-        );
+        let idle = wait_awake(&server, "nothing working", |a| a["why"].is_null());
+        assert_eq!(idle["holding"], true, "held through the grace");
         wait_awake(&server, "let go after the grace", |a| a["holding"] == false);
-        assert!(!alive(pid), "caffeinate ended");
+        // Let go off the server's task, which ends caffeinate and waits on it.
+        let deadline = common::deadline(Duration::from_secs(5));
+        while alive(pid) {
+            assert!(Instant::now() < deadline, "caffeinate ended");
+            std::thread::sleep(Duration::from_millis(50));
+        }
         assert_eq!(caffeinates(&server).1.len(), 1, "taken once");
     } else {
         server.ok(&["set", "-u", "-t", &pane, "@agent_state"]);

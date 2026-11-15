@@ -220,6 +220,12 @@ fn a_restore_keeps_what_it_read_through_later_saves() {
     let mut client = server.attach(80, 24);
     client.wait_text("$");
     server.ok(&["new-tab", "-n", "second"]);
+    // Its shell at its prompt, so the save has the screen the restart
+    // brings back rather than an empty one.
+    let second = pane_ids(&server.list())[1][0].clone();
+    client.wait_for("the second shell's prompt", |_| {
+        server.ok(&["capture-pane", "-t", &second]).contains('$')
+    });
     server.ok(&["save"]);
     let before = std::fs::read_to_string(server.state.join("layout.json")).unwrap();
     drop(client);

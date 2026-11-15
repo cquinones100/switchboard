@@ -1991,8 +1991,15 @@ fn with_ux2_the_top_lines_arrows_step_back_and_forward_and_a_right_click_shows_t
     });
     // Now two steps forward, none back.
     press(&mut client, 2, forward);
-    let screen = client.wait_text("you are here");
-    assert!(cell_of(&screen, "→ 2").is_some(), "{}", screen.join("\n"));
+    // Not the trail's box from before the click, which may not have gone yet.
+    let screen = client.wait_for("the trail with two steps forward", |s| {
+        cell_of(s, "→ 2").is_some()
+    });
+    assert!(
+        screen.iter().any(|l| l.contains("you are here")),
+        "{}",
+        screen.join("\n")
+    );
     assert!(cell_of(&screen, "← 1").is_none(), "{}", screen.join("\n"));
 }
 
