@@ -1336,7 +1336,9 @@ pub fn draw(buf: &mut Buffer, area: Rect, lines: &[Line]) {
         let mut x = area.x;
         for span in &line.spans {
             let mut before = 0;
-            for c in span.content.chars() {
+            // A control character never reaches a cell: one from a hook's
+            // text (a file named with an escape) would reach the terminal.
+            for c in span.content.chars().filter(|c| !c.is_control()) {
                 let w = text::width_after(c, before);
                 before = w;
                 if w == 0 {
@@ -2359,6 +2361,17 @@ mod tests {
         assert_eq!(buf[(4, 0)].symbol(), "b");
         assert_eq!(buf[(6, 0)].bg, Color::Indexed(238));
         assert_eq!(buf[(7, 0)].symbol(), " ", "nothing past its area");
+    }
+
+    #[test]
+    fn drawing_leaves_control_characters_out() {
+        let mut row = Row::default();
+        row.put("a\u{1b}]0;x\u{7}b\u{9b}c", Style::new());
+        let lines = vec![row.fit(8, None)];
+        let mut buf = Buffer::empty(Rect::new(0, 0, 8, 1));
+        draw(&mut buf, Rect::new(0, 0, 8, 1), &lines);
+        let drawn: String = (0..8).map(|x| buf[(x, 0)].symbol().to_string()).collect();
+        assert_eq!(drawn.trim_end(), "a]0;xbc");
     }
     #[test]
     fn a_folded_group_is_its_heading_and_one_line_of_its_tabs_marks() {

@@ -2130,3 +2130,26 @@ fn a_step_chosen_from_the_trail_menu_leaves_the_sidebar() {
         tabs(l)[0]["current"] == true && !focused(l)
     });
 }
+
+#[test]
+fn an_escape_in_a_hook_s_file_name_never_reaches_the_terminal() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    session_file(&server.home, pid, json!({"sessionId": "s-1"}));
+    // A file named with OSC 52, which would set the clipboard.
+    hook(
+        &server,
+        &pane,
+        "PreToolUse",
+        json!({"tool_name": "Edit", "tool_input": {"file_path": "/x/a\u{1b}]52;c;aGk=\u{7}.rs"}}),
+    );
+    row_of(&mut client, "editing a]52;c;aGk=.rs");
+    assert!(
+        !common::sent(&client.raw, b"\x1b]52;"),
+        "the escape reached the terminal"
+    );
+    assert!(!common::sent(&client.raw, b"aGk=\x07"));
+}

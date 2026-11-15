@@ -492,9 +492,17 @@ fn short(text: &str, n: usize) -> String {
     }
 }
 
-/// Tabs and line breaks as spaces, so what is shown stays on one line.
+/// Tabs and line breaks as spaces, so what is shown stays on one line, and
+/// every other control character left out, so an escape in a file name or a
+/// command never reaches the terminal the sidebar draws on.
 fn one_line(text: &str) -> String {
-    text.replace(['\t', '\n', '\u{1f}'], " ")
+    text.chars()
+        .filter_map(|c| match c {
+            '\t' | '\n' | '\r' | '\u{1f}' => Some(' '),
+            c if c.is_control() => None,
+            c => Some(c),
+        })
+        .collect()
 }
 
 /// Every pane's Claude, by pane.
@@ -952,7 +960,7 @@ impl Agents {
         // Only the names `option` reads; any other is a plain pane option.
         self.option(pane, name)?;
         let agent = self.panes.entry(pane).or_default();
-        let text = value.map(str::to_string);
+        let text = value.map(one_line);
         let result = match name {
             "@agent_state" => match value {
                 None => {
@@ -1862,6 +1870,11 @@ mod tests {
             "github: list prs"
         );
         assert_eq!(activity("Fly", json!({})), "Fly");
+        assert_eq!(
+            activity("Edit", json!({"file_path": "/x/a\u{1b}]52;c;aGk=\u{7}.rs"})),
+            "editing a]52;c;aGk=.rs",
+            "control characters left out"
+        );
         assert_eq!(activity("Bash", json!({"command": "ls\nrm"})), "ls");
         let long = activity("Bash", json!({"description": "x".repeat(100)}));
         assert_eq!(long.chars().count(), 60);
