@@ -5,7 +5,7 @@
 //! M-f to pin a tab), M-h for the tab's history (new with UX 2.0,
 //! src/history), M-s into the sidebar and the views'
 //! (M-v, M-i, M-r, M-l, M-m, M-S-f, M-u, src/views), M-d (src/diff) and Notes'
-//! M-N and M-e (src/notes/serve.rs), M-0 and C-w (src/extras), under the
+//! M-N and M-e (src/notes/serve.rs), M-0, C-w and M-R (src/extras), under the
 //! same keys, with the prefix `M-b` for the rest;
 //! `~/.config/switchboard/keys.json` adds to or changes them:
 //!

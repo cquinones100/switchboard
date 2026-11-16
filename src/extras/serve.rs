@@ -225,7 +225,11 @@ impl Server {
                 self.key_back_to_pane(client, &Action::Extra(command));
             }
             Command::Keys => self.open_mission(client, Opening::View("keys".into())),
-            Command::SidebarRepo | Command::SidebarAll if is_off("sidebar_repo_filter") => {
+            // With the filter off, M-R is the pane's.
+            Command::SidebarRepo if is_off("sidebar_repo_filter") => {
+                self.key_back_to_pane(client, &Action::Extra(command));
+            }
+            Command::SidebarAll if is_off("sidebar_repo_filter") => {
                 self.say(
                     Some(client),
                     "The sidebar repository filter is off in Settings (sidebar_repo_filter).",

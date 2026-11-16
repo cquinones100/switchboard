@@ -1491,6 +1491,64 @@ fn the_sidebar_filtered_to_one_repository_folds_the_others_under_other_repos() {
     assert!(err.contains("sidebar_repo_filter"), "{err}");
 }
 
+// M-R opens "Filter the sidebar to a repository": choosing a repository
+// filters the sidebar to it, and M-R again offers "Every repository" first,
+// which Enter takes; M-p lists the command with its key.
+#[test]
+fn m_shift_r_filters_the_sidebar_to_a_repository() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let beta = server.dir.path().join("beta");
+    {
+        let dir = &beta;
+        std::fs::create_dir_all(dir).unwrap();
+        git(dir, &["init", "-q"]);
+        git(dir, &["commit", "-q", "--allow-empty", "-m", "start"]);
+    }
+    let beta = beta.canonicalize().unwrap();
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-d", "-c", &beta.to_string_lossy(), "-n", "bee"]);
+    row_of(&mut client, "bee");
+    let repo = |l: &Value| l["sessions"][0]["sidebar"]["repo"].clone();
+
+    client.type_text(&format!("{ALT}R"));
+    client.wait_text("Filter the sidebar to a repository");
+    client.type_text("beta");
+    client.wait_text("beta  1 tab");
+    client.type_text("\r");
+    wait_list(&server, "filtered to beta", |l| {
+        repo(l) == json!(beta.to_string_lossy())
+    });
+    // Its box closes on any key, which goes no further.
+    client.wait_text("Sidebar: beta only");
+    client.type_text("x");
+    client.wait_for("the box closed", |s| {
+        !s.iter().any(|l| l.contains("Sidebar: beta only"))
+    });
+
+    client.type_text(&format!("{ALT}R"));
+    let screen = client.wait_text("Filter the sidebar to a repository");
+    let every = screen.iter().position(|l| l.contains("Every repository"));
+    let first_repo = screen.iter().position(|l| l.contains("beta  1 tab"));
+    assert!(every.is_some() && every < first_repo, "{screen:?}");
+    client.type_text("\r");
+    wait_list(&server, "every repository again", |l| repo(l).is_null());
+    // Its box closes on any key, which goes no further.
+    client.wait_text("Sidebar: every repository");
+    client.type_text("x");
+    client.wait_for("the box closed", |s| {
+        !s.iter().any(|l| l.contains("Sidebar: every repository"))
+    });
+
+    client.type_text(&format!("{ALT}p"));
+    client.type_text("Filter the sidebar");
+    client.wait_for("the palette naming M-S-R, as it writes M-R", |s| {
+        s.iter()
+            .any(|l| l.contains("Filter the sidebar to a repos") && l.contains("M-S-R"))
+    });
+}
+
 // A right press on a notification in the Notifications window opens its
 // menu, on the window's empty part the window's menu; a right click on a
 // tab in the sidebar opens its menu, peeking first.
