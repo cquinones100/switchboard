@@ -264,7 +264,8 @@ static WAITS: LazyLock<Regex> = LazyLock::new(|| {
 /// never one whose arguments can run a program or write a file (`awk`'s
 /// `system`, `sed -i`, `sort -o`, `find -exec`). Each is the words a simple
 /// command starts with, the first by its name alone or in one of
-/// `SYSTEM_BINS` (`/bin/sleep`), never a project's own (`./test`).
+/// `SYSTEM_BINS` (`/bin/sleep`), never a project's own (`./test`). `awk` is
+/// a look only when its program is one that only reads (`awk_only_reads`).
 const LOOKS: &[&str] = &[
     "sleep",
     "seq",
@@ -393,12 +394,140 @@ fn only_waits(command: &str) -> bool {
             "tail" => rest.first().is_some_and(|w| *w == "-f" || *w == "-F"),
             _ => false,
         };
+        if first == "awk" {
+            return awk_only_reads(&rest);
+        }
         LOOKS.iter().any(|look| {
             let mut look = look.split(' ');
             look.next() == Some(first) && look.enumerate().all(|(i, w)| rest.get(i) == Some(&w))
         })
     });
     only_looks && waits
+}
+
+/// awk's calls that run a command or reach past its input (`system(…)`,
+/// `close(…)`, `getline`), as words, so a file named `filesystem.log` is
+/// still a look.
+static AWK_RUNS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b(?:system|close)\s*\(|\bgetline\b").expect("a regex"));
+
+/// An awk program with each string literal (`"closed"`) and regex literal
+/// (`/done|failed/`) in it standing as a `0`, since they hold data rather
+/// than anything that runs, so a `|` in them isn't read as a pipe. A `/` is
+/// a division after what ends an operand (a name, a number, a literal, `)`,
+/// `]`, `$`, `.`, `++` or `--`), which is kept, and starts a regex anywhere
+/// else and after `print`, `printf` and `return`. A comment goes too, up to
+/// its line's end, so a quote in a comment never hides the code after it.
+fn without_awk_literals(program: &str) -> String {
+    let mut out = String::new();
+    let mut chars = program.chars();
+    while let Some(c) = chars.next() {
+        let before = out.trim_end_matches([' ', '\t']);
+        let last_word = before
+            .rsplit(|p: char| !(p.is_ascii_alphanumeric() || p == '_'))
+            .next()
+            .unwrap_or("");
+        let after_an_increment = before.ends_with("++") || before.ends_with("--");
+        let operand_may_start = matches!(last_word, "print" | "printf" | "return")
+            || !after_an_increment
+                && before
+                    .chars()
+                    .last()
+                    .is_none_or(|p| !(p.is_ascii_alphanumeric() || "_)]$.".contains(p)));
+        let end = match c {
+            // A line continued goes on with the same expression.
+            '\\' if chars.clone().next() == Some('\n') => {
+                chars.next();
+                out.push(' ');
+                continue;
+            }
+            '"' => '"',
+            '/' if operand_may_start => '/',
+            '#' => {
+                if chars.by_ref().any(|inner| inner == '\n') {
+                    out.push('\n');
+                }
+                continue;
+            }
+            _ => {
+                out.push(c);
+                continue;
+            }
+        };
+        // The literal, up to its unescaped end, stands as a `0`. One its
+        // line ends first is no literal awk would take (a division read as a
+        // regex), so it stands as a pipe, never hiding what follows it from
+        // the check.
+        let mut closed = false;
+        while let Some(inner) = chars.next() {
+            match inner {
+                '\\' => {
+                    chars.next();
+                }
+                '\n' => break,
+                _ if inner == end => {
+                    closed = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        out.push(if closed { '0' } else { '|' });
+    }
+    out
+}
+
+/// Whether an `awk` given these arguments only reads and prints: its
+/// program, the first argument after the options that only set a separator
+/// or a variable (`-F`, `-v`), holds nothing that can run a command or
+/// write a file (`system`, a pipe, `getline` from a command, a redirection,
+/// `close`). A program read from a file (`-f`), or any other option, counts
+/// as work, since what it runs can't be read here. Every argument is held to
+/// both rules, not only the one taken as the program, since an empty one
+/// (`-F ''`) is gone from the words and would shift what follows along.
+fn awk_only_reads(args: &[&str]) -> bool {
+    // Past a `--`, nothing is an option, the program included.
+    let options_end = args.iter().position(|a| *a == "--").unwrap_or(args.len());
+    let runs_something = args.iter().enumerate().any(|(at, arg)| {
+        // A separator or a variable given in the same word (`-F'|'`,
+        // `-vwant='a|b'`) is never the program, and nor is a variable's
+        // `name=value` after a `-v` of its own, which keeps its `name=`
+        // even with an empty value.
+        let an_option = at < options_end;
+        let a_variable = at > 0
+            && args[at - 1] == "-v"
+            && arg.split_once('=').is_some_and(|(name, _)| {
+                name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                    && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            });
+        if an_option && (arg.starts_with("-F") || arg.starts_with("-v") || a_variable) {
+            return false;
+        }
+        let another_option = an_option && arg.starts_with('-') && *arg != "-";
+        // A `||` is awk's or, which runs nothing; a lone `|` is a pipe.
+        // The calls are looked for both as written, so a regex read as a
+        // division can't hide one, and with the lines joined, so a line
+        // continued inside one can't either.
+        let calls = AWK_RUNS.is_match(arg);
+        let arg = without_awk_literals(arg).replace("||", "");
+        // A `@` is gawk's: `@include` and `@load` read code from a file, and
+        // `@name()` calls a function a variable names, `system` included.
+        another_option || calls || AWK_RUNS.is_match(&arg) || arg.contains(['|', '>', '@'])
+    });
+    let mut args = args.iter();
+    let program = loop {
+        match args.next() {
+            None => return false,
+            Some(&"--") => break args.next(),
+            Some(&("-F" | "-v")) => {
+                args.next();
+            }
+            Some(a) if a.starts_with("-F") || a.starts_with("-v") => {}
+            Some(a) if a.starts_with('-') => return false,
+            program => break program,
+        }
+    };
+    program.is_some() && !runs_something
 }
 
 /// The simple commands a shell command runs, each as its words with their
@@ -1932,6 +2061,10 @@ mod tests {
         );
     }
 
+    /// A watch for autopilot's queue to drain, as a tab ran it: it reads the
+    /// note and the tabs with `awk` and sleeps between its looks.
+    const DRAIN_WATCH: &str = r#"until [ -z "$(awk '/^## /{exit} /^- \[ \]/' "$HOME/Notes/Some Notes.md")" ] && ! switchboard tabs | awk -F'\t' '$4 == "working"' | grep -q . ; do sleep 120; done"#;
+
     #[test]
     fn a_command_only_waits_when_all_it_runs_is_a_look_or_a_sleep() {
         for wait in [
@@ -1953,6 +2086,19 @@ mod tests {
             "for f do grep -q x \"$f\" && break; sleep 30; done",
             "while true; do LC_ALL=C sleep 30; done",
             "while true; do 2>/dev/null sleep 30; done",
+            DRAIN_WATCH,
+            "until awk '{print}' f | grep -q done; do sleep 30; done",
+            "until awk -F: -v want=x -- '$1 == want' f | grep -q .; do sleep 30; done",
+            "until awk '$1 == \"done\" || $1 == \"failed\"' status | grep -q .; do sleep 30; done",
+            "until awk '$1 == \"closed\" || /system/' filesystem.log | grep -q .; do sleep 30; done",
+            "until awk '/done|failed/' status | grep -q .; do sleep 30; done",
+            "until awk '/started/\n/done|failed/' status | grep -q .; do sleep 30; done",
+            "until awk '# a | in a comment\n/done/' status | grep -q .; do sleep 30; done",
+            "until awk '{ print /done|failed/ }' status | grep -q 1; do sleep 30; done",
+            "until awk -F'|' '$2 == \"done\"' status | grep -q .; do sleep 30; done",
+            "while true; do awk -vpattern='done|failed' '$0 ~ pattern' status; sleep 30; done",
+            "while true; do awk -v pattern='done|failed' '$0 ~ pattern' status; sleep 30; done",
+            "until awk '$2 ~ /a|b/ && $3 != \"x|y\" { print $1 / 2 }' status | grep -q .; do sleep 30; done",
         ] {
             assert!(only_waits(wait), "{wait}");
         }
@@ -1982,6 +2128,33 @@ mod tests {
             "for f in logs/*.log; do grep -n sleep \"$f\"; done",
             "while true; do grep -q sleep f; done",
             "for f in logs/*.log; do grep -n 'tail -f' \"$f\"; done",
+            "until awk '{system(\"rm x\")}' f; do sleep 30; done",
+            "until awk '{print > \"f\"}' g; do sleep 30; done",
+            "until awk '{print | \"sh\"}' g; do sleep 30; done",
+            "until awk 'BEGIN{\"date\" | getline d}'; do sleep 30; done",
+            "until awk -f prog.awk g; do sleep 30; done",
+            "until awk 'END { close (\"f\") }' g; do sleep 30; done",
+            "until awk -v x=1 'BEGIN { system(\"make\") }' g; do sleep 30; done",
+            "while true; do awk '# Match a literal \" character\nBEGIN { system(\"make\") }'; sleep 30; done",
+            "while true; do awk '$1 == \"a\nBEGIN { system(\"make\") }'; sleep 30; done",
+            "while true; do awk '{ found = /\"/; system(\"make\") }' input; sleep 30; done",
+            "while true; do awk '{ found = /\"/; print | \"sh\" }' input; sleep 30; done",
+            "while true; do awk '{ print /\"/; print | \"sh\" }' input; sleep 30; done",
+            "while true; do awk 'BEGIN { n=2; print n++ / 2 | \"cat\" }'; sleep 30; done",
+            "while true; do awk '{ print n++ / 2 | \"sort\"; rate = NR / 2 }' input; sleep 30; done",
+            "while true; do awk '{ print /x/ / 2 | \"sort\"; rate = NR / 2 }' input; sleep 30; done",
+            "while true; do awk '{ print \"x\" / 2 | \"sort\"; rate = NR / 2 }' input; sleep 30; done",
+            "while true; do awk 'BEGIN { n=2; print n \\\n / 2 | \"make\"; rate = NR / 2 }'; sleep 30; done",
+            "while true; do awk 'BEGIN { system \\\n(\"make\") }'; sleep 30; done",
+            "while true; do awk -- '-F || system(\"make\")' input; sleep 30; done",
+            "while true; do awk '@include \"job.awk\"'; sleep 30; done",
+            "while true; do awk 'BEGIN { f = \"system\"; @f(\"make\") }'; sleep 30; done",
+            "until awk '/x/ { print /y/ | \"sh\" }' g; do sleep 30; done",
+            "until awk '{ print $1 / 2 | \"sh\" }' g; do sleep 30; done",
+            "until awk '{ getline line < \"f\" }' g; do sleep 30; done",
+            "until awk; do sleep 30; done",
+            "while true; do awk -F '' 'BEGIN { system(\"make\") }' input.txt; sleep 30; done",
+            "while true; do awk -F '' -f prog.awk input; sleep 30; done",
         ] {
             assert!(!only_waits(work), "{work}");
         }
@@ -2027,6 +2200,13 @@ mod tests {
         let work = r.background_work(&t.file, now - 60_000, now).unwrap();
         assert_eq!((work.count, work.monitors.len()), (4, 2));
         assert_eq!(work.loop_run.map(|l| l.kind), Some("queue"));
+        // A watch that reads with `awk` is a watch too.
+        t.add(&call(
+            "b5",
+            json!({"command": DRAIN_WATCH, "description": "Wait for the queue to drain", "run_in_background": true}),
+        ));
+        let work = r.background_work(&t.file, now - 60_000, now).unwrap();
+        assert_eq!((work.count, work.monitors.len()), (5, 3));
     }
 
     #[test]
