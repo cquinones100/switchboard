@@ -1579,6 +1579,53 @@ pub fn last_reply(file: &Path) -> Option<String> {
     from_end(file, size, parse_reply)
 }
 
+/// Every string in a JSON value, depth first.
+fn strings_in<'a>(value: &'a Value, out: &mut Vec<&'a str>) {
+    match value {
+        Value::String(text) => out.push(text),
+        Value::Array(items) => items.iter().for_each(|v| strings_in(v, out)),
+        Value::Object(map) => map.values().for_each(|v| strings_in(v, out)),
+        _ => {}
+    }
+}
+
+/// The words of a transcript's last turns, from its end (`TAIL` bytes):
+/// Claude's messages, its tool calls' input and tools' results (never
+/// what you typed, as M-p lists no file a prompt names), unbroken by
+/// any screen's width, a string a line, for M-p's media list to look in.
+/// A subagent's messages are left out. Blocking, as `last_reply`.
+pub fn last_words(file: &Path) -> Option<String> {
+    let size = fs::metadata(file).ok()?.len();
+    let take = TAIL.min(size);
+    let mut f = fs::File::open(file).ok()?;
+    f.seek(SeekFrom::Start(size - take)).ok()?;
+    let mut buf = Vec::with_capacity(take as usize);
+    f.take(take).read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf);
+    let mut words = Vec::new();
+    for line in text.split('\n').filter(|line| line.starts_with('{')) {
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if entry.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        // What you typed is left out: a user entry gives its tools' results alone.
+        let user = entry.get("type").and_then(Value::as_str) == Some("user");
+        let mut found = Vec::new();
+        match entry.pointer("/message/content") {
+            Some(Value::Array(parts)) if user => parts
+                .iter()
+                .filter(|p| p.get("type").and_then(Value::as_str) == Some("tool_result"))
+                .for_each(|p| strings_in(p, &mut found)),
+            Some(content) if !user => strings_in(content, &mut found),
+            _ => {}
+        }
+        words.extend(found.into_iter().map(str::to_string));
+    }
+    Some(words.join("\n"))
+}
+
 // ── Reading, with what was read kept ────────────────────────────────────────
 
 /// Claude Code's files as last read: the session files by their modified
@@ -2595,6 +2642,25 @@ mod tests {
         assert_eq!(status("busy").idle_since, None);
         assert_eq!(status("waiting").idle_since, None);
         assert_eq!(project_dir_name("/Users/me/my.repo"), "-Users-me-my-repo");
+    }
+
+    #[test]
+    fn the_last_words_are_every_messages_and_tools_strings_but_a_subagents() {
+        let t = Transcript::new("words");
+        t.add(&[
+            json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "AskUserQuestion", "input": {"questions": [{"question": "Keep /tmp/a/clip.mp4?"}]}}]}}),
+            json!({"type": "user", "message": {"content": [{"type": "tool_result", "content": "saved /tmp/b.png"}]}}),
+            json!({"type": "assistant", "isSidechain": true, "message": {"content": [{"type": "text", "text": "/tmp/sub.png"}]}}),
+            json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "Done"}]}}),
+            json!({"type": "user", "message": {"content": "look at /tmp/typed.png"}}),
+            json!({"type": "user", "message": {"content": [{"type": "text", "text": "and /tmp/pasted.png"}]}}),
+        ]);
+        let words = last_words(&t.file).unwrap();
+        assert!(words.contains("Keep /tmp/a/clip.mp4?"));
+        assert!(words.contains("saved /tmp/b.png"));
+        assert!(words.contains("Done"));
+        assert!(!words.contains("sub.png"));
+        assert!(!words.contains("typed.png") && !words.contains("pasted.png"));
     }
 
     #[test]

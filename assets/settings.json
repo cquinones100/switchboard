@@ -1364,6 +1364,13 @@
     "default": true
   },
   {
+    "key": "conversation_media",
+    "category": "Palette",
+    "label": "Pictures and videos Claude named",
+    "description": "M-p's \"Open an image or video from this pane\" also lists the files the last turns of the tab's Claude named that the screen doesn't show, read from its transcript. Off, it lists only what the pane and the tab's note show",
+    "default": true
+  },
+  {
     "key": "pane_commands_read_note",
     "category": "Palette",
     "label": "Pane commands read the tab's note",

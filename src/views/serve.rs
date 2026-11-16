@@ -91,6 +91,9 @@ fn is_readable(url: &str) -> bool {
 /// it marks one you gave Claude (`given::LABEL`).
 const IN_THE_NOTE: &str = "in the note";
 
+/// What the media list shows beside a file only the conversation named.
+const CONVERSATION: &str = "from the conversation";
+
 /// The rows of a list of what a pane shows, each giving its address.
 fn rows(found: &[Shown]) -> Vec<PickItem> {
     found
@@ -1360,6 +1363,9 @@ impl Server {
     /// (from where the pane is, else `~` or absolute) or a link to one,
     /// newest first; Enter opens a file in its app and a link in the
     /// browser, Ctrl-O shows a file in its folder (link-view.sh's `media`).
+    /// After them, those the last turns of the tab's Claude named that the
+    /// screen doesn't show, marked as the conversation's, from its
+    /// transcript as the sidebar last found it, read off the server's task.
     fn open_media(&mut self, client: ClientId) {
         let Some((pane, tab, dir)) = self.here(client) else {
             return;
@@ -1399,8 +1405,54 @@ impl Server {
             }
         }
         found.extend(links.into_iter().filter(|l| shown::is_media(&l.url)));
+        let in_note = note.is_some() && self.reads_tab();
+        // The tab's Claude pane, whose directory its relative paths are from.
+        let claude = self
+            .panes_with_parked(tab)
+            .into_iter()
+            .find(|p| self.runs_claude(*p));
+        let transcript = claude
+            .and_then(|p| self.sidebar.panes.get(&p))
+            .and_then(|read| read.transcript.clone());
+        let (true, Some(claude), Some(file)) =
+            (settings::is_on("conversation_media"), claude, transcript)
+        else {
+            return self.pick_media(client, tab, pane, found, in_note);
+        };
+        let dir = self.pane_own_dir(claude).unwrap_or_else(paths::home);
+        self.off_task(
+            client,
+            move || {
+                let words = crate::sidebar::claude::last_words(&file).unwrap_or_default();
+                shown::media_in(&words, &dir, &home, &[])
+            },
+            move |server, client, said| {
+                let mut found = found;
+                for file in said {
+                    if !found.iter().any(|s| s.url == file.url) {
+                        found.push(Shown {
+                            text: CONVERSATION.into(),
+                            url: file.url,
+                        });
+                    }
+                }
+                server.pick_media(client, tab, pane, found, in_note);
+            },
+        );
+    }
+
+    /// The media picker over what `open_media` found, or why it found
+    /// nothing.
+    fn pick_media(
+        &mut self,
+        client: ClientId,
+        tab: TabId,
+        pane: PaneId,
+        found: Vec<Shown>,
+        in_note: bool,
+    ) {
         if found.is_empty() {
-            let why = if note.is_some() && self.reads_tab() {
+            let why = if in_note {
                 "No image or video in this pane or its note"
             } else {
                 "No image or video in this pane"

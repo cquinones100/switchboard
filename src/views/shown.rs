@@ -80,8 +80,21 @@ fn trimmed(url: &str) -> &str {
 /// The links in a pane's text, newest (lowest) first, each once: the plain
 /// ones without the punctuation that follows a link in a sentence, and the
 /// hyperlinks (`hyperlinks`, by their text's bytes) with the text they were
-/// written into, the newest text a link was given winning.
+/// written into, the newest text a link was given winning. A link a
+/// program broke across lines is listed put back together too
+/// (`wrapped_link`), before the half the line shows, which stays listed
+/// since a join can't be told from a link with a path under it for sure.
 pub fn links_in(text: &str, hyperlinks: &[(Range<usize>, String)]) -> Vec<Shown> {
+    found_links(text, hyperlinks, true)
+}
+
+/// As `links_in`, for text no screen wrapped (what you sent Claude, its
+/// replies): no link is joined across lines.
+pub fn links_in_unwrapped(text: &str) -> Vec<Shown> {
+    found_links(text, &[], false)
+}
+
+fn found_links(text: &str, hyperlinks: &[(Range<usize>, String)], wrapped: bool) -> Vec<Shown> {
     let mut found: Vec<(usize, String, String)> = Vec::new();
     for (range, url) in hyperlinks {
         let url = url.as_str();
@@ -97,6 +110,12 @@ pub fn links_in(text: &str, hyperlinks: &[(Range<usize>, String)]) -> Vec<Shown>
             .any(|(r, _)| m.start() < r.end && r.start < m.end());
         if !inside {
             found.push((m.start(), trimmed(m.as_str()).to_string(), String::new()));
+            if let Some(joined) = wrapped
+                .then(|| wrapped_link(text, m.as_str(), m.end()))
+                .flatten()
+            {
+                found.push((m.start(), joined, String::new()));
+            }
         }
     }
     found.sort_by_key(|(at, _, _)| *at);
@@ -109,6 +128,60 @@ pub fn links_in(text: &str, hyperlinks: &[(Range<usize>, String)]) -> Vec<Shown>
         }
     }
     out
+}
+
+/// The characters that close a sentence, a bracket or a quote after a path
+/// or a link.
+const CLOSERS: &[char] = &[
+    '.', ',', ';', ':', '!', '?', ')', ']', '}', '"', '\'', '`', '>',
+];
+
+/// The lines after the one ending at `end` (a byte of `text`), each from
+/// its first character past its indentation, at most `most` of them: where
+/// a path or a link a program broke across lines goes on.
+fn lines_after(text: &str, end: usize, most: usize) -> Vec<&str> {
+    let rest = &text[end..];
+    let rest = rest.trim_start_matches([' ', '\t']);
+    let Some(rest) = rest.strip_prefix('\n') else {
+        return Vec::new();
+    };
+    rest.split('\n').take(most).map(str::trim).collect()
+}
+
+/// A link that runs to its line's end and that a program broke there, put
+/// back together (up to 3 lines): when the next line, past its indentation,
+/// holds one word of nothing but a link's characters (and not a link of
+/// its own), since a link's rest followed by words can't be told from prose,
+/// the half ends in no punctuation a sentence puts after a link, and the
+/// next piece holds what a link holds and a word doesn't (`/`, `?`, `=`,
+/// `&`, `#`, `%`, `_`), so a whole link followed by a line of prose
+/// stays as it is, the joined link, kept
+/// when its host is the half's. Nothing when it isn't broken.
+fn wrapped_link(text: &str, half: &str, end: usize) -> Option<String> {
+    if trimmed(half) != half {
+        return None;
+    }
+    let host = crate::links::host_of(half)?;
+    let mut joined = half.to_string();
+    for line in lines_after(text, end, 2) {
+        let piece = line;
+        let breaks = !piece.contains(char::is_whitespace)
+            && piece.contains(['/', '?', '=', '&', '#', '%', '_']);
+        let all_link = !piece.is_empty()
+            && LINK.find(piece).is_none()
+            && piece
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "._~:/?#[]@!$&'()*+,;=%-".contains(c));
+        if !all_link || !breaks {
+            break;
+        }
+        joined.push_str(piece);
+    }
+    let joined = trimmed(&joined).to_string();
+    let whole = joined.len() > trimmed(half).len()
+        && crate::links::host_of(&joined).as_deref() == Some(host.as_str())
+        && safe(&joined);
+    whole.then_some(joined)
 }
 
 static TAB_NAMED: LazyLock<Regex> = LazyLock::new(|| {
@@ -186,6 +259,14 @@ static MEDIA_PATH: LazyLock<Regex> = LazyLock::new(|| {
     .expect("a regex")
 });
 
+/// A whole path to an image or a video, as `MEDIA_PATH` finds one.
+static MEDIA_WHOLE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(
+        r"(?i)^(?:~|\.{{1,2}})?/?[\w.~@+%/'-]*[\w-]\.(?:{MEDIA})$"
+    ))
+    .expect("a regex")
+});
+
 static MEDIA_END: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(&format!(r"(?i)\.(?:{MEDIA})$")).expect("a regex"));
 
@@ -205,13 +286,67 @@ fn opens(before: Option<char>) -> bool {
     before.is_none_or(|c| c.is_whitespace() || "([{<=".contains(c))
 }
 
+/// The paths a program broke across lines, put back together: a line's
+/// last word holding a `/` (past a quote or bracket that opens it), joined
+/// with the first word of the next line past its indentation, and of the
+/// line after when the next held nothing else, each kept by where it starts
+/// when it names an image or a video whose file is there (`full_of`). A
+/// join that names no file leaves the halves as they were.
+fn wrapped_media(text: &str, full_of: &dyn Fn(&str) -> std::path::PathBuf) -> Vec<(usize, String)> {
+    let mut found = Vec::new();
+    let mut at = 0;
+    for line in text.split('\n') {
+        let start = at;
+        at += line.len() + 1;
+        let kept = line.trim_end();
+        let word_at = kept
+            .char_indices()
+            .rfind(|(_, c)| c.is_whitespace())
+            .map_or(0, |(i, c)| i + c.len_utf8());
+        let word = &kept[word_at..];
+        let head = word.trim_start_matches(['"', '\'', '`', '(', '[', '{', '<']);
+        let head = head.rsplit_once('=').map_or(head, |(_, path)| path);
+        if !head.contains('/') {
+            continue;
+        }
+        let mut joined = head.to_string();
+        for next in lines_after(text, start + kept.len(), 2) {
+            let Some(piece) = next.split_whitespace().next() else {
+                break;
+            };
+            joined.push_str(piece);
+            let path = joined.trim_end_matches(CLOSERS);
+            if MEDIA_WHOLE.is_match(path) {
+                let full = full_of(path);
+                if full.is_file() {
+                    found.push((start + word_at, full.to_string_lossy().into_owned()));
+                }
+                break;
+            }
+            if piece != next {
+                break;
+            }
+        }
+    }
+    found
+}
+
 /// The images and videos a pane's text names: the files first, newest
 /// first, each a path absolute, from `~`, or from the pane's directory
 /// (`dir`), listed only when the file is there; then the links to them
 /// among the pane's links (`links`, as `links_in` gives them), each known
 /// by its path's extension.
 pub fn media_in(text: &str, dir: &Path, home: &Path, links: &[Shown]) -> Vec<Shown> {
-    let mut files: Vec<String> = Vec::new();
+    let full_of = |path: &str| {
+        if let Some(rest) = path.strip_prefix("~/") {
+            home.join(rest)
+        } else if path.starts_with('/') {
+            Path::new(path).to_path_buf()
+        } else {
+            dir.join(path.strip_prefix("./").unwrap_or(path))
+        }
+    };
+    let mut files: Vec<(usize, String)> = Vec::new();
     for m in MEDIA_PATH.find_iter(text) {
         let mut start = m.start();
         let mut path = m.as_str();
@@ -236,20 +371,16 @@ pub fn media_in(text: &str, dir: &Path, home: &Path, links: &[Shown]) -> Vec<Sho
         if !ok || !ends || path.is_empty() {
             continue;
         }
-        let full = if let Some(rest) = path.strip_prefix("~/") {
-            home.join(rest)
-        } else if path.starts_with('/') {
-            Path::new(path).to_path_buf()
-        } else {
-            dir.join(path.strip_prefix("./").unwrap_or(path))
-        };
+        let full = full_of(path);
         if full.is_file() {
-            files.push(full.to_string_lossy().into_owned());
+            files.push((start, full.to_string_lossy().into_owned()));
         }
     }
+    files.extend(wrapped_media(text, &full_of));
+    files.sort_by_key(|(at, _)| *at);
     let home = home.to_string_lossy();
     let mut out: Vec<Shown> = Vec::new();
-    for file in files.into_iter().rev() {
+    for (_, file) in files.into_iter().rev() {
         if out.iter().any(|s| s.url == file) {
             continue;
         }
@@ -367,6 +498,71 @@ mod tests {
         assert!(is_media("https://x.example/a.webm#t"));
         assert!(!is_media("https://x.example/png"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_path_a_program_broke_across_lines_is_found_when_its_file_is_there() {
+        let root = std::env::temp_dir().join(format!("sb-wrapped-{}", std::process::id()));
+        let session = root.join("scratchpad/6152");
+        std::fs::create_dir_all(session.join("walkthrough")).unwrap();
+        let video = session.join("walkthrough/Force-the-variants.mp4");
+        std::fs::write(&video, b"x").unwrap();
+        let first = format!("  │ The video is at {}/", session.display());
+        let text = format!("{first}\n    walkthrough/Force-the-variants.mp4.\n  Keep it?");
+        let found = media_in(&text, &root, &root, &[]);
+        assert_eq!(urls(&found), vec![video.to_str().unwrap()]);
+        // Over three lines, the middle one holding nothing else.
+        let text = format!(
+            "at {}/\n  walkthrough/\n  Force-the-variants.mp4 done",
+            session.display()
+        );
+        assert_eq!(
+            urls(&media_in(&text, &root, &root, &[])),
+            vec![video.to_str().unwrap()]
+        );
+        // A join that names no file leaves the halves.
+        let text = format!("at {}/\n    walkthrough/gone.mp4", session.display());
+        assert!(media_in(&text, &root, &root, &[]).is_empty());
+        // A space wider than a byte before the last word.
+        assert!(media_in("hello\u{a0}world\nmore", &root, &root, &[]).is_empty());
+        // A path ending a line before a new sentence stays as it is.
+        let text = format!("saved {}\nThen it plays.mp4", video.display());
+        assert_eq!(
+            urls(&media_in(&text, &root, &root, &[])),
+            vec![video.to_str().unwrap()]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_link_a_program_broke_across_lines_is_joined() {
+        let text = "see https://github.com/acme/widgets/\n    pull/12345/files\n  for it";
+        assert_eq!(
+            urls(&links_in(text, &[])),
+            vec![
+                "https://github.com/acme/widgets/pull/12345/files",
+                "https://github.com/acme/widgets/",
+            ]
+        );
+        assert_eq!(
+            urls(&links_in_unwrapped(text)),
+            vec!["https://github.com/acme/widgets/"]
+        );
+        let text = "read https://x.example/docs?page=\n  2&tab=api.";
+        assert_eq!(
+            urls(&links_in(text, &[]))[0],
+            "https://x.example/docs?page=2&tab=api"
+        );
+        // A link ending a sentence, then a new line of words, stays whole.
+        let text = "see https://x.example/a.\nThen more\nhttps://x.example/b/\nRun the walkthrough\nhttps://x.example/c/\nCI/CD instructions follow";
+        assert_eq!(
+            urls(&links_in(text, &[])),
+            vec![
+                "https://x.example/c/",
+                "https://x.example/b/",
+                "https://x.example/a"
+            ]
+        );
     }
 
     #[test]

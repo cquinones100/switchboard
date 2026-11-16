@@ -59,7 +59,7 @@ impl Given {
     }
 
     fn keep(&mut self, pane: PaneId, text: &str, now: i64, prompt: bool) {
-        let found = shown::links_in(text, &[]);
+        let found = shown::links_in_unwrapped(text);
         if found.is_empty() {
             return;
         }
