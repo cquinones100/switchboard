@@ -1163,7 +1163,7 @@ impl Server {
     /// A link to read beside the pane: one typed, or one of those the pane
     /// shows (link-view.sh's `pick`); Ctrl-O opens it in the browser.
     fn ask_link(&mut self, client: ClientId) {
-        let Some((pane, _, _)) = self.here(client) else {
+        let Some((pane, tab, _)) = self.here(client) else {
             return;
         };
         let shown = self.pane_links(pane).unwrap_or_default();
@@ -1173,11 +1173,13 @@ impl Server {
             .exact()
             .free()
             .also("read it beside", "open in browser");
-        self.pick_also(client, picker, move |server, client, picked| {
-            let Some((picked, other)) = picked else {
-                return;
-            };
-            server.link_picked(client, pane, picked.value.trim(), other);
+        self.about_tab(client, tab, move |s| {
+            s.pick_also(client, picker, move |server, client, picked| {
+                let Some((picked, other)) = picked else {
+                    return;
+                };
+                server.link_picked(client, pane, picked.value.trim(), other);
+            })
         });
     }
 
@@ -1185,7 +1187,7 @@ impl Server {
     /// "Copy a link from this pane" (`copy`), each list's Ctrl-O doing what
     /// link-view.sh's did: reading it beside the pane, and opening it.
     fn pick_link(&mut self, client: ClientId, copy: bool) {
-        let Some((pane, _, _)) = self.here(client) else {
+        let Some((pane, tab, _)) = self.here(client) else {
             return;
         };
         let shown = match self.pane_links(pane) {
@@ -1202,19 +1204,21 @@ impl Server {
             .prompt(prompt)
             .exact()
             .also(enter, other);
-        self.pick_also(client, picker, move |server, client, picked| {
-            let Some((picked, other)) = picked else {
-                return;
-            };
-            let url = picked.value;
-            match (copy, other) {
-                (true, false) => {
-                    server.to_clipboard(Some(client), &url);
-                    server.say(Some(client), &format!("Copied {url}"));
+        self.about_tab(client, tab, move |s| {
+            s.pick_also(client, picker, move |server, client, picked| {
+                let Some((picked, other)) = picked else {
+                    return;
+                };
+                let url = picked.value;
+                match (copy, other) {
+                    (true, false) => {
+                        server.to_clipboard(Some(client), &url);
+                        server.say(Some(client), &format!("Copied {url}"));
+                    }
+                    (true, true) => server.link_picked(client, pane, &url, true),
+                    (false, other) => server.link_picked(client, pane, &url, !other),
                 }
-                (true, true) => server.link_picked(client, pane, &url, true),
-                (false, other) => server.link_picked(client, pane, &url, !other),
-            }
+            })
         });
     }
 
@@ -1259,7 +1263,7 @@ impl Server {
     /// number of a tab this pane mentions" (`copy`), each list's Ctrl-O
     /// doing the other; with one tab named, going there needs no list.
     fn pick_mentioned_tab(&mut self, client: ClientId, copy: bool) {
-        let Some((pane, _, _)) = self.here(client) else {
+        let Some((pane, tab, _)) = self.here(client) else {
             return;
         };
         let tabs = self.mentioned_tabs(pane);
@@ -1300,25 +1304,27 @@ impl Server {
             .named("mentioned-tabs")
             .prompt(prompt)
             .also(enter, other);
-        self.pick_also(client, picker, move |server, client, picked| {
-            let Some((picked, other)) = picked else {
-                return;
-            };
-            let Some(tab) = picked
-                .value
-                .parse::<TabId>()
-                .ok()
-                .filter(|t| server.tabs.contains_key(t))
-            else {
-                return server.say(Some(client), "That tab has closed");
-            };
-            if copy != other {
-                let n = server.tab_number(tab).to_string();
-                server.to_clipboard(Some(client), &n);
-                server.say(Some(client), &format!("Copied tab {n}"));
-            } else {
-                server.go_to_tab(client, tab);
-            }
+        self.about_tab(client, tab, move |s| {
+            s.pick_also(client, picker, move |server, client, picked| {
+                let Some((picked, other)) = picked else {
+                    return;
+                };
+                let Some(tab) = picked
+                    .value
+                    .parse::<TabId>()
+                    .ok()
+                    .filter(|t| server.tabs.contains_key(t))
+                else {
+                    return server.say(Some(client), "That tab has closed");
+                };
+                if copy != other {
+                    let n = server.tab_number(tab).to_string();
+                    server.to_clipboard(Some(client), &n);
+                    server.say(Some(client), &format!("Copied tab {n}"));
+                } else {
+                    server.go_to_tab(client, tab);
+                }
+            })
         });
     }
 
@@ -1353,7 +1359,7 @@ impl Server {
     /// newest first; Enter opens a file in its app and a link in the
     /// browser, Ctrl-O shows a file in its folder (link-view.sh's `media`).
     fn open_media(&mut self, client: ClientId) {
-        let Some((pane, _, dir)) = self.here(client) else {
+        let Some((pane, tab, dir)) = self.here(client) else {
             return;
         };
         let links = self.pane_links(pane).unwrap_or_default();
@@ -1404,29 +1410,31 @@ impl Server {
             .prompt("Open: ")
             .exact()
             .also("open it", "show in its folder");
-        self.pick_also(client, picker, move |server, client, picked| {
-            let Some((picked, folder)) = picked else {
-                return;
-            };
-            let target = picked.value;
-            if target.contains("://") {
-                return server.link_picked(client, pane, &target, true);
-            }
-            let file = PathBuf::from(&target);
-            if !file.is_file() {
-                return server.say(Some(client), &format!("{} is gone", paths::tilde(&file)));
-            }
-            let tx = server.tx.clone();
-            tokio::task::spawn_blocking(move || {
-                let opened = if folder {
-                    crate::platform::reveal(&file)
-                } else {
-                    crate::platform::open(&target)
+        self.about_tab(client, tab, move |s| {
+            s.pick_also(client, picker, move |server, client, picked| {
+                let Some((picked, folder)) = picked else {
+                    return;
                 };
-                if let Err(e) = opened {
-                    Server::say_later(&tx, client, format!("Couldn't open it: {e}"));
+                let target = picked.value;
+                if target.contains("://") {
+                    return server.link_picked(client, pane, &target, true);
                 }
-            });
+                let file = PathBuf::from(&target);
+                if !file.is_file() {
+                    return server.say(Some(client), &format!("{} is gone", paths::tilde(&file)));
+                }
+                let tx = server.tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let opened = if folder {
+                        crate::platform::reveal(&file)
+                    } else {
+                        crate::platform::open(&target)
+                    };
+                    if let Err(e) = opened {
+                        Server::say_later(&tx, client, format!("Couldn't open it: {e}"));
+                    }
+                });
+            })
         });
     }
 

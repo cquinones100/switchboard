@@ -1201,7 +1201,7 @@ fn the_spare_columns_beside_a_capped_pane_list_what_can_open_there() {
 }
 
 #[test]
-fn a_box_a_key_opens_goes_beside_a_narrow_pane_when_it_fits() {
+fn a_box_about_the_tab_opens_beside_a_narrow_pane_as_a_pane() {
     let server = TestServer::start_with_settings(r#"{"lone_pane_width": "165"}"#);
     let mut client = server.attach(365, 40);
     client.wait_text("BESIDE THIS PANE");
@@ -1209,16 +1209,26 @@ fn a_box_a_key_opens_goes_beside_a_narrow_pane_when_it_fits() {
         .as_u64()
         .unwrap_or(0) as usize;
     let rule = side + 165;
-    // In the spare columns right of the rule, the hints hidden under it.
-    server.ok(&["say", "Something to say"]);
-    let screen = client.wait_text("Something to say");
-    let (x, _) = cell_of(&screen, "Something to say").unwrap();
-    assert!(x > rule, "at {x}:\n{}", screen.join("\n"));
+    // M-u's links picker: its title on the first row right of the rule,
+    // its keys on the last row, no box edge and no shadow, the hints gone.
+    server.ok(&["press", "read-link"]);
+    let screen = client.wait_text("Read a link beside this pane");
+    let (x, y) = cell_of(&screen, "Read a link beside this pane").unwrap();
+    assert!(x > rule && y == 0, "at {x},{y}:\n{}", screen.join("\n"));
+    assert!(screen[0].contains("tab 1 · "), "{}", screen[0]);
+    let (kx, ky) = cell_of(&screen, "esc close").unwrap();
+    assert!(kx > rule && ky > 30, "keys at {kx},{ky}");
     assert!(cell_of(&screen, "BESIDE THIS PANE").is_none());
+    assert!(
+        !screen.iter().any(|l| l.contains('╭') || l.contains('▀')),
+        "no box edge or shadow:\n{}",
+        screen.join("\n")
+    );
     // Esc closes it and brings the hints back.
     client.send(b"\x1b");
     client.wait_for("the hints back", |s| {
-        cell_of(s, "Something to say").is_none() && cell_of(s, "BESIDE THIS PANE").is_some()
+        cell_of(s, "Read a link beside this pane").is_none()
+            && cell_of(s, "BESIDE THIS PANE").is_some()
     });
     // Off, it goes in the middle of the screen, over the pane.
     drop(client);
@@ -1227,27 +1237,44 @@ fn a_box_a_key_opens_goes_beside_a_narrow_pane_when_it_fits() {
     );
     let mut client = server.attach(365, 40);
     client.wait_text("BESIDE THIS PANE");
-    server.ok(&["say", "Said in the middle"]);
-    let screen = client.wait_text("Said in the middle");
-    let (x, _) = cell_of(&screen, "Said in the middle").unwrap();
+    server.ok(&["press", "read-link"]);
+    let screen = client.wait_text("Read a link beside this pane");
+    let (x, _) = cell_of(&screen, "Read a link beside this pane").unwrap();
     assert!(x < rule, "at {x}:\n{}", screen.join("\n"));
 }
 
 #[test]
-fn a_box_with_too_few_columns_beside_the_pane_goes_in_the_middle() {
-    let server = TestServer::start_with_settings(r#"{"lone_pane_width": "80"}"#);
-    let mut client = server.attach(140, 36);
-    client.wait_text("$");
-    client.wait_for("the lone pane at 80 columns", |_| {
-        widths(&server.list()) == [80]
-    });
+fn a_box_not_about_the_tab_goes_in_the_middle_beside_a_narrow_pane() {
+    let server = TestServer::start_with_settings(r#"{"lone_pane_width": "165"}"#);
+    let mut client = server.attach(365, 40);
+    client.wait_text("BESIDE THIS PANE");
     let side = server.list()["sessions"][0]["sidebar"]["columns"]
         .as_u64()
         .unwrap_or(0) as usize;
+    let rule = side + 165;
+    // A message, the palette and M-F's search, each over the pane, the
+    // hints left beside it.
+    let corner = |s: &[String]| cell_of(s, "╭").map(|(x, _)| x);
     server.ok(&["say", "Something to say"]);
     let screen = client.wait_text("Something to say");
     let (x, _) = cell_of(&screen, "Something to say").unwrap();
-    assert!(x < side + 80, "at {x}:\n{}", screen.join("\n"));
+    assert!(x < rule, "at {x}:\n{}", screen.join("\n"));
+    assert!(cell_of(&screen, "BESIDE THIS PANE").is_some());
+    client.send(b"\x1b");
+    client.wait_for("the message gone", |s| {
+        cell_of(s, "Something to say").is_none()
+    });
+    for (press, words) in [
+        ("palette", "esc close"),
+        ("search-everything", "Search everything"),
+    ] {
+        server.ok(&["press", press]);
+        let screen = client.wait_text(words);
+        let x = corner(&screen).unwrap_or(usize::MAX);
+        assert!(x < rule, "{press} at {x}:\n{}", screen.join("\n"));
+        client.send(b"\x1b");
+        client.wait_for("it closed", |s| corner(s).is_none());
+    }
 }
 
 /// Settings' `lone_pane_width` as the server wrote it to the test's file.

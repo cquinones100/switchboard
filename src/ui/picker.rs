@@ -697,14 +697,19 @@ impl Overlay for Picker {
         // The box's size first, for the room its rows have: the share of the
         // screen palette.sh's popup took, less the prompt, the count, and the
         // blank line and keys at the bottom.
+        // As a pane beside a narrow lone pane, the columns there whole.
         let area = buf.area;
-        let across = draw::share_across(area, look, 60);
-        let outer_w = (across as usize * 60 / 100)
-            .max(40)
-            .min(area.width as usize);
-        let outer_h = (area.height as usize * 60 / 100)
-            .max(10)
-            .min(area.height as usize);
+        let (outer_w, outer_h) = match draw::pane_beside(area, look) {
+            Some(pane) => (pane.width as usize, pane.height as usize),
+            None => (
+                (area.width as usize * 60 / 100)
+                    .max(40)
+                    .min(area.width as usize),
+                (area.height as usize * 60 / 100)
+                    .max(10)
+                    .min(area.height as usize),
+            ),
+        };
         let inner = outer_w.saturating_sub(2);
         let rows = outer_h.saturating_sub(2 + self.first_row() + 2).max(1);
         // With previews, the lower half shows the chosen one, under a rule;

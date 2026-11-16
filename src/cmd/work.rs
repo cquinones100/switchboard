@@ -1413,19 +1413,29 @@ impl Server {
                 } else {
                     boxed
                 };
-                server.open(
-                    client,
-                    Box::new(boxed),
-                    Some(Box::new(move |server: &mut Server, client, outcome| {
-                        let Outcome::Picked(p) = outcome else {
-                            return;
-                        };
-                        let Ok(picked) = serde_json::from_str::<Chosen>(&p.value) else {
-                            return;
-                        };
-                        server.work_item_chosen(client, open, p.index, picked, default);
-                    })),
-                );
+                // About the tab Notes is in, which the box is opened from.
+                let Some(here) = server
+                    .current_pane(client)
+                    .and_then(|p| server.panes.get(&p))
+                    .map(|slot| slot.tab)
+                else {
+                    return;
+                };
+                server.about_tab(client, here, move |s| {
+                    s.open(
+                        client,
+                        Box::new(boxed),
+                        Some(Box::new(move |server: &mut Server, client, outcome| {
+                            let Outcome::Picked(p) = outcome else {
+                                return;
+                            };
+                            let Ok(picked) = serde_json::from_str::<Chosen>(&p.value) else {
+                                return;
+                            };
+                            server.work_item_chosen(client, open, p.index, picked, default);
+                        })),
+                    )
+                });
             },
         );
     }

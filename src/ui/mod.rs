@@ -144,10 +144,11 @@ pub struct Look {
     /// A box whose list runs past it has a scroll bar on its right edge
     /// (scroll_bars).
     pub scroll_bars: bool,
-    /// The empty columns beside a tab's narrow lone pane, where a box that
-    /// goes in the middle goes instead when it fits there
-    /// (boxes_beside_narrow_pane); set as the overlays are drawn, never
-    /// under a view that covers the screen.
+    /// The empty columns beside a tab's narrow lone pane, where a box about
+    /// the tab that goes in the middle is drawn as a pane instead when it
+    /// fits there (boxes_beside_narrow_pane); set as the overlays are drawn
+    /// for such a box alone (`Layer::about`), never under a view that
+    /// covers the screen.
     pub middle: Option<Rect>,
 }
 
@@ -369,6 +370,11 @@ pub trait Overlay: AsAny + Send {
 pub(crate) struct Layer {
     pub overlay: Box<dyn Overlay>,
     pub then: Option<Then>,
+    /// For a box about the tab in front (its links, renaming it, answering
+    /// its Claude, ...), the tab as its header names it ("tab 1 ·
+    /// planning"): such a box alone goes beside a narrow lone pane, as a
+    /// pane (`Server::about_tab`).
+    pub about: Option<String>,
 }
 
 /// A client's overlays, the top one taking its input, and what the status
@@ -377,6 +383,9 @@ pub(crate) struct Layer {
 pub struct Stack {
     pub(crate) layers: Vec<Layer>,
     pub(crate) look: Look,
+    /// The tab the next box opened is about, while `Server::about_tab`
+    /// opens it.
+    pub(crate) about_next: Option<String>,
     /// The status line's message (tmux's `display-message`) and when it goes.
     pub(crate) note: Option<(String, Instant)>,
     /// Whether the client's terminal was asked for every mouse movement
@@ -443,10 +452,11 @@ impl Stack {
     }
 
     /// Draws the overlays over the frame, bottom first, and the status
-    /// line's message over the status line. A box that goes in the middle
-    /// goes in the middle of `beside` instead, the empty columns beside a
-    /// narrow lone pane, when it fits there and nothing under it fills the
-    /// screen.
+    /// line's message over the status line. A box about the tab that goes
+    /// in the middle is drawn as a pane in `beside` instead, the empty
+    /// columns beside a narrow lone pane, when it fits there and nothing
+    /// under it fills the screen; every other box stays in the middle of
+    /// the screen (UX 2.0 boards 111 and 112).
     pub fn draw(&mut self, frame: &mut Frame, beside: Option<Rect>) {
         // A message kept from before the status line went (UX 2.0 turned on
         // while one was up) has no row to go in, and is left undrawn.
@@ -482,14 +492,31 @@ impl Stack {
             return;
         }
         let mut look = self.look;
-        look.middle = beside;
+        let mut beside = beside;
         // Where the shadow of the topmost box so far is in the frame's images.
         let mut shadow: Option<usize> = None;
         for layer in &mut self.layers {
             if layer.overlay.covers_screen() {
-                look.middle = None;
+                beside = None;
             }
+            look.middle = beside.filter(|_| layer.about.is_some());
             layer.overlay.draw_frame(frame, &look);
+            let header = layer.overlay.drawn().and_then(|d| d.header_end);
+            if let (Some((from, to)), Some(tab)) = (header, &layer.about) {
+                // A pane beside the lone pane: no shadow, nothing dimmed,
+                // the tab it is about named after its title.
+                let words = format!("   {tab}");
+                let y = layer.overlay.drawn().map_or(0, |d| d.outer.y);
+                let style = ratatui::style::Style::new().fg(look.theme.dim);
+                draw::put_line(
+                    &mut frame.buf,
+                    from,
+                    y,
+                    to.saturating_sub(from),
+                    &ratatui::text::Line::from(Span::styled(words, style)),
+                );
+                continue;
+            }
             if let Some(outer) = layer.overlay.stands_out() {
                 dim_behind(&mut frame.buf, outer, &look.theme);
                 // Only the topmost box casts a shadow: one under a box over
@@ -672,6 +699,7 @@ mod tests {
             stack.layers.push(Layer {
                 overlay: Box::new(Message::new(text, 5)),
                 then: None,
+                about: None,
             });
         }
         let mut f = frame_behind(60, 12);

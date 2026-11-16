@@ -98,6 +98,7 @@ mod tests {
             rows: vec![(6, 0), (7, 1), (8, 2)],
             clickable: vec![7, 8],
             close: Some(Rect::new(26, 5, 3, 1)),
+            header_end: None,
         };
         assert_eq!(drawn.pointer(12, 7, true), Some(Pointer::Hand));
         assert_eq!(drawn.pointer(12, 6, true), Some(Pointer::Arrow));

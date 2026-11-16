@@ -65,8 +65,36 @@ impl Server {
             overlay.open_near(at);
         }
         c.overlays.look = Look::read_for(c.truecolor());
-        c.overlays.layers.push(Layer { overlay, then });
+        let about = c.overlays.about_next.take();
+        c.overlays.layers.push(Layer {
+            overlay,
+            then,
+            about,
+        });
         self.overlays_changed(client);
+    }
+
+    /// Opens a box about a tab with `open` (its links, renaming it,
+    /// answering its Claude, which note is its, its menu, Work on this
+    /// item), marked so that it goes beside a narrow lone pane as a pane
+    /// when the tab is the one in front of the client (UX 2.0 board 111);
+    /// every other box goes in the middle.
+    pub fn about_tab(&mut self, client: ClientId, tab: TabId, open: impl FnOnce(&mut Server)) {
+        let in_front = self
+            .clients
+            .get(&client)
+            .and_then(|c| self.session(&c.session))
+            .is_some_and(|s| s.current == tab);
+        let header =
+            in_front.then(|| format!("tab {} · {}", self.tab_number(tab), self.tab_label(tab)));
+        if let Some(c) = self.clients.get_mut(&client) {
+            c.overlays.about_next = header;
+        }
+        open(self);
+        // A box `open` didn't open leaves nothing for the next one.
+        if let Some(c) = self.clients.get_mut(&client) {
+            c.overlays.about_next = None;
+        }
     }
 
     /// Asks a question; `then` is told whether it was answered yes.

@@ -217,6 +217,10 @@ pub struct Drawn {
     pub clickable: Vec<u16>,
     /// The close button's cells, when it has one.
     pub close: Option<Rect>,
+    /// Drawn as a pane beside a narrow lone pane (`draw_pane`): the
+    /// header's columns after its title, up to the close button, where the
+    /// tab it is about is named.
+    pub header_end: Option<(u16, u16)>,
 }
 
 /// What a mouse event landed on.
@@ -329,21 +333,19 @@ pub fn gesture(m: &Mouse) -> Gesture {
     }
 }
 
-/// Whether a `Share` box of `cols_pct` of `m`'s columns fits in them
-/// with a column clear each side.
-fn share_fits(m: Rect, cols_pct: u16) -> bool {
-    (m.width as usize * cols_pct as usize / 100).max(40) + 2 <= m.width as usize
-}
+/// The narrowest the empty columns beside a lone pane are for a `Share`
+/// box about the tab to be drawn there as a pane, as a `Share` box is at
+/// its narrowest.
+const PANE_LEAST: u16 = 40;
 
-/// How many columns a `Share` box of `cols_pct` takes its share of: the
-/// empty columns beside a narrow lone pane where it goes there
-/// (`Look::middle`), else the screen's, so a box that lays out its own
-/// lines does so at the width `draw_box` gives it.
-pub fn share_across(screen: Rect, look: &Look, cols_pct: u16) -> u16 {
+/// Where a `Share` box about the tab goes as a pane (`Look::middle`, the
+/// empty columns beside a narrow lone pane, when they are wide enough), so
+/// a box that lays out its own lines (the picker) does so at the size
+/// `draw_box` gives it.
+pub fn pane_beside(screen: Rect, look: &Look) -> Option<Rect> {
     look.middle
         .map(|m| m.intersection(screen))
-        .filter(|m| share_fits(*m, cols_pct))
-        .map_or(screen.width, |m| m.width)
+        .filter(|m| m.width >= PANE_LEAST && m.height >= 3)
 }
 
 /// Draws a box over what is in the buffer and gives where it went. The
@@ -362,21 +364,9 @@ pub fn draw_box(buf: &mut Buffer, spec: &BoxSpec<'_>, look: &Look) -> Drawn {
     // A row clear above and below, as modalBox kept, so the status line
     // stays in sight.
     let room = (rows as usize).saturating_sub(4 + keys_rows).max(1);
-    // Beside a narrow lone pane, a box that goes in the middle goes in the
-    // middle of the empty columns there, a share of them for a `Share`,
-    // when it fits with a column clear each side.
-    let beside = look
-        .middle
-        .filter(|_| matches!(spec.place, Place::Center | Place::Share { .. }))
-        .map(|m| m.intersection(screen))
-        .filter(|m| match spec.place {
-            Place::Share { cols_pct, .. } => share_fits(*m, cols_pct),
-            _ => m.width > 4,
-        });
     let (inner_w, shown) = match spec.place {
         Place::Share { cols_pct, rows_pct } => {
-            let across = beside.map_or(cols, |m| m.width);
-            let w = (across as usize * cols_pct as usize / 100)
+            let w = (cols as usize * cols_pct as usize / 100)
                 .max(40)
                 .min(cols as usize)
                 - 2;
@@ -407,6 +397,16 @@ pub fn draw_box(buf: &mut Buffer, spec: &BoxSpec<'_>, look: &Look) -> Drawn {
         }
     };
     let outer_w = inner_w as u16 + 2;
+    // A box about the tab, beside a narrow lone pane, is a pane there when
+    // it fits (`Look::middle`, set only for such a box).
+    let pane = match spec.place {
+        Place::Share { .. } => pane_beside(screen, look),
+        Place::Center => pane_beside(screen, look).filter(|m| outer_w <= m.width),
+        _ => None,
+    };
+    if let Some(m) = pane {
+        return draw_pane(buf, spec, look, m, close, keys_line);
+    }
     let outer_h = (shown + 2 + keys_rows) as u16;
     let outer_h = outer_h.min(rows);
     let (left, top) = match spec.place {
@@ -433,16 +433,10 @@ pub fn draw_box(buf: &mut Buffer, spec: &BoxSpec<'_>, look: &Look) -> Drawn {
                 top.min(rows.saturating_sub(outer_h)),
             )
         }
-        _ => match beside.filter(|m| outer_w + 2 <= m.width) {
-            Some(m) => (
-                m.x + (m.width - outer_w) / 2,
-                rows.saturating_sub(outer_h) / 2,
-            ),
-            None => (
-                cols.saturating_sub(outer_w) / 2,
-                rows.saturating_sub(outer_h) / 2,
-            ),
-        },
+        _ => (
+            cols.saturating_sub(outer_w) / 2,
+            rows.saturating_sub(outer_h) / 2,
+        ),
     };
     let outer = Rect::new(left, top, outer_w, outer_h).intersection(screen);
     let inner = Rect::new(
@@ -506,6 +500,98 @@ pub fn draw_box(buf: &mut Buffer, spec: &BoxSpec<'_>, look: &Look) -> Drawn {
         );
         Rect::new(x, t, close_w as u16, 1)
     });
+    let (rows, clickable) = draw_inside(buf, spec, look, inner, keys_line);
+    Drawn {
+        outer,
+        inner,
+        rows,
+        clickable,
+        close: close_at,
+        header_end: None,
+    }
+}
+
+/// A box about the tab drawn as a pane in the empty columns `m` beside a
+/// narrow lone pane (UX 2.0 board 111): as tall as they are, on the base
+/// surface as the pane beside it, a header line naming it (the tab named
+/// after it by `Stack::draw`, at `Drawn::header_end`) with the close
+/// button at its right end, the rule at the pane's edge its only border,
+/// and no shadow; its lines and keys laid out as a box's.
+fn draw_pane(
+    buf: &mut Buffer,
+    spec: &BoxSpec<'_>,
+    look: &Look,
+    m: Rect,
+    close: bool,
+    keys_line: Option<String>,
+) -> Drawn {
+    for y in m.top()..m.bottom() {
+        for x in m.left()..m.right() {
+            buf[(x, y)].reset();
+        }
+    }
+    let header = Rect::new(m.x, m.y, m.width, 1);
+    buf.set_style(
+        header,
+        Style::new().bg(super::kit::Surface::Panel.color(&look.theme)),
+    );
+    let close_w = if close { width(CLOSE) as u16 } else { 0 };
+    // The close button a column in from the edge, as the board has it.
+    let close_at = close.then(|| Rect::new(m.right() - 1 - close_w, m.y, close_w, 1));
+    if let Some(at) = close_at {
+        let mut style = Style::new().fg(look.theme.dim);
+        if spec.close_lit {
+            style = style.add_modifier(Modifier::REVERSED);
+        }
+        put_line(
+            buf,
+            at.x,
+            at.y,
+            at.width,
+            &Line::from(Span::styled(CLOSE, style)),
+        );
+    }
+    let room = m.width.saturating_sub(3 + close_w) as usize;
+    let title = cut(spec.title, room);
+    let style = Style::new()
+        .fg(look.theme.bright)
+        .add_modifier(Modifier::BOLD);
+    let header_end = put_line(
+        buf,
+        m.x + 1,
+        m.y,
+        room as u16,
+        &Line::from(Span::styled(title, style)),
+    );
+    // A blank row under the header, a column clear each side.
+    let inner = Rect::new(
+        m.x + 1,
+        m.y + 2,
+        m.width.saturating_sub(2),
+        m.height.saturating_sub(2),
+    );
+    let (rows, clickable) = draw_inside(buf, spec, look, inner, keys_line);
+    Drawn {
+        outer: m,
+        inner,
+        rows,
+        clickable,
+        close: close_at,
+        header_end: Some((header_end, m.x + m.width - 1 - close_w)),
+    }
+}
+
+/// A box's lines from the top of `inner`, and its keys on its last row
+/// with a blank one above; gives the screen row of each line shown and the
+/// rows a click means something on.
+fn draw_inside(
+    buf: &mut Buffer,
+    spec: &BoxSpec<'_>,
+    look: &Look,
+    inner: Rect,
+    keys_line: Option<String>,
+) -> (Vec<(u16, usize)>, Vec<u16>) {
+    let keys_rows = if keys_line.is_some() { 2 } else { 0 };
     let mut drawn_rows = Vec::new();
     let mut clickable = Vec::new();
     let line_rows = inner.height.saturating_sub(keys_rows as u16);
@@ -537,13 +623,7 @@ pub fn draw_box(buf: &mut Buffer, spec: &BoxSpec<'_>, look: &Look) -> Drawn {
             &Line::from(Span::styled(keys, Style::new().fg(look.theme.dim))),
         );
     }
-    Drawn {
-        outer,
-        inner,
-        rows: drawn_rows,
-        clickable,
-        close: close_at,
-    }
+    (drawn_rows, clickable)
 }
 
 #[cfg(test)]
@@ -675,55 +755,53 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_box_that_goes_in_the_middle_goes_beside_a_narrow_pane_when_it_fits() {
+    fn a_box_about_the_tab_is_a_pane_beside_a_narrow_lone_pane_when_it_fits() {
         let lines = [BoxLine::text(" Open", Style::new())];
         let spare = Rect::new(100, 0, 140, 40);
         let drawn = |place, middle| {
             let mut buf = Buffer::empty(Rect::new(0, 0, 240, 40));
             let mut spec = BoxSpec::new("Box", &lines);
             spec.place = place;
+            spec.keys = Some("esc close");
             let look = Look {
                 middle,
                 ..Look::default()
             };
-            draw_box(&mut buf, &spec, &look).outer
+            (draw_box(&mut buf, &spec, &look), buf)
         };
-        let centered = drawn(Place::Center, Some(spare));
-        assert_eq!(centered.x, 100 + (140 - centered.width) / 2);
-        assert_eq!(
-            centered.y,
-            drawn(Place::Center, None).y,
-            "its height and row as in the middle"
-        );
-        // A share of the spare columns, not of the screen.
+        // The spare columns whole, its title on their first row, its first
+        // line under a blank one and its keys on the last row.
+        let (pane, buf) = drawn(Place::Center, Some(spare));
+        assert_eq!(pane.outer, spare);
+        assert_eq!(buf[(101, 0)].symbol(), "B");
+        assert_eq!(pane.rows.first(), Some(&(2, 0)));
+        assert_eq!(buf[(102, 39)].symbol(), "e");
+        let (to, until) = pane.header_end.expect("a pane names its tab");
+        assert!(to > 101 && until < 240 && to < until, "{to}..{until}");
+        // No box edge: the rule at the pane's edge is its border.
+        assert_eq!(buf[(100, 0)].symbol(), " ");
         let share = Place::Share {
             cols_pct: 60,
             rows_pct: 60,
         };
-        let shared = drawn(share, Some(spare));
-        assert_eq!(shared.width, 140 * 60 / 100);
+        assert_eq!(drawn(share, Some(spare)).0.outer, spare);
+        let screen = Rect::new(0, 0, 240, 40);
         let beside = Look {
             middle: Some(spare),
             ..Look::default()
         };
-        let screen = Rect::new(0, 0, 240, 40);
-        assert_eq!(
-            share_across(screen, &beside, 60),
-            140,
-            "callers lay out at its width"
-        );
-        assert_eq!(share_across(screen, &Look::default(), 60), 240);
-        assert!(shared.x > 100 && shared.right() < 240, "{shared:?}");
+        assert_eq!(pane_beside(screen, &beside), Some(spare));
+        assert_eq!(pane_beside(screen, &Look::default()), None);
         // Too few columns: the middle of the screen, as before.
-        let narrow = Rect::new(200, 0, 30, 40);
+        let narrow = Rect::new(210, 0, 30, 40);
         assert_eq!(
-            drawn(Place::Center, Some(narrow)),
-            drawn(Place::Center, None)
+            drawn(Place::Center, Some(narrow)).0,
+            drawn(Place::Center, None).0
         );
-        assert_eq!(drawn(share, Some(narrow)), drawn(share, None));
+        assert_eq!(drawn(share, Some(narrow)).0, drawn(share, None).0);
         // A box beside a click stays beside it.
         let near = Place::Near { x: 10, y: 5 };
-        assert_eq!(drawn(near, Some(spare)), drawn(near, None));
+        assert_eq!(drawn(near, Some(spare)).0, drawn(near, None).0);
     }
 
     #[test]

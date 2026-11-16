@@ -650,6 +650,10 @@ impl Overlay for WorkItemBox {
         self.drawn.as_ref().map(|d| d.outer)
     }
 
+    fn drawn(&self) -> Option<&Drawn> {
+        self.drawn.as_ref()
+    }
+
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
         let inner = (buf.area.width as usize).saturating_sub(6).min(WIDTH);
         let (mut lines, mut parts) = self.lines(inner, look);

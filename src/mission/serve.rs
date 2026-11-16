@@ -3464,15 +3464,10 @@ impl Server {
             list.retain(|c| !matches!(c.act, Do::AnswerWith { .. }));
             None
         };
-        self.mission_menu(
-            client,
-            format!("{} {}", tab.index, tab.name),
-            body,
-            list,
-            None,
-            None,
-            false,
-        );
+        let title = format!("{} {}", tab.index, tab.name);
+        self.about_tab(client, tab.id, move |s| {
+            s.mission_menu(client, title, body, list, None, None, false);
+        });
     }
 
     /// A waiting tab's question's options, each answering it as its number
@@ -5243,38 +5238,40 @@ impl Server {
         )
         .text(had)
         .empty_ok();
-        self.open(
-            client,
-            Box::new(ask),
-            Some(Box::new(move |server: &mut Server, client, outcome| {
-                let Outcome::Picked(p) = outcome else {
-                    return;
-                };
-                // The tab's `@tab_name`, as tmux's rename set it, so `/wt`,
-                // `/wtn` and `/shape`, which set and clear that option, still
-                // name the tab after a rename here.
-                if let Some(t) = server.tabs.get_mut(&tab) {
-                    t.name.clear();
-                    // The name typed is the tab's whole title now, so a
-                    // full title kept for a note's item goes.
-                    t.opts.remove("@tab_title");
-                    if p.value.is_empty() {
-                        t.opts.remove("@tab_name");
-                    } else {
-                        t.opts.insert("@tab_name".into(), p.value.clone());
+        self.about_tab(client, tab, move |s| {
+            s.open(
+                client,
+                Box::new(ask),
+                Some(Box::new(move |server: &mut Server, client, outcome| {
+                    let Outcome::Picked(p) = outcome else {
+                        return;
+                    };
+                    // The tab's `@tab_name`, as tmux's rename set it, so `/wt`,
+                    // `/wtn` and `/shape`, which set and clear that option, still
+                    // name the tab after a rename here.
+                    if let Some(t) = server.tabs.get_mut(&tab) {
+                        t.name.clear();
+                        // The name typed is the tab's whole title now, so a
+                        // full title kept for a note's item goes.
+                        t.opts.remove("@tab_title");
+                        if p.value.is_empty() {
+                            t.opts.remove("@tab_name");
+                        } else {
+                            t.opts.insert("@tab_name".into(), p.value.clone());
+                        }
                     }
-                }
-                server.name_tab(tab);
-                server.mission_redraw();
-                server.dirty_tab(tab);
-                let said = if p.value.is_empty() {
-                    "Named after its directory again.".to_string()
-                } else {
-                    format!("Renamed it {}.", p.value)
-                };
-                server.mission_note(client, said);
-            })),
-        );
+                    server.name_tab(tab);
+                    server.mission_redraw();
+                    server.dirty_tab(tab);
+                    let said = if p.value.is_empty() {
+                        "Named after its directory again.".to_string()
+                    } else {
+                        format!("Renamed it {}.", p.value)
+                    };
+                    server.mission_note(client, said);
+                })),
+            )
+        });
     }
 
     /// A tab opened in `dir` in the client's session, its shell typing
@@ -5398,15 +5395,17 @@ impl Server {
         }
         let found = self.prompt_of(tab);
         let title = format!("Answer {} {}", model.index, model.name);
-        self.open(
-            client,
-            Box::new(AnswerBox::new(title, found, note)),
-            Some(Box::new(move |server: &mut Server, client, outcome| {
-                if let Outcome::Picked(p) = outcome {
-                    server.answer_tab(client, tab, &p.value);
-                }
-            })),
-        );
+        self.about_tab(client, tab, move |s| {
+            s.open(
+                client,
+                Box::new(AnswerBox::new(title, found, note)),
+                Some(Box::new(move |server: &mut Server, client, outcome| {
+                    if let Outcome::Picked(p) = outcome {
+                        server.answer_tab(client, tab, &p.value);
+                    }
+                })),
+            )
+        });
     }
 
     /// Presses a reply in a tab: an option's number, `submit`, your own

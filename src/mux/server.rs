@@ -4032,7 +4032,7 @@ impl Server {
     }
 
     /// The empty columns beside the narrow lone pane of a session's tab in
-    /// front, where a box that goes in the middle goes instead (Settings'
+    /// front, where a box about the tab goes as a pane (Settings'
     /// `boxes_beside_narrow_pane`).
     fn boxes_beside(&self, session: &str) -> Option<Rect> {
         if !crate::settings::is_on("boxes_beside_narrow_pane") {
@@ -4169,9 +4169,9 @@ impl Server {
             if spread != area {
                 let theme = c.overlays.look().theme;
                 compose::draw_spare(&mut frame.buf, spread, area, &theme);
-                // A box that keeps the keys hides them, since one that
-                // goes in the middle opens in these columns.
-                let boxed = !c.overlays.lets_through()
+                // A box about the tab hides them, since it opens in these
+                // columns as a pane.
+                let boxed = c.overlays.layers.iter().any(|l| l.about.is_some())
                     && crate::settings::is_on("boxes_beside_narrow_pane");
                 if crate::settings::is_on("spare_hints")
                     && !boxed

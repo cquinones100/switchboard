@@ -149,8 +149,7 @@ impl Overlay for Finder {
         spec.keys = Some("type to filter  ↑↓ move  ↵ open  esc close");
         spec.closes = false;
         let area = buf.area;
-        let across = draw::share_across(area, look, 85);
-        let inner_w = (across as usize * 85 / 100)
+        let inner_w = (area.width as usize * 85 / 100)
             .max(40)
             .min(area.width as usize)
             - 2;

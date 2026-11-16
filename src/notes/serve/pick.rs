@@ -144,18 +144,20 @@ impl Server {
                 )
                 .named("tab-note")
                 .prompt("Note: ");
-                server.pick(client, picker, move |server, _, picked| {
-                    let Some(picked) = picked else {
-                        return;
-                    };
-                    if picked.value.is_empty() {
-                        server.set_tab_opt(tab, "@tab_note_asked", Some("1"));
-                    } else {
-                        server.set_tab_opt(tab, "@tab_note", Some(&picked.value));
-                        server.set_tab_opt(tab, super::BY_YOU, Some(&picked.value));
-                        // Notes beside the tab already shows it now.
-                        server.notes_show(tab);
-                    }
+                server.about_tab(client, tab, move |s| {
+                    s.pick(client, picker, move |server, _, picked| {
+                        let Some(picked) = picked else {
+                            return;
+                        };
+                        if picked.value.is_empty() {
+                            server.set_tab_opt(tab, "@tab_note_asked", Some("1"));
+                        } else {
+                            server.set_tab_opt(tab, "@tab_note", Some(&picked.value));
+                            server.set_tab_opt(tab, super::BY_YOU, Some(&picked.value));
+                            // Notes beside the tab already shows it now.
+                            server.notes_show(tab);
+                        }
+                    })
                 });
             },
         );
