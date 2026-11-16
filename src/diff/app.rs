@@ -331,6 +331,36 @@ enum ListRow {
     Chapter(usize),
     Label(String, Tone, Option<usize>),
     Blank,
+    /// The whole change's files and lines added and deleted, with their
+    /// bar, as GitHub's PR header shows them; filtered, the files left's.
+    Totals,
+    /// A faint line under the list, saying what the path filter hides.
+    Hint(String),
+}
+
+/// The whole change's files, lines added and lines deleted, summed once
+/// each time the change is read; a binary file counts as a file with no
+/// lines, and a file both staged and changed since as one file.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Totals {
+    files: usize,
+    added: usize,
+    deleted: usize,
+}
+
+impl Totals {
+    fn of<'a>(entries: impl IntoIterator<Item = &'a Entry> + Clone) -> Totals {
+        let files: HashSet<&str> = entries
+            .clone()
+            .into_iter()
+            .map(|e| e.path.as_str())
+            .collect();
+        Totals {
+            files: files.len(),
+            added: entries.clone().into_iter().map(|e| e.additions).sum(),
+            deleted: entries.into_iter().map(|e| e.deletions).sum(),
+        }
+    }
 }
 
 /// The story's state.
@@ -556,6 +586,11 @@ pub struct App {
     nothing: Option<String>,
     closed: bool,
     change: Option<Change>,
+    totals: Totals,
+    /// The files the path filter leaves, summed as each sort narrows them,
+    /// and how many files (by path) the list may show before it filters.
+    left: Totals,
+    listed_files: usize,
     /// The diff as the story reads it: its hunks and what Haiku is given.
     hunks: story::Hunks,
     input: String,
@@ -699,6 +734,9 @@ impl App {
             nothing: None,
             closed: false,
             change: None,
+            totals: Totals::default(),
+            left: Totals::default(),
+            listed_files: 0,
             hunks: Default::default(),
             input: String::new(),
             reading: Reading::default(),
@@ -911,6 +949,7 @@ impl App {
     fn loaded_now(&mut self, change: Change) {
         self.loading = None;
         self.read_input(&change);
+        self.totals = Totals::of(&change.entries);
         self.change = Some(change);
         self.order = (0..self.entries().len()).collect();
         self.show_story(None);
@@ -1036,6 +1075,7 @@ impl App {
         self.visual = None;
         self.read_input(&change);
         let (key, _) = story::key_of(change.told_part());
+        self.totals = Totals::of(&change.entries);
         self.change = Some(change);
         self.order = (0..self.entries().len()).collect();
         if self.story_key.as_deref() == Some(key.as_str()) {
@@ -1126,8 +1166,9 @@ impl App {
             .get(self.view)
             .and_then(|&i| self.entry(i))
             .map(Entry::key);
-        let mut order: Vec<usize> = self
-            .listable()
+        let listable = self.listable();
+        self.listed_files = Totals::of(listable.iter().map(|&i| &self.entries()[i])).files;
+        let mut order: Vec<usize> = listable
             .into_iter()
             .filter(|&i| path_matches(&self.path_filter, &self.entries()[i].path))
             .collect();
@@ -1156,6 +1197,7 @@ impl App {
                     }
                 })
         });
+        self.left = Totals::of(order.iter().map(|&i| &entries[i]));
         self.order = order;
         if let Some(keep) = keep
             && let Some(at) = self.order.iter().position(|&i| entries[i].key() == keep)
@@ -2791,6 +2833,9 @@ impl App {
             .and_then(|&i| self.entry(i))
             .map_or(Section::Committed, |e| e.section);
         let mut rows = vec![ListRow::Header(first)];
+        if !self.entries().is_empty() {
+            rows.extend([ListRow::Totals, ListRow::Blank]);
+        }
         if self.telling == Telling::Waiting {
             rows.push(ListRow::Loading);
         }
@@ -2907,6 +2952,23 @@ impl App {
                 rows.push(ListRow::Label(GENERATED_LAST.into(), Tone::Dim, None));
             }
             rows.push(ListRow::File(k));
+        }
+        // What the filter hides, under the list, and how to clear it.
+        let hidden = self.listed_files.saturating_sub(self.left.files);
+        if !self.path_filter.trim().is_empty() && hidden > 0 {
+            let clears = if self.filtering {
+                "Esc clears it"
+            } else {
+                "/ then Esc clears it"
+            };
+            rows.extend([
+                ListRow::Blank,
+                ListRow::Hint(format!(
+                    "{hidden} file{} hidden by the filter",
+                    if hidden == 1 { "" } else { "s" }
+                )),
+                ListRow::Hint(clears.into()),
+            ]);
         }
         rows
     }
@@ -4302,6 +4364,128 @@ mod tests {
         shown.iter().map(|l| l.chars().take(30).collect()).collect()
     }
 
+    /// A change of the files given, with no text to show.
+    fn app_of(entries: Vec<Entry>, ux2: bool) -> App {
+        let (tx, _rx) = channel();
+        let mut app = App::new(Options { ux2, ..opts() }, 100, 16, tx);
+        app.loaded(Change {
+            top: PathBuf::from("/repo"),
+            base: "origin/main".into(),
+            left: "L".into(),
+            right: "R".into(),
+            entries,
+            diff: String::new(),
+            staged: None,
+            raw_commits: String::new(),
+            uncommitted: None,
+        });
+        app
+    }
+
+    #[test]
+    fn the_list_heads_with_the_whole_changes_files_lines_and_bar() {
+        for ux2 in [false, true] {
+            let mut app = app_of(
+                vec![entry("src/a.rs", 'M', 10, 2), entry("src/b.rs", 'A', 3, 0)],
+                ux2,
+            );
+            let shown = screen(&mut app);
+            let at = line_with(&shown, "2 files  +13 −2");
+            assert!(shown[at].contains("■■■■■"), "{shown:?}");
+            assert!(at < line_with(&list(&shown), "a.rs"), "{shown:?}");
+            let row = app.totals_row(40);
+            let cells = |tone: Tone| {
+                row.iter()
+                    .filter(|s| s.style == tone.style(&app.theme()))
+                    .map(|s| s.content.chars().filter(|c| *c == '■').count())
+                    .sum::<usize>()
+            };
+            assert_eq!((cells(Tone::Done), cells(Tone::Failed)), (4, 1));
+        }
+    }
+
+    #[test]
+    fn a_binary_file_adds_a_file_to_the_totals_and_no_lines() {
+        let mut bin = entry("logo.png", 'A', 0, 0);
+        bin.binary = true;
+        let mut app = app_of(vec![entry("src/a.rs", 'M', 10, 2), bin], true);
+        line_with(&screen(&mut app), "2 files  +10 −2");
+    }
+
+    #[test]
+    fn the_totals_count_only_the_files_the_path_filter_leaves() {
+        let mut app = app_of(
+            vec![
+                entry("src/a.rs", 'M', 10, 2),
+                entry("src/b.rs", 'A', 3, 0),
+                entry("tests/c.rs", 'A', 7, 1),
+            ],
+            true,
+        );
+        line_with(&screen(&mut app), "3 files  +20 −3");
+        press(&mut app, "/src");
+        let shown = list(&screen(&mut app));
+        line_with(&shown, "2 of 3 files  +13 −2");
+        line_with(&shown, "1 file hidden by the filter");
+        line_with(&shown, "Esc clears it");
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        line_with(&list(&screen(&mut app)), "/ then Esc clears it");
+        press(&mut app, "/");
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let shown = list(&screen(&mut app));
+        line_with(&shown, "3 files  +20 −3");
+        assert!(!shown.iter().any(|l| l.contains("hidden")), "{shown:?}");
+    }
+
+    #[test]
+    fn a_file_both_staged_and_changed_since_counts_once_filtered_too() {
+        let mut staged = entry("a.txt", 'M', 2, 1);
+        staged.section = Section::Staged;
+        let mut unstaged = entry("a.txt", 'M', 1, 0);
+        unstaged.section = Section::Unstaged;
+        let mut app = app_of(vec![staged, unstaged, entry("b.txt", 'M', 4, 0)], true);
+        line_with(&screen(&mut app), "2 files  +7 −1");
+        press(&mut app, "/a.txt");
+        let shown = list(&screen(&mut app));
+        line_with(&shown, "1 of 2 files  +3 −1");
+        line_with(&shown, "1 file hidden by the filter");
+    }
+
+    #[test]
+    fn totals_too_wide_for_the_list_close_up_before_cutting_the_bar() {
+        let mut app = app_of(
+            (0..10)
+                .map(|n| entry(&format!("src/f{n}.rs"), 'M', 18, 4))
+                .collect(),
+            true,
+        );
+        app.path_filter = "f1".into();
+        app.sort();
+        let row: String = app
+            .totals_row(28)
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(row.trim_end(), " 1 of 10 files +18 −4 ■■■■■");
+        // Wider still, the words are cut and the bar, its deleted cell
+        // last, stays whole.
+        let mut app = app_of(
+            (0..20)
+                .map(|n| entry(&format!("f{n}.rs"), 'M', 184, 36))
+                .collect(),
+            true,
+        );
+        app.path_filter = "f1".into();
+        app.sort();
+        let row = app.totals_row(30);
+        let text: String = row.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(width(&text), 30, "{text:?}");
+        assert!(text.ends_with(" ■■■■■"), "{text:?}");
+        let last = row.last().unwrap();
+        assert_eq!(last.content, "", "no faint cells");
+        assert_eq!(row[row.len() - 2].content, "■", "the deleted cell kept");
+    }
+
     #[test]
     fn easy_mode_puts_a_button_for_each_key_at_the_bottom_and_a_click_presses_it() {
         let mut app = app();
@@ -5399,14 +5583,16 @@ mod tests {
                 modifiers: KeyModifiers::NONE,
             })
         };
+        // Past the totals and the blank under them, then past README.md.
+        wheel(&mut app, 2, true);
         wheel(&mut app, 2, true);
         let shown = list(&screen(&mut app));
-        assert_eq!(app.list_top, 3, "{shown:?}");
+        assert_eq!(app.list_top, 5, "{shown:?}");
         assert!(!shown.iter().any(|l| l.contains("README.md")), "{shown:?}");
         assert_eq!(app.current().unwrap().path, "README.md", "still chosen");
         press(&mut app, "j");
         screen(&mut app);
-        assert_eq!(app.list_top, 2, "a key brings the cursor back in sight");
+        assert_eq!(app.list_top, 4, "a key brings the cursor back in sight");
         // The answer's window: the view moves, the cursor along with it.
         press(&mut app, "ga");
         press(&mut app, "Why?");

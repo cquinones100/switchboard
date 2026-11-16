@@ -780,6 +780,32 @@ pub fn meter(used: u8, cells: usize, tone: Tone, theme: &Theme) -> Vec<Span<'sta
     ]
 }
 
+/// A change's added and deleted lines as GitHub's bar draws them: `cells`
+/// cells shared out by the two, added first in the done tone, deleted in
+/// the failed tone, faint for what rounding leaves. A share under one
+/// cell but above none takes one, so a single deleted line still shows.
+pub fn diff_meter(added: usize, deleted: usize, cells: usize, theme: &Theme) -> Vec<Span<'static>> {
+    let (green, red) = diff_shares(added, deleted, cells);
+    vec![
+        Span::styled("■".repeat(green), Tone::Done.style(theme)),
+        Span::styled("■".repeat(red), Tone::Failed.style(theme)),
+        Span::styled("■".repeat(cells - green - red), Tone::Faint.style(theme)),
+    ]
+}
+
+/// How many of `cells` cells `diff_meter` gives the added and the deleted
+/// lines: each its rounded share (a half up), at least one when it has any.
+pub fn diff_shares(added: usize, deleted: usize, cells: usize) -> (usize, usize) {
+    let all = added + deleted;
+    if all == 0 || cells == 0 {
+        return (0, 0);
+    }
+    let share = |n: usize| ((n * cells * 2 + all) / (all * 2)).max(usize::from(n > 0));
+    let green = share(added).min(cells - usize::from(deleted > 0 && cells > 1));
+    let red = share(deleted).min(cells - green);
+    (green, red)
+}
+
 /// A stage's cell, `cols` wide with its ends: the text centered on its
 /// tone's tint, bold while working or failed; a waiting one dim on the
 /// neutral tint (`Tone::Dim`).
@@ -1868,6 +1894,17 @@ mod tests {
     }
 
     const T: Theme = Theme::DARK;
+
+    #[test]
+    fn a_diff_meter_shares_its_cells_by_the_lines_added_and_deleted() {
+        assert_eq!(diff_shares(13, 2, 5), (4, 1));
+        assert_eq!(diff_shares(184, 36, 5), (4, 1));
+        assert_eq!(diff_shares(99, 1, 5), (4, 1), "one deleted line shows");
+        assert_eq!(diff_shares(1, 99, 5), (1, 4), "one added line shows");
+        assert_eq!(diff_shares(10, 0, 5), (5, 0));
+        assert_eq!(diff_shares(0, 0, 5), (0, 0), "no lines, all faint");
+        assert_eq!(text(&diff_meter(13, 2, 5, &T)), "■■■■■");
+    }
 
     fn fixed(natural: usize, cap: usize) -> Col {
         Col::Fixed {

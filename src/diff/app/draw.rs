@@ -310,6 +310,7 @@ impl App {
                         | ListRow::Chapter(_)
                         | ListRow::Label(..)
                         | ListRow::Blank
+                        | ListRow::Totals
                 )
             {
                 first -= 1;
@@ -442,6 +443,23 @@ impl App {
                     put_line(buf, 0, y, w, &Spans::from(spans));
                 }
                 ListRow::Blank => {}
+                ListRow::Totals => {
+                    let spans = self.totals_row(w as usize);
+                    put_line(buf, 0, y, w, &Spans::from(spans));
+                }
+                ListRow::Hint(text) => {
+                    let spans = vec![
+                        Span::raw(" "),
+                        Span::styled(text.clone(), Tone::Faint.style(&theme)),
+                    ];
+                    put_line(
+                        buf,
+                        0,
+                        y,
+                        w,
+                        &Spans::from(kit::fit(spans, w as usize, Style::new())),
+                    );
+                }
                 ListRow::File(k) if self.opts.ux2 => {
                     let Some(e) = self.order.get(*k).and_then(|&i| entries.get(i)) else {
                         continue;
@@ -582,6 +600,68 @@ impl App {
         if self.order.is_empty() {
             Self::put(buf, 1, 2, w.saturating_sub(1), "No changes", self.faint());
         }
+    }
+
+    /// The totals at the head of the list, as board 105 draws them: the
+    /// change's files, its lines added and deleted, and five cells shared
+    /// out by them, cut to the list's width; with the path filter set, as
+    /// board 106 does, the files left of how many and their lines alone.
+    pub(super) fn totals_row(&self, cols: usize) -> Vec<Span<'static>> {
+        let theme = self.theme();
+        let plural = |n: usize| if n == 1 { "" } else { "s" };
+        let (t, files) = if self.path_filter.trim().is_empty() {
+            let t = self.totals;
+            (
+                t,
+                vec![Span::styled(
+                    format!("{} file{}", t.files, plural(t.files)),
+                    Tone::Text.bold(&theme),
+                )],
+            )
+        } else {
+            let (left, of) = (self.left.files, self.listed_files);
+            (
+                self.left,
+                vec![
+                    Span::styled(left.to_string(), Tone::Text.bold(&theme)),
+                    Span::styled(
+                        format!(" of {of} file{}", plural(of)),
+                        Tone::Dim.style(&theme),
+                    ),
+                ],
+            )
+        };
+        // Two spaces between the parts where they fit, one where they
+        // don't; the words then cut before the bar, which keeps its room
+        // so its deleted share is never the part cut.
+        let words = |gap: &'static str| {
+            let mut spans = vec![Span::raw(" ")];
+            spans.extend(files.clone());
+            spans.extend([
+                Span::raw(gap),
+                Span::styled(format!("+{}", t.added), Tone::Done.bold(&theme)),
+                Span::raw(" "),
+                Span::styled(format!("−{}", t.deleted), Tone::Failed.bold(&theme)),
+                Span::raw(gap),
+            ]);
+            spans
+        };
+        let meter = kit::diff_meter(t.added, t.deleted, 5, &theme);
+        let room = cols.saturating_sub(kit::spans_width(&meter));
+        let wide = words("  ");
+        let mut spans = if kit::spans_width(&wide) <= room {
+            wide
+        } else {
+            let mut narrow = words(" ");
+            narrow.pop();
+            if kit::spans_width(&narrow) >= room {
+                narrow = kit::fit(narrow, room.saturating_sub(1), Style::new());
+            }
+            narrow.push(Span::raw(" "));
+            narrow
+        };
+        spans.extend(meter);
+        kit::fit(spans, cols, Style::new())
     }
 
     /// A file's row in UX 2.0's list, after the chosen row's bar: a ● in
