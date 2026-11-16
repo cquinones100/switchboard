@@ -422,14 +422,14 @@ fn a_tab_of_the_work_a_note_mode_lands_without_asking_only_once_leak_check_finds
 }
 
 #[test]
-fn a_landing_whose_tests_run_in_ci_checks_for_leaks_pushes_its_own_branch_waits_and_deletes_it() {
+fn a_landing_runs_its_tests_through_land_lock_test_which_pushes_and_deletes_its_ci_branch() {
     let all = skills();
     let (_, queue) = all
         .iter()
         .find(|(name, _)| name == "queue-and-clean")
         .unwrap();
     let section = queue
-        .split("**The tests in CI.**")
+        .split("**Running the tests.**")
         .nth(1)
         .and_then(|rest| rest.split("\n1. **The note.**").next())
         .expect("the section");
@@ -438,48 +438,50 @@ fn a_landing_whose_tests_run_in_ci_checks_for_leaks_pushes_its_own_branch_waits_
             .find(said)
             .unwrap_or_else(|| panic!("the section says {said}"))
     };
-    assert!(section.starts_with(" With `testIn` `ci`, steps 5 and 9"));
+    assert!(section.starts_with(" Steps 5 and 9 run them with `<lock> test --base <base>`"));
     at("`switchboard landing --json`'s `ciBranch`");
     assert!(
         !queue.contains("ci/<branch>"),
         "the worktree's branch name is never part of what is pushed"
     );
-    let leak = at("`switchboard leak-check <base>..HEAD`");
-    let push = at("`git push --force origin HEAD:refs/heads/ci/land-<id>`");
-    let wait = at(
-        "`switchboard wait-ci --repo <owner/name> --sha \"$(git rev-parse HEAD)\" --same-as \"$(git merge-base HEAD origin/<name>)\"`",
-    );
-    assert!(
-        leak < push && push < wait,
-        "leak-check, then the push, then the wait"
-    );
     for said in [
-        "- `passed <sha>`",
-        "- `base-failing <sha> <run id> <job names>`",
-        "- `change-failing <sha> <run id> <job names>`",
-        "- `mixed <sha> <run id> <job names>`",
-        "go on as for `base-failing`; otherwise as for `change-failing`",
-        "`gh run view <run id> --log-failed`",
-        "- `none`: no CI ran on the branch, or every job it has was skipped there. Say so in a line and run the tests here",
-        "- `timeout`: a failure",
-        "being the repository the commit was pushed to",
-        "**Delete the branch** on every way out of this section, with `git push origin --delete ci/land-<id>`",
+        "- `passed …` (exit 0)",
+        "- `no tests` (exit 0)",
+        "- `not set` (exit 5)",
+        "- `failed <n of m> <log>` (exit 1)",
+        "- `failed in CI …`, `mixed in CI …` (exit 1), `base-failing in CI …` (exit 4)",
+        "- `failed in CI <sha> <run id> <job names>`: none of the failures is the default branch's",
+        "- `base-failing in CI <sha> <run id> <job names>`: every test",
+        "- `mixed in CI <sha> <run id> <job names>`",
+        "go on as for `base-failing`; otherwise as for `failed in CI`",
+        "waits for its CI as `switchboard wait-ci --same-as` does",
+        "`leak-check found <n>` (exit 3)",
+        "- `timeout ci/land-<id>` (exit 6)",
+        "`switchboard leak-check <base>..HEAD` first",
+        "deletes the branch again on every way out, an interrupt included",
+        "**Push to ci/land-<id>**, which runs it again with `--leak-ok`",
+        "**Run them here**, which runs it again with `--here`",
+        "`gh run view <run id> -R <owner/name> --log-failed`",
     ] {
         at(said);
     }
+    assert!(
+        !queue.contains("git push --force origin HEAD:refs/heads/ci/land-<id>"),
+        "the push is the command's, not Claude's"
+    );
     let line = |start: &str| {
         queue
             .lines()
             .find(|l| l.starts_with(start))
             .unwrap_or_else(|| panic!("no {start}"))
     };
-    for step in [
-        "5. **The tests pass before the review**",
-        "9. **Onto the default branch as it is now, again**",
-    ] {
-        assert!(line(step).contains("with `testIn` `ci`"), "{step}");
-    }
-    assert!(line("**Not yet**").contains("delete the landing's `ci/land-<id>`"));
+    assert!(
+        line("5. **The tests pass before the review**").contains("`<lock> test --base \"$base\"`")
+    );
+    assert!(
+        line("9. **Onto the default branch as it is now, again**")
+            .contains("`<lock> test --again --base origin/<name>`")
+    );
     assert!(
         line("11. **Push**").contains("the landing's `ci/land-<id>` deleted"),
         "the push deletes it"
@@ -649,7 +651,6 @@ fn a_clean_rebase_is_checked_with_after_rebase_and_a_failing_default_branch_is_w
         "when `afterRebase` is set, the rebase had no conflict",
         "`switchboard wait-ci --now --repo <owner/name> --sha \"$(git rev-parse origin/<name>)\"`",
         "`<lock> phase checking after the rebase`",
-        "`<lock> phase testing again`",
         "`<lock> phase check failed`",
     ] {
         assert!(nine.contains(said), "step 9 says {said}");

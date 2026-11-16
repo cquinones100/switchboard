@@ -151,6 +151,21 @@ impl Onto {
     }
 }
 
+/// Whether a landing may run the repository's code in the worktree `here`
+/// (`beforePush`, `land-lock test`'s tests), with your credentials: only
+/// where it holds nothing but your own and origin's commits, or the main
+/// clone (the parent of `common`, its git directory) is in trusted-dirs
+/// (src/trust.rs), as update-target, and never someone else's PR checked
+/// out untrusted.
+pub(crate) fn may_run_its_code(common: &Path, here: &Path) -> bool {
+    let home = crate::paths::home();
+    !crate::trust::is_untrusted(here)
+        && (common
+            .parent()
+            .is_some_and(|root| crate::trust::listed(&home, root))
+            || crate::trust::yours_or_listed(&home, here).is_ok())
+}
+
 fn onto(common: &Path, here: &Path, target: Option<String>) -> Result<Onto, String> {
     match target {
         Some(name) => {
@@ -300,16 +315,7 @@ pub(crate) fn main(
     // The commit the gate checked, which beforePush must leave as it is.
     let checked = worktree::git_at(here, &["rev-parse", "HEAD"]).unwrap_or_default();
     if !steps.before_push.trim().is_empty() {
-        // It runs the repository's code with your credentials: only where
-        // the worktree holds nothing but your own and origin's commits, or
-        // the main clone is in trusted-dirs (src/trust.rs), as update-target.
-        let home = crate::paths::home();
-        if crate::trust::is_untrusted(here)
-            || (!common
-                .parent()
-                .is_some_and(|root| crate::trust::listed(&home, root))
-                && crate::trust::yours_or_listed(&home, here).is_err())
-        {
+        if !may_run_its_code(common, here) {
             return failed(
                 lock,
                 "the worktree holds code that isn't yours, so beforePush isn't run; trust the main clone in trusted-dirs to land it",

@@ -517,28 +517,8 @@ pub fn main(args: Vec<String>) -> ExitCode {
     }
     let timeout = minutes("timeout", 45.0);
     let grace = minutes("grace", 3.0);
-    let poll = number(std::env::var("WAIT_CI_POLL_SECS").ok())
-        .map(Duration::from_secs_f64)
-        .unwrap_or(POLL);
+    let poll = poll();
     let same_as = arg("same-as").filter(|base| !base.is_empty());
-    // A failure's line: `failed`, or with `--same-as` whose it is. A
-    // failure that is the base's so far while other jobs of the landing
-    // still run is no answer yet when waiting (a job yet to fail may be
-    // the change's), and `mixed` at one look.
-    let failed = |run: &str, names: &[String], all: &[Value], waiting: bool| {
-        let word = match &same_as {
-            Some(base) => {
-                let still_running = all.iter().any(|c| text(c, "status") != "completed");
-                match util::block_on(blame_of(&repo, all, base)) {
-                    Blame::Base if still_running && waiting => return None,
-                    Blame::Base if still_running => Blame::Mixed.word(),
-                    blame => blame.word(),
-                }
-            }
-            None => "failed",
-        };
-        Some(format!("{word} {sha} {run} {}", names.join(", ")))
-    };
     if args.iter().any(|a| a == "--now") {
         return match util::block_on(check_runs(&repo, &sha, SOURCE)) {
             Ok((_, all)) => {
@@ -546,7 +526,8 @@ pub fn main(args: Vec<String>) -> ExitCode {
                     "{}",
                     match seen(&all) {
                         Seen::Failed { run, names, .. } => {
-                            failed(&run, &names, &all, false).unwrap_or_default()
+                            failure_line(&repo, &sha, same_as.as_deref(), &run, &names, &all, false)
+                                .unwrap_or_default()
                         }
                         Seen::Passed => format!("passed {sha}"),
                         Seen::Running => format!("running {sha}"),
@@ -561,38 +542,120 @@ pub fn main(args: Vec<String>) -> ExitCode {
             }
         };
     }
+    match wait(&repo, &sha, same_as.as_deref(), timeout, grace, poll) {
+        Ok(answer) => {
+            println!("{answer}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("wait-ci: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// A failure's line: `failed`, or with `same_as` whose it is. A failure
+/// that is the base's so far while other jobs of the landing still run is
+/// no answer yet when `waiting` (a job yet to fail may be the change's),
+/// and `mixed` at one look.
+fn failure_line(
+    repo: &str,
+    sha: &str,
+    same_as: Option<&str>,
+    run: &str,
+    names: &[String],
+    all: &[Value],
+    waiting: bool,
+) -> Option<String> {
+    let word = match same_as {
+        Some(base) => {
+            let still_running = all.iter().any(|c| text(c, "status") != "completed");
+            match util::block_on(blame_of(repo, all, base)) {
+                Blame::Base if still_running && waiting => return None,
+                Blame::Base if still_running => Blame::Mixed.word(),
+                blame => blame.word(),
+            }
+        }
+        None => "failed",
+    };
+    Some(format!("{word} {sha} {run} {}", names.join(", ")))
+}
+
+/// Waits for the commit `sha`'s CI in `repo`, looking every `poll`, and
+/// gives the line `wait-ci` prints (`passed <sha>`, `failed <sha> <run id>
+/// <job names>` or, with `same_as`, whose failure it is, `none` or
+/// `timeout`); an error when GitHub refuses the token, which waiting won't
+/// mend. `land-lock test` waits on it too.
+pub fn wait(
+    repo: &str,
+    sha: &str,
+    same_as: Option<&str>,
+    timeout: Duration,
+    grace: Duration,
+    poll: Duration,
+) -> Result<String, String> {
     let started = Instant::now();
     let mut passed_before = false;
     loop {
-        let looked = util::block_on(check_runs(&repo, &sha, SOURCE));
-        let (now, all) = match looked {
+        let (now, all) = match util::block_on(check_runs(repo, sha, SOURCE)) {
             Ok((_, all)) => (Some(seen(&all)), all),
             // No token, or one GitHub refuses, won't mend by waiting, so
             // it is said at once rather than spending the whole timeout.
-            Err(e) if refused(&e) => {
-                eprintln!("wait-ci: {e}");
-                return ExitCode::FAILURE;
-            }
+            Err(e) if refused(&e) => return Err(e.to_string()),
             // A network blip or a rate limit: try again next round.
             Err(_) => (None, Vec::new()),
         };
         let answer = match &now {
-            Some(Seen::Failed { run, names, .. }) => match failed(run, names, &all, true) {
-                None if started.elapsed() > timeout => Some("timeout".to_string()),
-                line => line,
-            },
+            Some(Seen::Failed { run, names, .. }) => {
+                match failure_line(repo, sha, same_as, run, names, &all, true) {
+                    None if started.elapsed() > timeout => Some("timeout".to_string()),
+                    line => line,
+                }
+            }
             Some(Seen::Passed) if passed_before => Some(format!("passed {sha}")),
             Some(Seen::Nothing) if started.elapsed() > grace => Some("none".to_string()),
             _ if started.elapsed() > timeout => Some("timeout".to_string()),
             _ => None,
         };
         if let Some(answer) = answer {
-            println!("{answer}");
-            return ExitCode::SUCCESS;
+            return Ok(answer);
         }
         passed_before = now == Some(Seen::Passed);
         std::thread::sleep(poll);
     }
+}
+
+/// The logs of the commit `sha`'s failed check runs in `repo`, each under
+/// a line naming its job and read as `ciboard::readable` shows them (no
+/// timestamps, colors or group marks, so a runner's summary starts its line), for `land-lock test` to keep as a CI run's
+/// output; empty when GitHub gives none.
+pub fn failed_logs(repo: &str, sha: &str) -> String {
+    util::block_on(async {
+        let Ok((_, all)) = check_runs(repo, sha, SOURCE).await else {
+            return String::new();
+        };
+        let mut out = String::new();
+        for job in all.iter().filter(|c| has_failed(c)) {
+            out.push_str(&format!("==> {} <==\n", text(job, "name")));
+            match log_of(repo, job).await {
+                Some(log) => out.push_str(&crate::sources::ciboard::readable(&log)),
+                None => out.push_str("(no log: see the check's page)"),
+            }
+            out.push('\n');
+        }
+        out
+    })
+}
+
+/// How often `wait` looks: every 30 seconds, or every `WAIT_CI_POLL_SECS`,
+/// for the tests.
+pub fn poll() -> Duration {
+    std::env::var("WAIT_CI_POLL_SECS")
+        .ok()
+        .and_then(|t| t.trim().parse::<f64>().ok())
+        .filter(|t| t.is_finite() && *t >= 0.0)
+        .map(Duration::from_secs_f64)
+        .unwrap_or(POLL)
 }
 
 #[cfg(test)]

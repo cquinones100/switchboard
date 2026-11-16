@@ -100,6 +100,9 @@
 //!                     {round, title, fixed_by} to the list; `output` keeps
 //!                     the file whole beside it (landing-output.log) and its
 //!                     last 40 lines in the record; `clear` starts it again
+//! land-lock test [--leak-ok] [--command <cmd>] [--base <ref>] [--again] [--here]
+//!                     runs the landing's tests, here or in CI as repos.json
+//!                     says, and records them (src/cmd/land_test.rs)
 //! ```
 //!
 //! A landing holds it only to rebase, test and push: one whose change no
@@ -154,7 +157,7 @@ const MUTEX_TRIES: u32 = 500;
 /// `requeue`'s mark, in the worktree's own git directory.
 const REQUEUED: &str = "land-requeued";
 
-const USAGE: &str = "usage: land-lock [--target <branch>] take|wait|release|requeue|leave|holder|queue|move|phase [words]|record ...|squash ...|push [--asked]|landed <short hash> <branch>|autolanded <short hash> [--plan <file>] [--apply-range <from> <to>] [item]";
+const USAGE: &str = "usage: land-lock [--target <branch>] take|wait|release|requeue|leave|holder|queue|move|phase [words]|record ...|squash ...|test ...|push [--asked]|landed <short hash> <branch>|autolanded <short hash> [--plan <file>] [--apply-range <from> <to>] [item]";
 
 pub fn main(mut args: Vec<String>) -> ExitCode {
     let mut given_target = None;
@@ -183,6 +186,9 @@ pub fn main(mut args: Vec<String>) -> ExitCode {
     }
     if command == "record" {
         return record(&args[1..]);
+    }
+    if command == "test" {
+        return crate::cmd::land_test::main(&args[1..], given_target);
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let found = common_dir(&cwd).and_then(|common| {
