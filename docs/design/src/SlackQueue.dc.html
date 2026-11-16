@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Slack queue, proposed</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Lato:wght@400;700;900&amp;family=JetBrains+Mono:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+.board{width:1260px;height:910px;box-sizing:border-box;background:#0b0c12;position:relative;font-family:Lato,-apple-system,'Helvetica Neue',sans-serif;-webkit-font-smoothing:antialiased}
+.idx{position:absolute;top:0;right:12px;font:11px/16px 'JetBrains Mono',monospace;color:#8d93a8;text-decoration:none;z-index:3}
+.phone{position:absolute;left:10px;top:42px;width:400px;height:856px;border-radius:52px;background:#000;box-shadow:0 0 0 2px #2a2c33}
+.screen{position:absolute;inset:8px;border-radius:44px;overflow:hidden;background:#1a1d21;color:#d1d2d3;display:flex;flex-direction:column;font-size:15px;line-height:21px}
+.status{height:44px;flex:none;display:flex;align-items:flex-end;justify-content:space-between;padding:0 30px 4px 34px;font-size:15px;color:#fff}
+.status .sig{font-size:11px;letter-spacing:1px}
+.top{flex:none;display:flex;align-items:center;gap:10px;padding:6px 14px 8px;border-bottom:1px solid #2b2d31}
+.top .back{font-size:30px;line-height:26px;color:#d1d2d3;width:16px}
+.top .title{flex:1;display:flex;align-items:center;gap:8px}
+.top .title b{display:block;font-size:16px;line-height:19px;color:#fff}
+.top .sub{display:block;font-size:12px;line-height:15px;color:#ababad}
+.top .icons{color:#ababad;font-size:17px;letter-spacing:8px}
+.tabs{flex:none;display:flex;gap:22px;padding:0 16px;border-bottom:1px solid #2b2d31;font-size:14px;color:#ababad}
+.tabs span{padding:9px 0 8px}
+.tabs .on{color:#fff;font-weight:700;box-shadow:inset 0 -2px #fff}
+.feed{flex:1;overflow:hidden;padding:4px 0 6px;display:flex;flex-direction:column;justify-content:flex-end}
+.feed.top-aligned{justify-content:flex-start}
+.m{display:flex;gap:10px;padding:7px 14px}
+.m.cont{padding-top:1px}
+.av{flex:none;width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:18px}
+.av.app{background:#5fd7ff;color:#11131a}
+.av.me{background:#c98a6b;color:#fff;font-size:16px}
+.av.none{height:0}
+.av.sm{width:26px;height:26px;border-radius:6px;font-size:14px}
+.av.mini{display:inline-block;width:18px;height:18px;border-radius:4px;margin-right:2px;vertical-align:middle}
+.m-body{flex:1;min-width:0}
+.m-head{display:flex;align-items:baseline;gap:6px;margin-bottom:1px}
+.m-head b{color:#fff;font-size:15px}
+.tag{font-size:10px;line-height:14px;font-weight:700;color:#ababad;background:#2c2d30;border-radius:3px;padding:0 4px}
+.time{font-size:12px;color:#ababad}
+.m-rep{font-size:12px;color:#ababad;margin-bottom:1px}
+.link{color:#1d9bd1}
+code{font-family:'JetBrains Mono',Menlo,monospace;font-size:12.5px;color:#e8912d;background:#222529;border:1px solid #35373b;border-radius:3px;padding:0 3px}
+.b-sec{margin:1px 0 3px;word-wrap:break-word}
+.b-head{font-weight:900;font-size:17px;line-height:23px;color:#fff;margin:4px 0 2px}
+.b-ctx{font-size:12.5px;line-height:17px;color:#ababad;margin:3px 0}
+.b-ctx code{font-size:11px}
+.b-div{height:1px;background:#35373b;margin:9px 0}
+.b-code{font-family:'JetBrains Mono',Menlo,monospace;font-size:11.5px;line-height:16px;background:#222529;border:1px solid #35373b;border-radius:4px;padding:6px 8px;margin:4px 0;white-space:pre-wrap;color:#d1d2d3}
+.b-list{margin:2px 0 4px;padding-left:20px}
+.b-act{display:flex;flex-wrap:wrap;gap:7px;margin:7px 0 4px}
+.b-acc{display:flex;align-items:flex-start;gap:10px}
+.b-acc .b-sec{flex:1}
+.btn{display:inline-block;max-width:100%;box-sizing:border-box;overflow:hidden;text-overflow:ellipsis;font-size:14px;font-weight:700;line-height:18px;padding:6px 12px;border-radius:8px;border:1px solid #565856;color:#d1d2d3;background:#1a1d21;white-space:nowrap}
+.btn.primary{background:#007a5a;border-color:#007a5a;color:#fff}
+.btn.danger{color:#e01e5a;border-color:#e01e5a55}
+.reacts{display:flex;gap:5px;margin:5px 0 2px}
+.react{font-size:13px;border-radius:12px;padding:1px 8px;background:#2c2d30;border:1px solid #2c2d30}
+.react.mine{background:#1d9bd122;border-color:#1d9bd1}
+.react small{font-size:11px;color:#d1d2d3}
+.edited{font-size:11px;color:#868686;margin-left:4px}
+.day{display:flex;align-items:center;gap:8px;margin:6px 14px;font-size:12px;font-weight:700;color:#d1d2d3}
+.day:before,.day:after{content:'';flex:1;height:1px;background:#35373b}
+.day span{border:1px solid #35373b;border-radius:12px;padding:1px 10px}
+.replies{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700;margin:3px 0}
+.rlast{font-weight:400;color:#868686;font-size:12px}
+.compose{flex:none;margin:6px 10px 26px;border:1px solid #35373b;border-radius:10px;display:flex;align-items:center;gap:10px;padding:9px 12px;color:#868686}
+.compose .field{flex:1}
+.compose .plus,.compose .mic{color:#ababad}
+.home{flex:1;overflow:hidden;padding:8px 16px}
+.dim-under{position:absolute;inset:0;background:rgba(0,0,0,.55)}
+.sheet{position:absolute;left:0;right:0;bottom:0;top:54px;background:#1a1d21;border-radius:14px 14px 0 0;display:flex;flex-direction:column;box-shadow:0 -8px 30px rgba(0,0,0,.5)}
+.grab{width:38px;height:5px;border-radius:3px;background:#4a4c52;margin:7px auto 2px}
+.mtop{display:flex;align-items:center;justify-content:space-between;padding:6px 16px 10px;border-bottom:1px solid #2b2d31;font-size:15px}
+.mtop b{color:#fff;font-size:16px}
+.mclose{color:#d1d2d3}
+.msub{color:#1d9bd1;font-weight:700;min-width:44px;text-align:right}
+.mbody{flex:1;overflow:hidden;padding:10px 16px}
+.in{margin:8px 0 12px}
+.in-l{font-weight:700;color:#fff;margin-bottom:5px}
+.in-f{border:1px solid #565856;border-radius:8px;padding:8px 10px;color:#d1d2d3}
+.in-f.ph{color:#868686}
+.in-f.multi{min-height:66px}
+.in-f.sel{display:flex;justify-content:space-between}
+.in-h{font-size:12.5px;color:#ababad;margin-top:4px}
+.cap{position:absolute;top:14px;font:12px/16px 'JetBrains Mono',monospace;color:#8d93a8}
+.note{position:absolute;left:14px;right:14px;bottom:-2px;font:11px/14px 'JetBrains Mono',monospace;color:#565b6e}
+</style>
+</helmet>
+<div class="board">
+<a href="Index.dc.html" class="idx">index</a>
+<div class="cap" style="left:34px">The queue on the Home tab</div><div class="phone" style="left:10px"><div class="screen">
+<div class="status"><b>2:15</b><span class="sig">▂▄▆ ᯤ ▮</span></div>
+<div class="top"><span class="back">‹</span><div class="title"><div class="av app sm">⌁</div><div><b>Switchboard</b><span class="sub">App</span></div></div><span class="icons">⌕ ⓘ</span></div><div class="tabs"><span class="">Messages</span><span class="on">Home</span><span>About</span></div>
+<div class="home">
+<div class="b-head">🤖 Autopilot · switchboard's queue</div>
+<div class="b-sec">Working · 2 tabs at once · done about <b>6:40 PM</b></div>
+<div class="b-sec">🔵 <code>ap-139</code> show uncommitted changes in M-d · tab 3 <span class="link">thread ›</span><br>🟡 <code>ap-140</code> give each note a stable ID · waiting on you <span class="link">thread ›</span></div>
+<div class="b-div"></div>
+<div class="b-sec"><b>Next</b></div>
+<div class="b-acc"><div class="b-sec"><code>ap-142</code>  cycle through idle tabs<br><span class="b-ctx">1st · settled</span></div><span class="btn" style="padding:4px 10px">⋯</span></div>
+<div class="b-acc"><div class="b-sec"><code>ap-145</code>  faster hover highlight<br><span class="b-ctx">2nd · after ap-140</span></div><span class="btn" style="padding:4px 10px">⋯</span></div>
+<div class="b-acc"><div class="b-sec"><code>ap-147</code>  a condensed sidebar for short screens<br><span class="b-ctx">3rd · 🟡 needs a choice</span></div><span class="btn" style="padding:4px 10px">⋯</span></div>
+<div class="b-acc"><div class="b-sec"><code>ap-148</code>  cache PR and ticket images<br><span class="b-ctx">4th · settled</span></div><span class="btn" style="padding:4px 10px">⋯</span></div>
+<div class="b-ctx">Parked 3 · Landed today 2: ap-138, ap-136</div>
+<div class="b-act"><span class="btn">Pause</span><span class="btn">Parked and landed</span><span class="btn">Settings</span></div>
+<div class="b-ctx">As of 2:15 PM</div>
+</div>
+</div></div>
+<div class="cap" style="left:454px">⋯ on an item: its menu</div><div class="phone" style="left:430px"><div class="screen">
+<div class="status"><b>2:15</b><span class="sig">▂▄▆ ᯤ ▮</span></div>
+<div class="top"><span class="back">‹</span><div class="title"><div class="av app sm">⌁</div><div><b>Switchboard</b><span class="sub">App</span></div></div><span class="icons">⌕ ⓘ</span></div><div class="tabs"><span class="">Messages</span><span class="on">Home</span><span>About</span></div>
+<div class="home">
+<div class="b-head">🤖 Autopilot · switchboard's queue</div>
+<div class="b-sec">Working · 2 tabs at once · done about <b>6:40 PM</b></div>
+<div class="b-sec">🔵 <code>ap-139</code> show uncommitted changes in M-d · tab 3 <span class="link">thread ›</span><br>🟡 <code>ap-140</code> give each note a stable ID · waiting on you <span class="link">thread ›</span></div>
+<div class="b-div"></div>
+<div class="b-sec"><b>Next</b></div>
+<div class="b-acc"><div class="b-sec"><code>ap-142</code>  cycle through idle tabs<br><span class="b-ctx">1st · settled</span></div><span class="btn" style="padding:4px 10px">⋯</span></div>
+<div class="b-acc"><div class="b-sec"><code>ap-145</code>  faster hover highlight<br><span class="b-ctx">2nd · after ap-140</span></div><span class="btn" style="padding:4px 10px">⋯</span></div>
+<div class="b-acc" style="background:#1d9bd118;border-radius:6px;margin:0 -6px;padding:0 6px"><div class="b-sec"><code>ap-147</code>  a condensed sidebar for short screens<br><span class="b-ctx">3rd · 🟡 needs a choice</span></div><span class="btn" style="padding:4px 10px">⋯</span></div>
+<div class="b-acc"><div class="b-sec"><code>ap-148</code>  cache PR and ticket images<br><span class="b-ctx">4th · settled</span></div><span class="btn" style="padding:4px 10px">⋯</span></div>
+<div class="b-ctx">Parked 3 · Landed today 2: ap-138, ap-136</div>
+<div class="b-act"><span class="btn">Pause</span><span class="btn">Parked and landed</span><span class="btn">Settings</span></div>
+<div class="b-ctx">As of 2:15 PM</div>
+</div><div class="dim-under"></div><div class="sheet" style="top:auto;height:330px"><div class="grab"></div>
+<div class="mbody">
+<div class="b-ctx" style="margin:4px 0 10px"><code>ap-147</code> a condensed sidebar for short screens</div>
+<div class="b-sec" style="padding:9px 0;border-bottom:1px solid #2b2d31;color:#fff">Make its choice…</div>
+<div class="b-sec" style="padding:9px 0;border-bottom:1px solid #2b2d31;color:#fff">Move up</div>
+<div class="b-sec" style="padding:9px 0;border-bottom:1px solid #2b2d31;color:#fff">Move to the top</div>
+<div class="b-sec" style="padding:9px 0;border-bottom:1px solid #2b2d31;color:#fff">Waits on…</div>
+<div class="b-sec" style="padding:9px 0;border-bottom:1px solid #2b2d31;color:#fff">Park it</div>
+<div class="b-sec" style="padding:9px 0;color:#fff">Open its plan</div>
+</div></div>
+</div></div>
+<div class="cap" style="left:874px">Make its choice…: a form</div><div class="phone" style="left:850px"><div class="screen">
+<div class="status"><b>2:15</b><span class="sig">▂▄▆ ᯤ ▮</span></div>
+<div class="top"><span class="back">‹</span><div class="title"><div class="av app sm">⌁</div><div><b>Switchboard</b><span class="sub">App</span></div></div><span class="icons">⌕ ⓘ</span></div><div class="tabs"><span class="">Messages</span><span class="on">Home</span><span>About</span></div>
+<div class="home">
+<div class="b-head">🤖 Autopilot · switchboard's queue</div>
+<div class="b-sec">Working · 2 tabs at once · done about <b>6:40 PM</b></div>
+<div class="b-sec">🔵 <code>ap-139</code> show uncommitted changes in M-d · tab 3 <span class="link">thread ›</span><br>🟡 <code>ap-140</code> give each note a stable ID · waiting on you <span class="link">thread ›</span></div>
+<div class="b-div"></div>
+<div class="b-sec"><b>Next</b></div>
+<div class="b-acc"><div class="b-sec"><code>ap-142</code>  cycle through idle tabs<br><span class="b-ctx">1st · settled</span></div><span class="btn" style="padding:4px 10px">⋯</span></div>
+<div class="b-acc"><div class="b-sec"><code>ap-145</code>  faster hover highlight<br><span class="b-ctx">2nd · after ap-140</span></div><span class="btn" style="padding:4px 10px">⋯</span></div>
+<div class="b-acc" style="background:#1d9bd118;border-radius:6px;margin:0 -6px;padding:0 6px"><div class="b-sec"><code>ap-147</code>  a condensed sidebar for short screens<br><span class="b-ctx">3rd · 🟡 needs a choice</span></div><span class="btn" style="padding:4px 10px">⋯</span></div>
+<div class="b-acc"><div class="b-sec"><code>ap-148</code>  cache PR and ticket images<br><span class="b-ctx">4th · settled</span></div><span class="btn" style="padding:4px 10px">⋯</span></div>
+<div class="b-ctx">Parked 3 · Landed today 2: ap-138, ap-136</div>
+<div class="b-act"><span class="btn">Pause</span><span class="btn">Parked and landed</span><span class="btn">Settings</span></div>
+<div class="b-ctx">As of 2:15 PM</div>
+</div><div class="dim-under"></div><div class="sheet"><div class="grab"></div>
+<div class="mtop"><span class="mclose">Cancel</span><b>ap-147's choice</b><span class="msub">Choose</span></div>
+<div class="mbody">
+<div class="b-sec" style="color:#fff;font-weight:700">Does focus widen the condensed sidebar?</div>
+<div class="b-ctx">From Plan - Condensed sidebar · Decision needed</div>
+<div style="display:flex;gap:10px;margin:10px 0"><span style="flex:none;width:18px;height:18px;border-radius:50%;border:2px solid #1d9bd1;box-sizing:border-box;box-shadow:inset 0 0 0 4px #1a1d21;background:#1d9bd1"></span><div><div style="color:#fff">Widen the focused tab's row; the rest stay condensed</div><div class="in-h">Recommended. Its name and state show whole.</div></div></div>
+<div style="display:flex;gap:10px;margin:10px 0"><span style="flex:none;width:18px;height:18px;border-radius:50%;border:2px solid #565856;box-sizing:border-box;"></span><div><div style="color:#fff">Keep every row condensed; focus only lights it</div><div class="in-h">The most rows; the focused name may be cut.</div></div></div>
+<div style="display:flex;gap:10px;margin:10px 0"><span style="flex:none;width:18px;height:18px;border-radius:50%;border:2px solid #565856;box-sizing:border-box;"></span><div><div style="color:#fff">Talk it over first, in a tab of its own</div><div class="in-h">Opens a tab on the plan; the item waits.</div></div></div>
+<div class="b-ctx" style="margin-top:14px">Choosing writes it into the plan note and makes ap-147 settled, 3rd in Next.</div>
+</div></div>
+</div></div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1260,"height":910}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+<!--
+Autopilot's section of the Home tab (boards 50 and 81) lists the repository's queue in place of the note's counts: what is working and needs you, Next in order, each item's ID, place and what it needs, an overflow menu (⋯) on each.
+The overflow's options are Slack's own overflow menu: Make its choice… (only while it needs one), Move up, Move to the top, Waits on…, Park it, Open its plan; the queue redraws in place.
+Make its choice… opens a modal of the plan's options as radio buttons, the recommended first and chosen; Waits on… a modal with a multi-select of the open items.
+Every press goes through slack.rs's press_from and every form through submission_from, as the relay's other buttons do.
+-->
+</body>
+</html>

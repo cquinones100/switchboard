@@ -151,3 +151,15 @@ The relay's DM, threads and Home tab.
 - [52. Proposed: autopilot's settings as a Slack form that also starts it](https://cquinones100.github.io/switchboard/design/52.html)
 - [81. Proposed: autopilot on the Home tab, working, paused by you and paused by its spend limit, edited in place](https://cquinones100.github.io/switchboard/design/81.html)
 - [82. Proposed: jump from Home to a tab's thread, its name and a Thread › button opening it at the newest message](https://cquinones100.github.io/switchboard/design/82.html)
+
+## Proposal: autopilot's queue outside the note
+
+- [92. Beside a lone pane: a new row, Autopilot's queue, opening the tab's repository's queue in the spare columns](https://cquinones100.github.io/switchboard/design/92.html)
+- [93. The queue as a pane right of the tab: working, needs you, Next in order, parked folded, landed today with its Done line; each item's ID](https://cquinones100.github.io/switchboard/design/93.html)
+- [94. Enter on a queued item: make its choice, open its plan, work on it now, move it, what it waits on, park it, copy its ID](https://cquinones100.github.io/switchboard/design/94.html)
+- [95. Move…: the item lifts and follows the arrows or a drag; Enter puts it down, Esc puts it back](https://cquinones100.github.io/switchboard/design/95.html)
+- [96. Waits on…: every open item in every queue, a switch each, in place of After: lines](https://cquinones100.github.io/switchboard/design/96.html)
+- [97. Make its choice…: the plan's question and options as its note words them, the recommended one first](https://cquinones100.github.io/switchboard/design/97.html)
+- [98. Mission control's Autopilot from the queue: each card its ID and place, Next in order with what it needs, Parked under the board, Landed with its Done line](https://cquinones100.github.io/switchboard/design/98.html)
+- [99. A plan note is the item: its bar names its ID, place, holds and what it needs, Enter opening the queue's menu; ticking an option makes the choice](https://cquinones100.github.io/switchboard/design/99.html)
+- [100. Slack's Home tab lists the queue, an overflow menu on each item, and Make its choice… as a form](https://cquinones100.github.io/switchboard/design/100.html)
