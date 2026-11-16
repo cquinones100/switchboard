@@ -1891,8 +1891,47 @@ fn a_squash_asks_first_then_shows_its_progress_and_esc_cancels_it() {
 }
 
 #[test]
+fn line_numbers_are_each_lines_own_unless_relative_numbers_is_on() {
+    let (_dir, mut store) = temp("absolute-numbers");
+    let path = store.create("", Some("Nums"));
+    write(&path, "# Nums\n\n## Part\na\nb\n## Next\nc\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&path, false, false);
+    keys(&mut app, "3G");
+    let gutter = |app: &mut App, rows: usize| {
+        let shown = screen(app);
+        let (x, y) = (app.geo.note.x as usize, app.geo.text.y as usize);
+        (y..y + rows)
+            .map(|y| shown[y].chars().skip(x).take(3).collect::<String>())
+            .map(|n| n.trim().to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        gutter(&mut app, 7),
+        ["1", "2", "3", "4", "5", "6", "7"],
+        "off, every line shows its own number"
+    );
+    app.opts.relative_numbers = true;
+    assert_eq!(
+        gutter(&mut app, 7),
+        ["2", "1", "3", "1", "2", "3", "4"],
+        "on, the distance from the cursor's line, which shows its own"
+    );
+    keys(&mut app, "zc");
+    assert_eq!(
+        gutter(&mut app, 5),
+        ["2", "1", "3", "3", "4"],
+        "a closed fold's hidden lines are counted"
+    );
+    app.opts.relative_numbers = false;
+    assert_eq!(gutter(&mut app, 5), ["1", "2", "3", "6", "7"]);
+}
+
+#[test]
 fn the_note_window_numbers_its_lines_relative_to_the_cursor() {
     let (_dir, mut app) = started("numbers");
+    app.opts.relative_numbers = true;
     keys(&mut app, "gg");
     let shown = screen(&mut app);
     let x = app.geo.note.x as usize;

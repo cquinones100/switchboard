@@ -697,6 +697,13 @@
     "default": true
   },
   {
+    "key": "notes_relative_numbers",
+    "category": "Notes",
+    "label": "Relative line numbers",
+    "description": "Notes numbers each line by its distance from the cursor's line, the cursor's line showing its own number, as Vim's relativenumber, for jumps like 5j. Off, every line shows its own number.",
+    "default": false
+  },
+  {
     "key": "notes_item_chips",
     "category": "Notes",
     "label": "Chips on checklist items",

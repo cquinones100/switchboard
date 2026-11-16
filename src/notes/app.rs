@@ -145,8 +145,11 @@ pub struct Options {
     pub list: bool,
     /// A click on a link follows it, as in Notes.
     pub follow_links_on_click: bool,
-    /// Line numbers relative to the cursor's line, for jumps like 5j.
+    /// Line numbers in a gutter left of the note.
     pub numbers: bool,
+    /// The numbers relative to the cursor's line, for jumps like 5j, as
+    /// Vim's `relativenumber` (notes_relative_numbers); else each line's own.
+    pub relative_numbers: bool,
     /// A ticked item and what is under it struck through.
     pub strike_checked: bool,
     /// Ticked items move under the rest, a blank line between.
@@ -187,6 +190,7 @@ impl Default for Options {
             list: true,
             follow_links_on_click: true,
             numbers: true,
+            relative_numbers: false,
             strike_checked: true,
             move_checked_to_bottom: true,
             gap_before_checked: true,
@@ -233,10 +237,17 @@ impl Options {
             item_chips: on("notes_item_chips"),
             scroll_bars: on("scroll_bars"),
             recent: on("notes_recent"),
+            relative_numbers: relative_numbers(&all),
             caps: crate::mux::graphics::apps_round_ends(),
             ..Options::default()
         }
     }
+}
+
+/// Settings' `notes_relative_numbers`, off unless set.
+fn relative_numbers(all: &[settings::Setting]) -> bool {
+    all.iter()
+        .any(|s| s.key == "notes_relative_numbers" && s.value == serde_json::Value::Bool(true))
 }
 
 /// The note open, and what is known of its file.
@@ -2718,10 +2729,12 @@ impl App {
                 self.follow_lines();
             }
             Input::FocusIn => {
-                // The notes_images setting read again, as changing it in
-                // Settings takes the focus away.
+                // The notes_images and notes_relative_numbers settings read
+                // again, as changing them in Settings takes the focus away.
+                let all = settings::read_settings();
+                self.opts.relative_numbers = relative_numbers(&all);
                 if crate::mux::graphics::apps_draw() {
-                    self.images.on = settings::read_settings()
+                    self.images.on = all
                         .iter()
                         .find(|s| s.key == "notes_images")
                         .is_none_or(|s| s.value != serde_json::Value::Bool(false));

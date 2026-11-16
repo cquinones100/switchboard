@@ -1,6 +1,7 @@
 //! Drawing the notes app, split from app.rs for its length: the list on the
 //! left with its cursor's row lit, the note on the right with its toolbar,
-//! its line numbers relative to the cursor's line, its lines wrapped at
+//! its line numbers (relative to the cursor's line with
+//! `notes_relative_numbers` on, else each line's own), its lines wrapped at
 //! words and indented under themselves (Neovim's `linebreak` and
 //! `breakindent`), its folds, and its pictures under their lines; at the
 //! bottom the key help line in easy mode and the line Vim's messages and
@@ -703,17 +704,20 @@ impl App {
                 let first = matches!(s, Shown::Text { first: true, .. } | Shown::Fold { .. });
                 if first {
                     let r = s.row();
-                    let n = if r == cursor_row {
-                        format!("{:<w$}", r + 1, w = number_w as usize - 1)
+                    let w = number_w as usize - 1;
+                    let n = if !self.opts.relative_numbers {
+                        format!("{:>w$}", r + 1)
+                    } else if r == cursor_row {
+                        format!("{:<w$}", r + 1)
                     } else {
-                        format!("{:>w$}", r.abs_diff(cursor_row), w = number_w as usize - 1)
+                        format!("{:>w$}", r.abs_diff(cursor_row))
                     };
                     let style = if r == cursor_row {
                         Style::new().fg(Color::Indexed(if self.opts.light { 236 } else { 250 }))
                     } else {
                         Style::new().fg(Color::Indexed(if self.opts.light { 248 } else { 240 }))
                     };
-                    buf.set_stringn(note.x, y, n, number_w as usize - 1, style);
+                    buf.set_stringn(note.x, y, n, w, style);
                 }
             }
             match s {
