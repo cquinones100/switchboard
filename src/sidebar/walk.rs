@@ -18,7 +18,9 @@
 //! not in the list, a tab
 //! pinned or waiting on you comes first, before the next finished one; the
 //! next press from there picks up where the finished ones were left
-//! (`after`), so the walk still reaches every one.
+//! (`after`), so the walk still reaches every one. Needs you is finished
+//! before Build failing and the notifications: a tab that finished since the
+//! last press, so isn't among the stops noted then, comes before them.
 
 use crate::mux::TabId;
 
@@ -68,6 +70,9 @@ pub struct Walk {
     /// The tab the notifications were last opened from, which counts as
     /// being at them while you are still there.
     notices_from: Option<TabId>,
+    /// The finished tabs it went to since it last reached Build failing or
+    /// the notifications.
+    visited: Vec<Place>,
 }
 
 /// What a press of M-a comes to.
@@ -84,6 +89,10 @@ pub enum Next {
 impl Walk {
     /// The stop to go to from the tab `here`, keeping where the walk got to.
     pub fn next(&mut self, stops: &[Stop], here: TabId) -> Next {
+        // A visited finished tab that left the list since (prompted again)
+        // counts as new when it finishes, whatever this press comes to.
+        self.visited
+            .retain(|p| stops.iter().any(|s| s.place == *p && s.why == Why::Done));
         let n = stops.len();
         if n == 0 {
             return Next::Nothing;
@@ -118,10 +127,12 @@ impl Walk {
             at.is_none_or(|i| matches!(stops[i].why, Why::Done | Why::BuildFailing | Why::Notices));
         let to = match urgent {
             Some(u) if from_finished => {
-                if let Some(i) = at {
-                    self.after = Some(stops[(i + 1) % n].place);
-                } else if let Some(i) = after {
+                // Where the walk was going before it turned aside to a
+                // finished tab (below) comes before the stop after it.
+                if let Some(i) = after {
                     self.after = Some(stops[i].place);
+                } else if let Some(i) = at {
+                    self.after = Some(stops[(i + 1) % n].place);
                 } else if let Some(i) = rest.filter(|&i| i != u) {
                     self.after = Some(stops[i].place);
                 }
@@ -142,6 +153,28 @@ impl Walk {
                 }
             }
         };
+        // Needs you is finished before Build failing and the notifications:
+        // about to go to one of those (on from one, from a stop that left
+        // the list, or back from a detour to an urgent one), a tab that
+        // finished since the last press (not in `rest` or `after`) comes
+        // first, and the walk picks up where it was going after it. One the
+        // walk went to this time round is passed over, since with
+        // done_clears at "prompt" it stays listed once seen (`visited`).
+        let unvisited_done = (0..n).find(|&i| {
+            Some(i) != at && stops[i].why == Why::Done && !self.visited.contains(&stops[i].place)
+        });
+        let to = match unvisited_done {
+            Some(done) if matches!(stops[to].why, Why::BuildFailing | Why::Notices) => {
+                self.after = Some(stops[to].place);
+                done
+            }
+            _ => to,
+        };
+        match stops[to].why {
+            Why::BuildFailing | Why::Notices => self.visited.clear(),
+            Why::Done => self.visited.push(stops[to].place),
+            _ => {}
+        }
         self.window = Some(stops[to].place);
         self.rest = stops[to + 1..].iter().map(|s| s.place).collect();
         if stops[to].place == Place::Notices {
@@ -267,7 +300,8 @@ mod tests {
         // on round, not to them again.
         let mut w = Walk::default();
         let stops = [tab(done_a, Why::Done), tab(done_b, Why::Done), NOTICES];
-        w.window = Some(Place::Tab(TabId(done_b)));
+        assert_eq!(press(&mut w, &stops, 9), at(done_a));
+        assert_eq!(press(&mut w, &stops, done_a), at(done_b));
         assert_eq!(press(&mut w, &stops, done_b), Some(Place::Notices));
         assert_eq!(press(&mut w, &stops, done_b), at(done_a));
 
@@ -310,5 +344,116 @@ mod tests {
         let alone = [tab(failing_a, Why::BuildFailing)];
         assert_eq!(w.next(&alone, TabId(failing_a)), Next::OnlyHere);
         assert_eq!(w.next(&alone, TabId(waiting)), Next::Go(0));
+    }
+
+    #[test]
+    fn a_tab_that_finished_since_the_last_press_comes_before_build_failing() {
+        let (done_a, failing_b, done_c, failing_d, waiting) = (1, 2, 3, 4, 5);
+        let mut w = Walk::default();
+        let stops = [tab(done_a, Why::Done), tab(failing_b, Why::BuildFailing)];
+        assert_eq!(press(&mut w, &stops, 9), at(done_a));
+        // done_a is seen and leaves; done_c finishes meanwhile.
+        let since = [tab(done_c, Why::Done), tab(failing_b, Why::BuildFailing)];
+        assert_eq!(press(&mut w, &since, done_a), at(done_c));
+        let seen = [tab(failing_b, Why::BuildFailing)];
+        assert_eq!(press(&mut w, &seen, done_c), at(failing_b));
+
+        // From a failing tab, one that finished meanwhile comes before the
+        // next failing one, and the walk then goes on to it.
+        let failing = [
+            tab(failing_b, Why::BuildFailing),
+            tab(failing_d, Why::BuildFailing),
+        ];
+        let mut w = Walk::default();
+        assert_eq!(press(&mut w, &failing, 9), at(failing_b));
+        assert_eq!(press(&mut w, &failing, failing_b), at(failing_d));
+        assert_eq!(
+            press(&mut w, &failing, failing_d),
+            at(failing_b),
+            "wrapping"
+        );
+        let finished = [
+            tab(done_c, Why::Done),
+            tab(failing_b, Why::BuildFailing),
+            tab(failing_d, Why::BuildFailing),
+        ];
+        assert_eq!(press(&mut w, &finished, failing_b), at(done_c));
+        assert_eq!(press(&mut w, &failing, done_c), at(failing_d));
+
+        // A tab waiting on you still comes first from a failing one.
+        let both = [
+            tab(waiting, Why::Waiting),
+            tab(done_c, Why::Done),
+            tab(failing_b, Why::BuildFailing),
+        ];
+        assert_eq!(press(&mut w, &both, failing_d), at(waiting));
+
+        // Back from that detour, with the tab still waiting, the finished
+        // one comes before the failing one the walk was going on to.
+        assert_eq!(press(&mut w, &both, waiting), at(done_c));
+        assert_eq!(press(&mut w, &failing, done_c), at(failing_b));
+    }
+
+    #[test]
+    fn a_finished_tab_that_stays_listed_once_seen_doesnt_hold_the_walk() {
+        // done_clears at "prompt": the finished mark stays after a visit.
+        let (waiting, done, failing_b, failing_c) = (1, 2, 3, 4);
+        let stops = [
+            tab(waiting, Why::Waiting),
+            tab(done, Why::Done),
+            tab(failing_b, Why::BuildFailing),
+            tab(failing_c, Why::BuildFailing),
+        ];
+        let mut w = Walk::default();
+        let mut from = failing_b;
+        w.window = at(from);
+        let mut reached = Vec::new();
+        for _ in 0..8 {
+            let to = press(&mut w, &stops, from);
+            reached.push(to);
+            let Some(Place::Tab(TabId(t))) = to else {
+                panic!("went nowhere")
+            };
+            from = t;
+        }
+        assert!(reached.contains(&at(failing_c)), "{reached:?}");
+        assert!(reached.contains(&at(failing_b)), "{reached:?}");
+        assert!(reached.contains(&at(done)), "{reached:?}");
+
+        // Two that finished meanwhile are both visited before the failing
+        // one the walk was going on to.
+        let (done_a, done_b) = (5, 6);
+        let failing = [
+            tab(failing_b, Why::BuildFailing),
+            tab(failing_c, Why::BuildFailing),
+        ];
+        let mut w = Walk::default();
+        assert_eq!(press(&mut w, &failing, 9), at(failing_b));
+        let finished = [
+            tab(done_a, Why::Done),
+            tab(done_b, Why::Done),
+            tab(failing_b, Why::BuildFailing),
+            tab(failing_c, Why::BuildFailing),
+        ];
+        assert_eq!(press(&mut w, &finished, failing_b), at(done_a));
+        assert_eq!(press(&mut w, &finished, done_a), at(done_b));
+        assert_eq!(press(&mut w, &finished, done_b), at(failing_c));
+
+        // A visited finished tab prompted again and finishing anew, while
+        // the walk is away at a waiting tab, is visited again.
+        let mut w = Walk::default();
+        let first = [tab(done_a, Why::Done), tab(failing_b, Why::BuildFailing)];
+        assert_eq!(press(&mut w, &first, 9), at(done_a));
+        let prompted = [
+            tab(waiting, Why::Waiting),
+            tab(failing_b, Why::BuildFailing),
+        ];
+        assert_eq!(press(&mut w, &prompted, done_a), at(waiting));
+        let again = [
+            tab(waiting, Why::Waiting),
+            tab(done_a, Why::Done),
+            tab(failing_b, Why::BuildFailing),
+        ];
+        assert_eq!(press(&mut w, &again, waiting), at(done_a));
     }
 }
