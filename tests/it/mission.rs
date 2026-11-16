@@ -2971,8 +2971,8 @@ fn m_f_finds_tabs_by_name_and_by_what_their_panes_show() {
 #[test]
 fn m_f_brings_up_a_tab_at_its_match_on_ctrl_o() {
     let (server, mut client, _) = search_everything_for_tabs(json!({}));
-    // Down to the tab found by its pane, and Ctrl-O.
-    client.type_text("\x1b[B\x0f");
+    // Down to the chips, the first result, the tab found by its pane, and Ctrl-O.
+    client.type_text("\x1b[B\x1b[B\x1b[B\x0f");
     wait_list(&server, "the first tab in front", |l| {
         tabs(l)[0]["current"] == true
     });

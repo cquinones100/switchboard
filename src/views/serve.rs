@@ -754,7 +754,8 @@ impl Server {
             &search::read_off(),
             typed,
             caps,
-        );
+        )
+        .with_arrows(settings::is_on("search_arrows"));
         let then: crate::ui::Then = Box::new(move |server, client, outcome| {
             let (picked, browser) = match outcome {
                 Outcome::Picked(p) => (p, false),

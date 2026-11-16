@@ -50,13 +50,19 @@ const CHIPS: usize = 2;
 /// to spare.
 const CHIPS_WIDTH: usize = 72;
 
-/// What has Tab's focus.
+/// What has the focus: Tab's stops, and the results, which Up and Down
+/// reach below the chips.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Part {
     Field,
     All,
     Chip(Source),
     Close,
+    Results,
+}
+
+fn is_chip(part: Part) -> bool {
+    matches!(part, Part::All | Part::Chip(_))
 }
 
 /// One line of the results: a source's label, a row, or a source still
@@ -87,6 +93,10 @@ pub struct SearchBox {
     /// out.
     pane: Option<PaneId>,
     caps: bool,
+    /// Settings' `search_arrows`: Up and Down step through the field, the
+    /// chips and the results, Left and Right along the chips; off, Up and
+    /// Down move through the results alone.
+    arrows: bool,
     /// The sources Settings has on, a chip each.
     sources: Vec<Source>,
     /// The ones lit.
@@ -104,6 +114,8 @@ pub struct SearchBox {
     top: usize,
     room: usize,
     focus: Part,
+    /// The chip Down from the field lands on: the one focused last.
+    last_chip: Part,
     hover: Option<Part>,
     hover_row: Option<usize>,
     /// Each chip's columns on its line, from the inside's left edge.
@@ -138,6 +150,7 @@ impl SearchBox {
         if lit.is_empty() {
             lit = sources.clone();
         }
+        let first_chip = sources.first().map_or(Part::All, |s| Part::Chip(*s));
         let mut b = SearchBox {
             client,
             tx,
@@ -155,6 +168,7 @@ impl SearchBox {
             top: 0,
             room: 10,
             focus: Part::Field,
+            last_chip: first_chip,
             hover: None,
             hover_row: None,
             chip_at: Vec::new(),
@@ -162,9 +176,16 @@ impl SearchBox {
             drawn: None,
             dragging: None,
             last_click: None,
+            arrows: true,
         };
         b.type_in(typed);
         b
+    }
+
+    /// With Settings' `search_arrows` as `on`.
+    pub fn with_arrows(mut self, on: bool) -> SearchBox {
+        self.arrows = on;
+        self
     }
 
     /// The sources lit, for the tests.
@@ -320,7 +341,7 @@ impl SearchBox {
                 self.lit.sort();
             }
             Part::Close => return Step::Close(Outcome::Dismissed),
-            Part::Field => return Step::Same,
+            Part::Field | Part::Results => return Step::Same,
         }
         self.prefixed = false;
         self.keep();
@@ -388,15 +409,62 @@ impl SearchBox {
     fn step_focus(&mut self, by: isize, look: &Look) -> Step {
         let stops = self.stops(look);
         let at = stops.iter().position(|p| *p == self.focus).unwrap_or(0) as isize;
-        self.focus = stops[(at + by).rem_euclid(stops.len() as isize) as usize];
+        self.focus_on(stops[(at + by).rem_euclid(stops.len() as isize) as usize]);
         Step::Redraw
     }
 
-    /// Moves through the results, the focus back in the field, so Enter
-    /// takes the row moved to rather than pressing a chip.
+    fn focus_on(&mut self, part: Part) {
+        if is_chip(part) {
+            self.last_chip = part;
+        }
+        self.focus = part;
+    }
+
+    /// Left and Right along the chips, wrapping at either end.
+    fn step_chip(&mut self, by: isize) -> Step {
+        let mut chips = vec![Part::All];
+        chips.extend(self.sources.iter().map(|s| Part::Chip(*s)));
+        let at = chips.iter().position(|p| *p == self.focus).unwrap_or(0) as isize;
+        self.focus_on(chips[(at + by).rem_euclid(chips.len() as isize) as usize]);
+        Step::Redraw
+    }
+
+    /// Down: from the field (or the close button) to the chip focused
+    /// last, from the chips to the first result, then through the results.
+    fn down(&mut self) -> Step {
+        match self.focus {
+            Part::Field | Part::Close => {
+                self.focus_on(self.last_chip);
+                Step::Redraw
+            }
+            Part::All | Part::Chip(_) if self.rows.is_empty() => Step::Same,
+            Part::All | Part::Chip(_) => self.move_to(0),
+            Part::Results => self.move_to(self.cursor + 1),
+        }
+    }
+
+    /// Up: through the results, from the first to the chips, from the
+    /// chips back to the field.
+    fn up(&mut self) -> Step {
+        match self.focus {
+            Part::Field | Part::Close => Step::Same,
+            Part::All | Part::Chip(_) => {
+                self.focus = Part::Field;
+                Step::Redraw
+            }
+            Part::Results if self.cursor == 0 => {
+                self.focus_on(self.last_chip);
+                Step::Redraw
+            }
+            Part::Results => self.move_to(self.cursor - 1),
+        }
+    }
+
+    /// Moves through the results, the focus on them, so Enter takes the
+    /// row moved to rather than pressing a chip.
     fn move_to(&mut self, to: usize) -> Step {
-        let refocused = self.focus != Part::Field;
-        self.focus = Part::Field;
+        let refocused = self.focus != Part::Results;
+        self.focus = Part::Results;
         let to = to.min(self.rows.len().saturating_sub(1));
         if to == self.cursor {
             return if refocused { Step::Redraw } else { Step::Same };
@@ -673,16 +741,21 @@ impl Overlay for SearchBox {
             KeyCode::Char('c' | 'g') if ctrl => return Step::Close(Outcome::Dismissed),
             KeyCode::Tab => return self.step_focus(1, look),
             KeyCode::BackTab => return self.step_focus(-1, look),
-            KeyCode::Down => return self.move_to(self.cursor + 1),
+            KeyCode::Down if !self.arrows => return self.move_to(self.cursor + 1),
+            KeyCode::Up if !self.arrows => return self.move_to(self.cursor.saturating_sub(1)),
+            KeyCode::Down => return self.down(),
             KeyCode::Char('n' | 'j') if ctrl => return self.move_to(self.cursor + 1),
-            KeyCode::Up => return self.move_to(self.cursor.saturating_sub(1)),
+            KeyCode::Up => return self.up(),
             KeyCode::Char('p' | 'k') if ctrl => return self.move_to(self.cursor.saturating_sub(1)),
             KeyCode::PageDown => return self.move_to(self.cursor + self.room),
             KeyCode::PageUp => return self.move_to(self.cursor.saturating_sub(self.room)),
             KeyCode::Char('o') if ctrl => return self.take(true),
+            KeyCode::Left if self.arrows && is_chip(self.focus) => return self.step_chip(-1),
+            KeyCode::Right if self.arrows && is_chip(self.focus) => return self.step_chip(1),
             _ => {}
         }
-        if self.focus != Part::Field && matches!(key.code, KeyCode::Enter | KeyCode::Char(' ')) {
+        let on_button = is_chip(self.focus) || self.focus == Part::Close;
+        if on_button && matches!(key.code, KeyCode::Enter | KeyCode::Char(' ')) {
             return self.press(self.focus);
         }
         match key.code {
@@ -754,7 +827,7 @@ impl Overlay for SearchBox {
         };
         if let Some(to) = to {
             self.top = to;
-            self.focus = Part::Field;
+            self.focus = Part::Results;
             // The row nearest the one chosen among those now shown, past
             // the first line, whose label the drawing keeps above it.
             let shown = lines.iter().enumerate().skip(to).take(room);
@@ -800,7 +873,7 @@ impl Overlay for SearchBox {
                 }
                 self.last_click = Some((now, row));
                 self.cursor = row;
-                self.focus = Part::Field;
+                self.focus = Part::Results;
                 Step::Redraw
             }
             Gesture::WheelDown => self.move_to(self.cursor + 1),
@@ -941,7 +1014,10 @@ mod tests {
             Source::Notes,
             vec![found(Source::Notes, "n1"), found(Source::Notes, "n2")],
         );
-        b.key(key(KeyCode::Down), &look);
+        // Down to the chips, the first result, the second.
+        for _ in 0..3 {
+            b.key(key(KeyCode::Down), &look);
+        }
         match b.key(key(KeyCode::Enter), &look) {
             Step::Close(Outcome::Picked(p)) => {
                 assert_eq!((p.value.as_str(), p.query.as_str()), ("n2", "zebra"))
@@ -1006,11 +1082,103 @@ mod tests {
         );
         b.key(key(KeyCode::Tab), &look);
         b.key(key(KeyCode::Down), &look);
-        assert_eq!(b.focus, Part::Field);
+        b.key(key(KeyCode::Down), &look);
+        assert_eq!(b.focus, Part::Results);
         match b.key(key(KeyCode::Enter), &look) {
             Step::Close(Outcome::Picked(p)) => assert_eq!(p.value, "t2"),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn down_from_the_field_focuses_the_tabs_chip_and_up_goes_back() {
+        let (mut b, _rx) = open(&[], "");
+        let look = Look::default();
+        type_text(&mut b, "zeb");
+        b.key(key(KeyCode::Down), &look);
+        assert_eq!(b.focus, Part::Chip(Source::Tabs));
+        b.key(key(KeyCode::Up), &look);
+        assert_eq!(b.focus, Part::Field);
+        type_text(&mut b, "ra");
+        assert_eq!(b.typed(), "zebra");
+    }
+
+    #[test]
+    fn left_and_right_wrap_along_the_chips() {
+        let (mut b, _rx) = open(&[], "");
+        let look = Look::default();
+        b.key(key(KeyCode::Down), &look);
+        b.key(key(KeyCode::Left), &look);
+        b.key(key(KeyCode::Left), &look);
+        assert_eq!(b.focus, Part::Chip(Source::Slack));
+        b.key(key(KeyCode::Right), &look);
+        assert_eq!(b.focus, Part::All);
+        // Down from the field again comes back to the chip left last.
+        b.key(key(KeyCode::Right), &look);
+        b.key(key(KeyCode::Up), &look);
+        b.key(key(KeyCode::Down), &look);
+        assert_eq!(b.focus, Part::Chip(Source::Tabs));
+    }
+
+    #[test]
+    fn enter_on_a_chip_reached_by_the_arrows_turns_its_source_off() {
+        let (mut b, _rx) = open(&[], "zebra");
+        let look = Look::default();
+        b.key(key(KeyCode::Enter), &look);
+        let id = b.asked.as_ref().unwrap().id;
+        b.answered(id, Source::Tabs, vec![found(Source::Tabs, "t1")]);
+        b.answered(id, Source::Notes, vec![found(Source::Notes, "n1")]);
+        b.key(key(KeyCode::Down), &look);
+        b.key(key(KeyCode::Enter), &look);
+        assert!(!b.lit().contains(&Source::Tabs));
+        assert!(b.rows.iter().all(|r| r.source != Source::Tabs));
+    }
+
+    #[test]
+    fn down_from_the_chips_reaches_the_first_result_and_up_returns() {
+        let (mut b, _rx) = open(&[], "zebra");
+        let look = Look::default();
+        b.key(key(KeyCode::Enter), &look);
+        let id = b.asked.as_ref().unwrap().id;
+        b.answered(
+            id,
+            Source::Tabs,
+            vec![found(Source::Tabs, "t1"), found(Source::Tabs, "t2")],
+        );
+        b.key(key(KeyCode::Down), &look);
+        b.key(key(KeyCode::Right), &look);
+        b.key(key(KeyCode::Down), &look);
+        assert_eq!((b.focus, b.cursor), (Part::Results, 0));
+        b.key(key(KeyCode::Up), &look);
+        assert_eq!(b.focus, Part::Chip(Source::Notes));
+    }
+
+    #[test]
+    fn with_the_arrows_setting_off_down_from_the_field_moves_through_the_results() {
+        let (b, _rx) = open(&[], "zebra");
+        let mut b = b.with_arrows(false);
+        let look = Look::default();
+        b.key(key(KeyCode::Enter), &look);
+        let id = b.asked.as_ref().unwrap().id;
+        b.answered(
+            id,
+            Source::Tabs,
+            vec![found(Source::Tabs, "t1"), found(Source::Tabs, "t2")],
+        );
+        b.key(key(KeyCode::Down), &look);
+        assert_eq!((b.focus, b.cursor), (Part::Results, 1));
+        b.key(key(KeyCode::Tab), &look);
+        b.key(key(KeyCode::Right), &look);
+        assert_eq!(b.focus, Part::All);
+    }
+
+    #[test]
+    fn a_letter_typed_on_a_chip_goes_into_the_field() {
+        let (mut b, _rx) = open(&[], "zeb");
+        let look = Look::default();
+        b.key(key(KeyCode::Down), &look);
+        b.key(key(KeyCode::Char('r')), &look);
+        assert_eq!((b.focus, b.typed()), (Part::Field, "zebr"));
     }
 
     #[test]
@@ -1085,7 +1253,7 @@ mod tests {
             b.mouse(press(drawn.inner.x + 4, row_y), &look),
             Step::Redraw
         );
-        assert_eq!(b.focus, Part::Field);
+        assert_eq!(b.focus, Part::Results);
         // A second click on it takes it.
         assert!(matches!(
             b.mouse(press(drawn.inner.x + 4, row_y), &look),

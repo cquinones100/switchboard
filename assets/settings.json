@@ -344,6 +344,13 @@
     "default": true
   },
   {
+    "key": "search_arrows",
+    "category": "Integrations",
+    "label": "Arrow keys reach the search chips",
+    "description": "In M-S-f's box, Down goes from the field to the chips and on to the results, Up back the same way, and Left and Right move along the chips; off, Up and Down move through the results alone and Tab reaches the chips",
+    "default": true
+  },
+  {
     "key": "search_slack",
     "category": "Integrations",
     "label": "Slack in search everything",
