@@ -22,32 +22,15 @@ use common::{BIN, TempDir};
 struct Home {
     _dir: TempDir,
     home: PathBuf,
-    /// The PATH its commands run with: `bin` first, then the test's own,
-    /// without the computer's own lazygit.
+    /// The PATH its commands run with: `bin` first, then the test's own.
     search_path: std::ffi::OsString,
 }
 
-/// The test's PATH with `bin` first and the computer's own lazygit, which
-/// the guided setup would offer a config for, left out: a folder holding
-/// one is replaced by a folder in `shadows` linking everything else in it,
-/// so git and the rest beside it are still found. A test that wants lazygit
-/// puts a stand-in in `bin`.
-fn search_path(bin: &Path, shadows: &Path) -> std::ffi::OsString {
+/// The test's PATH with `bin` first.
+fn search_path(bin: &Path) -> std::ffi::OsString {
     let path = std::env::var_os("PATH").unwrap_or_default();
-    let dirs = std::env::split_paths(&path).enumerate().map(|(i, dir)| {
-        if !dir.join("lazygit").exists() {
-            return dir;
-        }
-        let shadow = shadows.join(i.to_string());
-        fs::create_dir_all(&shadow).unwrap();
-        for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
-            if entry.file_name() != "lazygit" {
-                let _ = std::os::unix::fs::symlink(entry.path(), shadow.join(entry.file_name()));
-            }
-        }
-        shadow
-    });
-    std::env::join_paths(std::iter::once(bin.to_path_buf()).chain(dirs)).unwrap()
+    std::env::join_paths(std::iter::once(bin.to_path_buf()).chain(std::env::split_paths(&path)))
+        .unwrap()
 }
 
 impl Home {
@@ -57,7 +40,7 @@ impl Home {
         let dir = TempDir::new(prefix);
         let home = dir.path().join("home");
         fs::create_dir_all(home.join("bin")).unwrap();
-        let search_path = search_path(&home.join("bin"), &dir.path().join("path"));
+        let search_path = search_path(&home.join("bin"));
         let h = Home {
             _dir: dir,
             home,
@@ -2282,57 +2265,66 @@ fn the_configs_the_clone_held_come_back_from_its_history() {
     );
 }
 
+/// The lazygit config Switchboard 0.7.0 to 0.9.0 wrote, byte for byte.
+const LAZYGIT_CONFIG_0_9: &str = "# yaml-language-server: $schema=https://raw.githubusercontent.com/jesseduffield/lazygit/master/schema/config.json
+# Written by `switchboard setup lazygit` where you had no lazygit config; it is
+# yours now, and setup never writes over it.
+
+# Esc with nothing left to back out of quits, as q and Ctrl-C do, so lazygit
+# in a pane's place (M-p's \"Open lazygit in place of this pane\") closes the
+# way the diff and the views do, bringing the pane back.
+quitOnTopLevelReturn: true
+";
+
 #[test]
-fn a_lazygit_config_is_written_only_where_lazygit_is_and_you_have_none() {
+fn the_lazygit_config_an_earlier_version_wrote_is_taken_out_and_no_other() {
     let h = Home::new("setup-lazygit");
     std::os::unix::fs::symlink(BIN, h.path("bin/switchboard")).unwrap();
-    let config = h.path(if cfg!(target_os = "macos") {
+    common::stand_in::install(&h.path("bin/lazygit"), "#!/bin/sh\nexit 0\n");
+    let rel = if cfg!(target_os = "macos") {
         "Library/Application Support/lazygit/config.yml"
     } else {
         ".config/lazygit/config.yml"
-    });
+    };
+    let config = h.path(rel);
 
-    // Without lazygit, the part has nothing to set up and isn't offered.
-    let without = h.run(&["setup", "lazygit"]);
-    assert_eq!(without.status.code(), Some(1));
-    assert!(stderr(&without).contains("lazygit isn't installed"));
+    // With none, setup writes none, and the guided setup says nothing of
+    // lazygit.
+    assert_eq!(ok(&h.run(&["setup", "lazygit"])), "lazygit: up to date\n");
     assert!(!stdout(&h.run(&["setup"])).contains("lazygit"));
+    assert!(!config.exists());
 
-    // With it, the guided setup asks, and a no writes nothing.
-    common::stand_in::install(&h.path("bin/lazygit"), "#!/bin/sh\nexit 0\n");
+    // The one an earlier version wrote: the guided setup asks, and a no
+    // keeps it.
+    fs::create_dir_all(config.parent().unwrap()).unwrap();
+    fs::write(&config, LAZYGIT_CONFIG_0_9).unwrap();
     let closed = ok(&h.run(&["setup"]));
     assert!(
-        closed.contains("Write a lazygit config") && closed.contains("switchboard setup lazygit"),
+        closed.contains(&format!(
+            "Take out ~/{rel}, the lazygit config an earlier version of Switchboard wrote?"
+        )) && closed.contains("switchboard setup lazygit"),
         "{closed}"
     );
-    assert!(!config.exists());
-
-    // Named, it writes the config once.
-    let wrote = ok(&h.run(&["setup", "lazygit"]));
-    assert!(wrote.contains("write a lazygit config"), "{wrote}");
-    assert!(read(&config).contains("quitOnTopLevelReturn: true"));
-    assert_eq!(ok(&h.run(&["setup", "lazygit"])), "lazygit: up to date\n");
-    let guided = ok(&h.run(&["setup"]));
+    assert!(config.exists());
+    let check = ok(&h.run(&["setup", "--check", "lazygit"]));
     assert!(
-        guided.contains("✓ lazygit's config says what Esc does"),
-        "{guided}"
+        check.contains(&format!("would: take out ~/{rel}")),
+        "{check}"
     );
+    assert!(config.exists());
 
-    // A config of your own is kept byte for byte, and the line to add said.
-    fs::remove_file(&config).unwrap();
-    let own = h.path(".config/jesseduffield/lazygit/config.yml");
-    fs::create_dir_all(own.parent().unwrap()).unwrap();
-    fs::write(&own, "gui:\n  sidePanelWidth: 0.2\n").unwrap();
-    assert_eq!(ok(&h.run(&["setup", "lazygit"])), "lazygit: up to date\n");
-    assert_eq!(read(&own), "gui:\n  sidePanelWidth: 0.2\n");
+    // Named, it is taken out, once.
+    let took = ok(&h.run(&["setup", "lazygit"]));
+    assert!(took.contains(&format!("take out ~/{rel}")), "{took}");
     assert!(!config.exists());
-    let said = ok(&h.run(&["setup"]));
-    assert!(
-        said.contains(
-            "add quitOnTopLevelReturn: true to ~/.config/jesseduffield/lazygit/config.yml"
-        ),
-        "{said}"
-    );
+    assert_eq!(ok(&h.run(&["setup", "lazygit"])), "lazygit: up to date\n");
+
+    // One changed since is yours, and kept byte for byte.
+    let changed = format!("{LAZYGIT_CONFIG_0_9}gui:\n  sidePanelWidth: 0.2\n");
+    fs::write(&config, &changed).unwrap();
+    assert_eq!(ok(&h.run(&["setup", "lazygit"])), "lazygit: up to date\n");
+    assert!(!stdout(&h.run(&["setup"])).contains("lazygit"));
+    assert_eq!(read(&config), changed);
 }
 
 #[test]

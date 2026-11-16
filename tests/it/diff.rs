@@ -591,6 +591,89 @@ fn lazygit_and_the_diff_take_the_panes_place_from_the_palette_and_a_tabs_menu() 
     client.wait_text("export const a = 2;");
 }
 
+/// How the stand-in lazygit was called last, its arguments as one line.
+fn lazygit_args(server: &TestServer) -> String {
+    std::fs::read_to_string(server.home.join("bin/.lazygit-args"))
+        .unwrap()
+        .trim_end()
+        .to_string()
+}
+
+/// lazygit opened in the first pane's place, its stand-in's call read, and
+/// quit again.
+fn open_lazygit(server: &TestServer, client: &mut common::TestClient) -> String {
+    let first = panes(server)[0]["id"].as_str().unwrap().to_string();
+    let _ = std::fs::remove_file(server.home.join("bin/.lazygit-args"));
+    server.ok(&["press", "lazygit"]);
+    client.wait_text("stand-in lazygit in");
+    let args = lazygit_args(server);
+    server.ok(&["press", "lazygit"]);
+    wait_until("the pane back after C-c", || {
+        panes(server)[0]["id"] == first.as_str()
+    });
+    args
+}
+
+#[test]
+fn lazygit_reads_switchboards_config_ahead_of_yours_and_yours_is_never_written() {
+    let server = TestServer::start();
+    settings(&server);
+    stand_in::lazygit(&server.home.join("bin"));
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    let ours = server
+        .home
+        .join(".local/share/switchboard/lazygit/config.yml");
+
+    // With no config of yours, Switchboard's alone, written as it opens.
+    assert_eq!(
+        open_lazygit(&server, &mut client),
+        format!("--use-config-file {}", ours.display())
+    );
+    let text = std::fs::read_to_string(&ours).unwrap();
+    assert!(
+        text.lines().any(|l| l == "quitOnTopLevelReturn: true"),
+        "{text}"
+    );
+    let lazygit_s = server.home.join(".config/lazygit");
+    assert!(!lazygit_s.exists(), "lazygit's own config written");
+
+    // A config of yours comes after it, so what yours says wins, and it is
+    // left as it was.
+    let yours = lazygit_s.join("config.yml");
+    std::fs::create_dir_all(&lazygit_s).unwrap();
+    std::fs::write(&yours, "quitOnTopLevelReturn: false\n").unwrap();
+    assert_eq!(
+        open_lazygit(&server, &mut client),
+        format!("--use-config-file {},{}", ours.display(), yours.display())
+    );
+    assert_eq!(
+        std::fs::read_to_string(&yours).unwrap(),
+        "quitOnTopLevelReturn: false\n"
+    );
+    // Switchboard's, changed, is written again as the build has it.
+    std::fs::write(&ours, "gui: {}\n").unwrap();
+    open_lazygit(&server, &mut client);
+    assert_eq!(std::fs::read_to_string(&ours).unwrap(), text);
+}
+
+#[test]
+fn lazygit_runs_with_your_config_alone_with_esc_quits_lazygit_off() {
+    let server = TestServer::start_with_settings(
+        r#"{"notifications": false, "tips": false, "github": false, "linear": false, "lazygit_esc_quits": false}"#,
+    );
+    stand_in::lazygit(&server.home.join("bin"));
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    assert_eq!(open_lazygit(&server, &mut client), "");
+    assert!(
+        !server
+            .home
+            .join(".local/share/switchboard/lazygit")
+            .exists()
+    );
+}
+
 #[test]
 fn the_working_trees_changes_show_staged_and_not_in_their_own_lists() {
     let server = TestServer::start();

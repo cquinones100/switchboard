@@ -2,8 +2,8 @@
 //! Claude Code, and nothing beside it. Ported from setup.sh's Claude steps;
 //! the dotfiles it linked (tmux, Neovim, lazygit, Ghostty and the rest) are
 //! gone with the programs they configured, so these parts are all that is
-//! left of it, the only configs of other programs being what Switchboard
-//! itself needs from Ghostty and lazygit, never an editor's:
+//! left of it, the only config of another program being what Switchboard
+//! itself needs from the terminal, never an editor's:
 //!
 //! - `plugin` (`plugin`): Switchboard's skills, hooks and instructions as a
 //!   Claude Code plugin in `~/.local/share/switchboard/claude/plugin`, which the
@@ -18,8 +18,9 @@
 //!   skills run linked into `~/.local/bin`.
 //! - `terminal` (`terminal`): Option acting as Alt in a Mac's terminal,
 //!   and Notes' easy mode's Cmd keys in Ghostty.
-//! - `lazygit` (`lazygit`): a lazygit config where you have none, so Esc
-//!   quits lazygit in a pane's place.
+//! - `lazygit` (`lazygit`): the lazygit config earlier versions wrote,
+//!   taken out, since the lazygit Switchboard opens gets its setting from a
+//!   file of Switchboard's own (src/diff/lazygit.rs).
 //! - `leftovers` (`leftovers`): what the tmux version's setup.sh left in
 //!   your home that leads nowhere now, and a `switchboard` function or alias
 //!   that starts tmux in the binary's place, tidied.
@@ -151,7 +152,7 @@ pub const PARTS: &[Part] = &[
     },
     Part {
         name: "lazygit",
-        about: "write a lazygit config where you have none, so Esc quits lazygit in a pane's place",
+        about: "take out the lazygit config an earlier version wrote, while it is as it was written, since the lazygit Switchboard opens quits on Esc without it",
         run: lazygit::run,
     },
     Part {
@@ -470,38 +471,36 @@ fn terminal_offered(check: bool, list: &mut List) {
     }
 }
 
-/// A lazygit config, offered only where lazygit is installed and you have
-/// none; a config of yours lacking `quitOnTopLevelReturn` gets the line to
-/// add said.
+/// The lazygit config an earlier version wrote, offered to be taken out
+/// while it is still as it was written; nothing said where there is none.
 fn lazygit_offered(check: bool, list: &mut List) {
-    if !lazygit::installed() {
+    let written = lazygit::written();
+    if written.is_empty() {
         return;
     }
-    if let Some(yours) = lazygit::yours() {
-        if std::fs::read_to_string(&yours).is_ok_and(|t| lazygit::says_esc(&t)) {
-            list.ok("lazygit's config says what Esc does");
-        } else {
-            list.optional(&format!(
-                "Esc quitting lazygit in a pane's place: add quitOnTopLevelReturn: true to {}",
-                home_tilde(&yours)
-            ));
-        }
-        return;
-    }
+    let files = written
+        .iter()
+        .map(|f| home_tilde(f))
+        .collect::<Vec<_>>()
+        .join(" and ");
     let part = part_named("lazygit").expect("a part");
     if ask(
         check,
-        "Write a lazygit config, so Esc quits lazygit in a pane's place? You have none, and it would be yours.",
+        &format!(
+            "Take out {files}, the lazygit config an earlier version of Switchboard wrote? The lazygit Switchboard opens quits on Esc without it now, and lazygit elsewhere goes back to its own defaults."
+        ),
     ) {
         if apply(part) {
-            list.ok("lazygit quits on Esc in a pane's place");
+            list.ok("took out the lazygit config an earlier version wrote");
         } else {
             list.todo("switchboard setup lazygit failed");
         }
     } else {
         list.not_now(
             "lazygit",
-            "a lazygit config, so Esc quits lazygit in a pane's place: switchboard setup lazygit",
+            &format!(
+                "{files}, the lazygit config an earlier version wrote: switchboard setup lazygit"
+            ),
         );
     }
 }

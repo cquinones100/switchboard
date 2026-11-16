@@ -919,6 +919,16 @@ fn lazygit_refuses_an_argument_it_doesnt_have() {
         2,
         "Argument missing for flag: -p",
     );
+    // A config file named that isn't there, which lazygit won't start on.
+    let config = dir.path().join("config.yml");
+    std::fs::write(&config, "gui: {}\n").unwrap();
+    let gone = dir.path().join("gone.yml");
+    let both = format!("{},{}", config.display(), gone.display());
+    refused(
+        &run(&lazygit, &["--use-config-file", &both], None, dir.path()),
+        1,
+        &format!("open {}: no such file or directory", gone.display()),
+    );
     // As M-g starts it, with nothing: it says where it runs and waits.
     let mut child = Command::new(&lazygit)
         .current_dir(dir.path())

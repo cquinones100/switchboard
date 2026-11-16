@@ -19,6 +19,8 @@
 //! - `app`: the program on the screen.
 //! - `ahead`: the story told ahead of time for each tab's new commit.
 //! - `in_place`: a tool in a pane's place, in the server.
+//! - `lazygit`: the command that starts lazygit, with Switchboard's config
+//!   for it under yours.
 //! - `clear`: M-p's "Clear this tab's diff cache".
 //! - `serve`: the server's keys: M-d, lazygit in a pane's place, and the
 //!   palette's commands.
@@ -33,6 +35,7 @@ pub mod clear;
 pub mod git;
 pub mod highlight;
 pub mod in_place;
+pub mod lazygit;
 pub mod order;
 mod serve;
 pub mod sides;
@@ -136,7 +139,7 @@ impl Command {
                 "It presses ga in the diff. Haiku runs in the repository with tools to read and search only, keeps no session, and streams its answer beside the diff. Sends the diff and your question to Claude; diff_ask turns it off."
             }
             Command::Lazygit => {
-                "It runs in the pane's directory, the pane parked behind it, and quits with its own Ctrl-c rather than q, which would land in a commit message. lazygit isn't shipped with Switchboard; without it, a box says so."
+                "It runs in the pane's directory, the pane parked behind it, and quits with its own Ctrl-c rather than q, which would land in a commit message; Esc quits it too, from a config of Switchboard's given to this lazygit alone under yours, which lazygit_esc_quits turns off. lazygit isn't shipped with Switchboard; without it, a box says so."
             }
             Command::WorkingTree => {
                 "Unstaged changes are listed under Changes and staged ones under Staged changes, with the diff's own keys. Its story reads the staged changes first, with no commit messages; M-d closes it too."

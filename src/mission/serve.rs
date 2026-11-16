@@ -4403,7 +4403,7 @@ impl Server {
                         self.mission_note(client, "lazygit isn't installed.");
                         return;
                     }
-                    vec!["lazygit".to_string()]
+                    crate::diff::lazygit::command()
                 } else {
                     let exe = crate::util::exe()
                         .map(|e| e.to_string_lossy().into_owned())

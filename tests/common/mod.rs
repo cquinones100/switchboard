@@ -403,7 +403,13 @@ impl TestServer {
             // Terminal (src/mux/graphics.rs), so a test draws the same in
             // it as anywhere; a test gives a terminal by what its client
             // attaches as.
-            .env_remove("WT_SESSION");
+            .env_remove("WT_SESSION")
+            // Nor its lazygit config, which the lazygit Switchboard opens
+            // reads under its own (src/diff/lazygit.rs): the test's home
+            // holds any a test gives it.
+            .env_remove("LG_CONFIG_FILE")
+            .env_remove("CONFIG_DIR")
+            .env_remove("XDG_CONFIG_HOME");
     }
 
     pub fn socket(&self) -> PathBuf {
