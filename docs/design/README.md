@@ -152,7 +152,7 @@ The relay's DM, threads and Home tab.
 - [81. Proposed: autopilot on the Home tab, working, paused by you and paused by its spend limit, edited in place](https://cquinones100.github.io/switchboard/design/81.html)
 - [82. Proposed: jump from Home to a tab's thread, its name and a Thread › button opening it at the newest message](https://cquinones100.github.io/switchboard/design/82.html)
 
-## Proposal: autopilot's queue outside the note
+## Autopilot's queue outside the note
 
 - [92. Beside a lone pane: a new row, Autopilot's queue, opening the tab's repository's queue in the spare columns](https://cquinones100.github.io/switchboard/design/92.html)
 - [93. The queue as a pane right of the tab: To do across every repository in the order autopilot takes them, each item's repository, and Done with its Done line](https://cquinones100.github.io/switchboard/design/93.html)
