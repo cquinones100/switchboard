@@ -672,8 +672,33 @@
     "key": "views_beside_narrow_pane",
     "category": "Tabs and status bar",
     "label": "Open views beside a narrow pane",
-    "description": "With a tab's one pane narrowed by Widest a lone pane gets and at least 80 columns spare at its right, M-d's diff, lazygit, and the PR and ticket views that open in Claude's place open in those columns instead, the pane keeping its width beside them; the same key, q or M-w closes the view and the tab is one narrow pane again. With fewer columns spare, or something already beside the pane, they open in its place. Off, they always open in the pane's place",
+    "description": "With a tab's one pane narrowed by Widest a lone pane gets and at least 80 columns spare at its right, M-d's diff, lazygit, and the PR and ticket views that open in Claude's place open in those columns instead, the pane keeping its width beside them (the diff takes Diff's share beside a narrow pane, narrowing the pane while it is open); the same key, q or M-w closes the view and the tab is one narrow pane again. With fewer columns spare, or something already beside the pane, they open in its place. Off, they always open in the pane's place",
     "default": true
+  },
+  {
+    "key": "diff_beside_share",
+    "category": "Tabs and status bar",
+    "label": "Diff's share beside a narrow pane",
+    "description": "How much of the width beside the sidebar M-d's diff takes when it opens beside a narrow lone pane: half, two thirds or three quarters, the pane narrowed to the rest while the diff is open and given its own width back when it closes, or the spare columns alone, the pane keeping its width. Where the spare columns already give the diff more, it takes them. Dragging the line between them resizes for that diff alone",
+    "choices": [
+      {
+        "value": "50",
+        "label": "50%"
+      },
+      {
+        "value": "66",
+        "label": "66%"
+      },
+      {
+        "value": "75",
+        "label": "75%"
+      },
+      {
+        "value": "spare",
+        "label": "the spare columns"
+      }
+    ],
+    "default": "75"
   },
   {
     "key": "boxes_beside_narrow_pane",

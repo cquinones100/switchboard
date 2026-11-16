@@ -915,14 +915,17 @@ fn m_d_opens_beside_a_narrow_lone_pane_and_in_its_place_without_the_room() {
         .as_u64()
         .unwrap();
 
-    // Room to spare: the diff beside the pane, which keeps its width.
+    // Room to spare: the diff beside the pane, taking three quarters of
+    // the spread, the pane narrowed to the rest.
+    let spread = 240 - side;
     client.send(b"\x1bd");
     client.wait_text("1/2 Change the core");
     let shown = panes(&server);
     assert_eq!(shown.len(), 2, "beside the pane: {shown:?}");
     assert_eq!(shown[0]["id"], first.as_str());
-    assert_eq!(shown[0]["cols"], 80);
-    assert_eq!(shown[1]["cols"].as_u64().unwrap(), 240 - side - 81);
+    let share = spread * 3 / 4;
+    assert_eq!(shown[1]["cols"].as_u64().unwrap(), share);
+    assert_eq!(shown[0]["cols"].as_u64().unwrap(), spread - share - 1);
     assert_eq!(shown[1]["options"]["@in_place"], "diff");
     assert!(shown[0]["options"].get("@pane_parked").is_none());
     // M-d in the diff closes it: one capped pane again, focused.
@@ -933,6 +936,20 @@ fn m_d_opens_beside_a_narrow_lone_pane_and_in_its_place_without_the_room() {
     });
     client.type_text("echo pane-is-back\r");
     client.wait_text("pane-is-back");
+
+    // With the share at the spare columns, the pane keeps its width (81,
+    // to know the settings were read).
+    with(json!({"lone_pane_width": "81", "diff_beside_share": "spare"}));
+    wait_until("the pane at 81", || panes(&server)[0]["cols"] == 81);
+    client.send(b"\x1bd");
+    client.wait_text("1/2 Change the core");
+    let shown = panes(&server);
+    assert_eq!(shown.len(), 2, "beside the pane: {shown:?}");
+    assert_eq!(shown[0]["cols"], 81);
+    assert_eq!(shown[1]["cols"].as_u64().unwrap(), spread - 82);
+    client.send(b"\x1bd");
+    wait_until("one capped pane again", || panes(&server).len() == 1);
+    with(json!({"lone_pane_width": "80"}));
 
     // One column too few to spare (79): in the pane's place.
     let wider = 240 - side - 1 - 79;

@@ -26,8 +26,11 @@
 //! `views_beside_narrow_pane` on and at least `BESIDE_LEAST` of them, the
 //! tool opens there instead, as "side" leaves it, the pane keeping its
 //! width and never parked, so the same key, `q` or M-w closes the tool and
-//! the tab is one capped pane again. New with the lone pane's cap, with no
-//! tmux-version file behind it.
+//! the tab is one capped pane again. The diff, with its file list and two
+//! sides, takes Settings' `diff_beside_share` of the spread (three quarters
+//! by default) when the spare columns give it less, the pane narrowed while
+//! it is open and capped again once it closes. New with the lone pane's
+//! cap, with no tmux-version file behind it.
 
 use anyhow::{Result, anyhow};
 use ratatui::layout::Rect;
@@ -44,6 +47,38 @@ pub const PANE_PARKED: &str = "@pane_parked";
 /// The fewest spare columns beside a narrow lone pane a tool opens in
 /// rather than in the pane's place, as a lone pane gets no fewer.
 pub const BESIDE_LEAST: u16 = crate::mux::layout::LONE_LEAST;
+
+/// The columns a tool opening beside a narrow lone pane takes, of a spread
+/// `spread` wide with `spare` columns right of the pane's rule: the spare
+/// columns, or for the diff Settings' `diff_beside_share` of the spread
+/// when that is more, always leaving the pane a column and the rule one.
+fn beside_width(tool: &str, spread: u16, spare: u16) -> u16 {
+    if tool != crate::diff::serve::TOOL {
+        return spare;
+    }
+    let setting = crate::settings::cached("diff_beside_share");
+    share_width(setting.as_ref().and_then(share_percent), spread, spare)
+}
+
+/// The columns the diff takes beside a narrow lone pane given its share,
+/// `percent` of the spread (none for the spare columns alone).
+fn share_width(percent: Option<u32>, spread: u16, spare: u16) -> u16 {
+    let Some(percent) = percent else {
+        return spare;
+    };
+    let share = u32::from(spread) * percent / 100;
+    let share = u16::try_from(share)
+        .unwrap_or(u16::MAX)
+        .min(spread.saturating_sub(2));
+    spare.max(share)
+}
+
+/// The percent of the spread `diff_beside_share` gives the diff: none for
+/// `spare`, the spare columns alone.
+fn share_percent(value: &serde_json::Value) -> Option<u32> {
+    let percent = value.as_u64().or_else(|| value.as_str()?.parse().ok())?;
+    u32::try_from(percent.min(100)).ok()
+}
 
 impl Server {
     /// Runs `command` in `pane`'s place, as tool `tool`; gives the tool's
@@ -73,15 +108,18 @@ impl Server {
             return Err(anyhow!("{pane} is waiting already"));
         }
         let beside = self.spare_beside(tab_id);
-        let width = beside.map_or(cols, |(_, spare)| spare.width);
+        let width = beside.map_or(cols, |(spread, spare)| {
+            beside_width(tool, spread.width, spare.width)
+        });
         let made = self.spawn_pane(tab_id, cwd, Some(command), width, rows)?;
         let tab = self.tabs.get_mut(&tab_id).expect("checked above");
         match beside {
-            Some((spread, spare)) => {
+            Some((spread, _)) => {
                 tab.layout.split(pane, made, Direction::Right, None);
-                // The pane keeps its width, the tool filling the spare
-                // columns, the rule at the pane's edge the line between.
-                let keep = spare.x.saturating_sub(spread.x + 1);
+                // The tool takes its columns at the right (the spare ones,
+                // so the pane keeps its width, or the diff's share), the
+                // rule at the pane's edge the line between.
+                let keep = spread.width.saturating_sub(width + 1);
                 let now = tab.layout.place(spread).panes;
                 if let Some((_, now)) = now.iter().find(|(p, _)| *p == pane) {
                     let (dir, cells) = if keep > now.width {
@@ -360,5 +398,34 @@ impl Server {
             self.focus_pane(tool);
         }
         self.dirty_tab(tab_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn the_diff_takes_its_share_of_the_spread_or_the_spare_columns_when_more() {
+        // A 210-column spread, the pane capped at 80: 129 spare.
+        assert_eq!(share_width(Some(75), 210, 129), 157);
+        assert_eq!(share_width(Some(50), 210, 129), 129);
+        assert_eq!(share_width(None, 210, 129), 129);
+        // Always a column for the pane and one for the rule.
+        assert_eq!(share_width(Some(100), 210, 129), 208);
+    }
+
+    #[test]
+    fn the_share_reads_a_percent_and_spare_as_none() {
+        assert_eq!(share_percent(&json!("75")), Some(75));
+        assert_eq!(share_percent(&json!(66)), Some(66));
+        assert_eq!(share_percent(&json!("spare")), None);
+    }
+
+    #[test]
+    fn only_the_diff_takes_a_share() {
+        assert_eq!(beside_width(crate::diff::serve::LAZYGIT, 210, 129), 129);
+        assert_eq!(beside_width("pr-view", 210, 129), 129);
     }
 }
