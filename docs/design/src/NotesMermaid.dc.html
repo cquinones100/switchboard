@@ -18,7 +18,7 @@ body{margin:0}
 .kitty{position:absolute;left:0;top:0;width:0;height:0}
 </style>
 </helmet>
-<div class="scr" style="width:1280px;height:800px;box-sizing:border-box;padding:16px;background:#0b0c12;overflow:hidden;position:relative">
+<div class="scr" style="width:1280px;height:800px;box-sizing:border-box;padding:16px 0;background:#0b0c12;overflow:hidden;position:relative">
 <a href="Index.dc.html" style="position:absolute;top:0;right:16px;font-size:11px;line-height:16px;color:#8d93a8;text-decoration:none">index</a>
 <div style="position:relative;display:inline-block;background:#15161e">
 <sc-for list="{{rows}}" as="row" hint-placeholder-count="45"><div class="ln"><sc-for list="{{row.runs}}" as="r" hint-placeholder-count="6"><span style="{{r.style}}">{{r.text}}</span></sc-for></div></sc-for>
