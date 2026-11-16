@@ -271,7 +271,7 @@ T(CX.on, BY + 5, ['on', 'f']); T(CX.cap, BY + 5, ['tabs at once', 'f']); T(CX.sp
 let REPOS = [['switchboard', true, 2, 10, 0.71, '8 · 2 working'], ['web-app', true, 1, 6, 0.38, '2 · 1 working'], ['oncall-tools', false, 1, 4, 0, '1 · off']];
 if (MODE === 'move') REPOS = [REPOS[1], REPOS[0], REPOS[2]];
 REPOS.forEach(([name, on, cap, spend, used, todo], i) => {
-  const y = BY + 6 + i, lifted = MODE === 'move' && name === 'web-app', chosen = !lifted && MODE !== 'move' && name === 'web-app';
+  const y = BY + 6 + i, lifted = MODE === 'move' && name === 'web-app', chosen = !lifted && (MODE === 'box' || MODE === 'menu') && name === 'web-app';
   const bg = line(y, chosen, lifted);
   if (lifted) put(LX - 2, y, '⇅', 'a', 'b', bg); else put(LX - 2, y, String(i + 1), 'd', '', bg);
   put(LX, y, name, on ? 't' : 'd', chosen || lifted ? 'b' : '', bg);
@@ -281,11 +281,12 @@ REPOS.forEach(([name, on, cap, spend, used, todo], i) => {
   if (on) meter(CX.meter, y, 12, used, '#82aaff');
   R(RX, y, todo, 'd', '', bg);
 });
+if (MODE !== 'move') { const ay = BY + 9, abg = line(ay, MODE === 'add'); put(LX - 2, ay, '+', 'a', 'b', abg); put(LX, ay, 'Add a repository…', 'a', MODE === 'add' ? 'b' : '', abg); }
 if (MODE === 'move') {
   T(LX, BY + 10, ['Moving web-app, 2nd to 1st', 't', 'b', 'E']);
   T(LX, BY + 11, ['Next up becomes  ', 'd', '', 'E'], ['ap-134 web-app', 't', '', 'E'], ['  ·  ap-142, ap-145, ap-147 switchboard  ·  ap-150 oncall-tools', 'd', '', 'E']);
 } else {
-  T(LX, BY + 10, ['Enter on one: Move…, its switch, its cap and spend, where it lands. A drag moves it too.', 'f', '', 'E']);
+  T(LX, BY + 11, ['Enter on one: Move…, its switch, its cap and spend, where it lands. A drag moves it too.', 'f', '', 'E']);
 }
 label(LX, BY + 13, 'For all of them', 'd');
 const VX = X + 30;
@@ -305,6 +306,19 @@ const SAY = MODE === 'move'
 put(LX, BY + 27, SAY[0], 't', '', 'E'); put(LX, BY + 28, SAY[1], 't', '', 'E');
 rule(X + 1, BY + 35, W - 2);
 keys(LX, BY + 36, MODE === 'move' ? [['↑↓', 'place it'], ['↵', 'put it here'], ['esc', 'put it back']] : [['↑↓', 'move'], ['↵', 'actions'], ['/', 'search'], ['← →', 'count'], ['Space', 'switch'], ['esc', 'close']]);
+if (MODE === 'add') {
+  const MX = X + 14, MY = BY + 8, MW = 72;
+  box(MX, MY, MW, 19, 'Add a repository to autopilot');
+  input(MX + 2, MY + 2, MW - 4, '', 'search your repositories', null);
+  const C = [['~/code/api', 'open in tab 4 · 2 plan notes'], ['~/code/docs-site', '1 worktree'], ['~/code/mobile', 'used 3d ago'], ['~/code/infra', 'used 2w ago']];
+  C.forEach(([n, f], i) => option(MX, MY + 4 + i, MW, n, f, i === 0));
+  hl(MX + 1, MY + 9, MW - 2, 'L');
+  option(MX, MY + 10, MW, 'Choose a folder…', '', false);
+  put(MX + 4, MY + 12, 'It joins last, on, at 1 tab at once and $5.00 a day, all of', 'd', '', 'E');
+  put(MX + 4, MY + 13, 'them changeable after. Its items are the plan notes for it.', 'd', '', 'E');
+  hl(MX + 1, MY + 15, MW - 2, 'L');
+  keys(MX + 2, MY + 16, [['↑↓', 'move'], ['↵', 'add it'], ['/', 'search'], ['esc', 'close']]);
+}
 if (MODE === 'menu') {
   const MX = X + 22, MY = BY + 9, MW = 60;
   box(MX, MY, MW, 14, 'web-app');

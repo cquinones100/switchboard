@@ -418,7 +418,7 @@
       "page": "design"
     },
     "AutopilotRepos.dc.html": {
-      "title": "101. Autopilot's settings across every repository: their order, which it takes from first, each one's switch, cap of tabs and spend limit beside the shared ones",
+      "title": "101. Autopilot's settings across every repository: their order, which it takes from first, each one's switch, cap of tabs and spend limit beside the shared ones, and Add a repository…",
       "page": "design"
     },
     "AutopilotRepoMenu.dc.html": {
@@ -427,6 +427,10 @@
     },
     "AutopilotRepoMove.dc.html": {
       "title": "103. Moving a repository while autopilot runs: Next up rearranged across the queues as it is put down",
+      "page": "design"
+    },
+    "AutopilotRepoAdd.dc.html": {
+      "title": "104. Add a repository… in autopilot's settings: your repositories not yet in it, or a folder; it joins last, on, with a cap and spend of its own",
       "page": "design"
     }
   }

@@ -163,6 +163,7 @@ The relay's DM, threads and Home tab.
 - [98. Mission control's Autopilot from every repository's queue: each card its ID, place and repository, Parked under the board, Landed with its Done line](https://cquinones100.github.io/switchboard/design/98.html)
 - [99. A plan note is the item: its bar names its ID, place, holds and what it needs, Enter opening the queue's menu; ticking an option makes the choice](https://cquinones100.github.io/switchboard/design/99.html)
 - [100. Slack's Home tab lists the queue, an overflow menu on each item, and Make its choice… as a form](https://cquinones100.github.io/switchboard/design/100.html)
-- [101. Autopilot's settings across every repository: their order, which it takes from first, each one's switch, cap of tabs and spend limit beside the shared ones](https://cquinones100.github.io/switchboard/design/101.html)
+- [101. Autopilot's settings across every repository: their order, which it takes from first, each one's switch, cap of tabs and spend limit beside the shared ones, and Add a repository…](https://cquinones100.github.io/switchboard/design/101.html)
 - [102. Enter on a repository in autopilot's settings: move it, turn it off, its cap, its spend limit, where it lands, its queue](https://cquinones100.github.io/switchboard/design/102.html)
 - [103. Moving a repository while autopilot runs: Next up rearranged across the queues as it is put down](https://cquinones100.github.io/switchboard/design/103.html)
+- [104. Add a repository… in autopilot's settings: your repositories not yet in it, or a folder; it joins last, on, with a cap and spend of its own](https://cquinones100.github.io/switchboard/design/104.html)
