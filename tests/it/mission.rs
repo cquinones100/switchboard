@@ -3044,9 +3044,13 @@ fn search_this_tabs_conversation(
 #[test]
 fn m_f_finds_this_tab_by_what_was_said_in_its_conversation() {
     let (_server, mut client, _) = search_this_tabs_conversation(json!({}), "zebraword");
+    // Its row, and the preview beside the results saying when it was said
+    // and showing the line.
     let screen = client.wait_for("this tab, found in its conversation", |s| {
-        s.iter()
-            .any(|l| l.contains("1 home · this tab") && l.contains("said 3h 0m ago: is the"))
+        s.iter().any(|l| l.contains("1 home · this tab"))
+            && s.iter()
+                .any(|l| l.contains("Said in its Claude's conversation 3h 0m ago"))
+            && s.iter().any(|l| l.contains("is the zebraword set?"))
     });
     assert!(
         !screen.iter().any(|l| l.contains("No results")),

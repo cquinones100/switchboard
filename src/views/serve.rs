@@ -755,7 +755,8 @@ impl Server {
             typed,
             caps,
         )
-        .with_arrows(settings::is_on("search_arrows"));
+        .with_arrows(settings::is_on("search_arrows"))
+        .with_preview(settings::is_on("search_preview"), self.side_resize_keys());
         let then: crate::ui::Then = Box::new(move |server, client, outcome| {
             let (picked, browser) = match outcome {
                 Outcome::Picked(p) => (p, false),
@@ -789,6 +790,22 @@ impl Server {
             }
         });
         self.open(client, Box::new(search_box), Some(then));
+    }
+
+    /// The keys bound to moving a pane's divider left or right, each with
+    /// its columns (right positive), for a box with panes side by side.
+    fn side_resize_keys(&self) -> Vec<(crate::mux::input::Key, isize)> {
+        use crate::mux::Direction;
+        use crate::mux::keys::Action;
+        self.bindings
+            .root
+            .iter()
+            .filter_map(|(key, action)| match action {
+                Action::Resize(Direction::Left, n) => Some((*key, -(*n as isize))),
+                Action::Resize(Direction::Right, n) => Some((*key, *n as isize)),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Asks each source M-F's box names for `query`, each answering with
@@ -833,6 +850,7 @@ impl Server {
                     text: why,
                     detail: String::new(),
                     link: String::new(),
+                    context: search::Context::default(),
                 }]
             };
             match source {

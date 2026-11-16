@@ -39,6 +39,10 @@ pub struct Hit {
     pub at: i64,
     pub line: String,
     pub count: usize,
+    /// The lines said around it, for M-F's preview, and where it is
+    /// among them (`pane_search::around`).
+    pub around: Vec<String>,
+    pub around_at: usize,
 }
 
 /// A transcript as read so far: its lines said, and where its next read
@@ -105,7 +109,13 @@ impl Conversation {
         let Some(text) = text else {
             return;
         };
-        for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        // Each line with its indentation, which M-F's preview shows; what
+        // is searched and summed up is the same either way.
+        for line in text
+            .lines()
+            .map(str::trim_end)
+            .filter(|l| !l.trim().is_empty())
+        {
             self.said.push(Said {
                 at,
                 line: line.to_string(),
@@ -118,15 +128,19 @@ impl Conversation {
         if text.is_empty() {
             return None;
         }
-        let mut hits = self
-            .said
-            .iter()
-            .filter(|s| s.line.to_lowercase().contains(text));
-        let last = hits.next_back()?;
+        let hits: Vec<usize> = (0..self.said.len())
+            .filter(|&i| self.said[i].line.to_lowercase().contains(text))
+            .collect();
+        let &i = hits.last()?;
+        let last = &self.said[i];
+        let lines: Vec<&str> = self.said.iter().map(|s| s.line.as_str()).collect();
+        let (around, around_at) = crate::mission::pane_search::around(&lines, i);
         Some(Hit {
             at: last.at,
-            line: last.line.clone(),
-            count: hits.count() + 1,
+            line: last.line.trim().to_string(),
+            count: hits.len(),
+            around,
+            around_at,
         })
     }
 
@@ -260,6 +274,19 @@ mod tests {
                 .unwrap()
                 .as_second()
         );
+    }
+
+    #[test]
+    fn a_match_s_lines_around_keep_their_indentation() {
+        let mut c = Conversation::default();
+        c.take(&reply(
+            "2026-11-15T10:00:05Z",
+            "- parent\n    - zebra child  ",
+        ));
+        let hit = c.search("zebra").unwrap();
+        assert_eq!(hit.line, "- zebra child");
+        assert_eq!(hit.around, ["- parent", "    - zebra child"]);
+        assert_eq!(hit.around_at, 1);
     }
 
     #[test]

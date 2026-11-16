@@ -154,14 +154,177 @@ pub fn scope(query: &str) -> (Vec<Source>, &str) {
     (named, rest.trim())
 }
 
-/// One result: what it is, a word about it, and the link it reads (empty
-/// for a row that only says something, as Slack's connector missing).
+/// One result: what it is, a word about it, the link it reads (empty for a
+/// row that only says something, as Slack's connector missing), and where
+/// it was found, for M-F's preview.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Found {
     pub source: Source,
     pub text: String,
     pub detail: String,
     pub link: String,
+    pub context: Context,
+}
+
+/// Where a result was found, as M-F's preview shows it (board 91): its
+/// place (a note's title and the heading above the match, a tab, a ticket,
+/// a PR, a Slack channel), what it is, and the lines around the match,
+/// filled by its source as it answers so the preview reads nothing.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Context {
+    pub place: String,
+    pub about: String,
+    /// The match's line number, for what has lines of its own to count (a
+    /// note); 0 for what doesn't.
+    pub line: usize,
+    /// Up to `pane_search::AROUND` lines each side of the match and the
+    /// match's own, each cut to `pane_search::AROUND_CHARS` characters.
+    pub lines: Vec<String>,
+    /// The match's line among `lines`.
+    pub at: usize,
+}
+
+/// The qualifiers GitHub's, Linear's and Slack's searches take, as
+/// `<key>:<value>`.
+const QUALIFIERS: &[&str] = &[
+    "after",
+    "archived",
+    "assignee",
+    "author",
+    "base",
+    "before",
+    "closed",
+    "comments",
+    "commenter",
+    "created",
+    "draft",
+    "during",
+    "from",
+    "has",
+    "head",
+    "in",
+    "involves",
+    "is",
+    "label",
+    "language",
+    "linked",
+    "mentions",
+    "merged",
+    "milestone",
+    "no",
+    "on",
+    "org",
+    "project",
+    "reason",
+    "repo",
+    "review",
+    "sort",
+    "state",
+    "status",
+    "team",
+    "to",
+    "type",
+    "updated",
+    "user",
+    "with",
+];
+
+/// The words of `query` a result's text holds, lowercased, for finding and
+/// marking the match: the services' qualifiers (`is:pr`, `in:#deploys`,
+/// `label:"help wanted"`, a key of `QUALIFIERS`, its quoted value whole)
+/// and exclusions (`-draft`) left out, and the quotes of a phrase taken
+/// off; every word when that leaves none.
+pub fn terms(query: &str) -> Vec<String> {
+    let qualifier = |w: &str| {
+        w.split_once(':').is_some_and(|(key, value)| {
+            QUALIFIERS.contains(&key.to_lowercase().as_str()) && !value.is_empty()
+        })
+    };
+    // Each word, with whether it is kept: inside a quoted phrase it is,
+    // inside a qualifier's quoted value it isn't.
+    let mut open: Option<bool> = None;
+    let marked: Vec<(&str, bool)> = query
+        .split_whitespace()
+        .map(|w| {
+            let odd = w.matches('"').count() % 2 == 1;
+            let kept = match open {
+                Some(kept) => {
+                    if odd {
+                        open = None;
+                    }
+                    kept
+                }
+                None => {
+                    let kept = w.starts_with('"') || !(w.starts_with('-') || qualifier(w));
+                    if odd {
+                        open = Some(kept);
+                    }
+                    kept
+                }
+            };
+            (w, kept)
+        })
+        .collect();
+    let words = |all: bool| -> Vec<String> {
+        marked
+            .iter()
+            .filter(|(_, kept)| all || *kept)
+            .map(|(w, _)| {
+                w.trim_matches(|c: char| c == '"' || c == '\'')
+                    .to_lowercase()
+            })
+            .filter(|w| !w.is_empty())
+            .collect()
+    };
+    let terms = words(false);
+    if terms.is_empty() { words(true) } else { terms }
+}
+
+/// The first of `lines` holding the most of `terms`, at least one, so a
+/// phrase or several words searched for are found together where they are.
+fn first_holding<S: AsRef<str>>(lines: &[S], terms: &[String]) -> Option<usize> {
+    let mut best: Option<(usize, usize)> = None;
+    for (i, l) in lines.iter().enumerate() {
+        let l = l.as_ref().to_lowercase();
+        let held = terms.iter().filter(|t| l.contains(t.as_str())).count();
+        if held > 0 && best.is_none_or(|(_, most)| held > most) {
+            best = Some((i, held));
+        }
+    }
+    best.map(|(i, _)| i)
+}
+
+impl Context {
+    /// A result's context with nothing around it: its text alone.
+    fn alone(place: &str, about: &str, text: &str) -> Context {
+        let (lines, at) = pane_search::around(&[text], 0);
+        Context {
+            place: place.to_string(),
+            about: about.to_string(),
+            line: 0,
+            lines,
+            at,
+        }
+    }
+
+    /// The lines of `body` around the first holding one of `query`'s
+    /// `terms`, or its text alone when none does.
+    fn in_body(place: &str, about: &str, body: &str, query: &str, text: &str) -> Context {
+        let lines: Vec<&str> = body.lines().collect();
+        match first_holding(&lines, &terms(query)) {
+            Some(i) => {
+                let (lines, at) = pane_search::around(&lines, i);
+                Context {
+                    place: place.to_string(),
+                    about: about.to_string(),
+                    line: 0,
+                    lines,
+                    at,
+                }
+            }
+            None => Context::alone(place, about, text),
+        }
+    }
 }
 
 /// The sources Settings has on, a chip each in M-F's box: the tabs and the
@@ -367,7 +530,9 @@ pub fn tabs(
             .as_ref()
             .filter(|_| !named)
             .and_then(|(pane, file)| Some((*pane, said.get(file)?)));
-        let (group, order, detail, at) = match (on_screen, in_talk) {
+        let mark = if t.here { " · this tab" } else { "" };
+        let text = clean(&format!("{} {}{mark}", t.number, t.label));
+        let (group, order, detail, at, context) = match (on_screen, in_talk) {
             (Some(f), _) => (
                 1,
                 -(f.count as i64),
@@ -377,21 +542,34 @@ pub fn tabs(
                     pane: Some(f.pane),
                     said: None,
                 },
-            ),
-            (None, Some((pane, hit))) => (
-                2,
-                -hit.at,
-                format!(
-                    "said {} ago: {}",
-                    crate::history::timeline::span_words(now - hit.at),
-                    clean(&hit.line)
-                ),
-                TabAt {
-                    tab: t.tab,
-                    pane: Some(pane),
-                    said: Some(hit.at),
+                Context {
+                    place: format!("{text} › pane {}", f.pane),
+                    about: "What the pane shows".to_string(),
+                    line: 0,
+                    lines: f.around.clone(),
+                    at: f.around_at,
                 },
             ),
+            (None, Some((pane, hit))) => {
+                let ago = crate::history::timeline::span_words(now - hit.at);
+                (
+                    2,
+                    -hit.at,
+                    format!("said {ago} ago: {}", clean(&hit.line)),
+                    TabAt {
+                        tab: t.tab,
+                        pane: Some(pane),
+                        said: Some(hit.at),
+                    },
+                    Context {
+                        place: format!("{text} › conversation"),
+                        about: format!("Said in its Claude's conversation {ago} ago"),
+                        line: 0,
+                        lines: hit.around.clone(),
+                        at: hit.around_at,
+                    },
+                )
+            }
             (None, None) if named => (
                 0,
                 0,
@@ -401,20 +579,21 @@ pub fn tabs(
                     pane: None,
                     said: None,
                 },
+                Context::alone(&text, "A tab found by its name", &t.label),
             ),
             (None, None) => continue,
         };
         let (group, order) = if named { (0, i as i64) } else { (group, order) };
-        let mark = if t.here { " · this tab" } else { "" };
         rows.push((
             group,
             t.here,
             order,
             Found {
                 source: Source::Tabs,
-                text: clean(&format!("{} {}{mark}", t.number, t.label)),
+                text,
                 detail,
                 link: tab_link(at),
+                context,
             },
         ));
     }
@@ -457,6 +636,7 @@ pub fn notes(dir: &Path, query: &str) -> Vec<Found> {
     hits.into_iter()
         .take(LIMIT)
         .map(|(_, file, text)| {
+            let all: Vec<&str> = text.lines().collect();
             let mut lines = text.lines();
             let first = lines.next().unwrap_or("");
             let title = first.strip_prefix('#').unwrap_or(first).trim().to_string();
@@ -477,11 +657,41 @@ pub fn notes(dir: &Path, query: &str) -> Vec<Found> {
                         .collect::<String>()
                 })
                 .unwrap_or_default();
+            // The match's line: the first holding the first word, after the
+            // title when it is past it.
+            let at = (1..all.len())
+                .chain([0])
+                .find(|&i| all[i].to_lowercase().contains(&words[0]))
+                .unwrap_or(0);
+            let heading = all[1..=at.max(1).min(all.len().saturating_sub(1))]
+                .iter()
+                .rev()
+                .find(|l| l.starts_with('#'))
+                .map(|l| l.trim_start_matches('#').trim().to_string())
+                .filter(|_| at > 0);
+            let place = match heading {
+                Some(h) if !h.is_empty() => format!("{title} › {h}"),
+                _ => title.clone(),
+            };
+            let folder = file
+                .parent()
+                .and_then(|p| p.strip_prefix(dir).ok())
+                .map(|p| p.to_string_lossy().into_owned())
+                .filter(|p| !p.is_empty())
+                .unwrap_or_else(|| "Notes".to_string());
+            let (around, around_at) = pane_search::around(&all, at);
             Found {
                 source: Source::Notes,
                 text: clean(&title),
                 detail: clean(&hit),
                 link: file_url(&file),
+                context: Context {
+                    place: clean(&place),
+                    about: format!("Note in {folder}"),
+                    line: at + 1,
+                    lines: around,
+                    at: around_at,
+                },
             }
         })
         .collect()
@@ -491,7 +701,7 @@ pub fn notes(dir: &Path, query: &str) -> Vec<Found> {
 pub async fn linear(query: &str) -> Result<Vec<Found>, String> {
     let data = linear::graphql(
         &format!(
-            "query($q: String!) {{ searchIssues(term: $q, first: {LIMIT}) {{ nodes {{ identifier title url state {{ name }} }} }} }}"
+            "query($q: String!) {{ searchIssues(term: $q, first: {LIMIT}) {{ nodes {{ identifier title description url state {{ name }} }} }} }}"
         ),
         json!({ "q": query }),
         SOURCE,
@@ -512,9 +722,12 @@ pub async fn linear(query: &str) -> Result<Vec<Found>, String> {
                     .unwrap_or("")
                     .to_string()
             };
+            let title = clean(&format!("{} {}", text("/identifier"), text("/title")));
+            let about = format!("Linear ticket, {}", text("/state/name"));
             Found {
                 source: Source::Linear,
-                text: clean(&format!("{} {}", text("/identifier"), text("/title"))),
+                context: Context::in_body(&title, &about, &text("/description"), query, &title),
+                text: title,
                 detail: text("/state/name"),
                 link: text("/url"),
             }
@@ -553,11 +766,12 @@ pub async fn github(query: &str, dirs: Vec<PathBuf>) -> Result<Vec<Found>, Strin
     )
     .await
     .map_err(|e| e.to_string())?;
-    Ok(github_results(&answer))
+    Ok(github_results(&answer, query))
 }
 
-/// GitHub's search answer as rows.
-pub fn github_results(answer: &Value) -> Vec<Found> {
+/// GitHub's search answer as rows, each with the lines of its body around
+/// `query`.
+pub fn github_results(answer: &Value, query: &str) -> Vec<Found> {
     let items = answer
         .get("items")
         .and_then(Value::as_array)
@@ -581,10 +795,14 @@ pub fn github_results(answer: &Value) -> Vec<Found> {
             } else {
                 "issue"
             };
+            let title = clean(&format!("{repo}#{number} {}", text("title")));
+            let detail = format!("{kind}, {}", text("state"));
+            let about = format!("GitHub {detail}");
             Found {
                 source: Source::GitHub,
-                text: clean(&format!("{repo}#{number} {}", text("title"))),
-                detail: format!("{kind}, {}", text("state")),
+                context: Context::in_body(&title, &about, &text("body"), query, &title),
+                text: title,
+                detail,
                 link: text("html_url"),
             }
         })
@@ -611,13 +829,14 @@ pub async fn slack(query: &str) -> Result<Vec<Found>, String> {
                     other => other.to_string(),
                 })
                 .unwrap_or(text);
-            Ok(slack_results(&results))
+            Ok(slack_results(&results, query))
         }
         Err(e) if e.not_connected => Ok(vec![Found {
             source: Source::Slack,
             text: e.message,
             detail: String::new(),
             link: String::new(),
+            context: Context::default(),
         }]),
         Err(e) => Err(e.message),
     }
@@ -635,8 +854,11 @@ static ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r" \(ID: \w+\).*$").unw
 static EMAIL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r" <[^>]*>").unwrap());
 
 /// The connector's text as rows: each result's message, who wrote it,
-/// where and when, and its permalink; one with no permalink left out.
-pub fn slack_results(text: &str) -> Vec<Found> {
+/// where and when, and its permalink, with the messages around it centered
+/// on its first line holding one of `query`'s `terms`; one with no
+/// permalink left out.
+pub fn slack_results(text: &str, query: &str) -> Vec<Found> {
+    let terms = terms(query);
     RESULT
         .split(text)
         .skip(1)
@@ -649,28 +871,48 @@ pub fn slack_results(text: &str) -> Vec<Found> {
                     .to_string()
             };
             let link = PERMALINK.captures(block)?[1].replace("\\/", "/");
-            // The message: after `Text:` up to its context or the end.
-            let mut body = Vec::new();
-            let mut lines = block.lines().skip_while(|l| !l.starts_with("Text:"));
-            if let Some(first) = lines.next() {
-                let rest = first.trim_start_matches("Text:").trim();
-                if !rest.is_empty() {
-                    body.push(rest.to_string());
-                }
-                for l in lines {
-                    if l.starts_with("Context before:")
-                        || l.starts_with("Context after:")
-                        || l.starts_with("---")
-                    {
-                        break;
+            // The message after `Text:`, and the messages Slack gave before
+            // and after it, each up to the next part or the end.
+            let part = |name: &str| -> Vec<String> {
+                let mut out = Vec::new();
+                let mut lines = block.lines().skip_while(|l| !l.starts_with(name));
+                if let Some(first) = lines.next() {
+                    let rest = first.trim_start_matches(name).trim();
+                    if !rest.is_empty() {
+                        out.push(rest.to_string());
                     }
-                    body.push(l.to_string());
+                    for l in lines {
+                        // The message itself may hold a line starting
+                        // "Text:"; only a context part ends at one.
+                        if (name != "Text:" && l.starts_with("Text:"))
+                            || l.starts_with("Context before:")
+                            || l.starts_with("Context after:")
+                            || l.starts_with("---")
+                        {
+                            break;
+                        }
+                        out.push(l.to_string());
+                    }
                 }
-            }
-            let body = body.join("\n");
-            let body = MENTION.replace_all(&body, "@$1");
-            let body = NAMED_LINK.replace_all(&body, "$2");
-            let body = BARE_LINK.replace_all(&body, "$1");
+                out
+            };
+            let readable = |text: &str| {
+                let text = MENTION.replace_all(text, "@$1");
+                let text = NAMED_LINK.replace_all(&text, "$2");
+                BARE_LINK.replace_all(&text, "$1").into_owned()
+            };
+            let body = readable(&part("Text:").join("\n"));
+            let before: Vec<String> = part("Context before:")
+                .iter()
+                .map(|l| readable(l))
+                .collect();
+            let after: Vec<String> = part("Context after:").iter().map(|l| readable(l)).collect();
+            let mut around: Vec<String> = before.clone();
+            around.extend(body.lines().map(str::to_string));
+            around.extend(after);
+            let body_lines: Vec<&str> = body.lines().collect();
+            let matched = first_holding(&body_lines, &terms).unwrap_or(0);
+            let (lines, at) = pane_search::around(&around, before.len() + matched);
             let channel = ID.replace(&field("Channel"), "").into_owned();
             let who = ID
                 .replace(&EMAIL.replace(&field("From"), ""), "")
@@ -681,6 +923,13 @@ pub fn slack_results(text: &str) -> Vec<Found> {
                 text: clean(&body).chars().take(140).collect(),
                 detail: clean(&format!("{who} in {channel}, {time}")),
                 link,
+                context: Context {
+                    place: clean(&format!("{channel} › {who}")),
+                    about: format!("Slack message, {time}"),
+                    line: 0,
+                    lines,
+                    at,
+                },
             })
         })
         .collect()
@@ -701,6 +950,7 @@ mod tests {
             text: link.to_string(),
             detail: String::new(),
             link: link.to_string(),
+            context: Context::default(),
         }
     }
 
@@ -859,6 +1109,8 @@ mod tests {
                     pane: PaneId(tab + 10),
                     lines: vec!["first zebra".into(), format!("a  zebra {tab}")],
                     count,
+                    around: Vec::new(),
+                    around_at: 0,
                 },
             );
         }
@@ -910,6 +1162,8 @@ mod tests {
                     pane: PaneId(tab + 10),
                     lines: vec![format!("node on screen {tab}")],
                     count: 1,
+                    around: vec![format!("node on screen {tab}")],
+                    around_at: 0,
                 },
             );
         }
@@ -921,6 +1175,8 @@ mod tests {
                     at,
                     line: format!("asked about node in {tab}"),
                     count: 1,
+                    around: vec![format!("asked about node in {tab}")],
+                    around_at: 0,
                 },
             );
         }
@@ -960,13 +1216,55 @@ mod tests {
     fn slacks_answer_is_read_into_rows() {
         let text = "Found 2.\n### Result 1 of 2\nChannel: #deploys (ID: C1)\nFrom: Jo <jo@x.com> (ID: U1)\n\
             Time: 2026-11-05 10:30:12 EST\nPermalink: [link](https:\\/\\/acme.slack.com\\/archives\\/C1\\/p1)\n\
-            Text:\nThe <@U2|sam> freeze is <https://x.com/a|on>\nsee <https://x.com/b>\nContext after:\nignored\n\
+            Text:\nThe <@U2|sam> freeze is <https://x.com/a|on>\nsee <https://x.com/b>\nText: kept\nContext after:\nignored\n\
             ### Result 2 of 2\nChannel: #x\nFrom: Bot\nText: no link here\n";
-        let rows = slack_results(text);
+        let rows = slack_results(text, "in:#deploys \"see\"");
+        assert_eq!(
+            rows[0].context.lines[rows[0].context.at], "see https://x.com/b",
+            "the preview centered on the line holding the word"
+        );
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].text, "The @sam freeze is on see https://x.com/b");
+        assert_eq!(
+            rows[0].text, "The @sam freeze is on see https://x.com/b Text: kept",
+            "a line of the message starting Text: kept"
+        );
         assert_eq!(rows[0].detail, "Jo in #deploys, 2026-11-05 10:30");
         assert_eq!(rows[0].link, "https://acme.slack.com/archives/C1/p1");
+    }
+
+    #[test]
+    fn a_querys_terms_leave_out_qualifiers_exclusions_and_quotes() {
+        assert_eq!(terms("is:pr \"Login\" -draft fix"), ["login", "fix"]);
+        assert_eq!(terms("https://example.com/a"), ["https://example.com/a"]);
+        assert_eq!(terms("\"note:x\""), ["note:x"], "a quoted word kept");
+        assert_eq!(
+            terms("\"error status:500\" -x"),
+            ["error", "status:500"],
+            "a qualifier-like word inside a phrase kept"
+        );
+        assert_eq!(
+            terms("label:\"help wanted\" crash"),
+            ["crash"],
+            "a qualifier's quoted value left out"
+        );
+        assert_eq!(
+            terms("localhost:3000 error"),
+            ["localhost:3000", "error"],
+            "an address kept"
+        );
+        assert_eq!(
+            terms("is:open"),
+            ["is:open"],
+            "every word when none is left"
+        );
+        let ctx = Context::in_body("p", "a", "intro\nthe login form\nend", "is:pr login", "t");
+        assert_eq!(ctx.lines[ctx.at], "the login form");
+        let body = "Deployment guide\nintro\nthe deployment failed at 3";
+        let ctx = Context::in_body("p", "a", body, "is:pr \"deployment failed\"", "t");
+        assert_eq!(
+            ctx.lines[ctx.at], "the deployment failed at 3",
+            "the line holding both"
+        );
     }
 
     #[test]
@@ -978,9 +1276,48 @@ mod tests {
             { "repository_url": "https://api.github.com/repos/acme/widgets", "number": 3,
               "title": "Slow", "html_url": "https://github.com/acme/widgets/issues/3", "state": "closed" }
         ] });
-        let rows = github_results(&answer);
+        let rows = github_results(&answer, "login");
         assert_eq!(rows[0].text, "widgets#12 Fix the login");
         assert_eq!(rows[0].detail, "PR, open");
         assert_eq!(rows[1].detail, "issue, closed");
+    }
+
+    #[test]
+    fn a_note_s_match_carries_its_line_and_five_lines_each_side() {
+        let dir = std::env::temp_dir().join(format!("sb-search-context-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Plans")).unwrap();
+        let mut text = vec!["# Long note".to_string()];
+        text.extend((2..=20).map(|n| format!("line {n}")));
+        text[11] = format!("## Steps\n{}", "x".repeat(300));
+        // Line 12 the heading, 13 the long line, 14 the match.
+        let text = text.join("\n").replace("line 13", "the zebra is here");
+        std::fs::write(dir.join("Plans/Long note.md"), &text).unwrap();
+        std::fs::write(dir.join("Short.md"), "# Short\nzebra first\nend\n").unwrap();
+        let rows = notes(&dir, "zebra");
+        let long = rows.iter().find(|r| r.text == "Long note").unwrap();
+        let ctx = &long.context;
+        assert_eq!(ctx.line, 14);
+        assert_eq!(ctx.place, "Long note › Steps");
+        assert_eq!(ctx.about, "Note in Plans");
+        assert_eq!(ctx.lines.len(), 11);
+        assert_eq!(ctx.lines[ctx.at], "the zebra is here");
+        assert_eq!(ctx.lines[0], "line 9");
+        assert_eq!(ctx.lines[10], "line 18");
+        assert_eq!(
+            ctx.lines[ctx.at - 1].chars().count(),
+            200,
+            "a long line cut"
+        );
+        let short = rows.iter().find(|r| r.text == "Short").unwrap();
+        assert_eq!(short.context.line, 2);
+        assert_eq!(short.context.place, "Short");
+        assert_eq!(short.context.about, "Note in Notes");
+        assert_eq!(
+            short.context.lines,
+            ["# Short", "zebra first", "end"],
+            "cut at the note's start and end"
+        );
+        assert_eq!(short.context.at, 1);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

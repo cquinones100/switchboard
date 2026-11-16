@@ -351,6 +351,13 @@
     "default": true
   },
   {
+    "key": "search_preview",
+    "category": "Integrations",
+    "label": "Preview the chosen search result",
+    "description": "M-S-f's box is wider and shows the chosen result beside the results (under them in a narrow box): where it was found and the lines around the match, the match's line lit; J and K scroll it with the results focused; off, the box lists the results alone",
+    "default": true
+  },
+  {
     "key": "search_slack",
     "category": "Integrations",
     "label": "Slack in search everything",

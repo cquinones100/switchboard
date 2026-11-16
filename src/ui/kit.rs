@@ -480,6 +480,43 @@ pub fn label(
     fit(out, cols, Style::new())
 }
 
+/// Text with each place it holds one of `words` (lowercase) in the accent,
+/// bold and underlined, as M-F's preview marks the words searched for
+/// (board 91), the rest in `rest`.
+pub fn found(text: &str, words: &[String], rest: Style, theme: &Theme) -> Vec<Span<'static>> {
+    let lower = text.to_lowercase();
+    // Where lowercasing changed a character's length, the places can't be
+    // told apart: the text unmarked.
+    let mut marked = vec![false; text.len()];
+    if lower.len() == text.len() {
+        for word in words.iter().filter(|w| !w.is_empty()) {
+            for (at, _) in lower.match_indices(word.as_str()) {
+                marked[at..at + word.len()]
+                    .iter_mut()
+                    .for_each(|m| *m = true);
+            }
+        }
+    }
+    let hit = Tone::Accent.bold(theme).add_modifier(Modifier::UNDERLINED);
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut run = String::new();
+    let mut in_hit = false;
+    for (at, ch) in text.char_indices() {
+        if marked[at] != in_hit && !run.is_empty() {
+            out.push(Span::styled(
+                std::mem::take(&mut run),
+                if in_hit { hit } else { rest },
+            ));
+        }
+        in_hit = marked[at];
+        run.push(ch);
+    }
+    if !run.is_empty() {
+        out.push(Span::styled(run, if in_hit { hit } else { rest }));
+    }
+    out
+}
+
 /// The line between regions, `cols` wide.
 pub fn rule(cols: usize, theme: &Theme) -> Span<'static> {
     Span::styled("─".repeat(cols), Style::new().fg(border(theme)))

@@ -36,12 +36,36 @@ pub struct Copied {
 
 /// What a tab's panes showed of the text searched for: the pane that
 /// showed it last, the last `SHOWN` lines that hold it (in the order the
-/// pane shows them), and how many lines in all.
+/// pane shows them), how many lines in all, and the lines around the last
+/// match (`AROUND` each side, the match at `around_at`), for M-F's preview.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Found {
     pub pane: PaneId,
     pub lines: Vec<String>,
     pub count: usize,
+    pub around: Vec<String>,
+    pub around_at: usize,
+}
+
+/// How many lines each side of a match M-F's preview shows.
+pub const AROUND: usize = 5;
+/// The most characters of a line M-F's preview keeps.
+pub const AROUND_CHARS: usize = 200;
+
+/// The lines around `lines[at]`: up to `AROUND` each side, each cut to
+/// `AROUND_CHARS` characters, and where the match is among them.
+pub fn around<S: AsRef<str>>(lines: &[S], at: usize) -> (Vec<String>, usize) {
+    if lines.is_empty() {
+        return (Vec::new(), 0);
+    }
+    let at = at.min(lines.len() - 1);
+    let from = at.saturating_sub(AROUND);
+    let to = (at + AROUND + 1).min(lines.len());
+    let cut = lines[from..to]
+        .iter()
+        .map(|l| l.as_ref().trim_end().chars().take(AROUND_CHARS).collect())
+        .collect();
+    (cut, at - from)
 }
 
 /// How many lines `tab_search_lines` reads above each pane's screen.
@@ -64,26 +88,30 @@ pub fn search(copies: &[Copied], text: &str) -> HashMap<TabId, Found> {
     let mut copies: Vec<&Copied> = copies.iter().collect();
     copies.sort_by_key(|c| c.pane);
     for copy in copies {
-        let hits: Vec<&String> = copy
+        let hits: Vec<(usize, &String)> = copy
             .lines
             .iter()
-            .filter(|l| l.to_lowercase().contains(text))
+            .enumerate()
+            .filter(|(_, l)| l.to_lowercase().contains(text))
             .collect();
-        if hits.is_empty() {
+        let Some(&(last, _)) = hits.last() else {
             continue;
-        }
+        };
         let found = out.entry(copy.tab).or_insert_with(|| Found {
             pane: copy.pane,
             lines: Vec::new(),
             count: 0,
+            around: Vec::new(),
+            around_at: 0,
         });
+        (found.around, found.around_at) = around(&copy.lines, last);
         // The pane with the most recent match is the one the menu goes to:
         // the later pane, once it has any.
         found.pane = copy.pane;
         found.lines = hits
             .iter()
             .skip(hits.len().saturating_sub(SHOWN))
-            .map(|l| l.trim().to_string())
+            .map(|(_, l)| l.trim().to_string())
             .collect();
         found.count += hits.len();
     }
@@ -111,6 +139,8 @@ pub fn narrowed(found: &HashMap<TabId, Found>, text: &str) -> HashMap<TabId, Fou
                         pane: f.pane,
                         lines,
                         count,
+                        around: f.around.clone(),
+                        around_at: f.around_at,
                     },
                 )
             })
@@ -345,6 +375,8 @@ mod tests {
                     pane: PaneId(tab),
                     lines: vec!["a zebra".into()],
                     count,
+                    around: Vec::new(),
+                    around_at: 0,
                 },
             );
         }

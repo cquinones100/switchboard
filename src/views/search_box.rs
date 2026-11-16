@@ -18,12 +18,23 @@
 //! source alone; one turned off drops its rows and any answer still on its
 //! way, so a source off is sent nothing. The box shows no keys: board 78
 //! keeps its room for the results.
+//!
+//! With Settings' `search_preview` on (board 91) the box is wider and the
+//! chosen result is previewed beside the results, or under them in a box
+//! narrower than `SIDE_MIN`: its place, what it is, its line number when
+//! it has one, and the lines around the match its source gave
+//! (`search::Context`), the match's line lit and the words searched for in
+//! the accent. It follows the cursor from what the rows hold, reading
+//! nothing. With the results focused, J and K scroll it, as the wheel over
+//! it does; beside the results, the pane resize keys and a drag of the rule
+//! between the two move that rule.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::text::Span;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -49,6 +60,28 @@ const CHIPS: usize = 2;
 /// The inside's least width: every chip with a two-digit count, and room
 /// to spare.
 const CHIPS_WIDTH: usize = 72;
+/// The inside's least width for the preview beside the results; under it,
+/// the preview goes under them.
+const SIDE_MIN: usize = 100;
+/// The results' and the preview's least widths beside each other.
+const RESULTS_MIN: usize = 30;
+const PREVIEW_MIN: usize = 40;
+/// The preview's lines above the context: its place, what it is, a rule.
+const PREVIEW_HEAD: usize = 3;
+/// The most lines the preview takes under the results: its head and the
+/// context's eleven.
+const PREVIEW_UNDER: usize = PREVIEW_HEAD + 11;
+
+/// Where the preview is, as drawn last.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Preview {
+    Off,
+    /// Beside the results, which are this wide; the rule between is the
+    /// next column.
+    Beside(usize),
+    /// Under the results, from this line of the box, this many lines.
+    Under(usize, usize),
+}
 
 /// What has the focus: Tab's stops, and the results, which Up and Down
 /// reach below the chips.
@@ -127,6 +160,22 @@ pub struct SearchBox {
     dragging: Option<kit::Grab>,
     /// The last click on a row, for a second one.
     last_click: Option<(Instant, usize)>,
+    /// Settings' `search_preview`.
+    preview: bool,
+    /// Where the preview was drawn last.
+    previewed: Preview,
+    /// The result the preview's scroll is of (its search's number and its
+    /// link), and its first context line shown; another result, or the
+    /// same link found by another search, starts at its match again.
+    peek: Option<(u64, String, usize)>,
+    /// The results' width beside the preview, once a drag or a resize key
+    /// moved the rule between them.
+    split: Option<usize>,
+    /// The rule between them being dragged.
+    splitting: bool,
+    /// The keys bound to moving a pane's divider left or right, and by how
+    /// many columns (right positive).
+    resize_keys: Vec<(Key, isize)>,
 }
 
 impl SearchBox {
@@ -177,6 +226,12 @@ impl SearchBox {
             dragging: None,
             last_click: None,
             arrows: true,
+            preview: false,
+            previewed: Preview::Off,
+            peek: None,
+            split: None,
+            splitting: false,
+            resize_keys: Vec::new(),
         };
         b.type_in(typed);
         b
@@ -185,6 +240,15 @@ impl SearchBox {
     /// With Settings' `search_arrows` as `on`.
     pub fn with_arrows(mut self, on: bool) -> SearchBox {
         self.arrows = on;
+        self
+    }
+
+    /// With Settings' `search_preview` as `on`, and the pane resize keys
+    /// (each with its columns, right positive) moving the rule between the
+    /// results and the preview.
+    pub fn with_preview(mut self, on: bool, resize_keys: Vec<(Key, isize)>) -> SearchBox {
+        self.preview = on;
+        self.resize_keys = resize_keys;
         self
     }
 
@@ -559,6 +623,8 @@ impl SearchBox {
     }
 
     fn result_line(&self, line: Line, inner: usize, look: &Look) -> BoxLine {
+        // `inner`: the results' width, the whole inside's or, beside the
+        // preview, theirs.
         let theme = &look.theme;
         match line {
             Line::Gap => BoxLine::blank(),
@@ -650,12 +716,207 @@ impl SearchBox {
 
     fn row_at(&self, hit: Hit) -> Option<usize> {
         match hit {
+            Hit::Line(_, col) if matches!(self.previewed, Preview::Beside(w) if col as usize >= w) => {
+                None
+            }
             Hit::Line(i, _) if i >= HEAD => match self.shown.get(i - HEAD) {
                 Some(Line::Row(r)) if !self.rows[*r].link.is_empty() => Some(*r),
                 _ => None,
             },
             _ => None,
         }
+    }
+
+    /// Whether `hit` is on the preview.
+    fn on_preview(&self, hit: Hit) -> bool {
+        match (self.previewed, hit) {
+            (Preview::Beside(w), Hit::Line(i, col)) => i >= HEAD && col as usize > w,
+            (Preview::Under(from, n), Hit::Line(i, _)) => (from..from + n).contains(&i),
+            _ => false,
+        }
+    }
+
+    /// The words searched for, which the preview marks.
+    /// The tabs and notes are searched for the words as typed, the services
+    /// by their own syntax (`search::terms`).
+    fn words(&self) -> Vec<String> {
+        let Some(a) = &self.asked else {
+            return Vec::new();
+        };
+        let query = search::scope(&a.query).1;
+        match self.rows.get(self.cursor).map(|r| r.source) {
+            Some(Source::Tabs | Source::Notes) => query
+                .to_lowercase()
+                .split_whitespace()
+                .map(str::to_string)
+                .collect(),
+            _ => search::terms(query),
+        }
+    }
+
+    /// The chosen row's context lines shown in `room` lines: from where its
+    /// scroll left them, else with its match in the middle.
+    fn peek_top(&self, room: usize) -> usize {
+        let Some(row) = self.rows.get(self.cursor) else {
+            return 0;
+        };
+        let ctx = &row.context;
+        let most = ctx.lines.len().saturating_sub(room);
+        match &self.peek {
+            Some((id, link, top)) if self.peek_of() == Some((*id, link.as_str())) => {
+                (*top).min(most)
+            }
+            _ => ctx.at.saturating_sub(room / 2).min(most),
+        }
+    }
+
+    /// The chosen result as the preview's scroll is kept for it.
+    fn peek_of(&self) -> Option<(u64, &str)> {
+        Some((
+            self.asked.as_ref()?.id,
+            self.rows.get(self.cursor)?.link.as_str(),
+        ))
+    }
+
+    /// Scrolls the preview by `by` lines.
+    fn scroll_peek(&mut self, by: isize) -> Step {
+        let room = match self.previewed {
+            Preview::Off => return Step::Same,
+            Preview::Beside(_) => self.room,
+            Preview::Under(_, n) => n,
+        }
+        .saturating_sub(PREVIEW_HEAD)
+        .max(1);
+        let top = self.peek_top(room);
+        let most = self
+            .rows
+            .get(self.cursor)
+            .map_or(0, |r| r.context.lines.len().saturating_sub(room));
+        let to = top.saturating_add_signed(by).min(most);
+        if to == top {
+            return Step::Same;
+        }
+        self.peek = self.peek_of().map(|(id, link)| (id, link.to_string(), to));
+        Step::Redraw
+    }
+
+    /// Moves the rule between the results and the preview to give the
+    /// results `to` columns, within both's least widths.
+    fn split_to(&mut self, to: isize) -> Step {
+        let Preview::Beside(now) = self.previewed else {
+            return Step::Same;
+        };
+        let inner = self.drawn.as_ref().map_or(0, |d| d.inner.width as usize);
+        let to = (to.max(0) as usize).clamp(
+            RESULTS_MIN,
+            inner.saturating_sub(PREVIEW_MIN + 1).max(RESULTS_MIN),
+        );
+        if to == now {
+            return Step::Same;
+        }
+        self.split = Some(to);
+        Step::Redraw
+    }
+
+    /// The preview of the chosen row, `cols` wide and `rows` tall: its
+    /// place and line number, what it is, a rule, and the lines around the
+    /// match, numbered when they have numbers, the match's line lit.
+    fn preview_lines(&self, cols: usize, rows: usize, look: &Look) -> Vec<Vec<Span<'static>>> {
+        let theme = &look.theme;
+        let mut out: Vec<Vec<Span<'static>>> = Vec::new();
+        let row = self
+            .rows
+            .get(self.cursor)
+            .filter(|_| self.asked.is_some() && !self.rows.is_empty());
+        if let Some(row) = row {
+            let ctx = &row.context;
+            let place = if ctx.place.is_empty() {
+                &row.text
+            } else {
+                &ctx.place
+            };
+            let line_no = if ctx.line > 0 {
+                format!("line {}", ctx.line)
+            } else {
+                String::new()
+            };
+            let at = kit::columns(
+                &[
+                    Col::Stretch {
+                        weight: 1,
+                        min: 8,
+                        max: None,
+                    },
+                    Col::Right {
+                        natural: draw::width(&line_no),
+                        cap: 12,
+                    },
+                ],
+                cols.saturating_sub(2),
+                2,
+                &[1],
+            );
+            let mut head = Vec::new();
+            if let Some((x, w)) = at[0] {
+                kit::place(
+                    &mut head,
+                    vec![Span::styled(place.clone(), Tone::Text.bold(theme))],
+                    (x + 1, w),
+                );
+            }
+            if let Some((x, w)) = at[1].filter(|_| !line_no.is_empty()) {
+                kit::place(
+                    &mut head,
+                    vec![Span::styled(line_no, Tone::Dim.style(theme))],
+                    (x + 1, w),
+                );
+            }
+            out.push(kit::fit(head, cols, Style::new()));
+            out.push(kit::fit(
+                vec![
+                    Span::raw(" "),
+                    Span::styled(ctx.about.clone(), Tone::Dim.style(theme)),
+                ],
+                cols,
+                Style::new(),
+            ));
+            out.push(vec![kit::rule(cols, theme)]);
+            let room = rows.saturating_sub(PREVIEW_HEAD);
+            let top = self.peek_top(room);
+            let first = ctx.line.saturating_sub(ctx.at);
+            let digits = if ctx.line > 0 {
+                (first + ctx.lines.len()).to_string().len()
+            } else {
+                0
+            };
+            let words = self.words();
+            for (i, text) in ctx.lines.iter().enumerate().skip(top).take(room) {
+                let lit = i == ctx.at;
+                let mut spans = Vec::new();
+                if digits > 0 {
+                    let tone = if lit { Tone::Accent } else { Tone::Faint };
+                    spans.push(Span::styled(
+                        format!("{:>digits$}  ", first + i),
+                        tone.style(theme),
+                    ));
+                }
+                let rest = if lit { Tone::Text } else { Tone::Dim }.style(theme);
+                // Its indentation kept, so a nested item reads as one; tabs
+                // as four spaces and control characters left out.
+                let text: String = text
+                    .replace('\t', "    ")
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .collect();
+                spans.extend(kit::found(&text, &words, rest, theme));
+                out.push(kit::row(spans, cols, lit, theme));
+            }
+        }
+        while out.len() < rows {
+            out.push(vec![Span::raw(" ".repeat(cols))]);
+        }
+        out.truncate(rows);
+        out
     }
 }
 
@@ -674,16 +935,41 @@ impl Overlay for SearchBox {
 
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
         let area = buf.area;
-        // Three fifths of the screen, as the pickers take, but never too
-        // narrow for every chip with its count.
-        let outer_w = (area.width as usize * 60 / 100)
+        // Three fifths of the screen, as the pickers take (four fifths with
+        // the preview), but never too narrow for every chip with its count.
+        let share = if self.preview { 80 } else { 60 };
+        let outer_w = (area.width as usize * share / 100)
             .max(CHIPS_WIDTH + 2)
             .min(area.width as usize);
         let outer_h = (area.height as usize * 60 / 100)
             .max(10)
             .min(area.height as usize);
         let inner = outer_w.saturating_sub(2);
-        self.room = outer_h.saturating_sub(2 + HEAD).max(1);
+        let body = outer_h.saturating_sub(2 + HEAD).max(1);
+        self.previewed = match self.preview {
+            false => Preview::Off,
+            true if inner >= SIDE_MIN => {
+                let natural = inner * 45 / 100;
+                let most = inner.saturating_sub(PREVIEW_MIN + 1).max(RESULTS_MIN);
+                Preview::Beside(self.split.unwrap_or(natural).clamp(RESULTS_MIN, most))
+            }
+            // Under the results, with a rule above it: half the lines, at
+            // least its head and one line of context, the results keeping
+            // three.
+            true if body > PREVIEW_HEAD + 1 + 3 => {
+                let n = PREVIEW_UNDER.min((body - 1) / 2).max(PREVIEW_HEAD + 1);
+                Preview::Under(HEAD + body - n, n)
+            }
+            true => Preview::Off,
+        };
+        self.room = match self.previewed {
+            Preview::Under(_, n) => body - n - 1,
+            _ => body,
+        };
+        let results_w = match self.previewed {
+            Preview::Beside(w) => w,
+            _ => inner,
+        };
         let theme = look.theme;
         let found = self.rows.iter().filter(|r| !r.link.is_empty()).count();
         let right = match &self.asked {
@@ -719,11 +1005,39 @@ impl Overlay for SearchBox {
         self.top = self.top.min(all.len().saturating_sub(self.room));
         self.shown = all.iter().copied().skip(self.top).take(self.room).collect();
         for line in &self.shown {
-            lines.push(self.result_line(*line, inner, look));
+            lines.push(self.result_line(*line, results_w, look));
         }
         // As tall as its share of the screen whatever it holds.
         while lines.len() < HEAD + self.room {
             lines.push(BoxLine::blank());
+        }
+        match self.previewed {
+            Preview::Off => {}
+            Preview::Beside(w) => {
+                let peek = self.preview_lines(inner - w - 1, self.room, look);
+                for (line, peek) in lines[HEAD..].iter_mut().zip(peek) {
+                    // The results' line cut to its column, a hovered one's
+                    // fill kept to it.
+                    let mut spans = kit::fit(std::mem::take(&mut line.spans), w, Style::new());
+                    if let Some(bg) = line.fill.take() {
+                        spans = spans
+                            .into_iter()
+                            .map(|s| Span::styled(s.content, s.style.bg(bg)))
+                            .collect();
+                    }
+                    spans.push(kit::rule_v(&theme));
+                    spans.extend(peek);
+                    line.spans = spans;
+                }
+            }
+            Preview::Under(_, n) => {
+                lines.push(BoxLine::spans(vec![kit::rule(inner, &theme)]));
+                lines.extend(
+                    self.preview_lines(inner, n, look)
+                        .into_iter()
+                        .map(BoxLine::spans),
+                );
+            }
         }
         let mut spec = BoxSpec::new("Search everything", &lines);
         spec.width = inner as u16;
@@ -736,6 +1050,14 @@ impl Overlay for SearchBox {
     fn key(&mut self, key: Key, look: &Look) -> Step {
         let ctrl = key.mods == Mods::CTRL;
         let plain = key.mods == Mods::NONE || key.mods == Mods::SHIFT;
+        if let Preview::Beside(w) = self.previewed
+            && let Some((_, by)) = self
+                .resize_keys
+                .iter()
+                .find(|(k, _)| *k == key || *k == key.normalized())
+        {
+            return self.split_to(w as isize + by);
+        }
         match key.code {
             KeyCode::Esc => return Step::Close(Outcome::Dismissed),
             KeyCode::Char('c' | 'g') if ctrl => return Step::Close(Outcome::Dismissed),
@@ -750,6 +1072,11 @@ impl Overlay for SearchBox {
             KeyCode::PageDown => return self.move_to(self.cursor + self.room),
             KeyCode::PageUp => return self.move_to(self.cursor.saturating_sub(self.room)),
             KeyCode::Char('o') if ctrl => return self.take(true),
+            KeyCode::Char(c @ ('J' | 'K'))
+                if plain && self.focus == Part::Results && self.previewed != Preview::Off =>
+            {
+                return self.scroll_peek(if c == 'J' { 1 } else { -1 });
+            }
             KeyCode::Left if self.arrows && is_chip(self.focus) => return self.step_chip(-1),
             KeyCode::Right if self.arrows && is_chip(self.focus) => return self.step_chip(1),
             _ => {}
@@ -846,6 +1173,36 @@ impl Overlay for SearchBox {
             return Step::Same;
         };
         let hit = drawn.hit(mouse.col, mouse.row);
+        // The rule between the results and the preview: a press on it
+        // starts a drag that moves it.
+        if let Preview::Beside(w) = self.previewed
+            && look.mouse
+        {
+            let inner_x = drawn.inner.x;
+            match (mouse.kind, mouse.button, hit) {
+                (MouseKind::Press, MouseButton::Left, Hit::Line(i, col))
+                    if i >= HEAD && col as usize == w =>
+                {
+                    self.splitting = true;
+                    return Step::Same;
+                }
+                (MouseKind::Drag, ..) if self.splitting => {
+                    return self.split_to(mouse.col as isize - inner_x as isize);
+                }
+                (MouseKind::Release, ..) if self.splitting => {
+                    self.splitting = false;
+                    return Step::Same;
+                }
+                _ => {}
+            }
+        }
+        if self.on_preview(hit) {
+            match draw::gesture(&mouse) {
+                Gesture::WheelDown => return self.scroll_peek(1),
+                Gesture::WheelUp => return self.scroll_peek(-1),
+                _ => {}
+            }
+        }
         match draw::gesture(&mouse) {
             Gesture::Click if look.mouse => {
                 if hit == Hit::Outside {
@@ -903,6 +1260,7 @@ mod tests {
 
     fn found(source: Source, link: &str) -> Found {
         Found {
+            context: search::Context::default(),
             source,
             text: link.to_string(),
             detail: String::new(),
@@ -1289,5 +1647,214 @@ mod tests {
         let (mut b, _rx) = open(&[], "note:");
         b.press(Part::Chip(Source::Notes));
         assert_eq!(b.lit(), [Source::Notes]);
+    }
+
+    /// A row whose context is `lines`, the match at `at`, numbered from
+    /// `first`.
+    fn with_context(link: &str, lines: &[&str], at: usize, first: usize) -> Found {
+        Found {
+            context: search::Context {
+                place: format!("Place of {link}"),
+                about: "Note in Notes".to_string(),
+                line: first + at,
+                lines: lines.iter().map(|l| l.to_string()).collect(),
+                at,
+            },
+            ..found(Source::Notes, link)
+        }
+    }
+
+    /// The screen's rows as text.
+    fn screen(buf: &Buffer) -> Vec<String> {
+        let a = buf.area;
+        (0..a.height)
+            .map(|y| {
+                (0..a.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// A box with the preview on, `zebra` searched and two notes found.
+    fn previewing() -> (SearchBox, tokio::sync::mpsc::UnboundedReceiver<Event>) {
+        let (b, rx) = open(&[], "zebra");
+        let mut b = b.with_preview(
+            true,
+            vec![(
+                Key::new(
+                    KeyCode::Char('h'),
+                    Mods {
+                        shift: false,
+                        alt: true,
+                        ctrl: true,
+                    },
+                ),
+                -5,
+            )],
+        );
+        b.key(key(KeyCode::Enter), &Look::default());
+        let id = b.asked.as_ref().unwrap().id;
+        b.answered(
+            id,
+            Source::Notes,
+            vec![
+                with_context(
+                    "n1",
+                    &["## Steps", "", "the zebra line", "    - after it"],
+                    2,
+                    9,
+                ),
+                with_context("n2", &["one zebra"], 0, 1),
+            ],
+        );
+        (b, rx)
+    }
+
+    #[test]
+    fn the_preview_shows_the_chosen_row_s_context_with_the_match_lit_and_follows_down() {
+        let (mut b, _rx) = previewing();
+        let look = Look::default();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 160, 45));
+        b.draw(&mut buf, &look);
+        let Preview::Beside(w) = b.previewed else {
+            panic!("{:?}", b.previewed)
+        };
+        let rows = screen(&buf);
+        let text = rows.join("\n");
+        assert!(text.contains("Place of n1"), "{text}");
+        assert!(text.contains("line 11"), "{text}");
+        let lit = rows
+            .iter()
+            .position(|r| r.contains("11  the zebra line"))
+            .expect(&text);
+        let x = rows[lit].find("zebra line").unwrap();
+        let col = rows[lit][..x].chars().count() as u16;
+        let cell = &buf[(col, lit as u16)];
+        assert_eq!(
+            cell.fg,
+            Tone::Accent.fg(&look.theme),
+            "the word searched for in the accent"
+        );
+        assert_eq!(
+            cell.bg,
+            kit::Surface::Chosen.color(&look.theme),
+            "its line lit"
+        );
+        assert!(rows[lit].contains("│"), "beside the results, {w} wide");
+        assert!(
+            text.contains("12      - after it"),
+            "indentation kept: {text}"
+        );
+        // Down to the chips, the first result, the second: the preview
+        // follows.
+        for _ in 0..3 {
+            b.key(key(KeyCode::Down), &look);
+        }
+        b.draw(&mut buf, &look);
+        let text = screen(&buf).join("\n");
+        assert!(
+            text.contains("Place of n2") && !text.contains("Place of n1"),
+            "{text}"
+        );
+        // A resize key moves the rule between them.
+        b.key(
+            Key::new(
+                KeyCode::Char('h'),
+                Mods {
+                    shift: false,
+                    alt: true,
+                    ctrl: true,
+                },
+            ),
+            &look,
+        );
+        b.draw(&mut buf, &look);
+        assert_eq!(b.previewed, Preview::Beside(w - 5));
+    }
+
+    #[test]
+    fn with_the_setting_off_no_preview_draws() {
+        let (mut b, _rx) = open(&[], "zebra");
+        let look = Look::default();
+        b.key(key(KeyCode::Enter), &look);
+        let id = b.asked.as_ref().unwrap().id;
+        b.answered(
+            id,
+            Source::Notes,
+            vec![with_context("n1", &["the zebra line"], 0, 3)],
+        );
+        let mut buf = Buffer::empty(Rect::new(0, 0, 160, 45));
+        b.draw(&mut buf, &look);
+        assert_eq!(b.previewed, Preview::Off);
+        assert!(!screen(&buf).join("\n").contains("Place of n1"));
+    }
+
+    #[test]
+    fn an_80_column_terminal_s_preview_shows_the_match_s_line() {
+        let (mut b, _rx) = previewing();
+        let look = Look::default();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+        b.draw(&mut buf, &look);
+        assert!(
+            matches!(b.previewed, Preview::Under(..)),
+            "{:?}",
+            b.previewed
+        );
+        let text = screen(&buf).join("\n");
+        assert!(text.contains("11  the zebra line"), "{text}");
+    }
+
+    #[test]
+    fn a_narrow_box_puts_the_preview_under_the_results() {
+        let (mut b, _rx) = previewing();
+        let look = Look::default();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, 45));
+        b.draw(&mut buf, &look);
+        let Preview::Under(from, _) = b.previewed else {
+            panic!("{:?}", b.previewed)
+        };
+        let rows = screen(&buf);
+        let place = rows.iter().position(|r| r.contains("Place of n1")).unwrap();
+        let first = rows.iter().position(|r| r.contains("n2")).unwrap();
+        assert!(place > first, "under the results");
+        assert_eq!(
+            place as u16,
+            b.drawn.as_ref().unwrap().inner.y + from as u16
+        );
+    }
+
+    #[test]
+    fn j_and_k_scroll_the_preview_with_the_results_focused() {
+        let (mut b, _rx) = previewing();
+        let look = Look::default();
+        // A small screen, so the context runs past the preview.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 140, 16));
+        b.draw(&mut buf, &look);
+        b.key(key(KeyCode::Down), &look);
+        b.key(key(KeyCode::Down), &look);
+        assert_eq!(b.focus, Part::Results);
+        let before = b.peek_top(1);
+        assert_eq!(b.key(key(KeyCode::Char('J')), &look), Step::Redraw);
+        assert_eq!(b.peek_top(1), before + 1);
+        b.key(key(KeyCode::Char('K')), &look);
+        assert_eq!(b.peek_top(1), before);
+        assert_eq!(b.typed(), "zebra", "nothing typed");
+        // Scrolled, then a new search: its first result starts at its match.
+        b.key(key(KeyCode::Char('J')), &look);
+        assert_eq!(b.peek_top(1), before + 1);
+        b.ask("zebra".to_string());
+        let id = b.asked.as_ref().unwrap().id;
+        b.answered(
+            id,
+            Source::Notes,
+            vec![with_context(
+                "n1",
+                &["## Steps", "", "the zebra line", "after it"],
+                2,
+                9,
+            )],
+        );
+        assert_eq!(b.peek_top(1), before);
     }
 }
