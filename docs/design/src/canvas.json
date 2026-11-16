@@ -440,6 +440,22 @@
     "DiffTotalsFiltered.dc.html": {
       "title": "106. The diff's file list filtered by path with /: the totals count only the files left, of how many in all",
       "page": "design"
+    },
+    "SlackReplyMenu.dc.html": {
+      "title": "107. Enter on a Slack item with Settings' \"Reply from the Slack view\" on (off by default): the replies that apply, each naming where it goes",
+      "page": "design"
+    },
+    "SlackReplyBox.dc.html": {
+      "title": "108. The reply box: where it goes, the message it answers quoted, what you type, Send and Cancel",
+      "page": "design"
+    },
+    "SlackReplyAsk.dc.html": {
+      "title": "109. Send asks first, naming the destination, [Y/n]; nothing is sent before a yes",
+      "page": "design"
+    },
+    "SlackReplySent.dc.html": {
+      "title": "110. Sent: the reply in the thread pane as yours, marked sent, the thread's count up by one",
+      "page": "design"
     }
   }
 }

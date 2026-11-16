@@ -172,3 +172,10 @@ The relay's DM, threads and Home tab.
 
 - [105. M-d with the whole change's totals at the head of its file list, as GitHub's PR header: files, lines added and deleted, five cells shared out by them](https://cquinones100.github.io/switchboard/design/105.html)
 - [106. The diff's file list filtered by path with /: the totals count only the files left, of how many in all](https://cquinones100.github.io/switchboard/design/106.html)
+
+## Proposal: replying from the slack view
+
+- [107. Enter on a Slack item with Settings' "Reply from the Slack view" on (off by default): the replies that apply, each naming where it goes](https://cquinones100.github.io/switchboard/design/107.html)
+- [108. The reply box: where it goes, the message it answers quoted, what you type, Send and Cancel](https://cquinones100.github.io/switchboard/design/108.html)
+- [109. Send asks first, naming the destination, \[Y/n\]; nothing is sent before a yes](https://cquinones100.github.io/switchboard/design/109.html)
+- [110. Sent: the reply in the thread pane as yours, marked sent, the thread's count up by one](https://cquinones100.github.io/switchboard/design/110.html)
