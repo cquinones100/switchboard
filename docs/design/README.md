@@ -82,6 +82,13 @@ Spend, processes, settings and keys.
 - [26. Settings: every option by category, your files' too](https://cquinones100.github.io/switchboard/design/26.html)
 - [27. Keys: every binding, yours over the defaults](https://cquinones100.github.io/switchboard/design/27.html)
 
+## Proposal: mission control · factory
+
+- [87. Factory: Spend, every dollar today, Claude's, Codex's, the hidden Haiku's and CI's, against a budget that pauses autopilot](https://cquinones100.github.io/switchboard/design/87.html)
+- [88. Factory: a tab over its hourly limit, its row's menu (and its notification's): open it, pause it, or pause autopilot and every routine](https://cquinones100.github.io/switchboard/design/88.html)
+- [89. Factory: Limits, when the 5-hour and weekly limits run out at today's pace, the services' rate limits and every request](https://cquinones100.github.io/switchboard/design/89.html)
+- [90. Factory: Landing, the lock and its queue now, then how landings, review loops and CI went this week](https://cquinones100.github.io/switchboard/design/90.html)
+
 ## Moving between mission control's views
 
 Five ways to show its groups and views, to pick one.

@@ -360,6 +360,22 @@
     "QueueSlots.dc.html": {
       "title": "80. Resources: each kind of slot, how many are held, by which tab and for how long, and who waits in order",
       "page": "design"
+    },
+    "FactorySpend.dc.html": {
+      "title": "87. Factory: Spend, every dollar today, Claude's, Codex's, the hidden Haiku's and CI's, against a budget that pauses autopilot",
+      "page": "design"
+    },
+    "FactoryRunaway.dc.html": {
+      "title": "88. Factory: a tab over its hourly limit, its row's menu (and its notification's): open it, pause it, or pause autopilot and every routine",
+      "page": "design"
+    },
+    "FactoryLimits.dc.html": {
+      "title": "89. Factory: Limits, when the 5-hour and weekly limits run out at today's pace, the services' rate limits and every request",
+      "page": "design"
+    },
+    "FactoryLanding.dc.html": {
+      "title": "90. Factory: Landing, the lock and its queue now, then how landings, review loops and CI went this week",
+      "page": "design"
     }
   }
 }
