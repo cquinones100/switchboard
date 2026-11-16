@@ -485,11 +485,13 @@ impl Server {
                 let picker = Picker::new(format!("Send the last reply to: {preview}…"), others)
                     .named("send-reply")
                     .prompt("send to> ");
-                server.pick(client, picker, move |server, client, picked| {
-                    let Some(tab) = picked.and_then(|p| p.value.parse().ok()).map(TabId) else {
-                        return;
-                    };
-                    server.paste_into_tab(client, tab, &reply, false);
+                server.about_tab(client, here, move |s| {
+                    s.pick(client, picker, move |server, client, picked| {
+                        let Some(tab) = picked.and_then(|p| p.value.parse().ok()).map(TabId) else {
+                            return;
+                        };
+                        server.paste_into_tab(client, tab, &reply, false);
+                    })
                 });
             },
         );

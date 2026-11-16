@@ -315,11 +315,13 @@ impl Server {
             ],
         )
         .body(title::body(&full, &facts));
-        self.choose(client, menu, move |server, client, chose| {
-            if chose == Some(0) {
-                server.to_clipboard(Some(client), &full);
-                server.say(Some(client), "Copied the tab's title");
-            }
+        self.about_tab(client, tab, move |s| {
+            s.choose(client, menu, move |server, client, chose| {
+                if chose == Some(0) {
+                    server.to_clipboard(Some(client), &full);
+                    server.say(Some(client), "Copied the tab's title");
+                }
+            })
         });
     }
 }

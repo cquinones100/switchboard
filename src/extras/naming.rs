@@ -34,39 +34,43 @@ impl Server {
         options.push(MenuOption::new("Shaping a ticket").key('s'));
         let menu = Menu::new("Name the tab", options)
             .body("Optional: Esc leaves it named after its directory.");
-        self.choose(client, menu, move |server, client, chose| {
-            let shaping = match (chose, linear) {
-                (Some(0), _) => return server.rename_tab(client, tab),
-                (Some(1), true) => false,
-                (Some(1), false) | (Some(2), true) => true,
-                _ => return,
-            };
-            match ticket::id_for_dir(&dir) {
-                Some(id) => server.name_after_ticket(client, tab, id, true, shaping),
-                None => server.ask_ticket_for_name(client, tab, dir, shaping),
-            }
+        self.about_tab(client, tab, move |s| {
+            s.choose(client, menu, move |server, client, chose| {
+                let shaping = match (chose, linear) {
+                    (Some(0), _) => return server.rename_tab(client, tab),
+                    (Some(1), true) => false,
+                    (Some(1), false) | (Some(2), true) => true,
+                    _ => return,
+                };
+                match ticket::id_for_dir(&dir) {
+                    Some(id) => server.name_after_ticket(client, tab, id, true, shaping),
+                    None => server.ask_ticket_for_name(client, tab, dir, shaping),
+                }
+            })
         });
     }
 
     /// The ticket a tab is named after, when its branch names none.
     fn ask_ticket_for_name(&mut self, client: ClientId, tab: TabId, dir: PathBuf, shaping: bool) {
         let ask = Ask::new("Ticket", "Its ID, like ABC-123, or its Linear link.");
-        self.open(
-            client,
-            Box::new(ask),
-            Some(Box::new(move |server: &mut Server, client, outcome| {
-                let Outcome::Picked(p) = outcome else {
-                    return;
-                };
-                let branch = ticket::id_for_dir(&dir);
-                match ticket_typed(&p.value, branch.as_deref()) {
-                    Ok(TicketTyped::Id(id) | TicketTyped::Url { id, .. }) => {
-                        server.name_after_ticket(client, tab, id, false, shaping)
+        self.about_tab(client, tab, move |s| {
+            s.open(
+                client,
+                Box::new(ask),
+                Some(Box::new(move |server: &mut Server, client, outcome| {
+                    let Outcome::Picked(p) = outcome else {
+                        return;
+                    };
+                    let branch = ticket::id_for_dir(&dir);
+                    match ticket_typed(&p.value, branch.as_deref()) {
+                        Ok(TicketTyped::Id(id) | TicketTyped::Url { id, .. }) => {
+                            server.name_after_ticket(client, tab, id, false, shaping)
+                        }
+                        Err(why) => server.say(Some(client), &why),
                     }
-                    Err(why) => server.say(Some(client), &why),
-                }
-            })),
-        );
+                })),
+            )
+        });
     }
 
     /// Names the tab "Shaping: <id>", or after the ticket and its title as

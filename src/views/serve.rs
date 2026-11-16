@@ -659,32 +659,34 @@ impl Server {
             return;
         };
         let checks_dir = dir.to_string_lossy().into_owned();
-        self.open(
-            client,
-            Box::new(ReadyBox::new()),
-            Some(Box::new(move |server: &mut Server, client, outcome| {
-                let Outcome::Chose(i) = outcome else {
-                    return;
-                };
-                match Choice::from_index(i) {
-                    Choice::SeeFailing => {
-                        let pane = Some(pane)
-                            .filter(|p| server.panes.contains_key(p))
-                            .or_else(|| server.current_pane(client));
-                        if let Some(pane) = pane {
-                            server.open_beside(
-                                pane,
-                                CHECKS_VIEW,
-                                vec!["pr-view".into(), "--checks".into(), checks_dir],
-                                LINK_PERCENT,
-                            );
+        self.about_tab(client, tab, move |s| {
+            s.open(
+                client,
+                Box::new(ReadyBox::new()),
+                Some(Box::new(move |server: &mut Server, client, outcome| {
+                    let Outcome::Chose(i) = outcome else {
+                        return;
+                    };
+                    match Choice::from_index(i) {
+                        Choice::SeeFailing => {
+                            let pane = Some(pane)
+                                .filter(|p| server.panes.contains_key(p))
+                                .or_else(|| server.current_pane(client));
+                            if let Some(pane) = pane {
+                                server.open_beside(
+                                    pane,
+                                    CHECKS_VIEW,
+                                    vec!["pr-view".into(), "--checks".into(), checks_dir],
+                                    LINK_PERCENT,
+                                );
+                            }
                         }
+                        Choice::ResolveConflicts => server.resolve_in_tab(client, tab),
+                        Choice::Close => {}
                     }
-                    Choice::ResolveConflicts => server.resolve_in_tab(client, tab),
-                    Choice::Close => {}
-                }
-            })),
-        );
+                })),
+            )
+        });
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let answer = ready::check(dir).await;

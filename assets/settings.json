@@ -672,7 +672,7 @@
     "key": "boxes_beside_narrow_pane",
     "category": "Tabs and status bar",
     "label": "Open boxes beside a narrow pane",
-    "description": "With a tab's one pane narrowed by Widest a lone pane gets, a box about the tab (its links, pictures and the tabs it mentions, answering its Claude, which note is its, renaming it, its menu, Work on this item) opens as a pane in the empty columns at the pane's right, as tall as they are, the hints there hidden while it is open; every other box, a message and a notification among them, goes in the middle of the screen. With too few columns spare it goes in the middle of the screen too. Off, every box goes in the middle of the screen",
+    "description": "With a tab's one pane narrowed by Widest a lone pane gets, a box about the tab (its links, pictures and the tabs it mentions, answering its Claude, which note is its, naming or renaming it, its menu and its full title, M-m's PR readiness, sending its Claude's last reply on, Work on this item) opens as a pane in the empty columns at the pane's right, as tall as they are, the hints there hidden while it is open; every other box, a message and a notification among them, goes in the middle of the screen. With too few columns spare it goes in the middle of the screen too. Off, every box goes in the middle of the screen",
     "default": true
   },
   {
