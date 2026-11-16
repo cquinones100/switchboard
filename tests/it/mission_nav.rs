@@ -158,3 +158,30 @@ fn keeping_the_tabs_sidebar_lists_the_views_in_a_column_of_its_own_beside_it() {
         "the tabs in the sidebar:\n{all}"
     );
 }
+
+/// `C-w h` from the view's leftmost pane gives the list of views the keys,
+/// whose `j` and Enter open the next view, with the list in the sidebar's
+/// place or in a column of its own.
+fn c_w_h_reaches_the_list(extra: Value) {
+    let (_server, mut client, _) = opened(extra);
+    client.type_text("\x17");
+    client.type_text("h");
+    client.type_text("j");
+    client.type_text("\r");
+    let screen = client.wait_for("the next view open", |s| !s[0].contains("│ Tabs   Work"));
+    let header = screen[0].clone();
+    assert!(
+        header.contains("   Work") || header.contains("   Code"),
+        "{header}"
+    );
+}
+
+#[test]
+fn c_w_h_gives_the_list_of_views_the_keys() {
+    c_w_h_reaches_the_list(json!({}));
+}
+
+#[test]
+fn c_w_h_reaches_the_column_of_views_beside_the_kept_tabs_sidebar() {
+    c_w_h_reaches_the_list(json!({ "mission_keep_tabs_sidebar": true }));
+}

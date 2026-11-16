@@ -7371,19 +7371,37 @@ fn window_key(m: &mut Mission, k: Key) -> bool {
         KeyCode::Char('k') | KeyCode::Up if either => return section_step(m, -1),
         _ => return false,
     };
+    // With UX 2.0 the list of views is the leftmost stop, before the
+    // view's own panes: its rows take the keys as Tab's focus gives them.
+    let nav = usize::from(m.groups().is_some());
+    let on_nav = nav == 1 && matches!(m.focus, Some(Focus::View(_) | Focus::Group(_)));
     let panes = m.panes();
-    let at = panes.iter().position(|p| *p == m.pane_now()).unwrap_or(0) as isize;
-    let to = if round {
-        Some((at + by).rem_euclid(panes.len() as isize))
+    let stops = (nav + panes.len()) as isize;
+    let at = if on_nav {
+        0
     } else {
-        Some(at + by).filter(|to| (0..panes.len() as isize).contains(to))
+        (nav + panes.iter().position(|p| *p == m.pane_now()).unwrap_or(0)) as isize
     };
-    if let Some(to) = to {
-        m.pane = Some((m.view, panes[to as usize]));
-        // The pane takes the keys at once, from a control Tab's focus was on.
-        if m.focus.is_some() {
-            m.focus = Some(Focus::Item);
+    let to = if round {
+        Some((at + by).rem_euclid(stops))
+    } else {
+        Some(at + by).filter(|to| (0..stops).contains(to))
+    };
+    match to {
+        // The view in front, or the first its filter leaves when it hides it.
+        Some(0) if nav == 1 => {
+            m.focus = Some(Focus::View(m.view));
+            nav_focus_listed(m);
         }
+        Some(to) => {
+            m.pane = Some((m.view, panes[to as usize - nav]));
+            // The pane takes the keys at once, from the list of views or a
+            // control Tab's focus was on.
+            if m.focus.is_some() {
+                m.focus = Some(Focus::Item);
+            }
+        }
+        None => {}
     }
     true
 }
@@ -9038,14 +9056,31 @@ mod tests {
     }
 
     #[test]
+    fn c_w_h_to_a_filtered_list_of_views_chooses_a_view_it_shows() {
+        let key = |k: &str| Key::parse(k).unwrap();
+        let mut m = settings_mission();
+        m.nav_filter = Some(Filter {
+            text: "tabs".into(),
+            typing: false,
+        });
+        window_key(&mut m, key("h"));
+        window_key(&mut m, key("h"));
+        assert_eq!(m.focus, Some(Focus::View(0)), "the Settings row is hidden");
+    }
+
+    #[test]
     fn c_w_h_focuses_the_settings_categories_whose_j_walks_them_and_c_w_l_goes_back() {
         let key = |k: &str| Key::parse(k).unwrap();
         let mut m = settings_mission();
         assert_eq!(m.panes(), vec![Pane::Panel, Pane::List]);
         assert!(window_key(&mut m, key("h")));
         assert_eq!(m.pane_now(), Pane::Panel);
-        assert!(window_key(&mut m, key("h")), "no pane further left");
-        assert_eq!(m.pane_now(), Pane::Panel);
+        assert!(window_key(&mut m, key("h")), "on to the list of views");
+        assert_eq!(m.focus, Some(Focus::View(1)));
+        assert!(window_key(&mut m, key("h")), "nothing further left");
+        assert_eq!(m.focus, Some(Focus::View(1)));
+        window_key(&mut m, key("l"));
+        assert_eq!((m.pane_now(), m.focus), (Pane::Panel, Some(Focus::Item)));
         assert!(pane_key(&mut m, key("j")));
         assert_eq!(m.cursor, 4, "the next category's first option");
         assert!(pane_key(&mut m, key("k")));
@@ -9098,9 +9133,17 @@ mod tests {
         pane_key(&mut m, key("g"));
         assert_eq!(m.side_top(), 0);
         window_key(&mut m, key("w"));
-        assert_eq!(m.pane_now(), Pane::List, "w goes round");
+        assert_eq!(
+            m.focus,
+            Some(Focus::View(1)),
+            "w goes round to the list of views"
+        );
+        window_key(&mut m, key("w"));
+        assert_eq!((m.pane_now(), m.focus), (Pane::List, Some(Focus::Item)));
+        window_key(&mut m, key("W"));
         window_key(&mut m, key("W"));
         assert_eq!(m.pane_now(), Pane::Beside);
+        m.focus = None;
         // The wheel over the list moves the list, giving it the focus; a
         // control Tab's focus is on takes Enter before the pane does.
         let wheel = Mouse {
