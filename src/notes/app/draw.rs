@@ -25,6 +25,9 @@ use crate::ui::draw::{put_line, width};
 /// `scrolloff`, in rows since a line may wrap to many).
 const SCROLLOFF: usize = 8;
 
+/// UX 2.0's button that opens the palette, as the tab header's does.
+const COMMANDS: &str = "⌘ Commands";
+
 /// The columns an item's text keeps before its chips: fewer, and the chips
 /// go on a row of their own under it.
 const MIN_TEXT: usize = 12;
@@ -108,7 +111,13 @@ impl App {
         } else {
             0
         };
-        self.geo.list = Rect::new(0, 0, list_w, body_h);
+        // UX 2.0's list starts under its own top line and a blank row.
+        let head = if self.opts.ux2 && list_w > 0 {
+            2.min(body_h)
+        } else {
+            0
+        };
+        self.geo.list = Rect::new(0, head, list_w, body_h - head);
         let note_x = if list_w > 0 { list_w + 1 } else { 0 };
         self.geo.note = match split {
             Some((Some((x, w)), _)) => Rect::new(x, 0, w, body_h),
@@ -131,6 +140,12 @@ impl App {
             }
         };
         let mut cursor = None;
+        self.geo.search = None;
+        self.geo.commands = None;
+        self.geo.corner = head == 0 && self.commands_shown();
+        if head > 0 {
+            self.draw_top_line(buf, list_w);
+        }
         if list_w > 0 {
             self.draw_list(buf);
             let edge = Style::new().fg(Color::Indexed(if self.opts.light { 250 } else { 238 }));
@@ -139,6 +154,16 @@ impl App {
             }
         }
         let note_cursor = self.draw_note(buf);
+        // No note drawn to hold "⌘ Commands" (none open) and no plan: the
+        // top right corner, over the empty note side.
+        if self.geo.corner && self.geo.commands.is_none() && self.geo.plan.width == 0 {
+            let cw = width(COMMANDS) as u16;
+            if area.width > cw + 2 {
+                let r = Rect::new(area.width - cw - 1, 0, cw, 1);
+                self.top_label(buf, r, COMMANDS);
+                self.geo.commands = Some(r);
+            }
+        }
         let plan_focused = self.beside.as_ref().is_some_and(|b| b.focused);
         if plan_focused {
             cursor = plan_cursor;
@@ -194,6 +219,52 @@ impl App {
             RowLook::Rule => Style::new().fg(c(238, 250)),
             RowLook::Plain => Style::new(),
         }
+    }
+
+    /// The list's top line, as board 7 draws it: "Notes", and at its
+    /// right "/ search", which a click starts as `/` does; before it, where
+    /// there is room and Settings' palette_button is on, "⌘ Commands",
+    /// which a click opens the palette with as M-p does, since Notes' own
+    /// tab has no header to hold it. Each lit under the mouse.
+    fn draw_top_line(&mut self, buf: &mut Buffer, w: u16) {
+        let title = self.list_style(RowLook::Header);
+        buf.set_stringn(1, 0, "Notes", (w as usize).saturating_sub(1), title);
+        let search = "/ search";
+        let sw = width(search) as u16;
+        // "Notes", a space, then the label, a column from the edge.
+        if w < sw + 8 {
+            return;
+        }
+        let r = Rect::new(w - sw - 1, 0, sw, 1);
+        self.top_label(buf, r, search);
+        self.geo.search = Some(r);
+        let cw = width(COMMANDS) as u16;
+        // "Notes", two spaces, the button, two spaces, then the search.
+        if self.commands_shown() && r.x >= 1 + 5 + 2 + cw + 2 {
+            let c = Rect::new(r.x - 2 - cw, 0, cw, 1);
+            self.top_label(buf, c, COMMANDS);
+            self.geo.commands = Some(c);
+        }
+    }
+
+    /// Whether UX 2.0's "⌘ Commands" is drawn: Settings' palette_button
+    /// on, and a palette to open (the workspace's, or the app's own).
+    fn commands_shown(&self) -> bool {
+        self.opts.ux2 && self.opts.commands && (self.opts.server || self.opts.palette)
+    }
+
+    /// A label of the list's top line at `r`, dim, lit under the mouse.
+    fn top_label(&self, buf: &mut Buffer, r: Rect, label: &str) {
+        let lit = self.opts.hover
+            && self
+                .mouse_at
+                .is_some_and(|(x, y)| y == r.y && x >= r.x && x < r.right());
+        let style = if lit {
+            Style::new().fg(Color::Indexed(16)).bg(Color::Indexed(81))
+        } else {
+            self.list_style(RowLook::Detail)
+        };
+        buf.set_string(r.x, r.y, label, style);
     }
 
     fn draw_list(&mut self, buf: &mut Buffer) {
@@ -368,6 +439,16 @@ impl App {
                 ),
             }];
         }
+        // An item's plan line, the cursor elsewhere: the item's chips in
+        // its place.
+        if let Some((item, at, chips)) = ctx.plan_lines.get(&row) {
+            return vec![Shown::Chips {
+                row,
+                item: *item,
+                at: Some(*at),
+                chips: chips.clone(),
+            }];
+        }
         let raw = row == ctx.cursor_row && ctx.raw;
         let extra = ctx
             .selected
@@ -430,7 +511,12 @@ impl App {
                 {
                     *room = chips
                 }
-                _ => out.push(Shown::Chips { row, chips }),
+                _ => out.push(Shown::Chips {
+                    row,
+                    item: row,
+                    at: None,
+                    chips,
+                }),
             }
         }
         if line.contains("![")
@@ -476,8 +562,22 @@ impl App {
             return None;
         }
         let mut top_y = note.y;
+        // "⌘ Commands" at the right end of the note's top row: the toolbar
+        // leaves it room, and with none the note starts a row down.
+        let room = width(COMMANDS) as u16 + 2;
+        let corner = self.geo.corner && note.width > room + 8;
+        if corner {
+            let r = Rect::new(note.right() - room + 1, note.y, room - 2, 1);
+            self.top_label(buf, r, COMMANDS);
+            self.geo.commands = Some(r);
+        }
         if self.opts.toolbar {
-            self.geo.toolbar = easy::toolbar(note.x, note.y, note.width);
+            let cols = if corner {
+                note.width.saturating_sub(room)
+            } else {
+                note.width
+            };
+            self.geo.toolbar = easy::toolbar(note.x, note.y, cols);
             for (i, r) in &self.geo.toolbar {
                 let lit = self.hover_button == Some(*i);
                 let style = if lit {
@@ -495,6 +595,8 @@ impl App {
                     style,
                 );
             }
+            top_y += 1;
+        } else if corner {
             top_y += 1;
         }
         let lines = self.editor.doc.text.lines();
@@ -574,7 +676,7 @@ impl App {
                 }
             }
         }
-        let chips = if self.opts.ux2 && self.opts.item_chips {
+        let mut chips = if self.opts.ux2 && self.opts.item_chips {
             let mut chips = render::chips(&lines, &kinds, &self.note_tabs());
             for (row, hash) in render::landed(&lines, &kinds).into_iter().enumerate() {
                 if let Some(hash) = hash {
@@ -592,7 +694,32 @@ impl App {
         } else {
             Vec::new()
         };
+        // An item with a plan line shows its chips in that line's place,
+        // under it, as board 7 draws them; the cursor on the line shows its
+        // text to edit, the chips back beside the item meanwhile.
+        let mut plan_lines = std::collections::HashMap::new();
+        for (item, its) in chips.iter_mut().enumerate() {
+            if its.is_empty() {
+                continue;
+            }
+            let Some((at, _)) = render::plan_line_of(&lines, &kinds, item) else {
+                continue;
+            };
+            let indent = width(&lines[at][..lines[at].len() - lines[at].trim_start().len()]);
+            // Only where they fit whole: a line too long for them (a long
+            // choice's words) stays its text, the chips at the item's right.
+            let fits =
+                indent + its.iter().map(|c| c.width() + 1).sum::<usize>() <= text.width as usize;
+            // A line in a Visual selection shows the text it acts on, and
+            // one linking a picture stays, the picture drawn under it.
+            let selected_line = selected.contains_key(&at);
+            let picture = lines[at].contains("![");
+            if at != cursor_row && folded.contains_key(&at) && fits && !selected_line && !picture {
+                plan_lines.insert(at, (item, indent as u16, std::mem::take(its)));
+            }
+        }
         let mut ctx = Ctx {
+            plan_lines,
             raw: self.focus == Focus::Note
                 && matches!(
                     self.editor.mode,
@@ -672,6 +799,11 @@ impl App {
                 self.editor.doc.row = rows[want];
                 self.editor.clamp();
                 ctx.cursor_row = rows[want];
+                // Onto a plan line drawn as chips: its text, the chips back
+                // at the item's right.
+                if let Some((item, _, chips)) = ctx.plan_lines.remove(&rows[want]) {
+                    ctx.chips[item] = chips;
+                }
             }
         } else if !rows.is_empty() {
             let mut fit = Fit {
@@ -816,8 +948,10 @@ impl App {
                         cursor = Some((text.x, y));
                     }
                 }
-                Shown::Chips { row, chips } => {
-                    self.draw_chips(buf, text, y, *row, chips);
+                Shown::Chips {
+                    item, at, chips, ..
+                } => {
+                    self.draw_chips(buf, text, y, *item, *at, chips);
                 }
                 Shown::Diagram { text: t, cut, .. } => {
                     let (x, _) = buf.set_stringn(text.x, y, t, text.width as usize, Style::new());
@@ -883,7 +1017,7 @@ impl App {
                         buf.set_stringn(x, y, &cell.text, cell.width, style);
                         x += cell.width as u16;
                     }
-                    self.draw_chips(buf, text, y, *row, chips);
+                    self.draw_chips(buf, text, y, *row, None, chips);
                     // Past the end of the line, where Insert mode types.
                     let last_piece = shown
                         .get(k + 1)
@@ -902,22 +1036,29 @@ impl App {
         cursor
     }
 
-    /// An item's chips at the right edge of `text` on row `y`, a column
-    /// apart, kept in `geo.chips` for the mouse.
+    /// An item's chips on row `y`, a column apart, at the right edge of
+    /// `text`, or `at` columns into it; kept in `geo.chips` for the
+    /// mouse, by the item's `row`.
     fn draw_chips(
         &mut self,
         buf: &mut Buffer,
         text: Rect,
         y: u16,
         row: usize,
+        at: Option<u16>,
         chips: &[render::Chip],
     ) {
         let total = chips.iter().map(|c| c.width() + 1).sum::<usize>() as u16;
-        let mut x = text.right().saturating_sub(total).max(text.x) + 1;
+        let mut x = match at {
+            Some(at) => text.x + at,
+            None => text.right().saturating_sub(total).max(text.x) + 1,
+        };
         for (k, chip) in chips.iter().enumerate() {
             let w = chip.width() as u16;
+            // One too wide for the room is passed over, so a long choice
+            // never hides the plan chip after it.
             if x + w > text.right() {
-                break;
+                continue;
             }
             let lit = App::clickable(chip)
                 && self
@@ -1139,6 +1280,9 @@ struct Ctx {
     /// Each checklist item's UX 2.0 chips, its "landed <hash>" among them,
     /// empty with them off.
     chips: Vec<Vec<render::Chip>>,
+    /// The items' plan lines drawn as their chips, by the line's row: the
+    /// item's row, the line's indent and the chips.
+    plan_lines: std::collections::HashMap<usize, (usize, u16, Vec<render::Chip>)>,
     folded: std::collections::HashMap<usize, Option<usize>>,
     selected: std::collections::HashMap<usize, (usize, usize)>,
     /// Each mermaid block drawn as its diagram, by its opening fence's

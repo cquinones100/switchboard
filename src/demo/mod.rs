@@ -974,6 +974,10 @@ pub fn start_server(home: &Path, bin: &Path, env: &[(String, String)]) -> Result
         // `new-tab` prints the tab's id and its pane's.
         let made = ask(home, &args)?;
         if let Some(id) = made.split_whitespace().next() {
+            // Notes' tab marked as M-N marks its own, so it shows as it does.
+            if args[6] == "Notes" {
+                ask(home, &["set", "-t", id, "@notes", "1"])?;
+            }
             ids.push((args[6].to_string(), id.to_string()));
         }
     }

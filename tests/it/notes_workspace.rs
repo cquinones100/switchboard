@@ -596,3 +596,27 @@ fn with_an_app_in_each_tab_m_e_opens_one_on_each_tabs_note_and_leaves_the_others
     client.type_text(&format!("{ALT}e"));
     rig.wait("the second tab's app ended", |l| notes_per_tab(l) == [1, 0]);
 }
+
+/// With UX 2.0, Notes' own tab has no header: the app draws its own top
+/// line (board 7), so its pane takes the header's rows, while another tab
+/// keeps the header and its keys.
+#[test]
+fn with_ux2_notes_own_tab_has_no_header_and_its_pane_takes_the_rows() {
+    let rig = Rig::with(json!({ "ux2": true }));
+    let (mut client, first, notes) = notes_open(&rig);
+    client.wait_for("the first tab's header", |s| s[2].contains("M-c Claude"));
+    let rows_of = |l: &Value, pane: &str| {
+        tabs(l)
+            .iter()
+            .flat_map(|t| t["panes"].as_array().unwrap().clone())
+            .find(|p| p["id"] == pane)
+            .and_then(|p| p["rows"].as_u64())
+    };
+    let list = rig.list();
+    let below_header = rows_of(&list, &first).unwrap();
+    client.type_text(&format!("{ALT}2"));
+    rig.wait("Notes' tab in front, the whole height", |l| {
+        tabs(l)[1]["current"] == true && rows_of(l, &notes) == Some(below_header + 4)
+    });
+    client.wait_for("no header", |s| !s.iter().any(|r| r.contains("M-c Claude")));
+}

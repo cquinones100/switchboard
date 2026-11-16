@@ -136,7 +136,7 @@ impl Server {
             return None;
         }
         let session = self.session_of_tab(tab_id)?;
-        let spread = session.spread_for(false);
+        let spread = session.spread_for(tab);
         let spare = crate::mux::beside::spare_of(spread, session.area_for(tab))?;
         (spare.width >= BESIDE_LEAST).then_some((spread, spare))
     }

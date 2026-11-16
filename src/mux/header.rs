@@ -30,6 +30,10 @@
 //! keycap for each key (the half circles at its ends where the client's
 //! terminal draws them) and the rule.
 //!
+//! Notes' own tab goes without it while the sidebar shows
+//! (`Session::headerless`): the app draws its own top line (board 7), and
+//! its pane takes the header's rows.
+//!
 //! It is drawn from what the server already holds, as everything on the
 //! drawing path is: no file is read and no process started for it.
 

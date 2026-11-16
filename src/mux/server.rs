@@ -233,9 +233,16 @@ impl Session {
     /// two rows, src/status), the sidebar, and with UX 2.0 the tab's header
     /// at the top (src/mux/header.rs).
     pub fn main_area(&self) -> Rect {
+        self.main_area_with(true)
+    }
+
+    /// The area panes are laid out in, with or without the tab's header's
+    /// rows at the top.
+    fn main_area_with(&self, header: bool) -> Rect {
         let side = self.sidebar.min(self.cols.saturating_sub(1));
         let below = crate::status::lines();
-        let top = crate::status::top().min(self.rows.saturating_sub(below + 1));
+        let top = if header { crate::status::top() } else { 0 };
+        let top = top.min(self.rows.saturating_sub(below + 1));
         Rect::new(
             side,
             top,
@@ -255,13 +262,23 @@ impl Session {
         )
     }
 
-    /// What a tab's panes have to fill: the whole of it when zoomed.
-    pub fn spread_for(&self, zoomed: bool) -> Rect {
-        if zoomed {
+    /// What a tab's panes have to fill: the whole of it when zoomed, and
+    /// the header's rows too for Notes' own tab (`headerless`).
+    pub fn spread_for(&self, tab: &Tab) -> Rect {
+        if tab.zoomed {
             self.full_area()
         } else {
-            self.main_area()
+            self.main_area_with(!self.headerless(tab))
         }
+    }
+
+    /// Whether a tab goes without UX 2.0's header: Notes' own tab (`@notes`)
+    /// while the sidebar shows, whose app draws its own top line (board 7),
+    /// the header's keys of what shows in Claude's place meaning nothing in
+    /// a tab with no Claude. With the sidebar hidden it keeps the header,
+    /// which then holds the sidebar's buttons.
+    pub fn headerless(&self, tab: &Tab) -> bool {
+        self.sidebar > 0 && tab.opts.get("@notes").is_some_and(|v| v == "1")
     }
 
     /// Where a tab's panes go: its spread, but for a lone pane (one pane,
@@ -271,7 +288,7 @@ impl Session {
     /// against the sidebar, while a split shares out the whole width.
     pub fn area_for(&self, tab: &Tab) -> Rect {
         Self::area_in(
-            self.spread_for(tab.zoomed),
+            self.spread_for(tab),
             tab,
             super::layout::width_of(tab.opts.get(super::layout::OWN_WIDTH).map(String::as_str)),
         )
@@ -2228,11 +2245,11 @@ impl Server {
         let sidebar = s.sidebar > 0 && !tab.zoomed;
         let side_ways = matches!(dir, super::Direction::Left | super::Direction::Right);
         let name = s.name.clone();
-        if let Some(next) = tab.layout.neighbor(s.main_area(), pane, dir) {
+        if let Some(next) = tab.layout.neighbor(s.spread_for(tab), pane, dir) {
             self.focus_pane(next);
         } else if sidebar && side_ways {
             self.sidebar_enter(&name, None);
-        } else if let Some(next) = tab.layout.wrap(s.main_area(), pane, dir) {
+        } else if let Some(next) = tab.layout.wrap(s.spread_for(tab), pane, dir) {
             self.focus_pane(next);
         }
     }
@@ -2852,7 +2869,7 @@ impl Server {
             .session(&c.session)
             .and_then(|s| {
                 let tab = self.tabs.get(&s.current).filter(|t| !t.zoomed)?;
-                tab.layout.place(s.main_area()).border_at(col, row)
+                tab.layout.place(s.spread_for(tab)).border_at(col, row)
             })
             .map(|(_, _, vertical)| vertical);
         border.map_or(Pointer::Arrow, Pointer::border)
@@ -3141,7 +3158,7 @@ impl Server {
                 // A lone pane has no divider: the keys move its right edge.
                 let Some((spread, area)) = self.tabs.get(&current_tab).and_then(|t| {
                     let s = self.session(&session)?;
-                    Some((s.spread_for(t.zoomed), s.area_for(t)))
+                    Some((s.spread_for(t), s.area_for(t)))
                 }) else {
                     return;
                 };
@@ -3151,7 +3168,10 @@ impl Server {
                 self.set_own_width(current_tab, Some(cap));
             }
             Action::Resize(dir, cells) => {
-                let area = self.session(&session).map(Session::main_area);
+                let area = self
+                    .session(&session)
+                    .zip(self.tabs.get(&current_tab))
+                    .map(|(s, t)| s.spread_for(t));
                 if let (Some(p), Some(area), Some(tab)) =
                     (pane, area, self.tabs.get_mut(&current_tab))
                 {
@@ -3776,7 +3796,7 @@ impl Server {
     fn lone_edge_at(&self, id: ClientId, col: u16, row: u16) -> Option<(TabId, Rect)> {
         let s = self.session(&self.clients.get(&id)?.session)?;
         let tab = self.tabs.get(&s.current)?;
-        let spread = s.spread_for(tab.zoomed);
+        let spread = s.spread_for(tab);
         let area = s.area_for(tab);
         let on_rule = area != spread && col == area.right() && row >= area.y && row < area.bottom();
         on_rule.then_some((tab.id, spread))
@@ -3833,7 +3853,8 @@ impl Server {
         let Some(tab) = self.tabs.get(&s.current).filter(|t| !t.zoomed) else {
             return;
         };
-        let Some((before, after, vertical)) = tab.layout.place(s.main_area()).border_at(col, row)
+        let Some((before, after, vertical)) =
+            tab.layout.place(s.spread_for(tab)).border_at(col, row)
         else {
             return;
         };
@@ -3869,7 +3890,8 @@ impl Server {
         let Some(area) = self
             .session(&c.session)
             .filter(|s| s.current == tab)
-            .map(Session::main_area)
+            .zip(self.tabs.get(&tab))
+            .map(|(s, t)| s.spread_for(t))
         else {
             return;
         };
@@ -4111,7 +4133,7 @@ impl Server {
                     palette.border,
                 );
             }
-            let spread = s.spread_for(tab.zoomed);
+            let spread = s.spread_for(tab);
             if spread != area {
                 let theme = c.overlays.look().theme;
                 compose::draw_spare(&mut frame.buf, spread, area, &theme);
@@ -4139,12 +4161,13 @@ impl Server {
             }
         }
         // UX 2.0's header over the tab's panes (src/mux/header.rs); a
-        // zoomed pane covers it, as it covers the sidebar.
+        // zoomed pane covers it, as it covers the sidebar, and Notes' own
+        // tab goes without it.
         let top = crate::status::top();
         let header_at = self
             .tabs
             .get(&s.current)
-            .filter(|t| top > 0 && !t.zoomed)
+            .filter(|t| top > 0 && !t.zoomed && !s.headerless(t))
             .map(|_| {
                 let main = s.main_area();
                 Rect::new(main.x, 0, main.width, top).intersection(frame.area())
@@ -4181,6 +4204,11 @@ impl Server {
         // (UX 2.0), at the header's.
         let status = match header_at {
             Some(area) if crate::status::lines() == 0 => Rect::new(area.x, 0, area.width, 1),
+            // A tab without its header (Notes' own) has it at the top right.
+            None if crate::status::lines() == 0 && top > 0 => {
+                let main = s.main_area();
+                Rect::new(main.x, 0, main.width, 1)
+            }
             _ => Rect::new(0, rows.saturating_sub(crate::status::lines()), cols, 1),
         };
         if c.prefix && status.y < rows {

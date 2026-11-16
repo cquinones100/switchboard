@@ -630,6 +630,8 @@ impl Server {
         self.set_tab_opt(tab, "@notes_beside", None);
         self.set_tab_opt(tab, "@tab_name", Some("Notes"));
         self.name_tab(tab);
+        // Its pane takes the header's rows (Session::headerless).
+        self.relayout(tab);
     }
 
     // ── M-e ──────────────────────────────────────────────────────────────────

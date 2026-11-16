@@ -834,8 +834,10 @@ pub fn looks<S: AsRef<str>>(lines: &[S], kinds: &[Kind], d: &Drawing<'_>) -> Vec
 
 /// What a chip at the right of a checklist item says, with UX 2.0 and
 /// Settings' "Chips on checklist items" on, as board 7 draws them: an
-/// unticked item has a plan (an indented `Plan: [[...]]` line under it), or
-/// waits on a choice ("needs a choice" in the item or that line); a ticked
+/// unticked item has a plan (an indented `Plan: [[...]]` line under it),
+/// waits on a choice ("needs a choice" in the item or that line, with what
+/// it is between after a colon) or has one made ("chose A" on that line),
+/// and with a plan line its chips are drawn in that line's place; a ticked
 /// one landed, its commit named on a line under it. Read from the note's
 /// text alone, so drawing starts nothing.
 ///
@@ -850,8 +852,11 @@ pub enum Chip {
     /// A tab waiting on you: its number, what it waits on, if known, and
     /// its color.
     Waits(usize, String, Option<Color>),
-    Choice,
+    /// A choice waits: what it is between, if the plan line says.
+    Choice(String),
     Plan,
+    /// The choice made, as the plan line says it ("chose A").
+    Chose(String),
     /// A ticked item's commit, its short hash.
     Landed(String),
     /// Autopilot has put the item next in its queue (Notes' "Work on this
@@ -892,8 +897,10 @@ impl Chip {
         match self {
             Chip::Working(n, phase, _) => with(format!("⠹ tab {n}"), phase),
             Chip::Waits(n, wait, _) => with(format!("● tab {n} waits on you"), wait),
-            Chip::Choice => "needs a choice".into(),
+            Chip::Choice(between) if between.is_empty() => "needs a choice".into(),
+            Chip::Choice(between) => format!("needs a choice: {between}"),
             Chip::Plan => "plan".into(),
+            Chip::Chose(what) => format!("chose: {what}"),
             Chip::Landed(hash) => format!("landed {hash}"),
             Chip::Next => "next in the queue".into(),
         }
@@ -938,7 +945,7 @@ impl Chip {
     }
 
     /// A run of background color: the choice and a waiting tab yellow, a
-    /// working tab blue, the plan dim.
+    /// working tab blue, the plan and the choice made dim.
     pub fn style(&self, light: bool) -> Style {
         match self {
             Chip::Working(..) => Style::new().fg(Color::Indexed(4)).bg(if light {
@@ -946,12 +953,12 @@ impl Chip {
             } else {
                 Color::Rgb(0x1e, 0x2a, 0x3c)
             }),
-            Chip::Choice | Chip::Waits(..) => Style::new().fg(Color::Indexed(3)).bg(if light {
+            Chip::Choice(_) | Chip::Waits(..) => Style::new().fg(Color::Indexed(3)).bg(if light {
                 Color::Rgb(0xf5, 0xe9, 0xb8)
             } else {
                 Color::Rgb(0x3a, 0x32, 0x20)
             }),
-            Chip::Plan => Style::new()
+            Chip::Plan | Chip::Chose(_) => Style::new()
                 .fg(Color::Indexed(if light { 242 } else { 245 }))
                 .bg(Color::Indexed(if light { 253 } else { 237 })),
             Chip::Landed(_) => landed_style(light),
@@ -1032,12 +1039,7 @@ pub fn chips<S: AsRef<str>>(
 ) -> Vec<Vec<Chip>> {
     let mut out = vec![Vec::new(); lines.len()];
     for (i, k) in kinds.iter().enumerate() {
-        let Kind::Check {
-            indent,
-            done: false,
-            ..
-        } = *k
-        else {
+        let Kind::Check { done: false, .. } = *k else {
             continue;
         };
         if let Some(tab) = tabs.get(item_text(lines[i].as_ref(), *k)) {
@@ -1048,30 +1050,42 @@ pub fn chips<S: AsRef<str>>(
             });
         }
         let mut plan = false;
-        let mut choice = lines[i].as_ref().to_lowercase().contains("needs a choice");
-        for (line, k) in lines.iter().zip(kinds).skip(i + 1) {
-            let line = line.as_ref();
-            if line.bytes().all(is_space)
-                || indent_of(line) <= indent
-                || matches!(k, Kind::Check { .. })
-            {
-                break;
-            }
-            let text = line.trim_start();
-            let text = text.strip_prefix("- ").unwrap_or(text);
-            if text.starts_with("Plan:") && text.contains("[[") {
-                plan = true;
-                choice |= text.to_lowercase().contains("needs a choice");
+        let mut choice = lines[i]
+            .as_ref()
+            .to_lowercase()
+            .contains("needs a choice")
+            .then(String::new);
+        let mut chose = None;
+        // The plan line as Enter and the drawing find it, past sub-items.
+        if let Some((at, _)) = plan_line_of(lines, kinds, i) {
+            plan = true;
+            let text = lines[at].as_ref();
+            let after = text.rsplit_once("]]").map_or("", |(_, a)| a);
+            if let Some(between) = said_after(after, "needs a choice") {
+                choice = Some(between.trim_start_matches(':').trim().to_string());
+            } else if let Some(what) = said_after(after, "chose") {
+                chose = Some(what.trim_start_matches(':').trim().to_string());
             }
         }
-        if choice {
-            out[i].push(Chip::Choice);
+        if let Some(between) = choice {
+            out[i].push(Chip::Choice(between));
         }
         if plan {
             out[i].push(Chip::Plan);
         }
+        if let Some(what) = chose.filter(|w| !w.is_empty()) {
+            out[i].push(Chip::Chose(what));
+        }
     }
     out
+}
+
+/// What a plan line says after `words` (matched in any case), up to a
+/// closing parenthesis: "(needs a choice: A, B)" gives ": A, B".
+fn said_after<'a>(text: &'a str, words: &str) -> Option<&'a str> {
+    let at = text.to_lowercase().find(words)?;
+    let rest = text.get(at + words.len()..)?;
+    Some(rest.split(')').next().unwrap_or(rest))
 }
 
 /// The end (exclusive) of the item on `row` at `indent`: the lines
@@ -1115,7 +1129,11 @@ pub fn item_of_plan_line<S: AsRef<str>>(lines: &[S], kinds: &[Kind], row: usize)
 }
 
 /// The row of an unticked item's plan link and the note it names.
-fn plan_line_of<S: AsRef<str>>(lines: &[S], kinds: &[Kind], row: usize) -> Option<(usize, String)> {
+pub fn plan_line_of<S: AsRef<str>>(
+    lines: &[S],
+    kinds: &[Kind],
+    row: usize,
+) -> Option<(usize, String)> {
     let Some(Kind::Check {
         indent,
         done: false,
@@ -1530,13 +1548,32 @@ mod tests {
         let ks = kinds(&lines);
         let got = chips(&lines, &ks, &HashMap::new());
         assert_eq!(got[1], [Chip::Plan]);
-        assert_eq!(got[3], [Chip::Choice, Chip::Plan]);
-        assert_eq!(got[5], [Chip::Choice]);
+        assert_eq!(got[3], [Chip::Choice("A or B".into()), Chip::Plan]);
+        assert_eq!(got[5], [Chip::Choice(String::new())]);
         assert!(got[6].is_empty(), "no Plan: line, no chip");
         assert!(got[8].is_empty(), "a ticked item gets nothing new");
         assert!(got[10].is_empty(), "a plan under no item");
         assert_eq!(Chip::Plan.text(), "plan");
-        assert_eq!(Chip::Choice.style(false).fg, Some(Color::Indexed(3)));
+        assert_eq!(
+            Chip::Choice(String::new()).style(false).fg,
+            Some(Color::Indexed(3))
+        );
+    }
+
+    #[test]
+    fn a_plan_lines_choice_names_what_it_is_between_or_what_was_chosen() {
+        let lines = [
+            "- [ ] a condensed sidebar",
+            "  Plan: [[Condensed sidebar]] (needs a choice: A, B)",
+            "- [ ] stable IDs",
+            "  - Seen in the audit",
+            "  Plan: [[Stable IDs]] (chose A)",
+        ];
+        let got = chips(&lines, &kinds(&lines), &HashMap::new());
+        assert_eq!(got[0], [Chip::Choice("A, B".into()), Chip::Plan]);
+        assert_eq!(got[2], [Chip::Plan, Chip::Chose("A".into())]);
+        assert_eq!(got[0][0].text(), "needs a choice: A, B");
+        assert_eq!(got[2][1].text(), "chose: A");
     }
 
     #[test]

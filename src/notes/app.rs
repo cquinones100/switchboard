@@ -135,6 +135,9 @@ pub struct Options {
     pub hover: bool,
     /// Ctrl-Shift-P's palette (notes_palette).
     pub palette: bool,
+    /// UX 2.0's "⌘ Commands" on the list's top line (palette_button),
+    /// which Notes' own tab has in place of its header's.
+    pub commands: bool,
     /// Ctrl-V pastes the clipboard's image while typing (notes_ctrl_v_image).
     pub ctrl_v_image: bool,
     /// Pictures drawn under their lines (notes_images).
@@ -190,6 +193,7 @@ impl Default for Options {
             key_help: true,
             hover: true,
             palette: true,
+            commands: true,
             ctrl_v_image: true,
             images: true,
             mermaid: true,
@@ -230,6 +234,7 @@ impl Options {
             key_help: on("key_help_line"),
             hover: on("hover_highlight"),
             palette: on("notes_palette"),
+            commands: on("palette_button"),
             ctrl_v_image: on("notes_ctrl_v_image"),
             images: on("notes_images") && crate::mux::graphics::apps_draw(),
             mermaid: on("notes_mermaid"),
@@ -255,6 +260,16 @@ impl Options {
 }
 
 /// Settings' `notes_relative_numbers`, off unless set.
+/// How often the settings file's modified time is looked at.
+const SETTINGS_EVERY: Duration = Duration::from_secs(2);
+
+/// The settings file's modified time, none when it isn't there.
+fn settings_mtime() -> Option<std::time::SystemTime> {
+    std::fs::metadata(settings::settings_file())
+        .and_then(|m| m.modified())
+        .ok()
+}
+
 fn relative_numbers(all: &[settings::Setting]) -> bool {
     all.iter()
         .any(|s| s.key == "notes_relative_numbers" && s.value == serde_json::Value::Bool(true))
@@ -362,11 +377,15 @@ pub(crate) enum Shown {
         /// UX 2.0's chips at the right of the line.
         chips: Vec<render::Chip>,
     },
-    /// UX 2.0's chips on a line of their own under a checklist item, at
+    /// UX 2.0's chips on a line of their own: under a checklist item, at
     /// its right edge, when the item's line is shown whole and leaves no
-    /// room beside it.
+    /// room beside it; or in the place of the item's plan line (`row`),
+    /// from `at` columns in, as board 7 draws them. `item` is the item's
+    /// row, which a click on one of them puts the cursor on.
     Chips {
         row: usize,
+        item: usize,
+        at: Option<u16>,
         chips: Vec<render::Chip>,
     },
     Fold {
@@ -411,6 +430,14 @@ impl Shown {
 #[derive(Default)]
 struct Geo {
     list: Rect,
+    /// UX 2.0's "/ search" at the right of the list's top line (board 7),
+    /// when it is drawn.
+    search: Option<Rect>,
+    /// And "⌘ Commands" beside it, when it is drawn.
+    commands: Option<Rect>,
+    /// "⌘ Commands" goes at the top right corner instead, the list's top
+    /// line not drawn (the list put away, or a plan beside the note).
+    corner: bool,
     note: Rect,
     /// The note's text, right of its numbers.
     text: Rect,
@@ -668,6 +695,10 @@ pub struct App {
     replaying: bool,
     save_due: Option<Instant>,
     watch_due: Option<Instant>,
+    /// When the settings file was last looked at, and its modified time
+    /// then, so a palette_button changed in Settings reaches "⌘ Commands"
+    /// without the focus coming back.
+    settings_seen: (Instant, Option<std::time::SystemTime>),
     squash_pid: Option<u32>,
     squash_paths: Vec<PathBuf>,
     /// The squashed notes' locks this app took for the squash, held until
@@ -798,6 +829,7 @@ impl App {
             replaying: false,
             save_due: None,
             watch_due: None,
+            settings_seen: (Instant::now(), settings_mtime()),
             item_tabs: HashMap::new(),
             next_items: HashSet::new(),
             ids_checked: Default::default(),
@@ -3144,6 +3176,18 @@ impl App {
         if self.check_held() {
             changed = true;
         }
+        if now.duration_since(self.settings_seen.0) >= SETTINGS_EVERY {
+            let mtime = settings_mtime();
+            if mtime != self.settings_seen.1 {
+                let was = self.opts.commands;
+                self.opts.commands = settings::read_settings()
+                    .iter()
+                    .find(|s| s.key == "palette_button")
+                    .is_none_or(|s| s.value != serde_json::Value::Bool(false));
+                changed |= was != self.opts.commands;
+            }
+            self.settings_seen = (now, mtime);
+        }
         if self.save_due.is_some_and(|due| now >= due) {
             self.save();
             // The note saved after an edit: the plan beside it goes once
@@ -3193,8 +3237,9 @@ impl App {
                 self.follow_lines();
             }
             Input::FocusIn => {
-                // The notes_images and notes_relative_numbers settings read
-                // again, as changing them in Settings takes the focus away.
+                // The notes_images, notes_relative_numbers, notes_mermaid and
+                // palette_button settings read again, as changing them in
+                // Settings takes the focus away.
                 let all = settings::read_settings();
                 self.opts.relative_numbers = relative_numbers(&all);
                 if crate::mux::graphics::apps_draw() {
@@ -3203,9 +3248,14 @@ impl App {
                         .find(|s| s.key == "notes_images")
                         .is_none_or(|s| s.value != serde_json::Value::Bool(false));
                 }
-                self.opts.mermaid = settings::read_settings()
+                self.opts.mermaid = all
                     .iter()
                     .find(|s| s.key == "notes_mermaid")
+                    .is_none_or(|s| s.value != serde_json::Value::Bool(false));
+                // And palette_button, whose "⌘ Commands" Notes draws.
+                self.opts.commands = all
+                    .iter()
+                    .find(|s| s.key == "palette_button")
                     .is_none_or(|s| s.value != serde_json::Value::Bool(false));
                 self.images.forget_sent();
                 self.check();
@@ -4425,6 +4475,21 @@ impl App {
                 if let Some(((row, _), chip)) = chip {
                     return self.click_chip(row, &chip);
                 }
+                if self.geo.commands.is_some_and(inside) {
+                    return self.palette();
+                }
+                if self.geo.search.is_some_and(inside) {
+                    // The list takes the keys, as `/` there has them, so the
+                    // results are what j, k and Enter then move through;
+                    // leaving the note saves it.
+                    if self.focus == Focus::Note {
+                        self.finish_editing();
+                        self.save();
+                    }
+                    self.adding = None;
+                    self.focus = Focus::List;
+                    return self.search();
+                }
                 if self.geo.input == Some(y) {
                     self.focus = Focus::Note;
                     return self.start_adding();
@@ -4859,9 +4924,7 @@ pub fn run(store: Store) -> ExitCode {
             libc::signal(signal, on_signal as *const () as libc::sighandler_t);
         }
     }
-    let term = match Term::enter(
-        opts.hover && (opts.toolbar || opts.easy || (opts.ux2 && opts.item_chips)),
-    ) {
+    let term = match Term::enter(opts.hover && (opts.toolbar || opts.easy || opts.ux2)) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("switchboard notes: can't take the terminal: {e}");

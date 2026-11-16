@@ -749,7 +749,7 @@
     "key": "notes_item_chips",
     "category": "Notes",
     "label": "Chips on checklist items",
-    "description": "With UX 2.0 on, each checklist item shows at its right the tab working on it (its number in the tab's color, a click going there), \"landed <hash>\" once ticked with its commit named under it, \"plan\" where it links its plan (a click opening it) and \"needs a choice\" while one waits, its text cut with … before them except on the cursor's line; off, items are their text alone",
+    "description": "With UX 2.0 on, each checklist item shows chips: the tab working on it (its number in the tab's color, a click going there), \"landed <hash>\" once ticked with its commit named under it, \"plan\" where it links its plan (a click opening it), \"needs a choice\" while one waits and \"chose\" once made; with a Plan: line under the item they are drawn in that line's place, its text shown while the cursor is on it, else at the item's right, its text cut with … before them except on the cursor's line; off, items are their text alone",
     "default": true
   },
   {
@@ -1307,7 +1307,7 @@
     "key": "palette_button",
     "category": "Palette",
     "label": "Commands button",
-    "description": "A ⌘ Commands button that opens M-p when clicked: in the status bar after the session name, or with UX 2.0 at the right end of the tab header's keys, where a click while the palette is open closes it",
+    "description": "A ⌘ Commands button that opens M-p when clicked: in the status bar after the session name, or with UX 2.0 at the right end of the tab header's keys, where a click while the palette is open closes it, and on the notes list's top line in Notes' own tab, which has no header",
     "default": true
   },
   {

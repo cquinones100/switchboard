@@ -2599,23 +2599,26 @@ fn chips_note(app: &mut App) -> std::path::PathBuf {
 }
 
 #[test]
-fn an_items_chips_sit_at_its_right_its_text_cut_before_them_but_on_the_cursors_line() {
+fn an_items_chips_take_its_plan_lines_place_and_sit_at_its_right_while_the_cursor_is_on_that_line()
+{
     let (_dir, mut app) = started_ux2("item chips");
     chips_note(&mut app);
     app.editor.doc.row = 5;
     let shown = screen(&mut app);
-    let item = shown.iter().find(|l| l.contains("Draw the logo")).unwrap();
+    let at = shown
+        .iter()
+        .position(|l| l.contains("Draw the logo"))
+        .unwrap();
+    assert!(!shown[at].contains('…'), "wrapped whole: {:?}", shown[at]);
+    let end = shown[at..].iter().position(|l| l.contains("end")).unwrap() + at;
+    let under = shown[end + 1].trim_end();
     assert!(
-        item.ends_with("⠹ tab 7 · review round 1   plan"),
-        "the tab and the plan at the right edge: {item:?}"
+        under.ends_with("  ⠹ tab 7 · review round 1   plan"),
+        "the tab and the plan under it, at the plan line's indent: {under:?}"
     );
     assert!(
-        item.contains("word…  ⠹"),
-        "its text cut before them: {item:?}"
-    );
-    assert!(
-        !shown.iter().any(|l| l.trim_start().starts_with("word")),
-        "on one row"
+        !shown.iter().any(|l| l.contains("Plan:")),
+        "the plan line's text not shown: {shown:#?}"
     );
     let ticked = shown.iter().find(|l| l.contains("Pick a name")).unwrap();
     assert!(ticked.ends_with("landed 2505ca4"), "{ticked:?}");
@@ -2630,20 +2633,20 @@ fn an_items_chips_sit_at_its_right_its_text_cut_before_them_but_on_the_cursors_l
     let (x, y) = find(&shown, "tab 7");
     assert_eq!(buf[(x, y)].fg, Color::Rgb(0x9a, 0xd0, 0xf5));
 
-    // On the cursor's line, the text whole, wrapped, its chips after it.
-    app.editor.doc.row = 2;
+    // The cursor on the plan line: its text to edit, the chips at the
+    // item's right, its text cut before them.
+    app.editor.doc.row = 3;
     let shown = screen(&mut app);
-    let at = shown
-        .iter()
-        .position(|l| l.contains("Draw the logo"))
-        .unwrap();
-    assert!(!shown[at].contains('…'), "{:?}", shown[at]);
-    let end = shown[at..].iter().position(|l| l.contains("end")).unwrap() + at;
-    assert!(end > at, "wrapped");
     assert!(
-        shown[end..=end + 1].iter().any(|l| l.ends_with("plan")),
-        "the chips after it: {shown:#?}"
+        shown.iter().any(|l| l.contains("Plan: Plan - Logo")),
+        "{shown:#?}"
     );
+    let item = shown.iter().find(|l| l.contains("Draw the logo")).unwrap();
+    assert!(
+        item.ends_with("⠹ tab 7 · review round 1   plan"),
+        "the tab and the plan at the right edge: {item:?}"
+    );
+    assert!(item.contains("word…  ⠹"), "{item:?}");
 
     // Off, the items are their text alone.
     app.opts.item_chips = false;
@@ -2654,7 +2657,36 @@ fn an_items_chips_sit_at_its_right_its_text_cut_before_them_but_on_the_cursors_l
             .iter()
             .any(|l| l.contains("tab 7") || l.contains("landed"))
     );
-    assert!(!shown.iter().any(|l| l.contains("word…")), "wrapped whole");
+    assert!(shown.iter().any(|l| l.contains("Plan: Plan - Logo")));
+}
+
+#[test]
+fn a_plan_lines_choice_is_a_chip_under_its_item() {
+    let (_dir, mut app) = started_ux2("choice chips");
+    let path = app.store.create("", Some("Choices"));
+    write(
+        &path,
+        "# Choices\n\n- [ ] A condensed sidebar\n  - Seen in the audit\n  Plan: [[Plan - Condensed]] (needs a choice: A, B)\n- [ ] Stable IDs\n  Plan: [[Plan - IDs]] (chose A)\n",
+    );
+    app.open_note(&path, false, false);
+    app.editor.doc.row = 1;
+    let shown = screen(&mut app);
+    assert!(
+        shown
+            .iter()
+            .any(|l| l.trim_end().ends_with("  needs a choice: A, B   plan")),
+        "{shown:#?}"
+    );
+    assert!(
+        shown
+            .iter()
+            .any(|l| l.trim_end().ends_with("  plan   chose: A")),
+        "{shown:#?}"
+    );
+    assert!(
+        shown.iter().any(|l| l.contains("Seen in the audit")),
+        "the other lines under it as they are"
+    );
 }
 
 #[test]
@@ -2677,9 +2709,9 @@ fn the_chip_under_the_mouse_is_lit_wherever_the_chips_are_drawn() {
         buf[(x, y)].bg == Color::Indexed(81)
     };
     assert!(lit(&mut app), "the plan chip under the mouse");
-    // The cursor onto the item: its chips go after its text, wrapped whole,
+    // The cursor onto the plan line: its chips go to the item's right,
     // away from the mouse, and none of them is lit.
-    app.editor.doc.row = 2;
+    app.editor.doc.row = 3;
     let mut buf = Buffer::empty(Rect::new(0, 0, app.cols, app.rows));
     app.draw(&mut buf);
     assert!(!buf.content.iter().any(|c| c.bg == Color::Indexed(81)));
@@ -4399,4 +4431,214 @@ fn add_an_item_is_refused_on_a_note_another_app_has_open() {
     app.adding = Some("two".into());
     app.add_item(true);
     assert!(app.planning.is_empty(), "nothing handed on");
+}
+
+#[test]
+fn with_ux2_the_list_has_its_own_top_line_and_a_click_on_search_searches() {
+    let (_dir, mut app) = started_ux2("top line");
+    let shown = screen(&mut app);
+    assert!(shown[0].starts_with(" Notes "), "{:?}", shown[0]);
+    let list_w = app.geo.list.width as usize;
+    let top: String = shown[0].chars().take(list_w).collect();
+    assert!(top.trim_end().ends_with("/ search"), "{top:?}");
+    assert_eq!(app.geo.list.y, 2, "the list under it and a blank row");
+    let (x, y) = find(&shown, "/ search");
+    app.focus = Focus::Note;
+    click(&mut app, x, y);
+    assert_eq!(app.focus, Focus::List, "the results take the keys");
+    let mut buf = Buffer::empty(Rect::new(0, 0, app.cols, app.rows));
+    app.draw(&mut buf);
+    let all: String = buf.content.iter().map(|c| c.symbol()).collect();
+    assert!(all.contains("Search notes"), "the search asked for");
+
+    // Without UX 2.0, the list starts at the top.
+    let (_dir, mut app) = started("no top line");
+    let shown = screen(&mut app);
+    assert!(!shown[0].contains("/ search"), "{:?}", shown[0]);
+    assert_eq!(app.geo.list.y, 0);
+}
+
+#[test]
+fn a_plan_line_too_long_for_its_chips_stays_and_a_sub_item_keeps_the_plan_chip() {
+    let (_dir, mut app) = started_ux2("long choice");
+    let path = app.store.create("", Some("Long"));
+    let long = "keep the sidebar as it is or replace it ".repeat(4);
+    write(
+        &path,
+        &format!(
+            "# Long\n\n- [ ] A condensed sidebar\n  Plan: [[Plan - Condensed]] (needs a choice: {long})\n- [ ] Stable IDs\n  - [ ] a sub-item\n  Plan: [[Plan - IDs]]\n"
+        ),
+    );
+    app.open_note(&path, false, false);
+    app.editor.doc.row = 1;
+    let shown = screen(&mut app);
+    assert!(
+        shown.iter().any(|l| l.contains("Plan: Plan - Condensed")),
+        "the line kept: {shown:#?}"
+    );
+    let at = shown
+        .iter()
+        .position(|l| l.contains("A condensed sidebar"))
+        .unwrap();
+    assert!(
+        shown[at + 1].trim_end().ends_with("plan"),
+        "the plan chip still drawn, past the choice too wide for the row: {shown:#?}"
+    );
+    assert!(
+        !shown.iter().any(|l| l.contains("Plan: Plan - IDs")),
+        "the sub-item's parent's plan line as chips: {shown:#?}"
+    );
+    assert!(shown.iter().any(|l| l.trim_end().ends_with("  plan")));
+}
+
+#[test]
+fn typing_before_a_click_on_search_is_one_step_to_undo() {
+    let (_dir, mut app) = started_ux2("search undo");
+    let path = app.store.create("", Some("Typed"));
+    write(&path, "# Typed\n\nfirst\n");
+    app.open_note(&path, false, false);
+    app.focus = Focus::Note;
+    keys(&mut app, "3GA more");
+    let shown = screen(&mut app);
+    let (x, y) = find(&shown, "/ search");
+    click(&mut app, x, y);
+    keys(&mut app, "<Esc>");
+    app.focus = Focus::Note;
+    keys(&mut app, "u");
+    assert_eq!(lines(&app)[2], "first", "what was typed undone");
+}
+
+#[test]
+fn a_plan_line_in_a_visual_selection_shows_its_text() {
+    let (_dir, mut app) = started_ux2("visual plan line");
+    chips_note(&mut app);
+    app.focus = Focus::Note;
+    keys(&mut app, "3GVjj");
+    assert_eq!(app.editor.doc.row, 4, "the cursor past the plan line");
+    let shown = screen(&mut app);
+    assert!(
+        shown.iter().any(|l| l.contains("Plan: Plan - Logo")),
+        "{shown:#?}"
+    );
+}
+
+#[test]
+fn a_plan_line_linking_a_picture_keeps_its_text() {
+    let (_dir, mut app) = started_ux2("picture plan line");
+    let path = app.store.create("", Some("Pictured"));
+    write(
+        &path,
+        "# Pictured\n\n- [ ] Draw it\n  Plan: [[Plan - Draw]] ![preview](preview.png)\n- [ ] Next\n",
+    );
+    app.open_note(&path, false, false);
+    app.editor.doc.row = 4;
+    let shown = screen(&mut app);
+    assert!(
+        shown.iter().any(|l| l.contains("Plan: Plan - Draw")),
+        "{shown:#?}"
+    );
+}
+
+#[test]
+fn the_wheel_moving_the_cursor_onto_a_plan_line_shows_its_text() {
+    let (_dir, mut app) = started_ux2("wheel plan line");
+    let path = app.store.create("", Some("Many"));
+    let items: String = (0..40)
+        .map(|k| format!("- [ ] item {k}\n  Plan: [[P {k}]] (chose A)\n"))
+        .collect();
+    write(&path, &format!("# Many\n\n{items}"));
+    app.open_note(&path, false, false);
+    app.focus = Focus::Note;
+    keys(&mut app, "gg");
+    screen(&mut app);
+    let mut onto_plan_lines = 0;
+    for _ in 0..8 {
+        let r = app.geo.note;
+        app.mouse(Mouse {
+            kind: MouseKind::Press,
+            button: MouseButton::WheelDown,
+            col: r.x + 2,
+            row: r.y + 2,
+            mods: Mods::NONE,
+        });
+        let shown = screen(&mut app);
+        let line = lines(&app)[app.editor.doc.row].clone();
+        if let Some(rest) = line.trim_start().strip_prefix("Plan: [[") {
+            onto_plan_lines += 1;
+            let name = rest.split("]]").next().unwrap();
+            assert!(
+                shown.iter().any(|l| l.contains(&format!("Plan: {name}"))),
+                "the cursor's plan line shown: {shown:#?}"
+            );
+        }
+    }
+    assert!(
+        onto_plan_lines > 0,
+        "the wheel put the cursor on a plan line"
+    );
+}
+
+#[test]
+fn with_ux2_the_list_top_line_has_commands_which_a_click_opens_the_palette_with() {
+    let (_dir, mut app) = started_ux2("commands");
+    let shown = screen(&mut app);
+    let top: String = shown[0].chars().take(app.geo.list.width as usize).collect();
+    assert!(top.contains("⌘ Commands  / search"), "{top:?}");
+    let (x, y) = find(&shown, "⌘ Commands");
+    click(&mut app, x, y);
+    assert_eq!(app.layers.len(), 1, "the palette open");
+
+    // Off in Settings, it isn't drawn.
+    let (_dir, mut app) = started_ux2("no commands");
+    app.opts.commands = false;
+    let shown = screen(&mut app);
+    assert!(!shown[0].contains("Commands"), "{:?}", shown[0]);
+}
+
+#[test]
+fn with_the_list_put_away_commands_sits_in_the_top_right_corner() {
+    let (_dir, mut app) = started_ux2("corner");
+    let path = app.store.create("", Some("Corner"));
+    write(&path, "# Corner\n\nfirst\n");
+    app.open_note(&path, false, false);
+    app.list_shown = false;
+    let shown = screen(&mut app);
+    assert!(
+        shown[0].trim_end().ends_with("⌘ Commands"),
+        "{:?}",
+        shown[0]
+    );
+    assert!(
+        shown[0].contains('⋯'),
+        "the toolbar beside it: {:?}",
+        shown[0]
+    );
+    let (x, y) = find(&shown, "⌘ Commands");
+    click(&mut app, x, y);
+    assert_eq!(app.layers.len(), 1, "the palette open");
+    app.layers.clear();
+
+    // With no toolbar, the note starts a row down, under it.
+    app.opts.toolbar = false;
+    let shown = screen(&mut app);
+    assert!(
+        shown[0].trim_end().ends_with("⌘ Commands"),
+        "{:?}",
+        shown[0]
+    );
+    assert!(!shown[0].contains("Corner"), "{:?}", shown[0]);
+    assert!(shown[1].contains("Corner"), "{:?}", shown[1]);
+}
+
+#[test]
+fn with_no_note_open_and_the_list_put_away_commands_is_still_drawn() {
+    let (_dir, mut app) = started_ux2("no note");
+    app.open = None;
+    app.list_shown = false;
+    let shown = screen(&mut app);
+    assert!(
+        shown[0].trim_end().ends_with("⌘ Commands"),
+        "{:?}",
+        shown[0]
+    );
 }

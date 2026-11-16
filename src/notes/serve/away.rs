@@ -8,6 +8,10 @@
 //! Enter or a click goes to the tab that has Notes; M-e brings Notes back
 //! here, as it does anywhere. If Notes has been quit, Enter or a click
 //! starts it again here, in this pane, which is marked Notes' then.
+//!
+//! With UX 2.0, Notes' own tab has no header (`Session::headerless`), so
+//! this draws the header's "⌘ Commands" at its top right, a click there
+//! opening the palette as M-p does.
 
 use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
@@ -57,9 +61,27 @@ fn where_notes() -> Option<Where> {
         })
 }
 
+/// "⌘ Commands", and the columns it takes on the top row, when Settings
+/// draw it: UX 2.0 and palette_button on.
+const COMMANDS: &str = "⌘ Commands";
+
+fn commands_at(cols: u16) -> Option<(u16, u16)> {
+    // Read afresh, not from the process's cache, so a change in Settings
+    // shows on the next draw.
+    let all = crate::settings::read_settings();
+    let value = |key: &str| all.iter().find(|s| s.key == key).map(|s| s.value.clone());
+    let on = value("ux2") == Some(serde_json::Value::Bool(true))
+        && value("palette_button") != Some(serde_json::Value::Bool(false));
+    let w = crate::ui::draw::width(COMMANDS) as u16;
+    (on && cols > w + 2).then(|| (cols - w - 1, cols - 1))
+}
+
 fn draw(out: &mut impl Write, at: Option<&Where>) {
-    let rows = crossterm::terminal::size().map_or(24, |(_, r)| r);
+    let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
     let mut screen = String::from("\x1b[H\x1b[2J");
+    if let Some((x, _)) = commands_at(cols) {
+        screen.push_str(&format!("\x1b[1;{}H{DIM}{COMMANDS}{RESET}\x1b[H", x + 1));
+    }
     for _ in 0..rows / 3 {
         screen.push_str("\r\n");
     }
@@ -74,6 +96,20 @@ fn draw(out: &mut impl Write, at: Option<&Where>) {
     }
     let _ = out.write_all(screen.as_bytes());
     let _ = out.flush();
+}
+
+/// A click on "⌘ Commands".
+fn commands(input: &Input) -> bool {
+    let cols = crossterm::terminal::size().map_or(80, |(c, _)| c);
+    match (input, commands_at(cols)) {
+        (Input::Mouse(m), Some((from, to))) => {
+            m.kind == MouseKind::Press
+                && m.button == MouseButton::Left
+                && m.row == 0
+                && (from..to).contains(&m.col)
+        }
+        _ => false,
+    }
 }
 
 /// Enter, or a click.
@@ -122,6 +158,10 @@ pub fn main() -> ExitCode {
                 let mut read = parser.feed(&bytes);
                 if parser.pending() {
                     read.extend(parser.flush());
+                }
+                if read.iter().any(|p| commands(&p.input)) {
+                    let _ = socket::ask(&["press", "palette"]);
+                    continue;
                 }
                 read.iter().any(|p| goes(&p.input))
             }
