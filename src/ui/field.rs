@@ -70,6 +70,8 @@ pub struct Field {
     /// A byte offset into `text`, on a grapheme's edge.
     cursor: usize,
     multi: bool,
+    /// Whether a tab pasted stays a tab rather than a space.
+    tabs: bool,
     undo: Vec<(String, usize)>,
     redo: Vec<(String, usize)>,
     /// Whether the last change was a character typed, so the next one
@@ -92,6 +94,13 @@ impl Field {
     /// A field that takes new lines (S-Enter, M-Enter, a paste's).
     pub fn multi_line(mut self) -> Field {
         self.multi = true;
+        self
+    }
+
+    /// A field that keeps a pasted tab, for text sent on as written (the
+    /// Slack reply box's), where a tab drawn as a space still counts one.
+    pub fn keep_tabs(mut self) -> Field {
+        self.tabs = true;
         self
     }
 
@@ -170,13 +179,14 @@ impl Field {
     }
 
     /// What a field keeps of `text`: new lines as they are in a multi-line
-    /// field (`\r\n` and `\r` as one), else a space each, a tab a space,
-    /// and no other control character.
+    /// field (`\r\n` and `\r` as one), else a space each, a tab a space
+    /// (unless `keep_tabs`), and no other control character.
     fn clean(&self, text: &str) -> String {
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
         text.chars()
             .filter_map(|c| match c {
                 '\n' if self.multi => Some('\n'),
+                '\t' if self.tabs => Some('\t'),
                 '\n' | '\t' => Some(' '),
                 c if c.is_control() => None,
                 c => Some(c),

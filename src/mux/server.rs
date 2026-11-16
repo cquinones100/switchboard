@@ -2917,10 +2917,19 @@ impl Server {
         let Some(parsed) = self.mission_input(id, parsed) else {
             return;
         };
-        self.mission_changed();
-        let Some(parsed) = self.overlay_input(id, parsed) else {
-            return;
+        // A key typed in a box over mission control (the Slack reply box's)
+        // changes the box alone, so mission control stands rather than
+        // building every view again on each key.
+        let parsed = match self.overlay_input(id, parsed) {
+            crate::ui::Handed::Left(parsed) => parsed,
+            crate::ui::Handed::Took { only_itself } => {
+                if !only_itself {
+                    self.mission_changed();
+                }
+                return;
+            }
         };
+        self.mission_changed();
         match parsed.input {
             Input::Key(key) => self.key(id, key, &parsed.raw),
             Input::Mouse(m) => self.mouse(id, m),

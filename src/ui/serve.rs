@@ -27,6 +27,15 @@ use crate::mux::server::{ClientId, Event, Reply, Server};
 use crate::mux::{PaneId, TabId};
 use crate::{paths, settings, util};
 
+/// What became of input handed to a client's overlays.
+pub enum Handed {
+    /// None of them took it: it is the tab's.
+    Left(Parsed),
+    /// One took it; `only_itself` while all it changed was that box (a key
+    /// typed in it), not anything a box closing hands its opener.
+    Took { only_itself: bool },
+}
+
 /// How long the status line shows a message with message_boxes off: tmux's
 /// `display-time`, whose default tmux.conf kept.
 const DISPLAY_TIME: Duration = Duration::from_millis(750);
@@ -207,19 +216,23 @@ impl Server {
     /// Hands a client's input to its overlays: the top one takes keys, the
     /// mouse and pastes, and one that closes on a key can pass it on, to the
     /// one under it or, past the last, to the tab. Gives back the input
-    /// nothing took, for the tab.
-    pub fn overlay_input(&mut self, id: ClientId, parsed: Parsed) -> Option<Parsed> {
+    /// nothing took, for the tab, or whether what took it changed only the
+    /// box itself (a key typed in it), which nothing behind it can show.
+    pub fn overlay_input(&mut self, id: ClientId, parsed: Parsed) -> Handed {
         if !matches!(
             parsed.input,
             Input::Key(_) | Input::Mouse(_) | Input::Paste(_)
         ) {
-            return Some(parsed);
+            return Handed::Left(parsed);
         }
+        let mut closed = false;
         loop {
-            let c = self.clients.get_mut(&id)?;
+            let Some(c) = self.clients.get_mut(&id) else {
+                return Handed::Took { only_itself: false };
+            };
             let look = c.overlays.look;
             let Some(top) = c.overlays.layers.last_mut() else {
-                return Some(parsed);
+                return Handed::Left(parsed);
             };
             let step = match &parsed.input {
                 Input::Key(k) => top.overlay.key(*k, &look),
@@ -250,18 +263,24 @@ impl Server {
                 Input::Paste(text) => top.overlay.paste(text, &look),
                 _ => Step::Same,
             };
+            // A box's own keys change nothing but the box (they reach no
+            // more than it), until it closes and its opener acts.
+            let only_itself = !closed;
             match step {
-                Step::Same => return None,
+                Step::Same => return Handed::Took { only_itself },
                 Step::Redraw => {
                     c.dirty = true;
-                    return None;
+                    return Handed::Took { only_itself };
                 }
                 Step::Close(outcome) => {
                     self.finish_top(id, outcome);
-                    return None;
+                    return Handed::Took { only_itself: false };
                 }
-                Step::Pass => self.finish_top(id, Outcome::Dismissed),
-                Step::Through => return Some(parsed),
+                Step::Pass => {
+                    closed = true;
+                    self.finish_top(id, Outcome::Dismissed);
+                }
+                Step::Through => return Handed::Left(parsed),
             }
         }
     }

@@ -80,6 +80,7 @@ pub use confirm::Confirm;
 pub use menu::{Menu, MenuOption};
 pub use message::Message;
 pub use picker::{PickItem, Picked, Picker};
+pub use serve::Handed;
 pub use tip::Tip;
 
 /// The shades of grey the boxes are drawn in (lib/sidebar/text.js's

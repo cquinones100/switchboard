@@ -654,22 +654,25 @@ impl Server {
     }
 
     /// What a standing snapshot takes again: the spinners' frame, and with
-    /// UX 2.0 the screens of the panes that have changed.
+    /// UX 2.0 the screens of the panes that have changed. While a box is
+    /// over it, both at most every `BOXED_SPIN_MS`, so a key typed in the
+    /// box (the Slack reply box's) draws the box again rather than reading
+    /// every tab's screen behind it.
     fn mission_refresh(&mut self, client: ClientId) {
-        let ux2 = self
-            .clients
-            .get(&client)
-            .and_then(|c| c.overlays.find::<Mission>())
-            .is_some_and(|m| m.snap.rules.ux2);
-        let screens = ux2.then(|| self.mission_screens());
         let boxed = self.mission_boxed(client);
         let Some(m) = self.mission_mut(client) else {
             return;
         };
-        if let Some(screens) = screens {
+        let was = (m.snap.frame, m.spun_at);
+        m.snap.frame = spin_frame(m, boxed);
+        let held = boxed && (m.snap.frame, m.spun_at) == was;
+        if !m.snap.rules.ux2 || held {
+            return;
+        }
+        let screens = self.mission_screens();
+        if let Some(m) = self.mission_mut(client) {
             m.snap.screens = screens;
         }
-        m.snap.frame = spin_frame(m, boxed);
     }
 
     /// Whether a box other than the busy box is over a client's mission

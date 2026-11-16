@@ -3648,3 +3648,58 @@ fn the_reminders_menu_shows_the_lists_a_narrow_screen_keeps_behind_i() {
     client.type_text("m");
     pick(&mut client, "Back to the chosen day");
 }
+
+// The Slack reply box types as every box does: a line, S-Enter (as kitty's
+// keyboard protocol sends it, and as `ESC CR` from a terminal without it),
+// a dash and more words all land in it, and Send takes them as typed.
+#[test]
+fn the_slack_reply_box_takes_s_enter_then_a_dash_and_the_words_after() {
+    let server = TestServer::start();
+    std::fs::create_dir_all(&server.state).unwrap();
+    let secs = switchboard::util::now_ms() / 1000;
+    std::fs::write(
+        server.state.join("slack.json"),
+        json!({ "checked": secs * 1000, "items": [
+            { "kind": "channel", "channel": "C1", "from": "Ben", "where": "#dev",
+                "text": "a deploy question", "ts": format!("{}.000100", secs - 500),
+                "link": "https://slack.example/b" },
+        ] })
+        .to_string(),
+    )
+    .unwrap();
+    settings(
+        &server,
+        json!({ "view_slack": true, "ux2": true, "slack_threads": false,
+            "slack_background": false, "photos": false, "slack_reply": true }),
+    );
+    let mut client = server.attach(204, 40);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("vslack\r");
+    client.wait_text("a deploy question");
+    client.type_text("\r");
+    client.wait_text("Reply in Ben's thread");
+    client.type_text("\x1b[B");
+    client.wait_for("Reply in the thread chosen", |s| {
+        s.iter()
+            .any(|l| l.contains('›') && l.contains("Reply in Ben's thread"))
+    });
+    client.type_text("\r");
+    client.wait_text("Your reply");
+    client.type_text("On it");
+    client.send(b"\x1b[13;2u");
+    client.type_text("- the menu");
+    client.send(b"\x1b\r");
+    client.type_text("- the refresh");
+    let screen = client.wait_text("- the refresh");
+    let at = |text: &str| screen.iter().position(|l| l.contains(text));
+    let (first, second, third) = (at("On it"), at("- the menu"), at("- the refresh"));
+    assert!(
+        first.is_some() && first < second && second < third,
+        "each on a line of its own: {}",
+        screen.join("\n")
+    );
+    // Send asks before anything goes, with the reply's first line.
+    client.type_text("\t\r");
+    client.wait_text("\"On it\"");
+}
