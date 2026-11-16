@@ -2,9 +2,11 @@
 # as long as its slowest: the formatting checked; on x86_64 Linux clippy with
 # its warnings as errors (with the net feature and without it, the build that
 # type-checks macOS's paths from Linux) and the tests, in jobs of their own;
-# and on an Apple silicon Mac one job running the same clippy and then the
-# tests, since the account runs few macOS jobs at once and a landing's run
-# waiting for a free Mac took longer than one job doing both. Intel Macs are
+# and on an Apple silicon Mac a job running the same clippy and building the
+# tests into an archive, whose tests two jobs then run half each: three
+# macOS jobs a run, since the account runs few at once, while the whole
+# suite on one small Mac took 15 minutes and timed out tests waiting on the
+# screen. Intel Macs are
 # left to the release, which builds their archive itself. nextest is CI's
 # alone: on the computer the tests are `cargo test`, and the Linux job checks
 # that nextest lists as many tests as it.
@@ -86,8 +88,8 @@ jobs:
         # it failed, so a run names every failure rather than the first.
         run: cargo nextest run --locked --no-fail-fast --test-threads 8
 
-  macos:
-    name: macOS arm64
+  build-macos:
+    name: Build the tests (macOS arm64)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -103,6 +105,38 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Clippy without the net feature
         run: cargo clippy --locked --all-targets --no-default-features -- -D warnings
+      - name: Build the test binaries into an archive
+        run: cargo nextest archive --locked --archive-file tests.tar.zst
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-tests
+          path: tests.tar.zst
+          retention-days: 1
+
+  test-macos:
+    name: Tests (macOS arm64, ${{ matrix.partition }} of 2)
+    needs: build-macos
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+        with:
+          tool: cargo-nextest
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: macos-tests
       - name: Tests
-        # Built once here, after clippy, and run on 8 threads like Linux's.
-        run: cargo nextest run --locked --no-fail-fast --test-threads 8
+        # The archive is unpacked into the checkout's own target/, the path
+        # it was built at, since the tests find the binary by the path cargo
+        # compiled into them (CARGO_BIN_EXE_switchboard).
+        run: >
+          cargo nextest run --archive-file tests.tar.zst
+          --workspace-remap . --extract-to . --extract-overwrite
+          --partition count:${{ matrix.partition }}/2
+          --no-fail-fast --test-threads 8
