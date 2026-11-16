@@ -432,6 +432,14 @@
     "AutopilotRepoAdd.dc.html": {
       "title": "104. Add a repository… in autopilot's settings: your repositories not yet in it, or a folder; it joins last, on, with a cap and spend of its own",
       "page": "design"
+    },
+    "DiffTotals.dc.html": {
+      "title": "105. M-d with the whole change's totals at the head of its file list, as GitHub's PR header: files, lines added and deleted, five cells shared out by them",
+      "page": "design"
+    },
+    "DiffTotalsFiltered.dc.html": {
+      "title": "106. The diff's file list filtered by path with /: the totals count only the files left, of how many in all",
+      "page": "design"
     }
   }
 }
