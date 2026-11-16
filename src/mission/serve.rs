@@ -152,7 +152,7 @@ pub(super) const KEYS: &[(&str, &str)] = &[
     ),
     (
         "tab ⇧tab",
-        "move focus through the groups' and views' names, the filter, the items, the footer's keys and easy mode's ×; ↵ presses it (with tab_focus off: next, last view)",
+        "move focus through the groups' and views' names, the filter, each section of the view and the panes beside it, the footer's keys and easy mode's ×, round; ↵ presses it (with tab_focus off: next, last view)",
     ),
     ("v", "go to a view by typing its name (↵ go, esc cancel)"),
     ("esc q", "close"),
@@ -7793,24 +7793,25 @@ fn show_view(m: &mut Mission, to: usize) {
     m.scope = None;
 }
 
-/// Tab and Shift-Tab with tab_focus: focus through what can be clicked, in
-/// reading order, round: with UX 2.0 each view's row in the list of groups
-/// and views, else each view's name; the filter (not on a
-/// board), each item, and easy mode's ×.
+/// Tab and Shift-Tab with tab_focus: focus a section at a time, in reading
+/// order, round: with UX 2.0 each view's row in the list of groups and
+/// views, else each view's name; the filter (not on a board), a side panel,
+/// each section of the list (`Mission::sections`, the whole list where it
+/// has one) at its first row, a pane beside, the footer's keys and easy
+/// mode's ×. A section's own rows are reached with `j` and `k`.
 fn move_focus(m: &mut Mission, by: isize) {
-    // Tab goes round what can be clicked, the list's items among them, so
-    // it hands the keys back to the list from Settings' categories or the
-    // pane beside; `C-w` gives them to another pane again.
-    m.pane = Some((m.view, Pane::List));
     #[derive(Clone, Copy, PartialEq)]
     enum Stop {
         View(usize),
         Kind(usize),
         Filter,
-        Item(isize),
+        Section(isize),
+        Pane(Pane),
         Key(Key),
         Close,
     }
+    let pane_was = m.pane_now();
+    let panes = m.panes();
     let board = m.current().and_then(View::columns).is_some();
     let count = match m.current() {
         Some(v) => v.data.items.len(),
@@ -7839,9 +7840,12 @@ fn move_focus(m: &mut Mission, by: isize) {
     if !board {
         stops.push(Stop::Filter);
     }
+    if panes.contains(&Pane::Panel) {
+        stops.push(Stop::Pane(Pane::Panel));
+    }
     // A grouped view's headings are no stop, the cursor never resting on
-    // one, or Shift-Tab would land on it and be put back where it was; nor
-    // are the Usage view's rows that are neither a tab nor a service.
+    // one, nor are the Usage view's rows that are neither a tab nor a
+    // service; a list of one section is one stop at its first row.
     let heading = |i: isize| {
         m.current().is_some_and(|v| {
             let item = v.data.items.get(i as usize);
@@ -7851,13 +7855,36 @@ fn move_focus(m: &mut Mission, by: isize) {
                     && item.is_some_and(|i| m.passes_over(i)))
         })
     };
-    stops.extend(
-        (floor(m)..count as isize)
-            .filter(|i| !heading(*i))
-            .map(Stop::Item),
-    );
-    // The keys drawn: the Reminders pane's after the chosen row, the
-    // footer's, on the last row, at the end.
+    let mut starts: Vec<isize> = m.sections().into_iter().map(|s| s as isize).collect();
+    // Beside a side panel (Settings' categories, the Slack board's
+    // sections) the list shows only the part the panel chose, which the
+    // cursor names, so the list's stop is where the cursor is.
+    // While a filter searches Settings, every category with a match shows,
+    // as sections; the Slack board still shows the section chosen.
+    let searching = m.filter.as_ref().is_some_and(|f| !f.text.trim().is_empty());
+    let panel_chooses = m.current().is_some_and(|v| {
+        v.id == ViewId::Settings && super::render::settings_board_shown(m) && !searching
+            || super::render::slack_board_shown(m, v)
+    }) && (floor(m)..count as isize).contains(&m.cursor)
+        && !heading(m.cursor);
+    if starts.is_empty() && panel_chooses {
+        starts.push(m.cursor);
+    }
+    if starts.is_empty() {
+        starts = m.board_groups().into_iter().map(|s| s as isize).collect();
+    }
+    if starts.is_empty() {
+        starts.extend((floor(m)..count as isize).find(|i| !heading(*i)));
+    }
+    let section_of = |cursor: isize| {
+        starts
+            .iter()
+            .rposition(|s| *s <= cursor)
+            .map_or(starts.first().copied(), |at| Some(starts[at]))
+    };
+    stops.extend(starts.iter().map(|s| Stop::Section(*s)));
+    // The keys drawn: the Reminders pane's after the chosen row's section,
+    // the footer's, on the last row, at the end.
     let mut seen = Vec::new();
     let keys: Vec<(u16, Key)> = m
         .hits
@@ -7874,10 +7901,14 @@ fn move_focus(m: &mut Mission, by: isize) {
         .collect();
     let foot = keys.iter().map(|(y, _)| *y).max();
     let (footer, pane): (Vec<_>, Vec<_>) = keys.into_iter().partition(|(y, _)| Some(*y) == foot);
-    if let Some(at) = stops.iter().position(|s| *s == Stop::Item(m.cursor)) {
+    let chosen = section_of(m.cursor).map(Stop::Section);
+    if let Some(at) = stops.iter().position(|s| Some(*s) == chosen) {
         for (n, (_, k)) in pane.into_iter().enumerate() {
             stops.insert(at + 1 + n, Stop::Key(k));
         }
+    }
+    if panes.contains(&Pane::Beside) {
+        stops.push(Stop::Pane(Pane::Beside));
     }
     stops.extend(footer.into_iter().map(|(_, k)| Stop::Key(k)));
     if m.snap.close {
@@ -7890,24 +7921,41 @@ fn move_focus(m: &mut Mission, by: isize) {
         Some(Focus::View(v)) => stops.iter().position(|s| *s == Stop::View(v)),
         Some(Focus::Kind(k)) => stops.iter().position(|s| *s == Stop::Kind(k)),
         Some(Focus::Filter) => stops.iter().position(|s| *s == Stop::Filter),
-        Some(Focus::Item) => stops.iter().position(|s| *s == Stop::Item(m.cursor)),
+        Some(Focus::Item) if pane_was != Pane::List => {
+            stops.iter().position(|s| *s == Stop::Pane(pane_was))
+        }
+        Some(Focus::Item) => stops.iter().position(|s| Some(*s) == chosen),
         Some(Focus::Close) => stops.iter().position(|s| *s == Stop::Close),
         Some(Focus::Key(k)) => stops.iter().position(|s| *s == Stop::Key(k)),
     };
     let n = stops.len() as isize;
+    if n == 0 {
+        return;
+    }
     let to = match at {
         None if by > 0 => 0,
         None => n - 1,
         Some(i) => (i as isize + by).rem_euclid(n),
     };
+    // Tab hands the keys back to the list from a pane it leaves, and
+    // landing on a pane gives them to it, as `C-w` does; on the footer's
+    // keys and the × the pane keeps them, its footer the one drawn.
+    let keeps_pane = matches!(stops[to as usize], Stop::Key(_) | Stop::Close);
+    if !keeps_pane {
+        m.pane = Some((m.view, Pane::List));
+    }
     match stops[to as usize] {
         Stop::View(v) => m.focus = Some(Focus::View(v)),
         Stop::Kind(k) => m.focus = Some(Focus::Kind(k)),
         Stop::Filter => m.focus = Some(Focus::Filter),
-        Stop::Item(i) => {
+        Stop::Section(i) => {
             m.focus = Some(Focus::Item);
             m.cursor = i;
             follow_reminder(m);
+        }
+        Stop::Pane(pane) => {
+            m.focus = Some(Focus::Item);
+            m.pane = Some((m.view, pane));
         }
         Stop::Close => m.focus = Some(Focus::Close),
         Stop::Key(k) => m.focus = Some(Focus::Key(k)),
@@ -8369,7 +8417,7 @@ mod tests {
     }
 
     #[test]
-    fn brackets_go_round_the_views_and_tab_moves_focus_through_names_filter_and_items() {
+    fn brackets_go_round_the_views_and_tab_moves_focus_through_names_filter_and_the_list() {
         let mut m = mission(2, vec![list("Closed", 3), list("Other", 1)]);
         switch_view(&mut m, 1, true);
         assert_eq!(m.view, 1);
@@ -8385,10 +8433,227 @@ mod tests {
         assert_eq!(m.focus, Some(Focus::Filter));
         move_focus(&mut m, 1);
         assert_eq!((m.focus, m.cursor), (Some(Focus::Item), 0));
+        // A list of one section is one stop, its rows reached with j and k.
+        m.cursor = 1;
+        move_focus(&mut m, 1);
+        assert_eq!(m.focus, Some(Focus::View(0)), "round to the first");
+    }
+
+    /// The Usage view as the server lists it: the total and the limits,
+    /// still, then the tabs, the services and the sessions.
+    fn usage_sections() -> Mission {
+        let still = |id: &str| Item::new(id, id).data(serde_json::json!({ "still": true }));
+        let usage = View {
+            id: ViewId::Usage,
+            title: "Usage".into(),
+            data: ViewData {
+                items: vec![
+                    still("spent"),
+                    still("limit:five_hour"),
+                    Item::new("tab:tab:1", "1 api"),
+                    Item::new("tab:tab:2", "2 web"),
+                    Item::new("requests:GitHub", "GitHub"),
+                    Item::new("requests:Linear", "Linear"),
+                    still("requests:uncounted"),
+                    Item::new("session:a", "a"),
+                ],
+                ..ViewData::default()
+            },
+            loaded: true,
+        };
+        let mut m = mission(1, vec![usage]);
+        m.view = 1;
+        m
+    }
+
+    #[test]
+    fn tab_goes_through_the_usage_view_a_section_at_a_time_and_round() {
+        let mut m = usage_sections();
+        m.cursor = 3;
+        m.focus = Some(Focus::Item);
+        move_focus(&mut m, 1);
+        assert_eq!((m.focus, m.cursor), (Some(Focus::Item), 4), "the services");
+        move_focus(&mut m, 1);
+        assert_eq!((m.focus, m.cursor), (Some(Focus::Item), 7), "the sessions");
+        move_focus(&mut m, 1);
+        assert_eq!(m.focus, Some(Focus::View(0)), "round to the first stop");
+        move_focus(&mut m, -1);
+        assert_eq!((m.focus, m.cursor), (Some(Focus::Item), 7));
+        m.cursor = 5;
+        move_focus(&mut m, -1);
+        assert_eq!(
+            (m.focus, m.cursor),
+            (Some(Focus::Item), 2),
+            "the tabs' first"
+        );
+        move_focus(&mut m, -1);
+        assert_eq!(m.focus, Some(Focus::Filter));
+    }
+
+    #[test]
+    fn tab_from_settings_categories_keeps_the_category_chosen_there() {
+        let settings = View {
+            id: ViewId::Settings,
+            title: "Settings".into(),
+            data: ViewData {
+                items: vec![
+                    views::header("a", "First", 1),
+                    Item::new("one", "one"),
+                    views::header("b", "Second", 1),
+                    Item::new("two", "two"),
+                ],
+                ..ViewData::default()
+            },
+            loaded: true,
+        };
+        let mut m = mission(1, vec![settings]);
+        m.snap.rules.ux2 = true;
+        m.size = (200, 50);
+        m.view = 1;
+        m.cursor = 3;
+        m.focus = Some(Focus::Item);
+        m.pane = Some((1, Pane::Panel));
+        assert_eq!(m.pane_now(), Pane::Panel);
+        move_focus(&mut m, 1);
+        assert_eq!(
+            (m.focus, m.pane_now(), m.cursor),
+            (Some(Focus::Item), Pane::List, 3),
+            "the second category's rows"
+        );
+        // Back from the footer the same, whatever panes C-w knows of.
+        m.pane = None;
+        m.focus = Some(Focus::Close);
+        m.snap.close = true;
+        move_focus(&mut m, -1);
+        assert_eq!((m.focus, m.cursor), (Some(Focus::Item), 3));
+        // A filter shows every category with a match: Tab goes through them.
+        m.filter = Some(Filter {
+            text: "o".into(),
+            typing: false,
+        });
+        m.cursor = 1;
+        move_focus(&mut m, 1);
+        assert_eq!(
+            (m.focus, m.cursor),
+            (Some(Focus::Item), 3),
+            "the next category"
+        );
+    }
+
+    #[test]
+    fn tab_goes_column_to_column_on_a_board() {
+        let item = |n: u32, column: &str| Item::new(n.to_string(), format!("#{n}")).group(column);
+        let board = View {
+            id: ViewId::Prs,
+            title: "PRs".into(),
+            data: ViewData {
+                items: vec![
+                    item(1, "Draft"),
+                    item(2, "In review"),
+                    item(3, "In review"),
+                    item(4, "Merged"),
+                ],
+                ..ViewData::default()
+            },
+            loaded: true,
+        };
+        let mut m = mission(0, vec![board]);
+        m.view = 1;
+        m.cursor = 2;
+        m.focus = Some(Focus::Item);
+        move_focus(&mut m, 1);
+        assert_eq!(
+            (m.focus, m.cursor),
+            (Some(Focus::Item), 3),
+            "the last column"
+        );
+        move_focus(&mut m, -1);
+        move_focus(&mut m, -1);
+        assert_eq!(
+            (m.focus, m.cursor),
+            (Some(Focus::Item), 0),
+            "the first column"
+        );
+    }
+
+    #[test]
+    fn tab_goes_through_the_routines_board_s_sections() {
+        let routine = |n: u32, section: u8| {
+            Item::new(n.to_string(), n.to_string()).data(serde_json::json!({ "section": section }))
+        };
+        let routines = View {
+            id: ViewId::Routines,
+            title: "Routines".into(),
+            data: ViewData {
+                items: vec![routine(1, 0), routine(2, 0), routine(3, 1), routine(4, 2)],
+                ..ViewData::default()
+            },
+            loaded: true,
+        };
+        let mut m = mission(0, vec![routines]);
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.cursor = 1;
+        m.focus = Some(Focus::Item);
+        move_focus(&mut m, 1);
+        assert_eq!(m.cursor, 2, "Once");
+        move_focus(&mut m, 1);
+        assert_eq!(m.cursor, 3, "Ran once");
+    }
+
+    #[test]
+    fn tab_goes_reminder_to_reminder_in_the_month() {
+        let mut m = mission(0, vec![view(ViewId::Reminders, "Reminders")]);
+        m.snap.views[0].data.items = (0..3)
+            .map(|i| Item::new(i.to_string(), format!("reminder {i}")))
+            .collect();
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.cursor = 0;
+        m.focus = Some(Focus::Item);
         move_focus(&mut m, 1);
         assert_eq!(m.cursor, 1);
         move_focus(&mut m, 1);
-        assert_eq!(m.focus, Some(Focus::View(0)), "round to the first");
+        assert_eq!(m.cursor, 2);
+    }
+
+    #[test]
+    fn tab_from_a_list_of_one_section_goes_to_the_pane_beside_and_back() {
+        let mut m = mission(1, vec![list("Closed", 3)]);
+        m.view = 1;
+        m.cursor = 2;
+        m.focus = Some(Focus::Item);
+        m.hits = vec![HitBox {
+            y: 2,
+            x0: 60,
+            x1: 90,
+            spot: Spot::Side(10),
+        }];
+        move_focus(&mut m, 1);
+        assert_eq!((m.focus, m.pane_now()), (Some(Focus::Item), Pane::Beside));
+        // The pane's footer keys keep the pane, whose footer they are.
+        let scroll = Key::new(KeyCode::Char('G'), Mods::NONE);
+        m.hits.push(HitBox {
+            y: 30,
+            x0: 2,
+            x1: 8,
+            spot: Spot::Key(scroll),
+        });
+        move_focus(&mut m, 1);
+        assert_eq!(
+            (m.focus, m.pane_now()),
+            (Some(Focus::Key(scroll)), Pane::Beside)
+        );
+        move_focus(&mut m, -1);
+        assert_eq!((m.focus, m.pane_now()), (Some(Focus::Item), Pane::Beside));
+        move_focus(&mut m, -1);
+        assert_eq!(
+            (m.focus, m.pane_now(), m.cursor),
+            (Some(Focus::Item), Pane::List, 0),
+            "the list's first row"
+        );
+        move_focus(&mut m, -1);
+        assert_eq!(m.focus, Some(Focus::Filter));
     }
 
     #[test]

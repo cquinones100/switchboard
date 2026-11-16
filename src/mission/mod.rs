@@ -1020,19 +1020,88 @@ impl Mission {
     /// the tabs, a view of one section, and a board whose sections stand
     /// side by side or in a panel of their own, where `h` and `l` or the
     /// panel reach them.
-    pub fn sections(&self) -> Vec<usize> {
-        let Some(view) = self.current() else {
-            return Vec::new();
-        };
+    /// Whether the view in front is a board whose sections stand side by
+    /// side or in a panel of their own.
+    fn side_by_side(&self, view: &View) -> bool {
         let cols = self.laid().0 as usize;
-        let side_by_side = view.columns().is_some()
+        view.columns().is_some()
             || render::pilot_board_shown(self, view, cols)
             || view.id == ViewId::Settings && render::settings_board_shown(self)
             || render::slack_board_shown(self, view)
             || render::keys_board_shown(self, view, cols)
             || view.id == ViewId::Routines && crate::routines::view::is_board(self)
-            || view.id == ViewId::Reminders && reminders::is_month(self);
-        if side_by_side {
+            || view.id == ViewId::Reminders && reminders::is_month(self)
+    }
+
+    /// The first item of each group a board stands side by side (the Keys
+    /// board's groups, a board's columns; each of the month's reminders),
+    /// where Tab goes on such a board;
+    /// empty for a view that isn't one, or has a single group.
+    pub fn board_groups(&self) -> Vec<usize> {
+        let Some(view) = self.current() else {
+            return Vec::new();
+        };
+        if !self.side_by_side(view) {
+            return Vec::new();
+        }
+        let items = &view.data.items;
+        let mut starts: Vec<usize> = if render::keys_board_shown(self, view, self.laid().0 as usize)
+        {
+            keys_board::groups(items)
+                .iter()
+                .map(|g| g.rows[0])
+                .collect()
+        } else if view.id == ViewId::Reminders {
+            // The month's reminders: `j` and `k` move a week there, never
+            // between a day's reminders, so each is a stop.
+            (0..items.len())
+                .filter(|&i| !self.passes_over(&items[i]))
+                .collect()
+        } else if let Some(columns) = view.columns() {
+            columns
+                .iter()
+                .filter_map(|c| items.iter().position(|i| i.group.as_deref() == Some(*c)))
+                .collect()
+        } else {
+            // Its group, or the section a board keeps in its data (the
+            // Routines board's Recurring, Once and Ran once).
+            let kind = |item: &Item| {
+                item.group
+                    .clone()
+                    .or_else(|| item.data.get("section").map(ToString::to_string))
+            };
+            let mut last: Option<Option<String>> = None;
+            let mut out = Vec::new();
+            for (i, item) in items.iter().enumerate() {
+                // A heading starts a section of its own rows.
+                if views::is_header(item) {
+                    last = None;
+                    continue;
+                }
+                if self.passes_over(item) {
+                    continue;
+                }
+                let this = kind(item);
+                if last.as_ref() != Some(&this) {
+                    out.push(i);
+                    last = Some(this);
+                }
+            }
+            out
+        };
+        starts.sort_unstable();
+        starts.dedup();
+        if starts.len() < 2 {
+            starts.clear();
+        }
+        starts
+    }
+
+    pub fn sections(&self) -> Vec<usize> {
+        let Some(view) = self.current() else {
+            return Vec::new();
+        };
+        if self.side_by_side(view) {
             return Vec::new();
         }
         let kind = |item: &crate::items::Item| -> Option<String> {
