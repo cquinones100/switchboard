@@ -489,12 +489,27 @@ impl Server {
     }
 
     /// A session's tabs as its sidebar groups them: those of another
-    /// repository than its filter marked `elsewhere`, for Other repos.
+    /// repository than its filter marked `elsewhere`, for Other repos, but
+    /// one with a reminder come due, which stays in Needs you with its
+    /// repository named.
     pub(crate) fn sidebar_marked(&self, session: &str) -> Vec<TabModel> {
         let mut tabs = self.sidebar_tabs(session);
         if let Some(repo) = self.sidebar_repo(session) {
+            let r = Rules::now();
             for t in &mut tabs {
-                t.elsewhere = t.repo_dir.as_deref() != Some(repo);
+                if t.repo_dir.as_deref() == Some(repo) {
+                    continue;
+                }
+                if model::reminder_due(t, &r) {
+                    t.outside_filter = true;
+                    t.from_repo = t
+                        .repo_dir
+                        .as_deref()
+                        .and_then(|d| d.file_name())
+                        .map(|n| n.to_string_lossy().into_owned());
+                } else {
+                    t.elsewhere = true;
+                }
             }
         }
         tabs

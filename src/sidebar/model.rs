@@ -169,6 +169,12 @@ pub struct TabModel {
     /// (`Side::repo`), so under Other repos whatever it is doing; only the
     /// sidebar's own model sets it, never mission control's.
     pub elsewhere: bool,
+    /// Outside the repository the sidebar is filtered to but left in its
+    /// own group, as a tab with a reminder come due is; only the sidebar's
+    /// own model sets it.
+    pub outside_filter: bool,
+    /// Such a tab's repository, by its folder's name, `None` outside one.
+    pub from_repo: Option<String>,
     pub color: Option<Rgb>,
     pub state: TabState,
     /// Pinned by hand (M-f) as needing you, until unpinned.
@@ -276,6 +282,8 @@ impl TabModel {
             repo: None,
             repo_dir: None,
             elsewhere: false,
+            outside_filter: false,
+            from_repo: None,
             color: None,
             state: TabState::Idle,
             pinned: false,
@@ -670,7 +678,14 @@ pub struct Staged<'a> {
 /// on their own); a tab opened since goes where its state puts it, after
 /// them.
 pub fn grouped<'a>(tabs: &'a [TabModel], frozen: Option<&Frozen>, r: &Rules) -> Vec<Staged<'a>> {
-    let held = |t: &TabModel| frozen.and_then(|f| f.get(&t.id)).copied();
+    // A tab held under Other repos that the filter no longer sends there (a
+    // reminder come due while browsing) leaves it, since that group folds.
+    let held = |t: &TabModel| {
+        frozen
+            .and_then(|f| f.get(&t.id))
+            .copied()
+            .filter(|(s, _)| *s != Stage::OtherRepos || t.elsewhere)
+    };
     Stage::ALL
         .iter()
         .filter_map(|&stage| {
@@ -1327,6 +1342,33 @@ pub(crate) mod tests {
                 ("Loops", v(&["Calendar"])),
                 ("Idle", v(&["resting"])),
                 ("Other", v(&["Notes", "Slack relay"])),
+            ]
+        );
+    }
+
+    // Browsing a filtered sidebar, a tab held under Other repos that the
+    // filter keeps out of it now (its reminder come due) leaves the folded
+    // group; one still of another repository stays held there.
+    #[test]
+    fn a_frozen_layout_lets_a_due_reminder_out_of_other_repos() {
+        let r = rules();
+        let mut before = vec![
+            tab(1, "mine", TabState::Idle),
+            tab(2, "bee", TabState::Idle),
+            tab(3, "wasp", TabState::Idle),
+        ];
+        before[1].elsewhere = true;
+        before[2].elsewhere = true;
+        let frozen = frozen_from(&before, &r);
+        let mut after = before.clone();
+        after[1].elsewhere = false;
+        after[1].remind_at = Some(1);
+        assert_eq!(
+            names(&grouped(&after, Some(&frozen), &r)),
+            vec![
+                ("Needs you", v(&["bee"])),
+                ("Idle", v(&["mine"])),
+                ("Other repos", v(&["wasp"])),
             ]
         );
     }

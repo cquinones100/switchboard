@@ -1521,6 +1521,61 @@ fn the_sidebar_filtered_to_one_repository_folds_the_others_under_other_repos() {
     assert!(err.contains("sidebar_repo_filter"), "{err}");
 }
 
+// Filtered to one repository, another's tab with a reminder come due stays
+// in Needs you with its repository named, one without stays in Other repos,
+// and once its reminder is done with it goes there too.
+#[test]
+fn a_reminder_come_due_shows_through_the_repository_filter() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let alpha = server.dir.path().join("alpha");
+    let beta = server.dir.path().join("beta");
+    for dir in [&alpha, &beta] {
+        std::fs::create_dir_all(dir).unwrap();
+        git(dir, &["init", "-q"]);
+        git(dir, &["commit", "-q", "--allow-empty", "-m", "start"]);
+    }
+    let alpha = alpha.canonicalize().unwrap();
+    let beta = beta.canonicalize().unwrap();
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    cd(&server, &mut client, &alpha);
+    for name in ["bee", "wasp"] {
+        server.ok(&["new-tab", "-d", "-c", &beta.to_string_lossy(), "-n", name]);
+        row_of(&mut client, name);
+    }
+    let list = server.list();
+    let bee = tabs(&list).iter().find(|t| t["name"] == "bee").unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["set", "-t", &bee, "@remind_at", "1"]);
+
+    server.ok(&["sidebar-repo", &alpha.to_string_lossy()]);
+    let fold = row_of(&mut client, "1 tab · beta");
+    let needs = row_of(&mut client, "NEEDS YOU");
+    let row = row_of(&mut client, "bee");
+    assert!(needs < row && row < fold);
+    let screen = client.screen();
+    assert!(
+        screen[row + 1..fold - 1]
+            .iter()
+            .any(|l| left(l, 34).contains("beta")),
+        "{screen:?}"
+    );
+    assert!(left(&screen[0], 34).contains("1 of 3"), "{:?}", screen[0]);
+    assert!(
+        !screen.iter().any(|l| left(l, 34).contains("wasp")),
+        "{screen:?}"
+    );
+
+    server.ok(&["seen", "-t", &bee]);
+    row_of(&mut client, "2 tabs · beta");
+    client.wait_for("bee folded away", |s| {
+        !s.iter().any(|l| left(l, 34).contains("bee"))
+    });
+}
+
 // M-R opens "Filter the sidebar to a repository": choosing a repository
 // filters the sidebar to it, and M-R again offers "Every repository" first,
 // which Enter takes; M-p lists the command with its key.

@@ -507,7 +507,10 @@ pub fn sidebar_lines(
         let Some(repo) = view.repo else {
             return 0;
         };
-        let mine = tabs.iter().filter(|t| !t.elsewhere).count();
+        let mine = tabs
+            .iter()
+            .filter(|t| !t.elsewhere && !t.outside_filter)
+            .count();
         let mut said = format!("{mine} of {}", tabs.len());
         // The chip's ends, " ×" and the column after it.
         let around = 5;
@@ -934,6 +937,10 @@ pub fn sidebar_lines(
                 if let Some(n) = tab.pr.filter(|n| !tab.name.contains(&format!("#{n}"))) {
                     doing.push(format!("#{n}"));
                 }
+                // The other repository first, so a long state never cuts it.
+                if let Some(repo) = &tab.from_repo {
+                    doing.insert(0, repo.clone());
+                }
                 if !doing.is_empty() {
                     let mut second = Row::default();
                     second.put("    ", Style::new()).put(
@@ -1011,6 +1018,7 @@ pub fn sidebar_lines(
                 .collect();
             parts.extend(pr);
             parts.extend(failing.clone());
+            parts.extend(tab.from_repo.clone());
             if tab.notes_here {
                 parts.push("✎ Notes here".into());
             }
