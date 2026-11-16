@@ -180,7 +180,7 @@ The relay's DM, threads and Home tab.
 - [109. Send asks first, naming the destination, \[Y/n\]; nothing is sent before a yes](https://cquinones100.github.io/switchboard/design/109.html)
 - [110. Sent: the reply in the thread pane as yours, marked sent, the thread's count up by one](https://cquinones100.github.io/switchboard/design/110.html)
 
-## Proposal: boxes beside a lone pane
+## Boxes beside a lone pane
 
 - [111. Beside a lone pane, a box about the tab (here M-u's links picker) drawn as a pane: the spare columns' full height, a header line naming it and the tab, the rule at the pane's edge its only border, no shadow; M-p, M-F and the pickers stay in the middle](https://cquinones100.github.io/switchboard/design/111.html)
 - [112. A notification while the links picker is beside a lone pane: raised in the middle of the whole screen with its shadow, as every message, question and notification is; the pane beside dims and keeps its place](https://cquinones100.github.io/switchboard/design/112.html)
