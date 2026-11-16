@@ -227,7 +227,8 @@ pub fn stamp(dir: &Path) -> Option<std::time::SystemTime> {
     files.chain([folder]).max()
 }
 
-/// Every routine kept, oldest first; a file that doesn't read is said on
+/// Every routine kept, oldest first, the todo note's starter with an
+/// earlier prompt given its new one; a file that doesn't read is said on
 /// stderr (the server's log) and passed over.
 pub fn load_all(dir: &Path) -> Vec<Routine> {
     let Ok(entries) = fs::read_dir(dir) else {
@@ -241,11 +242,19 @@ pub fn load_all(dir: &Path) -> Vec<Routine> {
             let named_tools = serde_json::from_str::<serde_json::Value>(&text)
                 .is_ok_and(|v| v.get("tools").is_some());
             match serde_json::from_str::<Routine>(&text) {
-                Ok(r) if named_tools => Some(r),
+                Ok(mut r) if named_tools => {
+                    if super::starters::bring_up_to_date(dir, &mut r)
+                        && let Err(err) = save(dir, &r)
+                    {
+                        eprintln!("routines: couldn't bring {} up to date: {err}", r.id);
+                    }
+                    Some(r)
+                }
                 // From a build before the allowed tools: given its own once,
                 // a starter's from its file, any other the defaults.
                 Ok(mut r) => {
                     super::starters::give_tools(dir, &mut r);
+                    super::starters::bring_up_to_date(dir, &mut r);
                     if let Err(err) = save(dir, &r) {
                         eprintln!("routines: couldn't give {} its tools: {err}", r.id);
                     }
