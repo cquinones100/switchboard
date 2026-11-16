@@ -32,7 +32,10 @@
 //! - `shown`: the links, images and videos a pane shows, for M-p's link
 //!   commands (link-view.sh's `links_of` and `media_of`).
 //! - `given`: the links in what you sent each pane's Claude, pasted text
-//!   included, which the link commands list too.
+//!   included, which the link commands list too, and in what it answered,
+//!   each with when it was seen.
+//! - `seen`: when each of a note's links was first seen there, and the
+//!   link commands' order, newest first.
 //! - `ready`: whether the PR can merge (pr-ready.sh).
 //! - `serve`: the server's side: the keys, the boxes, the panes beside.
 
@@ -52,6 +55,7 @@ pub mod pr;
 pub mod ready;
 pub mod search;
 pub mod search_box;
+pub mod seen;
 mod serve;
 pub mod shown;
 pub mod ticket;
@@ -415,10 +419,12 @@ pub enum ViewsEvent {
 }
 
 /// What the server keeps for the views: the links in what you sent each
-/// pane's Claude. A search's rows are its box's (`search_box`).
+/// pane's Claude and in what it answered, and when each note's links were
+/// first seen. A search's rows are its box's (`search_box`).
 #[derive(Default)]
 pub struct Views {
     pub(crate) given: given::Given,
+    pub(crate) seen: seen::Seen,
 }
 
 /// The program's directory argument, else where it runs.

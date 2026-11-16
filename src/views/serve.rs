@@ -8,6 +8,8 @@
 //! in its app, each list's Ctrl-O doing the other thing link-view.sh's
 //! `pick` and `media` offered. In the notes pane, the links are the note's,
 //! since Notes shows a link's text alone.
+//! Each list holds the newest first, across the pane, what you sent its
+//! Claude and the note (`seen`).
 //!
 //! A view opens in a pane split off to the right of the pane you are in
 //! (`open_beside`), running one of Switchboard's own programs, and is
@@ -30,7 +32,7 @@ use super::ready::{self, Choice, ReadyBox};
 use super::search::{self, Found, Source};
 use super::search_box::SearchBox;
 use super::shown::{self, Shown};
-use super::{Command, ViewsEvent, page, ticket};
+use super::{Command, ViewsEvent, page, seen, ticket};
 use crate::integrations::{github, linear};
 use crate::mux::server::{ClientId, Event, Server};
 use crate::mux::{Direction, PaneId, TabId};
@@ -966,16 +968,23 @@ impl Server {
 
     /// A hook from a pane's Claude: a prompt's links are kept for the link
     /// commands (src/views/given.rs), since Claude Code shows pasted text
-    /// as "[Pasted text #1]"; a fresh session starts with none.
+    /// as "[Pasted text #1]", and a finished turn's are timed, so the
+    /// commands list the newest first; a fresh session starts with none.
     pub fn links_hook(&mut self, pane: PaneId, hook: &crate::agent::Hook, payload: &Value) {
         if !hook.agent.is_empty() {
             return;
         }
+        let text = |key: &str| payload.get(key).and_then(Value::as_str);
         match hook.event.as_str() {
             "SessionStart" if hook.source != "compact" => self.views.given.forget(pane),
             "UserPromptSubmit" if settings::is_on("prompt_links") => {
-                if let Some(prompt) = payload.get("prompt").and_then(Value::as_str) {
-                    self.views.given.took(pane, prompt);
+                if let Some(prompt) = text("prompt") {
+                    self.views.given.took(pane, prompt, util::now_ms());
+                }
+            }
+            "Stop" => {
+                if let Some(reply) = text("last_assistant_message") {
+                    self.views.given.replied(pane, reply, util::now_ms());
                 }
             }
             _ => {}
@@ -1050,16 +1059,58 @@ impl Server {
         found
     }
 
+    /// The links a pane shows, newest first (src/views/seen.rs), by when
+    /// the pane's Claude (or, from the notes pane, the tab's other panes')
+    /// last saw each and when the note open in the tab first held it; the
+    /// untimed after them, in the order `listed_links` gives.
+    fn pane_links(&mut self, pane: PaneId) -> Result<Vec<Shown>, String> {
+        let note = self.tab_note_text(pane);
+        if let Some((name, text, _)) = &note {
+            let file = crate::notes::store::notes_dir().join(format!("{name}.md"));
+            let saved = std::fs::metadata(&file)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(i64::MAX, |d| d.as_millis() as i64)
+                .min(util::now_ms());
+            self.views.seen.note(name, &shown::note_links(text), saved);
+        }
+        let found = self.listed_links(pane, &note)?;
+        // The panes whose links the list holds: the notes pane lists the
+        // tab's others, any other pane its own alone.
+        let mut claudes = vec![pane];
+        if self.is_notes_pane(pane)
+            && note.is_some()
+            && let Some(slot) = self.panes.get(&pane)
+        {
+            claudes.extend(self.other_panes(pane, slot.tab));
+        }
+        let at = |url: &str| {
+            let in_note = note
+                .as_ref()
+                .and_then(|(name, _, _)| self.views.seen.at(name, url));
+            claudes
+                .iter()
+                .filter_map(|p| self.views.given.at(*p, url))
+                .chain(in_note)
+                .max()
+        };
+        Ok(seen::newest_first(found, at))
+    }
+
     /// The links a pane shows: in the notes pane while it shows a note,
     /// the note's, top to bottom, then the tab's other panes'; in any
     /// other pane its own (`screen_links`), then those of the note open
     /// in its tab, marked as the note's. Each once, and why there are none,
     /// when there are none.
-    fn pane_links(&self, pane: PaneId) -> Result<Vec<Shown>, String> {
+    fn listed_links(
+        &self,
+        pane: PaneId,
+        note: &Option<(String, String, PathBuf)>,
+    ) -> Result<Vec<Shown>, String> {
         let Some(slot) = self.panes.get(&pane) else {
             return Err("No pane here".into());
         };
-        let note = self.tab_note_text(pane);
         let mut found = Vec::new();
         let add = |found: &mut Vec<Shown>, more: Vec<Shown>| {
             for link in more {
@@ -1305,10 +1356,10 @@ impl Server {
         let Some((pane, _, dir)) = self.here(client) else {
             return;
         };
+        let links = self.pane_links(pane).unwrap_or_default();
         let Some(slot) = self.panes.get(&pane) else {
             return;
         };
-        let links = self.pane_links(pane).unwrap_or_default();
         let home = paths::home();
         let note = self.tab_note_text(pane);
         // Where the files are named, each with the folder a relative path

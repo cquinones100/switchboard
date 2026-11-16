@@ -155,9 +155,15 @@ pub struct Handover {
     /// A cell's size in pixels as the terminal answered when asked.
     #[serde(default)]
     pub asked_cell: Option<(u16, u16)>,
-    /// The links in what you sent each pane's Claude (src/views/given.rs).
+    /// The links in what you sent each pane's Claude (src/views/given.rs),
+    /// as a build that kept no times handed them over; read when
+    /// `given_links` is missing, and still written for such a build.
     #[serde(default)]
     pub given: Vec<(PaneId, Vec<String>)>,
+    /// The links in what you sent each pane's Claude and in what it
+    /// answered, each with when it was last seen (src/views/given.rs).
+    #[serde(default)]
+    pub given_links: Vec<(PaneId, Vec<crate::views::given::Kept>)>,
     /// The computer held awake by hand, until you say (src/awake).
     #[serde(default)]
     pub awake_by_hand: bool,
@@ -794,6 +800,7 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
     for slot in server.panes.values_mut() {
         panes.push(slot.pane.hand_over());
     }
+    let given_links = server.views.given.records();
     let handover = Handover {
         version: VERSION,
         from: crate::update::version_line(),
@@ -810,7 +817,14 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
         next_tab: server.next_tab,
         images: server.sixel.hand_over(),
         asked_cell: server.terminal.asked_cell,
-        given: server.views.given.records(),
+        given: given_links
+            .iter()
+            .map(|(pane, kept)| {
+                let urls = kept.iter().filter(|k| k.prompt).map(|k| k.url.clone());
+                (*pane, urls.collect())
+            })
+            .collect(),
+        given_links,
         awake_by_hand: server.awake.by_hand,
         slots: server.slots.clone(),
         written_panes: super::persist::written_panes(server),
@@ -983,7 +997,14 @@ pub fn adopt(server: &mut Server, handover: Handover) {
             server.agents.put(id, agent);
         }
     }
-    for (id, links) in handover.given {
+    if handover.given_links.is_empty() {
+        for (id, links) in handover.given {
+            if server.panes.contains_key(&id) {
+                server.views.given.put_untimed(id, links);
+            }
+        }
+    }
+    for (id, links) in handover.given_links {
         if server.panes.contains_key(&id) {
             server.views.given.put(id, links);
         }
@@ -1207,6 +1228,14 @@ mod tests {
             )],
             asked_cell: Some((10, 20)),
             given: vec![(PaneId(4), vec!["https://a.example/1".into()])],
+            given_links: vec![(
+                PaneId(4),
+                vec![crate::views::given::Kept {
+                    url: "https://b.example/2".into(),
+                    at: Some(7),
+                    prompt: true,
+                }],
+            )],
             awake_by_hand: true,
             slots: {
                 let mut board = crate::slots::Board::default();
@@ -1253,6 +1282,7 @@ mod tests {
         assert_eq!(read.cell, Some((9, 18)));
         assert_eq!(read.images, sample().images);
         assert_eq!(read.asked_cell, Some((10, 20)));
+        assert_eq!(read.given_links, sample().given_links, "the links timed");
         assert!(read.awake_by_hand);
         assert_eq!(read.slots, sample().slots, "the queue's slots carried");
         assert_eq!(read.written_panes, Some(5));

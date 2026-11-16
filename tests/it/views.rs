@@ -1016,6 +1016,50 @@ fn the_link_commands_list_the_links_you_gave_the_panes_claude() {
 }
 
 #[test]
+fn the_link_commands_list_the_newest_link_first_across_the_pane_and_prompts() {
+    let server = TestServer::start();
+    settings(&server, json!({"sidebar": false}));
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    let pane = panes(&server)[0]["id"].as_str().unwrap().to_string();
+    // Nothing listens on port 9, and nothing here reads a link anyway.
+    client.type_text("echo http://127.0.0.1:9/screen\r");
+    client.wait_for("the echoed link", |s| {
+        s.iter().any(|l| l.starts_with("http://127.0.0.1:9/screen"))
+    });
+    let first = |client: &mut common::TestClient, row: &str| {
+        // The chosen row, in the box rather than the echoed line.
+        let chosen = format!("› {row}");
+        client.wait_for(&chosen, |s| s.iter().any(|l| l.contains(&chosen)));
+        client.type_text("\x1b");
+        client.wait_for("the list closed", |s| {
+            !s.iter().any(|l| l.contains("Copy a link"))
+        });
+    };
+
+    // A prompt sent after the screen showed its link leads it.
+    hook(
+        &server,
+        &pane,
+        "UserPromptSubmit",
+        json!({"prompt": "look at http://127.0.0.1:9/sent"}),
+    );
+    server.ok(&["press", "copy-link"]);
+    first(&mut client, "you gave it  http://127.0.0.1:9/sent");
+
+    // A turn that ends naming the screen's link puts it first again.
+    std::thread::sleep(Duration::from_millis(5) * common::patience());
+    hook(
+        &server,
+        &pane,
+        "Stop",
+        json!({"last_assistant_message": "Done: http://127.0.0.1:9/screen"}),
+    );
+    server.ok(&["press", "copy-link"]);
+    first(&mut client, "http://127.0.0.1:9/screen");
+}
+
+#[test]
 fn with_prompt_links_off_the_link_commands_list_only_what_the_pane_shows() {
     let server = TestServer::start();
     settings(&server, json!({"sidebar": false, "prompt_links": false}));
