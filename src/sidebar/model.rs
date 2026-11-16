@@ -196,6 +196,10 @@ pub struct TabModel {
     pub notes_away: bool,
     /// Which tab has Notes then, its number and name, for that tab's line.
     pub notes_owner: Option<(usize, String)>,
+    /// The title of the note Notes shows, for the Notes tab's own line
+    /// (`@notes_open`, which the app sets on its pane); `None` in every
+    /// other tab and while Notes is beside another.
+    pub notes_open: Option<String>,
     /// Background tasks running.
     pub background: usize,
     /// The Monitor watches running, by description.
@@ -285,6 +289,7 @@ impl TabModel {
             notes_here: false,
             notes_away: false,
             notes_owner: None,
+            notes_open: None,
             background: 0,
             monitors: Vec::new(),
             tab_loop: None,
@@ -863,6 +868,10 @@ pub fn state_only(tab: &TabModel, r: &Rules) -> String {
             None => "Notes isn't open".into(),
         };
     }
+    // The Notes tab: the note it shows.
+    if let Some(title) = &tab.notes_open {
+        return format!("✎ {title}");
+    }
     let now = r.now_secs();
     let since = text::ago(tab.since, now);
     // A PR landing through the merge queue says its place once, as landing
@@ -997,13 +1006,13 @@ pub fn state_only(tab: &TabModel, r: &Rules) -> String {
     }
 }
 
-/// A PR's checks, review and size in a few marks: `✓12 ✗1 ⏳3`, `approved`,
+/// A PR's checks, review and size in a few marks: `✓12 ✕1 ⏳3`, `approved`,
 /// `+340 −80`, failing checks and changes asked for first.
 pub fn pr_facts(tab: &TabModel) -> Vec<String> {
     let mut out = Vec::new();
     if let Some(c) = tab.checks {
         let pending = crate::sidebar::text::pending_mark();
-        let marks: Vec<String> = [("✓", c.pass), ("✗", c.fail), (pending, c.pending)]
+        let marks: Vec<String> = [("✓", c.pass), ("✕", c.fail), (pending, c.pending)]
             .iter()
             .filter(|(_, n)| *n > 0)
             .map(|(m, n)| format!("{m}{n}"))
@@ -1140,6 +1149,14 @@ pub(crate) mod tests {
         assert_eq!(state_words(&notes, &r), "Notes is beside tab 3 · api");
         notes.notes_owner = None;
         assert_eq!(state_words(&notes, &r), "Notes isn't open");
+    }
+
+    #[test]
+    fn the_notes_tab_names_the_note_it_shows() {
+        let mut notes = tab(1, "Notes", TabState::Idle);
+        notes.command = Some("switchboard".into());
+        notes.notes_open = Some("Release plan".into());
+        assert_eq!(state_words(&notes, &rules()), "✎ Release plan");
     }
 
     #[test]
@@ -1901,6 +1918,6 @@ pub(crate) mod tests {
         });
         t.review = Some("APPROVED".into());
         t.size = Some((340, 80));
-        assert_eq!(pr_facts(&t), vec!["✓12 ✗1 ⏳3", "approved", "+340 −80"]);
+        assert_eq!(pr_facts(&t), vec!["✓12 ✕1 ⏳3", "approved", "+340 −80"]);
     }
 }

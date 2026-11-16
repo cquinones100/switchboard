@@ -9,7 +9,10 @@
 //!
 //! Its first row is filled with the tab's own color (the one its number
 //! has in the sidebar, src/tabs/color.rs), and on it, dark, the state's
-//! mark, the tab's name in bold, where it works, what Claude is doing and
+//! mark, the tab's name in bold (cut to keep the path, the state and
+//! where M-a goes next on the line), the repository it works in (its main
+//! clone, never a worktree's long path), its branch, cut first where the
+//! row is narrow, what Claude is doing and
 //! how full its context is (`ctx 62%`, as its statusline last told the
 //! server);
 //! while the tab's history shows a past moment, which ("viewing 1:41 PM, 51
@@ -38,6 +41,7 @@ use ratatui::text::Line;
 use crate::agent::State;
 use crate::mux::compose;
 use crate::mux::keys::Action;
+use crate::sidebar::text;
 use crate::status::theme::Palette;
 use crate::ui::Theme;
 use crate::ui::kit::{self, Mark};
@@ -297,38 +301,105 @@ pub fn draw(
         x += 1;
     }
     x = compose::put(buf, x, first, &mark.content, mark_style);
-    x = compose::put(
-        buf,
-        x + 1,
-        first,
-        &h.name,
-        band.fg(name_fg).add_modifier(Modifier::BOLD),
-    );
-    let mut facts = vec![h.path.clone()];
-    if !h.branch.is_empty() {
-        facts.push(h.branch.clone());
-    }
-    if let Some(s) = h.state {
-        // "waiting 4m": how long a tab has waited is what tells you where
-        // M-a should take you first.
-        facts.push(if h.age.is_empty() {
+    // "waiting 4m": how long a tab has waited is what tells you where M-a
+    // should take you first.
+    let state = h.state.map(|s| {
+        if h.age.is_empty() {
             s.name().to_string()
         } else {
             format!("{} {}", s.name(), h.age)
-        });
-    }
-    if !h.opened.is_empty() {
-        facts.push(format!("opened {}", h.opened));
-    }
-    if let Some(used) = h.context {
-        facts.push(format!("ctx {used}%"));
-    }
+        }
+    });
+    let opened = (!h.opened.is_empty()).then(|| format!("opened {}", h.opened));
+    let context = h.context.map(|used| format!("ctx {used}%"));
     // The moment a tab's history shows, at the right end in place of where
     // M-a goes next, its room kept: the facts give way to it.
     let viewing_at = h.viewing.as_ref().map(|v| {
         let width = crate::sidebar::text::width(v) as u16 + 1;
         area.right().saturating_sub(width).max(area.x)
     });
+    let joined = |parts: &[&str]| text::width(&parts.join(" · "));
+    let must: Vec<&str> = std::iter::once(h.path.as_str())
+        .chain(state.as_deref())
+        .collect();
+    // The name, the path and the state, then where M-a goes next at the
+    // right: the name is cut to keep their room, down to a few words, then
+    // the path, and where even both at their least leave too little, M-a's
+    // next gives way.
+    let name_x = x + 1;
+    const NAME_MIN: usize = 12;
+    const PATH_MIN: usize = 8;
+    let left_of = |right: u16| right.saturating_sub(2).saturating_sub(name_x) as usize;
+    let name_room = |right: u16| left_of(right).saturating_sub(3 + joined(&must));
+    let least_facts = joined(&must) - text::width(&h.path) + text::width(&h.path).min(PATH_MIN);
+    // Its name is cut to what the least of those leaves (a long item's
+    // title is the usual name), and it gives way only below a few columns.
+    const NEXT_NAME_MIN: usize = 6;
+    // The path whole first, else at its least.
+    let left_with =
+        |facts: usize| name_x as usize + NAME_MIN.min(text::width(&h.name)) + 3 + facts + 2;
+    let next = h
+        .next
+        .as_ref()
+        .filter(|_| h.viewing.is_none())
+        .and_then(|(number, name)| {
+            let key = format!("M-a next: {number} ");
+            let least = NEXT_NAME_MIN.min(text::width(name));
+            let room = |facts: usize| {
+                (area.right() as usize)
+                    .saturating_sub(left_with(facts) + text::width(&key) + 1)
+                    .min(text::width(name))
+            };
+            [joined(&must), least_facts]
+                .into_iter()
+                .map(room)
+                .find(|room| *room >= least)
+                .map(|room| format!("{key}{} ", text::cut(name, room)))
+        })
+        .map(|next| {
+            let at = area.right().saturating_sub(text::width(&next) as u16);
+            (next, at)
+        });
+    let right = viewing_at
+        .or(next.as_ref().map(|(_, at)| *at))
+        .unwrap_or(first.right());
+    let name = text::cut(&h.name, name_room(right).max(NAME_MIN));
+    x = compose::put(
+        buf,
+        name_x,
+        first,
+        &name,
+        band.fg(name_fg).add_modifier(Modifier::BOLD),
+    );
+    let facts_x = x + 3;
+    let room = right.saturating_sub(2).saturating_sub(facts_x) as usize;
+    // Then the branch, cut to what is left (dropped when that leaves it no
+    // more than a few columns), then how long the tab has been open and
+    // how full its context is, each only where it fits, so none pushes the
+    // state or M-a's next off the line.
+    let sep = " · ".chars().count();
+    // A path too long for the room left once the name has its least is
+    // cut, so the state after it still shows.
+    let state_cols = state.as_deref().map_or(0, |s| sep + text::width(s));
+    let path = text::cut(&h.path, room.saturating_sub(state_cols).max(PATH_MIN));
+    let mut used = text::width(&path) + state_cols;
+    let branch = (!h.branch.is_empty())
+        .then(|| text::cut(&h.branch, room.saturating_sub(used + sep)))
+        .filter(|b| *b == h.branch || text::width(b) >= 6);
+    if let Some(b) = &branch {
+        used += sep + text::width(b);
+    }
+    let mut extra = Vec::new();
+    for fact in [opened, context].into_iter().flatten() {
+        if used + sep + text::width(&fact) <= room {
+            used += sep + text::width(&fact);
+            extra.push(fact);
+        }
+    }
+    let mut facts = vec![path];
+    facts.extend(branch);
+    facts.extend(state);
+    facts.extend(extra);
     let facts_room = Rect {
         width: viewing_at.map_or(first.width, |at| {
             at.saturating_sub(2).saturating_sub(first.x)
@@ -337,7 +408,7 @@ pub fn draw(
     };
     let end = compose::put(
         buf,
-        x + 3,
+        facts_x,
         facts_room,
         &facts.join(" · "),
         band.fg(words_fg),
@@ -351,13 +422,10 @@ pub fn draw(
             viewing,
             band.fg(name_fg).add_modifier(Modifier::BOLD),
         );
-    } else if let Some((number, name)) = &h.next {
-        let next = format!("M-a next: {number} {name} ");
-        let width = crate::sidebar::text::width(&next) as u16;
-        let at = area.right().saturating_sub(width);
-        if at > end + 1 {
-            compose::put(buf, at, first, &next, band.fg(words_fg));
-        }
+    } else if let Some((next, at)) = &next
+        && *at > end + 1
+    {
+        compose::put(buf, *at, first, next, band.fg(words_fg));
     }
     if area.height < 3 {
         return keys;
@@ -584,6 +652,89 @@ mod tests {
         assert!(first.ends_with("M-a next: 3 billing"));
         let at = 90 - "M-a next: 3 billing ".len() as u16;
         assert_eq!(buf[(at, 0)].fg, Palette::DARK.dim);
+    }
+
+    // Board 1: a long branch is cut, never the state or where M-a goes
+    // next, so they always fit.
+    #[test]
+    fn a_long_branch_gives_way_to_the_state_and_m_a_next() {
+        let area = Rect::new(0, 0, 90, ROWS);
+        let mut buf = Buffer::empty(area);
+        let h = Header {
+            branch: "note/bug-tab-header-and-sidebar-crowd-state-and-miscount".into(),
+            next: Some((3, "billing".into())),
+            ..header(Shown::Claude)
+        };
+        draw(&mut buf, area, &h, None, &Palette::DARK, false, false);
+        let first = text(&buf, 0);
+        assert!(first.contains(" · working 2m"), "{first}");
+        assert!(
+            first.contains("~/switchboard · note/bug-tab-header"),
+            "{first}"
+        );
+        assert!(first.contains("…"), "{first}");
+        assert!(first.ends_with("M-a next: 3 billing"), "{first}");
+        // How long it has been open and how full its context is give way
+        // too, where they would push M-a's next off.
+        let h = Header {
+            name: "Fix tab header and sidebar".into(),
+            branch: "main".into(),
+            opened: "1h12m".into(),
+            context: Some(62),
+            next: Some((3, "billing".into())),
+            ..header(Shown::Claude)
+        };
+        let mut buf = Buffer::empty(area);
+        draw(&mut buf, area, &h, None, &Palette::DARK, false, false);
+        let first = text(&buf, 0);
+        assert!(first.contains(" · working 2m"), "{first}");
+        assert!(!first.contains("ctx 62%"), "{first}");
+        assert!(first.ends_with("M-a next: 3 billing"), "{first}");
+        // A long name is cut to keep the path, the state and M-a's next.
+        let h = Header {
+            name: "Make the header keep its state and the next tab in view always".into(),
+            next: Some((3, "billing".into())),
+            ..header(Shown::Claude)
+        };
+        let mut buf = Buffer::empty(area);
+        draw(&mut buf, area, &h, None, &Palette::DARK, false, false);
+        let first = text(&buf, 0);
+        assert!(first.contains("…   ~/switchboard · working 2m"), "{first}");
+        assert!(first.ends_with("M-a next: 3 billing"), "{first}");
+        // So is a long path, after the name has its least.
+        let h = Header {
+            path: "~/code/customer-platform/services/notifications-service/backend".into(),
+            ..h
+        };
+        let mut buf = Buffer::empty(area);
+        draw(&mut buf, area, &h, None, &Palette::DARK, false, false);
+        let first = text(&buf, 0);
+        assert!(first.contains("… · working 2m"), "{first}");
+        // M-a's next stays while the cut path leaves it room.
+        let h = Header {
+            name: "planning".into(),
+            ..h
+        };
+        let mut buf = Buffer::empty(area);
+        draw(&mut buf, area, &h, None, &Palette::DARK, false, false);
+        let first = text(&buf, 0);
+        assert!(first.contains("… · working 2m"), "{first}");
+        assert!(first.ends_with("M-a next: 3 billing"), "{first}");
+        // A long next tab's name is cut rather than dropped.
+        let h = Header {
+            path: "~/switchboard".into(),
+            next: Some((
+                3,
+                "BUG: Tab header and sidebar crowd state and miscount notifications".into(),
+            )),
+            ..h
+        };
+        let mut buf = Buffer::empty(area);
+        draw(&mut buf, area, &h, None, &Palette::DARK, false, false);
+        let first = text(&buf, 0);
+        assert!(first.contains("~/switchboard · working 2m"), "{first}");
+        assert!(first.contains("M-a next: 3 BUG: Tab"), "{first}");
+        assert!(first.ends_with("…"), "{first}");
     }
 
     #[test]

@@ -916,7 +916,7 @@ pub fn repo_key(item: &Item) -> Option<&str> {
 static TICKET: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)^([a-z][a-z0-9]*-\d+)").expect("a regex"));
 
-/// Where a PR stands, in a few words: `#12 merged`, `#12 ✗2 failing`; none
+/// Where a PR stands, in a few words: `#12 merged`, `#12 ✕ 2 failing`; none
 /// with the github setting off. Without UX 2.0, the row's PR cell.
 fn pr_words(tab: &TabModel) -> String {
     if !settings::is_on("github") {
@@ -932,7 +932,7 @@ fn pr_words(tab: &TabModel) -> String {
             _ => "in merge queue".into(),
         },
         None => match tab.checks {
-            Some(c) if c.fail > 0 => format!("✗{} failing", c.fail),
+            Some(c) if c.fail > 0 => format!("✕ {} failing", c.fail),
             Some(c) if c.pending > 0 => "checks running".into(),
             _ => "open".into(),
         },

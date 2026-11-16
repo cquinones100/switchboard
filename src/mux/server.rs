@@ -4221,7 +4221,17 @@ impl Server {
         let dir = self.tab_path(tab);
         super::header::Header {
             name: self.tab_label(tab),
-            path: dir.map(crate::paths::tilde).unwrap_or_default(),
+            // The repository it works in, by its main clone, as tab naming
+            // last worked it out: a worktree's own path, deep under the
+            // clone, would push the state and M-a's next off the line.
+            path: self
+                .tab_names
+                .shown
+                .get(&tab)
+                .and_then(|shown| shown.repo_dir.as_deref())
+                .or(dir)
+                .map(crate::paths::tilde)
+                .unwrap_or_default(),
             branch: dir
                 .and_then(|d| self.tab_names.names.branch(d))
                 .unwrap_or_default()

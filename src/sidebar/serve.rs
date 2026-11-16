@@ -664,6 +664,15 @@ impl Server {
         if t.notes_away {
             t.notes_owner = self.notes_owner(&s.name);
         }
+        // The Notes tab's own line names the note it shows, as the app
+        // that owns the notes directory marks its pane; a tab Notes is
+        // beside says "Notes here" instead.
+        t.notes_open = (panes.len() == 1)
+            .then(|| self.panes.get(&panes[0]))
+            .flatten()
+            .and_then(|slot| slot.opts.get("@notes_open"))
+            .filter(|title| !title.is_empty())
+            .cloned();
         t.background = work.count;
         t.monitors = work.monitors.clone();
         t.round = round;

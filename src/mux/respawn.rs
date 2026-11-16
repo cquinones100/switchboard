@@ -31,7 +31,8 @@ use super::server::Server;
 /// Pane options that say what the program in it is or may do, set by that
 /// program or by whoever started it: the notes app (`@notes_pane`), the pane
 /// standing in for it in its tab (`@notes_placeholder`), Notes in easy mode
-/// taking the Cmd keys (`@notes_cmd_keys`), and a program allowed to pass
+/// taking the Cmd keys (`@notes_cmd_keys`), the note Notes shows
+/// (`@notes_open`), and a program allowed to pass
 /// kitty's graphics commands to the terminal (`@allow_passthrough`). They go
 /// when the program does: at a respawn, and when a restart brings the pane
 /// back as a shell.
@@ -39,6 +40,7 @@ pub const PROGRAM_MARKS: &[&str] = &[
     "@notes_pane",
     "@notes_placeholder",
     "@notes_cmd_keys",
+    "@notes_open",
     "@allow_passthrough",
 ];
 

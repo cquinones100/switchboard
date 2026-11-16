@@ -501,13 +501,28 @@ pub fn sidebar_lines(
             .add_modifier(Modifier::BOLD),
     };
     // The repository filter's chip, and how many of the tabs are its.
-    let repo_chip = |row: &mut Row| -> usize {
+    // In `room` columns: where they are short, "7 of 9" gives way first,
+    // then the repository's name is cut, so what follows it keeps its place.
+    let repo_chip = |row: &mut Row, room: usize| -> usize {
         let Some(repo) = view.repo else {
             return 0;
         };
-        let chip = kit::chip(&format!("{repo} ×"), Tone::Accent, false, theme);
         let mine = tabs.iter().filter(|t| !t.elsewhere).count();
-        let said = format!("{mine} of {}", tabs.len());
+        let mut said = format!("{mine} of {}", tabs.len());
+        // The chip's ends, " ×" and the column after it.
+        let around = 5;
+        if width(repo) + around + width(&said) > room {
+            said.clear();
+        }
+        // With no room even for a cut name, the chip is its × alone, which
+        // still clears the filter on a click.
+        let name_room = room.saturating_sub(around);
+        let label = if name_room < 2 {
+            "×".to_string()
+        } else {
+            format!("{} ×", text::cut(repo, name_room))
+        };
+        let chip = kit::chip(&label, Tone::Accent, false, theme);
         let used: usize = chip.iter().map(|s| width(&s.content)).sum::<usize>() + width(&said);
         row.spans.extend(chip);
         row.put(said, fg(theme.dim));
@@ -583,7 +598,14 @@ pub fn sidebar_lines(
                 reminders_at = reminders_chip(&mut pill_row);
                 pill_row.put(" ", Style::new());
             }
-            repo_chip(&mut pill_row);
+            // Room for "/ filter" at the right, a column apart, as the
+            // board has it beside the chip (43).
+            let before: usize = pill_row.spans.iter().map(|s| width(&s.content)).sum();
+            let cup = if view.awake { 3 } else { 0 };
+            repo_chip(
+                &mut pill_row,
+                cols.saturating_sub(before + cup + width("/ filter") + 2),
+            );
             if view.repo.is_none() {
                 pill_row.put(said.clone(), fg(theme.dim));
             }
@@ -612,7 +634,7 @@ pub fn sidebar_lines(
             reminders_at = reminders_chip(&mut pill_row);
             pill_row.put(" ", Style::new());
         }
-        if repo_chip(&mut pill_row) > 0 {
+        if repo_chip(&mut pill_row, usize::MAX) > 0 {
             pill_row.put("  ", Style::new());
         }
         counts(&mut pill_row, tabs, r, theme);
@@ -684,7 +706,29 @@ pub fn sidebar_lines(
         // at a glance.
         let mut heading = Row::default();
         heading.put(" ", Style::new());
-        if r.ux2 {
+        // UX 2.0's Other repos, folded: ▸ and its tabs' marks on its
+        // heading, so one that needs you still shows, its count at the
+        // right edge (board 43); its repositories by name under it.
+        let other_folded =
+            r.ux2 && group.stage == Stage::OtherRepos && view.folded.contains(&group.stage);
+        if other_folded {
+            let tone = Mark::of_badge(group.stage.color()).look().1;
+            let n = group.tabs.len().to_string();
+            let mut spans = vec![
+                Span::raw(" "),
+                Span::styled("▸ OTHER REPOS ", tone.bold(theme)),
+            ];
+            let room = cols.saturating_sub(kit::spans_width(&spans) + width(&n) + 2);
+            for t in group.tabs.iter().take(room) {
+                let state = model::badge_state(t, r);
+                spins |= kit::spins(state, true);
+                spans.push(kit::mark(Mark::of_badge(state), view.frame, theme));
+            }
+            let gap = cols.saturating_sub(kit::spans_width(&spans) + width(&n) + 1);
+            spans.push(Span::raw(" ".repeat(gap.max(1))));
+            spans.push(Span::styled(n, tone.style(theme)));
+            heading.spans = kit::fit(spans, cols, Style::new());
+        } else if r.ux2 {
             // UX 2.0: the kit's label in its stage's tone, so what needs you
             // reads yellow and what works blue, its count at the right edge.
             let tone = Mark::of_badge(group.stage.color()).look().1;
@@ -740,21 +784,32 @@ pub fn sidebar_lines(
                 }
             }
             let mut row = Row::default();
-            row.put(if r.ux2 { "" } else { " " }, Style::new());
-            row.put("▸ ", fg(theme.dim));
-            for t in &group.tabs {
-                let state = model::badge_state(t, r);
-                spins |= kit::spins(state, true);
-                row.spans
-                    .push(kit::mark(Mark::of_badge(state), view.frame, theme));
-            }
             let n = group.tabs.len();
-            let mut said = format!("  {n} {}", if n == 1 { "tab" } else { "tabs" });
-            if !names.is_empty() {
-                said.push_str(" · ");
-                said.push_str(&names.join(", "));
+            let tabs_said = format!("{n} {}", if n == 1 { "tab" } else { "tabs" });
+            if other_folded {
+                // Its marks are on the heading: under it, its repositories.
+                let said = if names.is_empty() {
+                    tabs_said
+                } else {
+                    names.join(" · ")
+                };
+                row.put("  ", Style::new()).put(said, fg(theme.faint));
+            } else {
+                row.put(if r.ux2 { "" } else { " " }, Style::new());
+                row.put("▸ ", fg(theme.dim));
+                for t in &group.tabs {
+                    let state = model::badge_state(t, r);
+                    spins |= kit::spins(state, true);
+                    row.spans
+                        .push(kit::mark(Mark::of_badge(state), view.frame, theme));
+                }
+                let mut said = format!("  {tabs_said}");
+                if !names.is_empty() {
+                    said.push_str(" · ");
+                    said.push_str(&names.join(", "));
+                }
+                row.put(said, fg(theme.dim));
             }
-            row.put(said, fg(theme.dim));
             // Its line holds the list's place as the chosen tab would: the
             // cursor on it, or the tab in front folded into it.
             let holds_here = selected.is_some_and(|s| group.tabs.iter().any(|t| t.id == s));
@@ -861,7 +916,7 @@ pub fn sidebar_lines(
                     .map(str::to_string)
                     .collect();
                 if let Some(c) = tab.checks.filter(|c| c.fail > 0) {
-                    doing.insert(0, format!("✗{} failing", c.fail));
+                    doing.insert(0, format!("✕ {} failing", c.fail));
                 }
                 if let Some(n) = tab.pr.filter(|n| !tab.name.contains(&format!("#{n}"))) {
                     doing.push(format!("#{n}"));
@@ -1101,20 +1156,59 @@ pub fn sidebar_lines(
             } else {
                 None
             };
-            // How long ago it came at the right edge, dim, the title cut
-            // so it always fits.
+            // Its kind's mark, the title, and how long ago it came at the
+            // right edge, dim (board 1), laid out as columns so the title
+            // is cut before the time column, a column short of it, whether
+            // or not this one keeps a time: the titles end in one place.
             let when = text::ago(n.time, r.now_secs());
-            let room = cols.saturating_sub(4 + if when.is_empty() { 0 } else { width(&when) + 1 });
-            let title = text::cut(&n.title, room);
-            let gap = cols.saturating_sub(4 + width(&title) + width(&when));
+            let when_cols = width(&when).max(3);
             let chosen = view.focused && view.cursor.is_some_and(|c| c.same_row(&n.owner));
-            let mut row = Row::default();
-            row.spans.push(kit::mark(Mark::Needs, 0, theme));
-            row.put(" ", Style::new()).put(title, fg(theme.text));
-            if !when.is_empty() {
-                row.put(" ".repeat(gap), Style::new())
-                    .put(when, fg(theme.dim));
+            let mark = match &n.owner {
+                Owner::Notice { source, id } => super::notices::mark_of(source, id),
+                _ => Mark::Needs,
+            };
+            let at = kit::columns(
+                &[
+                    kit::Col::Fixed {
+                        min: 1,
+                        natural: 1,
+                        cap: 1,
+                    },
+                    kit::Col::Stretch {
+                        weight: 1,
+                        min: 1,
+                        max: None,
+                    },
+                    kit::Col::Right {
+                        natural: when_cols,
+                        cap: when_cols,
+                    },
+                ],
+                cols.saturating_sub(2),
+                1,
+                &[2],
+            );
+            let mut spans = Vec::new();
+            if let Some(col) = at[0] {
+                kit::place(&mut spans, vec![kit::mark(mark, 0, theme)], col);
             }
+            if let Some(col) = at[1] {
+                kit::place(
+                    &mut spans,
+                    vec![Span::styled(n.title.clone(), fg(theme.text))],
+                    col,
+                );
+            }
+            if let Some((x, w)) = at[2].filter(|_| !when.is_empty()) {
+                // Flush right in its column.
+                let pad = w.saturating_sub(width(&when));
+                kit::place(
+                    &mut spans,
+                    vec![Span::styled(when, fg(theme.dim))],
+                    (x + pad, w - pad),
+                );
+            }
+            let row = Row { spans };
             head.push(Line {
                 spans: kit::row(
                     row.fit(cols.saturating_sub(1), None).spans,
@@ -1665,6 +1759,124 @@ mod tests {
         assert_ne!(old.owners[1], Some(Owner::BuildRow));
     }
 
+    // Board 43: filtered to a repository, the top line keeps "/ filter"
+    // beside the chip, the count giving way first, and Other repos folded
+    // has ▸ and its tabs' marks on its heading, its repositories under it.
+    #[test]
+    fn with_ux2_the_filtered_sidebar_keeps_its_hint_and_folds_other_repos_onto_its_heading() {
+        let mut bench = tab(2, "benchmark harness", TabState::Idle);
+        bench.elsewhere = true;
+        bench.repo_dir = Some("/code/sb-bench".into());
+        let mut oncall = tab(3, "oncall watch", TabState::Waiting);
+        oncall.elsewhere = true;
+        oncall.repo_dir = Some("/code/oncall-tools".into());
+        let tabs = vec![tab(1, "planning", TabState::Working), bench, oncall];
+        let r = Rules {
+            ux2: true,
+            ..rules()
+        };
+        let folded: std::collections::BTreeSet<Stage> = [Stage::OtherRepos].into();
+        let draw = |buttons: Option<&Buttons>, reminders: usize| {
+            texts(&sidebar_lines(
+                &tabs,
+                None,
+                &[],
+                &[],
+                "s",
+                34,
+                30,
+                &View {
+                    repo: Some("switchboard"),
+                    folded: &folded,
+                    buttons,
+                    reminders,
+                    ..view(1)
+                },
+                &r,
+                &Theme::DARK,
+            ))
+        };
+        let text = draw(None, 0);
+        assert!(text[0].contains("switchboard ×"), "{:?}", text[0]);
+        assert!(text[0].contains("1 of 3"), "{:?}", text[0]);
+        assert!(text[0].ends_with("/ filter"), "{:?}", text[0]);
+        let heading = text.iter().position(|l| l.contains("OTHER REPOS")).unwrap();
+        assert!(
+            text[heading].starts_with(" ▸ OTHER REPOS ●○"),
+            "{:?}",
+            text[heading]
+        );
+        assert!(text[heading].ends_with(" 2"), "{:?}", text[heading]);
+        assert_eq!(text[heading + 1], "   oncall-tools · sb-bench");
+        // With the workspace's buttons first, the count gives way, then the
+        // name is cut.
+        let b = Buttons {
+            trail: Some((None, None)),
+            mission_open: false,
+            needs: 1,
+        };
+        let text = draw(Some(&b), 0);
+        assert!(text[0].contains("swi… ×"), "{:?}", text[0]);
+        assert!(!text[0].contains("of 3"), "{:?}", text[0]);
+        assert!(text[0].ends_with("/ filter"), "{:?}", text[0]);
+        // With the reminders' chip too, the chip is its × alone, which
+        // still clears the filter.
+        let text = draw(Some(&b), 1);
+        assert!(!text[0].contains("swi"), "{:?}", text[0]);
+        assert!(text[0].ends_with("×"), "{:?}", text[0]);
+    }
+
+    // Board 1: each notification wears its kind's mark, and a failing
+    // count the kit's ✕.
+    #[test]
+    fn with_ux2_notifications_wear_their_kinds_marks_and_failing_counts_the_kits() {
+        let notice = |source: &str, id: &str, title: &str| Notice {
+            owner: Owner::Notice {
+                source: source.into(),
+                id: id.into(),
+            },
+            title: title.into(),
+            detail: String::new(),
+            time: None,
+        };
+        let notices = [
+            notice("meeting", "m", "Design review → 3:00"),
+            notice("prs", "merged:x", "PR 212 merged"),
+            notice("ci", "c", "main is failing"),
+            notice("new-notes", "n", "Standup note written"),
+        ];
+        let mut red = tab(1, "full titles", TabState::Waiting);
+        red.checks = Some(Checks {
+            fail: 2,
+            ..Checks::default()
+        });
+        let r = Rules {
+            ux2: true,
+            ..rules()
+        };
+        let text = texts(&sidebar_lines(
+            std::slice::from_ref(&red),
+            None,
+            &notices,
+            &[],
+            "s",
+            34,
+            20,
+            &view(1),
+            &r,
+            &Theme::DARK,
+        ));
+        assert_eq!(text[3], " ◷ Design review → 3:00");
+        assert_eq!(text[4], " ✓ PR 212 merged");
+        assert_eq!(text[5], " ✕ main is failing");
+        assert_eq!(text[6], " ✎ Standup note written");
+        assert!(
+            text.iter()
+                .any(|l| l.ends_with("    ✕ 2 failing · waiting on you")),
+            "{text:?}"
+        );
+    }
+
     #[test]
     fn with_ux2_the_top_line_starts_with_back_forward_and_mission_control() {
         let tabs = vec![
@@ -1799,14 +2011,15 @@ mod tests {
             out.lines[2].spans[1].style.fg,
             Some(crate::mux::compose::colors::ACCENT)
         );
-        // How long ago it came, dim at the right edge.
-        assert_eq!(text[3], format!(" ● 3 new on Slack{}12m", " ".repeat(19)));
+        // Its kind's mark, and how long ago it came, dim at the right edge.
+        assert_eq!(text[3], format!(" @ 3 new on Slack{}12m", " ".repeat(19)));
         assert_eq!(out.lines[3].spans.last().unwrap().content, " ");
         let when = &out.lines[3].spans[out.lines[3].spans.len() - 2];
         assert_eq!(when.content, "12m");
         assert_eq!(when.style.fg, Some(Theme::DARK.dim));
         assert_eq!(out.owners[3], Some(notice.owner.clone()));
-        // A long title is cut so the time still fits; none kept, none shown.
+        // A long title is cut before the time column, a column short of
+        // it, whether or not it keeps a time; none kept, none shown.
         let long = |time| Notice {
             title: "Landed the stable note IDs and the claims by them".into(),
             time,
@@ -1829,9 +2042,9 @@ mod tests {
         };
         assert_eq!(
             at(&long(Some(rules().now_secs() - 3600))),
-            " ● Landed the stable note IDs and t… 1h"
+            " @ Landed the stable note IDs and …  1h"
         );
-        assert_eq!(at(&long(None)), " ● Landed the stable note IDs and the …");
+        assert_eq!(at(&long(None)), " @ Landed the stable note IDs and …");
         assert_eq!(text[4], "");
         assert!(text[0].ends_with("/ filter"), "{:?}", text[0]);
         // A ☕ after the count while the computer is held awake, the

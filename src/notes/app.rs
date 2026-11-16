@@ -648,6 +648,9 @@ pub struct App {
     squash_paths: Vec<PathBuf>,
     squash_cancelled: bool,
     tx: Sender<Msg>,
+    /// The title last named on the pane (`@notes_open`), so it is said
+    /// again only when it changes.
+    told: Option<String>,
     /// What the message line says while a link opens, which stays until
     /// the browser comes up (`Msg::Opened`).
     opening: Option<String>,
@@ -750,6 +753,7 @@ impl App {
             editor,
             open: None,
             layers: Vec::new(),
+            told: None,
             prompt: None,
             message: None,
             leader: false,
@@ -985,6 +989,21 @@ impl App {
             .is_some_and(|id| self.next_items.contains(&note_item_key(id, item)))
     }
 
+    /// Tells the workspace which note is open (`name_open_note`), from the
+    /// app that owns the notes directory in a pane of the workspace only.
+    fn tell_open(&mut self) {
+        let title = self.open.as_ref().map(|o| o.title.clone());
+        self.tell_title(title);
+    }
+
+    /// Names `title` on the pane when it isn't the one named there last.
+    fn tell_title(&mut self, title: Option<String>) {
+        if self.opts.server && self.locked_by.is_none() && self.told != title {
+            name_open_note(title.as_deref());
+            self.told = title;
+        }
+    }
+
     fn modified(&self) -> bool {
         self.open
             .as_ref()
@@ -1061,6 +1080,7 @@ impl App {
         if self.modified() {
             self.save_due = Some(Instant::now() + AUTOSAVE);
         }
+        self.tell_open();
         let rel = self.store.relative(path);
         self.store.opened(&rel);
         self.store.opened_beside(&rel);
@@ -1259,6 +1279,11 @@ impl App {
             o.base = Some(disk.clone());
             o.saved = Text::from_file(&disk_body);
         }
+        // A change from outside names the note on its pane by the title it
+        // now has, whatever it was named there last; the open note's own
+        // title stays the one it was saved under, which a save compares
+        // with to rename its file.
+        self.tell_title(Some(store::title_of(&new)));
         let after = self.editor.doc.text.lines();
         self.editor.folds.follow(&before, &after);
         let mut rows = sync::changed_rows(&before, &after);
@@ -1320,6 +1345,7 @@ impl App {
         if let Some(o) = &mut self.open {
             o.title = now;
         }
+        self.tell_open();
         self.store
             .moved_outside(&from_rel, &to_rel, retitled.as_ref());
         // The images pasted since the last save, named only in the editor.
@@ -1424,6 +1450,9 @@ impl App {
         if let Some(o) = &mut self.open {
             o.title = now.clone();
         }
+        // Said whatever it was, since a change from outside may have named
+        // another title on the pane than the one it was saved under.
+        self.tell_open();
         if now != was {
             let retitled = Retitled {
                 path: self.store.relative(&renamed),
@@ -1544,8 +1573,9 @@ impl App {
         };
         self.open = None;
         self.editor.load(Text::default());
-        if let Some(next) = next {
-            self.open_note(&next, true, false);
+        match next {
+            Some(next) => self.open_note(&next, true, false),
+            None => self.tell_open(),
         }
     }
 
@@ -4415,6 +4445,20 @@ pub(crate) fn mark_pane(option: &str, on: bool) {
     let _ = crate::mux::socket::ask(&args);
 }
 
+/// Names on the pane Notes runs in the note it shows (`@notes_open`, its
+/// title), or lets the name go with none, so the sidebar's line for the
+/// Notes tab says which note is open from what the server holds.
+pub(crate) fn name_open_note(title: Option<&str>) {
+    let Ok(pane) = std::env::var("SWITCHBOARD_PANE") else {
+        return;
+    };
+    let args: Vec<&str> = match title {
+        Some(title) => vec!["set", "-t", &pane, "@notes_open", title],
+        None => vec!["set", "-t", &pane, "-u", "@notes_open"],
+    };
+    let _ = crate::mux::socket::ask(&args);
+}
+
 /// Runs the app on this terminal until it is quit.
 pub fn run(store: Store) -> ExitCode {
     let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
@@ -4547,6 +4591,7 @@ pub fn run(store: Store) -> ExitCode {
     }
     if app.locked_by.is_none() && opts.server {
         mark_pane("@allow_passthrough", false);
+        name_open_note(None);
         if opts.easy {
             mark_pane("@notes_cmd_keys", false);
         }

@@ -30,6 +30,7 @@ use crate::mission::views::ViewId;
 use crate::mux::TabId;
 use crate::mux::server::ClientId;
 use crate::ui::Theme;
+use crate::ui::kit::Mark;
 
 /// The tab option that marks a session's Notifications window.
 pub const MARK: &str = "@notices_window";
@@ -98,6 +99,26 @@ pub fn as_its_view_has_it(source: &str, item: &Item) -> Item {
         own.data = item.data.get("event").cloned().unwrap_or_default();
     }
     own
+}
+
+/// A kind's mark in the sidebar, by its source and its first
+/// notification's id (board 1): ◷ for the meeting about to start and what
+/// changed on the calendar, @ for what someone sent you on Slack or Linear,
+/// ✎ for a note written for you, ✓ for a landing and a PR merged or
+/// approved, ✕ for checks that failed, a failing default branch and a
+/// routine's run that failed or was skipped, and ◇ for what autopilot or a
+/// suggestion has to say.
+pub fn mark_of(source: &str, id: &str) -> Mark {
+    match source {
+        "meeting" | "calendar" => Mark::Reminder,
+        "slack" | "inbox" => Mark::Mention,
+        "new-notes" => Mark::Note,
+        "autolanded" | "landed" => Mark::Passed,
+        "prs" if id.starts_with("failing:") => Mark::Failed,
+        "prs" => Mark::Passed,
+        "ci" | "routines" => Mark::Failed,
+        _ => Mark::Comment,
+    }
 }
 
 /// A source's place in `ORDER`.
@@ -631,5 +652,20 @@ mod tests {
                 .add_modifier
                 .contains(Modifier::REVERSED)
         );
+    }
+
+    #[test]
+    fn each_kind_wears_its_own_mark() {
+        assert_eq!(mark_of("meeting", "e"), Mark::Reminder);
+        assert_eq!(mark_of("calendar", "c"), Mark::Reminder);
+        assert_eq!(mark_of("slack", "s"), Mark::Mention);
+        assert_eq!(mark_of("inbox", "i"), Mark::Mention);
+        assert_eq!(mark_of("new-notes", "n"), Mark::Note);
+        // A PR's news by what happened to it.
+        assert_eq!(mark_of("prs", "merged:x"), Mark::Passed);
+        assert_eq!(mark_of("prs", "failing:x"), Mark::Failed);
+        assert_eq!(mark_of("ci", "c"), Mark::Failed);
+        assert_eq!(mark_of("autolanded", "a"), Mark::Passed);
+        assert_eq!(mark_of("habits", "h"), Mark::Comment);
     }
 }
