@@ -121,7 +121,9 @@ impl App {
     /// as every footer: those of the list or of the diff, whichever has
     /// the focus, then M-c back to Claude in the workspace.
     pub(super) fn footer_keys(&self) -> Vec<(&'static str, &'static str)> {
-        let mut keys = if self.focus == Focus::List {
+        let mut keys = if self.filtering {
+            vec![("↑↓", "move"), ("↵", "keep"), ("esc", "clear")]
+        } else if self.focus == Focus::List {
             vec![("↑↓", "move"), ("↵", "read"), ("esc", "close")]
         } else {
             vec![("↑↓", "move"), ("←→", "sides"), ("esc", "list")]
@@ -262,9 +264,35 @@ impl App {
         );
     }
 
+    /// The path filter's line, pinned at the list's top: what is typed and
+    /// how many files it leaves of how many.
+    fn draw_filter_line(&self, buf: &mut Buffer, w: u16, theme: &crate::ui::Theme) {
+        let (left, of) = self.filtered_count();
+        let count = format!("{left} of {of} files");
+        if self.opts.ux2 {
+            let spans = kit::input_beside(
+                &self.path_filter,
+                "type to filter paths",
+                w as usize,
+                vec![Span::styled(count, Tone::Dim.style(theme))],
+                theme,
+                false,
+            );
+            put_line(buf, 0, 0, w, &Spans::from(spans));
+        } else {
+            let cursor = if self.filtering { "▏" } else { "" };
+            let text = format!(" /{}{cursor}", self.path_filter);
+            let room = (w as usize).saturating_sub(width(&count) + 1);
+            Self::put(buf, 0, 0, room as u16, &text, Style::new());
+            let x = w.saturating_sub(width(&count) as u16);
+            Self::put(buf, x, 0, w - x, &count, self.faint());
+        }
+    }
+
     fn draw_list(&mut self, buf: &mut Buffer) {
         let w = self.list_width.min(self.cols.saturating_sub(10));
-        let h = self.diff_area().height as usize;
+        let h = self.list_height();
+        let pinned = self.list_pinned();
         let rows = self.list_rows();
         // The cursor's file in sight, with its heading where there's room,
         // once it has moved (or the story has moved its row): the wheel
@@ -299,7 +327,7 @@ impl App {
         if self.opts.ux2 {
             // The list on the panel, a rule between it and the diff.
             let panel = Surface::Panel.color(&theme);
-            for y in 0..h as u16 {
+            for y in 0..self.diff_area().height {
                 for x in 0..w {
                     buf[(x, y)].set_bg(panel);
                 }
@@ -313,13 +341,16 @@ impl App {
         if bar {
             kit::draw_scrollbar(
                 buf,
-                (full - 1, 0, h as u16),
+                (full - 1, pinned, h as u16),
                 (rows.len(), self.list_top, h),
                 &theme,
             );
         }
+        if pinned > 0 {
+            self.draw_filter_line(buf, w, &theme);
+        }
         for (y, row) in rows.iter().skip(self.list_top).take(h).enumerate() {
-            let y = y as u16;
+            let y = y as u16 + pinned;
             match row {
                 ListRow::Header(section) if self.opts.ux2 => {
                     // What is listed apart under "Not committed yet" counted
@@ -825,7 +856,12 @@ impl App {
         let area = self.diff_area();
         let Some(entry) = self.current().cloned() else {
             if let Some(change) = &self.change {
-                let text = if change.working() {
+                let text = if !self.path_filter.trim().is_empty() {
+                    format!(
+                        "No file's path matches “{}”. Backspace or esc widens it.",
+                        self.path_filter.trim()
+                    )
+                } else if change.working() {
                     "No changes in the working tree.".to_string()
                 } else if change.to_work_tree() {
                     format!("No changes between {} and the working tree.", change.base)

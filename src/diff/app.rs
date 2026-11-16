@@ -465,6 +465,10 @@ pub const KEYS: &[(&str, &[KeyRow])] = &[
             key_row("J K", "scroll the chosen file down, up from the file list"),
             key_row("E", "widen the file list, or narrow it again"),
             key_row(
+                "/",
+                "filter the file list by path (!word leaves it out); ↵ keeps it, esc clears it",
+            ),
+            key_row(
                 "c",
                 "the branch's commits, one at a time; c again goes back",
             ),
@@ -560,6 +564,10 @@ pub struct App {
     order: Vec<usize>,
     /// The list's cursor (an index into `order`), the file it shows.
     at: usize,
+    /// What `/` filters the list's paths by (`path_matches`), kept while
+    /// the diff is open, and whether it is being typed.
+    path_filter: String,
+    filtering: bool,
     /// The list's first row on the screen, and its width.
     list_top: usize,
     list_width: u16,
@@ -657,6 +665,20 @@ pub struct App {
     drawing: bool,
 }
 
+/// Whether `path` is left by the path filter `filter`: every word in it,
+/// case aside, a word starting with `!` one it must not hold.
+fn path_matches(filter: &str, path: &str) -> bool {
+    let path = path.to_lowercase();
+    filter
+        .to_lowercase()
+        .split_whitespace()
+        .all(|word| match word.strip_prefix('!') {
+            Some("") => true,
+            Some(not) => !path.contains(not),
+            None => path.contains(word),
+        })
+}
+
 /// `fg` mixed over `bg`, `amount` of it.
 fn blend(fg: u32, bg: u32, amount: f64) -> Color {
     let channel = |c: u32, shift: u32| ((c >> shift) & 0xff) as f64;
@@ -682,6 +704,8 @@ impl App {
             reading: Reading::default(),
             order: Vec::new(),
             at: 0,
+            path_filter: String::new(),
+            filtering: false,
             list_top: 0,
             list_width: LIST_WIDTH,
             list_followed: None,
@@ -1076,7 +1100,25 @@ impl App {
         self.order.get(self.at).and_then(|&i| self.entry(i))
     }
 
-    /// The files in the order known now, the cursor kept on its file.
+    /// The files the list may show: the page's, else all of them.
+    fn listable(&self) -> Vec<usize> {
+        let entries = self.entries();
+        let page: Option<HashSet<&str>> = self.page.and_then(|p| {
+            self.story
+                .as_ref()
+                .and_then(|s| s.chapters.get(p - 1))
+                .map(|c| c.touches.iter().map(String::as_str).collect())
+        });
+        (0..entries.len())
+            .filter(|&i| {
+                page.as_ref()
+                    .is_none_or(|p| p.contains(entries[i].path.as_str()))
+            })
+            .collect()
+    }
+
+    /// The files in the order known now, those the path filter leaves,
+    /// the cursor kept on its file.
     fn sort(&mut self) {
         let keep = self.current().map(Entry::key);
         let view = self
@@ -1084,20 +1126,14 @@ impl App {
             .get(self.view)
             .and_then(|&i| self.entry(i))
             .map(Entry::key);
+        let mut order: Vec<usize> = self
+            .listable()
+            .into_iter()
+            .filter(|&i| path_matches(&self.path_filter, &self.entries()[i].path))
+            .collect();
         let entries = self.entries().to_vec();
         let story = self.story.as_ref();
         let smart = &self.smart;
-        let page: Option<HashSet<&str>> = self.page.and_then(|p| {
-            story
-                .and_then(|s| s.chapters.get(p - 1))
-                .map(|c| c.touches.iter().map(String::as_str).collect())
-        });
-        let mut order: Vec<usize> = (0..entries.len())
-            .filter(|&i| {
-                page.as_ref()
-                    .is_none_or(|p| p.contains(entries[i].path.as_str()))
-            })
-            .collect();
         let by_order = self.opts.order;
         let apart = self.not_committed_apart();
         order.sort_by(|&a, &b| {
@@ -1948,12 +1984,15 @@ impl App {
             self.ask_box = None;
             self.pending = None;
             self.message = None;
+            self.filtering = false;
             return Act::Redraw;
         }
         if ctrl && key.code == KeyCode::Char('n') && self.ask_box.is_none() {
             return Act::Same;
         }
         if let Some(dir) = alt_arrow(&key) {
+            // Moving between windows ends typing the path filter, kept.
+            self.filtering = false;
             // With pane_arrows off the workspace passes them on unasked, and
             // they do nothing here, as nvim/diff.lua fed them back.
             if self.opts.pane_arrows {
@@ -2000,6 +2039,9 @@ impl App {
         if self.answer.is_some() {
             return self.answer_key(key);
         }
+        if self.filtering {
+            return self.filter_key(key);
+        }
         let before = self.focus;
         let act = self.normal_key(key);
         if self.focus != before {
@@ -2036,6 +2078,7 @@ impl App {
                 return Act::Same;
             }
             KeyCode::Char('E') => self.widen(),
+            KeyCode::Char('/') if list && !ctrl => self.filtering = true,
             KeyCode::Char('R') if !ctrl => self.refresh(),
             KeyCode::Char('c') if !ctrl && self.in_history => self.wants = Some(Wants::Leave),
             KeyCode::Char('c') if !ctrl => self.open_history(),
@@ -2375,10 +2418,11 @@ impl App {
             let on = x == bx && y >= by && ((y - by) as usize) < body;
             return on.then(|| (BarDrag::Answer, (y - by) as usize));
         }
-        let h = self.diff_area().height as usize;
+        let h = self.list_height();
+        let pinned = self.list_pinned();
         let (rows, w) = self.list_extent();
-        if w > 0 && x + 1 == w && rows > h {
-            return Some((BarDrag::List, y as usize));
+        if w > 0 && x + 1 == w && y >= pinned && rows > h {
+            return Some((BarDrag::List, (y - pinned) as usize));
         }
         let area = self.diff_area();
         let body = area.y + self.head_height() as u16;
@@ -2412,7 +2456,7 @@ impl App {
     fn scroll_bar_to(&mut self, bar: BarDrag, row: usize, drag: Option<kit::Grab>) {
         match bar {
             BarDrag::List => {
-                let h = self.diff_area().height as usize;
+                let h = self.list_height();
                 let (rows, _) = self.list_extent();
                 self.list_top = if let Some(grab) = drag {
                     kit::scroll_drag(rows, h, h, row, grab)
@@ -2652,6 +2696,70 @@ impl App {
         self.lines.clear();
     }
 
+    // ── The path filter ─────────────────────────────────────────────────────
+
+    /// A key while the path filter is typed: text narrows the list, the
+    /// arrows move in it, Enter keeps the filter and gives the keys back to
+    /// the list, Esc clears it.
+    fn filter_key(&mut self, key: KeyEvent) -> Act {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc => {
+                self.filtering = false;
+                self.path_filter.clear();
+                self.refilter();
+            }
+            KeyCode::Enter => self.filtering = false,
+            KeyCode::Down => self.move_list(1),
+            KeyCode::Up => self.move_list(-1),
+            KeyCode::Backspace => {
+                self.path_filter.pop();
+                self.refilter();
+            }
+            KeyCode::Char('u') if ctrl => {
+                self.path_filter.clear();
+                self.refilter();
+            }
+            KeyCode::Char(c) if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) => {
+                self.path_filter.push(c);
+                self.refilter();
+            }
+            _ => return Act::Same,
+        }
+        Act::Redraw
+    }
+
+    /// The list narrowed to what the filter leaves, the cursor on its first
+    /// file and that file shown.
+    fn refilter(&mut self) {
+        self.sort();
+        self.list_top = 0;
+        self.list_followed = None;
+        self.moved = true;
+        if self.order.is_empty() {
+            self.at = 0;
+            self.view = 0;
+        } else {
+            self.show_at(0);
+        }
+    }
+
+    /// How many files the filter leaves of how many the list may show.
+    fn filtered_count(&self) -> (usize, usize) {
+        (self.order.len(), self.listable().len())
+    }
+
+    /// The rows over the list's scrolling ones: the filter's line, while it
+    /// is typed or kept, pinned there so it shows wherever the list is.
+    pub(super) fn list_pinned(&self) -> u16 {
+        u16::from(self.filtering || !self.path_filter.is_empty())
+    }
+
+    /// How many of the list's rows show under what is pinned.
+    pub(super) fn list_height(&self) -> usize {
+        (self.diff_area().height - self.list_pinned().min(self.diff_area().height)) as usize
+    }
+
     // ── The story's chapters and pages ──────────────────────────────────────
 
     /// Why there is no story to move through, said.
@@ -2879,10 +2987,22 @@ impl App {
         if self.story.is_none() {
             return self.no_story();
         }
+        if self.order.is_empty() {
+            return self.say("The filter leaves no files.\n/ then esc clears it.");
+        }
         let starts = self.starts();
-        if let Some(to) = story::jump(&starts, self.at + 1, step) {
-            self.moved = true;
-            self.show_at(to - 1);
+        match story::jump(&starts, self.at + 1, step) {
+            Some(to) => {
+                self.moved = true;
+                self.show_at(to - 1);
+            }
+            None if !self.path_filter.trim().is_empty() => {
+                let way = if step > 0 { "after" } else { "before" };
+                self.say(format!(
+                    "No chapter {way} this one has a file the filter leaves.\n/ then esc clears it."
+                ));
+            }
+            None => {}
         }
     }
 
@@ -3238,6 +3358,16 @@ impl App {
         if let Some(h) = &mut self.history {
             let act = h.app.paste(text);
             return self.after_history(act);
+        }
+        if self.ask_box.is_none() && self.filtering {
+            self.path_filter.extend(
+                text.chars()
+                    .map(|c| if c.is_whitespace() { ' ' } else { c })
+                    .filter(|c| !c.is_control()),
+            );
+            self.refilter();
+            self.read_view();
+            return Act::Redraw;
         }
         let Some(b) = &mut self.ask_box else {
             return Act::Same;
@@ -3624,6 +3754,11 @@ impl App {
         }
         // A click closes a message and goes on to do what it does.
         let closed = self.message.take().is_some();
+        // A click anywhere but the filter's line ends typing in it, the
+        // filter kept, so a button's keys or a click in the diff act as
+        // they would; one on that line types into it again.
+        let pinned = self.list_pinned();
+        self.filtering = false;
         if self.failed.is_some() || self.nothing.is_some() {
             return Act::Quit;
         }
@@ -3685,8 +3820,12 @@ impl App {
         }
         if x < self.list_width {
             self.focus = Focus::List;
+            if y < pinned {
+                self.filtering = true;
+                return Act::Redraw;
+            }
             let rows = self.list_rows();
-            let at = self.list_top + y as usize;
+            let at = self.list_top + (y - pinned) as usize;
             let file = rows.get(at..).and_then(|rest| {
                 rest.iter().find_map(|r| match r {
                     ListRow::File(k) => Some(*k),
@@ -5383,6 +5522,236 @@ mod tests {
                 .collect(),
             t => t.chars().map(plain).collect(),
         }
+    }
+
+    /// A change of five files, each one line changed: two under `src/`,
+    /// a test, a README and a doc.
+    fn five() -> App {
+        let (tx, _rx) = channel();
+        let mut app = App::new(opts(), 100, 16, tx);
+        let paths = [
+            "src/a.rs",
+            "src/b.rs",
+            "tests/a.rs",
+            "README.md",
+            "docs/guide.md",
+        ];
+        let mut diff = String::new();
+        for p in paths {
+            diff.push_str(&format!(
+                "diff --git a/{p} b/{p}\n--- a/{p}\n+++ b/{p}\n@@ -1 +1 @@\n-old\n+new\n"
+            ));
+            app.give_text("L", p, Some("old\n".into()));
+            app.give_text("R", p, Some("new\n".into()));
+        }
+        app.loaded(Change {
+            top: PathBuf::from("/repo"),
+            base: "origin/main".into(),
+            left: "L".into(),
+            right: "R".into(),
+            entries: paths.iter().map(|p| entry(p, 'M', 1, 1)).collect(),
+            diff,
+            staged: None,
+            raw_commits: String::new(),
+            uncommitted: None,
+        });
+        app
+    }
+
+    fn listed(app: &App) -> Vec<String> {
+        app.order
+            .iter()
+            .map(|&i| app.entries()[i].path.clone())
+            .collect()
+    }
+
+    fn special(app: &mut App, code: KeyCode) {
+        app.key(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn a_path_filter_matches_every_word_and_leaves_out_a_bang_word() {
+        assert!(path_matches("", "src/a.rs"));
+        assert!(path_matches("SRC a.rs", "src/a.rs"));
+        assert!(!path_matches("src b.rs", "src/a.rs"));
+        assert!(!path_matches("!tests/", "tests/a.rs"));
+        assert!(path_matches("!tests/ !", "src/a.rs"));
+    }
+
+    #[test]
+    fn slash_filters_the_file_list_by_path_and_esc_clears_it() {
+        let mut app = five();
+        press(&mut app, "/src");
+        assert_eq!(listed(&app), ["src/a.rs", "src/b.rs"]);
+        assert_eq!(app.at, 0, "the cursor on the first file left");
+        let shown = screen(&mut app);
+        line_with(&shown, "2 of 5 files");
+        // Enter keeps it, and j moves among the files left.
+        special(&mut app, KeyCode::Enter);
+        press(&mut app, "jj");
+        assert_eq!(listed(&app).len(), 2);
+        assert_eq!(app.current().unwrap().path, "src/b.rs");
+        // / reopens it, Esc clears it.
+        press(&mut app, "/");
+        special(&mut app, KeyCode::Esc);
+        assert_eq!(listed(&app).len(), 5);
+        assert!(!screen(&mut app).iter().any(|l| l.contains("of 5 files")));
+        // Esc again, in the list, closes the diff.
+        assert_eq!(
+            app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            Act::Quit
+        );
+    }
+
+    #[test]
+    fn a_bang_word_leaves_paths_out_and_nothing_left_says_so() {
+        let mut app = five();
+        press(&mut app, "/!tests/");
+        assert!(!listed(&app).contains(&"tests/a.rs".to_string()));
+        assert_eq!(listed(&app).len(), 4);
+        special(&mut app, KeyCode::Esc);
+        press(&mut app, "/nothing");
+        assert!(listed(&app).is_empty());
+        line_with(&screen(&mut app), "No file's path matches");
+    }
+
+    #[test]
+    fn the_filter_line_stays_in_sight_down_a_long_list() {
+        let mut app = five();
+        app.resize(100, 6);
+        press(&mut app, "GG");
+        press(&mut app, "/");
+        let shown = screen(&mut app);
+        assert!(shown[0].contains("5 of 5 files"), "{shown:?}");
+        press(&mut app, "s");
+        assert!(screen(&mut app)[0].contains("of 5 files"));
+    }
+
+    #[test]
+    fn the_palettes_reset_ends_typing_the_filter() {
+        let mut app = five();
+        press(&mut app, "/src");
+        app.key(KeyEvent::new(KeyCode::Char('\\'), KeyModifiers::CONTROL));
+        assert!(!app.filtering);
+        assert_eq!(app.path_filter, "src", "the filter kept");
+        press(&mut app, "j");
+        assert_eq!(app.current().unwrap().path, "src/b.rs");
+    }
+
+    #[test]
+    fn a_click_on_a_button_ends_typing_the_filter() {
+        let mut app = five();
+        app.opts.easy = true;
+        app.resize(220, 16);
+        press(&mut app, "/src");
+        screen(&mut app);
+        let close = BUTTONS.iter().position(|(_, k)| *k == "q").unwrap();
+        let (_, at) = *app
+            .buttons
+            .iter()
+            .find(|(b, _)| *b == Button::Bar(close))
+            .unwrap();
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: at.x + 1,
+            row: at.y,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert_eq!(app.mouse(click), Act::Quit);
+        assert_eq!(app.path_filter, "src");
+    }
+
+    #[test]
+    fn every_key_is_safe_while_the_filter_leaves_no_files() {
+        for (_, rows) in KEYS {
+            for row in *rows {
+                for token in row.keys.split(' ') {
+                    let mut app = five();
+                    let paths = [
+                        "src/a.rs",
+                        "src/b.rs",
+                        "tests/a.rs",
+                        "README.md",
+                        "docs/guide.md",
+                    ];
+                    app.told(story::Story {
+                        chapters: (0..2)
+                            .map(|n| story::Chapter {
+                                title: format!("Part {n}"),
+                                why: "Why.".into(),
+                                files: paths[n * 2..n * 2 + 2]
+                                    .iter()
+                                    .map(|p| p.to_string())
+                                    .collect(),
+                                touches: paths[n * 2..n * 2 + 2]
+                                    .iter()
+                                    .map(|p| p.to_string())
+                                    .collect(),
+                            })
+                            .collect(),
+                        place: HashMap::new(),
+                        chapter: paths
+                            .iter()
+                            .enumerate()
+                            .map(|(i, p)| (p.to_string(), (i / 2).min(1) + 1))
+                            .collect(),
+                        hunks: HashMap::new(),
+                        missed: None,
+                    });
+                    press(&mut app, "/nothing");
+                    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                    for start in ["", "\t"] {
+                        if start == "\t" {
+                            app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+                        }
+                        for event in events(token) {
+                            app.key(event);
+                        }
+                        for keys in ["[c", "]c", "[p", "]p", "jkGJK"] {
+                            press(&mut app, keys);
+                        }
+                        screen(&mut app);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_click_on_the_empty_filter_line_keeps_typing() {
+        let mut app = five();
+        press(&mut app, "/");
+        screen(&mut app);
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 3,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        app.mouse(click);
+        assert!(app.filtering);
+        press(&mut app, "q");
+        assert_eq!(app.path_filter, "q");
+    }
+
+    #[test]
+    fn an_alt_arrow_to_the_diff_ends_typing_the_filter() {
+        let mut app = five();
+        press(&mut app, "/src");
+        app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::ALT));
+        assert!(!app.filtering);
+        assert_ne!(app.focus, Focus::List);
+        assert_eq!(app.path_filter, "src");
+    }
+
+    #[test]
+    fn the_filter_stays_through_the_change_read_again() {
+        let mut app = five();
+        press(&mut app, "/src");
+        special(&mut app, KeyCode::Enter);
+        let change = app.change.clone().unwrap();
+        app.refreshed(change);
+        assert_eq!(listed(&app), ["src/a.rs", "src/b.rs"]);
     }
 
     #[test]
