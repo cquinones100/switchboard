@@ -407,6 +407,13 @@
     "default": true
   },
   {
+    "key": "notice_shows_in_view",
+    "category": "Mission control",
+    "label": "Notifications show in their view",
+    "description": "A notification whose kind a view lists (Slack, Inbox, Calendar, PRs, CI, Routines) leads its menu with Show it in the <view> view, which a click or Enter takes: mission control opens on that view with the cursor on its item. Off, its menu starts with its view's own first choice, such as Open it in Slack",
+    "default": true
+  },
+  {
     "key": "boxes_near_click",
     "category": "Mission control",
     "label": "Open boxes by the click",

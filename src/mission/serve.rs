@@ -448,6 +448,38 @@ impl Server {
         self.mission_prepare(client);
     }
 
+    /// Mission control on `view` with the cursor on its item `id`, as a
+    /// notification's "Show it in" takes it there: a Slack message's
+    /// thread row, which stands for it (`slack_board::members`), its
+    /// thread beside it. The view's first row while it no longer lists it.
+    fn show_in_view(&mut self, client: ClientId, view: &ViewId, id: &str) {
+        // The Slack board opens on its first section before the cursor
+        // reaches the item, which never showed it: what it had viewed
+        // before stands, and only the item's section counts as shown.
+        let viewed_before = self
+            .mission_mut(client)
+            .and_then(|m| m.slack_viewed.clone());
+        self.open_mission(client, Opening::View(view.slug()));
+        let Some(m) = self.mission_mut(client) else {
+            return;
+        };
+        m.slack_viewed = viewed_before;
+        let stands_for = |item: &Item| {
+            item.id == id
+                || super::slack_board::members(item)
+                    .iter()
+                    .any(|member| member.id == id)
+        };
+        let at = m
+            .current()
+            .filter(|v| v.id == *view)
+            .and_then(|v| v.data.items.iter().position(stands_for));
+        if let Some(at) = at {
+            m.cursor = at as isize;
+        }
+        self.mission_prepare(client);
+    }
+
     /// Closes mission control on a client, and whatever is open over it.
     pub fn mission_close(&mut self, client: ClientId) {
         let Some(c) = self.clients.get(&client) else {
@@ -3641,6 +3673,7 @@ impl Server {
                 .map(|(_, c)| c.clone())
                 .unwrap_or_default()
         };
+        let shows = |v: &ViewId| settings::is_on("notice_shows_in_view") && v.shows();
         let ctx = Ctx {
             tabs: &tabs,
             repos_of: &repos_of,
@@ -3649,6 +3682,7 @@ impl Server {
             to_tab: settings::is_on("notice_to_tab"),
             to_tab_submits: settings::is_on("send_to_tab_submits"),
             slack_reply: settings::is_on("slack_reply"),
+            shows: &shows,
         };
         if *view == ViewId::Settings {
             return self.setting_choices(item);
@@ -4185,6 +4219,17 @@ impl Server {
         // The restart may yet refuse or fail its build, so the notification
         // that main is ahead stays until a build at or past main takes over.
         let restarting = matches!(c.act, Do::Restart);
+        // Shown in the Slack view or the Inbox, an item stays listed there,
+        // since dismissing either takes it out of the view it is being shown
+        // in: a Slack message seen puts its notification away, an Inbox one
+        // stays until it is dismissed from the view.
+        let kept_in_its_view = matches!(
+            c.act,
+            Do::ShowIn {
+                view: ViewId::Slack | ViewId::Inbox,
+                ..
+            }
+        );
         if let Some(item) = seen.as_ref().filter(|_| !playing) {
             self.slack_item_acted(item);
         }
@@ -4198,7 +4243,7 @@ impl Server {
             Some((source, item, _)) if dismissed => {
                 self.notice_history_mark(&source, &item.id, Sidebar::Dismissed, true);
             }
-            Some((source, item, true)) if !playing && !restarting => {
+            Some((source, item, true)) if !playing && !restarting && !kept_in_its_view => {
                 self.notice_dismiss(&source, &item)
             }
             // A suggestion's choice says what becomes of it, which puts it
@@ -4911,6 +4956,7 @@ impl Server {
                 self.new_note_open(client, &rel);
             }
             Do::OpenView(slug) => self.open_mission(client, Opening::View(slug)),
+            Do::ShowIn { view, id } => self.show_in_view(client, &view, &id),
             Do::AnswerWith { tab, reply } => self.answer_tab(client, tab, &reply),
             Do::SlackPlay(item) => self.slack_play_now(client, Some(*item)),
             Do::EditFile { dir, file } => self.edit_own_file(client, &dir, &file),
@@ -8468,6 +8514,7 @@ mod tests {
             to_tab: false,
             to_tab_submits: true,
             slack_reply: false,
+            shows: &|_| true,
         };
         let item = m.snap.views[0].data.items[1].clone();
         let acts = |item: Item| -> Vec<Do> {

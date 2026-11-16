@@ -94,6 +94,22 @@ pub const NO_VIEW: [&str; 7] = [
     "behind",
 ];
 
+/// The id a notification's item has in its view, from the notification's
+/// own: the meeting about to start by its event's (`calendar::meeting_notice`),
+/// a PR's news by its PR's on the board (`prnotices::notice`), the rest
+/// the same.
+pub fn id_in_its_view(source: &str, id: &str) -> String {
+    let own = match source {
+        "meeting" => id.strip_prefix("meeting:"),
+        "prs" => id
+            .split_once(':')
+            .filter(|(kind, _)| ["merged", "approved", "failing"].contains(kind))
+            .map(|(_, board)| board),
+        _ => None,
+    };
+    own.unwrap_or(id).to_string()
+}
+
 /// A notification as its view lists it, `item` under its own id: the
 /// meeting about to start as its event, which it carries.
 pub fn as_its_view_has_it(source: &str, item: &Item) -> Item {
@@ -610,6 +626,18 @@ mod tests {
             sources,
             ["meeting", "slack", "inbox", "autopilot", "habits"]
         );
+    }
+
+    // A notification finds its item in its view by the id the view gives it.
+    #[test]
+    fn a_notification_names_its_item_by_its_views_id() {
+        assert_eq!(id_in_its_view("meeting", "meeting:ev1"), "ev1");
+        assert_eq!(
+            id_in_its_view("prs", "merged:https://github.com/o/r/pull/1"),
+            "https://github.com/o/r/pull/1"
+        );
+        assert_eq!(id_in_its_view("slack", "D1:1.5"), "D1:1.5");
+        assert_eq!(id_in_its_view("routines", "routine:r1"), "routine:r1");
     }
 
     #[test]

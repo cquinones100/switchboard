@@ -166,6 +166,13 @@ pub enum Do {
     OpenNote(String),
     /// Mission control on a view, by its name lowercased with dashes.
     OpenView(String),
+    /// Mission control on a view with the cursor on one of its items, by
+    /// the id the view lists it under (a Slack message's by its thread's
+    /// row, which stands for it), a notification shown where it came from.
+    ShowIn {
+        view: ViewId,
+        id: String,
+    },
     /// A workspace key from the Keys view, pressed in the pane mission
     /// control was over once it has closed, as an M-p pick is.
     Press(crate::mux::keys::Action),
@@ -702,6 +709,9 @@ pub struct Ctx<'a> {
     pub to_tab_submits: bool,
     /// The `slack_reply` setting: a Slack message's menu offers replies.
     pub slack_reply: bool,
+    /// Whether a notification offers to be shown in a view: Settings'
+    /// `notice_shows_in_view` on and the view there (`ViewId::shows`).
+    pub shows: &'a dyn Fn(&ViewId) -> bool,
 }
 
 /// Whether a tab's name has a ticket (or a pattern), and not one whose
@@ -1581,7 +1591,9 @@ pub fn puts_away(act: &Do) -> bool {
 /// kind: its item's menu in the view it came from (`notices::view_of`, the
 /// item as that view lists it), less what acts on everything the view shows,
 /// the notifications being put away one at a time; for a kind no view lists,
-/// what it leads to (`notice_leads`). Then putting it away: the view's own
+/// what it leads to (`notice_leads`). A kind with a view shown leads with
+/// showing it there, the cursor on its item, as a click on it takes the
+/// menu's first option. Then putting it away: the view's own
 /// dismissing where its menu has one (a Slack message's, worded as there),
 /// else "Dismiss it" (dismissing every one shown is the view's own menu's,
 /// `dismiss_all`). A suggestion has its habit's choices alone. Whatever is
@@ -1612,9 +1624,23 @@ pub fn notice_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
             // With nothing shown beside it, what acts on all shown acts on none.
             let acts_on_all_shown =
                 |c: &Choice| matches!(&c.act, Do::SlackDismiss(all) if all.is_empty());
-            item_choices(&view, &listed, &[], ctx)
+            let show_it = (ctx.shows)(&view).then(|| {
+                choice(
+                    'i',
+                    format!("Show it in the {} view", view.title()),
+                    Do::ShowIn {
+                        id: notices::id_in_its_view(&source, &own.id),
+                        view: view.clone(),
+                    },
+                )
+            });
+            show_it
                 .into_iter()
-                .filter(|c| !acts_on_all_shown(c))
+                .chain(
+                    item_choices(&view, &listed, &[], ctx)
+                        .into_iter()
+                        .filter(|c| !acts_on_all_shown(c)),
+                )
                 .collect()
         }
         None => notice_leads(&source, &own, ctx),
@@ -1731,7 +1757,7 @@ pub fn led_to_words(
             "you opened it at {}",
             crate::util::local_now().strftime(crate::ui::when::CLOCK)
         ),
-        Do::OpenView(_) => "you opened its view".into(),
+        Do::OpenView(_) | Do::ShowIn { .. } => "you opened its view".into(),
         Do::Routine {
             act: crate::routines::Act::RunNow,
             ..
@@ -1826,6 +1852,7 @@ mod tests {
             to_tab: false,
             to_tab_submits: true,
             slack_reply: false,
+            shows: &|_| true,
         }
     }
 
@@ -1888,10 +1915,10 @@ mod tests {
             .target(Target::Url("https://slack.example/m".into()))
             .data(json!({ "kind": "dm", "message": { "channel": "D1", "ts": "1.5" } }));
         let choices = notice_choices(&message, &c);
-        assert_eq!(keys(&choices), "otspyx");
-        assert!(matches!(choices[2].act, Do::ToTab(_)));
-        assert!(matches!(choices[3].act, Do::PasteToTab(_)));
-        assert_eq!(choices[4].act, Do::Copy("https://slack.example/m".into()));
+        assert_eq!(keys(&choices), "iotspyx");
+        assert!(matches!(choices[3].act, Do::ToTab(_)));
+        assert!(matches!(choices[4].act, Do::PasteToTab(_)));
+        assert_eq!(choices[5].act, Do::Copy("https://slack.example/m".into()));
         let h = handoff_of(&choices);
         assert_eq!(h.name, "Slack: Ada");
         assert_eq!(
@@ -1908,7 +1935,7 @@ mod tests {
             .target(Target::Url("https://linear.app/x/issue/AB-3".into()))
             .data(json!({ "ticket": "AB-3", "notification": "n1" }));
         let choices = notice_choices(&inbox, &c);
-        assert_eq!(keys(&choices), "wsDvoyrtSpx");
+        assert_eq!(keys(&choices), "iwsDvoyrtSpx");
         assert_eq!(handed(&choices), both('t', 'S'));
         let h = handoff_of(&choices);
         assert_eq!(h.name, "Linear: AB-3");
@@ -2346,6 +2373,7 @@ mod tests {
             to_tab: false,
             to_tab_submits: true,
             slack_reply: false,
+            shows: &|_| true,
         };
         let suggestion = Item::new("habits\tkey:M-d", "Press M-d");
         let choices = notice_choices(&suggestion, &c);
@@ -2358,9 +2386,16 @@ mod tests {
                 "title": "Standup", "join": "https://meet.example/x",
                 "link": "https://calendar.example/e" } }));
         let choices = notice_choices(&meeting, &c);
-        assert_eq!(keys(&choices), "ogcx");
-        assert_eq!(choices[0].act, Do::Open("https://meet.example/x".into()));
-        assert!(matches!(&choices[3].act, Do::Dismiss { source, .. } if source == "meeting"));
+        assert_eq!(keys(&choices), "iogcx");
+        assert_eq!(
+            choices[0].act,
+            Do::ShowIn {
+                view: ViewId::Calendar,
+                id: "m1".into()
+            }
+        );
+        assert_eq!(choices[1].act, Do::Open("https://meet.example/x".into()));
+        assert!(matches!(&choices[4].act, Do::Dismiss { source, .. } if source == "meeting"));
         let (source, own) = dismisses(&meeting).expect("dismissed after");
         assert_eq!((source.as_str(), own.id.as_str()), ("meeting", "m1"));
         assert_eq!(dismisses(&suggestion), None, "a suggestion's choices say");
@@ -2369,8 +2404,8 @@ mod tests {
             .target(Target::Url("https://linear.app/x/issue/AB-3".into()))
             .data(json!({ "ticket": "AB-3", "notification": "n1" }));
         let choices = notice_choices(&inbox, &c);
-        assert_eq!(keys(&choices), "wsDvoyrx");
-        assert!(matches!(&choices[7].act, Do::Dismiss { source, .. } if source == "inbox"));
+        assert_eq!(keys(&choices), "iwsDvoyrx");
+        assert!(matches!(&choices[8].act, Do::Dismiss { source, .. } if source == "inbox"));
         // A Slack message offers the Slack view's menu, its dismissing
         // worded as there, less dismissing every message shown.
         let message = Item::new("slack\tD1:1.5", "DM Ada · Slack")
@@ -2381,18 +2416,35 @@ mod tests {
         assert_eq!(
             choices.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(),
             [
+                "Show it in the Slack view",
                 "Open it in Slack",
                 "Open a tab for it",
                 "Copy its link",
                 "Dismiss it, until its thread gets a reply"
             ]
         );
+        assert_eq!(
+            choices[0].act,
+            Do::ShowIn {
+                view: ViewId::Slack,
+                id: "D1:1.5".into()
+            }
+        );
         let mut own = message.clone();
         own.id = "D1:1.5".into();
-        assert_eq!(choices[3].act, Do::SlackDismiss(vec![own]));
+        assert_eq!(choices[4].act, Do::SlackDismiss(vec![own]));
         // One with no message to dismiss by keeps the plain way.
         let bare = Item::new("slack\tD1:1.6", "DM Ada · Slack");
-        assert_eq!(keys(&notice_choices(&bare, &c)), "x");
+        assert_eq!(keys(&notice_choices(&bare, &c)), "ix");
+        // With the Slack view off, nothing offers to show it there.
+        let no_slack = Ctx {
+            shows: &|v| *v != ViewId::Slack,
+            ..ctx(&tabs, &repo)
+        };
+        assert_eq!(
+            notice_choices(&message, &no_slack)[0].label,
+            "Open it in Slack"
+        );
         // Every one shown goes at once from the view's own menu, never a
         // notification's, suggestions left to their own choices.
         let shown = [message.clone(), inbox.clone(), suggestion.clone()];
@@ -2479,6 +2531,22 @@ mod tests {
             assert!(!in_its_view.is_empty(), "{source}'s item has a menu there");
             // What acts on everything the view shows stays the view's.
             in_its_view.retain(|c| c.key != 'X');
+            // Showing it in its view comes first, a click's pick.
+            in_its_view.insert(
+                0,
+                choice(
+                    'i',
+                    format!("Show it in the {} view", view.title()),
+                    Do::ShowIn {
+                        id: notices::id_in_its_view(source, &own.id),
+                        view: view.clone(),
+                    },
+                ),
+            );
+            assert!(
+                in_its_view[1..].iter().all(|c| c.key != 'i'),
+                "{source}'s view takes i for its own"
+            );
             if !in_its_view.iter().any(|c| puts_away(&c.act)) {
                 in_its_view.push(choice(
                     'x',

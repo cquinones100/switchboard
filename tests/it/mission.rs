@@ -1067,6 +1067,92 @@ fn a_slack_notifications_menu_is_the_slack_views_with_the_message_whole() {
     assert!(gone.contains(&format!("D1:{ts}")), "{gone}");
 }
 
+// A click on a Slack notification opens its menu on "Show it in the Slack
+// view", and taking it shows the Slack board on the message's own row: its
+// section, never the first one's.
+#[test]
+fn a_click_on_a_slack_notification_shows_it_in_the_slack_view() {
+    let server = TestServer::start();
+    std::fs::create_dir_all(&server.state).unwrap();
+    let secs = switchboard::util::now_ms() / 1000;
+    let ts = |ago: i64| format!("{}.000100", secs - ago);
+    std::fs::write(
+        server.state.join("slack.json"),
+        json!({ "checked": secs * 1000, "items": [
+            { "kind": "dm", "channel": "D1", "from": "Ada", "where": "Ada",
+                "text": "hello from ada", "ts": ts(100), "link": "https://slack.example/a" },
+            { "kind": "channel", "channel": "C1", "from": "Ben", "where": "#dev",
+                "text": "a deploy question", "ts": ts(500), "link": "https://slack.example/b" },
+        ] })
+        .to_string(),
+    )
+    .unwrap();
+    settings(
+        &server,
+        json!({ "view_slack": true, "ux2": true, "slack_threads": true,
+            "slack_background": false, "photos": false }),
+    );
+    let mut client = server.attach(204, 40);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("vnotifications\r");
+    // Ben's channel is the second section, so the board opens on it only
+    // by the cursor put on its row.
+    let (row_text, text, other) = ("Ben · #dev", "a deploy question", "hello from ada");
+    let screen = client.wait_for("the Notifications view in front", |s| {
+        header(s).trim_start().starts_with("Notifications")
+            && s.iter().any(|l| l.contains(row_text))
+    });
+    let (row, line) = screen
+        .iter()
+        .enumerate()
+        .find(|(_, l)| l.contains(row_text))
+        .unwrap();
+    let col = line[..line.find(row_text).unwrap()].chars().count() + 2;
+    let click = format!("\x1b[<0;{col};{}M\x1b[<0;{col};{}m", row + 1, row + 1);
+    // A click chooses the row, and one on the chosen row opens its menu.
+    let chosen = |s: &[String]| s.iter().any(|l| l.contains("▌") && l.contains(row_text));
+    if !chosen(&screen) {
+        client.send(click.as_bytes());
+        client.wait_for("the row chosen", |s| chosen(s));
+    }
+    client.send(click.as_bytes());
+    let screen = client.wait_text("Show it in the Slack view");
+    assert!(
+        screen
+            .iter()
+            .any(|l| l.contains('›') && l.contains("Show it in the Slack view")),
+        "the click's pick first: {}",
+        screen.join("\n")
+    );
+    client.type_text("\r");
+    let screen = client.wait_for("the Slack board on its section", |s| {
+        !s.iter().any(|l| l.contains("Show it in the Slack view"))
+            && s.iter().any(|l| l.contains(text))
+            && !s.iter().any(|l| l.contains(other))
+    });
+    let chosen = screen.iter().find(|l| l.contains(text)).unwrap();
+    assert!(chosen.contains('▌'), "{}", screen.join("\n"));
+    // Leaving marks seen the section it showed, never the first one it
+    // passed on the way.
+    client.type_text("\x1b");
+    client.wait_for("mission control closed", |s| {
+        !s.iter().any(|l| l.contains("MISSION CONTROL"))
+    });
+    let seen = server.state.join("slack-seen-items.json");
+    let deadline = common::deadline(Duration::from_secs(5));
+    while !seen.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let kept = std::fs::read_to_string(&seen).unwrap_or_default();
+    assert!(kept.contains(&format!("C1:{}", ts(500))), "{kept}");
+    assert!(!kept.contains(&format!("D1:{}", ts(100))), "{kept}");
+    assert!(
+        !server.state.join("slack-seen").exists(),
+        "the look as a whole isn't seen"
+    );
+}
+
 #[test]
 fn the_notifications_views_menu_dismisses_every_notification_shown() {
     let notes = common::TempDir::new("sbda");
