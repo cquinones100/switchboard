@@ -1189,10 +1189,20 @@ impl Mission {
         {
             return held.clone();
         }
-        Some(
-            self.current()
-                .map_or_else(|| grid::TABS.to_string(), View::slug),
-        )
+        Some(self.view_shown())
+    }
+
+    /// The view on the screen (`View::slug`, the Tabs view's `grid::TABS`),
+    /// rested on or not.
+    pub fn view_shown(&self) -> String {
+        self.current()
+            .map_or_else(|| grid::TABS.to_string(), View::slug)
+    }
+
+    /// Whether the list of views' cursor was walked and hasn't rested
+    /// (`nav_held`), the view on the screen not yet on the trail.
+    pub fn walk_unsettled(&self) -> bool {
+        !self.picker && self.nav_held.is_some()
     }
 
     pub fn current(&self) -> Option<&View> {

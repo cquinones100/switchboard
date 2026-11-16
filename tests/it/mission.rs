@@ -3548,6 +3548,53 @@ fn back_forward_and_m_tab_step_through_mission_control_views_as_well_as_tabs() {
     });
 }
 
+/// A view left with Esc is the place before the tab it returns to.
+#[test]
+fn m_tab_returns_to_a_view_left_with_esc() {
+    let (server, mut client) = two_tabs(json!({}));
+    let first = first_tab_id(&server);
+    server.ok(&["select-tab", "-t", &first]);
+    wait_list(&server, "the first tab in front", |l| {
+        tabs(l)[0]["current"] == true
+    });
+    server.ok(&["press", "mission-routines"]);
+    client.wait_text("No routines yet");
+    client.type_text("\x1b");
+    client.wait_for("mission control closed", closed);
+    client.type_text(&format!("{ALT}\t"));
+    client.wait_text("No routines yet");
+    wait_list(&server, "the first tab under it", |l| {
+        tabs(l)[0]["current"] == true
+    });
+    client.type_text(&format!("{ALT}\t"));
+    client.wait_for("mission control closed", closed);
+    wait_list(&server, "still the first tab", |l| {
+        tabs(l)[0]["current"] == true
+    });
+}
+
+/// With back and forward off, M-Tab goes to the last tab, past a view
+/// left with Esc.
+#[test]
+fn m_tab_goes_to_the_last_tab_past_a_view_with_back_and_forward_off() {
+    let (server, mut client) = two_tabs(json!({ "tab_back_forward": false }));
+    let first = first_tab_id(&server);
+    server.ok(&["select-tab", "-t", &first]);
+    wait_list(&server, "the first tab in front", |l| {
+        tabs(l)[0]["current"] == true
+    });
+    server.ok(&["press", "mission-routines"]);
+    client.wait_text("No routines yet");
+    client.type_text("\x1b");
+    client.wait_for("mission control closed", closed);
+    client.type_text(&format!("{ALT}\t"));
+    wait_list(&server, "the second tab in front", |l| {
+        tabs(l)[1]["current"] == true
+    });
+    let screen = client.screen();
+    assert!(closed(&screen), "no view opened:\n{}", screen.join("\n"));
+}
+
 #[test]
 fn back_passes_over_a_view_turned_off_since() {
     let (server, mut client) = two_tabs(json!({}));

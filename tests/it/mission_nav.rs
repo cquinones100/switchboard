@@ -257,3 +257,24 @@ fn with_the_list_not_following_j_only_moves_the_cursor() {
     client.type_text("\r");
     next_header(&mut client, "Tabs");
 }
+
+#[test]
+fn m_tab_returns_to_the_view_walked_to_and_left_with_esc_at_once() {
+    let (_server, mut client, _) = opened(json!({ "tab_focus": true }));
+    client.type_text("\t");
+    client.type_text("j");
+    let walked = next_header(&mut client, "Tabs");
+    // Esc before the cursor rests: the view on the screen is still the
+    // place left.
+    client.type_text("\x1b");
+    client.wait_for("mission control closed", |s| {
+        !s.iter().any(|l| l.contains("MISSION CONTROL"))
+    });
+    client.type_text(&format!("{ALT}\t"));
+    let screen = client.wait_text("MISSION CONTROL");
+    assert_eq!(header_view(&screen), walked);
+    client.type_text(&format!("{ALT}\t"));
+    client.wait_for("mission control closed", |s| {
+        !s.iter().any(|l| l.contains("MISSION CONTROL"))
+    });
+}

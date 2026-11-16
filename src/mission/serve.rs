@@ -494,6 +494,12 @@ impl Server {
             .find::<Mission>()
             .filter(|m| m.came.as_deref() == Some("Slack") || m.grid_has("slack"))
             .map(Mission::slack_seen);
+        let shown = c
+            .overlays
+            .find::<Mission>()
+            .filter(|m| m.walk_unsettled())
+            .map(Mission::view_shown);
+        self.settle_view_left(client, shown);
         let above: Vec<&'static str> = kinds[at + 1..].to_vec();
         for kind in above.into_iter().rev() {
             self.close_overlays(client, kind);
@@ -501,6 +507,26 @@ impl Server {
         self.close_overlays(client, "mission");
         if let Some(seen) = leaving_slack {
             self.slack_left(seen);
+        }
+    }
+
+    /// Mission control closing while the list of views' cursor hasn't
+    /// rested (`Mission::nav_held`), `shown` the view on the screen: it is
+    /// the place left, so M-Tab from the tab comes back to it, rather than
+    /// the place from before the walk. Not when the session already went
+    /// to a tab (its trail on no view), which visited the place it left.
+    fn settle_view_left(&mut self, client: ClientId, shown: Option<String>) {
+        let Some(shown) = shown else {
+            return;
+        };
+        let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
+            return;
+        };
+        let on_a_view = self
+            .session(&session)
+            .is_some_and(|s| s.trail.view.is_some());
+        if on_a_view {
+            self.trail_view_is(&session, Some(shown));
         }
     }
 
@@ -3051,6 +3077,9 @@ impl Server {
     /// Closes mission control from inside a key's handling, where its state
     /// is out of its overlay: Slack's view left is seen.
     fn mission_close_from(&mut self, client: ClientId, m: &Mission) {
+        // Its state is out of the overlay, so the view on the screen is
+        // read here.
+        self.settle_view_left(client, m.walk_unsettled().then(|| m.view_shown()));
         // Shown among several views, it was looked at too.
         if m.came.as_deref() == Some("Slack") || m.grid_has("slack") {
             self.slack_left(m.slack_seen());
