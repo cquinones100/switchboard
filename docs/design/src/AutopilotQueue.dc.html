@@ -191,9 +191,9 @@ sidebar(2);
 navBar('Work', 'Autopilot', '');
 
 // The heading: the note autopilot works, its slots and cap, how it lands, its spend as the kit's meter; Enter opens its menu.
-mark(36, 4, 'working'); T(38, 4, ['switchboard', 't', 'b'], ['   its queue · 2 of 2 working · 4 next · 3 parked · lands without asking', 'd']);
-R(158, 4, '$6.20 / $15', 'd');
-meter(132, 4, 13, 6.2 / 15, '#82aaff');
+mark(36, 4, 'working'); T(38, 4, ['Every repository', 't', 'b'], ['   switchboard, web-app, oncall-tools · 3 of 3 working', 'd']);
+R(158, 4, '$13.40 / $20', 'd');
+meter(131, 4, 13, 13.4 / 20, '#82aaff');
 rule(36, 5, 122);
 
 // The columns: Next → Working → Needs you → Landing → Landed, each item the kit's card, its stage as a meter on its last line.
@@ -214,37 +214,38 @@ const item = (i, y, tab, state, title, lines, stage, sel) => {
   if (stage) meter(x + 2, y + 1 + tls.length + lines.length, w, stage, COLOR[MARK[state][1]]);
   return y + h + 1;
 };
-head(0, 'Next', 4); head(1, 'Working', 2, 'b'); head(2, 'Needs you', 1, 'y'); head(3, 'Landing', 2, 'm'); head(4, 'Landed', 2, 'g');
+head(0, 'Next', 6); head(1, 'Working', 3, 'b'); head(2, 'Needs you', 1, 'y'); head(3, 'Landing', 2, 'm'); head(4, 'Landed', 2, 'g');
 
 let y0 = 9;
-y0 = item(0, y0, '1 · ap-142', 'pending', 'cycle through idle tabs', [[['settled', 'd']]]);
-y0 = item(0, y0, '2 · ap-145', 'pending', 'faster hover highlight', [[['after ap-140', 'm']]]);
-y0 = item(0, y0, '3 · ap-147', 'pending', 'a condensed sidebar for short screens', [[['needs a choice', 'y']]]);
-y0 = item(0, y0, '4 · ap-148', 'pending', 'cache PR and ticket images', [[['settled', 'd']]]);
+y0 = item(0, y0, '1 · ap-142', 'pending', 'cycle through idle tabs', [[['switchboard', 'd']]]);
+y0 = item(0, y0, '2 · ap-145', 'pending', 'faster hover highlight', [[['switchboard', 'd']], [['after ap-140', 'm']]]);
+y0 = item(0, y0, '3 · ap-147', 'pending', 'a condensed sidebar for short screens', [[['switchboard', 'd']], [['needs a choice', 'y']]]);
+T(37, y0, ['4 ap-148 ', 'd'], ['switchboard', 'f']); T(37, y0 + 1, ['5 ap-134 ', 'd'], ['web-app', 'f']); T(37, y0 + 2, ['6 ap-150 ', 'd'], ['oncall-tools', 'f']);
 
 let y1 = 9;
-y1 = item(1, y1, 'ap-139 · 3', 'working', 'show uncommitted changes in M-d', [[['round 1 · 6m', 'd']], [['codex · 1 finding', 'd']]], 4 / 8);
-y1 = item(1, y1, 'ap-141 · 7', 'working', 'note what an upgrade keeps', [[['working · 3m', 'd']]], 2 / 8);
+y1 = item(1, y1, 'ap-139 · 3', 'working', 'show uncommitted changes in M-d', [[['switchboard', 'd']], [['round 1 · 6m', 'd']]], 4 / 8);
+y1 = item(1, y1, 'ap-141 · 7', 'working', 'note what an upgrade keeps', [[['switchboard · 3m', 'd']]], 2 / 8);
+y1 = item(1, y1, 'ap-133 · 10', 'working', 'RSVP menu keys', [[['web-app · 9m', 'd']]], 5 / 8);
 
 let y2 = 9;
-y2 = item(2, y2, 'ap-140 · 2', 'needs', 'give each note a stable ID', [[['4m · ', 'd'], ['git push', 'y']]], 6 / 8, true);
+y2 = item(2, y2, 'ap-140 · 2', 'needs', 'give each note a stable ID', [[['switchboard', 'd']], [['4m · ', 'd'], ['git push', 'y']]], 6 / 8, true);
 
 let y3 = 9;
-y3 = item(3, y3, 'ap-137 · 5', 'landing', 'benchmark harness', [[['2nd in queue · 4m', 'd']]], 6 / 8);
-y3 = item(3, y3, 'ap-143 · 4', 'failed', 'full titles for a note\'s tabs', [[['✕ 2 of 401 tests', 'r']]], 3 / 8);
+y3 = item(3, y3, 'ap-137 · 5', 'landing', 'benchmark harness', [[['switchboard', 'd']], [['2nd in queue · 4m', 'd']]], 6 / 8);
+y3 = item(3, y3, 'ap-143 · 4', 'failed', 'full titles for a note\'s tabs', [[['switchboard', 'd']], [['✕ 2 of 401 tests', 'r']]], 3 / 8);
 
 let y4 = 9;
-y4 = item(4, y4, 'ap-138', 'passed', 'land without asking', [[['Done: lands its', 'd']], [['commit by itself', 'd']], [['a501ce1 · 40m', 'f']]]);
-y4 = item(4, y4, 'ap-136', 'passed', 'sealed review of PRs', [[['Done: a fork\'s PR', 'd']], [['runs only sealed', 'd']], [['2505ca4 · 1h', 'f']]]);
+y4 = item(4, y4, 'ap-138', 'passed', 'land without asking', [[['Done: lands its', 'd']], [['commit by itself', 'd']], [['switchboard · 40m', 'f']]]);
+y4 = item(4, y4, 'ap-136', 'passed', 'sealed review of PRs', [[['Done: a fork\'s PR', 'd']], [['runs only sealed', 'd']], [['switchboard · 1h', 'f']]]);
 
 // Skipped: last, under the board.
 rule(36, 32, 122);
-label(36, 33, 'Parked', 'd', 3, 46);
-T(38, 34, ['ap-131  ', 'f'], ['Neovim, lazygit and Ghostty config for new installs', 'd']); chip(100, 34, 'parked by you · 2d', 'd');
-T(38, 35, ['ap-129  ', 'f'], ['a sidebar block for on-call alerts', 'd'], ['   and 1 more · Unpark it is the first option of each one\'s menu', 'f']);
+label(36, 33, 'Parked', 'd', 4, 46);
+T(38, 34, ['ap-131  ', 'f'], ['Neovim, lazygit and Ghostty config for new installs', 'd'], ['  switchboard', 'f']); chip(113, 34, 'parked by you · 2d', 'd');
+T(38, 35, ['ap-129  ', 'f'], ['a sidebar block for on-call alerts', 'd'], ['  oncall-tools', 'f'], ['   and 2 more · Unpark it is the first option of each one\'s menu', 'f']);
 
 // Under the board: the chosen card, as the kit's pane.
-let py = pane(36, 37, 123, 'ap-140 · give each note a stable ID', 'tab 2 · ap-140-stable-note-ids · Plan - Stable note IDs · ap-145 waits on it');
+let py = pane(36, 37, 123, 'ap-140 · give each note a stable ID', 'switchboard · tab 2 · ap-140-stable-note-ids · Plan - Stable note IDs · ap-145 waits on it');
 T(36, py - 1, ['Keep a note\'s ID on its last line, so wtn and autopilot find the item after the note is renamed.', 't']);
 T(36, py, ['Waiting on: ', 'd'], ['Bash(git push origin main)', 'y'], ['  · tests ✓ · review ✓ 2 clean · leak check ✓', 'd']);
 

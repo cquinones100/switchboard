@@ -386,7 +386,7 @@
       "page": "design"
     },
     "QueuePane.dc.html": {
-      "title": "93. The queue as a pane right of the tab: working, needs you, Next in order, parked folded, landed today with its Done line; each item's ID",
+      "title": "93. The queue as a pane right of the tab: To do across every repository in the order autopilot takes them, each item's repository, and Done with its Done line",
       "page": "design"
     },
     "QueueItemMenu.dc.html": {
@@ -406,7 +406,7 @@
       "page": "design"
     },
     "AutopilotQueue.dc.html": {
-      "title": "98. Mission control's Autopilot from the queue: each card its ID and place, Next in order with what it needs, Parked under the board, Landed with its Done line",
+      "title": "98. Mission control's Autopilot from every repository's queue: each card its ID, place and repository, Parked under the board, Landed with its Done line",
       "page": "design"
     },
     "NotesQueue.dc.html": {
@@ -415,6 +415,18 @@
     },
     "SlackQueue.dc.html": {
       "title": "100. Slack's Home tab lists the queue, an overflow menu on each item, and Make its choice… as a form",
+      "page": "design"
+    },
+    "AutopilotRepos.dc.html": {
+      "title": "101. Autopilot's settings across every repository: their order, which it takes from first, each one's switch, cap of tabs and spend limit beside the shared ones",
+      "page": "design"
+    },
+    "AutopilotRepoMenu.dc.html": {
+      "title": "102. Enter on a repository in autopilot's settings: move it, turn it off, its cap, its spend limit, where it lands, its queue",
+      "page": "design"
+    },
+    "AutopilotRepoMove.dc.html": {
+      "title": "103. Moving a repository while autopilot runs: Next up rearranged across the queues as it is put down",
       "page": "design"
     }
   }

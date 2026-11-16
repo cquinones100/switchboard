@@ -170,7 +170,7 @@ const mcBar = (group, current, right) => {
 // names its branch (ap-147-condensed-sidebar), its tab and its Slack messages. The queue keeps each item's place, state, what it
 // waits on and its choice; the plan note keeps the words. A repository has one queue, whichever tab or note an item came from.
 sidebar(0);
-const CAP = 165, X0 = 35, QX = X0 + CAP + 1, QW = 66;
+const CAP = 165, X0 = 35, QX = X0 + CAP + 1, QW = 84;
 const spare = (x, w) => fill(x, 0, w, H, '1');
 // THE TAB: Claude in a lone pane, capped at 165 columns.
 const claudePane = () => {
@@ -192,13 +192,16 @@ const claudePane = () => {
 // THE QUEUE PANE: the tab's repository's queue, the kit's labels, marks, chips and rows; Enter on a row opens its menu.
 const ITEMS = {
   todo: [
-    ['ap-139', 'show uncommitted changes in M-d', ['tab 3 working', 'b'], 'working'],
-    ['ap-140', 'give each note a stable ID', ['tab 2 needs you', 'y'], 'needs'],
-    ['ap-141', 'note what an upgrade keeps', ['tab 7 working', 'b'], 'working'],
-    ['ap-142', 'cycle through idle tabs', ['settled', 'd']],
-    ['ap-145', 'faster hover highlight', ['after ap-140', 'm']],
-    ['ap-147', 'a condensed sidebar for short screens', ['needs a choice', 'y']],
-    ['ap-148', 'cache PR and ticket images', ['settled', 'd']],
+    ['ap-139', 'show uncommitted changes in M-d', ['tab 3 working', 'b'], 'working', 'switchboard'],
+    ['ap-140', 'give each note a stable ID', ['tab 2 needs you', 'y'], 'needs', 'switchboard'],
+    ['ap-141', 'note what an upgrade keeps', ['tab 7 working', 'b'], 'working', 'switchboard'],
+    ['ap-133', 'RSVP menu keys', ['tab 10 working', 'b'], 'working', 'web-app'],
+    ['ap-142', 'cycle through idle tabs', ['settled', 'd'], null, 'switchboard'],
+    ['ap-145', 'faster hover highlight', ['after ap-140', 'm'], null, 'switchboard'],
+    ['ap-147', 'a condensed sidebar for short screens', ['needs a choice', 'y'], null, 'switchboard'],
+    ['ap-148', 'cache PR and ticket images', ['settled', 'd'], null, 'switchboard'],
+    ['ap-134', 'settings page empty states', ['settled', 'd'], null, 'web-app'],
+    ['ap-150', 'dedupe repeated alerts', ['settled', 'd'], null, 'oncall-tools'],
   ],
   landed: [['ap-138', 'land without asking', 'a501ce1 · 40m', 'Autopilot lands its tab\'s commit itself when "Land without asking" is on.'], ['ap-136', 'sealed review of PRs', '2505ca4 · 1h', 'A contributor\'s PR builds and runs only inside the sealed try.']],
 };
@@ -207,23 +210,24 @@ const queuePane = (o) => {
   o = o || {};
   const R2 = QX + QW - 2, TX = QX + 10;
   fill(QX, 0, QW, H, '0');
-  T(QX + 1, 0, ['Queue', 't', 'b'], ['  switchboard', 'd']); R(R2, 0, 'autopilot on · 2 of 2 working', 'd');
+  T(QX + 1, 0, ['Queue', 't', 'b'], ['  3 repositories, in their order', 'd']); R(R2, 0, 'autopilot on · 3 of 3 working', 'd');
   hl(QX, 1, QW);
   const todo = o.todo || ITEMS.todo;
   let y = 3;
   label(QX + 1, y, 'To do', 'd', todo.length, R2); y++;
-  todo.forEach(([id, t, r, m], i) => {
+  todo.forEach(([id, t, r, m, repo], i) => {
     const lifted = o.lifted === id, sel = lifted || o.sel === id;
     const bg = lifted ? '4' : row(QX, y, QW, 1, sel);
     if (lifted) { fill(QX, y, QW, 1, '4'); put(QX, y, '▌', 'a', '', '4'); K(QX + 0.3, y - 0.05, QW - 0.6, 1.1, 'border-radius:4px;box-shadow:0 6px 16px 2px rgba(0,0,0,.55)'); }
     if (lifted) put(QX + 2, y, '⇅', 'a', 'b', bg); else if (m) mark(QX + 2, y, m, bg); else R(QX + 2, y, String(i + 1), 'd', '', bg);
     put(QX + 4, y, id, lifted ? 'a' : 'd', lifted ? 'b' : '', bg);
-    const rw = [...r[0]].length + 3;
-    put(TX + 1, y, clip(t, R2 - TX - rw - 1), 't', sel ? 'b' : '', bg);
+    const rw = 18, RPX = R2 - rw - 13;
+    put(TX + 1, y, clip(t, RPX - TX - 3), 't', sel ? 'b' : '', bg);
+    put(RPX, y, repo, 'd', '', bg);
     chip(R2 - [...r[0]].length - 1, y, r[0], r[1]);
     y++;
   });
-  T(QX + 4, y, ['▸ 3 parked', 'f']); y += 2;
+  T(QX + 4, y, ['▸ 4 parked', 'f']); y += 2;
   label(QX + 1, y, 'Done', 'g', 2, R2); R(R2 - 3, y, 'today', 'd'); y++;
   for (const [id, t, when, done] of ITEMS.landed) { mark(QX + 2, y, 'passed'); put(QX + 4, y, id, 'd'); put(TX + 1, y, t, 't'); R(R2, y, when, 'd'); put(QX + 4, y + 1, clip(done, QW - 6), 'd'); y += 3; }
   T(QX + 1, y, ['all done items › mission control\'s Autopilot', 'f']);
