@@ -194,6 +194,63 @@ pub fn category_name(category: &str, ux2: bool) -> &str {
     }
 }
 
+/// A category named `group: name` (`Mission control: Slack`) as its group
+/// and its name under it: the Settings view draws the group as a heading
+/// and the category under it. None for a category with no group.
+pub fn category_group(category: &str) -> Option<(&str, &str)> {
+    category.split_once(": ")
+}
+
+/// The group a category belongs to among `categories`: its own, or, for a
+/// category some other names as its group (`Mission control` beside
+/// `Mission control: Slack`), itself, since it holds what belongs to the
+/// group as a whole.
+pub fn group_of<'a>(category: &'a str, categories: &[&str]) -> Option<&'a str> {
+    if let Some((group, _)) = category_group(category) {
+        return Some(group);
+    }
+    categories
+        .iter()
+        .any(|c| category_group(c).is_some_and(|(group, _)| group == category))
+        .then_some(category)
+}
+
+/// The options' categories in the order the Settings view lists them: the
+/// ones with no group as the options first name them, then each group's
+/// together, the category holding what belongs to the group as a whole
+/// first. So an option added anywhere in the file lands under its group.
+pub fn categories(all: &[Setting]) -> Vec<&str> {
+    let mut named: Vec<&str> = Vec::new();
+    for o in all {
+        if !named.contains(&o.category.as_str()) {
+            named.push(&o.category);
+        }
+    }
+    let mut groups: Vec<&str> = Vec::new();
+    for c in &named {
+        if let Some(group) = group_of(c, &named)
+            && !groups.contains(&group)
+        {
+            groups.push(group);
+        }
+    }
+    let mut out: Vec<&str> = named
+        .iter()
+        .copied()
+        .filter(|c| group_of(c, &named).is_none())
+        .collect();
+    for group in groups {
+        out.extend(named.iter().copied().filter(|c| *c == group));
+        out.extend(
+            named
+                .iter()
+                .copied()
+                .filter(|c| *c != group && group_of(c, &named) == Some(group)),
+        );
+    }
+    out
+}
+
 /// The list of options, as compiled in; `schema` reads the clone's first
 /// (src/assets.rs).
 pub const SCHEMA: &str = include_str!("../assets/settings.json");

@@ -739,9 +739,9 @@ With UX 2.0 and mission control at least 100 columns wide and tall enough for it
 
 ### Settings
 
-"Settings: turn the workspace's options on and off" in `M-p` opens mission control on its Settings view: every option under its category, with its value and what it does. Enter or Space opens the chosen one's menu, whose first choice changes it (on and off, or the next of its choices), so Enter twice does, and the change takes effect at once; its file in your editor is its next. `/` filters by name, description, category, key or value, leaving out the categories with nothing that matches. What you change is kept in `~/.config/switchboard/settings.json`, only what differs from the defaults; a change made there by hand takes effect too, and the version before each change is kept beside it as `settings.json.bak`.
+"Settings: turn the workspace's options on and off" in `M-p` opens mission control on its Settings view: every option under its category, with its value and what it does, each mission control view's options in a category of its own (`Mission control: Slack`), after the others. Enter or Space opens the chosen one's menu, whose first choice changes it (on and off, or the next of its choices), so Enter twice does, and the change takes effect at once; its file in your editor is its next. `/` filters by name, description, category, key or value, leaving out the categories with nothing that matches. What you change is kept in `~/.config/switchboard/settings.json`, only what differs from the defaults; a change made there by hand takes effect too, and the version before each change is kept beside it as `settings.json.bak`.
 
-With UX 2.0 on and mission control at least 136 columns wide, Settings is a board in two panes. At the left, a panel lists the categories, each with how many options it has and, when some of them differ from their defaults, a chip with how many, then under "Your files" each file of yours with its settings. Beside it, the category in front: its name, how many options it has and how many changed, and a row per option, its name bold, a "changed" chip when it differs from its default, its key dim at the right, and a switch at the far right (green with its knob at the right when on, an image where the terminal draws them, kitty's or sixel, ` ━●` or `○━ ` elsewhere), or the value's words for an option of choices. The chosen option opens to its whole description, its default and what Enter does ("default on · Enter turns it back on"). `h` and `l` move to the category before or after, `j` and `k` between options; `C-w h` (or a click on a category) gives the panel the focus, the category in front on the chosen surface and the chosen option resting, `j` and `k` there walk the categories with their options showing, and `C-w l`, Enter or Space go back into the options; Enter and Space open the chosen one's menu, changing it first ("Turn it on", or for an option of choices every choice, the one it has marked "(now)", each one pick away), then opening its file in your editor; a click on a switch flips it and a click on a category goes there. `/` searches every category, the pane listing the matches under each category's name and the panel dimming the categories with none. The view's `m` menu opens the file in front in your editor in a tab of its own: `settings.json` for a category, the file itself for one of yours, `repos.json` for a repository's landing. With UX 2.0 on, the "Tabs and status bar" category is named "Tabs and header", since the status line is gone; `/` finds it by either name. Narrower, the view is the list above, with the "changed" chip on an option that differs from its default.
+With UX 2.0 on and mission control at least 136 columns wide, Settings is a board in two panes. At the left, a panel lists the categories, each with how many options it has and, when some of them differ from their defaults, a chip with how many, then under a "Mission control" heading what belongs to mission control as a whole and a category for each of its views (Slack, Calendar, Autopilot and the rest, a view's on/off switch first among its options), then under "Your files" each file of yours with its settings. Beside it, the category in front: its name, how many options it has and how many changed, and a row per option, its name bold, a "changed" chip when it differs from its default, its key dim at the right, and a switch at the far right (green with its knob at the right when on, an image where the terminal draws them, kitty's or sixel, ` ━●` or `○━ ` elsewhere), or the value's words for an option of choices. The chosen option opens to its whole description, its default and what Enter does ("default on · Enter turns it back on"). `h` and `l` move to the category before or after, `j` and `k` between options; `C-w h` (or a click on a category) gives the panel the focus, the category in front on the chosen surface and the chosen option resting, `j` and `k` there walk the categories with their options showing, and `C-w l`, Enter or Space go back into the options; Enter and Space open the chosen one's menu, changing it first ("Turn it on", or for an option of choices every choice, the one it has marked "(now)", each one pick away), then opening its file in your editor; a click on a switch flips it and a click on a category goes there. `/` searches every category, the pane listing the matches under each category's name and the panel dimming the categories with none. The view's `m` menu opens the file in front in your editor in a tab of its own: `settings.json` for a category, the file itself for one of yours, `repos.json` for a repository's landing. With UX 2.0 on, the "Tabs and status bar" category is named "Tabs and header", since the status line is gone; `/` finds it by either name. Narrower, the view is the list above, with the "changed" chip on an option that differs from its default.
 
 Below the options, each setting kept in a file of your own in `~/.config/switchboard` has a row under that file's name: where your Claude rules come from and the file in your rules repository that holds them (`claude.json`), your Linear workspace, team and labels (`linear.json`), the Chrome profile each site's links open in and the default profile (`browser.json`), the Slack view's channels (`slack-updates.json`), the Slack relay's owner (`slack-relay.json`), the on-call settings (`oncall.json`), and the sidebar's sizes (`sidebar.json`). Enter on one types a value in, starting from what it is (empty unsets it); a Chrome profile is picked from the profiles Chrome lists. "Your CLAUDE.md" offers the local file (`~/.config/switchboard/CLAUDE.md`), another file or a git repository, the last two typed in; it writes `claude.json` and runs `switchboard setup claude-md`, which clones a repository named and writes `~/.claude/CLAUDE.md` to import the rules, and says what it changed or why it couldn't. Saving "Rules file in the repo" runs that part too. Anything bigger (your CLAUDE.md rules, your key bindings in `keys.json`, your trusted directories, the plugins, the on-call channels and rules) opens the whole file in your editor (`$VISUAL`, else `$EDITOR`, else `vi`) in a tab of its own.
 
@@ -2163,12 +2163,10 @@ Mission control's Settings view (`M-p`, then "Settings: turn the workspace's opt
 | Half-page scrolling (`sidebar_half_page`) | on | C-d and C-u in the sidebar, and the wheel over it, scroll its list half a screen down or up, the cursor moving with it, as in Vim, one flick of the wheel moving once; off, C-d and C-u run in the chosen tab as other Ctrl keys do and the wheel moves a tab at a time |
 | Sidebar repository filter (`sidebar_repo_filter`) | on | M-p's Filter the sidebar to a repository moves every other repository's tabs to an Other repos group at the bottom, whatever they are doing, until Show every repository's tabs clears it; the filter is kept across restarts. Off, the commands and M-R are gone and every tab is in its own group |
 | Select several tabs (`sidebar_select`) | on | v in the sidebar, or a Shift-click on a tab, selects several tabs to close at once from one menu. Off, v does nothing, a Shift-click on a tab goes there as a click does, and the sidebar acts on one tab at a time |
-| Reminders (`reminders`) | on | M-p's Remind me about this tab: the tab waits under Reminders with the time left, then moves to Needs you with a banner when it comes due, and mission control's Reminders view shows every tab's reminder, on a month with UX 2.0; off, reminders are neither set nor shown, and the view is gone |
 | Reminders in the sidebar (`sidebar_reminders`) | on | Tabs waiting on a reminder sit under Reminders in the sidebar. Off, they are left out of the sidebar, the top line counts them (⏰ 3) and a click there opens mission control's Reminders view; a tab comes back under Needs you when its reminder comes due |
 | Build failing (`build_failing`) | on | A Build failing group in the sidebar and mission control for the tabs whose open PR has a failing check, asked of GitHub every minute, an idle one wearing a red ✗; off, they stay in Working or Idle with the failing count in their words #github |
 | Show the landing queue (`landing_queue`) | on | Tabs landing on the default branch with queue-and-clean, or waiting their turn, get a Landing group in the sidebar and mission control, in the landing queue's order, which a waiting tab's menu changes; off, they show as Working, and the queue still orders the landings |
 | Notifications (`sidebar_notifications`) | on | The Notifications block at the bottom of the sidebar: new Slack messages and your Linear inbox, which a click opens in mission control |
-| Notifications' history (`notification_history`) | on | Mission control's Notifications view keeps every notification of the last two weeks by day, with what each led to and whether the sidebar still shows it, in ~/.local/state/switchboard/notifications on this computer; off, the view shows only the sidebar's notifications, as they are now, and nothing is kept |
 | PR notifications (`pr_notices`) | on | The sidebar tells you when one of your PRs merges, is approved or its checks start failing, from the PRs board's lookups; off, it doesn't |
 | M-a goes to notifications (`needs_notices`) | on | M-a's walk of what needs you ends at the notifications while there are any, after the tabs, opening them as the sidebar's n does |
 | M-a visits Build failing tabs (`walk_build_failing`) | on | M-a's walk of what needs you goes on to the tabs under Build failing after those under Needs you, before the notifications; off, it passes them by |
@@ -2181,16 +2179,9 @@ Mission control's Settings view (`M-p`, then "Settings: turn the workspace's opt
 
 | Setting | Default | What it does |
 |---|---|---|
-| Autopilot (`autopilot`) | on | With it on, M-p's 'Autopilot: work a note' keeps tabs working through a note's checklist, opening the next item with wtn as each lands; the mode itself starts off until you turn it on there. Off, it opens no tabs, and its line in mission control and its notification go |
-| Estimated finish (`autopilot_eta`) | on | Autopilot's view says when the note's ready items should all be done ("done by about 3:40 PM · 6 left"), from the median time its recent items took from opening to landing, its slots and its tabs still at work, and how many items wait on you (an open choice it won't take, a design board to review). Off, its heading has no estimate |
-| Keep opening tabs while I'm away (`autopilot_while_away`) | on | Autopilot keeps opening tabs for the note's next items while you're away (the screen locked, or no input for 10 minutes), up to its slots, most tabs open and spend limit, so it works through the note overnight with a terminal attached. Off, it opens nothing while you're away and finishes only the tabs already open |
-| Autopilot's push allowed in auto mode (`autopilot_push_rule`) | on | A tab autopilot opens in a repository that lands straight on a branch starts its Claude with the landing's push command, switchboard land-lock push, allowed for that session, so Claude Code's auto mode doesn't refuse it; the command pushes without asking only while the tab's "Land without asking" is on and its checks pass, and every other push still asks, as does the push after your yes, which no rule allows. Off, the session gets no rule of its own, so auto mode judges the command itself and a tab landing without asking may stop at it |
 | Target branches follow the default branch (`target_follows_default`) | on | When a landing pushes to the default branch while autopilot or hand-started items land on another branch, opens a tab in the background that merges the default branch into that branch under its landing lock, runs the repository's tests and pushes it, so the branch and the builds made from it carry the default branch's work; a conflict or failing tests leave the merge in its worktree for you, marked red in the Landing view. Off, a target branch takes the default branch's work only when you merge it yourself; M-p's 'Bring a target branch up to date with the default branch' still runs it by hand |
 | Watch the default branch's CI (`main_ci_watch`) | on | While autopilot works on a repository, or a tab waits to land on it, and its landings test in CI, Switchboard looks at its default branch's CI every two minutes and tells you when it fails, naming the commit and the line of the log that says why. Off, nothing looks, and you hear of a failing default branch only from the next landing |
-| Autopilot's hands-free mode (`autopilot_handsfree`) | on | Lets autopilot's menu offer 'Hands-free', which has its tabs take the recommended option of what they would ask you (a question box, a question that ends the turn, an item whose plan needs a choice), write each decision into the item's plan as a 'Decided hands-free' line, and land without asking; what your rules or a skill say must be asked still asks. The mode itself starts off. Off, the menu doesn't offer it and every tab asks as usual |
 | Remove landed worktrees (`sweep_landed_worktrees`) | on | Removes a worktree under a repository's .claude/worktrees once everything on its branch is on the default branch, nothing in it is uncommitted, nothing git ignores in it is of its own (tool output and caches, links and copies of the main clone's files go with it), no tab has it open and git hasn't changed its index or HEAD for an hour (a commit, a checkout, a staged file; a read such as git log doesn't count): when a tab in it closes, and hourly for each repository a tab has been in, after fetching the default branch. Its branch is kept, and a message names what went. Off, worktrees stay until you remove them, as Reopen's menu still does |
-| Close a worked note's landed tabs (`autopilot_close`) | when seen | When a tab autopilot opened closes once queue-and-clean has landed it and moved it back to the main clone: when seen, as soon as you leave it after seeing it, or 30 minutes after landing if you never look; at once, as soon as it lands; after 5 minutes, or sooner once seen and left; never, left open for you to close. Whatever the choice, a tab in front stays until you leave it and a prompt typed in it after landing keeps it open; one closed without being seen leaves a notification while Notify when autopilot lands is on |
-| Notify when autopilot lands (`autopilot_landing_notices`) | off | Puts each item autopilot lands without asking, and each landed tab it closes before you saw it, in the sidebar's notifications and the Slack relay's main DM. Off, they show only in the Autopilot view's Landed column, the Notifications view's history (as dismissed) and the item's Done: line |
 | Keep the computer awake while tabs work (`keep_awake`) | on | While a tab's Claude works (background work and watches too, not a /loop between its runs) or autopilot, on and not paused, has tabs open, the computer doesn't sleep when idle (caffeinate on macOS, a logind inhibitor on Linux), shown by a ☕ on the status line, or with UX 2.0 at the top of the sidebar; it lets go two minutes after everything is idle, the display still sleeps, and a laptop closed with no display on it sleeps anyway. M-p's 'Keep the computer awake until I say' holds it whatever runs. Off, the computer sleeps on its own schedule unless held from M-p |
 | wtpr asks where the PR stands (`wtpr_prompt`) | on | Claude, started in a PR's worktree by wtpr (or mission control's "work on it in a new tab"), first reads the PR, its review threads, failing checks and ticket and says where it stands and what it would do next, changing nothing until you say; off, it starts with no prompt |
 | Copy Claude's reply (`copy_reply`) | on | M-y copies the latest reply of the tab's Claude to the clipboard, read from its session transcript; off, the key reaches the pane |
@@ -2226,40 +2217,130 @@ Mission control's Settings view (`M-p`, then "Settings: turn the workspace's opt
 
 ### Mission control
 
+What belongs to mission control as a whole, then a category for each view, its on/off switch first. In Settings they stand together under a "Mission control" heading, each named `Mission control: <view>` over its options and in a search.
+
 | Setting | Default | What it does |
 |---|---|---|
 | Click in menus (`menu_mouse`) | on | A click takes an option of mission control's menus, Yes or No of a question or a numbered answer, and a click outside the box closes it; a right click on an item in mission control, the Notifications window or the sidebar opens its menu, and where no item is the view's (the sidebar's own in the sidebar); and a click picks an option of M-m's, the update box's and M-w's menus; off, they take keys alone |
-| Open boxes by the click (`boxes_near_click`) | on | A menu or question a click opens appears beside the place clicked, so its options are a short move away; one opened by a key stays in the middle. Off, every box opens in the middle of the screen |
-| Tab moves focus (`tab_focus`) | on | Tab and Shift-Tab move a highlight through what can be clicked, as on a webpage, and Enter presses it (Space too, but in the sidebar, where Space peeks): in mission control the views' names, the filter, each section of the view (its rows reached with j and k) and the panes beside it, wrapping round, with [ ] switching views; in the sidebar each of its rows, M-Space opening mission control; and the options of every box and menu; off, Tab switches views in mission control and opens it from the sidebar |
-| Highlight on hover (`hover_highlight`) | on | What a click would press lights under the mouse: in mission control the views' names, the filter, the cards and rows, a menu's options, Yes and No, an answer's options and easy mode's ×; the sidebar's tabs and notifications; the options of M-m's, the update box's and M-w's menus; and the buttons of Notes' toolbar, its boxes' × and M-d's diff. In Ghostty and kitty the mouse pointer also turns into a hand over what a click presses (the workspace's sidebar, header, status line, mission control and boxes) and a resizing arrow over a line between panes. Off, nothing follows the mouse and the pointer is never changed. Takes effect at once in mission control and the sidebar, and when a menu, Notes or the diff next opens |
-| Notifications show in their view (`notice_shows_in_view`) | on | A notification whose kind a view lists (Slack, Inbox, Calendar, PRs, CI, Routines) leads its menu with Show it in the <view> view, which a click or Enter takes: mission control opens on that view with the cursor on its item. Off, its menu starts with its view's own first choice, such as Open it in Slack |
 | Notifications hand off to a tab (`notice_to_tab`) | on | Every notification's menu, and the Slack, Inbox, Calendar and Autopilot views' and a failing default branch's in the CI view, offers Send it to a tab, which pastes its words and link into the Claude of a tab you pick and sends them (Paste it into a tab, beside it, without sending), and Open a tab for it, which starts a tab with Claude told about it (a failing default branch's in its repository's main clone, told to fix it). Off, the menus keep their own choices only |
 | Send it to a tab submits it (`send_to_tab_submits`) | on | An item's Send it to a tab pastes its words and link into the Claude of the tab you pick and presses Enter, so that Claude starts on it; Paste it into a tab, beside it, pastes them without sending, to add to first. Off, Send it to a tab pastes without sending and Paste it into a tab isn't offered |
-| Calendar (`view_calendar`) | on | Mission control's Calendar view: today from the day /today last saved |
-| Slack relay (`view_relay`) | on | Mission control's Slack relay view: whether the relay is running, what it sent today, and which kinds of message reach you and how, with presets |
-| Slack (`view_slack`) | on | Mission control's Slack view: your mentions, DMs, thread replies and chosen channels from the last day, as /slack-updates saved them |
-| Reopen (`view_reopen`) | on | Mission control's Reopen view: tabs closed and past Claude sessions to resume, with the last screen of each, and the worktrees no tab has open; off, M-o opens it still and nothing else lists them |
-| Resources (`view_resources`) | on | Mission control's Resources view: the computer's CPU and memory, and a table of the CPU and memory each tab's processes use, sorted by CPU or memory, read from the kernel every few seconds only while the view is in front; with UX 2.0 a board of sparklines and each tab's process tree, whose menu can end a process. Off, the view and its readings are gone |
-| Requests in Usage (`request_audit`) | on | The Usage view lists today's requests to services outside this computer (GitHub, Linear, Slack, Anthropic and the rest), by protocol and by service, as Switchboard counts them; off, it leaves them out |
-| Usage (`usage`) | on | Mission control's Usage view: today's Claude spend and how much of the rate limits is used |
-| Keys (`view_keys`) | on | Mission control's Keys view, which M-/ opens: every key Switchboard binds, the workspace's grouped by their first tag, then the sidebar's, mission control's, M-d's and Notes', then the commands reached only through M-p, with / to filter, Enter's menu to press a workspace key and m's to find a key by pressing it; with UX 2.0, a board with a heatmap of the Alt keys you pressed this week (counted with habits on); off, M-/ reaches the pane |
+| Notifications show in their view (`notice_shows_in_view`) | on | A notification whose kind a view lists (Slack, Inbox, Calendar, PRs, CI, Routines) leads its menu with Show it in the <view> view, which a click or Enter takes: mission control opens on that view with the cursor on its item. Off, its menu starts with its view's own first choice, such as Open it in Slack |
+| Open boxes by the click (`boxes_near_click`) | on | A menu or question a click opens appears beside the place clicked, so its options are a short move away; one opened by a key stays in the middle. Off, every box opens in the middle of the screen |
+| Tab moves focus (`tab_focus`) | on | Tab and Shift-Tab move a highlight through what can be clicked, as on a webpage, and Enter presses it (Space too, but in the sidebar, where Space peeks): in mission control the views' names, the filter, each section of the view (its rows reached with j and k) and the panes beside it, wrapping round, with [ ] switching views; in the sidebar each of its rows, M-Space opening mission control; and the options of every box and menu; off, Tab switches views in mission control and opens it from the sidebar |
 | Show views as the list moves (`mission_nav_follow`) | on | With UX 2.0, moving the cursor through mission control's list of views with j, k or the arrows brings each view to the front as it lands on it, the list keeping the keys; Enter then moves into the view, a view joins back and forward's trail once the cursor rests on it a second, and the list is one Tab stop, Tab going into the view in front and Shift-Tab back. Off, j and k only move the cursor, Enter opens the view, and Tab stops on each view's row |
+| Highlight on hover (`hover_highlight`) | on | What a click would press lights under the mouse: in mission control the views' names, the filter, the cards and rows, a menu's options, Yes and No, an answer's options and easy mode's ×; the sidebar's tabs and notifications; the options of M-m's, the update box's and M-w's menus; and the buttons of Notes' toolbar, its boxes' × and M-d's diff. In Ghostty and kitty the mouse pointer also turns into a hand over what a click presses (the workspace's sidebar, header, status line, mission control and boxes) and a resizing arrow over a line between panes. Off, nothing follows the mouse and the pointer is never changed. Takes effect at once in mission control and the sidebar, and when a menu, Notes or the diff next opens |
 | Keep the tabs sidebar in mission control (`mission_keep_tabs_sidebar`) | off | With UX 2.0, mission control keeps the tabs sidebar and lists its groups and views in a column of its own beside it, the view to its right; off, while mission control is open the sidebar itself lists its groups and views, the tabs coming back as it closes |
+| Pause lookups while away (`pause_when_away`) | on | Stop asking GitHub, Linear and the calendar for mission control's views, and telling the diff's stories ahead, while no terminal is attached, or the computer has been locked, or idle 10 minutes, with no key pressed in Switchboard since (from another computer over SSH too), and catch up on return |
+| Look often (`poll_fast`) | off | Ask GitHub and Linear every 15 seconds (the PR board every 30) and look at the Slack Home tab every 10, in place of every one or two minutes: about eight times as many requests, which can reach GitHub's 5,000 an hour |
+
+#### Mission control: Notifications
+
+| Setting | Default | What it does |
+|---|---|---|
+| Notifications' history (`notification_history`) | on | Mission control's Notifications view keeps every notification of the last two weeks by day, with what each led to and whether the sidebar still shows it, in ~/.local/state/switchboard/notifications on this computer; off, the view shows only the sidebar's notifications, as they are now, and nothing is kept |
+
+#### Mission control: Tabs
+
+| Setting | Default | What it does |
+|---|---|---|
+| Summaries of each turn (`turn_summaries`) | off | With UX 2.0, each card says what its tab's last turn did, in a sentence Haiku writes as the turn ends from the turn's prompt and last reply, which this sends to Claude; off, as it is by default, nothing is sent and a card shows the reply's first line |
+
+#### Mission control: Calendar
+
+| Setting | Default | What it does |
+|---|---|---|
+| Calendar (`view_calendar`) | on | Mission control's Calendar view: today from the day /today last saved |
 | RSVP from the Calendar (`calendar_rsvp`) | on | Answer an invitation yes, maybe or no from its Enter menu in the Calendar view, through Claude's Google Calendar connector |
 | Attendees' photos in the Calendar (`calendar_photos`) | off | Show the photos of who is going to the Calendar view's chosen event, looked up by each attendee's email address in Linear and the Slack relay's app (users:read.email), which sends those addresses to them. Off, as it is by default, no address is sent and each attendee is their initial |
+
+#### Mission control: Reminders
+
+| Setting | Default | What it does |
+|---|---|---|
+| Reminders (`reminders`) | on | M-p's Remind me about this tab: the tab waits under Reminders with the time left, then moves to Needs you with a banner when it comes due, and mission control's Reminders view shows every tab's reminder, on a month with UX 2.0; off, reminders are neither set nor shown, and the view is gone |
+
+#### Mission control: Slack
+
+| Setting | Default | What it does |
+|---|---|---|
+| Slack (`view_slack`) | on | Mission control's Slack view: your mentions, DMs, thread replies and chosen channels from the last day, as /slack-updates saved them |
 | Slack without a tab (`slack_background`) | on | Mission control looks at Slack itself every minute, through cheap headless Haiku calls, instead of the Slack routine following the slack-updates skill |
 | Slack threads and pictures (`slack_threads`) | on | With UX 2.0, the Slack view shows the chosen message's whole thread beside it, with its pictures and videos, which each look reads through Claude's Slack connector (a few more headless Haiku calls a look) and keeps on this computer; off, the view lists the messages alone and reads no threads or files |
 | Reply from the Slack view (`slack_reply`) | off | A Slack message's Enter menu in the Slack view offers to reply in its thread or its channel, or in its DM: a box to type in, and Send asks before anything goes, naming who can read it, then sends your words as typed through Claude's Slack connector. Off, as it is by default since it sends your words to Slack, the menu offers no replies |
-| Pause lookups while away (`pause_when_away`) | on | Stop asking GitHub, Linear and the calendar for mission control's views, and telling the diff's stories ahead, while no terminal is attached, or the computer has been locked, or idle 10 minutes, with no key pressed in Switchboard since (from another computer over SSH too), and catch up on return |
-| Look often (`poll_fast`) | off | Ask GitHub and Linear every 15 seconds (the PR board every 30) and look at the Slack Home tab every 10, in place of every one or two minutes: about eight times as many requests, which can reach GitHub's 5,000 an hour |
+
+#### Mission control: Reopen
+
+| Setting | Default | What it does |
+|---|---|---|
+| Reopen (`view_reopen`) | on | Mission control's Reopen view: tabs closed and past Claude sessions to resume, with the last screen of each, and the worktrees no tab has open; off, M-o opens it still and nothing else lists them |
+
+#### Mission control: PRs
+
+| Setting | Default | What it does |
+|---|---|---|
 | PR board (`pr_board`) | on | Mission control's PRs view, which asks GitHub about your pull requests every two minutes |
-| Ticket board (`ticket_board`) | on | Mission control's Tickets view, which asks Linear about the issues assigned to you every two minutes |
-| Inbox (`view_inbox`) | on | Mission control's Inbox view and the sidebar's count of it: your unread Linear mentions, comments and assignments, asked of Linear every two minutes #linear |
+
+#### Mission control: CI
+
+| Setting | Default | What it does |
+|---|---|---|
 | CI (`view_ci`) | on | Mission control's CI view: your pull requests failing, running and passing, each failed check with the line of its log that says why and, with UX 2.0, its failing step beside the list, asked of GitHub every two minutes #github |
-| Routines (`routines`) | on | Prompts of yours on a schedule, each run by a headless Claude allowed only the routine's tools, opening no tab, and the Routines view in mission control; off, no routine runs and the view is gone, the routines kept |
-| Autopilot view (`view_autopilot`) | on | With UX 2.0 on, while autopilot works a note, mission control shows a view of it: the note, its tabs working and open against its slots and cap, today's spend against its limit, and a board of every item it works, a card in the column where it stands (Next up, Working, Waiting on you, Landing, Landed, and Skipped while an item is skipped). Off, its line above the tabs stays and the view goes; on, the view takes the line's place |
-| Summaries of each turn (`turn_summaries`) | off | With UX 2.0, each card says what its tab's last turn did, in a sentence Haiku writes as the turn ends from the turn's prompt and last reply, which this sends to Claude; off, as it is by default, nothing is sent and a card shows the reply's first line |
+
+#### Mission control: Landing
+
+| Setting | Default | What it does |
+|---|---|---|
 | Landing view (`view_landing`) | on | While a tab is landing or waiting to land, mission control shows each repository's landing queue or merge queue (everyone's PRs in it, asked of GitHub every 15 seconds), in queue order, with the tab that has each; a waiting one's menu moves it or takes it out |
+
+#### Mission control: Autopilot
+
+| Setting | Default | What it does |
+|---|---|---|
+| Autopilot view (`view_autopilot`) | on | With UX 2.0 on, while autopilot works a note, mission control shows a view of it: the note, its tabs working and open against its slots and cap, today's spend against its limit, and a board of every item it works, a card in the column where it stands (Next up, Working, Waiting on you, Landing, Landed, and Skipped while an item is skipped). Off, its line above the tabs stays and the view goes; on, the view takes the line's place |
+| Autopilot (`autopilot`) | on | With it on, M-p's 'Autopilot: work a note' keeps tabs working through a note's checklist, opening the next item with wtn as each lands; the mode itself starts off until you turn it on there. Off, it opens no tabs, and its line in mission control and its notification go |
+| Close a worked note's landed tabs (`autopilot_close`) | when seen | When a tab autopilot opened closes once queue-and-clean has landed it and moved it back to the main clone: when seen, as soon as you leave it after seeing it, or 30 minutes after landing if you never look; at once, as soon as it lands; after 5 minutes, or sooner once seen and left; never, left open for you to close. Whatever the choice, a tab in front stays until you leave it and a prompt typed in it after landing keeps it open; one closed without being seen leaves a notification while Notify when autopilot lands is on |
+| Autopilot's hands-free mode (`autopilot_handsfree`) | on | Lets autopilot's menu offer 'Hands-free', which has its tabs take the recommended option of what they would ask you (a question box, a question that ends the turn, an item whose plan needs a choice), write each decision into the item's plan as a 'Decided hands-free' line, and land without asking; what your rules or a skill say must be asked still asks. The mode itself starts off. Off, the menu doesn't offer it and every tab asks as usual |
+| Notify when autopilot lands (`autopilot_landing_notices`) | off | Puts each item autopilot lands without asking, and each landed tab it closes before you saw it, in the sidebar's notifications and the Slack relay's main DM. Off, they show only in the Autopilot view's Landed column, the Notifications view's history (as dismissed) and the item's Done: line |
+| Estimated finish (`autopilot_eta`) | on | Autopilot's view says when the note's ready items should all be done ("done by about 3:40 PM · 6 left"), from the median time its recent items took from opening to landing, its slots and its tabs still at work, and how many items wait on you (an open choice it won't take, a design board to review). Off, its heading has no estimate |
+| Keep opening tabs while I'm away (`autopilot_while_away`) | on | Autopilot keeps opening tabs for the note's next items while you're away (the screen locked, or no input for 10 minutes), up to its slots, most tabs open and spend limit, so it works through the note overnight with a terminal attached. Off, it opens nothing while you're away and finishes only the tabs already open |
+| Autopilot's push allowed in auto mode (`autopilot_push_rule`) | on | A tab autopilot opens in a repository that lands straight on a branch starts its Claude with the landing's push command, switchboard land-lock push, allowed for that session, so Claude Code's auto mode doesn't refuse it; the command pushes without asking only while the tab's "Land without asking" is on and its checks pass, and every other push still asks, as does the push after your yes, which no rule allows. Off, the session gets no rule of its own, so auto mode judges the command itself and a tab landing without asking may stop at it |
+
+#### Mission control: Routines
+
+| Setting | Default | What it does |
+|---|---|---|
+| Routines (`routines`) | on | Prompts of yours on a schedule, each run by a headless Claude allowed only the routine's tools, opening no tab, and the Routines view in mission control; off, no routine runs and the view is gone, the routines kept |
+
+#### Mission control: Tickets
+
+| Setting | Default | What it does |
+|---|---|---|
+| Ticket board (`ticket_board`) | on | Mission control's Tickets view, which asks Linear about the issues assigned to you every two minutes |
+
+#### Mission control: Inbox
+
+| Setting | Default | What it does |
+|---|---|---|
+| Inbox (`view_inbox`) | on | Mission control's Inbox view and the sidebar's count of it: your unread Linear mentions, comments and assignments, asked of Linear every two minutes #linear |
+
+#### Mission control: Resources
+
+| Setting | Default | What it does |
+|---|---|---|
+| Resources (`view_resources`) | on | Mission control's Resources view: the computer's CPU and memory, and a table of the CPU and memory each tab's processes use, sorted by CPU or memory, read from the kernel every few seconds only while the view is in front; with UX 2.0 a board of sparklines and each tab's process tree, whose menu can end a process. Off, the view and its readings are gone |
+
+#### Mission control: Usage
+
+| Setting | Default | What it does |
+|---|---|---|
+| Usage (`usage`) | on | Mission control's Usage view: today's Claude spend and how much of the rate limits is used |
+| Requests in Usage (`request_audit`) | on | The Usage view lists today's requests to services outside this computer (GitHub, Linear, Slack, Anthropic and the rest), by protocol and by service, as Switchboard counts them; off, it leaves them out |
+
+#### Mission control: Keys
+
+| Setting | Default | What it does |
+|---|---|---|
+| Keys (`view_keys`) | on | Mission control's Keys view, which M-/ opens: every key Switchboard binds, the workspace's grouped by their first tag, then the sidebar's, mission control's, M-d's and Notes', then the commands reached only through M-p, with / to filter, Enter's menu to press a workspace key and m's to find a key by pressing it; with UX 2.0, a board with a heatmap of the Alt keys you pressed this week (counted with habits on); off, M-/ reaches the pane |
 
 ### Tabs and status bar
 
@@ -2374,6 +2455,7 @@ With UX 2.0 on, this category is named "Tabs and header".
 
 | Setting | Default | What it does |
 |---|---|---|
+| Slack relay (`view_relay`) | on | Mission control's Slack relay view: whether the relay is running, what it sent today, and which kinds of message reach you and how, with presets |
 | Close the relay's tab when it stops (`relay_close_tab`) | on | Stopping the Slack relay, from M-p, `slack-relay stop`, `stop` in its DM or Ctrl-C in its tab, closes its tab; a crash or a start it refuses keeps the tab at a shell with the error. Off, the tab stays at a shell whenever the relay ends |
 | Prompts and questions (`relay_send_prompts`) | Notify me | Where a prompt, question or wait goes: Notify me (its thread, with a line there mentioning you) or Thread only |
 | Dialogs before a session starts (`relay_send_dialogs`) | Notify me | Where a dialog before a session starts goes: Notify me or Thread only |

@@ -42,36 +42,39 @@ const SIDE_MIN: usize = 24;
 const TEXT_MAX: usize = 100;
 
 /// A category or file of the panel: the heading's id in the view, its
-/// name, how many options it has and how many changed.
+/// name (a grouped category's without its group, which is the heading over
+/// it), its group, how many options it has and how many changed.
 struct Entry {
     id: String,
     name: String,
+    group: Option<String>,
     count: usize,
     changed: usize,
 }
 
 /// Every category of the settings, then every file of yours, in the order
-/// the view lists them; a category's counts from its heading in the view
+/// the view lists them (`settings::categories`: the grouped ones last, a
+/// group's together); a category's counts from its heading in the view
 /// where it has one, which a filter keeps whole.
 fn entries(items: &[Item], ux2: bool) -> (Vec<Entry>, Vec<Entry>) {
-    let mut categories: Vec<Entry> = Vec::new();
-    for o in settings::current_settings() {
-        let id = format!("header:{}", o.category);
-        let at = match categories.iter().position(|e| e.id == id) {
-            Some(at) => at,
-            None => {
-                categories.push(Entry {
-                    id,
-                    name: settings::category_name(&o.category, ux2).to_string(),
-                    count: 0,
-                    changed: 0,
-                });
-                categories.len() - 1
+    let all = settings::current_settings();
+    let names = settings::categories(&all);
+    let mut categories: Vec<Entry> = names
+        .iter()
+        .map(|&category| {
+            let members = all.iter().filter(|o| o.category == category);
+            Entry {
+                id: format!("header:{category}"),
+                name: match settings::category_group(category) {
+                    Some((_, name)) => name.to_string(),
+                    None => settings::category_name(category, ux2).to_string(),
+                },
+                group: settings::group_of(category, &names).map(str::to_string),
+                count: members.clone().count(),
+                changed: members.filter(|o| o.changed()).count(),
             }
-        };
-        categories[at].count += 1;
-        categories[at].changed += usize::from(o.changed());
-    }
+        })
+        .collect();
     let mut files: Vec<Entry> = Vec::new();
     for f in OWN_FILES {
         let id = format!("header:{}", f.category);
@@ -80,6 +83,7 @@ fn entries(items: &[Item], ux2: bool) -> (Vec<Entry>, Vec<Entry>) {
             None => files.push(Entry {
                 id,
                 name: f.category.to_string(),
+                group: None,
                 count: f.rows.len(),
                 changed: 0,
             }),
@@ -92,6 +96,7 @@ fn entries(items: &[Item], ux2: bool) -> (Vec<Entry>, Vec<Entry>) {
         Entry {
             id: format!("header:{}", crate::usage::own::LANDING),
             name: crate::usage::own::LANDING.to_string(),
+            group: None,
             count: 0,
             changed: 0,
         },
@@ -487,8 +492,18 @@ pub fn board(
             panel.push((if chosen { row } else { on_surface(row, bg) }, first));
         }
     };
-    section("Categories", &categories, &mut panel);
-    panel.push((on_surface(blank(side_w), panel_bg), None));
+    // The categories with no group, then each group under its name.
+    let mut from = 0;
+    while from < categories.len() {
+        let group = &categories[from].group;
+        let to = (from..categories.len())
+            .find(|&i| &categories[i].group != group)
+            .unwrap_or(categories.len());
+        let title = group.as_deref().unwrap_or("Categories");
+        section(title, &categories[from..to], &mut panel);
+        panel.push((on_surface(blank(side_w), panel_bg), None));
+        from = to;
+    }
     section("Your files", &files, &mut panel);
 
     // The pane: the category in front's options, or every match by category.
@@ -646,6 +661,68 @@ mod tests {
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
             .collect();
         assert!(shown.contains(&format!("  {}", &head[..8])), "{shown}");
+    }
+
+    #[test]
+    fn mission_control_is_a_group_heading_with_each_view_a_category_under_it() {
+        let items = rows();
+        let reply = items
+            .iter()
+            .position(|i| i.id == "setting:slack_reply")
+            .unwrap();
+        let view = View {
+            id: views::ViewId::Settings,
+            title: "Settings".into(),
+            data: crate::items::ViewData {
+                items: items.clone(),
+                ..Default::default()
+            },
+            loaded: true,
+        };
+        let mut m = Mission::new();
+        m.snap.rules.ux2 = true;
+        m.cursor = reply as isize;
+        let (mut lines, mut hits, mut images) = (Vec::new(), Vec::new(), Vec::new());
+        board(&view, &m, 160, 80, &mut lines, &mut hits, &mut images);
+        let text: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect())
+            .collect();
+        let at = |words: &str| {
+            text.iter()
+                .position(|l| l.trim_start().starts_with(words))
+                .unwrap_or_else(|| panic!("{words}\n{}", text.join("\n")))
+        };
+        // The categories with no group, then the group under its name, what
+        // belongs to it as a whole first, then your files.
+        let (plain, group, files) = (at("CATEGORIES"), at("MISSION CONTROL"), at("YOUR FILES"));
+        assert!(plain < group && group < files, "{}", text.join("\n"));
+        assert!(text[group + 1].trim_start().starts_with("Mission control"));
+        let slack = (group..files)
+            .find(|&i| text[i].trim_start().starts_with("Slack "))
+            .unwrap_or_else(|| panic!("{}", text.join("\n")));
+        // Slack is in front, named whole over its options, its switch first.
+        assert!(text[slack].contains("4"), "{}", text[slack]);
+        assert!(text[0].contains("Mission control: Slack"), "{}", text[0]);
+        let shown = text.join("\n");
+        let place = |words: &str| {
+            shown
+                .find(words)
+                .unwrap_or_else(|| panic!("{words}\n{shown}"))
+        };
+        assert!(place("Reply from the Slack view") > place("Slack threads and pictures"));
+        assert!(place("Slack threads and pictures") > place("Slack without a tab"));
+        assert!(!shown.contains("Highlight on hover"), "{shown}");
+
+        // h and l step through the group's categories as through the rest.
+        let before = side_step(&items, reply as isize, -1) as usize;
+        let head = |row: usize| items[heading_of(&items, row).unwrap()].title.clone();
+        assert!(
+            head(before).starts_with("Mission control"),
+            "{}",
+            head(before)
+        );
+        assert_ne!(head(before), "Mission control: Slack");
     }
 
     #[test]

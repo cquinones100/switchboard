@@ -94,13 +94,6 @@
     "default": true
   },
   {
-    "key": "reminders",
-    "category": "Sidebar",
-    "label": "Reminders",
-    "description": "M-p's Remind me about this tab: the tab waits under Reminders with the time left, then moves to Needs you with a banner when it comes due, and mission control's Reminders view shows every tab's reminder, on a month with UX 2.0; off, reminders are neither set nor shown, and the view is gone",
-    "default": true
-  },
-  {
     "key": "sidebar_reminders",
     "category": "Sidebar",
     "label": "Reminders in the sidebar",
@@ -122,77 +115,10 @@
     "default": true
   },
   {
-    "key": "autopilot",
-    "category": "Sessions",
-    "label": "Autopilot",
-    "description": "With it on, M-p's 'Autopilot: work a note' keeps tabs working through a note's checklist, opening the next item with wtn as each lands; the mode itself starts off until you turn it on there. Off, it opens no tabs, and its line in mission control and its notification go",
-    "default": true
-  },
-  {
     "key": "sweep_landed_worktrees",
     "category": "Sessions",
     "label": "Remove landed worktrees",
     "description": "Removes a worktree under a repository's .claude/worktrees once everything on its branch is on the default branch, nothing in it is uncommitted, nothing git ignores in it is of its own (tool output and caches, links and copies of the main clone's files go with it), no tab has it open and git hasn't changed its index or HEAD for an hour (a commit, a checkout, a staged file; a read such as git log doesn't count): when a tab in it closes, and hourly for each repository a tab has been in, after fetching the default branch. Its branch is kept, and a message names what went. Off, worktrees stay until you remove them, as Reopen's menu still does",
-    "default": true
-  },
-  {
-    "key": "autopilot_close",
-    "category": "Sessions",
-    "label": "Close a worked note's landed tabs",
-    "description": "When a tab autopilot opened closes once queue-and-clean has landed it and moved it back to the main clone: when seen, as soon as you leave it after seeing it, or 30 minutes after landing if you never look; at once, as soon as it lands; after 5 minutes, or sooner once seen and left; never, left open for you to close. Whatever the choice, a tab in front stays until you leave it and a prompt typed in it after landing keeps it open; one closed without being seen leaves a notification while Notify when autopilot lands is on",
-    "choices": [
-      {
-        "value": "seen",
-        "label": "when seen"
-      },
-      {
-        "value": "now",
-        "label": "at once"
-      },
-      {
-        "value": "5m",
-        "label": "after 5 minutes"
-      },
-      {
-        "value": "off",
-        "label": "never"
-      }
-    ],
-    "default": "seen"
-  },
-  {
-    "key": "autopilot_handsfree",
-    "category": "Sessions",
-    "label": "Autopilot's hands-free mode",
-    "description": "Lets autopilot's menu offer 'Hands-free', which has its tabs take the recommended option of what they would ask you (a question box, a question that ends the turn, an item whose plan needs a choice), write each decision into the item's plan as a 'Decided hands-free' line, and land without asking; what your rules or a skill say must be asked still asks. The mode itself starts off. Off, the menu doesn't offer it and every tab asks as usual",
-    "default": true
-  },
-  {
-    "key": "autopilot_landing_notices",
-    "category": "Sessions",
-    "label": "Notify when autopilot lands",
-    "description": "Puts each item autopilot lands without asking, and each landed tab it closes before you saw it, in the sidebar's notifications and the Slack relay's main DM. Off, they show only in the Autopilot view's Landed column, the Notifications view's history (as dismissed) and the item's Done: line",
-    "default": false
-  },
-  {
-    "key": "autopilot_eta",
-    "category": "Sessions",
-    "label": "Estimated finish",
-    "description": "Autopilot's view says when the note's ready items should all be done (\"done by about 3:40 PM · 6 left\"), from the median time its recent items took from opening to landing, its slots and its tabs still at work, and how many items wait on you (an open choice it won't take, a design board to review). Off, its heading has no estimate",
-    "default": true
-  },
-  {
-    "key": "autopilot_while_away",
-    "category": "Sessions",
-    "label": "Keep opening tabs while I'm away",
-    "description": "Autopilot keeps opening tabs for the note's next items while you're away (the screen locked, or no input for 10 minutes), up to its slots, most tabs open and spend limit, so it works through the note overnight with a terminal attached. Off, it opens nothing while you're away and finishes only the tabs already open",
-    "default": true
-  },
-  {
-    "key": "autopilot_push_rule",
-    "category": "Sessions",
-    "label": "Autopilot's push allowed in auto mode",
-    "description": "A tab autopilot opens in a repository that lands straight on a branch starts its Claude with the landing's push command, switchboard land-lock push, allowed for that session, so Claude Code's auto mode doesn't refuse it; the command pushes without asking only while the tab's \"Land without asking\" is on and its checks pass, and every other push still asks, as does the push after your yes, which no rule allows. Off, the session gets no rule of its own, so auto mode judges the command itself and a tab landing without asking may stop at it",
     "default": true
   },
   {
@@ -221,13 +147,6 @@
     "category": "Sidebar",
     "label": "Notifications",
     "description": "The Notifications block at the bottom of the sidebar: new Slack messages and your Linear inbox, which a click opens in mission control",
-    "default": true
-  },
-  {
-    "key": "notification_history",
-    "category": "Sidebar",
-    "label": "Notifications' history",
-    "description": "Mission control's Notifications view keeps every notification of the last two weeks by day, with what each led to and whether the sidebar still shows it, in ~/.local/state/switchboard/notifications on this computer; off, the view shows only the sidebar's notifications, as they are now, and nothing is kept",
     "default": true
   },
   {
@@ -442,6 +361,248 @@
     "default": true
   },
   {
+    "key": "mission_keep_tabs_sidebar",
+    "category": "Mission control",
+    "label": "Keep the tabs sidebar in mission control",
+    "description": "With UX 2.0, mission control keeps the tabs sidebar and lists its groups and views in a column of its own beside it, the view to its right; off, while mission control is open the sidebar itself lists its groups and views, the tabs coming back as it closes",
+    "default": false
+  },
+  {
+    "key": "pause_when_away",
+    "category": "Mission control",
+    "label": "Pause lookups while away",
+    "description": "Stop asking GitHub, Linear and the calendar for mission control's views, and telling the diff's stories ahead, while no terminal is attached, or the computer has been locked, or idle 10 minutes, with no key pressed in Switchboard since (from another computer over SSH too), and catch up on return",
+    "default": true
+  },
+  {
+    "key": "poll_fast",
+    "category": "Mission control",
+    "label": "Look often",
+    "description": "Ask GitHub and Linear every 15 seconds (the PR board every 30) and look at the Slack Home tab every 10, in place of every one or two minutes: about eight times as many requests, which can reach GitHub's 5,000 an hour",
+    "default": false
+  },
+  {
+    "key": "notification_history",
+    "category": "Mission control: Notifications",
+    "label": "Notifications' history",
+    "description": "Mission control's Notifications view keeps every notification of the last two weeks by day, with what each led to and whether the sidebar still shows it, in ~/.local/state/switchboard/notifications on this computer; off, the view shows only the sidebar's notifications, as they are now, and nothing is kept",
+    "default": true
+  },
+  {
+    "key": "turn_summaries",
+    "category": "Mission control: Tabs",
+    "label": "Summaries of each turn",
+    "description": "With UX 2.0, each card says what its tab's last turn did, in a sentence Haiku writes as the turn ends from the turn's prompt and last reply, which this sends to Claude; off, as it is by default, nothing is sent and a card shows the reply's first line",
+    "default": false
+  },
+  {
+    "key": "view_calendar",
+    "category": "Mission control: Calendar",
+    "label": "Calendar",
+    "description": "Mission control's Calendar view: today from the day /today last saved",
+    "default": true
+  },
+  {
+    "key": "calendar_rsvp",
+    "category": "Mission control: Calendar",
+    "label": "RSVP from the Calendar",
+    "description": "Answer an invitation yes, maybe or no from its Enter menu in the Calendar view, through Claude's Google Calendar connector",
+    "default": true
+  },
+  {
+    "key": "calendar_photos",
+    "category": "Mission control: Calendar",
+    "label": "Attendees' photos in the Calendar",
+    "description": "Show the photos of who is going to the Calendar view's chosen event, looked up by each attendee's email address in Linear and the Slack relay's app (users:read.email), which sends those addresses to them. Off, as it is by default, no address is sent and each attendee is their initial",
+    "default": false
+  },
+  {
+    "key": "reminders",
+    "category": "Mission control: Reminders",
+    "label": "Reminders",
+    "description": "M-p's Remind me about this tab: the tab waits under Reminders with the time left, then moves to Needs you with a banner when it comes due, and mission control's Reminders view shows every tab's reminder, on a month with UX 2.0; off, reminders are neither set nor shown, and the view is gone",
+    "default": true
+  },
+  {
+    "key": "view_slack",
+    "category": "Mission control: Slack",
+    "label": "Slack",
+    "description": "Mission control's Slack view: your mentions, DMs, thread replies and chosen channels from the last day, as /slack-updates saved them",
+    "default": true
+  },
+  {
+    "key": "slack_background",
+    "category": "Mission control: Slack",
+    "label": "Slack without a tab",
+    "description": "Mission control looks at Slack itself every minute, through cheap headless Haiku calls, instead of the Slack routine following the slack-updates skill",
+    "default": true
+  },
+  {
+    "key": "slack_threads",
+    "category": "Mission control: Slack",
+    "label": "Slack threads and pictures",
+    "description": "With UX 2.0, the Slack view shows the chosen message's whole thread beside it, with its pictures and videos, which each look reads through Claude's Slack connector (a few more headless Haiku calls a look) and keeps on this computer; off, the view lists the messages alone and reads no threads or files",
+    "default": true
+  },
+  {
+    "key": "slack_reply",
+    "category": "Mission control: Slack",
+    "label": "Reply from the Slack view",
+    "description": "A Slack message's Enter menu in the Slack view offers to reply in its thread or its channel, or in its DM: a box to type in, and Send asks before anything goes, naming who can read it, then sends your words as typed through Claude's Slack connector. Off, as it is by default since it sends your words to Slack, the menu offers no replies",
+    "default": false
+  },
+  {
+    "key": "view_reopen",
+    "category": "Mission control: Reopen",
+    "label": "Reopen",
+    "description": "Mission control's Reopen view: tabs closed and past Claude sessions to resume, with the last screen of each, and the worktrees no tab has open; off, M-o opens it still and nothing else lists them",
+    "default": true
+  },
+  {
+    "key": "pr_board",
+    "category": "Mission control: PRs",
+    "label": "PR board",
+    "description": "Mission control's PRs view, which asks GitHub about your pull requests every two minutes",
+    "default": true
+  },
+  {
+    "key": "view_ci",
+    "category": "Mission control: CI",
+    "label": "CI",
+    "description": "Mission control's CI view: your pull requests failing, running and passing, each failed check with the line of its log that says why and, with UX 2.0, its failing step beside the list, asked of GitHub every two minutes #github",
+    "default": true
+  },
+  {
+    "key": "view_landing",
+    "category": "Mission control: Landing",
+    "label": "Landing view",
+    "description": "While a tab is landing or waiting to land, mission control shows each repository's landing queue or merge queue (everyone's PRs in it, asked of GitHub every 15 seconds), in queue order, with the tab that has each; a waiting one's menu moves it or takes it out",
+    "default": true
+  },
+  {
+    "key": "view_autopilot",
+    "category": "Mission control: Autopilot",
+    "label": "Autopilot view",
+    "description": "With UX 2.0 on, while autopilot works a note, mission control shows a view of it: the note, its tabs working and open against its slots and cap, today's spend against its limit, and a board of every item it works, a card in the column where it stands (Next up, Working, Waiting on you, Landing, Landed, and Skipped while an item is skipped). Off, its line above the tabs stays and the view goes; on, the view takes the line's place",
+    "default": true
+  },
+  {
+    "key": "autopilot",
+    "category": "Mission control: Autopilot",
+    "label": "Autopilot",
+    "description": "With it on, M-p's 'Autopilot: work a note' keeps tabs working through a note's checklist, opening the next item with wtn as each lands; the mode itself starts off until you turn it on there. Off, it opens no tabs, and its line in mission control and its notification go",
+    "default": true
+  },
+  {
+    "key": "autopilot_close",
+    "category": "Mission control: Autopilot",
+    "label": "Close a worked note's landed tabs",
+    "description": "When a tab autopilot opened closes once queue-and-clean has landed it and moved it back to the main clone: when seen, as soon as you leave it after seeing it, or 30 minutes after landing if you never look; at once, as soon as it lands; after 5 minutes, or sooner once seen and left; never, left open for you to close. Whatever the choice, a tab in front stays until you leave it and a prompt typed in it after landing keeps it open; one closed without being seen leaves a notification while Notify when autopilot lands is on",
+    "choices": [
+      {
+        "value": "seen",
+        "label": "when seen"
+      },
+      {
+        "value": "now",
+        "label": "at once"
+      },
+      {
+        "value": "5m",
+        "label": "after 5 minutes"
+      },
+      {
+        "value": "off",
+        "label": "never"
+      }
+    ],
+    "default": "seen"
+  },
+  {
+    "key": "autopilot_handsfree",
+    "category": "Mission control: Autopilot",
+    "label": "Autopilot's hands-free mode",
+    "description": "Lets autopilot's menu offer 'Hands-free', which has its tabs take the recommended option of what they would ask you (a question box, a question that ends the turn, an item whose plan needs a choice), write each decision into the item's plan as a 'Decided hands-free' line, and land without asking; what your rules or a skill say must be asked still asks. The mode itself starts off. Off, the menu doesn't offer it and every tab asks as usual",
+    "default": true
+  },
+  {
+    "key": "autopilot_landing_notices",
+    "category": "Mission control: Autopilot",
+    "label": "Notify when autopilot lands",
+    "description": "Puts each item autopilot lands without asking, and each landed tab it closes before you saw it, in the sidebar's notifications and the Slack relay's main DM. Off, they show only in the Autopilot view's Landed column, the Notifications view's history (as dismissed) and the item's Done: line",
+    "default": false
+  },
+  {
+    "key": "autopilot_eta",
+    "category": "Mission control: Autopilot",
+    "label": "Estimated finish",
+    "description": "Autopilot's view says when the note's ready items should all be done (\"done by about 3:40 PM · 6 left\"), from the median time its recent items took from opening to landing, its slots and its tabs still at work, and how many items wait on you (an open choice it won't take, a design board to review). Off, its heading has no estimate",
+    "default": true
+  },
+  {
+    "key": "autopilot_while_away",
+    "category": "Mission control: Autopilot",
+    "label": "Keep opening tabs while I'm away",
+    "description": "Autopilot keeps opening tabs for the note's next items while you're away (the screen locked, or no input for 10 minutes), up to its slots, most tabs open and spend limit, so it works through the note overnight with a terminal attached. Off, it opens nothing while you're away and finishes only the tabs already open",
+    "default": true
+  },
+  {
+    "key": "autopilot_push_rule",
+    "category": "Mission control: Autopilot",
+    "label": "Autopilot's push allowed in auto mode",
+    "description": "A tab autopilot opens in a repository that lands straight on a branch starts its Claude with the landing's push command, switchboard land-lock push, allowed for that session, so Claude Code's auto mode doesn't refuse it; the command pushes without asking only while the tab's \"Land without asking\" is on and its checks pass, and every other push still asks, as does the push after your yes, which no rule allows. Off, the session gets no rule of its own, so auto mode judges the command itself and a tab landing without asking may stop at it",
+    "default": true
+  },
+  {
+    "key": "routines",
+    "category": "Mission control: Routines",
+    "label": "Routines",
+    "description": "Prompts of yours on a schedule, each run by a headless Claude allowed only the routine's tools, opening no tab, and the Routines view in mission control; off, no routine runs and the view is gone, the routines kept",
+    "default": true
+  },
+  {
+    "key": "ticket_board",
+    "category": "Mission control: Tickets",
+    "label": "Ticket board",
+    "description": "Mission control's Tickets view, which asks Linear about the issues assigned to you every two minutes",
+    "default": true
+  },
+  {
+    "key": "view_inbox",
+    "category": "Mission control: Inbox",
+    "label": "Inbox",
+    "description": "Mission control's Inbox view and the sidebar's count of it: your unread Linear mentions, comments and assignments, asked of Linear every two minutes #linear",
+    "default": true
+  },
+  {
+    "key": "view_resources",
+    "category": "Mission control: Resources",
+    "label": "Resources",
+    "description": "Mission control's Resources view: the computer's CPU and memory, and a table of the CPU and memory each tab's processes use, sorted by CPU or memory, read from the kernel every few seconds only while the view is in front; with UX 2.0 a board of sparklines and each tab's process tree, whose menu can end a process. Off, the view and its readings are gone",
+    "default": true
+  },
+  {
+    "key": "usage",
+    "category": "Mission control: Usage",
+    "label": "Usage",
+    "description": "Mission control's Usage view: today's Claude spend and how much of the rate limits is used",
+    "default": true
+  },
+  {
+    "key": "request_audit",
+    "category": "Mission control: Usage",
+    "label": "Requests in Usage",
+    "description": "The Usage view lists today's requests to services outside this computer (GitHub, Linear, Slack, Anthropic and the rest), by protocol and by service, as Switchboard counts them; off, it leaves them out",
+    "default": true
+  },
+  {
+    "key": "view_keys",
+    "category": "Mission control: Keys",
+    "label": "Keys",
+    "description": "Mission control's Keys view, which M-/ opens: every key Switchboard binds, the workspace's grouped by their first tag, then the sidebar's, mission control's, M-d's and Notes', then the commands reached only through M-p, with / to filter, Enter's menu to press a workspace key and m's to find a key by pressing it; with UX 2.0, a board with a heatmap of the Alt keys you pressed this week (counted with habits on); off, M-/ reaches the pane",
+    "default": true
+  },
+  {
     "key": "diff_story_progress",
     "category": "Diff",
     "label": "Diff story progress",
@@ -503,76 +664,6 @@
     "label": "Diff story notes on changes",
     "description": "M-d's diff shows Haiku's note over each change worth one, why it is needed, and names the chapter of a change that belongs to another one than its file; off, only the list's chapters",
     "default": true
-  },
-  {
-    "key": "turn_summaries",
-    "category": "Mission control",
-    "label": "Summaries of each turn",
-    "description": "With UX 2.0, each card says what its tab's last turn did, in a sentence Haiku writes as the turn ends from the turn's prompt and last reply, which this sends to Claude; off, as it is by default, nothing is sent and a card shows the reply's first line",
-    "default": false
-  },
-  {
-    "key": "view_calendar",
-    "category": "Mission control",
-    "label": "Calendar",
-    "description": "Mission control's Calendar view: today from the day /today last saved",
-    "default": true
-  },
-  {
-    "key": "view_slack",
-    "category": "Mission control",
-    "label": "Slack",
-    "description": "Mission control's Slack view: your mentions, DMs, thread replies and chosen channels from the last day, as /slack-updates saved them",
-    "default": true
-  },
-  {
-    "key": "view_relay",
-    "category": "Mission control",
-    "label": "Slack relay",
-    "description": "Mission control's Slack relay view: whether the relay is running, what it sent today, and which kinds of message reach you and how, with presets. Off, the view is gone and the relay's settings stay in Settings",
-    "default": true
-  },
-  {
-    "key": "view_reopen",
-    "category": "Mission control",
-    "label": "Reopen",
-    "description": "Mission control's Reopen view: tabs closed and past Claude sessions to resume, with the last screen of each, and the worktrees no tab has open; off, M-o opens it still and nothing else lists them",
-    "default": true
-  },
-  {
-    "key": "view_resources",
-    "category": "Mission control",
-    "label": "Resources",
-    "description": "Mission control's Resources view: the computer's CPU and memory, and a table of the CPU and memory each tab's processes use, sorted by CPU or memory, read from the kernel every few seconds only while the view is in front; with UX 2.0 a board of sparklines and each tab's process tree, whose menu can end a process. Off, the view and its readings are gone",
-    "default": true
-  },
-  {
-    "key": "request_audit",
-    "category": "Mission control",
-    "label": "Requests in Usage",
-    "description": "The Usage view lists today's requests to services outside this computer (GitHub, Linear, Slack, Anthropic and the rest), by protocol and by service, as Switchboard counts them; off, it leaves them out",
-    "default": true
-  },
-  {
-    "key": "usage",
-    "category": "Mission control",
-    "label": "Usage",
-    "description": "Mission control's Usage view: today's Claude spend and how much of the rate limits is used",
-    "default": true
-  },
-  {
-    "key": "view_keys",
-    "category": "Mission control",
-    "label": "Keys",
-    "description": "Mission control's Keys view, which M-/ opens: every key Switchboard binds, the workspace's grouped by their first tag, then the sidebar's, mission control's, M-d's and Notes', then the commands reached only through M-p, with / to filter, Enter's menu to press a workspace key and m's to find a key by pressing it; with UX 2.0, a board with a heatmap of the Alt keys you pressed this week (counted with habits on); off, M-/ reaches the pane",
-    "default": true
-  },
-  {
-    "key": "mission_keep_tabs_sidebar",
-    "category": "Mission control",
-    "label": "Keep the tabs sidebar in mission control",
-    "description": "With UX 2.0, mission control keeps the tabs sidebar and lists its groups and views in a column of its own beside it, the view to its right; off, while mission control is open the sidebar itself lists its groups and views, the tabs coming back as it closes",
-    "default": false
   },
   {
     "key": "idle_walk",
@@ -881,104 +972,6 @@
     "label": "Point Claude at the tab's note",
     "description": "As a Claude session starts in a tab with a note of its own, tell it the note's path and to read it before its first reply, so the note's standing rules reach every session in the tab, in any repository, while Switchboard loads as a plugin (claude_plugin), whose session-start hook does it; off, a session reads the note only when asked to. Off by default, since it has Claude read a note on its own",
     "default": false
-  },
-  {
-    "key": "calendar_rsvp",
-    "category": "Mission control",
-    "label": "RSVP from the Calendar",
-    "description": "Answer an invitation yes, maybe or no from its Enter menu in the Calendar view, through Claude's Google Calendar connector",
-    "default": true
-  },
-  {
-    "key": "calendar_photos",
-    "category": "Mission control",
-    "label": "Attendees' photos in the Calendar",
-    "description": "Show the photos of who is going to the Calendar view's chosen event, looked up by each attendee's email address in Linear and the Slack relay's app (users:read.email), which sends those addresses to them. Off, as it is by default, no address is sent and each attendee is their initial",
-    "default": false
-  },
-  {
-    "key": "slack_background",
-    "category": "Mission control",
-    "label": "Slack without a tab",
-    "description": "Mission control looks at Slack itself every minute, through cheap headless Haiku calls, instead of the Slack routine following the slack-updates skill",
-    "default": true
-  },
-  {
-    "key": "slack_threads",
-    "category": "Mission control",
-    "label": "Slack threads and pictures",
-    "description": "With UX 2.0, the Slack view shows the chosen message's whole thread beside it, with its pictures and videos, which each look reads through Claude's Slack connector (a few more headless Haiku calls a look) and keeps on this computer; off, the view lists the messages alone and reads no threads or files",
-    "default": true
-  },
-  {
-    "key": "slack_reply",
-    "category": "Mission control",
-    "label": "Reply from the Slack view",
-    "description": "A Slack message's Enter menu in the Slack view offers to reply in its thread or its channel, or in its DM: a box to type in, and Send asks before anything goes, naming who can read it, then sends your words as typed through Claude's Slack connector. Off, as it is by default since it sends your words to Slack, the menu offers no replies",
-    "default": false
-  },
-  {
-    "key": "pause_when_away",
-    "category": "Mission control",
-    "label": "Pause lookups while away",
-    "description": "Stop asking GitHub, Linear and the calendar for mission control's views, and telling the diff's stories ahead, while no terminal is attached, or the computer has been locked, or idle 10 minutes, with no key pressed in Switchboard since (from another computer over SSH too), and catch up on return",
-    "default": true
-  },
-  {
-    "key": "poll_fast",
-    "category": "Mission control",
-    "label": "Look often",
-    "description": "Ask GitHub and Linear every 15 seconds (the PR board every 30) and look at the Slack Home tab every 10, in place of every one or two minutes: about eight times as many requests, which can reach GitHub's 5,000 an hour",
-    "default": false
-  },
-  {
-    "key": "pr_board",
-    "category": "Mission control",
-    "label": "PR board",
-    "description": "Mission control's PRs view, which asks GitHub about your pull requests every two minutes",
-    "default": true
-  },
-  {
-    "key": "ticket_board",
-    "category": "Mission control",
-    "label": "Ticket board",
-    "description": "Mission control's Tickets view, which asks Linear about the issues assigned to you every two minutes",
-    "default": true
-  },
-  {
-    "key": "view_inbox",
-    "category": "Mission control",
-    "label": "Inbox",
-    "description": "Mission control's Inbox view and the sidebar's count of it: your unread Linear mentions, comments and assignments, asked of Linear every two minutes #linear",
-    "default": true
-  },
-  {
-    "key": "view_ci",
-    "category": "Mission control",
-    "label": "CI",
-    "description": "Mission control's CI view: your pull requests failing, running and passing, each failed check with the line of its log that says why and, with UX 2.0, its failing step beside the list, asked of GitHub every two minutes #github",
-    "default": true
-  },
-  {
-    "key": "view_landing",
-    "category": "Mission control",
-    "label": "Landing view",
-    "description": "While a tab is landing or waiting to land, mission control shows each repository's landing queue or merge queue (everyone's PRs in it, asked of GitHub every 15 seconds), in queue order, with the tab that has each; a waiting one's menu moves it or takes it out",
-    "default": true
-  },
-  {
-    "key": "routines",
-    "category": "Mission control",
-    "label": "Routines",
-    "description": "Prompts of yours on a schedule, each run by a headless Claude allowed only the routine's tools, opening no tab, and the Routines view in mission control; off, no routine runs and the view is gone, the routines kept",
-    "default": true
-  },
-  {
-    "key": "view_autopilot",
-    "category": "Mission control",
-    "label": "Autopilot view",
-    "description": "With UX 2.0 on, while autopilot works a note, mission control shows a view of it: the note, its tabs working and open against its slots and cap, today's spend against its limit, and a board of every item it works, a card in the column where it stands (Next up, Working, Waiting on you, Landing, Landed, and Skipped while an item is skipped). Off, its line above the tabs stays and the view goes; on, the view takes the line's place",
-    "default": true
   },
   {
     "key": "second_status",
@@ -1508,6 +1501,13 @@
     "category": "Updates",
     "label": "Skills and instructions from the clone",
     "description": "A build made from a clone reads its skills, Claude settings, instructions and settings list from that clone's assets/ folder, so a change there is live once it lands: the plugin and the parts you set up are brought up to date within seconds, with no rebuild or restart. A release build has no clone and keeps what it carries. Off, every build uses what it carries",
+    "default": true
+  },
+  {
+    "key": "view_relay",
+    "category": "Slack relay",
+    "label": "Slack relay",
+    "description": "Mission control's Slack relay view: whether the relay is running, what it sent today, and which kinds of message reach you and how, with presets. Off, the view is gone and the relay's settings stay in Settings",
     "default": true
   },
   {

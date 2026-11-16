@@ -753,14 +753,8 @@ pub fn settings_items(own: &[Item], ux2: bool) -> Vec<Item> {
 }
 
 pub(crate) fn settings_items_of(all: &[settings::Setting], own: &[Item], ux2: bool) -> Vec<Item> {
-    let mut categories: Vec<&str> = Vec::new();
-    for o in all {
-        if !categories.contains(&o.category.as_str()) {
-            categories.push(&o.category);
-        }
-    }
     let mut items = Vec::new();
-    for category in categories {
+    for category in settings::categories(all) {
         let members: Vec<&settings::Setting> =
             all.iter().filter(|o| o.category == category).collect();
         let name = settings::category_name(category, ux2);
@@ -1967,6 +1961,68 @@ mod tests {
     }
 
     #[test]
+    fn each_mission_control_view_has_a_category_of_its_own_led_by_its_switch() {
+        let all = settings::schema();
+        let category = |key: &str| {
+            let o = all.iter().find(|o| o.key == key);
+            o.unwrap_or_else(|| panic!("{key} is no setting"))
+                .category
+                .clone()
+        };
+        for view in crate::usage::habits::VIEWS {
+            // The relay's settings are a category of their own, its view's
+            // switch among them.
+            let own = match view.title {
+                "Slack relay" => "Slack relay".to_string(),
+                title => format!("Mission control: {title}"),
+            };
+            assert_eq!(category(view.key), own, "{}", view.key);
+            let first = all.iter().find(|o| o.category == own).unwrap();
+            assert_eq!(first.key, view.key, "{own} starts with its view's switch");
+        }
+        // An option named after a view is in that view's category, but
+        // what the sidebar shows of the calendar, which is the sidebar's.
+        let sidebars = ["calendar_changes"];
+        for (prefix, title) in [
+            ("calendar_", "Calendar"),
+            ("slack_", "Slack"),
+            ("autopilot", "Autopilot"),
+            ("usage", "Usage"),
+            ("routines", "Routines"),
+        ] {
+            for o in all.iter().filter(|o| o.key.starts_with(prefix)) {
+                if sidebars.contains(&o.key.as_str()) {
+                    continue;
+                }
+                assert_eq!(o.category, format!("Mission control: {title}"), "{}", o.key);
+            }
+        }
+
+        // The groups come after the categories with none, what belongs to
+        // mission control as a whole first, each view's category after it.
+        let headings: Vec<String> = settings_items_of(&all, &[], true)
+            .into_iter()
+            .filter(is_header)
+            .map(|h| h.title)
+            .collect();
+        let whole = headings
+            .iter()
+            .position(|h| h == "Mission control")
+            .unwrap();
+        assert!(
+            headings[..whole].iter().all(|h| !h.contains(": ")),
+            "{headings:?}"
+        );
+        assert!(
+            headings[whole + 1..]
+                .iter()
+                .all(|h| h.starts_with("Mission control: ")),
+            "{headings:?}"
+        );
+        assert!(headings.contains(&"Mission control: Slack".to_string()));
+    }
+
+    #[test]
     fn a_filter_finds_its_words_in_any_order() {
         let view = View {
             id: ViewId::Settings,
@@ -1992,7 +2048,7 @@ mod tests {
                 "{filter}: {found:?}"
             );
             assert!(
-                found.iter().any(|t| t == "Mission control"),
+                found.iter().any(|t| t == "Mission control: Slack"),
                 "{filter}: its heading"
             );
         }
