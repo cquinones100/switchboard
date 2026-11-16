@@ -282,9 +282,10 @@ impl Why {
 /// A tab's note, from its options (`opt`), the note autopilot is working
 /// through (`working`, while it is on) and whether a note's file is
 /// there: with `precedence` (Settings' note_by_precedence), the note you
-/// linked, else an autopilot tab's plan, else autopilot's note, else the
-/// tab's note or the one shown beside it last; without it, those last two
-/// alone. The first whose file is there.
+/// linked, else an autopilot tab's plan, else, on an autopilot tab,
+/// autopilot's note, else the tab's note or the one shown beside it last;
+/// without it, those last two alone. The first whose file is there, so a
+/// tab with none of its own gets none, and M-e asks which is its note.
 pub fn by_precedence(
     opt: impl Fn(&str) -> Option<String>,
     working: Option<&str>,
@@ -297,8 +298,8 @@ pub fn by_precedence(
         order.push((opt(BY_YOU), Why::Linked));
         if autopilot_tab {
             order.push((opt(PLAN_NOTE), Why::Plan));
+            order.push((working.map(str::to_string), Why::Autopilot));
         }
-        order.push((working.map(str::to_string), Why::Autopilot));
     }
     order.push((opt("@tab_note"), Why::Tab));
     order.push((opt("@tab_note_last"), Why::Tab));
@@ -1236,8 +1237,18 @@ mod tests {
         let plain = [("@tab_note", "Other.md"), ("@tab_note_last", "Last.md")];
         assert_eq!(
             pick(&plain, Some("Work.md"), true, &[]),
+            picked("Other.md", Why::Tab),
+            "a plain tab keeps its own note while autopilot works one"
+        );
+        assert_eq!(
+            pick(&[], Some("Work.md"), true, &[]),
+            None,
+            "a new tab has no note while autopilot works one, so M-e asks"
+        );
+        assert_eq!(
+            pick(&[("@autopilot", "1700000000")], Some("Work.md"), true, &[]),
             picked("Work.md", Why::Autopilot),
-            "a plain tab while autopilot works a note"
+            "an autopilot tab with no plan gets autopilot's note"
         );
         assert_eq!(
             pick(&plain, None, true, &[]),

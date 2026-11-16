@@ -592,6 +592,21 @@ fn m_e_in_its_tab_shows_the_items_plan_until_you_choose_the_tabs_note() {
     });
 }
 
+#[test]
+fn m_e_in_a_new_tab_asks_for_its_note_while_autopilot_works_one() {
+    let (_notes, _note, server, mut client, _repo) = set_up_with(
+        json!({}),
+        "# Work\n\n- [ ] First thing\n",
+        &[("Other.md", "# Other\n")],
+    );
+    wait("autopilot's tab", &server, || !opened(&server).is_empty());
+    // Mission control, opened as the mode was set up, closed first.
+    client.type_text("\x1b");
+    server.ok(&["new-tab"]);
+    client.type_text("\x1be");
+    client.wait_text("Which note is this tab's?");
+}
+
 /// A Claude Code hook in `pane`, as its Claude would send it.
 fn hook(server: &TestServer, pane: &str, event: &str) {
     use std::io::Write;
