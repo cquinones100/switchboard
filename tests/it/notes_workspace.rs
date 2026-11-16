@@ -620,3 +620,69 @@ fn with_ux2_notes_own_tab_has_no_header_and_its_pane_takes_the_rows() {
     });
     client.wait_for("no header", |s| !s.iter().any(|r| r.contains("M-c Claude")));
 }
+
+/// With an app in each tab, two apps on one note: the second shows it
+/// read-only, an edit tried there opens a box naming the first's tab, and
+/// "Take it over" makes it the second's to edit, the first read-only
+/// naming the second's tab.
+#[test]
+fn a_held_note_taken_over_from_another_tab_is_this_tabs_to_edit() {
+    let server = TestServer::start();
+    common::write_settings(&server.home, json!({ "notes_per_tab": true }));
+    let notes = server.home.join("Notes");
+    std::fs::create_dir_all(&notes).unwrap();
+    std::fs::write(notes.join("Plan.md"), "# Plan\n\n- [ ] the first thing\n").unwrap();
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    for name in ["one", "two"] {
+        server.ok(&[
+            "new-tab",
+            "-n",
+            name,
+            "--",
+            "env",
+            "NOTES_OPEN=Plan.md",
+            common::BIN,
+            "notes",
+        ]);
+        client.wait_text("the first thing");
+    }
+    let list = server.list();
+    let tab = |name: &str| {
+        tabs(&list)
+            .into_iter()
+            .find(|t| t["name"] == name || t["own"] == name)
+            .unwrap_or_else(|| panic!("no tab {name}: {list:#}"))
+    };
+    let (one, two) = (tab("one")["index"].clone(), tab("two")["index"].clone());
+    client.wait_text(&format!("Open in tab {one}, read-only here"));
+
+    client.type_text("i");
+    client.wait_text(&format!(
+        "Plan is open in tab {one}, so it's read-only here"
+    ));
+    client.type_text("j\r");
+    client.wait_text(&format!("Took it over from tab {one}"));
+    client.type_text("Go");
+    client.type_text("taken over\x1b");
+    // Saved before the other tab comes to the front, so no key typed
+    // here reaches it.
+    client.wait_text("taken over");
+    let plan = notes.join("Plan.md");
+    let deadline = common::deadline(Duration::from_secs(10));
+    while !std::fs::read_to_string(&plan)
+        .unwrap()
+        .contains("taken over")
+    {
+        assert!(
+            Instant::now() < deadline,
+            "not saved: {}",
+            std::fs::read_to_string(&plan).unwrap()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    server.ok(&["select-tab", "-t", tab("one")["id"].as_str().unwrap()]);
+    client.wait_text(&format!("Open in tab {two}, read-only here"));
+    client.wait_text("taken over");
+}

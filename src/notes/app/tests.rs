@@ -4129,11 +4129,113 @@ fn a_note_open_in_another_app_is_read_only_until_that_app_lets_it_go() {
     app.held.as_mut().unwrap().checked = Instant::now() - HELD_CHECK;
     assert!(app.tick());
     assert!(app.held.is_none());
-    keys(&mut app, "Ohello<Esc>");
+    keys(&mut app, "Gohello<Esc>");
     app.save();
     assert!(fs::read_to_string(&plan).unwrap().contains("hello"));
     app.stop();
     assert!(!lock.exists(), "let go as it ends");
+}
+
+#[test]
+fn an_edit_tried_on_a_held_note_opens_a_box_naming_its_tab() {
+    let (_dir, store) = temp("held-box");
+    let plan = store.absolute("Plan.md");
+    write(&plan, "# Plan\n\n- [ ] one\n");
+    let (mut app, _) = app_in(
+        store,
+        Options {
+            per_note: true,
+            ..options()
+        },
+    );
+    app.start();
+    let key = id::in_text(&fs::read_to_string(&plan).unwrap()).unwrap();
+    let lock = app.store.root().join(store::LOCKS).join(&key);
+    let other = unsafe { libc::getppid() } as i64;
+    fs::write(&lock, format!("{other} %9")).unwrap();
+    app.open_note(&plan, false, false);
+    app.held.as_mut().unwrap().tab = Some(4);
+
+    keys(&mut app, "i");
+    assert_eq!(app.top_kind(), Some("menu"));
+    assert!(matches!(app.editor.mode, Mode::Normal));
+    let shown = screen(&mut app);
+    assert!(
+        shown
+            .iter()
+            .any(|l| l.contains("Plan is open in tab 4, so it's read-only here")),
+        "{shown:#?}"
+    );
+    for option in ["Go to tab 4", "Take it over", "Keep reading"] {
+        assert!(shown.iter().any(|l| l.contains(option)), "{option}");
+    }
+
+    // Typing on goes to the box, never a second one.
+    keys(&mut app, "abc");
+    assert_eq!(app.layers.len(), 1);
+    keys(&mut app, "<Esc>");
+    assert_eq!(app.top_kind(), None, "Esc keeps reading");
+    assert!(matches!(app.editor.mode, Mode::Normal));
+    assert_eq!(lines(&app), ["# Plan", "", "- [ ] one"]);
+
+    // Answered, the next try asks again.
+    keys(&mut app, "dd");
+    assert_eq!(app.top_kind(), Some("menu"));
+    assert_eq!(lines(&app), ["# Plan", "", "- [ ] one"]);
+
+    // Let go meanwhile, the box closes and the note is this app's.
+    fs::write(&lock, "999999999 %9").unwrap();
+    app.held.as_mut().unwrap().checked = Instant::now() - HELD_CHECK;
+    assert!(app.tick());
+    assert!(app.held.is_none());
+    assert_eq!(app.top_kind(), None);
+}
+
+#[test]
+fn a_note_given_to_another_app_is_saved_let_go_and_shown_read_only() {
+    let (_dir, store) = temp("held-give");
+    let plan = store.absolute("Plan.md");
+    write(&plan, "# Plan\n\none\n");
+    let (mut app, _) = app_in(
+        store,
+        Options {
+            per_note: true,
+            ..options()
+        },
+    );
+    app.start();
+    let key = id::in_text(&fs::read_to_string(&plan).unwrap()).unwrap();
+    let lock = app.store.root().join(store::LOCKS).join(&key);
+    keys(&mut app, "Gotwo");
+    let other = unsafe { libc::getppid() } as i64;
+
+    assert!(
+        app.request(Request::Give {
+            pid: other,
+            pane: Some("%9".into()),
+            key: "another".into(),
+        })
+        .starts_with("error"),
+        "only the note open here"
+    );
+    let reply = app.request(Request::Give {
+        pid: other,
+        pane: Some("%9".into()),
+        key: key.clone(),
+    });
+    assert_eq!(reply, "ok");
+    assert!(fs::read_to_string(&plan).unwrap().contains("two"), "saved");
+    assert!(!lock.exists(), "let go");
+    assert!(matches!(app.editor.mode, Mode::Normal));
+    let held = app.held.as_ref().expect("read-only here");
+    assert_eq!(held.holder.pid, other);
+    assert_eq!(held.holder.pane.as_deref(), Some("%9"));
+
+    // The other app takes it; this one doesn't take it back.
+    fs::write(&lock, format!("{other} %9")).unwrap();
+    app.held.as_mut().unwrap().checked = Instant::now() - HELD_CHECK;
+    app.tick();
+    assert!(app.held.is_some());
 }
 
 #[test]

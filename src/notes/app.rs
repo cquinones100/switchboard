@@ -341,6 +341,9 @@ enum Then {
     Finder,
     Complete,
     Format(FormatFrom),
+    /// The box an edit tried on a held note opens: go to its tab, take it
+    /// over, or keep reading.
+    Held,
 }
 
 struct Layer {
@@ -1365,13 +1368,7 @@ impl App {
         let key = held.key.clone();
         match self.store.lock_note(&key) {
             Ok(()) => {
-                self.note_lock = Some(key);
-                // Read while still held, so a rename the app that had it
-                // made is followed as that app's (`follow_id`).
-                self.check();
-                self.held = None;
-                self.rebuild();
-                self.say("This note is yours to edit now");
+                self.became_yours(key, "This note is yours to edit now".into());
                 true
             }
             Err(holder) => {
@@ -1386,6 +1383,124 @@ impl App {
                 changed
             }
         }
+    }
+
+    /// A held note's lock taken: its text read again and editable, the
+    /// box asking about it closed, and `words` said.
+    fn became_yours(&mut self, key: String, words: String) {
+        self.note_lock = Some(key);
+        // Read while still held, so a rename the app that had it made is
+        // followed as that app's (`follow_id`).
+        self.check();
+        self.held = None;
+        if matches!(
+            self.layers.last(),
+            Some(Layer {
+                then: Then::Held,
+                ..
+            })
+        ) {
+            self.layers.pop();
+        }
+        self.rebuild();
+        self.say(words);
+    }
+
+    /// The box an edit tried on a held note opens, saying why it is
+    /// read-only; with no tab to name (the one Notes has it), the held
+    /// line said instead.
+    fn explain_held(&mut self) {
+        let Some(held) = &self.held else { return };
+        if held.holder.pane.is_none() {
+            if let Some(line) = self.held_line() {
+                self.say(line);
+            }
+            return;
+        }
+        let tab = match held.tab {
+            Some(n) => format!("tab {n}"),
+            None => "another tab".to_string(),
+        };
+        let title = self
+            .current_path()
+            .map(sidebar::title_at)
+            .unwrap_or_else(|| "This note".into());
+        let options = vec![
+            MenuOption::new(format!("Go to {tab}")),
+            MenuOption::new("Take it over"),
+            MenuOption::new("Keep reading"),
+        ];
+        self.push(
+            Box::new(
+                Menu::new("Read-only here", options)
+                    .body(format!("{title} is open in {tab}, so it's read-only here")),
+            ),
+            Then::Held,
+        );
+    }
+
+    /// "Take it over": the app that has the held note asked over its
+    /// socket to save it and let it go, and its lock taken here.
+    fn take_over(&mut self) {
+        let Some(held) = self.held.clone() else {
+            return;
+        };
+        let Some(pane) = held.holder.pane.clone() else {
+            return;
+        };
+        let from = match held.tab {
+            Some(n) => format!("tab {n}"),
+            None => "its tab".to_string(),
+        };
+        let mine = std::env::var("SWITCHBOARD_PANE")
+            .ok()
+            .filter(|p| !p.is_empty())
+            .unwrap_or_else(|| "-".into());
+        let request = format!("give {} {mine} {}", std::process::id(), held.key);
+        if let Err(why) = socket::send(&socket::path_for_pane(&pane), &request) {
+            return self.say(format!(
+                "The Notes in {from} didn't let it go ({why}), so it stays read-only"
+            ));
+        }
+        match self.store.lock_note(&held.key) {
+            Ok(()) => self.became_yours(held.key, format!("Took it over from {from}")),
+            Err(_) => self.say(format!("Couldn't take it over from {from}")),
+        }
+    }
+
+    /// Asked by another app to let the note open here go (`give`): saved,
+    /// its lock let go, and shown read-only, naming that app's tab.
+    fn give(&mut self, key: String, to: store::Holder) -> String {
+        if self.held.is_some() || self.note_lock.as_deref() != Some(key.as_str()) {
+            return "error that note isn't open here".into();
+        }
+        if self.squash_locks.contains(&key) {
+            return "error it's being squashed".into();
+        }
+        if matches!(self.editor.mode, Mode::Insert | Mode::Replace) {
+            self.editor.mode = Mode::Normal;
+        }
+        self.save();
+        // A save that failed (a full disk) keeps the note here, so its
+        // edits aren't left behind.
+        if self.modified() {
+            return "error its changes couldn't be saved".into();
+        }
+        self.note_lock = None;
+        self.store.unlock_note(&key);
+        let tab = to.pane.as_deref().and_then(|p| self.tab_of(p));
+        self.held = Some(Held {
+            key,
+            holder: to,
+            tab,
+            checked: Instant::now(),
+        });
+        self.rebuild();
+        match tab {
+            Some(n) => self.say(format!("Tab {n} took this note over")),
+            None => self.say("Another Notes took this note over"),
+        }
+        "ok".into()
     }
 
     /// Enter on a held note: to the tab that has it.
@@ -1421,14 +1536,16 @@ impl App {
             self.editor.set_history(history);
             self.editor.clamp();
         }
-        if matches!(self.editor.mode, Mode::Insert | Mode::Replace) {
+        let typing = matches!(self.editor.mode, Mode::Insert | Mode::Replace);
+        if typing {
             self.editor.mode = Mode::Normal;
         }
-        if changed || self.save_due.is_some() {
-            self.save_due = None;
-            if let Some(line) = self.held_line() {
-                self.say(line);
-            }
+        let tried_an_edit = same_note && (changed || typing || self.save_due.is_some());
+        self.save_due = None;
+        // Once a key: none while a box is open (this one, or one the key
+        // opened); a menu that made the edit has closed.
+        if tried_an_edit && self.layers.is_empty() {
+            self.explain_held();
         }
     }
 
@@ -2636,6 +2753,11 @@ impl App {
         };
         match then {
             Then::Nothing => {}
+            Then::Held => match outcome {
+                Outcome::Chose(0) => self.go_to_holder(),
+                Outcome::Chose(1) => self.take_over(),
+                _ => {}
+            },
             Then::Squash(paths) => {
                 if outcome == Outcome::Yes && !paths.iter().any(|p| self.held_elsewhere(p)) {
                     self.start_squash(paths);
@@ -3132,6 +3254,7 @@ impl App {
                 "ok".into()
             }
             Request::Palette => self.palette_request(),
+            Request::Give { pid, pane, key } => self.give(key, store::Holder { pid, pane }),
             Request::Run(name) => {
                 let mut reply = String::new();
                 self.read_only(|app| reply = app.run_request(&name));

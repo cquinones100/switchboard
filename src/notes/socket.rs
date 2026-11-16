@@ -19,6 +19,11 @@
 //!                                       for the workspace's M-p  → ok <JSON>
 //! run <command's words>                 that palette command run → ok | error <why>
 //! say <words>                           the words on its message line → ok
+//! give <pid> <pane | -> <note's key>  the note, open here, saved and
+//!                                       its lock let go, for the app with
+//!                                       that process and pane to take it
+//!                                       over; shown read-only here, naming
+//!                                       that app's tab           → ok | error <why>
 //! ping                                                           → ok
 //! ```
 //!
@@ -79,6 +84,11 @@ pub enum Request {
     Palette,
     Run(String),
     Say(String),
+    Give {
+        pid: i64,
+        pane: Option<String>,
+        key: String,
+    },
     Ping,
 }
 
@@ -94,6 +104,16 @@ pub fn parse(line: &str) -> Option<Request> {
         ("run", name) if !name.is_empty() => Some(Request::Run(name.to_string())),
         ("say", words) if !words.is_empty() => Some(Request::Say(words.to_string())),
         ("ping", "") => Some(Request::Ping),
+        ("give", rest) => {
+            let mut words = rest.splitn(3, ' ');
+            let pid = words.next()?.parse::<i64>().ok()?;
+            let pane = match words.next()? {
+                "-" => None,
+                pane => Some(pane.to_string()),
+            };
+            let key = words.next().filter(|k| !k.is_empty())?.to_string();
+            Some(Request::Give { pid, pane, key })
+        }
         _ => None,
     }
 }
@@ -246,6 +266,23 @@ mod tests {
             parse("run Find a note\n"),
             Some(Request::Run("Find a note".into()))
         );
+        assert_eq!(
+            parse("give 42 %3 Work/My Plan.md"),
+            Some(Request::Give {
+                pid: 42,
+                pane: Some("%3".into()),
+                key: "Work/My Plan.md".into()
+            })
+        );
+        assert_eq!(
+            parse("give 42 - abc"),
+            Some(Request::Give {
+                pid: 42,
+                pane: None,
+                key: "abc".into()
+            })
+        );
+        assert_eq!(parse("give 42 %3"), None);
         assert_eq!(parse("run "), None);
         assert_eq!(parse("open "), None);
         assert_eq!(parse("rm -rf"), None);
