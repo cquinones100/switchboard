@@ -376,6 +376,10 @@
     "FactoryLanding.dc.html": {
       "title": "90. Factory: Landing, the lock and its queue now, then how landings, review loops and CI went this week",
       "page": "design"
+    },
+    "SearchPreview.dc.html": {
+      "title": "91. M-F with the chosen result previewed beside the results: its place, then 5 lines each side of the match, the match lit; under the results in a narrow box",
+      "page": "design"
     }
   }
 }

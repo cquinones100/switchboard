@@ -125,6 +125,7 @@ The dialogs the views open, each over its view.
 - [54. Enter in any mission control view: the chosen item's actions in a menu, here a calendar event's](https://cquinones100.github.io/switchboard/design/54.html)
 - [55. m in any mission control view: the view's own actions in a menu, here Calendar's](https://cquinones100.github.io/switchboard/design/55.html)
 - [78. M-F: search everything, a chip per source to search, its count once it answers](https://cquinones100.github.io/switchboard/design/78.html)
+- [91. M-F with the chosen result previewed beside the results: its place, then 5 lines each side of the match, the match lit; under the results in a narrow box](https://cquinones100.github.io/switchboard/design/91.html)
 
 ## Core and extras
 
