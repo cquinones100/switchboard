@@ -29,6 +29,14 @@
 //! the worktree's own copy is passed over, saying so on stderr, and its
 //! main clone's comes first: its skills are the PR author's, and a
 //! review-loop of theirs would rewrite the review of their change.
+//!
+//! A build from a clone reads its skills from the clone (src/assets.rs), so
+//! a skill can name a command the installed binary, built before it, lacks:
+//! a landing once ran `land-lock test` on such a binary, read its usage line
+//! as no CI answering, and ran the tests here. So beside the path, on
+//! stderr, it says which `switchboard` commands the skill's `allowed-tools`
+//! name that this build doesn't have (`missing_commands`, against
+//! `cmd::has`), and the skills that act on it stop there.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -54,6 +62,12 @@ pub fn main(args: Vec<String>) -> ExitCode {
     match find(name, &dir) {
         Some(found) => {
             println!("{}", found.display());
+            let missing = std::fs::read_to_string(&found)
+                .map(|text| missing_commands(&text))
+                .unwrap_or_default();
+            if !missing.is_empty() {
+                eprintln!("{}", behind_line(&missing));
+            }
             ExitCode::SUCCESS
         }
         None => ExitCode::from(1),
@@ -77,6 +91,58 @@ fn own(name: Option<&str>) -> ExitCode {
         }
         None => ExitCode::from(1),
     }
+}
+
+/// The line saying this build is older than the skill, naming what it lacks.
+pub fn behind_line(missing: &[String]) -> String {
+    format!(
+        "skill-path: build behind: this switchboard lacks {}, which the skill names: build and install Switchboard from main, then run the skill again",
+        missing
+            .iter()
+            .map(|m| format!("`switchboard {m}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+/// The `switchboard` commands a SKILL.md's `allowed-tools` name that this
+/// build lacks, each as `<program>` or `<program> <subcommand>`, once each.
+pub fn missing_commands(skill: &str) -> Vec<String> {
+    let mut lines = skill.lines();
+    if lines.next().map(str::trim_end) != Some("---") {
+        return Vec::new();
+    }
+    let mut missing: Vec<String> = Vec::new();
+    for line in lines.take_while(|l| l.trim_end() != "---") {
+        // A YAML list item, its rule bare or quoted either way.
+        let item = line.trim().trim_start_matches("- ").trim();
+        let unquoted = ['"', '\'']
+            .into_iter()
+            .find_map(|q| item.strip_prefix(q).and_then(|i| i.strip_suffix(q)))
+            .unwrap_or(item);
+        let Some(rule) = unquoted
+            .strip_prefix("Bash(switchboard ")
+            .and_then(|r| r.strip_suffix(')'))
+        else {
+            continue;
+        };
+        let mut words = rule.split_whitespace();
+        let Some(name) = words.next().filter(|n| !n.contains('*')) else {
+            continue;
+        };
+        let first = words.next();
+        if crate::cmd::has(name, first) {
+            continue;
+        }
+        let what = match first {
+            Some(first) if crate::cmd::is_command(name) => format!("{name} {first}"),
+            _ => name.to_string(),
+        };
+        if !missing.contains(&what) {
+            missing.push(what);
+        }
+    }
+    missing
 }
 
 /// The SKILL.md to follow, as the module's comment orders them.
@@ -118,4 +184,27 @@ pub fn find(name: &str, dir: &Path) -> Option<PathBuf> {
                 .join("SKILL.md"),
         ))
         .find(|file| file.exists())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names_what_this_build_lacks_once_each() {
+        let skill = "---\nname: x\nallowed-tools:\n  - Bash(switchboard land-lock take)\n  - Bash(switchboard land-lock nosuch)\n  - Bash(switchboard land-lock nosuch --here *)\n  - Bash(switchboard no-such-program *)\n  - \"Bash(switchboard land-lock quoted)\"\n  - 'Bash(switchboard land-lock take)'\n  - Bash(git status)\n---\n\nBash(switchboard after-the-front-matter)\n";
+        assert_eq!(
+            missing_commands(skill),
+            vec![
+                "land-lock nosuch".to_string(),
+                "no-such-program".to_string(),
+                "land-lock quoted".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn a_skill_with_no_front_matter_names_nothing() {
+        assert!(missing_commands("Bash(switchboard nosuch)").is_empty());
+    }
 }

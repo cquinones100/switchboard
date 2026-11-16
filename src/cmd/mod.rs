@@ -414,6 +414,54 @@ const OWN_HELP: &[&str] = &[
     "setup",
 ];
 
+/// The programs whose first word is one of a fixed set of subcommands, and
+/// those subcommands, so `skill-path` can tell a skill newer than this build
+/// (one naming `land-lock test` to a binary from before it) by what the
+/// skill's `allowed-tools` name. Every other program takes any first word.
+pub const SUBCOMMANDS: &[(&str, &[&str])] = &[
+    (
+        "land-lock",
+        &[
+            "take",
+            "wait",
+            "push",
+            "release",
+            "requeue",
+            "leave",
+            "holder",
+            "queue",
+            "move",
+            "phase",
+            "record",
+            "squash",
+            "test",
+            "landed",
+            "autolanded",
+        ],
+    ),
+    (
+        "slack-relay",
+        &[
+            "start", "stop", "status", "run", "relay", "notify", "sends", "help",
+        ],
+    ),
+];
+
+/// Whether this build has `switchboard <name> <first>`: the program, and,
+/// for one in `SUBCOMMANDS`, its subcommand (a first word that is a flag or
+/// a wildcard counts as none).
+pub fn has(name: &str, first: Option<&str>) -> bool {
+    if !is_command(name) {
+        return false;
+    }
+    match (SUBCOMMANDS.iter().find(|(n, _)| *n == name), first) {
+        (Some((_, subs)), Some(word)) if !word.starts_with('-') && !word.contains('*') => {
+            subs.contains(&word)
+        }
+        _ => true,
+    }
+}
+
 /// Whether `name` is a command a link to the binary may be named after: one
 /// of its programs, or a command asked of the running server. A file of any
 /// other name (`.switchboard.new.123`, which an installer runs once before
@@ -487,5 +535,60 @@ mod tests {
                 "{name} isn't a command"
             );
         }
+    }
+
+    #[test]
+    fn every_subcommand_listed_is_in_its_programs_usage() {
+        let usage_of = |name| match name {
+            "land-lock" => include_str!("land_lock.rs"),
+            "slack-relay" => include_str!("../relay/cli.rs"),
+            other => panic!("{other} has no usage to check"),
+        };
+        for (name, subs) in SUBCOMMANDS {
+            let source = usage_of(name);
+            for sub in *subs {
+                assert!(
+                    source.contains(&format!("\"{sub}\"")),
+                    "{name} {sub} isn't dispatched"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_switchboard_command_a_shipped_skill_allows_is_in_this_build() {
+        let shipped = crate::setup::skills::shipped()
+            .into_iter()
+            .filter_map(|(name, files)| {
+                let (_, text) = files.into_iter().find(|(path, _)| path == "SKILL.md")?;
+                Some((name, String::from_utf8_lossy(&text).into_owned()))
+            });
+        let own_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".claude/skills");
+        let own = std::fs::read_dir(&own_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| {
+                let text = std::fs::read_to_string(entry.path().join("SKILL.md")).ok()?;
+                Some((entry.file_name().to_string_lossy().into_owned(), text))
+            });
+        let mut checked = 0;
+        for (name, text) in shipped.chain(own) {
+            let missing = skill_path::missing_commands(&text);
+            assert!(missing.is_empty(), "{name} names {missing:?}");
+            checked += 1;
+        }
+        assert!(checked > 10, "only {checked} skills read");
+    }
+
+    #[test]
+    fn a_subcommand_this_build_lacks_is_missing() {
+        assert!(has("land-lock", Some("test")));
+        assert!(has("land-lock", Some("--target")));
+        assert!(has("land-lock", Some("*")));
+        assert!(!has("land-lock", Some("nosuch")));
+        assert!(!has("no-such-program", None));
+        assert!(has("setting", Some("ux2")));
+        assert!(has("show", Some("*")));
     }
 }

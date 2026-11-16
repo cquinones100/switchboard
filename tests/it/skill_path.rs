@@ -228,6 +228,60 @@ fn skill_path_finds_the_repository_s_copy_then_switchboard_s_personal_one_then_t
     assert_eq!(usage.status.code(), Some(2));
 }
 
+// A skill read from a clone newer than the build names a command the build
+// lacks: skill-path says so beside the path, which queue-and-clean stops on
+// rather than reading the command's usage line as a failure to work around.
+#[test]
+fn skill_path_says_when_the_skill_names_a_command_this_build_lacks() {
+    let tmp = TempDir::new("skill-behind");
+    let home = tmp.path();
+    let repo = home.join("repo");
+    let status = Command::new("git")
+        .args(["init", "-q"])
+        .arg(&repo)
+        .env("HOME", home)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let file = repo.join(".claude/skills/queue-and-clean/SKILL.md");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let run = |rules: &str| -> Output {
+        fs::write(
+            &file,
+            format!("---\nname: queue-and-clean\nallowed-tools:\n{rules}---\n\n# Queue\n"),
+        )
+        .unwrap();
+        Command::new(BIN)
+            .args(["skill-path", "queue-and-clean"])
+            .arg(&repo)
+            .env("HOME", home)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap()
+    };
+
+    let behind =
+        run("  - Bash(switchboard land-lock test)\n  - Bash(switchboard land-lock nosuch *)\n");
+    assert!(behind.status.success(), "the path is still printed");
+    assert_eq!(
+        String::from_utf8_lossy(&behind.stdout).trim(),
+        file.to_string_lossy()
+    );
+    let said = String::from_utf8_lossy(&behind.stderr);
+    assert!(
+        said.contains(
+            "skill-path: build behind: this switchboard lacks `switchboard land-lock nosuch`"
+        ),
+        "{said}"
+    );
+    assert!(!said.contains("land-lock test"), "{said}");
+
+    let current = run("  - Bash(switchboard land-lock test)\n  - Bash(switchboard show *)\n");
+    assert!(current.status.success());
+    assert_eq!(String::from_utf8_lossy(&current.stderr), "");
+}
+
 #[test]
 fn every_switchboard_command_a_skill_names_is_one_the_binary_has_and_none_names_tmux() {
     let known = |name: &str| {
