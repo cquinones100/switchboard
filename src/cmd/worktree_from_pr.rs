@@ -478,7 +478,7 @@ fn run(given: &Given, asked: Asked, target: &str, input: &str) -> Result<ExitCod
         root = find_clone(named);
         let Some(found) = &root else {
             return Err(format!(
-                "That PR is in {named}, and no clone of it was found among your tabs, recent Claude sessions or the directories in your home.\nClone it, then run wtpr again."
+                "That PR is in {named}, and no clone of it was found among your tabs, recent Claude sessions or the directories in your home.\nClone it, then run switchboard worktree-from-pr again."
             ));
         };
         eprintln!("Repo:     {}", found.display());
@@ -516,7 +516,7 @@ fn run(given: &Given, asked: Asked, target: &str, input: &str) -> Result<ExitCod
         let (others, against) = others_on_pr(&pr, &repo, &root)?;
         if !others.is_empty() {
             eprintln!(
-                "Commits:  not all yours ({}), so it opens untrusted; wtpr --trusted {} opens it as your own.",
+                "Commits:  not all yours ({}), so it opens untrusted; switchboard worktree-from-pr --trusted {} opens it as your own.",
                 others.join(", "),
                 pr.number
             );
@@ -613,7 +613,7 @@ fn run(given: &Given, asked: Asked, target: &str, input: &str) -> Result<ExitCod
         if !others.is_empty() {
             return Err(format!(
                 "{} holds commits beyond the default branch by someone else ({}), whose CLAUDE.md, settings and hooks Claude would load, so Claude isn't started there.\n\
-                 Read them, then run wtpr --trusted {} to open it as your own.",
+                 Read them, then run switchboard worktree-from-pr --trusted {} to open it as your own.",
                 paths::tilde(&finished),
                 others.join(", "),
                 pr.number
@@ -699,7 +699,7 @@ fn others_on_pr(
         .find(|d| worktree::fetch_branch(root, &base, d, FETCH))
     else {
         return Err(format!(
-            "could not fetch {base}'s default branch to see whose commits PR #{} holds; wtpr --untrusted {} or --trusted {} says which it is",
+            "could not fetch {base}'s default branch to see whose commits PR #{} holds; switchboard worktree-from-pr --untrusted {} or --trusted {} says which it is",
             pr.number, pr.number, pr.number
         ));
     };
@@ -870,7 +870,7 @@ fn untrusted_worktree(
         let ours = common_dir(&dir).is_some() && common_dir(&dir) == common_dir(root);
         if !ours || !trust::marked(&dir) {
             return Err(format!(
-                "{} is there already but isn't a worktree wtpr --untrusted made from {}; move it away and run again",
+                "{} is there already but isn't a worktree switchboard worktree-from-pr --untrusted made from {}; move it away and run again",
                 dir.display(),
                 root.display()
             ));
@@ -1034,6 +1034,27 @@ fn slug(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hints_name_a_command_every_shell_has() {
+        // wtpr, wtn and wt are shell functions an rc may not define.
+        let bare = regex::Regex::new(r"\b(?:run |; )?(?:wtpr|wtn|wtb|wt) (?:--|\{|again)").unwrap();
+        for (file, text) in [
+            ("worktree_from_pr.rs", include_str!("worktree_from_pr.rs")),
+            (
+                "worktree_from_note.rs",
+                include_str!("worktree_from_note.rs"),
+            ),
+        ] {
+            for line in text.lines() {
+                let code = line.trim_start();
+                if code.starts_with("//") || !code.contains('"') {
+                    continue;
+                }
+                assert!(!bare.is_match(code), "{file}: {code}");
+            }
+        }
+    }
 
     #[test]
     fn how_long_an_author_has_been_on_github() {

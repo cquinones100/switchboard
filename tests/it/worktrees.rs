@@ -954,7 +954,9 @@ fn a_prs_commits_someone_else_wrote_open_it_untrusted_as_a_forks_would() {
     );
     assert_eq!(out.status.code(), Some(3), "{}", stderr(&out));
     assert!(
-        stderr(&out).contains("not all yours (them@e)"),
+        stderr(&out).contains(
+            "not all yours (them@e), so it opens untrusted; switchboard worktree-from-pr --trusted 7 opens it as your own."
+        ),
         "{}",
         stderr(&out)
     );
