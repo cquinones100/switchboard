@@ -14,11 +14,11 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::{App, Focus, NoteBar, Shown, list_width};
-use crate::notes::easy;
 use crate::notes::editor::Mode;
 use crate::notes::images::Picture;
 use crate::notes::render::{self, Cell, Hl, Kind};
 use crate::notes::sidebar::Look as RowLook;
+use crate::notes::{diagram, easy};
 use crate::ui::draw::{put_line, width};
 
 /// Rows of the screen kept above and below the cursor's line (the config's
@@ -326,6 +326,25 @@ impl App {
     /// The rows a buffer row takes on the screen, and its pieces.
     fn pieces(&mut self, row: usize, ctx: &Ctx) -> Vec<Shown> {
         let line = &ctx.lines[row];
+        if let Some((rows, cut)) = ctx.diagrams.get(&row) {
+            let mut out: Vec<Shown> = rows
+                .iter()
+                .enumerate()
+                .map(|(r, (text, cut))| Shown::Diagram {
+                    row,
+                    r,
+                    text: text.clone(),
+                    cut: *cut,
+                })
+                .collect();
+            if *cut {
+                out.push(Shown::Aside {
+                    row,
+                    text: diagram::CUT.to_string(),
+                });
+            }
+            return out;
+        }
         if let Some(Some(hidden)) = ctx.folded.get(&row) {
             let text = line.trim_start_matches('#').trim().to_string();
             if self.opts.ux2 && render::parked(line, ctx.kinds[row]) {
@@ -432,6 +451,12 @@ impl App {
                 }
             }
         }
+        if let Some(text) = ctx.asides.get(&row) {
+            out.push(Shown::Aside {
+                row,
+                text: text.clone(),
+            });
+        }
         out
     }
 
@@ -491,14 +516,48 @@ impl App {
         );
         self.geo.text = text;
         self.editor.height = text.height as usize;
-        let visible = self.editor.folds.visible(&kinds);
-        let folded: std::collections::HashMap<usize, Option<usize>> =
-            visible.iter().copied().collect();
+        let mut visible = self.editor.folds.visible(&kinds);
         // The cursor on a row in a closed fold is on the fold's heading.
         let mut cursor_row = self.editor.doc.row;
         if let Some((s, _)) = self.editor.folds.closed_at(&kinds, cursor_row) {
             cursor_row = s;
         }
+        // A mermaid block the cursor is outside drawn as its diagram, in
+        // the place of its rows; one whose kind isn't drawn keeps its code,
+        // a line under it saying so.
+        let mut diagrams = std::collections::HashMap::new();
+        let mut asides = std::collections::HashMap::new();
+        self.geo.diagrams.clear();
+        if self.shows_diagrams() {
+            let mut hidden = std::collections::HashSet::new();
+            for block in diagram::blocks(&lines, &kinds) {
+                match self.diagrams.get(&block.source, text.width as usize) {
+                    Some(drawn) if !block.holds(cursor_row) => {
+                        // Two rows short of the note, so a line beside it
+                        // shows whole for the cursor while the wheel moves
+                        // the view, which on the diagram would show its code.
+                        diagrams.insert(
+                            block.start,
+                            diagram::fit(
+                                drawn,
+                                text.width as usize,
+                                (text.height as usize).saturating_sub(2),
+                            ),
+                        );
+                        hidden.extend(block.start + 1..=block.end);
+                        self.geo.diagrams.push((block.start, block.end));
+                    }
+                    Some(_) => {}
+                    None => {
+                        asides.insert(block.end, diagram::not_drawn(&block.source));
+                    }
+                }
+            }
+            self.diagrams.sweep();
+            visible.retain(|(row, _)| !hidden.contains(row));
+        }
+        let folded: std::collections::HashMap<usize, Option<usize>> =
+            visible.iter().copied().collect();
         let mut selected = std::collections::HashMap::new();
         if let Some(sel) = self.editor.selection() {
             for (r, line) in lines
@@ -545,6 +604,8 @@ impl App {
             chips,
             folded,
             selected,
+            diagrams,
+            asides,
         };
         // Scrolled so the cursor's line shows with rows around it, and only
         // when it doesn't already: a cursor moving within the view moves
@@ -585,7 +646,21 @@ impl App {
                     still.push(i);
                 }
             }
-            let within = if still.is_empty() { &whole } else { &still };
+            let mut within = if still.is_empty() { whole } else { still };
+            // Not onto a diagram, which the cursor would turn to its code
+            // under the wheel, while another line is there to go to.
+            let off_diagrams: Vec<usize> = within
+                .iter()
+                .copied()
+                .filter(|&i| !ctx.diagrams.contains_key(&rows[i]))
+                .collect();
+            if !off_diagrams.is_empty() {
+                within = off_diagrams;
+            } else if !within.is_empty() && ti > 0 {
+                // Only a diagram whole in the view: the line over it, which
+                // the view then settles on, the diagram whole under it.
+                within = vec![ti - 1];
+            }
             let want = match (within.first(), within.last()) {
                 (Some(&first), Some(&last)) => ci.clamp(first, last),
                 _ => ti,
@@ -701,7 +776,12 @@ impl App {
         for (k, s) in shown.iter().enumerate() {
             let y = text.y + k as u16;
             if number_w > 0 {
-                let first = matches!(s, Shown::Text { first: true, .. } | Shown::Fold { .. });
+                let first = matches!(
+                    s,
+                    Shown::Text { first: true, .. }
+                        | Shown::Fold { .. }
+                        | Shown::Diagram { r: 0, .. }
+                );
                 if first {
                     let r = s.row();
                     let w = number_w as usize - 1;
@@ -735,6 +815,26 @@ impl App {
                 }
                 Shown::Chips { row, chips } => {
                     self.draw_chips(buf, text, y, *row, chips);
+                }
+                Shown::Diagram { text: t, cut, .. } => {
+                    let (x, _) = buf.set_stringn(text.x, y, t, text.width as usize, Style::new());
+                    if *cut && x < text.right() {
+                        buf.set_string(
+                            text.right() - 1,
+                            y,
+                            "›",
+                            Hl::Fold.style(self.opts.light).add_modifier(Modifier::BOLD),
+                        );
+                    }
+                }
+                Shown::Aside { text: t, .. } => {
+                    buf.set_stringn(
+                        text.x,
+                        y,
+                        t,
+                        text.width as usize,
+                        Hl::Fence.style(self.opts.light),
+                    );
                 }
                 Shown::Picture { pic, r, .. } => {
                     let x0 = text.x + pic.indent;
@@ -859,9 +959,11 @@ impl App {
                     .unwrap_or(0);
                 Some((*row, Some(end)))
             }
-            Shown::Chips { row, .. } | Shown::Fold { row, .. } | Shown::Picture { row, .. } => {
-                Some((*row, None))
-            }
+            Shown::Chips { row, .. }
+            | Shown::Fold { row, .. }
+            | Shown::Picture { row, .. }
+            | Shown::Diagram { row, .. }
+            | Shown::Aside { row, .. } => Some((*row, None)),
         }
     }
 
@@ -1032,4 +1134,11 @@ struct Ctx {
     chips: Vec<Vec<render::Chip>>,
     folded: std::collections::HashMap<usize, Option<usize>>,
     selected: std::collections::HashMap<usize, (usize, usize)>,
+    /// Each mermaid block drawn as its diagram, by its opening fence's
+    /// row: the diagram's rows, each with whether it was cut short, and whether it
+    /// was cut at all (too wide or too tall).
+    diagrams: std::collections::HashMap<usize, (Vec<(String, bool)>, bool)>,
+    /// The line under a mermaid block whose kind isn't drawn, by its
+    /// closing fence's row.
+    asides: std::collections::HashMap<usize, String>,
 }

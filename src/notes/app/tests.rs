@@ -3742,3 +3742,154 @@ fn a_copy_made_while_notes_runs_is_found_when_the_original_opens_again() {
     );
     assert_eq!(id::of_file(&copy).as_deref(), Some(old_id.as_str()));
 }
+
+const DIAGRAM_NOTE: &str = "# Flow\n\nintro\n```mermaid\ngraph LR\n  subgraph ci[\"CI\"]\n    build[Build] --> deploy[Deploy]\n  end\n```\nafter\n```mermaid\npie\n  \"a\" : 1\n```\n";
+
+fn diagram_app(name: &str, opts: Options) -> (Dir, App) {
+    let (dir, mut store) = temp(name);
+    let path = store.create("", Some("Flow"));
+    write(&path, DIAGRAM_NOTE);
+    let (mut app, _) = app_in(store, opts);
+    app.start();
+    keys(&mut app, "gg");
+    (dir, app)
+}
+
+fn shows(shown: &[String], text: &str) -> bool {
+    shown.iter().any(|l| l.contains(text))
+}
+
+#[test]
+fn a_mermaid_block_draws_as_its_diagram_and_as_its_code_with_the_cursor_in_it() {
+    let (_dir, mut app) = diagram_app("mermaid", options());
+    let shown = screen(&mut app);
+    let all = shown.join("\n");
+    assert!(shows(&shown, "│ Build ├"), "drawn:\n{all}");
+    assert!(shows(&shown, " CI "), "its subgraph's title:\n{all}");
+    assert!(!shows(&shown, "graph LR"), "its code hidden:\n{all}");
+    assert!(shows(&shown, "after"), "{all}");
+    // A pie isn't drawn: its code shows, with a line saying so.
+    assert!(shows(&shown, "pie"), "{all}");
+    assert!(
+        shows(
+            &shown,
+            "Pie charts aren't drawn in Notes; its code shows instead."
+        ),
+        "{all}"
+    );
+    // Down onto the block: its first line, and its code.
+    keys(&mut app, "jjj");
+    assert_eq!(app.editor.doc.row, 3);
+    let shown = screen(&mut app);
+    assert!(shows(&shown, "graph LR"), "{}", shown.join("\n"));
+    assert!(!shows(&shown, "│ Build ├"), "{}", shown.join("\n"));
+    // Out of it again: the diagram.
+    keys(&mut app, "G");
+    let shown = screen(&mut app);
+    assert!(shows(&shown, "│ Build ├"), "{}", shown.join("\n"));
+    assert!(!shows(&shown, "graph LR"), "{}", shown.join("\n"));
+}
+
+#[test]
+fn show_diagram_code_pins_a_notes_blocks_to_their_code_until_show_diagrams() {
+    let (_dir, mut app) = diagram_app("mermaid-code", options());
+    keys(&mut app, "<C-p>/diagram code<CR>");
+    let shown = screen(&mut app);
+    assert!(shows(&shown, "graph LR"), "{}", shown.join("\n"));
+    assert!(!shows(&shown, "│ Build ├"), "{}", shown.join("\n"));
+    let named = |app: &App| {
+        app.palette_commands(false)
+            .into_iter()
+            .find(|c| c.act == PaletteAct::Format(FormatAct::DiagramCode))
+            .map(|c| c.name)
+    };
+    assert_eq!(named(&app).as_deref(), Some("Diagram: Show diagrams"));
+    keys(&mut app, "<C-p>/show diagrams");
+    let shown = screen(&mut app);
+    assert!(shows(&shown, "Show diagrams"), "{}", shown.join("\n"));
+    keys(&mut app, "<CR>");
+    let shown = screen(&mut app);
+    assert!(shows(&shown, "│ Build ├"), "{}", shown.join("\n"));
+    assert_eq!(named(&app).as_deref(), Some("Diagram: Show diagram code"));
+}
+
+#[test]
+fn with_the_setting_off_every_block_shows_its_code() {
+    let (_dir, mut app) = diagram_app(
+        "mermaid-off",
+        Options {
+            mermaid: false,
+            ..options()
+        },
+    );
+    let shown = screen(&mut app);
+    assert!(shows(&shown, "graph LR"), "{}", shown.join("\n"));
+    assert!(!shows(&shown, "│ Build ├"), "{}", shown.join("\n"));
+    assert!(!shows(&shown, "aren't drawn"), "{}", shown.join("\n"));
+}
+
+#[test]
+fn a_diagram_wider_than_the_note_is_cut_at_its_edge() {
+    let (_dir, mut store) = temp("mermaid-wide");
+    let path = store.create("", Some("Wide"));
+    let children: Vec<String> = (0..12)
+        .map(|i| format!("d --> s{i}[service-{i}]"))
+        .collect();
+    write(
+        &path,
+        &format!(
+            "# Wide\n\n```mermaid\ngraph TD\n{}\n```\n",
+            children.join("\n")
+        ),
+    );
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    keys(&mut app, "gg");
+    let shown = screen(&mut app);
+    let all = shown.join("\n");
+    assert!(shows(&shown, "service-0"), "{all}");
+    assert!(shown.iter().any(|l| l.ends_with('›')), "{all}");
+    assert!(shows(&shown, crate::notes::diagram::CUT), "{all}");
+}
+
+#[test]
+fn a_diagram_taller_than_the_note_is_cut_to_fit_it() {
+    let (_dir, mut store) = temp("mermaid-tall");
+    let path = store.create("", Some("Tall"));
+    let chain: Vec<String> = (0..12)
+        .map(|i| format!("n{i}[Step {i}] --> n{}[Step {}]", i + 1, i + 1))
+        .collect();
+    write(
+        &path,
+        &format!(
+            "# Tall\n\n```mermaid\ngraph TD\n{}\n```\n",
+            chain.join("\n")
+        ),
+    );
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    keys(&mut app, "gg");
+    let shown = screen(&mut app);
+    let all = shown.join("\n");
+    assert!(shows(&shown, "Step 0"), "{all}");
+    // The wheel scrolls it to the top, its rows and the line under it on
+    // the screen, still drawn.
+    for _ in 0..4 {
+        let r = app.geo.note;
+        app.mouse(Mouse {
+            kind: MouseKind::Press,
+            button: MouseButton::WheelDown,
+            col: r.x + 2,
+            row: r.y + 2,
+            mods: Mods::NONE,
+        });
+        screen(&mut app);
+    }
+    let shown = screen(&mut app);
+    assert!(shows(&shown, "Step 0"), "{}", shown.join("\n"));
+    assert!(
+        shows(&shown, crate::notes::diagram::CUT),
+        "{}",
+        shown.join("\n")
+    );
+}

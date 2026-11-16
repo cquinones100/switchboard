@@ -231,7 +231,11 @@ pub fn commands(from_list: bool, in_note: bool, ux2: bool) -> Vec<Command> {
         {
             list.push(command(
                 format!("{heading}: {}", item.label),
-                format!("Ctrl-P {}", item.key),
+                if item.key.is_empty() {
+                    String::new()
+                } else {
+                    format!("Ctrl-P {}", item.key)
+                },
                 "format",
                 Act::Format(item.act),
             ));

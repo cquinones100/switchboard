@@ -15,7 +15,8 @@
 //! as less did, so each is built and tested on its own.
 //!
 //! - `markdown`: Markdown laid out for a terminal, glow-style.json's look.
-//! - `mermaid`: flowcharts and sequence diagrams drawn as text.
+//! - `mermaid`: flowcharts (with their subgraphs) and sequence diagrams
+//!   drawn as text, for the views and Notes.
 //! - `pictures`: the pictures and Mermaid diagrams a view draws as
 //!   images, where the terminal can show them.
 //! - `pager`: less's part: keys, search, resize, links.

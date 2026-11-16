@@ -41,6 +41,8 @@ pub enum Act {
     AddColumn,
     DeleteRow,
     DeleteColumn,
+    /// The note's mermaid blocks shown as their code, or drawn again.
+    DiagramCode,
 }
 
 impl Act {
@@ -92,6 +94,11 @@ const fn item(key: &'static str, label: &'static str, act: Act) -> Item {
     Item { key, label, act }
 }
 
+/// The Diagram item's label, and its label while the note shows its
+/// diagrams' code.
+pub const SHOW_DIAGRAM_CODE: &str = "Show diagram code";
+pub const SHOW_DIAGRAMS: &str = "Show diagrams";
+
 /// The menu's headings and their items, in its order.
 pub const SECTIONS: &[(&str, &[Item])] = &[
     (
@@ -142,6 +149,7 @@ pub const SECTIONS: &[(&str, &[Item])] = &[
             item("X", "Delete column", Act::DeleteColumn),
         ],
     ),
+    ("Diagram", &[item("", SHOW_DIAGRAM_CODE, Act::DiagramCode)]),
 ];
 
 /// Every item, in the menu's order, each with its heading.
@@ -175,13 +183,36 @@ pub struct FormatMenu {
     rows: Vec<Option<usize>>,
     /// The first line shown, when the screen is too short for them all.
     top: usize,
+    /// The note shows its diagrams' code, so the Diagram item reads "Show
+    /// diagrams".
+    diagram_code: bool,
+}
+
+/// An item's label as the menu shows it: the Diagram item's "Show
+/// diagrams" while the note shows its diagrams' code.
+fn label(item: &Item, diagram_code: bool) -> &'static str {
+    if item.act == Act::DiagramCode && diagram_code {
+        SHOW_DIAGRAMS
+    } else {
+        item.label
+    }
 }
 
 impl FormatMenu {
+    pub fn new(diagram_code: bool) -> FormatMenu {
+        FormatMenu {
+            diagram_code,
+            ..FormatMenu::default()
+        }
+    }
+
     /// The items shown, by their place in `items()`: every one while the
     /// search is closed.
     fn shown(&self) -> Vec<usize> {
-        let labels: Vec<&str> = items().iter().map(|(_, i)| i.label).collect();
+        let labels: Vec<&str> = items()
+            .iter()
+            .map(|(_, i)| label(i, self.diagram_code))
+            .collect();
         self.filter.shown(&labels)
     }
 }
@@ -202,6 +233,7 @@ impl Overlay for FormatMenu {
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
         let mut lines = Vec::new();
         self.rows.clear();
+        let diagram_code = self.diagram_code;
         let row = |item: &Item, at: usize| {
             let chosen = at == self.cursor;
             let fill = if chosen {
@@ -218,7 +250,7 @@ impl Overlay for FormatMenu {
             };
             spans.push(Span::styled(format!("{:<3} ", item.key), look.dim()));
             spans.push(Span::styled(
-                item.label.to_string(),
+                label(item, diagram_code).to_string(),
                 if chosen {
                     look.bold_bright()
                 } else {

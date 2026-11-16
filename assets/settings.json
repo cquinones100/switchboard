@@ -690,6 +690,13 @@
     "default": true
   },
   {
+    "key": "notes_mermaid",
+    "category": "Notes",
+    "label": "Draw Mermaid diagrams",
+    "description": "A ```mermaid block in a note (a flowchart, its subgraphs among it, or a sequence diagram) drawn as its diagram while the cursor is outside it, and as its code while the cursor is in it; the Format menu's Show diagram code shows a note's blocks as code until Show diagrams. Off, every block shows as its code",
+    "default": true
+  },
+  {
     "key": "notes_recent",
     "category": "Notes",
     "label": "Recent notes in the sidebar",

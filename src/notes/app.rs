@@ -139,6 +139,9 @@ pub struct Options {
     pub ctrl_v_image: bool,
     /// Pictures drawn under their lines (notes_images).
     pub images: bool,
+    /// A mermaid block drawn as its diagram while the cursor is outside
+    /// it (notes_mermaid).
+    pub mermaid: bool,
     pub light: bool,
     /// The list shown as the app starts (`NOTES_SIDEBAR=off` starts it
     /// put away, beside a tab).
@@ -186,6 +189,7 @@ impl Default for Options {
             palette: true,
             ctrl_v_image: true,
             images: true,
+            mermaid: true,
             light: false,
             list: true,
             follow_links_on_click: true,
@@ -224,6 +228,7 @@ impl Options {
             palette: on("notes_palette"),
             ctrl_v_image: on("notes_ctrl_v_image"),
             images: on("notes_images") && crate::mux::graphics::apps_draw(),
+            mermaid: on("notes_mermaid"),
             light: all
                 .iter()
                 .any(|s| s.key == "theme" && crate::status::theme::light_for(&s.value)),
@@ -352,6 +357,20 @@ pub(crate) enum Shown {
         pic: images::Picture,
         r: u16,
     },
+    /// A row of a mermaid block's diagram, in the place of the block, its
+    /// first row the block's opening fence; `cut` where it ran past the
+    /// note's edge.
+    Diagram {
+        row: usize,
+        r: usize,
+        text: String,
+        cut: bool,
+    },
+    /// A dim line under a diagram, saying it was cut or isn't drawn.
+    Aside {
+        row: usize,
+        text: String,
+    },
 }
 
 impl Shown {
@@ -360,7 +379,9 @@ impl Shown {
             Shown::Text { row, .. }
             | Shown::Chips { row, .. }
             | Shown::Fold { row, .. }
-            | Shown::Picture { row, .. } => *row,
+            | Shown::Picture { row, .. }
+            | Shown::Diagram { row, .. }
+            | Shown::Aside { row, .. } => *row,
         }
     }
 }
@@ -387,6 +408,9 @@ struct Geo {
     /// height, the shown lines' rows of the note (a closed fold's hidden
     /// ones left out) and how many show from the first.
     note_bar: Option<NoteBar>,
+    /// The mermaid blocks drawn as their diagrams, their fences' rows, for
+    /// the wheel.
+    diagrams: Vec<(usize, usize)>,
 }
 
 /// The note's scroll bar as it was drawn, for the mouse.
@@ -607,6 +631,11 @@ pub struct App {
     leader: bool,
     /// Ctrl-V's next key typed as it is.
     literal: bool,
+    /// Mermaid blocks drawn, by their code and width.
+    diagrams: super::diagram::Diagrams,
+    /// The notes whose diagrams show as their code (the Format menu's
+    /// "Show diagram code"), until "Show diagrams".
+    diagram_code: HashSet<PathBuf>,
     images: Images,
     /// Escapes written after the frame: the clipboard's, the pictures'.
     pub out: Vec<u8>,
@@ -726,6 +755,8 @@ impl App {
             leader: false,
             literal: false,
             images: Images::new(opts.images),
+            diagrams: Default::default(),
+            diagram_code: HashSet::new(),
             out: Vec::new(),
             last_change: Vec::new(),
             recording: None,
@@ -888,6 +919,36 @@ impl App {
 
     pub fn current_path(&self) -> Option<&Path> {
         self.open.as_ref().map(|o| o.path.as_path())
+    }
+
+    /// Whether the open note's mermaid blocks are drawn as their diagrams:
+    /// notes_mermaid on, and the note not switched to their code.
+    pub(crate) fn shows_diagrams(&self) -> bool {
+        self.opts.mermaid
+            && self
+                .current_path()
+                .is_none_or(|p| !self.diagram_code.contains(p))
+    }
+
+    /// The Format menu's "Show diagram code", or "Show diagrams" once it
+    /// was: the open note's diagrams shown as their code, or drawn again.
+    fn switch_diagram_code(&mut self) {
+        let Some(path) = self.current_path().map(Path::to_path_buf) else {
+            return;
+        };
+        if !self.diagram_code.remove(&path) {
+            self.diagram_code.insert(path);
+        }
+    }
+
+    /// What the Format menu and the palette call "Show diagram code" for
+    /// the open note: "Show diagrams" while it shows their code.
+    fn diagram_label(&self) -> &'static str {
+        if self.opts.mermaid && !self.shows_diagrams() {
+            menu::SHOW_DIAGRAMS
+        } else {
+            menu::SHOW_DIAGRAM_CODE
+        }
     }
 
     /// The open note's tabs by its items' first lines, for its chips and
@@ -2321,7 +2382,10 @@ impl App {
         let typing = self.typing_col();
         let from = self.format_from(typing);
         self.leave_modes();
-        self.push(Box::<FormatMenu>::default(), Then::Format(from));
+        self.push(
+            Box::new(FormatMenu::new(self.diagram_label() == menu::SHOW_DIAGRAMS)),
+            Then::Format(from),
+        );
     }
 
     /// Out of Insert, Replace and Visual mode, as a menu or a button takes
@@ -2363,6 +2427,10 @@ impl App {
                 self.work_on_item();
                 return;
             }
+            FormatAct::DiagramCode => {
+                self.switch_diagram_code();
+                return;
+            }
             _ => {}
         }
         self.editor.change(|doc| match act {
@@ -2380,7 +2448,10 @@ impl App {
             FormatAct::AddColumn => table::add_column(doc),
             FormatAct::DeleteRow => table::delete_row(doc),
             FormatAct::DeleteColumn => table::delete_column(doc),
-            FormatAct::Link | FormatAct::PasteImage | FormatAct::WorkOnItem => {}
+            FormatAct::Link
+            | FormatAct::PasteImage
+            | FormatAct::WorkOnItem
+            | FormatAct::DiagramCode => {}
         });
         self.take_insert();
         if act.typing() && sel.is_none() && self.editor.mode != Mode::Insert {
@@ -2739,6 +2810,10 @@ impl App {
                         .find(|s| s.key == "notes_images")
                         .is_none_or(|s| s.value != serde_json::Value::Bool(false));
                 }
+                self.opts.mermaid = settings::read_settings()
+                    .iter()
+                    .find(|s| s.key == "notes_mermaid")
+                    .is_none_or(|s| s.value != serde_json::Value::Bool(false));
                 self.images.forget_sent();
                 self.check();
                 self.rebuild();
@@ -2999,6 +3074,22 @@ impl App {
         self.push(Box::new(picker), Then::Palette(commands, from));
     }
 
+    /// The palette's commands, the Diagram item named as the Format menu
+    /// names it for the note.
+    fn palette_commands(&self, from_list: bool) -> Vec<palette::Command> {
+        let mut commands =
+            palette::commands(from_list, !from_list && self.open.is_some(), self.opts.ux2);
+        if self.beside.is_some() {
+            commands.push(palette::note_or_plan());
+        }
+        for c in &mut commands {
+            if c.act == PaletteAct::Format(FormatAct::DiagramCode) {
+                c.name = format!("Diagram: {}", self.diagram_label());
+            }
+        }
+        commands
+    }
+
     /// The palette's commands where the app is, and where they were asked
     /// from, out of Insert and Visual mode as a command needs it.
     fn palette_here(&mut self) -> (Vec<palette::Command>, PaletteFrom) {
@@ -3006,11 +3097,7 @@ impl App {
         let typing = self.typing_col();
         let format = self.format_from(typing);
         self.leave_modes();
-        let mut commands =
-            palette::commands(from_list, !from_list && self.open.is_some(), self.opts.ux2);
-        if self.beside.is_some() {
-            commands.push(palette::note_or_plan());
-        }
+        let commands = self.palette_commands(from_list);
         let from = PaletteFrom {
             list: from_list,
             format,
@@ -3029,11 +3116,7 @@ impl App {
             .current_path()
             .filter(|p| !self.store.in_trash(p))
             .map(|p| self.store.relative(p));
-        let mut commands =
-            palette::commands(from_list, !from_list && self.open.is_some(), self.opts.ux2);
-        if self.beside.is_some() {
-            commands.push(palette::note_or_plan());
-        }
+        let mut commands = self.palette_commands(from_list);
         // The checklist item's commands lead, the rest in the app's order.
         commands.sort_by_key(|c| !c.act.on_item());
         let commands = commands
@@ -4075,13 +4158,23 @@ impl App {
     /// The wheel over the note: the view moves, and the cursor is brought
     /// into it as it is drawn, at the scrolloff's distance from its edges,
     /// as Vim moves it (`draw_note`).
+    /// A diagram drawn in its block's place is one line to the wheel: going
+    /// down it stops with the diagram at the top, and never in its rows.
     fn scroll(&mut self, by: usize, down: bool) {
         let last = self.editor.doc.text.len() - 1;
-        self.editor.top = if down {
-            (self.editor.top + by).min(last)
+        let top = self.editor.top;
+        let mut to = if down {
+            (top + by).min(last)
         } else {
-            self.editor.top.saturating_sub(by)
+            top.saturating_sub(by)
         };
+        let drawn = &self.geo.diagrams;
+        if down && let Some(&(start, _)) = drawn.iter().find(|(s, _)| top < *s && *s <= to) {
+            to = start;
+        } else if let Some(&(start, end)) = drawn.iter().find(|(s, e)| *s < to && to <= *e) {
+            to = if down { (end + 1).min(last) } else { start };
+        }
+        self.editor.top = to;
         self.scrolled = true;
     }
 
@@ -4094,7 +4187,10 @@ impl App {
         let from = self.format_from(typing);
         self.leave_modes();
         match b.item.and_then(menu::by_label) {
-            None => self.push(Box::<FormatMenu>::default(), Then::Format(from)),
+            None => self.push(
+                Box::new(FormatMenu::new(self.diagram_label() == menu::SHOW_DIAGRAMS)),
+                Then::Format(from),
+            ),
             Some(item) => self.run_format(item.act, from),
         }
     }

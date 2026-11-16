@@ -25,7 +25,8 @@
 //!   Neovim's, new here.
 //! - `editor`: Vim's keys.
 //! - `sync`: notes changed from outside (sync.lua).
-//! - `images`: pictures pasted and drawn (images.lua).
+//! - `images`: pictures pasted and drawn (images.lua); `diagram`: mermaid
+//!   blocks drawn as their diagrams, new here.
 //! - `sidebar`: the list (sidebar.lua).
 //! - `menu`: the Format menu and the boxes the app asks in.
 //! - `palette`: Ctrl-Shift-P (palette.lua); `finder`: Ctrl-F (finder.lua).
@@ -40,6 +41,7 @@
 use std::process::ExitCode;
 
 pub mod app;
+pub mod diagram;
 pub mod easy;
 pub mod editor;
 pub mod finder;

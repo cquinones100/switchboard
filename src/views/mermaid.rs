@@ -4,6 +4,14 @@
 //! class or state diagram, a Gantt chart) gives `None`, and the view keeps
 //! its source with a line saying where it is shown properly.
 //!
+//! A flowchart's subgraphs (`subgraph id["title"]` ... `end`, nested) are
+//! each laid out on their own, in their `direction` or the diagram's, and
+//! placed in the layout around them as one rounded box with the title on
+//! its top edge, so a subgraph's nodes stay together and no box crosses
+//! another. An edge between nodes in different subgraphs, or to or from a
+//! subgraph itself, meets the box of the outermost subgraph it enters or
+//! leaves.
+//!
 //! A flowchart is laid out in layers, as mermaid-ascii and Mermaid itself
 //! lay one out: each node a layer below the longest chain of nodes leading
 //! to it, an edge that loops back laid out the other way round with its
@@ -42,12 +50,7 @@ pub fn draw(source: &str, max_width: usize) -> Option<String> {
     let mut words = head.split_whitespace();
     match words.next()? {
         "flowchart" | "graph" => {
-            let dir = match words.next().map(str::to_ascii_uppercase).as_deref() {
-                Some("LR") => Dir::LeftRight,
-                Some("RL") => Dir::RightLeft,
-                Some("BT") => Dir::BottomUp,
-                _ => Dir::TopDown,
-            };
+            let dir = words.next().map_or(Dir::TopDown, dir_of);
             let graph = Graph::parse(rest);
             if graph.nodes.is_empty() {
                 return None;
@@ -320,6 +323,19 @@ struct Node {
     id: String,
     label: Vec<String>,
     round: bool,
+    /// A subgraph's own drawing, which its box holds under its title (the
+    /// label).
+    block: Option<Vec<String>>,
+}
+
+/// A subgraph: its id, its title, the subgraph it is in, and its own
+/// direction when it names one.
+#[derive(Clone, Debug)]
+struct Cluster {
+    id: String,
+    title: String,
+    parent: Option<usize>,
+    dir: Option<Dir>,
 }
 
 #[derive(Clone, Debug)]
@@ -331,10 +347,22 @@ struct Edge {
     stroke: Stroke,
 }
 
+/// A node or a subgraph, as one box of a level's layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Rep {
+    Node(usize),
+    Cluster(usize),
+}
+
 #[derive(Default, Debug)]
 struct Graph {
     nodes: Vec<Node>,
     edges: Vec<Edge>,
+    clusters: Vec<Cluster>,
+    /// Each node's subgraph, the one it was first named in.
+    member: Vec<Option<usize>>,
+    /// The subgraph being read.
+    inside: Option<usize>,
 }
 
 static TEXT_LINK: LazyLock<Regex> =
@@ -366,22 +394,32 @@ impl Graph {
         let mut graph = Graph::default();
         for line in lines {
             for statement in split_statements(line) {
-                let first = statement.split_whitespace().next().unwrap_or("");
-                if [
-                    "subgraph",
-                    "end",
-                    "classDef",
-                    "class",
-                    "style",
-                    "linkStyle",
-                    "click",
-                    "direction",
-                ]
-                .contains(&first)
-                {
-                    continue;
+                let mut words = statement.split_whitespace();
+                match words.next().unwrap_or("") {
+                    "subgraph" => {
+                        let (id, title) = subgraph_head(statement["subgraph".len()..].trim());
+                        let id = if id.is_empty() {
+                            format!("subgraph {}", graph.clusters.len())
+                        } else {
+                            id
+                        };
+                        graph.clusters.push(Cluster {
+                            id,
+                            title,
+                            parent: graph.inside,
+                            dir: None,
+                        });
+                        graph.inside = Some(graph.clusters.len() - 1);
+                    }
+                    "end" => graph.inside = graph.inside.and_then(|c| graph.clusters[c].parent),
+                    "direction" => {
+                        if let Some(c) = graph.inside {
+                            graph.clusters[c].dir = words.next().map(dir_of);
+                        }
+                    }
+                    "classDef" | "class" | "style" | "linkStyle" | "click" => {}
+                    _ => graph.statement(&statement),
                 }
-                graph.statement(&statement);
             }
         }
         graph
@@ -395,7 +433,9 @@ impl Graph {
                     id: id.to_string(),
                     label: vec![id.to_string()],
                     round: false,
+                    block: None,
                 });
+                self.member.push(None);
                 self.nodes.len() - 1
             }
         }
@@ -445,6 +485,9 @@ impl Graph {
         let mut rest = text;
         while let Some((id, label, round, after)) = node_ref(rest.trim_start()) {
             let i = self.node(&id);
+            if self.member[i].is_none() {
+                self.member[i] = self.inside;
+            }
             if let Some(label) = label {
                 self.nodes[i].label = label_lines(&label);
                 self.nodes[i].round = round;
@@ -485,6 +528,38 @@ fn split_statements(line: &str) -> Vec<String> {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect()
+}
+
+/// A direction's name, as `flowchart` and `direction` give it.
+fn dir_of(word: &str) -> Dir {
+    match word.to_ascii_uppercase().as_str() {
+        "LR" => Dir::LeftRight,
+        "RL" => Dir::RightLeft,
+        "BT" => Dir::BottomUp,
+        _ => Dir::TopDown,
+    }
+}
+
+/// A subgraph's id and title from what follows `subgraph`: `id["title"]`,
+/// `id`, `"title"` or a title of several words, which is its id too.
+fn subgraph_head(rest: &str) -> (String, String) {
+    if let Some(q) = rest.strip_prefix('"') {
+        let title = q.split('"').next().unwrap_or("").to_string();
+        return (title.clone(), title);
+    }
+    // `id[title]`, or `id [title]` with space before its bracket.
+    let joined = match rest.split_once(char::is_whitespace) {
+        Some((id, title)) if title.trim_start().starts_with(['[', '(', '{']) => {
+            format!("{id}{}", title.trim_start())
+        }
+        _ => rest.to_string(),
+    };
+    if let Some((id, Some(label), _, after)) = node_ref(&joined)
+        && after.trim().is_empty()
+    {
+        return (id, label_lines(&label).join(" "));
+    }
+    (rest.to_string(), label_lines(rest).join(" "))
 }
 
 /// A node at the start of `text`: its id, the label its shape gives, round
@@ -610,13 +685,33 @@ struct Point {
 
 /// A box's size along the diagram's direction and across it.
 fn box_size(node: &Node, dir: Dir) -> (usize, usize) {
-    let mut w = node.label.iter().map(|l| width(l)).max().unwrap_or(0) + 4;
+    let label_w = node.label.iter().map(|l| width(l)).max().unwrap_or(0);
+    let (mut w, h) = match &node.block {
+        // A border and a space round the drawing, and room for the title
+        // on the top edge.
+        Some(block) => (
+            block
+                .iter()
+                .map(|l| width(l))
+                .max()
+                .unwrap_or(0)
+                .max(label_w + 2)
+                + 4,
+            if block.is_empty() { 3 } else { block.len() + 4 },
+        ),
+        None => (label_w + 4, node.label.len() + 2),
+    };
+    // Drawn up or down, an edge may meet a subgraph at its top edge's
+    // middle (one leaving it bottom up, or one looping back top down),
+    // where its title is: room for the title left of the middle.
+    if node.block.is_some() && matches!(dir, Dir::TopDown | Dir::BottomUp) {
+        w = w.max(2 * (label_w + 4) + 1);
+    }
     // An odd width has a middle column for the edges to meet, so a chain
     // draws straight down.
     if matches!(dir, Dir::TopDown | Dir::BottomUp) && w % 2 == 0 {
         w += 1;
     }
-    let h = node.label.len() + 2;
     match dir {
         Dir::TopDown | Dir::BottomUp => (h, w),
         Dir::LeftRight | Dir::RightLeft => (w, h),
@@ -625,6 +720,101 @@ fn box_size(node: &Node, dir: Dir) -> (usize, usize) {
 
 impl Graph {
     fn draw(&self, dir: Dir) -> String {
+        if self.clusters.is_empty() {
+            self.layout(dir)
+        } else {
+            self.level(None, dir)
+        }
+    }
+
+    /// The subgraphs from the outermost to `at`.
+    fn chain(&self, at: Option<usize>) -> Vec<usize> {
+        let mut out = Vec::new();
+        let mut c = at;
+        while let Some(i) = c {
+            out.push(i);
+            c = self.clusters[i].parent;
+        }
+        out.reverse();
+        out
+    }
+
+    /// What stands for node `n` in the level of the subgraphs `own`: the
+    /// node itself, the subgraph in the level it is inside, or nothing when
+    /// it is outside the level (or names the level's own subgraph).
+    fn rep(&self, own: &[usize], n: usize) -> Option<Rep> {
+        let named = self.clusters.iter().position(|c| c.id == self.nodes[n].id);
+        let chain = match named {
+            Some(c) => self.chain(Some(c)),
+            None => self.chain(self.member[n]),
+        };
+        if !chain.starts_with(own) {
+            return None;
+        }
+        match chain.get(own.len()) {
+            Some(&c) => Some(Rep::Cluster(c)),
+            None if named.is_none() => Some(Rep::Node(n)),
+            None => None,
+        }
+    }
+
+    /// One level of the diagram, the whole of it or a subgraph's inside:
+    /// the nodes in it, and each subgraph in it as one box holding its own
+    /// drawing, laid out flat.
+    fn level(&self, at: Option<usize>, dir: Dir) -> String {
+        let own = self.chain(at);
+        let mut reps: Vec<Rep> = Vec::new();
+        for n in 0..self.nodes.len() {
+            if let Some(r) = self.rep(&own, n)
+                && !reps.contains(&r)
+            {
+                reps.push(r);
+            }
+        }
+        for (c, cluster) in self.clusters.iter().enumerate() {
+            if cluster.parent == at && !reps.contains(&Rep::Cluster(c)) {
+                reps.push(Rep::Cluster(c));
+            }
+        }
+        let mut flat = Graph::default();
+        for r in &reps {
+            flat.nodes.push(match *r {
+                Rep::Node(n) => self.nodes[n].clone(),
+                Rep::Cluster(c) => {
+                    let cluster = &self.clusters[c];
+                    let inside = self.level(Some(c), cluster.dir.unwrap_or(dir));
+                    Node {
+                        id: cluster.id.clone(),
+                        label: vec![cluster.title.clone()],
+                        round: true,
+                        block: Some(inside.lines().map(str::to_string).collect()),
+                    }
+                }
+            });
+        }
+        let place = |r: Rep| reps.iter().position(|x| *x == r);
+        for e in &self.edges {
+            let (Some(a), Some(b)) = (self.rep(&own, e.from), self.rep(&own, e.to)) else {
+                continue;
+            };
+            if let (Some(from), Some(to)) = (place(a), place(b))
+                && a != b
+            {
+                flat.edges.push(Edge {
+                    from,
+                    to,
+                    ..e.clone()
+                });
+            }
+        }
+        if flat.nodes.is_empty() {
+            return String::new();
+        }
+        flat.layout(dir)
+    }
+
+    /// Lays out a graph with no subgraphs: its boxes and edges.
+    fn layout(&self, dir: Dir) -> String {
         let n = self.nodes.len();
         let edges: Vec<&Edge> = self.edges.iter().filter(|e| e.from != e.to).collect();
         // Edges that loop back, found depth first, are laid out the other
@@ -854,6 +1044,7 @@ impl Graph {
         let mut canvas = Canvas::default();
         // The edges first, the boxes over their ends.
         let mut marks: Vec<((usize, usize), &'static str)> = Vec::new();
+        let mut titles: Vec<(usize, usize, usize, String)> = Vec::new();
         let mut labels: Vec<(usize, usize, usize, String)> = Vec::new();
         for (g, path) in paths.iter().enumerate() {
             let group = &groups[g].2;
@@ -933,11 +1124,42 @@ impl Graph {
             let (x, y) = (a.0.min(b.0), a.1.min(b.1));
             let (w, h) = (a.0.max(b.0) - x + 1, a.1.max(b.1) - y + 1);
             canvas.rect(x, y, w, h, node.round);
+            if let Some(block) = &node.block {
+                let title = node.label.join(" ");
+                if !title.is_empty() {
+                    titles.push((x, y, w, format!(" {title} ")));
+                }
+                for (j, line) in block.iter().enumerate() {
+                    canvas.text(x + 2, y + 2 + j, line);
+                }
+                continue;
+            }
             let inner = w.saturating_sub(4);
             for (j, line) in node.label.iter().enumerate() {
                 let pad = inner.saturating_sub(width(line)) / 2;
                 canvas.text(x + 2 + pad, y + 1 + j, line);
             }
+        }
+        // A subgraph's title on its top edge, beside any edge meeting the
+        // edge there rather than over it; with no room beside, over it.
+        for (x, y, w, title) in titles {
+            let len = width(&title);
+            let joins: Vec<usize> = marks
+                .iter()
+                .filter(|((mx, my), _)| *my == y && *mx > x && *mx + 1 < x + w)
+                .map(|((mx, _), _)| *mx)
+                .collect();
+            let clear = |at: usize| {
+                at > x && at + len < x + w && !joins.iter().any(|j| (at..at + len).contains(j))
+            };
+            let mut places = vec![x + 2];
+            for &j in &joins {
+                places.push(j + 2);
+                places.push(j.saturating_sub(len + 1));
+            }
+            let at = places.into_iter().find(|&at| clear(at)).unwrap_or(x + 2);
+            marks.retain(|((mx, my), _)| *my != y || !(at..at + len).contains(mx));
+            canvas.text(at, y, &title);
         }
         for (at, ch) in marks {
             canvas.put(at.0, at.1, ch);
@@ -1380,6 +1602,103 @@ mod tests {
         assert_eq!(draw("pie\n  \"a\": 1", 80), None);
         assert_eq!(draw("classDiagram\n  A <|-- B", 80), None);
         assert_eq!(draw("", 80), None);
+    }
+
+    /// The row and column (in characters) where `text` starts.
+    fn place(drawn: &str, text: &str) -> (usize, usize) {
+        drawn
+            .lines()
+            .enumerate()
+            .find_map(|(y, l)| l.find(text).map(|b| (y, l[..b].chars().count())))
+            .unwrap_or_else(|| panic!("{text} in {drawn}"))
+    }
+
+    #[test]
+    fn a_subgraph_is_a_round_box_round_its_nodes_with_its_title_on_top() {
+        let drawn = draw(
+            "flowchart LR\n  subgraph local[\"On your computer\"]\n    branch[Branch] --> tests{Tests pass?}\n  end\n  subgraph ci[\"CI\"]\n    build[Build] --> deploy[Deploy]\n  end\n  tests --> ci",
+            200,
+        )
+        .unwrap();
+        assert!(drawn.contains("╭─ On your computer ─"), "{drawn}");
+        assert!(drawn.contains("╭─ CI ─"), "{drawn}");
+        // Each subgraph's nodes inside its box: under its top edge, right
+        // of its left edge.
+        let (ty, tx) = place(&drawn, "On your computer");
+        let (by, bx) = place(&drawn, "Branch");
+        assert!(by > ty && bx > tx - 3, "{drawn}");
+        let (cy, cx) = place(&drawn, " CI ");
+        let (dy, dx) = place(&drawn, "Deploy");
+        assert!(dy > cy && dx > cx, "{drawn}");
+        // The edge to the subgraph meets its box: one arrow into it, and
+        // one inside each subgraph.
+        assert_eq!(drawn.matches('▶').count(), 3, "{drawn}");
+        assert!(
+            cx > place(&drawn, "Tests pass?").1,
+            "CI right of the first box: {drawn}"
+        );
+    }
+
+    #[test]
+    fn subgraphs_nest_and_take_their_own_direction() {
+        let drawn = draw(
+            "flowchart TD\n  subgraph outer[Outer]\n    subgraph inner[Inner]\n      direction LR\n      a[One] --> b[Two]\n    end\n    c[Three]\n  end\n  c --> a\n  start[Start] --> outer",
+            200,
+        )
+        .unwrap();
+        let (oy, ox) = place(&drawn, " Outer ");
+        let (iy, ix) = place(&drawn, " Inner ");
+        assert!(iy > oy && ix > ox, "Inner inside Outer: {drawn}");
+        // Inner reads across, as its direction says, though the diagram
+        // reads down.
+        assert_eq!(place(&drawn, "One").0, place(&drawn, "Two").0, "{drawn}");
+        // An edge from inside one subgraph to a node inside another meets
+        // the inner one's box, and Start's edge meets Outer's.
+        assert!(place(&drawn, "Three").0 < iy, "{drawn}");
+        assert!(place(&drawn, "Start").0 < oy, "{drawn}");
+        assert_eq!(drawn.matches('▼').count(), 2, "{drawn}");
+    }
+
+    #[test]
+    fn a_subgraph_is_read_with_its_id_and_title() {
+        assert_eq!(
+            subgraph_head("local[\"On your computer\"]"),
+            ("local".into(), "On your computer".into())
+        );
+        assert_eq!(subgraph_head("one"), ("one".into(), "one".into()));
+        assert_eq!(subgraph_head("sg [Group]"), ("sg".into(), "Group".into()));
+        // An edge to it meets its box rather than a node of its name.
+        let drawn = draw(
+            "flowchart TD\nsubgraph sg [Group]\nA --> B\nend\nX --> sg",
+            80,
+        )
+        .unwrap();
+        assert!(drawn.contains("╭─ Group ─"), "{drawn}");
+        assert!(!drawn.contains("│ sg │"), "{drawn}");
+        // An edge leaving by the title's edge meets it beside the title.
+        let drawn = draw("flowchart BT\nsubgraph sg[Group]\nA\nend\nsg --> B", 80).unwrap();
+        assert!(drawn.contains(" Group "), "{drawn}");
+        assert!(drawn.contains('┴') || drawn.contains('┬'), "{drawn}");
+        // So does one looping back from it, top down.
+        let drawn = draw(
+            "flowchart TD\nA --> B\nsubgraph sg[Long group title]\nC\nend\nB --> sg\nsg --> A",
+            80,
+        )
+        .unwrap();
+        assert!(drawn.contains(" Long group title "), "{drawn}");
+        let top = drawn
+            .lines()
+            .find(|l| l.contains("Long group title"))
+            .unwrap();
+        assert!(top.contains('┴') || top.contains('┬'), "{drawn}");
+        assert_eq!(
+            subgraph_head("\"Two words\""),
+            ("Two words".into(), "Two words".into())
+        );
+        assert_eq!(
+            subgraph_head("Some title"),
+            ("Some title".into(), "Some title".into())
+        );
     }
 
     #[test]
