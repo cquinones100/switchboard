@@ -142,6 +142,11 @@ pub struct Look {
     /// A box whose list runs past it has a scroll bar on its right edge
     /// (scroll_bars).
     pub scroll_bars: bool,
+    /// The empty columns beside a tab's narrow lone pane, where a box that
+    /// goes in the middle goes instead when it fits there
+    /// (boxes_beside_narrow_pane); set as the overlays are drawn, never
+    /// under a view that covers the screen.
+    pub middle: Option<Rect>,
 }
 
 impl Default for Look {
@@ -154,6 +159,7 @@ impl Default for Look {
             tab_focus: true,
             theme: Theme::DARK,
             scroll_bars: true,
+            middle: None,
         }
     }
 }
@@ -190,6 +196,7 @@ impl Look {
             tab_focus: on("tab_focus"),
             theme: if light { Theme::LIGHT } else { Theme::DARK },
             scroll_bars: on("scroll_bars"),
+            middle: None,
         }
     }
 
@@ -301,6 +308,14 @@ pub trait Overlay: AsAny + Send {
     /// tip, a hover's peek or a view that fills the screen.
     fn stands_out(&self) -> Option<Rect> {
         None
+    }
+
+    /// Whether it fills the screen (mission control), so a box over it goes
+    /// in the screen's middle rather than beside a narrow pane it hides;
+    /// one drawn over a pane alone (the history, a picture) leaves the
+    /// columns beside it empty.
+    fn covers_screen(&self) -> bool {
+        false
     }
 
     /// Opens beside a click's cell rather than where it would (`Place::Near`),
@@ -426,8 +441,11 @@ impl Stack {
     }
 
     /// Draws the overlays over the frame, bottom first, and the status
-    /// line's message over the status line.
-    pub fn draw(&mut self, frame: &mut Frame) {
+    /// line's message over the status line. A box that goes in the middle
+    /// goes in the middle of `beside` instead, the empty columns beside a
+    /// narrow lone pane, when it fits there and nothing under it fills the
+    /// screen.
+    pub fn draw(&mut self, frame: &mut Frame, beside: Option<Rect>) {
         // A message kept from before the status line went (UX 2.0 turned on
         // while one was up) has no row to go in, and is left undrawn.
         if let Some((text, _)) = &self.note
@@ -461,10 +479,14 @@ impl Stack {
         if self.layers.is_empty() {
             return;
         }
-        let look = self.look;
+        let mut look = self.look;
+        look.middle = beside;
         // Where the shadow of the topmost box so far is in the frame's images.
         let mut shadow: Option<usize> = None;
         for layer in &mut self.layers {
+            if layer.overlay.covers_screen() {
+                look.middle = None;
+            }
             layer.overlay.draw_frame(frame, &look);
             if let Some(outer) = layer.overlay.stands_out() {
                 dim_behind(&mut frame.buf, outer, &look.theme);
@@ -652,7 +674,7 @@ mod tests {
         }
         let mut f = frame_behind(60, 12);
         f.graphics = Some(crate::mux::graphics::Graphics::kitty((8, 16)));
-        stack.draw(&mut f);
+        stack.draw(&mut f, None);
         assert_eq!(f.images.len(), 1);
     }
 }

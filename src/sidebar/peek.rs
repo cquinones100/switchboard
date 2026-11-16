@@ -156,7 +156,8 @@ impl Overlay for Peek {
 
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
         // The box's inside, less a space each side.
-        let inner = (buf.area.width as usize * 90 / 100)
+        let across = draw::share_across(buf.area, look, 90);
+        let inner = (across as usize * 90 / 100)
             .max(40)
             .min(buf.area.width as usize);
         let cols = inner.saturating_sub(4).max(10);

@@ -655,6 +655,13 @@
     "default": true
   },
   {
+    "key": "boxes_beside_narrow_pane",
+    "category": "Tabs and status bar",
+    "label": "Open boxes beside a narrow pane",
+    "description": "With a tab's one pane narrowed by Widest a lone pane gets, a menu, question, picker, the palette or a message a key opens goes in the middle of the empty columns at the pane's right when it fits there, rather than over the pane, and the hints there hide while it is open. With too few columns spare it goes in the middle of the screen. Off, every box goes in the middle of the screen",
+    "default": true
+  },
+  {
     "key": "tab_back_forward",
     "category": "Tabs and status bar",
     "label": "M-{ and M-} go back and forward",

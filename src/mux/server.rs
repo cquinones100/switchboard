@@ -4002,8 +4002,9 @@ impl Server {
         // cells as the panes drew them, before anything is drawn over them
         // (src/mux/sixel).
         let pictures = self.pictures_drawn(&frame, &panes, way, ends);
+        let beside = self.boxes_beside(&session);
         let c = self.clients.get_mut(&id).expect("checked above");
-        frame.cover_links(|frame| c.overlays.draw(frame));
+        frame.cover_links(|frame| c.overlays.draw(frame, beside));
         c.status_hits = hits;
         c.header_keys = header_keys;
         c.dirty = false;
@@ -4027,6 +4028,18 @@ impl Server {
         let _ = c.tx.send(ServerMsg::Output(bytes));
         self.sidebar_drawn(id, &session, side);
         self.sync_motion(id);
+    }
+
+    /// The empty columns beside the narrow lone pane of a session's tab in
+    /// front, where a box that goes in the middle goes instead (Settings'
+    /// `boxes_beside_narrow_pane`).
+    fn boxes_beside(&self, session: &str) -> Option<Rect> {
+        if !crate::settings::is_on("boxes_beside_narrow_pane") {
+            return None;
+        }
+        let s = self.session(session)?;
+        let tab = self.tabs.get(&s.current)?;
+        super::beside::spare_of(s.spread_for(tab), s.area_for(tab))
     }
 
     /// Draws a client's session into `frame`; gives where the status line's
@@ -4155,7 +4168,12 @@ impl Server {
             if spread != area {
                 let theme = c.overlays.look().theme;
                 compose::draw_spare(&mut frame.buf, spread, area, &theme);
+                // A box that keeps the keys hides them, since one that
+                // goes in the middle opens in these columns.
+                let boxed = !c.overlays.lets_through()
+                    && crate::settings::is_on("boxes_beside_narrow_pane");
                 if crate::settings::is_on("spare_hints")
+                    && !boxed
                     && let Some(spare) = super::beside::spare_of(spread, area)
                 {
                     let pr = crate::settings::is_on("github") && self.tab_pr(s.current).is_some();

@@ -670,7 +670,8 @@ impl Overlay for Picker {
         // screen palette.sh's popup took, less the prompt, the count, and the
         // blank line and keys at the bottom.
         let area = buf.area;
-        let outer_w = (area.width as usize * 60 / 100)
+        let across = draw::share_across(area, look, 60);
+        let outer_w = (across as usize * 60 / 100)
             .max(40)
             .min(area.width as usize);
         let outer_h = (area.height as usize * 60 / 100)

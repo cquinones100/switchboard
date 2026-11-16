@@ -1241,6 +1241,10 @@ impl Overlay for Mission {
         "mission"
     }
 
+    fn covers_screen(&self) -> bool {
+        true
+    }
+
     /// A hand over anything a click presses (a view's name, a card, a row,
     /// a chip, a footer's key), the arrow elsewhere, among them the pane
     /// beside a board, which only the wheel scrolls; left of its parts, the

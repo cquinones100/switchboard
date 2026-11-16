@@ -329,6 +329,23 @@ pub fn gesture(m: &Mouse) -> Gesture {
     }
 }
 
+/// Whether a `Share` box of `cols_pct` of `m`'s columns fits in them
+/// with a column clear each side.
+fn share_fits(m: Rect, cols_pct: u16) -> bool {
+    (m.width as usize * cols_pct as usize / 100).max(40) + 2 <= m.width as usize
+}
+
+/// How many columns a `Share` box of `cols_pct` takes its share of: the
+/// empty columns beside a narrow lone pane where it goes there
+/// (`Look::middle`), else the screen's, so a box that lays out its own
+/// lines does so at the width `draw_box` gives it.
+pub fn share_across(screen: Rect, look: &Look, cols_pct: u16) -> u16 {
+    look.middle
+        .map(|m| m.intersection(screen))
+        .filter(|m| share_fits(*m, cols_pct))
+        .map_or(screen.width, |m| m.width)
+}
+
 /// Draws a box over what is in the buffer and gives where it went. The
 /// lines are cut to fit; a box taller than the screen shows as many of its
 /// lines as fit, as modalBox showed `rows - 6`.
@@ -345,9 +362,21 @@ pub fn draw_box(buf: &mut Buffer, spec: &BoxSpec<'_>, look: &Look) -> Drawn {
     // A row clear above and below, as modalBox kept, so the status line
     // stays in sight.
     let room = (rows as usize).saturating_sub(4 + keys_rows).max(1);
+    // Beside a narrow lone pane, a box that goes in the middle goes in the
+    // middle of the empty columns there, a share of them for a `Share`,
+    // when it fits with a column clear each side.
+    let beside = look
+        .middle
+        .filter(|_| matches!(spec.place, Place::Center | Place::Share { .. }))
+        .map(|m| m.intersection(screen))
+        .filter(|m| match spec.place {
+            Place::Share { cols_pct, .. } => share_fits(*m, cols_pct),
+            _ => m.width > 4,
+        });
     let (inner_w, shown) = match spec.place {
         Place::Share { cols_pct, rows_pct } => {
-            let w = (cols as usize * cols_pct as usize / 100)
+            let across = beside.map_or(cols, |m| m.width);
+            let w = (across as usize * cols_pct as usize / 100)
                 .max(40)
                 .min(cols as usize)
                 - 2;
@@ -404,10 +433,16 @@ pub fn draw_box(buf: &mut Buffer, spec: &BoxSpec<'_>, look: &Look) -> Drawn {
                 top.min(rows.saturating_sub(outer_h)),
             )
         }
-        _ => (
-            cols.saturating_sub(outer_w) / 2,
-            rows.saturating_sub(outer_h) / 2,
-        ),
+        _ => match beside.filter(|m| outer_w + 2 <= m.width) {
+            Some(m) => (
+                m.x + (m.width - outer_w) / 2,
+                rows.saturating_sub(outer_h) / 2,
+            ),
+            None => (
+                cols.saturating_sub(outer_w) / 2,
+                rows.saturating_sub(outer_h) / 2,
+            ),
+        },
     };
     let outer = Rect::new(left, top, outer_w, outer_h).intersection(screen);
     let inner = Rect::new(
@@ -637,6 +672,58 @@ pub(crate) mod tests {
         spec.width = 20;
         let squeezed = draw_box(&mut buf, &spec, &Look::default()).outer;
         assert!(squeezed.right() <= 30 && squeezed.bottom() <= 6);
+    }
+
+    #[test]
+    fn a_box_that_goes_in_the_middle_goes_beside_a_narrow_pane_when_it_fits() {
+        let lines = [BoxLine::text(" Open", Style::new())];
+        let spare = Rect::new(100, 0, 140, 40);
+        let drawn = |place, middle| {
+            let mut buf = Buffer::empty(Rect::new(0, 0, 240, 40));
+            let mut spec = BoxSpec::new("Box", &lines);
+            spec.place = place;
+            let look = Look {
+                middle,
+                ..Look::default()
+            };
+            draw_box(&mut buf, &spec, &look).outer
+        };
+        let centered = drawn(Place::Center, Some(spare));
+        assert_eq!(centered.x, 100 + (140 - centered.width) / 2);
+        assert_eq!(
+            centered.y,
+            drawn(Place::Center, None).y,
+            "its height and row as in the middle"
+        );
+        // A share of the spare columns, not of the screen.
+        let share = Place::Share {
+            cols_pct: 60,
+            rows_pct: 60,
+        };
+        let shared = drawn(share, Some(spare));
+        assert_eq!(shared.width, 140 * 60 / 100);
+        let beside = Look {
+            middle: Some(spare),
+            ..Look::default()
+        };
+        let screen = Rect::new(0, 0, 240, 40);
+        assert_eq!(
+            share_across(screen, &beside, 60),
+            140,
+            "callers lay out at its width"
+        );
+        assert_eq!(share_across(screen, &Look::default(), 60), 240);
+        assert!(shared.x > 100 && shared.right() < 240, "{shared:?}");
+        // Too few columns: the middle of the screen, as before.
+        let narrow = Rect::new(200, 0, 30, 40);
+        assert_eq!(
+            drawn(Place::Center, Some(narrow)),
+            drawn(Place::Center, None)
+        );
+        assert_eq!(drawn(share, Some(narrow)), drawn(share, None));
+        // A box beside a click stays beside it.
+        let near = Place::Near { x: 10, y: 5 };
+        assert_eq!(drawn(near, Some(spare)), drawn(near, None));
     }
 
     #[test]

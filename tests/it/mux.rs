@@ -1200,6 +1200,56 @@ fn the_spare_columns_beside_a_capped_pane_list_what_can_open_there() {
     client.wait_for("no hints", |s| cell_of(s, "BESIDE THIS PANE").is_none());
 }
 
+#[test]
+fn a_box_a_key_opens_goes_beside_a_narrow_pane_when_it_fits() {
+    let server = TestServer::start_with_settings(r#"{"lone_pane_width": "165"}"#);
+    let mut client = server.attach(365, 40);
+    client.wait_text("BESIDE THIS PANE");
+    let side = server.list()["sessions"][0]["sidebar"]["columns"]
+        .as_u64()
+        .unwrap_or(0) as usize;
+    let rule = side + 165;
+    // In the spare columns right of the rule, the hints hidden under it.
+    server.ok(&["say", "Something to say"]);
+    let screen = client.wait_text("Something to say");
+    let (x, _) = cell_of(&screen, "Something to say").unwrap();
+    assert!(x > rule, "at {x}:\n{}", screen.join("\n"));
+    assert!(cell_of(&screen, "BESIDE THIS PANE").is_none());
+    // Esc closes it and brings the hints back.
+    client.send(b"\x1b");
+    client.wait_for("the hints back", |s| {
+        cell_of(s, "Something to say").is_none() && cell_of(s, "BESIDE THIS PANE").is_some()
+    });
+    // Off, it goes in the middle of the screen, over the pane.
+    drop(client);
+    let server = TestServer::start_with_settings(
+        r#"{"lone_pane_width": "165", "boxes_beside_narrow_pane": false}"#,
+    );
+    let mut client = server.attach(365, 40);
+    client.wait_text("BESIDE THIS PANE");
+    server.ok(&["say", "Said in the middle"]);
+    let screen = client.wait_text("Said in the middle");
+    let (x, _) = cell_of(&screen, "Said in the middle").unwrap();
+    assert!(x < rule, "at {x}:\n{}", screen.join("\n"));
+}
+
+#[test]
+fn a_box_with_too_few_columns_beside_the_pane_goes_in_the_middle() {
+    let server = TestServer::start_with_settings(r#"{"lone_pane_width": "80"}"#);
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    client.wait_for("the lone pane at 80 columns", |_| {
+        widths(&server.list()) == [80]
+    });
+    let side = server.list()["sessions"][0]["sidebar"]["columns"]
+        .as_u64()
+        .unwrap_or(0) as usize;
+    server.ok(&["say", "Something to say"]);
+    let screen = client.wait_text("Something to say");
+    let (x, _) = cell_of(&screen, "Something to say").unwrap();
+    assert!(x < side + 80, "at {x}:\n{}", screen.join("\n"));
+}
+
 /// Settings' `lone_pane_width` as the server wrote it to the test's file.
 fn lone_setting(server: &TestServer) -> Option<String> {
     let file = server.home.join(".config/switchboard/settings.json");
