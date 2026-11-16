@@ -274,8 +274,8 @@ impl Server {
     fn sidebar_own_menu(&mut self, client: ClientId, session: &str, on: Option<Owner>) {
         let mut list: Vec<(String, Act)> = Vec::new();
         match on {
-            Some(group @ Owner::Group(stage)) => {
-                let folded = self.sidebar_stops(session).contains(&group);
+            Some(Owner::Group(stage)) => {
+                let folded = self.sidebar_group_folded(session, stage);
                 let verb = if folded { "Unfold" } else { "Fold" };
                 list.push((
                     format!("{verb} {}", stage.title()),

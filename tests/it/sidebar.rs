@@ -954,10 +954,11 @@ fn with_ux2_j_from_the_last_kind_of_notification_goes_onto_the_first_tab() {
     client.wait_text("2 new on Slack");
     client.wait_text("New note: Plan");
 
-    // k from the tab: onto the last kind, the note's.
+    // k from the tab, past its group's heading: onto the last kind, the
+    // note's.
     client.type_text(&format!("{ALT}s"));
     wait_list(&server, "the sidebar focused", focused);
-    client.type_text("k");
+    client.type_text("kk");
     wait_list(&server, "the Notifications window in front", |l| {
         notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == true) && focused(l)
     });
@@ -965,10 +966,10 @@ fn with_ux2_j_from_the_last_kind_of_notification_goes_onto_the_first_tab() {
     // k: onto the Slack line's first message, past the second.
     client.type_text("k");
     wait_chosen(&mut client, "DM Ada");
-    // j, j: the note, then the first tab.
+    // j, j, j: the note, the first group's heading, then the first tab.
     client.type_text("j");
     wait_chosen(&mut client, "Plan");
-    client.type_text("j");
+    client.type_text("jj");
     wait_list(&server, "the tab in front", |l| {
         tabs(l)[0]["current"] == true && focused(l)
     });
@@ -1002,15 +1003,16 @@ fn with_ux2_k_from_the_first_tab_goes_up_onto_the_notifications() {
     let list = wait_list(&server, "the tab still in front", focused);
     assert_eq!(notices_tab(&list), None, "no window opened");
 
-    // k: up onto the notification, its window in front.
-    client.type_text("k");
+    // k, k: up past its group's heading onto the notification, its window
+    // in front.
+    client.type_text("kk");
     wait_list(&server, "the Notifications window in front", |l| {
         notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == true) && focused(l)
     });
 
-    // k again stays; j goes back down to the tab.
+    // k again stays; j, j go back down past the heading to the tab.
     client.type_text("k");
-    client.type_text("j");
+    client.type_text("jj");
     wait_list(&server, "the tab in front", |l| {
         tabs(l)[0]["current"] == true
     });
@@ -1029,15 +1031,15 @@ fn up_and_down_wrap_around_the_tabs() {
         tabs(l)[2]["current"] == true
     });
 
-    // j on the last tab: round to the first; k on the first: round to the
-    // last.
+    // j on the last tab: round to the group's heading, then the first tab;
+    // k on the first: past the heading round to the last.
     client.type_text(&format!("{ALT}s"));
     wait_list(&server, "the sidebar focused", focused);
-    client.type_text("j");
+    client.type_text("jj");
     wait_list(&server, "the first tab in front", |l| {
         tabs(l)[0]["current"] == true && focused(l)
     });
-    client.type_text("k");
+    client.type_text("kk");
     wait_list(&server, "the last tab in front", |l| {
         tabs(l)[2]["current"] == true && focused(l)
     });
@@ -1099,28 +1101,56 @@ fn j_from_the_last_kind_of_notification_goes_round_to_the_first_tab() {
     client.wait_text("2 new on Slack");
     client.wait_text("New note: Plan");
 
-    // k from the only tab: round to the last kind, the note's.
+    // k from the only tab, past its group's heading: round to the last
+    // kind, the note's.
     client.type_text(&format!("{ALT}s"));
     wait_list(&server, "the sidebar focused", focused);
-    client.type_text("k");
+    client.type_text("kk");
     wait_list(&server, "the Notifications window in front", |l| {
         notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == true) && focused(l)
     });
     wait_chosen(&mut client, "Plan");
-    // j: round to the tab.
-    client.type_text("j");
+    // j, j: round to the heading, then the tab.
+    client.type_text("jj");
     wait_list(&server, "the tab in front", |l| {
         tabs(l)[0]["current"] == true && focused(l)
     });
-    // j, j, j: Slack, the note, and round to the tab again.
+    // j, j, j, j: Slack, the note, and round past the heading to the tab
+    // again.
     client.type_text("j");
     wait_chosen(&mut client, "DM Ada");
     client.type_text("j");
     wait_chosen(&mut client, "Plan");
-    client.type_text("j");
+    client.type_text("jj");
     wait_list(&server, "the tab in front again", |l| {
         tabs(l)[0]["current"] == true && focused(l)
     });
+}
+
+// With UX 2.0 the wheel goes up from the first tab past its group's open
+// heading onto the notifications above it, a flick at a time.
+#[test]
+fn with_ux2_the_wheel_goes_up_past_the_first_heading_onto_the_notifications() {
+    let (server, _notes) =
+        two_kinds_of_notification(r#"{"notifications": false, "tips": false, "ux2": true}"#);
+    let mut client = server.attach(140, 36);
+    client.wait_text("2 new on Slack");
+    client.wait_text("New note: Plan");
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    let deadline = common::deadline(Duration::from_secs(10));
+    loop {
+        client.send(b"\x1b[<64;6;20M");
+        std::thread::sleep(Duration::from_millis(300) * common::patience());
+        let list = server.list();
+        if notices_tab(&list).is_some_and(|i| tabs(&list)[i]["current"] == true) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the wheel never reached the notifications: {list}"
+        );
+    }
 }
 
 #[test]
@@ -1686,6 +1716,82 @@ fn z_or_a_click_on_its_heading_folds_a_group_and_enter_unfolds_it() {
     client.type_text("2");
     wait_list(&server, "unfolded for the digit's tab", |l| {
         folded(l) == json!([]) && tabs(l)[1]["current"] == true && focused(l)
+    });
+}
+
+// Every group's heading is a stop: k from a group's first tab lands on it,
+// the tab in front kept; Enter or Space there folds the group, the heading
+// still chosen, and again unfolds it; j from a folded heading goes to the
+// next group's heading.
+#[test]
+fn enter_on_a_group_s_heading_folds_and_unfolds_it() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    session_file(&server.home, pid, json!({"sessionId": "s-heading"}));
+    hook(&server, &pane, "UserPromptSubmit", json!({}));
+    server.ok(&["new-tab", "-d", "-n", "bee"]);
+    row_of(&mut client, "bee");
+    assert!(row_of(&mut client, "WORKING 1") < row_of(&mut client, "OTHER 1"));
+    let folded = |l: &Value| l["sessions"][0]["sidebar"]["folded"].clone();
+    let has = |l: &Value, stage: &str| {
+        folded(l)
+            .as_array()
+            .is_some_and(|a| a.iter().any(|s| s == stage))
+    };
+
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("k");
+    client.type_text("\r");
+    wait_list(&server, "Working folded by Enter", |l| {
+        folded(l) == json!(["working"]) && focused(l) && tabs(l)[0]["current"] == true
+    });
+    client.type_text("\r");
+    wait_list(&server, "Working unfolded by Enter", |l| {
+        folded(l) == json!([]) && focused(l) && tabs(l)[0]["current"] == true
+    });
+
+    // Back onto the heading; Space folds it too.
+    client.type_text("k");
+    client.type_text(" ");
+    wait_list(&server, "Working folded by Space", |l| {
+        folded(l) == json!(["working"])
+    });
+
+    // j from the folded heading: onto Other's heading, where Enter folds it.
+    client.type_text("j");
+    client.type_text("\r");
+    wait_list(&server, "Other folded from its heading", |l| {
+        has(l, "working") && has(l, "other") && tabs(l)[0]["current"] == true
+    });
+}
+
+// C-u from a group's second tab lands on its first tab, never on the open
+// group's heading above it.
+#[test]
+fn half_a_page_up_passes_an_open_group_s_heading() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-n", "second"]);
+    client.wait_text("2:second");
+    wait_list(&server, "the second tab in front", |l| {
+        tabs(l)[1]["current"] == true
+    });
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.send(b"\x15");
+    wait_list(&server, "the first tab in front", |l| {
+        tabs(l)[0]["current"] == true && focused(l)
+    });
+    // Enter goes into it rather than folding its group.
+    client.type_text("\r");
+    wait_list(&server, "into the first tab", |l| {
+        !focused(l) && l["sessions"][0]["sidebar"]["folded"] == json!([])
     });
 }
 

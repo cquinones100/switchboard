@@ -54,10 +54,13 @@ pub const KEYS: &[(&str, &str)] = &[
     ("g G", "first, last"),
     (
         "z",
-        "fold its group, or the notifications; unfold a folded one",
+        "fold its group, or the notifications; on a heading, fold or unfold it",
     ),
     ("^d ^u", "half a screen down, up"),
-    ("↵ l", "go to the tab"),
+    (
+        "↵ l",
+        "go to the tab; on a heading, ↵ folds or unfolds it, l unfolds it",
+    ),
     ("h esc q ^c", "back to your pane"),
     ("1-9", "go to that tab"),
     ("/", "find a tab by title (↵ go, esc clear)"),
@@ -66,7 +69,7 @@ pub const KEYS: &[(&str, &str)] = &[
         "next, last tab (with tab_focus off: mission control)",
     ),
     ("M-space", "mission control"),
-    ("space", "peek at it"),
+    ("space", "peek at it; on a heading, fold or unfold it"),
     ("m ⇧F10", "its menu, as a right click opens"),
     ("a", "answer it, or send it a message"),
     (
@@ -869,26 +872,48 @@ impl Server {
 
     /// What j and k step through in a session's sidebar, in the order it
     /// draws them, by the groups as drawn, the held layout's included, so
-    /// a tab that moved while you browse is where it shows: each tab, and
-    /// a folded group's line in its tabs' place.
+    /// a tab that moved while you browse is where it shows: each group's
+    /// heading, where Enter folds or unfolds it, then its tabs unless it is
+    /// folded. A / search, which unfolds every group, steps over its tabs
+    /// alone.
     fn sidebar_stops(&self, session: &str) -> Vec<Owner> {
         let tabs = self.sidebar_listed(session);
         let folded = self.sidebar_folded(session, &tabs);
-        let frozen = self
-            .sidebar
-            .sides
-            .get(session)
-            .and_then(|s| s.frozen.as_ref());
+        let side = self.sidebar.sides.get(session);
+        let searching = side
+            .filter(|s| s.focused)
+            .is_some_and(|s| s.filter.is_some());
+        let frozen = side.and_then(|s| s.frozen.as_ref());
         model::grouped(&tabs, frozen, &Rules::now())
             .into_iter()
             .flat_map(|g| {
-                if folded.contains(&g.stage) {
-                    vec![Owner::Group(g.stage)]
+                let heading = (!searching).then_some(Owner::Group(g.stage));
+                let shown = if folded.contains(&g.stage) {
+                    Vec::new()
                 } else {
                     g.tabs.iter().map(|t| Owner::Tab(t.id)).collect()
-                }
+                };
+                heading.into_iter().chain(shown)
             })
             .collect()
+    }
+
+    /// What half a page (C-d, C-u, the wheel) lands on: the stops but an
+    /// open group's heading, so it always lands on a tab or a folded line.
+    fn sidebar_page_stops(&self, session: &str) -> Vec<Owner> {
+        self.sidebar_stops(session)
+            .into_iter()
+            .filter(|o| match o {
+                Owner::Group(stage) => self.sidebar_group_folded(session, *stage),
+                _ => true,
+            })
+            .collect()
+    }
+
+    /// Whether a group is folded in a session's sidebar, as drawn.
+    fn sidebar_group_folded(&self, session: &str, stage: Stage) -> bool {
+        self.sidebar_folded(session, &self.sidebar_listed(session))
+            .contains(&stage)
     }
 
     /// The tabs in the order a session's sidebar lists them, those under
@@ -1616,12 +1641,13 @@ impl Server {
         // notifications, as the Notifications window goes through them.
         let on_notice = notices.iter().position(|o| o.same_row(&cursor));
         let by_item = on_notice.is_some() && settings::is_on("notice_list");
-        // A folded group's line is a stop in its tabs' place.
+        // Every group's heading is a stop, a folded one's in its tabs' place.
         let stops = stop_list.len();
-        let on_fold = match &cursor {
+        let on_heading = match &cursor {
             Owner::Group(stage) if stop_list.contains(&cursor) => Some(*stage),
             _ => None,
         };
+        let on_fold = on_heading.filter(|stage| self.sidebar_group_folded(session, *stage));
         let at = match on_notice {
             Some(i) => stops + i,
             None => stop_list.iter().position(|o| *o == cursor).unwrap_or(0),
@@ -1745,10 +1771,17 @@ impl Server {
             self.sidebar_step_ux2(session, stops, on_notice, at, by);
             return;
         }
-        // On a folded group's line, Enter, l or the right arrow unfolds it.
+        // On a group's heading, Enter or Space folds or unfolds it, as a
+        // click does; on a folded one, l or the right arrow unfolds it too.
+        if let Some(stage) = on_heading
+            && (k.code == KeyCode::Enter || k.code == KeyCode::Char(' ') && none)
+        {
+            self.sidebar_fold(session, stage, on_fold.is_none());
+            return;
+        }
         if let Some(stage) = on_fold
-            && (matches!(k.code, KeyCode::Right | KeyCode::Char('l')) && none
-                || k.code == KeyCode::Enter)
+            && matches!(k.code, KeyCode::Right | KeyCode::Char('l'))
+            && none
         {
             self.sidebar_fold(session, stage, false);
             return;
@@ -1769,12 +1802,12 @@ impl Server {
                 self.sidebar_move(session, stops as isize - 1)
             }
             // z folds the chosen tab's group to one line, or the
-            // notifications; on a folded line, unfolds it.
+            // notifications; on a heading, folds or unfolds its group.
             KeyCode::Char('z') if none => {
                 if on_notice.is_some() {
                     self.sidebar_fold_notices(session, true);
-                } else if let Some(stage) = on_fold {
-                    self.sidebar_fold(session, stage, false);
+                } else if let Some(stage) = on_heading {
+                    self.sidebar_fold(session, stage, on_fold.is_none());
                 } else if let Some(stage) = chosen.and_then(|t| self.sidebar_group_of(session, t)) {
                     self.sidebar_fold(session, stage, true);
                 }
@@ -2089,6 +2122,7 @@ impl Server {
         // screen on, else the nearest one past it, never the one the cursor
         // is on, which a tab taller than half the list would otherwise hold
         // it on press after press.
+        let targets = self.sidebar_page_stops(session);
         let here = cursor.as_ref();
         let line = scroll.cursor_at as isize + by;
         let found = if down {
@@ -2097,7 +2131,7 @@ impl Server {
                 .iter()
                 .skip(line.max(0) as usize)
                 .flatten()
-                .find(|o| Some(*o) != here && stops.contains(o))
+                .find(|o| Some(*o) != here && targets.contains(o))
                 .cloned()
         } else {
             scroll
@@ -2106,14 +2140,18 @@ impl Server {
                 .take((line + 1).max(0) as usize)
                 .rev()
                 .flatten()
-                .find(|o| Some(*o) != here && stops.contains(o))
+                .find(|o| Some(*o) != here && targets.contains(o))
                 .cloned()
         };
-        let to = match found {
-            Some(o) => stops.iter().position(|s| *s == o).unwrap_or(0),
-            None if down => stops.len() - 1,
-            None => 0,
+        let edge = if down {
+            targets.last()
+        } else {
+            targets.first()
         };
+        let Some(o) = found.as_ref().or(edge) else {
+            return;
+        };
+        let to = stops.iter().position(|s| s == o).unwrap_or(0);
         self.sidebar_move(session, to as isize);
     }
 
@@ -2341,8 +2379,8 @@ impl Server {
             .as_ref()
             .and_then(Owner::tab)
             .and_then(|t| self.sidebar_group_of(session, t))
-            .map(Owner::Group)
-            .filter(|g| stops.contains(g));
+            .filter(|stage| self.sidebar_group_folded(session, *stage))
+            .map(Owner::Group);
         if let Some(group) = folded_over {
             self.sidebar.side(session).cursor = Some(group);
             return;
@@ -2484,11 +2522,20 @@ impl Server {
                     }
                     self.sidebar.wheel.insert(client, (down, now));
                 }
+                // On a stop short of the last place half a page lands, in
+                // the way it goes: at or past it (an open group's heading
+                // above the first tab), it steps on, so the notifications
+                // stay in reach.
                 let stops = self.sidebar_stops(&session);
-                let edge = if down { stops.last() } else { stops.first() };
-                // On a tab or a folded group's line short of the edge.
-                let on_tab_short_of_the_edge = match &self.sidebar.side(&session).cursor {
-                    Some(c @ (Owner::Tab(_) | Owner::Group(_))) => Some(c) != edge,
+                let pages = self.sidebar_page_stops(&session);
+                let edge = if down { pages.last() } else { pages.first() };
+                let at_of = |o: &Owner| stops.iter().position(|s| s == o);
+                let on_tab_short_of_the_edge = match (
+                    self.sidebar.side(&session).cursor.as_ref().and_then(at_of),
+                    edge.and_then(at_of),
+                ) {
+                    (Some(here), Some(edge)) if down => here < edge,
+                    (Some(here), Some(edge)) => here > edge,
                     _ => false,
                 };
                 if half_page && on_tab_short_of_the_edge {
@@ -2553,7 +2600,7 @@ impl Server {
                 // does, the focus coming into the sidebar and its first tab
                 // to the front; unfolded, a click on its heading folds it.
                 Some(group @ Owner::Group(stage)) => {
-                    let folded = self.sidebar_stops(&session).contains(&group);
+                    let folded = self.sidebar_group_folded(&session, stage);
                     if folded {
                         self.sidebar_enter(&session, Some(group));
                     }

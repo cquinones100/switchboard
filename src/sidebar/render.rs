@@ -752,9 +752,22 @@ pub fn sidebar_lines(
         }
         let owner = Owner::Group(group.stage);
         // A heading folds or unfolds its group on a click, so it lights
-        // under the mouse.
-        let heading_lit = view.hover == Some(&owner);
-        lines.push(heading.fit(cols, heading_lit.then_some(theme.panel)));
+        // under the mouse; an open group's is a stop of its own, lit as a
+        // chosen tab is under the cursor (a folded one's line below it is).
+        let heading_chosen =
+            view.focused && view.cursor == Some(&owner) && !view.folded.contains(&group.stage);
+        if heading_chosen {
+            cursor_at = lines.len();
+            cursor_end = lines.len();
+        }
+        let heading_fill = if heading_chosen {
+            Some(theme.highlight)
+        } else if view.hover == Some(&owner) {
+            Some(theme.panel)
+        } else {
+            None
+        };
+        lines.push(heading.fit(cols, heading_fill));
         owners.push(Some(owner.clone()));
         if view.folded.contains(&group.stage) {
             // Folded: one line of its tabs' marks, so a waiting one still

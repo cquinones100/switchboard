@@ -462,7 +462,7 @@ Each tab is in one group, the same as its stage in mission control's Tabs view, 
 
 ### Folding a group
 
-Any group folds to one line: `z` on one of its tabs in the sidebar, or a click on its heading. Folded, it is its heading with its count and, on the line under it, its tabs' marks, so one waiting on you still shows. That line is a stop for `j`, `k` and `Tab` in its tabs' place; `Enter`, `l`, `z` or a click on it unfolds the group, the cursor onto its first tab without bringing it to the front, so the tab in front stays the one you were on until `j`, `k` or `Enter` moves, and a click on its heading folds it again. The notifications fold the same way, `z` on one of them or a click on their heading, to their heading and one line of their kinds ("3 new on Slack · 2 PR updates"); a click there or `n` unfolds them. A `/` search unfolds every group while it is on, and a tab gone to with `M-a`, `M-A`, `M-1`…`M-9` or a search's match unfolds the group it is in. What is folded is kept with the layout, through a restart and an upgrade; nothing is folded until you fold it.
+Any group folds to one line: `Enter` or `Space` on its heading in the sidebar, `z` on one of its tabs, or a click on its heading. Every group's heading is a stop for `j`, `k`, `g`, `G` and `Tab`, above its tabs, lit when the cursor is on it, where `Enter`, `Space` or `z` folds or unfolds the group; `M-a`, `M-A`, `M-1`…`M-9` and a click on a tab never stop on one, and a `/` search steps over the tabs alone. Folded, it is its heading with its count and, on the line under it, its tabs' marks, so one waiting on you still shows. Its heading is then the stop in its tabs' place; `Enter`, `l`, `z` or a click on it unfolds the group, the cursor onto its first tab without bringing it to the front, so the tab in front stays the one you were on until `j`, `k` or `Enter` moves, and a click on its heading folds it again. The notifications fold the same way, `z` on one of them or a click on their heading, to their heading and one line of their kinds ("3 new on Slack · 2 PR updates"); a click there or `n` unfolds them. A `/` search unfolds every group while it is on, and a tab gone to with `M-a`, `M-A`, `M-1`…`M-9` or a search's match unfolds the group it is in. What is folded is kept with the layout, through a restart and an upgrade; nothing is folded until you fold it.
 
 Settings' "Reminders in the sidebar" (`sidebar_reminders`) off leaves the Reminders group out of the sidebar: the top line counts its tabs on a chip (`⏰ 3`), a click on which opens mission control's Reminders view, `M-1`…`M-9` still reach them, and a tab comes back under Needs you when its reminder comes due.
 
@@ -520,17 +520,17 @@ Moving past the last tab with `j`, `n` in the sidebar, or a click puts the curso
 
 | Key | In the sidebar |
 | --- | --- |
-| `j` `k` (arrows, `C-n` `C-p`) | the next or previous tab, brought to the front; on the notifications, the next or previous kind, the Notifications window on its first; from the last row round to the first and from the first to the last (Settings' "Up and down wrap around", `sidebar_wrap`; off, they stop at the ends) |
-| `g` `G` | the first or last tab |
-| `z` | fold the chosen tab's group to one line, or the notifications on one of them; on a folded group's line, unfold it (see [Folding a group](#folding-a-group)) |
+| `j` `k` (arrows, `C-n` `C-p`) | the next or previous tab, brought to the front, or group's heading; on the notifications, the next or previous kind, the Notifications window on its first; from the last row round to the first and from the first to the last (Settings' "Up and down wrap around", `sidebar_wrap`; off, they stop at the ends) |
+| `g` `G` | the first or last row, a group's heading or a tab |
+| `z` | fold the chosen tab's group to one line, or the notifications on one of them; on a group's heading, fold or unfold it (see [Folding a group](#folding-a-group)) |
 | `C-d` `C-u` | the list half a screen down or up, the cursor onto the tab there, stopping at the first and last tab, as in Vim (Settings' "Half-page scrolling", `sidebar_half_page`; off, they run in the chosen tab) |
-| `Enter` `l` | into the chosen tab's pane; on a folded group's line, unfolds it; on a notification, into the Notifications window (with it off, what the notification leads to) |
+| `Enter` `l` | into the chosen tab's pane; on a group's heading, `Enter` folds or unfolds it, and `l` unfolds a folded one; on a notification, into the Notifications window (with it off, what the notification leads to) |
 | `h` `q` `Esc` `C-c` | back out to your pane (`Esc` clears a kept filter first) |
 | `1`–`9` | the cursor onto that tab, brought to the front |
 | `/` | find a tab by name: typing narrows the list, the arrows move, Enter goes, Esc clears |
 | `Tab` `S-Tab` | the next or previous row, tabs then notifications, wrapping round (Settings' "Tab moves focus", `tab_focus`; off, `Tab` opens mission control) |
-| `Space` | peek at the chosen tab |
-| `m` `S-F10` | the menu a right click on the chosen row opens, beside it: a tab's, a notification's, or on a folded group's line the sidebar's own |
+| `Space` | peek at the chosen tab; on a group's heading, fold or unfold it |
+| `m` `S-F10` | the menu a right click on the chosen row opens, beside it: a tab's, a notification's, or on a group's heading the sidebar's own |
 | `a` | answer the chosen tab's Claude, or send it a message, in mission control's box (see [Answering a tab](#answering-a-tab)) |
 | `n` | to the notifications, unfolding them, or a box saying there are none |
 | `t` | a new tab running Claude, as `M-t` opens one, from the chosen tab, so its directory is first in the list |
