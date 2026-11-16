@@ -45,6 +45,12 @@ pub struct Shown {
     /// The repository its directory is in, by its main clone's directory
     /// (`git::main_clone`), for the sidebar's repository filter.
     pub repo_dir: Option<PathBuf>,
+    /// The linked worktree the directory it is named from is in, by its top
+    /// directory; `None` in a main clone or outside git.
+    pub worktree: Option<PathBuf>,
+    /// Whether the directory it was named from was removed under its pane
+    /// (a worktree cleaned up), its name kept from before.
+    pub gone: bool,
 }
 
 impl Server {
@@ -90,7 +96,8 @@ impl Server {
         // up, before the pane restarts in the main clone): the tab reads as
         // it did, its color and PR too, rather than as the ancestor left,
         // while its path (`@tab_path`, which the diff and others work in)
-        // becomes that ancestor, a directory that exists.
+        // becomes that ancestor, a directory that exists. Arriving in the
+        // main clone after that, it keeps the name (`keep_cleaned_name`).
         let Some(said) = said else {
             return;
         };
@@ -101,8 +108,10 @@ impl Server {
             && let Some(shown) = self.tab_names.shown.get_mut(&tab_id)
         {
             shown.path = Some(dir);
+            shown.gone = true;
             return;
         }
+        self.keep_cleaned_name(tab_id, &dir);
         let (facts, asks) = self.tab_names.names.facts(&dir, Instant::now());
         for ask in asks {
             self.start_lookup(ask);
@@ -112,6 +121,7 @@ impl Server {
             .apart
             .then(|| self.own_tint(tab_id, facts.tint))
             .flatten();
+        let place = git::locate(&dir);
         let shown = Shown {
             label: facts.label,
             pr: facts.pr,
@@ -121,8 +131,16 @@ impl Server {
                 Some(tint) => color::tab_color(tint, switches.shade),
                 None => facts.color,
             }),
-            repo_dir: Some(crate::tabs::git::main_clone(&dir)),
+            repo_dir: Some(
+                place
+                    .as_ref()
+                    .map_or_else(|| dir.clone(), git::GitPlace::main_clone),
+            ),
+            worktree: place
+                .filter(|p| p.worktree().is_some())
+                .and_then(|_| git::top_level(&dir)),
             path: Some(dir),
+            gone: false,
         };
         let tab = self.tabs.get_mut(&tab_id).expect("checked above");
         tab.auto_name = shown.label.clone();
@@ -131,6 +149,34 @@ impl Server {
             if let Some(name) = self.session_of_tab(tab_id).map(|s| s.name.clone()) {
                 self.dirty_session(&name);
             }
+        }
+    }
+
+    /// Gives a tab with no name of its own the name it showed in a worktree
+    /// that was removed under its pane, as the pane arrives in that
+    /// repository's main clone (`dir`): a landed worktree's tab goes on
+    /// saying what it did, rather than taking the main clone's name. The
+    /// name is its `@tab_name`, so it is saved with the layout, and `/wt`,
+    /// `wtn` and a rename replace it as they do any other.
+    fn keep_cleaned_name(&mut self, tab_id: TabId, dir: &Path) {
+        let Some(shown) = self.tab_names.shown.get(&tab_id) else {
+            return;
+        };
+        let worktree_removed = shown.gone && shown.worktree.as_ref().is_some_and(|w| !w.exists());
+        if !worktree_removed || shown.label.is_empty() || self.tab_own_name(tab_id).is_some() {
+            return;
+        }
+        let Some(place) = git::locate(dir) else {
+            return;
+        };
+        let back_in_its_main_clone =
+            place.worktree().is_none() && shown.repo_dir == Some(place.main_clone());
+        if !back_in_its_main_clone {
+            return;
+        }
+        let name = shown.label.clone();
+        if let Some(tab) = self.tabs.get_mut(&tab_id) {
+            tab.opts.insert("@tab_name".into(), name);
         }
     }
 

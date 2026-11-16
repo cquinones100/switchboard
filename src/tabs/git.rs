@@ -45,6 +45,17 @@ impl GitPlace {
             .map(|n| n.to_string_lossy().into_owned())
     }
 
+    /// The main clone's directory, as `main_clone` says it.
+    pub fn main_clone(&self) -> PathBuf {
+        if self.common_dir.file_name().is_some_and(|n| n == ".git") {
+            self.common_dir
+                .parent()
+                .map_or_else(|| self.common_dir.clone(), Path::to_path_buf)
+        } else {
+            self.common_dir.clone()
+        }
+    }
+
     /// Whether `HEAD` is on a branch, which a PR or a ticket can be looked
     /// up by (window-pr.sh skipped `HEAD`).
     pub fn on_branch(&self) -> bool {
@@ -82,14 +93,15 @@ pub fn locate(dir: &Path) -> Option<GitPlace> {
 /// name, or the shared directory itself for a bare one); a directory
 /// outside git is its own.
 pub fn main_clone(dir: &Path) -> PathBuf {
-    match locate(dir) {
-        Some(place) if place.common_dir.file_name().is_some_and(|n| n == ".git") => place
-            .common_dir
-            .parent()
-            .map_or_else(|| place.common_dir.clone(), Path::to_path_buf),
-        Some(place) => place.common_dir,
-        None => dir.to_path_buf(),
-    }
+    locate(dir).map_or_else(|| dir.to_path_buf(), |place| place.main_clone())
+}
+
+/// The top directory of the checkout `dir` is in: the nearest directory
+/// above it holding a `.git`.
+pub fn top_level(dir: &Path) -> Option<PathBuf> {
+    dir.ancestors()
+        .find(|at| at.join(".git").exists())
+        .map(Path::to_path_buf)
 }
 
 // The repository directory for `dir`: the nearest `.git` above it, a

@@ -161,7 +161,7 @@ fn a_tab_in_a_repository_wears_its_name_and_color_and_a_given_name_wins() {
 }
 
 #[test]
-fn a_tab_keeps_its_name_after_its_worktree_is_removed_until_it_moves() {
+fn a_tab_keeps_its_name_after_its_worktree_is_removed_and_in_the_main_clone() {
     let server = TestServer::start();
     settings(
         &server,
@@ -207,9 +207,124 @@ fn a_tab_keeps_its_name_after_its_worktree_is_removed_until_it_moves() {
     let left = worktree.parent().unwrap();
     assert_eq!(kept["path"], left.to_string_lossy().as_ref());
 
-    // In a directory that exists again, the name follows it.
+    // Back in the main clone, as the pane restarts there, the tab still
+    // says what it did, by a name of its own now.
+    let id = named["id"].as_str().unwrap().to_string();
+    client.type_text(&format!("cd {}\r", main.display()));
+    let back = wait_tab(&server, "the main clone's path", |t| {
+        t["path"] == main.to_string_lossy().as_ref()
+    });
+    assert_eq!(back["label"], named["label"]);
+    assert_eq!(
+        server.ok(&["show", "-t", &id, "@tab_name"]).trim(),
+        named["label"].as_str().unwrap()
+    );
+
+    // The name is the tab's own, so taking it away, as `/wt` does handing
+    // the tab a new ticket, names it after its directory again.
+    server.ok(&["set", "-t", &id, "-u", "@tab_name"]);
+    wait_tab(&server, "the main clone's name", |t| t["label"] == "app");
+}
+
+#[test]
+fn a_tab_moved_by_hand_or_named_by_you_is_left_as_it_is() {
+    let server = TestServer::start();
+    settings(
+        &server,
+        json!({"github": false, "linear": false, "tab_colors_apart": false}),
+    );
+    let main = server.dir.path().join("app");
+    repo(&main, "main");
+    let worktree = main.join(".claude/worktrees/fix-login");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "fix-login",
+            worktree.to_str().unwrap(),
+        ],
+    );
+
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    client.type_text(&format!("cd {}\r", worktree.display()));
+    let named = wait_tab(&server, "the worktree's name", |t| {
+        t["path"] == worktree.to_string_lossy().as_ref()
+    });
+    let id = named["id"].as_str().unwrap().to_string();
+
+    // Moved to the main clone with the worktree still there, the name
+    // follows the pane, and back in the worktree it is the worktree's again.
     client.type_text(&format!("cd {}\r", main.display()));
     wait_tab(&server, "the main clone's name", |t| t["label"] == "app");
+    assert_eq!(server.ok(&["show", "-t", &id, "@tab_name"]).trim(), "");
+    client.type_text(&format!("cd {}\r", worktree.display()));
+    wait_tab(&server, "the worktree's name again", |t| {
+        t["label"] == named["label"]
+    });
+
+    // A plain directory removed under the pane pins nothing: back in the
+    // main clone, the tab is named after it.
+    let build = main.join("build");
+    std::fs::create_dir_all(&build).unwrap();
+    client.type_text(&format!("cd {}\r", build.display()));
+    wait_tab(&server, "the plain directory", |t| {
+        t["path"] == build.to_string_lossy().as_ref()
+    });
+    std::fs::remove_dir_all(&build).unwrap();
+    wait_tab(&server, "the directory's parent", |t| {
+        t["path"] == main.to_string_lossy().as_ref()
+    });
+    client.type_text(&format!("cd {}\r", main.display()));
+    wait_tab(&server, "the main clone's name once more", |t| {
+        t["label"] == "app"
+    });
+    assert_eq!(server.ok(&["show", "-t", &id, "@tab_name"]).trim(), "");
+    client.type_text(&format!("cd {}\r", worktree.display()));
+    wait_tab(&server, "the worktree's name a third time", |t| {
+        t["label"] == named["label"]
+    });
+
+    // Nor does a directory removed inside a worktree that is still there.
+    let inner = worktree.join("build");
+    std::fs::create_dir_all(&inner).unwrap();
+    client.type_text(&format!("cd {}\r", inner.display()));
+    wait_tab(&server, "the worktree's directory", |t| {
+        t["path"] == inner.to_string_lossy().as_ref()
+    });
+    std::fs::remove_dir_all(&inner).unwrap();
+    wait_tab(&server, "the worktree as the directory's parent", |t| {
+        t["path"] == worktree.to_string_lossy().as_ref()
+    });
+    client.type_text(&format!("cd {}\r", main.display()));
+    wait_tab(&server, "the main clone's name a third time", |t| {
+        t["label"] == "app"
+    });
+    assert_eq!(server.ok(&["show", "-t", &id, "@tab_name"]).trim(), "");
+    client.type_text(&format!("cd {}\r", worktree.display()));
+    wait_tab(&server, "the worktree's name a fourth time", |t| {
+        t["label"] == named["label"]
+    });
+
+    // A name you gave the tab stays through the cleanup.
+    server.ok(&["set", "-t", &id, "@tab_name", "Fix the login"]);
+    git(
+        &main,
+        &["worktree", "remove", "--force", worktree.to_str().unwrap()],
+    );
+    std::thread::sleep(Duration::from_millis(2_500) * common::patience());
+    client.type_text(&format!("cd {}\r", main.display()));
+    wait_tab(&server, "the main clone's path", |t| {
+        t["path"] == main.to_string_lossy().as_ref()
+    });
+    assert_eq!(first_tab(&server)["label"], "Fix the login");
+    assert_eq!(
+        server.ok(&["show", "-t", &id, "@tab_name"]).trim(),
+        "Fix the login"
+    );
 }
 
 #[test]
