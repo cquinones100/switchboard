@@ -1253,6 +1253,7 @@ impl Server {
                 self.sidebar.config.card_height,
             ),
             tab_focus: settings::is_on("tab_focus"),
+            nav_follow: settings::is_on("mission_nav_follow"),
             side_keys: super::side_keys(&self.bindings),
             close: settings::is_on("easy_keys") && settings::is_on("menu_mouse"),
             now_secs: now.div_euclid(1000),
@@ -2420,6 +2421,9 @@ impl Server {
                     self.act(client, a);
                     return;
                 }
+                // The view the list's cursor rests on is a place to come
+                // back to, however briefly it rested there.
+                m.nav_held = None;
                 if let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) {
                     self.trail_view_is(&session, m.trail_view());
                 }
@@ -2508,6 +2512,10 @@ impl Server {
         match m.focus {
             Some(Focus::Group(g)) if press => {
                 open_group(m, g);
+                return;
+            }
+            Some(Focus::View(v)) if press && v == m.view && follows(m) => {
+                into_view(m);
                 return;
             }
             Some(Focus::View(v)) if press => {
@@ -7654,8 +7662,9 @@ fn open_group(m: &mut Mission, g: views::Group) {
 /// Keys for the list of groups and views (src/mission/nav.rs): while its
 /// filter is typed, the filter's; while Tab's focus is on a view's row,
 /// `j` `k` and the arrows move it through the listed views, which Enter
-/// opens, and `/` types a filter that narrows them by name. Whether the key
-/// was the list's.
+/// opens (with Settings' `mission_nav_follow` on, each comes to the front
+/// as the focus lands on it), and `/` types a filter that narrows them by
+/// name. Whether the key was the list's.
 fn nav_key(m: &mut Mission, k: Key) -> bool {
     let taken = nav_key_in(m, k);
     if taken {
@@ -7728,12 +7737,38 @@ fn nav_key_in(m: &mut Mission, k: Key) -> bool {
         None => 0,
     };
     m.focus = Some(Focus::View(order[to]));
+    if follows(m) && order[to] != m.view {
+        // Back and forward still know the place before the walk, until the
+        // cursor rests (`Mission::nav_held`).
+        let held = m.trail_view();
+        show_view(m, order[to]);
+        m.nav_held = Some((held, util::now_ms()));
+    }
     true
+}
+
+/// Whether moving the list of views' cursor brings each view to the front
+/// (Settings' `mission_nav_follow`), the list one Tab stop: not while
+/// several views show at once, where a view is a cell to focus.
+fn follows(m: &Mission) -> bool {
+    m.snap.nav_follow && m.groups().is_some() && m.grid.is_none()
+}
+
+/// Enter on the list's row of the view in front: the keys go to the view,
+/// its first pane, as `C-w l` gives them, and the view joins the trail now.
+fn into_view(m: &mut Mission) {
+    m.nav_held = None;
+    if let Some(&first) = m.panes().first() {
+        m.pane = Some((m.view, first));
+    }
+    m.focus = Some(Focus::Item);
 }
 
 /// A view brought to the front: focus on a view's name follows, and on
 /// the filter goes to the items of a board, which has none.
 fn show_view(m: &mut Mission, to: usize) {
+    // Opened, not walked past: a visit at once.
+    m.nav_held = None;
     // The list of groups and views follows the view brought to the front.
     m.nav_scrolled = false;
     // A view brought to the front starts on its list.
@@ -7781,8 +7816,20 @@ fn move_focus(m: &mut Mission, by: isize) {
         Some(v) => v.data.items.len(),
         None => m.order().len(),
     };
-    // With UX 2.0, each listed view's row (src/mission/nav.rs).
+    // With UX 2.0, each listed view's row (src/mission/nav.rs), or, while
+    // the list's cursor brings each view to the front, the list as one
+    // stop, `j` and `k` moving through it.
+    let follow = follows(m);
     let mut stops: Vec<Stop> = match m.groups() {
+        // The view in front's row, or the first the list's filter leaves
+        // when it hides that one.
+        Some(_) if follow => {
+            let order = super::nav::order(m);
+            let row = Some(m.view)
+                .filter(|v| order.contains(v))
+                .or(order.first().copied());
+            row.map(Stop::View).into_iter().collect()
+        }
         Some(_) => super::nav::order(m).into_iter().map(Stop::View).collect(),
         None => (0..=m.snap.views.len()).map(Stop::View).collect(),
     };
@@ -7839,6 +7886,7 @@ fn move_focus(m: &mut Mission, by: isize) {
     let at = match m.focus {
         None => None,
         Some(Focus::Group(_)) => None,
+        Some(Focus::View(_)) if follow => Some(0),
         Some(Focus::View(v)) => stops.iter().position(|s| *s == Stop::View(v)),
         Some(Focus::Kind(k)) => stops.iter().position(|s| *s == Stop::Kind(k)),
         Some(Focus::Filter) => stops.iter().position(|s| *s == Stop::Filter),
@@ -8487,6 +8535,63 @@ mod tests {
         nav_key(&mut m, Key::new(KeyCode::Esc, Mods::NONE));
         assert!(m.nav_filter.is_none());
         assert_eq!(super::super::nav::order(&m), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn with_the_list_following_j_shows_each_view_and_back_counts_one_step_until_it_rests() {
+        let mut m = mission(
+            1,
+            vec![
+                view(ViewId::WorkMap, "Work map"),
+                view(ViewId::Prs, "PRs"),
+                view(ViewId::Settings, "Settings"),
+            ],
+        );
+        m.snap.rules.ux2 = true;
+        m.snap.nav_follow = true;
+        let key = |c| Key::new(KeyCode::Char(c), Mods::NONE);
+        let before = m.trail_view();
+        m.focus = Some(Focus::View(0));
+        assert!(nav_key(&mut m, key('j')));
+        assert_eq!(m.view, 1, "the Map in front");
+        assert_eq!(m.focus, Some(Focus::View(1)), "the list keeps the keys");
+        nav_key(&mut m, key('j'));
+        assert_eq!(m.view, 2, "PRs in front");
+        assert_eq!(m.trail_view(), before, "walked past: no step yet");
+        // Rested a second: PRs is the place back and forward know.
+        m.nav_held.as_mut().unwrap().1 -= super::super::NAV_SETTLE_MS;
+        assert_eq!(m.trail_view(), Some(m.current().unwrap().slug()));
+        // Tab goes from the list into the view (its first stop, a board's
+        // first card), never along the list, and Shift-Tab back to the view
+        // in front's row.
+        move_focus(&mut m, 1);
+        assert_eq!((m.view, m.focus), (2, Some(Focus::Item)));
+        move_focus(&mut m, -1);
+        assert_eq!(m.focus, Some(Focus::View(2)));
+        // Enter there moves into the view, which joins the trail at once.
+        nav_key(&mut m, key('k'));
+        assert!(m.nav_held.is_some());
+        into_view(&mut m);
+        assert_eq!((m.view, m.focus), (1, Some(Focus::Item)));
+        assert!(m.nav_held.is_none());
+        // With the list's filter hiding the view in front, Shift-Tab comes
+        // back to the first row it leaves, which Enter opens.
+        m.nav_filter = Some(Filter {
+            text: "settings".into(),
+            typing: false,
+        });
+        m.focus = Some(Focus::Filter);
+        move_focus(&mut m, -1);
+        assert_eq!(m.focus, Some(Focus::View(3)));
+    }
+
+    #[test]
+    fn with_the_list_not_following_j_leaves_the_view_in_front() {
+        let mut m = mission(1, vec![view(ViewId::Prs, "PRs")]);
+        m.snap.rules.ux2 = true;
+        m.focus = Some(Focus::View(0));
+        nav_key(&mut m, Key::new(KeyCode::Char('j'), Mods::NONE));
+        assert_eq!((m.view, m.focus), (0, Some(Focus::View(1))));
     }
 
     #[test]

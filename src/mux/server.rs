@@ -2060,6 +2060,7 @@ impl Server {
     /// setting the trail's place on the way; nothing with no place that
     /// way.
     pub fn trail_step(&mut self, client: ClientId, back: bool, steps: usize) {
+        self.trail_settle(client);
         let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
             return;
         };
@@ -2143,6 +2144,21 @@ impl Server {
         c.trail_view = now.clone();
         let session = c.session.clone();
         self.trail_view_is(&session, now);
+    }
+
+    /// `trail_sync`, the view mission control's list of views was walked
+    /// to counted as visited at once (`Mission::nav_held`), however briefly
+    /// it rested there: run before a step along the trail, by key, click or
+    /// menu, so the step goes from the view on the screen.
+    pub fn trail_settle(&mut self, client: ClientId) {
+        if let Some(m) = self
+            .clients
+            .get_mut(&client)
+            .and_then(|c| c.overlays.find_mut::<crate::mission::Mission>())
+        {
+            m.nav_held = None;
+        }
+        self.trail_sync(client);
     }
 
     /// The session is on `now`'s view (none: on its tab): a visit when that
@@ -3069,6 +3085,7 @@ impl Server {
                 }
             }
             Action::LastTab if crate::settings::is_on("tab_back_forward") => {
+                self.trail_settle(id);
                 // The place before, tab or view, as a visit, so pressed
                 // again it comes back; the tab before when that view is
                 // off now, or the server restarted since, which keeps no

@@ -6355,6 +6355,7 @@ mod tests {
             theme: Theme::DARK,
             card: (56, 13),
             tab_focus: true,
+            nav_follow: false,
             side_keys: String::new(),
             close: false,
             now_secs: rules().now_secs(),

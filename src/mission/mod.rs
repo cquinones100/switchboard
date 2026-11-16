@@ -216,6 +216,9 @@ pub struct Snapshot {
     /// sidebar.json's cardWidth and cardHeight.
     pub card: (u16, u16),
     pub tab_focus: bool,
+    /// Settings' `mission_nav_follow`: moving the list of views' cursor
+    /// brings each view to the front, and the list is one Tab stop.
+    pub nav_follow: bool,
     /// The keys the pane resize actions are bound to left and right
     /// (`side_keys`), which the footer names beside a board's pane; empty
     /// with neither bound.
@@ -295,6 +298,7 @@ impl Default for Snapshot {
             theme: Theme::DARK,
             card: (56, 13),
             tab_focus: true,
+            nav_follow: false,
             side_keys: String::new(),
             close: false,
             now_secs: 0,
@@ -519,6 +523,12 @@ pub struct Mission {
     /// When `C-w` was pressed (ms), its second key awaited until
     /// `WINDOW_WAIT_MS` after it.
     pub window_key: Option<i64>,
+    /// While the cursor walks the list of views with Settings'
+    /// `mission_nav_follow` on, the place back and forward knew before
+    /// the walk and when the cursor last moved (ms): the view it rests on
+    /// joins the trail only `NAV_SETTLE_MS` after that, or on Enter, so a
+    /// walk past several views is one step.
+    pub nav_held: Option<(Option<String>, i64)>,
     /// M-j's picker's search of what the panes show (`tab_search_panes`):
     /// the text last searched for and what it found, the text a search is
     /// running for, and each pane's copied text with its `version` and
@@ -541,6 +551,10 @@ pub enum Pane {
 
 /// How long `C-w` waits for its second key.
 pub const WINDOW_WAIT_MS: i64 = 1000;
+
+/// How long the list of views' cursor rests on a view before back and
+/// forward count it as visited (`Mission::nav_held`).
+pub const NAV_SETTLE_MS: i64 = 1000;
 
 impl Mission {
     pub fn new() -> Mission {
@@ -608,6 +622,7 @@ impl Mission {
             slack_all: Default::default(),
             pane: None,
             window_key: None,
+            nav_held: None,
             panes_found: None,
             panes_searching: None,
             pane_copies: HashMap::new(),
@@ -1097,6 +1112,11 @@ impl Mission {
     pub fn trail_view(&self) -> Option<String> {
         if self.picker {
             return None;
+        }
+        if let Some((held, at)) = &self.nav_held
+            && crate::util::now_ms().saturating_sub(*at) < NAV_SETTLE_MS
+        {
+            return held.clone();
         }
         Some(
             self.current()

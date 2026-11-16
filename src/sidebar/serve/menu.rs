@@ -145,7 +145,7 @@ impl Server {
     pub(crate) fn sidebar_trail_menu(&mut self, client: ClientId, session: &str) {
         // Mission control closed by the click that opened it is a step
         // already, so the menu's steps are the ones a choice takes.
-        self.trail_sync(client);
+        self.trail_settle(client);
         let Some((current, (back, forward))) = self.session(session).map(|s| {
             let here = s.trail.here(s.current);
             let steps = s.trail.steps(&here, crate::mux::server::place_usable);

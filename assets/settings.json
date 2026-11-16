@@ -407,6 +407,13 @@
     "default": true
   },
   {
+    "key": "mission_nav_follow",
+    "category": "Mission control",
+    "label": "Show views as the list moves",
+    "description": "With UX 2.0, moving the cursor through mission control's list of views with j, k or the arrows brings each view to the front as it lands on it, the list keeping the keys; Enter then moves into the view, a view joins back and forward's trail once the cursor rests on it a second, and the list is one Tab stop, Tab going into the view in front and Shift-Tab back. Off, j and k only move the cursor, Enter opens the view, and Tab stops on each view's row",
+    "default": true
+  },
+  {
     "key": "hover_highlight",
     "category": "Mission control",
     "label": "Highlight on hover",

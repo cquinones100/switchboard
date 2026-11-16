@@ -185,3 +185,75 @@ fn c_w_h_gives_the_list_of_views_the_keys() {
 fn c_w_h_reaches_the_column_of_views_beside_the_kept_tabs_sidebar() {
     c_w_h_reaches_the_list(json!({ "mission_keep_tabs_sidebar": true }));
 }
+
+/// The view the header over mission control names.
+fn header_view(screen: &[String]) -> String {
+    let after = screen[0].split('│').nth(1).unwrap_or_default().trim_start();
+    after
+        .split("   ")
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+/// Waits for the header to name a view other than `not`, and gives it.
+fn next_header(client: &mut TestClient, not: &str) -> String {
+    let screen = client.wait_for("another view in front", |s| header_view(s) != not);
+    header_view(&screen)
+}
+
+#[test]
+fn j_in_the_list_shows_each_view_and_back_skips_the_views_walked_past() {
+    let (_server, mut client, screen) = opened(json!({ "tab_focus": true }));
+    assert_eq!(header_view(&screen), "Tabs");
+    client.type_text("\t");
+    let started = std::time::Instant::now();
+    client.type_text("j");
+    let first = next_header(&mut client, "Tabs");
+    // A second j, then back at once: the Map walked past isn't a step,
+    // unless the computer was too slow for the second j to come within
+    // the second the cursor rests.
+    let quick = started.elapsed() < std::time::Duration::from_millis(900);
+    client.type_text("j");
+    let second = next_header(&mut client, &first);
+    client.type_text(&format!("{ALT}{{"));
+    let back = next_header(&mut client, &second);
+    if quick {
+        assert_eq!(back, "Tabs", "one step back from {second}, past {first}");
+    } else {
+        assert_eq!(back, first);
+    }
+}
+
+#[test]
+fn tab_from_the_list_goes_into_the_view_and_shift_tab_comes_back_to_the_list() {
+    let (_server, mut client, _) = opened(json!({ "tab_focus": true }));
+    client.type_text("\t");
+    client.type_text("j");
+    let first = next_header(&mut client, "Tabs");
+    // Tab into the view and back leave the list's cursor where it was, so
+    // the next j shows the view after it.
+    client.type_text("\t");
+    client.type_text("\x1b[Z");
+    client.type_text("j");
+    let second = next_header(&mut client, &first);
+    assert_ne!(second, "Tabs");
+    // k back along the list shows the view before.
+    client.type_text("k");
+    assert_eq!(next_header(&mut client, &second), first);
+}
+
+#[test]
+fn with_the_list_not_following_j_only_moves_the_cursor() {
+    let (_server, mut client, _) =
+        opened(json!({ "tab_focus": true, "mission_nav_follow": false }));
+    client.type_text("\t");
+    client.type_text("j");
+    std::thread::sleep(std::time::Duration::from_millis(
+        300 * u64::from(common::patience()),
+    ));
+    assert_eq!(header_view(&client.screen()), "Tabs");
+    client.type_text("\r");
+    next_header(&mut client, "Tabs");
+}
