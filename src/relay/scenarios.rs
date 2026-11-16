@@ -5717,3 +5717,162 @@ fn without_notes_in_slack_the_autopilot_form_never_names_the_note() {
     );
     assert!(!posts.iter().any(|p| p.body.contains("Plans")), "{posts:?}");
 }
+
+/// Autopilot's board as the server's `autopilot-board` says it, working
+/// `Work.md` with one tab waiting on you.
+fn autopilot_board(landed: u64) -> Value {
+    json!({
+        "on": true, "note": "Work", "paused": false, "pausedAt": null,
+        "away": false, "limited": false, "said": "", "slots": 2,
+        "spent": 7.1, "limit": 20.0,
+        "eta": "done by about 6:40 PM · 5 left · 1 wait on you",
+        "columns": [["Next up", 3], ["Working", 1], ["Waiting on you", 1], ["Landing", 1], ["Landed", landed + 2], ["Skipped", 0]],
+        "landedToday": landed,
+        "tabs": [{ "tab": "@7", "index": 2, "column": "Waiting on you", "started": 1 }],
+    })
+}
+
+/// The autopilot section's text in the Home tab last published.
+fn autopilot_section(rig: &Rig) -> String {
+    let home = rig.calls("views.publish").last().unwrap().clone();
+    home["view"]["blocks"].to_string()
+}
+
+#[test]
+fn the_home_tab_shows_autopilots_progress_and_edits_it_in_place_at_most_once_a_minute() {
+    let (rig, _) = rig_with(&[("notes_in_slack", json!(true))]);
+    *rig.mux.board.borrow_mut() = Some(autopilot_board(4));
+    rig.block_on(refresh_dashboard(&rig.cx, Refresh::opened_quick()))
+        .unwrap();
+    let shown = autopilot_section(&rig);
+    for words in [
+        "🤖 Autopilot",
+        "Working *Work* · 2 tabs at once",
+        "Done by about 6:40 PM · 5 left · 1 wait on you",
+        "Next up *3*",
+        "Landed today *4*",
+        "Waiting on you *1*",
+        "Today *$7.10* of $20.00 ▰▰▰▱▱▱▱▱▱▱ 36%",
+        "🟡 2 a tab · waiting on you",
+        r#"\"a\":\"autopilot-pause\""#,
+        "Settings",
+    ] {
+        assert!(shown.contains(words), "{words} in {shown}");
+    }
+    assert!(
+        !shown.contains("Skipped *"),
+        "no Skipped while none is: {shown}"
+    );
+    let published = rig.calls("views.publish").len();
+
+    // An item lands: within the minute the board isn't read again, so the
+    // Home isn't published for it.
+    *rig.mux.board.borrow_mut() = Some(autopilot_board(5));
+    rig.block_on(refresh_dashboard(&rig.cx, Refresh::default()))
+        .unwrap();
+    assert_eq!(rig.calls("views.publish").len(), published);
+
+    // A minute on, the same Home tab is edited in place, and nothing is
+    // posted for it.
+    rig.cx.mem.borrow_mut().autopilot.at -= super::autopilot_home::EVERY_MS;
+    rig.block_on(refresh_dashboard(&rig.cx, Refresh::default()))
+        .unwrap();
+    assert_eq!(rig.calls("views.publish").len(), published + 1);
+    assert!(autopilot_section(&rig).contains("Landed today *5*"));
+    assert!(rig.posts().is_empty(), "{:?}", rig.posts());
+}
+
+#[test]
+fn autopilots_pause_on_the_home_tab_is_taken_from_the_owner_alone() {
+    let (rig, _) = rig_with(&[]);
+    *rig.mux.board.borrow_mut() = Some(autopilot_board(4));
+    rig.block_on(refresh_dashboard(&rig.cx, Refresh::opened_quick()))
+        .unwrap();
+    assert!(autopilot_section(&rig).contains("Working your note"));
+    let dm = rig.cx.state.borrow().dm();
+    let press = |user: &str, a: &str| {
+        json!({
+            "type": "block_actions", "user": { "id": user, "team_id": "T1" }, "team": { "id": "T1" },
+            "container": { "type": "view", "view_id": "VHOME" }, "view": { "id": "VHOME", "type": "home" },
+            "actions": [{ "value": json!({ "a": a }).to_string() }],
+        })
+    };
+    assert!(press_from(&dm, &press("U2", "autopilot-pause"), |_| {}).is_none());
+    assert!(rig.mux.paused.borrow().is_empty());
+
+    let p = press_from(&dm, &press("U1", "autopilot-pause"), |_| {}).unwrap();
+    rig.block_on(super::presses::handle_press(&rig.cx, p))
+        .unwrap();
+    assert_eq!(*rig.mux.paused.borrow(), [true]);
+    let shown = autopilot_section(&rig);
+    assert!(shown.contains("⏸ Autopilot, paused by you"), "{shown}");
+    assert!(shown.contains(r#"\"a\":\"autopilot-resume\""#), "{shown}");
+    assert!(
+        shown.contains("Opens no new tab; the one open goes on to its end."),
+        "{shown}"
+    );
+
+    let p = press_from(&dm, &press("U1", "autopilot-resume"), |_| {}).unwrap();
+    rig.block_on(super::presses::handle_press(&rig.cx, p))
+        .unwrap();
+    assert_eq!(*rig.mux.paused.borrow(), [true, false]);
+    assert!(autopilot_section(&rig).contains("🤖 Autopilot"));
+}
+
+#[test]
+fn past_its_spend_limit_the_home_tab_says_so_and_offers_raising_it() {
+    let (rig, _) = rig_with(&[]);
+    let mut board = autopilot_board(4);
+    board["limited"] = json!(true);
+    board["spent"] = json!(20.04);
+    board["eta"] = json!("1 wait on you");
+    *rig.mux.board.borrow_mut() = Some(board);
+    rig.block_on(refresh_dashboard(&rig.cx, Refresh::opened_quick()))
+        .unwrap();
+    let shown = autopilot_section(&rig);
+    for words in [
+        "⏸ Autopilot, paused by its limit",
+        "🔴 Paused: today's spend reached $20.00",
+        "1 wait on you · no finish time while paused",
+        "▰▰▰▰▰▰▰▰▰▰ 100%",
+        "Raise the limit",
+        "Starts again tomorrow, or once the limit is raised.",
+    ] {
+        assert!(shown.contains(words), "{words} in {shown}");
+    }
+}
+
+#[test]
+fn with_autopilot_in_slack_off_the_home_tab_leaves_it_out_and_never_asks() {
+    let (rig, _) = rig_with(&[("relay_autopilot", json!(false))]);
+    *rig.mux.board.borrow_mut() = Some(autopilot_board(4));
+    rig.block_on(refresh_dashboard(&rig.cx, Refresh::opened_quick()))
+        .unwrap();
+    let shown = autopilot_section(&rig);
+    assert!(
+        !shown.contains("🤖 Autopilot") && !shown.contains("Next up"),
+        "{shown}"
+    );
+    assert!(rig.cx.mem.borrow().autopilot.board.is_none());
+}
+
+#[test]
+fn the_autopilot_form_opened_while_it_works_saves_its_changes() {
+    let (rig, _) = rig_with(&[("notes_in_slack", json!(true))]);
+    autopilot_set_up(&rig);
+    crate::autopilot::Mode::update(&rig.cx.paths.switchboard_state, |m| m.on = true).unwrap();
+    let shown = super::autopilot::read(&rig.cx.paths.switchboard_state, &rig.cx.paths.notes, true);
+    let view = super::autopilot::form(&shown);
+    assert_eq!(view["submit"]["text"], "Save");
+    let meta = view["private_metadata"].as_str().unwrap().to_string();
+    let dm = rig.cx.state.borrow().dm();
+    let sent = json!({
+        "type": "view_submission", "user": { "id": "U1", "team_id": "T1" }, "team": { "id": "T1" },
+        "view": { "callback_id": "autopilot", "private_metadata": meta, "state": { "values": autopilot_values() } },
+    });
+    let form = submission_from(&dm, &sent, |_| {}).unwrap();
+    rig.block_on(super::screens::handle_submission(&rig.cx, &form))
+        .unwrap();
+    assert_eq!(*rig.mux.changed.borrow(), [true]);
+    assert_eq!(rig.mux.autopilot.borrow()[0]["slots"], 3);
+}

@@ -158,6 +158,12 @@ pub struct FakeMux {
     /// The fields of every autopilot started, which it answers saying the
     /// note it works, as the server does.
     pub autopilot: RefCell<Vec<Value>>,
+    /// Whether each start was a change to it working (`--change`).
+    pub changed: RefCell<Vec<bool>>,
+    /// What `autopilot-board` answers; `None` as from a server too old.
+    pub board: RefCell<Option<Value>>,
+    /// Every pause (true) and resume (false) asked for.
+    pub paused: RefCell<Vec<bool>>,
     next: Cell<u32>,
 }
 
@@ -336,7 +342,24 @@ impl Mux for Rc<FakeMux> {
         Ok(())
     }
 
-    fn start_autopilot(&self, fields: String) -> LocalBoxFuture<'static, Result<String>> {
+    fn autopilot_board(&self) -> Option<Value> {
+        self.board.borrow().clone()
+    }
+
+    fn pause_autopilot(&self, pause: bool) -> Result<String> {
+        self.paused.borrow_mut().push(pause);
+        if let Some(board) = self.board.borrow_mut().as_mut() {
+            board["paused"] = Value::Bool(pause);
+        }
+        Ok(if pause { "Paused" } else { "Resumed" }.into())
+    }
+
+    fn start_autopilot(
+        &self,
+        fields: String,
+        change: bool,
+    ) -> LocalBoxFuture<'static, Result<String>> {
+        self.changed.borrow_mut().push(change);
         let answer = serde_json::from_str::<Value>(&fields)
             .map_err(anyhow::Error::from)
             .map(|fields| {

@@ -347,6 +347,8 @@ const HOME_ACTIONS: &[&str] = &[
     "refresh",
     "new",
     "autopilot",
+    "autopilot-pause",
+    "autopilot-resume",
     "cleanup",
     "home-opt",
     "home-dialog",

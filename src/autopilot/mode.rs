@@ -54,6 +54,8 @@ pub struct Mode {
     /// The most of its tabs open at once, those waiting on you included.
     pub cap: u32,
     pub paused: bool,
+    /// When you paused it, in seconds; 0 while it isn't paused by you.
+    pub paused_at: i64,
     /// Only items whose plan is settled.
     pub ready_only: bool,
     /// The items skipped, each by its note's ID and its first line.
@@ -148,6 +150,7 @@ impl Default for Mode {
             slots: 3,
             cap: 5,
             paused: false,
+            paused_at: 0,
             ready_only: false,
             skipped: Vec::new(),
             next: Vec::new(),
@@ -187,6 +190,11 @@ impl Mode {
             slots: count("slots", d.slots),
             cap: count("cap", d.cap),
             paused: flag("paused", d.paused),
+            paused_at: map
+                .get("pausedAt")
+                .and_then(Value::as_f64)
+                .filter(|n| n.is_finite() && *n >= 0.0)
+                .map_or(0, |n| n as i64),
             ready_only: flag("readyOnly", d.ready_only),
             // A first line alone, from before notes had IDs, was the mode's
             // note's.
@@ -282,6 +290,7 @@ impl Mode {
         map.insert("slots".into(), self.slots.into());
         map.insert("cap".into(), self.cap.into());
         map.insert("paused".into(), self.paused.into());
+        map.insert("pausedAt".into(), self.paused_at.into());
         map.insert("readyOnly".into(), self.ready_only.into());
         map.insert(
             "skipped".into(),

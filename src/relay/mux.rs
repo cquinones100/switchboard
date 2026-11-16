@@ -135,7 +135,18 @@ pub trait Mux {
     /// the server says of it, or why it didn't start.
     /// Waited for off the relay's thread, since the server answers once
     /// it has checked them, which can reach GitHub.
-    fn start_autopilot(&self, fields: String) -> LocalBoxFuture<'static, Result<String>>;
+    /// With `change`, autopilot's settings changed while it works, as the
+    /// settings box's Save changes them.
+    fn start_autopilot(
+        &self,
+        fields: String,
+        change: bool,
+    ) -> LocalBoxFuture<'static, Result<String>>;
+    /// Autopilot's progress (`autopilot-board`), or `None` when the
+    /// server can't be asked or is too old to say.
+    fn autopilot_board(&self) -> Option<Value>;
+    /// Autopilot paused, or resumed: what the server says of it.
+    fn pause_autopilot(&self, pause: bool) -> Result<String>;
 }
 
 /// How long `autopilot-start` is waited for: longer than the server lets
@@ -300,16 +311,33 @@ impl Mux for Server {
         self.ask(&["seen", "-t", tab]).map(|_| ())
     }
 
-    fn start_autopilot(&self, fields: String) -> LocalBoxFuture<'static, Result<String>> {
+    fn start_autopilot(
+        &self,
+        fields: String,
+        change: bool,
+    ) -> LocalBoxFuture<'static, Result<String>> {
         let server = Server {
             socket: self.socket.clone(),
         };
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
-                server.ask_waiting(&["autopilot-start", &fields], START_WAIT)
+                let mut args = vec!["autopilot-start"];
+                if change {
+                    args.push("--change");
+                }
+                args.push(&fields);
+                server.ask_waiting(&args, START_WAIT)
             })
             .await?
         })
+    }
+
+    fn autopilot_board(&self) -> Option<Value> {
+        serde_json::from_str(&self.ask(&["autopilot-board"]).ok()?).ok()
+    }
+
+    fn pause_autopilot(&self, pause: bool) -> Result<String> {
+        self.ask(&["autopilot-pause", if pause { "on" } else { "off" }])
     }
 }
 

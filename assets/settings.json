@@ -1433,8 +1433,15 @@
     "key": "notes_in_slack",
     "category": "Slack relay",
     "label": "Notes in Slack",
-    "description": "Lets the Slack app's Autopilot form name your notes, so you can pick the note it works from Slack; only the notes' names are sent, never their items. Off, the form names no note and starts autopilot on the note it last worked",
+    "description": "Lets the Slack app's Autopilot form name your notes, so you can pick the note it works from Slack, and the Home tab's autopilot section name the note it works; only the notes' names are sent, never their items. Off, the form names no note and starts autopilot on the note it last worked, and the Home tab says \"your note\"",
     "default": false
+  },
+  {
+    "key": "relay_autopilot",
+    "category": "Slack relay",
+    "label": "Autopilot in Slack",
+    "description": "While autopilot works, the Slack app's Home tab shows its progress above Needs you: paused or not, when its ready items should be done, how many items stand in each column of its board, today's spend against its limit, its tabs in flight with a link to each one's thread, and Pause, Resume and Settings buttons. It is edited in place at most once a minute, and nothing new is posted for it. Off, the Home tab leaves autopilot out",
+    "default": true
   },
   {
     "key": "relay_send_prompts",

@@ -319,10 +319,12 @@ pub fn apply(act: &Act, mode: &mut Mode) -> Option<String> {
     Some(match act {
         Act::Pause => {
             mode.paused = true;
+            mode.paused_at = crate::util::now_secs();
             "Paused".to_string()
         }
         Act::Resume => {
             mode.paused = false;
+            mode.paused_at = 0;
             "Resumed".to_string()
         }
         Act::Skip(text) => {

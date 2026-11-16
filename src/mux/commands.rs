@@ -107,6 +107,8 @@ pub const NAMES: &[&str] = &[
     "server-version",
     "autopilot-next",
     "autopilot-start",
+    "autopilot-board",
+    "autopilot-pause",
     "slot-report",
 ];
 
@@ -218,7 +220,15 @@ pub const USAGE: &[(&str, &str)] = &[
     ),
     (
         "autopilot-start",
-        "autopilot-start <fields>: autopilot, while off, started with the settings given as JSON, as its settings box starts it; the Slack relay's Autopilot form, refused run by hand",
+        "autopilot-start [--change] <fields>: autopilot, while off, started with the settings given as JSON, as its settings box starts it, or with --change, while on, its settings changed as the box's Save changes them; the Slack relay's Autopilot form, refused run by hand",
+    ),
+    (
+        "autopilot-board",
+        "autopilot-board: autopilot's progress as JSON, for the Slack relay's Home tab: paused or not, its spend, when it should be done, how many items stand in each column of its board, and its tabs in flight",
+    ),
+    (
+        "autopilot-pause",
+        "autopilot-pause on|off: autopilot paused or resumed, as its menu's Pause and Resume do",
     ),
     (
         "slot-report",
@@ -461,6 +471,16 @@ impl Server {
                 self.autopilot_put_next(client, note.clone(), line, None);
                 Ok(Reply::ok(""))
             }
+            "autopilot-board" => Ok(Reply::ok(format!(
+                "{}\n",
+                crate::util::json_compact(&self.autopilot_board())
+            ))),
+            "autopilot-pause" => match rest.first().map(String::as_str) {
+                Some("on") => self.autopilot_pause(true),
+                Some("off") => self.autopilot_pause(false),
+                _ => Err("autopilot-pause takes on or off".to_string()),
+            }
+            .map(|said| Reply::ok(format!("{said}\n"))),
             "sidebar-repo" => self.cmd_sidebar_repo(rest, cwd, caller),
             "save" => super::persist::save_now(self)
                 .map(|file| Reply::ok(format!("{}\n", file.display())))

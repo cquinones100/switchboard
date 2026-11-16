@@ -40,7 +40,8 @@
 //! - `landing`: a landing in its tab's thread, its steps and push question.
 //! - `dashboard`: the app's Home tab.
 //! - `screens`, `skills`, `places`: a tab's screen and its forms.
-//! - `autopilot`: autopilot's settings as a form that starts it.
+//! - `autopilot`: autopilot's settings as a form that starts or changes it.
+//! - `autopilot_home`: autopilot's progress on the Home tab.
 //! - `buttons`, `presses`, `quickreplies`: buttons, and acting on a press.
 //! - `files`, `slices`: images and videos, both ways.
 //! - `cleanup`: deleting closed tabs' threads.
@@ -57,6 +58,7 @@
 
 pub mod alerts;
 pub mod autopilot;
+pub mod autopilot_home;
 pub mod buttons;
 pub mod cleanup;
 pub mod cli;
@@ -154,6 +156,8 @@ pub struct Memory {
     pub screens: screens::Memory,
     pub picks: buttons::Picks,
     pub drafts: commands::Drafts,
+    /// Autopilot's board as the Home tab last read it.
+    pub autopilot: autopilot_home::Memory,
     /// The welcome message's words, for editing it when the app's ID comes.
     pub welcome: String,
 }

@@ -336,10 +336,11 @@ pub fn form(shown: &Shown) -> Value {
         "type": "modal",
         "callback_id": "autopilot",
         // Whether it started landing without asking, for reading an
-        // unticked Land without asking as the form showed it.
-        "private_metadata": util::json_compact(&json!({ "landing": mode.land_without_asking || mode.hands_free })),
+        // unticked Land without asking as the form showed it, and whether
+        // it changes autopilot at work rather than starting it.
+        "private_metadata": util::json_compact(&json!({ "landing": mode.land_without_asking || mode.hands_free, "change": mode.on })),
         "title": plain("Autopilot"),
-        "submit": plain("Start"),
+        "submit": plain(if mode.on { "Save" } else { "Start" }),
         "close": plain("Cancel"),
         "blocks": blocks,
     })
@@ -409,12 +410,38 @@ pub async fn open(cx: &Cx, trigger: &str) -> Result<()> {
 }
 
 /// The form's Start: autopilot started through the server, and the DM told
-/// whether it did, naming the note only when the form may.
+/// whether it did, naming the note only when the form may; or, opened
+/// while it worked (the Home tab's Settings, board 81), its Save: its
+/// settings changed, and the DM told what changed.
 pub async fn submitted(cx: &Cx, form: &Form) -> Result<()> {
     let named = names_notes(cx);
     let mode = Mode::read(&cx.paths.switchboard_state);
+    let change = form.meta["change"] == json!(true);
     let said = if !allowed(cx) {
         "🤖 Autopilot is off in Settings (Autopilot), so it didn't start.".to_string()
+    } else if change && !mode.on {
+        "🤖 Autopilot has stopped, so nothing changed.".to_string()
+    } else if change {
+        let fields = fields_of(&mode, form, named, hands_free_offered(cx));
+        let hidden = (!named).then(|| note_title(&fields.note));
+        let words = |text: &str| match &hidden {
+            Some(title) if !title.is_empty() => unnamed(text, title),
+            _ => text.to_string(),
+        };
+        match cx
+            .mux
+            .start_autopilot(util::json_compact(&json!(fields)), true)
+            .await
+        {
+            Ok(changed) => {
+                let changed = changed.trim();
+                format!(
+                    "🤖 Autopilot: {}",
+                    words(changed.strip_prefix("Autopilot: ").unwrap_or(changed))
+                )
+            }
+            Err(e) => format!("🤖 Autopilot didn't change: {}", words(&e.to_string())),
+        }
     } else if mode.on {
         "🤖 Autopilot is already on.".to_string()
     } else {
@@ -426,7 +453,7 @@ pub async fn submitted(cx: &Cx, form: &Form) -> Result<()> {
         };
         match cx
             .mux
-            .start_autopilot(util::json_compact(&json!(fields)))
+            .start_autopilot(util::json_compact(&json!(fields)), false)
             .await
         {
             Ok(started) => format!("🤖 Autopilot: {}", words(started.trim())),

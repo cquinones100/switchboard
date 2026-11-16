@@ -88,6 +88,13 @@ pub async fn handle_press(cx: &Cx, press: Press) -> Result<()> {
         let trigger = press.trigger_id.clone().unwrap_or_default();
         return super::autopilot::open(cx, &trigger).await;
     }
+    // The Home tab's autopilot section's Pause and Resume (board 81).
+    if a == "autopilot-pause" || a == "autopilot-resume" {
+        if let Err(e) = cx.mux.pause_autopilot(a == "autopilot-pause") {
+            post(cx, &format!("🤖 Autopilot: {e}"), None, PostOpts::default()).await?;
+        }
+        return refresh_dashboard(cx, Refresh::opened_quick()).await;
+    }
     let thread = press
         .message
         .as_ref()

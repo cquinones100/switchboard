@@ -1111,7 +1111,7 @@ fn a_push_marks_when_its_tab_landed_once() {
 /// Hands-free and Land without asking with no question, and so is a second
 /// start while it is on.
 #[test]
-fn autopilot_start_starts_it_with_the_forms_fields_and_refuses_one_by_hand() {
+fn the_relays_commands_start_change_show_and_pause_it_and_a_start_by_hand_is_refused() {
     let notes = TempDir::new("sbn");
     std::fs::write(
         notes.path().join("Work.md"),
@@ -1159,4 +1159,48 @@ fn autopilot_start_starts_it_with_the_forms_fields_and_refuses_one_by_hand() {
     let (code, _, err) = server.run(&["autopilot-start", &fields]);
     assert_ne!(code, 0);
     assert!(err.contains("already working"), "{err}");
+
+    // The Home tab's Settings form, saved while it works, changes it.
+    let mut fewer: Value = serde_json::from_str(&fields).unwrap();
+    fewer["slots"] = json!(1);
+    let said = server.ok(&["autopilot-start", "--change", &fewer.to_string()]);
+    assert!(said.starts_with("Autopilot: "), "{said}");
+    assert_eq!(mode(&server)["slots"], 1);
+    assert_eq!(mode(&server)["on"], true);
+
+    // Its board, for the Home tab: on, its note, its columns.
+    let board = || -> Value { serde_json::from_str(&server.ok(&["autopilot-board"])).unwrap() };
+    let b = board();
+    assert_eq!(b["on"], true);
+    assert_eq!(b["note"], "Work");
+    assert_eq!(b["paused"], false);
+    assert_eq!(b["slots"], 1);
+    assert_eq!(b["landedToday"], 0);
+    let columns: Vec<&str> = b["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c[0].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        columns,
+        [
+            "Next up",
+            "Working",
+            "Waiting on you",
+            "Landing",
+            "Landed",
+            "Skipped"
+        ]
+    );
+
+    // Paused and resumed from it, saying since when it is paused.
+    assert_eq!(server.ok(&["autopilot-pause", "on"]).trim(), "Paused");
+    assert_eq!(mode(&server)["paused"], true);
+    let b = board();
+    assert_eq!(b["paused"], true);
+    assert!(b["pausedAt"].as_i64().unwrap() > 0, "{b}");
+    assert_eq!(server.ok(&["autopilot-pause", "off"]).trim(), "Resumed");
+    assert_eq!(board()["paused"], false);
+    assert_eq!(board()["pausedAt"], Value::Null);
 }

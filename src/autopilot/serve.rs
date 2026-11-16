@@ -1390,7 +1390,9 @@ impl Server {
     /// `autopilot-start <fields>`, from the Slack relay's Autopilot form
     /// (board 52): the mode, off, started with the fields as its settings
     /// box would start it, answered on `reply` once they are checked off
-    /// the task, with what it says of it or why it didn't start. Run by
+    /// the task, with what it says of it or why it didn't start; with
+    /// `--change`, the mode, on, changed as the box's Save changes it, the
+    /// form opened from the Home tab's autopilot section (board 81). Run by
     /// hand it is refused, as autopilot's marks are, since it can turn on
     /// Land without asking and Hands-free, which the box asks a yes for
     /// and the form's Start is.
@@ -1418,8 +1420,9 @@ impl Server {
             );
             return;
         }
+        let change = args.get(1).is_some_and(|a| a == "--change");
         let Some(fields) = args
-            .get(1)
+            .get(if change { 2 } else { 1 })
             .and_then(|a| serde_json::from_str::<Fields>(a).ok())
         else {
             answer(
@@ -1429,11 +1432,18 @@ impl Server {
             return;
         };
         let mode = Mode::read(&paths::state_dir());
-        if mode.on {
+        if mode.on && !change {
             answer(
                 reply,
                 // Not naming the note, which the Slack relay may not say.
                 fail("Autopilot is already working a note".into()),
+            );
+            return;
+        }
+        if !mode.on && change {
+            answer(
+                reply,
+                fail("Autopilot is off, so there is nothing to change".into()),
             );
             return;
         }
@@ -1475,11 +1485,20 @@ impl Server {
         checked: Result<Checked, String>,
     ) -> crate::mux::server::Reply {
         use crate::mux::server::Reply;
-        // Started on the computer meanwhile: left as it is.
-        if Mode::read(&paths::state_dir()).on {
+        // What the check refused, said as it is.
+        let checked = match checked {
+            Ok(c) => c,
+            Err(e) => return Reply::fail(e),
+        };
+        // Started, or stopped, on the computer meanwhile: left as it is.
+        let on = Mode::read(&paths::state_dir()).on;
+        if checked.starting && on {
             return Reply::fail("Autopilot was started meanwhile");
         }
-        match checked.and_then(|c| self.autopilot_write_checked(fields, was, c)) {
+        if !checked.starting && !on {
+            return Reply::fail("Autopilot was stopped meanwhile");
+        }
+        match self.autopilot_write_checked(fields, was, checked) {
             Ok(said) => {
                 self.say(None, &said);
                 Reply::ok(format!("{said}\n"))
@@ -1662,6 +1681,36 @@ impl Server {
         if !(mode.on || keep) {
             return None;
         }
+        let rows = self.autopilot_rows(landing);
+        let (summary, eta) = self.autopilot_heading(&rows);
+        Some(self.autopilot_items(&summary, &eta, &rows))
+    }
+
+    /// The view's items from its rows and heading.
+    fn autopilot_items(
+        &self,
+        summary: &Summary,
+        eta: &str,
+        rows: &[super::view::Row],
+    ) -> Vec<crate::items::Item> {
+        let mode = &self.autopilot.mode;
+        let skipped: Vec<String> = mode.skipped_here().map(str::to_string).collect();
+        super::view::items(
+            summary,
+            eta,
+            &mode.said,
+            rows,
+            &self.autopilot.pilot.next.queue,
+            &self.autopilot.pilot.next.held,
+            &skipped,
+            &self.autopilot.pilot.next.plans,
+        )
+    }
+
+    /// A row for each of the mode's tabs, then for each of today's
+    /// landings of its note whose tab is closed.
+    fn autopilot_rows(&self, landing: &[crate::items::Item]) -> Vec<super::view::Row> {
+        let mode = &self.autopilot.mode;
         let marked = |opts: &std::collections::BTreeMap<String, String>, name: &str| {
             opts.get(name).is_some_and(|v| !v.is_empty() && v != "0")
         };
@@ -1751,11 +1800,17 @@ impl Server {
                 now: util::now_secs(),
             });
         }
+        rows
+    }
+
+    /// What the heading says, and when the note's ready items should be
+    /// done (empty while stopped or with Settings' "Estimated finish" off).
+    fn autopilot_heading(&self, rows: &[super::view::Row]) -> (Summary, String) {
+        let mode = &self.autopilot.mode;
         let summary = Summary {
             failing: self.sources.main_failing(),
             ..self.autopilot.pilot.summary(mode, self.autopilot_away())
         };
-        let skipped: Vec<String> = mode.skipped_here().map(str::to_string).collect();
         // Paused, away or past today's spend limit, it opens nothing for now.
         let held_off = summary.paused
             || summary.away
@@ -1763,7 +1818,7 @@ impl Server {
         // Stopped, it starts nothing more, so it has nothing to estimate.
         let eta = if settings::is_on("autopilot_eta") && mode.on {
             super::view::eta(
-                &rows,
+                rows,
                 &mode.landed,
                 mode.slots,
                 mode.cap,
@@ -1774,16 +1829,99 @@ impl Server {
         } else {
             String::new()
         };
-        Some(super::view::items(
-            &summary,
-            &eta,
-            &mode.said,
-            &rows,
-            &self.autopilot.pilot.next.queue,
-            &self.autopilot.pilot.next.held,
-            &skipped,
-            &self.autopilot.pilot.next.plans,
-        ))
+        (summary, eta)
+    }
+
+    /// `autopilot-board`: autopilot's progress for the Slack relay's Home
+    /// tab (board 81), as JSON, from what the view is built from: whether
+    /// it is on, paused (by you, and since when), away or past its spend
+    /// limit, what it last said, its note's title, the spend and limit,
+    /// when the ready items should be done, how many items stand in each of
+    /// the board's columns, and its tabs in flight (working, waiting on you
+    /// or landing), each with its tab and column (never its item, a note's words), and how
+    /// many landed today.
+    pub fn autopilot_board(&mut self) -> serde_json::Value {
+        use serde_json::json;
+        let mode = self.autopilot.mode.clone();
+        if !settings::is_on("autopilot") || !mode.on {
+            return json!({ "on": false });
+        }
+        let landing = self
+            .landing_view(false)
+            .map(|d| d.items)
+            .unwrap_or_default();
+        let rows = self.autopilot_rows(&landing);
+        let (summary, eta) = self.autopilot_heading(&rows);
+        let items = self.autopilot_items(&summary, &eta, &rows);
+        let columns: Vec<serde_json::Value> = super::view::COLUMNS
+            .iter()
+            .map(|c| {
+                let n = items
+                    .iter()
+                    .filter(|i| i.group.as_deref() == Some(*c))
+                    .count();
+                json!([c, n])
+            })
+            .collect();
+        let mut flying: Vec<(usize, &super::view::Row)> = rows
+            .iter()
+            .filter(|r| r.closed.is_none())
+            .map(|r| (super::view::column(r, &super::view::stages(r)), r))
+            .filter(|(c, _)| (1..=3).contains(c))
+            .collect();
+        // Waiting on you first, then landing, then working, as board 81 lists them.
+        flying.sort_by_key(|(c, r)| ([3, 0, 1][*c - 1], r.index));
+        let tabs: Vec<serde_json::Value> = flying
+            .into_iter()
+            .map(|(c, r)| {
+                json!({
+                    "tab": r.tab.to_string(),
+                    "index": r.index,
+                    "column": super::view::COLUMNS[c],
+                    "started": r.started,
+                })
+            })
+            .collect();
+        let limited = summary.spend_limit > 0.0 && summary.spent >= summary.spend_limit;
+        // The Landed column keeps a landed tab open from another day; the
+        // Home tab counts today's alone.
+        let now = util::now_ms();
+        let landed_today = rows
+            .iter()
+            .filter(|r| super::view::column(r, &super::view::stages(r)) == 4)
+            .filter(|r| r.ended.is_some_and(|e| mode::same_day(e * 1000, now)))
+            .count();
+        json!({
+            "on": true,
+            "note": note_title(&mode.note),
+            "paused": summary.paused,
+            "pausedAt": (summary.paused && mode.paused_at > 0).then_some(mode.paused_at),
+            "away": summary.away,
+            "limited": limited,
+            "said": mode.said,
+            "slots": mode.slots,
+            "spent": summary.spent,
+            "limit": summary.spend_limit,
+            "eta": eta,
+            "columns": columns,
+            "landedToday": landed_today,
+            "tabs": tabs,
+        })
+    }
+
+    /// `autopilot-pause on|off`: paused or resumed, as its menu's Pause
+    /// and Resume do, from the Slack relay's Home tab: what it says of it.
+    pub fn autopilot_pause(&mut self, pause: bool) -> Result<String, String> {
+        if !Mode::read(&paths::state_dir()).on {
+            return Err("Autopilot is off".into());
+        }
+        let act = if pause { Act::Pause } else { Act::Resume };
+        let mut said = None;
+        Mode::update(&paths::state_dir(), |m| said = line::apply(&act, m))
+            .map_err(|e| format!("Couldn't save it: {e}"))?;
+        self.autopilot.pilot.reset();
+        self.autopilot_tick();
+        Ok(said.unwrap_or_default())
     }
 
     // ── The check ───────────────────────────────────────────────────────────
