@@ -1315,6 +1315,7 @@ impl Server {
                 self.mission_tick();
                 self.diff_tick();
                 self.update_tick();
+                self.behind_tick();
                 self.autopilot_tick();
                 self.routines_tick();
                 self.awake_check();

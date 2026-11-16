@@ -142,6 +142,8 @@ pub enum Do {
     },
     /// What autopilot offers (src/autopilot).
     Autopilot(crate::autopilot::Act),
+    /// M-p's "Restart Switchboard on the latest main" (src/mux/upgrade.rs).
+    Restart,
     /// A CI job's kept log, read in a pane beside the one you're in, from
     /// `line` (its failing step's first), or from its end with none.
     ReadLog {
@@ -317,7 +319,7 @@ pub fn handoff(source: &str, item: &Item, ctx: &Ctx<'_>) -> Option<Handoff> {
         dir: None,
     };
     let handoff = match source {
-        "habits" => return None,
+        "habits" | "behind" => return None,
         "slack" => {
             let who = slack_who(item);
             Handoff {
@@ -1488,7 +1490,8 @@ pub fn notice_opens(source: &str, item: &Item) -> Option<Do> {
 /// What a notification no view lists as an item leads to (`notices::NO_VIEW`):
 /// a new note opens in Notes and a calendar change opens the Calendar view
 /// (`notice_opens`), what autopilot said opens its view, a landing made
-/// without asking goes to its tab, while it is open, and to its plan; else
+/// without asking goes to its tab, while it is open, and to its plan, main
+/// ahead of the running build to the restart on it; else
 /// what its target offers.
 fn notice_leads(source: &str, item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
     if let Some(open) = notice_opens(source, item) {
@@ -1505,6 +1508,11 @@ fn notice_leads(source: &str, item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
             .filter(|(_, _, act)| *act != crate::autopilot::Act::Dismiss)
             .map(|(key, label, act)| choice(key, label, Do::Autopilot(act)))
             .collect(),
+        "behind" => vec![choice(
+            'r',
+            "Restart Switchboard on the latest main",
+            Do::Restart,
+        )],
         "autolanded" => item
             .data
             .get("tab")

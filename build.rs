@@ -51,7 +51,7 @@ fn main() {
 /// `SWITCHBOARD_CHECKOUT` and `SWITCHBOARD_TARGET_DIR`, and the main clone
 /// the checkout belongs to, as `SWITCHBOARD_MAIN_CLONE`
 /// (src/mux/main_clone.rs), for M-p's "Restart Switchboard on the latest
-/// build on disk" (src/mux/latest.rs) to build: the main clone, since a
+/// main" (src/mux/latest.rs) to build: the main clone, since a
 /// worktree is removed once its work lands; all empty in a release build (`SWITCHBOARD_RELEASE` set), which
 /// has no checkout on the computer it runs on. The target directory is the
 /// one holding `OUT_DIR` that cargo marks with its `CACHEDIR.TAG`, so a

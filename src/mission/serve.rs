@@ -4185,6 +4185,9 @@ impl Server {
         // in place, as `p` did, so the list keeps its order and its next is
         // played from the same row.
         let playing = matches!(c.act, Do::SlackPlay(_));
+        // The restart may yet refuse or fail its build, so the notification
+        // that main is ahead stays until a build at or past main takes over.
+        let restarting = matches!(c.act, Do::Restart);
         if let Some(item) = seen.as_ref().filter(|_| !playing) {
             self.slack_item_acted(item);
         }
@@ -4198,7 +4201,9 @@ impl Server {
             Some((source, item, _)) if dismissed => {
                 self.notice_history_mark(&source, &item.id, Sidebar::Dismissed, true);
             }
-            Some((source, item, true)) if !playing => self.notice_dismiss(&source, &item),
+            Some((source, item, true)) if !playing && !restarting => {
+                self.notice_dismiss(&source, &item)
+            }
             // A suggestion's choice says what becomes of it, which puts it
             // out of the sidebar as you dismissing it.
             Some((source, item, false)) if source == "habits" => {
@@ -4223,6 +4228,7 @@ impl Server {
             "autolanded" => self.autopilot_dismiss_autolanded(Some(&item.id)),
             "routines" => self.routines_dismiss(item),
             "habits" => {}
+            crate::mux::behind::SOURCE => self.behind_dismiss(item),
             _ => self.day_dismiss(source, item),
         }
     }
@@ -4382,6 +4388,10 @@ impl Server {
             Do::GoToMatch { tab, pane, text } => self.mission_go_to_match(client, tab, pane, &text),
             Do::Answer(tab) => self.open_answer(client, tab, None),
             Do::Peek(tab) => self.mission_peek(client, tab),
+            Do::Restart => {
+                self.mission_close(client);
+                self.latest_asked(client);
+            }
             Do::DefaultWidth(tab) => {
                 self.set_own_width(tab, None);
                 self.mission_note(client, "The tab takes the default width again.");

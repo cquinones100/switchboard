@@ -42,7 +42,7 @@ pub const MARK: &str = "@notices_window";
 /// what autopilot has to say, the landed tabs it closed
 /// without your seeing them, and suggestions. A source not named here goes
 /// after them.
-pub const ORDER: [&str; 12] = [
+pub const ORDER: [&str; 13] = [
     "meeting",
     "slack",
     "calendar",
@@ -55,6 +55,7 @@ pub const ORDER: [&str; 12] = [
     "landed",
     "routines",
     "habits",
+    "behind",
 ];
 
 /// The view a kind of notification is an item of, by its source: a Slack
@@ -81,14 +82,16 @@ pub fn view_of(source: &str) -> Option<ViewId> {
 /// (`mission::choices::notice_leads`): a change on the calendar (the
 /// Calendar lists the day's events, not what changed), a note written for
 /// you, what autopilot said and the landings it tells of (its view's rows
-/// are its tabs), and a suggestion.
-pub const NO_VIEW: [&str; 6] = [
+/// are its tabs), a suggestion, and main ahead of the running build
+/// (src/mux/behind.rs), which leads to the restart.
+pub const NO_VIEW: [&str; 7] = [
     "calendar",
     "new-notes",
     "autolanded",
     "autopilot",
     "landed",
     "habits",
+    "behind",
 ];
 
 /// A notification as its view lists it, `item` under its own id: the

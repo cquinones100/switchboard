@@ -1055,6 +1055,10 @@ impl Server {
                 if name == super::layout::OWN_WIDTH {
                     self.relayout(t);
                 }
+                // A landing may have moved main past the running build.
+                if name == crate::sidebar::model::LANDED && !unset {
+                    self.behind_check();
+                }
                 self.dirty_tab(t);
             }
         }

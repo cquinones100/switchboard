@@ -36,7 +36,10 @@
 //!   M-{ and M-} to go back and forward through and M-Tab to go back to.
 //! - `latest`: M-p's restart building the checkout first, and telling
 //!   whether there is anything new to restart on.
+//! - `behind`: the notification that main has landings the running build
+//!   lacks.
 
+pub mod behind;
 pub mod beside;
 pub mod build_row;
 pub mod client;

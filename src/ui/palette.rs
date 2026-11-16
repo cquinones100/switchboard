@@ -519,6 +519,24 @@ mod tests {
     }
 
     #[test]
+    fn the_restart_is_found_by_its_name_and_by_its_old_one() {
+        let all = entries(&Bindings::default(), true, true, &[]);
+        let restart = all.iter().find(|e| e.action == Action::Upgrade).unwrap();
+        assert_eq!(restart.words, "Restart Switchboard on the latest main");
+        let hay = restart.item().haystack().to_lowercase();
+        let words: Vec<&str> = hay
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .collect();
+        for typed in ["latest main", "build on disk"] {
+            assert!(
+                typed.split(' ').all(|t| words.contains(&t)),
+                "{typed:?} in {hay:?}"
+            );
+        }
+    }
+
+    #[test]
     fn the_palette_lists_each_command_once_with_its_keys() {
         let all = entries(&Bindings::default(), true, true, &[]);
         assert!(all.iter().all(|e| e.action != Action::Palette));

@@ -908,3 +908,102 @@ fn wait_long(server: &TestServer, client: &mut common::TestClient, text: &str) -
         std::thread::sleep(Duration::from_millis(50));
     }
 }
+
+// A landing that leaves the running build behind main says so in one
+// notification, whose count a second landing updates rather than adding
+// another, and whose menu leads with the restart on the latest main.
+#[test]
+fn a_landing_past_the_build_says_so_once_and_offers_the_restart() {
+    let dir = common::TempDir::new("sbb");
+    let origin = dir.path().join("origin.git");
+    let main = dir.path().join("main");
+    git(
+        dir.path(),
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            origin.to_str().unwrap(),
+        ],
+    );
+    git(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            main.to_str().unwrap(),
+        ],
+    );
+    git(&main, &["commit", "-q", "--allow-empty", "-m", "built"]);
+    git(&main, &["push", "-q", "origin", "HEAD:main"]);
+    let built = git(&main, &["rev-parse", "--short=12", "HEAD"]);
+    let server = TestServer::start_with_env(&[
+        ("SWITCHBOARD_MAIN_CLONE", main.to_str().unwrap()),
+        ("SWITCHBOARD_BUILT_FROM", &built),
+    ]);
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    let tab = server.list()["sessions"][0]["tabs"][0]["id"].to_string();
+    let tab = tab.trim_matches('"').to_string();
+    let land = |n: usize| {
+        git(
+            &main,
+            &[
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                &format!("landed {n}"),
+            ],
+        );
+        git(&main, &["push", "-q", "origin", "HEAD:main"]);
+        let hash = git(&main, &["rev-parse", "--short", "HEAD"]);
+        server.ok(&[
+            "set",
+            "-t",
+            &tab,
+            "@tab_landed",
+            &format!("{hash} main main /x"),
+        ]);
+    };
+    land(1);
+    // In mission control's Notifications view, whose rows are wide enough
+    // for the whole line.
+    client.type_text("\x1b ");
+    client.wait_text("MISSION CONTROL");
+    client.type_text("]");
+    client.wait_text("Switchboard's main has 1 landing this build lacks");
+    land(2);
+    let screen = client.wait_text("Switchboard's main has 2 landings this build lacks");
+    assert_eq!(
+        screen
+            .iter()
+            .filter(|l| l.contains("this build lacks"))
+            .count(),
+        1,
+        "one notification: {screen:#?}"
+    );
+    client.type_text("j");
+    client.type_text("\r");
+    let screen = client.wait_text("Dismiss it");
+    let all = screen.join("\n");
+    let row = |text: &str| {
+        screen
+            .iter()
+            .position(|l| l.contains(text))
+            .unwrap_or_else(|| panic!("{text} isn't shown: {all}"))
+    };
+    assert!(
+        row("Restart Switchboard on the latest main") < row("Dismiss it"),
+        "the restart first: {all}"
+    );
+    assert!(
+        screen
+            .iter()
+            .any(|l| l.contains('›') && l.contains("Restart Switchboard on the latest main")),
+        "chosen as the menu opens: {all}"
+    );
+}

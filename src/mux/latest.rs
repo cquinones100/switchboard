@@ -1,4 +1,4 @@
-//! M-p's "Restart Switchboard on the latest build on disk": what runs before
+//! M-p's "Restart Switchboard on the latest main": what runs before
 //! the restart (src/mux/upgrade.rs) so that it has something new to restart
 //! on. A binary built from a clone knows the main clone of the checkout it
 //! was built in (build.rs's `SWITCHBOARD_MAIN_CLONE`, src/mux/main_clone.rs),

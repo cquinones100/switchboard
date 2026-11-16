@@ -1,4 +1,4 @@
-//! M-p's "Restart Switchboard on the latest build on disk" as the workspace
+//! M-p's "Restart Switchboard on the latest main" as the workspace
 //! shows it while it goes (UX 2.0 board 56, "A build running without
 //! blocking"): the sidebar's build row, the same words on the status line
 //! with UX 2.0 off, and its steps in a box a click on the row (or a second

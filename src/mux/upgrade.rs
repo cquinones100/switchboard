@@ -335,6 +335,8 @@ pub struct Upgrade {
     /// else redraws.
     pub frame: usize,
     ticking: bool,
+    /// Whether main has moved past this build (src/mux/behind.rs).
+    pub behind: super::behind::Behind,
 }
 
 struct Pending {
@@ -363,6 +365,9 @@ pub enum UpgradeEvent {
     /// M-p's build for the terminal that asked: the binary to restart on,
     /// `None` when there is nothing new, or why the build failed.
     Built(ClientId, Result<super::latest::Brought, String>),
+    /// The commits main has that this build lacks, and main's commit
+    /// (src/mux/behind.rs).
+    Behind(Option<(usize, String)>),
 }
 
 /// How often the build's spinner turns while it builds.
@@ -412,7 +417,7 @@ impl Server {
         });
     }
 
-    /// M-p's "Restart Switchboard on the latest build on disk": builds the
+    /// M-p's "Restart Switchboard on the latest main": builds the
     /// checkout first, off the server's task (src/mux/latest.rs), then
     /// restarts as `switchboard upgrade` does, only when the binary on disk
     /// is a new one.
@@ -581,6 +586,10 @@ impl Server {
                     }
                     self.build_changed();
                 }
+                return;
+            }
+            UpgradeEvent::Behind(found) => {
+                self.behind_counted(found);
                 return;
             }
             UpgradeEvent::Tick => {

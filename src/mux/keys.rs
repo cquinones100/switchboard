@@ -460,7 +460,7 @@ impl Action {
             Action::SlackRelay => "Open the Slack relay in its own tab".into(),
             Action::StopSlackRelay => "Stop the Slack relay".into(),
             Action::Update(command) => command.about().into(),
-            Action::Upgrade => "Restart Switchboard on the latest build on disk".into(),
+            Action::Upgrade => "Restart Switchboard on the latest main".into(),
             Action::RestoreLayout => "Restore the layout from before the last start".into(),
             Action::KeepAwake => {
                 "Keep the computer awake until I say, or back to only while tabs work".into()
@@ -700,7 +700,15 @@ impl Action {
             Action::Diff(command) => command.tags(),
             Action::SlackRelay | Action::StopSlackRelay => &["slack", "relay", "remote"],
             Action::Update(command) => command.tags(),
-            Action::Upgrade => &["switchboard", "update", "restart", "upgrade"],
+            // "build" and "disk" from its old name, "on the latest build on disk".
+            Action::Upgrade => &[
+                "switchboard",
+                "update",
+                "restart",
+                "upgrade",
+                "build",
+                "disk",
+            ],
             Action::RestoreLayout => &["tabs", "restore", "restart", "layout"],
             Action::KeepAwake => &["system", "sleep", "awake"],
             Action::ContextMenu => &["mouse", "menus"],
