@@ -135,19 +135,36 @@ fn ci_branch(here: &Path, branch: &str) -> Option<String> {
 
 /// Where the landing goes: the branch's name (the lock's and the success
 /// line's), and the remote branch it pushes to, when there is one.
-struct Onto {
-    name: String,
-    remote: Option<(String, String)>,
+pub(crate) struct Onto {
+    pub(crate) name: String,
+    pub(crate) remote: Option<(String, String)>,
 }
 
 impl Onto {
     /// What the commit's base is checked against: the remote-tracking ref,
     /// or the local branch.
-    fn base(&self) -> String {
+    pub(crate) fn base(&self) -> String {
         match &self.remote {
             Some((remote, branch)) => format!("{remote}/{branch}"),
             None => format!("refs/heads/{}", self.name),
         }
+    }
+}
+
+/// Fetches the branch landed on, when it tracks a remote one, into its
+/// tracking ref by name, which a remote fetching only some branches
+/// wouldn't update by itself.
+pub(crate) fn fetch(here: &Path, onto: &Onto) -> Result<(), String> {
+    let Some((remote, branch)) = &onto.remote else {
+        return Ok(());
+    };
+    worktree::count_fetch(here, remote, "landing");
+    let spec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");
+    let (fetched, said) = git(here, &["fetch", "--quiet", remote, &spec]);
+    if fetched {
+        Ok(())
+    } else {
+        Err(format!("couldn't fetch {branch} from {remote}: {said}"))
     }
 }
 
@@ -166,7 +183,7 @@ pub(crate) fn may_run_its_code(common: &Path, here: &Path) -> bool {
             || crate::trust::yours_or_listed(&home, here).is_ok())
 }
 
-fn onto(common: &Path, here: &Path, target: Option<String>) -> Result<Onto, String> {
+pub(crate) fn onto(common: &Path, here: &Path, target: Option<String>) -> Result<Onto, String> {
     match target {
         Some(name) => {
             let remote = crate::cmd::worktree_from_note::tracked(here, &name);
@@ -185,7 +202,7 @@ fn onto(common: &Path, here: &Path, target: Option<String>) -> Result<Onto, Stri
 
 /// This program again, for the commands it already has (`leak-check`,
 /// `codex-review`, `slack-relay`), run in `here`.
-fn this_program(here: &Path, args: &[&str]) -> Option<std::process::Output> {
+pub(crate) fn this_program(here: &Path, args: &[&str]) -> Option<std::process::Output> {
     let me = std::env::current_exe().ok()?;
     Command::new(me)
         .args(args)
@@ -206,7 +223,7 @@ pub(crate) fn tab_option(option: &str) -> String {
 }
 
 /// `git` in `dir`, its output (stdout and stderr) whichever way it went.
-fn git(dir: &Path, args: &[&str]) -> (bool, String) {
+pub(crate) fn git(dir: &Path, args: &[&str]) -> (bool, String) {
     match Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -248,18 +265,8 @@ pub(crate) fn main(
     };
     // The branch as it is now: a landing that moved it meanwhile is taken
     // in by rebasing again, under the lock.
-    if let Some((remote, branch)) = &onto.remote {
-        worktree::count_fetch(here, remote, "landing");
-        // Into the tracking ref by name, which a remote fetching only some
-        // branches wouldn't update by itself.
-        let spec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");
-        let (fetched, said) = git(here, &["fetch", "--quiet", remote, &spec]);
-        if !fetched {
-            return failed(
-                lock,
-                &format!("couldn't fetch {branch} from {remote}: {said}"),
-            );
-        }
+    if let Err(e) = fetch(here, &onto) {
+        return failed(lock, &e);
     }
     let base = onto.base();
     if !worktree::git_ok(here, &["merge-base", "--is-ancestor", &base, "HEAD"]) {
@@ -432,7 +439,7 @@ fn move_local(here: &Path, name: &str) -> (bool, String) {
     }
 }
 
-/// The main clone brought up to the landed commit, as step 12 did: its
+/// The main clone brought up to the landed commit, as step 10 did: its
 /// branch fast-forwarded when it has the branch landed on checked out, a
 /// target's local branch moved when it doesn't. What it prints: `before
 /// <commit>` when the main clone moved, else why not.

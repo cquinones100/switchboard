@@ -23,6 +23,7 @@ mod graphics;
 mod guard_hooks;
 mod headless;
 mod land_lock;
+mod land_settle;
 mod land_test;
 mod leak_check;
 mod links;

@@ -455,16 +455,16 @@ fn a_tab_of_the_work_a_note_mode_lands_without_asking_only_once_leak_check_finds
     );
     let ask = step("4. **Ask** with `AskUserQuestion`");
     assert!(queue.find(&hands_free).unwrap() < queue.find(&ask).unwrap());
-    let step11 = step("11. **Push**");
-    let gated = step11
+    let step9 = step("9. **Push**");
+    let gated = step9
         .find("When step 7 took the answer without asking, run `<lock> push`")
         .expect("the push without asking goes through the command's gate");
-    let again = step11
+    let again = step9
         .find("it reads `@autopilot_land` again")
         .expect("which reads the switch again");
     assert!(gated < again, "as it pushes");
     assert!(
-        step11.contains("run `<lock> push --asked`"),
+        step9.contains("run `<lock> push --asked`"),
         "the push after a yes"
     );
     let review = text("review-loop");
@@ -492,7 +492,9 @@ fn a_landing_runs_its_tests_through_land_lock_test_which_pushes_and_deletes_its_
             .find(said)
             .unwrap_or_else(|| panic!("the section says {said}"))
     };
-    assert!(section.starts_with(" Steps 5 and 9 run them with `<lock> test --base <base>`"));
+    assert!(section.starts_with(
+        " Step 5 runs them with `<lock> test --base \"$base\"`, and step 8's `<lock> settle`"
+    ));
     at("`switchboard landing --json`'s `ciBranch`");
     assert!(
         !queue.contains("ci/<branch>"),
@@ -533,21 +535,22 @@ fn a_landing_runs_its_tests_through_land_lock_test_which_pushes_and_deletes_its_
         line("5. **The tests pass before the review**").contains("`<lock> test --base \"$base\"`")
     );
     assert!(
-        line("9. **Onto the default branch as it is now, again**")
-            .contains("`<lock> test --again --base origin/<name>`")
+        line("8. **Settle under the lock**")
+            .contains("runs the tests again as `<lock> test --again` does")
     );
     assert!(
-        line("11. **Push**").contains("the landing's `ci/land-<id>` deleted"),
+        line("9. **Push**").contains("the landing's `ci/land-<id>` deleted"),
         "the push deletes it"
     );
     assert!(
-        line("11. **Push**").contains("git push origin HEAD:<name>` (never forced"),
+        line("9. **Push**").contains("git push origin HEAD:<name>` (never forced"),
         "the landing's own push is never forced"
     );
 }
 
-// A landing that must review its change again lets the landing lock go,
-// keeping its turn, and takes the lock back to rebase again before pushing.
+// A landing whose change is no longer the one reviewed lets the landing lock
+// go, keeping its turn, and settles again (rebasing under the lock) before
+// pushing.
 #[test]
 fn a_landing_reviews_again_without_the_lock_and_rebases_again_once_it_has_it() {
     let all = skills();
@@ -555,29 +558,26 @@ fn a_landing_reviews_again_without_the_lock_and_rebases_again_once_it_has_it() {
         .iter()
         .find(|(name, _)| name == "queue-and-clean")
         .unwrap();
-    let start = queue
-        .find("10. **Still the change the review found clean?**")
-        .unwrap();
-    let end = queue.find("11. **Push**").unwrap();
-    let step10 = &queue[start..end];
-    let requeue = step10
-        .find("run `<lock> requeue`")
-        .expect("step 10 requeues");
-    let review = step10
+    let start = queue.find("8. **Settle under the lock**").unwrap();
+    let end = queue.find("9. **Push**").unwrap();
+    let step8 = &queue[start..end];
+    let changed = step8.find("- `12` (`changed`)").expect("it says changed");
+    let requeued = step8
+        .find("put this worktree first in the landing queue, marked reviewing")
+        .expect("settle requeues");
+    let review = step8
         .find("review it again as step 6 does")
-        .expect("step 10 reviews again");
-    let without = step10
-        .find("**Again without the lock.** Before reviewing or asking again")
-        .expect("the requeue comes before the review");
-    assert!(review < without && without < requeue, "{step10}");
-    let wait = step10.find("`<lock> wait`").expect("it waits for the lock");
-    let back = step10
-        .find("once it has the lock go back to step 9")
+        .expect("it reviews again");
+    let back = step8
+        .find("run step 8 again, never straight to the push")
         .expect("it rebases again");
-    assert!(requeue < wait && wait < back, "{step10}");
     assert!(
-        !step10.contains("holding the lock"),
-        "nothing reviews or asks again holding the lock: {step10}"
+        changed < requeued && requeued < review && review < back,
+        "{step8}"
+    );
+    assert!(
+        !step8.contains("holding the lock"),
+        "nothing reviews or asks again holding the lock: {step8}"
     );
 }
 
@@ -700,15 +700,15 @@ fn a_clean_rebase_is_checked_with_after_rebase_and_a_failing_default_branch_is_w
             .find(|l| l.starts_with(start))
             .unwrap_or_else(|| panic!("no {start}"))
     };
-    let nine = step("9. **Onto the default branch as it is now, again**");
+    let eight = step("8. **Settle under the lock**");
     for said in [
-        "when `afterRebase` is set, the rebase had no conflict",
-        "`switchboard wait-ci --now --repo <owner/name> --sha \"$(git rev-parse origin/<name>)\"`",
-        "`<lock> phase checking after the rebase`",
-        "`<lock> phase check failed`",
+        "checks it with `afterRebase` after a clean rebase while `<name>`'s own CI isn't failing",
+        "(phase `checking after the rebase`)",
+        "unless this very commit was already tested",
     ] {
-        assert!(nine.contains(said), "step 9 says {said}");
+        assert!(eight.contains(said), "step 8 says {said}");
     }
+    assert!(queue.contains("or `check failed <log>` for `afterRebase`"));
     let section = queue
         .split("**The tests in CI.**")
         .nth(1)
@@ -724,7 +724,7 @@ fn a_clean_rebase_is_checked_with_after_rebase_and_a_failing_default_branch_is_w
             "a failing CI run asks whether the default branch fails the same way: {said}"
         );
     }
-    assert!(queue.contains("`afterRebase`, a command step 9 runs"));
+    assert!(queue.contains("`afterRebase`, a command step 8's `<lock> settle` runs"));
 }
 
 #[test]

@@ -44,6 +44,8 @@
       "Bash(switchboard land-lock test --base *)",
       "Bash(switchboard land-lock test --again *)",
       "Bash(switchboard land-lock test --here *)",
+      "Bash(switchboard land-lock settle)",
+      "Bash(switchboard land-lock settle --patch *)",
       "Bash(switchboard wait-ci *)",
       "Bash(switchboard wait-deploy *)",
       "Bash(switchboard watch-note *)",

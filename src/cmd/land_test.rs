@@ -210,8 +210,15 @@ impl Run {
         }
     }
 
+    /// Records the run, with the commit it ran on (`head`), by which
+    /// `land-lock settle` tells a commit already tested from one to test.
     fn record_tests(&self, ok: bool, counts: &Counts) {
-        let mut tests = json!({ "ok": ok, "file": counts.first.clone().unwrap_or_default() });
+        let head = worktree::git_at(&self.top, &["rev-parse", "HEAD"]).unwrap_or_default();
+        let mut tests = json!({
+            "ok": ok,
+            "file": counts.first.clone().unwrap_or_default(),
+            "head": head,
+        });
         for (key, n) in [
             ("passed", counts.passed),
             ("failed", counts.failed),

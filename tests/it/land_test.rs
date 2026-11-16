@@ -16,7 +16,7 @@ use std::process::{Command, Output, Stdio};
 use common::{BIN, TempDir};
 use serde_json::{Value, json};
 
-fn git(cwd: &Path, args: &[&str]) -> String {
+pub(crate) fn git(cwd: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
         .args(args)
         .current_dir(cwd)
@@ -38,7 +38,7 @@ fn git(cwd: &Path, args: &[&str]) -> String {
 
 /// A repository on `main` with a commit, and a worktree of it on `feature`
 /// with one more, in `tmp`; the worktree's path.
-fn worktree(tmp: &Path) -> PathBuf {
+pub(crate) fn worktree(tmp: &Path) -> PathBuf {
     let repo = tmp.join("repo");
     git(tmp, &["init", "-q", repo.to_str().unwrap()]);
     git(&repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
@@ -62,7 +62,7 @@ fn worktree(tmp: &Path) -> PathBuf {
 }
 
 /// repos.json in `home` with `entry` under `key`.
-fn repos(home: &Path, key: &str, entry: Value) {
+pub(crate) fn repos(home: &Path, key: &str, entry: Value) {
     let dir = home.join(".config/switchboard");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("repos.json"), json!({ key: entry }).to_string()).unwrap();
@@ -70,7 +70,7 @@ fn repos(home: &Path, key: &str, entry: Value) {
 
 /// Lists `dir` in trusted-dirs in `home`, as you would to land a clone
 /// with no remote of yours.
-fn trust(home: &Path, dir: &Path) {
+pub(crate) fn trust(home: &Path, dir: &Path) {
     let config = home.join(".config/switchboard");
     std::fs::create_dir_all(&config).unwrap();
     std::fs::write(config.join("trusted-dirs"), format!("{}\n", dir.display())).unwrap();
@@ -103,11 +103,11 @@ fn land_test(home: &Path, cwd: &Path, args: &[&str]) -> Command {
     command
 }
 
-fn said(out: &Output) -> String {
+pub(crate) fn said(out: &Output) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-fn record(dir: &Path) -> Value {
+pub(crate) fn record(dir: &Path) -> Value {
     let own = PathBuf::from(git(dir, &["rev-parse", "--absolute-git-dir"]));
     serde_json::from_str(&std::fs::read_to_string(own.join("landing.json")).unwrap()).unwrap()
 }

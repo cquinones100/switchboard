@@ -647,6 +647,15 @@ pub fn failed_logs(repo: &str, sha: &str) -> String {
     })
 }
 
+/// Whether the commit `sha`'s CI in `repo` is failing at one look, as
+/// `wait-ci --now` prints `failed`: `None` when GitHub doesn't answer,
+/// which says nothing of it. `land-lock settle` asks it of the branch
+/// landed on before it checks a clean rebase with `afterRebase`.
+pub fn failing_now(repo: &str, sha: &str) -> Option<bool> {
+    let (_, all) = util::block_on(check_runs(repo, sha, SOURCE)).ok()?;
+    Some(matches!(seen(&all), Seen::Failed { .. }))
+}
+
 /// How often `wait` looks: every 30 seconds, or every `WAIT_CI_POLL_SECS`,
 /// for the tests.
 pub fn poll() -> Duration {

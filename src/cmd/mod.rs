@@ -21,6 +21,7 @@ pub mod headless;
 pub mod item_done;
 pub mod land_lock;
 pub mod land_push;
+pub mod land_settle;
 pub mod land_squash;
 pub mod land_test;
 pub mod landing;
@@ -435,6 +436,7 @@ pub const SUBCOMMANDS: &[(&str, &[&str])] = &[
             "record",
             "squash",
             "test",
+            "settle",
             "landed",
             "autolanded",
         ],

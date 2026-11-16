@@ -1533,7 +1533,7 @@ fn push_rule(path: &Path, root: &Path, start: &str, target: Option<&str>) -> Opt
 }
 
 /// Claude Code's settings allowing `switchboard land-lock push`, the
-/// command queue-and-clean's step 11 runs, exactly so, and nothing else:
+/// command queue-and-clean's step 9 runs, exactly so, and nothing else:
 /// no `git push`, and not its `--asked` form, which pushes past its gate.
 fn push_settings() -> String {
     serde_json::json!({

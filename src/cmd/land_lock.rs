@@ -103,6 +103,13 @@
 //! land-lock test [--leak-ok] [--command <cmd>] [--base <ref>] [--again] [--here]
 //!                     runs the landing's tests, here or in CI as repos.json
 //!                     says, and records them (src/cmd/land_test.rs)
+//! land-lock settle [--command <cmd>] [--patch <id>]
+//!                     takes the lock (waiting its turn), rebases onto the
+//!                     branch landed on as it is now, tests or checks the
+//!                     result and compares it with the change reviewed:
+//!                     exit 0 ready to push, 4 taken out of the queue, 10
+//!                     a conflict, 11 the tests or the check failed, 12
+//!                     changed since the review (src/cmd/land_settle.rs)
 //! ```
 //!
 //! A landing holds it only to rebase, test and push: one whose change no
@@ -157,7 +164,7 @@ const MUTEX_TRIES: u32 = 500;
 /// `requeue`'s mark, in the worktree's own git directory.
 const REQUEUED: &str = "land-requeued";
 
-const USAGE: &str = "usage: land-lock [--target <branch>] take|wait|release|requeue|leave|holder|queue|move|phase [words]|record ...|squash ...|test ...|push [--asked]|landed <short hash> <branch>|autolanded <short hash> [--plan <file>] [--apply-range <from> <to>] [item]";
+const USAGE: &str = "usage: land-lock [--target <branch>] take|wait|release|requeue|leave|holder|queue|move|phase [words]|record ...|squash ...|test ...|push [--asked]|settle [--command <cmd>] [--patch <id>]|landed <short hash> <branch>|autolanded <short hash> [--plan <file>] [--apply-range <from> <to>] [item]";
 
 pub fn main(mut args: Vec<String>) -> ExitCode {
     let mut given_target = None;
@@ -213,23 +220,23 @@ pub fn main(mut args: Vec<String>) -> ExitCode {
     let lock = Lock::new(&common, here, suffix.as_deref());
     let result = match command {
         "take" => lock.take(false).map(ExitCode::from),
-        "wait" => {
-            let poll = std::env::var("LAND_LOCK_POLL")
-                .ok()
-                .and_then(|p| p.trim().parse::<f64>().ok())
-                .filter(|p| p.is_finite() && *p >= 0.0)
-                .unwrap_or(5.0);
-            lock.wait(Duration::from_secs_f64(poll)).map(|code| {
-                if code == 4 {
-                    println!("taken out of the landing queue");
-                }
-                ExitCode::from(code)
-            })
-        }
+        "wait" => lock.wait(poll()).map(|code| {
+            if code == 4 {
+                println!("taken out of the landing queue");
+            }
+            ExitCode::from(code)
+        }),
         // Every way out of a landing runs release, so it leaves the queue
         // too: a waiter stopped while its session goes on would otherwise
         // hold up every worktree behind it.
         "push" => Ok(crate::cmd::land_push::main(
+            &lock,
+            &common,
+            &lock_here,
+            push_target,
+            &args[1..],
+        )),
+        "settle" => Ok(crate::cmd::land_settle::main(
             &lock,
             &common,
             &lock_here,
@@ -268,6 +275,17 @@ pub fn main(mut args: Vec<String>) -> ExitCode {
         eprintln!("land-lock: {e}");
         ExitCode::FAILURE
     })
+}
+
+/// How often a wait for the lock looks: every `LAND_LOCK_POLL` seconds, 5
+/// by default.
+fn poll() -> Duration {
+    let seconds = std::env::var("LAND_LOCK_POLL")
+        .ok()
+        .and_then(|p| p.trim().parse::<f64>().ok())
+        .filter(|p| p.is_finite() && *p >= 0.0)
+        .unwrap_or(5.0);
+    Duration::from_secs_f64(seconds)
 }
 
 /// How many of the last output's lines the record keeps.
@@ -725,6 +743,19 @@ impl Lock {
             std::thread::sleep(poll);
             waited = true;
         }
+    }
+
+    /// `take`, then `wait` when it isn't this worktree's turn, the tab's
+    /// phase saying so meanwhile; a landing back from a `requeue` goes
+    /// straight to the wait, which tells it was taken out of the queue
+    /// during its review. 0 taken, 4 taken out of the queue.
+    pub(crate) fn take_or_wait(&self) -> io::Result<u8> {
+        let requeued = self.requeued_mark().is_some_and(|m| m.exists());
+        if !requeued && self.take(false)? == 0 {
+            return Ok(0);
+        }
+        set_phase("waiting for the landing lock");
+        self.wait(poll())
     }
 
     fn holder(&self) -> Option<Value> {
