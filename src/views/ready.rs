@@ -44,7 +44,7 @@ use super::pager::{self, Content};
 use crate::integrations::github;
 use crate::mux::input::{Key, KeyCode, Mods, Mouse};
 use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
-use crate::ui::menu::{Filter, Filtered, NO_MATCH, SEARCH_KEYS};
+use crate::ui::menu::{Filter, Filtered, NO_MATCH, SEARCH_KEYS, wrap_step};
 use crate::ui::{Look, Outcome, Overlay, Step};
 use crate::util;
 
@@ -1026,19 +1026,27 @@ impl Overlay for ReadyBox {
         let choices = self.shown();
         if self.filter.is_open() {
             return match key.code {
-                KeyCode::Down | KeyCode::Tab if !choices.is_empty() => {
-                    self.cursor = (self.cursor + 1).min(choices.len() - 1);
+                KeyCode::Down => {
+                    self.cursor = wrap_step(self.cursor, choices.len(), true);
                     Step::Redraw
                 }
-                KeyCode::Char('n') if key.mods == Mods::CTRL && !choices.is_empty() => {
-                    self.cursor = (self.cursor + 1).min(choices.len() - 1);
+                KeyCode::Char('n') if key.mods == Mods::CTRL => {
+                    self.cursor = wrap_step(self.cursor, choices.len(), true);
                     Step::Redraw
                 }
-                KeyCode::Up | KeyCode::BackTab => {
-                    self.cursor = self.cursor.saturating_sub(1);
+                KeyCode::Up => {
+                    self.cursor = wrap_step(self.cursor, choices.len(), false);
                     Step::Redraw
                 }
                 KeyCode::Char('p') if key.mods == Mods::CTRL => {
+                    self.cursor = wrap_step(self.cursor, choices.len(), false);
+                    Step::Redraw
+                }
+                KeyCode::Tab if !choices.is_empty() => {
+                    self.cursor = (self.cursor + 1).min(choices.len() - 1);
+                    Step::Redraw
+                }
+                KeyCode::BackTab => {
                     self.cursor = self.cursor.saturating_sub(1);
                     Step::Redraw
                 }
@@ -1064,11 +1072,19 @@ impl Overlay for ReadyBox {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => Step::Close(Outcome::Dismissed),
             KeyCode::Char('j') | KeyCode::Down => {
-                self.cursor = (self.cursor + 1).min(last);
+                self.cursor = wrap_step(self.cursor, choices.len(), true);
                 Step::Redraw
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                self.cursor = self.cursor.saturating_sub(1);
+                self.cursor = wrap_step(self.cursor, choices.len(), false);
+                Step::Redraw
+            }
+            KeyCode::Char('n') if key.mods == Mods::CTRL => {
+                self.cursor = wrap_step(self.cursor, choices.len(), true);
+                Step::Redraw
+            }
+            KeyCode::Char('p') if key.mods == Mods::CTRL => {
+                self.cursor = wrap_step(self.cursor, choices.len(), false);
                 Step::Redraw
             }
             // Tab and Shift-Tab go round, as menu.sh's stops did.
@@ -1389,6 +1405,21 @@ mod tests {
             done.key(Key::new(KeyCode::Char('x'), Mods::NONE), &look),
             Step::Close(Outcome::Dismissed)
         );
+    }
+
+    #[test]
+    fn the_boxs_choices_wrap_round() {
+        let look = Look::default();
+        let mut b = ReadyBox::new();
+        b.answered(Ok(answer_from(&pr("OPEN", "DIRTY", "CONFLICTING"))));
+        let last = b.choices().len() - 1;
+        b.key(Key::new(KeyCode::Char('p'), Mods::CTRL), &look);
+        assert_eq!(b.cursor, last, "C-p on the first chooses the last");
+        b.key(Key::new(KeyCode::Down, Mods::NONE), &look);
+        assert_eq!(b.cursor, 0, "Down on the last chooses the first");
+        b.key(Key::new(KeyCode::Up, Mods::NONE), &look);
+        b.key(Key::new(KeyCode::Char('n'), Mods::CTRL), &look);
+        assert_eq!(b.cursor, 0);
     }
 
     #[test]

@@ -45,6 +45,7 @@ use crate::mux::input::{Key, KeyCode, Mods, Mouse, MouseButton, MouseKind};
 use crate::mux::server::{ClientId, Event};
 use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
 use crate::ui::kit::{self, Col, Tone};
+use crate::ui::menu::wrap_step;
 use crate::ui::{Look, Outcome, Overlay, Picked, Step};
 
 /// Two clicks on a row this close together take it.
@@ -503,7 +504,7 @@ impl SearchBox {
             }
             Part::All | Part::Chip(_) if self.rows.is_empty() => Step::Same,
             Part::All | Part::Chip(_) => self.move_to(0),
-            Part::Results => self.move_to(self.cursor + 1),
+            Part::Results => self.step(true),
         }
     }
 
@@ -522,6 +523,12 @@ impl SearchBox {
             }
             Part::Results => self.move_to(self.cursor - 1),
         }
+    }
+
+    /// One result down or up, the last's next the first and the first's
+    /// previous the last (`menu::wrap_step`).
+    fn step(&mut self, down: bool) -> Step {
+        self.move_to(wrap_step(self.cursor, self.rows.len(), down))
     }
 
     /// Moves through the results, the focus on them, so Enter takes the
@@ -1063,12 +1070,12 @@ impl Overlay for SearchBox {
             KeyCode::Char('c' | 'g') if ctrl => return Step::Close(Outcome::Dismissed),
             KeyCode::Tab => return self.step_focus(1, look),
             KeyCode::BackTab => return self.step_focus(-1, look),
-            KeyCode::Down if !self.arrows => return self.move_to(self.cursor + 1),
-            KeyCode::Up if !self.arrows => return self.move_to(self.cursor.saturating_sub(1)),
+            KeyCode::Down if !self.arrows => return self.step(true),
+            KeyCode::Up if !self.arrows => return self.step(false),
             KeyCode::Down => return self.down(),
-            KeyCode::Char('n' | 'j') if ctrl => return self.move_to(self.cursor + 1),
+            KeyCode::Char('n' | 'j') if ctrl => return self.step(true),
             KeyCode::Up => return self.up(),
-            KeyCode::Char('p' | 'k') if ctrl => return self.move_to(self.cursor.saturating_sub(1)),
+            KeyCode::Char('p' | 'k') if ctrl => return self.step(false),
             KeyCode::PageDown => return self.move_to(self.cursor + self.room),
             KeyCode::PageUp => return self.move_to(self.cursor.saturating_sub(self.room)),
             KeyCode::Char('o') if ctrl => return self.take(true),
@@ -1509,6 +1516,28 @@ mod tests {
         assert_eq!((b.focus, b.cursor), (Part::Results, 0));
         b.key(key(KeyCode::Up), &look);
         assert_eq!(b.focus, Part::Chip(Source::Notes));
+    }
+
+    #[test]
+    fn down_on_the_last_result_chooses_the_first_and_ctrl_p_on_the_first_the_last() {
+        let (mut b, _rx) = open(&[], "zebra");
+        let look = Look::default();
+        b.key(key(KeyCode::Enter), &look);
+        let id = b.asked.as_ref().unwrap().id;
+        b.answered(
+            id,
+            Source::Tabs,
+            vec![found(Source::Tabs, "t1"), found(Source::Tabs, "t2")],
+        );
+        b.key(key(KeyCode::Down), &look);
+        b.key(key(KeyCode::Down), &look);
+        b.key(key(KeyCode::Down), &look);
+        assert_eq!((b.focus, b.cursor), (Part::Results, 1));
+        b.key(key(KeyCode::Down), &look);
+        assert_eq!(b.cursor, 0, "wrapped to the first result");
+        b.key(Key::new(KeyCode::Char('p'), Mods::CTRL), &look);
+        assert_eq!(b.cursor, 1, "wrapped to the last result");
+        assert_eq!(b.key(key(KeyCode::PageDown), &look), Step::Same);
     }
 
     #[test]

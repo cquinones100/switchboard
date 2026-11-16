@@ -19,7 +19,7 @@ use ratatui::text::Span;
 use super::format::{Character, Paragraph};
 use crate::mux::input::{Key, KeyCode, Mouse};
 use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
-use crate::ui::menu::{Filter, Filtered, NO_MATCH, SEARCH_KEYS};
+use crate::ui::menu::{Filter, Filtered, NO_MATCH, SEARCH_KEYS, wrap_step};
 use crate::ui::{Look, Outcome, Overlay, Step};
 
 /// What an item does.
@@ -355,10 +355,12 @@ impl Overlay for FormatMenu {
                         None => Step::Same,
                     };
                 }
-                KeyCode::Down | KeyCode::Tab => self.cursor + 1,
-                KeyCode::Char('n') if key.mods.ctrl => self.cursor + 1,
-                KeyCode::Up | KeyCode::BackTab => self.cursor.saturating_sub(1),
-                KeyCode::Char('p') if key.mods.ctrl => self.cursor.saturating_sub(1),
+                KeyCode::Down => wrap_step(self.cursor, shown.len(), true),
+                KeyCode::Char('n') if key.mods.ctrl => wrap_step(self.cursor, shown.len(), true),
+                KeyCode::Up => wrap_step(self.cursor, shown.len(), false),
+                KeyCode::Char('p') if key.mods.ctrl => wrap_step(self.cursor, shown.len(), false),
+                KeyCode::Tab => self.cursor + 1,
+                KeyCode::BackTab => self.cursor.saturating_sub(1),
                 _ => return Step::Same,
             }
             .min(last);
@@ -374,19 +376,19 @@ impl Overlay for FormatMenu {
             KeyCode::Esc => Step::Close(Outcome::Dismissed),
             KeyCode::Enter => Step::Close(Outcome::Chose(self.cursor)),
             KeyCode::Down => {
-                self.cursor = (self.cursor + 1) % total;
+                self.cursor = wrap_step(self.cursor, total, true);
                 Step::Redraw
             }
             KeyCode::Up => {
-                self.cursor = (self.cursor + total - 1) % total;
+                self.cursor = wrap_step(self.cursor, total, false);
                 Step::Redraw
             }
             KeyCode::Char('n') if key.mods.ctrl => {
-                self.cursor = (self.cursor + 1) % total;
+                self.cursor = wrap_step(self.cursor, total, true);
                 Step::Redraw
             }
             KeyCode::Char('p') if key.mods.ctrl => {
-                self.cursor = (self.cursor + total - 1) % total;
+                self.cursor = wrap_step(self.cursor, total, false);
                 Step::Redraw
             }
             KeyCode::Char('Q') if plain => Step::Close(Outcome::Dismissed),
@@ -395,11 +397,11 @@ impl Overlay for FormatMenu {
                 match items().iter().position(|(_, i)| i.key == typed) {
                     Some(at) => Step::Close(Outcome::Chose(at)),
                     None if c == 'j' => {
-                        self.cursor = (self.cursor + 1) % total;
+                        self.cursor = wrap_step(self.cursor, total, true);
                         Step::Redraw
                     }
                     None if c == 'k' => {
-                        self.cursor = (self.cursor + total - 1) % total;
+                        self.cursor = wrap_step(self.cursor, total, false);
                         Step::Redraw
                     }
                     None => Step::Same,

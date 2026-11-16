@@ -28,7 +28,7 @@ use regex::Regex;
 
 use crate::mux::input::{Key, KeyCode, Mods, Mouse};
 use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
-use crate::ui::menu::{Filter, Filtered, NO_MATCH, SEARCH_KEYS};
+use crate::ui::menu::{Filter, Filtered, NO_MATCH, SEARCH_KEYS, wrap_step};
 use crate::ui::{Look, Outcome, Overlay, Picked, Step};
 
 /// How long a paste is given to land before Enter follows it: sent at once,
@@ -637,10 +637,12 @@ impl Overlay for AnswerBox {
                         _ => Step::Same,
                     };
                 }
-                KeyCode::Down | KeyCode::Tab => at + 1,
-                KeyCode::Char('n') if k.mods == Mods::CTRL => at + 1,
-                KeyCode::Up | KeyCode::BackTab => at.saturating_sub(1),
-                KeyCode::Char('p') if k.mods == Mods::CTRL => at.saturating_sub(1),
+                KeyCode::Down => wrap_step(at, shown.len(), true),
+                KeyCode::Char('n') if k.mods == Mods::CTRL => wrap_step(at, shown.len(), true),
+                KeyCode::Up => wrap_step(at, shown.len(), false),
+                KeyCode::Char('p') if k.mods == Mods::CTRL => wrap_step(at, shown.len(), false),
+                KeyCode::Tab => at + 1,
+                KeyCode::BackTab => at.saturating_sub(1),
                 KeyCode::Char('c') if k.mods == Mods::CTRL => {
                     return Step::Close(Outcome::Dismissed);
                 }
@@ -680,6 +682,21 @@ impl Overlay for AnswerBox {
         };
         let options = found.options.len();
         let stops = options + usize::from(look.close);
+        let ctrl = k.mods == Mods::CTRL;
+        let arrow_down = k.code == KeyCode::Down
+            || (ctrl && k.code == KeyCode::Char('n'))
+            || (plain && k.code == KeyCode::Char('j'));
+        let arrow_up = k.code == KeyCode::Up
+            || (ctrl && k.code == KeyCode::Char('p'))
+            || (plain && k.code == KeyCode::Char('k'));
+        if (arrow_down || arrow_up) && options > 0 {
+            self.focus = Some(match self.focus {
+                None if arrow_down => 0,
+                None => options - 1,
+                Some(at) => wrap_step(at, options, arrow_down),
+            });
+            return Step::Redraw;
+        }
         match k.code {
             KeyCode::Tab | KeyCode::BackTab if stops > 0 => {
                 let forward = k.code == KeyCode::Tab;
@@ -775,6 +792,31 @@ mod tests {
 │   2. Yes, and don't ask again for git push│
 │   3. No, and tell Claude what to do       │
 ╰───────────────────────────────────────────╯";
+
+    #[test]
+    fn the_arrows_choose_an_answer_and_wrap_round() {
+        let look = Look::default();
+        let mut b = AnswerBox::new("Answer 2 fix".into(), options_in(PERMISSION), None);
+        let options = b.found.as_ref().unwrap().options.len();
+        b.key(Key::new(KeyCode::Up, Mods::NONE), &look);
+        assert_eq!(b.focus, Some(options - 1), "Up first chooses the last");
+        b.key(Key::new(KeyCode::Down, Mods::NONE), &look);
+        assert_eq!(b.focus, Some(0), "Down on the last chooses the first");
+        b.key(Key::new(KeyCode::Char('p'), Mods::CTRL), &look);
+        assert_eq!(b.focus, Some(options - 1));
+        b.key(Key::new(KeyCode::Char('j'), Mods::NONE), &look);
+        assert_eq!(b.focus, Some(0), "j on the last chooses the first");
+        b.key(Key::new(KeyCode::Char('k'), Mods::NONE), &look);
+        assert_eq!(
+            b.focus,
+            Some(options - 1),
+            "k on the first chooses the last"
+        );
+        assert!(matches!(
+            b.key(Key::new(KeyCode::Enter, Mods::NONE), &look),
+            Step::Close(Outcome::Picked(p)) if p.value == options.to_string()
+        ));
+    }
 
     #[test]
     fn a_permission_prompts_question_and_options_are_read_off_the_screen() {

@@ -321,6 +321,22 @@ pub fn label_room(cols: usize) -> usize {
     widest(cols).saturating_sub(5)
 }
 
+/// The row one step from `at` toward `down` in a list of `n`, wrapping:
+/// Down on the last row goes to the first and Up on the first to the last.
+/// Every menu, picker and box list moves its arrows, `j`/`k` and
+/// `C-n`/`C-p` through it, so they all wrap alike; PageUp, PageDown, Home,
+/// End and the wheel still stop at the ends. An `at` past the list (a
+/// menu's close button) steps to its first row down and its last up.
+pub fn wrap_step(at: usize, n: usize, down: bool) -> usize {
+    match (n, down) {
+        (0, _) => 0,
+        (_, true) if at + 1 >= n => 0,
+        (_, true) => at + 1,
+        (_, false) if at == 0 => n - 1,
+        (_, false) => at.min(n) - 1,
+    }
+}
+
 impl Overlay for Menu {
     fn drawn(&self) -> Option<&crate::ui::draw::Drawn> {
         self.drawn.as_ref()
@@ -485,10 +501,12 @@ impl Overlay for Menu {
         if self.filter.is_open() {
             let ctrl = key.mods == Mods::CTRL;
             let to = match key.code {
-                KeyCode::Down | KeyCode::Tab => self.cursor + 1,
-                KeyCode::Char('n') if ctrl => self.cursor + 1,
-                KeyCode::Up | KeyCode::BackTab => self.cursor.saturating_sub(1),
-                KeyCode::Char('p') if ctrl => self.cursor.saturating_sub(1),
+                KeyCode::Down => wrap_step(self.cursor, n, true),
+                KeyCode::Char('n') if ctrl => wrap_step(self.cursor, n, true),
+                KeyCode::Up => wrap_step(self.cursor, n, false),
+                KeyCode::Char('p') if ctrl => wrap_step(self.cursor, n, false),
+                KeyCode::Tab => self.cursor + 1,
+                KeyCode::BackTab => self.cursor.saturating_sub(1),
                 KeyCode::Enter => return self.take(),
                 KeyCode::Char('c') if ctrl => return Step::Close(Outcome::Dismissed),
                 _ => return Step::Same,
@@ -521,15 +539,13 @@ impl Overlay for Menu {
         };
         match key.code {
             KeyCode::Char('j') | KeyCode::Down if plain => {
-                moved((self.cursor + 1).min(n - 1), &mut self.cursor)
+                moved(wrap_step(self.cursor, n, true), &mut self.cursor)
             }
-            KeyCode::Char('n') if ctrl => moved((self.cursor + 1).min(n - 1), &mut self.cursor),
+            KeyCode::Char('n') if ctrl => moved(wrap_step(self.cursor, n, true), &mut self.cursor),
             KeyCode::Char('k') | KeyCode::Up if plain => {
-                moved(self.cursor.min(n).saturating_sub(1), &mut self.cursor)
+                moved(wrap_step(self.cursor, n, false), &mut self.cursor)
             }
-            KeyCode::Char('p') if ctrl => {
-                moved(self.cursor.min(n).saturating_sub(1), &mut self.cursor)
-            }
+            KeyCode::Char('p') if ctrl => moved(wrap_step(self.cursor, n, false), &mut self.cursor),
             KeyCode::Char('g') | KeyCode::Home if plain => moved(0, &mut self.cursor),
             KeyCode::Char('G') | KeyCode::End => moved(n - 1, &mut self.cursor),
             KeyCode::Tab if plain => {
@@ -638,11 +654,6 @@ mod tests {
         assert_eq!(m.key(key(KeyCode::Char('j')), &look), Step::Redraw);
         assert_eq!(m.key(key(KeyCode::Down), &look), Step::Redraw);
         assert_eq!(
-            m.key(key(KeyCode::Down), &look),
-            Step::Same,
-            "stops at the end"
-        );
-        assert_eq!(
             m.key(key(KeyCode::Enter), &look),
             Step::Close(Outcome::Chose(2))
         );
@@ -713,6 +724,52 @@ mod tests {
                 MenuOption::new("Plan the landing"),
             ],
         )
+    }
+
+    #[test]
+    fn up_on_the_first_option_chooses_the_last_and_down_on_the_last_the_first() {
+        let look = Look::default();
+        let mut m = menu();
+        assert_eq!(m.key(key(KeyCode::Up), &look), Step::Redraw);
+        assert_eq!(m.cursor, 2);
+        assert_eq!(m.key(key(KeyCode::Down), &look), Step::Redraw);
+        assert_eq!(m.cursor, 0);
+        m.key(key(KeyCode::Char('k')), &look);
+        assert_eq!(m.cursor, 2);
+        m.key(key(KeyCode::Char('j')), &look);
+        assert_eq!(m.cursor, 0);
+        m.key(Key::new(KeyCode::Char('p'), Mods::CTRL), &look);
+        assert_eq!(m.cursor, 2);
+        m.key(Key::new(KeyCode::Char('n'), Mods::CTRL), &look);
+        assert_eq!(m.cursor, 0);
+        // End and Home still stop at the ends.
+        m.key(key(KeyCode::End), &look);
+        assert_eq!(m.key(key(KeyCode::End), &look), Step::Same);
+        m.key(key(KeyCode::Home), &look);
+        assert_eq!(m.key(key(KeyCode::Home), &look), Step::Same);
+    }
+
+    #[test]
+    fn a_searched_menu_wraps_over_its_matches() {
+        let look = Look::default();
+        let mut m = long();
+        m.key(key(KeyCode::Char('/')), &look);
+        typed(&mut m, "lan", &look);
+        assert_eq!(m.shown, vec![2, 5]);
+        m.key(key(KeyCode::Up), &look);
+        assert_eq!(m.cursor(), 5, "the last match");
+        m.key(key(KeyCode::Down), &look);
+        assert_eq!(m.cursor(), 2, "the first match");
+    }
+
+    #[test]
+    fn wrap_step_wraps_and_steps_back_from_past_the_list() {
+        assert_eq!(wrap_step(0, 3, false), 2);
+        assert_eq!(wrap_step(2, 3, true), 0);
+        assert_eq!(wrap_step(1, 3, true), 2);
+        assert_eq!(wrap_step(3, 3, false), 2, "from the close button");
+        assert_eq!(wrap_step(3, 3, true), 0);
+        assert_eq!(wrap_step(0, 0, true), 0);
     }
 
     #[test]

@@ -482,14 +482,27 @@ impl Picker {
         }))
     }
 
+    /// One row down or up, Down on the last row going to the first and Up
+    /// on the first to the last (`menu::wrap_step`), passing over the rows
+    /// that are off the way it moves.
+    fn step(&mut self, down: bool) -> Step {
+        let to = super::menu::wrap_step(self.cursor, self.shown.len(), down);
+        self.move_toward(to, down)
+    }
+
     fn move_to(&mut self, to: usize) -> Step {
+        self.move_toward(to, to > self.cursor)
+    }
+
+    fn move_toward(&mut self, to: usize, down: bool) -> Step {
         let to = to.min(self.shown.len().saturating_sub(1));
-        // Already at the end it moves toward (Up on the first row, Down
-        // on the last), it stays, rather than looking the other way.
+        // Already at the end it moves toward (PageUp on the first row,
+        // PageDown on the last), it stays, rather than looking the other
+        // way.
         if to == self.cursor {
             return Step::Same;
         }
-        let Some(to) = self.on_row(to, to > self.cursor) else {
+        let Some(to) = self.on_row(to, down) else {
             return Step::Same;
         };
         if to == self.cursor {
@@ -826,10 +839,12 @@ impl Overlay for Picker {
             KeyCode::Char('c' | 'g') if ctrl => Step::Close(Outcome::Dismissed),
             KeyCode::Tab if self.multi => self.mark(true),
             KeyCode::BackTab if self.multi => self.mark(false),
-            KeyCode::Down | KeyCode::Tab => self.move_to(self.cursor + 1),
-            KeyCode::Char('n' | 'j') if ctrl => self.move_to(self.cursor + 1),
-            KeyCode::Up | KeyCode::BackTab => self.move_to(self.cursor.saturating_sub(1)),
-            KeyCode::Char('p' | 'k') if ctrl => self.move_to(self.cursor.saturating_sub(1)),
+            KeyCode::Down => self.step(true),
+            KeyCode::Char('n' | 'j') if ctrl => self.step(true),
+            KeyCode::Up => self.step(false),
+            KeyCode::Char('p' | 'k') if ctrl => self.step(false),
+            KeyCode::Tab => self.move_to(self.cursor + 1),
+            KeyCode::BackTab => self.move_to(self.cursor.saturating_sub(1)),
             KeyCode::PageDown => self.move_to(self.cursor + self.room),
             KeyCode::PageUp => self.move_to(self.cursor.saturating_sub(self.room)),
             KeyCode::Backspace => self.edit(|q| {
@@ -975,6 +990,33 @@ mod tests {
     }
 
     #[test]
+    fn up_on_the_first_row_chooses_the_last_and_down_on_the_last_the_first() {
+        let look = Look::default();
+        let key = |code, mods| Key::new(code, mods);
+        let mut p = Picker::new("Pick", items());
+        assert_eq!(p.key(key(KeyCode::Up, Mods::NONE), &look), Step::Redraw);
+        assert_eq!(p.chosen().unwrap().text, "Zoom the pane in or out");
+        // PageDown on the last row stays there.
+        assert_eq!(p.key(key(KeyCode::PageDown, Mods::NONE), &look), Step::Same);
+        p.key(key(KeyCode::Down, Mods::NONE), &look);
+        assert_eq!(p.chosen().unwrap().text, "Split pane to the left");
+        p.key(key(KeyCode::Char('k'), Mods::CTRL), &look);
+        assert_eq!(p.chosen().unwrap().text, "Zoom the pane in or out");
+        p.key(key(KeyCode::Char('n'), Mods::CTRL), &look);
+        assert_eq!(p.chosen().unwrap().text, "Split pane to the left");
+
+        // Filtered, it wraps over the rows that match.
+        typed(&mut p, "pane");
+        let shown = p.shown();
+        assert_eq!(shown.len(), 3);
+        let (first, last) = (shown[0].to_string(), shown[2].to_string());
+        p.key(key(KeyCode::Up, Mods::NONE), &look);
+        assert_eq!(p.chosen().unwrap().text, last);
+        p.key(key(KeyCode::Down, Mods::NONE), &look);
+        assert_eq!(p.chosen().unwrap().text, first);
+    }
+
+    #[test]
     fn a_free_list_takes_what_is_typed_when_no_row_matches_or_on_alt_enter() {
         let enter = |p: &mut Picker, mods| p.key(Key::new(KeyCode::Enter, mods), &Look::default());
         let mut p = Picker::new("Pick", items()).exact().free();
@@ -1093,8 +1135,13 @@ mod tests {
         p.key(Key::new(KeyCode::Up, Mods::NONE), &look);
         assert!(p.chosen().is_none());
         assert_eq!(p.key(enter, &look), Step::Same);
-        // Up on the first row stays there.
-        assert_eq!(p.key(Key::new(KeyCode::Up, Mods::NONE), &look), Step::Same);
+        // Up on the first row wraps to the last that can be taken, and
+        // Down there back to the first that can.
+        p.key(Key::new(KeyCode::Up, Mods::NONE), &look);
+        assert_eq!(p.chosen().unwrap().text, "Zoom the pane in or out");
+        p.key(down, &look);
+        assert_eq!(p.chosen().unwrap().text, "Close the pane");
+        p.key(Key::new(KeyCode::Up, Mods::NONE), &look);
         assert!(p.chosen().is_none());
         let mut buf = Buffer::empty(Rect::new(0, 0, 100, 30));
         p.draw(&mut buf, &look);

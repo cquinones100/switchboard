@@ -15,6 +15,7 @@ use ratatui::text::{Line, Span};
 use super::store::NoteEntry;
 use crate::mux::input::{Key, KeyCode, Mouse, MouseButton, MouseKind};
 use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit, Place};
+use crate::ui::menu::wrap_step;
 use crate::ui::{Look, Outcome, Overlay, Picked, Step};
 
 pub struct Finder {
@@ -255,10 +256,16 @@ impl Overlay for Finder {
             KeyCode::Enter => self.pick(),
             KeyCode::Esc => Step::Close(Outcome::Dismissed),
             KeyCode::Char('c' | 'g') if ctrl => Step::Close(Outcome::Dismissed),
-            KeyCode::Down | KeyCode::Tab => self.move_to(self.cursor + 1),
-            KeyCode::Char('n' | 'j') if ctrl => self.move_to(self.cursor + 1),
-            KeyCode::Up | KeyCode::BackTab => self.move_to(self.cursor.saturating_sub(1)),
-            KeyCode::Char('p' | 'k') if ctrl => self.move_to(self.cursor.saturating_sub(1)),
+            KeyCode::Down => self.move_to(wrap_step(self.cursor, self.shown.len(), true)),
+            KeyCode::Char('n' | 'j') if ctrl => {
+                self.move_to(wrap_step(self.cursor, self.shown.len(), true))
+            }
+            KeyCode::Up => self.move_to(wrap_step(self.cursor, self.shown.len(), false)),
+            KeyCode::Char('p' | 'k') if ctrl => {
+                self.move_to(wrap_step(self.cursor, self.shown.len(), false))
+            }
+            KeyCode::Tab => self.move_to(self.cursor + 1),
+            KeyCode::BackTab => self.move_to(self.cursor.saturating_sub(1)),
             KeyCode::Backspace => {
                 self.query.pop();
                 self.refilter();
@@ -372,6 +379,11 @@ mod tests {
             ["Groceries", "Standup"],
             "Recently Deleted isn't listed"
         );
+        // Up on the first note chooses the last, and Down there the first.
+        f.key(Key::new(KeyCode::Up, Mods::NONE), &Look::default());
+        assert_eq!(f.cursor, 1);
+        f.key(Key::new(KeyCode::Down, Mods::NONE), &Look::default());
+        assert_eq!(f.cursor, 0);
         for c in "work".chars() {
             f.key(Key::new(KeyCode::Char(c), Mods::NONE), &Look::default());
         }
