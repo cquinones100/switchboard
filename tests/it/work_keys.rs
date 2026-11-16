@@ -293,11 +293,29 @@ fn notes_gw_press_opens_a_tab_for_the_item_on_its_line_and_offers_it_the_next_ti
     client.send(b"\r");
     client.wait_text("Land on");
     client.send(b"\r");
-    wait("the item's tab", || tabs(&server).len() == before + 1);
-    let tab = &tabs(&server)[before];
-    assert_eq!(tab["options"]["@tab_name"], "Speed up the build");
-    assert_eq!(tab["current"], true, "in front, as a tab you asked for");
-    assert_eq!(tab["options"]["@tab_note"], "Plan.md");
+    // The server names the tab, gives it its note and brings it to the front
+    // after the tab opens, so wait for all three rather than reading them as
+    // soon as it appears.
+    let deadline = common::deadline(Duration::from_secs(15));
+    loop {
+        let now = tabs(&server);
+        let tab = now.get(before);
+        let ready = now.len() == before + 1
+            && tab.is_some_and(|t| {
+                t["options"]["@tab_name"] == "Speed up the build"
+                    && t["options"]["@tab_note"] == "Plan.md"
+                    && t["current"] == true
+            });
+        if ready {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for the item's tab, named for the item, with its note and in front; \
+             the tabs last seen: {now:#?}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
     wait("the note's repository kept", || {
         std::fs::read_to_string(server.state.join("work-recent.json"))
             .is_ok_and(|t| t.contains("\"Plan.md\"") && t.contains(repo.to_str().unwrap()))
