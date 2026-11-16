@@ -163,6 +163,29 @@ pub fn has_side(view: &View, chosen: bool, ux2: bool) -> bool {
             ))
 }
 
+/// Whether mission control shows the view `slug` names (`ViewId::slug`):
+/// the Tabs view always, a built-in one while `shows` says so, and a
+/// plugin's, whose slug follows what it answers, always (opening one gone
+/// shows the tabs).
+pub fn slug_shows(slug: &str) -> bool {
+    ViewId::BUILT_IN
+        .iter()
+        .find(|v| v.slug() == slug)
+        .is_none_or(ViewId::shows)
+}
+
+/// The title of the view `slug` names, for the trail's buttons and
+/// menu: a built-in view's own, else (a plugin's) the slug.
+pub fn slug_title(slug: &str) -> String {
+    if slug == super::grid::TABS {
+        return "Tabs".into();
+    }
+    ViewId::BUILT_IN
+        .iter()
+        .find(|v| v.slug() == slug)
+        .map_or_else(|| slug.to_string(), |v| v.title().to_string())
+}
+
 /// What M-p says of each view: its "Mission control: <view>" command
 /// (`extras::Command::Mission`) lists every view here while it shows, so a
 /// view added to `ViewId` is one pick away once it is in `BUILT_IN`. The

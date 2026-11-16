@@ -754,7 +754,7 @@ mod tests {
         f.key(key("M-Tab"), &look);
         assert_eq!(
             f.found().unwrap().words.as_deref(),
-            Some("Go back to the previous tab")
+            Some("Go back to the previous tab or view")
         );
         // After the prefix, a key is looked up as one after it.
         let mut f = FindKey::new(lookup(), false);

@@ -2225,9 +2225,16 @@ fn with_ux2_m_brackets_move_between_groups_braces_do_nothing_and_m_braces_close_
     client.type_text("{");
     client.type_text(&format!("{ALT}["));
     client.wait_for("Work's views", |s| views_row(s).contains("Tabs"));
-    // M-{ closes it and goes back through the tabs, to the first.
+    // M-{ goes back through the views visited, Day's, then Work's, then
+    // closes it on the tab it opened over, then goes to the first.
+    client.type_text(&format!("{ALT}{{"));
+    client.wait_for("Day's views", |s| views_row(s).contains("Reminders"));
+    client.type_text(&format!("{ALT}{{"));
+    client.wait_for("Work's views", |s| views_row(s).contains("Tabs"));
     client.type_text(&format!("{ALT}{{"));
     client.wait_for("mission control closed", closed);
+    assert_eq!(tabs(&server.list())[1]["current"], true, "the second tab");
+    client.type_text(&format!("{ALT}{{"));
     wait_list(&server, "the first tab in front", |l| {
         tabs(l)[0]["current"] == true
     });
@@ -3246,4 +3253,77 @@ fn m_f_matches_tab_names_alone_with_the_panes_search_off() {
         "{}",
         screen.join("\n")
     );
+}
+
+#[test]
+fn back_forward_and_m_tab_step_through_mission_control_views_as_well_as_tabs() {
+    let (server, mut client) = two_tabs(json!({}));
+    let first = first_tab_id(&server);
+    server.ok(&["select-tab", "-t", &first]);
+    wait_list(&server, "the first tab in front", |l| {
+        tabs(l)[0]["current"] == true
+    });
+    // From the first tab to the Routines view, then to the second tab.
+    server.ok(&["press", "mission-routines"]);
+    client.wait_text("No routines yet");
+    client.type_text(&format!("{ALT}2"));
+    client.wait_for("mission control closed", closed);
+    wait_list(&server, "the second tab in front", |l| {
+        tabs(l)[1]["current"] == true
+    });
+    // Back opens Routines over the first tab, back again closes it there.
+    client.type_text(&format!("{ALT}{{"));
+    client.wait_text("No routines yet");
+    wait_list(&server, "the first tab under it", |l| {
+        tabs(l)[0]["current"] == true
+    });
+    client.type_text(&format!("{ALT}{{"));
+    client.wait_for("mission control closed", closed);
+    // Forward twice reaches the second tab through Routines.
+    client.type_text(&format!("{ALT}}}"));
+    client.wait_text("No routines yet");
+    client.type_text(&format!("{ALT}}}"));
+    client.wait_for("mission control closed", closed);
+    wait_list(&server, "the second tab in front", |l| {
+        tabs(l)[1]["current"] == true
+    });
+    // M-Tab goes to the place before, Routines, and again back to the tab.
+    client.type_text(&format!("{ALT}\t"));
+    client.wait_text("No routines yet");
+    client.type_text(&format!("{ALT}\t"));
+    client.wait_for("mission control closed", closed);
+    wait_list(&server, "the second tab in front", |l| {
+        tabs(l)[1]["current"] == true
+    });
+}
+
+#[test]
+fn back_passes_over_a_view_turned_off_since() {
+    let (server, mut client) = two_tabs(json!({}));
+    let first = first_tab_id(&server);
+    server.ok(&["select-tab", "-t", &first]);
+    wait_list(&server, "the first tab in front", |l| {
+        tabs(l)[0]["current"] == true
+    });
+    server.ok(&["press", "mission-notifications"]);
+    client.wait_text("No notifications");
+    client.type_text(&format!("{ALT}2"));
+    client.wait_for("mission control closed", closed);
+    wait_list(&server, "the second tab in front", |l| {
+        tabs(l)[1]["current"] == true
+    });
+    // The view turned off, and the sidebar on to see the settings read.
+    settings(
+        &server,
+        json!({"sidebar_notifications": false, "sidebar": true}),
+    );
+    wait_list(&server, "the settings read", |l| {
+        l["sessions"][0]["sidebar"]["columns"] != 0
+    });
+    client.type_text(&format!("{ALT}{{"));
+    wait_list(&server, "back to the first tab", |l| {
+        tabs(l)[0]["current"] == true
+    });
+    let screen = client.screen();
+    assert!(closed(&screen), "no view opened:\n{}", screen.join("\n"));
 }

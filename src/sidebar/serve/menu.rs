@@ -13,7 +13,7 @@
 //! away; on ⊞, mission control's views by group (board 60).
 
 use super::super::model::{self, Rules, Stage};
-use super::super::render::Owner;
+use super::super::render::{self, Owner};
 use crate::extras::Command as Extra;
 use crate::mux::TabId;
 use crate::mux::keys::Action;
@@ -137,16 +137,20 @@ impl Server {
         self.notice_menu(client, item);
     }
 
-    /// The whole trail of tabs a session visited, as board 58 draws it:
-    /// the forward ones furthest first, the tab you are on marked "you are
-    /// here", then the back ones nearest first, each its mark, number and
-    /// name with its steps away at the right; a choice goes straight there,
-    /// as that many steps would.
+    /// The whole trail of places a session visited, as board 58 draws it:
+    /// the forward ones furthest first, the place you are on marked "you
+    /// are here", then the back ones nearest first, each a tab's mark,
+    /// number and name or a view's ⊞ and title, with its steps away at the
+    /// right; a choice goes straight there, as that many steps would.
     pub(crate) fn sidebar_trail_menu(&mut self, client: ClientId, session: &str) {
-        let Some((current, (back, forward))) = self
-            .session(session)
-            .map(|s| (s.current, s.trail.steps(s.current)))
-        else {
+        // Mission control closed by the click that opened it is a step
+        // already, so the menu's steps are the ones a choice takes.
+        self.trail_sync(client);
+        let Some((current, (back, forward))) = self.session(session).map(|s| {
+            let here = s.trail.here(s.current);
+            let steps = s.trail.steps(&here, crate::mux::server::place_usable);
+            (here, steps)
+        }) else {
             return;
         };
         let Some(s) = self.session(session) else {
@@ -161,27 +165,31 @@ impl Server {
             .get(&client)
             .map_or(80, |c| usize::from(c.cols));
         let room = crate::ui::menu::label_room(cols).saturating_sub(3 + width(HERE));
-        let name = |t: TabId| {
-            self.trail_model(s, t).map(|m| {
-                let mark = Mark::of_badge(model::badge_state(&m, &r)).look().0;
-                // Cut so its steps away stay in the menu's width
-                // whatever the tab's title.
-                text::cut(&format!("{mark} {} {}", m.index, m.name), room)
-            })
+        let name = |p: &crate::mux::trail::Place| {
+            let words = match self.going_model(s, p)? {
+                render::Going::Tab(m) => {
+                    let mark = Mark::of_badge(model::badge_state(&m, &r)).look().0;
+                    format!("{mark} {} {}", m.index, m.name)
+                }
+                render::Going::View(title) => format!("⊞ {title}"),
+            };
+            // Cut so its steps away stay in the menu's width whatever the
+            // tab's title.
+            Some(text::cut(&words, room))
         };
         // Each row: its words, its steps away, and where a choice goes
         // (back or not, and how many steps).
         type Row = (String, String, Option<(bool, usize)>);
         let mut rows: Vec<Row> = Vec::new();
         for (t, n) in forward.iter().rev() {
-            if let Some(words) = name(*t) {
+            if let Some(words) = name(t) {
                 rows.push((words, format!("→ {n}"), Some((false, *n))));
             }
         }
         let here = rows.len();
-        rows.push((name(current).unwrap_or_default(), HERE.into(), None));
+        rows.push((name(&current).unwrap_or_default(), HERE.into(), None));
         for (t, n) in &back {
-            if let Some(words) = name(*t) {
+            if let Some(words) = name(t) {
                 rows.push((words, format!("← {n}"), Some((true, *n))));
             }
         }
@@ -199,7 +207,7 @@ impl Server {
             if let Some((back, n)) = chose.and_then(|i| rows.get(i)).and_then(|(_, _, go)| *go) {
                 // As M-{ and M-} do: out of the sidebar, onto the tab.
                 server.sidebar_leave(&session);
-                server.trail_step(&session, back, n);
+                server.trail_step(client, back, n);
             }
         });
     }

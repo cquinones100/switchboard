@@ -75,7 +75,7 @@ pub enum Command {
     SidebarAll,
     /// "Select several tabs in the sidebar".
     SidebarSelect,
-    /// "Back and forward: every tab you visited", the menu a right click
+    /// "Back and forward: every tab and view you visited", the menu a right click
     /// on ← or → opens.
     TabTrail,
     /// "Mission control's views by group", the menu a right click on ⊞
@@ -190,7 +190,9 @@ impl Command {
             Command::SidebarRepo => "Filter the sidebar to a repository",
             Command::SidebarAll => "Show every repository's tabs in the sidebar",
             Command::SidebarSelect => "Select several tabs in the sidebar",
-            Command::TabTrail => "Back and forward: every tab you visited, to go straight to one",
+            Command::TabTrail => {
+                "Back and forward: every tab and view you visited, to go straight to one"
+            }
             Command::MissionViews => "Mission control's views by group, to open one",
             Command::DefaultWidth => {
                 "Use the default width for this tab's lone pane and mission control"

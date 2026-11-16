@@ -30,7 +30,7 @@ use super::keys::{Action, Bindings};
 use super::layout::Layout;
 use super::pane::{Pane, PaneSpawn, PaneView};
 use super::proto::{self, ClientMsg, ServerMsg};
-use super::trail::Trail;
+use super::trail::{Place, Trail};
 use super::{Direction, PaneEvent, PaneId, TabId, TermNotice, socket};
 use crate::{paths, util};
 
@@ -213,7 +213,8 @@ pub struct Session {
     pub tabs: Vec<TabId>,
     pub current: TabId,
     pub last: Option<TabId>,
-    /// The tabs visited before and after the current one, for M-{ and M-}.
+    /// The places (tabs and mission control's views) visited before and
+    /// after the current one, for M-{, M-} and M-Tab.
     pub trail: Trail,
     /// The size its tabs are laid out for: its latest client's.
     pub cols: u16,
@@ -377,6 +378,10 @@ enum Drag {
 
 pub struct Client {
     pub id: ClientId,
+    /// The mission control view it last put on its session's trail (none:
+    /// its tab), so only a client whose own view changed moves the trail,
+    /// never two showing the session differently in turn.
+    pub trail_view: Option<String>,
     pub tx: mpsc::UnboundedSender<ServerMsg>,
     /// Its connection's task, for handing it to a new build.
     pub(super) hold: mpsc::UnboundedSender<Hold>,
@@ -1739,8 +1744,14 @@ impl Server {
             .expect("the session was just found");
         if opened == Opened::Front {
             s.last = Some(s.current);
-            s.trail.visited(s.current);
+            s.trail.visited(s.trail.here(s.current));
+            s.trail.view = None;
             s.current = tab;
+            // As `select_tab_as`: a mission control still open puts its
+            // view back on the trail over the new tab.
+            for c in self.clients.values_mut().filter(|c| c.session == session) {
+                c.trail_view = None;
+            }
         }
         // Opened from the Notifications window, it goes before it.
         self.notices_last(session);
@@ -2019,29 +2030,109 @@ impl Server {
         self.select_tab_as(session, tab, false);
     }
 
-    /// Goes `steps` back (or forward) through the tabs a session visited,
-    /// as M-{ (or M-}) pressed that many times would, setting the trail's
-    /// place on the way; nothing with no tab that way.
-    pub fn trail_step(&mut self, session: &str, back: bool, steps: usize) {
-        let to = self.session_mut(session).and_then(|s| {
+    /// Goes `steps` back (or forward) through the places a client's
+    /// session visited, as M-{ (or M-}) pressed that many times would,
+    /// setting the trail's place on the way; nothing with no place that
+    /// way.
+    pub fn trail_step(&mut self, client: ClientId, back: bool, steps: usize) {
+        let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
+            return;
+        };
+        let to = self.session_mut(&session).and_then(|s| {
             let mut to = None;
             for _ in 0..steps {
-                let current = to.unwrap_or(s.current);
+                let current = to.clone().unwrap_or_else(|| s.trail.here(s.current));
                 let step = if back {
-                    s.trail.back(current)
+                    s.trail.back(current, place_usable)
                 } else {
-                    s.trail.forward(current)
+                    s.trail.forward(current, place_usable)
                 };
                 match step {
-                    Some(t) => to = Some(t),
+                    Some(p) => to = Some(p),
                     None => break,
                 }
             }
             to
         });
-        if let Some(t) = to {
-            self.select_tab_as(session, t, true);
+        if let Some(place) = to {
+            self.go_to_place(client, &session, place, true);
         }
+    }
+
+    /// Goes to a place on the trail: onto a tab, mission control closes and
+    /// the tab comes to the front; onto a view, mission control opens on it
+    /// over the tab it sat over, or the tab in front when that one closed.
+    /// `stepping` when it is a step back or forward, which moves along the
+    /// trail rather than adding to it.
+    pub fn go_to_place(&mut self, client: ClientId, session: &str, place: Place, stepping: bool) {
+        let Some(s) = self.session_mut(session) else {
+            return;
+        };
+        let left = s.trail.here(s.current);
+        if !stepping && !left.same(&place) {
+            s.trail.visited(left);
+        }
+        match place {
+            Place::Tab(tab) => {
+                s.trail.view = None;
+                if self.mission_open(client) {
+                    self.mission_close(client);
+                }
+                self.select_tab_as(session, tab, true);
+            }
+            Place::View { view, over } => {
+                let over = if s.tabs.contains(&over) {
+                    over
+                } else {
+                    s.current
+                };
+                self.select_tab_as(session, over, true);
+                if let Some(s) = self.session_mut(session) {
+                    s.trail.view = Some(view.clone());
+                }
+                let how = if view == crate::mission::grid::TABS {
+                    crate::mission::Opening::Tabs
+                } else {
+                    crate::mission::Opening::View(view)
+                };
+                self.open_mission(client, how);
+            }
+        }
+    }
+
+    /// Brings a client's session's trail up to the view its mission control
+    /// shows (none while it is closed or a picker): moving onto a view, to
+    /// another or off one to the tab is a visit. Run before each draw, so
+    /// every way of moving between views counts.
+    pub fn trail_sync(&mut self, client: ClientId) {
+        let Some(c) = self.clients.get_mut(&client) else {
+            return;
+        };
+        let now = c
+            .overlays
+            .find::<crate::mission::Mission>()
+            .and_then(crate::mission::Mission::trail_view);
+        if c.trail_view == now {
+            return;
+        }
+        c.trail_view = now.clone();
+        let session = c.session.clone();
+        self.trail_view_is(&session, now);
+    }
+
+    /// The session is on `now`'s view (none: on its tab): a visit when that
+    /// is somewhere else.
+    pub fn trail_view_is(&mut self, session: &str, now: Option<String>) {
+        let Some(s) = self.session_mut(session) else {
+            return;
+        };
+        if s.trail.view == now {
+            return;
+        }
+        let left = s.trail.here(s.current);
+        s.trail.visited(left);
+        s.trail.view = now;
+        self.dirty_session(session);
     }
 
     /// Goes to a tab, as `select_tab`; `stepping` when it is a step back or
@@ -2055,9 +2146,16 @@ impl Server {
         if switched {
             s.last = Some(s.current);
             if !stepping {
-                s.trail.visited(s.current);
+                s.trail.visited(s.trail.here(s.current));
             }
+            s.trail.view = None;
             s.current = tab;
+            // A mission control still open on the session (a command chose
+            // the tab under it) puts its view back on the trail, over this
+            // tab, at its next draw.
+            for c in self.clients.values_mut().filter(|c| c.session == session) {
+                c.trail_view = None;
+            }
         }
         self.refresh_name(tab);
         self.relayout(tab);
@@ -2220,6 +2318,7 @@ impl Server {
             activity: Instant::now(),
             options_taken: 0,
             terminal_colors: false,
+            trail_view: None,
         };
         // Its colours, for the panes' programs that ask (src/mux/terminal.rs),
         // the background's for the `system` theme too (src/status).
@@ -2309,6 +2408,7 @@ impl Server {
                 .unwrap_or_else(Instant::now),
             options_taken: 0,
             terminal_colors: false,
+            trail_view: None,
         };
         self.clients.insert(id, client);
         self.terminal_colors_sync();
@@ -2410,6 +2510,13 @@ impl Server {
             return;
         }
         let left = std::mem::replace(&mut c.session, session.to_string());
+        // Its mission control's view is the session's it comes to now, so
+        // its next draw puts its own on that session's trail.
+        c.trail_view = self
+            .sessions
+            .iter()
+            .find(|s| s.name == session)
+            .and_then(|s| s.trail.view.clone());
         c.screen.invalidate();
         c.dirty = true;
         self.size_session_to(id);
@@ -2429,6 +2536,18 @@ impl Server {
             .map(|c| c.id);
         if let Some(id) = latest {
             self.size_session_to(id);
+        }
+        // Left with mission control open and no other terminal showing a
+        // view, the session is back on its tab, so back reopens the view.
+        let a_view_shows = self.clients.values().any(|c| {
+            c.session == session
+                && c.overlays
+                    .find::<crate::mission::Mission>()
+                    .and_then(crate::mission::Mission::trail_view)
+                    .is_some()
+        });
+        if !a_view_shows {
+            self.trail_view_is(session, None);
         }
     }
 
@@ -2924,18 +3043,29 @@ impl Server {
                     self.select_tab(&session, *t);
                 }
             }
+            Action::LastTab if crate::settings::is_on("tab_back_forward") => {
+                // The place before, tab or view, as a visit, so pressed
+                // again it comes back; the tab before when that view is
+                // off now, or the server restarted since, which keeps no
+                // place.
+                let last = self.session(&session).and_then(|s| {
+                    s.trail
+                        .last
+                        .clone()
+                        .filter(place_usable)
+                        .or(s.last.map(Place::Tab))
+                });
+                if let Some(place) = last {
+                    self.go_to_place(id, &session, place, false);
+                }
+            }
             Action::LastTab => {
                 if let Some(last) = self.session(&session).and_then(|s| s.last) {
                     self.select_tab(&session, last);
                 }
             }
             Action::TabBack | Action::TabForward => {
-                // Mission control sits over the tab you are on, so it
-                // closes first.
-                if self.mission_open(id) {
-                    self.mission_close(id);
-                }
-                self.trail_step(&session, action == Action::TabBack, 1);
+                self.trail_step(id, action == Action::TabBack, 1);
             }
             Action::SelectTab(n) => {
                 if let Some(t) = self.tab_numbered(n) {
@@ -3798,6 +3928,7 @@ impl Server {
 
     fn draw_now(&mut self, id: ClientId) {
         self.mission_before_draw(id);
+        self.trail_sync(id);
         self.history_before_draw(id);
         self.pictures_before_draw(id);
         let Some(c) = self.clients.get(&id) else {
@@ -4121,6 +4252,15 @@ impl Server {
 /// tab keeps its own, of two with the same one the first keeps it, and the
 /// rest take the smallest free, in order, so the tabs of a build before
 /// numbers go by their places as they did.
+/// Whether back, forward or M-Tab may go to a place: a view only while
+/// mission control shows it (a closed tab is already off the trail).
+pub(crate) fn place_usable(place: &Place) -> bool {
+    match place {
+        Place::Tab(_) => true,
+        Place::View { view, .. } => crate::mission::views::slug_shows(view),
+    }
+}
+
 fn fill_numbers(have: &[usize]) -> Vec<usize> {
     let mut used = std::collections::HashSet::new();
     let kept: Vec<bool> = have.iter().map(|n| *n > 0 && used.insert(*n)).collect();

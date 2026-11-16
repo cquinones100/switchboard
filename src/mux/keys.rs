@@ -394,9 +394,9 @@ impl Action {
             Action::SelectPane(Direction::Down) => "Move to the pane below (as C-w j)".into(),
             Action::PrevTab => "Previous tab".into(),
             Action::NextTab => "Next tab".into(),
-            Action::LastTab => "Go back to the previous tab".into(),
-            Action::TabBack => "Back to the tab before".into(),
-            Action::TabForward => "Forward to the tab after".into(),
+            Action::LastTab => "Go back to the previous tab or view".into(),
+            Action::TabBack => "Back to the tab or view before".into(),
+            Action::TabForward => "Forward to the tab or view after".into(),
             Action::SelectTab(n) => format!("Go to tab {n}"),
             Action::NewTab => "New tab".into(),
             Action::Split(d) => format!("Split pane {}", side(d)),
@@ -759,6 +759,12 @@ impl Action {
         match self {
             // Off, the Keys view's key goes on to the pane instead.
             Action::Extra(Extra::Keys) => crate::settings::is_on("view_keys"),
+            // A view is a place on the trail: a step decides whether it
+            // closes (onto a tab), as M-{, M-} and M-Tab do over it. Off,
+            // they go to a tab beside, closing it first.
+            Action::TabBack | Action::TabForward | Action::LastTab => {
+                crate::settings::is_on("tab_back_forward")
+            }
             _ => matches!(
                 self,
                 Action::MissionControl
@@ -767,6 +773,7 @@ impl Action {
                     | Action::ReviveWorktree
                     | Action::Extra(Extra::Mission(_))
                     | Action::Extra(Extra::MissionViews)
+                    | Action::Extra(Extra::TabTrail)
                     | Action::Autopilot(_)
                     | Action::ContextMenu
             ),
@@ -1175,10 +1182,11 @@ mod tests {
     }
 
     #[test]
-    fn the_views_menu_runs_over_mission_control_and_the_trail_closes_it() {
+    fn the_views_menu_and_the_trail_run_over_mission_control() {
         use crate::extras::Command as Extra;
         assert!(Action::Extra(Extra::MissionViews).in_mission());
-        assert!(!Action::Extra(Extra::TabTrail).in_mission());
+        // A view is a place on the trail, so listing it closes nothing.
+        assert!(Action::Extra(Extra::TabTrail).in_mission());
     }
 
     #[test]

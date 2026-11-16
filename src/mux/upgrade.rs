@@ -1109,6 +1109,7 @@ fn adopt_pane(server: &Server, handed: HandedPane, extended_keys: bool) -> Resul
 mod tests {
     use super::*;
     use crate::mux::persist::{SavedSession, SavedTab};
+    use crate::mux::trail::Place;
     use crate::mux::{TabId, layout::Layout};
     use std::os::unix::fs::PermissionsExt;
 
@@ -1128,8 +1129,15 @@ mod tests {
                     current: TabId(1),
                     last: None,
                     trail: crate::mux::trail::Trail {
-                        back: vec![TabId(3)],
-                        forward: vec![TabId(5)],
+                        back: vec![
+                            Place::Tab(TabId(3)),
+                            Place::View {
+                                view: "reopen".into(),
+                                over: TabId(1),
+                            },
+                        ],
+                        forward: vec![Place::Tab(TabId(5))],
+                        ..Default::default()
                     },
                     sidebar_repo: None,
                     sidebar_repo_open: false,

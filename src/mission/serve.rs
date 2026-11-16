@@ -148,7 +148,7 @@ pub(super) const KEYS: &[(&str, &str)] = &[
     ("M-] M-[", "with UX 2.0, the next, last group of views"),
     (
         "M-{ M-}",
-        "close it, and back, forward through the tabs visited, as outside it",
+        "back, forward through the tabs and views visited, closing it onto a tab",
     ),
     (
         "tab ⇧tab",
@@ -2393,14 +2393,28 @@ impl Server {
                 self.act(client, crate::mux::keys::Action::SelectTab(n));
                 return;
             }
-            // Back and forward through the tabs visited close it first,
-            // since it sits over the tab you are on.
+            // Back, forward and M-Tab go from the view in front, once its
+            // place is on the trail, after the key (mission control's state
+            // is out of its overlay until then). With the history off, M-{
+            // and M-} go to the tab on either side and M-Tab to the tab
+            // before, closing it first.
             Some(
-                a @ (crate::mux::keys::Action::TabBack | crate::mux::keys::Action::TabForward),
+                a @ (crate::mux::keys::Action::TabBack
+                | crate::mux::keys::Action::TabForward
+                | crate::mux::keys::Action::LastTab),
             ) => {
                 let a = a.clone();
-                self.mission_close_from(client, m);
-                self.act(client, a);
+                if !settings::is_on("tab_back_forward") {
+                    self.mission_close_from(client, m);
+                    self.act(client, a);
+                    return;
+                }
+                if let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) {
+                    self.trail_view_is(&session, m.trail_view());
+                }
+                self.mission.after_key = Some(Box::new(move |server: &mut Server| {
+                    server.act(client, a);
+                }));
                 return;
             }
             Some(crate::mux::keys::Action::Palette) => {
@@ -3132,7 +3146,15 @@ impl Server {
                 }
                 return;
             }
-            if mouse.kind == MouseKind::Press && !mouse.button.is_wheel() {
+            // So do ← and →: a step decides whether it closes (onto a
+            // tab), and the trail menu opens over it, the trail as it is.
+            let on_a_trail_button = matches!(
+                self.sidebar_under(client, mouse.col, mouse.row),
+                Some(Some(
+                    crate::sidebar::Owner::Back | crate::sidebar::Owner::Forward
+                ))
+            );
+            if mouse.kind == MouseKind::Press && !mouse.button.is_wheel() && !on_a_trail_button {
                 self.mission_close(client);
             }
             self.sidebar_mouse(client, mouse);

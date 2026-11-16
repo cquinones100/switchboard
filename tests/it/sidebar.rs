@@ -2161,13 +2161,14 @@ fn with_ux2_the_mission_control_button_opens_and_closes_it_and_its_right_click_l
     press(&mut client, 0, settings);
     client.wait_text("MISSION CONTROL");
     client.wait_text("INTEGRATIONS");
-    // With mission control open, M-{ closes it and steps back.
+    // On a view, M-{ steps back to the place before it, the tab it opened
+    // over, closing it.
     client.type_text(&format!("{ALT}{{"));
     client.wait_for("mission control closed", |s| {
         !s.iter().any(|l| l.contains("MISSION CONTROL"))
     });
-    wait_list(&server, "back to the second", |l| {
-        tabs(l)[1]["current"] == true
+    wait_list(&server, "back on the third", |l| {
+        tabs(l)[2]["current"] == true
     });
 }
 

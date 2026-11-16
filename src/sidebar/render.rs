@@ -130,14 +130,21 @@ pub struct Filter {
     pub typing: bool,
 }
 
+/// Where ← or → goes: a tab, or a mission control view by its title.
+#[derive(Clone, Debug)]
+pub enum Going {
+    Tab(Box<TabModel>),
+    View(String),
+}
+
 /// The workspace's own buttons on the top line, with UX 2.0 (boards 57
 /// to 60): ← and → while back and forward step through the tabs visited
-/// (tab_back_forward), with the tab each goes to, and ⊞ mission control.
+/// (tab_back_forward), with the place each goes to, and ⊞ mission control.
 #[derive(Clone, Debug, Default)]
 pub struct Buttons {
-    /// The tabs back and forward go to, while they step through the tabs
-    /// visited; none draws no ← and →.
-    pub trail: Option<(Option<TabModel>, Option<TabModel>)>,
+    /// The places back and forward go to, while they step through the
+    /// places visited; none draws no ← and →.
+    pub trail: Option<(Option<Going>, Option<Going>)>,
     /// Mission control is open on this client, which lights ⊞.
     pub mission_open: bool,
     /// How many tabs need you, beside ⊞ while over 0.
@@ -521,8 +528,8 @@ pub fn sidebar_lines(
     };
     let mut reminders_at = None;
     let mut buttons_at = Vec::new();
-    // The tab ← or → goes to while the mouse is over it, and its arrow.
-    let going: Option<(&TabModel, &str)> = match (view.buttons, view.hover) {
+    // The place ← or → goes to while the mouse is over it, and its arrow.
+    let going: Option<(&Going, &str)> = match (view.buttons, view.hover) {
         (Some(b), Some(Owner::Back)) => b
             .trail
             .as_ref()
@@ -548,7 +555,11 @@ pub fn sidebar_lines(
         // Under the mouse, a button names where it goes in place of the
         // rest of the line.
         let named = match (going, view.hover) {
-            (Some((tab, _)), _) => {
+            (Some((Going::View(title), _)), _) => {
+                pill_row.put(format!("⊞ {title}"), bold(theme.text));
+                true
+            }
+            (Some((Going::Tab(tab), _)), _) => {
                 let state = model::badge_state(tab, r);
                 pill_row
                     .spans
@@ -798,7 +809,9 @@ pub fn sidebar_lines(
                 spins |= kit::spins(state, true);
                 // The tab ← or → goes to lights under the mouse on it too,
                 // the arrow at its right edge.
-                let arrow = going.filter(|(t, _)| t.id == tab.id).map(|(_, a)| a);
+                let arrow = going
+                    .filter(|(t, _)| matches!(t, Going::Tab(t) if t.id == tab.id))
+                    .map(|(_, a)| a);
                 let fill = if chosen {
                     Some(theme.highlight)
                 } else if view.hover == Some(&Owner::Tab(tab.id)) || arrow.is_some() {
@@ -1705,7 +1718,7 @@ mod tests {
         // With a tab back there, the mouse over ← names it in place of the
         // count, and lights its row with the arrow at its right edge.
         let b = Buttons {
-            trail: Some((Some(tabs[1].clone()), None)),
+            trail: Some((Some(Going::Tab(Box::new(tabs[1].clone()))), None)),
             mission_open: false,
             needs: 0,
         };

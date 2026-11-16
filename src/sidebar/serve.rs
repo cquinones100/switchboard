@@ -31,7 +31,7 @@ use crate::facts::{Merge, PrState};
 use crate::mux::compose::colors;
 use crate::mux::input::{Key, KeyCode, Mods, Mouse, MouseButton, MouseKind};
 use crate::mux::keys::Action;
-use crate::mux::server::{ClientId, Event, Server, Session};
+use crate::mux::server::{ClientId, Event, Server, Session, place_usable};
 use crate::mux::{PaneId, TabId};
 use crate::ui::{Outcome, PickItem, Picker, Theme};
 use crate::{paths, settings, util};
@@ -1063,15 +1063,33 @@ impl Server {
         self.tab_model(s, attached, tab, self.tab_number(tab))
     }
 
+    /// A place on a session's trail as the ← and → buttons name it: a tab
+    /// as `trail_model`, a view by its title.
+    pub(crate) fn going_model(
+        &self,
+        s: &Session,
+        place: &crate::mux::trail::Place,
+    ) -> Option<render::Going> {
+        match place {
+            crate::mux::trail::Place::Tab(tab) => self
+                .trail_model(s, *tab)
+                .map(|m| render::Going::Tab(Box::new(m))),
+            crate::mux::trail::Place::View { view, .. } => {
+                Some(render::Going::View(crate::mission::views::slug_title(view)))
+            }
+        }
+    }
+
     /// What the header's copy of the workspace's own buttons shows, with
     /// the sidebar hidden.
     pub fn header_nav(&self, s: &Session) -> crate::mux::header::Nav {
         let all = self.sidebar_tabs(&s.name);
         crate::mux::header::Nav {
             trail: settings::is_on("tab_back_forward").then(|| {
+                let here = s.trail.here(s.current);
                 (
-                    s.trail.peek_back(s.current).is_some(),
-                    s.trail.peek_forward(s.current).is_some(),
+                    s.trail.peek_back(&here, place_usable).is_some(),
+                    s.trail.peek_forward(&here, place_usable).is_some(),
                 )
             }),
             needs: model::needs_you(&all, &Rules::now()).len(),
@@ -1084,13 +1102,14 @@ impl Server {
     fn sidebar_buttons(&self, s: &Session, client: ClientId, r: &Rules) -> render::Buttons {
         let all = self.sidebar_tabs(&s.name);
         let trail = settings::is_on("tab_back_forward").then(|| {
+            let here = s.trail.here(s.current);
             (
                 s.trail
-                    .peek_back(s.current)
-                    .and_then(|t| self.trail_model(s, t)),
+                    .peek_back(&here, place_usable)
+                    .and_then(|p| self.going_model(s, &p)),
                 s.trail
-                    .peek_forward(s.current)
-                    .and_then(|t| self.trail_model(s, t)),
+                    .peek_forward(&here, place_usable)
+                    .and_then(|p| self.going_model(s, &p)),
             )
         });
         render::Buttons {
@@ -2541,10 +2560,10 @@ impl Server {
                         .is_some_and(|s| s.notices_folded);
                     self.sidebar_fold_notices(&session, !folded);
                 }
-                // ← and →: back and forward through the tabs visited, as
-                // M-{ and M-} (mission control, over the tab you are on,
-                // closed first by its own click); ⊞: mission control, or,
-                // while it is open, closed.
+                // ← and →: back and forward through the tabs and views
+                // visited, as M-{ and M-} (mission control left open by its
+                // own click, for the step to close or keep); ⊞: mission
+                // control, or, while it is open, closed.
                 Some(Owner::Back) => self.act(client, Action::TabBack),
                 Some(Owner::Forward) => self.act(client, Action::TabForward),
                 Some(Owner::Mission) => {

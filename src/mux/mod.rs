@@ -32,8 +32,8 @@
 //! - `replay`: what a pane shows, as the bytes that draw it again.
 //! - `upgrade`: the server restarted on a new build in place, its panes'
 //!   programs, its socket and its terminals handed over across an exec.
-//! - `trail`: the tabs a session visited, for M-{ and M-} to go back and
-//!   forward through.
+//! - `trail`: the tabs and mission control views a session visited, for
+//!   M-{ and M-} to go back and forward through and M-Tab to go back to.
 //! - `latest`: M-p's restart building the checkout first, and telling
 //!   whether there is anything new to restart on.
 

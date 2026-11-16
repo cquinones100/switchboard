@@ -1041,6 +1041,19 @@ impl Mission {
         !self.usage_week && self.snap.rules.ux2 && self.laid().0 as usize >= usage_board::BOARD_AT
     }
 
+    /// The view in front as back and forward know it (`View::slug`, the
+    /// Tabs view's `grid::TABS`); none for M-j's and M-o's pickers, which
+    /// are a way to a tab rather than a place.
+    pub fn trail_view(&self) -> Option<String> {
+        if self.picker {
+            return None;
+        }
+        Some(
+            self.current()
+                .map_or_else(|| grid::TABS.to_string(), View::slug),
+        )
+    }
+
     pub fn current(&self) -> Option<&View> {
         self.view
             .checked_sub(1)
