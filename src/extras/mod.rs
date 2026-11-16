@@ -263,7 +263,7 @@ impl Command {
                 "A drag of a lone pane's right edge, or the pane resize keys in a tab with one pane, gives that tab a width of its own, kept through restarts; and the keys in mission control give it one; this clears both, the pane and mission control taking Settings' \"Widest a lone pane gets\" (lone_pane_width) again."
             }
             Command::Keys => {
-                "Mission control's Keys view: the workspace's keys by their first tag, then the sidebar's, mission control's, the diff's and Notes', then those only through M-p; Enter presses a workspace key and ? finds one by pressing it. With UX 2.0, a board with a heatmap of the Alt keys pressed this week. Settings' \"Keys\" (view_keys) off hands M-/ to the pane."
+                "Mission control's Keys view: the workspace's keys by their first tag, then the sidebar's, mission control's, the boxes', the diff's and Notes', then those only through M-p; Enter presses a workspace key and ? finds one by pressing it. With UX 2.0, a board with a heatmap of the Alt keys pressed this week. Settings' \"Keys\" (view_keys) off hands M-/ to the pane."
             }
         }
     }

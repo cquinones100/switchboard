@@ -345,7 +345,7 @@ impl ViewId {
                 "Spend at API prices as Claude Code estimates it, interactive sessions only, and when each limit resets; below, today's requests to services outside the computer, then each open Claude session's context, model and age, the fullest first. Settings' \"Usage\" (usage)."
             }
             ViewId::Keys => {
-                "The same as M-/: the workspace's keys by their first tag, then the sidebar's, mission control's, the diff's and Notes', then those only through M-p, with / to filter. Settings' \"Keys\" (view_keys)."
+                "The same as M-/: the workspace's keys by their first tag, then the sidebar's, mission control's, the boxes', the diff's and Notes', then those only through M-p, with / to filter. Settings' \"Keys\" (view_keys)."
             }
             ViewId::Settings => {
                 "The same as M-p's \"Settings\": every option under its category, then your own files' settings."

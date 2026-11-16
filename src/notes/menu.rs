@@ -337,6 +337,7 @@ impl Overlay for FormatMenu {
 
     fn key(&mut self, key: Key, _look: &Look) -> Step {
         match self.filter.key(key) {
+            Filtered::Moved => return Step::Redraw,
             Filtered::Changed | Filtered::Closed => {
                 self.cursor = 0;
                 self.top = 0;
@@ -433,6 +434,11 @@ impl Overlay for FormatMenu {
         match draw::gesture(&mouse) {
             Gesture::Click if look.mouse => match (hit, row) {
                 (Hit::Outside | Hit::Close, _) => Step::Close(Outcome::Dismissed),
+                // The search's line, at the top while it is open.
+                (Hit::Line(0, col), _) if self.filter.is_open() => {
+                    self.filter.click(col as usize);
+                    Step::Redraw
+                }
                 (_, Some(at)) => match self.shown().get(at) {
                     Some(i) => Step::Close(Outcome::Chose(*i)),
                     None => Step::Same,

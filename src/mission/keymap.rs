@@ -3,7 +3,8 @@
 //! under headings, its groups. First the workspace's, as the M-p palette
 //! lists them (`ui::palette::entries`, M-p itself included), each under the
 //! first of its tags, the biggest group first; then the sidebar's and
-//! mission control's own (the lists their `?` shows), M-d's diff's
+//! mission control's own (the lists their `?` shows), the keys of a box
+//! that takes typing (`ui::field::KEYS`), M-d's diff's
 //! (`diff::app::KEYS`, the cover, the box `ga` opens and its answer, those
 //! only with diff_ask) and Notes' (`notes::app::key_groups`: a note's, with
 //! its leader keys and, while easy_keys is on, easy mode's Cmd keys, then
@@ -314,6 +315,7 @@ pub fn items(bindings: &Bindings, shown: Shown, counts: &HashMap<String, u64>) -
     let mut out = all;
     out.extend(part("Sidebar", &owned(crate::sidebar::KEYS)));
     out.extend(part("Mission control", &owned(super::serve::KEYS)));
+    out.extend(part("Boxes", &owned(crate::ui::field::KEYS)));
     for (title, rows) in crate::diff::app::key_groups(shown.ask) {
         out.extend(part(title, &rows));
     }
@@ -388,6 +390,7 @@ fn app_name(app: &str) -> String {
     match app {
         "Sidebar" => "the sidebar".into(),
         "Mission control" => "mission control".into(),
+        "Boxes" => "a box that takes typing".into(),
         a if a.starts_with("Notes") => "Notes".into(),
         a if a.starts_with("M-d") => "the diff".into(),
         a => a.to_string(),

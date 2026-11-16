@@ -5,6 +5,10 @@
 //! a reminder for nothing in particular), Esc goes back. With easy mode's
 //! ×, Tab moves to it and Enter presses it; typing takes the focus back.
 //!
+//! What is typed is a `ui::field`, with its cursor keys, wrapping at the
+//! box's width and a click putting the cursor; one whose use takes more
+//! than a line (`multi_line`) takes S-Enter and M-Enter as a new line.
+//!
 //! It closes with what was typed as its outcome's value
 //! (`Outcome::Picked`), trimmed.
 
@@ -13,12 +17,15 @@ use ratatui::text::Span;
 
 use crate::mux::input::{Key, KeyCode, Mods, Mouse};
 use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
+use crate::ui::field::{Edit, Field};
 use crate::ui::{Look, Outcome, Overlay, Picked, Step};
 
 pub struct Ask {
     title: String,
     hint: String,
-    text: String,
+    field: Field,
+    /// The index of the field's first row among the box's lines.
+    field_line: usize,
     /// Whether Enter on an empty line takes it.
     empty: bool,
     close_focus: bool,
@@ -30,7 +37,8 @@ impl Ask {
         Ask {
             title: title.into(),
             hint: hint.into(),
-            text: String::new(),
+            field: Field::new(),
+            field_line: 0,
             empty: false,
             close_focus: false,
             drawn: None,
@@ -39,7 +47,21 @@ impl Ask {
 
     /// What it starts with, to change rather than type again.
     pub fn text(mut self, text: impl Into<String>) -> Ask {
-        self.text = text.into();
+        let text = text.into();
+        // Text of several lines (a shell command kept in a setting) keeps
+        // them, and takes S-Enter for another.
+        let field = if text.contains(['\n', '\r']) || self.field.is_multi_line() {
+            Field::new().multi_line()
+        } else {
+            Field::new()
+        };
+        self.field = field.with_text(text);
+        self
+    }
+
+    /// It takes more than a line: S-Enter and M-Enter add one.
+    pub fn multi_line(mut self) -> Ask {
+        self.field = Field::new().multi_line().with_text(self.field.text());
         self
     }
 
@@ -51,7 +73,7 @@ impl Ask {
 
     /// What is typed now.
     pub fn typed(&self) -> &str {
-        &self.text
+        self.field.text()
     }
 }
 
@@ -75,12 +97,33 @@ impl Overlay for Ask {
             .map(|w| BoxLine::text(format!(" {w}"), look.dim()))
             .collect();
         lines.push(BoxLine::blank());
-        lines.push(BoxLine::spans(vec![
-            Span::styled(format!(" › {}", self.text), look.bright()),
-            Span::styled("▏", look.dim()),
-        ]));
+        self.field_line = lines.len();
+        // Up to half the screen, and never more than the box has rows for
+        // under the hint.
+        let left = (buf.area.height as usize).saturating_sub(6 + lines.len());
+        let most = (buf.area.height as usize / 2)
+            .saturating_sub(4)
+            .min(left)
+            .max(1);
+        let rows = self.field.view(
+            inner.saturating_sub(4),
+            most,
+            look.bright(),
+            look.dim(),
+            true,
+        );
+        for (i, row) in rows.into_iter().enumerate() {
+            let lead = if i == 0 { " › " } else { "   " };
+            let mut spans = vec![Span::styled(lead, look.bright())];
+            spans.extend(row);
+            lines.push(BoxLine::spans(spans));
+        }
         let mut spec = BoxSpec::new(&self.title, &lines);
-        spec.keys = Some("type  ↵ done  esc back");
+        spec.keys = Some(if self.field.is_multi_line() {
+            "type  ⇧↵ new line  ↵ done  esc back"
+        } else {
+            "type  ↵ done  esc back"
+        });
         spec.width = inner as u16;
         spec.close_lit = self.close_focus;
         self.drawn = Some(draw::draw_box(buf, &spec, look));
@@ -96,11 +139,16 @@ impl Overlay for Ask {
             return Step::Close(Outcome::Dismissed);
         }
         self.close_focus = false;
+        match self.field.key(k) {
+            Edit::Changed | Edit::Moved => return Step::Redraw,
+            Edit::Same | Edit::Up | Edit::Down => return Step::Same,
+            Edit::Not => {}
+        }
         match k.code {
             KeyCode::Esc => Step::Close(Outcome::Dismissed),
             KeyCode::Char('c') if k.mods == Mods::CTRL => Step::Close(Outcome::Dismissed),
             KeyCode::Enter => {
-                let text = self.text.trim().to_string();
+                let text = self.field.text().trim().to_string();
                 if text.is_empty() && !self.empty {
                     return Step::Same;
                 }
@@ -109,18 +157,6 @@ impl Overlay for Ask {
                     value: text.clone(),
                     query: text,
                 }))
-            }
-            KeyCode::Backspace => {
-                self.text.pop();
-                Step::Redraw
-            }
-            KeyCode::Char('u') if k.mods == Mods::CTRL => {
-                self.text.clear();
-                Step::Redraw
-            }
-            KeyCode::Char(c) if !k.mods.ctrl && !k.mods.alt => {
-                self.text.push(c);
-                Step::Redraw
             }
             _ => Step::Same,
         }
@@ -135,6 +171,15 @@ impl Overlay for Ask {
             Gesture::Click if look.mouse && matches!(hit, Hit::Close | Hit::Outside) => {
                 Step::Close(Outcome::Dismissed)
             }
+            Gesture::Click if look.mouse => match hit {
+                Hit::Line(i, col) if i >= self.field_line => {
+                    self.close_focus = false;
+                    self.field
+                        .click(i - self.field_line, (col as usize).saturating_sub(3));
+                    Step::Redraw
+                }
+                _ => Step::Same,
+            },
             Gesture::Move if look.hover => {
                 let close = hit == Hit::Close;
                 if close == self.close_focus {
@@ -149,7 +194,7 @@ impl Overlay for Ask {
     }
 
     fn paste(&mut self, text: &str, _look: &Look) -> Step {
-        self.text.push_str(&text.replace(['\n', '\r'], " "));
+        self.field.paste(text);
         Step::Redraw
     }
 }
@@ -187,5 +232,53 @@ mod tests {
             a.key(key(KeyCode::Esc), &look),
             Step::Close(Outcome::Dismissed)
         );
+    }
+
+    fn screen(a: &mut Ask, cols: u16, rows: u16) -> Vec<String> {
+        let mut buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, cols, rows));
+        a.draw(&mut buf, &Look::default());
+        crate::ui::draw::tests::screen(&buf)
+    }
+
+    #[test]
+    fn s_enter_adds_a_line_in_a_multi_line_ask_and_enter_takes_both() {
+        let look = Look::default();
+        let mut a = Ask::new("Shape a new ticket", "What about?").multi_line();
+        a.paste("first", &look);
+        assert_eq!(
+            a.key(Key::new(KeyCode::Enter, Mods::SHIFT), &look),
+            Step::Redraw
+        );
+        a.paste("second", &look);
+        let s = screen(&mut a, 60, 20);
+        assert!(s.iter().any(|l| l.contains("› first")), "{s:#?}");
+        assert!(s.iter().any(|l| l.contains("   second▏")), "{s:#?}");
+        assert!(matches!(
+            a.key(key(KeyCode::Enter), &look),
+            Step::Close(Outcome::Picked(p)) if p.value == "first\nsecond"
+        ));
+        let mut one = Ask::new("Rename", "A name.").text("a");
+        assert_eq!(
+            one.key(Key::new(KeyCode::Enter, Mods::SHIFT), &look),
+            Step::Same
+        );
+    }
+
+    #[test]
+    fn text_of_several_lines_keeps_them() {
+        let look = Look::default();
+        let mut a = Ask::new("Test command", "A command.").text("cat <<-EOF\n\tx\n\tEOF");
+        assert!(matches!(
+            a.key(key(KeyCode::Enter), &look),
+            Step::Close(Outcome::Picked(p)) if p.value == "cat <<-EOF\n\tx\n\tEOF"
+        ));
+    }
+
+    #[test]
+    fn a_long_name_wraps_in_the_box() {
+        let mut a = Ask::new("Rename", "A name.").text("alpha bravo charlie delta echo foxtrot");
+        let s = screen(&mut a, 24, 20);
+        assert!(s.iter().any(|l| l.contains("› alpha bravo")), "{s:#?}");
+        assert!(s.iter().any(|l| l.contains("foxtrot▏")), "{s:#?}");
     }
 }

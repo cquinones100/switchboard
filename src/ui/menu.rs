@@ -25,6 +25,7 @@
 use ratatui::buffer::Buffer;
 
 use super::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
+use super::field::{Edit, Field};
 use super::{Look, Outcome, Overlay, Step};
 use crate::mux::input::{Key, KeyCode, Mods, Mouse};
 
@@ -33,7 +34,9 @@ use crate::mux::input::{Key, KeyCode, Mods, Mouse};
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Filter {
     open: bool,
-    typed: String,
+    field: Field,
+    /// The columns its line last gave what is typed, for a click on it.
+    room: usize,
 }
 
 /// What a key did to a `Filter`.
@@ -41,6 +44,9 @@ pub struct Filter {
 pub enum Filtered {
     /// It opened, typed or took a character off: the list shown changed.
     Changed,
+    /// Only its cursor moved (or the key did nothing): drawn again, the
+    /// list and its chosen match left as they are.
+    Moved,
     /// It closed (Esc, or Backspace on its last character): every option
     /// shows again.
     Closed,
@@ -54,11 +60,12 @@ impl Filter {
     }
 
     pub fn typed(&self) -> &str {
-        &self.typed
+        self.field.text()
     }
 
-    /// A key: `/` opens it; while it is open, printable keys type, Ctrl-U
-    /// clears, Backspace takes a character off and Esc closes it.
+    /// A key: `/` opens it; while it is open, it types as a `ui::field`
+    /// does, Backspace on its last character or Esc closing it, and the
+    /// arrows up and down are the box's.
     pub fn key(&mut self, key: Key) -> Filtered {
         let k = key.normalized();
         if !self.open {
@@ -68,29 +75,27 @@ impl Filter {
             }
             return Filtered::Not;
         }
-        match k.code {
-            KeyCode::Esc => {
+        let backspace = k.code == KeyCode::Backspace && k.mods == Mods::NONE;
+        if k.code == KeyCode::Esc || (backspace && self.field.is_empty()) {
+            *self = Filter::default();
+            return Filtered::Closed;
+        }
+        match self.field.key(k) {
+            Edit::Changed if backspace && self.field.is_empty() => {
                 *self = Filter::default();
                 Filtered::Closed
             }
-            KeyCode::Backspace => {
-                self.typed.pop();
-                if self.typed.is_empty() {
-                    *self = Filter::default();
-                    Filtered::Closed
-                } else {
-                    Filtered::Changed
-                }
-            }
-            KeyCode::Char('u') if k.mods == Mods::CTRL => {
-                self.typed.clear();
-                Filtered::Changed
-            }
-            KeyCode::Char(c) if !k.mods.ctrl && !k.mods.alt => {
-                self.typed.push(c);
-                Filtered::Changed
-            }
-            _ => Filtered::Not,
+            Edit::Changed => Filtered::Changed,
+            Edit::Moved | Edit::Same => Filtered::Moved,
+            Edit::Up | Edit::Down | Edit::Not => Filtered::Not,
+        }
+    }
+
+    /// A click on its line at `col` from the line's left: the cursor goes
+    /// there, past the chip's end and its `› `.
+    pub fn click(&mut self, col: usize) {
+        if self.open {
+            self.field.click_one_row(self.room, col.saturating_sub(3));
         }
     }
 
@@ -100,11 +105,7 @@ impl Filter {
             return false;
         }
         // Words pasted on lines of their own stay words apart.
-        self.typed.extend(
-            text.chars()
-                .map(|c| if c.is_whitespace() { ' ' } else { c })
-                .filter(|c| !c.is_control()),
-        );
+        self.field.paste(text);
         true
     }
 
@@ -112,7 +113,7 @@ impl Filter {
     /// typed, else those holding every word typed, best first, in their own
     /// order among equals.
     pub fn shown<S: AsRef<str>>(&self, labels: &[S]) -> Vec<usize> {
-        let typed = crate::ui::palette::normalize(&self.typed);
+        let typed = crate::ui::palette::normalize(self.field.text());
         if typed.is_empty() {
             return (0..labels.len()).collect();
         }
@@ -135,17 +136,21 @@ impl Filter {
 
     /// Its line, `cols` wide (a box's inside less its margins): `›`, what is typed and the cursor, and
     /// how many match of how many there are at its right.
-    pub fn line(&self, cols: usize, matched: usize, of: usize, look: &Look) -> BoxLine {
-        BoxLine::spans(super::kit::input_beside(
-            &self.typed,
+    pub fn line(&mut self, cols: usize, matched: usize, of: usize, look: &Look) -> BoxLine {
+        let count = format!("{matched}/{of}");
+        self.room = super::kit::input_field_room("", cols, draw::width(&count));
+        BoxLine::spans(super::kit::input_field(
+            "",
+            &self.field,
             "type to search",
             cols,
             vec![ratatui::text::Span::styled(
-                format!("{matched}/{of}"),
+                count,
                 super::kit::Tone::Dim.style(&look.theme),
             )],
             &look.theme,
             false,
+            true,
         ))
     }
 }
@@ -194,6 +199,8 @@ pub struct Menu {
     options: Vec<MenuOption>,
     /// The search `/` opens, and the options it shows, by their index.
     filter: Filter,
+    /// The line the search was last drawn on, while it is open.
+    search_line: Option<usize>,
     shown: Vec<usize>,
     /// The chosen one of those shown; one past the last is the close button
     /// (Tab).
@@ -219,6 +226,7 @@ impl Menu {
             shown: (0..options.len()).collect(),
             options,
             filter: Filter::default(),
+            search_line: None,
             cursor: 0,
             close_lit: false,
             drawn: None,
@@ -410,6 +418,7 @@ impl Overlay for Menu {
         if !lines.is_empty() {
             lines.push(BoxLine::blank());
         }
+        self.search_line = searching.then_some(lines.len());
         if searching {
             lines.push(
                 self.filter
@@ -495,6 +504,7 @@ impl Overlay for Menu {
                 self.refilter();
                 return Step::Redraw;
             }
+            Filtered::Moved => return Step::Redraw,
             Filtered::Not => {}
         }
         let n = self.shown.len();
@@ -595,6 +605,10 @@ impl Overlay for Menu {
         match draw::gesture(&mouse) {
             Gesture::Click if look.mouse => match (hit, option) {
                 (_, Some(o)) => Step::Close(Outcome::Chose(self.shown[o])),
+                (Hit::Line(i, col), _) if Some(i) == self.search_line => {
+                    self.filter.click(col as usize);
+                    Step::Redraw
+                }
                 (Hit::Close | Hit::Outside, _) => Step::Close(Outcome::Dismissed),
                 _ => Step::Same,
             },
@@ -747,6 +761,21 @@ mod tests {
         assert_eq!(m.key(key(KeyCode::End), &look), Step::Same);
         m.key(key(KeyCode::Home), &look);
         assert_eq!(m.key(key(KeyCode::Home), &look), Step::Same);
+    }
+
+    #[test]
+    fn moving_the_search_cursor_keeps_the_chosen_match() {
+        let look = Look::default();
+        let mut m = long();
+        m.key(key(KeyCode::Char('/')), &look);
+        typed(&mut m, "lan", &look);
+        m.key(key(KeyCode::Down), &look);
+        assert_eq!(m.cursor(), 5);
+        assert_eq!(m.key(key(KeyCode::Left), &look), Step::Redraw);
+        assert_eq!(m.cursor(), 5);
+        m.key(Key::new(KeyCode::Enter, Mods::SHIFT), &look);
+        assert_eq!(m.cursor(), 5);
+        assert!(m.filter.is_open());
     }
 
     #[test]

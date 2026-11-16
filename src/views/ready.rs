@@ -855,6 +855,8 @@ pub struct ReadyBox {
     /// and the line it is drawn on.
     first_shown: usize,
     first_line: usize,
+    /// The line the search was last drawn on, while it is open.
+    search_line: Option<usize>,
     hover: Option<usize>,
     drawn: Option<Drawn>,
 }
@@ -873,6 +875,7 @@ impl ReadyBox {
             cursor: 0,
             first_shown: 0,
             first_line: 0,
+            search_line: None,
             hover: None,
             drawn: None,
         }
@@ -949,6 +952,7 @@ impl Overlay for ReadyBox {
         let searching = self.filter.is_open();
         if !choices.is_empty() || searching {
             lines.push(BoxLine::blank());
+            self.search_line = searching.then_some(lines.len());
             if searching {
                 lines.push(
                     self.filter
@@ -1016,6 +1020,7 @@ impl Overlay for ReadyBox {
     fn key(&mut self, key: Key, _look: &Look) -> Step {
         if !self.choices().is_empty() {
             match self.filter.key(key) {
+                Filtered::Moved => return Step::Redraw,
                 Filtered::Changed | Filtered::Closed => {
                     self.cursor = 0;
                     return Step::Redraw;
@@ -1137,6 +1142,12 @@ impl Overlay for ReadyBox {
             Gesture::Click if look.mouse => {
                 if hit == Hit::Outside || hit == Hit::Close {
                     return Step::Close(Outcome::Dismissed);
+                }
+                if let Hit::Line(i, col) = hit
+                    && Some(i) == self.search_line
+                {
+                    self.filter.click(col as usize);
+                    return Step::Redraw;
                 }
                 match option {
                     Some(i) => Step::Close(Outcome::Chose(choices[i] as usize)),

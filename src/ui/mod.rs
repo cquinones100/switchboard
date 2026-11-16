@@ -16,6 +16,7 @@
 //! under it, or to the tab, as if the box hadn't been there.
 //!
 //! - `draw`: text measured in columns, and the box everything is drawn in.
+//! - `field`: the text field every box that takes typing shares.
 //! - `images`: the image atoms (avatar, picture, meter, series, shadow)
 //!   drawn with kitty graphics, or as text where the terminal can't.
 //! - `kit`: UX 2.0's atoms (tones, marks, chips, cards, keys), which every
@@ -59,6 +60,7 @@ use crate::settings;
 
 pub mod confirm;
 pub mod draw;
+pub mod field;
 pub mod headless;
 pub mod images;
 pub mod keylist;

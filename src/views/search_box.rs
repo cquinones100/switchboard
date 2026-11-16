@@ -44,6 +44,7 @@ use crate::mux::PaneId;
 use crate::mux::input::{Key, KeyCode, Mods, Mouse, MouseButton, MouseKind};
 use crate::mux::server::{ClientId, Event};
 use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
+use crate::ui::field::{Edit, Field};
 use crate::ui::kit::{self, Col, Tone};
 use crate::ui::menu::wrap_step;
 use crate::ui::{Look, Outcome, Overlay, Picked, Step};
@@ -138,7 +139,11 @@ pub struct SearchBox {
     /// Whether the chips lit are a typed prefix's, until a chip is
     /// pressed.
     prefixed: bool,
-    query: String,
+    /// What is typed (a `ui::field`), a source's prefix taken out.
+    query: Field,
+    /// The columns the field was last drawn in, and where on its line
+    /// they start, for a click on it.
+    field_at: (usize, usize),
     asked: Option<Asked>,
     rows: Vec<Found>,
     waiting: Vec<Source>,
@@ -209,7 +214,8 @@ impl SearchBox {
             sources,
             lit,
             prefixed: false,
-            query: String::new(),
+            query: Field::new(),
+            field_at: (0, 0),
             asked: None,
             rows: Vec::new(),
             waiting: Vec::new(),
@@ -260,20 +266,33 @@ impl SearchBox {
 
     /// What is typed, for the tests.
     pub fn typed(&self) -> &str {
-        &self.query
+        self.query.text()
     }
 
-    /// Text typed into the field: a source's prefix at its start leaves
-    /// it and lights the sources it names alone.
-    fn type_in(&mut self, text: &str) {
+    /// A character typed into the field, at its cursor.
+    fn type_key(&mut self, key: Key) {
         // The space after a prefix taken out isn't kept either.
+        if !(self.query.is_empty() && key.code == KeyCode::Char(' ')) {
+            self.query.key(key);
+        }
+        self.scope_typed();
+    }
+
+    /// Text pasted into the field, at its cursor.
+    fn type_in(&mut self, text: &str) {
         let text = if self.query.is_empty() {
             text.trim_start()
         } else {
             text
         };
-        self.query.push_str(text);
-        let (named, rest) = search::scope(&self.query);
+        self.query.paste(text);
+        self.scope_typed();
+    }
+
+    /// A source's prefix at the field's start leaves it and lights the
+    /// sources it names alone.
+    fn scope_typed(&mut self) {
+        let (named, rest) = search::scope(self.query.text());
         if named != Source::ALL {
             // A prefix typed after another adds its sources to the other's.
             let lit: Vec<Source> = self
@@ -287,12 +306,20 @@ impl SearchBox {
             if !lit.is_empty() {
                 self.lit = lit;
             }
-            self.query = rest.to_string();
+            // What follows the prefixes, from where it starts in the text
+            // (scope gives it trimmed), the cursor moved back by as much.
+            let text = self.query.text();
+            let cut = (rest.as_ptr() as usize)
+                .saturating_sub(text.as_ptr() as usize)
+                .min(text.len());
+            let cursor = self.query.cursor().saturating_sub(cut);
+            let rest = text[cut..].to_string();
+            self.query.take_in(&rest, cursor);
             self.prefixed = true;
         }
         // Prefixes add up only while nothing but the start of another
         // source's word follows them.
-        if !self.query.is_empty() && !search::starts_a_source(&self.query) {
+        if !self.query.is_empty() && !search::starts_a_source(self.query.text()) {
             self.prefixed = false;
         }
     }
@@ -324,7 +351,7 @@ impl SearchBox {
     /// Enter in the field: asks the lit sources for what is typed, unless
     /// the results are of it already, when it takes the chosen row.
     fn enter(&mut self, browser: bool) -> Step {
-        let query = self.query.trim().to_string();
+        let query = self.query.text().trim().to_string();
         // A prefix typed since lights other sources: those are asked, and
         // the rows of the ones lit before are never taken.
         let (same_query, same_sources) = self.asked.as_ref().map_or((false, false), |a| {
@@ -985,15 +1012,23 @@ impl Overlay for SearchBox {
             None => String::new(),
         };
         let mut lines = vec![
-            BoxLine::spans(kit::input_prompted(
-                &self.prompt(),
-                &self.query,
-                "",
-                inner,
-                vec![Span::styled(right, Tone::Dim.style(&theme))],
-                &theme,
-                self.caps,
-            ))
+            BoxLine::spans({
+                let prompt = self.prompt();
+                self.field_at = (
+                    kit::input_field_room(&prompt, inner, draw::width(&right)),
+                    3 + draw::width(&prompt),
+                );
+                kit::input_field(
+                    &prompt,
+                    &self.query,
+                    "",
+                    inner,
+                    vec![Span::styled(right, Tone::Dim.style(&theme))],
+                    &theme,
+                    self.caps,
+                    true,
+                )
+            })
             .clickable(),
             BoxLine::blank(),
             BoxLine::spans(self.chips_line(look)).clickable(),
@@ -1075,7 +1110,8 @@ impl Overlay for SearchBox {
             KeyCode::Down => return self.down(),
             KeyCode::Char('n' | 'j') if ctrl => return self.step(true),
             KeyCode::Up => return self.up(),
-            KeyCode::Char('p' | 'k') if ctrl => return self.step(false),
+            // C-k is the field's, to the line's end.
+            KeyCode::Char('p') if ctrl => return self.step(false),
             KeyCode::PageDown => return self.move_to(self.cursor + self.room),
             KeyCode::PageUp => return self.move_to(self.cursor.saturating_sub(self.room)),
             KeyCode::Char('o') if ctrl => return self.take(true),
@@ -1093,40 +1129,34 @@ impl Overlay for SearchBox {
             return self.press(self.focus);
         }
         match key.code {
-            KeyCode::Enter => self.enter(false),
+            KeyCode::Enter if key.mods == Mods::NONE => self.enter(false),
+            KeyCode::Char(_) if plain => {
+                self.focus = Part::Field;
+                self.type_key(key);
+                Step::Redraw
+            }
             // Anything taken out of the field ends a run of prefixes, so a
             // prefix typed after it starts its own.
-            KeyCode::Backspace => {
-                self.focus = Part::Field;
-                self.prefixed = false;
-                self.query.pop();
-                Step::Redraw
-            }
-            KeyCode::Char('u') if ctrl => {
-                self.focus = Part::Field;
-                self.prefixed = false;
-                self.query.clear();
-                Step::Redraw
-            }
-            KeyCode::Char('w') if ctrl => {
-                self.focus = Part::Field;
-                self.prefixed = false;
-                let kept = self.query.trim_end().rfind(' ').map_or(0, |at| at + 1);
-                self.query.truncate(kept);
-                Step::Redraw
-            }
-            KeyCode::Char(c) if plain => {
-                self.focus = Part::Field;
-                self.type_in(&c.to_string());
-                Step::Redraw
-            }
-            _ => Step::Same,
+            _ => match self.query.key(key) {
+                Edit::Changed => {
+                    self.focus = Part::Field;
+                    self.prefixed = false;
+                    // An edit that leaves a prefix at the start takes it, as typing it does.
+                    self.scope_typed();
+                    Step::Redraw
+                }
+                Edit::Moved => {
+                    self.focus = Part::Field;
+                    Step::Redraw
+                }
+                _ => Step::Same,
+            },
         }
     }
 
     fn paste(&mut self, text: &str, _look: &Look) -> Step {
         self.focus = Part::Field;
-        self.type_in(text.lines().next().unwrap_or(""));
+        self.type_in(text);
         Step::Redraw
     }
 
@@ -1218,6 +1248,11 @@ impl Overlay for SearchBox {
                 if let Some(part) = self.part_at(hit) {
                     if part == Part::Field {
                         self.focus = Part::Field;
+                        if let Hit::Line(_, col) = hit {
+                            let (room, start) = self.field_at;
+                            self.query
+                                .click_one_row(room, (col as usize).saturating_sub(start));
+                        }
                         return Step::Redraw;
                     }
                     return self.press(part);
@@ -1328,6 +1363,29 @@ mod tests {
         type_text(&mut b, "fix: it");
         assert_eq!(b.typed(), "fix: it", "a word naming no source stays");
         assert_eq!(b.lit(), Source::ALL);
+    }
+
+    #[test]
+    fn a_prefix_pasted_before_the_text_keeps_the_cursor_where_it_was() {
+        let (mut b, _) = open(&[], "");
+        let look = Look::default();
+        type_text(&mut b, "beta ");
+        b.key(key(KeyCode::Home), &look);
+        b.paste("note: alpha", &look);
+        type_text(&mut b, "X");
+        assert_eq!(b.typed(), "alphaXbeta ");
+        assert_eq!(b.lit(), [Source::Notes]);
+    }
+
+    #[test]
+    fn undo_never_brings_a_prefix_back_as_text() {
+        let (mut b, _) = open(&[], "");
+        type_text(&mut b, "note: alpha");
+        let undo = Key::new(KeyCode::Char('z'), Mods::CTRL);
+        b.key(undo, &Look::default());
+        b.key(undo, &Look::default());
+        assert!(!b.typed().contains("note:"), "{}", b.typed());
+        assert_eq!(b.lit(), [Source::Notes]);
     }
 
     #[test]

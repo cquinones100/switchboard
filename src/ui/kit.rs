@@ -1480,16 +1480,84 @@ pub fn input_prompted(
     theme: &Theme,
     caps: bool,
 ) -> Vec<Span<'static>> {
+    let typed = vec![
+        Span::styled(text.to_string(), Tone::Text.style(theme)),
+        Span::styled("▏", Tone::Accent.style(theme)),
+    ];
+    chip_of(
+        prompt,
+        typed,
+        text.is_empty(),
+        placeholder,
+        cols,
+        right,
+        theme,
+        caps,
+    )
+}
+
+/// A field as `input_prompted` draws it, from a `ui::field`: its text
+/// scrolled sideways to keep the cursor in sight and the cursor where it
+/// is, drawn only while `cursor` (the field has the focus).
+#[allow(clippy::too_many_arguments)]
+pub fn input_field(
+    prompt: &str,
+    field: &super::field::Field,
+    placeholder: &str,
+    cols: usize,
+    right: Vec<Span<'static>>,
+    theme: &Theme,
+    caps: bool,
+    cursor: bool,
+) -> Vec<Span<'static>> {
+    let room = input_field_room(prompt, cols, spans_width(&right));
+    let typed = if cursor {
+        field.one_row(room, Tone::Text.style(theme), Tone::Accent.style(theme))
+    } else {
+        vec![Span::styled(
+            field.text().replace('\n', " "),
+            Tone::Text.style(theme),
+        )]
+    };
+    chip_of(
+        prompt,
+        typed,
+        field.is_empty(),
+        placeholder,
+        cols,
+        right,
+        theme,
+        caps,
+    )
+}
+
+/// The columns `input_field` gives a field's text, which starts
+/// `3 + width(prompt)` columns into the chip: what `Field::click_one_row`
+/// takes.
+pub fn input_field_room(prompt: &str, cols: usize, right: usize) -> usize {
+    cols.saturating_sub(2)
+        .saturating_sub(right + 1)
+        .saturating_sub(2 + width(prompt))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn chip_of(
+    prompt: &str,
+    typed_spans: Vec<Span<'static>>,
+    empty: bool,
+    placeholder: &str,
+    cols: usize,
+    right: Vec<Span<'static>>,
+    theme: &Theme,
+    caps: bool,
+) -> Vec<Span<'static>> {
     let inner = cols.saturating_sub(2);
     let mut typed = vec![Span::styled("› ", Tone::Accent.bold(theme))];
     if !prompt.is_empty() {
         typed.push(Span::styled(prompt.to_string(), Tone::Dim.style(theme)));
     }
-    typed.extend([
-        Span::styled(text.to_string(), Tone::Text.style(theme)),
-        Span::styled("▏", Tone::Accent.style(theme)),
-    ]);
-    if text.is_empty() {
+    typed.extend(typed_spans);
+    if empty {
         typed.push(Span::styled(
             placeholder.to_string(),
             Tone::Faint.style(theme),

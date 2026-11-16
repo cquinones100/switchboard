@@ -5,7 +5,8 @@
 //! its own running `shape`, as shape-batch opens them. /shape looks for a
 //! ticket that already covers an item first, and offers to resume shaping
 //! that one instead. M-p's "Shape a new Linear ticket" is the same with one
-//! idea typed in place of a note's items. Ported from tmux/note-shape.sh.
+//! idea typed in place of a note's items, in an ask box that takes more
+//! than a line. Ported from tmux/note-shape.sh.
 //!
 //! The notes are the notes app's: Markdown in `$NOTES_DIR` or `~/Notes`,
 //! the one open in the app first, then the rest, newest first. An item is
@@ -207,19 +208,20 @@ impl Server {
             return;
         }
         if typed {
-            let picker = Picker::new(
-                "Shape a new ticket: what should it be about? (Enter on nothing cancels)",
-                Vec::new(),
+            let ask = crate::mission::ask::Ask::new(
+                "Shape a new ticket",
+                "What should it be about? S-Enter starts a new line.",
             )
-            .named("shape-idea")
-            .prompt("> ")
-            .free();
-            self.pick(client, picker, |server, client, picked| {
-                let idea = picked.map(|p| p.value.trim().to_string());
-                if let Some(idea) = idea.filter(|i| !i.is_empty()) {
-                    server.shape_in_repo(client, vec![idea]);
-                }
-            });
+            .multi_line();
+            self.open(
+                client,
+                Box::new(ask),
+                Some(Box::new(|server: &mut Server, client, outcome| {
+                    if let crate::ui::Outcome::Picked(p) = outcome {
+                        server.shape_in_repo(client, vec![p.value]);
+                    }
+                })),
+            );
             return;
         }
         let notes = worktree_from_note::notes_dir();

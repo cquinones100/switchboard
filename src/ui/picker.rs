@@ -31,10 +31,10 @@
 //! up, and Enter takes the rows marked, in the list's order, or the chosen
 //! one when none is. The marks stay while what is typed changes.
 //!
-//! Up and Down (C-p and C-n, C-k and C-j, Tab and Shift-Tab but in a list
-//! that marks, the wheel) move; Enter picks; Esc or C-c closes; Backspace,
-//! C-w and C-u edit what is
-//! typed. A click moves to a row and a second click on it picks it, as fzf
+//! Up and Down (C-p and C-n, C-j, Tab and Shift-Tab but in a list that
+//! marks, the wheel) move; Enter picks; Esc or C-c closes; what is typed is
+//! a `ui::field`, edited as every box's is (C-k deleting to its end), and
+//! a click on it puts its cursor there. A click moves to a row and a second click on it picks it, as fzf
 //! does; a click outside closes the list; the row under the mouse is lit.
 
 use std::time::{Duration, Instant};
@@ -47,6 +47,7 @@ use ratatui::text::Span;
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit, Place};
+use super::field::{Edit, Field};
 use super::kit::{self, Tone};
 use super::{Look, Outcome, Overlay, Step};
 use crate::mux::input::{Key, KeyCode, Mods, Mouse, MouseButton, MouseKind};
@@ -113,6 +114,11 @@ pub struct Picker {
     prompt: String,
     items: Vec<PickItem>,
     query: String,
+    /// What is typed, as a field; `query` is its text.
+    field: Field,
+    /// The columns the field was last drawn in, and where on its line
+    /// they start, for a click on it.
+    field_at: (usize, usize),
     exact: bool,
     free: bool,
     order: Option<Order>,
@@ -156,6 +162,8 @@ impl Picker {
             prompt: "> ".into(),
             items,
             query: String::new(),
+            field: Field::new(),
+            field_at: (0, 0),
             exact: false,
             free: false,
             order: None,
@@ -329,6 +337,7 @@ impl Picker {
     /// Typed, as if by hand.
     pub fn query(mut self, query: &str) -> Picker {
         self.query = query.to_string();
+        self.field = Field::new().with_text(query);
         self.refilter();
         self
     }
@@ -517,14 +526,20 @@ impl Picker {
         Step::Redraw
     }
 
-    fn edit(&mut self, change: impl FnOnce(&mut String)) -> Step {
-        let before = self.query.clone();
-        change(&mut self.query);
-        if self.query == before {
-            return Step::Same;
+    /// What is typed changed or its cursor moved: the rows shown follow it.
+    fn edited(&mut self) -> Step {
+        if self.field.text() == self.query {
+            return Step::Redraw;
         }
+        self.query = self.field.text().to_string();
         self.refilter();
         Step::Redraw
+    }
+
+    /// The columns the query gets on its line without the kit, after the
+    /// prompt.
+    fn plain_room(&self, inner: usize) -> usize {
+        inner.saturating_sub(2 + draw::width(&self.prompt))
     }
 
     /// The columns a row's parts get in a box `inner` wide: the text, the
@@ -730,24 +745,37 @@ impl Overlay for Picker {
                 self.marked.len()
             )
         };
+        self.field_at = match self.kit {
+            Some(_) => (kit::input_field_room("", inner, draw::width(&count)), 3),
+            None => (self.plain_room(inner), 1 + draw::width(&self.prompt)),
+        };
         let mut lines = match self.kit {
             Some(caps) => vec![
-                BoxLine::spans(kit::input_beside(
-                    &self.query,
+                BoxLine::spans(kit::input_field(
+                    "",
+                    &self.field,
                     "",
                     inner,
                     vec![Span::styled(count, Tone::Dim.style(&look.theme))],
                     &look.theme,
                     caps,
+                    true,
                 )),
                 BoxLine::spans(vec![kit::rule(inner, &look.theme)]),
             ],
             None => vec![
-                BoxLine::spans(vec![
-                    Span::styled(format!(" {}", self.prompt), Style::new().fg(draw::EDGE)),
-                    Span::styled(self.query.clone(), look.bright()),
-                    Span::styled("▏", look.dim()),
-                ]),
+                BoxLine::spans(
+                    [Span::styled(
+                        format!(" {}", self.prompt),
+                        Style::new().fg(draw::EDGE),
+                    )]
+                    .into_iter()
+                    .chain(
+                        self.field
+                            .one_row(self.plain_room(inner), look.bright(), look.dim()),
+                    )
+                    .collect(),
+                ),
                 BoxLine::text(format!("   {count}"), look.dim()),
             ],
         };
@@ -830,10 +858,9 @@ impl Overlay for Picker {
 
     fn key(&mut self, key: Key, _look: &Look) -> Step {
         let ctrl = key.mods == Mods::CTRL;
-        let plain = key.mods == Mods::NONE || key.mods == Mods::SHIFT;
         match key.code {
             KeyCode::Enter if self.free && key.mods == Mods::ALT => self.take_typed(),
-            KeyCode::Enter => self.pick(),
+            KeyCode::Enter if key.mods == Mods::NONE => self.pick(),
             KeyCode::Char('o') if ctrl && self.also.is_some() => self.pick_also(),
             KeyCode::Esc => Step::Close(Outcome::Dismissed),
             KeyCode::Char('c' | 'g') if ctrl => Step::Close(Outcome::Dismissed),
@@ -842,27 +869,22 @@ impl Overlay for Picker {
             KeyCode::Down => self.step(true),
             KeyCode::Char('n' | 'j') if ctrl => self.step(true),
             KeyCode::Up => self.step(false),
-            KeyCode::Char('p' | 'k') if ctrl => self.step(false),
+            // C-k is the field's, to the line's end.
+            KeyCode::Char('p') if ctrl => self.step(false),
             KeyCode::Tab => self.move_to(self.cursor + 1),
             KeyCode::BackTab => self.move_to(self.cursor.saturating_sub(1)),
             KeyCode::PageDown => self.move_to(self.cursor + self.room),
             KeyCode::PageUp => self.move_to(self.cursor.saturating_sub(self.room)),
-            KeyCode::Backspace => self.edit(|q| {
-                q.pop();
-            }),
-            KeyCode::Char('u') if ctrl => self.edit(String::clear),
-            KeyCode::Char('w') if ctrl => self.edit(|q| {
-                let kept = q.trim_end().rfind(' ').map_or(0, |at| at + 1);
-                q.truncate(kept);
-            }),
-            KeyCode::Char(c) if plain => self.edit(|q| q.push(c)),
-            _ => Step::Same,
+            _ => match self.field.key(key) {
+                Edit::Changed | Edit::Moved => self.edited(),
+                _ => Step::Same,
+            },
         }
     }
 
     fn paste(&mut self, text: &str, _look: &Look) -> Step {
-        let line = text.lines().next().unwrap_or("").to_string();
-        self.edit(|q| q.push_str(&line))
+        self.field.paste(text);
+        self.edited()
     }
 
     fn mouse(&mut self, mouse: Mouse, look: &Look) -> Step {
@@ -910,6 +932,15 @@ impl Overlay for Picker {
         let hit = drawn.hit(mouse.col, mouse.row);
         let first = self.first_row();
         // A row that can't be taken neither lights nor takes a click.
+        // A click in what is typed puts the cursor there.
+        if let (Hit::Line(0, col), Gesture::Click) = (hit, draw::gesture(&mouse))
+            && look.mouse
+        {
+            let (room, start) = self.field_at;
+            self.field
+                .click_one_row(room, (col as usize).saturating_sub(start));
+            return Step::Redraw;
+        }
         let row = match hit {
             Hit::Line(i, _) if i >= first && i < first + self.room => {
                 Some(self.top + i - first).filter(|r| self.takes(*r))
@@ -974,6 +1005,21 @@ mod tests {
     }
 
     #[test]
+    fn the_query_edits_as_a_field_and_s_enter_picks_nothing() {
+        let look = Look::default();
+        let mut p = Picker::new("Pick", items());
+        typed(&mut p, "new tab");
+        p.key(Key::new(KeyCode::Home, Mods::NONE), &look);
+        p.key(Key::new(KeyCode::Right, Mods::ALT), &look);
+        p.key(Key::new(KeyCode::Char('k'), Mods::CTRL), &look);
+        assert_eq!(p.typed(), "new");
+        assert_eq!(
+            p.key(Key::new(KeyCode::Enter, Mods::SHIFT), &look),
+            Step::Same
+        );
+    }
+
+    #[test]
     fn typing_filters_fuzzily_and_enter_picks() {
         let mut p = Picker::new("Pick", items());
         assert_eq!(p.shown().len(), 4);
@@ -1000,7 +1046,7 @@ mod tests {
         assert_eq!(p.key(key(KeyCode::PageDown, Mods::NONE), &look), Step::Same);
         p.key(key(KeyCode::Down, Mods::NONE), &look);
         assert_eq!(p.chosen().unwrap().text, "Split pane to the left");
-        p.key(key(KeyCode::Char('k'), Mods::CTRL), &look);
+        p.key(key(KeyCode::Char('p'), Mods::CTRL), &look);
         assert_eq!(p.chosen().unwrap().text, "Zoom the pane in or out");
         p.key(key(KeyCode::Char('n'), Mods::CTRL), &look);
         assert_eq!(p.chosen().unwrap().text, "Split pane to the left");

@@ -17,6 +17,8 @@
 //! move a highlight round the options (and easy mode's ×), Enter taking it.
 //! `/` searches the options as it searches every menu (src/ui/menu.rs's
 //! `Filter`), each keeping its number, since that is what is pressed.
+//! What is typed is a multi-line `ui::field`: S-Enter and M-Enter start a
+//! new line, pasted with the rest, and Enter sends it.
 //! It closes with what to press, which the server presses in the pane.
 
 use std::sync::LazyLock;
@@ -28,6 +30,7 @@ use regex::Regex;
 
 use crate::mux::input::{Key, KeyCode, Mods, Mouse};
 use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
+use crate::ui::field::{Edit, Field};
 use crate::ui::menu::{Filter, Filtered, NO_MATCH, SEARCH_KEYS, wrap_step};
 use crate::ui::{Look, Outcome, Overlay, Picked, Step};
 
@@ -409,11 +412,15 @@ pub fn into_prompt(screen: &str, presses: Vec<Press>) -> Vec<Press> {
 pub struct AnswerBox {
     title: String,
     found: Option<Prompt>,
-    text: String,
+    field: Field,
+    /// The box's lines that hold the field's rows.
+    field_lines: std::ops::Range<usize>,
     typing: bool,
     note: Option<String>,
     /// The search `/` opens over the options.
     filter: Filter,
+    /// The line the search was last drawn on, while it is open.
+    search_line: Option<usize>,
     /// Where Tab has put the highlight: one of the options shown, or past
     /// the last the close button.
     focus: Option<usize>,
@@ -430,10 +437,12 @@ impl AnswerBox {
         AnswerBox {
             title,
             found,
-            text: String::new(),
+            field: Field::new().multi_line(),
+            field_lines: 0..0,
             typing: false,
             note,
             filter: Filter::default(),
+            search_line: None,
             focus: None,
             close_focus: false,
             lit: None,
@@ -498,9 +507,16 @@ impl Overlay for AnswerBox {
             // While searching, a question too long for the screen gives up
             // its last rows, so the search and a match still fit in the box
             // (four rows of its own and two of keys).
+            // While typing, it gives them up so the options, a blank and a
+            // row of the field (and the note) still fit under it.
             let room = (buf.area.height as usize).saturating_sub(6);
-            let most = room.saturating_sub(4).max(1);
-            if self.filter.is_open() && asked.len() > most {
+            let most = if typing {
+                let below = if self.note.is_some() { 2 } else { 0 };
+                room.saturating_sub(found.options.len() + 3 + below).max(1)
+            } else {
+                room.saturating_sub(4).max(1)
+            };
+            if (self.filter.is_open() || typing) && asked.len() > most {
                 asked.truncate(most - 1);
                 asked.push("…".into());
             }
@@ -509,6 +525,7 @@ impl Overlay for AnswerBox {
             }
             lines.push(BoxLine::blank());
             let shown = self.shown();
+            self.search_line = self.filter.is_open().then_some(lines.len());
             if self.filter.is_open() {
                 lines.push(self.filter.line(
                     inner.saturating_sub(2),
@@ -583,10 +600,29 @@ impl Overlay for AnswerBox {
         }
         if typing {
             lines.push(BoxLine::blank());
-            lines.push(BoxLine::spans(vec![
-                Span::styled(format!(" › {}", self.text), look.bright()),
-                Span::styled("▏", look.dim()),
-            ]));
+            let first = lines.len();
+            // Up to half the screen, and never more than the box has rows
+            // for under the question and the options (and the note after).
+            let below = if self.note.is_some() { 2 } else { 0 };
+            let left = (buf.area.height as usize).saturating_sub(6 + lines.len() + below);
+            let most = (buf.area.height as usize / 2)
+                .saturating_sub(4)
+                .min(left)
+                .max(1);
+            let rows = self.field.view(
+                inner.saturating_sub(4),
+                most,
+                look.bright(),
+                look.dim(),
+                true,
+            );
+            for (i, row) in rows.into_iter().enumerate() {
+                let lead = if i == 0 { " › " } else { "   " };
+                let mut spans = vec![Span::styled(lead, look.bright())];
+                spans.extend(row);
+                lines.push(BoxLine::spans(spans));
+            }
+            self.field_lines = first..lines.len();
         }
         if let Some(note) = &self.note {
             lines.push(BoxLine::blank());
@@ -604,7 +640,7 @@ impl Overlay for AnswerBox {
                     ""
                 }
             ),
-            _ => "type  ↵ send  esc back".to_string(),
+            _ => "type  ⇧↵ new line  ↵ send  esc back".to_string(),
         };
         let mut spec = BoxSpec::new(&self.title, &lines);
         spec.keys = Some(&keys);
@@ -623,6 +659,7 @@ impl Overlay for AnswerBox {
                     self.focus = self.filter.is_open().then_some(0);
                     return Step::Redraw;
                 }
+                Filtered::Moved => return Step::Redraw,
                 Filtered::Not => {}
             }
         }
@@ -666,16 +703,13 @@ impl Overlay for AnswerBox {
                 return Step::Close(Outcome::Dismissed);
             }
             self.close_focus = false;
-            match k.code {
-                KeyCode::Enter => return AnswerBox::give(self.text.clone()),
-                KeyCode::Backspace => {
-                    self.text.pop();
+            return match self.field.key(k) {
+                Edit::Changed | Edit::Moved => Step::Redraw,
+                Edit::Not if k.code == KeyCode::Enter => {
+                    AnswerBox::give(self.field.text().to_string())
                 }
-                KeyCode::Char('u') if k.mods == Mods::CTRL => self.text.clear(),
-                KeyCode::Char(c) if !k.mods.ctrl && !k.mods.alt => self.text.push(c),
-                _ => return Step::Same,
-            }
-            return Step::Redraw;
+                _ => Step::Same,
+            };
         }
         let Some(found) = &self.found else {
             return Step::Same;
@@ -747,6 +781,16 @@ impl Overlay for AnswerBox {
         match draw::gesture(&mouse) {
             Gesture::Click if look.mouse => match (hit, option) {
                 (_, Some(n)) => AnswerBox::give(n.to_string()),
+                (Hit::Line(i, col), _) if Some(i) == self.search_line => {
+                    self.filter.click(col as usize);
+                    Step::Redraw
+                }
+                (Hit::Line(i, col), _) if self.typing_line() && self.field_lines.contains(&i) => {
+                    self.close_focus = false;
+                    self.field
+                        .click(i - self.field_lines.start, (col as usize).saturating_sub(3));
+                    Step::Redraw
+                }
                 (Hit::Close | Hit::Outside, _) => Step::Close(Outcome::Dismissed),
                 _ => Step::Same,
             },
@@ -772,7 +816,7 @@ impl Overlay for AnswerBox {
         if !self.typing_line() {
             return Step::Same;
         }
-        self.text.push_str(text);
+        self.field.paste(text);
         Step::Redraw
     }
 }
