@@ -285,9 +285,19 @@ impl Menu {
 }
 
 /// The keys a menu takes, on its bottom row.
-pub(crate) const KEYS: &str = "jk or tab move  ↵ or click choose  esc back";
+/// Board 0's: the arrows, Enter and Esc, never a letter key.
+pub(crate) const KEYS: &str = "↑↓ move  ↵ choose  esc close";
 /// A long menu's, which says it searches.
-const KEYS_SEARCH: &str = "jk or tab move  ↵ or click choose  / search  esc back";
+const KEYS_SEARCH: &str = "↑↓ move  ↵ choose  / search  esc close";
+
+/// A footer's keys as the kit's (key, what it does) pairs: two spaces
+/// between pairs, the key up to the first space in each.
+fn hint_pairs(keys: &str) -> Vec<(&str, &str)> {
+    keys.split("  ")
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| pair.split_once(' ').unwrap_or((pair, "")))
+        .collect()
+}
 
 /// The widest a menu's inside is on a screen `cols` wide: its box 72
 /// columns or two thirds of the screen, whichever is less.
@@ -425,6 +435,18 @@ impl Overlay for Menu {
         spec.close_lit = self.cursor == n || self.close_lit;
         spec.place = self.place;
         let drawn = draw::draw_box(buf, &spec, look);
+        // The keys row again, each key in the accent and what it does dim,
+        // as every footer's.
+        if drawn.inner.height >= 2 {
+            let hints = super::kit::hints(&hint_pairs(self.keys()), &look.theme);
+            draw::put_line(
+                buf,
+                drawn.inner.x + 1,
+                drawn.inner.bottom() - 1,
+                drawn.inner.width.saturating_sub(1),
+                &ratatui::text::Line::from(hints),
+            );
+        }
         if !searching {
             self.closed_width = Some(drawn.inner.width as usize);
         }
@@ -634,6 +656,33 @@ mod tests {
         assert_eq!(m.cursor(), 2, "Shift-Tab goes round to the last");
         m.key(key(KeyCode::Tab), &look);
         assert_eq!(m.cursor(), 0);
+    }
+
+    #[test]
+    fn its_footer_reads_as_board_0_with_the_keys_in_the_accent() {
+        let look = Look::default();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+        menu().draw(&mut buf, &look);
+        let s = screen(&buf);
+        assert!(
+            s.iter().any(|l| l.contains("↑↓ move  ↵ choose  esc close")),
+            "{s:#?}"
+        );
+        assert!(!s.iter().any(|l| l.contains("jk")), "no letter keys");
+        let y = s.iter().position(|l| l.contains("↑↓ move")).unwrap() as u16;
+        let x = (0..80u16).find(|x| buf[(*x, y)].symbol() == "↵").unwrap();
+        let accent = crate::ui::kit::Tone::Accent.style(&look.theme).fg;
+        assert_eq!(buf[(x, y)].style().fg, accent, "the key in the accent");
+        assert_ne!(buf[(x + 2, y)].style().fg, accent, "what it does dim");
+
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+        long().draw(&mut buf, &look);
+        let s = screen(&buf);
+        assert!(
+            s.iter()
+                .any(|l| l.contains("↑↓ move  ↵ choose  / search  esc close")),
+            "{s:#?}"
+        );
     }
 
     fn typed(m: &mut Menu, text: &str, look: &Look) {
