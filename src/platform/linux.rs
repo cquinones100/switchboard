@@ -16,6 +16,10 @@ use crate::{paths, util};
 
 pub const NAME: &str = "Linux";
 
+/// Where Homebrew on Linux puts rustup's `cargo`, which it leaves off the
+/// PATH.
+pub const RUSTUP_DIRS: [&str; 1] = ["/home/linuxbrew/.linuxbrew/opt/rustup/bin"];
+
 // ── Secrets ─────────────────────────────────────────────────────────────────
 
 const SECRETS: &str = "org.freedesktop.secrets";

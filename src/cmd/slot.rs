@@ -4,7 +4,9 @@
 //!
 //! The binary is also the `cargo`, `npm` and `pnpm` every pane finds first
 //! on its PATH (`STAND_INS`, linked in `bin_dir`): run by one of those
-//! names, it finds the real program further down the PATH and runs a heavy
+//! names, it finds the real program further down the PATH (a `cargo` the
+//! PATH lacks in rustup's usual folders, `platform::rustup_dirs`, since
+//! Homebrew's rustup leaves its folder off the PATH) and runs a heavy
 //! subcommand of it through a slot of its kind (`heavy`), and anything else
 //! at once, in its place. `cargo test` is two steps, so a compile holds a
 //! build slot only while it compiles and a long test run never keeps a
@@ -211,12 +213,24 @@ pub fn heavy(program: &str, args: &[String]) -> Plan {
 }
 
 /// The real `program`: the first on `path` that isn't this binary (or a
-/// link to it) and isn't in `bin_dir`.
-pub fn real_program(program: &str, path: &str, me: Option<&Path>) -> Option<PathBuf> {
+/// link to it) and isn't in `bin_dir`, else, for `cargo`, the first in
+/// `rustup_dirs` (`platform::rustup_dirs`), since Homebrew's rustup leaves
+/// its folder off the PATH.
+pub fn real_program(
+    program: &str,
+    path: &str,
+    me: Option<&Path>,
+    rustup_dirs: &[PathBuf],
+) -> Option<PathBuf> {
     let bin = bin_dir();
-    path.split(':')
+    let on_path = path
+        .split(':')
         .filter(|dir| !dir.is_empty() && Path::new(dir) != bin)
-        .map(|dir| Path::new(dir).join(program))
+        .map(PathBuf::from);
+    let rustups = rustup_dirs.iter().filter(|_| program == "cargo").cloned();
+    on_path
+        .chain(rustups)
+        .map(|dir| dir.join(program))
         .find(|candidate| {
             let Ok(meta) = std::fs::metadata(candidate) else {
                 return false;
@@ -226,6 +240,22 @@ pub fn real_program(program: &str, path: &str, me: Option<&Path>) -> Option<Path
             runnable
                 && me.is_none_or(|me| std::fs::canonicalize(candidate).ok().as_deref() != Some(me))
         })
+}
+
+/// `path` with `real`'s folder added at its end when it isn't on it, so a
+/// cargo found in rustup's folders finds `rustc` beside it; `None` when
+/// nothing needs adding.
+fn path_reaching(real: &Path, path: &str) -> Option<String> {
+    let dir = real.parent()?;
+    if path.split(':').any(|d| Path::new(d) == dir) {
+        return None;
+    }
+    let dir = dir.to_string_lossy();
+    Some(if path.is_empty() {
+        dir.into_owned()
+    } else {
+        format!("{path}:{dir}")
+    })
 }
 
 /// What a command given one of `cap` slots of `kind` runs with, besides
@@ -346,11 +376,20 @@ fn code_of(status: std::process::ExitStatus) -> u8 {
 
 /// Runs `program` with `args` holding a slot of `kind` (or at once, with
 /// the queue off for it): its exit code.
-fn run_held(program: &Path, args: &[String], kind: Kind, argv0: &str) -> Result<u8, String> {
+fn run_held(
+    program: &Path,
+    args: &[String],
+    kind: Kind,
+    argv0: &str,
+    path: Option<&str>,
+) -> Result<u8, String> {
     let words = words_of(argv0, args);
     let taken = take(kind, &words)?;
     let mut cmd = Command::new(program);
     cmd.arg0(argv0).args(args);
+    if let Some(path) = path {
+        cmd.env("PATH", path);
+    }
     if let Some(t) = &taken {
         cmd.envs(t.env.iter().map(|(k, v)| (*k, v)));
     }
@@ -369,8 +408,13 @@ fn run_held(program: &Path, args: &[String], kind: Kind, argv0: &str) -> Result<
 }
 
 /// Replaces this process with `program`, as though it had been run.
-fn exec(program: &Path, args: &[String], argv0: &str) -> ExitCode {
-    let err = Command::new(program).arg0(argv0).args(args).exec();
+fn exec(program: &Path, args: &[String], argv0: &str, path: Option<&str>) -> ExitCode {
+    let mut cmd = Command::new(program);
+    cmd.arg0(argv0).args(args);
+    if let Some(path) = path {
+        cmd.env("PATH", path);
+    }
+    let err = cmd.exec();
     eprintln!("{argv0}: running {}: {err}", program.display());
     ExitCode::from(126)
 }
@@ -381,27 +425,38 @@ pub fn stand_in(name: &str, args: Vec<String>) -> ExitCode {
     let me = crate::util::exe()
         .ok()
         .and_then(|e| std::fs::canonicalize(e).ok());
-    let Some(real) = real_program(name, &path, me.as_deref()) else {
-        eprintln!("{name}: command not found");
+    let Some(real) = real_program(name, &path, me.as_deref(), &crate::platform::rustup_dirs())
+    else {
+        if name == "cargo" {
+            eprintln!("{name}: {name} isn't on your PATH or in rustup's usual folders");
+        } else {
+            eprintln!("{name}: command not found");
+        }
         return ExitCode::from(127);
     };
+    let child_path = path_reaching(&real, &path);
+    let child_path = child_path.as_deref();
     if std::env::var_os(slots::HELD).is_some() {
-        return exec(&real, &args, name);
+        return exec(&real, &args, name, child_path);
     }
     // With the queue off for the work, the command runs as typed.
     let result = match heavy(name, &args) {
-        Plan::AtOnce => return exec(&real, &args, name),
-        Plan::Hold(kind) if slots::cap(kind) == 0 => return exec(&real, &args, name),
+        Plan::AtOnce => return exec(&real, &args, name, child_path),
+        Plan::Hold(kind) if slots::cap(kind) == 0 => {
+            return exec(&real, &args, name, child_path);
+        }
         Plan::CompileThenTest(_)
             if slots::cap(Kind::Build) == 0 && slots::cap(Kind::Tests) == 0 =>
         {
-            return exec(&real, &args, name);
+            return exec(&real, &args, name, child_path);
         }
-        Plan::Hold(kind) => run_held(&real, &args, kind, name),
-        Plan::CompileThenTest(compile) => match run_held(&real, &compile, Kind::Build, name) {
-            Ok(0) => run_held(&real, &args, Kind::Tests, name),
-            other => other,
-        },
+        Plan::Hold(kind) => run_held(&real, &args, kind, name, child_path),
+        Plan::CompileThenTest(compile) => {
+            match run_held(&real, &compile, Kind::Build, name, child_path) {
+                Ok(0) => run_held(&real, &args, Kind::Tests, name, child_path),
+                other => other,
+            }
+        }
     };
     match result {
         Ok(code) => ExitCode::from(code),
@@ -442,7 +497,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
             .map(code_of)
             .map_err(|e| format!("running {shown}: {e}"))
     } else {
-        run_held(&program, program_args, kind, &shown)
+        run_held(&program, program_args, kind, &shown, None)
     };
     match result {
         Ok(code) => ExitCode::from(code),
@@ -568,10 +623,55 @@ mod tests {
         let me = std::fs::canonicalize(&me).unwrap();
         let path = format!("{}:{}", mine.display(), other.display());
         assert_eq!(
-            real_program("cargo", &path, Some(&me)),
+            real_program("cargo", &path, Some(&me), &[]),
             Some(other.join("cargo"))
         );
-        assert_eq!(real_program("npm", &path, Some(&me)), None);
+        assert_eq!(real_program("npm", &path, Some(&me), &[]), None);
+    }
+
+    #[test]
+    fn cargo_off_the_path_is_found_in_rustups_folders_and_its_folder_reached() {
+        let dir = std::env::temp_dir().join(format!("sb-slot-rustup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (path_dir, cargo_home, brew) = (
+            dir.join("path"),
+            dir.join("cargo-home/bin"),
+            dir.join("opt/rustup/bin"),
+        );
+        for d in [&path_dir, &cargo_home, &brew] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let script = |p: &Path| {
+            std::fs::write(p, "#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(p, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+                .unwrap();
+        };
+        let me = dir.join("switchboard");
+        script(&me);
+        let me = std::fs::canonicalize(&me).unwrap();
+        // The wrapper never finds itself, on the PATH or in rustup's folders.
+        std::os::unix::fs::symlink(&me, path_dir.join("cargo")).unwrap();
+        std::os::unix::fs::symlink(&me, cargo_home.join("cargo")).unwrap();
+        let path = path_dir.to_string_lossy().into_owned();
+        let rustups = [cargo_home.clone(), brew.clone()];
+        assert_eq!(real_program("cargo", &path, Some(&me), &rustups), None);
+
+        script(&brew.join("cargo"));
+        let real = real_program("cargo", &path, Some(&me), &rustups);
+        assert_eq!(real, Some(brew.join("cargo")));
+        assert_eq!(
+            path_reaching(&brew.join("cargo"), &path),
+            Some(format!("{path}:{}", brew.display()))
+        );
+        let out = Command::new(real.unwrap()).output().unwrap();
+        assert!(out.status.success());
+
+        // npm is never looked for there.
+        script(&brew.join("npm"));
+        assert_eq!(real_program("npm", &path, Some(&me), &rustups), None);
+        // One on the PATH needs nothing added.
+        assert_eq!(path_reaching(&path_dir.join("cargo"), &path), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -12,6 +12,10 @@ use crate::util;
 
 pub const NAME: &str = "macOS";
 
+/// Where Homebrew puts rustup's `cargo`, which it leaves off the PATH: Apple
+/// silicon's prefix, then Intel's.
+pub const RUSTUP_DIRS: [&str; 2] = ["/opt/homebrew/opt/rustup/bin", "/usr/local/opt/rustup/bin"];
+
 pub fn secret(service: &str, account: Option<&str>) -> Option<String> {
     let mut args = vec!["find-generic-password"];
     if let Some(a) = account {

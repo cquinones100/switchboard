@@ -153,6 +153,19 @@ pub fn claude_managed_settings() -> PathBuf {
     }
 }
 
+/// The folders rustup's `cargo` is in when it isn't on the PATH, in the
+/// order they are looked in: `$CARGO_HOME/bin` (else `~/.cargo/bin`), where
+/// rustup.rs installs it, then where Homebrew's rustup keeps it here.
+pub fn rustup_dirs() -> Vec<PathBuf> {
+    let cargo_home = match std::env::var_os("CARGO_HOME") {
+        Some(h) if !h.is_empty() => PathBuf::from(h),
+        _ => crate::paths::home_join(".cargo"),
+    };
+    std::iter::once(cargo_home.join("bin"))
+        .chain(os::RUSTUP_DIRS.iter().map(PathBuf::from))
+        .collect()
+}
+
 /// Chrome's `Local State` file, which lists its profiles, where Chrome (or
 /// Chromium) keeps it here.
 pub fn chrome_local_state() -> Option<PathBuf> {
