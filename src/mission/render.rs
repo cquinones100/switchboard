@@ -5286,12 +5286,9 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool, resizes: bool) -> Vec<(
         ViewId::Reminders if super::reminders::is_month(m) => {
             with_acts(super::reminders::hints(), ACTS, VIEW, &[])
         }
-        ViewId::Routines if crate::routines::view::is_board(m) => with_acts(
-            &[("jk", "move")],
-            ACTS,
-            VIEW,
-            crate::routines::view::hints((m.size.0 as usize) < crate::routines::view::BESIDE_AT),
-        ),
+        ViewId::Routines if crate::routines::view::is_board(m) => {
+            with_acts(&[("jk", "move")], ACTS, VIEW, filter)
+        }
         ViewId::Settings if settings_board_shown(m) => with_acts(
             &[("hl", "category"), ("jk", "option")],
             "its choices",
@@ -5345,35 +5342,17 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool, resizes: bool) -> Vec<(
             "view actions: its settings, pause",
             filter,
         ),
+        // No letter keys (boards 18, 22): `i` still shows the chosen row's
+        // pane on a narrow screen, as the view's menu does.
         ViewId::Inbox if super::inbox_board::shown(m, view) => {
-            let ticket: &[(&str, &str)] = if super::inbox_board::beside(m.laid().0 as usize) {
-                &[]
-            } else if m.inbox_pane {
-                &[("i", "back to the list")]
-            } else {
-                &[("i", "its ticket")]
-            };
-            let mut rest = ticket.to_vec();
-            rest.extend_from_slice(filter);
-            with_acts(&[("jk", "move")], "actions, marks read", VIEW, &rest)
+            with_acts(&[("jk", "move")], "actions, marks read", VIEW, filter)
         }
-        ViewId::Reopen if super::reopen_board::shown(m, view) => {
-            let pane: &[(&str, &str)] = if m.laid().0 as usize >= super::reopen_board::PANE_AT {
-                &[]
-            } else if m.reopen_pane {
-                &[("i", "back to the list")]
-            } else {
-                &[("i", "what it brings back")]
-            };
-            let mut rest = pane.to_vec();
-            rest.extend_from_slice(filter);
-            with_acts(
-                &[("jk", "move")],
-                "reopen, forget",
-                "view actions: tabs or sessions only",
-                &rest,
-            )
-        }
+        ViewId::Reopen if super::reopen_board::shown(m, view) => with_acts(
+            &[("jk", "move")],
+            "reopen, forget",
+            "view actions: tabs or sessions only",
+            filter,
+        ),
         ViewId::Resources => with_acts(
             &[("jk", "move")],
             "actions: go to the tab, end a process",
@@ -7204,7 +7183,10 @@ mod tests {
 
         let (lines, _) = draw(120);
         let text = texts(&lines).join("\n");
-        assert!(text.contains("this month and later"), "{text}");
+        assert!(
+            !text.contains("this month and later"),
+            "no letter keys: {text}"
+        );
         assert!(!text.contains("LATER"), "the lists wait behind i: {text}");
         assert!(
             text.contains("▌1") && !text.contains("▌1 api"),
@@ -7493,7 +7475,10 @@ mod tests {
         // Under 140 the pane is behind i.
         let (text, _) = draw(120, false);
         assert!(!text.contains("PROMPT"), "{text}");
-        assert!(text.contains("i the chosen routine"), "{text}");
+        assert!(
+            !text.contains("i the chosen routine"),
+            "no letter keys: {text}"
+        );
         let (text, _) = draw(120, true);
         assert!(
             text.contains("PROMPT") && text.contains("run now, edit, pause or delete it"),
@@ -7726,8 +7711,8 @@ mod tests {
         assert!(!t.iter().any(|l| l.contains("Reopening brings back")));
         assert!(images.is_empty());
         assert!(
-            t.last().unwrap().contains("i what it brings back"),
-            "{:?}",
+            !t.last().unwrap().contains("i what it brings back"),
+            "no letter keys: {:?}",
             t.last()
         );
         m.reopen_pane = true;

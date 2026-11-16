@@ -157,11 +157,13 @@ pub const NO_MATCH: &str = " No option matches";
 pub const SEARCH_KEYS: &str = "↑↓ move  ↵ take  esc all";
 
 /// One option: its label, and a key that takes it at once, shown dim at the
-/// end of its row.
+/// end of its row unless `unshown` (a menu that shows no letter keys, as
+/// board 54's, still taking them).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MenuOption {
     pub label: String,
     pub key: Option<char>,
+    pub unshown: bool,
 }
 
 impl MenuOption {
@@ -169,11 +171,19 @@ impl MenuOption {
         MenuOption {
             label: label.into(),
             key: None,
+            unshown: false,
         }
     }
 
     pub fn key(mut self, key: char) -> MenuOption {
         self.key = Some(key);
+        self
+    }
+
+    /// A key that takes it at once, left off its row.
+    pub fn unshown_key(mut self, key: char) -> MenuOption {
+        self.key = Some(key);
+        self.unshown = true;
         self
     }
 }
@@ -398,7 +408,7 @@ impl Overlay for Menu {
         self.first_shown = first;
         // A row is `   label` and, two columns past the longest label, its
         // key, inside the box's margin of a column each side.
-        let keyed = self.options.iter().any(|o| o.key.is_some());
+        let keyed = self.options.iter().any(|o| o.key.is_some() && !o.unshown);
         let label_room = if keyed {
             inner.saturating_sub(8)
         } else {
@@ -414,7 +424,7 @@ impl Overlay for Menu {
             let chosen = at == self.cursor;
             let spans = super::kit::option(
                 &labels[*i],
-                self.options[*i].key,
+                self.options[*i].key.filter(|_| !self.options[*i].unshown),
                 key_col,
                 chosen,
                 &look.theme,
@@ -724,6 +734,33 @@ mod tests {
         assert_eq!(
             m.key(key(KeyCode::Enter), &look),
             Step::Close(Outcome::Chose(5))
+        );
+    }
+
+    #[test]
+    fn an_unshown_key_still_takes_its_option_but_is_left_off_its_row() {
+        let look = Look::default();
+        let mut m = Menu::new(
+            "Planning",
+            vec![
+                MenuOption::new("Join the Meet").unshown_key('o'),
+                MenuOption::new("Going").unshown_key('y'),
+            ],
+        );
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+        m.draw(&mut buf, &look);
+        let s = screen(&buf);
+        let row = s.iter().find(|l| l.contains("Going")).unwrap();
+        assert!(
+            !row.trim_end()
+                .trim_end_matches('│')
+                .trim_end()
+                .ends_with('y'),
+            "{row}"
+        );
+        assert_eq!(
+            m.key(key(KeyCode::Char('y')), &look),
+            Step::Close(Outcome::Chose(1))
         );
     }
 

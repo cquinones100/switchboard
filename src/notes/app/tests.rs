@@ -3245,7 +3245,10 @@ fn the_plan_beside_the_note_shows_its_choice_as_cards_and_a_letter_chooses() {
     assert!(text.contains("1. A sidebar_condensed setting"));
     let footer = shown.last().unwrap();
     assert!(footer.contains("C-w note or plan"), "{footer}");
-    assert!(footer.contains("a/b choose"), "{footer}");
+    assert!(
+        !footer.contains("a/b choose") && !footer.contains("e edit"),
+        "{footer}"
+    );
     assert!(footer.contains("Esc close"), "{footer}");
 
     // C-w l gives the plan the keys, C-w h the note back.

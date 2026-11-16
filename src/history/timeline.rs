@@ -440,14 +440,10 @@ pub fn draw_timeline(
     } else {
         "close"
     };
+    // No letter keys (board 6): `c` and `w` still go to the next commit
+    // and wait, unshown.
     let hints = kit::hints(
-        &[
-            ("h/l", "move in time"),
-            ("[ ]", "turns"),
-            ("c", "next commit"),
-            ("w", "next wait"),
-            ("Esc", back),
-        ],
+        &[("h/l", "move in time"), ("[ ]", "turns"), ("Esc", back)],
         theme,
     );
     let end = put(frame, area.x + 1, row(10), area.width - 1, hints);

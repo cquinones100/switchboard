@@ -276,7 +276,7 @@ fn with_ux2_its_command_shows_its_board_whose_menu_and_button_open_its_settings_
     client.wait_text("Autopilot's settings");
     client.type_text("\r");
     let screen = client.wait_text("Autopilot · Work");
-    for want in ["tabs working, ", "Tabs at once", "M-↵  Save", "p  Pause"] {
+    for want in ["tabs working, ", "Tabs at once", "M-↵  Save", "‖ Pause"] {
         assert!(
             screen.iter().any(|l| l.contains(want)),
             "{want}: {screen:#?}"

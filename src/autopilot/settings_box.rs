@@ -14,9 +14,9 @@
 //! it), Planned only, Land without asking and Hands-free (switches, Space
 //! flips one), and the note's skipped items (u takes one back) with the
 //! items left out for needing a choice. Under a rule, its keys as keycaps:
-//! M-↵ Save (Start while off), p Pause or Resume and s Stop while on, m
-//! the menu's other options, esc Cancel, asking first when anything
-//! changed.
+//! M-↵ Save (Start while off), and while on the buttons Pause or Resume,
+//! Stop and More… (the menu's other options, `p`, `s` and `m` taking
+//! them unshown), esc Cancel, asking first when anything changed.
 //!
 //! Rows are laid out with `kit::columns`, so the box fills any width as
 //! board 45 says: under 160 columns the steppers' words go, then the line
@@ -1134,10 +1134,25 @@ impl SettingsBox {
             return (lines, parts, pictures);
         }
         let mut caps = vec![Span::raw(" ")];
-        let mut cap = |key: &str, what: &str, part: Part, caps: &mut Vec<Span<'static>>| {
+        // No letter keys (board 35): Pause, Stop and More… are buttons
+        // (`key` none), taken with a click, Tab and Enter; `p`, `s` and
+        // `m` still work.
+        let mut cap = |key: Option<&str>, what: &str, part: Part, caps: &mut Vec<Span<'static>>| {
             let x = kit::spans_width(caps);
             let lit = self.focus == part || self.hover == Some(part);
-            let spans = kit::keycap(key, what, lit, false, theme);
+            let spans = match key {
+                Some(key) => kit::keycap(key, what, lit, false, theme),
+                None => {
+                    let press = if lit {
+                        kit::Press::Hover
+                    } else {
+                        kit::Press::Rest
+                    };
+                    let mut spans = kit::button(what, None, press, false, theme);
+                    spans.push(Span::raw(" "));
+                    spans
+                }
+            };
             let w = kit::spans_width(&spans);
             caps.extend(spans);
             parts.push((
@@ -1148,22 +1163,26 @@ impl SettingsBox {
             ));
         };
         cap(
-            "M-↵",
+            Some("M-↵"),
             if ctx.on { "Save" } else { "Start" },
             Part::Save,
             &mut caps,
         );
         if ctx.on {
             cap(
-                "p",
-                if ctx.paused { "Resume" } else { "Pause" },
+                None,
+                if ctx.paused {
+                    "▶ Resume"
+                } else {
+                    "‖ Pause"
+                },
                 Part::Pause,
                 &mut caps,
             );
-            cap("s", "Stop", Part::Stop, &mut caps);
-            cap("m", "More…", Part::Menu, &mut caps);
+            cap(None, "■ Stop", Part::Stop, &mut caps);
+            cap(None, "More…", Part::Menu, &mut caps);
         }
-        cap("esc", "Cancel", Part::Cancel, &mut caps);
+        cap(Some("esc"), "Cancel", Part::Cancel, &mut caps);
         lines.push(BoxLine::spans(caps).clickable());
         (lines, parts, pictures)
     }
@@ -1699,8 +1718,9 @@ mod tests {
             "Pick a color",
             "needs a choice",
             "M-↵  Save",
-            "p  Pause",
-            "s  Stop",
+            "‖ Pause",
+            "■ Stop",
+            "More…",
             "esc  Cancel",
         ] {
             assert!(text.contains(want), "{want}:\n{text}");
@@ -1720,7 +1740,7 @@ mod tests {
         let text = text_of(&off, WIDTH, true);
         assert!(text.contains("M-↵  Start"), "{text}");
         assert!(text.contains("○ off"), "{text}");
-        assert!(!text.contains("p  Pause"), "{text}");
+        assert!(!text.contains("Pause"), "{text}");
         assert!(!text.contains("Hands-free"), "{text}");
     }
 

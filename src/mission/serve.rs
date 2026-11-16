@@ -206,6 +206,11 @@ enum ViewAct {
     /// The Reopen view's chosen row's pane shown over the list, or put
     /// away, as `i` does.
     ReopenPane,
+    /// The same for the Inbox board's ticket, the Routines board's
+    /// routine, and the Reminders month's lists under it.
+    InboxPane,
+    RoutinesPane,
+    RemindersLists,
     /// A day of the Notifications history unfolded.
     Unfold(String),
     /// The Calendar a day back or forward, or on today.
@@ -3466,8 +3471,7 @@ impl Server {
             .then(|| notice_for(&item, true))
             .flatten();
         let title = item.title.clone();
-        // A calendar event's choices show their keys, which take them (board
-        // 54).
+        // A calendar event's choices keep their keys, unshown (board 54).
         let keyed = *view == ViewId::Calendar;
         self.mission_menu(
             client,
@@ -3654,8 +3658,51 @@ impl Server {
                     ViewAct::RemindOn(day),
                 );
                 add("Go to today", ViewAct::RemindToday);
+                // What `i` does on a screen too narrow for the lists beside.
+                if (m.laid().0 as usize) < super::reminders::BESIDE_AT {
+                    add(
+                        if m.reminders_lists {
+                            "Back to the chosen day"
+                        } else {
+                            "Show this month and later"
+                        },
+                        ViewAct::RemindersLists,
+                    );
+                }
             }
-            Some(ViewId::Routines) => add("New routine…", ViewAct::NewRoutine),
+            Some(ViewId::Routines) => {
+                add("New routine…", ViewAct::NewRoutine);
+                // What `i` does on a screen too narrow for the pane.
+                let narrow = (m.laid().0 as usize) < crate::routines::view::BESIDE_AT;
+                if crate::routines::view::is_board(m)
+                    && narrow
+                    && (m.chosen_item().is_some() || m.routines_pane)
+                {
+                    add(
+                        if m.routines_pane {
+                            "Back to the list"
+                        } else {
+                            "Show the chosen routine"
+                        },
+                        ViewAct::RoutinesPane,
+                    );
+                }
+            }
+            Some(ViewId::Inbox) => {
+                // What `i` does on a screen too narrow for the ticket beside.
+                let narrow = !inbox_board::beside(m.laid().0 as usize);
+                let shown = view.as_ref().is_some_and(|v| inbox_board::shown(m, v));
+                if shown && narrow && (m.chosen_item().is_some() || m.inbox_pane) {
+                    add(
+                        if m.inbox_pane {
+                            "Back to the list"
+                        } else {
+                            "Show its ticket"
+                        },
+                        ViewAct::InboxPane,
+                    );
+                }
+            }
             Some(ViewId::Reopen) => {
                 use crate::usage::reopen::Kind;
                 for (label, kind) in [
@@ -3782,6 +3829,12 @@ impl Server {
                 m.cursor = 0;
             }
             ViewAct::ReopenPane => m.reopen_pane = !m.reopen_pane,
+            ViewAct::InboxPane => {
+                m.inbox_pane = !m.inbox_pane;
+                m.side = None;
+            }
+            ViewAct::RoutinesPane => m.routines_pane = !m.routines_pane,
+            ViewAct::RemindersLists => m.reminders_lists = !m.reminders_lists,
             ViewAct::Day(by) => self.calendar_day_step(client, &mut m, by),
             ViewAct::Today => {
                 m.calendar_day = None;
@@ -3937,9 +3990,9 @@ impl Server {
     }
 
     /// A menu of choices over mission control; the one taken is done. Its
-    /// options have no keys of their own, as the daemon's menus had none:
-    /// j and k move, Enter takes; with `keyed`, each shows its key at the
-    /// right, which takes it. `seen` is a Slack message seen whatever
+    /// options show no letter keys (board 54): ↑↓ or `/` move, Enter or a
+    /// click takes; with `keyed`, each choice's own key takes it too,
+    /// unshown. `seen` is a Slack message seen whatever
     /// is picked, and `notice` the notification it is the menu of, what
     /// is picked recorded as what it led to, and dismissed after it when
     /// its flag says so.
@@ -3959,9 +4012,9 @@ impl Server {
             .map(|c| {
                 let option = MenuOption::new(c.label.clone());
                 // A number takes the option with that number in every menu,
-                // and j k g G q move or close it, so none of them is shown.
+                // and j k g G q move or close it, so none of them is a key.
                 if keyed && c.key.is_ascii_alphabetic() && !"jkgGq".contains(c.key) {
-                    option.key(c.key)
+                    option.unshown_key(c.key)
                 } else {
                     option
                 }

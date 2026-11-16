@@ -806,28 +806,14 @@ impl App {
 
     /// The footer while the panel shows, in place of the item keys.
     pub(super) fn plan_footer(&self) -> Vec<Span<'static>> {
+        // No letter keys (board 8): a choice's letters and `e` still work,
+        // the cards take a click and Tab, and the plan opens from the list.
         let mut line = vec![Span::raw(" ")];
-        let letters: String = self
-            .beside
-            .as_ref()
-            .and_then(|b| b.plan.choice())
-            .map(|c| {
-                c.options
-                    .iter()
-                    .map(|o| o.letter.to_ascii_lowercase().to_string())
-                    .collect::<Vec<_>>()
-                    .join("/")
-            })
-            .unwrap_or_default();
-        let mut keys: Vec<(&str, &str)> = vec![("C-w", "note or plan")];
-        if !letters.is_empty() {
-            keys.push((&letters, "choose"));
-        }
-        keys.extend([
+        let keys = [
+            ("C-w", "note or plan"),
             ("Enter", "start the item"),
-            ("e", "edit the plan"),
             ("Esc", "close"),
-        ]);
+        ];
         line.extend(kit::hints(&keys, &self.look.theme));
         line
     }

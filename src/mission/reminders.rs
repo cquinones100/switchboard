@@ -484,7 +484,6 @@ pub fn month(
         },
         beside || m.reminders_lists,
     );
-    let side_hint = !beside && !m.reminders_lists;
     let mut out: Vec<GridRow> = Vec::new();
     if pane_w > 0 {
         let height = body.max(grid.len());
@@ -513,16 +512,6 @@ pub fn month(
             out.push((
                 spans,
                 p.hits.iter().map(|(a, b, s)| (a + 1, b + 1, *s)).collect(),
-            ));
-        }
-        if side_hint {
-            out.push((
-                {
-                    let mut s = vec![Span::raw(" ")];
-                    s.extend(kit::hints(&[("i", "this month and later")], theme));
-                    s
-                },
-                Vec::new(),
             ));
         }
     }

@@ -6,7 +6,9 @@
 //! small, each picked view in its cell, the first's, which takes the
 //! focus, in the accent. Space picks or unpicks the chosen view (up to
 //! four), `J` and `K` move it a place later or earlier, 1 2 3 choose the
-//! layout, Enter shows them and Esc goes back to one view. Each row and
+//! layout (left off the keys' row, as board 32 has it: the keycaps are
+//! reached with Tab and Space, or a click), Enter shows them and Esc goes back to one
+//! view. Each row and
 //! keycap takes a click and lights under the mouse, and a click on a cell
 //! of the drawing gives its view the first place.
 //!
@@ -40,8 +42,7 @@ const DRAW_W: usize = 40;
 const DRAW_H: usize = 9;
 const SUBTITLE: &str = "Pick up to four. The first is where the focus starts.";
 const TOO_MANY: &str = "Up to four at once.";
-pub const KEYS: &str =
-    "↑↓ move  space pick  J K its place  1 2 3 layout  ↵ show them  esc one view";
+pub const KEYS: &str = "↑↓ move  space show or not  J K its place  ↵ show them  esc one view";
 
 /// A view the box lists: its group, its slug and its name.
 #[derive(Clone, Debug, PartialEq, Eq)]

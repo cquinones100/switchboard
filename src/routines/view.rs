@@ -319,11 +319,6 @@ pub fn board(
             end.saturating_sub(body).min(chosen_line)
         };
         list = rows_of.into_iter().skip(first).take(body).collect();
-        if !beside && chosen.is_some() && list.len() < body {
-            let mut hint = vec![Span::raw(" ")];
-            hint.extend(kit::hints(&[("i", "the chosen routine")], theme));
-            list.push(Drawn::of(hint));
-        }
     }
     for r in 0..body {
         let y = (top + r) as u16;
@@ -1133,17 +1128,6 @@ fn run_words(run: &Value) -> String {
         Some("Failed") if !words.is_empty() => format!("failed: {words}"),
         Some("Failed") => "failed".to_string(),
         _ => words.to_string(),
-    }
-}
-
-/// The view's own keys for the footer, after moving, Enter and `m`:
-/// n, and on a narrow screen i for the chosen routine; the rest are the
-/// pane's keycaps.
-pub fn hints(narrow: bool) -> &'static [(&'static str, &'static str)] {
-    if narrow {
-        &[("n", "new"), ("i", "the routine")]
-    } else {
-        &[("n", "new")]
     }
 }
 

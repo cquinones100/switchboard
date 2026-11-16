@@ -3327,3 +3327,26 @@ fn back_passes_over_a_view_turned_off_since() {
     let screen = client.screen();
     assert!(closed(&screen), "no view opened:\n{}", screen.join("\n"));
 }
+
+// No letter keys on the footers (boards 18, 22, 28, 29): on a screen too
+// narrow for the Reminders lists beside the month, the view's menu shows
+// them, as `i` does unshown.
+#[test]
+fn the_reminders_menu_shows_the_lists_a_narrow_screen_keeps_behind_i() {
+    let server = TestServer::start();
+    settings(&server, json!({ "ux2": true, "reminders": true }));
+    let mut client = server.attach(120, 36);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("vreminders\r");
+    let screen = client.wait_text("H L month");
+    let all = screen.join("\n");
+    assert!(!all.contains("this month and later"), "{all}");
+    client.type_text("m");
+    pick(&mut client, "Show this month and later");
+    client.wait_for("the menu closed", |s| {
+        !s.join("\n").contains("Several views")
+    });
+    client.type_text("m");
+    pick(&mut client, "Back to the chosen day");
+}

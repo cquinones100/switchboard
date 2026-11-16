@@ -1196,7 +1196,7 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
                 ));
             }
         }
-        // Board 54's order, each with its key: joining first, so Enter twice
+        // Board 54's order: joining first, so Enter twice
         // joins, then the answers its invitation takes, then the event in
         // Google Calendar and its call's link.
         ViewId::Calendar => {

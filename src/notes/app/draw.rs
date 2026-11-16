@@ -977,14 +977,16 @@ impl App {
         self.geo.input = None;
         if self.adds() {
             let typed = self.adding.as_deref();
+            // Board 7's keys, typed into or not: a click on the bar (or
+            // `ga`, unshown) starts typing.
             let keys: &[(&str, &str)] = if typed.is_some() {
                 &[
                     ("Enter", "adds it"),
-                    ("M-Enter", "adds it and writes its plan"),
+                    ("M-Enter", "adds it with its plan"),
                     ("Esc", ""),
                 ]
             } else {
-                &[("ga", "add")]
+                &[("Enter", "adds it"), ("M-Enter", "adds it with its plan")]
             };
             let theme = &self.look.theme;
             // The end of a draft too long for the room beside the keys, so
@@ -1057,15 +1059,10 @@ impl App {
             return None;
         }
         if mode.is_empty() && self.adds() && self.focus == Focus::Note {
+            // No letter keys (board 7): `o`, `gw`, `ga` and `za` still work,
+            // and M-p's commands list each with its key.
             let spans = crate::ui::kit::hints(
-                &[
-                    ("Enter", "tick or follow"),
-                    ("o", "its tab"),
-                    ("gw", "work on it"),
-                    ("ga", "add"),
-                    ("za", "fold"),
-                    ("M-p", "commands, autopilot"),
-                ],
+                &[("Enter", "tick or follow"), ("M-p", "commands, autopilot")],
                 &self.look.theme,
             );
             let mut line = vec![Span::raw(" ")];
