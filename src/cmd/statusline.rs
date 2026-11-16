@@ -11,10 +11,11 @@
 //! control's Usage view (`usage`) are both on, where its Sessions show it;
 //! a plain terminal has no Usage view, so there it stays.
 //!
-//! In a pane it tells the server the context used (`context`, over the
-//! socket as a hook does, waiting at most a second), which the server keeps
-//! beside the pane's Claude for the tab's header and its card, since
-//! nothing on the drawing path reads a file.
+//! In a pane it tells the server it drew and the context used (`context`,
+//! over the socket as a hook does, waiting at most a second), which the
+//! server keeps beside the pane's Claude for the tab's header and its card,
+//! since nothing on the drawing path reads a file; a pane whose Claude ends
+//! a turn with no draw had the statusline skipped, which the server says.
 //!
 //! It also keeps what Claude Code tells the statusline alone, for mission
 //! control's Usage view and its Sessions (src/usage/sessions.rs), under
@@ -102,9 +103,11 @@ pub fn main(_args: Vec<String>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Tells the server how full this pane's Claude's context is, for the tab's
-/// header and its card, which read only what the server holds. A headless
-/// Claude in the pane draws no statusline, so it is always the tab's own.
+/// Tells the server this pane's Claude drew its statusline, which tells a
+/// statusline a plugin skipped from one that works, and how full its context
+/// is once that is known, for the tab's header and its card, which read only
+/// what the server holds. A headless Claude in the pane draws no statusline,
+/// so it is always the tab's own.
 fn tell_server(payload: &Value) {
     let Some(pane) = std::env::var("SWITCHBOARD_PANE")
         .ok()
@@ -112,15 +115,12 @@ fn tell_server(payload: &Value) {
     else {
         return;
     };
-    let Some(used) = used(payload) else {
-        return;
-    };
-    let model = or_empty(&payload["model"]["display_name"]).unwrap_or_default();
-    let _ = crate::mux::socket::ask_quiet(
-        vec!["context".into(), format!("{used}"), model],
-        Some(pane),
-        None,
-    );
+    let mut args = vec!["context".to_string()];
+    if let Some(used) = used(payload) {
+        let model = or_empty(&payload["model"]["display_name"]).unwrap_or_default();
+        args.extend([format!("{used}"), model]);
+    }
+    let _ = crate::mux::socket::ask_quiet(args, Some(pane), None);
 }
 
 /// The tint of this pane's tab (`show @tab_tint`, its `@tab_hue` and

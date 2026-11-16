@@ -200,7 +200,7 @@ pub const USAGE: &[(&str, &str)] = &[
     ),
     (
         "context",
-        "context <percent> [model]: from switchboard statusline, how full the calling pane's Claude's context is",
+        "context [<percent> [model]]: from switchboard statusline, that the calling pane's Claude drew its statusline, and how full its context is once known",
     ),
     (
         "press",
@@ -1066,6 +1066,11 @@ impl Server {
         let Some(name) = a.rest.first() else {
             return Err("show: which option?".into());
         };
+        // The whole workspace's, for `switchboard setup`'s report.
+        if name == "@statusline_skipped" {
+            let skipped = self.statusline_skipped().then_some("1\n");
+            return Ok(Reply::ok(skipped.unwrap_or_default()));
+        }
         let value = match self.option_target(&a, caller, name)? {
             // What the terminals showing the pane's session get, for an app
             // in it to draw by (src/mux/graphics.rs).

@@ -1319,6 +1319,7 @@ impl Server {
                 self.routines_tick();
                 self.awake_check();
                 self.sweep_tick();
+                self.statusline_tick();
                 self.history_tick();
                 self.notice_history_tick();
             }

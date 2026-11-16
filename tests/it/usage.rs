@@ -2,8 +2,9 @@
 //! closes is logged for the Reopen view with its name, directory and
 //! panes, a sealed review reopened from M-o's picker with its sealed try
 //! beside it, a
-//! plugin named in sidebar.json is run with its options on stdin, and one
-//! that asks for it lists its first items in the sidebar.
+//! plugin named in sidebar.json is run with its options on stdin, one
+//! that asks for it lists its first items in the sidebar, and a statusline
+//! a managed plugin skips is said once and marked.
 
 use crate::common;
 
@@ -329,4 +330,76 @@ fn with_ux2_a_statusline_s_spend_shows_on_the_usage_board_under_its_tab() {
         "{}",
         screen.join("\n")
     );
+}
+
+/// A hook sent over the socket from `pane`, its JSON on stdin, as
+/// `switchboard hook` sends it.
+fn hook_from(server: &TestServer, pane: &str, event: &str, input: serde_json::Value) {
+    let msg = switchboard::mux::proto::ClientMsg::Command {
+        args: vec!["hook".into(), event.into()],
+        cwd: server.home.clone(),
+        pane: Some(pane.into()),
+        stdin: Some(input.to_string().into_bytes()),
+        by_hand: false,
+    };
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    switchboard::mux::socket::run_command_at(&server.socket(), &msg, &mut out, &mut err);
+}
+
+#[test]
+fn a_statusline_a_managed_plugin_skips_is_said_once_and_marked() {
+    use serde_json::json;
+    let server = TestServer::start();
+    // Switchboard's statusline turned off: a session started now isn't
+    // watched, however silent its statusline stays.
+    common::write_settings(
+        &server.home,
+        json!({"notifications": false, "tips": false, "pane_statusline": false}),
+    );
+    let mut client = server.attach(160, 40);
+    client.wait_text("$");
+    server.ok(&["new-tab"]);
+    let panes: Vec<String> = server.list()["sessions"][0]["tabs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["panes"][0]["id"].as_str().unwrap().to_string())
+        .collect();
+    let (silent, unwatched) = (&panes[0], &panes[1]);
+    // Its Claude is known by its session file, as Claude Code writes one,
+    // so the sweep keeps its watch.
+    let pid = server.list()["sessions"][0]["tabs"][0]["panes"][0]["pid"]
+        .as_u64()
+        .unwrap();
+    let sessions = server.home.join(".claude/sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(
+        sessions.join(format!("{pid}.json")),
+        json!({"pid": pid, "entrypoint": "cli", "sessionId": "s1"}).to_string(),
+    )
+    .unwrap();
+    let session = json!({"session_id": "s1", "cwd": server.home, "source": "startup"});
+    hook_from(&server, unwatched, "SessionStart", session.clone());
+    common::write_settings(&server.home, json!({"notifications": false, "tips": false}));
+    hook_from(&server, silent, "SessionStart", session.clone());
+    for pane in [silent, unwatched] {
+        hook_from(&server, pane, "UserPromptSubmit", session.clone());
+        hook_from(&server, pane, "Stop", session.clone());
+    }
+    let missing = |pane: &str| server.ok(&["show", "-t", pane, "@statusline_missing"]);
+    let deadline = common::deadline(Duration::from_secs(30));
+    while missing(silent).trim() != "1" {
+        assert!(
+            Instant::now() < deadline,
+            "the silent statusline wasn't marked"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    client.wait_text("Claude's statusline is off in tab 1");
+    assert_eq!(missing(unwatched).trim(), "");
+    assert_eq!(server.ok(&["show", "@statusline_skipped"]).trim(), "1");
+    // Its statusline drawing at last takes the mark off.
+    server.typed_in(silent, &["context"]);
+    assert_eq!(missing(silent).trim(), "");
+    assert_eq!(server.ok(&["show", "@statusline_skipped"]).trim(), "");
 }

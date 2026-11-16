@@ -48,10 +48,13 @@ impl Server {
     /// tab of autopilot's hands-free mode, where a question box or a turn
     /// ending on a question is answered for Claude Code to read
     /// (`hands_free_answer`).
-    /// `context <percent> [model]`: the calling pane's statusline says how
-    /// full its Claude's context is, which the tab's header and its card
-    /// show. Says nothing back, as a hook doesn't.
+    /// `context [<percent> [model]]`: the calling pane's statusline drew,
+    /// saying how full its Claude's context is once that is known, which the
+    /// tab's header and its card show. Says nothing back, as a hook doesn't.
     pub fn agent_context(&mut self, rest: &[String], caller: Option<PaneId>) -> Reply {
+        if let Some(pane) = caller {
+            self.agents.statusline_spoke(pane);
+        }
         let (Some(pane), Some(used)) = (caller, rest.first().and_then(|u| u.parse::<f64>().ok()))
         else {
             return Reply::ok("");
@@ -158,6 +161,22 @@ impl Server {
             hook.tool.clear();
             hook.wait.clear();
             hook.ask = None;
+        }
+        // A session that should draw Switchboard's statusline through the
+        // plugin is watched until its statusline speaks (`statusline_tick`).
+        if hook.agent.is_empty() {
+            match hook.event.as_str() {
+                "SessionStart"
+                    if hook.source != "compact"
+                        && setting_on(crate::setup::way::SETTING)
+                        && setting_on("pane_statusline") =>
+                {
+                    self.agents.watch_statusline(pane);
+                }
+                "Stop" => self.agents.statusline_turn_ended(pane, util::now_ms()),
+                "SessionEnd" => self.agents.statusline_ended(pane),
+                _ => {}
+            }
         }
         // A prompt given in a tab whose work landed is new work, so the
         // landing no longer files it under Merged.
@@ -399,6 +418,62 @@ impl Server {
     /// A tab's state, as its status line badge shows it.
     pub fn tab_agent(&self, tab: TabId) -> Option<State> {
         self.agents.rollup(&self.tab_panes(tab))
+    }
+
+    /// Each tick: a watched pane whose Claude finished a turn a while ago and
+    /// whose statusline never drew had Switchboard's skipped, by a plugin
+    /// outside its tier (an administrator's) answering Claude Code's
+    /// settings.read first. Said once a pane, while the settings still want
+    /// it; the old way, which puts the statusline in `~/.claude/settings.json`,
+    /// isn't skipped so.
+    pub fn statusline_tick(&mut self) {
+        // Kept until someone is attached to be told, and while the settings
+        // don't want it.
+        if self.latest_client().is_none()
+            || !settings::is_on(crate::setup::way::SETTING)
+            || !settings::is_on("pane_statusline")
+        {
+            return;
+        }
+        let newly = self.agents.statusline_overdue(util::now_ms());
+        if newly.is_empty() {
+            return;
+        }
+        // Every tab found at once is named, since none is said again.
+        let tabs: Vec<TabId> = newly
+            .iter()
+            .filter_map(|p| self.panes.get(p).map(|slot| slot.tab))
+            .collect();
+        let Some(&tab) = tabs.first() else {
+            return;
+        };
+        let mut numbers: Vec<usize> = tabs.iter().map(|t| self.tab_number(*t)).collect();
+        numbers.sort();
+        numbers.dedup();
+        let named = match numbers.as_slice() {
+            [one] => format!("tab {one}"),
+            [rest @ .., last] => format!(
+                "tabs {} and {last}",
+                rest.iter()
+                    .map(usize::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            [] => return,
+        };
+        let text = format!(
+            "Claude's statusline is off in {named}: a managed plugin answers Claude Code's settings before Switchboard's. Turn off \"Load Switchboard as a plugin\" in Settings to bring it back."
+        );
+        let client = self
+            .session_of_tab(tab)
+            .and_then(|s| self.latest_client_of(&s.name));
+        self.say(client, &text);
+    }
+
+    /// Whether any pane's statusline was skipped (`statusline_tick`), for
+    /// `switchboard setup`'s report.
+    pub fn statusline_skipped(&self) -> bool {
+        self.agents.any_statusline_missing()
     }
 
     /// A pane's record for `switchboard list`, or null.

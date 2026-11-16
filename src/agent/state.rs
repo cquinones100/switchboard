@@ -30,7 +30,7 @@
 //! more said until it ends, so the request's words are kept aside and the
 //! pane waits only once the Notification of a prompt shown to you comes.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -517,7 +517,20 @@ pub struct Agents {
     dirs: HashMap<PaneId, (u32, PathBuf)>,
     /// When every marked pane was last checked for a Claude still running.
     pub(super) swept: Option<Instant>,
+    /// Each pane whose Claude's statusline hasn't spoken since its session
+    /// started, with when its silence counts (ms), 0 until a turn ends:
+    /// Claude Code draws the statusline as an answer comes, so before one a
+    /// silent statusline says nothing.
+    statusline_due: HashMap<PaneId, i64>,
+    /// The panes whose Claude's statusline stayed silent after a turn ended:
+    /// a plugin outside Switchboard's tier (an administrator's) answered
+    /// Claude Code's settings.read without passing it on to Switchboard's.
+    statusline_missing: HashSet<PaneId>,
 }
+
+/// How long after a turn ends a statusline that hasn't spoken counts as
+/// skipped (ms): Claude Code draws it within a moment of the answer.
+pub const STATUSLINE_GRACE_MS: i64 = 15_000;
 
 impl Agents {
     pub fn get(&self, pane: PaneId) -> Option<&PaneAgent> {
@@ -584,6 +597,7 @@ impl Agents {
     /// whose stage times the board still shows.
     pub fn restarted(&mut self, pane: PaneId) {
         self.dirs.remove(&pane);
+        self.statusline_ended(pane);
         let phases = self
             .panes
             .remove(&pane)
@@ -604,6 +618,63 @@ impl Agents {
     pub fn retain(&mut self, alive: impl Fn(PaneId) -> bool) {
         self.panes.retain(|p, _| alive(*p));
         self.dirs.retain(|p, _| alive(*p));
+        self.statusline_due.retain(|p, _| alive(*p));
+        self.statusline_missing.retain(|p| alive(*p));
+    }
+
+    /// A session started in the pane with Switchboard's statusline wanted:
+    /// it is watched until its statusline speaks.
+    pub fn watch_statusline(&mut self, pane: PaneId) {
+        self.statusline_due.insert(pane, 0);
+    }
+
+    /// A turn ended in the pane: a statusline still silent counts as
+    /// skipped `STATUSLINE_GRACE_MS` from now.
+    pub fn statusline_turn_ended(&mut self, pane: PaneId, now_ms: i64) {
+        if let Some(due) = self.statusline_due.get_mut(&pane)
+            && *due == 0
+        {
+            *due = now_ms + STATUSLINE_GRACE_MS;
+        }
+    }
+
+    /// The pane's statusline spoke. Gives whether it had been marked
+    /// missing.
+    pub fn statusline_spoke(&mut self, pane: PaneId) -> bool {
+        self.statusline_due.remove(&pane);
+        self.statusline_missing.remove(&pane)
+    }
+
+    /// The pane's Claude ended: nothing of its statusline is watched or
+    /// marked any longer.
+    pub fn statusline_ended(&mut self, pane: PaneId) {
+        self.statusline_due.remove(&pane);
+        self.statusline_missing.remove(&pane);
+    }
+
+    /// The watched panes whose statusline is now overdue, marked missing;
+    /// gives the ones not marked before, which are said once.
+    pub fn statusline_overdue(&mut self, now_ms: i64) -> Vec<PaneId> {
+        let overdue: Vec<PaneId> = self
+            .statusline_due
+            .iter()
+            .filter(|(_, due)| **due > 0 && **due <= now_ms)
+            .map(|(p, _)| *p)
+            .collect();
+        let mut newly = Vec::new();
+        for pane in overdue {
+            self.statusline_due.remove(&pane);
+            if self.statusline_missing.insert(pane) {
+                newly.push(pane);
+            }
+        }
+        newly.sort();
+        newly
+    }
+
+    /// Whether any pane's statusline is marked missing.
+    pub fn any_statusline_missing(&self) -> bool {
+        !self.statusline_missing.is_empty()
     }
 
     /// A pane's Claude, in front as process group `group`, said it works in
@@ -918,6 +989,7 @@ impl Agents {
         if agent.is_empty() {
             self.panes.remove(&pane);
         }
+        self.statusline_ended(pane);
         changed
     }
 
@@ -935,6 +1007,13 @@ impl Agents {
     /// One of a pane's `@agent_` options, by its tmux name, as `show` reads
     /// it; `None` for a name that isn't one of them.
     pub fn option(&self, pane: PaneId, name: &str) -> Option<Option<String>> {
+        if name == "@statusline_missing" {
+            return Some(
+                self.statusline_missing
+                    .contains(&pane)
+                    .then(|| "1".to_string()),
+            );
+        }
         let a = self.panes.get(&pane);
         Some(match name {
             "@agent_state" => a.and_then(|a| a.state).map(|s| s.name().to_string()),
@@ -1163,6 +1242,48 @@ mod tests {
     use super::*;
 
     const P: PaneId = PaneId(1);
+
+    #[test]
+    fn a_statusline_silent_after_a_turn_is_marked_missing_once() {
+        let mut agents = Agents::default();
+        let speaks = PaneId(2);
+        agents.watch_statusline(P);
+        agents.watch_statusline(speaks);
+        // Before a turn ends, silence says nothing.
+        assert!(agents.statusline_overdue(i64::MAX).is_empty());
+        agents.statusline_turn_ended(P, 1_000);
+        agents.statusline_turn_ended(speaks, 1_000);
+        assert!(!agents.statusline_spoke(speaks));
+        // A second turn doesn't put the deadline off.
+        agents.statusline_turn_ended(P, 5_000);
+        assert!(
+            agents
+                .statusline_overdue(1_000 + STATUSLINE_GRACE_MS - 1)
+                .is_empty()
+        );
+        assert_eq!(
+            agents.statusline_overdue(1_000 + STATUSLINE_GRACE_MS),
+            vec![P]
+        );
+        assert_eq!(
+            agents.option(P, "@statusline_missing"),
+            Some(Some("1".into()))
+        );
+        assert_eq!(agents.option(speaks, "@statusline_missing"), Some(None));
+        assert!(agents.any_statusline_missing());
+        // A new session still silent stays marked and isn't said again.
+        agents.watch_statusline(P);
+        agents.statusline_turn_ended(P, 100_000);
+        assert!(agents.statusline_overdue(i64::MAX).is_empty());
+        // Speaking at last takes the mark off.
+        assert!(agents.statusline_spoke(P));
+        assert!(!agents.any_statusline_missing());
+        // A session ending forgets its watch.
+        agents.watch_statusline(P);
+        agents.statusline_turn_ended(P, 1_000);
+        agents.statusline_ended(P);
+        assert!(agents.statusline_overdue(i64::MAX).is_empty());
+    }
 
     #[test]
     fn a_reported_directory_counts_only_while_its_program_is_in_front() {

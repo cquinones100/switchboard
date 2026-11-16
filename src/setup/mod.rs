@@ -669,7 +669,19 @@ fn plugin_way(check: bool, list: &mut List) {
             Ok(_) => list.todo("switchboard setup claude failed"),
         }
     }
-    if crate::settings::is_on("pane_statusline") {
+    let statusline_skipped = || {
+        crate::mux::socket::ask_quiet(
+            vec!["show".into(), "@statusline_skipped".into()],
+            None,
+            None,
+        )
+        .is_some_and(|(code, out, _)| code == 0 && out.starts_with(b"1"))
+    };
+    if crate::settings::is_on("pane_statusline") && statusline_skipped() {
+        list.todo(
+            "Switchboard's statusline in its panes: a managed plugin answers Claude Code's settings before Switchboard's, so a pane's Claude draws none; turning off \"Load Switchboard as a plugin\" in Settings brings it back",
+        );
+    } else if crate::settings::is_on("pane_statusline") {
         list.ok(
             "Switchboard's statusline in its panes, drawn by its plugin (mission control's Usage view), yours everywhere else",
         );
