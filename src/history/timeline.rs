@@ -180,14 +180,18 @@ impl Model {
     }
 }
 
-/// `13:41`, in the computer's time zone.
+/// `1:41 PM`, in the computer's time zone.
 pub fn clock(at: i64) -> String {
     Timestamp::from_second(at)
-        .map(|t| t.to_zoned(TimeZone::system()).strftime("%H:%M").to_string())
+        .map(|t| {
+            t.to_zoned(TimeZone::system())
+                .strftime(crate::ui::when::CLOCK)
+                .to_string()
+        })
         .unwrap_or_default()
 }
 
-/// "viewing 13:41, 51 minutes ago", for the header.
+/// "viewing 1:41 PM, 51 minutes ago", for the header.
 pub fn viewing(at: i64, now: i64) -> String {
     let minutes = (now - at).max(0) / 60;
     let ago = match minutes {

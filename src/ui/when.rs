@@ -43,13 +43,16 @@ pub fn notice(ms: i64, now: &Zoned) -> String {
     }
 }
 
+/// How every clock time the workspace shows is written: "3:05 PM".
+pub const CLOCK: &str = "%-I:%M %p";
+
 /// `ms` as a clock time alone ("9:42 AM"), for a row under its day's
 /// heading.
 pub fn clock(ms: i64, now: &Zoned) -> String {
     jiff::Timestamp::from_millisecond(ms)
         .map(|t| {
             t.to_zoned(now.time_zone().clone())
-                .strftime("%-I:%M %p")
+                .strftime(CLOCK)
                 .to_string()
         })
         .unwrap_or_default()
@@ -74,6 +77,34 @@ mod tests {
             .unwrap()
             .timestamp()
             .as_millisecond()
+    }
+
+    #[test]
+    fn every_clock_time_is_written_the_same_twelve_hour_way() {
+        let afternoon = ms(11, 11, 15, 5, 2026);
+        assert_eq!(clock(afternoon, &now()), "3:05 PM");
+        assert_eq!(stamp(afternoon, &now()), "3:05 PM");
+        // The grid, reminders, Usage, autopilot and the Slack Home tab
+        // write `CLOCK` as it reads; History, Reopen, the Inbox and the
+        // menus' words name it. None writes a 24-hour clock.
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut stack = vec![src];
+        let mut found = Vec::new();
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    let twenty_four = ["\"%H:%M\"", concat!("%-", "H:%M")];
+                    if twenty_four.iter().any(|f| text.contains(f)) {
+                        found.push(path.display().to_string());
+                    }
+                }
+            }
+        }
+        assert!(found.is_empty(), "a 24-hour clock in {found:?}");
     }
 
     #[test]

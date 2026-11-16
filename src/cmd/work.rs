@@ -274,12 +274,6 @@ fn tickets_on(clipboard: &str) -> String {
     }
 }
 
-static PR_URL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^https://github\.com/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)/pull/([0-9]+)([/?#].*)?$")
-        .unwrap()
-});
-static PR_NUMBER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^#?([0-9]+)$").unwrap());
-
 /// A PR as wtpr is given it: a URL rebuilt from its owner, name and number,
 /// or a bare number, which is a PR of a repository still to pick.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -290,14 +284,14 @@ pub enum PrAsked {
 
 pub fn parse_pr(text: &str) -> Option<PrAsked> {
     let text: String = text.chars().filter(|c| !c.is_whitespace()).collect();
-    if let Some(m) = PR_URL.captures(&text) {
+    if let Some(m) = worktree::PR_URL.captures(&text) {
         let number = m[3].parse().ok()?;
         return Some(PrAsked::Url(
             format!("https://github.com/{}/{}/pull/{number}", &m[1], &m[2]),
             number,
         ));
     }
-    PR_NUMBER
+    worktree::PR_NUMBER
         .captures(&text)
         .and_then(|m| m[1].parse().ok())
         .map(PrAsked::Number)

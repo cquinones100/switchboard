@@ -7261,10 +7261,7 @@ fn side_step(m: &Mission, by: isize) -> isize {
     if view.id == ViewId::Settings && super::render::settings_board_shown(m) {
         return super::settings_board::side_step(&view.data.items, m.cursor, by);
     }
-    let pilot_board = view.id == ViewId::Autopilot
-        && m.snap.rules.ux2
-        && m.laid().0 as usize >= super::render::PILOT_BOARD_AT;
-    if pilot_board {
+    if super::render::pilot_board_shown(m, view, m.laid().0 as usize) {
         return pilot_side_step(m, &view.data.items, by);
     }
     let Some(columns) = view.columns() else {
@@ -8363,6 +8360,64 @@ mod tests {
         m.cursor = 6;
         assert_eq!(side_step(&m, 1), 6, "the last column stays");
         assert_eq!(side_step(&m, -1), 4);
+    }
+
+    #[test]
+    fn the_autopilot_drawing_layout_footer_and_keys_agree_on_board_or_list() {
+        let pilot = |items: Vec<Item>, loaded: bool| {
+            let mut m = mission(
+                0,
+                vec![View {
+                    id: ViewId::Autopilot,
+                    title: "Autopilot".into(),
+                    data: ViewData {
+                        items,
+                        ..ViewData::default()
+                    },
+                    loaded,
+                }],
+            );
+            m.snap.rules.ux2 = true;
+            m.size = (120, 30);
+            m.view = 1;
+            m.cursor = 0;
+            m
+        };
+        let cards = || {
+            vec![
+                Item::new("next", "next").group("Next up"),
+                Item::new("tab 4", "tab 4").group("Waiting on you"),
+            ]
+        };
+        // What each of the four copies makes of it: the drawing (the board
+        // draws its empty Working column), the layout's sections (none on a
+        // board), the footer's keys and `l`.
+        let seen = |m: &Mission| {
+            let (lines, _) = super::super::render::screen(m, 120, 30);
+            let text: Vec<String> = lines
+                .iter()
+                .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+                .collect();
+            let drawn = text.iter().any(|l| l.to_lowercase().contains("working"));
+            let footer = text.last().is_some_and(|l| l.contains("column"));
+            let laid = m.sections().is_empty();
+            let keys = side_step(m, 1) != m.cursor;
+            [drawn, laid, footer, keys]
+        };
+        assert_eq!(seen(&pilot(cards(), true)), [true; 4], "the board");
+        let unloaded = seen(&pilot(cards(), false));
+        assert_eq!(unloaded, [false; 4], "the list until it loads");
+        let mut empty = pilot(Vec::new(), true);
+        empty.cursor = -1;
+        let (lines, _) = super::super::render::screen(&empty, 120, 30);
+        let footer: String = lines
+            .last()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .unwrap_or_default();
+        assert!(
+            !footer.contains("column"),
+            "no items, the list's keys: {footer}"
+        );
     }
 
     #[test]

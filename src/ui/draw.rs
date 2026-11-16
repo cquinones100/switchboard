@@ -515,6 +515,24 @@ pub fn draw_box(buf: &mut Buffer, spec: &BoxSpec<'_>, look: &Look) -> Drawn {
 pub(crate) mod tests {
     use super::*;
 
+    #[test]
+    fn both_widths_count_what_a_terminal_draws() {
+        for (text, cols) in [("plain text", 10), ("漢字", 4), ("⏱️ 5m", 5), ("⚠️", 2)] {
+            assert_eq!(width(text), cols, "ui::draw::width of {text:?}");
+            assert_eq!(
+                crate::sidebar::text::width(text),
+                cols,
+                "sidebar::text::width of {text:?}"
+            );
+        }
+        // Where they part: a ZWJ sequence is one grapheme here, as ratatui
+        // draws it, and two emoji in the sidebar, which counts and writes
+        // its cells by the code point (`sidebar::render::put`).
+        let coder = "👩\u{200d}💻";
+        assert_eq!(width(coder), 2);
+        assert_eq!(crate::sidebar::text::width(coder), 4);
+    }
+
     /// A row of a buffer as text.
     pub fn row(buf: &Buffer, y: u16) -> String {
         (0..buf.area.width)

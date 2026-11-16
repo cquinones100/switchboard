@@ -41,11 +41,6 @@ fn usage() -> ExitCode {
     ExitCode::from(1)
 }
 
-static TICKET: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(?:[A-Za-z][A-Za-z0-9]*-\d+|https?://\S*/issue/[A-Za-z][A-Za-z0-9]*-\d+\S*)$")
-        .unwrap()
-});
-
 /// A line break and the space around it, made one space, so an item is one
 /// line of the tab's command.
 static LINE_BREAK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s*\n\s*").unwrap());
@@ -58,7 +53,7 @@ pub fn items_from(arg: &str) -> Vec<String> {
         .split(|c: char| c.is_whitespace() || c == ',')
         .filter(|t| !t.is_empty())
         .collect();
-    if !tokens.is_empty() && tokens.iter().all(|t| TICKET.is_match(t)) {
+    if !tokens.is_empty() && tokens.iter().all(|t| worktree::looks_like_ticket(t)) {
         tokens.into_iter().map(str::to_string).collect()
     } else {
         vec![arg.to_string()]

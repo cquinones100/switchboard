@@ -26,10 +26,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
-use std::sync::LazyLock;
 use std::time::{Duration, Instant};
-
-use regex::Regex;
 
 use crate::mux::socket;
 use crate::worktree::{self, fail};
@@ -44,18 +41,10 @@ fn usage() -> ExitCode {
     ExitCode::from(1)
 }
 
-static TICKET: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^([A-Za-z][A-Za-z0-9]*-\d+)$").unwrap());
-static ISSUE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"/issue/([A-Za-z][A-Za-z0-9]*-\d+)").unwrap());
-
 /// The ticket a word names: an issue URL's, or the word when it is an
 /// identifier.
 pub fn ticket_in(word: &str) -> Option<String> {
-    ISSUE
-        .captures(word)
-        .or_else(|| TICKET.captures(word))
-        .map(|m| m[1].to_string())
+    worktree::ticket_from(word)
 }
 
 /// What `shape` was asked: the prompt Claude starts with and the tab's name.

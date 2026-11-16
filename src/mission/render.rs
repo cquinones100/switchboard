@@ -4217,6 +4217,20 @@ const PILOT_SIDE_W: usize = 44;
 /// properly (`Markdown::parse`).
 const PLAN_PLACE: &str = "its plan note in Notes";
 
+/// Whether the Autopilot view is drawn as its board on a main area `cols`
+/// wide: with UX 2.0 on, the screen wide enough, the view loaded and set up,
+/// and at least one item, else as the plain list. The drawing, the layout's
+/// sections, the footer's keys and `h`/`l` all ask this, so none of them
+/// treats the list as the board.
+pub fn pilot_board_shown(m: &Mission, v: &View, cols: usize) -> bool {
+    m.snap.rules.ux2
+        && v.id == ViewId::Autopilot
+        && cols >= PILOT_BOARD_AT
+        && v.loaded
+        && v.data.setup.is_none()
+        && !v.data.items.is_empty()
+}
+
 /// Whether the Slack view is drawn as its board: with UX 2.0 on, once
 /// something is saved.
 pub fn slack_board_shown(m: &Mission, v: &View) -> bool {
@@ -5319,14 +5333,12 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool, resizes: bool) -> Vec<(
             with_acts(&[("jk", "move")], ACTS, VIEW, rest)
         }
         ViewId::Calendar => with_acts(&[("jk", "events"), ("hl", "day")], ACTS, VIEW, &[]),
-        ViewId::Autopilot if m.snap.rules.ux2 && m.laid().0 as usize >= PILOT_BOARD_AT => {
-            with_acts(
-                &[("hl", "column"), ("jk", "move")],
-                ACTS,
-                "view actions: its settings, pause",
-                &[],
-            )
-        }
+        ViewId::Autopilot if pilot_board_shown(m, view, m.laid().0 as usize) => with_acts(
+            &[("hl", "column"), ("jk", "move")],
+            ACTS,
+            "view actions: its settings, pause",
+            &[],
+        ),
         ViewId::Autopilot => with_acts(
             &[("jk", "move")],
             ACTS,
@@ -6159,12 +6171,7 @@ pub(super) fn body(
             cards(m, cols, body, top, lines, hits);
         }
         Some(v) => {
-            let pilot_board_shown = snap.rules.ux2
-                && v.id == ViewId::Autopilot
-                && cols >= PILOT_BOARD_AT
-                && v.loaded
-                && v.data.setup.is_none()
-                && !v.data.items.is_empty();
+            let pilot_board_shown = pilot_board_shown(m, v, cols);
             let ci_shown = snap.rules.ux2
                 && v.id == ViewId::Ci
                 && v.loaded

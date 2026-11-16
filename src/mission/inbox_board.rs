@@ -148,7 +148,7 @@ fn when(ms: i64, now_ms: i64, tz: &jiff::tz::TimeZone) -> String {
             m => format!("{}h ago", m / 60),
         }
     } else {
-        at.strftime("%-H:%M").to_string()
+        at.strftime(crate::ui::when::CLOCK).to_string()
     }
 }
 

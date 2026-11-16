@@ -12,7 +12,7 @@
 //! mark, the tab's name in bold, where it works, what Claude is doing and
 //! how full its context is (`ctx 62%`, as its statusline last told the
 //! server);
-//! while the tab's history shows a past moment, which ("viewing 13:41, 51
+//! while the tab's history shows a past moment, which ("viewing 1:41 PM, 51
 //! minutes ago") in place of where M-a goes next;
 //! under a blank row, the keys of what the tab can show in Claude's place
 //! (M-c Claude, M-d its diff, M-v its PR, M-i its ticket, M-e its note), the
@@ -178,7 +178,7 @@ pub struct Header {
     /// client shows the tab's history.
     pub history: bool,
     pub history_open: bool,
-    /// The moment the history shows, as "viewing 13:41, 51 minutes ago".
+    /// The moment the history shows, as "viewing 1:41 PM, 51 minutes ago".
     pub viewing: Option<String>,
     /// How full its Claude's context is, in percent, once its statusline
     /// has said.
@@ -557,12 +557,15 @@ mod tests {
         let mut buf = Buffer::empty(narrow);
         let h = Header {
             opened: "1h12m".into(),
-            viewing: Some("viewing 13:41, 51 minutes ago".into()),
+            viewing: Some("viewing 1:41 PM, 51 minutes ago".into()),
             ..header(Shown::Claude)
         };
         draw(&mut buf, narrow, &h, None, &Palette::DARK, false, false);
         let first = text(&buf, 0);
-        assert!(first.ends_with("viewing 13:41, 51 minutes ago"), "{first}");
+        assert!(
+            first.ends_with("viewing 1:41 PM, 51 minutes ago"),
+            "{first}"
+        );
         assert!(!first.contains("opened 1h12m"), "{first}");
     }
 
@@ -807,7 +810,7 @@ mod history_tests {
             commands: false,
             history: true,
             history_open: true,
-            viewing: Some("viewing 13:41, 51 minutes ago".into()),
+            viewing: Some("viewing 1:41 PM, 51 minutes ago".into()),
             context: None,
             nav: None,
         };
@@ -817,7 +820,7 @@ mod history_tests {
         assert_eq!(keys.last().unwrap().1, Button::History);
         assert_eq!(Button::History.action(), Action::History);
         let first: String = (0..120).map(|x| buf[(x, 0)].symbol().to_string()).collect();
-        assert!(first.contains("viewing 13:41, 51 minutes ago"), "{first}");
+        assert!(first.contains("viewing 1:41 PM, 51 minutes ago"), "{first}");
         assert!(!first.contains("M-a next"), "in its place");
     }
 }
@@ -843,14 +846,16 @@ mod viewing_tests {
             commands: false,
             history: true,
             history_open: true,
-            viewing: Some("viewing 13:41, 51 minutes ago".into()),
+            viewing: Some("viewing 1:41 PM, 51 minutes ago".into()),
             context: None,
             nav: None,
         };
         draw(&mut buf, area, &h, None, &Palette::DARK, false, false);
         let first: String = (0..70).map(|x| buf[(x, 0)].symbol().to_string()).collect();
         assert!(
-            first.trim_end().ends_with("viewing 13:41, 51 minutes ago"),
+            first
+                .trim_end()
+                .ends_with("viewing 1:41 PM, 51 minutes ago"),
             "{first}"
         );
     }

@@ -577,13 +577,29 @@ pub fn set_upstream(root: &Path, branch: &str, remote: &str, remote_branch: &str
 
 // ── What is asked for ───────────────────────────────────────────────────────
 
-static TICKET_ID: LazyLock<Regex> =
+// The one reading of a ticket and a PR as someone gives one (a word typed,
+// a link pasted, an item's link), which `shape`, `shape-batch`, M-p's work
+// box and mission control's menus use too: a ticket's identifier in any
+// case, alone; a ticket from any URL's `/issue/`; a PR's URL, alone, with
+// a path, query or fragment after its number allowed. Finding one inside
+// other text (a branch's leading ticket, a link to shorten in a line) is a
+// different question, asked where it is.
+
+/// A ticket's identifier, alone, in any case.
+pub static TICKET_ID: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[A-Za-z][A-Za-z0-9]*-\d+$").unwrap());
-static ISSUE_URL: LazyLock<Regex> =
+/// A ticket in a URL's `/issue/`, any host.
+pub static ISSUE_URL: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"/issue/([A-Za-z][A-Za-z0-9]*-\d+)").unwrap());
-static PR_URL: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"github\.com/([^/]+)/([^/]+)/pull/(\d+)").unwrap());
-static PR_NUMBER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^#?(\d+)$").unwrap());
+/// A PR's URL, alone: its owner, name and number.
+pub static PR_URL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^(?:https?://)?(?:www\.)?github\.com/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)/pull/(\d+)(?:[/?#].*)?$",
+    )
+    .unwrap()
+});
+/// A PR's number, alone, with or without its `#`.
+pub static PR_NUMBER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^#?(\d+)$").unwrap());
 
 /// Whether the text is a Linear ticket: its identifier or an issue URL.
 pub fn looks_like_ticket(input: &str) -> bool {
@@ -1026,6 +1042,53 @@ mod tests {
             Some((7, Some("o/r".into())))
         );
         assert!(!looks_like_pr("12a"));
+    }
+
+    #[test]
+    fn every_reader_of_a_ticket_or_pr_takes_the_same_inputs() {
+        use crate::cmd::{shape, shape_batch, work};
+        let linear = "https://linear.app/w/issue/ENG-5/title";
+        let elsewhere = "https://example.com/x/issue/ENG-5";
+        let pr = "https://github.com/o/r/pull/7";
+        // Each input, the ticket it names and whether it is a PR's URL.
+        let table: &[(&str, Option<&str>, bool)] = &[
+            ("ABC-12", Some("ABC-12"), false),
+            ("abc-12", Some("abc-12"), false),
+            ("abc-12 and more", None, false),
+            (linear, Some("ENG-5"), false),
+            (elsewhere, Some("ENG-5"), false),
+            (pr, None, true),
+            ("https://github.com/o/r/pull/7/files", None, true),
+            ("https://github.com/o/r/pull/7?x=1", None, true),
+            ("https://github.com/o/r/pull/7#c", None, true),
+            ("https://github.com/o/r/issues/7", None, false),
+            ("see https://github.com/o/r/pull/7", None, false),
+        ];
+        for &(input, ticket, is_pr) in table {
+            assert_eq!(
+                ticket_from(input).as_deref(),
+                ticket,
+                "ticket_from {input:?}"
+            );
+            assert_eq!(looks_like_ticket(input), ticket.is_some(), "{input:?}");
+            assert_eq!(
+                shape::ticket_in(input).as_deref(),
+                ticket,
+                "shape {input:?}"
+            );
+            if !input.contains(' ') {
+                let batch = shape_batch::items_from(&format!("{input} ABC-1"));
+                assert_eq!(batch.len() == 2, ticket.is_some(), "shape-batch {input:?}");
+            }
+            assert_eq!(PR_URL.is_match(input), is_pr, "PR_URL {input:?}");
+            assert_eq!(pr_from(input).is_some_and(|(_, r)| r.is_some()), is_pr);
+            assert_eq!(
+                matches!(work::parse_pr(input), Some(work::PrAsked::Url(..))),
+                is_pr,
+                "the work box {input:?}"
+            );
+        }
+        assert_eq!(pr_from(pr), Some((7, Some("o/r".into()))));
     }
 
     #[test]

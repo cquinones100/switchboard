@@ -10,7 +10,6 @@
 //! them without a server.
 
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 
 use regex::Regex;
 use serde_json::Value;
@@ -679,12 +678,6 @@ pub struct Ctx<'a> {
     pub to_tab: bool,
 }
 
-static PR_URL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^https://github\.com/[\w.-]+/[\w.-]+/pull/\d+$").expect("a regex")
-});
-static TICKET_ID: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[A-Z][A-Z0-9]*-\d+$").expect("a regex"));
-
 /// Whether a tab's name has a ticket (or a pattern), and not one whose
 /// number only starts the same (AB-3 isn't AB-30).
 fn names(tab: &TabModel, pattern: &str) -> bool {
@@ -753,7 +746,7 @@ pub fn board_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
     let number = item.data.pointer("/pr/number").and_then(Value::as_u64);
     let repo = text(&item.data, "/pr/repo");
     if let Some(n) = number
-        && PR_URL.is_match(&url)
+        && crate::worktree::PR_URL.is_match(&url)
     {
         let (tab, dir) = pr_places(ctx, n, repo);
         if let Some(t) = tab {
@@ -776,7 +769,7 @@ pub fn board_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
         ));
     }
     let ticket = text(&item.data, "/ticket").to_string();
-    if TICKET_ID.is_match(&ticket) {
+    if crate::worktree::TICKET_ID.is_match(&ticket) {
         if let Some(t) = tab_naming(ctx.tabs, &ticket) {
             out.push(choice(
                 't',
@@ -1010,7 +1003,7 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
                         },
                     ));
                 }
-                _ if PR_URL.is_match(&url) => out.push(choice(
+                _ if crate::worktree::PR_URL.is_match(&url) => out.push(choice(
                     'c',
                     "Start a CI loop on it in a new tab",
                     Do::StartIn {
@@ -1146,7 +1139,7 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
                     Do::GoTo(t.id),
                 ));
             }
-            if PR_URL.is_match(&url) {
+            if crate::worktree::PR_URL.is_match(&url) {
                 out.push(choice(
                     'v',
                     "Read the PR here, in a pane beside",
@@ -1692,7 +1685,7 @@ pub fn led_to_words(
         },
         Do::OpenNote(_) => format!(
             "you opened it at {}",
-            crate::util::local_now().strftime("%-H:%M")
+            crate::util::local_now().strftime(crate::ui::when::CLOCK)
         ),
         Do::OpenView(_) => "you opened its view".into(),
         Do::Routine {

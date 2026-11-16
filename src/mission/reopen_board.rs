@@ -100,9 +100,13 @@ fn clock(ms: i64, m: &Mission) -> String {
         .unwrap_or_default()
         .to_zoned(m.snap.tz.clone());
     if at.date() == now.date() {
-        at.strftime("%-H:%M").to_string()
+        at.strftime(crate::ui::when::CLOCK).to_string()
     } else {
-        at.strftime("%b %-d %-H:%M").to_string()
+        format!(
+            "{} {}",
+            at.strftime("%b %-d"),
+            at.strftime(crate::ui::when::CLOCK)
+        )
     }
 }
 
@@ -454,7 +458,8 @@ fn pane_lines(item: &Item, r: &Value, cols: usize, m: &Mission) -> PaneOut {
     if let Some(n) = r["turns"].as_u64() {
         times.push(format!("{n} turn{}", if n == 1 { "" } else { "s" }));
     }
-    let times = times.join(" · ");
+    let parts = times;
+    let times = parts.join(" · ");
     let has_screen = m.snap.reopen_shot.is_some() && r["screen"].is_string();
     if !has_screen {
         if !times.is_empty() {
@@ -482,8 +487,20 @@ fn pane_lines(item: &Item, r: &Value, cols: usize, m: &Mission) -> PaneOut {
     );
     let picture_at = out.len();
     let facts_beside = cols >= FACTS_AT && at[1].is_some();
+    // A line a fact or a few, none split, so "Opened Nov 9 3:05 PM" or
+    // "41 turns" reads whole.
     let facts_lines: Vec<String> = if facts_beside {
-        text::wrap(&times, FACTS_W)
+        let mut lines: Vec<String> = Vec::new();
+        for part in &parts {
+            match lines.last_mut() {
+                Some(last) if width(last) + 3 + width(part) <= FACTS_W => {
+                    last.push_str(" · ");
+                    last.push_str(part);
+                }
+                _ => lines.extend(text::wrap(part, FACTS_W)),
+            }
+        }
+        lines
     } else {
         Vec::new()
     };

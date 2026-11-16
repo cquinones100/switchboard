@@ -961,9 +961,7 @@ impl Mission {
         };
         let cols = self.laid().0 as usize;
         let side_by_side = view.columns().is_some()
-            || view.id == ViewId::Autopilot
-                && self.snap.rules.ux2
-                && cols >= render::PILOT_BOARD_AT
+            || render::pilot_board_shown(self, view, cols)
             || view.id == ViewId::Settings && render::settings_board_shown(self)
             || render::slack_board_shown(self, view)
             || render::keys_board_shown(self, view, cols)
