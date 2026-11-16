@@ -456,7 +456,7 @@ impl Screen {
                 }
                 if let Some(shape) = shape(cell.c, cw as f32, ch as f32) {
                     text.push_str(&format!(
-                        "<p style=\"left:{left}px;top:{top}px;{shape};background:{}\"></p>",
+                        "<p style=\"left:{left}px;top:{top}px;{shape};color:{}\"></p>",
                         hex(cell.fg)
                     ));
                     i += 1;
@@ -476,6 +476,7 @@ impl Screen {
                         || c.c == '\0'
                         || c.c.is_ascii_graphic()
                         || ('\u{2500}'..='\u{257F}').contains(&c.c)
+                            && shape(c.c, cw as f32, ch as f32).is_none()
                 };
                 if in_run(cell) {
                     let mut j = i;
@@ -559,6 +560,10 @@ const MONO_ADVANCE: f32 = 0.6021;
 /// its images at the cell's size times this.
 pub const SCALE: u32 = 2;
 
+/// A light line's width in the PNG, in CSS pixels, for the box edges and
+/// corners drawn as shapes.
+const LIGHT_LINE: f32 = 1.0;
+
 fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -566,22 +571,53 @@ fn escape(text: &str) -> String {
         .replace('\0', " ")
 }
 
-/// The CSS that draws `c` as a shape in a cell of `w` by `h`, for the half
-/// circles and block elements Ghostty draws itself.
+/// The CSS that draws `c` as a shape in a cell of `w` by `h`, in the cell's
+/// color, for the half circles, block elements and a box's light edges and
+/// arc corners, which Ghostty draws itself: a font's arcs (Menlo's among
+/// them) bend so tightly at a cell's size that a card's or box's corners
+/// would read as square.
 fn shape(c: char, w: f32, h: f32) -> Option<String> {
     let block = |x: f32, y: f32, bw: f32, bh: f32| {
         Some(format!(
-            "margin-left:{x:.2}px;margin-top:{y:.2}px;width:{bw:.2}px;height:{bh:.2}px"
+            "margin-left:{x:.2}px;margin-top:{y:.2}px;width:{bw:.2}px;height:{bh:.2}px;\
+             background:currentColor"
+        ))
+    };
+    // A quarter of a rounded box's border, from the cell's middle to the
+    // two edges its lines leave by, as wide as a light line.
+    let arc = |right: bool, down: bool| {
+        let line = LIGHT_LINE;
+        let x = if right { (w - line) / 2.0 } else { 0.0 };
+        let y = if down { (h - line) / 2.0 } else { 0.0 };
+        let side = if right { "left" } else { "right" };
+        let end = if down { "top" } else { "bottom" };
+        Some(format!(
+            "margin-left:{x:.2}px;margin-top:{y:.2}px;width:{:.2}px;height:{:.2}px;\
+             box-sizing:border-box;border-{side}:{line}px solid;border-{end}:{line}px solid;\
+             border-{end}-{side}-radius:{:.2}px",
+            (w + line) / 2.0,
+            (h + line) / 2.0,
+            w / 2.0,
         ))
     };
     let half = h / 2.0;
     match c as u32 {
         0xE0B6 => Some(format!(
-            "width:{w}px;height:{h}px;border-radius:{w}px 0 0 {w}px/{half}px 0 0 {half}px"
+            "width:{w}px;height:{h}px;border-radius:{w}px 0 0 {w}px/{half}px 0 0 {half}px;\
+             background:currentColor"
         )),
         0xE0B4 => Some(format!(
-            "width:{w}px;height:{h}px;border-radius:0 {w}px {w}px 0/0 {half}px {half}px 0"
+            "width:{w}px;height:{h}px;border-radius:0 {w}px {w}px 0/0 {half}px {half}px 0;\
+             background:currentColor"
         )),
+        // The light edges too, so they meet the arcs and the next row's
+        // edge, where a font's are shorter than the cell and thicker.
+        0x2500 => block(0.0, (h - LIGHT_LINE) / 2.0, w, LIGHT_LINE),
+        0x2502 => block((w - LIGHT_LINE) / 2.0, 0.0, LIGHT_LINE, h),
+        0x256D => arc(true, true),
+        0x256E => arc(false, true),
+        0x256F => arc(false, false),
+        0x2570 => arc(true, false),
         0x2580 => block(0.0, 0.0, w, half),
         n @ 0x2581..=0x2588 => {
             let bh = h * (n - 0x2580) as f32 / 8.0;
@@ -1090,6 +1126,26 @@ mod tests {
             html.contains("margin-top:8.00px;width:8.00px;height:8.00px"),
             "the lower half block: {html}"
         );
+    }
+
+    #[test]
+    fn a_box_corner_is_drawn_as_an_arc_and_its_edges_as_text() {
+        let mut s = Screen::new(10, 3);
+        s.feed("╭──╮\r\n│  │\r\n╰──╯".as_bytes());
+        let html = s.html(8, 16);
+        for corner in [
+            "border-top-left-radius:4.00px",
+            "border-top-right-radius:4.00px",
+            "border-bottom-right-radius:4.00px",
+            "border-bottom-left-radius:4.00px",
+        ] {
+            assert!(html.contains(corner), "{corner}: {html}");
+        }
+        assert!(
+            html.contains("margin-top:7.50px;width:8.00px;height:1.00px"),
+            "the edge between: {html}"
+        );
+        assert!(!html.contains(['╭', '╮', '╰', '╯', '─', '│']), "{html}");
     }
 
     #[test]
