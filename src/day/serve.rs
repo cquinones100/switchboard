@@ -567,6 +567,39 @@ impl Server {
         self.day_views(&dirs, &util::local_now());
     }
 
+    /// A reply sent from the Slack view: what came before it in its
+    /// conversation and thread is read at once, and the look made again
+    /// (without a tab, while it is on) so the reply shows in the thread.
+    /// With no ts from Slack (`ts` `None`), the look records the reply
+    /// once it finds it, and the pane is read through now, after it.
+    /// `shown`, the thread the item was in, is read through it in the pane
+    /// too, a DM's included, whose reply goes in no thread.
+    pub fn slack_replied(
+        &mut self,
+        channel: &str,
+        thread: Option<&str>,
+        ts: Option<&str>,
+        shown: Option<&str>,
+    ) {
+        let dirs = Dirs::here();
+        if let Some(ts) = ts {
+            slack::mark_replied(&dirs.state, channel, thread, ts);
+        }
+        // The thread pane's replies through the one sent, which it reads by
+        // the thread's own watermark.
+        let at = ts
+            .and_then(|t| t.parse::<f64>().ok())
+            .map_or_else(util::now_ms, |t| (t * 1000.0).ceil() as i64);
+        let sent_in = thread.map(|t| format!("{channel}:{t}"));
+        for key in sent_in.iter().map(String::as_str).chain(shown) {
+            slack::mark_thread_read(&dirs.state, key, at);
+        }
+        self.day_views(&dirs, &util::local_now());
+        if settings::is_on("slack_background") {
+            self.look_at_slack();
+        }
+    }
+
     /// Dismisses Slack messages (items of the Slack view) until their
     /// threads get something newer: one, or every one shown.
     pub fn slack_dismiss(&mut self, items: &[Item]) {

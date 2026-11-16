@@ -55,6 +55,7 @@
 //! - `busy`: the box an option shows while it works.
 //! - `remind`: a tab's reminder (remind.sh).
 //! - `reminders`: the Reminders view, every tab's reminder on a month.
+//! - `reply_box`: the Slack view's reply box (board 108).
 //! - `remind_box`: with UX 2.0, the reminder's box (board 34): when, what
 //!   for, and the reminder set now.
 //! - `resources_board`: with UX 2.0, the Resources view as a board: the
@@ -90,6 +91,7 @@ pub mod remind_box;
 pub mod reminders;
 pub mod render;
 pub mod reopen_board;
+pub mod reply_box;
 pub mod resources_board;
 mod serve;
 pub mod settings_board;
@@ -1515,6 +1517,23 @@ pub enum After {
     Tickets,
     /// An invitation answered: the calendar feed read again.
     Calendar,
+    /// A Slack reply sent: what came before it in its conversation and
+    /// thread read, and the look made again so the reply shows.
+    SlackReplied {
+        channel: String,
+        thread: Option<String>,
+        /// The ts Slack gave it, when its result said.
+        ts: Option<String>,
+        /// The thread the item was in, as `Reply::shown`.
+        shown: Option<String>,
+    },
+    /// A Slack reply that wasn't sent: its box again, the text kept, so
+    /// it can be sent once the connector answers.
+    SlackReplyAgain {
+        reply: Box<crate::day::slack_reply::Reply>,
+        text: String,
+        why: String,
+    },
     /// Linear has said which state closing a ticket moves it to: asked
     /// about first, since it changes Linear for everyone.
     CloseTicket {

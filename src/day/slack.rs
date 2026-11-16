@@ -158,7 +158,10 @@ pub fn mark_item_seen(state: &Path, channel: &str, ts: &str, now: i64) {
         .into_iter()
         .filter(|(_, at)| now - at.as_f64().unwrap_or(0.0) as i64 <= DISMISS_KEEP_MS)
         .collect();
-    kept.insert(format!("{channel}:{ts}"), json!(now));
+    // Never back: a thread read through a later look stays read through it.
+    let key = format!("{channel}:{ts}");
+    let was = kept.get(&key).and_then(Value::as_i64).unwrap_or(0);
+    kept.insert(key, json!(now.max(was)));
     let _ = util::write_atomic(
         seen_items_file(state),
         util::json_compact(&Value::Object(kept)),
@@ -487,7 +490,14 @@ fn body(value: Option<&Value>, max: usize) -> String {
         .collect()
 }
 
-fn is_ts(text: &str) -> bool {
+/// A Slack conversation's ID: capitals and digits (`C0123`, `D9`).
+pub(crate) fn is_channel(c: &str) -> bool {
+    !c.is_empty()
+        && c.bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+}
+
+pub(crate) fn is_ts(text: &str) -> bool {
     let mut parts = text.splitn(2, '.');
     let whole = parts.next().unwrap_or("");
     !whole.is_empty()
@@ -517,6 +527,41 @@ pub fn relay_dm(relay: &Path) -> (Option<String>, Option<String>) {
             .map(str::to_string)
     };
     (get("channel"), get("bot"))
+}
+
+/// One reply of yours, `ts`, in `channel` (in `thread`, else on its own):
+/// the newest you wrote there, in the conversation and in its thread.
+fn note_replied(replied: &mut Map<String, Value>, channel: &str, thread: Option<&str>, ts: &str) {
+    let thread = thread.unwrap_or(ts);
+    let at: f64 = ts.parse().unwrap_or(0.0);
+    for k in [channel.to_string(), format!("{channel}:{thread}")] {
+        let was = replied
+            .get(&k)
+            .map(|v| util::js_string(v).parse::<f64>().unwrap_or(f64::NAN));
+        if !was.is_some_and(|w| w >= at) {
+            replied.insert(k, json!(ts));
+        }
+    }
+}
+
+/// A reply sent from the Slack view: what came before it in its
+/// conversation and thread is read, as a reply the look finds is, at once
+/// rather than at the next look. The rest of `slack.json` stays as it is.
+pub fn mark_replied(state: &Path, channel: &str, thread: Option<&str>, ts: &str) {
+    if channel.is_empty() || !is_ts(ts) {
+        return;
+    }
+    let Some(mut all) = util::read_json(file(state)).filter(Value::is_object) else {
+        return;
+    };
+    let mut replied = all
+        .get("replied")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    note_replied(&mut replied, channel, thread.filter(|t| is_ts(t)), ts);
+    all["replied"] = Value::Object(replied);
+    let _ = util::write_atomic(file(state), util::json_compact(&all));
 }
 
 /// Adds what a look found (`{ items, replied }`, as /slack-updates writes
@@ -558,11 +603,7 @@ pub fn save(state: &Path, relay: &Path, found: &Value, now: i64) -> std::io::Res
         .collect();
     let new = items.len();
     let mut replied = saved.replied.clone();
-    let channel_ok = |c: &str| {
-        !c.is_empty()
-            && c.bytes()
-                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
-    };
+    let channel_ok = is_channel;
     for r in found
         .get("replied")
         .and_then(Value::as_array)
@@ -573,20 +614,8 @@ pub fn save(state: &Path, relay: &Path, found: &Value, now: i64) -> std::io::Res
         if !channel_ok(&channel) || !is_ts(&ts) {
             continue;
         }
-        let thread = r
-            .get("thread")
-            .map(util::js_string)
-            .filter(|t| is_ts(t))
-            .unwrap_or_else(|| ts.clone());
-        let at: f64 = ts.parse().unwrap_or(0.0);
-        for k in [channel.clone(), format!("{channel}:{thread}")] {
-            let was = replied
-                .get(&k)
-                .map(|v| util::js_string(v).parse::<f64>().unwrap_or(f64::NAN));
-            if !was.is_some_and(|w| w >= at) {
-                replied.insert(k, json!(ts));
-            }
-        }
+        let thread = r.get("thread").map(util::js_string).filter(|t| is_ts(t));
+        note_replied(&mut replied, &channel, thread.as_deref(), &ts);
     }
     replied.retain(|_, v| {
         let ts = util::js_string(v).parse::<f64>().unwrap_or(0.0);

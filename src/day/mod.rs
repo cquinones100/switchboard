@@ -20,6 +20,7 @@
 //!   the next meeting, RSVP.
 //! - `changes`: what changed on today's calendar since you last looked.
 //! - `slack`, `slack_look`: the Slack view, its saved look, and the look.
+//! - `slack_reply`: a reply sent from the Slack view, asked first.
 //! - `slack_thread`: the chosen message's thread and its pictures.
 //! - `standup`: the note written for you. Today's todo note and the
 //!   meeting notes are starter routines now (src/routines/starters.rs).
@@ -35,6 +36,7 @@ pub mod rrule;
 mod serve;
 pub mod slack;
 pub mod slack_look;
+pub mod slack_reply;
 pub mod slack_thread;
 pub mod standup;
 
@@ -106,6 +108,23 @@ impl Connector for Claude {
     ) -> impl Future<Output = Result<String, ConnectorError>> + Send {
         let tool = tool.to_string();
         async move { crate::connector::call_in_background(&tool, &input, timeout).await }
+    }
+}
+
+/// Claude's connectors for a call you start (a reply sent from the Slack
+/// view): always made, as `connector::call_connector` says, so it is how
+/// you try again at once after connecting one with `/mcp`.
+pub struct ClaudeNow;
+
+impl Connector for ClaudeNow {
+    fn call(
+        &self,
+        tool: &str,
+        input: Value,
+        timeout: Option<Duration>,
+    ) -> impl Future<Output = Result<String, ConnectorError>> + Send {
+        let tool = tool.to_string();
+        async move { crate::connector::call_connector(&tool, &input, timeout).await }
     }
 }
 

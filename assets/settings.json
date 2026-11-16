@@ -858,6 +858,13 @@
     "default": true
   },
   {
+    "key": "slack_reply",
+    "category": "Mission control",
+    "label": "Reply from the Slack view",
+    "description": "A Slack message's Enter menu in the Slack view offers to reply in its thread or its channel, or in its DM: a box to type in, and Send asks before anything goes, naming who can read it, then sends your words as typed through Claude's Slack connector. Off, as it is by default since it sends your words to Slack, the menu offers no replies",
+    "default": false
+  },
+  {
     "key": "pause_when_away",
     "category": "Mission control",
     "label": "Pause lookups while away",

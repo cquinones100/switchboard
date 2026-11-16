@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use switchboard::connector::ConnectorError;
 use switchboard::day::calendar::{self, Feed, Look};
 use switchboard::day::{
-    Ask, AskOpts, Connector, Dirs, new_notes, slack_look, slack_thread, standup,
+    Ask, AskOpts, Connector, Dirs, new_notes, slack, slack_look, slack_reply, slack_thread, standup,
 };
 use switchboard::util;
 
@@ -554,4 +554,64 @@ fn the_calendar_view_shows_the_day_today_saved_and_says_when_it_is_out_of_date()
         moves: &Default::default(),
     });
     assert!(none.setup.is_some(), "nothing set up says how to set it up");
+}
+
+#[test]
+fn a_reply_from_the_slack_view_goes_as_typed_to_its_thread_and_marks_it_read() {
+    let home = Home::new("slack-reply");
+    let dirs = &home.dirs;
+    let now = util::now_ms();
+    let secs = now / 1000;
+    let root = format!("{}.000100", secs - 300);
+    let reply_ts = format!("{}.000200", secs - 60);
+    slack::save(
+        &dirs.state,
+        &dirs.relay,
+        &json!({ "items": [{ "kind": "mention", "channel": "C3", "where": "#web-app",
+            "user": "U1", "from": "Ben", "text": "@you can you look?",
+            "ts": reply_ts, "thread": root }] }),
+        now,
+    )
+    .unwrap();
+    let threads = Default::default();
+    let view = |at: i64| {
+        slack::slack_view(&slack::Look {
+            state: &dirs.state,
+            background: true,
+            looping: false,
+            down: None,
+            now: at,
+            threads: &threads,
+        })
+    };
+    let item = view(now).items.remove(0);
+    assert_eq!(item.data["answered"], json!(false));
+    let replies = slack_reply::replies_of(&item);
+    assert_eq!(replies.len(), 2, "its thread, then the channel");
+    let sent_at = format!("{}.000300", secs - 1);
+    let link = format!(
+        "Message sent: https://x.slack.com/archives/C3/p{}",
+        sent_at.replace('.', "")
+    );
+    let slack = Fake::new(|_, _| link.clone());
+
+    // Nothing typed, nothing sent.
+    assert!(util::block_on(slack_reply::send(&slack, &replies[0], " \n ")).is_err());
+    assert!(slack.tools().is_empty());
+
+    let typed = "On it: the refresh rebuilds the menu.\nFix up before 3:00.";
+    let ts = util::block_on(slack_reply::send(&slack, &replies[0], typed)).unwrap();
+    assert_eq!(ts.as_deref(), Some(sent_at.as_str()));
+    let asked = slack.asked.lock().unwrap().clone();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].0, slack_reply::TOOL);
+    assert_eq!(
+        asked[0].1,
+        json!({ "channel_id": "C3", "message": typed, "thread_ts": root })
+    );
+
+    slack::mark_replied(&dirs.state, "C3", replies[0].thread.as_deref(), &sent_at);
+    let item = view(now).items.remove(0);
+    assert_eq!(item.data["answered"], json!(true), "read once you replied");
+    assert!(item.title.ends_with("· seen"), "{}", item.title);
 }

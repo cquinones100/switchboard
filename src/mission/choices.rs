@@ -107,6 +107,9 @@ pub enum Do {
     TabFor(Handoff),
     /// Slack messages dismissed until their threads get more.
     SlackDismiss(Vec<Item>),
+    /// The reply box for a Slack message, its thread or its conversation
+    /// (Settings' `slack_reply`), Send asked first.
+    SlackReply(Box<crate::day::slack_reply::Reply>),
     /// Every notification shown put away, each by its source and its own
     /// item, as dismissing it alone would.
     DismissAll(Vec<(String, Item)>),
@@ -678,6 +681,8 @@ pub struct Ctx<'a> {
     pub habit: &'a dyn Fn(&str) -> Vec<habits::Choice>,
     /// The `notice_to_tab` setting: items' menus hand them to a tab.
     pub to_tab: bool,
+    /// The `slack_reply` setting: a Slack message's menu offers replies.
+    pub slack_reply: bool,
 }
 
 /// Whether a tab's name has a ticket (or a pattern), and not one whose
@@ -1167,11 +1172,21 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
                 out.push(choice('y', "Copy its link", Do::Copy(url)));
             }
         }
-        // Opening it, a tab for its thread, sending it to a tab, its link,
-        // then dismissing.
+        // Opening it, replying (board 107), a tab for its thread, sending
+        // it to a tab, its link, then dismissing.
         ViewId::Slack => {
             if let Target::Url(url) = &item.target {
                 out.push(choice('o', "Open it in Slack", Do::Open(url.clone())));
+            }
+            if ctx.slack_reply {
+                for (reply, key) in crate::day::slack_reply::replies_of(item)
+                    .into_iter()
+                    .zip(['r', 'R'])
+                {
+                    out.push(choice(key, reply.label(), Do::SlackReply(Box::new(reply))));
+                }
+            }
+            if let Target::Url(url) = &item.target {
                 let thread = handoff("slack", item, ctx);
                 if let Some(h) = thread.clone() {
                     out.push(choice('t', "Open a tab for it", Do::TabFor(h)));
@@ -1683,6 +1698,8 @@ pub fn led_to_words(
         // be canceled.
         Do::TabFor(_) => "you asked for a tab for it".into(),
         Do::ToTab(_) => "you chose a tab to send it to".into(),
+        // Asked for: Send asks again, and may be told no.
+        Do::SlackReply(_) => "you chose to reply".into(),
         // Said once Linear answers (`After::DropInbox`).
         Do::MarkRead(_) => return None,
         Do::CloseTicket { .. } => "you chose to close it in Linear".into(),
@@ -1788,6 +1805,7 @@ mod tests {
             home: "/home/me".into(),
             habit: &|_| Vec::new(),
             to_tab: false,
+            slack_reply: false,
         }
     }
 
@@ -2195,6 +2213,67 @@ mod tests {
     }
 
     #[test]
+    fn a_slack_message_offers_its_replies_only_with_slack_reply_on() {
+        let tabs: Vec<TabModel> = Vec::new();
+        let repo = |_: &Path| Vec::new();
+        let in_channel = Item::new("C1:2.5", "@ Ben · #web-app")
+            .target(Target::Url("https://slack.example/m".into()))
+            .data(
+                json!({ "kind": "mention", "from": "Ben", "where": "#web-app",
+                "message": { "channel": "C1", "thread": "1.5", "ts": "2.5" },
+                "root": { "from": "Ana", "text": "can you look?", "ts": "1.5" } }),
+            );
+        let dm = Item::new("D1:3.5", "DM Ben · Ben")
+            .target(Target::Url("https://slack.example/d".into()))
+            .data(json!({ "kind": "dm", "from": "Ben", "where": "Ben",
+                "message": { "channel": "D1", "ts": "3.5" } }));
+        let off = ctx(&tabs, &repo);
+        for item in [&in_channel, &dm] {
+            let choices = item_choices(&ViewId::Slack, item, &[], &off);
+            assert!(
+                !choices.iter().any(|c| matches!(c.act, Do::SlackReply(_))),
+                "off by default"
+            );
+        }
+        let on = Ctx {
+            slack_reply: true,
+            ..ctx(&tabs, &repo)
+        };
+        let labels = |item: &Item| {
+            item_choices(&ViewId::Slack, item, &[], &on)
+                .into_iter()
+                .map(|c| c.label)
+                .collect::<Vec<_>>()
+        };
+        let shown = labels(&in_channel);
+        assert_eq!(
+            shown[..3],
+            [
+                "Open it in Slack",
+                "Reply in Ana's thread",
+                "Reply in #web-app"
+            ]
+        );
+        let choices = item_choices(&ViewId::Slack, &in_channel, &[], &on);
+        match &choices[1].act {
+            Do::SlackReply(r) => {
+                assert_eq!(
+                    (r.channel.as_str(), r.thread.as_deref()),
+                    ("C1", Some("1.5"))
+                )
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(&choices[2].act, Do::SlackReply(r) if r.thread.is_none()));
+        let shown = labels(&dm);
+        assert_eq!(shown[..2], ["Open it in Slack", "Reply to Ben"]);
+        assert!(
+            !shown.iter().any(|l| l.starts_with("Reply in")),
+            "{shown:?}"
+        );
+    }
+
+    #[test]
     fn a_ticket_offers_work_shaping_and_closing_and_the_inbox_marks_read() {
         let tabs = vec![tab(7, "AB-30: other"), tab(8, "AB-3: this one")];
         let repo = |_: &Path| Vec::new();
@@ -2224,6 +2303,7 @@ mod tests {
             home: "/h".into(),
             habit: &habit,
             to_tab: false,
+            slack_reply: false,
         };
         let suggestion = Item::new("habits\tkey:M-d", "Press M-d");
         let choices = notice_choices(&suggestion, &c);

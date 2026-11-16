@@ -3652,6 +3652,7 @@ impl Server {
             home: paths::home(),
             habit: &habit,
             to_tab: settings::is_on("notice_to_tab"),
+            slack_reply: settings::is_on("slack_reply"),
         };
         if *view == ViewId::Settings {
             return self.setting_choices(item);
@@ -4775,6 +4776,7 @@ impl Server {
                     server.paste_into_tab(client, tab, &h.text);
                 });
             }
+            Do::SlackReply(reply) => self.slack_reply_box(client, *reply, ""),
             Do::SlackDismiss(items) => {
                 self.slack_dismiss(&items);
                 self.mission_note(client, "Dismissed.");
@@ -5043,6 +5045,73 @@ impl Server {
         self.refresh_sources(Some(crate::sources::INBOX));
     }
 
+    /// The Slack view's reply box (board 108), `text` typed to start with;
+    /// Send asks first (board 109), naming who can read it, and a no comes
+    /// back to the box with the text kept. Only a yes sends, the text as
+    /// typed, to the conversation and thread the item named.
+    pub(crate) fn slack_reply_box(
+        &mut self,
+        client: ClientId,
+        reply: crate::day::slack_reply::Reply,
+        text: &str,
+    ) {
+        self.slack_reply_box_with(client, reply, text, None);
+    }
+
+    /// `slack_reply_box`, saying in the box why the last Send didn't send.
+    fn slack_reply_box_with(
+        &mut self,
+        client: ClientId,
+        reply: crate::day::slack_reply::Reply,
+        text: &str,
+        failed: Option<String>,
+    ) {
+        let boxed = super::reply_box::ReplyBox::new(reply.clone(), text).failed(failed);
+        self.open(
+            client,
+            Box::new(boxed),
+            Some(Box::new(move |server: &mut Server, client, outcome| {
+                let Outcome::Picked(p) = outcome else {
+                    return;
+                };
+                let text = p.query;
+                let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+                let quoted = format!("\"{}\"", crate::ui::draw::cut(first, 60));
+                let question = Confirm::new(reply.question()).list(vec![reply.readers(), quoted]);
+                server.ask(client, question, move |server, client, yes| {
+                    if !yes {
+                        server.slack_reply_box(client, reply, &text);
+                        return;
+                    }
+                    server.mission_busy_with(client, "Sending it", async move {
+                        let sent =
+                            crate::day::slack_reply::send(&crate::day::ClaudeNow, &reply, &text)
+                                .await;
+                        match sent {
+                            Ok(ts) => (
+                                Some(format!("Sent to {}.", reply.place)),
+                                Some(After::SlackReplied {
+                                    channel: reply.channel.clone(),
+                                    thread: reply.thread.clone(),
+                                    ts,
+                                    shown: reply.shown.clone(),
+                                }),
+                            ),
+                            Err(e) => (
+                                None,
+                                Some(After::SlackReplyAgain {
+                                    reply: Box::new(reply),
+                                    text,
+                                    why: e,
+                                }),
+                            ),
+                        }
+                    });
+                });
+            })),
+        );
+    }
+
     /// What a busy option leaves the server to do once it has answered.
     fn mission_after(&mut self, client: ClientId, after: After) {
         match after {
@@ -5055,6 +5124,15 @@ impl Server {
                 self.mission_revived(true);
             }
             After::Calendar => self.calendar_reread(),
+            After::SlackReplied {
+                channel,
+                thread,
+                ts,
+                shown,
+            } => self.slack_replied(&channel, thread.as_deref(), ts.as_deref(), shown.as_deref()),
+            After::SlackReplyAgain { reply, text, why } => {
+                self.slack_reply_box_with(client, *reply, &text, Some(why))
+            }
             After::Tickets => {
                 self.refresh_sources(Some(crate::sources::TICKETS));
                 self.refresh_sources(Some(crate::sources::INBOX));
@@ -8379,6 +8457,7 @@ mod tests {
             home: PathBuf::from("/home"),
             habit: &habit,
             to_tab: false,
+            slack_reply: false,
         };
         let item = m.snap.views[0].data.items[1].clone();
         let acts = |item: Item| -> Vec<Do> {
