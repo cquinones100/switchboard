@@ -51,7 +51,7 @@ const views = (x, y, on) => { for (const [k, l] of [['M-c', 'Claude'], ['M-d', '
 // K(x, y, w, h, css, text) places one; css is any extra CSS (background, border-radius, opacity...).
 const imgs = [];
 // Placed in cells on an outer box in the terminal's font (ch is a cell only in that font); its look, and any font of its own, on an inner one.
-const K = (x, y, w, h, css, text) => imgs.push({ pos: 'position:absolute;left:' + (x * 8) + 'px;top:' + (y * 17) + 'px;width:' + (w * 8) + 'px;height:' + (h * 17) + 'px', style: 'width:100%;height:100%;box-sizing:border-box;' + (css || ''), text: text || '' });
+const K = (x, y, w, h, css, text) => imgs.push({ pos: 'position:absolute;left:' + (x * 8) + 'px;top:' + (y * 17) + 'px;width:' + (w * 8) + 'px;height:' + (h * 17) + 'px', style: 'width:100%;height:100%;box-sizing:border-box;' + (css || ''), text: text || '', r: [x, y, w, h] });
 // ─── THE KIT: the atoms every board draws with ──────────────────────────────
 // Tones: t text, d secondary, f faint; a accent (what you can act on, what is chosen);
 // y needs you, b working, m landing or queued, g done, r failed. Bold is for names only.
@@ -84,7 +84,7 @@ const card = (x, y, w, h, o) => {
 // Call backdrop(boxes) once, last, to dim what is behind every box.
 const BOXES = [];
 const box = (x, y, w, h, title, tone) => {
-  BOXES.push([x, y, w, h]);
+  BOXES.push([x, y, w, h, imgs.length]);
   fill(x, y, w, h, 'E');
   const c = tone || 'a';
   put(x, y, '╭', c); hl(x + 1, y, w - 2, c); put(x + w - 1, y, '╮', c);
@@ -93,7 +93,7 @@ const box = (x, y, w, h, title, tone) => {
   put(x + 2, y, ' ' + title + ' ', 't', 'b', 'E'); put(x + w - 4, y, ' × ', 'd', '', 'E');
   K(x, y, w, h, 'border-radius:7px;box-shadow:0 14px 34px 8px rgba(0,0,0,.6),0 3px 8px rgba(0,0,0,.45)');
 };
-const backdrop = () => { for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { if (BOXES.some(([bx, by, bw, bh]) => x >= bx && x < bx + bw && y >= by && y < by + bh)) continue; const c = g[y][x]; c.fg = 'f'; if (c.bg === '4' || c.bg === 'A') c.bg = '2'; } };
+const backdrop = () => { for (let i = imgs.length - 1; i >= 0; i--) { const [ix, iy, iw, ih] = imgs[i].r; const under = BOXES.filter((b) => i < b[4]); if (!under.length) continue; if (under.some(([bx, by, bw, bh]) => ix < bx + bw && ix + iw > bx && iy < by + bh && iy + ih > by)) imgs.splice(i, 1); else imgs[i].style += ';opacity:.35'; } for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { if (BOXES.some(([bx, by, bw, bh]) => x >= bx && x < bx + bw && y >= by && y < by + bh)) continue; const c = g[y][x]; c.fg = 'f'; if (/^(4|A|Y|B|M|G|R|3|5)$/.test(c.bg)) c.bg = '2'; if (c.c === '\uE0B6' || c.c === '\uE0B4') c.fg = '2'; } };
 // OPTION: one choice in a box; the chosen one lit, a yellow › before it. Never a letter key: a menu is moved with ↑↓ (or /), chosen with Enter or a click; what sits at the right is a fact, such as a time.
 const option = (x, y, w, text, key, chosen) => { const bg = chosen ? '4' : 'E'; if (chosen) fill(x + 1, y, w - 2, 1, '4'); put(x + 2, y, chosen ? '›' : ' ', 'y', 'b', bg); put(x + 4, y, text, 't', chosen ? 'b' : '', bg); if (key) R(x + w - 3, y, key, chosen ? 'a' : 'd', '', bg); };
 // KEYCAP: a key you can press or click, with what it does; lit while what it opens is in front.
