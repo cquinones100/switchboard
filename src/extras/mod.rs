@@ -81,6 +81,9 @@ pub enum Command {
     /// "Mission control's views by group", the menu a right click on ⊞
     /// opens.
     MissionViews,
+    /// "Use the default width": the tab's lone pane takes Settings'
+    /// `lone_pane_width` again, its own width from a drag cleared.
+    DefaultWidth,
 }
 
 impl Command {
@@ -107,6 +110,7 @@ impl Command {
                 Command::SidebarSelect,
                 Command::TabTrail,
                 Command::MissionViews,
+                Command::DefaultWidth,
             ])
             .collect()
     }
@@ -135,6 +139,7 @@ impl Command {
             Command::SidebarSelect => "sidebar-select".into(),
             Command::TabTrail => "tab-trail".into(),
             Command::MissionViews => "mission-views".into(),
+            Command::DefaultWidth => "default-width".into(),
         }
     }
 
@@ -187,6 +192,9 @@ impl Command {
             Command::SidebarSelect => "Select several tabs in the sidebar",
             Command::TabTrail => "Back and forward: every tab you visited, to go straight to one",
             Command::MissionViews => "Mission control's views by group, to open one",
+            Command::DefaultWidth => {
+                "Use the default width for this tab's lone pane and mission control"
+            }
         };
         words.to_string()
     }
@@ -249,6 +257,9 @@ impl Command {
             Command::MissionViews => {
                 "The menu a right click on the sidebar's ⊞ opens: each view that is on, by group, the Tabs view with how many tabs need you; a choice opens mission control on it."
             }
+            Command::DefaultWidth => {
+                "A drag of a lone pane's right edge, or the pane resize keys in a tab with one pane, gives that tab a width of its own, kept through restarts; and the keys in mission control give it one; this clears both, the pane and mission control taking Settings' \"Widest a lone pane gets\" (lone_pane_width) again."
+            }
             Command::Keys => {
                 "Mission control's Keys view: the workspace's keys by their first tag, then the sidebar's, mission control's, the diff's and Notes', then those only through M-p; Enter presses a workspace key and ? finds one by pressing it. With UX 2.0, a board with a heatmap of the Alt keys pressed this week. Settings' \"Keys\" (view_keys) off hands M-/ to the pane."
             }
@@ -278,6 +289,7 @@ impl Command {
             }
             Command::TabTrail => &["tabs", "navigate", "history"],
             Command::MissionViews => &["mission", "views"],
+            Command::DefaultWidth => &["tabs", "panes", "width"],
         }
     }
 

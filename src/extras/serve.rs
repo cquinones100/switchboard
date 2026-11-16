@@ -245,6 +245,26 @@ impl Server {
                 }
             }
             Command::MissionViews => self.sidebar_views_menu(client),
+            Command::DefaultWidth => {
+                // The tab's own width, and mission control's in its session.
+                let session = self.clients.get(&client).map(|c| c.session.clone());
+                let mission = session
+                    .and_then(|name| self.session_mut(&name))
+                    .and_then(|s| s.mission_width.take())
+                    .is_some();
+                let tab = self
+                    .client_tab(client)
+                    .filter(|t| self.own_width(*t).is_some());
+                if let Some(tab) = tab {
+                    self.set_own_width(tab, None);
+                }
+                let words = if tab.is_some() || mission {
+                    "This tab and mission control take the default width again."
+                } else {
+                    "This tab and mission control already take the default width."
+                };
+                self.say(Some(client), words);
+            }
             Command::SidebarAll => {
                 if let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) {
                     self.sidebar_set_repo(&session, None);

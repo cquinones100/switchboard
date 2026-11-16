@@ -1026,6 +1026,10 @@ impl Server {
                     );
                     tab.opts.insert(name.clone(), value);
                 }
+                // A lone pane's own width resizes its program too.
+                if name == super::layout::OWN_WIDTH {
+                    self.relayout(t);
+                }
                 self.dirty_tab(t);
             }
         }
@@ -1086,7 +1090,8 @@ impl Server {
         // it, a tool standing in for Claude's pane or not.
         let tab_option = name.starts_with("@tab_")
             || name.starts_with("@autopilot")
-            || (name.starts_with("@agent") && !name.starts_with("@agent_"));
+            || (name.starts_with("@agent") && !name.starts_with("@agent_"))
+            || name == super::layout::OWN_WIDTH;
         // A pane named for a tab's option means its tab, as without `-t`.
         if let Some(t) = a.value('t') {
             return match self.parse_target(t)? {

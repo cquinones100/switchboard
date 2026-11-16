@@ -140,6 +140,9 @@ pub struct SavedSession {
     pub sidebar_folded: Vec<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub sidebar_notices_folded: bool,
+    /// Mission control's own width for one view (`Session::mission_width`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mission_width: Option<String>,
 }
 
 /// A session's sidebar folds as they are kept (`SavedSession`).
@@ -774,6 +777,7 @@ impl Persist {
                 sidebar_repo_open: side.is_some_and(|x| x.repo.is_some() && x.repo_open),
                 sidebar_folded: folds_of(side).0,
                 sidebar_notices_folded: folds_of(side).1,
+                mission_width: s.mission_width.clone(),
             });
         }
         Saved {
@@ -1174,6 +1178,7 @@ impl Persist {
                 cols,
                 rows,
                 sidebar,
+                mission_width: ss.mission_width,
             });
             for t in tabs {
                 server.relayout(t);
@@ -1326,6 +1331,7 @@ pub fn layout_now(server: &Server) -> Saved {
                 .is_some_and(|x| x.repo.is_some() && x.repo_open),
             sidebar_folded: folds_of(server.sidebar.sides.get(&s.name)).0,
             sidebar_notices_folded: folds_of(server.sidebar.sides.get(&s.name)).1,
+            mission_width: s.mission_width.clone(),
             tabs: s
                 .tabs
                 .iter()
@@ -1457,6 +1463,7 @@ pub fn adopt_layout(server: &mut Server, saved: Saved) {
             cols,
             rows,
             sidebar,
+            mission_width: ss.mission_width,
         });
     }
     // Panes whose tab couldn't be built, each in a tab of its own.
@@ -1478,6 +1485,7 @@ pub fn adopt_layout(server: &mut Server, saved: Saved) {
                 cols: 80,
                 rows: 24,
                 sidebar: server.sidebar_columns(80),
+                mission_width: None,
             });
         }
         let tab = TabId(server.next_tab);
@@ -1527,6 +1535,7 @@ mod tests {
                 sidebar_repo_open: false,
                 sidebar_folded: Vec::new(),
                 sidebar_notices_folded: false,
+                mission_width: None,
                 tabs: vec![
                     SavedTab {
                         id: TabId(1),

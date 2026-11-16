@@ -1208,8 +1208,16 @@ fn lone_setting(server: &TestServer) -> Option<String> {
     settings["lone_pane_width"].as_str().map(str::to_string)
 }
 
+/// The first session's tab `n`'s panes' widths.
+fn tab_widths(server: &TestServer, n: usize) -> Vec<u64> {
+    server.list()["sessions"][0]["tabs"][n]["panes"]
+        .as_array()
+        .map(|panes| panes.iter().filter_map(|p| p["cols"].as_u64()).collect())
+        .unwrap_or_default()
+}
+
 #[test]
-fn a_lone_panes_edge_drags_and_moves_with_the_resize_keys_for_every_tab() {
+fn a_lone_panes_edge_drags_and_moves_with_the_resize_keys_for_its_tab_alone() {
     let server = TestServer::start_with_settings(r#"{"lone_pane_width": "165"}"#);
     let mut client = server.attach(365, 40);
     client.wait_text("$");
@@ -1225,26 +1233,65 @@ fn a_lone_panes_edge_drags_and_moves_with_the_resize_keys_for_every_tab() {
     client.wait_for("the pane dragged to 200 columns", |_| {
         widths(&server.list()) == [200]
     });
-    assert_eq!(lone_setting(&server).as_deref(), Some("200"));
-    client.wait_text("A lone pane is now 200 columns");
+    assert_eq!(lone_setting(&server).as_deref(), Some("165"));
+    client.wait_text("This tab's pane is now 200 columns");
     client.send(b"\x1b");
     client.wait_for("the message closed", |s| {
-        !s.iter().any(|l| l.contains("A lone pane is now"))
+        !s.iter().any(|l| l.contains("This tab's pane is now"))
     });
     // C-M-S-h moves the edge back 5 columns, as it moves a divider.
     client.send(b"\x1b[104;8u");
     client.wait_for("the pane 5 columns narrower", |_| {
         widths(&server.list()) == [195]
     });
-    assert_eq!(lone_setting(&server).as_deref(), Some("195"));
-    // C-M-S-l the other way; a new tab with one pane takes the same width.
+    assert_eq!(lone_setting(&server).as_deref(), Some("165"));
+    // C-M-S-l the other way; a new tab with one pane takes the setting's
+    // width, the first keeping its own.
     client.send(b"\x1b[108;8u");
     client.wait_for("the pane 5 columns wider", |_| {
         widths(&server.list()) == [200]
     });
+    let first = server.list()["sessions"][0]["tabs"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        server.ok(&["show", "-t", &first, "@lone_width"]).trim(),
+        "200",
+        "kept with the tab's options, which the layout saves"
+    );
     server.ok(&["new-tab"]);
-    client.wait_for("the new tab's pane as wide", |_| {
-        server.list()["sessions"][0]["tabs"][1]["panes"][0]["cols"].as_u64() == Some(200)
+    client.wait_for("the new tab at the setting's width", |_| {
+        tab_widths(&server, 1) == [165]
+    });
+    // The new tab's rule dragged to the screen's edge: it alone fills it.
+    let rule = side + 166;
+    client.send(format!("\x1b[<0;{rule};5M\x1b[<32;365;5M\x1b[<0;365;5m").as_bytes());
+    client.wait_for("the new tab filling the width", |_| {
+        tab_widths(&server, 1) == [365 - side as u64]
+    });
+    assert_eq!(tab_widths(&server, 0), [200]);
+    assert_eq!(lone_setting(&server).as_deref(), Some("165"));
+    client.wait_text("This tab's pane now fills the width");
+    client.send(b"\x1b");
+    client.wait_for("the message closed", |s| {
+        !s.iter().any(|l| l.contains("now fills the width"))
+    });
+    // "Use the default width", on a key of its own, gives it the setting's
+    // again.
+    std::fs::write(
+        server.home.join(".config/switchboard/keys.json"),
+        r#"{"root": {"M-z": "default-width"}}"#,
+    )
+    .unwrap();
+    let deadline = common::deadline(std::time::Duration::from_secs(10));
+    while !server.ok(&["list-keys"]).contains("M-z") {
+        assert!(std::time::Instant::now() < deadline, "keys.json not read");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    client.type_text(&format!("{ALT}z"));
+    client.wait_for("the new tab back at the setting's width", |_| {
+        tab_widths(&server, 1) == [165]
     });
 }
 

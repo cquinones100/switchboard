@@ -1292,7 +1292,13 @@ impl Server {
             slack_files_kept: Default::default(),
         };
         m.left = left;
-        m.lone = crate::mux::layout::lone_width();
+        // Mission control's own width (the resize keys'), else the setting's.
+        m.lone = crate::mux::layout::width_of(
+            self.clients
+                .get(&client)
+                .and_then(|c| self.session(&c.session))
+                .and_then(|s| s.mission_width.as_deref()),
+        );
         let spread = ratatui::layout::Rect::new(0, 0, cols - left, rows);
         m.size = (m.view_area(spread).width, rows);
         if m.view > m.snap.views.len() {
@@ -2451,7 +2457,14 @@ impl Server {
             lone_key(&self.bindings, m, k).or_else(|| lone_key(&self.bindings, m, key))
         {
             m.lone = cap;
-            m.note = Some(self.set_lone_width(cap).unwrap_or_else(|e| e));
+            let session = self.clients.get(&client).map(|c| c.session.clone());
+            if let Some(s) = session.and_then(|name| self.session_mut(&name)) {
+                s.mission_width = Some(crate::mux::layout::own_value(cap));
+            }
+            m.note = Some(match cap {
+                Some(n) => format!("Mission control is now {n} columns"),
+                None => "Mission control now fills the width".to_string(),
+            });
             return;
         }
         let mut k = k;
@@ -3242,6 +3255,20 @@ impl Server {
                 },
                 act: Do::CardScreen(tab.id),
             });
+        }
+        // A tab whose lone pane was given a width of its own (a drag of its
+        // edge, the resize keys) can take the setting's again.
+        if self.own_width(tab.id).is_some()
+            && let Some(i) = list.iter().position(|c| matches!(c.act, Do::Rename(_)))
+        {
+            list.insert(
+                i + 1,
+                Choice {
+                    key: 'w',
+                    label: "Use the default width".into(),
+                    act: Do::DefaultWidth(tab.id),
+                },
+            );
         }
         let at = 1.min(list.len());
         list.splice(at..at, after_go);
@@ -4141,6 +4168,10 @@ impl Server {
             Do::GoToMatch { tab, pane, text } => self.mission_go_to_match(client, tab, pane, &text),
             Do::Answer(tab) => self.open_answer(client, tab, None),
             Do::Peek(tab) => self.mission_peek(client, tab),
+            Do::DefaultWidth(tab) => {
+                self.set_own_width(tab, None);
+                self.mission_note(client, "The tab takes the default width again.");
+            }
             Do::TabTitle(tab) => self.show_tab_title(client, tab),
             Do::Diff(tab) => self.tool_in_tab(client, tab, false),
             Do::Lazygit(tab) => self.tool_in_tab(client, tab, true),

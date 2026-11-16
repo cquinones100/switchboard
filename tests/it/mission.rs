@@ -2614,7 +2614,7 @@ fn on_a_wide_screen_one_view_is_capped_against_the_sidebar_and_its_side_takes_no
 }
 
 #[test]
-fn the_resize_keys_move_a_lone_views_right_edge_and_set_the_lone_width() {
+fn the_resize_keys_move_a_lone_views_right_edge_leaving_the_lone_width() {
     let server = TestServer::start();
     settings(&server, json!({ "lone_pane_width": "165" }));
     let mut client = server.attach(365, 40);
@@ -2629,9 +2629,15 @@ fn the_resize_keys_move_a_lone_views_right_edge_and_set_the_lone_width() {
     // C-M-S-l, with no pane beside the list, moves the view's edge.
     client.send(b"\x1b[108;8u");
     client.wait_for("the rule 5 columns further", |s| rule_at(s, 170));
+    // Mission control's own width, the setting left as it was.
     wait_saved(&server, "the lone width", |saved| {
-        saved["lone_pane_width"] == "170"
+        saved["lone_pane_width"] == "165"
     });
+    // Closed and opened again, it keeps its width.
+    client.send(b"\x1b");
+    client.wait_for("closed", closed);
+    open(&mut client);
+    client.wait_for("the view at its own width again", |s| rule_at(s, 170));
 }
 
 /// The settings file as written, once `pred` holds of it.

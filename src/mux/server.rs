@@ -221,6 +221,10 @@ pub struct Session {
     /// The columns the sidebar takes on the left, its line beside the panes
     /// included; 0 with none (src/sidebar).
     pub sidebar: u16,
+    /// Mission control's own widest width for one view, set by the pane
+    /// resize keys there, kept as a tab's `@lone_width` is (columns, or
+    /// `full`); none to take Settings' `lone_pane_width`.
+    pub mission_width: Option<String>,
 }
 
 impl Session {
@@ -260,14 +264,15 @@ impl Session {
     }
 
     /// Where a tab's panes go: its spread, but for a lone pane (one pane,
-    /// or zoomed into one of several) at most Settings' `lone_pane_width`
-    /// wide when one is chosen (it is off by default), against the
-    /// sidebar, while a split shares out the whole width.
+    /// or zoomed into one of several) at most the tab's own width
+    /// (`@lone_width`, from a drag of its edge) or else Settings'
+    /// `lone_pane_width` wide when one is chosen (it is off by default),
+    /// against the sidebar, while a split shares out the whole width.
     pub fn area_for(&self, tab: &Tab) -> Rect {
         Self::area_in(
             self.spread_for(tab.zoomed),
             tab,
-            super::layout::lone_width(),
+            super::layout::width_of(tab.opts.get(super::layout::OWN_WIDTH).map(String::as_str)),
         )
     }
 
@@ -361,12 +366,12 @@ enum Drag {
     },
     /// A capped lone pane's right edge, the rule beside it, moved with the
     /// mouse: its tab, the left column and the width of the spread it is
-    /// capped in, and Settings' `lone_pane_width` as the press found it.
+    /// capped in, and the tab's own width as the press found it.
     Edge {
         tab: TabId,
         left: u16,
         spread: u16,
-        from: Option<u16>,
+        from: Option<Option<u16>>,
     },
 }
 
@@ -1679,6 +1684,7 @@ impl Server {
             cols,
             rows,
             sidebar: self.sidebar_columns(cols),
+            mission_width: None,
         };
         let area = super::layout::capped(session.main_area(), super::layout::lone_width());
         // In the directory asked from, while it is still there, else home
@@ -3004,10 +3010,8 @@ impl Server {
                 };
                 let by = i32::from(cells) * if dir == Direction::Right { 1 } else { -1 };
                 let cap = super::layout::lone_moved(i32::from(area.width) + by, spread.width);
-                // Said only when it fails, since a box would take the next press.
-                if let Err(e) = self.set_lone_width(cap) {
-                    self.say(Some(id), &e);
-                }
+                // Said by no box, since a box would take the next press.
+                self.set_own_width(current_tab, Some(cap));
             }
             Action::Resize(dir, cells) => {
                 let area = self.session(&session).map(Session::main_area);
@@ -3446,18 +3450,19 @@ impl Server {
                 }),
             ) => {
                 let cap = super::layout::lone_moved(i32::from(m.col) - i32::from(left), spread);
-                crate::settings::hold("lone_pane_width", super::layout::lone_value(cap));
-                self.relayout(tab);
-                self.dirty_tab(tab);
+                self.set_own_width(tab, Some(cap));
                 return;
             }
-            (MouseKind::Release, Some(Drag::Edge { from, .. })) => {
+            (MouseKind::Release, Some(Drag::Edge { tab, from, .. })) => {
                 if let Some(c) = self.clients.get_mut(&id) {
                     c.drag = None;
                 }
-                let cap = super::layout::lone_width();
-                if cap != from {
-                    let words = self.set_lone_width(cap).unwrap_or_else(|e| e);
+                let now = self.own_width(tab);
+                if now != from {
+                    let words = match now.flatten() {
+                        Some(n) => format!("This tab's pane is now {n} columns"),
+                        None => "This tab's pane now fills the width".to_string(),
+                    };
                     self.say(Some(id), &words);
                 }
                 return;
@@ -3640,30 +3645,34 @@ impl Server {
         on_rule.then_some((tab.id, spread))
     }
 
-    /// Writes a lone pane's widest width (none for off) to Settings'
-    /// `lone_pane_width`, and lays every tab out with it at once; gives
-    /// what to say about it, or why it couldn't.
-    pub(crate) fn set_lone_width(&mut self, cap: Option<u16>) -> Result<String, String> {
-        let value = super::layout::lone_value(cap);
-        let written = crate::settings::write_setting("lone_pane_width", value);
-        // Failed, the width the file holds comes back, which a drag held
-        // aside from it, so the tabs are laid out again either way.
-        crate::settings::reload_settings();
-        let tabs: Vec<TabId> = self.tabs.keys().copied().collect();
-        for tab in tabs {
+    /// A tab's own widest width for its lone pane (`@lone_width`):
+    /// `Some(None)` to fill the width, none when it takes Settings'
+    /// `lone_pane_width`.
+    pub(crate) fn own_width(&self, tab: TabId) -> Option<Option<u16>> {
+        let opts = &self.tabs.get(&tab)?.opts;
+        super::layout::own_width(opts.get(super::layout::OWN_WIDTH).map(String::as_str))
+    }
+
+    /// Gives a tab a widest width of its own for its lone pane (`Some(None)`
+    /// filling the width), or none to take Settings' `lone_pane_width`
+    /// again, and lays that tab alone out with it; the setting is left as
+    /// it is.
+    pub(crate) fn set_own_width(&mut self, tab: TabId, cap: Option<Option<u16>>) {
+        let Some(t) = self.tabs.get_mut(&tab) else {
+            return;
+        };
+        let key = super::layout::OWN_WIDTH;
+        let changed = match cap {
+            Some(cap) => {
+                let value = super::layout::own_value(cap);
+                t.opts.insert(key.into(), value.clone()) != Some(value)
+            }
+            None => t.opts.remove(key).is_some(),
+        };
+        if changed {
             self.relayout(tab);
+            self.dirty_tab(tab);
         }
-        for c in self.clients.values_mut() {
-            c.dirty = true;
-        }
-        self.mission_changed();
-        if let Err(e) = written {
-            return Err(format!("Couldn't set a lone pane's width: {e}"));
-        }
-        Ok(match cap {
-            Some(n) => format!("A lone pane is now {n} columns"),
-            None => "A lone pane now fills the width".to_string(),
-        })
     }
 
     /// A press on a line between panes, which a drag then moves, or on the
@@ -3674,7 +3683,7 @@ impl Server {
                 tab,
                 left: spread.x,
                 spread: spread.width,
-                from: super::layout::lone_width(),
+                from: self.own_width(tab),
             };
             if let Some(c) = self.clients.get_mut(&id) {
                 c.drag = Some(drag);

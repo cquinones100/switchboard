@@ -55,6 +55,9 @@ pub enum Do {
     },
     /// Its name typed in.
     Rename(TabId),
+    /// Its lone pane's width of its own cleared, taking Settings'
+    /// `lone_pane_width` again.
+    DefaultWidth(TabId),
     Pin(TabId),
     /// A reminder set (remind.sh's times), or cleared.
     Remind(TabId),
