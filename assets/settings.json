@@ -459,7 +459,7 @@
     "key": "lazygit_esc_quits",
     "category": "Diff",
     "label": "Esc quits lazygit",
-    "description": "lazygit opened in a pane's place (M-p, the sidebar's L, mission control) or in a tab of its own quits on Esc with nothing left to back out of, as the diff and the views close, bringing the pane back: Switchboard gives that lazygit alone quitOnTopLevelReturn from a file of its own, ~/.local/share/switchboard/lazygit/config.yml, ahead of your own lazygit config, which wins where it says otherwise and is never written. Off, lazygit runs with your config alone",
+    "description": "lazygit in Switchboard's panes, opened in a pane's place (M-p, the sidebar's L, mission control) or typed in a pane's shell, quits on Esc with nothing left to back out of, as the diff and the views close, bringing the pane back: every pane's LG_CONFIG_FILE names a file of Switchboard's own, ~/.local/share/switchboard/lazygit/config.yml, holding quitOnTopLevelReturn, ahead of your own lazygit config, which wins where it says otherwise and is never written. Panes opened after a change take it. Off, lazygit in a pane reads your config alone",
     "default": true
   },
   {

@@ -8,9 +8,9 @@
 //! lazygit stands in a pane's place as the diff does, when it is installed
 //! (it is a program of its own, which Switchboard doesn't ship); asked for
 //! again in it, or in the pane beside it, it is sent C-c, its own quit,
-//! rather than closed, since q would be typed into a commit message. It is
-//! started with Switchboard's config for it under yours (`lazygit`), so Esc
-//! quits it too.
+//! rather than closed, since q would be typed into a commit message. Its
+//! pane's environment names Switchboard's config for it ahead of yours, as
+//! every pane's does (`lazygit`), so Esc quits it too.
 //!
 //! M-d opens `switchboard diff` in the pane's place, in the pane's
 //! directory; the program works out the base itself (fetching it while it
@@ -156,7 +156,7 @@ impl Server {
             );
             return;
         }
-        if let Err(e) = self.open_in_place(pane, LAZYGIT, super::lazygit::command(), Some(client)) {
+        if let Err(e) = self.open_in_place(pane, LAZYGIT, vec![LAZYGIT.into()], Some(client)) {
             self.say(Some(client), &format!("Couldn't open lazygit: {e}"));
         }
     }

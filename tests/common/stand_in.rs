@@ -1804,9 +1804,10 @@ pub fn cargo(bin: &Path, answer: &str) -> PathBuf {
 const LAZYGIT: &str = r#"#!/bin/sh
 # A stand-in for lazygit (tests/common/stand_in.rs): it refuses an argument
 # lazygit doesn't have, as lazygit's flag parser does, and a config file that
-# isn't there, as lazygit does one --use-config-file names, writes down how it
-# was called in .lazygit-args beside it, says where it runs, and waits, as
-# lazygit does, until it is ended.
+# isn't there, as lazygit does one --use-config-file or LG_CONFIG_FILE names,
+# writes down how it was called in .lazygit-args beside it and the config
+# files it reads in .lazygit-config, says where it runs, and waits, as lazygit
+# does, until it is ended.
 @PROLOGUE@
 takes_value() {
   case $1 in
@@ -1838,26 +1839,28 @@ check() {
   fi
 }
 @CHECKED@
+config_files=${LG_CONFIG_FILE-}
 prev=
 for arg do
   case $prev in
-    -ucf | --use-config-file)
-      set -f
-      old_ifs=$IFS
-      IFS=,
-      for file in $arg; do
-        if [ ! -f "$file" ]; then
-          wrong "no config file $file"
-          printf 'open %s: no such file or directory\n' "$file" >&2
-          exit 1
-        fi
-      done
-      IFS=$old_ifs
-      set +f ;;
+    -ucf | --use-config-file) config_files=$arg ;;
   esac
   prev=$arg
 done
+set -f
+old_ifs=$IFS
+IFS=,
+for file in $config_files; do
+  if [ ! -f "$file" ]; then
+    wrong "no config file $file"
+    printf 'open %s: no such file or directory\n' "$file" >&2
+    exit 1
+  fi
+done
+IFS=$old_ifs
+set +f
 printf '%s\n' "$*" > "${0%/*}/.lazygit-args"
+printf '%s\n' "$config_files" > "${0%/*}/.lazygit-config"
 echo "stand-in lazygit in $PWD"
 exec sleep 60
 "#;

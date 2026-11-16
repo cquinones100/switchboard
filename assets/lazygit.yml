@@ -1,9 +1,10 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/jesseduffield/lazygit/master/schema/config.json
-# Switchboard's own settings for the lazygit it opens (M-p's "Open lazygit in
-# place of this pane", the sidebar's L, mission control's lazygit), given to
-# that lazygit alone through --use-config-file, ahead of your own config,
-# whose settings win. Written by Switchboard as it opens lazygit, so a change
-# here is written over; Settings' "Esc quits lazygit" off leaves it out.
+# Switchboard's own settings for lazygit in its panes, opened in a pane's
+# place (M-p's "Open lazygit in place of this pane", the sidebar's L, mission
+# control's lazygit) or typed in a pane's shell: every pane's LG_CONFIG_FILE
+# names this file ahead of your own config, whose settings win. Written by
+# Switchboard as a pane starts, so a change here is written over; Settings'
+# "Esc quits lazygit" off leaves it out.
 
 # Esc with nothing left to back out of quits, as q and Ctrl-C do, so lazygit
 # in a pane's place closes the way the diff and the views do, bringing the

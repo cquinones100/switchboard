@@ -19,7 +19,7 @@
 //! - `terminal` (`terminal`): Option acting as Alt in a Mac's terminal,
 //!   and Notes' easy mode's Cmd keys in Ghostty.
 //! - `lazygit` (`lazygit`): the lazygit config earlier versions wrote,
-//!   taken out, since the lazygit Switchboard opens gets its setting from a
+//!   taken out, since lazygit in Switchboard's panes gets its setting from a
 //!   file of Switchboard's own (src/diff/lazygit.rs).
 //! - `leftovers` (`leftovers`): what the tmux version's setup.sh left in
 //!   your home that leads nowhere now, and a `switchboard` function or alias
@@ -152,7 +152,7 @@ pub const PARTS: &[Part] = &[
     },
     Part {
         name: "lazygit",
-        about: "take out the lazygit config an earlier version wrote, while it is as it was written, since the lazygit Switchboard opens quits on Esc without it",
+        about: "take out the lazygit config an earlier version wrote, while it is as it was written, since lazygit in Switchboard's panes quits on Esc without it",
         run: lazygit::run,
     },
     Part {
@@ -487,7 +487,7 @@ fn lazygit_offered(check: bool, list: &mut List) {
     if ask(
         check,
         &format!(
-            "Take out {files}, the lazygit config an earlier version of Switchboard wrote? The lazygit Switchboard opens quits on Esc without it now, and lazygit elsewhere goes back to its own defaults."
+            "Take out {files}, the lazygit config an earlier version of Switchboard wrote? lazygit in Switchboard's panes quits on Esc without it now, and lazygit elsewhere goes back to its own defaults."
         ),
     ) {
         if apply(part) {

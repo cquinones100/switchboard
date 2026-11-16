@@ -929,6 +929,16 @@ fn lazygit_refuses_an_argument_it_doesnt_have() {
         1,
         &format!("open {}: no such file or directory", gone.display()),
     );
+    let by_env = Command::new(&lazygit)
+        .current_dir(dir.path())
+        .env("LG_CONFIG_FILE", &both)
+        .output()
+        .unwrap();
+    refused(
+        &by_env,
+        1,
+        &format!("open {}: no such file or directory", gone.display()),
+    );
     // As M-g starts it, with nothing: it says where it runs and waits.
     let mut child = Command::new(&lazygit)
         .current_dir(dir.path())

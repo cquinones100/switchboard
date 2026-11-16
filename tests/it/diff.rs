@@ -591,31 +591,54 @@ fn lazygit_and_the_diff_take_the_panes_place_from_the_palette_and_a_tabs_menu() 
     client.wait_text("export const a = 2;");
 }
 
-/// How the stand-in lazygit was called last, its arguments as one line.
-fn lazygit_args(server: &TestServer) -> String {
-    std::fs::read_to_string(server.home.join("bin/.lazygit-args"))
+/// The config files the stand-in lazygit last read, as lazygit lists them.
+fn lazygit_config(server: &TestServer) -> String {
+    std::fs::read_to_string(server.home.join("bin/.lazygit-config"))
         .unwrap()
         .trim_end()
         .to_string()
 }
 
-/// lazygit opened in the first pane's place, its stand-in's call read, and
-/// quit again.
+/// lazygit opened in the first pane's place, the config files its stand-in
+/// read, and quit again.
 fn open_lazygit(server: &TestServer, client: &mut common::TestClient) -> String {
     let first = panes(server)[0]["id"].as_str().unwrap().to_string();
-    let _ = std::fs::remove_file(server.home.join("bin/.lazygit-args"));
+    let _ = std::fs::remove_file(server.home.join("bin/.lazygit-config"));
     server.ok(&["press", "lazygit"]);
     client.wait_text("stand-in lazygit in");
-    let args = lazygit_args(server);
+    let read = lazygit_config(server);
+    assert_eq!(
+        std::fs::read_to_string(server.home.join("bin/.lazygit-args")).unwrap(),
+        "\n",
+        "lazygit started with arguments"
+    );
     server.ok(&["press", "lazygit"]);
     wait_until("the pane back after C-c", || {
         panes(server)[0]["id"] == first.as_str()
     });
-    args
+    read
+}
+
+/// lazygit typed in the shell of a tab opened now, the config files its
+/// stand-in read.
+fn typed_lazygit(server: &TestServer) -> String {
+    let config = server.home.join("bin/.lazygit-config");
+    let _ = std::fs::remove_file(&config);
+    let out = server.ok(&["new-tab", "-d"]);
+    let pane = out.split_whitespace().nth(1).unwrap().to_string();
+    server.ok(&["send-keys", "-t", &pane, "-l", "lazygit"]);
+    server.ok(&["send-keys", "-t", &pane, "Enter"]);
+    wait_until("lazygit typed in the shell", || config.exists());
+    wait_until("its config files written down", || {
+        std::fs::read_to_string(&config).is_ok_and(|t| t.ends_with('\n'))
+    });
+    let read = lazygit_config(server);
+    server.ok(&["send-keys", "-t", &pane, "-l", "\x03"]);
+    read
 }
 
 #[test]
-fn lazygit_reads_switchboards_config_ahead_of_yours_and_yours_is_never_written() {
+fn lazygit_in_a_pane_reads_switchboards_config_ahead_of_yours_and_yours_is_never_written() {
     let server = TestServer::start();
     settings(&server);
     stand_in::lazygit(&server.home.join("bin"));
@@ -625,10 +648,11 @@ fn lazygit_reads_switchboards_config_ahead_of_yours_and_yours_is_never_written()
         .home
         .join(".local/share/switchboard/lazygit/config.yml");
 
-    // With no config of yours, Switchboard's alone, written as it opens.
+    // With no config of yours, Switchboard's alone, in the pane's
+    // environment, written as the pane starts.
     assert_eq!(
         open_lazygit(&server, &mut client),
-        format!("--use-config-file {}", ours.display())
+        ours.display().to_string()
     );
     let text = std::fs::read_to_string(&ours).unwrap();
     assert!(
@@ -639,14 +663,13 @@ fn lazygit_reads_switchboards_config_ahead_of_yours_and_yours_is_never_written()
     assert!(!lazygit_s.exists(), "lazygit's own config written");
 
     // A config of yours comes after it, so what yours says wins, and it is
-    // left as it was.
+    // left as it was; lazygit typed in a pane's shell reads the same.
     let yours = lazygit_s.join("config.yml");
     std::fs::create_dir_all(&lazygit_s).unwrap();
     std::fs::write(&yours, "quitOnTopLevelReturn: false\n").unwrap();
-    assert_eq!(
-        open_lazygit(&server, &mut client),
-        format!("--use-config-file {},{}", ours.display(), yours.display())
-    );
+    let both = format!("{},{}", ours.display(), yours.display());
+    assert_eq!(open_lazygit(&server, &mut client), both);
+    assert_eq!(typed_lazygit(&server), both);
     assert_eq!(
         std::fs::read_to_string(&yours).unwrap(),
         "quitOnTopLevelReturn: false\n"
@@ -658,7 +681,7 @@ fn lazygit_reads_switchboards_config_ahead_of_yours_and_yours_is_never_written()
 }
 
 #[test]
-fn lazygit_runs_with_your_config_alone_with_esc_quits_lazygit_off() {
+fn lazygit_in_a_pane_reads_your_config_alone_with_esc_quits_lazygit_off() {
     let server = TestServer::start_with_settings(
         r#"{"notifications": false, "tips": false, "github": false, "linear": false, "lazygit_esc_quits": false}"#,
     );
@@ -666,6 +689,7 @@ fn lazygit_runs_with_your_config_alone_with_esc_quits_lazygit_off() {
     let mut client = server.attach(140, 36);
     client.wait_text("$");
     assert_eq!(open_lazygit(&server, &mut client), "");
+    assert_eq!(typed_lazygit(&server), "");
     assert!(
         !server
             .home

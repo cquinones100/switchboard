@@ -1,9 +1,10 @@
 //! The `lazygit` part: takes out the lazygit config earlier builds (0.7.0
 //! to 0.9.0) offered to write where you had none, holding only
 //! `quitOnTopLevelReturn: true`. Written into lazygit's own config, it
-//! changed lazygit everywhere; the lazygit Switchboard opens now gets that
-//! setting from a file of Switchboard's own, ahead of your config
-//! (src/diff/lazygit.rs), and lazygit elsewhere is left as you set it up.
+//! changed lazygit everywhere; lazygit in Switchboard's panes now gets that
+//! setting from a file of Switchboard's own, which each pane's
+//! `LG_CONFIG_FILE` names ahead of your config (src/diff/lazygit.rs), and
+//! lazygit elsewhere is left as you set it up.
 //!
 //! Only a file still exactly as it was written goes, wherever lazygit reads
 //! one from: one you have changed is yours, and kept, and so is a link,
@@ -53,7 +54,7 @@ pub fn run(r: &mut Report) -> Result<()> {
                 .with_context(|| format!("can't remove {}", home_tilde(&file)))?;
         }
         r.change(format!(
-            "take out {}, the lazygit config an earlier version wrote, which the lazygit Switchboard opens no longer needs",
+            "take out {}, the lazygit config an earlier version wrote, which lazygit in Switchboard's panes no longer needs",
             home_tilde(&file)
         ));
     }

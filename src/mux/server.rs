@@ -1618,8 +1618,9 @@ impl Server {
 
     /// A program started for pane `id`, as every pane's is: `command` (the
     /// login shell when `None`) in `cwd`, its environment naming the server,
-    /// the pane and, while Settings' "Load Switchboard as a plugin" is on,
-    /// Switchboard's plugin for the Claude Code that runs there.
+    /// the pane, while Settings' "Load Switchboard as a plugin" is on,
+    /// Switchboard's plugin for the Claude Code that runs there, and, while
+    /// "Esc quits lazygit" is on, Switchboard's config for lazygit.
     pub(crate) fn start_program(
         &self,
         id: PaneId,
@@ -1674,6 +1675,13 @@ impl Server {
             Some(value) => env.push((plugin.to_string(), value)),
             None if inherited.is_some() => env.push((plugin.to_string(), String::new())),
             None => {}
+        }
+        // lazygit run in the pane, opened in a pane's place or typed in its
+        // shell, reads Switchboard's config for it and then yours
+        // (src/diff/lazygit.rs); with the setting off, the variable is as
+        // the server was given it.
+        if let Some(value) = crate::diff::lazygit::pane_value() {
+            env.push((crate::diff::lazygit::ENV.to_string(), value));
         }
         let spec = PaneSpawn {
             id: Some(id),

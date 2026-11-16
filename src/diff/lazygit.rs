@@ -1,35 +1,41 @@
-//! lazygit's config for the lazygit Switchboard opens: in a pane's place
-//! (M-p's "Open lazygit in place of this pane", the sidebar's `L`, mission
-//! control's lazygit on a tab) or in a tab of its own for a folder no tab
-//! is in. That lazygit quits on Esc with nothing left to back out of
-//! (`quitOnTopLevelReturn`), as the diff and the views close, so the pane
-//! behind it comes back.
+//! lazygit's config in Switchboard's panes: lazygit run there, whether
+//! Switchboard opens it in a pane's place (M-p's "Open lazygit in place of
+//! this pane", the sidebar's `L`, mission control's lazygit) or you type
+//! `lazygit` in a pane's shell, quits on Esc with nothing left to back out
+//! of (`quitOnTopLevelReturn`), as the diff and the views close, so the pane
+//! a tool stands in for comes back.
 //!
-//! The setting reaches only the lazygit Switchboard starts, as its plugin
-//! reaches only the Claude in its panes: it is in a file of Switchboard's
-//! own, `~/.local/share/switchboard/lazygit/config.yml` (`assets/lazygit.yml`,
-//! written when it differs), which the command names first in lazygit's
-//! `--use-config-file`, your own config after it. lazygit reads the files in
-//! that order, a later one's settings over an earlier one's, so whatever
-//! yours says wins, and yours is never written: a lazygit you start
-//! yourself, in a pane or anywhere else, reads your config alone. Earlier
-//! builds offered to write the setting into lazygit's own config instead,
-//! which the `lazygit` setup part now takes out (src/setup/lazygit.rs).
-//! Settings' "Esc quits lazygit" (`lazygit_esc_quits`) off runs plain
-//! `lazygit`.
+//! The setting reaches lazygit through the panes' environment, as
+//! Switchboard's plugin reaches the Claude in them, never through lazygit's
+//! own config: it is in a file of Switchboard's own,
+//! `~/.local/share/switchboard/lazygit/config.yml` (`assets/lazygit.yml`,
+//! written when it differs), and every pane's environment names it first in
+//! `LG_CONFIG_FILE`, your own config after it (`pane_value`, which the
+//! server's `start_program` adds as each pane starts). lazygit reads the
+//! files that variable lists in order, a later one's settings over an
+//! earlier one's, so whatever yours says wins, and yours is never written; a
+//! lazygit outside Switchboard reads your config alone. Earlier builds
+//! offered to write the setting into lazygit's own config instead, which the
+//! `lazygit` setup part now takes out (src/setup/lazygit.rs). Settings' "Esc
+//! quits lazygit" (`lazygit_esc_quits`) off leaves the variable as the
+//! server was given it.
 //!
-//! `--use-config-file` takes the place of the config lazygit would read
+//! `LG_CONFIG_FILE` takes the place of the config lazygit would read
 //! itself, so yours is found here by lazygit's own rules (`yours`), and only
 //! files that are there are named, since lazygit refuses to start on one
-//! that isn't.
+//! that isn't. A pane keeps the value it started with: a config of yours
+//! made later is read in panes opened after it, and a shell whose startup
+//! files set `LG_CONFIG_FILE` themselves has theirs.
 
 use std::path::{Path, PathBuf};
 
-use super::serve::LAZYGIT;
 use crate::{paths, platform, settings, util};
 
 /// Settings' "Esc quits lazygit".
 pub const SETTING: &str = "lazygit_esc_quits";
+
+/// The variable naming the config files lazygit reads, comma-separated.
+pub const ENV: &str = "LG_CONFIG_FILE";
 
 /// Switchboard's lazygit config, compiled in.
 pub const ASSET: &str = include_str!("../../assets/lazygit.yml");
@@ -53,17 +59,19 @@ pub fn mac() -> bool {
     platform::NAME == "macOS"
 }
 
-/// The command that starts lazygit for Switchboard: with the setting on,
-/// Switchboard's config and then yours, else lazygit as it is. Run on the
-/// server's task as a key opens lazygit: the file it writes is a few lines,
-/// written only when it differs, and yours are only looked for.
-pub fn command() -> Vec<String> {
-    let ours = settings::is_on(SETTING).then(written).flatten();
-    command_with(ours.as_deref(), &yours(&env, &paths::home(), mac()))
+/// `LG_CONFIG_FILE` for a pane starting now: with the setting on,
+/// Switchboard's config and then yours; none with it off, or when
+/// Switchboard's can't be written, leaving the variable as the server was
+/// given it. Run on the server's task as a pane starts: the file it writes
+/// is a few lines, written only when it differs, and yours are only looked
+/// for.
+pub fn pane_value() -> Option<String> {
+    let ours = settings::is_on(SETTING).then(written).flatten()?;
+    value_with(&ours, &yours(&env, &paths::home(), mac()))
 }
 
 /// Switchboard's config, written when it differs from what this build
-/// carries; none when it can't be, and lazygit then opens without it.
+/// carries; none when it can't be.
 fn written() -> Option<PathBuf> {
     let file = file();
     let text = crate::assets::text("lazygit.yml", ASSET);
@@ -73,27 +81,22 @@ fn written() -> Option<PathBuf> {
     Some(file)
 }
 
-/// lazygit's command line: `--use-config-file` naming `ours` and then
-/// `yours`, comma-separated as lazygit takes them; plain `lazygit` without
-/// ours, or when a path holds a comma, which the list can't, so that your
-/// config is still the one lazygit reads.
-fn command_with(ours: Option<&Path>, yours: &[PathBuf]) -> Vec<String> {
-    let plain = vec![LAZYGIT.to_string()];
-    let Some(ours) = ours else {
-        return plain;
-    };
+/// `LG_CONFIG_FILE` naming `ours` and then `yours`, comma-separated as
+/// lazygit reads it. A config of Switchboard's among yours (the server
+/// started from one of its panes, whose variable already names one) is left
+/// out, so it isn't named twice. None when a path holds a comma, which the
+/// list can't, so that lazygit reads your config as it would.
+fn value_with(ours: &Path, yours: &[PathBuf]) -> Option<String> {
     let files: Vec<String> = std::iter::once(ours)
-        .chain(yours.iter().map(PathBuf::as_path))
+        .chain(
+            yours
+                .iter()
+                .map(PathBuf::as_path)
+                .filter(|f| !f.ends_with(FILE)),
+        )
         .map(|f| f.to_string_lossy().into_owned())
         .collect();
-    if files.iter().any(|f| f.contains(',')) {
-        return plain;
-    }
-    vec![
-        LAZYGIT.to_string(),
-        "--use-config-file".to_string(),
-        files.join(","),
-    ]
+    (!files.iter().any(|f| f.contains(','))).then(|| files.join(","))
 }
 
 /// The files `LG_CONFIG_FILE` names, comma-separated.
@@ -131,9 +134,7 @@ fn looked_for(home: &Path, xdg_config_home: Option<&str>, mac: bool) -> Vec<Path
 /// Every file lazygit may read its config from: `LG_CONFIG_FILE`'s,
 /// `$CONFIG_DIR/config.yml`, and those it looks for (`looked_for`).
 pub fn places(var: &dyn Fn(&str) -> Option<String>, home: &Path, mac: bool) -> Vec<PathBuf> {
-    let mut places = var("LG_CONFIG_FILE")
-        .map(|files| listed(&files))
-        .unwrap_or_default();
+    let mut places = var(ENV).map(|files| listed(&files)).unwrap_or_default();
     if let Some(dir) = var("CONFIG_DIR") {
         places.push(PathBuf::from(dir).join("config.yml"));
     }
@@ -149,7 +150,7 @@ pub fn places(var: &dyn Fn(&str) -> Option<String>, home: &Path, mac: bool) -> V
 /// the files `LG_CONFIG_FILE` names; else `$CONFIG_DIR/config.yml`; else
 /// the first of those it looks for. None when you have none.
 pub fn yours(var: &dyn Fn(&str) -> Option<String>, home: &Path, mac: bool) -> Vec<PathBuf> {
-    let candidates = match (var("LG_CONFIG_FILE"), var("CONFIG_DIR")) {
+    let candidates = match (var(ENV), var("CONFIG_DIR")) {
         (Some(files), _) => listed(&files),
         (None, Some(dir)) => vec![PathBuf::from(dir).join("config.yml")],
         (None, None) => looked_for(home, var("XDG_CONFIG_HOME").as_deref(), mac)
@@ -280,28 +281,28 @@ mod tests {
     #[test]
     fn switchboard_s_config_comes_first_and_yours_after_it() {
         let ours = Path::new("/h/.local/share/switchboard/lazygit/config.yml");
-        let yours = [PathBuf::from("/h/.config/lazygit/config.yml")];
+        let yours = PathBuf::from("/h/.config/lazygit/config.yml");
         assert_eq!(
-            command_with(Some(ours), &yours),
-            [
-                "lazygit",
-                "--use-config-file",
-                "/h/.local/share/switchboard/lazygit/config.yml,/h/.config/lazygit/config.yml"
-            ]
+            value_with(ours, std::slice::from_ref(&yours)).as_deref(),
+            Some("/h/.local/share/switchboard/lazygit/config.yml,/h/.config/lazygit/config.yml")
         );
         assert_eq!(
-            command_with(Some(ours), &[]),
-            [
-                "lazygit",
-                "--use-config-file",
-                "/h/.local/share/switchboard/lazygit/config.yml"
-            ]
+            value_with(ours, &[]).as_deref(),
+            Some("/h/.local/share/switchboard/lazygit/config.yml")
         );
-        // Without ours, or with a path the list can't hold, lazygit reads
-        // your config itself.
-        assert_eq!(command_with(None, &yours), ["lazygit"]);
+        // A server started from a pane: Switchboard's config, its own or
+        // another home's, isn't named again.
+        let given = [
+            PathBuf::from("/other/.local/share/switchboard/lazygit/config.yml"),
+            yours.clone(),
+        ];
+        assert_eq!(
+            value_with(ours, &given).as_deref(),
+            Some("/h/.local/share/switchboard/lazygit/config.yml,/h/.config/lazygit/config.yml")
+        );
+        // A path the list can't hold: lazygit reads your config itself.
         let comma = [PathBuf::from("/h/a,b/config.yml")];
-        assert_eq!(command_with(Some(ours), &comma), ["lazygit"]);
+        assert_eq!(value_with(ours, &comma), None);
     }
 
     #[test]
