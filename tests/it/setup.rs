@@ -2283,7 +2283,7 @@ fn the_configs_the_clone_held_come_back_from_its_history() {
 }
 
 #[test]
-fn a_lazygit_config_is_written_only_where_lazygit_is_and_you_have_none() {
+fn only_switchboard_s_lazygit_settings_are_written_never_a_config_of_yours() {
     let h = Home::new("setup-lazygit");
     std::os::unix::fs::symlink(BIN, h.path("bin/switchboard")).unwrap();
     let config = h.path(if cfg!(target_os = "macos") {
@@ -2291,6 +2291,7 @@ fn a_lazygit_config_is_written_only_where_lazygit_is_and_you_have_none() {
     } else {
         ".config/lazygit/config.yml"
     });
+    let switchboard_s = h.path(".local/share/switchboard/lazygit.yml");
 
     // Without lazygit, the part has nothing to set up and isn't offered.
     let without = h.run(&["setup", "lazygit"]);
@@ -2298,41 +2299,32 @@ fn a_lazygit_config_is_written_only_where_lazygit_is_and_you_have_none() {
     assert!(stderr(&without).contains("lazygit isn't installed"));
     assert!(!stdout(&h.run(&["setup"])).contains("lazygit"));
 
-    // With it, the guided setup asks, and a no writes nothing.
+    // With it, the guided setup asks nothing and writes Switchboard's copy
+    // alone, never where lazygit reads its own config.
     common::stand_in::install(&h.path("bin/lazygit"), "#!/bin/sh\nexit 0\n");
-    let closed = ok(&h.run(&["setup"]));
-    assert!(
-        closed.contains("Write a lazygit config") && closed.contains("switchboard setup lazygit"),
-        "{closed}"
-    );
-    assert!(!config.exists());
-
-    // Named, it writes the config once.
-    let wrote = ok(&h.run(&["setup", "lazygit"]));
-    assert!(wrote.contains("write a lazygit config"), "{wrote}");
-    assert!(read(&config).contains("quitOnTopLevelReturn: true"));
-    assert_eq!(ok(&h.run(&["setup", "lazygit"])), "lazygit: up to date\n");
     let guided = ok(&h.run(&["setup"]));
     assert!(
-        guided.contains("✓ lazygit's config says what Esc does"),
+        guided.contains("lazygit in a pane's place gets Switchboard's settings"),
         "{guided}"
     );
+    assert!(read(&switchboard_s).contains("quitOnTopLevelReturn: true"));
+    assert!(!config.exists());
+    assert_eq!(ok(&h.run(&["setup", "lazygit"])), "lazygit: up to date\n");
 
-    // A config of your own is kept byte for byte, and the line to add said.
-    fs::remove_file(&config).unwrap();
+    // Out of date, named, it is written again; a config of yours is kept
+    // byte for byte.
+    fs::write(&switchboard_s, "old\n").unwrap();
     let own = h.path(".config/jesseduffield/lazygit/config.yml");
     fs::create_dir_all(own.parent().unwrap()).unwrap();
     fs::write(&own, "gui:\n  sidePanelWidth: 0.2\n").unwrap();
-    assert_eq!(ok(&h.run(&["setup", "lazygit"])), "lazygit: up to date\n");
+    let wrote = ok(&h.run(&["setup", "lazygit"]));
+    assert!(
+        wrote.contains("write Switchboard's lazygit settings"),
+        "{wrote}"
+    );
+    assert!(read(&switchboard_s).contains("quitOnTopLevelReturn: true"));
     assert_eq!(read(&own), "gui:\n  sidePanelWidth: 0.2\n");
     assert!(!config.exists());
-    let said = ok(&h.run(&["setup"]));
-    assert!(
-        said.contains(
-            "add quitOnTopLevelReturn: true to ~/.config/jesseduffield/lazygit/config.yml"
-        ),
-        "{said}"
-    );
 }
 
 #[test]

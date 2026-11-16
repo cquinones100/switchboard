@@ -550,6 +550,14 @@ fn lazygit_and_the_diff_take_the_panes_place_from_the_palette_and_a_tabs_menu() 
     assert_eq!(shown.len(), 1, "in the pane's place: {shown:?}");
     assert_eq!(shown[0]["options"]["@in_place"], "lazygit");
     assert_eq!(shown[0]["options"]["@parked_pane"], first.as_str());
+    // Switchboard's settings are written beside its own state, for
+    // LG_CONFIG_FILE to name, never where lazygit reads its own config.
+    let settings = server.home.join(".local/share/switchboard/lazygit.yml");
+    assert!(
+        std::fs::read_to_string(&settings)
+            .unwrap()
+            .contains("quitOnTopLevelReturn: true")
+    );
     server.ok(&["press", "lazygit"]);
     wait_until("the pane back after C-c", || {
         panes(&server)[0]["id"] == first.as_str()

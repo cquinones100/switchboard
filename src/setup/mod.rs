@@ -18,8 +18,8 @@
 //!   skills run linked into `~/.local/bin`.
 //! - `terminal` (`terminal`): Option acting as Alt in a Mac's terminal,
 //!   and Notes' easy mode's Cmd keys in Ghostty.
-//! - `lazygit` (`lazygit`): a lazygit config where you have none, so Esc
-//!   quits lazygit in a pane's place.
+//! - `lazygit` (`lazygit`): Switchboard's lazygit settings, layered under
+//!   your config at launch, so Esc quits lazygit in a pane's place.
 //! - `leftovers` (`leftovers`): what the tmux version's setup.sh left in
 //!   your home that leads nowhere now, and a `switchboard` function or alias
 //!   that starts tmux in the binary's place, tidied.
@@ -151,7 +151,7 @@ pub const PARTS: &[Part] = &[
     },
     Part {
         name: "lazygit",
-        about: "write a lazygit config where you have none, so Esc quits lazygit in a pane's place",
+        about: "write Switchboard's lazygit settings, which lazygit in a pane's place layers under your config so Esc quits it unless yours says otherwise, never writing your config",
         run: lazygit::run,
     },
     Part {
@@ -470,39 +470,17 @@ fn terminal_offered(check: bool, list: &mut List) {
     }
 }
 
-/// A lazygit config, offered only where lazygit is installed and you have
-/// none; a config of yours lacking `quitOnTopLevelReturn` gets the line to
-/// add said.
+/// lazygit, where it is installed: Switchboard's settings reach it at
+/// launch, layered under your config, so nothing is asked.
 fn lazygit_offered(check: bool, list: &mut List) {
     if !lazygit::installed() {
         return;
     }
-    if let Some(yours) = lazygit::yours() {
-        if std::fs::read_to_string(&yours).is_ok_and(|t| lazygit::says_esc(&t)) {
-            list.ok("lazygit's config says what Esc does");
-        } else {
-            list.optional(&format!(
-                "Esc quitting lazygit in a pane's place: add quitOnTopLevelReturn: true to {}",
-                home_tilde(&yours)
-            ));
-        }
-        return;
-    }
     let part = part_named("lazygit").expect("a part");
-    if ask(
-        check,
-        "Write a lazygit config, so Esc quits lazygit in a pane's place? You have none, and it would be yours.",
-    ) {
-        if apply(part) {
-            list.ok("lazygit quits on Esc in a pane's place");
-        } else {
-            list.todo("switchboard setup lazygit failed");
-        }
+    if check || apply(part) {
+        list.ok("lazygit in a pane's place gets Switchboard's settings under your config, so Esc quits it");
     } else {
-        list.not_now(
-            "lazygit",
-            "a lazygit config, so Esc quits lazygit in a pane's place: switchboard setup lazygit",
-        );
+        list.todo("switchboard setup lazygit failed");
     }
 }
 

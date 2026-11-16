@@ -1,17 +1,21 @@
-//! The `lazygit` part: a lazygit config where you have none, so lazygit in
+//! The `lazygit` part: Switchboard's own lazygit settings, so lazygit in
 //! a pane's place (`M-p`'s "Open lazygit in place of this pane") quits on
 //! Esc, as the diff and the views do, and the pane behind it comes back.
 //! The tmux version linked its own `lazygit/config.yml`, removed with it
 //! (commit e7e32268), whose `quitOnTopLevelReturn: true` is all of it that
 //! Switchboard needs; its delta renderer and custom commands were that
-//! setup's own, so a new install gets only `assets/lazygit.yml`.
+//! setup's own, so Switchboard's settings are only `assets/lazygit.yml`.
 //!
-//! A config of yours, wherever lazygit reads one from, is never changed:
-//! the guided setup only says the line to add when it lacks it. Offered
-//! only where lazygit is installed, since Switchboard doesn't need it.
+//! They reach lazygit at launch, never through its config file: lazygit
+//! opened in a pane's place is given `LG_CONFIG_FILE` naming Switchboard's
+//! copy in `~/.local/share/switchboard/lazygit.yml` and then your config
+//! (where lazygit reads one, when there is one), which lazygit layers in
+//! that order, so what yours says wins: Switchboard's are defaults, and a
+//! `quitOnTopLevelReturn: false` of yours keeps Esc as it was. A config of yours, wherever lazygit reads one from, is never
+//! written, a config an earlier setup wrote there included, which is yours.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
@@ -87,30 +91,86 @@ pub fn yours() -> Option<PathBuf> {
     here().into_iter().find(|f| f.is_file())
 }
 
-/// Whether a config already says what Esc does at the top level.
-pub fn says_esc(text: &str) -> bool {
-    text.lines()
-        .any(|l| l.trim_start().starts_with("quitOnTopLevelReturn:"))
+/// Switchboard's copy of its lazygit settings, under `~`.
+pub const OWN: &str = ".local/share/switchboard/lazygit.yml";
+
+/// Switchboard's copy, `~/.local/share/switchboard/lazygit.yml`.
+pub fn own() -> PathBuf {
+    paths::home_join(OWN)
 }
 
-/// The part.
+/// Whether Switchboard's copy is missing or says something other than
+/// `text`.
+fn own_is_stale(file: &Path, text: &str) -> bool {
+    fs::read_to_string(file).map_or(true, |t| t != text)
+}
+
+/// Switchboard's copy written, when it isn't already what the build says.
+fn write_own(file: &Path, text: &str) -> Result<bool> {
+    if !own_is_stale(file, text) {
+        return Ok(false);
+    }
+    if let Some(dir) = file.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    util::write_atomic(file, text.as_bytes())
+        .with_context(|| format!("can't write {}", home_tilde(file)))?;
+    Ok(true)
+}
+
+/// `LG_CONFIG_FILE` for lazygit in a pane's place: Switchboard's copy,
+/// then the files the variable already names, else your config when there
+/// is one, last so what yours says wins over Switchboard's defaults.
+fn config_files(lg_config_file: Option<&str>, yours: Option<&Path>, own: &Path) -> String {
+    let mut files = vec![own.to_string_lossy().into_owned()];
+    files.extend::<Vec<String>>(match lg_config_file {
+        Some(given) => given
+            .split(',')
+            .map(str::trim)
+            .filter(|f| !f.is_empty())
+            .map(String::from)
+            .collect(),
+        None => yours
+            .map(|f| f.to_string_lossy().into_owned())
+            .into_iter()
+            .collect(),
+    });
+    files.join(",")
+}
+
+/// The command that opens lazygit in a pane's place with Switchboard's
+/// settings layered under yours (`env LG_CONFIG_FILE=... lazygit`, so the
+/// pane's program is lazygit once `env` has run it), Switchboard's copy
+/// written first when it is missing or out of date; plain `lazygit` when
+/// it can't be written.
+pub fn command() -> Vec<String> {
+    let own = own();
+    if write_own(&own, &crate::assets::text("lazygit.yml", ASSET)).is_err() {
+        return vec!["lazygit".into()];
+    }
+    let files = config_files(var("LG_CONFIG_FILE").as_deref(), yours().as_deref(), &own);
+    vec![
+        "env".into(),
+        format!("LG_CONFIG_FILE={files}"),
+        "lazygit".into(),
+    ]
+}
+
+/// The part: Switchboard's copy written, never a config of yours.
 pub fn run(r: &mut Report) -> Result<()> {
     if !installed() {
         bail!("lazygit isn't installed, so there is nothing to set up");
     }
-    if yours().is_some() {
+    let file = own();
+    let text = crate::assets::text("lazygit.yml", ASSET);
+    if !own_is_stale(&file, &text) {
         return Ok(());
     }
-    let file = here().remove(0);
     if !r.check {
-        if let Some(dir) = file.parent() {
-            fs::create_dir_all(dir)?;
-        }
-        util::write_atomic(&file, crate::assets::text("lazygit.yml", ASSET).as_bytes())
-            .with_context(|| format!("can't write {}", home_tilde(&file)))?;
+        write_own(&file, &text)?;
     }
     r.change(format!(
-        "write a lazygit config, {}, so Esc quits lazygit in a pane's place",
+        "write Switchboard's lazygit settings, {}, which lazygit in a pane's place layers under your config so Esc quits it unless yours says otherwise",
         home_tilde(&file)
     ));
     Ok(())
@@ -146,9 +206,39 @@ mod tests {
     }
 
     #[test]
-    fn a_config_saying_what_esc_does_is_recognized() {
-        assert!(says_esc("gui: {}\nquitOnTopLevelReturn: false\n"));
-        assert!(says_esc(ASSET));
-        assert!(!says_esc("# quitOnTopLevelReturn: true\n"));
+    fn lazygit_is_given_switchboard_s_settings_then_your_config() {
+        let own = Path::new("/s/lazygit.yml");
+        assert_eq!(
+            config_files(None, Some(Path::new("/h/config.yml")), own),
+            "/s/lazygit.yml,/h/config.yml"
+        );
+        assert_eq!(config_files(None, None, own), "/s/lazygit.yml");
+        assert_eq!(
+            config_files(Some("/a.yml, /b.yml,"), Some(Path::new("/a.yml")), own),
+            "/s/lazygit.yml,/a.yml,/b.yml"
+        );
+    }
+
+    #[test]
+    fn only_switchboard_s_copy_is_written() {
+        let dir = std::env::temp_dir().join(format!("sb-lazygit-{}", std::process::id()));
+        let file = dir.join("share/lazygit.yml");
+        assert!(write_own(&file, ASSET).unwrap());
+        assert_eq!(fs::read_to_string(&file).unwrap(), ASSET);
+        assert!(
+            !write_own(&file, ASSET).unwrap(),
+            "unchanged, so not written"
+        );
+        fs::write(&file, "old").unwrap();
+        assert!(write_own(&file, ASSET).unwrap(), "out of date, so written");
+        assert!(ASSET.contains("quitOnTopLevelReturn: true"));
+        let _ = fs::remove_dir_all(&dir);
+        let own = own();
+        assert!(own.ends_with(".local/share/switchboard/lazygit.yml"));
+        assert!(
+            !places(None, None, None, true).contains(&own)
+                && !places(None, None, None, false).contains(&own),
+            "never a place lazygit reads its own config from"
+        );
     }
 }

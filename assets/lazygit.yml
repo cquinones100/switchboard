@@ -1,6 +1,7 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/jesseduffield/lazygit/master/schema/config.json
-# Written by `switchboard setup lazygit` where you had no lazygit config; it is
-# yours now, and setup never writes over it.
+# Switchboard's lazygit settings, which lazygit in a pane's place layers under
+# your own config (LG_CONFIG_FILE names this, then yours), so yours wins. Switchboard
+# writes this copy again whenever it differs, so change your own config instead.
 
 # Esc with nothing left to back out of quits, as q and Ctrl-C do, so lazygit
 # in a pane's place (M-p's "Open lazygit in place of this pane") closes the

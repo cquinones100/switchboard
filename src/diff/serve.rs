@@ -154,7 +154,12 @@ impl Server {
             );
             return;
         }
-        if let Err(e) = self.open_in_place(pane, LAZYGIT, vec![LAZYGIT.into()], Some(client)) {
+        if let Err(e) = self.open_in_place(
+            pane,
+            LAZYGIT,
+            crate::setup::lazygit::command(),
+            Some(client),
+        ) {
             self.say(Some(client), &format!("Couldn't open lazygit: {e}"));
         }
     }
