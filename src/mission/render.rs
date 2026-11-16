@@ -5756,11 +5756,9 @@ fn with_close(head: Row, m: &Mission, cols: usize, hits: &mut Vec<HitBox>) -> Li
     Line { spans, fill: None }
 }
 
-/// What the bar shows besides the views' names: the view a name being
-/// typed matches, the tabs' counts, the filter, and whether the filter
-/// takes a click.
+/// What the header shows besides the view's name: the tabs' counts, the
+/// filter, and whether the filter takes a click.
 struct Bar {
-    jumped: Option<usize>,
     counts: Vec<Span<'static>>,
     filter: Vec<Span<'static>>,
     filter_hit: bool,
@@ -5790,138 +5788,51 @@ fn bar_skip(
     skip
 }
 
-/// With UX 2.0, the bar as two rows and a rule (board 3 of the canvas):
-/// the groups that have a view, the one in front lit, then the tabs'
-/// counts; that group's views, the one in front lit and underlined, then
-/// the filter, and the keys that move through them at the right. While a
-/// view's name is typed, the group it is in shows, the view lit as it is
-/// matched. With several views at once (`grid`), the first row lights
-/// every group a shown view is in and the second names the shown views,
-/// the one with the focus lit and underlined, with how many at its right.
-fn grouped_bar(
-    m: &Mission,
-    groups: &[(views::Group, Vec<usize>)],
-    bar: Bar,
-    cols: usize,
-    lines: &mut Vec<Line>,
-    hits: &mut Vec<HitBox>,
-) {
-    let snap = &m.snap;
-    let theme = &snap.theme;
-    let caps = snap.caps;
-    let shown_view = bar.jumped.unwrap_or(match m.focus {
-        Some(Focus::View(v)) => v,
-        _ => m.view,
-    });
-    let shown = groups
-        .iter()
-        .find(|(_, held)| held.contains(&shown_view))
-        .or(groups.first());
-    let in_grid: Vec<usize> = m.grid_shown().into_iter().map(|(_, at)| at).collect();
-    let gridded = !in_grid.is_empty();
+/// With UX 2.0, the header over the view in front (board 64), since its
+/// groups and views are listed down the side (src/mission/nav.rs): the
+/// view's name, its group and its facts (the tabs' counts, the Reminders'
+/// or the Routines' words, with several views at once how many), then the
+/// filter; a rule under it and a line clear, so the view starts where it
+/// did under the two-row bar.
+fn header(m: &Mission, bar: Bar, cols: usize, lines: &mut Vec<Line>, hits: &mut Vec<HitBox>) {
+    let theme = &m.snap.theme;
+    let gridded = m.grid_shown().len();
+    let (name, group) = super::nav::header_words(m, m.view);
     let mut head = Row::default();
     head.put(" ", Style::new())
-        .put("MISSION CONTROL", bold(ACCENT))
-        .put("  ", Style::new());
-    for (g, held) in groups {
-        let lit = if gridded {
-            held.iter().any(|v| in_grid.contains(v))
-        } else {
-            shown.is_some_and(|(s, _)| s == g)
-        };
-        // Under the mouse, lit while a click would change the view: the
-        // group in front's too, away from its first view.
-        let ring = m.focus == Some(Focus::Group(*g))
-            || (m.hover == Some(Spot::Group(*g)) && held[0] != m.view);
-        let x = head.width();
-        let name = kit::bar_name(g.name(), kit::BarRow::Groups, lit, ring, caps, theme);
+        .put(name, Tone::Text.bold(theme));
+    if !group.is_empty() {
+        head.put(format!("   {group}"), Tone::Dim.style(theme));
+    }
+    if gridded > 0 {
+        head.put(
+            format!(" · {gridded} views at once"),
+            Tone::Dim.style(theme),
+        );
+    } else if !bar.counts.is_empty()
+        && m.current()
+            .is_none_or(|v| matches!(v.id, ViewId::Reminders | ViewId::Routines))
+    {
+        head.put("   ", Style::new());
+        head.spans.extend(bar.counts);
+    }
+    if !bar.filter.is_empty() && bar.filter_hit {
+        let x = head.width() + 2;
         hits.push(HitBox {
             y: 0,
             x0: x as u16,
-            x1: (x + spans_width(&name)).saturating_sub(1) as u16,
-            spot: Spot::Group(*g),
-        });
-        head.spans.extend(name);
-        head.put(" ", Style::new());
-    }
-    head.put(" ", Style::new());
-    head.spans.extend(bar.counts);
-    lines.push(with_close(head, m, cols, hits));
-    let names: &[usize] = if gridded {
-        &in_grid
-    } else {
-        shown.map(|(_, held)| held.as_slice()).unwrap_or(&[])
-    };
-    let title_of = |i: usize| match i.checked_sub(1).and_then(|v| snap.views.get(v)) {
-        Some(v) => views::bar_title(v),
-        None => "Tabs",
-    };
-    // With Tab's focus on a view's name or the filter past the screen's
-    // edge, the row scrolls: the names before it give way to a ‹.
-    let (target, tail) = match m.focus {
-        Some(Focus::View(v)) => (names.iter().position(|&i| i == v), 0),
-        Some(Focus::Filter) => (names.len().checked_sub(1), 1 + spans_width(&bar.filter)),
-        _ => (None, 0),
-    };
-    let widths: Vec<usize> = names.iter().map(|&i| width(title_of(i)) + 2).collect();
-    let skip = bar_skip(&widths, target, 1, tail, cols);
-    let mut row = Row::default();
-    row.put(" ", Style::new());
-    if skip > 0 {
-        row.put("‹ ", fg(theme.dim));
-    }
-    for &i in &names[skip..] {
-        let title = title_of(i);
-        let x = row.width();
-        let name = if bar.jumped == Some(i) {
-            vec![Span::styled(
-                format!(" {title} "),
-                Style::new()
-                    .bg(YELLOW)
-                    .fg(Color::Indexed(232))
-                    .add_modifier(Modifier::BOLD),
-            )]
-        } else {
-            let ring =
-                m.focus == Some(Focus::View(i)) || (m.hover == Some(Spot::View(i)) && i != m.view);
-            kit::bar_name(title, kit::BarRow::Views, i == m.view, ring, caps, theme)
-        };
-        hits.push(HitBox {
-            y: 1,
-            x0: x as u16,
-            x1: (x + spans_width(&name)).saturating_sub(1) as u16,
-            spot: Spot::View(i),
-        });
-        row.spans.extend(name);
-        row.put(" ", Style::new());
-    }
-    if !bar.filter.is_empty() && bar.filter_hit {
-        let x = row.width() + 2;
-        hits.push(HitBox {
-            y: 1,
-            x0: x as u16,
-            x1: (row.width() + spans_width(&bar.filter)).saturating_sub(1) as u16,
+            x1: (head.width() + spans_width(&bar.filter)).saturating_sub(1) as u16,
             spot: Spot::Filter,
         });
     }
-    row.spans.extend(bar.filter);
-    let keys = if gridded {
-        vec![Span::styled(
-            format!("{} views at once", in_grid.len()),
-            Tone::Dim.style(theme),
-        )]
-    } else {
-        kit::hints(&[("M-[ M-]", "groups"), ("[ ]", "views")], theme)
-    };
-    // At the right, a column in from the edge, two clear of what is before.
-    let gap = cols.saturating_sub(row.width() + spans_width(&keys) + 1);
-    if gap >= 2 {
-        row.put(" ".repeat(gap), Style::new());
-        row.spans.extend(keys);
-    }
-    lines.push(row.line(cols, None));
+    head.spans.extend(bar.filter);
+    lines.push(with_close(head, m, cols, hits));
     lines.push(Line {
         spans: vec![kit::rule(cols, theme)],
+        fill: None,
+    });
+    lines.push(Line {
+        spans: vec![Span::raw(" ".repeat(cols))],
         fill: None,
     });
 }
@@ -5952,8 +5863,8 @@ pub fn drawn(
     (lines, hits, meters, pictures)
 }
 
-/// The bar: with UX 2.0 its two rows and a rule (`grouped_bar`), else
-/// one row naming every view.
+/// The bar: with UX 2.0 the header over the view in front (`header`),
+/// else one row naming every view.
 pub(super) fn bar(m: &Mission, cols: usize, hits: &mut Vec<HitBox>) -> Vec<Line> {
     let snap = &m.snap;
     let theme = &snap.theme;
@@ -6010,14 +5921,13 @@ pub(super) fn bar(m: &Mission, cols: usize, hits: &mut Vec<HitBox>) -> Vec<Line>
         None => tally(&snap.tabs, &snap.rules, theme),
     };
     let mut lines = Vec::new();
-    if let Some(groups) = m.groups() {
+    if m.groups().is_some() {
         let bar = Bar {
-            jumped,
             counts,
             filter,
             filter_hit: filter_stop || (m.filter.is_some() && snap.tab_focus),
         };
-        grouped_bar(m, &groups, bar, cols, &mut lines, hits);
+        header(m, bar, cols, &mut lines, hits);
     } else {
         let mut names: Vec<(String, usize)> = vec![("Tabs".into(), snap.tabs.len())];
         names.extend(
@@ -7963,7 +7873,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_the_bar_is_the_groups_over_the_views_of_the_one_in_front() {
+    fn with_ux2_the_header_names_the_view_and_its_group_over_a_rule() {
         let mut m = mission(
             vec![tab(1, "api")],
             vec![
@@ -7976,36 +7886,22 @@ mod tests {
         m.view = 2;
         let (lines, hits) = screen(&m, 100, 12);
         let t = texts(&lines);
+        assert!(t[0].starts_with(" PRs   Code"), "{:?}", t[0]);
+        assert_eq!(t[1], "─".repeat(100));
+        assert_eq!(t[2].trim(), "");
+        let name = lines[0].spans.iter().find(|s| s.content == "PRs").unwrap();
+        assert!(name.style.add_modifier.contains(Modifier::BOLD));
         assert!(
-            t[0].starts_with(" MISSION CONTROL   Work   Code   System"),
-            "{:?}",
-            t[0]
-        );
-        assert!(t[1].starts_with("  PRs  "), "{:?}", t[1]);
-        assert!(
-            t[1].trim_end().ends_with("M-[ M-] groups  [ ] views"),
-            "{:?}",
-            t[1]
-        );
-        assert_eq!(t[2], "─".repeat(100));
-        let lit = lines[1].spans.iter().find(|s| s.content == "PRs").unwrap();
-        assert!(lit.style.add_modifier.contains(Modifier::UNDERLINED));
-        let code = hits
-            .iter()
-            .find(|h| h.spot == Spot::Group(views::Group::Code))
-            .unwrap();
-        assert_eq!(
-            (code.y, &t[0][code.x0 as usize..=code.x1 as usize]),
-            (0, " Code ")
-        );
-        let prs = hits.iter().find(|h| h.spot == Spot::View(2)).unwrap();
-        assert_eq!(
-            (prs.y, &t[1][prs.x0 as usize..=prs.x1 as usize]),
-            (1, " PRs ")
+            hits.iter()
+                .all(|h| !matches!(h.spot, Spot::Group(_) | Spot::View(_))),
+            "the groups and views are listed down the side"
         );
         m.view = 1;
         let t = texts(&screen(&m, 100, 12).0);
-        assert!(t[1].starts_with("  Tabs   Map  "), "{:?}", t[1]);
+        assert!(t[0].starts_with(" Map   Work"), "{:?}", t[0]);
+        m.view = 0;
+        let t = texts(&screen(&m, 100, 12).0);
+        assert!(t[0].starts_with(" Tabs   Work"), "{:?}", t[0]);
     }
 
     fn work_views() -> Vec<View> {
@@ -8019,33 +7915,50 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_a_narrow_bar_scrolls_its_views_row_to_tabs_focus() {
+    fn with_ux2_the_list_of_views_scrolls_to_keep_the_chosen_one_in_sight() {
+        let mut m = mission(
+            vec![tab(1, "api")],
+            vec![
+                list_view(ViewId::WorkMap, "Work map", vec![]),
+                list_view(ViewId::Prs, "PRs", vec![]),
+                list_view(ViewId::Settings, "Settings", vec![]),
+                list_view(ViewId::Keys, "Keys", vec![]),
+            ],
+        );
+        m.snap.rules.ux2 = true;
+        let text = |m: &Mission| {
+            let (lines, hits, top) = super::super::nav::lines(m, 34, 10, false);
+            (texts(&lines).join("\n"), hits, top)
+        };
+        let (all, _, top) = text(&m);
+        assert_eq!(top, 0);
+        assert!(all.contains("Tabs") && !all.contains("Keys"), "{all}");
+        // Keys in front: the list moves to keep its row in sight, a click
+        // on it landing there.
+        m.view = 4;
+        let (all, hits, top) = text(&m);
+        assert!(top > 0 && all.contains("Keys"), "{all}");
+        let keys = hits.iter().find(|h| h.spot == Spot::View(4)).unwrap();
+        assert!(
+            texts(&super::super::nav::lines(&m, 34, 10, false).0)[keys.y as usize].contains("Keys")
+        );
+        // Scrolled back up by the wheel, it stays there.
+        m.nav_top = 0;
+        m.nav_scrolled = true;
+        assert_eq!(text(&m).2, 0);
+    }
+
+    #[test]
+    fn with_ux2_tabs_focus_on_the_filter_is_on_the_header() {
         let mut m = mission(vec![tab(1, "api")], work_views());
         m.snap.rules.ux2 = true;
         m.snap.tab_focus = true;
-        let t = texts(&screen(&m, 48, 12).0);
-        assert!(t[1].starts_with("  Tabs   Landing "), "{:?}", t[1]);
-        assert!(!t[1].contains('‹'), "{:?}", t[1]);
-        m.focus = Some(Focus::View(5));
-        let (lines, hits) = screen(&m, 48, 12);
-        let t = texts(&lines);
-        assert!(t[1].starts_with(" ‹  Autopilot "), "{:?}", t[1]);
-        assert!(t[1].contains(" Reopen "), "{:?}", t[1]);
-        let last = hits.iter().find(|h| h.spot == Spot::View(5)).unwrap();
-        assert!(last.x1 < 48, "{last:?}");
-        assert_eq!(
-            t[1].chars()
-                .skip(last.x0 as usize)
-                .take((last.x1 - last.x0 + 1) as usize)
-                .collect::<String>(),
-            " Reopen "
-        );
-        assert!(hits.iter().all(|h| h.spot != Spot::View(0)));
         m.focus = Some(Focus::Filter);
         let (lines, hits) = screen(&m, 48, 12);
         let t = texts(&lines);
-        assert!(t[1].ends_with(" / filter"), "{:?}", t[1]);
+        assert!(t[0].ends_with(" / filter"), "{:?}", t[0]);
         let filter = hits.iter().find(|h| h.spot == Spot::Filter).unwrap();
+        assert_eq!(filter.y, 0);
         assert!(filter.x1 < 48, "{filter:?}");
     }
 

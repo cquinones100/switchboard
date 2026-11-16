@@ -44,6 +44,8 @@
 //! - `history`: the Notifications view as a history by day.
 //! - `inbox_board`: with UX 2.0, the Inbox as a board: the notifications
 //!   by day with who acted's photos, the chosen one in its ticket beside.
+//! - `nav`: with UX 2.0, the list of its groups and views, in the
+//!   sidebar's place or a column of its own.
 //! - `grid`: several views at once, picked from a view's `m` menu
 //!   (`views_box`).
 //! - `views_box`: the "Views at once" box a view's `m` menu opens.
@@ -80,6 +82,7 @@ pub mod history;
 pub mod inbox_board;
 pub mod keymap;
 pub mod keys_board;
+pub mod nav;
 pub mod pane_search;
 pub mod relay_board;
 pub mod remind;
@@ -384,6 +387,24 @@ pub struct Mission {
     /// With UX 2.0, the sidebar's columns, which it leaves showing on its
     /// left; 0 to cover the whole screen.
     pub left: u16,
+    /// With UX 2.0, whether its groups and views are listed in a column of
+    /// its own at its left (Settings' `mission_keep_tabs_sidebar`, or the
+    /// sidebar hidden) rather than in the sidebar's place (`nav`).
+    pub own_column: bool,
+    /// The filter typed into the list of groups and views.
+    pub nav_filter: Option<crate::sidebar::render::Filter>,
+    /// Where each part of that list was last drawn, on the whole screen.
+    pub nav_hits: Vec<HitBox>,
+    /// What of that list the mouse is over, lit while a click would press it.
+    pub nav_hover: Option<Spot>,
+    /// The first of that list's groups' lines drawn, when they run past its
+    /// room.
+    pub nav_top: usize,
+    /// Whether the wheel put `nav_top` where it is, so the list stays there
+    /// rather than following its chosen row, until a key or a view moves it.
+    pub nav_scrolled: bool,
+    /// The columns that list was last drawn in, on the whole screen.
+    pub nav_area: Option<ratatui::layout::Rect>,
     /// The widest one view is drawn (Settings' `lone_pane_width`), as a
     /// lone pane is; none to fill the width. Several views at once fill it.
     pub lone: Option<u16>,
@@ -543,6 +564,13 @@ impl Mission {
             diagrams_asked: None,
             size: (0, 0),
             left: 0,
+            own_column: false,
+            nav_filter: None,
+            nav_hits: Vec::new(),
+            nav_hover: None,
+            nav_top: 0,
+            nav_scrolled: false,
+            nav_area: None,
             lone: None,
             capped_at: None,
             spread_cols: 0,
@@ -586,10 +614,32 @@ impl Mission {
         }
     }
 
+    /// The columns of its own list of groups and views, its line beside
+    /// it included: none unless it draws that list as a column of its own.
+    pub fn nav_cols(&self) -> u16 {
+        if self.own_column && self.groups().is_some() {
+            nav::COLUMN + 1
+        } else {
+            0
+        }
+    }
+
+    /// Where the views are drawn from: right of the sidebar and of its own
+    /// list of groups and views.
+    pub fn view_left(&self) -> u16 {
+        self.left + self.nav_cols()
+    }
+
+    /// Whether its list of groups and views is drawn in the sidebar's
+    /// place.
+    pub fn nav_in_sidebar(&self) -> bool {
+        !self.own_column && self.groups().is_some() && self.left > 1
+    }
+
     /// A column of the screen in the view's own columns; none left of it
     /// (the sidebar's) or right of a capped view (its spare columns).
     pub fn col_in(&self, col: u16) -> Option<u16> {
-        let col = col.checked_sub(self.left)?;
+        let col = col.checked_sub(self.view_left())?;
         self.capped_at.is_none_or(|w| col < w).then_some(col)
     }
 
@@ -1177,6 +1227,16 @@ impl Overlay for Mission {
     /// sidebar's.
     fn pointer(&self, col: u16, row: u16, _look: &Look) -> Option<crate::ui::pointer::Pointer> {
         use crate::ui::pointer::Pointer;
+        // Over its list of groups and views, a hand on what a click presses.
+        if self.nav_area.is_some_and(|a| {
+            col >= a.x && col < a.x + a.width && row >= a.y && row < a.y + a.height
+        }) {
+            let on = self
+                .nav_hits
+                .iter()
+                .any(|h| h.y == row && col >= h.x0 && col <= h.x1);
+            return Some(if on { Pointer::Hand } else { Pointer::Arrow });
+        }
         let col = self.col_in(col)?;
         let hit = self
             .hits
@@ -1196,6 +1256,48 @@ impl Overlay for Mission {
         }
         let whole = buf.area;
         let left = self.left.min(whole.width.saturating_sub(1));
+        // Its groups and views, in the sidebar's place or a column of its
+        // own (src/mission/nav.rs).
+        self.nav_hits.clear();
+        self.nav_area = None;
+        let nav = self.nav_cols().min(whole.width - left);
+        let list = if self.nav_in_sidebar() {
+            Some((
+                ratatui::layout::Rect::new(whole.x, whole.y, left - 1, whole.height),
+                false,
+            ))
+        } else {
+            (nav > 1).then(|| {
+                let at = ratatui::layout::Rect::new(whole.x + left, whole.y, nav - 1, whole.height);
+                (at, true)
+            })
+        };
+        if let Some((at, column)) = list {
+            let (lines, hits, top) =
+                nav::lines(self, at.width as usize, at.height as usize, column);
+            self.nav_top = top;
+            crate::sidebar::render::draw(buf, at, &lines);
+            // Its line on the right, plain: in the sidebar's place, without
+            // the tabs' scroll bar the sidebar drew there.
+            let edge = at.x + at.width;
+            if edge < whole.x + whole.width {
+                let line = ratatui::style::Style::new().fg(crate::ui::kit::border(&look.theme));
+                for y in at.y..at.y + at.height {
+                    buf[(edge, y)].set_symbol("│").set_style(line);
+                }
+            }
+            self.nav_hits = hits
+                .into_iter()
+                .map(|h| HitBox {
+                    y: h.y + at.y,
+                    x0: h.x0 + at.x,
+                    x1: h.x1 + at.x,
+                    spot: h.spot,
+                })
+                .collect();
+            self.nav_area = Some(at);
+        }
+        let left = left + nav;
         let spread =
             ratatui::layout::Rect::new(whole.x + left, whole.y, whole.width - left, whole.height);
         let area = self.view_area(spread);

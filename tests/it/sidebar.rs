@@ -2142,9 +2142,10 @@ fn with_ux2_the_mission_control_button_opens_and_closes_it_and_its_right_click_l
     });
     let mission = cell_of(&screen, "⊞").unwrap();
     press(&mut client, 0, mission);
-    client.wait_text("MISSION CONTROL");
-    // Still there beside it, a second click closes it.
-    press(&mut client, 0, mission);
+    // The sidebar lists its views meanwhile, and its way back to the tabs
+    // closes it.
+    let screen = client.wait_text("MISSION CONTROL");
+    press(&mut client, 0, cell_of(&screen, "‹ Tabs").unwrap());
     client.wait_for("mission control closed", |s| {
         !s.iter().any(|l| l.contains("MISSION CONTROL"))
     });

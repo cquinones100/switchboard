@@ -1297,6 +1297,9 @@ impl Server {
             slack_files_kept: Default::default(),
         };
         m.left = left;
+        // Its groups and views in a column of its own, beside the tabs
+        // sidebar, or where there is no sidebar to list them in.
+        m.own_column = ux2 && (settings::is_on("mission_keep_tabs_sidebar") || left <= 1);
         // Mission control's own width (the resize keys'), else the setting's.
         m.lone = crate::mux::layout::width_of(
             self.clients
@@ -1304,7 +1307,7 @@ impl Server {
                 .and_then(|c| self.session(&c.session))
                 .and_then(|s| s.mission_width.as_deref()),
         );
-        let spread = ratatui::layout::Rect::new(0, 0, cols - left, rows);
+        let spread = ratatui::layout::Rect::new(0, 0, cols.saturating_sub(m.view_left()), rows);
         m.size = (m.view_area(spread).width, rows);
         if m.view > m.snap.views.len() {
             m.view = 0;
@@ -2308,6 +2311,9 @@ impl Server {
                     if let Some(f) = m.filter.as_mut().filter(|f| f.typing) {
                         f.text.push_str(&text);
                         m.cursor = 0;
+                    } else if let Some(f) = m.nav_filter.as_mut().filter(|f| f.typing) {
+                        f.text.push_str(&text);
+                        nav_focus_listed(m);
                     } else if let Some(j) = m.jump.as_mut() {
                         j.text.push_str(&text);
                     }
@@ -2429,6 +2435,7 @@ impl Server {
                 if let Some(f) = m.filter.as_mut() {
                     f.typing = false;
                 }
+                super::nav::end_typing(m);
                 self.open_palette(client);
                 return;
             }
@@ -2452,6 +2459,11 @@ impl Server {
             jump_key(m, k);
             return;
         }
+        // The list of views' filter being typed takes the keys, as the
+        // view's own does.
+        if m.nav_filter.as_ref().is_some_and(|f| f.typing) && nav_key(m, k) {
+            return;
+        }
         // What the last action did stays in the footer until the next key.
         m.note = None;
         // `C-w` and a direction move the focus between the view's panes,
@@ -2465,6 +2477,11 @@ impl Server {
         }
         if k.code == KeyCode::Char('w') && k.mods == Mods::CTRL && settings::is_on("ctrl_w_panes") {
             m.window_key = Some(now);
+            return;
+        }
+        // The list of views' keys, after a `C-w` waiting for its direction
+        // has had it.
+        if nav_key(m, k) {
             return;
         }
         // The pane resize keys, once a C-w waiting for its direction has
@@ -3113,11 +3130,21 @@ impl Server {
         // to, a right click's peek over the workspace); the wheel and the
         // mouse moving stay the sidebar's, mission control left open.
         let dragging = m.side_drag.is_some() || m.pane_bar_drag.is_some();
+        let on_nav = m.nav_area.is_some_and(|a| {
+            mouse.col >= a.x
+                && mouse.col < a.x + a.width
+                && mouse.row >= a.y
+                && mouse.row < a.y + a.height
+        });
+        if on_nav && !dragging {
+            self.nav_mouse(client, mouse, look);
+            return;
+        }
         let beside = mouse.col >= m.left && m.col_in(mouse.col).is_none();
         // A drag begun in the view goes on, and ends, at its nearest column
         // while the mouse is beside it.
-        let held =
-            (beside && dragging).then(|| (mouse.col - m.left).min(m.size.0.saturating_sub(1)));
+        let held = (beside && dragging)
+            .then(|| (mouse.col.saturating_sub(m.view_left())).min(m.size.0.saturating_sub(1)));
         if beside && !dragging {
             // The spare columns beside a capped view take no clicks, and
             // put out what the mouse lit on its way there.
@@ -3181,6 +3208,17 @@ impl Server {
         {
             return;
         }
+        // A press in the view ends the list's filter being typed, so the
+        // keys it leads to (Enter, `m`) reach the view, and the wheel there
+        // moves the view's items rather than the list's focus.
+        if mouse.kind == MouseKind::Press {
+            if !mouse.button.is_wheel() {
+                super::nav::end_typing(m);
+            }
+            if mouse.button.is_wheel() && matches!(m.focus, Some(Focus::View(_))) {
+                m.focus = Some(Focus::Item);
+            }
+        }
         let mouse = Mouse { col, ..mouse };
         let then = mouse_in(m, mouse, look.hover);
         save_side(m);
@@ -3196,8 +3234,19 @@ impl Server {
                     .and_then(|m| m.filter.as_mut())
                     .map(|f| std::mem::replace(&mut f.typing, false))
                     .unwrap_or(false);
+                // So does the list of views' filter.
+                let nav_typing = self
+                    .mission_mut(client)
+                    .and_then(|m| m.nav_filter.as_mut())
+                    .map(|f| std::mem::replace(&mut f.typing, false))
+                    .unwrap_or(false);
                 self.mission_key(client, key);
                 if typing && let Some(f) = self.mission_mut(client).and_then(|m| m.filter.as_mut())
+                {
+                    f.typing = true;
+                }
+                if nav_typing
+                    && let Some(f) = self.mission_mut(client).and_then(|m| m.nav_filter.as_mut())
                 {
                     f.typing = true;
                 }
@@ -3211,6 +3260,88 @@ impl Server {
             Then::SlackPlay => self.slack_play_now(client, None),
             Then::Part(n) => self.relay_part(client, n),
         }
+    }
+
+    /// The mouse over the list of groups and views (src/mission/nav.rs): a
+    /// click on a view's row brings it to the front, a right click opens
+    /// its menu as `m` there does, a click on `‹ Tabs` goes back to the
+    /// tabs, closing mission control, and on the filter starts typing one;
+    /// the mouse moving lights what a click would press. The rest of the
+    /// list takes no click.
+    fn nav_mouse(&mut self, client: ClientId, mouse: Mouse, look: crate::ui::Look) {
+        let Some(m) = self.mission_mut(client) else {
+            return;
+        };
+        let hit = m
+            .nav_hits
+            .iter()
+            .find(|h| h.y == mouse.row && mouse.col >= h.x0 && mouse.col <= h.x1)
+            .map(|h| h.spot);
+        // A press on the list ends whatever was being typed (either filter,
+        // a view's name after `v`) and puts Tab's focus away, as a click in
+        // the view does, so the keys after it reach what it chose.
+        if mouse.kind == MouseKind::Press && !mouse.button.is_wheel() {
+            m.focus = None;
+            m.jump = None;
+            if let Some(f) = m.filter.as_mut() {
+                f.typing = false;
+            }
+            super::nav::end_typing(m);
+        }
+        let view = match (mouse.kind, mouse.button) {
+            (MouseKind::Move, _) => {
+                let lit = hit
+                    .filter(|_| look.hover)
+                    .filter(|s| *s != Spot::View(m.view));
+                if lit != m.nav_hover || m.hover.is_some() {
+                    m.nav_hover = lit;
+                    m.hover = None;
+                    self.mission_dirty(client);
+                }
+                return;
+            }
+            (MouseKind::Press, MouseButton::Left) => match hit {
+                Some(Spot::View(v)) => v,
+                Some(Spot::Close) => {
+                    self.mission_close(client);
+                    return;
+                }
+                Some(Spot::Filter) => {
+                    let text = m.nav_filter.take().map(|f| f.text).unwrap_or_default();
+                    m.nav_filter = Some(Filter { text, typing: true });
+                    self.mission_dirty(client);
+                    return;
+                }
+                _ => return,
+            },
+            // The wheel scrolls the list where it runs past its room.
+            (MouseKind::Press, MouseButton::WheelUp | MouseButton::WheelDown) => {
+                m.nav_top = if mouse.button == MouseButton::WheelUp {
+                    m.nav_top.saturating_sub(3)
+                } else {
+                    m.nav_top + 3
+                };
+                m.nav_scrolled = true;
+                self.mission_dirty(client);
+                return;
+            }
+            (MouseKind::Press, MouseButton::Right) if look.mouse => match hit {
+                Some(Spot::View(v)) => {
+                    if v != m.view {
+                        show_view(m, v);
+                        self.mission_prepare(client);
+                    }
+                    self.mission_key(client, Key::new(KeyCode::Char('m'), Mods::NONE));
+                    return;
+                }
+                _ => return,
+            },
+            _ => return,
+        };
+        m.nav_hover = None;
+        show_view(m, view);
+        self.mission_prepare(client);
+        self.mission_dirty(client);
     }
 
     /// Draws a client's mission control again.
@@ -6789,6 +6920,17 @@ fn context_menu_key(m: &mut Mission) -> Key {
     if let Some(f) = m.filter.as_mut() {
         f.typing = false;
     }
+    super::nav::end_typing(m);
+    // On a row of the list of views, that view's menu, as a right click on
+    // the row opens it: the view brought to the front first.
+    if let Some(Focus::View(v)) = m.focus
+        && m.groups().is_some()
+    {
+        if v != m.view {
+            show_view(m, v);
+        }
+        return Key::new(KeyCode::Char('m'), Mods::NONE);
+    }
     let an_item_is_chosen = matches!(m.focus, None | Some(Focus::Item))
         && match m.current() {
             // The Reminders month chooses within its chosen day alone.
@@ -7491,9 +7633,91 @@ fn open_group(m: &mut Mission, g: views::Group) {
     }
 }
 
+/// Keys for the list of groups and views (src/mission/nav.rs): while its
+/// filter is typed, the filter's; while Tab's focus is on a view's row,
+/// `j` `k` and the arrows move it through the listed views, which Enter
+/// opens, and `/` types a filter that narrows them by name. Whether the key
+/// was the list's.
+fn nav_key(m: &mut Mission, k: Key) -> bool {
+    let taken = nav_key_in(m, k);
+    if taken {
+        m.nav_scrolled = false;
+    }
+    taken
+}
+
+/// The focus on the first view the list's filter leaves, for Enter,
+/// unless it is on one it leaves already; on none when it leaves none.
+fn nav_focus_listed(m: &mut Mission) {
+    let order = super::nav::order(m);
+    if matches!(m.focus, Some(Focus::View(v)) if order.contains(&v)) {
+        return;
+    }
+    // With none left, nothing for Enter to open.
+    m.focus = order.first().map(|&first| Focus::View(first));
+}
+
+fn nav_key_in(m: &mut Mission, k: Key) -> bool {
+    if let Some(f) = m.nav_filter.as_mut().filter(|f| f.typing) {
+        match k.code {
+            KeyCode::Enter => f.typing = false,
+            KeyCode::Esc => m.nav_filter = None,
+            KeyCode::Char('c') if k.mods == Mods::CTRL => m.nav_filter = None,
+            KeyCode::Backspace => {
+                f.text.pop();
+            }
+            KeyCode::Char('u') if k.mods == Mods::CTRL => f.text.clear(),
+            KeyCode::Char(c) if !k.mods.ctrl && !k.mods.alt => f.text.push(c),
+            _ => return true,
+        }
+        // A filter left with no view isn't kept once typed: the whole list
+        // comes back, the focus on the view in front, so the keys still
+        // reach the list.
+        if !m.nav_filter.as_ref().is_some_and(|f| f.typing) && super::nav::order(m).is_empty() {
+            m.nav_filter = None;
+            m.focus = Some(Focus::View(m.view));
+            return true;
+        }
+        nav_focus_listed(m);
+        return true;
+    }
+    let Some(Focus::View(at)) = m.focus.filter(|_| m.groups().is_some()) else {
+        return false;
+    };
+    if !plain(&k) && !matches!(k.code, KeyCode::Up | KeyCode::Down) {
+        return false;
+    }
+    let by: isize = match k.code {
+        KeyCode::Char('j') | KeyCode::Down => 1,
+        KeyCode::Char('k') | KeyCode::Up => -1,
+        KeyCode::Char('/') => {
+            let text = m.nav_filter.take().map(|f| f.text).unwrap_or_default();
+            m.nav_filter = Some(Filter { text, typing: true });
+            return true;
+        }
+        KeyCode::Esc if m.nav_filter.is_some() => {
+            m.nav_filter = None;
+            return true;
+        }
+        _ => return false,
+    };
+    let order = super::nav::order(m);
+    let Some(last) = order.len().checked_sub(1) else {
+        return true;
+    };
+    let to = match order.iter().position(|&v| v == at) {
+        Some(i) => (i as isize + by).clamp(0, last as isize) as usize,
+        None => 0,
+    };
+    m.focus = Some(Focus::View(order[to]));
+    true
+}
+
 /// A view brought to the front: focus on a view's name follows, and on
 /// the filter goes to the items of a board, which has none.
 fn show_view(m: &mut Mission, to: usize) {
+    // The list of groups and views follows the view brought to the front.
+    m.nav_scrolled = false;
     // A view brought to the front starts on its list.
     m.pane = None;
     if m.grid.is_some() {
@@ -7517,8 +7741,8 @@ fn show_view(m: &mut Mission, to: usize) {
 }
 
 /// Tab and Shift-Tab with tab_focus: focus through what can be clicked, in
-/// reading order, round: with UX 2.0 each group's name and the names of
-/// the views in front's group, else each view's name; the filter (not on a
+/// reading order, round: with UX 2.0 each view's row in the list of groups
+/// and views, else each view's name; the filter (not on a
 /// board), each item, and easy mode's ×.
 fn move_focus(m: &mut Mission, by: isize) {
     // Tab goes round what can be clicked, the list's items among them, so
@@ -7527,7 +7751,6 @@ fn move_focus(m: &mut Mission, by: isize) {
     m.pane = Some((m.view, Pane::List));
     #[derive(Clone, Copy, PartialEq)]
     enum Stop {
-        Group(views::Group),
         View(usize),
         Kind(usize),
         Filter,
@@ -7540,14 +7763,9 @@ fn move_focus(m: &mut Mission, by: isize) {
         Some(v) => v.data.items.len(),
         None => m.order().len(),
     };
+    // With UX 2.0, each listed view's row (src/mission/nav.rs).
     let mut stops: Vec<Stop> = match m.groups() {
-        Some(groups) => {
-            let mut stops: Vec<Stop> = groups.iter().map(|(g, _)| Stop::Group(*g)).collect();
-            if let Some((_, held)) = groups.iter().find(|(_, held)| held.contains(&m.view)) {
-                stops.extend(held.iter().map(|v| Stop::View(*v)));
-            }
-            stops
-        }
+        Some(_) => super::nav::order(m).into_iter().map(Stop::View).collect(),
         None => (0..=m.snap.views.len()).map(Stop::View).collect(),
     };
     if notice_board(m) {
@@ -7602,7 +7820,7 @@ fn move_focus(m: &mut Mission, by: isize) {
     }
     let at = match m.focus {
         None => None,
-        Some(Focus::Group(g)) => stops.iter().position(|s| *s == Stop::Group(g)),
+        Some(Focus::Group(_)) => None,
         Some(Focus::View(v)) => stops.iter().position(|s| *s == Stop::View(v)),
         Some(Focus::Kind(k)) => stops.iter().position(|s| *s == Stop::Kind(k)),
         Some(Focus::Filter) => stops.iter().position(|s| *s == Stop::Filter),
@@ -7617,7 +7835,6 @@ fn move_focus(m: &mut Mission, by: isize) {
         Some(i) => (i as isize + by).rem_euclid(n),
     };
     match stops[to as usize] {
-        Stop::Group(g) => m.focus = Some(Focus::Group(g)),
         Stop::View(v) => m.focus = Some(Focus::View(v)),
         Stop::Kind(k) => m.focus = Some(Focus::Kind(k)),
         Stop::Filter => m.focus = Some(Focus::Filter),
@@ -8196,22 +8413,62 @@ mod tests {
         assert_eq!(m.view, 6, "round to System's Settings");
         switch_view(&mut m, 1, false);
         assert_eq!(m.view, 0, "Tab goes on past the group, round");
+        // Tab goes through every listed view's row, in the list's order.
         m.focus = None;
         move_focus(&mut m, 1);
-        assert_eq!(m.focus, Some(Focus::Group(views::Group::Work)));
-        for _ in 0..4 {
-            move_focus(&mut m, 1);
-        }
-        assert_eq!(
-            m.focus,
-            Some(Focus::View(0)),
-            "the groups, then the views of the one in front"
-        );
+        assert_eq!(m.focus, Some(Focus::View(0)));
+        move_focus(&mut m, 1);
+        assert_eq!(m.focus, Some(Focus::View(2)), "the Map, after the tabs");
+        move_focus(&mut m, 1);
+        assert_eq!(m.focus, Some(Focus::View(4)), "Code's PRs");
         open_group(&mut m, views::Group::Day);
         assert_eq!(m.view, 3, "a group's name pressed: its first view");
         m.view = 1;
         open_group(&mut m, views::Group::Day);
         assert_eq!(m.view, 3, "the group in front's too");
+    }
+
+    #[test]
+    fn with_ux2_j_and_k_move_through_the_listed_views_and_slash_narrows_them() {
+        let mut m = mission(
+            1,
+            vec![
+                view(ViewId::WorkMap, "Work map"),
+                view(ViewId::Prs, "PRs"),
+                view(ViewId::Settings, "Settings"),
+            ],
+        );
+        m.snap.rules.ux2 = true;
+        let key = |c| Key::new(KeyCode::Char(c), Mods::NONE);
+        assert!(
+            !nav_key(&mut m, key('j')),
+            "the view's while the list has no focus"
+        );
+        m.focus = Some(Focus::View(0));
+        assert!(nav_key(&mut m, key('j')));
+        assert_eq!(m.focus, Some(Focus::View(1)), "the Map");
+        assert!(nav_key(&mut m, Key::new(KeyCode::Down, Mods::NONE)));
+        assert_eq!(m.focus, Some(Focus::View(2)), "PRs");
+        nav_key(&mut m, key('k'));
+        nav_key(&mut m, key('k'));
+        nav_key(&mut m, key('k'));
+        assert_eq!(m.focus, Some(Focus::View(0)), "held at the top");
+        nav_key(&mut m, key('/'));
+        nav_key(&mut m, key('s'));
+        nav_key(&mut m, key('e'));
+        assert_eq!(super::super::nav::order(&m), vec![3], "Settings alone");
+        assert_eq!(m.focus, Some(Focus::View(3)), "on the first it leaves");
+        nav_key(&mut m, key('z'));
+        assert!(super::super::nav::order(&m).is_empty());
+        assert_eq!(m.focus, None, "nothing left for Enter to open");
+        nav_key(&mut m, Key::new(KeyCode::Enter, Mods::NONE));
+        assert!(m.nav_filter.is_none(), "a filter that left none isn't kept");
+        assert_eq!(m.focus, Some(Focus::View(m.view)));
+        nav_key(&mut m, key('/'));
+        nav_key(&mut m, key('s'));
+        nav_key(&mut m, Key::new(KeyCode::Esc, Mods::NONE));
+        assert!(m.nav_filter.is_none());
+        assert_eq!(super::super::nav::order(&m), vec![0, 1, 2, 3]);
     }
 
     #[test]

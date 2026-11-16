@@ -198,7 +198,7 @@ fn kitty_sent(raw: &[u8]) -> bool {
 
 #[test]
 fn with_sixel_the_settings_switches_reach_the_terminal_as_sixel() {
-    let (server, mut client) = sixel_server(140, 40);
+    let (server, mut client) = sixel_server(164, 40);
     server.ok(&["press", "settings"]);
     // A switch is four cells by one: 52 by 25 pixels, made 24, whole bands.
     let deadline = common::deadline(std::time::Duration::from_secs(10));

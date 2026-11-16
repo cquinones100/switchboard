@@ -1142,13 +1142,9 @@ mod tests {
         let (lines, hits, meters, _) = drawn(&mut m, 125, 24);
         let t = texts(&lines);
         let screen = t.join("\n");
-        // The bar: every group a shown view is in lit, the shown views
-        // named, and how many at its right.
-        assert!(
-            t[1].contains("Slack") && t[1].contains("Calendar"),
-            "{screen}"
-        );
-        assert!(t[1].ends_with("4 views at once"), "{screen}");
+        // The header: the focused view, and how many are shown.
+        assert!(t[0].starts_with(" Slack   Day"), "{screen}");
+        assert!(t[0].contains("Day · 4 views at once"), "{screen}");
         // The labels with their counts at each cell's right edge.
         let labels = &t[3];
         assert!(labels.starts_with(" SLACK"), "{screen}");
@@ -1375,7 +1371,7 @@ mod tests {
             let (lines, ..) = drawn(&mut m, cols, 24);
             let t = texts(&lines);
             let screen = t.join("\n");
-            assert!(t[1].ends_with("4 views at once"), "{cols}: {screen}");
+            assert!(t[0].contains("4 views at once"), "{cols}: {screen}");
             assert!(t[3].ends_with("2 unread"), "{cols}: {screen}");
             let billing = t.iter().find(|l| l.contains("1 billing")).unwrap();
             assert!(billing.contains("$6.00 │"), "{cols}: {screen}");

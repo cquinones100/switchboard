@@ -444,7 +444,9 @@ fn the_settings_view_changes_a_setting_in_the_settings_file() {
 /// screen's left, by its name.
 fn chosen_category(screen: &[String]) -> Option<String> {
     screen.iter().find_map(|l| {
-        let name = l.strip_prefix("▌")?.trim_start().split("  ").next()?;
+        // Right of the column of groups and views.
+        let (_, view) = l.split_once('│')?;
+        let name = view.strip_prefix("▌")?.trim_start().split("  ").next()?;
         Some(name.to_string())
     })
 }
@@ -453,7 +455,7 @@ fn chosen_category(screen: &[String]) -> Option<String> {
 fn with_ux2_c_w_h_moves_into_the_settings_categories_and_c_w_l_back_to_their_options() {
     let server = TestServer::start();
     settings(&server, json!({"ux2": true}));
-    let mut client = server.attach(160, 40);
+    let mut client = server.attach(184, 40);
     client.wait_text("$");
     client.wait_text("M-c Claude");
     open(&mut client);
@@ -1265,7 +1267,7 @@ fn choosing_a_slack_message_reads_its_thread_once_and_draws_it_beside() {
         &server,
         json!({ "view_slack": true, "ux2": true, "slack_threads": true, "slack_background": false, "photos": false }),
     );
-    let mut client = server.attach(180, 40);
+    let mut client = server.attach(204, 40);
     client.wait_text("$");
     open(&mut client);
     client.type_text("vslack\r");
@@ -1313,14 +1315,13 @@ fn the_slack_views_sections_choose_the_messages_beside_them() {
         &server,
         json!({ "view_slack": true, "ux2": true, "slack_threads": false, "slack_background": false, "photos": false }),
     );
-    let mut client = server.attach(180, 40);
+    let mut client = server.attach(204, 40);
     client.wait_text("$");
     open(&mut client);
-    // UX 2.0 taken up first, its bar grouped, so the view opens as the
+    // UX 2.0 taken up first, its views grouped, so the view opens as the
     // board, on its first section.
-    client.wait_for("the bar grouped", |s| {
-        s.iter()
-            .any(|l| l.contains("Work") && l.contains("Day") && l.contains("System"))
+    client.wait_for("the views grouped", |s| {
+        s.iter().any(|l| l.starts_with(" WORK ")) && s.iter().any(|l| l.starts_with(" SYSTEM "))
     });
     client.type_text("vslack\r");
     // The board once UX 2.0 is taken up.
@@ -1432,17 +1433,17 @@ fn the_slack_board_lists_a_threads_replies_as_one_row() {
         &server,
         json!({ "view_slack": true, "ux2": true, "slack_threads": true, "slack_background": false, "photos": false }),
     );
-    let mut client = server.attach(180, 40);
+    let mut client = server.attach(204, 40);
     client.wait_text("$");
     open(&mut client);
-    client.wait_for("the bar grouped", |s| {
-        s.iter()
-            .any(|l| l.contains("Work") && l.contains("Day") && l.contains("System"))
+    client.wait_for("the views grouped", |s| {
+        s.iter().any(|l| l.starts_with(" WORK ")) && s.iter().any(|l| l.starts_with(" SYSTEM "))
     });
     client.type_text("vslack\r");
     let screen = client.wait_text("reply three");
     let all = screen.join("\n");
-    let list = |l: &String| l.split('│').nth(1).unwrap_or("").to_string();
+    // Past the column of groups and views, then the sections.
+    let list = |l: &String| l.split('│').nth(2).unwrap_or("").to_string();
     let listed: Vec<String> = screen.iter().map(list).collect();
     assert!(listed.iter().any(|l| l.contains("the question")), "{all}");
     assert!(
@@ -1459,7 +1460,7 @@ fn the_slack_board_lists_a_threads_replies_as_one_row() {
     );
     let beside: Vec<String> = screen
         .iter()
-        .map(|l| l.split('│').nth(2).unwrap_or("").to_string())
+        .map(|l| l.split('│').nth(3).unwrap_or("").to_string())
         .collect();
     for words in ["reply one", "reply two", "reply three"] {
         assert!(
@@ -1497,14 +1498,13 @@ fn leaving_the_slack_board_marks_only_the_sections_shown_seen() {
         &server,
         json!({ "view_slack": true, "ux2": true, "slack_threads": false, "slack_background": false, "photos": false }),
     );
-    let mut client = server.attach(180, 40);
+    let mut client = server.attach(204, 40);
     client.wait_text("$");
     open(&mut client);
-    // UX 2.0 taken up first, its bar grouped, so the view opens as the
+    // UX 2.0 taken up first, its views grouped, so the view opens as the
     // board, on its first section.
-    client.wait_for("the bar grouped", |s| {
-        s.iter()
-            .any(|l| l.contains("Work") && l.contains("Day") && l.contains("System"))
+    client.wait_for("the views grouped", |s| {
+        s.iter().any(|l| l.starts_with(" WORK ")) && s.iter().any(|l| l.starts_with(" SYSTEM "))
     });
     client.type_text("vslack\r");
     client.wait_text("@ Mentions");
@@ -1640,7 +1640,7 @@ fn the_notifications_history_folds_old_days_and_its_menu_narrows_it_to_a_kind() 
 fn with_ux2_resources_ends_a_tabs_busy_process_from_its_menu_after_a_yes() {
     let server = TestServer::start();
     settings(&server, json!({"view_resources": true, "ux2": true}));
-    let mut client = server.attach(150, 36);
+    let mut client = server.attach(174, 36);
     client.wait_text("$");
     // A process pegging a core in the tab.
     client.type_text("yes > /dev/null\r");
@@ -1784,7 +1784,7 @@ fn with_ux2_the_inbox_shows_each_in_its_ticket_and_its_menu_acts_on_it() {
         &server,
         json!({"ux2": true, "linear": true, "view_inbox": true, "photos": false}),
     );
-    let mut client = server.attach(170, 40);
+    let mut client = server.attach(194, 40);
     client.wait_text("$");
     open(&mut client);
     client.type_text("vinbox\r");
@@ -2168,8 +2168,13 @@ fn m_p_lists_views_beyond_the_old_twelve_and_opens_or_switches_to_them() {
 
 #[test]
 fn with_ux2_a_click_on_a_tab_in_the_sidebar_closes_it_and_goes_there() {
+    // The tabs sidebar kept beside mission control: off, the sidebar lists
+    // its views instead (tests/it/mission_nav.rs).
     let server = TestServer::start();
-    settings(&server, json!({"ux2": true, "sidebar": true}));
+    settings(
+        &server,
+        json!({"ux2": true, "sidebar": true, "mission_keep_tabs_sidebar": true}),
+    );
     let mut client = server.attach(140, 36);
     client.wait_text("$");
     server.ok(&["new-tab", "-n", "second"]);
@@ -2199,23 +2204,24 @@ fn with_ux2_a_click_on_a_tab_in_the_sidebar_closes_it_and_goes_there() {
     });
 }
 
-/// The bar's second row, the views of the group in front and its keys.
-fn views_row(s: &[String]) -> String {
-    s.iter()
-        .find(|l| l.contains("[ ] views"))
-        .cloned()
+/// The header over the view in front, naming it and its group, right of
+/// the column listing the groups and views.
+fn header(s: &[String]) -> String {
+    s.first()
+        .and_then(|l| l.split('│').nth(1))
         .unwrap_or_default()
+        .to_string()
 }
 
 #[test]
 fn with_ux2_m_brackets_move_between_groups_braces_do_nothing_and_m_braces_close_it() {
     let (server, mut client) = two_tabs_ux2();
     let screen = open(&mut client);
-    assert!(views_row(&screen).contains("Tabs"), "{}", screen.join("\n"));
+    assert!(header(&screen).contains("   Work"), "{}", screen.join("\n"));
     // } moves nothing, so M-] after it goes from Work to Day, not to System.
     client.type_text("}");
     client.type_text(&format!("{ALT}]"));
-    client.wait_for("Day's views", |s| views_row(s).contains("Reminders"));
+    client.wait_for("Day's views", |s| header(s).contains("   Day"));
     assert_eq!(
         tabs(&server.list())[1]["current"],
         true,
@@ -2224,13 +2230,13 @@ fn with_ux2_m_brackets_move_between_groups_braces_do_nothing_and_m_braces_close_
     // { moves nothing either, so M-[ after it goes back to Work.
     client.type_text("{");
     client.type_text(&format!("{ALT}["));
-    client.wait_for("Work's views", |s| views_row(s).contains("Tabs"));
+    client.wait_for("Work's views", |s| header(s).contains("   Work"));
     // M-{ goes back through the views visited, Day's, then Work's, then
     // closes it on the tab it opened over, then goes to the first.
     client.type_text(&format!("{ALT}{{"));
-    client.wait_for("Day's views", |s| views_row(s).contains("Reminders"));
+    client.wait_for("Day's views", |s| header(s).contains("   Day"));
     client.type_text(&format!("{ALT}{{"));
-    client.wait_for("Work's views", |s| views_row(s).contains("Tabs"));
+    client.wait_for("Work's views", |s| header(s).contains("   Work"));
     client.type_text(&format!("{ALT}{{"));
     client.wait_for("mission control closed", closed);
     assert_eq!(tabs(&server.list())[1]["current"], true, "the second tab");
@@ -2666,7 +2672,7 @@ fn wait_saved(server: &TestServer, what: &str, pred: impl Fn(&Value) -> bool) ->
 fn with_ux2_the_slack_relay_view_sets_what_reaches_you() {
     let server = TestServer::start();
     settings(&server, json!({ "ux2": true, "view_relay": true }));
-    let mut client = server.attach(140, 40);
+    let mut client = server.attach(164, 40);
     client.wait_text("$");
     client.wait_text("M-c Claude");
     client.type_text(&format!("{ALT}p"));
@@ -2685,7 +2691,8 @@ fn with_ux2_the_slack_relay_view_sets_what_reaches_you() {
     client.type_text("jjjjjj");
     client.wait_for("Finished turns chosen", |s| {
         s.iter()
-            .any(|l| l.starts_with("▌") && l.contains("Finished turns"))
+            .filter_map(|l| l.split_once('│'))
+            .any(|(_, view)| view.starts_with("▌") && view.contains("Finished turns"))
     });
     client.type_text("\r");
     pick(&mut client, "Don't send");

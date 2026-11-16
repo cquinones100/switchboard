@@ -526,6 +526,13 @@
     "default": true
   },
   {
+    "key": "mission_keep_tabs_sidebar",
+    "category": "Mission control",
+    "label": "Keep the tabs sidebar in mission control",
+    "description": "With UX 2.0, mission control keeps the tabs sidebar and lists its groups and views in a column of its own beside it, the view to its right; off, while mission control is open the sidebar itself lists its groups and views, the tabs coming back as it closes",
+    "default": false
+  },
+  {
     "key": "idle_walk",
     "category": "Tabs and status bar",
     "label": "M-A cycles idle tabs",

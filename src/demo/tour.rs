@@ -20,9 +20,6 @@ use anyhow::{Context, Result};
 
 use crate::ui::headless::{self, Client};
 
-const CAP_LEFT: char = '\u{E0B6}';
-const CAP_RIGHT: char = '\u{E0B4}';
-
 /// A board of the tour.
 pub struct Step {
     pub name: &'static str,
@@ -238,32 +235,49 @@ const WAIT: Duration = Duration::from_secs(20);
 /// The most groups, and views in a group, the tour walks.
 const MOST: usize = 12;
 
-/// Mission control's groups (its first line) and the views of the group in
-/// front (its second), read off the screen right of the sidebar, each a
-/// name set apart from the next by three spaces or more, the chosen one's
-/// half circles (drawn for Ghostty) read as spaces.
-pub fn mission_names(lines: &[String]) -> (Vec<String>, Vec<String>) {
-    let names = |line: Option<&String>| -> Vec<String> {
-        let line = line
-            .map(String::as_str)
-            .unwrap_or("")
-            .replace([CAP_LEFT, CAP_RIGHT], " ");
-        let line = line
-            .split_once('│')
-            .map_or(line.as_str(), |(_, right)| right);
-        line.split("   ")
-            .map(str::trim)
-            .filter(|w| !w.is_empty())
-            .take_while(|w| !w.starts_with('/') && !w.starts_with('[') && !w.starts_with("M-["))
-            .filter(|w| w.chars().all(|c| c.is_alphanumeric() || c == ' '))
-            .map(str::to_string)
-            .collect()
+/// Mission control's groups, each with its views, read off the list of
+/// them (src/mission/nav.rs) under its MISSION CONTROL label: in the
+/// sidebar's place, or in a column of its own beside the tabs sidebar. A
+/// group is a label in capitals one column in; a view a row two columns in
+/// past the chosen row's bar, its name ending where its fact is set apart.
+/// A line between columns may be a scroll bar's thumb.
+pub fn mission_names(lines: &[String]) -> Vec<(String, Vec<String>)> {
+    let Some(column) = lines.iter().find_map(|l| {
+        l.split(['│', '┃'])
+            .position(|part| part.trim_start().starts_with("MISSION CONTROL"))
+    }) else {
+        return Vec::new();
     };
-    let groups = names(lines.first())
-        .into_iter()
-        .filter(|g| g != "MISSION CONTROL")
-        .collect();
-    (groups, names(lines.get(1)))
+    let mut out: Vec<(String, Vec<String>)> = Vec::new();
+    let mut started = false;
+    for line in lines {
+        let part = line.split(['│', '┃']).nth(column).unwrap_or("");
+        let trimmed = part.trim();
+        if trimmed.starts_with("MISSION CONTROL") {
+            started = true;
+            continue;
+        }
+        if !started || trimmed.is_empty() {
+            continue;
+        }
+        let label = part.starts_with(' ')
+            && !part.starts_with("  ")
+            && trimmed.chars().all(|c| c.is_uppercase() || c == ' ');
+        if label {
+            out.push((trimmed.to_string(), Vec::new()));
+        } else if let Some(row) = part
+            .strip_prefix("▌  ")
+            .or_else(|| part.strip_prefix("   "))
+        {
+            let name = row.split("  ").next().unwrap_or("").trim();
+            if let Some((_, views)) = out.last_mut()
+                && !name.is_empty()
+            {
+                views.push(name.to_string());
+            }
+        }
+    }
+    out
 }
 
 fn slug(name: &str) -> String {
@@ -351,13 +365,12 @@ pub fn run(server: &Path, dir: &Path, cols: u16, rows: u16) -> Result<Vec<String
     if !client.wait_text("MISSION CONTROL", Duration::from_secs(10)) {
         anyhow::bail!("mission control didn't open");
     }
-    let (groups, _) = client.read(|s| mission_names(&s.lines()));
-    for (g, group) in groups.iter().take(MOST).enumerate() {
+    let groups = client.read(|s| mission_names(&s.lines()));
+    for (g, (group, views)) in groups.iter().take(MOST).enumerate() {
         if g > 0 {
-            // The next group's views in place of this one's.
-            press_until(&mut client, "M-]", |s| mission_names(&s.lines()))?;
+            // The next group's first view.
+            press_until(&mut client, "M-]", |s| s.text())?;
         }
-        let (_, views) = client.read(|s| mission_names(&s.lines()));
         for (v, view) in views.iter().take(MOST).enumerate() {
             if v > 0 {
                 press_until(&mut client, "]", |s| s.text())?;
@@ -383,27 +396,53 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mission_controls_groups_and_views_are_read_off_its_first_lines() {
+    fn mission_controls_groups_and_views_are_read_off_its_list() {
         let lines: Vec<String> = [
-            " 5 tabs     / filter │ MISSION CONTROL   Work   Code   Day   System   ✗ 1  ! 2  ✓ 1",
-            "                     │  PRs   Tickets   CI     / filter      M-[ M-] groups  [ ] views",
+            " ‹ Tabs  ·  2 need you   / filter │ Tickets   Code",
+            "                                  │─────────",
+            " MISSION CONTROL                  │",
+            "                                  │",
+            " WORK                             │",
+            "   Tabs                2 need you │",
+            "   Map                         14 │",
+            "                                  │",
+            " CODE                             │",
+            "   PRs                          5 │",
+            "▌  Tickets                      3 │",
+            "                                  │",
+            " j/k view  Enter open  Esc tabs   │",
         ]
         .iter()
         .map(|l| l.to_string())
         .collect();
-        let (groups, views) = mission_names(&lines);
-        assert_eq!(groups, ["Work", "Code", "Day", "System"]);
-        assert_eq!(views, ["PRs", "Tickets", "CI"]);
+        let names = mission_names(&lines);
+        assert_eq!(
+            names,
+            [
+                (
+                    "WORK".to_string(),
+                    vec!["Tabs".to_string(), "Map".to_string()]
+                ),
+                (
+                    "CODE".to_string(),
+                    vec!["PRs".to_string(), "Tickets".to_string()]
+                ),
+            ]
+        );
 
-        let chosen: Vec<String> = [
-            " 5 tabs     / filter │ MISSION CONTROL   \u{E0B6}Work\u{E0B4}   Code   Day   System",
-            "                     │ PRs   \u{E0B6}Tickets\u{E0B4}   CI   M-[ M-] groups",
+        // Its own column, beside the tabs sidebar.
+        let column: Vec<String> = [
+            " 2 tabs   │ MISSION CONTROL       │ Tickets   Code",
+            " NEEDS YOU│                       │",
+            " ● 1 api  │ CODE                  │",
+            "          │▌  Tickets           3 │",
         ]
         .iter()
         .map(|l| l.to_string())
         .collect();
-        let (groups, views) = mission_names(&chosen);
-        assert_eq!(groups, ["Work", "Code", "Day", "System"]);
-        assert_eq!(views, ["PRs", "Tickets", "CI"]);
+        assert_eq!(
+            mission_names(&column),
+            [("CODE".to_string(), vec!["Tickets".to_string()])]
+        );
     }
 }

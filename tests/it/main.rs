@@ -26,6 +26,7 @@ mod land_lock;
 mod leak_check;
 mod links;
 mod mission;
+mod mission_nav;
 mod mux;
 mod notes_workspace;
 mod persist;

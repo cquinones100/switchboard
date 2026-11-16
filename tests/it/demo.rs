@@ -330,8 +330,12 @@ fn the_tour_saves_a_board_for_each_step() {
             );
         }
     }
+    // The PR's card, its title wrapped over two lines.
     let code_prs = std::fs::read_to_string(tour.join("code-prs.txt")).unwrap();
-    assert!(code_prs.contains("Rate-limit the login"), "{code_prs}");
+    assert!(
+        code_prs.contains("Rate-limit the") && code_prs.contains("login endpoint"),
+        "{code_prs}"
+    );
 
     // The Usage view has a day of spend by tab, and the request audit.
     let usage = std::fs::read_to_string(tour.join("system-usage.txt")).unwrap();
