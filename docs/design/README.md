@@ -82,7 +82,7 @@ Spend, processes, settings and keys.
 - [26. Settings: every option by category, your files' too](https://cquinones100.github.io/switchboard/design/26.html)
 - [27. Keys: every binding, yours over the defaults](https://cquinones100.github.io/switchboard/design/27.html)
 
-## Proposed: moving between mission control's views
+## Moving between mission control's views
 
 Five ways to show its groups and views, to pick one.
 
@@ -125,7 +125,7 @@ What a newcomer starts on and turns on.
 
 - [37. Extras: each bundle one switch, with what it adds and what it needs](https://cquinones100.github.io/switchboard/design/37.html)
 - [38. Core only: the workspace as a newcomer first sees it](https://cquinones100.github.io/switchboard/design/38.html)
-- [39. Core only: mission control's Tabs, its bar Work and System alone](https://cquinones100.github.io/switchboard/design/39.html)
+- [39. Core only: mission control's Tabs, its views Work and System alone](https://cquinones100.github.io/switchboard/design/39.html)
 - [40. The first run: switchboard setup ends by naming the extras](https://cquinones100.github.io/switchboard/design/40.html)
 - [41. Switchboard's first open: one tab of Claude, and the welcome tip](https://cquinones100.github.io/switchboard/design/41.html)
 - [42. A tip suggesting an extra the first time it fits: a tab's Claude opens a PR](https://cquinones100.github.io/switchboard/design/42.html)

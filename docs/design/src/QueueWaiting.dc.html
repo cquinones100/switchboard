@@ -170,6 +170,27 @@ const mcBar = (group, current, right) => {
   hl(35, 2, 125);
 };
 
+// MISSION CONTROL'S VIEWS IN THE SIDEBAR (board 64, the default; board 65 with "Keep the tabs sidebar in mission control" on):
+// while mission control is open the sidebar lists its groups and views, each saying what it would show; the view in front lit.
+// The view takes the whole height under one header line: its name, its group, and its facts at the right.
+const FACTS = { Tabs: ['3 need you', 'y'], Landing: ['1', 'm'], Autopilot: ['2 working', 'b'], Routines: ['next 9:00', 'd'], Reopen: ['5', 'd'], Map: ['14', 'd'], PRs: ['5 open', 'd'], Tickets: ['3', 'd'], CI: ['1 failing', 'r'], Calendar: ['next 3:00', 'd'], Reminders: ['1', 'y'], Slack: ['2 new', 'a'], 'Slack relay': ['on', 'g'], Inbox: ['4 unread', 'a'], Notifications: ['5', 'a'], Usage: ['$8.41', 'd'], Extras: ['1 of 7 on', 'd'] };
+const navBar = (group, current, right) => {
+  const core = GROUPS.length < 4, need = core ? '1 needs you' : '3 need you';
+  fill(0, 0, 34, H, '1'); vl(34, 0, H);
+  T(1, 0, ['‹ ', 'a'], ['Tabs', 'd'], ['  ·  ', 'f'], [need, 'y']); R(32, 0, '/ filter', 'd');
+  T(1, 2, ['MISSION CONTROL', 'a', 'b']);
+  let sy = 4;
+  for (const [gr, vs] of GROUPS) {
+    T(1, sy, [gr.toUpperCase(), 'd', 'b']); sy++;
+    for (const v of vs) { const sel = v === current; const bg = sel ? row(0, sy, 34, 1, true) : '1'; put(3, sy, v, 't', sel ? 'b' : '', bg); const f = v === 'Tabs' ? [need, 'y'] : FACTS[v]; if (f) R(32, sy, f[0], f[1], '', bg); sy++; }
+    sy++;
+  }
+  keys(1, 44, [['j/k', 'view'], ['Enter', 'open'], ['Esc', 'tabs']]);
+  fill(35, 0, 125, 2, '0');
+  T(36, 0, [current, 't', 'b'], ['   ' + group, 'd']); if (right) R(158, 0, right, 'd');
+  hl(35, 1, 125);
+};
+
 // ─── THE BOARD ───
 // THE QUEUE FOR HEAVY WORK, as the tabs show it. A pane's cargo, npm or pnpm holds a slot of its kind (builds, test runs,
 // package builds) while it runs, and waits in arrival order while every slot is held. A tab whose command waits stays in
@@ -177,7 +198,7 @@ const mcBar = (group, current, right) => {
 // the command, how long it has waited and a chip with its place. A tab holding a slot looks as any working tab does, with a
 // dim chip saying which slot; the Resources view lists every slot (board 80).
 sidebar(2);
-mcBar('Work', 'Tabs', '11 tabs · 3 need you');
+navBar('Work', 'Tabs', '11 tabs · 3 need you');
 
 // Each card says what its tab is about rather than showing a slice of its screen:
 // a tab that needs you shows what it asks, word for word, with its options to answer from here;
