@@ -179,3 +179,8 @@ The relay's DM, threads and Home tab.
 - [108. The reply box: where it goes, the message it answers quoted, what you type, Send and Cancel](https://cquinones100.github.io/switchboard/design/108.html)
 - [109. Send asks first, naming the destination, \[Y/n\]; nothing is sent before a yes](https://cquinones100.github.io/switchboard/design/109.html)
 - [110. Sent: the reply in the thread pane as yours, marked sent, the thread's count up by one](https://cquinones100.github.io/switchboard/design/110.html)
+
+## Proposal: boxes beside a lone pane
+
+- [111. Beside a lone pane, a box you open (here M-p's palette) drawn as a pane: the spare columns' full height, its title a header line as a view's, the rule at the pane's edge its only border, no shadow](https://cquinones100.github.io/switchboard/design/111.html)
+- [112. A notification while a box is beside a lone pane: raised in the middle of the whole screen with its shadow, as every message and notification is; the pane beside dims and keeps its place](https://cquinones100.github.io/switchboard/design/112.html)

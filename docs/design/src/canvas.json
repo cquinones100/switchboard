@@ -456,6 +456,14 @@
     "SlackReplySent.dc.html": {
       "title": "110. Sent: the reply in the thread pane as yours, marked sent, the thread's count up by one",
       "page": "design"
+    },
+    "BesidePane.dc.html": {
+      "title": "111. Beside a lone pane, a box you open (here M-p's palette) drawn as a pane: the spare columns' full height, its title a header line as a view's, the rule at the pane's edge its only border, no shadow",
+      "page": "design"
+    },
+    "BesideNotice.dc.html": {
+      "title": "112. A notification while a box is beside a lone pane: raised in the middle of the whole screen with its shadow, as every message and notification is; the pane beside dims and keeps its place",
+      "page": "design"
     }
   }
 }
