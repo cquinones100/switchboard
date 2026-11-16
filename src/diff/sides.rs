@@ -277,13 +277,13 @@ pub fn align(old: &[String], new: &[String]) -> Vec<Row> {
 }
 
 /// The rows of a file shown alone on one side (added, or deleted as it
-/// was): every line, unmarked.
+/// was): every line added, or every line removed, tinted as any other.
 pub fn alone(lines: &[String], new_side: bool) -> Vec<Row> {
     (0..lines.len())
         .map(|i| Row {
             old: (!new_side).then_some(i),
             new: new_side.then_some(i),
-            kind: Kind::Same,
+            kind: if new_side { Kind::Added } else { Kind::Removed },
             old_words: Vec::new(),
             new_words: Vec::new(),
         })

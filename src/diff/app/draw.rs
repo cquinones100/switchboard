@@ -84,6 +84,16 @@ impl App {
         if self.opts.easy {
             self.draw_buttons(buf);
         }
+        if self.has_footer() {
+            let y = self.rows - 1;
+            put_line(
+                buf,
+                1,
+                y,
+                self.cols.saturating_sub(1),
+                &Spans::from(kit::hints(&self.footer_keys(), &self.theme())),
+            );
+        }
         if self.ask_box.is_some() {
             cursor = self.draw_ask_box(buf);
         } else if self.answer.is_some() {
@@ -105,6 +115,21 @@ impl App {
             cursor = None;
         }
         cursor
+    }
+
+    /// The footer's keys, as board 12 lists them but with no letter key,
+    /// as every footer: those of the list or of the diff, whichever has
+    /// the focus, then M-c back to Claude in the workspace.
+    pub(super) fn footer_keys(&self) -> Vec<(&'static str, &'static str)> {
+        let mut keys = if self.focus == Focus::List {
+            vec![("↑↓", "move"), ("↵", "read"), ("esc", "close")]
+        } else {
+            vec![("↑↓", "move"), ("←→", "sides"), ("esc", "list")]
+        };
+        if self.opts.server {
+            keys.push(("M-c", "Claude"));
+        }
+        keys
     }
 
     /// The terminal's background and text, when it said both and its
@@ -297,10 +322,17 @@ impl App {
             let y = y as u16;
             match row {
                 ListRow::Header(section) if self.opts.ux2 => {
+                    // What is listed apart under "Not committed yet" counted
+                    // there, not here.
+                    let apart = self.not_committed_apart();
                     let n = self
                         .order
                         .iter()
-                        .filter(|&&i| entries.get(i).is_some_and(|e| e.section == *section))
+                        .filter(|&&i| {
+                            entries.get(i).is_some_and(|e| {
+                                e.section == *section && !apart.contains(e.path.as_str())
+                            })
+                        })
                         .count();
                     let spans = match (&self.title, self.page, &self.story) {
                         (Some((title, _)), _, _) => vec![
@@ -1016,6 +1048,19 @@ impl App {
                                 buf[(cx, y)].set_bg(line_bg);
                             }
                         }
+                        // The line's number on its first screen line, faint,
+                        // at the right of the gutter.
+                        let gutter = s.gutter(w as usize) as u16;
+                        if gutter > 0 && range.start == 0 {
+                            let number = (*line + 1).to_string();
+                            let nx = x + gutter - 1 - width(&number) as u16;
+                            let mut style = self.faint();
+                            if let Some((line_bg, _)) = tinted {
+                                style = style.bg(line_bg);
+                            }
+                            Self::put(buf, nx, y, gutter, &number, style);
+                        }
+                        let (x, w) = (x + gutter, w - gutter);
                         let mut cx = x;
                         for (i, c) in text[range.clone()].char_indices() {
                             let at = range.start + i;
@@ -1065,6 +1110,8 @@ impl App {
                 } else {
                     (new_x, nw)
                 };
+                let gutter = s.gutter(w as usize) as u16;
+                let (x, w) = (x + gutter, w - gutter);
                 cursor = Some((x + (self.col as u16).min(w.saturating_sub(1)), y));
             }
         }

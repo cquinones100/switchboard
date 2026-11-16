@@ -409,6 +409,12 @@ fn make_repo(home: &Path, repo: &fixtures::Repo) -> Result<()> {
                 file_of(repo.name, title, "enabled = true")
             ),
         )?;
+        // And a file only the working tree changes, which the diff lists
+        // apart, under "Not committed yet".
+        util::write_atomic(
+            wt.join("src/log.ts"),
+            file_of(repo.name, "src/log.ts", "level = \"debug\""),
+        )?;
         git(home, &wt, &["push", "-q", "-u", "origin", branch])?;
     }
     Ok(())

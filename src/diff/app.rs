@@ -269,6 +269,18 @@ struct Sides {
     all_open: bool,
 }
 
+impl Sides {
+    /// The columns of a side of `w` its line numbers take before its text,
+    /// as board 12 draws them: a blank, the number at the right of at
+    /// least three columns, a blank; none on a side too narrow to spare
+    /// them.
+    fn gutter(&self, w: usize) -> usize {
+        let digits = self.old.len().max(self.new.len()).max(1).to_string().len();
+        let g = digits.max(3) + 2;
+        if w >= g + 20 { g } else { 0 }
+    }
+}
+
 /// One side of a screen line of the diff.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Cell {
@@ -1087,15 +1099,26 @@ impl App {
             })
             .collect();
         let by_order = self.opts.order;
+        let apart = self.not_committed_apart();
         order.sort_by(|&a, &b| {
             let (pa, pb) = (&entries[a].path, &entries[b].path);
-            entries[a].section.cmp(&entries[b].section).then_with(|| {
-                if by_order {
-                    order::reading_order(pa, pb, story, smart)
-                } else {
-                    order::alphabetical(pa, pb)
-                }
-            })
+            // Generated files stay the order's last, after what isn't
+            // committed yet, so they keep one GENERATED, LAST label; with
+            // a story, nothing is apart and its chapters place them.
+            let generated = |p: &String| !apart.is_empty() && by_order && order::generated(p);
+            let last = |p: &String| apart.contains(p.as_str());
+            entries[a]
+                .section
+                .cmp(&entries[b].section)
+                .then_with(|| generated(pa).cmp(&generated(pb)))
+                .then_with(|| last(pa).cmp(&last(pb)))
+                .then_with(|| {
+                    if by_order {
+                        order::reading_order(pa, pb, story, smart)
+                    } else {
+                        order::alphabetical(pa, pb)
+                    }
+                })
         });
         self.order = order;
         if let Some(keep) = keep
@@ -1401,13 +1424,20 @@ impl App {
     /// The diff area's columns, and each side's.
     fn diff_area(&self) -> Rect {
         let x = self.list_width.min(self.cols.saturating_sub(10)) + 1;
-        let bottom = if self.opts.easy { 1 } else { 0 };
+        let bottom = u16::from(self.opts.easy || self.has_footer());
         Rect::new(
             x,
             0,
             self.cols.saturating_sub(x),
             self.rows.saturating_sub(bottom),
         )
+    }
+
+    /// Whether the screen's last row is the footer of keys (UX 2.0, as
+    /// board 12 draws it): not in easy mode, whose row of buttons there
+    /// names the keys already, nor on a screen too short to spare it.
+    pub(super) fn has_footer(&self) -> bool {
+        self.opts.ux2 && !self.opts.easy && self.rows >= 5
     }
 
     /// The columns of the old side and the new; one of them 0 for a file
@@ -1704,11 +1734,11 @@ impl App {
                     }
                     let old_pieces = row
                         .old
-                        .map(|o| sides::wrap(&s.old[o], ow.max(1)))
+                        .map(|o| sides::wrap(&s.old[o], (ow - s.gutter(ow)).max(1)))
                         .unwrap_or_default();
                     let new_pieces = row
                         .new
-                        .map(|n| sides::wrap(&s.new[n], nw.max(1)))
+                        .map(|n| sides::wrap(&s.new[n], (nw - s.gutter(nw)).max(1)))
                         .unwrap_or_default();
                     let tall = match s.alone {
                         Some(true) => new_pieces.len(),
@@ -2668,6 +2698,7 @@ impl App {
         }
         let short = self.list_width < SHORT_WHY;
         let starts = self.starts();
+        let apart = self.not_committed_apart();
         for (k, &i) in self.order.iter().enumerate() {
             // A working tree's staged changes under a heading of their own.
             if let Some(e) = self.entry(i)
@@ -2718,6 +2749,34 @@ impl App {
                     }
                 }
             }
+            // Without a story, what only the working tree changes under a
+            // label of its own in the needs tone, after the commits' files.
+            if let Some(e) = self.entry(i)
+                && apart.contains(e.path.as_str())
+                && !(k > 0
+                    && self
+                        .order
+                        .get(k - 1)
+                        .and_then(|&j| self.entry(j))
+                        .is_some_and(|p| apart.contains(p.path.as_str())))
+            {
+                if k > 0 {
+                    rows.push(ListRow::Blank);
+                }
+                let files = self
+                    .order
+                    .iter()
+                    .filter(|&&j| {
+                        self.entry(j)
+                            .is_some_and(|e| apart.contains(e.path.as_str()))
+                    })
+                    .count();
+                rows.push(ListRow::Label(
+                    story::NOT_COMMITTED.into(),
+                    Tone::Needs,
+                    Some(files),
+                ));
+            }
             // With UX 2.0, the generated files the order puts last under a
             // label saying so.
             if self.opts.ux2
@@ -2742,6 +2801,31 @@ impl App {
             rows.push(ListRow::File(k));
         }
         rows
+    }
+
+    /// The files only the working tree changes, which UX 2.0 lists last
+    /// under "Not committed yet" while no story is told (a story puts them
+    /// in a last chapter of that name); a file the commits change too
+    /// stays among theirs, marked ●, and so does a generated file among
+    /// the generated ones, last.
+    pub(super) fn not_committed_apart(&self) -> HashSet<&str> {
+        let Some(u) = self.change.as_ref().and_then(|c| c.uncommitted.as_ref()) else {
+            return HashSet::new();
+        };
+        if !self.opts.ux2 || self.story.is_some() || self.title.is_some() {
+            return HashSet::new();
+        }
+        let committed: HashSet<&str> = u
+            .committed
+            .entries
+            .iter()
+            .map(|e| e.path.as_str())
+            .collect();
+        u.dirty
+            .iter()
+            .map(String::as_str)
+            .filter(|p| !committed.contains(p) && !order::generated(p))
+            .collect()
     }
 
     /// The story's last chapter when it holds what isn't committed yet,
@@ -3596,6 +3680,9 @@ impl App {
             }
             return Act::Redraw;
         }
+        if y >= self.diff_area().bottom() {
+            return Act::Same;
+        }
         if x < self.list_width {
             self.focus = Focus::List;
             let rows = self.list_rows();
@@ -3644,7 +3731,13 @@ impl App {
             } else {
                 area.x + if ow > 0 { ow + 1 } else { 0 }
             };
-            self.col = x.saturating_sub(side_x) as usize;
+            let (ow, nw) = self.side_widths();
+            let side_w = if self.focus == Focus::Old { ow } else { nw };
+            let gutter = self
+                .current()
+                .and_then(|e| self.files.get(&e.key()))
+                .map_or(0, |s| s.gutter(side_w as usize));
+            self.col = (x.saturating_sub(side_x) as usize).saturating_sub(gutter);
             let cur = self.cur;
             if matches!(self.screen_lines().get(cur), Some(Line::Fold { .. })) {
                 self.open_fold();
@@ -4057,6 +4150,14 @@ mod tests {
         }
     }
 
+    /// The first line holding `text`.
+    fn line_with(lines: &[String], text: &str) -> usize {
+        lines
+            .iter()
+            .position(|l| l.contains(text))
+            .unwrap_or_else(|| panic!("no {text:?} in {lines:?}"))
+    }
+
     /// The list's part of each line.
     fn list(shown: &[String]) -> Vec<String> {
         shown.iter().map(|l| l.chars().take(30).collect()).collect()
@@ -4172,8 +4273,12 @@ mod tests {
 
     /// The diff of `to_work_tree`, with each file's sides.
     fn working_app() -> App {
+        working_app_with(opts())
+    }
+
+    fn working_app_with(opts: Options) -> App {
         let (tx, _rx) = channel();
-        let mut app = App::new(opts(), 100, 16, tx);
+        let mut app = App::new(opts, 100, 16, tx);
         app.give_text("L", "src/a.js", Some("a = 1\n".into()));
         app.give_text(git::WORK_TREE, "src/a.js", Some("a = 2\n".into()));
         app.give_text("L", "src/b.js", Some("b = 1\n".into()));
@@ -4235,6 +4340,123 @@ mod tests {
         });
         app.show_at(1);
         app
+    }
+
+    #[test]
+    fn with_ux2_an_added_files_lines_are_numbered_and_tinted_as_added_and_a_footer_names_the_keys()
+    {
+        let mut app = added_files(&["src/one.js", "src/two.js"], 3);
+        let buf = draw(&mut app);
+        let shown = screen(&mut app);
+        let first = line_with(&shown, "src/two.js line 1");
+        assert!(
+            shown[first].contains("   1 src/two.js line 1"),
+            "{:?}",
+            shown[first]
+        );
+        assert!(shown[first + 2].contains("   3 src/two.js line 3"));
+        // Tinted green from the number to the side's right edge.
+        let added = app.palette().2;
+        let x = app.diff_area().x;
+        assert_eq!(buf[(x + 1, first as u16)].bg, added);
+        assert_eq!(buf[(x + 40, first as u16)].bg, added);
+        // The footer on the last row, the list's keys while it has the
+        // focus, the diff's once a side has it.
+        assert_eq!(shown[23].trim(), "↑↓ move  ↵ read  esc close");
+        press(&mut app, "l");
+        assert!(screen(&mut app)[23].contains("←→ sides  esc list"));
+        // A click on the footer chooses nothing in the list.
+        let at_before = app.at;
+        app.mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 2,
+            row: 23,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.at, at_before);
+    }
+
+    #[test]
+    fn with_ux2_and_no_story_what_only_the_working_tree_changes_is_listed_last_under_not_committed_yet()
+     {
+        let mut app = working_app_with(Options {
+            ux2: true,
+            story: false,
+            ..opts()
+        });
+        let names = list(&screen(&mut app));
+        let heading = line_with(&names, "NOT COMMITTED YET");
+        assert!(names[heading].trim_end().ends_with('1'), "{names:?}");
+        assert!(names[0].trim_end().ends_with('2'), "{names:?}");
+        // b.js, changed by the commits too, stays among theirs, marked.
+        assert!(line_with(&names, "a.js") < heading && line_with(&names, "b.js") < heading);
+        assert!(line_with(&names, "new.js") > heading, "{names:?}");
+    }
+
+    /// With UX 2.0, a change to the working tree whose commits change a.js
+    /// and Cargo.lock, and whose working tree alone new.js and
+    /// package-lock.json; told as a story with `story`.
+    fn generated_and_apart(story: bool) -> App {
+        let (tx, _rx) = channel();
+        let mut app = App::new(
+            Options {
+                ux2: true,
+                story,
+                ..opts()
+            },
+            100,
+            16,
+            tx,
+        );
+        for (side, text) in [("L", "x = 1\n"), (git::WORK_TREE, "x = 2\n")] {
+            for p in ["src/a.js", "Cargo.lock", "src/new.js", "package-lock.json"] {
+                app.give_text(side, p, Some(text.into()));
+            }
+        }
+        let mut change = to_work_tree("b = 3", &["src/new.js", "package-lock.json"], &[]);
+        change.entries = ["src/a.js", "Cargo.lock", "src/new.js", "package-lock.json"]
+            .iter()
+            .map(|p| entry(p, 'M', 1, 1))
+            .collect();
+        if let Some(u) = &mut change.uncommitted {
+            u.committed.entries =
+                vec![entry("src/a.js", 'M', 1, 1), entry("Cargo.lock", 'M', 1, 1)];
+        }
+        app.loaded(change);
+        app
+    }
+
+    #[test]
+    fn generated_files_stay_last_after_whats_not_committed_yet() {
+        let mut app = generated_and_apart(false);
+        let names = list(&screen(&mut app));
+        let apart = line_with(&names, "NOT COMMITTED YET");
+        let generated = line_with(&names, "GENERATED, LAST");
+        assert!(line_with(&names, "a.js") < apart, "{names:?}");
+        assert!(apart < line_with(&names, "new.js"), "{names:?}");
+        assert!(line_with(&names, "new.js") < generated, "{names:?}");
+        assert!(generated < line_with(&names, "Cargo.lock"), "{names:?}");
+        assert!(generated < line_with(&names, "package-lock"), "{names:?}");
+        assert_eq!(
+            names.iter().filter(|l| l.contains("GENERATED")).count(),
+            1,
+            "{names:?}"
+        );
+    }
+
+    #[test]
+    fn told_as_a_story_the_chapters_place_generated_files_each_heading_once() {
+        let mut app = generated_and_apart(true);
+        let names = list(&screen(&mut app));
+        for heading in ["Committed", "NOT COMMITTED YET"] {
+            assert_eq!(
+                names.iter().filter(|l| l.contains(heading)).count(),
+                1,
+                "{heading}: {names:?}"
+            );
+        }
+        assert!(line_with(&names, "Cargo.lock") < line_with(&names, "NOT COMMITTED YET"));
+        assert!(line_with(&names, "NOT COMMITTED YET") < line_with(&names, "package-lock"));
     }
 
     #[test]
@@ -4384,7 +4606,11 @@ mod tests {
         }
         assert_ne!(app.current().unwrap().path, "src/a.js");
         let shown = screen(&mut app);
-        assert!(shown[11].contains("more"), "{shown:?}");
+        assert!(shown[10].contains("more"), "{shown:?}");
+        assert!(
+            shown[11].contains("↑↓ move"),
+            "the footer under it: {shown:?}"
+        );
         // The uncommitted chapter over its file, in the needs tone's words.
         let fresh = app
             .order
