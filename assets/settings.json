@@ -627,6 +627,13 @@
     "default": true
   },
   {
+    "key": "views_beside_narrow_pane",
+    "category": "Tabs and status bar",
+    "label": "Open views beside a narrow pane",
+    "description": "With a tab's one pane narrowed by Widest a lone pane gets and at least 80 columns spare at its right, M-d's diff, lazygit, and the PR and ticket views that open in Claude's place open in those columns instead, the pane keeping its width beside them; the same key, q or M-w closes the view and the tab is one narrow pane again. With fewer columns spare, or something already beside the pane, they open in its place. Off, they always open in the pane's place",
+    "default": true
+  },
+  {
     "key": "tab_back_forward",
     "category": "Tabs and status bar",
     "label": "M-{ and M-} go back and forward",

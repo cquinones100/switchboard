@@ -20,8 +20,17 @@
 //! left, half the width, and park it again, so a Claude session and its
 //! diff sit side by side; quitting the tool either way brings the pane back
 //! whole.
+//!
+//! A lone pane narrower than its spread (Settings' `lone_pane_width`, or the
+//! tab's own width) has spare columns at its right: with Settings'
+//! `views_beside_narrow_pane` on and at least `BESIDE_LEAST` of them, the
+//! tool opens there instead, as "side" leaves it, the pane keeping its
+//! width and never parked, so the same key, `q` or M-w closes the tool and
+//! the tab is one capped pane again. New with the lone pane's cap, with no
+//! tmux-version file behind it.
 
 use anyhow::{Result, anyhow};
+use ratatui::layout::Rect;
 
 use crate::mux::layout::Layout;
 use crate::mux::server::{ClientId, Server, Tab};
@@ -32,6 +41,9 @@ pub const PARKED_PANE: &str = "@parked_pane";
 pub const IN_PLACE: &str = "@in_place";
 /// A pane waiting while a tool stands in for it.
 pub const PANE_PARKED: &str = "@pane_parked";
+/// The fewest spare columns beside a narrow lone pane a tool opens in
+/// rather than in the pane's place, as a lone pane gets no fewer.
+pub const BESIDE_LEAST: u16 = crate::mux::layout::LONE_LEAST;
 
 impl Server {
     /// Runs `command` in `pane`'s place, as tool `tool`; gives the tool's
@@ -60,9 +72,30 @@ impl Server {
         {
             return Err(anyhow!("{pane} is waiting already"));
         }
-        let made = self.spawn_pane(tab_id, cwd, Some(command), cols, rows)?;
+        let beside = self.spare_beside(tab_id);
+        let width = beside.map_or(cols, |(_, spare)| spare.width);
+        let made = self.spawn_pane(tab_id, cwd, Some(command), width, rows)?;
         let tab = self.tabs.get_mut(&tab_id).expect("checked above");
-        tab.layout.replace(pane, made);
+        match beside {
+            Some((spread, spare)) => {
+                tab.layout.split(pane, made, Direction::Right, None);
+                // The pane keeps its width, the tool filling the spare
+                // columns, the rule at the pane's edge the line between.
+                let keep = spare.x.saturating_sub(spread.x + 1);
+                let now = tab.layout.place(spread).panes;
+                if let Some((_, now)) = now.iter().find(|(p, _)| *p == pane) {
+                    let (dir, cells) = if keep > now.width {
+                        (Direction::Right, keep - now.width)
+                    } else {
+                        (Direction::Left, now.width - keep)
+                    };
+                    tab.layout.resize(spread, pane, dir, cells);
+                }
+            }
+            None => {
+                tab.layout.replace(pane, made);
+            }
+        }
         tab.zoomed = false;
         if tab.active == pane {
             tab.active = made;
@@ -74,15 +107,38 @@ impl Server {
             slot.opts.insert(PARKED_PANE.into(), pane.to_string());
             slot.opts.insert(IN_PLACE.into(), tool.into());
         }
-        if let Some(slot) = self.panes.get_mut(&pane) {
+        if beside.is_none()
+            && let Some(slot) = self.panes.get_mut(&pane)
+        {
             slot.opts.insert(PANE_PARKED.into(), "1".into());
         }
         self.relayout(tab_id);
         self.focus_pane(made);
         self.dirty_tab(tab_id);
-        // How to get the pane back, the first time.
-        self.tip("in-place", client);
+        if beside.is_none() {
+            // How to get the pane back, the first time.
+            self.tip("in-place", client);
+        }
         Ok(made)
+    }
+
+    /// The tab's spread and the spare columns in it, when a tool opens
+    /// there rather than in the pane's place: Settings'
+    /// `views_beside_narrow_pane` on, the tab one pane (nothing beside it,
+    /// not zoomed) capped narrower than its spread, with at least
+    /// `BESIDE_LEAST` columns right of its rule.
+    fn spare_beside(&self, tab_id: TabId) -> Option<(Rect, Rect)> {
+        if !crate::settings::is_on("views_beside_narrow_pane") {
+            return None;
+        }
+        let tab = self.tabs.get(&tab_id)?;
+        if tab.zoomed || !matches!(tab.layout, Layout::Pane(_)) {
+            return None;
+        }
+        let session = self.session_of_tab(tab_id)?;
+        let spread = session.spread_for(false);
+        let spare = crate::mux::beside::spare_of(spread, session.area_for(tab))?;
+        (spare.width >= BESIDE_LEAST).then_some((spread, spare))
     }
 
     /// The pane a tool's pane stands in for, while it is still there.

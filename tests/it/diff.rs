@@ -887,3 +887,86 @@ fn ga_asks_a_copy_of_the_tabs_own_session_and_haiku_with_the_setting_off() {
     assert!(!asked[1].contains("--resume"), "{asked:?}");
     client.wait_text("Asked Haiku");
 }
+
+#[test]
+fn m_d_opens_beside_a_narrow_lone_pane_and_in_its_place_without_the_room() {
+    let server = TestServer::start();
+    let quiet = json!({"notifications": false, "tips": false, "github": false, "linear": false});
+    let with = |more: Value| {
+        let mut all = quiet.clone();
+        all.as_object_mut()
+            .unwrap()
+            .extend(more.as_object().unwrap().clone());
+        common::write_settings(&server.home, all);
+    };
+    with(json!({"lone_pane_width": "80"}));
+    stand_in_claude(&server.home);
+    let work = repository(server.dir.path());
+
+    let mut client = server.attach(240, 36);
+    client.wait_text("$");
+    let first = panes(&server)[0]["id"].as_str().unwrap().to_string();
+    client.type_text(&format!("cd {}\r", work.display()));
+    wait_until("the shell to cd and the pane capped", || {
+        let now = panes(&server);
+        now[0]["cwd"].as_str().is_some_and(|d| d.ends_with("work")) && now[0]["cols"] == 80
+    });
+    let side = server.list()["sessions"][0]["sidebar"]["columns"]
+        .as_u64()
+        .unwrap();
+
+    // Room to spare: the diff beside the pane, which keeps its width.
+    client.send(b"\x1bd");
+    client.wait_text("1/2 Change the core");
+    let shown = panes(&server);
+    assert_eq!(shown.len(), 2, "beside the pane: {shown:?}");
+    assert_eq!(shown[0]["id"], first.as_str());
+    assert_eq!(shown[0]["cols"], 80);
+    assert_eq!(shown[1]["cols"].as_u64().unwrap(), 240 - side - 81);
+    assert_eq!(shown[1]["options"]["@in_place"], "diff");
+    assert!(shown[0]["options"].get("@pane_parked").is_none());
+    // M-d in the diff closes it: one capped pane again, focused.
+    client.send(b"\x1bd");
+    wait_until("one capped pane again", || {
+        let now = panes(&server);
+        now.len() == 1 && now[0]["id"] == first.as_str() && now[0]["cols"] == 80
+    });
+    client.type_text("echo pane-is-back\r");
+    client.wait_text("pane-is-back");
+
+    // One column too few to spare (79): in the pane's place.
+    let wider = 240 - side - 1 - 79;
+    with(json!({"lone_pane_width": wider.to_string()}));
+    wait_until("the pane wider", || panes(&server)[0]["cols"] == wider);
+    client.send(b"\x1bd");
+    client.wait_text("1/2 Change the core");
+    let shown = panes(&server);
+    assert_eq!(shown.len(), 1, "in the pane's place: {shown:?}");
+    assert_eq!(shown[0]["options"]["@parked_pane"], first.as_str());
+    client.send(b"\x1bd");
+    wait_until("the pane back", || {
+        panes(&server)[0]["id"] == first.as_str()
+    });
+
+    // With the setting off: in the pane's place.
+    with(json!({"lone_pane_width": "80", "views_beside_narrow_pane": false}));
+    wait_until("capped again", || panes(&server)[0]["cols"] == 80);
+    client.send(b"\x1bd");
+    client.wait_text("1/2 Change the core");
+    assert_eq!(panes(&server).len(), 1);
+    client.send(b"\x1bd");
+    wait_until("the pane back", || {
+        panes(&server)[0]["id"] == first.as_str()
+    });
+
+    // Something beside the pane already: in its place.
+    with(json!({"lone_pane_width": "80"}));
+    client.send(format!("{}L", "\x1b").as_bytes());
+    wait_until("a split", || panes(&server).len() == 2);
+    server.ok(&["select-pane", "-t", &first]);
+    client.send(b"\x1bd");
+    client.wait_text("1/2 Change the core");
+    let shown = panes(&server);
+    assert_eq!(shown.len(), 2, "in the pane's place: {shown:?}");
+    assert!(shown.iter().all(|p| p["id"] != first.as_str()));
+}
