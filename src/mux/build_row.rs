@@ -5,7 +5,8 @@
 //! press) opens beside it. Nothing here blocks: the row is drawn from what
 //! the server keeps of the build (`Build`, told by src/mux/latest.rs's
 //! `Report`s), and the steps box takes no keys, so what you type still
-//! reaches the tab while it is up; a click anywhere closes it, and it
+//! reaches the tab while it is up but M-Esc, which closes it, as a click
+//! anywhere, a third press and M-p's "Hide the restart's progress" do; it
 //! closes itself once the build ends. After the restart the new server
 //! shows "Restarted on <hash>" for `RESTARTED_FOR`; a failure stays in red
 //! until its row is clicked, which shows why.
@@ -19,7 +20,7 @@ use ratatui::buffer::Buffer;
 use ratatui::style::Style;
 use ratatui::text::Span;
 
-use super::input::{Key, Mouse};
+use super::input::{Key, KeyCode, Mods, Mouse};
 use super::latest::Report;
 use crate::paths;
 use crate::sidebar::text::SPINNER;
@@ -457,7 +458,7 @@ pub fn steps_lines(shown: &Shown, now: Instant, theme: &Theme) -> Vec<BoxLine> {
 }
 
 /// What the steps box says at its foot.
-const FOOT: &str = "Keys still reach the tab; a click closes this.";
+const FOOT: &str = "Keys still reach the tab; M-Esc or a click closes this.";
 
 /// The build's steps in a box beside the sidebar's build row, which takes
 /// no keys and dims nothing.
@@ -504,8 +505,12 @@ impl Overlay for Steps {
         self.drawn = Some(draw::draw_box(buf, &spec, look));
     }
 
-    /// Keys go on to the tab, the box staying up.
-    fn key(&mut self, _key: Key, _look: &Look) -> Step {
+    /// Keys go on to the tab, the box staying up, but M-Esc, which no
+    /// key binding takes and closes it.
+    fn key(&mut self, key: Key, _look: &Look) -> Step {
+        if key == Key::new(KeyCode::Esc, Mods::ALT) {
+            return Step::Close(Outcome::Dismissed);
+        }
         Step::Through
     }
 
@@ -532,7 +537,6 @@ impl Overlay for Steps {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mux::input::{KeyCode, Mods};
     use crate::ui::draw::tests::screen;
     use ratatui::layout::Rect;
 
@@ -682,5 +686,14 @@ mod tests {
         assert_eq!(steps.paste("pasted", &Look::default()), Step::Through);
         assert!(steps.stands_out().is_none(), "it dims nothing");
         assert!(steps.lets_through(), "the pane keeps its cursor");
+        assert_eq!(
+            steps.key(Key::new(KeyCode::Esc, Mods::NONE), &Look::default()),
+            Step::Through,
+            "a plain Esc is the tab's"
+        );
+        assert_eq!(
+            steps.key(Key::new(KeyCode::Esc, Mods::ALT), &Look::default()),
+            Step::Close(Outcome::Dismissed)
+        );
     }
 }

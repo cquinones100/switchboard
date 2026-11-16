@@ -157,6 +157,9 @@ pub enum Action {
     /// server on it when it is new, keeping every pane, tab and terminal
     /// attached (src/mux/latest.rs, src/mux/upgrade.rs).
     Upgrade,
+    /// The restart's steps box taken off the screen, the build going on
+    /// (src/mux/build_row.rs).
+    HideBuildRow,
     /// The tabs from before the last start brought back beside the
     /// workspace's one tab (src/mux/persist.rs's `restore_layout`).
     RestoreLayout,
@@ -282,6 +285,7 @@ impl Action {
             "tab-title" => Action::TabTitle,
             "reopen-last-tab" => Action::ReopenLastTab,
             "upgrade" => Action::Upgrade,
+            "hide-build-row" => Action::HideBuildRow,
             "restore-layout" => Action::RestoreLayout,
             "keep-awake" => Action::KeepAwake,
             "context-menu" => Action::ContextMenu,
@@ -365,6 +369,7 @@ impl Action {
             Action::StopSlackRelay => "stop-slack-relay".into(),
             Action::Update(command) => command.name().into(),
             Action::Upgrade => "upgrade".into(),
+            Action::HideBuildRow => "hide-build-row".into(),
             Action::RestoreLayout => "restore-layout".into(),
             Action::KeepAwake => "keep-awake".into(),
             Action::ContextMenu => "context-menu".into(),
@@ -467,6 +472,7 @@ impl Action {
             Action::StopSlackRelay => "Stop the Slack relay".into(),
             Action::Update(command) => command.about().into(),
             Action::Upgrade => "Restart Switchboard on the latest main".into(),
+            Action::HideBuildRow => "Hide the restart's progress".into(),
             Action::RestoreLayout => "Restore the layout from before the last start".into(),
             Action::KeepAwake => {
                 "Keep the computer awake until I say, or back to only while tabs work".into()
@@ -638,6 +644,9 @@ impl Action {
             Action::Upgrade => {
                 "Builds the checkout the running binary came from, then the server runs the new build in its own process, handing it every pane, so nothing in a pane ends.".into()
             }
+            Action::HideBuildRow => {
+                "Closes the box of the restart's steps; the build goes on, the sidebar's row still shows it, and its result is said when it ends. M-Esc closes it too while it shows.".into()
+            }
             Action::RestoreLayout => {
                 "For when the tabs didn't come back after a restart: the tabs kept from before the server last started (layout.json.start) open beside the one tab you have, each Claude resumed. It refuses while other tabs are open.".into()
             }
@@ -719,6 +728,7 @@ impl Action {
                 "build",
                 "disk",
             ],
+            Action::HideBuildRow => &["switchboard", "restart", "build", "hide", "close"],
             Action::RestoreLayout => &["tabs", "restore", "restart", "layout"],
             Action::KeepAwake => &["system", "sleep", "awake"],
             Action::ContextMenu => &["mouse", "menus"],
@@ -833,6 +843,7 @@ impl Action {
             Action::TabTitle,
             Action::StopSlackRelay,
             Action::Upgrade,
+            Action::HideBuildRow,
             Action::RestoreLayout,
             Action::KeepAwake,
         ]
@@ -1070,6 +1081,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn m_esc_is_free_so_it_reaches_the_tab_or_closes_the_restarts_steps() {
+        let b = Bindings::default();
+        assert_eq!(b.root.get(&key("M-Escape")), None);
+    }
+
+    #[test]
     fn m_braces_go_back_and_forward_and_m_brackets_are_free() {
         let b = Bindings::default();
         assert_eq!(b.root.get(&key("M-{")), Some(&Action::TabBack));
@@ -1111,6 +1128,7 @@ mod tests {
             Action::TabTitle,
             Action::ReopenLastTab,
             Action::Upgrade,
+            Action::HideBuildRow,
             Action::RestoreLayout,
             Action::KeepAwake,
             Action::ContextMenu,

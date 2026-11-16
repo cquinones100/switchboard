@@ -423,9 +423,14 @@ impl Server {
     /// is a new one.
     pub fn latest_asked(&mut self, client: ClientId) {
         if self.upgrade.pending.is_some() || self.upgrade.handing || self.upgrade.building {
-            // A second press shows the build's steps, where they can show.
+            // A second press shows the build's steps, where they can show,
+            // and a third takes them away again.
             if matches!(self.upgrade.shown, Some(Shown::Building(_))) {
-                self.build_steps_open(client);
+                if self.build_steps_shown(client) {
+                    self.build_steps_hide(client);
+                } else {
+                    self.build_steps_open(client);
+                }
                 return;
             }
             self.say(
@@ -546,6 +551,21 @@ impl Server {
             .unwrap_or((1, 1));
         self.close_overlays(client, "build-steps");
         self.open(client, Box::new(Steps::new(shown, at)), None);
+    }
+
+    /// Whether a client has the build's steps box up.
+    fn build_steps_shown(&self, client: ClientId) -> bool {
+        self.clients
+            .get(&client)
+            .is_some_and(|c| c.overlays.find::<Steps>().is_some())
+    }
+
+    /// M-p's "Hide the restart's progress": the client's steps box closes,
+    /// the build going on, its row and the word when it ends unchanged.
+    pub fn build_steps_hide(&mut self, client: ClientId) {
+        if self.build_steps_shown(client) {
+            self.close_overlays(client, "build-steps");
+        }
     }
 
     /// Closes every client's steps box, as the build ends.

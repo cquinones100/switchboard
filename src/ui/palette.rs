@@ -537,6 +537,16 @@ mod tests {
     }
 
     #[test]
+    fn the_palette_hides_the_restarts_progress_with_no_key() {
+        let all = entries(&Bindings::default(), true, true, &[]);
+        let hide = all
+            .iter()
+            .find(|e| e.action == Action::HideBuildRow)
+            .unwrap();
+        assert_eq!(hide.words, "Hide the restart's progress");
+    }
+
+    #[test]
     fn the_palette_lists_each_command_once_with_its_keys() {
         let all = entries(&Bindings::default(), true, true, &[]);
         assert!(all.iter().all(|e| e.action != Action::Palette));

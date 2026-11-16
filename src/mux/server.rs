@@ -3277,6 +3277,7 @@ impl Server {
             Action::StopSlackRelay => self.slack_relay(false),
             Action::Update(command) => self.update_command(id, command),
             Action::Upgrade => self.latest_asked(id),
+            Action::HideBuildRow => self.build_steps_hide(id),
             Action::RestoreLayout => {
                 self.restore_layout_asked(super::persist::Asker::Client(id), None)
             }
