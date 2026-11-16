@@ -6,8 +6,10 @@
 //! open choice as the kit's cards side by side (the recommended one's edge
 //! in the accent, its mock inside, the option's words under it, a keycap to
 //! choose it), then its steps. Ctrl-W and the M-arrows move between the
-//! note and the plan as between Notes' other windows, a letter in the plan
-//! (or a click on a card) chooses that option, `e` opens the plan note in
+//! note and the plan as between Notes' other windows, the terminal's cursor
+//! going with the keys (in the plan on a line of it, which `j`/`k` move and
+//! which lights the card it is on, so the side with the keys shows), a
+//! letter in the plan (or a click on a card) chooses that option, `e` opens the plan note in
 //! the note's place, Esc closes the panel, and Enter starts the item, as
 //! `gw` does. New with UX 2.0; the tmux version opened a plan as any note.
 //!
@@ -57,6 +59,9 @@ pub struct Beside {
     pub item: String,
     /// The first of the plan's rows shown.
     pub scroll: usize,
+    /// The plan's row the cursor is on while it has the keys, counted as
+    /// `scroll` is, kept while the note has them.
+    pub line: usize,
     /// The plan has the keys, else the note.
     pub focused: bool,
     /// The card Tab's focus is on in the plan, if any.
@@ -65,7 +70,8 @@ pub struct Beside {
     pub hover: Option<Stop>,
     /// On a narrow screen, the note shown in the plan's place.
     pub show_note: bool,
-    /// Tab moved to another card: the next drawing scrolls it into view.
+    /// Tab moved to another card, or the cursor moved: the next drawing
+    /// scrolls it into view.
     pub follow: bool,
 }
 
@@ -191,6 +197,9 @@ pub fn lines(
     let mut out: Vec<Vec<Span<'static>>> = Vec::new();
     let mut hits = Vec::new();
     let inner = cols.saturating_sub(2);
+    // What Tab lit shows only while the plan has the keys, and comes back
+    // with them.
+    let stop = beside.stop.filter(|_| beside.focused);
 
     // The header: "Plan <name>", its folder at the right, easy mode's ×.
     let name = crate::ui::draw::cut(&beside.plan.name, NAME_CAP);
@@ -204,7 +213,7 @@ pub fn lines(
         right.push(Span::styled(folder.to_string(), Tone::Dim.style(theme)));
     }
     if easy {
-        let lit = beside.hover == Some(Stop::Close) || beside.stop == Some(Stop::Close);
+        let lit = beside.hover == Some(Stop::Close) || stop == Some(Stop::Close);
         right.push(Span::raw(" "));
         right.push(Span::styled(
             "×",
@@ -319,7 +328,7 @@ pub fn lines(
                     }
                     inside.push(Vec::new());
                     let key = o.letter.to_ascii_lowercase().to_string();
-                    let lit = beside.stop == Some(Stop::Card(o.letter))
+                    let lit = stop == Some(Stop::Card(o.letter))
                         || beside.hover == Some(Stop::Card(o.letter));
                     inside.push(kit::keycap(
                         &key,
@@ -343,7 +352,7 @@ pub fn lines(
                         inside.len() + 2
                     };
                     let chosen = o.recommended
-                        || beside.stop == Some(Stop::Card(o.letter))
+                        || stop == Some(Stop::Card(o.letter))
                         || beside.hover == Some(Stop::Card(o.letter));
                     let title = vec![Span::styled(
                         format!("{} · {}", o.letter, o.words),
@@ -399,7 +408,41 @@ pub fn lines(
     (out, hits)
 }
 
+/// The cursor moved in the plan: the card it is on lit, as Tab lights one,
+/// so Enter chooses it; the one lit kept while the cursor is still on it,
+/// as on a row of cards side by side.
+fn follow_card(b: &mut Beside, hits: &[Hit]) {
+    let row = b.line + 1;
+    let on = |h: &&Hit| matches!(h.4, Stop::Card(_)) && h.0 > 0 && (h.0..h.0 + h.3).contains(&row);
+    if hits.iter().filter(on).any(|h| Some(h.4) == b.stop) {
+        return;
+    }
+    b.stop = hits.iter().find(on).map(|h| h.4);
+}
+
 impl App {
+    /// The plan's rows below its header, and where its cards are, at the
+    /// width it was last drawn (else the width it will be).
+    fn plan_layout(&self) -> (usize, Vec<Hit>) {
+        let Some(b) = &self.beside else {
+            return (0, Vec::new());
+        };
+        let width = match self.geo.plan.width {
+            0 => split(self.cols, b.show_note).1.map_or(0, |(_, w)| w),
+            w => w,
+        };
+        let (rows, hits) = lines(
+            b,
+            &self.plan_folder(&b.path),
+            width as usize,
+            room(self.cols),
+            self.opts.easy,
+            self.opts.caps,
+            &self.look.theme,
+        );
+        (rows.len().saturating_sub(1), hits)
+    }
+
     /// The plan of the unticked item on the cursor's line, opened beside
     /// the note; whether the line is such an item. Its plan note missing,
     /// says so.
@@ -433,6 +476,7 @@ impl App {
             plan: Plan::parse(&text),
             item,
             scroll: 0,
+            line: 0,
             // Where the plan hides the note, the plan has the keys.
             focused: self.cols < NARROW,
             stop: None,
@@ -658,9 +702,15 @@ impl App {
         if ctrl && key.code == KeyCode::Char('f') {
             return self.finder();
         }
+        let (count, hits) = self.plan_layout();
+        let last = count.saturating_sub(1);
+        let half = (self.geo.plan.height.saturating_sub(1) as usize / 2).max(1);
         let Some(b) = self.beside.as_mut() else {
             return;
         };
+        if b.stop != Some(Stop::Close) {
+            follow_card(b, &hits);
+        }
         let letters: Vec<char> = b
             .plan
             .choice()
@@ -689,19 +739,43 @@ impl App {
             KeyCode::Char(c) if !ctrl && letters.contains(&c.to_ascii_uppercase()) => {
                 self.choose(c.to_ascii_uppercase());
             }
-            KeyCode::Tab => {
-                step(b, 1);
+            KeyCode::Tab | KeyCode::BackTab => {
+                step(b, if key.code == KeyCode::Tab { 1 } else { -1 });
+                // The cursor goes to the card's top, or, past the cards, to
+                // the line above them, so no card lights under it again.
+                let cards = || {
+                    hits.iter()
+                        .filter(|h| matches!(h.4, Stop::Card(_)) && h.0 > 0)
+                };
+                if let Some((top, ..)) = cards().find(|h| Some(h.4) == b.stop) {
+                    b.line = top - 1;
+                } else if b.stop.is_none()
+                    && let Some(top) = cards().map(|h| h.0).min()
+                {
+                    b.line = top.saturating_sub(2);
+                }
                 b.follow = true;
             }
-            KeyCode::BackTab => {
-                step(b, -1);
+            KeyCode::Char('j' | 'k' | 'g' | 'G') | KeyCode::Down | KeyCode::Up if !ctrl => {
+                b.line = match key.code {
+                    KeyCode::Char('j') | KeyCode::Down => b.line + 1,
+                    KeyCode::Char('k') | KeyCode::Up => b.line.saturating_sub(1),
+                    KeyCode::Char('g') => 0,
+                    _ => last,
+                }
+                .min(last);
                 b.follow = true;
+                follow_card(b, &hits);
             }
-            KeyCode::Char('j') | KeyCode::Down if !ctrl => b.scroll += 1,
-            KeyCode::Char('k') | KeyCode::Up if !ctrl => b.scroll = b.scroll.saturating_sub(1),
-            KeyCode::Char('d') if ctrl => b.scroll += 10,
-            KeyCode::Char('u') if ctrl => b.scroll = b.scroll.saturating_sub(10),
-            KeyCode::Char('g') if !ctrl => b.scroll = 0,
+            KeyCode::Char('d' | 'u') if ctrl => {
+                b.line = if key.code == KeyCode::Char('d') {
+                    (b.line + half).min(last)
+                } else {
+                    b.line.saturating_sub(half)
+                };
+                b.follow = true;
+                follow_card(b, &hits);
+            }
             KeyCode::Esc => self.close_beside(),
             KeyCode::Char('e') if !ctrl => {
                 let path = b.path.clone();
@@ -734,8 +808,13 @@ impl App {
     }
 
     /// The panel drawn in `area`, a rule at its left when the note is
-    /// beside it.
-    pub(super) fn draw_plan(&mut self, buf: &mut Buffer, area: Rect, rule: bool) {
+    /// beside it; where the cursor goes while the plan has the keys.
+    pub(super) fn draw_plan(
+        &mut self,
+        buf: &mut Buffer,
+        area: Rect,
+        rule: bool,
+    ) -> Option<(u16, u16)> {
         let theme = self.look.theme;
         if rule && area.x > 0 {
             let edge = Style::new().fg(kit::border(&theme));
@@ -745,23 +824,16 @@ impl App {
         }
         self.geo.plan = area;
         self.geo.plan_hits.clear();
-        let Some(b) = &self.beside else {
-            return;
-        };
+        let b = self.beside.as_ref()?;
         let folder = self.plan_folder(&b.path);
-        let (rows, hits) = lines(
-            b,
-            &folder,
-            area.width as usize,
-            room(self.cols),
-            self.opts.easy,
-            self.opts.caps,
-            &theme,
-        );
+        let (fits, easy, caps) = (room(self.cols), self.opts.easy, self.opts.caps);
+        let draw = |b: &Beside| lines(b, &folder, area.width as usize, fits, easy, caps, &theme);
+        let (mut rows, hits) = draw(b);
         // The header stays; the rest scrolls, never past its end.
         let body = area.height.saturating_sub(1) as usize;
         let last = rows.len().saturating_sub(1).saturating_sub(body);
         let mut scroll = b.scroll;
+        let mut line = b.line.min(rows.len().saturating_sub(2));
         // The card Tab just moved to scrolled into view, its top first.
         if b.follow
             && let Some((top, _, _, h, _)) = hits.iter().find(|hit| Some(hit.4) == b.stop)
@@ -773,11 +845,45 @@ impl App {
                 scroll = end.saturating_sub(body).min(first);
             }
         }
-        let scroll = scroll.min(last);
-        if let Some(b) = self.beside.as_mut() {
-            b.scroll = scroll;
-            b.follow = false;
+        // The cursor kept in sight as it moves; the wheel scrolling past it
+        // takes it along, as Vim's does.
+        if b.follow {
+            if line < scroll {
+                scroll = line;
+            } else if body > 0 && line >= scroll + body {
+                scroll = line + 1 - body;
+            }
         }
+        let scroll = scroll.min(last);
+        let focused = b.focused;
+        if focused && body > 0 {
+            line = line.clamp(scroll, scroll + body - 1);
+        }
+        let stop = b.stop;
+        let b = self.beside.as_mut()?;
+        b.scroll = scroll;
+        b.line = line;
+        b.follow = false;
+        // The card lit follows where the cursor ended up (the wheel, or the
+        // keys coming back from the note), so Enter acts on what is lit.
+        if focused && b.stop != Some(Stop::Close) {
+            follow_card(b, &hits);
+        }
+        if b.stop != stop {
+            rows = draw(b).0;
+        }
+        // On a card, the cursor sits on its edge, the one lit when they
+        // stand side by side.
+        let x = hits
+            .iter()
+            .find(|h| h.0 > 0 && Some(h.4) == b.stop && (h.0..h.0 + h.3).contains(&(line + 1)))
+            .map_or(1, |h| h.1);
+        let cursor = (focused && body > 0 && line >= scroll && line < scroll + body).then(|| {
+            (
+                area.x + (x as u16).min(area.width.saturating_sub(1)),
+                area.y + 1 + (line - scroll) as u16,
+            )
+        });
         if let Some(head) = rows.first() {
             put_line(buf, area.x, area.y, area.width, &Line::from(head.clone()));
         }
@@ -802,6 +908,7 @@ impl App {
                 .plan_hits
                 .push((Rect::new(area.x + x as u16, y, w as u16, h), stop));
         }
+        cursor
     }
 
     /// The footer while the panel shows, in place of the item keys.
@@ -809,10 +916,20 @@ impl App {
         // No letter keys (board 8): a choice's letters and `e` still work,
         // the cards take a click and Tab, and the plan opens from the list.
         let mut line = vec![Span::raw(" ")];
+        let Some(b) = self.beside.as_ref().filter(|b| b.focused) else {
+            // In the note, the keys are the note's: the plan's are a C-w away.
+            line.extend(kit::hints(&[("C-w l", "plan")], &self.look.theme));
+            return line;
+        };
+        let enter = match b.stop {
+            Some(Stop::Card(l)) => format!("choose {l}"),
+            Some(Stop::Close) => "close".to_string(),
+            None => "start the item".to_string(),
+        };
         let keys = [
-            ("C-w", "note or plan"),
-            ("Enter", "start the item"),
+            ("Enter", enter.as_str()),
             ("Esc", "close"),
+            ("C-w h", "note"),
         ];
         line.extend(kit::hints(&keys, &self.look.theme));
         line
@@ -832,8 +949,14 @@ impl App {
             .find(|(r, _)| inside(*r))
             .map(|(_, s)| *s);
         self.leave_modes();
+        let top = self.geo.plan.y;
         if let Some(b) = self.beside.as_mut() {
             b.focused = true;
+            // The cursor on the row clicked, the header's click leaving it.
+            if y > top {
+                b.line = b.scroll + (y - top - 1) as usize;
+                b.stop = hit.filter(|s| matches!(s, Stop::Card(_)));
+            }
         }
         match hit {
             Some(Stop::Card(l)) => self.choose(l),

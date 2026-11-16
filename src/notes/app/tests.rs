@@ -3244,12 +3244,8 @@ fn the_plan_beside_the_note_shows_its_choice_as_cards_and_a_letter_chooses() {
     assert!(text.contains("STEPS (A)"));
     assert!(text.contains("1. A sidebar_condensed setting"));
     let footer = shown.last().unwrap();
-    assert!(footer.contains("C-w note or plan"), "{footer}");
-    assert!(
-        !footer.contains("a/b choose") && !footer.contains("e edit"),
-        "{footer}"
-    );
-    assert!(footer.contains("Esc close"), "{footer}");
+    assert!(footer.contains("C-w l plan"), "{footer}");
+    assert!(!footer.contains("a/b choose"), "{footer}");
 
     // C-w l gives the plan the keys, C-w h the note back.
     keys(&mut app, "<C-w>l");
@@ -3287,6 +3283,160 @@ fn the_plan_beside_the_note_shows_its_choice_as_cards_and_a_letter_chooses() {
             .join("\n")
             .contains("Plan Condensed sidebar")
     );
+}
+
+/// The screen drawn, and where the terminal's cursor goes.
+fn drawn(app: &mut App) -> (Vec<String>, Option<(u16, u16)>) {
+    let mut buf = Buffer::empty(Rect::new(0, 0, app.cols, app.rows));
+    let cursor = app.draw(&mut buf);
+    let shown = (0..buf.area.height)
+        .map(|y| {
+            (0..buf.area.width)
+                .map(|x| buf[(x, y)].symbol().to_string())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect();
+    (shown, cursor)
+}
+
+#[test]
+fn the_plan_with_the_keys_shows_the_cursor_and_its_keys() {
+    let (_dir, mut app, _path, plan) = with_plan("beside cursor", 160);
+    app.rows = 14;
+    keys(&mut app, "4G<CR>");
+    let (shown, in_note) = drawn(&mut app);
+    let footer = shown.last().unwrap();
+    assert!(footer.contains("C-w l plan"), "{footer}");
+    assert!(!footer.contains("Esc close"), "{footer}");
+    let in_note = in_note.unwrap();
+    assert!(in_note.0 < app.geo.plan.x, "{in_note:?}");
+
+    // C-w puts the cursor on the plan's first line, j a line down.
+    keys(&mut app, "<C-w>l");
+    let (shown, cursor) = drawn(&mut app);
+    let x = app.geo.plan.x + 1;
+    assert_eq!(cursor, Some((x, 1)));
+    let footer = shown.last().unwrap();
+    assert!(!footer.contains("a/b choose"), "{footer}");
+    assert!(footer.contains("Enter start the item"), "{footer}");
+    assert!(footer.contains("Esc close"), "{footer}");
+    assert!(footer.contains("C-w h note"), "{footer}");
+    keys(&mut app, "j");
+    assert_eq!(drawn(&mut app).1, Some((x, 2)));
+
+    // At the plan's bottom it scrolls, keeping the cursor in sight.
+    let body = app.geo.plan.height - 1;
+    for _ in 0..body + 2 {
+        keys(&mut app, "j");
+    }
+    let (_, cursor) = drawn(&mut app);
+    assert!(app.beside.as_ref().unwrap().scroll > 0);
+    assert_eq!(cursor.map(|c| c.1), Some(body));
+
+    // C-w back puts the cursor where it was in the note.
+    keys(&mut app, "<C-w>h");
+    assert_eq!(drawn(&mut app).1, Some(in_note));
+
+    // Enter on option A's card chooses A.
+    keys(&mut app, "<C-w>lg");
+    for _ in 0..40 {
+        if app.beside.as_ref().unwrap().stop == Some(beside::Stop::Card('A')) {
+            break;
+        }
+        keys(&mut app, "j");
+        drawn(&mut app);
+    }
+    let footer = drawn(&mut app).0.last().unwrap().clone();
+    assert!(footer.contains("Enter choose A"), "{footer}");
+    keys(&mut app, "<CR>");
+    let written = fs::read_to_string(&plan).unwrap();
+    assert!(written.contains("- [x] A (recommended)"), "{written}");
+}
+
+#[test]
+fn the_card_lit_follows_the_cursor_after_the_wheel_and_the_note() {
+    let (_dir, mut app, _path, plan) = with_plan("beside cursor lit", 160);
+    let steps: String = (3..20).map(|n| format!("{n}. Step {n}\n")).collect();
+    write(&plan, &format!("{PLAN_A_B}{steps}"));
+    app.rows = 14;
+    keys(&mut app, "4G<CR><C-w>l<Tab>");
+    drawn(&mut app);
+    assert_eq!(
+        app.beside.as_ref().unwrap().stop,
+        Some(beside::Stop::Card('A'))
+    );
+
+    // Tab past the last card and BackTab before the first light none.
+    keys(&mut app, "<Tab><Tab>");
+    drawn(&mut app);
+    assert_eq!(app.beside.as_ref().unwrap().stop, None);
+    keys(&mut app, "<Tab>");
+    for want in [None, Some('B')] {
+        app.key(Key::new(KeyCode::BackTab, Mods::NONE));
+        drawn(&mut app);
+        assert_eq!(
+            app.beside.as_ref().unwrap().stop,
+            want.map(beside::Stop::Card)
+        );
+    }
+    // B, beside A on the same rows, is still lit after the note and back.
+    keys(&mut app, "<C-w>h");
+    assert!(!screen(&mut app).join("\n").contains("Enter choose"));
+    keys(&mut app, "<C-w>l");
+    drawn(&mut app);
+    assert_eq!(
+        app.beside.as_ref().unwrap().stop,
+        Some(beside::Stop::Card('B'))
+    );
+    // And after a click in the note.
+    click(&mut app, 5, 1);
+    assert!(!app.beside.as_ref().unwrap().focused);
+    keys(&mut app, "<C-w>l");
+    drawn(&mut app);
+    assert_eq!(
+        app.beside.as_ref().unwrap().stop,
+        Some(beside::Stop::Card('B'))
+    );
+    keys(&mut app, "<Tab><Tab>");
+
+    // The note and back: the cursor still on the card, it is lit again.
+    keys(&mut app, "<C-w>h<C-w>l");
+    drawn(&mut app);
+    assert_eq!(
+        app.beside.as_ref().unwrap().stop,
+        Some(beside::Stop::Card('A'))
+    );
+
+    // The wheel takes the cursor past the cards: nothing lit, Enter
+    // chooses nothing.
+    let (x, y) = (app.geo.plan.x + 3, 3);
+    for _ in 0..10 {
+        app.mouse(Mouse {
+            kind: MouseKind::Press,
+            button: MouseButton::WheelDown,
+            col: x,
+            row: y,
+            mods: Mods::NONE,
+        });
+        drawn(&mut app);
+    }
+    assert_eq!(app.beside.as_ref().unwrap().stop, None);
+    let before = fs::read_to_string(&plan).unwrap();
+    assert!(!before.contains("[x]"));
+}
+
+#[test]
+fn a_click_on_a_plan_line_puts_the_cursor_there() {
+    let (_dir, mut app, _path, _plan) = with_plan("beside cursor click", 160);
+    keys(&mut app, "4G<CR>");
+    drawn(&mut app);
+    assert!(!app.beside.as_ref().unwrap().focused);
+    let x = app.geo.plan.x + 3;
+    click(&mut app, x, 4);
+    assert!(app.beside.as_ref().unwrap().focused);
+    assert_eq!(drawn(&mut app).1, Some((app.geo.plan.x + 1, 4)));
 }
 
 #[test]

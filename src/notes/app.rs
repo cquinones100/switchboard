@@ -3037,8 +3037,8 @@ impl App {
                 }
                 (true, 'h' | 'w' | 'p') => {
                     if let Some(b) = self.beside.as_mut() {
+                        // The card lit kept for the keys coming back.
                         b.focused = false;
-                        b.stop = None;
                         b.show_note = narrow;
                     }
                     self.focus = Focus::Note;
@@ -3208,7 +3208,6 @@ impl App {
             && let Some(b) = self.beside.as_mut()
         {
             b.focused = false;
-            b.stop = None;
             b.show_note = self.cols < beside::NARROW;
             self.focus = Focus::Note;
         }
@@ -3277,7 +3276,6 @@ impl App {
                     b.show_note = narrow && !b.show_note;
                     b.focused = narrow && !b.show_note;
                     if !b.focused {
-                        b.stop = None;
                         self.focus = Focus::Note;
                     }
                 }
@@ -4015,7 +4013,6 @@ impl App {
                             // click in it does.
                             if let Some(b) = self.beside.as_mut() {
                                 b.focused = false;
-                                b.stop = None;
                             }
                             self.focus = Focus::Note;
                         }
@@ -4042,7 +4039,6 @@ impl App {
                 let narrow = self.cols < beside::NARROW;
                 if let Some(b) = self.beside.as_mut() {
                     b.focused = narrow && !b.show_note;
-                    b.stop = None;
                 }
                 if let Some(b) = button {
                     return self.button(b);

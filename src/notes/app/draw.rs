@@ -120,15 +120,16 @@ impl App {
         if let (Some((None, _)), Some(b)) = (split, self.beside.as_mut()) {
             b.focused = true;
         }
-        match split {
+        let plan_cursor = match split {
             Some((note, Some((x, w)))) => {
-                self.draw_plan(buf, Rect::new(x, 0, w, body_h), note.is_some());
+                self.draw_plan(buf, Rect::new(x, 0, w, body_h), note.is_some())
             }
             _ => {
                 self.geo.plan = Rect::default();
                 self.geo.plan_hits.clear();
+                None
             }
-        }
+        };
         let mut cursor = None;
         if list_w > 0 {
             self.draw_list(buf);
@@ -139,7 +140,9 @@ impl App {
         }
         let note_cursor = self.draw_note(buf);
         let plan_focused = self.beside.as_ref().is_some_and(|b| b.focused);
-        if self.focus == Focus::Note && !plan_focused {
+        if plan_focused {
+            cursor = plan_cursor;
+        } else if self.focus == Focus::Note {
             cursor = note_cursor;
         }
         cursor = self.draw_bottom(buf, body_h).or(cursor);
