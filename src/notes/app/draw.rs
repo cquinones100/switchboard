@@ -978,6 +978,7 @@ impl App {
         let faint = Style::new().fg(Color::Indexed(if self.opts.light { 243 } else { 245 }));
         let mut y = y0;
         self.geo.input = None;
+        self.geo.held_line = None;
         if self.adds() {
             let typed = self.adding.as_deref();
             // Board 7's keys, typed into or not: a click on the bar (or
@@ -1045,6 +1046,12 @@ impl App {
                 w,
                 &Line::from(Span::styled(text.clone(), Style::new())),
             );
+            return None;
+        }
+        if let Some(line) = self.held_line() {
+            let dim = Style::new().fg(Color::Indexed(if self.opts.light { 243 } else { 244 }));
+            put_line(buf, 0, y, w, &Line::from(Span::styled(line, dim)));
+            self.geo.held_line = Some(y);
             return None;
         }
         let mode = match self.editor.mode {

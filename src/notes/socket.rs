@@ -47,6 +47,30 @@ pub fn path() -> PathBuf {
     }
 }
 
+/// The socket of the app in a pane, with an app in each tab
+/// (notes_per_tab): `$NOTES_SOCKET` with the pane's number after it,
+/// else `notes-<pane>.sock` in the state directory.
+pub fn path_for_pane(pane: &str) -> PathBuf {
+    let n: String = pane.chars().filter(char::is_ascii_digit).collect();
+    match std::env::var_os("NOTES_SOCKET") {
+        Some(p) if !p.is_empty() => {
+            let mut p = p;
+            p.push(format!(".{n}"));
+            PathBuf::from(p)
+        }
+        _ => crate::paths::state_dir().join(format!("notes-{n}.sock")),
+    }
+}
+
+/// The socket this app listens on: its pane's, with an app in each tab
+/// and a pane to be in, else the one `path` gives.
+pub fn own_path(per_note: bool) -> PathBuf {
+    match std::env::var("SWITCHBOARD_PANE") {
+        Ok(pane) if per_note && !pane.is_empty() => path_for_pane(&pane),
+        _ => path(),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Request {
     Open(String),

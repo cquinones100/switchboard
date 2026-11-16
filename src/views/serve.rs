@@ -1002,14 +1002,11 @@ impl Server {
             return None;
         }
         let tab = self.panes.get(&pane)?.tab;
-        if !self
+        let notes = self
             .tab_panes(tab)
             .into_iter()
-            .any(|p| self.is_notes_pane(p))
-        {
-            return None;
-        }
-        let rel = crate::notes::serve::shown()?;
+            .find(|p| self.is_notes_pane(*p))?;
+        let rel = self.shown_in(notes)?;
         let file = crate::notes::store::notes_dir().join(&rel);
         let text = util::read_text(&file)?;
         let folder = file.parent()?.to_path_buf();

@@ -70,8 +70,16 @@ impl Server {
     /// to it, else a question which.
     pub(super) fn note_tab(&mut self, client: ClientId, note: Option<String>) {
         let dir = store::notes_dir();
+        // The note of the Notes in the tab in front, of several apps.
+        let here = self
+            .current_pane(client)
+            .and_then(|p| self.panes.get(&p))
+            .map(|s| s.tab)
+            .and_then(|tab| self.notes_in_tab(tab))
+            .and_then(|p| self.shown_in(p));
         let note = note
             .filter(|n| !n.is_empty())
+            .or(here)
             .or_else(shown)
             .filter(|n| in_notes(n) && dir.join(n).is_file());
         let Some(note) = note else {
@@ -193,9 +201,7 @@ impl Server {
         if !settings::is_on("note_tab_beside") {
             return;
         }
-        let notes = self
-            .notes_pane()
-            .filter(|p| self.panes.get(p).is_some_and(|s| s.tab == tab));
+        let notes = self.notes_in_tab(tab);
         let panes: Vec<PaneId> = self
             .tabs
             .get(&tab)

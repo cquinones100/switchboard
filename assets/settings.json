@@ -676,6 +676,13 @@
     "default": true
   },
   {
+    "key": "notes_per_tab",
+    "category": "Notes",
+    "label": "A Notes app in each tab",
+    "description": "M-e opens a Notes app beside the pane in the tab you're in, on that tab's note, and every other tab keeps its own open; a note open in one tab shows read-only in another, naming the tab that has it, until that tab's app lets it go. Off, there is one Notes, which M-e moves between the tabs",
+    "default": true
+  },
+  {
     "key": "notes_hide_sidebar",
     "category": "Notes",
     "label": "Hide the sidebar beside a tab",

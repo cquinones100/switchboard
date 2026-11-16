@@ -177,6 +177,9 @@ pub struct Options {
     pub scroll_bars: bool,
     /// The notes opened lately under Recent in the list (notes_recent).
     pub recent: bool,
+    /// An app in each tab (notes_per_tab): a lock a note rather than one
+    /// on the whole directory, and a socket of its pane's own.
+    pub per_note: bool,
 }
 
 impl Default for Options {
@@ -206,6 +209,7 @@ impl Default for Options {
             caps: false,
             scroll_bars: true,
             recent: true,
+            per_note: false,
         }
     }
 }
@@ -243,6 +247,7 @@ impl Options {
             scroll_bars: on("scroll_bars"),
             recent: on("notes_recent"),
             relative_numbers: relative_numbers(&all),
+            per_note: on("notes_per_tab"),
             caps: crate::mux::graphics::apps_round_ends(),
             ..Options::default()
         }
@@ -254,6 +259,22 @@ fn relative_numbers(all: &[settings::Setting]) -> bool {
     all.iter()
         .any(|s| s.key == "notes_relative_numbers" && s.value == serde_json::Value::Bool(true))
 }
+
+/// The open note's lock held by another app (`Store::lock_note`): the
+/// note is shown read-only, saying which tab has it, until that app lets
+/// it go.
+#[derive(Clone, Debug)]
+pub struct Held {
+    pub key: String,
+    pub holder: store::Holder,
+    /// The number of the holder's tab, as the workspace last listed it.
+    pub tab: Option<i64>,
+    /// When the lock was last tried again.
+    checked: Instant,
+}
+
+/// How often a note held by another app has its lock tried again.
+const HELD_CHECK: Duration = Duration::from_secs(1);
 
 /// The note open, and what is known of its file.
 struct Open {
@@ -401,6 +422,9 @@ struct Geo {
     chips: Vec<(Rect, (usize, usize), render::Chip)>,
     /// UX 2.0's "Add an item" input's row, when it is drawn.
     input: Option<u16>,
+    /// The row saying which tab has the note shown read-only, which a
+    /// click takes there as Enter does.
+    held_line: Option<u16>,
     /// UX 2.0's plan beside the note, where it was drawn, and its cards.
     plan: Rect,
     plan_hits: Vec<(Rect, beside::Stop)>,
@@ -646,6 +670,9 @@ pub struct App {
     watch_due: Option<Instant>,
     squash_pid: Option<u32>,
     squash_paths: Vec<PathBuf>,
+    /// The squashed notes' locks this app took for the squash, held until
+    /// it ends, so no other app edits a note the squash is about to replace.
+    squash_locks: Vec<String>,
     squash_cancelled: bool,
     tx: Sender<Msg>,
     /// The title last named on the pane (`@notes_open`), so it is said
@@ -681,6 +708,10 @@ pub struct App {
     /// time it opens there.
     planning: Vec<Planning>,
     pub locked_by: Option<i64>,
+    /// The open note's lock key while this app holds it (notes_per_tab).
+    note_lock: Option<String>,
+    /// The open note held by another app, shown read-only.
+    pub held: Option<Held>,
     recent_file: PathBuf,
     /// Saves the clipboard's image to a file (the platform's; a test's).
     pub grab: fn(&Path) -> bool,
@@ -772,6 +803,7 @@ impl App {
             ids_checked: Default::default(),
             squash_pid: None,
             squash_paths: Vec::new(),
+            squash_locks: Vec::new(),
             squash_cancelled: false,
             tx,
             opening: None,
@@ -788,6 +820,8 @@ impl App {
             adding: None,
             planning: Vec::new(),
             locked_by: None,
+            note_lock: None,
+            held: None,
             grab: grab_clipboard,
             claude: crate::diff::tell::claude_command(),
             geo: Geo::default(),
@@ -871,7 +905,9 @@ impl App {
     /// welcome note when there are none. Another app holding the lock leaves
     /// this one saying so, its notes untouched.
     pub fn start(&mut self) {
-        if let Err(pid) = self.store.lock() {
+        if !self.opts.per_note
+            && let Err(pid) = self.store.lock()
+        {
             self.locked_by = Some(pid);
             return;
         }
@@ -884,9 +920,17 @@ impl App {
             let _ = std::fs::write(&path, WELCOME);
             notes = self.store.notes(None);
         }
-        let first = self
-            .store
-            .last()
+        // The note the workspace started it on (`NOTES_OPEN`, a tab's),
+        // else the one its pane showed before a restart brought it back
+        // (`@notes_note`, kept with the layout), else the one open last.
+        let asked = std::env::var("NOTES_OPEN")
+            .ok()
+            .or_else(|| self.pane_shown_before())
+            .filter(|rel| super::serve::in_notes(rel))
+            .map(|rel| self.store.absolute(&rel))
+            .filter(|path| path.is_file());
+        let first = asked
+            .or_else(|| self.store.last())
             .or_else(|| notes.first().map(|n| n.path.clone()));
         if let Some(path) = first {
             self.open_note(&path, false, false);
@@ -894,6 +938,9 @@ impl App {
             self.rebuild();
         }
         self.focus = Focus::Note;
+        if let Some(words) = std::env::var("NOTES_SAY").ok().filter(|w| !w.is_empty()) {
+            self.say(words);
+        }
     }
 
     /// Everything saved, the lock let go, the pictures taken back.
@@ -915,6 +962,9 @@ impl App {
         }
         self.keep_jumps();
         self.store.unlock();
+        if let Some(key) = self.note_lock.take() {
+            self.store.unlock_note(&key);
+        }
         let gone = self.images.release_all();
         self.out.extend(gone);
     }
@@ -1048,6 +1098,10 @@ impl App {
             let kept = self.editor.put_away();
             self.kept.insert(left, kept);
         }
+        if self.opts.per_note {
+            let key = note_id.clone().unwrap_or_else(|| self.store.relative(path));
+            self.take_note_lock(key);
+        }
         let shown = Text::from_file(&id::body_of(&text));
         match self.kept.remove(path) {
             Some(kept) => self.editor.take_back(shown, kept),
@@ -1084,6 +1138,7 @@ impl App {
         let rel = self.store.relative(path);
         self.store.opened(&rel);
         self.store.opened_beside(&rel);
+        self.publish_shown();
         self.rebuild();
         self.reveal(path);
         if !stay {
@@ -1104,10 +1159,245 @@ impl App {
         if self.jumps.same_entries(&self.jumps_kept) {
             return;
         }
-        let mut meta = self.store.meta();
-        meta.insert(JUMPS.into(), self.jumps.saved(|p| self.store.relative(p)));
-        self.store.save_meta(&meta);
+        let saved = self.jumps.saved(|p| self.store.relative(p));
+        self.store.update_meta(|meta| {
+            meta.insert(JUMPS.into(), saved);
+            true
+        });
         self.jumps_kept = self.jumps.clone();
+    }
+
+    /// The note this app's pane showed before (`@notes_note`), with an app
+    /// in each tab: a pane a restart brought back keeps its options.
+    fn pane_shown_before(&self) -> Option<String> {
+        if !self.opts.per_note || !self.opts.server {
+            return None;
+        }
+        let pane = std::env::var("SWITCHBOARD_PANE").ok()?;
+        crate::mux::socket::ask_ok(&["show", "-t", &pane, "@notes_note"])
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    }
+
+    /// The note open, kept in this app's pane's `@notes_note` for the
+    /// workspace's link, picture and tab commands, with an app in each tab.
+    fn publish_shown(&self) {
+        if self.opts.per_note && self.opts.server {
+            let rel = self.current_path().map(|p| self.store.relative(p));
+            set_pane_option("@notes_note", rel.as_deref());
+        }
+    }
+
+    /// Whether another app has `path` open (notes_per_tab), said when it
+    /// has: a note is changed (renamed, moved, deleted, squashed) only by
+    /// the app that holds it.
+    fn held_elsewhere(&mut self, path: &Path) -> bool {
+        if !self.opts.per_note || self.current_path() == Some(path) && self.held.is_none() {
+            return false;
+        }
+        let key = self.lock_key(path);
+        let Some(holder) = self.store.held_by_other(&key) else {
+            return false;
+        };
+        let words = match holder.pane.as_deref().and_then(|p| self.tab_of(p)) {
+            Some(n) => format!("That note is open in tab {n}: change it there"),
+            None => "That note is open in another Notes: change it there".to_string(),
+        };
+        self.say(words);
+        true
+    }
+
+    /// A note's lock key: its ID, else its path.
+    fn lock_key(&self, path: &Path) -> String {
+        util::read_text(path)
+            .and_then(|text| id::in_text(&text))
+            .unwrap_or_else(|| self.store.relative(path))
+    }
+
+    /// The squashed notes' locks taken for the squash (notes_per_tab), or,
+    /// another app holding one, none and said so.
+    fn lock_for_squash(&mut self, paths: &[PathBuf]) -> bool {
+        if !self.opts.per_note {
+            return true;
+        }
+        for path in paths {
+            // Given its ID first, as opening it would, so the key is the
+            // one another app opening it takes.
+            let key = match util::read_text(path) {
+                Some(text) => self
+                    .give_id(path, text)
+                    .1
+                    .unwrap_or_else(|| self.store.relative(path)),
+                None => self.store.relative(path),
+            };
+            // The open note's too, so opening another meanwhile keeps it.
+            if self.store.lock_note(&key).is_err() {
+                self.unlock_squashed();
+                self.held_elsewhere(path);
+                return false;
+            }
+            self.squash_locks.push(key);
+        }
+        true
+    }
+
+    /// The locks `lock_for_squash` took let go.
+    fn unlock_squashed(&mut self) {
+        for key in std::mem::take(&mut self.squash_locks) {
+            if self.note_lock.as_ref() != Some(&key) {
+                self.store.unlock_note(&key);
+            }
+        }
+    }
+
+    /// Whether another app has any note under `folder` open, said as
+    /// `held_elsewhere` says it.
+    fn folder_held_elsewhere(&mut self, folder: &str) -> bool {
+        let prefix = format!("{folder}/");
+        let paths: Vec<PathBuf> = self
+            .store
+            .notes(None)
+            .into_iter()
+            .filter(|n| n.rel.starts_with(&prefix))
+            .map(|n| n.path)
+            .collect();
+        paths.iter().any(|p| self.held_elsewhere(p))
+    }
+
+    /// The open note's lock taken, the last one's let go; held by another
+    /// app, the note is shown read-only (`held`), naming its tab.
+    fn take_note_lock(&mut self, key: String) {
+        if let Some(old) = self.note_lock.take()
+            && old != key
+            && !self.squash_locks.contains(&old)
+        {
+            self.store.unlock_note(&old);
+        }
+        match self.store.lock_note(&key) {
+            Ok(()) => {
+                self.note_lock = Some(key);
+                self.held = None;
+            }
+            Err(holder) => {
+                let tab = holder.pane.as_deref().and_then(|p| self.tab_of(p));
+                self.held = Some(Held {
+                    key,
+                    holder,
+                    tab,
+                    checked: Instant::now(),
+                });
+            }
+        }
+    }
+
+    /// The number of the tab a pane is in, asked of the workspace.
+    fn tab_of(&self, pane: &str) -> Option<i64> {
+        if !self.opts.server {
+            return None;
+        }
+        let list: serde_json::Value =
+            serde_json::from_str(&crate::mux::socket::ask_ok(&["list"]).ok()?).ok()?;
+        list["sessions"]
+            .as_array()?
+            .iter()
+            .flat_map(|s| s["tabs"].as_array().into_iter().flatten())
+            .find(|t| {
+                t["panes"]
+                    .as_array()
+                    .is_some_and(|ps| ps.iter().any(|p| p["id"].as_str() == Some(pane)))
+            })
+            .and_then(|t| t["index"].as_i64())
+    }
+
+    /// What a held note's line says: where it is open, and that Enter
+    /// goes there.
+    pub fn held_line(&self) -> Option<String> {
+        let held = self.held.as_ref()?;
+        Some(match held.tab {
+            Some(n) => format!("Open in tab {n}, read-only here · Enter or a click: go there"),
+            None => "Open in another Notes, read-only here".to_string(),
+        })
+    }
+
+    /// A held note's lock tried again: let go by its app, it is this
+    /// one's, its text read again and editable.
+    fn check_held(&mut self) -> bool {
+        let Some(held) = &mut self.held else {
+            return false;
+        };
+        if held.checked.elapsed() < HELD_CHECK {
+            return false;
+        }
+        held.checked = Instant::now();
+        let key = held.key.clone();
+        match self.store.lock_note(&key) {
+            Ok(()) => {
+                self.note_lock = Some(key);
+                // Read while still held, so a rename the app that had it
+                // made is followed as that app's (`follow_id`).
+                self.check();
+                self.held = None;
+                self.rebuild();
+                self.say("This note is yours to edit now");
+                true
+            }
+            Err(holder) => {
+                let changed = self.held.as_ref().is_some_and(|h| h.holder != holder);
+                if changed {
+                    let tab = holder.pane.as_deref().and_then(|p| self.tab_of(p));
+                    if let Some(h) = &mut self.held {
+                        h.holder = holder;
+                        h.tab = tab;
+                    }
+                }
+                changed
+            }
+        }
+    }
+
+    /// Enter on a held note: to the tab that has it.
+    fn go_to_holder(&mut self) {
+        let Some(pane) = self.held.as_ref().and_then(|h| h.holder.pane.clone()) else {
+            return;
+        };
+        if self.opts.server {
+            let _ = crate::mux::socket::ask(&["select-pane", "-t", &pane]);
+        }
+    }
+
+    /// Runs `act` on a held note, then takes back any change it made to
+    /// the note's text, the editor left out of Insert mode: the note is
+    /// another app's to edit.
+    fn read_only(&mut self, act: impl FnOnce(&mut Self)) {
+        if self.held.is_none() {
+            return act(self);
+        }
+        let before = self.editor.doc.text.clone();
+        let history = self.editor.history();
+        let note = self.current_path().map(Path::to_path_buf);
+        act(self);
+        if self.held.is_none() {
+            return;
+        }
+        // Another note opened meanwhile has its own text, not this one's.
+        let same_note = self.current_path() == note.as_deref();
+        let changed = same_note && self.editor.doc.text != before;
+        if changed {
+            self.editor.doc.text = before;
+            // Its undo and redo too, so nothing done here is lost by it.
+            self.editor.set_history(history);
+            self.editor.clamp();
+        }
+        if matches!(self.editor.mode, Mode::Insert | Mode::Replace) {
+            self.editor.mode = Mode::Normal;
+        }
+        if changed || self.save_due.is_some() {
+            self.save_due = None;
+            if let Some(line) = self.held_line() {
+                self.say(line);
+            }
+        }
     }
 
     /// A note's ID as it opens: the one its file holds, else a new one,
@@ -1231,8 +1521,28 @@ impl App {
         // the file's own taken when it has one, so one given outside the
         // app (a copy given its own) is the note's from now on.
         let disk_body = id::body_of(&disk);
-        if let Some(given) = id::in_text(&disk) {
-            o.id = Some(given);
+        let disk_id = id::in_text(&disk);
+        if let Some(given) = &disk_id {
+            o.id = Some(given.clone());
+        }
+        let key = o.id.clone();
+        // The note's lock follows its ID (notes_per_tab): an ID given
+        // outside is locked as the note's own, and one an outside rewrite
+        // dropped is written back at once, so another app opening the note
+        // finds it held by this one rather than giving it another.
+        // Shown read-only, the lock waited for is the one the ID now names.
+        if let (Some(held), Some(given)) = (&mut self.held, &disk_id) {
+            held.key = given.clone();
+        }
+        if self.opts.per_note
+            && self.held.is_none()
+            && let Some(key) = key
+        {
+            if disk_id.is_none() {
+                self.save_due = Some(Instant::now());
+            } else if self.note_lock.as_ref() != Some(&key) {
+                self.take_note_lock(key);
+            }
         }
         let new = if modified {
             let (merged, clashes) = sync::merge(
@@ -1327,9 +1637,14 @@ impl App {
         let open = self.open.as_ref()?;
         let note_id = open.id.clone()?;
         let file = open.file?;
-        let to = id::holding(&note_id, self.store.root())
+        let holding = id::holding(&note_id, self.store.root());
+        // Held by the app that has it open (notes_per_tab), the one file
+        // holding its ID is the note that app saved and renamed, written
+        // whole into a new file, never a copy.
+        let owner_moved_it = self.held.is_some() && holding.len() == 1;
+        let to = holding
             .into_iter()
-            .find(|p| file_key(p) == Some(file))?;
+            .find(|p| owner_moved_it || file_key(p) == Some(file))?;
         if to == from {
             return None;
         }
@@ -1346,8 +1661,11 @@ impl App {
             o.title = now;
         }
         self.tell_open();
-        self.store
-            .moved_outside(&from_rel, &to_rel, retitled.as_ref());
+        // The app that moved it has carried its tabs' links along.
+        if !owner_moved_it {
+            self.store
+                .moved_outside(&from_rel, &to_rel, retitled.as_ref());
+        }
         // The images pasted since the last save, named only in the editor.
         if let (Some(old), Some(new)) = (from.parent(), to.parent())
             && old != new
@@ -1370,9 +1688,14 @@ impl App {
     /// longer reads as the title is written as it is, for a rename asked for.
     fn save_with(&mut self, keep_title: bool) {
         self.save_due = None;
+        if self.held.is_some() {
+            return;
+        }
         let on_disk = |app: &Self| app.open.as_ref().map(|o| (o.path.clone(), o.base.clone()));
         let before = on_disk(self);
-        if self.open.is_none() || !self.check() {
+        // Checked again after `check`, which may find the note now holds
+        // an ID another app has open.
+        if self.open.is_none() || !self.check() || self.held.is_some() {
             return;
         }
         let Some(open) = &self.open else { return };
@@ -1511,6 +1834,7 @@ impl App {
             && o.path == from
         {
             o.path = to.to_path_buf();
+            self.publish_shown();
         }
         if let Some(c) = self.cursors.remove(from) {
             self.cursors.insert(to.to_path_buf(), c);
@@ -1535,6 +1859,7 @@ impl App {
             && let Some(n) = follow(&o.path)
         {
             o.path = n;
+            self.publish_shown();
         }
         rekey(&mut self.cursors, &follow);
         rekey(&mut self.kept, &follow);
@@ -1575,7 +1900,10 @@ impl App {
         self.editor.load(Text::default());
         match next {
             Some(next) => self.open_note(&next, true, false),
-            None => self.tell_open(),
+            None => {
+                self.tell_open();
+                self.publish_shown();
+            }
         }
     }
 
@@ -1762,6 +2090,9 @@ impl App {
 
     pub fn delete(&mut self) {
         let Some(path) = self.list_note() else { return };
+        if self.held_elsewhere(&path) {
+            return;
+        }
         if self.store.in_trash(&path) {
             self.push(
                 Box::new(Confirm::new(
@@ -1823,13 +2154,22 @@ impl App {
             self.say("Notes weren't squashed: Claude Code isn't installed");
             return;
         };
+        if !self.lock_for_squash(&paths) {
+            return;
+        }
         let input = match squash::input(&self.store, &paths) {
             Ok(i) => i,
-            Err(why) => return self.say(format!("Notes weren't squashed: {why}")),
+            Err(why) => {
+                self.unlock_squashed();
+                return self.say(format!("Notes weren't squashed: {why}"));
+            }
         };
         let child = match squash::command(&program, squash::MODEL).spawn() {
             Ok(c) => c,
-            Err(_) => return self.say("Notes weren't squashed: Claude Code isn't installed"),
+            Err(_) => {
+                self.unlock_squashed();
+                return self.say("Notes weren't squashed: Claude Code isn't installed");
+            }
         };
         crate::requests::count("Anthropic", "claude -p", "Notes: squash");
         self.squash_pid = Some(child.id());
@@ -1846,6 +2186,7 @@ impl App {
     fn squashed(&mut self, result: Result<String, String>) {
         self.squash_pid = None;
         if std::mem::take(&mut self.squash_cancelled) {
+            self.unlock_squashed();
             return;
         }
         self.layers
@@ -1870,11 +2211,12 @@ impl App {
                 }
             }
         }
+        self.unlock_squashed();
     }
 
     pub fn restore(&mut self) {
         let Some(path) = self.list_note() else { return };
-        if !self.store.in_trash(&path) {
+        if !self.store.in_trash(&path) || self.held_elsewhere(&path) {
             return;
         }
         self.forget(&path);
@@ -2144,6 +2486,11 @@ impl App {
         if self.open.is_none() || !self.opts.ux2 {
             return;
         }
+        // Another app has the note open: nothing is added to it here, nor
+        // handed to a tab that would write it (M-Enter).
+        if let Some(line) = self.held_line() {
+            return self.say(line);
+        }
         self.finish_editing();
         // A click on the input while it is typed into keeps what is typed;
         // an item M-Enter handed on that never reached the note comes back.
@@ -2188,6 +2535,9 @@ impl App {
         let text = self.adding.take().unwrap_or_default().trim().to_string();
         if text.is_empty() {
             return;
+        }
+        if let Some(line) = self.held_line() {
+            return self.say(line);
         }
         if with_plan {
             // Saving can rename the note after its title, so its path is
@@ -2255,7 +2605,7 @@ impl App {
         match then {
             Then::Nothing => {}
             Then::Squash(paths) => {
-                if outcome == Outcome::Yes {
+                if outcome == Outcome::Yes && !paths.iter().any(|p| self.held_elsewhere(p)) {
                     self.start_squash(paths);
                 }
             }
@@ -2272,13 +2622,14 @@ impl App {
                 self.say("Squash canceled; the notes are as they were.");
             }
             Then::DeleteForGood(path) => {
-                if outcome == Outcome::Yes {
+                if outcome == Outcome::Yes && !self.held_elsewhere(&path) {
                     self.delete_now(&path);
                 }
             }
             Then::MoveTo(path, rels) => {
                 if let Outcome::Chose(i) = outcome
                     && let Some(rel) = rels.get(i)
+                    && !self.held_elsewhere(&path)
                 {
                     if self.current_path() == Some(path.as_path()) {
                         self.save();
@@ -2322,7 +2673,10 @@ impl App {
             Then::RenameNote(path) => {
                 if let Some(name) = typed(&outcome) {
                     let name = name.trim();
-                    if !name.is_empty() && name != sidebar::title_at(&path) {
+                    if !name.is_empty()
+                        && name != sidebar::title_at(&path)
+                        && !self.held_elsewhere(&path)
+                    {
                         let to = self.retitle(&path, name);
                         self.rebuild();
                         self.reveal(&to);
@@ -2330,7 +2684,9 @@ impl App {
                 }
             }
             Then::RenameFolder(from) => {
-                if let Some(name) = typed(&outcome).filter(|n| !n.trim().is_empty()) {
+                if let Some(name) = typed(&outcome).filter(|n| !n.trim().is_empty())
+                    && !self.folder_held_elsewhere(&from)
+                {
                     self.save();
                     match self.store.rename_folder(&from, &name) {
                         Ok(to) => {
@@ -2744,7 +3100,11 @@ impl App {
                 "ok".into()
             }
             Request::Palette => self.palette_request(),
-            Request::Run(name) => self.run_request(&name),
+            Request::Run(name) => {
+                let mut reply = String::new();
+                self.read_only(|app| reply = app.run_request(&name));
+                reply
+            }
             Request::Shown => match self.current_path().map(Path::to_path_buf) {
                 Some(p) => format!("ok {}", self.store.relative(&p)),
                 None => "ok".into(),
@@ -2779,6 +3139,9 @@ impl App {
             for parsed in self.parser.flush() {
                 self.input(parsed.input);
             }
+            changed = true;
+        }
+        if self.check_held() {
             changed = true;
         }
         if self.save_due.is_some_and(|due| now >= due) {
@@ -2821,12 +3184,12 @@ impl App {
             Input::Key(key) => self.key(key),
             Input::Mouse(m) => {
                 self.follow_lines();
-                self.mouse(m);
+                self.read_only(|app| app.mouse(m));
                 self.follow_lines();
             }
             Input::Paste(text) => {
                 self.follow_lines();
-                self.paste(&text);
+                self.read_only(|app| app.paste(&text));
                 self.follow_lines();
             }
             Input::FocusIn => {
@@ -2858,7 +3221,17 @@ impl App {
     /// own edit after, each on its own, so no line takes a gone one's place.
     pub fn key(&mut self, key: Key) {
         self.follow_lines();
-        self.key_inner(key);
+        let to_holder = self.held.is_some()
+            && self.focus == Focus::Note
+            && self.layers.is_empty()
+            && self.prompt.is_none()
+            && key.code == KeyCode::Enter
+            && key.mods.is_empty();
+        if to_holder {
+            self.go_to_holder();
+        } else {
+            self.read_only(|app| app.key_inner(key));
+        }
         self.follow_lines();
     }
 
@@ -3959,6 +4332,12 @@ impl App {
             return self.step(step);
         }
         let (x, y) = (m.col, m.row);
+        if m.kind == MouseKind::Press
+            && m.button == MouseButton::Left
+            && self.geo.held_line == Some(y)
+        {
+            return self.go_to_holder();
+        }
         let inside = |r: Rect| x >= r.x && x < r.right() && y >= r.y && y < r.bottom();
         let button = self
             .geo
@@ -4429,6 +4808,18 @@ fn note_item_key(note: &str, item: &str) -> String {
 /// for the workspace to pass it easy mode's Cmd keys, `@allow_passthrough`
 /// to pass its pictures' graphics commands on to the terminal, as bin/notes
 /// set its pane's allow-passthrough (src/mux/passthrough.rs).
+/// A pane option of this app's pane set to `value`, or unset.
+fn set_pane_option(option: &str, value: Option<&str>) {
+    let Ok(pane) = std::env::var("SWITCHBOARD_PANE") else {
+        return;
+    };
+    let args: Vec<&str> = match value {
+        Some(v) => vec!["set", "-t", &pane, option, v],
+        None => vec!["set", "-t", &pane, "-u", option],
+    };
+    let _ = crate::mux::socket::ask(&args);
+}
+
 pub(crate) fn mark_pane(option: &str, on: bool) {
     let Ok(pane) = std::env::var("SWITCHBOARD_PANE") else {
         return;
@@ -4500,12 +4891,17 @@ pub fn run(store: Store) -> ExitCode {
     } else {
         None
     };
-    let socket_path = socket::path();
+    let socket_path = socket::own_path(opts.per_note);
     let listener = if app.locked_by.is_none() {
         socket::listen(&socket_path, tx.clone())
     } else {
         None
     };
+    // With an app in each tab there is no lock on the directory to find
+    // an app started by hand by, so each marks its own pane as Notes'.
+    if opts.per_note && opts.server {
+        mark_pane("@notes_pane", true);
+    }
     if app.locked_by.is_none() && opts.server {
         mark_pane("@allow_passthrough", true);
         if opts.easy {
@@ -4578,6 +4974,10 @@ pub fn run(store: Store) -> ExitCode {
         }
     }
     app.stop();
+    if opts.per_note && opts.server {
+        set_pane_option("@notes_note", None);
+        mark_pane("@notes_pane", false);
+    }
     let mut out = std::io::stdout().lock();
     let _ = out.write_all(&app.out);
     let _ = out.flush();

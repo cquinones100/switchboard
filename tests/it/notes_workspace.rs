@@ -50,7 +50,7 @@ impl Rig {
         std::fs::create_dir_all(notes.join("Work")).unwrap();
         std::fs::write(notes.join("Plan.md"), "# Plan\n\n- [ ] the first thing\n").unwrap();
         let settings = dir.path().join("settings.json");
-        let mut all = json!({ "tips": false, "notifications": false, "ask_tab_note": false });
+        let mut all = json!({ "tips": false, "notifications": false, "ask_tab_note": false, "notes_per_tab": false });
         for (k, v) in extra.as_object().unwrap() {
             all[k] = v.clone();
         }
@@ -86,7 +86,10 @@ impl Rig {
         let server = TestServer::start_with_env(&[
             ("NOTES_DIR", &path(notes)),
             ("NOTES_SOCKET", &path(socket)),
-            ("NOTES_OPEN_COMMAND", "echo notes-stand-in; exec cat"),
+            (
+                "NOTES_OPEN_COMMAND",
+                "echo notes-stand-in \"$NOTES_OPEN\"; exec cat",
+            ),
             ("SWITCHBOARD_SETTINGS", &path(settings)),
         ]);
         Rig { server, dir, heard }
@@ -535,4 +538,61 @@ fn with_ux2_m_e_in_notes_own_tab_is_the_apps_and_beside_a_tab_sends_it_home() {
     rig.wait("Notes home again", |l| {
         pane_ids(&tabs(l)[0]) == [first.clone()] && pane_ids(&tabs(l)[1]) == [notes.clone()]
     });
+}
+
+/// The panes marked as Notes' in each tab.
+fn notes_per_tab(list: &Value) -> Vec<usize> {
+    tabs(list)
+        .iter()
+        .map(|t| {
+            t["panes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|p| p["options"]["@notes_pane"] == "1")
+                .count()
+        })
+        .collect()
+}
+
+#[test]
+fn with_an_app_in_each_tab_m_e_opens_one_on_each_tabs_note_and_leaves_the_others() {
+    let rig = Rig::with(json!({ "notes_per_tab": true }));
+    std::fs::write(rig.notes_dir().join("Work/Ideas.md"), "# Ideas\n").unwrap();
+    let mut client = rig.server.attach(140, 36);
+    client.wait_text("$");
+    rig.server.ok(&["new-tab", "-d"]);
+    let list = rig.list();
+    let (one, two) = (
+        tabs(&list)[0]["id"].as_str().unwrap().to_string(),
+        tabs(&list)[1]["id"].as_str().unwrap().to_string(),
+    );
+    rig.server.ok(&["set", "-t", &one, "@tab_note", "Plan.md"]);
+    rig.server
+        .ok(&["set", "-t", &two, "@tab_note", "Work/Ideas.md"]);
+
+    client.type_text(&format!("{ALT}e"));
+    rig.wait("Notes beside the first tab's pane", |l| {
+        notes_per_tab(l) == [1, 0]
+    });
+    client.wait_text("notes-stand-in Plan.md");
+
+    rig.server.ok(&["select-tab", "-t", &two]);
+    client.wait_for("the second tab in front", |s| {
+        !s.iter().any(|l| l.contains("notes-stand-in Plan.md"))
+    });
+    client.type_text(&format!("{ALT}e"));
+    let list = rig.wait("an app of its own beside the second tab's", |l| {
+        notes_per_tab(l) == [1, 1]
+    });
+    assert_eq!(tabs(&list)[1]["options"]["@notes_beside"], "1");
+    client.wait_text("notes-stand-in Work/Ideas.md");
+    assert!(
+        tabs(&list).iter().all(|t| t["options"]["@notes"] != "1"),
+        "no tab of Notes' own, nor a pane left in one: {list:#}"
+    );
+
+    // M-e again ends this tab's app, the first tab's left open.
+    client.type_text(&format!("{ALT}e"));
+    rig.wait("the second tab's app ended", |l| notes_per_tab(l) == [1, 0]);
 }

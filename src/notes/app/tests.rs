@@ -4046,3 +4046,357 @@ fn a_diagram_taller_than_the_note_is_cut_to_fit_it() {
         shown.join("\n")
     );
 }
+
+#[test]
+fn a_note_open_in_another_app_is_read_only_until_that_app_lets_it_go() {
+    let (_dir, store) = temp("held");
+    let plan = store.absolute("Plan.md");
+    write(&plan, "# Plan\n\n- [ ] one\n");
+    let (mut app, _) = app_in(
+        store,
+        Options {
+            per_note: true,
+            ..options()
+        },
+    );
+    app.start();
+    assert!(app.held.is_none(), "a note no app has is this one's");
+    let key = id::in_text(&fs::read_to_string(&plan).unwrap()).unwrap();
+    let lock = app.store.root().join(store::LOCKS).join(&key);
+    assert!(lock.exists(), "its lock taken as it opened");
+
+    // Another app, a live process, has it: shown read-only.
+    let other = unsafe { libc::getppid() } as i64;
+    fs::write(&lock, format!("{other} %9")).unwrap();
+    app.open_note(&plan, false, false);
+    assert!(app.held.is_some());
+    let before = fs::read_to_string(&plan).unwrap();
+    keys(&mut app, "Ohello<Esc>");
+    app.save();
+    assert_eq!(
+        lines(&app),
+        ["# Plan", "", "- [ ] one"],
+        "the edit taken back"
+    );
+    assert_eq!(
+        fs::read_to_string(&plan).unwrap(),
+        before,
+        "nothing written"
+    );
+    app.message = None;
+    assert!(
+        screen(&mut app)
+            .iter()
+            .any(|l| l.contains("Open in another Notes, read-only here")),
+        "{:#?}",
+        screen(&mut app)
+    );
+
+    // That app gone, the note is this one's to edit.
+    fs::write(&lock, "999999999 %9").unwrap();
+    app.held.as_mut().unwrap().checked = Instant::now() - HELD_CHECK;
+    assert!(app.tick());
+    assert!(app.held.is_none());
+    keys(&mut app, "Ohello<Esc>");
+    app.save();
+    assert!(fs::read_to_string(&plan).unwrap().contains("hello"));
+    app.stop();
+    assert!(!lock.exists(), "let go as it ends");
+}
+
+#[test]
+fn notes_another_app_has_open_keep_their_own_text_and_files() {
+    let (_dir, store) = temp("held-others");
+    let a = store.absolute("A.md");
+    let b = store.absolute("B.md");
+    write(&a, "# A\n\nthe first\n");
+    write(&b, "# B\n\nthe second\n");
+    let (mut app, _) = app_in(
+        store,
+        Options {
+            per_note: true,
+            ..options()
+        },
+    );
+    app.start();
+    app.open_note(&a, false, false);
+    app.open_note(&b, false, false);
+    let other = unsafe { libc::getppid() } as i64;
+    for path in [&a, &b] {
+        let key = id::in_text(&fs::read_to_string(path).unwrap()).unwrap();
+        fs::write(
+            app.store.root().join(store::LOCKS).join(key),
+            format!("{other} %9"),
+        )
+        .unwrap();
+    }
+    app.open_note(&a, false, false);
+    assert!(app.held.is_some());
+
+    // Opening the other from the list shows its own text, not A's.
+    app.reveal(&b);
+    app.focus = Focus::List;
+    keys(&mut app, "<CR>");
+    assert_eq!(app.current_path(), Some(b.as_path()));
+    assert_eq!(lines(&app), ["# B", "", "the second"]);
+
+    // Deleting it from the list is refused while the other app has it.
+    app.reveal(&a);
+    app.focus = Focus::List;
+    app.delete();
+    assert!(a.is_file(), "left where it is");
+    assert!(
+        app.message
+            .as_ref()
+            .is_some_and(|(m, _)| m.contains("open in another Notes"))
+    );
+}
+
+#[test]
+fn a_squash_keeps_its_notes_locked_while_another_note_is_opened() {
+    let (_dir, store) = temp("squash-locks");
+    let a = store.absolute("A.md");
+    let b = store.absolute("B.md");
+    let c = store.absolute("C.md");
+    for (path, title) in [(&a, "A"), (&b, "B"), (&c, "C")] {
+        write(path, &format!("# {title}\n"));
+    }
+    let (mut app, _) = app_in(
+        store,
+        Options {
+            per_note: true,
+            ..options()
+        },
+    );
+    app.start();
+    for path in [&c, &b, &a] {
+        app.open_note(path, false, false);
+    }
+    let lock = |path: &Path| {
+        let key = id::in_text(&fs::read_to_string(path).unwrap()).unwrap();
+        app.store.root().join(store::LOCKS).join(key)
+    };
+    let (lock_a, lock_b) = (lock(&a), lock(&b));
+    assert!(app.lock_for_squash(&[a.clone(), b.clone()]));
+    app.open_note(&c, false, false);
+    assert!(lock_a.exists(), "the open note's lock kept for the squash");
+    assert!(lock_b.exists());
+    app.unlock_squashed();
+    assert!(!lock_a.exists() && !lock_b.exists(), "let go as it ends");
+}
+
+#[test]
+fn a_squashed_note_never_opened_is_locked_by_the_id_opening_it_takes() {
+    let (_dir, store) = temp("squash-new-id");
+    let d = store.absolute("D.md");
+    write(&d, "# D\n");
+    let (mut app, _) = app_in(
+        store,
+        Options {
+            per_note: true,
+            ..options()
+        },
+    );
+    assert!(app.lock_for_squash(std::slice::from_ref(&d)));
+    let key = id::in_text(&fs::read_to_string(&d).unwrap()).expect("given its ID");
+    assert!(app.store.root().join(store::LOCKS).join(key).exists());
+    app.unlock_squashed();
+}
+
+#[test]
+fn a_notes_lock_follows_its_id_through_an_outside_rewrite() {
+    let (_dir, store) = temp("lock-follows-id");
+    let a = store.absolute("A.md");
+    write(&a, "# A\n\none\n");
+    let (mut app, _) = app_in(
+        store,
+        Options {
+            per_note: true,
+            ..options()
+        },
+    );
+    app.start();
+    let key = id::in_text(&fs::read_to_string(&a).unwrap()).unwrap();
+    let locks = app.store.root().join(store::LOCKS);
+
+    // Rewritten without its ID: written back at once, its lock kept.
+    write(&a, "# A\n\none\ntwo\n");
+    app.check();
+    app.tick();
+    assert_eq!(
+        id::in_text(&fs::read_to_string(&a).unwrap()).as_deref(),
+        Some(key.as_str())
+    );
+    assert!(locks.join(&key).exists());
+
+    // Given another outside: locked under that one, the old let go.
+    let other = id::with("# A\n\none\n", &id::new());
+    write(&a, &other);
+    app.check();
+    let new = id::in_text(&other).unwrap();
+    assert!(locks.join(&new).exists());
+    assert!(!locks.join(&key).exists());
+}
+
+#[test]
+fn a_held_note_renamed_by_the_app_that_has_it_is_followed() {
+    let (_dir, store) = temp("held-renamed");
+    let a = store.absolute("A.md");
+    write(&a, "# A\n\none\n");
+    let (mut app, _) = app_in(
+        store,
+        Options {
+            per_note: true,
+            ..options()
+        },
+    );
+    app.start();
+    let text = fs::read_to_string(&a).unwrap();
+    let key = id::in_text(&text).unwrap();
+    let lock = app.store.root().join(store::LOCKS).join(&key);
+    let other = unsafe { libc::getppid() } as i64;
+    fs::write(&lock, format!("{other} %9")).unwrap();
+    app.open_note(&a, false, false);
+    assert!(app.held.is_some());
+
+    // The other app retitles it: saved whole into a new file, renamed.
+    let renamed = app.store.absolute("B.md");
+    write(&renamed, &text.replacen("# A", "# B", 1));
+    fs::remove_file(&a).unwrap();
+    app.check();
+    assert_eq!(app.current_path(), Some(renamed.as_path()));
+
+    fs::write(&lock, "999999999 %9").unwrap();
+    app.held.as_mut().unwrap().checked = Instant::now() - HELD_CHECK;
+    app.tick();
+    assert!(app.held.is_none());
+    keys(&mut app, "Gohello<Esc>");
+    app.save();
+    assert!(fs::read_to_string(&renamed).unwrap().contains("hello"));
+}
+
+#[test]
+fn a_held_note_given_another_id_waits_on_that_ids_lock() {
+    let (_dir, store) = temp("held-new-id");
+    let a = store.absolute("A.md");
+    write(&a, "# A\n\none\n");
+    let (mut app, _) = app_in(
+        store,
+        Options {
+            per_note: true,
+            ..options()
+        },
+    );
+    app.start();
+    let key = id::in_text(&fs::read_to_string(&a).unwrap()).unwrap();
+    let other = unsafe { libc::getppid() } as i64;
+    let locks = app.store.root().join(store::LOCKS);
+    fs::write(locks.join(&key), format!("{other} %9")).unwrap();
+    app.open_note(&a, false, false);
+    assert!(app.held.is_some());
+    let new = id::new();
+    write(&a, &id::with("# A\n\none\n", &new));
+    app.check();
+    assert_eq!(
+        app.held.as_ref().map(|h| h.key.as_str()),
+        Some(new.as_str())
+    );
+}
+
+#[test]
+fn undo_on_a_held_note_keeps_its_history_for_when_it_is_this_apps_again() {
+    let (_dir, store) = temp("held-undo");
+    let a = store.absolute("A.md");
+    write(&a, "# A\n\none\n");
+    let (mut app, _) = app_in(
+        store,
+        Options {
+            per_note: true,
+            ..options()
+        },
+    );
+    app.start();
+    keys(&mut app, "Gotwo<Esc>");
+    app.save();
+    let key = id::in_text(&fs::read_to_string(&a).unwrap()).unwrap();
+    let lock = app.store.root().join(store::LOCKS).join(&key);
+    let other = unsafe { libc::getppid() } as i64;
+    fs::write(&lock, format!("{other} %9")).unwrap();
+    app.open_note(&a, false, false);
+    assert!(app.held.is_some());
+    keys(&mut app, "u");
+    assert_eq!(lines(&app), ["# A", "", "one", "two"], "taken back");
+
+    fs::write(&lock, "999999999 %9").unwrap();
+    app.held.as_mut().unwrap().checked = Instant::now() - HELD_CHECK;
+    app.tick();
+    assert!(app.held.is_none());
+    keys(&mut app, "u");
+    assert_eq!(
+        lines(&app),
+        ["# A", "", "one"],
+        "the edit still undone here"
+    );
+}
+
+#[test]
+fn a_held_note_renamed_as_its_app_lets_it_go_is_followed() {
+    let (_dir, store) = temp("held-renamed-released");
+    let a = store.absolute("A.md");
+    write(&a, "# A\n\none\n");
+    let (mut app, _) = app_in(
+        store,
+        Options {
+            per_note: true,
+            ..options()
+        },
+    );
+    app.start();
+    let text = fs::read_to_string(&a).unwrap();
+    let key = id::in_text(&text).unwrap();
+    let lock = app.store.root().join(store::LOCKS).join(&key);
+    let other = unsafe { libc::getppid() } as i64;
+    fs::write(&lock, format!("{other} %9")).unwrap();
+    app.open_note(&a, false, false);
+    assert!(app.held.is_some());
+
+    // Retitled and let go before this app looked again.
+    let renamed = app.store.absolute("B.md");
+    write(&renamed, &text.replacen("# A", "# B", 1));
+    fs::remove_file(&a).unwrap();
+    fs::remove_file(&lock).unwrap();
+    app.held.as_mut().unwrap().checked = Instant::now() - HELD_CHECK;
+    app.tick();
+    assert!(app.held.is_none());
+    assert_eq!(app.current_path(), Some(renamed.as_path()));
+}
+
+#[test]
+fn add_an_item_is_refused_on_a_note_another_app_has_open() {
+    let (_dir, store) = temp("held-add");
+    let a = store.absolute("A.md");
+    write(&a, "# A\n\n- [ ] one\n");
+    let (mut app, _) = app_in(
+        store,
+        Options {
+            per_note: true,
+            ux2: true,
+            ..options()
+        },
+    );
+    app.start();
+    let key = id::in_text(&fs::read_to_string(&a).unwrap()).unwrap();
+    let other = unsafe { libc::getppid() } as i64;
+    fs::write(
+        app.store.root().join(store::LOCKS).join(key),
+        format!("{other} %9"),
+    )
+    .unwrap();
+    app.open_note(&a, false, false);
+    assert!(app.held.is_some());
+    app.start_adding();
+    assert!(app.adding.is_none(), "no input opened");
+    app.adding = Some("two".into());
+    app.add_item(true);
+    assert!(app.planning.is_empty(), "nothing handed on");
+}

@@ -52,6 +52,15 @@
 //!
 //! Requests to the app go through one thread of their own, in order, so a
 //! key never waits on the app answering.
+//!
+//! With Settings' notes_per_tab on (`per_tab`), all of the above about one
+//! Notes moving gives way to an app in each tab: M-e starts one beside the
+//! pane, on the tab's note (`NOTES_OPEN`), and pressed again in that tab
+//! ends it; every other tab's app stays where it is. Each app listens on its
+//! pane's socket (`socket::path_for_pane`) and keeps the note it shows in
+//! its pane's `@notes_note`, which `shown_in` reads; M-N goes to the app in
+//! Notes' own tab, or opens one there. A note open in one app is locked to
+//! it (`Store::lock_note`), so another shows it read-only.
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Sender, channel};
@@ -110,7 +119,7 @@ impl Command {
     pub fn about(self) -> &'static str {
         match self {
             Command::Open => "Go to Notes, wherever it is open, or open it in its own tab",
-            Command::Beside => "Open Notes in a pane to the right, or put it back in its own tab",
+            Command::Beside => "Open this tab's Notes in a pane to the right, or close it",
             Command::NoteTab => {
                 "Open the tab for the note in Notes: the one linked to it, or a new one"
             }
@@ -122,13 +131,13 @@ impl Command {
     pub fn detail(self) -> &'static str {
         match self {
             Command::Open => {
-                "There is only one Notes, since two would save the same notes over each other, so it is found wherever it has moved. A new one opens at the end of the tabs, named Notes."
+                "Goes to the Notes in a tab of its own, or opens one at the end of the tabs, named Notes. With Settings' \"A Notes app in each tab\" off there is only one Notes, found wherever it has moved."
             }
             Command::Beside => {
-                "The one Notes moves there, showing this tab's own note, and its own tab says which tab has it. Its sidebar is put away beside another tab (Settings' \"Hide the sidebar beside a tab\")."
+                "Each tab has a Notes of its own, showing the tab's note, which M-e pressed again closes; a note open in another tab shows read-only. With Settings' \"A Notes app in each tab\" off, the one Notes moves there and back to its own tab instead. Its sidebar is put away beside another tab (Settings' \"Hide the sidebar beside a tab\")."
             }
             Command::NoteTab => {
-                "With no tab linked, it asks which open tab is the note's, or opens a new one in a directory you pick. Notes then moves beside that tab's Claude (Settings' \"Notes beside a note's tab\")."
+                "With no tab linked, it asks which open tab is the note's, or opens a new one in a directory you pick. Notes then opens beside that tab's Claude (Settings' \"Notes beside a note's tab\")."
             }
             Command::ChooseNote => {
                 "The notes are ranked on the computer, those naming the tab's ticket or PR first, then those sharing words with its name. \"Keep whatever is open\" stops the question for this tab."
@@ -178,6 +187,12 @@ pub fn in_notes(rel: &str) -> bool {
     !rel.is_empty() && !rel.starts_with('/') && !rel.split('/').any(|p| p == "..")
 }
 
+/// An app in each tab, rather than one Notes moving between them
+/// (Settings' notes_per_tab).
+pub fn per_tab() -> bool {
+    settings::is_on("notes_per_tab")
+}
+
 /// The note Notes shows, as it records it: `.notes.json`'s last.
 pub fn shown() -> Option<String> {
     let meta = util::read_json_object(store::notes_dir().join(store::META));
@@ -191,11 +206,23 @@ pub fn shown() -> Option<String> {
 /// `$NOTES_OPEN_COMMAND`, a shell command, when it is set (notes-open.sh let
 /// the tests put a stand-in there); with `NOTES_SIDEBAR` set when `sidebar`
 /// says whether the app starts with its list.
-fn notes_command(sidebar: Option<bool>) -> Vec<String> {
-    let mut command = Vec::new();
+/// With `note`, the app opens on that note (`NOTES_OPEN`), and with
+/// `said` it says those words as it does (`NOTES_SAY`).
+fn notes_command(sidebar: Option<bool>, note: Option<&str>, said: Option<&str>) -> Vec<String> {
+    let mut env = Vec::new();
     if let Some(on) = sidebar {
+        env.push(format!("NOTES_SIDEBAR={}", if on { "on" } else { "off" }));
+    }
+    if let Some(note) = note {
+        env.push(format!("NOTES_OPEN={note}"));
+    }
+    if let Some(said) = said {
+        env.push(format!("NOTES_SAY={said}"));
+    }
+    let mut command = Vec::new();
+    if !env.is_empty() {
         command.push("env".to_string());
-        command.push(format!("NOTES_SIDEBAR={}", if on { "on" } else { "off" }));
+        command.extend(env);
     }
     match std::env::var("NOTES_OPEN_COMMAND")
         .ok()
@@ -216,9 +243,6 @@ fn exe() -> String {
         .unwrap_or_else(|| "switchboard".into())
 }
 
-/// Sends a request to the running app, after those sent before it, on a
-/// thread of its own: an app that isn't running, or doesn't answer, holds
-/// up nothing.
 /// Marks the note you linked to a tab yourself (the picker, Notes' `t`,
 /// M-p's "Choose the tab's note"), set with `@tab_note`; what the workspace
 /// links leaves it alone.
@@ -284,13 +308,16 @@ pub fn by_precedence(
         .find(|(rel, _)| in_notes(rel) && there(rel))
 }
 
-pub(crate) fn tell(request: String) {
-    static QUEUE: OnceLock<Mutex<Sender<String>>> = OnceLock::new();
+/// Sends a request to the app listening on `socket`, after those sent
+/// before it, on a thread of its own: an app that isn't running, or
+/// doesn't answer, holds up nothing.
+pub(crate) fn tell_at(socket: PathBuf, request: String) {
+    static QUEUE: OnceLock<Mutex<Sender<(PathBuf, String)>>> = OnceLock::new();
     let queue = QUEUE.get_or_init(|| {
-        let (tx, rx) = channel::<String>();
+        let (tx, rx) = channel::<(PathBuf, String)>();
         std::thread::spawn(move || {
-            while let Ok(request) = rx.recv() {
-                let _ = super::socket::send(&super::socket::path(), &request);
+            while let Ok((socket, request)) = rx.recv() {
+                let _ = super::socket::send(&socket, &request);
             }
         });
         Mutex::new(tx)
@@ -299,7 +326,19 @@ pub(crate) fn tell(request: String) {
     let _ = queue
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .send(request);
+        .send((socket, request));
+}
+
+/// The socket of the app in `pane`: its pane's own while an app listens
+/// there (one started with an app in each tab, which keeps it whatever the
+/// setting says since), else the one Notes listens on.
+pub(crate) fn socket_of(pane: PaneId) -> PathBuf {
+    let own = super::socket::path_for_pane(&pane.to_string());
+    if own.exists() {
+        own
+    } else {
+        super::socket::path()
+    }
 }
 
 impl Server {
@@ -412,11 +451,59 @@ impl Server {
             .min()
     }
 
+    /// A tab's Notes pane, with an app in each tab.
+    pub(crate) fn tab_notes_pane(&self, tab: TabId) -> Option<PaneId> {
+        self.tabs
+            .get(&tab)?
+            .layout
+            .panes()
+            .into_iter()
+            .find(|p| self.pane_marked(*p, "@notes_pane"))
+    }
+
+    /// The Notes pane in a tab: the one marked there, else, with the one
+    /// Notes, that one found by its lock while it is there.
+    pub(crate) fn notes_in_tab(&mut self, tab: TabId) -> Option<PaneId> {
+        // Marked in the tab, whatever the setting says since it started.
+        if let Some(pane) = self.tab_notes_pane(tab) {
+            return Some(pane);
+        }
+        if per_tab() {
+            return None;
+        }
+        self.notes_pane().filter(|p| self.pane_tab(*p) == Some(tab))
+    }
+
+    /// The app in Notes' own tab, with an app in each tab.
+    fn home_notes_pane(&self) -> Option<PaneId> {
+        self.tabs
+            .iter()
+            .filter(|(_, t)| is_on(t.opts.get("@notes")))
+            .filter_map(|(id, _)| self.tab_notes_pane(*id))
+            .min()
+    }
+
+    /// The note the app in `pane` shows: its `@notes_note`, which an app
+    /// started with an app in each tab keeps, else, for the one Notes,
+    /// `.notes.json`'s last.
+    pub(crate) fn shown_in(&self, pane: PaneId) -> Option<String> {
+        let own = self.panes.get(&pane)?.opts.get("@notes_note");
+        match own {
+            Some(rel) => Some(rel.clone()).filter(|rel| in_notes(rel)),
+            // An app started as the one Notes, whatever the setting says now.
+            None if !super::socket::path_for_pane(&pane.to_string()).exists() => shown(),
+            None => None,
+        }
+    }
+
     /// The notes pane: the one marked, else the pane whose program holds the
     /// notes' lock (an app started by hand), marked then.
     pub fn notes_pane(&mut self) -> Option<PaneId> {
         if let Some(p) = self.marked_notes_pane() {
             return Some(p);
+        }
+        if per_tab() {
+            return None;
         }
         let lock = store::notes_dir().join(store::LOCK);
         let pid = util::read_text(&lock)
@@ -444,7 +531,17 @@ impl Server {
 
     /// M-N: to Notes, wherever it is open; else Notes in a tab of its own.
     fn open_notes(&mut self, client: ClientId) {
-        if let Some(pane) = self.notes_pane() {
+        self.open_notes_on(client, None);
+    }
+
+    /// M-N, the app started on `note` when there is none to go to.
+    fn open_notes_on(&mut self, client: ClientId, note: Option<&str>) {
+        let found = if per_tab() {
+            self.home_notes_pane()
+        } else {
+            self.notes_pane()
+        };
+        if let Some(pane) = found {
             self.go_to_pane(client, pane);
             return;
         }
@@ -454,7 +551,7 @@ impl Server {
         match self.new_tab(
             &session,
             Some(paths::home()),
-            Some(notes_command(None)),
+            Some(notes_command(None, note, None)),
             None,
             crate::mux::server::Opened::Front,
         ) {
@@ -482,6 +579,13 @@ impl Server {
             self.say(Some(client), &format!("There is no note {rel} any more."));
             return;
         }
+        if per_tab() {
+            match self.home_notes_pane() {
+                Some(home) => tell_at(socket_of(home), format!("open {rel}")),
+                None => return self.open_notes_on(client, Some(rel)),
+            }
+            return self.open_notes(client);
+        }
         if let Some(notes) = self.notes_pane() {
             let beside = self.pane_tab(notes).filter(|tab| {
                 self.tab_opt(*tab, "@notes").as_deref() != Some("1") && self.pane_count(*tab) > 1
@@ -491,7 +595,7 @@ impl Server {
                 self.remember_note(tab);
                 self.put_notes_away(notes, false);
             }
-            tell(format!("open {rel}"));
+            tell_at(socket_of(notes), format!("open {rel}"));
         } else {
             Store::at(store::notes_dir()).set_last(Some(rel));
         }
@@ -536,6 +640,9 @@ impl Server {
         let Some(here_tab) = self.pane_tab(here) else {
             return;
         };
+        if per_tab() {
+            return self.notes_beside_per_tab(client, here, here_tab);
+        }
         let Some(notes) = self.notes_pane() else {
             self.ask_note_if_none(here_tab, client);
             self.open_with_note(here_tab);
@@ -545,7 +652,7 @@ impl Server {
                 here,
                 Direction::Right,
                 Some(paths::home()),
-                Some(notes_command(Some(list))),
+                Some(notes_command(Some(list), None, None)),
                 Some(40),
                 false,
             ) {
@@ -620,6 +727,52 @@ impl Server {
         }
         self.show_note(here_tab);
         self.note_arrived(here_tab);
+    }
+
+    /// M-e with an app in each tab: the tab's own Notes ended when it has
+    /// one (M-e passed to it in Notes' own tab, with UX 2.0, as the app's),
+    /// else one started beside `here` on the tab's note.
+    fn notes_beside_per_tab(&mut self, client: Option<ClientId>, here: PaneId, tab: TabId) {
+        let own_tab = self.tab_opt(tab, "@notes").as_deref() == Some("1");
+        if let Some(notes) = self.tab_notes_pane(tab) {
+            if own_tab {
+                if here == notes
+                    && settings::is_on("ux2")
+                    && let Some(slot) = self.panes.get_mut(&notes)
+                    && let Some(key) = crate::mux::input::Key::parse("M-e")
+                {
+                    let bytes = crate::mux::input::encode_key(&key, &slot.pane.modes());
+                    let _ = slot.pane.write(&bytes);
+                }
+                return;
+            }
+            self.remember_note(tab);
+            self.set_tab_opt(tab, "@notes_beside", None);
+            self.kill_pane(notes);
+            return;
+        }
+        self.ask_note_if_none(tab, client);
+        let picked = self.note_and_why(tab);
+        let note = picked.as_ref().map(|(n, _)| n.as_str());
+        let said = picked.as_ref().and_then(|(_, why)| why.said());
+        let list = own_tab || !settings::is_on("notes_hide_sidebar");
+        match self.split(
+            here,
+            Direction::Right,
+            Some(paths::home()),
+            Some(notes_command(Some(list), note, said)),
+            Some(40),
+            false,
+        ) {
+            Ok(pane) => {
+                if !own_tab {
+                    self.set_tab_opt(tab, "@notes_beside", Some("1"));
+                }
+                self.set_pane_opt(pane, "@notes_pane", Some("1"));
+                self.note_arrived(tab);
+            }
+            Err(e) => self.say(client, &format!("Couldn't open Notes: {e}")),
+        }
     }
 
     /// Moves `pane` from its tab into `target`'s, on its `side`, taking
@@ -732,6 +885,10 @@ impl Server {
             return false;
         };
         self.remember_note(tab);
+        if per_tab() {
+            // Its own, the tab's app closes as any pane does.
+            return false;
+        }
         self.put_notes_away(pane, false)
     }
 
@@ -739,7 +896,12 @@ impl Server {
     /// beside and not its own, goes home and the tab closes, so it never
     /// holds a tab but Notes'.
     pub fn notes_orphan(&mut self, tab: TabId) {
-        let Some(notes) = self.marked_notes_pane() else {
+        let notes = if per_tab() {
+            self.tab_notes_pane(tab)
+        } else {
+            self.marked_notes_pane()
+        };
+        let Some(notes) = notes else {
             return;
         };
         if self.pane_tab(notes) != Some(tab)
@@ -750,6 +912,11 @@ impl Server {
             return;
         }
         self.remember_note(tab);
+        if per_tab() {
+            // The tab's own app, left alone, ends with it.
+            self.kill_pane(notes);
+            return;
+        }
         self.put_notes_away(notes, true);
     }
 
@@ -822,7 +989,12 @@ impl Server {
         }
         let arrived = self.tab_opt(tab, "@tab_note_arrived");
         self.set_tab_opt(tab, "@tab_note_arrived", None);
-        let Some(note) = shown() else {
+        let note = if per_tab() {
+            self.tab_notes_pane(tab).and_then(|p| self.shown_in(p))
+        } else {
+            shown()
+        };
+        let Some(note) = note else {
             return;
         };
         if self.note_for(tab).is_none() && Some(&note) == arrived.as_ref() {
@@ -845,21 +1017,27 @@ impl Server {
         let Some((want, why)) = self.note_and_why(tab) else {
             return;
         };
-        if shown().as_ref() != Some(&want) {
-            tell(format!("open {want}"));
+        let pane = if per_tab() {
+            self.tab_notes_pane(tab)
+        } else {
+            self.marked_notes_pane()
+        };
+        let Some(pane) = pane else {
+            return;
+        };
+        let socket = socket_of(pane);
+        if self.shown_in(pane).as_ref() != Some(&want) {
+            tell_at(socket.clone(), format!("open {want}"));
         }
         if let Some(said) = why.said() {
-            tell(format!("say {said}"));
+            tell_at(socket, format!("say {said}"));
         }
     }
 
     /// The tab's note shown, if Notes is beside it (a note just chosen for
     /// it).
     pub(crate) fn notes_show(&mut self, tab: TabId) {
-        if self
-            .notes_pane()
-            .is_some_and(|p| self.pane_tab(p) == Some(tab))
-        {
+        if self.notes_in_tab(tab).is_some() {
             self.show_note(tab);
         }
     }
@@ -876,7 +1054,13 @@ impl Server {
     /// always shown.
     fn notes_list(&mut self, show: bool) {
         let show = show || !settings::is_on("notes_hide_sidebar");
-        tell(format!("sidebar {}", if show { "on" } else { "off" }));
+        let socket = self
+            .marked_notes_pane()
+            .map_or_else(super::socket::path, socket_of);
+        tell_at(
+            socket,
+            format!("sidebar {}", if show { "on" } else { "off" }),
+        );
     }
 
     /// A tab with no note yet, neither one chosen nor one shown beside it
@@ -898,6 +1082,9 @@ impl Server {
     /// Which tab of a session has Notes beside its work, for the Notes tab's
     /// line while it is away: its number and its label, PR left out.
     pub fn notes_owner(&self, session: &str) -> Option<(usize, String)> {
+        if per_tab() {
+            return None;
+        }
         let notes = self.marked_notes_pane()?;
         let tab = self.pane_tab(notes)?;
         if self.pane_count(tab) < 2 {

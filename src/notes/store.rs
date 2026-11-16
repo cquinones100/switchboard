@@ -33,6 +33,12 @@ use crate::util;
 pub const TRASH: &str = ".trash";
 pub const META: &str = ".notes.json";
 pub const LOCK: &str = ".notes.lock";
+/// The locks on the notes open in a Notes app, one a note
+/// (`lock_note`), while Settings' notes_per_tab lets an app run in each tab.
+pub const LOCKS: &str = ".locks";
+/// Held for a moment while `.notes.json` is read and written again
+/// (`update_meta`), so no app's write drops another's.
+const META_LOCK: &str = ".notes.json.lock";
 /// How many notes opened lately `.notes.json` keeps.
 pub const RECENT: usize = 20;
 
@@ -54,6 +60,24 @@ pub fn notes_dir() -> PathBuf {
     match std::env::var_os("NOTES_DIR") {
         Some(d) if !d.is_empty() => PathBuf::from(d),
         _ => crate::paths::home_join("Notes"),
+    }
+}
+
+/// The app holding a note's lock: its process ID, and its pane in the
+/// workspace when it runs in one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Holder {
+    pub pid: i64,
+    pub pane: Option<String>,
+}
+
+impl Holder {
+    fn read(path: &Path) -> Option<Holder> {
+        let text = util::read_text(path)?;
+        let mut words = text.split_whitespace();
+        let pid = words.next()?.parse::<i64>().ok()?;
+        let pane = words.next().map(str::to_string);
+        Some(Holder { pid, pane })
     }
 }
 
@@ -193,6 +217,46 @@ impl Store {
         let _ = util::write_atomic(self.absolute(META), util::json_compact(data));
     }
 
+    /// `.notes.json` read, changed by `change` and written again under a
+    /// lock of a moment (`.notes.json.lock`), so several apps writing it
+    /// at once each keep the others' changes. `change` gives whether there
+    /// is anything to write. A lock left for over two seconds is a crashed
+    /// writer's, and taken over; one not had within half a second is
+    /// written without, as before there were several apps.
+    pub fn update_meta(&self, change: impl FnOnce(&mut Map<String, Value>) -> bool) {
+        let lock = self.absolute(META_LOCK);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+        let held = loop {
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&lock)
+            {
+                Ok(_) => break true,
+                Err(_) if std::time::Instant::now() >= deadline => break false,
+                Err(_) => {
+                    let stale = fs::metadata(&lock)
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|at| at.elapsed().ok())
+                        .is_some_and(|age| age > std::time::Duration::from_secs(2));
+                    if stale {
+                        let _ = fs::remove_file(&lock);
+                    } else {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                }
+            }
+        };
+        let mut data = self.meta();
+        if change(&mut data) {
+            self.save_meta(&data);
+        }
+        if held {
+            let _ = fs::remove_file(&lock);
+        }
+    }
+
     fn pinned_list(data: &Map<String, Value>) -> Vec<String> {
         data.get("pinned")
             .and_then(Value::as_array)
@@ -214,16 +278,17 @@ impl Store {
     }
 
     pub fn set_pinned(&self, rel: &str, on: bool) {
-        let mut data = self.meta();
-        let mut list: Vec<String> = Self::pinned_list(&data)
-            .into_iter()
-            .filter(|p| p != rel)
-            .collect();
-        if on {
-            list.push(rel.to_string());
-        }
-        data.insert("pinned".into(), list.into());
-        self.save_meta(&data);
+        self.update_meta(|data| {
+            let mut list: Vec<String> = Self::pinned_list(data)
+                .into_iter()
+                .filter(|p| p != rel)
+                .collect();
+            if on {
+                list.push(rel.to_string());
+            }
+            data.insert("pinned".into(), list.into());
+            true
+        });
     }
 
     fn recent_list(data: &Map<String, Value>) -> Vec<String> {
@@ -241,63 +306,66 @@ impl Store {
     /// A note moved or renamed keeps its pin and its place in the notes
     /// opened lately, and stays the note open last.
     fn repin(&self, from: &str, to: &str) {
-        let mut data = self.meta();
-        let follow = |p: String| if p == from { to.to_string() } else { p };
-        let list: Vec<String> = Self::pinned_list(&data).into_iter().map(follow).collect();
-        data.insert("pinned".into(), list.into());
-        // A note moved into Recently Deleted leaves the history.
-        let recent: Vec<String> = Self::recent_list(&data)
-            .into_iter()
-            .map(follow)
-            .filter(|p| !is_trash(p))
-            .collect();
-        if data.contains_key("recent") {
-            data.insert("recent".into(), recent.into());
-        }
-        if data.get("last").and_then(Value::as_str) == Some(from) {
-            data.insert("last".into(), to.into());
-        }
-        self.save_meta(&data);
+        self.update_meta(|data| {
+            let follow = |p: String| if p == from { to.to_string() } else { p };
+            let list: Vec<String> = Self::pinned_list(data).into_iter().map(follow).collect();
+            data.insert("pinned".into(), list.into());
+            // A note moved into Recently Deleted leaves the history.
+            let recent: Vec<String> = Self::recent_list(data)
+                .into_iter()
+                .map(follow)
+                .filter(|p| !is_trash(p))
+                .collect();
+            if data.contains_key("recent") {
+                data.insert("recent".into(), recent.into());
+            }
+            if data.get("last").and_then(Value::as_str) == Some(from) {
+                data.insert("last".into(), to.into());
+            }
+            true
+        });
     }
 
     /// The note open last, which the app opens again when it starts.
     pub fn set_last(&self, rel: Option<&str>) {
-        let mut data = self.meta();
-        if data.get("last").and_then(Value::as_str) == rel {
-            return;
-        }
-        match rel {
-            Some(rel) => {
-                data.insert("last".into(), rel.into());
+        self.update_meta(|data| {
+            if data.get("last").and_then(Value::as_str) == rel {
+                return false;
             }
-            None => {
-                data.shift_remove("last");
+            match rel {
+                Some(rel) => {
+                    data.insert("last".into(), rel.into());
+                }
+                None => {
+                    data.shift_remove("last");
+                }
             }
-        }
-        self.save_meta(&data);
+            true
+        });
     }
 
     /// A note opened: the note open last, and first in the notes opened
     /// lately, each there once, the oldest past `RECENT` let go. A note in
     /// Recently Deleted, or one gone, takes no place there.
     pub fn opened(&self, rel: &str) {
-        let mut data = self.meta();
-        let mut recent: Vec<String> = Self::recent_list(&data)
-            .into_iter()
-            .filter(|p| p != rel && !is_trash(p) && self.absolute(p).is_file())
-            .collect();
-        if !is_trash(rel) {
-            recent.insert(0, rel.to_string());
-        }
-        recent.truncate(RECENT);
-        let unchanged = data.get("last").and_then(Value::as_str) == Some(rel)
-            && Self::recent_list(&data) == recent;
-        if unchanged {
-            return;
-        }
-        data.insert("last".into(), rel.into());
-        data.insert("recent".into(), recent.into());
-        self.save_meta(&data);
+        self.update_meta(|data| {
+            let mut recent: Vec<String> = Self::recent_list(data)
+                .into_iter()
+                .filter(|p| p != rel && !is_trash(p) && self.absolute(p).is_file())
+                .collect();
+            if !is_trash(rel) {
+                recent.insert(0, rel.to_string());
+            }
+            recent.truncate(RECENT);
+            let unchanged = data.get("last").and_then(Value::as_str) == Some(rel)
+                && Self::recent_list(data) == recent;
+            if unchanged {
+                return false;
+            }
+            data.insert("last".into(), rel.into());
+            data.insert("recent".into(), recent.into());
+            true
+        });
     }
 
     /// The notes opened lately, newest first: those still notes, and not
@@ -338,6 +406,11 @@ impl Store {
         self.ensure();
         let path = self.absolute(LOCK);
         let me = std::process::id() as i64;
+        // An app in each tab (notes_per_tab), still running with a note
+        // open, holds that note: this one would write over it.
+        if let Some(holder) = self.note_holders().find(|h| h.pid != me) {
+            return Err(holder.pid);
+        }
         let holder = util::read_text(&path).and_then(|t| t.trim().parse::<i64>().ok());
         if let Some(holder) = holder
             && holder != me
@@ -354,6 +427,87 @@ impl Store {
         let path = self.absolute(LOCK);
         let me = std::process::id() as i64;
         if util::read_text(&path).and_then(|t| t.trim().parse::<i64>().ok()) == Some(me) {
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    // ── One app a note ────────────────────────────────────────────────────
+
+    /// The lock file of a note open in an app, by its key (its ID, else its
+    /// path), in `.locks/`.
+    fn note_lock(&self, key: &str) -> PathBuf {
+        self.root.join(LOCKS).join(key.replace('/', "%2F"))
+    }
+
+    /// Takes a note's lock (`.locks/<key>`), or gives who holds it: with
+    /// Settings' notes_per_tab, an app runs in each tab, and the one that
+    /// has a note open holds its lock, with its process ID and its pane
+    /// (`SWITCHBOARD_PANE`), so another app showing the note shows it
+    /// read-only, naming the tab that has it. A lock left by a process
+    /// that has gone is taken over.
+    pub fn lock_note(&self, key: &str) -> Result<(), Holder> {
+        let path = self.note_lock(key);
+        let _ = fs::create_dir_all(self.root.join(LOCKS));
+        let me = std::process::id() as i64;
+        // The one Notes, started with the setting off, holds every note.
+        if let Some(holder) =
+            Holder::read(&self.absolute(LOCK)).filter(|h| h.pid != me && util::is_alive(h.pid))
+        {
+            return Err(holder);
+        }
+        let mine = match std::env::var("SWITCHBOARD_PANE") {
+            Ok(pane) if !pane.is_empty() => format!("{me} {pane}"),
+            _ => me.to_string(),
+        };
+        for _ in 0..3 {
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(mut file) => {
+                    use std::io::Write;
+                    let _ = file.write_all(mine.as_bytes());
+                    return Ok(());
+                }
+                Err(_) => match Holder::read(&path) {
+                    Some(holder) if holder.pid == me => return Ok(()),
+                    Some(holder) if util::is_alive(holder.pid) => return Err(holder),
+                    // Its holder gone, or the file half written: taken
+                    // over, raced for again.
+                    _ => {
+                        let _ = fs::remove_file(&path);
+                    }
+                },
+            }
+        }
+        Err(Holder::read(&path).unwrap_or(Holder { pid: 0, pane: None }))
+    }
+
+    /// The apps still running that hold a note's lock.
+    fn note_holders(&self) -> impl Iterator<Item = Holder> {
+        fs::read_dir(self.root.join(LOCKS))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| Holder::read(&entry.path()))
+            .filter(|h| util::is_alive(h.pid))
+    }
+
+    /// Who holds a note's lock, when it is another process still running:
+    /// the app with the note open, or the one Notes, which holds them all.
+    pub fn held_by_other(&self, key: &str) -> Option<Holder> {
+        let me = std::process::id() as i64;
+        [self.absolute(LOCK), self.note_lock(key)]
+            .iter()
+            .filter_map(|path| Holder::read(path))
+            .find(|h| h.pid != me && util::is_alive(h.pid))
+    }
+
+    /// Lets go of a note's lock, if this process holds it.
+    pub fn unlock_note(&self, key: &str) {
+        let path = self.note_lock(key);
+        if Holder::read(&path).is_some_and(|h| h.pid == std::process::id() as i64) {
             let _ = fs::remove_file(path);
         }
     }
@@ -505,23 +659,24 @@ impl Store {
             p.strip_prefix(&format!("{from}/"))
                 .map(|rest| format!("{to}/{rest}"))
         };
-        let mut data = self.meta();
-        let list: Vec<String> = Self::pinned_list(&data)
-            .into_iter()
-            .map(|p| moved(&p).unwrap_or(p))
-            .collect();
-        data.insert("pinned".into(), list.into());
-        let recent: Vec<String> = Self::recent_list(&data)
-            .into_iter()
-            .map(|p| moved(&p).unwrap_or(p))
-            .collect();
-        if !recent.is_empty() {
-            data.insert("recent".into(), recent.into());
-        }
-        if let Some(last) = data.get("last").and_then(Value::as_str).and_then(moved) {
-            data.insert("last".into(), last.into());
-        }
-        self.save_meta(&data);
+        self.update_meta(|data| {
+            let list: Vec<String> = Self::pinned_list(data)
+                .into_iter()
+                .map(|p| moved(&p).unwrap_or(p))
+                .collect();
+            data.insert("pinned".into(), list.into());
+            let recent: Vec<String> = Self::recent_list(data)
+                .into_iter()
+                .map(|p| moved(&p).unwrap_or(p))
+                .collect();
+            if !recent.is_empty() {
+                data.insert("recent".into(), recent.into());
+            }
+            if let Some(last) = data.get("last").and_then(Value::as_str).and_then(moved) {
+                data.insert("last".into(), last.into());
+            }
+            true
+        });
         self.relink(&moved, None);
         Ok(to)
     }
@@ -1295,6 +1450,74 @@ pub(crate) mod tests {
                 .any(|e| e.file_name().to_string_lossy().ends_with(".tmp")),
             "the pins were written whole"
         );
+    }
+
+    #[test]
+    fn a_notes_lock_is_its_one_apps_and_one_left_by_a_process_gone_is_taken_over() {
+        let (_dir, s) = temp("note-lock");
+        assert_eq!(s.lock_note("abc"), Ok(()));
+        assert_eq!(s.lock_note("abc"), Ok(()), "taken again by its holder");
+        let file = s.root().join(LOCKS).join("abc");
+        // Held by a live process: this test's parent, with its pane.
+        let parent = unsafe { libc::getppid() } as i64;
+        fs::write(&file, format!("{parent} %7")).unwrap();
+        assert_eq!(
+            s.lock_note("abc"),
+            Err(Holder {
+                pid: parent,
+                pane: Some("%7".into())
+            })
+        );
+        s.unlock_note("abc");
+        assert!(file.exists(), "only its holder lets it go");
+        fs::write(&file, "999999999 %7").unwrap();
+        assert_eq!(s.lock_note("abc"), Ok(()), "its holder gone");
+        s.unlock_note("abc");
+        assert!(!file.exists(), "gone once it lets go");
+        assert_eq!(s.lock_note("Work/Plan.md"), Ok(()), "a path for a key");
+        // The one Notes and an app in each tab keep out of each other's way.
+        fs::write(&file, format!("{parent} %7")).unwrap();
+        let mut one = s.clone();
+        assert_eq!(one.lock(), Err(parent), "a note held by a running app");
+        fs::remove_file(&file).unwrap();
+        fs::write(s.absolute(LOCK), parent.to_string()).unwrap();
+        assert_eq!(
+            s.lock_note("abc"),
+            Err(Holder {
+                pid: parent,
+                pane: None
+            }),
+            "every note held by the one Notes"
+        );
+        assert_eq!(s.held_by_other("anything").map(|h| h.pid), Some(parent));
+        fs::remove_file(s.absolute(LOCK)).unwrap();
+        assert!(
+            s.notes(None).iter().all(|n| !n.rel.starts_with('.')),
+            "the locks aren't notes"
+        );
+    }
+
+    #[test]
+    fn apps_writing_the_notes_json_at_once_keep_each_others_changes() {
+        let (_dir, s) = temp("meta-merge");
+        let names: Vec<String> = (0..8).map(|i| format!("N{i}.md")).collect();
+        for name in &names {
+            fs::write(s.absolute(name), "# N\n").unwrap();
+        }
+        let threads: Vec<_> = names
+            .iter()
+            .map(|name| {
+                let (s, name) = (s.clone(), name.clone());
+                std::thread::spawn(move || s.set_pinned(&name, true))
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        let mut pinned = s.pinned();
+        pinned.sort();
+        assert_eq!(pinned, names, "no write dropped another's");
+        assert!(!s.absolute(META_LOCK).exists(), "the lock let go");
     }
 
     #[test]

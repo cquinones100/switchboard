@@ -757,6 +757,8 @@ fn the_link_commands_list_what_the_pane_shows_and_copy_read_or_open_it() {
     .unwrap();
     let id = first["id"].as_str().unwrap();
     server.ok(&["set", "-t", id, "@notes_pane", "1"]);
+    // The note the app shows, as it keeps it on its pane.
+    server.ok(&["set", "-t", id, "@notes_note", "Plan.md"]);
     server.ok(&["press", "read-link"]);
     // The note's first, chosen as the list opens, the tab's other panes'
     // after it.
@@ -800,6 +802,7 @@ fn the_link_and_tab_commands_read_the_note_open_in_the_tab_too() {
     client.wait_text("see http://127.0.0.1:9/pane and tab 2");
     let notes_pane = server.ok(&["split", "-d", "-t", &first]).trim().to_string();
     server.ok(&["set", "-t", &notes_pane, "@notes_pane", "1"]);
+    server.ok(&["set", "-t", &notes_pane, "@notes_note", "Work/Plan.md"]);
 
     // From the other pane: its own link first, then the note's, marked.
     server.ok(&["press", "copy-link"]);
@@ -876,6 +879,7 @@ fn the_link_and_tab_commands_read_the_note_open_in_the_tab_too() {
         .unwrap()
         .to_string();
     server.ok(&["set", "-t", &elsewhere, "@notes_pane", "1"]);
+    server.ok(&["set", "-t", &elsewhere, "@notes_note", "Work/Plan.md"]);
     server.ok(&["select-pane", "-t", &first]);
     server.ok(&["press", "go-to-mentioned-tab"]);
     client.wait_text("Went to tab 2");

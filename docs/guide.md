@@ -190,7 +190,7 @@ Each notification Claude Code sends (it waits on your permission or an answer, o
 | `M-F` | Search the open tabs, your notes, Linear, GitHub and Slack at once |
 | `M-u` | Read a link in a pane to the right, typed or one this pane shows |
 | `M-N` | Go to Notes, wherever it is open, or open it in a tab of its own |
-| `M-e` | Notes in a pane to the right, or back in its own tab |
+| `M-e` | The tab's own Notes in a pane to the right, or, pressed again, closed (with "A Notes app in each tab" off: the one Notes moved there, or back in its own tab) |
 | `M-S` | The Slack relay in a tab of its own |
 
 The rest follow the prefix, `M-b`. While it waits for the next key, a `^` shows at the right end of the status line.
@@ -1166,7 +1166,7 @@ Notes are kept in `$NOTES_DIR`, or `~/Notes`, one Markdown file each, in folders
 
 Each note's last line is its ID, `<!-- note-id: n-… -->`, which the app never shows, keeps last and puts back if it goes; it gives a note one when it makes it or first opens it, without changing when the note was last changed, and a copy of a note's file, which carries the original's, one of its own, saying so once (of two notes holding one ID, the one changed later is the copy). The ID survives a rename or move anywhere (`mv`, Finder, git, a Claude editing the note), so what keeps a note by it, `wtn`'s worktrees and autopilot, still finds it; `wtn` and autopilot give a note one too when it has none, and another editor shows it as an HTML comment. Titles, previews and searches leave it out.
 
-One app runs on a notes directory at a time. While it runs it holds `.notes.lock` there, with its process ID: notes save themselves as you type, so a second app on the same notes would write over the first's. A second one says the notes are open already and closes with `q`. A lock left by an app that has gone is taken over.
+Notes save themselves as you type, so two apps editing one note would write over each other. With Settings' "A Notes app in each tab" (`notes_per_tab`) on, any number of apps run on a notes directory, and each note is open for editing in one at a time: the app that opens it first holds its lock (`.locks/<the note's ID>` in the notes directory, with its process ID and pane), and another app opening the same note shows it read-only, its last line dim, saying "Open in tab 3, read-only here · Enter or a click: go there"; Enter, or a click on that line, goes to that tab, and once that app opens another note or quits, the note becomes editable here without opening it again. Changes saved in one app reach the others as changes made from outside, merged as any are, and `.notes.json` (the pins, the recent notes, the jump list) is read and written again under a lock of a moment, so no app's write drops another's. With it off, one app runs on a notes directory at a time, holding `.notes.lock` there with its process ID; a second one says the notes are open already and closes with `q`. A lock left by an app that has gone is taken over either way.
 
 A note changed from outside the app, by a skill, a script or another editor, shows the change while it is open, without a save or a keypress: a watch on the notes directory brings it in. If you have typed something not yet saved, the two are merged line by line, so changes to different lines, even next to each other, both stay; where both changed the same line, both versions are kept, yours first, and the app says so. An item ticked from outside moves under the ones left to do, as ticking it in the app does. A note renamed or moved outside the app while open (`mv`, Finder, `git mv`: its file moved, not copied) is followed by its stable ID: the note window and the sidebar go on with it at its new path, its pin and the tabs linked to it follow, and typing not yet saved is merged into it there; its file is named for its title from then on, as every note's is, so a rename that left the title as it was is undone at the next save. A note deleted outside the app while open (gone, or moved to Recently Deleted) isn't written back: what is on screen stays, unsaved, and the app says so.
 
@@ -1287,7 +1287,9 @@ The note and the plan share the width as board 8 draws them, the plan never narr
 
 ### Notes in the workspace
 
-There is only ever one Notes in the workspace, since two would save the same notes over each other.
+Each tab has a Notes app of its own (Settings' "A Notes app in each tab", `notes_per_tab`, on by default). `M-e` starts one in a pane to the right of the one you are in, showing that tab's note, and pressed again in that tab closes it; every other tab's Notes stays open where it is, so switching tabs never takes a note away. `M-N` goes to the app in Notes' own tab, or opens one there, and a note opened from a notification opens in that one. Each app listens on its own pane's socket (`notes-<pane>.sock` in the state directory), and a note open in one tab shows read-only in another (see [The notes app](#the-notes-app)). When the last of a tab's own panes closes, its Notes closes with it.
+
+With the setting off, there is only ever one Notes in the workspace, and the rest of this section describes it.
 
 `M-N` (Alt-Shift-N) goes to Notes wherever it is open, or opens it in a tab of its own, named Notes. `M-e` brings that same Notes into a pane to the right of the one you are in, or starts it there; pressed again in that tab, or `M-w` on Notes there, it goes back to a tab of its own rather than closing. While it is away, its own tab shows which tab has it ("Notes is beside tab 3"), so the tab stays in the sidebar: Enter there goes to that tab, and `M-e` brings Notes back. When the last of a tab's own panes closes, Notes goes back to its own tab rather than stay there alone. A note opened from a notification, or from anywhere but `M-e`, opens in Notes' own tab, Notes going home first when it was beside a tab. While Notes is beside a tab's pane, that tab says "✎ Notes here" in the sidebar and on its mission control card.
 
@@ -2273,6 +2275,7 @@ With UX 2.0 on, this category is named "Tabs and header".
 
 | Setting | Default | What it does |
 |---|---|---|
+| A Notes app in each tab (`notes_per_tab`) | on | M-e opens a Notes app beside the pane in the tab you're in, on that tab's note, and every other tab keeps its own open; a note open in one tab shows read-only in another, naming the tab that has it, until that tab's app lets it go. Off, there is one Notes, which M-e moves between the tabs |
 | Hide the sidebar beside a tab (`notes_hide_sidebar`) | on | When M-e brings Notes beside another tab's pane, put the notes app's sidebar away so the note has the room, and show it again in Notes' own tab |
 | Notes command palette (`notes_palette`) | on | M-p with Notes in front lists every command Notes has, each with its key, ahead of the workspace's, as Ctrl-Shift-P does in Notes run alone; off, M-p leaves them out and Ctrl-Shift-P in Notes run alone says the palette is off |
 | Ctrl-V pastes an image (`notes_ctrl_v_image`) | on | Ctrl-V while typing in a note pastes the clipboard's image under the line, as in Claude Code, when the clipboard holds one; off, or with no image there, Ctrl-V types the next key as it is, as in Vim |

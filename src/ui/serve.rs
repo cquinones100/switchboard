@@ -627,18 +627,19 @@ impl Server {
     /// for the note it shows and its own commands, listed ahead of the rest
     /// (`palette::notes_entries`); with no answer, they are left out.
     pub fn open_palette(&mut self, client: ClientId) {
-        let notes_in_front =
-            self.notes_in_front(client) && tokio::runtime::Handle::try_current().is_ok();
-        if !notes_in_front {
+        let notes_in_front = self
+            .notes_in_front(client)
+            .filter(|_| tokio::runtime::Handle::try_current().is_ok());
+        let Some(notes) = notes_in_front else {
             self.open_palette_with(client, None);
             return;
-        }
+        };
         self.notes_off_task(
-            || {
-                let notes = crate::notes::socket::path();
+            move || {
                 crate::notes::socket::send(&notes, "palette")
                     .ok()
                     .and_then(|reply| crate::notes::socket::InFront::read(&reply))
+                    .map(|front| (front, notes))
             },
             move |server, front| {
                 if server.clients.contains_key(&client) {
@@ -648,26 +649,26 @@ impl Server {
         );
     }
 
-    /// Whether the client's pane in front is the notes app's (one started
-    /// by hand found by the notes' lock), with neither the sidebar nor
-    /// mission control over it.
-    fn notes_in_front(&mut self, client: ClientId) -> bool {
-        let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
-            return false;
-        };
+    /// The socket of the notes app when the client's pane in front is
+    /// one (one started by hand found by the notes' lock), with neither the
+    /// sidebar nor mission control over it.
+    fn notes_in_front(&mut self, client: ClientId) -> Option<std::path::PathBuf> {
+        let session = self.clients.get(&client).map(|c| c.session.clone())?;
         if self.sidebar.focused(&session) || self.mission_open(client) {
-            return false;
+            return None;
         }
-        let here = self.current_pane(client);
-        here.is_some() && here == self.notes_pane()
+        let here = self.current_pane(client)?;
+        let tab = self.panes.get(&here)?.tab;
+        (self.notes_in_tab(tab) == Some(here)).then(|| crate::notes::serve::socket_of(here))
     }
 
     /// The palette, with what Notes in front answered (`front`).
     fn open_palette_with(
         &mut self,
         client: ClientId,
-        front: Option<crate::notes::socket::InFront>,
+        front: Option<(crate::notes::socket::InFront, std::path::PathBuf)>,
     ) {
+        let (front, socket) = front.unzip();
         let all = settings::read_settings();
         let on = |key: &str| {
             all.iter()
@@ -747,7 +748,9 @@ impl Server {
                 match &n.pick {
                     palette::NotesPick::WorkNote(note) => server.work_note(client, note.clone()),
                     palette::NotesPick::Run(name) => {
-                        crate::notes::serve::tell(format!("run {name}"))
+                        if let Some(socket) = &socket {
+                            crate::notes::serve::tell_at(socket.clone(), format!("run {name}"))
+                        }
                     }
                 }
                 return;

@@ -140,6 +140,15 @@ pub struct Kept {
     text: Text,
 }
 
+/// The undo and redo history as it was, for an edit taken back whole
+/// (`Editor::history`, `Editor::set_history`).
+#[derive(Clone, Debug)]
+pub struct History {
+    undo: Vec<Snap>,
+    redo: Vec<Snap>,
+    group: Option<Snap>,
+}
+
 /// As many changes as Neovim's change list keeps.
 const MOST_CHANGES: usize = 100;
 
@@ -511,6 +520,22 @@ impl Editor {
     /// Takes the open note's undo and redo history and its folds out, with
     /// the text they end at, to be put back when it opens again (`take_back`),
     /// as Neovim kept a buffer per note; a change under way ends here.
+    /// The undo and redo history as it is.
+    pub fn history(&self) -> History {
+        History {
+            undo: self.undo.clone(),
+            redo: self.redo.clone(),
+            group: self.group.clone(),
+        }
+    }
+
+    /// The undo and redo history put back as `history` gave it.
+    pub fn set_history(&mut self, history: History) {
+        self.undo = history.undo;
+        self.redo = history.redo;
+        self.group = history.group;
+    }
+
     pub fn put_away(&mut self) -> Kept {
         let typed = self.typed_in_step();
         if let Some(group) = self.group.take()

@@ -593,6 +593,15 @@ impl App {
             return;
         };
         let path = b.path.clone();
+        // Neither the note nor its plan is this app's to change while
+        // another app has it open (notes_per_tab).
+        if let Some(line) = self.held_line() {
+            self.say(line);
+            return;
+        }
+        if self.held_elsewhere(&path) {
+            return;
+        }
         // The item found before anything is written, so a choice never
         // leaves the plan settled and the item still needing it.
         let Some(at) = self.beside_row() else {

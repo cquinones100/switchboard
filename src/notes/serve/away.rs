@@ -149,7 +149,7 @@ fn start_notes(out: &mut impl Write) -> ExitCode {
         let _ = socket::ask(&["set", "-t", &pane, "-u", "@notes_placeholder"]);
         let _ = socket::ask(&["set", "-t", &pane, "@notes_pane", "1"]);
     }
-    let command = super::notes_command(None);
+    let command = super::notes_command(None, None, None);
     let err = std::process::Command::new(&command[0])
         .args(&command[1..])
         .exec();
