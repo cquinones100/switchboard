@@ -821,6 +821,14 @@ fn its_settings_box_saves_what_changed_at_once_and_asks_before_leaving_changes()
     assert_eq!(now["spendLimit"], 20);
     assert_eq!(now["said"], "", "what it said of the limit passed goes");
 
+    // The weekly limit's stepper: off, then 50 and up by fives.
+    open_box(&mut client, 6);
+    client.type_text("++");
+    client.wait_text(" − 55  + ");
+    client.type_text("\x1b\r");
+    client.wait_text("Autopilot: weekly limit 55%");
+    assert_eq!(mode(&server)["weeklyLimit"], 55);
+
     // u on a skipped item takes it back.
     settings_box(&mut client);
     let screen = client.wait_text("skipped by you");
@@ -837,7 +845,7 @@ fn its_settings_box_saves_what_changed_at_once_and_asks_before_leaving_changes()
     assert_eq!(mode(&server)["skipped"], json!([]));
 
     // Land without asking, after its question.
-    open_box(&mut client, 7);
+    open_box(&mut client, 8);
     client.type_text(" \x1b\r");
     let screen = client.wait_text("without asking to push?");
     assert!(

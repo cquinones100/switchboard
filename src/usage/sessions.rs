@@ -471,6 +471,25 @@ pub fn github_left(rows: &mut [Item], left: Option<(i64, i64)>) {
     );
 }
 
+/// A rate limit's window from the `limits` file: how much of it is used
+/// (percent) and when it resets (seconds), while it hasn't reset by `now`
+/// (seconds); `None` for one missing, unreadable or past.
+fn window_now(window: &Value, now: i64) -> Option<(f64, i64)> {
+    let used = window["used_percentage"]
+        .as_f64()
+        .filter(|u| u.is_finite())?;
+    let resets_at = window["resets_at"].as_f64().map(|r| r as i64)?;
+    (resets_at > now).then_some((used, resets_at))
+}
+
+/// The week's use of Claude Code's weekly rate limit, as the statusline
+/// last wrote it, read as the Usage view reads it: the percent used and
+/// when it resets (seconds); `None` while there is no current reading.
+pub fn weekly_used(state: &Path, now_ms: i64) -> Option<(f64, i64)> {
+    let limits = util::read_json(usage_dir(state).join("limits"))?;
+    window_now(&limits["seven_day"], now_ms.div_euclid(1000))
+}
+
 /// The Usage view's rows: today's spend, each rate limit not yet reset, and
 /// with `requests` the request audit's.
 pub fn usage_items(state: &Path, now_ms: i64, requests: Option<&Tally>) -> Vec<Item> {
@@ -493,15 +512,9 @@ pub fn usage_items(state: &Path, now_ms: i64, requests: Option<&Tally>) -> Vec<I
         ("spend_limit", "Spend limit"),
     ] {
         let window = &limits[key];
-        let Some(used) = window["used_percentage"].as_f64().filter(|u| u.is_finite()) else {
+        let Some((used, resets_at)) = window_now(window, now) else {
             continue;
         };
-        let Some(resets_at) = window["resets_at"].as_f64().map(|r| r as i64) else {
-            continue;
-        };
-        if resets_at <= now {
-            continue;
-        }
         let mut detail = Vec::new();
         if let Some(usd) = window["used_usd"].as_f64() {
             detail.push(format!(

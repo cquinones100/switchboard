@@ -41,6 +41,12 @@ pub struct Summary {
     /// Today's Claude spend, as the Usage view sums it, read with the next
     /// items while there is a limit; 0 otherwise.
     pub spent: f64,
+    /// The percent of the weekly rate limit used past which it opens
+    /// nothing; 0 for none.
+    pub weekly_limit: u32,
+    /// The week's use of the weekly rate limit (percent) and when it resets
+    /// (seconds), read with the next items while there is a weekly limit.
+    pub weekly: Option<(f64, i64)>,
     /// Its tabs land without asking.
     pub lands_alone: bool,
     /// Its tabs take the recommended option of what they would ask.
@@ -91,6 +97,9 @@ impl Summary {
         }
         if self.spend_limit > 0.0 {
             facts.push(format!("stops at ${} today", self.spend_limit));
+        }
+        if self.weekly_limit > 0 {
+            facts.push(format!("stops at {}% of the week", self.weekly_limit));
         }
         if self.hands_free {
             facts.push("hands-free".into());
@@ -167,6 +176,8 @@ pub enum Act {
     Cap,
     /// Its spend limit, asked for alone.
     SpendLimit,
+    /// Its weekly limit, asked for alone.
+    WeeklyLimit,
     /// "Land on:" asked again.
     ChangeTarget,
     Stop,
@@ -288,15 +299,21 @@ pub fn choices(
         "Change the target branch…".to_string(),
         Act::ChangeTarget,
     ));
-    out.extend(count_choices(mode.slots, mode.cap, mode.spend_limit));
+    out.extend(count_choices(
+        mode.slots,
+        mode.cap,
+        mode.spend_limit,
+        mode.weekly_limit,
+    ));
     out.push(('n', "Change its note…".to_string(), Act::Change));
     out.push(('x', "Stop working the note".to_string(), Act::Stop));
     out
 }
 
 /// The menu's options for its counts, each naming what it is now: the tabs
-/// working at once, the most open, and the spend limit (0 for none).
-pub fn count_choices(slots: u32, cap: u32, limit: f64) -> Vec<(char, String, Act)> {
+/// working at once, the most open, the spend limit and the weekly limit
+/// (each 0 for none).
+pub fn count_choices(slots: u32, cap: u32, limit: f64, weekly: u32) -> Vec<(char, String, Act)> {
     vec![
         ('o', format!("Tabs working at once: {slots}…"), Act::Slots),
         ('m', format!("Most tabs open: {cap}…"), Act::Cap),
@@ -308,6 +325,15 @@ pub fn count_choices(slots: u32, cap: u32, limit: f64) -> Vec<(char, String, Act
                 "Spend limit: none…".to_string()
             },
             Act::SpendLimit,
+        ),
+        (
+            '%',
+            if weekly > 0 {
+                format!("Weekly limit: {weekly}%…")
+            } else {
+                "Weekly limit: none…".to_string()
+            },
+            Act::WeeklyLimit,
         ),
     ]
 }
@@ -385,6 +411,7 @@ pub fn apply(act: &Act, mode: &mut Mode) -> Option<String> {
         | Act::Slots
         | Act::Cap
         | Act::SpendLimit
+        | Act::WeeklyLimit
         | Act::ChangeTarget
         | Act::ToTabs
         | Act::Dismiss
@@ -428,6 +455,8 @@ mod tests {
             skipped: 1,
             spend_limit: 0.0,
             spent: 0.0,
+            weekly_limit: 0,
+            weekly: None,
             lands_alone: false,
             hands_free: false,
             target: String::new(),
@@ -523,6 +552,7 @@ mod tests {
                 "Tabs working at once: 3…",
                 "Most tabs open: 5…",
                 "Spend limit: none…",
+                "Weekly limit: none…",
                 "Change its note…",
                 "Stop working the note"
             ]
@@ -532,6 +562,11 @@ mod tests {
             ..mode.clone()
         };
         assert!(labels(&limited, "").contains(&"Spend limit: $20 a day…".to_string()));
+        let weekly = Mode {
+            weekly_limit: 85,
+            ..mode.clone()
+        };
+        assert!(labels(&weekly, "").contains(&"Weekly limit: 85%…".to_string()));
         let (_, _, pause) = choices(&mode, "", "when seen", true).remove(0);
         assert_eq!(apply(&pause, &mut mode).as_deref(), Some("Paused"));
         assert!(mode.paused);

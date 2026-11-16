@@ -1,7 +1,7 @@
 //! The mode's state, what you chose, kept in `autopilot.json` in the state
 //! directory as lib/sidebar/autopilot.js kept it: `{ on, note, noteId, repo,
-//! slots, cap, paused, readyOnly, skipped, spendLimit, landWithoutAsking,
-//! handsFree, said, closed, landed, next }`.
+//! slots, cap, paused, readyOnly, skipped, spendLimit, weeklyLimit,
+//! landWithoutAsking, handsFree, said, closed, landed, next }`.
 //! `note` is the note's path within the notes directory and `noteId` its
 //! stable ID (src/notes/id.rs), which the mode follows the note by when it
 //! has been renamed or moved, outside Notes too, writing its path back;
@@ -66,6 +66,9 @@ pub struct Mode {
     /// Today's Claude spend, in dollars, past which it opens no more tabs;
     /// 0 for none.
     pub spend_limit: f64,
+    /// The percent of Claude Code's weekly rate limit used past which it
+    /// opens no more tabs; 0 for none.
+    pub weekly_limit: u32,
     /// Its tabs land on the default branch without asking to push.
     pub land_without_asking: bool,
     /// Its tabs take the recommended option of what they would ask.
@@ -155,6 +158,7 @@ impl Default for Mode {
             skipped: Vec::new(),
             next: Vec::new(),
             spend_limit: 0.0,
+            weekly_limit: 0,
             land_without_asking: false,
             hands_free: false,
             target: String::new(),
@@ -232,6 +236,7 @@ impl Mode {
                 .and_then(Value::as_f64)
                 .filter(|n| n.is_finite() && *n >= 0.0)
                 .unwrap_or(0.0),
+            weekly_limit: count("weeklyLimit", d.weekly_limit).min(100),
             land_without_asking: flag("landWithoutAsking", d.land_without_asking),
             hands_free: flag("handsFree", d.hands_free),
             target: text("target").unwrap_or_default(),
@@ -311,6 +316,7 @@ impl Mode {
             ),
         );
         map.insert("spendLimit".into(), util::js_number(self.spend_limit));
+        map.insert("weeklyLimit".into(), self.weekly_limit.into());
         map.insert("landWithoutAsking".into(), self.land_without_asking.into());
         map.insert("handsFree".into(), self.hands_free.into());
         map.insert("target".into(), self.target.into());
@@ -532,6 +538,10 @@ mod tests {
         assert_eq!(mode.skipped, Vec::<Skipped>::new(), "Lua's empty object");
         assert_eq!(mode.spend_limit, 2.5);
         assert_eq!(
+            mode.weekly_limit, 0,
+            "a state saved before weekly limits has none"
+        );
+        assert_eq!(
             mode.target, "",
             "a state saved before targets lands on the default branch"
         );
@@ -545,6 +555,7 @@ mod tests {
         let mode = Mode::update(&dir, |m| {
             m.on = true;
             m.spend_limit = 20.0;
+            m.weekly_limit = 85;
             m.note_id = "n-0123456789ab".into();
             m.target = "team/next".into();
             m.skipped.push(Skipped {
@@ -557,6 +568,8 @@ mod tests {
         let written = util::read_json(Mode::file(&dir)).unwrap();
         assert_eq!(written["later"], 1);
         assert_eq!(written["spendLimit"], 20);
+        assert_eq!(written["weeklyLimit"], 85);
+        assert_eq!(Mode::read(&dir).weekly_limit, 85);
         assert_eq!(written["readyOnly"], false);
         assert_eq!(
             written["skipped"][0],

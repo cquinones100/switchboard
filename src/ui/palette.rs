@@ -199,7 +199,7 @@ pub fn autopilot_on(entries: &mut [Entry], note: &str) {
     let work_note = Action::Autopilot(crate::autopilot::Command::WorkNote);
     for entry in entries.iter_mut().filter(|e| e.action == work_note) {
         entry.words = format!(
-            "Autopilot: work a note: show its board for {} (m for its settings: its tabs at once, the most open, the spend limit, the branch it lands on, pause or stop)",
+            "Autopilot: work a note: show its board for {} (m for its settings: its tabs at once, the most open, the spend and weekly limits, the branch it lands on, pause or stop)",
             crate::autopilot::mode::note_title(note)
         );
     }

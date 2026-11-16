@@ -11,7 +11,9 @@
 //! a suggestion dim after what is typed that → takes, how it lands under
 //! the branch), the tabs at once and the most open (steppers, − and + or ←
 //! and →), the spend limit (dollars, with a meter of today's spend against
-//! it), Planned only, Land without asking and Hands-free (switches, Space
+//! it), the weekly limit (a stepper of percents, off then 50 to 100 by 5,
+//! with a meter of the week's use of Claude Code's weekly rate limit
+//! against it), Planned only, Land without asking and Hands-free (switches, Space
 //! flips one), and the note's skipped items (u takes one back) with the
 //! items left out for needing a choice. Under a rule, its keys as keycaps:
 //! M-↵ Save (Start while off), and while on the buttons Pause or Resume,
@@ -69,6 +71,9 @@ pub struct Fields {
     pub cap: u32,
     /// Dollars as typed; empty for no limit.
     pub limit: String,
+    /// The percent of the weekly rate limit it stops at; 0 for none.
+    #[serde(default)]
+    pub weekly: u32,
     pub ready_only: bool,
     pub land_without_asking: bool,
     pub hands_free: bool,
@@ -95,6 +100,7 @@ impl Fields {
             slots: mode.slots,
             cap: mode.cap,
             limit: limit_text(mode.spend_limit),
+            weekly: mode.weekly_limit,
             ready_only: mode.ready_only,
             land_without_asking: mode.land_without_asking,
             hands_free: mode.hands_free,
@@ -135,11 +141,15 @@ impl Fields {
         mode.cap = self.cap.max(mode.slots);
         mode.target = self.target.trim().to_string();
         if let Some(limit) = self.limit() {
-            if mode.spend_limit != limit && mode.said.starts_with(super::pilot::SPENT) {
-                mode.said.clear();
+            if mode.spend_limit != limit {
+                mode.said = super::pilot::unsay(&mode.said, super::pilot::SPENT);
             }
             mode.spend_limit = limit;
         }
+        if mode.weekly_limit != self.weekly {
+            mode.said = super::pilot::unsay(&mode.said, super::pilot::WEEKLY);
+        }
+        mode.weekly_limit = self.weekly;
         mode.ready_only = self.ready_only;
         mode.hands_free = self.hands_free;
         mode.land_without_asking = self.land_without_asking || self.hands_free;
@@ -175,6 +185,12 @@ impl Fields {
                 _ => "no spend limit".to_string(),
             });
         }
+        if self.weekly != was.weekly {
+            out.push(match self.weekly {
+                0 => "no weekly limit".to_string(),
+                w => format!("weekly limit {w}%"),
+            });
+        }
         if self.ready_only != was.ready_only {
             out.push(format!("planned only {}", on_off(self.ready_only)));
         }
@@ -190,6 +206,21 @@ impl Fields {
         }
         out
     }
+}
+
+/// The weekly limit's stepper moved `by` a step from `at`: off (0), then 50
+/// to 100 by 5, a limit typed in the menu between them landing on the
+/// step past it.
+pub fn weekly_step(at: u32, by: i64) -> u32 {
+    let at = i64::from(at.min(100));
+    let next = if by > 0 {
+        if at < 50 { 50 } else { (at / 5 + 1) * 5 }
+    } else if at <= 50 {
+        0
+    } else {
+        (at - 1) / 5 * 5
+    };
+    next.clamp(0, 100) as u32
 }
 
 /// A limit in dollars as the field shows it: none empty, else exactly as
@@ -222,6 +253,9 @@ pub struct Context {
     pub open: usize,
     /// Today's Claude spend, in dollars.
     pub spent: f64,
+    /// The week's use of Claude Code's weekly rate limit, in percent; `None`
+    /// while the statusline has no current reading.
+    pub weekly: Option<f64>,
     /// The repository the landing words are for, as typed in the field.
     pub landing_repo: String,
     /// How it lands there, in words ("straight on main through
@@ -248,6 +282,7 @@ pub enum Part {
     Slots,
     Cap,
     Limit,
+    Weekly,
     Planned,
     Land,
     HandsFree,
@@ -275,6 +310,7 @@ pub enum Part {
 pub enum Field {
     Slots,
     Cap,
+    Weekly,
 }
 
 /// A part on a line: the line's index, its first and last column, the part.
@@ -355,6 +391,7 @@ impl SettingsBox {
             Part::Slots,
             Part::Cap,
             Part::Limit,
+            Part::Weekly,
             Part::Planned,
             Part::Land,
         ];
@@ -399,9 +436,18 @@ impl SettingsBox {
     }
 
     fn step(&mut self, field: Field, by: i64) -> Step {
+        if field == Field::Weekly {
+            let next = weekly_step(self.fields.weekly, by);
+            if next == self.fields.weekly {
+                return Step::Same;
+            }
+            self.fields.weekly = next;
+            return Step::Redraw;
+        }
         let n = match field {
             Field::Slots => &mut self.fields.slots,
             Field::Cap => &mut self.fields.cap,
+            Field::Weekly => return Step::Same,
         };
         let next = (*n as i64 + by).clamp(1, 99) as u32;
         if next == *n {
@@ -442,7 +488,7 @@ impl SettingsBox {
     fn press(&mut self, part: Part) -> Step {
         match part {
             Part::Note => self.close(NOTE),
-            Part::Repo | Part::Target | Part::Limit | Part::Slots | Part::Cap => {
+            Part::Repo | Part::Target | Part::Limit | Part::Slots | Part::Cap | Part::Weekly => {
                 self.focus = part;
                 Step::Redraw
             }
@@ -601,6 +647,7 @@ impl SettingsBox {
             "Tabs at once",
             "Most open",
             "Spend limit",
+            "Weekly limit",
             "Planned only",
             "Land without asking",
             "Hands-free",
@@ -887,6 +934,103 @@ impl SettingsBox {
         lines.push(BoxLine::spans(row(cells, &limit_cols)).clickable());
         lines.extend(under(
             "dollars a day, empty for none: it opens no new tab past it; the ones working finish",
+            Tone::Faint.style(theme),
+        ));
+
+        // The weekly limit, with the week's use against it.
+        let used = match ctx.weekly {
+            Some(u) => format!("{}% this week", u.round() as i64),
+            None => "no reading yet".to_string(),
+        };
+        let used_w = draw::width(&used);
+        let weekly_cols = kit::columns(
+            &[
+                name_col,
+                Col::Fixed {
+                    min: 9,
+                    natural: 9,
+                    cap: 9,
+                },
+                Col::Stretch {
+                    weight: 1,
+                    min: 6,
+                    max: None,
+                },
+                Col::Right {
+                    natural: used_w,
+                    cap: used_w,
+                },
+            ],
+            cols,
+            2,
+            &[2],
+        );
+        {
+            let at = weekly_cols[1].unwrap_or((0, 9));
+            let x = (at.0 + 1) as u16;
+            let cap_style = |p: Part| {
+                let bg = if self.hover == Some(p) {
+                    Surface::Chosen.color(theme)
+                } else {
+                    Surface::Panel.color(theme)
+                };
+                Tone::Accent.bold(theme).bg(bg)
+            };
+            let number = if self.focus == Part::Weekly {
+                Style::new().fg(theme.bright).add_modifier(Modifier::BOLD)
+            } else {
+                Tone::Text.bold(theme)
+            };
+            let shown = match f.weekly {
+                0 => "off".to_string(),
+                w => format!("{w}"),
+            };
+            let stepper = vec![
+                Span::styled(" − ", cap_style(Part::Less(Field::Weekly))),
+                Span::styled(format!("{shown:^3}"), number),
+                Span::styled(" + ", cap_style(Part::More(Field::Weekly))),
+            ];
+            parts.push((lines.len(), x, x + 2, Part::Less(Field::Weekly)));
+            parts.push((lines.len(), x + 3, x + 5, Part::Weekly));
+            parts.push((lines.len(), x + 6, x + 8, Part::More(Field::Weekly)));
+            let mut cells = vec![name("Weekly limit", Part::Weekly), stepper];
+            if let Some(meter_at) = weekly_cols[2] {
+                let (frac, tone) = match (f.weekly, ctx.weekly) {
+                    (l, Some(u)) if l > 0 => {
+                        let frac = (u / f64::from(l)) as f32;
+                        let tone = if frac >= 1.0 {
+                            Tone::Failed
+                        } else if frac >= 0.8 {
+                            Tone::Needs
+                        } else {
+                            Tone::Done
+                        };
+                        (frac.min(1.0), tone)
+                    }
+                    _ => (0.0, Tone::Dim),
+                };
+                let filled = (meter_at.1 as f32 * frac).round() as usize;
+                cells.push(vec![
+                    Span::styled("━".repeat(filled), tone.style(theme)),
+                    Span::styled(
+                        "━".repeat(meter_at.1.saturating_sub(filled)),
+                        Style::new().fg(kit::border(theme)),
+                    ),
+                ]);
+                pictures.push((
+                    lines.len(),
+                    (meter_at.0 + 1) as u16,
+                    meter_at.1 as u16,
+                    Picture::Meter(frac, tone.fg(theme)),
+                ));
+            } else {
+                cells.push(Vec::new());
+            }
+            cells.push(vec![Span::styled(used, Tone::Dim.style(theme))]);
+            lines.push(BoxLine::spans(row(cells, &weekly_cols)).clickable());
+        }
+        lines.extend(under(
+            "percent of Claude Code's weekly limit, from its statusline: it opens no new tab once the week reaches it",
             Tone::Faint.style(theme),
         ));
 
@@ -1254,6 +1398,15 @@ impl SettingsBox {
     }
 }
 
+/// The stepper a part with the focus moves.
+fn stepper_of(part: Part) -> Field {
+    match part {
+        Part::Slots => Field::Slots,
+        Part::Cap => Field::Cap,
+        _ => Field::Weekly,
+    }
+}
+
 impl SettingsBox {
     /// The part a click on a cell of the box presses: while the question
     /// before leaving is up, only Leave and Stay.
@@ -1415,22 +1568,14 @@ impl Overlay for SettingsBox {
             _ => {}
         }
         match (self.focus, k.code) {
-            (Part::Slots | Part::Cap, KeyCode::Left | KeyCode::Char('-') | KeyCode::Char('−')) => {
-                let f = if self.focus == Part::Slots {
-                    Field::Slots
-                } else {
-                    Field::Cap
-                };
-                return self.step(f, -1);
-            }
-            (Part::Slots | Part::Cap, KeyCode::Right | KeyCode::Char('+') | KeyCode::Char('=')) => {
-                let f = if self.focus == Part::Slots {
-                    Field::Slots
-                } else {
-                    Field::Cap
-                };
-                return self.step(f, 1);
-            }
+            (
+                Part::Slots | Part::Cap | Part::Weekly,
+                KeyCode::Left | KeyCode::Char('-') | KeyCode::Char('−'),
+            ) => return self.step(stepper_of(self.focus), -1),
+            (
+                Part::Slots | Part::Cap | Part::Weekly,
+                KeyCode::Right | KeyCode::Char('+') | KeyCode::Char('='),
+            ) => return self.step(stepper_of(self.focus), 1),
             (Part::Repo | Part::Target, KeyCode::Right) => return self.take_suggestion(),
             (Part::Planned | Part::Land | Part::HandsFree, KeyCode::Char(' ') | KeyCode::Enter) => {
                 return self.flip(self.focus);
@@ -1690,6 +1835,43 @@ mod tests {
         fields.limit = "20".into();
         fields.apply(&mut m);
         assert!(m.said.is_empty());
+    }
+
+    #[test]
+    fn the_weekly_limit_steps_off_then_by_fives_from_50_and_saves_with_the_rest() {
+        assert_eq!(weekly_step(0, 1), 50);
+        assert_eq!(weekly_step(50, 1), 55);
+        assert_eq!(weekly_step(100, 1), 100);
+        assert_eq!(weekly_step(50, -1), 0);
+        assert_eq!(weekly_step(0, -1), 0);
+        assert_eq!(weekly_step(83, 1), 85, "a limit typed in the menu");
+        assert_eq!(weekly_step(83, -1), 80);
+
+        let mut b = opened(Part::Weekly);
+        let look = Look::default();
+        assert!(text_of(&b, WIDTH, true).contains("Weekly limit"));
+        assert!(text_of(&b, WIDTH, true).contains("no reading yet"));
+        b.key(key(KeyCode::Right), &look);
+        b.key(key(KeyCode::Right), &look);
+        assert_eq!(b.fields().weekly, 55);
+        b.ctx.weekly = Some(62.4);
+        assert!(text_of(&b, WIDTH, true).contains("62% this week"));
+        let mut m = mode();
+        m.said = format!(
+            "{} 50% reached, resets in 2h 0m",
+            super::super::pilot::WEEKLY
+        );
+        b.fields().apply(&mut m);
+        assert_eq!(m.weekly_limit, 55);
+        assert!(m.said.is_empty(), "a new limit takes back what it said");
+        assert_eq!(
+            b.fields().changes(&Fields::from_mode(&mode())),
+            ["weekly limit 55%"]
+        );
+        b.key(key(KeyCode::Left), &look);
+        b.key(key(KeyCode::Left), &look);
+        assert_eq!(b.fields().weekly, 0);
+        assert!(text_of(&b, WIDTH, true).contains("off"));
     }
 
     #[test]

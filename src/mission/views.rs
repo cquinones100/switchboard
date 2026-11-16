@@ -1983,6 +1983,8 @@ mod tests {
             skipped: 0,
             spend_limit: 0.0,
             spent: 0.0,
+            weekly_limit: 0,
+            weekly: None,
             lands_alone: false,
             target: String::new(),
             drained: false,

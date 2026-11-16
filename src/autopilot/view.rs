@@ -513,6 +513,12 @@ pub fn items(
     if s.spend_limit > 0.0 {
         facts.push(format!("${:.2} of ${} today", s.spent, s.spend_limit));
     }
+    if s.weekly_limit > 0 {
+        facts.push(match s.weekly {
+            Some((used, _)) => format!("{}% of {}% this week", used.round() as i64, s.weekly_limit),
+            None => format!("stops at {}% of the week", s.weekly_limit),
+        });
+    }
     if s.drained {
         facts.push("nothing more to start".into());
     }
@@ -780,6 +786,8 @@ mod tests {
             skipped: 1,
             spend_limit: 0.0,
             spent: 0.0,
+            weekly_limit: 0,
+            weekly: None,
             lands_alone: false,
             hands_free: false,
             target: String::new(),
@@ -834,6 +842,8 @@ mod tests {
             skipped: 1,
             spend_limit: 0.0,
             spent: 0.0,
+            weekly_limit: 0,
+            weekly: None,
             lands_alone: true,
             hands_free: false,
             target: "team/next".into(),
@@ -931,6 +941,8 @@ mod tests {
             skipped: 0,
             spend_limit: 0.0,
             spent: 0.0,
+            weekly_limit: 0,
+            weekly: None,
             lands_alone: false,
             target: String::new(),
             drained: false,
@@ -1033,6 +1045,8 @@ mod tests {
             skipped: 0,
             spend_limit: 0.0,
             spent: 0.0,
+            weekly_limit: 0,
+            weekly: None,
             lands_alone: false,
             hands_free: false,
             target: String::new(),
@@ -1080,6 +1094,8 @@ mod tests {
             skipped: 0,
             spend_limit: 20.0,
             spent: 4.2,
+            weekly_limit: 0,
+            weekly: None,
             lands_alone: false,
             hands_free: false,
             target: String::new(),
@@ -1177,6 +1193,8 @@ mod tests {
             skipped: 0,
             spend_limit: 0.0,
             spent: 0.0,
+            weekly_limit: 0,
+            weekly: None,
             lands_alone: false,
             target: String::new(),
             drained: false,

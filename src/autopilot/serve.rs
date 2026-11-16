@@ -279,6 +279,7 @@ fn box_context(mode: &Mode, fields: &Fields, notes: &Path) -> Context {
         busy: 0,
         open: 0,
         spent: crate::usage::sessions::spent_today(&state, util::now_ms()),
+        weekly: crate::usage::sessions::weekly_used(&state, util::now_ms()).map(|(used, _)| used),
         landing_repo: fields.repo.clone(),
         landing,
         repos,
@@ -505,6 +506,17 @@ impl FieldsCheck {
             starting,
         })
     }
+}
+
+/// A percent of the week, as typed, a `%` after it or not: a whole number
+/// from 1 to 100; empty, or 0, for no limit.
+fn percent(text: &str) -> Option<u32> {
+    let text = text.trim();
+    let n: f64 = match text.strip_suffix('%').unwrap_or(text).trim() {
+        "" => return Some(0),
+        n => n.parse().ok()?,
+    };
+    (n.fract() == 0.0 && (0.0..=100.0).contains(&n)).then_some(n as u32)
 }
 
 impl Server {
@@ -924,6 +936,38 @@ impl Server {
         );
     }
 
+    /// The weekly limit asked for in a box, `was` typed in already (empty
+    /// for none); `then` given it, 0 for none.
+    fn autopilot_ask_weekly(
+        &mut self,
+        client: ClientId,
+        was: u32,
+        then: impl FnOnce(&mut Server, ClientId, u32) + Send + 'static,
+    ) {
+        let ask = Ask::new(
+            "Weekly limit",
+            "Open no more tabs once this percent of Claude Code's weekly rate limit is used, as the statusline last read it; empty for none.",
+        )
+        .text(if was > 0 { was.to_string() } else { String::new() })
+        .empty_ok();
+        self.open(
+            client,
+            Box::new(ask),
+            Some(Box::new(move |server: &mut Server, client, outcome| {
+                let Outcome::Picked(p) = outcome else {
+                    return;
+                };
+                match percent(&p.value) {
+                    Some(limit) => then(server, client, limit),
+                    None => server.mission_note(
+                        client,
+                        "Weekly limit: a percent from 1 to 100, or empty for none",
+                    ),
+                }
+            })),
+        );
+    }
+
     /// The note by its ID too, which the mode follows it by, given one when
     /// it has none, then the mode on; off the task, since that writes the
     /// note.
@@ -945,8 +989,8 @@ impl Server {
         );
     }
 
-    /// Its menu's "Tabs working at once", "Most tabs open" and "Spend
-    /// limit": that one box, what it was typed in, and only that count
+    /// Its menu's "Tabs working at once", "Most tabs open", "Spend limit"
+    /// and "Weekly limit": that one box, what it was typed in, and only that count
     /// written. The cap is never below the slots: slots past it raise it,
     /// and a cap typed below them is taken as the slots, each said.
     fn autopilot_set_count(&mut self, client: ClientId, act: Act) {
@@ -1006,6 +1050,27 @@ impl Server {
                     )
                 },
             ),
+            Act::WeeklyLimit => {
+                self.autopilot_ask_weekly(client, was.weekly_limit, move |server, client, limit| {
+                    set(
+                        server,
+                        client,
+                        Box::new(move |m| {
+                            // What it said of the limit before no longer
+                            // holds once the limit is another.
+                            if m.weekly_limit != limit {
+                                m.said = super::pilot::unsay(&m.said, super::pilot::WEEKLY);
+                            }
+                            m.weekly_limit = limit;
+                            if limit > 0 {
+                                format!("Weekly limit: {limit}% of the week")
+                            } else {
+                                "Weekly limit: none".to_string()
+                            }
+                        }),
+                    )
+                })
+            }
             _ => self.autopilot_ask_limit(client, was.spend_limit, move |server, client, limit| {
                 set(
                     server,
@@ -1013,8 +1078,8 @@ impl Server {
                     Box::new(move |m| {
                         // What it said of the limit before no longer
                         // holds once the limit is another.
-                        if m.spend_limit != limit && m.said.starts_with(super::pilot::SPENT) {
-                            m.said.clear();
+                        if m.spend_limit != limit {
+                            m.said = super::pilot::unsay(&m.said, super::pilot::SPENT);
                         }
                         m.spend_limit = limit;
                         if limit > 0.0 {
@@ -1563,6 +1628,7 @@ impl Server {
             Act::Slots => Some(Part::Slots),
             Act::Cap => Some(Part::Cap),
             Act::SpendLimit => Some(Part::Limit),
+            Act::WeeklyLimit => Some(Part::Weekly),
             _ => None,
         };
         if let Some(focus) = field
@@ -1582,7 +1648,9 @@ impl Server {
                 self.autopilot_setup(client, &dir);
             }
             Act::ChangeTarget => self.autopilot_change_target(client),
-            Act::Slots | Act::Cap | Act::SpendLimit => self.autopilot_set_count(client, act),
+            Act::Slots | Act::Cap | Act::SpendLimit | Act::WeeklyLimit => {
+                self.autopilot_set_count(client, act)
+            }
             Act::ToTabs => self.open_mission(client, super::opening()),
             Act::Dismiss => {
                 self.autopilot_dismiss();
@@ -1811,10 +1879,15 @@ impl Server {
             failing: self.sources.main_failing(),
             ..self.autopilot.pilot.summary(mode, self.autopilot_away())
         };
-        // Paused, away or past today's spend limit, it opens nothing for now.
+        // Paused, away, past today's spend limit or at the weekly limit, it
+        // opens nothing for now.
         let held_off = summary.paused
             || summary.away
-            || (summary.spend_limit > 0.0 && summary.spent >= summary.spend_limit);
+            || (summary.spend_limit > 0.0 && summary.spent >= summary.spend_limit)
+            || (summary.weekly_limit > 0
+                && summary
+                    .weekly
+                    .is_some_and(|(used, _)| used >= f64::from(summary.weekly_limit)));
         // Stopped, it starts nothing more, so it has nothing to estimate.
         let eta = if settings::is_on("autopilot_eta") && mode.on {
             super::view::eta(
@@ -1883,6 +1956,18 @@ impl Server {
             })
             .collect();
         let limited = summary.spend_limit > 0.0 && summary.spent >= summary.spend_limit;
+        // At the weekly limit, as its last reading says, for the Home tab to
+        // say when the week resets.
+        let weekly = summary
+            .weekly
+            .filter(|(used, resets_at)| {
+                summary.weekly_limit > 0
+                    && *used >= f64::from(summary.weekly_limit)
+                    && *resets_at > util::now_secs()
+            })
+            .map(|(used, resets_at)| {
+                json!({ "limit": summary.weekly_limit, "used": used, "resetsAt": resets_at })
+            });
         // The Landed column keeps a landed tab open from another day; the
         // Home tab counts today's alone.
         let now = util::now_ms();
@@ -1898,6 +1983,7 @@ impl Server {
             "pausedAt": (summary.paused && mode.paused_at > 0).then_some(mode.paused_at),
             "away": summary.away,
             "limited": limited,
+            "weekly": weekly,
             "said": mode.said,
             "slots": mode.slots,
             "spent": summary.spent,
@@ -2513,6 +2599,11 @@ impl Server {
             } else {
                 0.0
             };
+            let weekly = if job.weekly_limit > 0 {
+                crate::usage::sessions::weekly_used(&state, util::now_ms())
+            } else {
+                None
+            };
             let _ = tx.send(Event::Autopilot(AutopilotEvent::Next {
                 key: job.key,
                 text,
@@ -2520,6 +2611,7 @@ impl Server {
                 held,
                 plans,
                 spent,
+                weekly,
                 left,
             }));
         });
@@ -2568,6 +2660,7 @@ impl Server {
                 held,
                 plans,
                 spent,
+                weekly,
                 left,
             } => {
                 let changed = self.autopilot.pilot.next.text != text
@@ -2575,12 +2668,14 @@ impl Server {
                     || self.autopilot.pilot.next.queue != queue
                     || self.autopilot.pilot.next.held != held
                     || self.autopilot.pilot.next.plans != plans
-                    || self.autopilot.pilot.next.spent != spent;
+                    || self.autopilot.pilot.next.spent != spent
+                    || self.autopilot.pilot.next.weekly != weekly;
                 self.autopilot.pilot.next_read(key, text, util::now_ms());
                 self.autopilot.pilot.next.queue = queue;
                 self.autopilot.pilot.next.held = held;
                 self.autopilot.pilot.next.plans = plans;
                 self.autopilot.pilot.next.spent = spent;
+                self.autopilot.pilot.next.weekly = weekly;
                 self.autopilot.pilot.next.left = left;
                 if changed {
                     self.autopilot_redraw();
@@ -2649,6 +2744,18 @@ impl Server {
         );
         if mode.said.starts_with("Nothing left") {
             self.autopilot_say("");
+        } else if mode.said.contains(super::pilot::WEEKLY) {
+            // A tab opened, the weekly limit no longer holds it; a refusal
+            // said before it stays.
+            match Mode::update(&paths::state_dir(), |m| {
+                m.said = super::pilot::unsay(&m.said, super::pilot::WEEKLY)
+            }) {
+                Ok(mode) => {
+                    self.autopilot_notices(&mode);
+                    self.autopilot.mode = mode;
+                }
+                Err(e) => eprintln!("autopilot: couldn't save what it said: {e}"),
+            }
         }
     }
 
@@ -2926,5 +3033,12 @@ mod tests {
         assert_eq!(dollars("7.5"), Some(7.5));
         assert_eq!(dollars("-1"), None);
         assert_eq!(dollars("lots"), None);
+        assert_eq!(percent(""), Some(0), "empty for none");
+        assert_eq!(percent("80"), Some(80));
+        assert_eq!(percent("80%"), Some(80));
+        assert_eq!(percent(" 85 % "), Some(85));
+        for bad in ["101", "-5", "82.5", "most"] {
+            assert_eq!(percent(bad), None, "{bad}");
+        }
     }
 }

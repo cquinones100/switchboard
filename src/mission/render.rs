@@ -7080,6 +7080,8 @@ mod tests {
             skipped: 1,
             spend_limit: 0.0,
             spent: 0.0,
+            weekly_limit: 0,
+            weekly: None,
             lands_alone: false,
             hands_free: false,
             target: String::new(),
@@ -9284,6 +9286,8 @@ mod tests {
             skipped: 1,
             spend_limit: 20.0,
             spent: 5.0,
+            weekly_limit: 0,
+            weekly: None,
             lands_alone: true,
             hands_free: false,
         }

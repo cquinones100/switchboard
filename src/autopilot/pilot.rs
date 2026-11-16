@@ -112,6 +112,9 @@ pub struct Next {
     pub plans: HashMap<String, PlanNote>,
     /// Today's spend, read with them while there is a spend limit.
     pub spent: f64,
+    /// The week's use of the weekly rate limit (percent) and when it
+    /// resets (seconds), read with them while there is a weekly limit.
+    pub weekly: Option<(f64, i64)>,
     /// What is left of the note, whole, for the view's estimate.
     pub left: super::eta::Left,
 }
@@ -158,6 +161,9 @@ pub struct Job {
     pub next: Vec<String>,
     /// Today's Claude spend past which nothing opens; 0 for none.
     pub spend_limit: f64,
+    /// The percent of the weekly rate limit used past which nothing opens;
+    /// 0 for none.
+    pub weekly_limit: u32,
     /// For a read for mission control, the key it is read under.
     pub key: String,
     /// When the note last changed (ms).
@@ -212,12 +218,20 @@ impl Job {
     }
 
     /// The look for the next item to open: nothing once today's spend has
-    /// passed the limit, as the Usage view sums it; else the queue's first.
+    /// passed the limit, as the Usage view sums it, or the week's use of the
+    /// weekly rate limit has reached its limit, as the statusline last read
+    /// it (a missing or past reading holds nothing); else the queue's first.
     pub fn find(&self, notes: &Path, state: &Path, now_ms: i64) -> Found {
         if self.spend_limit > 0.0
             && crate::usage::sessions::spent_today(state, now_ms) >= self.spend_limit
         {
             return Found::Spent;
+        }
+        if self.weekly_limit > 0
+            && let Some((used, resets_at)) = crate::usage::sessions::weekly_used(state, now_ms)
+            && used >= f64::from(self.weekly_limit)
+        {
+            return Found::Weekly { used, resets_at };
         }
         match self.first(notes, state) {
             Ok(item) => Found::Item(item),
@@ -324,6 +338,9 @@ impl Keep {
 pub enum Found {
     /// Today's spend has passed the limit.
     Spent,
+    /// The week's use of the weekly rate limit has reached its limit, until
+    /// it resets (seconds).
+    Weekly { used: f64, resets_at: i64 },
     /// The item to open, or none left.
     Item(Option<Item>),
     /// The note couldn't be read.
@@ -361,6 +378,35 @@ pub struct Opened {
 /// it; a change of the limit takes it back.
 pub const SPENT: &str = "Stopped opening tabs: today's Claude spend passed";
 
+/// What it says once the week's use of the weekly rate limit has reached
+/// its limit, the limit and when it resets after it; a change of the limit,
+/// or a tab opened again, takes it back.
+pub const WEEKLY: &str = "Stopped opening tabs: weekly limit";
+
+/// What it says without its sentence starting `what` (`SPENT` or `WEEKLY`),
+/// wherever that sentence is, since what it says after a refusal is added
+/// to it (`autopilot_say`).
+pub fn unsay(said: &str, what: &str) -> String {
+    let Some(at) = said.find(what) else {
+        return said.to_string();
+    };
+    let end = said[at..].find(". ").map_or(said.len(), |e| at + e + 2);
+    format!("{}{}", &said[..at], &said[end..])
+        .trim_end_matches(". ")
+        .to_string()
+}
+
+/// What it says of the weekly limit reached: "… 85% reached, resets in 2h
+/// 10m".
+pub fn weekly_said(limit: u32, resets_at: i64) -> String {
+    // When, not how long until, since it stays said until the week resets.
+    let when = util::local_at_ms(resets_at * 1000);
+    format!(
+        "{WEEKLY} {limit}% reached, resets {}",
+        when.strftime("%a %-I:%M %p")
+    )
+}
+
 /// What the mode keeps between checks.
 #[derive(Clone, Debug)]
 pub struct Pilot {
@@ -380,6 +426,10 @@ pub struct Pilot {
     /// The day and limit today's spend was found past, so it isn't summed
     /// again until either changes.
     spent: Option<(String, f64)>,
+    /// When the week's use last found at the weekly limit resets (seconds),
+    /// and that limit, so it is said once; forgotten as the limit changes,
+    /// so going back to it says it again.
+    weekly: Option<(i64, u32)>,
     /// The note said to be missing, said once.
     missing_said: String,
     /// The items of its tabs still open, never taken again while there.
@@ -414,6 +464,7 @@ impl Default for Pilot {
             next: Next::default(),
             reading: false,
             spent: None,
+            weekly: None,
             missing_said: String::new(),
             held: Vec::new(),
             counts: (0, 0),
@@ -496,6 +547,22 @@ impl Pilot {
         here: Option<&str>,
     ) -> Check {
         let mut out = Check::default();
+        // A limit found reached is forgotten once the limit changes, before
+        // anything else holds the check (paused, away, its slots full), so
+        // going back to it looks, and says it, again.
+        if self
+            .spent
+            .as_ref()
+            .is_some_and(|(_, limit)| *limit != mode.spend_limit)
+        {
+            self.spent = None;
+        }
+        if self
+            .weekly
+            .is_some_and(|(_, limit)| limit != mode.weekly_limit)
+        {
+            self.weekly = None;
+        }
         if !mode.set_up() {
             self.counts = (0, 0);
             return out;
@@ -623,6 +690,7 @@ impl Pilot {
             skip: skip.clone(),
             next: mode.next_here(),
             spend_limit: mode.spend_limit,
+            weekly_limit: mode.weekly_limit,
             key,
             mtime,
         };
@@ -660,11 +728,31 @@ impl Pilot {
             return out;
         }
         let today = day_of(now_ms);
+        // Each limit holds only while the mode still says it was reached:
+        // stopped, set up again or a tab opened since, it is looked at again.
         if mode.spend_limit > 0.0
-            && self
-                .spent
-                .as_ref()
-                .is_some_and(|(day, limit)| *day == today && *limit == mode.spend_limit)
+            && mode.said.contains(SPENT)
+            && self.spent.as_ref().is_some_and(|(day, _)| *day == today)
+        {
+            return out;
+        }
+        // Held while the week's last reading, read again with the next
+        // items, is at the limit and hasn't reset, once a look has said so
+        // for that reset and limit: one gone, reset early or under a new
+        // limit lets it look again, and so does one not yet said.
+        // Today's spend past its limit, read with the next items and not yet
+        // said, is looked for first, since it is said first.
+        let spend_unsaid = mode.spend_limit > 0.0
+            && self.next.spent >= mode.spend_limit
+            && !mode.said.contains(SPENT);
+        if mode.weekly_limit > 0
+            && !spend_unsaid
+            && self.next.weekly.is_some_and(|(used, resets_at)| {
+                used >= f64::from(mode.weekly_limit)
+                    && now_ms < resets_at * 1000
+                    && self.weekly == Some((resets_at, mode.weekly_limit))
+                    && mode.said.contains(WEEKLY)
+            })
         {
             return out;
         }
@@ -703,6 +791,14 @@ impl Pilot {
             Found::Spent => {
                 self.spent = Some((day_of(now_ms), mode.spend_limit));
                 out.said = Some(format!("{SPENT} ${}", mode.spend_limit));
+            }
+            Found::Weekly { used, resets_at } => {
+                self.next.weekly = Some((used, resets_at));
+                let key = (resets_at, mode.weekly_limit);
+                if self.weekly != Some(key) || !mode.said.contains(WEEKLY) {
+                    self.weekly = Some(key);
+                    out.said = Some(weekly_said(mode.weekly_limit, resets_at));
+                }
             }
             Found::Failed(e) => out.failed = Some(e),
             Found::Item(None) => {
@@ -767,6 +863,7 @@ impl Pilot {
             held: Vec::new(),
             plans: HashMap::new(),
             spent: 0.0,
+            weekly: None,
             left: super::eta::Left::default(),
         };
     }
@@ -812,6 +909,8 @@ impl Pilot {
             skipped: mode.skipped_here().count(),
             spend_limit: mode.spend_limit,
             spent: self.next.spent,
+            weekly_limit: mode.weekly_limit,
+            weekly: self.next.weekly,
             lands_alone: mode.land_without_asking,
             hands_free: mode.hands_free,
             target: mode.target.clone(),
@@ -845,6 +944,7 @@ mod tests {
             skip: HashSet::new(),
             next: Vec::new(),
             spend_limit: 0.0,
+            weekly_limit: 0,
             key: String::new(),
             mtime: 0,
         };
@@ -854,6 +954,185 @@ mod tests {
             Found::Item(Some(item)) => assert_eq!(item.text, "Free"),
             other => panic!("expected the free item, found {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_limit_s_sentence_goes_wherever_it_is_said() {
+        let weekly = format!("{WEEKLY} 85% reached, resets in 1h 0m");
+        assert_eq!(unsay(&weekly, WEEKLY), "");
+        assert_eq!(
+            unsay(
+                &format!("Skipped One: wtn refused it, taken. {weekly}"),
+                WEEKLY
+            ),
+            "Skipped One: wtn refused it, taken"
+        );
+        assert_eq!(unsay(&format!("{weekly}. Later"), WEEKLY), "Later");
+        assert_eq!(
+            unsay("Nothing left to take in Work", WEEKLY),
+            "Nothing left to take in Work"
+        );
+    }
+
+    #[test]
+    fn find_stops_at_the_weekly_limit_while_the_reading_is_current() {
+        let dir = std::env::temp_dir().join(format!("sb-pilot-weekly-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let usage = crate::usage::sessions::usage_dir(&dir);
+        std::fs::create_dir_all(&usage).unwrap();
+        std::fs::write(
+            dir.join("Work.md"),
+            "# Work
+
+- [ ] One
+",
+        )
+        .unwrap();
+        let now_ms = util::now_ms();
+        let now = now_ms.div_euclid(1000);
+        let limits = |used: f64, resets_at: i64| {
+            std::fs::write(
+                usage.join("limits"),
+                serde_json::json!({
+                    "seven_day": { "used_percentage": used, "resets_at": resets_at },
+                })
+                .to_string(),
+            )
+            .unwrap();
+        };
+        let mut job = Job {
+            note: "Work.md".into(),
+            repo: dir.clone(),
+            ready_only: false,
+            with_choices: false,
+            skip: HashSet::new(),
+            next: Vec::new(),
+            spend_limit: 0.0,
+            weekly_limit: 80,
+            key: String::new(),
+            mtime: 0,
+        };
+        let item = |found: Found| matches!(found, Found::Item(Some(ref i)) if i.text == "One");
+
+        assert!(
+            item(job.find(&dir, &dir, now_ms)),
+            "no reading holds nothing"
+        );
+        limits(85.0, now + 3_600);
+        assert_eq!(
+            job.find(&dir, &dir, now_ms),
+            Found::Weekly {
+                used: 85.0,
+                resets_at: now + 3_600
+            }
+        );
+        limits(70.0, now + 3_600);
+        assert!(item(job.find(&dir, &dir, now_ms)), "under the limit");
+        limits(85.0, now - 5);
+        assert!(
+            item(job.find(&dir, &dir, now_ms)),
+            "a reading past its reset"
+        );
+        limits(85.0, now + 3_600);
+        job.weekly_limit = 0;
+        assert!(item(job.find(&dir, &dir, now_ms)), "no weekly limit");
+
+        // Past both, the spend limit is said first.
+        job.weekly_limit = 80;
+        job.spend_limit = 1.0;
+        let today = util::ymd(&util::local_at_ms(now_ms));
+        std::fs::write(usage.join("spend-a"), format!("{today}	5.0000	5	300")).unwrap();
+        assert_eq!(job.find(&dir, &dir, now_ms), Found::Spent);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn at_the_weekly_limit_it_says_so_once_and_holds_while_the_reading_says_so() {
+        let mut w = World::new();
+        w.mode.weekly_limit = 85;
+        let check = |w: &mut World, at: i64| {
+            w.pilot
+                .check(&w.mode, true, None, &[], false, at, Some(w.mtime), Some(ID))
+        };
+        // A look answered, what it says kept in the mode as the server keeps it.
+        let reach = |w: &mut World, used: f64, resets_at: i64, at: i64| {
+            w.pilot.cancel();
+            let said = w
+                .pilot
+                .opened(&w.mode, Found::Weekly { used, resets_at }, w.mtime, at)
+                .said;
+            if let Some(said) = &said {
+                w.mode.said = said.clone();
+            }
+            said
+        };
+        let now = w.now;
+        let job = check(&mut w, now)
+            .open
+            .expect("a look, which reads the week");
+        assert_eq!(job.weekly_limit, 85);
+        let resets_at = w.now.div_euclid(1000) + 3_600;
+        assert_eq!(
+            reach(&mut w, 90.0, resets_at, now).as_deref(),
+            Some(
+                format!(
+                    "Stopped opening tabs: weekly limit 85% reached, resets {}",
+                    util::local_at_ms(resets_at * 1000).strftime("%a %-I:%M %p")
+                )
+                .as_str()
+            )
+        );
+        let later = w.now + 60_000;
+        assert_eq!(check(&mut w, later).open, None, "held by the reading");
+
+        // A reading past it read with the next items, not yet said: looked
+        // for, so the look says it.
+        w.pilot.next.weekly = Some((92.0, resets_at + 60));
+        assert!(check(&mut w, later).open.is_some(), "not yet said");
+        assert!(reach(&mut w, 92.0, resets_at + 60, later).is_some());
+        assert_eq!(check(&mut w, later).open, None, "said, so held");
+        reach(&mut w, 90.0, resets_at, later);
+
+        // Gone from what the mode says (stopped and started again, a tab
+        // opened): looked at, and said, again.
+        w.mode.said.clear();
+        assert!(check(&mut w, later).open.is_some(), "no longer said");
+        assert!(reach(&mut w, 90.0, resets_at, later).is_some());
+
+        // The reading read again: gone, it holds nothing.
+        w.pilot.next.weekly = None;
+        assert!(check(&mut w, later).open.is_some(), "no reading");
+        assert_eq!(reach(&mut w, 90.0, resets_at, later), None, "said once");
+        w.pilot.next.weekly = Some((3.0, resets_at + 7 * 86_400));
+        assert!(check(&mut w, later).open.is_some(), "the week reset early");
+        reach(&mut w, 90.0, resets_at, later);
+
+        // Changed and changed back while paused: looked at and said again.
+        w.mode.paused = true;
+        w.mode.weekly_limit = 95;
+        assert_eq!(check(&mut w, later).open, None, "paused");
+        w.mode.weekly_limit = 85;
+        check(&mut w, later);
+        w.mode.paused = false;
+        w.mode.weekly_limit = 95;
+        assert!(
+            check(&mut w, later).open.is_some(),
+            "a limit past the reading"
+        );
+        w.mode.weekly_limit = 85;
+        assert!(
+            reach(&mut w, 90.0, resets_at, later).is_some(),
+            "said again at the old limit"
+        );
+        assert_eq!(check(&mut w, later).open, None, "held");
+        // Today's spend past a spend limit too, not yet said: looked for.
+        w.mode.spend_limit = 5.0;
+        w.pilot.next.spent = 6.0;
+        assert!(check(&mut w, later).open.is_some(), "the spend limit first");
+        w.pilot.cancel();
+        w.mode.spend_limit = 0.0;
+        let reset = resets_at * 1000 + 60_000;
+        assert!(check(&mut w, reset).open.is_some(), "it resets");
     }
 
     /// A stand-in for the server: its tabs, the note's items and what was
@@ -1158,6 +1437,7 @@ mod tests {
             opened.said.as_deref(),
             Some("Stopped opening tabs: today's Claude spend passed $5")
         );
+        w.mode.said = opened.said.unwrap_or_default();
         let later = w.now + 60_000;
         let check = w.pilot.check(
             &w.mode,
@@ -1182,6 +1462,19 @@ mod tests {
             Some(ID),
         );
         assert!(check.open.is_some(), "a new limit is looked at again");
+        w.pilot.cancel();
+        w.mode.spend_limit = 5.0;
+        let check = w.pilot.check(
+            &w.mode,
+            true,
+            None,
+            &[],
+            false,
+            later,
+            Some(w.mtime),
+            Some(ID),
+        );
+        assert!(check.open.is_some(), "and so is the old one again");
         w.pilot.cancel();
         // The claims brought to IDs, as the first check asked.
         w.pilot.kept(&Kept::default(), false, later);

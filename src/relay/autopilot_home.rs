@@ -3,12 +3,12 @@
 //!
 //! While autopilot works, the Home tab has a section of its own between
 //! its Next buttons and Needs you: whether it works or is paused (by you,
-//! since when, or by its spend limit), when the note's ready items should
+//! since when, or by its spend or weekly limit), when the note's ready items should
 //! be done, how many items stand in each column of the Autopilot view,
 //! today's spend against its limit, its tabs in flight (waiting on you,
 //! landing, working), each linking to its thread, and its buttons: Pause
-//! (Resume while paused by you, Raise the limit while its spend limit
-//! stopped it) and Settings, which opens board 52's form to change it.
+//! (Resume while paused by you, Raise the limit while its spend or weekly
+//! limit stopped it) and Settings, which opens board 52's form to change it.
 //!
 //! It is read from the server's `autopilot-board` at most once a
 //! `EVERY_MS`, but at once when the Home tab is opened or one of its
@@ -147,7 +147,13 @@ pub fn blocks(cx: &Cx, board: &Value, named: bool, tabs: &[Tab]) -> Vec<Value> {
     let number = |k: &str| board[k].as_f64().filter(|n| n.is_finite()).unwrap_or(0.0);
     let (spent, limit) = (number("spent"), number("limit"));
     let paused = board["paused"] == json!(true);
-    let limited = board["limited"] == json!(true);
+    let spend_limited = board["limited"] == json!(true);
+    // At the weekly limit: its percent and when the week resets (seconds).
+    let weekly = board["weekly"].as_object().map(|w| {
+        let n = |k: &str| w.get(k).and_then(Value::as_f64).unwrap_or(0.0);
+        (n("limit"), n("resetsAt") as i64)
+    });
+    let limited = spend_limited || weekly.is_some();
     let away = board["away"] == json!(true);
     let note = match board["note"].as_str().filter(|n| named && !n.is_empty()) {
         Some(n) => format!("*{n}*"),
@@ -168,10 +174,15 @@ pub fn blocks(cx: &Cx, board: &Value, named: bool, tabs: &[Tab]) -> Vec<Value> {
         if let Some(at) = board["pausedAt"].as_f64() {
             first.push_str(&format!(" · paused at {}", super::homes::when(at)));
         }
-    } else if limited {
+    } else if spend_limited {
         first.push_str(&format!(
             "\n🔴 Paused: today's spend reached {}",
             dollars(limit)
+        ));
+    } else if let Some((percent, resets_at)) = weekly {
+        first.push_str(&format!(
+            "\n🔴 Paused: the week reached {percent}% of Claude Code's weekly limit, resets {}",
+            util::local_at_ms(resets_at * 1000).strftime("%a %-I:%M %p")
         ));
     } else {
         first.push_str(&format!(
@@ -266,8 +277,10 @@ pub fn blocks(cx: &Cx, board: &Value, named: bool, tabs: &[Tab]) -> Vec<Value> {
             1 => "Opens no new tab; the one open goes on to its end.".to_string(),
             n => format!("Opens no new tab; these {n} go on to their end."),
         };
-        if limited && !paused {
+        if spend_limited && !paused {
             words.push_str(" Starts again tomorrow, or once the limit is raised.");
+        } else if weekly.is_some() && !paused {
+            words.push_str(" Starts again once the week resets, or once the limit is raised.");
         }
         out.push(context(&words));
     }

@@ -5843,6 +5843,27 @@ fn past_its_spend_limit_the_home_tab_says_so_and_offers_raising_it() {
 }
 
 #[test]
+fn at_its_weekly_limit_the_home_tab_says_when_the_week_resets() {
+    let (rig, _) = rig_with(&[]);
+    let mut board = autopilot_board(4);
+    let resets_at = util::now_secs() + 86_400;
+    board["weekly"] = json!({ "limit": 85, "used": 88.0, "resetsAt": resets_at });
+    *rig.mux.board.borrow_mut() = Some(board);
+    rig.block_on(refresh_dashboard(&rig.cx, Refresh::opened_quick()))
+        .unwrap();
+    let shown = autopilot_section(&rig);
+    let when = util::local_at_ms(resets_at * 1000).strftime("%a %-I:%M %p");
+    for words in [
+        "⏸ Autopilot, paused by its limit".to_string(),
+        format!("🔴 Paused: the week reached 85% of Claude Code's weekly limit, resets {when}"),
+        "Raise the limit".to_string(),
+        "Starts again once the week resets, or once the limit is raised.".to_string(),
+    ] {
+        assert!(shown.contains(&words), "{words} in {shown}");
+    }
+}
+
+#[test]
 fn with_autopilot_in_slack_off_the_home_tab_leaves_it_out_and_never_asks() {
     let (rig, _) = rig_with(&[("relay_autopilot", json!(false))]);
     *rig.mux.board.borrow_mut() = Some(autopilot_board(4));

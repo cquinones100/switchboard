@@ -189,6 +189,9 @@ pub enum AutopilotEvent {
         plans: std::collections::HashMap<String, crate::cmd::worktree_from_note::PlanNote>,
         /// Today's spend, while there is a spend limit.
         spent: f64,
+        /// The week's use of the weekly rate limit and when it resets,
+        /// while there is a weekly limit.
+        weekly: Option<(f64, i64)>,
         /// What is left of the note, for the view's estimate.
         left: eta::Left,
     },
