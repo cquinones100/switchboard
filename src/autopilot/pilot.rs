@@ -12,8 +12,10 @@
 //! for `RECENT_MS` after it was opened (`recent`), before `wtn` has made its
 //! branch, which is what claims it. A tab that landed and left holds
 //! nothing: `switchboard item-done` ticks its item before it removes the
-//! worktree, so the note shows it landed by then. A tab whose `wtn` failed before making
-//! its branch holds its item until it is closed. A note changed in the last
+//! worktree, so the note shows it landed by then. A tab whose `wtn` stopped
+//! before making its worktree (`@autopilot_failed`) is closed, its item opened
+//! again on a later check, and skipped once it has failed `FAILS_SKIP`
+//! times in `FAILS_MS` (`start_failed`); its card in Next up says why. A note changed in the last
 //! `SETTLE_MS` isn't taken from, since an item being typed is saved as it
 //! is typed and its first words would be opened as an item. A note found
 //! empty is looked at again once it changes, or `RECENT_MS` later, since an
@@ -68,6 +70,14 @@ use crate::util;
 pub const GAP_MS: i64 = 5_000;
 /// An item opened this recently is never taken again.
 pub const RECENT_MS: i64 = 60_000;
+/// An item whose tab failed to start this many times within `FAILS_MS` is
+/// skipped.
+pub const FAILS_SKIP: usize = 3;
+/// How long a failed start counts toward `FAILS_SKIP`.
+pub const FAILS_MS: i64 = 60 * 60_000;
+/// An item whose start failed is opened again no sooner than this after,
+/// listed in Next up meanwhile.
+pub const RETRY_MS: i64 = 5 * 60_000;
 /// A note changed this recently isn't taken from.
 pub const SETTLE_MS: i64 = 60_000;
 /// The next item is read again at most this often, and when the note, the
@@ -157,6 +167,9 @@ pub struct Job {
     /// Items whose plan needs a choice taken too (hands-free).
     pub with_choices: bool,
     pub skip: HashSet<String>,
+    /// Items listed in the queue but not opened yet: those whose start
+    /// failed in the last `RETRY_MS`.
+    pub retrying: HashSet<String>,
     /// The items put next in the queue, by their first lines.
     pub next: Vec<String>,
     /// Today's Claude spend past which nothing opens; 0 for none.
@@ -175,7 +188,7 @@ impl Job {
     /// directory, whose claims file says which items wtn started lately.
     pub fn first(&self, notes: &Path, state: &Path) -> Result<Option<Item>, String> {
         self.items(notes, state)
-            .map(|items| items.into_iter().next())
+            .map(|items| items.into_iter().find(|i| !self.retrying.contains(&i.text)))
     }
 
     /// Every item the queue gives, in the order it opens them.
@@ -416,6 +429,9 @@ pub struct Pilot {
     last_open: Option<i64>,
     /// Each item opened lately, and when (ms).
     recent: HashMap<Key, i64>,
+    /// Each item whose tab's start failed in the last `FAILS_MS`: when (ms)
+    /// and why, oldest first.
+    failed: HashMap<Key, Vec<(i64, String)>>,
     /// When the note was last found empty: its time then, and when (ms).
     empty: Option<(i64, i64)>,
     /// "Nothing left to take" said since the note last had an item to take.
@@ -459,6 +475,7 @@ impl Default for Pilot {
             opening: false,
             last_open: None,
             recent: HashMap::new(),
+            failed: HashMap::new(),
             empty: None,
             empty_said: false,
             next: Next::default(),
@@ -486,6 +503,48 @@ fn day_of(now_ms: i64) -> String {
 }
 
 impl Pilot {
+    /// A tab opened for the item `key` stopped before making its worktree at
+    /// `now_ms`, for `why`: whether that makes `FAILS_SKIP` in the last
+    /// `FAILS_MS`, which skips the item (and forgets its failures, so one
+    /// taken back gets its tries again).
+    pub fn start_failed(&mut self, key: Key, why: &str, now_ms: i64) -> bool {
+        // Listed in Next up again at once, `retrying` holding its opening.
+        self.recent.remove(&key);
+        let fails = self.failed.entry(key.clone()).or_default();
+        fails.retain(|(at, _)| now_ms - at < FAILS_MS);
+        fails.push((now_ms, why.to_string()));
+        let skip = fails.len() >= FAILS_SKIP;
+        if skip {
+            self.failed.remove(&key);
+        }
+        skip
+    }
+
+    /// The items of the mode's note whose start failed in the last
+    /// `RETRY_MS`, by their first lines: listed, not opened yet.
+    pub fn retrying(&self, mode: &Mode, now_ms: i64) -> HashSet<String> {
+        self.failed
+            .iter()
+            .filter(|(key, fails)| {
+                key.0 == mode.note_id && fails.last().is_some_and(|(at, _)| now_ms - at < RETRY_MS)
+            })
+            .map(|(key, _)| key.1.clone())
+            .collect()
+    }
+
+    /// Why each item of the mode's note last failed to start, in the last
+    /// `FAILS_MS`, by its first line, for its card in Next up.
+    pub fn start_failures(&self, mode: &Mode, now_ms: i64) -> HashMap<String, String> {
+        self.failed
+            .iter()
+            .filter(|(key, _)| key.0 == mode.note_id)
+            .filter_map(|(key, fails)| {
+                let (at, why) = fails.last()?;
+                (now_ms - at < FAILS_MS).then(|| (key.1.clone(), why.clone()))
+            })
+            .collect()
+    }
+
     /// The items of the mode's note never to take now, by their first
     /// line: those skipped, those of its tabs still open, and those opened
     /// in the last `RECENT_MS`.
@@ -682,12 +741,14 @@ impl Pilot {
             return out;
         }
         let skip = self.skip(mode, now_ms);
+        let retrying = self.retrying(mode, now_ms);
         let job = |key: String, mtime: i64| Job {
             note: mode.note.clone(),
             repo: mode.repo.clone(),
             ready_only: mode.ready_only,
             with_choices: mode.hands_free,
             skip: skip.clone(),
+            retrying: retrying.clone(),
             next: mode.next_here(),
             spend_limit: mode.spend_limit,
             weekly_limit: mode.weekly_limit,
@@ -803,8 +864,10 @@ impl Pilot {
             Found::Failed(e) => out.failed = Some(e),
             Found::Item(None) => {
                 // Said once, and only with none of its tabs open: while some
-                // still work, the view's heading says nothing more starts.
-                if !self.empty_said && self.counts.1 == 0 {
+                // still work, the view's heading says nothing more starts, nor
+                // while an item whose start failed waits to be tried again.
+                if !self.empty_said && self.counts.1 == 0 && self.retrying(mode, now_ms).is_empty()
+                {
                     self.empty_said = true;
                     out.said = Some(format!(
                         "Nothing left to take in {}",
@@ -927,6 +990,56 @@ mod tests {
     use crate::sidebar::model::TabState;
 
     #[test]
+    fn a_start_that_fails_is_tried_again_and_the_third_in_an_hour_skips_the_item() {
+        let mut pilot = Pilot::default();
+        let mode = Mode {
+            note_id: "n-1".into(),
+            ..Mode::default()
+        };
+        let key = || ("n-1".to_string(), "Item".to_string());
+        let hour = FAILS_MS;
+        pilot.took("n-1", "Item", 0);
+        assert!(!pilot.start_failed(key(), "offline", 0));
+        assert!(
+            !pilot.skip(&mode, 1).contains("Item"),
+            "listed in Next up again at once"
+        );
+        assert!(
+            pilot.retrying(&mode, 1).contains("Item"),
+            "but not opened yet"
+        );
+        assert!(
+            pilot.retrying(&mode, RETRY_MS).is_empty(),
+            "until a later check"
+        );
+        assert_eq!(
+            pilot
+                .start_failures(&mode, 1)
+                .get("Item")
+                .map(String::as_str),
+            Some("offline"),
+            "its card says why"
+        );
+        assert!(!pilot.start_failed(key(), "offline", 1_000));
+        assert!(
+            !pilot.start_failed(key(), "offline", hour + 500),
+            "the first is over an hour old by the third"
+        );
+        assert!(
+            pilot.start_failed(key(), "still offline", hour + 900),
+            "the third in an hour skips it"
+        );
+        assert!(
+            pilot.start_failures(&mode, hour + 900).is_empty(),
+            "and its tries start over once it is taken back"
+        );
+        assert!(
+            pilot.start_failures(&mode, 3 * hour).is_empty(),
+            "an old failure says nothing"
+        );
+    }
+
+    #[test]
     fn with_the_first_item_held_find_opens_the_second() {
         let dir = std::env::temp_dir().join(format!("sb-pilot-held-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -942,6 +1055,7 @@ mod tests {
             ready_only: false,
             with_choices: false,
             skip: HashSet::new(),
+            retrying: HashSet::new(),
             next: Vec::new(),
             spend_limit: 0.0,
             weekly_limit: 0,
@@ -1006,6 +1120,7 @@ mod tests {
             ready_only: false,
             with_choices: false,
             skip: HashSet::new(),
+            retrying: HashSet::new(),
             next: Vec::new(),
             spend_limit: 0.0,
             weekly_limit: 80,

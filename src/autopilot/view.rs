@@ -642,6 +642,23 @@ pub fn items(
     out
 }
 
+/// Each item in Next up whose last start failed (`failed`, by its first
+/// line, why) says so, "start failed: <why>": as its detail for the plain
+/// list, and as its data's `startFailed` for its card and the pane beside
+/// the board.
+pub fn say_failed_starts(items: &mut [Item], failed: &HashMap<String, String>) {
+    for item in items.iter_mut() {
+        let text = item
+            .id
+            .strip_prefix("next:")
+            .or_else(|| item.id.strip_prefix("held:"));
+        if let Some(why) = text.and_then(|t| failed.get(t)) {
+            item.detail = format!("start failed: {why}");
+            item.data["startFailed"] = json!(why);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -665,6 +682,22 @@ mod tests {
             phases: Vec::new(),
             now: 0,
         }
+    }
+
+    #[test]
+    fn an_item_whose_start_failed_says_so_on_its_card() {
+        let mut list = vec![
+            Item::new("next:One", "1. One"),
+            Item::new("next:Two", "2. Two"),
+        ];
+        let failed = HashMap::from([(
+            "Two".to_string(),
+            "couldn't fetch origin's main".to_string(),
+        )]);
+        say_failed_starts(&mut list, &failed);
+        assert_eq!(list[0].detail, "");
+        assert_eq!(list[1].detail, "start failed: couldn't fetch origin's main");
+        assert_eq!(list[1].data["startFailed"], "couldn't fetch origin's main");
     }
 
     #[test]

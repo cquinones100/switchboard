@@ -91,6 +91,13 @@ pub const YOURS: &str = "@autopilot_yours";
 pub const REFUSED: &str = "@autopilot_refused";
 /// What its notification says of a refused item, after the item.
 const REFUSED_SAID: &str = "wtn refused it";
+/// Why wtn stopped before making the item's worktree in the tab (a fetch of origin
+/// that failed, a worktree it couldn't make), the error's first line, which
+/// wtn sets as it exits: the tab is closed and the item opened again on a
+/// later check, until it has failed `pilot::FAILS_SKIP` times in an hour.
+pub const FAILED: &str = "@autopilot_failed";
+/// What its notification says of an item skipped for failing to start.
+const FAILED_SAID: &str = "its start failed";
 /// A tab of the mode marked with when it landed as `name`, just set to
 /// `value`, is its push (`PUSHED` or `AUTOLAND`), the first time only.
 pub fn landed_at(
@@ -1763,7 +1770,7 @@ impl Server {
     ) -> Vec<crate::items::Item> {
         let mode = &self.autopilot.mode;
         let skipped: Vec<String> = mode.skipped_here().map(str::to_string).collect();
-        super::view::items(
+        let mut items = super::view::items(
             summary,
             eta,
             &mode.said,
@@ -1772,7 +1779,10 @@ impl Server {
             &self.autopilot.pilot.next.held,
             &skipped,
             &self.autopilot.pilot.next.plans,
-        )
+        );
+        let failures = self.autopilot.pilot.start_failures(mode, util::now_ms());
+        super::view::say_failed_starts(&mut items, &failures);
+        items
     }
 
     /// A row for each of the mode's tabs, then for each of today's
@@ -2023,6 +2033,7 @@ impl Server {
     /// read or opened when it is time.
     pub fn autopilot_tick(&mut self) {
         self.autopilot_refused();
+        self.autopilot_failed();
         let state = paths::state_dir();
         let mut mode = Mode::read(&state);
         // Hands-free counts only while its setting allows it.
@@ -2571,6 +2582,56 @@ impl Server {
         }
     }
 
+    /// Each of its tabs whose wtn stopped before making its worktree (`FAILED`)
+    /// and didn't refuse the item: the tab closed, so its slot is free and
+    /// the item is opened again on a later check, and the item skipped, why
+    /// said, once it has failed `pilot::FAILS_SKIP` times in an hour.
+    fn autopilot_failed(&mut self) {
+        let failed: Vec<(TabId, String, String, String)> = self
+            .tabs
+            .iter()
+            .filter(|(_, t)| t.opts.contains_key(OPENED) && !t.opts.contains_key(YOURS))
+            .filter(|(_, t)| t.opts.get(REFUSED).is_none_or(|v| v.is_empty()))
+            .filter_map(|(id, t)| {
+                let why = t.opts.get(FAILED).filter(|v| !v.is_empty())?;
+                let item = t.opts.get(ITEM).filter(|v| !v.is_empty())?;
+                let note = t
+                    .opts
+                    .get(NOTE)
+                    .filter(|n| !n.is_empty())
+                    .cloned()
+                    .unwrap_or_else(|| self.autopilot.mode.note_id.clone());
+                Some((*id, item.clone(), why.clone(), note))
+            })
+            .collect();
+        for (tab, item, why, note) in failed {
+            let key = (note.clone(), item.clone());
+            let skip = self.autopilot.pilot.start_failed(key, &why, util::now_ms());
+            self.autopilot_close_tab(tab);
+            if !skip {
+                eprintln!("autopilot: closed {tab}, its start failed: {why}");
+                continue;
+            }
+            let written = Mode::update(&paths::state_dir(), |m| {
+                let skipped = mode::Skipped {
+                    note: note.clone(),
+                    text: item.clone(),
+                };
+                if !m.skipped.contains(&skipped) {
+                    m.skipped.push(skipped);
+                }
+            });
+            match written {
+                Ok(mode) => self.autopilot.mode = mode,
+                Err(e) => eprintln!("autopilot: couldn't skip the item that failed to start: {e}"),
+            }
+            self.autopilot_say(&format!(
+                "Skipped {item}: {FAILED_SAID} {} times in an hour, {why}",
+                super::pilot::FAILS_SKIP
+            ));
+        }
+    }
+
     /// The next item read again, off the task, for mission control's line.
     fn autopilot_read_next(&mut self, job: Job, notes: PathBuf) {
         if tokio::runtime::Handle::try_current().is_err() {
@@ -2774,7 +2835,7 @@ impl Server {
         // nothing said later hides why an item was skipped; empty, dismissed,
         // clears it too.
         let keep = |was: &str| {
-            if said.is_empty() || !was.contains(REFUSED_SAID) {
+            if said.is_empty() || !(was.contains(REFUSED_SAID) || was.contains(FAILED_SAID)) {
                 said.to_string()
             } else if was.contains(said) {
                 was.to_string()

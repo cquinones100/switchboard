@@ -926,6 +926,7 @@ fn wtn_output(
     .env("SWITCHBOARD_STATE_DIR", &server.state)
     .env("NOTES_DIR", notes)
     .env("GIT_CONFIG_NOSYSTEM", "1")
+    .env("SWITCHBOARD_FETCH_RETRY_MS", "0")
     .env_remove("SWITCHBOARD")
     .env_remove("SWITCHBOARD_PANE")
     .env_remove("SWITCHBOARD_SETTINGS")
@@ -992,6 +993,86 @@ fn an_item_wtn_refuses_in_its_tab_is_skipped_with_why_and_the_tab_closed() {
     assert!(
         said.starts_with(
             "Skipped Taken: wtn refused it, note/taken is for another item: \"Taken!\""
+        ),
+        "{said}"
+    );
+}
+
+#[test]
+fn a_tab_whose_start_failed_is_closed_its_item_left_in_line_and_the_third_failure_in_an_hour_skips_it()
+ {
+    let notes = TempDir::new("sbn");
+    std::fs::write(notes.path().join("Work.md"), "# Work\n\n- [ ] Offline\n").unwrap();
+    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
+    common::write_settings(
+        &server.home,
+        json!({"notifications": false, "tips": false, "github": false, "linear": false}),
+    );
+    Claude::new().install(&server.home.join("bin"));
+    let repo = server.home.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q"]);
+    git(&repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "start"]);
+    // An origin that can't be reached, never fetched.
+    let gone = server.home.join("gone.git");
+    git(&repo, &["remote", "add", "origin", gone.to_str().unwrap()]);
+    let repo = repo.canonicalize().unwrap();
+
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let open_tab = |n: usize| {
+        server.ok(&["new-tab", "-c", repo.to_str().unwrap()]);
+        let tab = server.list()["sessions"][0]["tabs"][n].clone();
+        let id = tab["id"].as_str().unwrap().to_string();
+        for (option, value) in [
+            ("@autopilot", "1"),
+            ("@autopilot_item", "Offline"),
+            ("@autopilot_note", "n-ffffffffffff"),
+        ] {
+            server.ok(&["set", "-t", &id, option, value]);
+        }
+        (id, tab["panes"][0]["id"].as_str().unwrap().to_string())
+    };
+    let (_, pane) = open_tab(1);
+    let out = wtn_output(&server, notes.path(), &repo, Some(&pane), &["--item", "3"]);
+    assert!(!out.status.success());
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        said.matches("Fetching origin's main again").count(),
+        2,
+        "tried twice more: {said}"
+    );
+
+    wait("the tab closed", &server, || opened(&server).is_empty());
+    let kept = std::fs::read_to_string(server.state.join("autopilot.json")).unwrap_or_default();
+    assert!(
+        !kept.contains("Offline"),
+        "a first failure leaves the item in line: {kept}"
+    );
+
+    // Two more failures within the hour, marked as wtn marks them.
+    for _ in 0..2 {
+        let (id, _) = open_tab(1);
+        server.ok(&[
+            "set",
+            "-t",
+            &id,
+            "@autopilot_failed",
+            "couldn't fetch origin's main",
+        ]);
+        wait("the tab closed", &server, || opened(&server).is_empty());
+    }
+    let mode = mode(&server);
+    assert_eq!(
+        mode["skipped"],
+        json!([{ "note": "n-ffffffffffff", "text": "Offline" }]),
+        "the third failure in an hour skips it"
+    );
+    let said = mode["said"].as_str().unwrap();
+    assert!(
+        said.starts_with(
+            "Skipped Offline: its start failed 3 times in an hour, couldn't fetch origin's main"
         ),
         "{said}"
     );

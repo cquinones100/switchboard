@@ -1658,14 +1658,15 @@ fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and
 }
 
 #[test]
-fn with_an_origin_an_items_branch_starts_from_origins_default_branch_and_an_origin_that_cant_be_fetched_stops_it()
+fn with_an_origin_an_items_branch_starts_from_origins_default_branch_as_last_fetched_when_origin_cant_be_reached_and_with_none_stops()
  {
-    let w = World::new("wtn-origin");
+    let mut w = World::new("wtn-origin");
+    w.set("SWITCHBOARD_FETCH_RETRY_MS", "0");
     let notes = w.path("Notes");
     std::fs::create_dir_all(&notes).unwrap();
     std::fs::write(
         notes.join("Work.md"),
-        "# Work\n\n- [ ] First thing\n- [ ] Second thing\n",
+        "# Work\n\n- [ ] First thing\n- [ ] Second thing\n- [ ] Third thing\n",
     )
     .unwrap();
     let origin = w.path("origin.git");
@@ -1702,7 +1703,40 @@ fn with_an_origin_an_items_branch_starts_from_origins_default_branch_and_an_orig
     );
 
     std::fs::remove_dir_all(&origin).unwrap();
+    let cd = w.path("cd-offline");
     let offline = w.run(
+        &repo,
+        &[
+            "worktree-from-note",
+            "--no-claude",
+            "--cd-file",
+            cd.to_str().unwrap(),
+            "--note",
+            "Work",
+            "--item",
+            "4",
+        ],
+    );
+    let said = stderr(&offline);
+    assert_eq!(offline.status.code(), Some(0), "{said}");
+    assert_eq!(
+        said.matches("Fetching origin's main again").count(),
+        2,
+        "tried twice more: {said}"
+    );
+    assert!(
+        said.contains("Starting from origin/main as of just now: couldn't reach origin"),
+        "{said}"
+    );
+    let worktree = PathBuf::from(read(&cd).lines().next().unwrap());
+    assert_eq!(
+        w.git(&worktree, &["rev-parse", "HEAD"]),
+        pushed,
+        "from origin's main as last fetched, still not the clone's own"
+    );
+
+    w.git(&repo, &["update-ref", "-d", "refs/remotes/origin/main"]);
+    let never_fetched = w.run(
         &repo,
         &[
             "worktree-from-note",
@@ -1710,14 +1744,14 @@ fn with_an_origin_an_items_branch_starts_from_origins_default_branch_and_an_orig
             "--note",
             "Work",
             "--item",
-            "4",
+            "5",
         ],
     );
-    assert_ne!(offline.status.code(), Some(0));
+    assert_ne!(never_fetched.status.code(), Some(0));
     assert!(
-        stderr(&offline).contains("couldn't fetch origin's"),
+        stderr(&never_fetched).contains("couldn't fetch origin's"),
         "{}",
-        stderr(&offline)
+        stderr(&never_fetched)
     );
 }
 

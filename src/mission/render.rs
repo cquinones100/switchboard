@@ -4560,7 +4560,9 @@ fn pilot_card(item: &Item, chosen: bool, hovered: bool, m: &Mission) -> kit::Boa
     let pilot = item.data.get("pilot");
     let skipped = item.data.get("skipped").is_some();
     let held = item.data.get("waitsOn").is_some();
-    let failed = pilot.and_then(|p| p["failed"].as_bool()) == Some(true);
+    // An item in line whose last start failed (`view::say_failed_starts`).
+    let start_failed = item.data["startFailed"].as_str();
+    let failed = pilot.and_then(|p| p["failed"].as_bool()) == Some(true) || start_failed.is_some();
     let stages = |p: &serde_json::Value| p["done"].as_f64().unwrap_or(0.0) as f32 / 8.0;
     let (name, where_, meter) = match pilot {
         // A skipped item has no place in line and no stages.
@@ -4582,10 +4584,10 @@ fn pilot_card(item: &Item, chosen: bool, hovered: bool, m: &Mission) -> kit::Boa
             let place = item.data["place"].as_u64().unwrap_or(1);
             (
                 ordinal(place),
-                if place == 1 {
-                    "opens next".to_string()
-                } else {
-                    format!("{} in line", ordinal(place))
+                match start_failed {
+                    Some(why) => format!("start failed: {why}"),
+                    None if place == 1 => "opens next".to_string(),
+                    None => format!("{} in line", ordinal(place)),
                 },
                 None,
             )
@@ -4666,6 +4668,10 @@ fn pilot_about(item: &Item, side_w: usize, theme: &Theme, images: Option<&Images
         Some(1) => "Opens next".to_string(),
         Some(n) => format!("Opens {} in line", ordinal(n)),
         None => item.detail.clone(),
+    };
+    let detail = match item.data["startFailed"].as_str() {
+        Some(why) => format!("{detail}, its last start failed: {why}"),
+        None => detail,
     };
     for l in text::wrap(&detail, inner) {
         out.push(vec![Span::styled(l, fg(theme.dim))]);
@@ -9307,6 +9313,46 @@ mod tests {
         assert!(
             text.contains("tab 4 ─") && text.contains(" 1h12m "),
             "{text}"
+        );
+    }
+
+    #[test]
+    fn with_ux2_an_item_whose_start_failed_says_why_on_its_card_and_beside_the_board() {
+        let mut list = crate::autopilot::view::items(
+            &pilot_summary(),
+            "",
+            "",
+            &[],
+            &["Offline item".into(), "Later".into()],
+            &[],
+            &[],
+            &std::collections::HashMap::new(),
+        );
+        let failed = std::collections::HashMap::from([(
+            "Offline item".to_string(),
+            "couldn't fetch origin's main".to_string(),
+        )]);
+        crate::autopilot::view::say_failed_starts(&mut list, &failed);
+        let chosen = list
+            .iter()
+            .position(|i| i.id == "next:Offline item")
+            .unwrap();
+        let mut m = mission(
+            Vec::new(),
+            vec![list_view(ViewId::Autopilot, "Autopilot", list)],
+        );
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.cursor = chosen as isize;
+        let text = texts(&drawn(&m, 200, 30).0).join("\n");
+        assert!(text.contains("start failed: couldn't"), "{text}");
+        assert!(
+            text.contains("2nd in line"),
+            "the other card as before: {text}"
+        );
+        assert!(
+            text.contains("its last start failed"),
+            "beside the board: {text}"
         );
     }
 
