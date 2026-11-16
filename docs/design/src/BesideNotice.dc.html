@@ -176,47 +176,47 @@ hl(X0, 3, PW);
 const say = (y, s, fg) => put(X0 + 1, y, s, fg || 't');
 say(5, '> how many commits are left for the fork to port?');
 say(7, '⏺ About five commits are still unported. GitHub counts our main as 27 commits ahead, but the');
-say(8, '  fork rebuilt most of them its own way.');
+say(8, '  fork rebuilt most of them its own way: https://github.com/acme/switchboard/compare/main...port');
 say(10, '  1. Land without asking, with bin/leak-check');
 say(11, '  2. Uncommitted changes in M-d');
 say(12, '  3. Sealed review of community PRs');
 say(13, '  4. Stable note IDs');
-say(14, '  5. The plan-item project skill');
+say(14, '  5. The plan-item project skill (tab 5 benchmark harness and tab 7 Rust port notes touch src/mux/upgrade.rs)');
 say(16, '> monitor the fork and let me know when it reaches parity');
 say(18, '⏺ Monitor(Rust port fork reaching feature parity)');
 say(19, '  ⎿  Monitor started (task bwil573qd, expires in 30m)', 'd');
+say(21, '⏺ Saved the comparison as fork-parity.png; the open issues are at https://github.com/acme/switchboard/issues,');
+say(22, '  and Ana\'s PR at https://github.com/acme/web-app/pull/2040');
 hl(X0, H - 4, PW); say(H - 3, '> ', 'd'); hl(X0, H - 2, PW);
 say(H - 1, '  ⏵⏵ auto mode on', 'd');
 
-// THE PALETTE AS A PANE in the spare columns: as tall as the screen, on the base surface like the tab beside it;
-// its title a header line as a view's (the raised bar, × at its right end, a click closes it), no box, no shadow,
-// and the rule at the pane's edge its only border. Opened by a key, a click or the palette, it takes the keys;
-// what it runs runs in tab 1, the pane you were in.
+// THE LINKS PICKER AS A PANE (M-u) in the spare columns, a box about this tab: as tall as the screen, on the base
+// surface like the tab beside it; its title a header line as a view's naming it and the tab (× at its right end, a
+// click closes it), no box, no shadow, the rule at the pane's edge its only border. It lists what tab 1's pane shows:
+// links, pictures and tabs mentioned, newest first; Enter opens the chosen one, a link in its site's Chrome profile.
 const SX = X0 + PW + 1, SW = W - SX;
 fill(SX, 0, SW, H, '0');
 fill(SX, 0, SW, 1, '3');
-T(SX + 1, 0, ['⌘ ', 'a', 'b', '3'], ['Commands', 't', 'b', '3'], ['   runs in tab 1 · planning', 'd', '', '3']);
+T(SX + 1, 0, ['↗ ', 'a', 'b', '3'], ['Links in this pane', 't', 'b', '3'], ['   tab 1 · planning', 'd', '', '3']);
 put(SX + SW - 4, 0, ' × ', 'd', '', '3');
-input(SX + 1, 2, SW - 2, 're', '', null); R(SX + SW - 3, 2, '9 match', 'd', '', '2');
+input(SX + 1, 2, SW - 2, '', 'type to narrow', null); R(SX + SW - 3, 2, '7 found', 'd', '', '2');
 rule(SX, 3, SW);
-const opt = (y, text, tg, key, chosen) => { const bg = chosen ? '4' : '0'; if (chosen) { fill(SX, y, SW, 1, '4'); put(SX, y, '▌', 'a', '', '4'); } put(SX + 2, y, chosen ? '›' : ' ', 'y', 'b', bg); const n = put(SX + 4, y, text, 't', chosen ? 'b' : '', bg); put(SX + 5 + n, y, tg, 'd', '', bg); if (key) R(SX + SW - 3, y, key, chosen ? 'a' : 'd', '', bg); };
-label(SX + 2, 5, 'Picked last');
-opt(6, 'Restart Switchboard on the latest main', '#switchboard #restart', '', true);
-opt(7, 'Reopen a worktree with no tab and resume its Claude', '#worktree', '');
-label(SX + 2, 9, 'The rest');
-opt(10, 'Remind me about this tab later, as Slack does', '#tabs #reminder', '');
-opt(11, 'Read a link in a pane beside this one, typed or one this pane shows', '#links', '');
-opt(12, 'Open the repository in the browser', '#github', '');
-opt(13, 'Go back to where you were', '#tabs #navigate', 'M-{');
-opt(14, 'Rename this tab', '#tabs', '');
-opt(15, 'Restore a closed tab', '#tabs', 'M-T');
-opt(16, 'Review a contributor\'s PR', '#github #pr', '');
-rule(SX, H - 8, SW);
-T(SX + 2, H - 7, ['Restart Switchboard on the latest main', 't', 'b']);
-T(SX + 2, H - 6, ['Brings the main clone up to date with origin, builds it, puts the build in place of the binary the server runs', 'd']);
-T(SX + 2, H - 5, ['and restarts the server on it, handing it every pane, so nothing in a pane ends.', 'd']);
-T(SX + 2, H - 4, ['No key: bind one in keys.json', 'd']);
-keys(SX + 2, H - 1, [['↑↓', 'move'], ['↵', 'run in tab 1'], ['Tab', 'next pane'], ['Esc', 'close']]);
+const opt = (y, text, where, chosen) => { const bg = chosen ? '4' : '0'; if (chosen) { fill(SX, y, SW, 1, '4'); put(SX, y, '▌', 'a', '', '4'); } put(SX + 2, y, chosen ? '›' : ' ', 'y', 'b', bg); put(SX + 4, y, text, chosen ? 't' : 'a', chosen ? 'b' : '', bg); R(SX + SW - 3, y, where, 'd', '', bg); };
+label(SX + 2, 5, 'Links', 'd', 4, SX + SW - 3);
+opt(6, 'https://github.com/acme/switchboard/compare/main...port', 'Chrome · Work', true);
+opt(7, 'https://github.com/acme/web-app/pull/2040', 'Chrome · Work', false);
+opt(8, 'https://github.com/acme/switchboard/issues', 'Chrome · Work', false);
+opt(9, 'src/mux/upgrade.rs', 'in a pane beside', false);
+label(SX + 2, 11, 'Pictures', 'd', 1, SX + SW - 3);
+opt(12, 'fork-parity.png', 'Preview', false);
+label(SX + 2, 14, 'Other tabs', 'd', 2, SX + SW - 3);
+const tabOpt = (y, st, n, name) => { put(SX + 4, y, ''); mark(SX + 4, y, st); put(SX + 6, y, String(n), 'n' + n); put(SX + 8, y, name, 't'); R(SX + SW - 3, y, 'go to it', 'd'); };
+tabOpt(15, 'landing', 5, 'benchmark harness');
+tabOpt(16, 'working', 7, 'Rust port notes');
+rule(SX, H - 7, SW);
+T(SX + 2, H - 6, ['github.com/acme/switchboard/compare/main...port', 't', 'b']);
+T(SX + 2, H - 5, ['Line 8 of this pane, from Claude\'s answer 2m ago. Opens in Chrome\'s Work profile, as browser.json gives github.com.', 'd']);
+keys(SX + 2, H - 1, [['↑↓', 'move'], ['↵', 'open'], ['Tab', 'next pane'], ['Esc', 'close']]);
 // The rule at the pane's edge, the pane's only border, drawn last so nothing breaks it.
 vl(X0 + PW, 0, H);
 
