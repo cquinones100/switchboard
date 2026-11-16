@@ -1,6 +1,6 @@
 # The design of UX 2.0
 
-The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from the kit's first board, every page beside a sidebar of them all. Drawn from the boards' sources in [`src/`](https://github.com/cquinones100/switchboard/tree/main/docs/design/src) on 2026-11-15 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again: a board is changed in its source, never in its page.
+The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from the kit's first board, every page beside a sidebar of them all. Drawn from the boards' sources in [`src/`](https://github.com/cquinones100/switchboard/tree/main/docs/design/src) on 2026-11-16 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again: a board is changed in its source, never in its page.
 
 ## The kit and the index
 
@@ -102,6 +102,8 @@ Items, the tabs working them and their plans.
 - [70. All 20 › under Recent, a click or Enter: every note opened lately, the last 20, in the finder's box](https://cquinones100.github.io/switchboard/design/70.html)
 - [83. Notes draws a Mermaid block as its diagram while the cursor is outside it: subgraphs boxed with their title on the edge, one too wide cut with ›, a pie kept as code](https://cquinones100.github.io/switchboard/design/83.html)
 - [84. The cursor in a Mermaid block shows its code to edit; the Format menu's Show diagram code keeps the note's diagrams as code until Show diagrams](https://cquinones100.github.io/switchboard/design/84.html)
+- [85. A note another tab has open: read-only here, the bar naming that tab with Go to it lit, the toolbar dim, ✎ in the list and the sidebar, a tip the first time](https://cquinones100.github.io/switchboard/design/85.html)
+- [86. Once the other tab lets go: the note becomes editable in place, a green line saying so, the cursor and toolbar back](https://cquinones100.github.io/switchboard/design/86.html)
 
 ## Boxes
 

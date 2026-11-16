@@ -317,6 +317,14 @@
       "title": "84. The cursor in a Mermaid block shows its code to edit; the Format menu's Show diagram code keeps the note's diagrams as code until Show diagrams",
       "page": "design"
     },
+    "NotesReadOnly.dc.html": {
+      "title": "85. A note another tab has open: read-only here, the bar naming that tab with Go to it lit, the toolbar dim, ✎ in the list and the sidebar, a tip the first time",
+      "page": "design"
+    },
+    "NotesEditable.dc.html": {
+      "title": "86. Once the other tab lets go: the note becomes editable in place, a green line saying so, the cursor and toolbar back",
+      "page": "design"
+    },
     "ReopenTabMenu.dc.html": {
       "title": "71. Enter on a closed tab in Reopen: reopen it, its note, its directory, or forget it",
       "page": "design"
