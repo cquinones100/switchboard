@@ -2571,16 +2571,39 @@ fn m_w_in_a_tabs_claude_pane_asks_to_close_the_tab() {
         json!({"sessionId": "s-1"}),
     );
     hook(&server, &claude, "UserPromptSubmit", json!({}));
-    // A split beside it closes alone, the tab and its Claude left.
+    // A split beside it closes alone, the tab and its Claude left. M-w
+    // waits for the split in front with its shell at its prompt, on a row of
+    // its own right of both borders: a login shell's profile can run a
+    // command of its own (Ubuntu's runs `locale`) before the prompt, and
+    // M-w then asks "Close pane?" rather than closing it.
     client.type_text(&format!("{ALT}L"));
-    wait_list(&server, "a split in the second tab", |l| {
-        tabs(l)[1]["panes"].as_array().unwrap().len() == 2
+    client.wait_for("a split in the second tab, at its prompt", |s| {
+        let list = server.list();
+        let panes = tabs(&list)[1]["panes"].as_array().unwrap().clone();
+        let split_at_its_prompt = s.iter().any(|row| {
+            row.matches('│').count() >= 2 && row.rsplit('│').next().map(str::trim) == Some("$")
+        });
+        panes.len() == 2
+            && panes.iter().any(|p| {
+                p["id"] != claude.as_str()
+                    && p["active"] == true
+                    && matches!(p["command"].as_str(), Some("sh" | "bash" | "dash"))
+            })
+            && split_at_its_prompt
     });
     client.type_text(&format!("{ALT}w"));
     wait_list(&server, "the split closed alone", |l| {
         tabs(l).len() == 2 && tabs(l)[1]["panes"].as_array().unwrap().len() == 1
     });
     // In its Claude pane, M-w asks about the tab; no keeps it, yes closes it.
+    wait_list(
+        &server,
+        "the Claude pane in front, known as Claude's",
+        |l| {
+            let pane = &tabs(l)[1]["panes"][0];
+            pane["id"] == claude.as_str() && pane["active"] == true && !pane["agent"].is_null()
+        },
+    );
     client.type_text(&format!("{ALT}w"));
     client.wait_text("Close tab 2");
     client.type_text("n");
