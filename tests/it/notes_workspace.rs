@@ -686,3 +686,48 @@ fn a_held_note_taken_over_from_another_tab_is_this_tabs_to_edit() {
     client.wait_text(&format!("Open in tab {two}, read-only here"));
     client.wait_text("taken over");
 }
+
+#[test]
+fn m_w_in_the_pane_notes_was_brought_beside_keeps_the_tab() {
+    let rig = Rig::new();
+    let (mut client, first, notes) = notes_open(&rig);
+    client.type_text(&format!("{ALT}e"));
+    rig.wait("Notes beside the first pane", |l| {
+        pane_ids(&tabs(l)[0]) == [first.clone(), notes.clone()]
+    });
+    rig.server.ok(&["select-pane", "-t", &first]);
+    rig.wait("the first pane focused", |l| {
+        tabs(l)[0]["panes"][0]["active"] == true
+    });
+    let before = tabs(&rig.list())[0]["panes"][0]["pid"].clone();
+    // Its shell gets a fresh one in its place: Notes isn't left alone to go
+    // home and take the tab with it.
+    client.type_text(&format!("{ALT}w"));
+    rig.wait("a fresh shell beside Notes, the tab kept", |l| {
+        tabs(l).len() == 2
+            && pane_ids(&tabs(l)[0]) == [first.clone(), notes.clone()]
+            && tabs(l)[0]["panes"][0]["pid"] != Value::Null
+            && tabs(l)[0]["panes"][0]["pid"] != before
+    });
+}
+
+#[test]
+fn m_w_on_the_pane_left_in_notes_tab_closes_that_tab() {
+    let rig = Rig::new();
+    let (mut client, first, notes) = notes_open(&rig);
+    client.type_text(&format!("{ALT}e"));
+    let list = rig.wait("Notes beside the first pane", |l| {
+        pane_ids(&tabs(l)[0]) == [first.clone(), notes.clone()]
+    });
+    let (_, stand_in) = marked(&list, "@notes_placeholder").expect("a pane left in its place");
+    client.type_text(&format!("{ALT}2"));
+    rig.wait("Notes' own tab in front", |l| tabs(l)[1]["current"] == true);
+    // Not a fresh shell left in a tab still marked Notes': it closes, as
+    // before, asked about since it runs a program.
+    client.type_text(&format!("{ALT}w"));
+    client.wait_text("Close pane?");
+    client.type_text("\r");
+    rig.wait("the tab it was left in closed", |l| {
+        tabs(l).len() == 1 && !pane_ids(&tabs(l)[0]).contains(&stand_in)
+    });
+}

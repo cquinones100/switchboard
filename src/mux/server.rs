@@ -3140,6 +3140,11 @@ impl Server {
                     self.close_pane(id, p);
                 }
             }
+            Action::CloseHere => {
+                if let Some(p) = pane {
+                    self.close_here(id, p);
+                }
+            }
             Action::CloseTab => self.close_tab(id, current_tab),
             Action::NextPane => {
                 let panes = self

@@ -1388,7 +1388,14 @@
     "key": "confirm_close",
     "category": "Safety",
     "label": "Ask before closing a pane",
-    "description": "M-w asks first when a program runs in the pane (a shell at its prompt closes at once); off, it closes the pane at once whatever runs in it",
+    "description": "M-w asks first when a program runs in the pane (a shell at its prompt closes at once), and before closing a tab from its Claude pane or sidebar row; off, it closes the pane or tab at once whatever runs in it",
+    "default": true
+  },
+  {
+    "key": "close_tab_from_claude",
+    "category": "Safety",
+    "label": "M-w closes the tab from Claude",
+    "description": "M-w in a tab's Claude pane, or on its sidebar row, asks to close the tab, and anywhere else closes only the pane, the tab's last pane getting a fresh shell; off, M-w closes the pane it is pressed in and the last pane closes its tab",
     "default": true
   },
   {

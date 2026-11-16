@@ -548,6 +548,31 @@ impl Server {
             .count()
     }
 
+    /// A tab's Claude pane, as its sidebar row takes it: the one whose state
+    /// the tab shows, else the first with a Claude session, else the first
+    /// running Claude, looked for behind a tool in a pane's place too.
+    pub(crate) fn tab_claude_pane(&self, tab: TabId) -> Option<PaneId> {
+        let with_parked = self.tab_panes(tab);
+        let leader = self.agents.leader(&with_parked).map(|(p, _, _)| p);
+        self.claude_pane_among(&with_parked, leader)
+    }
+
+    fn claude_pane_among(&self, panes: &[PaneId], leader: Option<PaneId>) -> Option<PaneId> {
+        let read_of = |p: PaneId| self.sidebar.panes.get(&p);
+        leader.or_else(|| {
+            panes
+                .iter()
+                .copied()
+                .find(|p| read_of(*p).is_some_and(|r| r.session.is_some()))
+                .or_else(|| {
+                    panes
+                        .iter()
+                        .copied()
+                        .find(|p| read_of(*p).is_some_and(|r| r.claude))
+                })
+        })
+    }
+
     /// One tab (model.js's `tabsFrom` for one window).
     fn tab_model(&self, s: &Session, attached: bool, id: TabId, index: usize) -> Option<TabModel> {
         let tab = self.tabs.get(&id)?;
@@ -564,18 +589,7 @@ impl Server {
         // there of those in that state; else the first running Claude.
         let leader = self.agents.leader(&with_parked);
         let read_of = |p: PaneId| self.sidebar.panes.get(&p);
-        let claude_pane = leader.map(|(p, _, _)| p).or_else(|| {
-            with_parked
-                .iter()
-                .copied()
-                .find(|p| read_of(*p).is_some_and(|r| r.session.is_some()))
-                .or_else(|| {
-                    with_parked
-                        .iter()
-                        .copied()
-                        .find(|p| read_of(*p).is_some_and(|r| r.claude))
-                })
-        });
+        let claude_pane = self.claude_pane_among(&with_parked, leader.map(|(p, _, _)| p));
         let read = claude_pane.and_then(read_of);
         let session = read.and_then(|r| r.session.clone());
         let base = match leader.map(|(_, state, _)| state) {
@@ -1356,6 +1370,21 @@ impl Server {
             _ => false,
         };
         if matches!(action, Action::TogglePin | Action::CopyReply) && off_a_listed_tab {
+            return (true, true);
+        }
+        // M-w on a tab's row closes that tab, after asking, the sidebar
+        // keeping the focus; on a group's line, or a tab a search leaves
+        // out, it does nothing.
+        if *action == Action::CloseHere && settings::is_on("close_tab_from_claude") {
+            if let Some(Owner::Tab(tab)) = self
+                .sidebar
+                .sides
+                .get(&session)
+                .and_then(|s| s.cursor.clone())
+                && self.sidebar_order(&session).contains(&tab)
+            {
+                self.close_tab_from_key(client, tab);
+            }
             return (true, true);
         }
         match action {

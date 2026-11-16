@@ -77,7 +77,7 @@ As a plugin, a Claude session outside Switchboard runs none of its hooks, so the
 | `M-c` | Into the pane running the tab's agent |
 | `M-Left` `M-Down` `M-Up` `M-Right` | To the pane on that side |
 | `M-H` `M-J` `M-K` `M-L` | Split the pane to that side |
-| `M-w` | Close the pane, asking first when something runs in it |
+| `M-w` | Close the pane, asking first when something runs in it; from the tab's Claude pane or sidebar row, close the tab |
 | `M-f` | Pin the tab to the top of Needs you |
 | `M-Space` | Mission control |
 | `M-p` | Find any command by what it does |

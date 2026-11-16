@@ -51,6 +51,9 @@ pub enum Action {
     Split(Direction),
     /// Close the current pane (its tab, when it is the last).
     ClosePane,
+    /// M-w: the current pane, or the tab from its Claude pane (Settings'
+    /// close_tab_from_claude), its last pane getting a fresh shell.
+    CloseHere,
     /// Close the current tab, after asking (tmux's prefix `&`).
     CloseTab,
     /// The next pane of the tab, going round (tmux's prefix `o`).
@@ -238,6 +241,7 @@ impl Action {
             "tab-forward" => Action::TabForward,
             "new-tab" => Action::NewTab,
             "close-pane" => Action::ClosePane,
+            "close-here" => Action::CloseHere,
             "close-tab" => Action::CloseTab,
             "next-pane" => Action::NextPane,
             "last-pane" => Action::LastPane,
@@ -316,6 +320,7 @@ impl Action {
             Action::NewTab => "new-tab".into(),
             Action::Split(d) => format!("split-{}", dir(d)),
             Action::ClosePane => "close-pane".into(),
+            Action::CloseHere => "close-here".into(),
             Action::CloseTab => "close-tab".into(),
             Action::NextPane => "next-pane".into(),
             Action::LastPane => "last-pane".into(),
@@ -401,6 +406,7 @@ impl Action {
             Action::NewTab => "New tab".into(),
             Action::Split(d) => format!("Split pane {}", side(d)),
             Action::ClosePane => "Close the pane".into(),
+            Action::CloseHere => "Close the pane, or the tab from its Claude pane".into(),
             Action::CloseTab => "Close the tab, after asking".into(),
             Action::NextPane => "Move to the next pane in the tab".into(),
             Action::LastPane => "Go back to the pane you were in before".into(),
@@ -502,6 +508,9 @@ impl Action {
             }
             Action::ClosePane => {
                 "It asks first when a program other than a shell at its prompt runs in it (Settings' confirm_close). The last pane closes its tab.".into()
+            }
+            Action::CloseHere => {
+                "In the tab's Claude pane, or on its sidebar row, it asks to close the tab; anywhere else it closes only the pane, asking first when a program runs in it, the last pane getting a fresh shell rather than closing its tab (Settings' close_tab_from_claude and confirm_close).".into()
             }
             Action::CloseTab => {
                 "The question names the programs running in its panes. Closing it ends them.".into()
@@ -659,6 +668,7 @@ impl Action {
             Action::NewTab => &["tabs", "new"],
             Action::Split(_) => &["panes", "split"],
             Action::ClosePane => &["panes", "close"],
+            Action::CloseHere => &["panes", "tabs", "close"],
             Action::CloseTab => &["tabs", "close"],
             Action::NextPane | Action::LastPane => &["panes", "navigate"],
             Action::Zoom => &["panes", "layout"],
@@ -878,7 +888,7 @@ impl Default for Bindings {
         bind("M-J", Split(Down));
         bind("M-K", Split(Up));
         bind("M-L", Split(Right));
-        bind("M-w", ClosePane);
+        bind("M-w", CloseHere);
         bind("M-=", Zoom);
         bind("C-M-S-h", Resize(Left, 5));
         bind("C-M-S-j", Resize(Down, 5));
@@ -1077,6 +1087,7 @@ mod tests {
             Action::Split(Direction::Down),
             Action::Detach,
             Action::CloseTab,
+            Action::CloseHere,
             Action::NextPane,
             Action::LastPane,
             Action::TabBack,

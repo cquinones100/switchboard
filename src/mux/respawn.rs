@@ -44,6 +44,14 @@ pub const PROGRAM_MARKS: &[&str] = &[
     "@allow_passthrough",
 ];
 
+/// The tab options about the work a tab was doing, which go when it is
+/// handed to other work: its directory and a sealed review's try.
+pub const HANDED_OVER: &[&str] = &[
+    super::server::TAB_DIR,
+    crate::usage::serve::SEALED_REVIEW,
+    crate::usage::serve::SEALED_REVIEW_FETCH,
+];
+
 impl Server {
     /// Ends `pane`'s program (with `kill`; without, one still running is
     /// refused) and starts `command` in its place (the login shell when
@@ -77,11 +85,11 @@ impl Server {
         self.forget_images(pane);
         // The tab is handed to other work (/wt, /wtn, queue-and-clean's
         // resume): the directory it was about goes with what it was doing.
+        // A sealed review's try isn't the new work's either.
         if let Some(t) = self.tabs.get_mut(&tab) {
-            t.opts.remove(super::server::TAB_DIR);
-            // Nor a sealed review's, whose try isn't the new work's.
-            t.opts.remove(crate::usage::serve::SEALED_REVIEW);
-            t.opts.remove(crate::usage::serve::SEALED_REVIEW_FETCH);
+            for name in HANDED_OVER {
+                t.opts.remove(*name);
+            }
         }
         self.agents.restarted(pane);
         self.sidebar.panes.remove(&pane);

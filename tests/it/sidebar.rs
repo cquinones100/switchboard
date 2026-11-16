@@ -2496,3 +2496,121 @@ fn a_tab_whose_command_waits_for_a_slot_says_so_under_working_until_it_holds_one
     });
     report(&["slot-report", "done", &me]);
 }
+
+#[test]
+fn m_w_in_a_tabs_claude_pane_asks_to_close_the_tab() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-n", "second"]);
+    client.wait_text("2:second");
+    wait_list(&server, "the second tab in front", |l| {
+        tabs(l)[1]["current"] == true
+    });
+    let pane = tabs(&server.list())[1]["panes"][0].clone();
+    let claude = pane["id"].as_str().unwrap().to_string();
+    session_file(
+        &server.home,
+        pane["pid"].as_u64().unwrap(),
+        json!({"sessionId": "s-1"}),
+    );
+    hook(&server, &claude, "UserPromptSubmit", json!({}));
+    // A split beside it closes alone, the tab and its Claude left.
+    client.type_text(&format!("{ALT}L"));
+    wait_list(&server, "a split in the second tab", |l| {
+        tabs(l)[1]["panes"].as_array().unwrap().len() == 2
+    });
+    client.type_text(&format!("{ALT}w"));
+    wait_list(&server, "the split closed alone", |l| {
+        tabs(l).len() == 2 && tabs(l)[1]["panes"].as_array().unwrap().len() == 1
+    });
+    // In its Claude pane, M-w asks about the tab; no keeps it, yes closes it.
+    client.type_text(&format!("{ALT}w"));
+    client.wait_text("Close tab 2");
+    client.type_text("n");
+    client.wait_for("the question gone", |s| {
+        !s.iter().any(|l| l.contains("Close tab 2"))
+    });
+    assert_eq!(tabs(&server.list()).len(), 2, "no is no");
+    client.type_text(&format!("{ALT}w"));
+    client.wait_text("Close tab 2");
+    client.type_text("\r");
+    wait_list(&server, "the Claude tab closed", |l| tabs(l).len() == 1);
+}
+
+#[test]
+fn m_w_in_a_tabs_last_pane_without_claude_keeps_the_tab() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-n", "second"]);
+    client.wait_text("2:second");
+    let pane = tabs(&server.list())[1]["panes"][0]["id"].clone();
+    let tab = tabs(&server.list())[1]["id"].as_str().unwrap().to_string();
+    let dir = server.home.to_string_lossy().to_string();
+    server.ok(&["set", "-t", &tab, "@tab_dir", &dir]);
+    let old_pid = |l: &Value| tabs(l)[1]["panes"][0]["pid"].as_u64();
+    let before = old_pid(&server.list());
+    client.type_text("sleep 100\r");
+    wait_list(&server, "sleep in front", |l| {
+        tabs(l)[1]["panes"][0]["command"] == "sleep"
+    });
+    client.type_text(&format!("{ALT}w"));
+    client.wait_text("Close pane?");
+    client.type_text("\r");
+    wait_list(&server, "a fresh shell in the tab's pane", |l| {
+        tabs(l).len() == 2 && old_pid(l).is_some() && old_pid(l) != before
+    });
+    assert_eq!(tabs(&server.list())[1]["panes"][0]["id"], pane);
+    // A fresh shell isn't other work: what the tab is about stays.
+    assert_eq!(tabs(&server.list())[1]["options"]["@tab_dir"], dir.as_str());
+}
+
+#[test]
+fn m_w_closes_the_last_pane_and_its_tab_with_the_setting_off() {
+    let server = TestServer::start();
+    settings(&server, json!({"close_tab_from_claude": false}));
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-n", "second"]);
+    client.wait_text("2:second");
+    // Its shell in front, so M-w doesn't ask: a login shell's profile can
+    // run a command of its own (Ubuntu's runs `locale`) first.
+    wait_list(
+        &server,
+        "the second tab in front, its shell in front",
+        |l| {
+            tabs(l)[1]["current"] == true
+                && matches!(
+                    tabs(l)[1]["panes"][0]["command"].as_str(),
+                    Some("sh" | "bash" | "dash")
+                )
+        },
+    );
+    client.wait_text("$");
+    client.type_text(&format!("{ALT}w"));
+    wait_list(&server, "the second tab closed with its pane", |l| {
+        tabs(l).len() == 1
+    });
+}
+
+#[test]
+fn m_w_on_a_sidebar_row_asks_to_close_that_tab() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-n", "second"]);
+    client.wait_text("2:second");
+    wait_list(&server, "the second tab in front", |l| {
+        tabs(l)[1]["current"] == true
+    });
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text(&format!("{ALT}w"));
+    client.wait_text("Close tab 2");
+    client.type_text("\r");
+    wait_list(&server, "the second tab closed", |l| tabs(l).len() == 1);
+}

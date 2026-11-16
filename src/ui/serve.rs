@@ -801,10 +801,6 @@ impl Server {
         });
     }
 
-    /// M-w: closes the pane, asking first when its program isn't a shell at
-    /// its prompt (confirm.sh's question), unless the confirm_close setting
-    /// is off. The pane is the one M-w was pressed in, whatever has the
-    /// focus by the time it is answered.
     /// The prefix's `&`: the tab closed once you say so, as tmux's
     /// `confirm-before kill-window`, the programs running in its panes
     /// listed under the question.
@@ -901,7 +897,40 @@ impl Server {
         );
     }
 
+    /// M-w on a tab's sidebar row, or in its Claude pane: the tab, asked as
+    /// the prefix's `&` asks, or at once with confirm_close off.
+    pub fn close_tab_from_key(&mut self, client: ClientId, tab: TabId) {
+        if setting_on("confirm_close") {
+            self.close_tab(client, tab);
+        } else if self.tabs.contains_key(&tab) {
+            self.kill_tab(tab);
+        }
+    }
+
+    /// M-w: closes the pane, asking first when its program isn't a shell at
+    /// its prompt (confirm.sh's question), unless the confirm_close setting
+    /// is off; in the tab's Claude pane it closes the tab instead. The pane
+    /// is the one M-w was pressed in, whatever has the focus by the time it
+    /// is answered.
+    pub fn close_here(&mut self, client: ClientId, pane: PaneId) {
+        let Some(tab) = self.panes.get(&pane).map(|s| s.tab) else {
+            return;
+        };
+        let from_claude = setting_on("close_tab_from_claude");
+        if from_claude && self.tab_claude_pane(tab) == Some(pane) {
+            self.close_tab_from_key(client, tab);
+            return;
+        }
+        self.close_pane_keeping(client, pane, from_claude);
+    }
+
+    /// The prefix's `x` and the palette's "Close the pane": the pane alone,
+    /// asked about as M-w asks, its tab closing with its last pane.
     pub fn close_pane(&mut self, client: ClientId, pane: PaneId) {
+        self.close_pane_keeping(client, pane, false);
+    }
+
+    fn close_pane_keeping(&mut self, client: ClientId, pane: PaneId, keep_tab: bool) {
         // Notes beside a pane goes back to its own tab instead (notes-open.sh
         // away, src/notes/serve.rs).
         if self.notes_close(pane) {
@@ -909,7 +938,7 @@ impl Server {
         }
         let running = self.running(pane);
         if running.is_none() || !setting_on("confirm_close") {
-            self.kill_pane(pane);
+            self.close_only_pane(pane, keep_tab);
             return;
         }
         let list: Vec<String> = running.into_iter().filter(|r| !r.is_empty()).collect();
@@ -918,10 +947,69 @@ impl Server {
             Confirm::new("Close pane?").list(list),
             move |server, _, yes| {
                 if yes {
-                    server.kill_pane(pane);
+                    server.close_only_pane(pane, keep_tab);
                 }
             },
         );
+    }
+
+    /// Ends a pane M-w closed and takes it out, leaving its tab: the tab's
+    /// last pane gets a shell in its place rather than closing the tab,
+    /// which M-w closes only from its Claude pane or its sidebar row. A tool
+    /// in a pane's place gives the place back, and Notes' own tab closes
+    /// with its last pane, as before. With `keep_tab` off (Settings'
+    /// close_tab_from_claude), the last pane closes its tab.
+    fn close_only_pane(&mut self, pane: PaneId, keep_tab: bool) {
+        let Some(slot) = self.panes.get(&pane) else {
+            return;
+        };
+        let is_tool = slot.opts.contains_key(crate::diff::in_place::IN_PLACE);
+        // Notes, or anything in Notes' own tab (its placeholder while Notes
+        // is beside another tab), closes as before.
+        let is_notes = slot.opts.contains_key("@notes_pane")
+            || self
+                .tabs
+                .get(&slot.tab)
+                .is_some_and(|t| t.opts.get("@notes").map(String::as_str) == Some("1"));
+        // Notes brought beside it doesn't count: left alone, it would go
+        // home and take the tab with it (notes_orphan).
+        let is_tabs_last_pane = self.tabs.get(&slot.tab).is_some_and(|t| {
+            let notes_beside = t.opts.get("@notes_beside").map(String::as_str) == Some("1")
+                && t.opts.get("@notes").map(String::as_str) != Some("1");
+            t.layout.panes().into_iter().all(|p| {
+                p == pane
+                    || notes_beside
+                        && self
+                            .panes
+                            .get(&p)
+                            .is_some_and(|s| s.opts.contains_key("@notes_pane"))
+            })
+        });
+        if keep_tab && is_tabs_last_pane && !is_tool && !is_notes {
+            // A fresh shell, not other work handed the tab: what the tab is
+            // about (its directory, a sealed review) stays, which
+            // respawn_pane clears.
+            let tab = slot.tab;
+            let kept: Vec<(String, String)> = self
+                .tabs
+                .get(&tab)
+                .map(|t| {
+                    t.opts
+                        .iter()
+                        .filter(|(k, _)| crate::mux::respawn::HANDED_OVER.contains(&k.as_str()))
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if let Err(e) = self.respawn_pane(pane, None, None, true) {
+                self.say(None, &format!("Couldn't start a shell in the pane: {e}"));
+            }
+            if let Some(t) = self.tabs.get_mut(&tab) {
+                t.opts.extend(kept);
+            }
+            return;
+        }
+        self.kill_pane(pane);
     }
 
     /// What a pane runs in front, its command line, or `None` when it is a
