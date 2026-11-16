@@ -1107,11 +1107,26 @@ fn the_notifications_views_menu_dismisses_every_notification_shown() {
     assert!(!left.contains("Plan.md"), "{left}");
 }
 
-// "Send it to a tab" on a notification: a tab running Claude picked, the
-// notification's words and link pasted into it without Enter, that tab in
-// front; a tab with no Claude isn't offered.
-#[test]
-fn send_it_to_a_tab_pastes_a_notification_into_the_tab_picked() {
+// "Send it to a tab" and "Paste it into a tab" on a notification: a tab
+// running Claude picked, the notification's words and link pasted into it,
+// that tab in front; a tab with no Claude isn't offered. The second tab's
+// "Claude" is `dd` writing every byte it gets to a file, in place of its
+// shell (its pid kept, so its session file still names it), so the test
+// sees whether Enter followed the paste. What the file holds is returned.
+/// What the second tab shows before the hand-off: a numbered list in
+/// Claude's reply with nothing waiting, a permission prompt its Claude waits
+/// on, the same asked in auto mode before it counts as waiting, or a draft
+/// in its prompt box, or a dialog before its session starts.
+#[derive(Clone, Copy, PartialEq)]
+enum Before {
+    Reply,
+    Asking,
+    AskingInAutoMode,
+    Draft,
+    Dialog,
+}
+
+fn hand_to_a_tab(choice: &str, title: &str, says: &str, before: Before) -> String {
     let server = TestServer::start();
     std::fs::create_dir_all(&server.state).unwrap();
     let ts = format!("{}.000100", switchboard::util::now_ms() / 1000);
@@ -1130,46 +1145,185 @@ fn send_it_to_a_tab_pastes_a_notification_into_the_tab_picked() {
     server.ok(&["new-tab", "-n", "second"]);
     server.ok(&["new-tab", "-n", "third"]);
     client.wait_text("3:third");
-    // The second tab's shell counts as its Claude; the third runs none.
+    let got = server.home.join("got");
+    // Written once the terminal is raw, just before dd starts reading.
+    let ready = server.home.join("ready");
     let list = server.list();
+    let second = tabs(&list)[1]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let command = format!(
+        "exec sh -c 'stty raw -echo; printf \"{}\"; : > {}; exec dd of={} bs=1 2>/dev/null'",
+        match before {
+            Before::Asking | Before::AskingInAutoMode | Before::Reply => {
+                r"\r\n Do you want to proceed?\r\n ❯ 1. Yes\r\n   2. No\r\n"
+            }
+            Before::Draft => r"\r\n────────\r\n❯ half typed\r\n────────\r\n",
+            Before::Dialog => {
+                r"\r\n Do you trust the files in this folder?\r\n\r\n ❯ 1. Yes, proceed\r\n   2. No, exit\r\n\r\n Enter to confirm · Esc to exit\r\n"
+            }
+        },
+        ready.display(),
+        got.display()
+    );
+    // Typed once its shell has drawn its prompt, so none of it is lost.
+    let deadline = common::deadline(Duration::from_secs(10));
+    while !server.ok(&["capture-pane", "-t", &second]).contains('$') {
+        assert!(
+            Instant::now() < deadline,
+            "the second tab's shell didn't start"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    server.ok(&["send-keys", "-t", &second, &command, "Enter"]);
+    let deadline = common::deadline(Duration::from_secs(10));
+    while !ready.exists() {
+        let screen = server.ok(&["capture-pane", "-t", &second]);
+        assert!(Instant::now() < deadline, "dd didn't start: {screen}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // The second tab's dd counts as its Claude; the third runs none.
     let pid = tabs(&list)[1]["panes"][0]["pid"].as_u64().unwrap();
     session_file(&server.home, pid, "s-second");
     wait_list(&server, "the second tab's Claude", |l| {
         !tabs(l)[1]["panes"][0]["claude"].is_null()
     });
+    if before == Before::AskingInAutoMode {
+        hook(
+            &server,
+            &second,
+            "PermissionRequest",
+            json!({"tool_name": "Bash", "permission_mode": "auto",
+                "tool_input": {"command": "ls"}}),
+        );
+        wait_list(&server, "the second tab still working", |l| {
+            tabs(l)[1]["panes"][0]["agent"]["state"] == "working"
+        });
+    }
+    if before == Before::Asking {
+        hook(
+            &server,
+            &second,
+            "PermissionRequest",
+            json!({"tool_name": "Bash", "tool_input": {"command": "ls"}}),
+        );
+        wait_list(&server, "the second tab waiting", |l| {
+            tabs(l)[1]["panes"][0]["agent"]["state"] == "waiting"
+        });
+    }
     open(&mut client);
     client.type_text("]");
     client.wait_text("DM Ada");
     client.type_text("j");
     client.type_text("\r");
-    pick(&mut client, "Send it to a tab");
-    let screen = client.wait_text("Send to: Slack: Ada");
+    pick(&mut client, choice);
+    let screen = client.wait_text(title);
     let all = screen.join("\n");
+    assert!(
+        all.contains(says),
+        "the picker says what choosing does: {all}"
+    );
     assert!(all.contains("2  second"), "{all}");
     assert!(
         !all.contains("3  third"),
         "a tab with no Claude isn't offered: {all}"
     );
     client.type_text("\r");
-    let list = wait_list(&server, "the second tab in front", |l| {
+    wait_list(&server, "the second tab in front", |l| {
         tabs(l)[1]["current"] == true
     });
-    let pane = tabs(&list)[1]["panes"][0]["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let deadline = common::deadline(Duration::from_secs(10));
-    loop {
-        let screen = server.ok(&["capture-pane", "-t", &pane]);
-        // The test's sh takes no bracketed paste, so runs each line it gets.
-        if screen.contains("> a question") {
-            assert!(screen.contains("Slack message from Ada"), "{screen}");
-            assert!(screen.contains("(https://slack.example/m):"), "{screen}");
-            break;
+    match before {
+        Before::Asking | Before::AskingInAutoMode | Before::Dialog => {
+            client.wait_text("is asking something");
+            return std::fs::read_to_string(&got).unwrap_or_default();
         }
-        assert!(Instant::now() < deadline, "not pasted: {screen}");
-        std::thread::sleep(Duration::from_millis(50));
+        Before::Draft => {
+            client.wait_text("had a draft");
+        }
+        Before::Reply => {}
     }
+    // Enter follows the paste after a moment, so the file is read once it
+    // has the whole message and has stopped growing.
+    let deadline = common::deadline(Duration::from_secs(10));
+    let mut last = String::new();
+    loop {
+        let now = std::fs::read_to_string(&got).unwrap_or_default();
+        if now.contains("> a question") && now == last {
+            assert!(now.contains("Slack message from Ada"), "{now:?}");
+            assert!(now.contains("(https://slack.example/m):"), "{now:?}");
+            return now;
+        }
+        assert!(Instant::now() < deadline, "not pasted: {now:?}");
+        last = now;
+        std::thread::sleep(common::deadline(Duration::from_millis(400)) - Instant::now());
+    }
+}
+
+#[test]
+fn send_it_to_a_tab_pastes_a_notification_into_the_tab_picked_and_sends_it() {
+    let got = hand_to_a_tab(
+        "Send it to a tab",
+        "Send to: Slack: Ada",
+        "Sends it as written",
+        Before::Reply,
+    );
+    assert!(got.ends_with("> a question\r"), "Enter after it: {got:?}");
+}
+
+#[test]
+fn send_it_to_a_tab_sends_nothing_to_a_claude_asking_for_permission() {
+    let got = hand_to_a_tab(
+        "Send it to a tab",
+        "Send to: Slack: Ada",
+        "Sends it as written",
+        Before::Asking,
+    );
+    assert_eq!(got, "", "no Enter to pick its option");
+}
+
+#[test]
+fn send_it_to_a_tab_sends_nothing_to_a_claude_asking_in_auto_mode() {
+    let got = hand_to_a_tab(
+        "Send it to a tab",
+        "Send to: Slack: Ada",
+        "Sends it as written",
+        Before::AskingInAutoMode,
+    );
+    assert_eq!(got, "", "no Enter to pick its option");
+}
+
+#[test]
+fn send_it_to_a_tab_sends_nothing_to_a_claude_showing_a_dialog() {
+    let got = hand_to_a_tab(
+        "Send it to a tab",
+        "Send to: Slack: Ada",
+        "Sends it as written",
+        Before::Dialog,
+    );
+    assert_eq!(got, "", "no Enter to pick its option");
+}
+
+#[test]
+fn send_it_to_a_tab_pastes_into_a_draft_without_sending() {
+    let got = hand_to_a_tab(
+        "Send it to a tab",
+        "Send to: Slack: Ada",
+        "Sends it as written",
+        Before::Draft,
+    );
+    assert!(got.ends_with("> a question"), "no Enter after it: {got:?}");
+}
+
+#[test]
+fn paste_it_into_a_tab_leaves_a_notification_unsent_in_the_tab_picked() {
+    let got = hand_to_a_tab(
+        "Paste it into a tab",
+        "Paste into: Slack: Ada",
+        "Pastes it without sending",
+        Before::Reply,
+    );
+    assert!(got.ends_with("> a question"), "no Enter after it: {got:?}");
 }
 
 // "Open a tab for it" on a notification: a directory asked for, then a new

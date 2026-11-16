@@ -100,9 +100,13 @@ pub enum Do {
     MarkRead(String),
     /// An invitation answered.
     Rsvp(Box<CalEvent>, Rsvp),
-    /// What an item is about pasted into the Claude of a tab you pick,
-    /// without Enter, that tab brought to the front.
+    /// What an item is about pasted into the Claude of a tab you pick and
+    /// submitted, that tab brought to the front.
     ToTab(Handoff),
+    /// The same pasted without Enter, to add to before sending: "Paste it
+    /// into a tab", or "Send it to a tab" with Settings'
+    /// `send_to_tab_submits` off.
+    PasteToTab(Handoff),
     /// A new tab whose Claude is told what an item is about.
     TabFor(Handoff),
     /// Slack messages dismissed until their threads get more.
@@ -447,9 +451,11 @@ fn free_key(out: &[Choice], keys: &[char]) -> char {
         .unwrap_or(keys[0])
 }
 
-/// "Open a tab for it" and "Send it to a tab", added to an item's menu
-/// while the `notice_to_tab` setting is on (`ctx.to_tab`), each where the
-/// menu hasn't it yet.
+/// "Open a tab for it", "Send it to a tab" and "Paste it into a tab",
+/// added to an item's menu while the `notice_to_tab` setting is on
+/// (`ctx.to_tab`), each where the menu hasn't it yet; with
+/// `send_to_tab_submits` off (`ctx.to_tab_submits`), "Send it to a tab"
+/// pastes without sending and stands alone.
 fn add_hand_offs(out: &mut Vec<Choice>, handoff: Option<Handoff>, ctx: &Ctx<'_>) {
     let Some(h) = handoff.filter(|_| ctx.to_tab) else {
         return;
@@ -458,10 +464,20 @@ fn add_hand_offs(out: &mut Vec<Choice>, handoff: Option<Handoff>, ctx: &Ctx<'_>)
         let key = free_key(out, &['t', 'n', 'T', 'N']);
         out.push(choice(key, "Open a tab for it", Do::TabFor(h.clone())));
     }
-    if !out.iter().any(|c| matches!(c.act, Do::ToTab(_))) {
-        let key = free_key(out, &['s', 'S', 'e', 'E']);
-        out.push(choice(key, "Send it to a tab", Do::ToTab(h)));
+    if out
+        .iter()
+        .any(|c| matches!(c.act, Do::ToTab(_) | Do::PasteToTab(_)))
+    {
+        return;
     }
+    let key = free_key(out, &['s', 'S', 'e', 'E']);
+    if !ctx.to_tab_submits {
+        out.push(choice(key, "Send it to a tab", Do::PasteToTab(h)));
+        return;
+    }
+    out.push(choice(key, "Send it to a tab", Do::ToTab(h.clone())));
+    let key = free_key(out, &['p', 'P', 'a', 'A']);
+    out.push(choice(key, "Paste it into a tab", Do::PasteToTab(h)));
 }
 
 /// One option: the key that takes it at once, its label, and what it does.
@@ -681,6 +697,9 @@ pub struct Ctx<'a> {
     pub habit: &'a dyn Fn(&str) -> Vec<habits::Choice>,
     /// The `notice_to_tab` setting: items' menus hand them to a tab.
     pub to_tab: bool,
+    /// The `send_to_tab_submits` setting: "Send it to a tab" presses Enter
+    /// after the paste, and "Paste it into a tab" is beside it.
+    pub to_tab_submits: bool,
     /// The `slack_reply` setting: a Slack message's menu offers replies.
     pub slack_reply: bool,
 }
@@ -1697,7 +1716,7 @@ pub fn led_to_words(
         // Asked for, since a directory or a tab is picked first, which may
         // be canceled.
         Do::TabFor(_) => "you asked for a tab for it".into(),
-        Do::ToTab(_) => "you chose a tab to send it to".into(),
+        Do::ToTab(_) | Do::PasteToTab(_) => "you chose a tab to send it to".into(),
         // Asked for: Send asks again, and may be told no.
         Do::SlackReply(_) => "you chose to reply".into(),
         // Said once Linear answers (`After::DropInbox`).
@@ -1805,13 +1824,14 @@ mod tests {
             home: "/home/me".into(),
             habit: &|_| Vec::new(),
             to_tab: false,
+            to_tab_submits: true,
             slack_reply: false,
         }
     }
 
     fn handed(list: &[Choice]) -> Vec<(char, String)> {
         list.iter()
-            .filter(|c| matches!(c.act, Do::TabFor(_) | Do::ToTab(_)))
+            .filter(|c| matches!(c.act, Do::TabFor(_) | Do::ToTab(_) | Do::PasteToTab(_)))
             .map(|c| (c.key, c.label.clone()))
             .collect()
     }
@@ -1858,16 +1878,20 @@ mod tests {
             vec![
                 (t, "Open a tab for it".to_string()),
                 (s, "Send it to a tab".to_string()),
+                ('p', "Paste it into a tab".to_string()),
             ]
         };
-        // A Slack message: opening it, a tab, sending, its link, dismissing.
+        // A Slack message: opening it, a tab, sending, pasting, its link,
+        // dismissing.
         let message = Item::new("slack\tD1:1.5", "DM Ada")
             .detail("Can you look?")
             .target(Target::Url("https://slack.example/m".into()))
             .data(json!({ "kind": "dm", "message": { "channel": "D1", "ts": "1.5" } }));
         let choices = notice_choices(&message, &c);
-        assert_eq!(keys(&choices), "otsyx");
-        assert_eq!(choices[3].act, Do::Copy("https://slack.example/m".into()));
+        assert_eq!(keys(&choices), "otspyx");
+        assert!(matches!(choices[2].act, Do::ToTab(_)));
+        assert!(matches!(choices[3].act, Do::PasteToTab(_)));
+        assert_eq!(choices[4].act, Do::Copy("https://slack.example/m".into()));
         let h = handoff_of(&choices);
         assert_eq!(h.name, "Slack: Ada");
         assert_eq!(
@@ -1884,7 +1908,7 @@ mod tests {
             .target(Target::Url("https://linear.app/x/issue/AB-3".into()))
             .data(json!({ "ticket": "AB-3", "notification": "n1" }));
         let choices = notice_choices(&inbox, &c);
-        assert_eq!(keys(&choices), "wsDvoyrtSx");
+        assert_eq!(keys(&choices), "wsDvoyrtSpx");
         assert_eq!(handed(&choices), both('t', 'S'));
         let h = handoff_of(&choices);
         assert_eq!(h.name, "Linear: AB-3");
@@ -1932,7 +1956,7 @@ mod tests {
         let note = Item::new("new-notes\tnote:/n/A.md", "A")
             .data(json!({ "kind": "note", "path": "/n/A.md" }));
         let choices = notice_choices(&note, &c);
-        assert_eq!(keys(&choices), "otsx");
+        assert_eq!(keys(&choices), "otspx");
         let h = handoff_of(&choices);
         assert_eq!(h.text, "Note: A (/n/A.md)");
         assert!(h.prompt.contains("don't read it unless I ask"));
@@ -1949,7 +1973,7 @@ mod tests {
         ] {
             assert_eq!(
                 handed(&notice_choices(&notice, &c)).len(),
-                2,
+                3,
                 "{}",
                 notice.id
             );
@@ -1987,12 +2011,29 @@ mod tests {
         for (view, item) in shown.clone() {
             assert_eq!(
                 handed(&item_choices(&view, item, &[], &c)).len(),
-                2,
+                3,
                 "{view:?}"
             );
         }
         let main = main_failing();
-        assert_eq!(handed(&item_choices(&ViewId::Ci, &main, &[], &c)).len(), 2);
+        assert_eq!(handed(&item_choices(&ViewId::Ci, &main, &[], &c)).len(), 3);
+        // With `send_to_tab_submits` off, "Send it to a tab" pastes alone.
+        c.to_tab_submits = false;
+        for (view, item) in shown.clone() {
+            let sends: Vec<Do> = item_choices(&view, item, &[], &c)
+                .into_iter()
+                .filter(|c| matches!(c.act, Do::ToTab(_) | Do::PasteToTab(_)))
+                .map(|c| {
+                    assert_eq!(c.label, "Send it to a tab", "{view:?}");
+                    c.act
+                })
+                .collect();
+            assert!(
+                matches!(sends.as_slice(), [Do::PasteToTab(_)]),
+                "{view:?}: {sends:?}"
+            );
+        }
+        c.to_tab_submits = true;
         c.to_tab = false;
         for (view, item) in shown.clone() {
             let choices = item_choices(&view, item, &[], &c);
@@ -2303,6 +2344,7 @@ mod tests {
             home: "/h".into(),
             habit: &habit,
             to_tab: false,
+            to_tab_submits: true,
             slack_reply: false,
         };
         let suggestion = Item::new("habits\tkey:M-d", "Press M-d");

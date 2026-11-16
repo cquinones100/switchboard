@@ -489,16 +489,24 @@ impl Server {
                     let Some(tab) = picked.and_then(|p| p.value.parse().ok()).map(TabId) else {
                         return;
                     };
-                    server.paste_into_tab(client, tab, &reply);
+                    server.paste_into_tab(client, tab, &reply, false);
                 });
             },
         );
     }
 
-    /// Text pasted into a tab's Claude (its active pane when it runs none)
-    /// without Enter, and the tab brought to the front: Claude's last reply
-    /// sent here, and a notification's "Send it to a tab".
-    pub(crate) fn paste_into_tab(&mut self, client: ClientId, tab: TabId, reply: &str) {
+    /// Text pasted into a tab's Claude (its active pane when it runs none),
+    /// Enter pressed once the paste has landed when `submit` and the pane
+    /// runs Claude (nothing at all while that Claude asks a question, and no
+    /// Enter with a draft already in its prompt box), and the tab brought to the front: Claude's last reply
+    /// sent here, and an item's "Send it to a tab" and "Paste it into a tab".
+    pub(crate) fn paste_into_tab(
+        &mut self,
+        client: ClientId,
+        tab: TabId,
+        reply: &str,
+        submit: bool,
+    ) {
         let model = self.sidebar_all_tabs().into_iter().find(|t| t.id == tab);
         let Some(model) = model else {
             self.say(Some(client), "That tab has closed.");
@@ -520,10 +528,54 @@ impl Server {
             );
             return;
         }
+        // Enter on a question or a permission prompt would pick its
+        // option rather than send the words, so a Claude asking something
+        // gets nothing: the tab comes to the front for it to be answered.
+        // Asking is waiting on you with options on screen, as mission
+        // control's answers read it, since a numbered list Claude wrote
+        // looks like options too; or a permission request auto mode still
+        // counts as work until it reaches you (`asked`), whose prompt is
+        // on screen meanwhile; or a dialog before its session starts (trust
+        // this folder, a new MCP server), which no hook tells of, as the
+        // Slack relay's `showing_choice` reads them.
+        let auto_mode_asked = self.agents.get(pane).is_some_and(|a| a.asked.is_some());
+        let dialog = self
+            .panes
+            .get(&pane)
+            .is_some_and(|slot| crate::relay::tabs::dialog_in(&slot.pane.text(0)).is_some());
+        let asking = submit
+            && model.claude_pane.is_some()
+            && (dialog
+                || (model.state == crate::sidebar::model::TabState::Waiting || auto_mode_asked)
+                    && self.prompt_of(tab).is_some());
+        // A draft already in its prompt box would go with the words, so
+        // they are pasted in unsent, at its cursor as a paste always was, to
+        // send together by hand.
+        let has_draft = submit
+            && model.claude_pane.is_some()
+            && self.panes.get(&pane).is_some_and(|slot| {
+                crate::relay::tabs::draft_in(&slot.pane.text(0), &slot.pane.typed_text(0)).is_some()
+            });
         let paste = vec![crate::mission::answer::Press::Paste(reply.to_string())];
-        if model.claude_pane.is_some() {
+        if asking {
+            self.say(
+                Some(client),
+                "That tab's Claude is asking something, so nothing was sent: answer it, then send it again.",
+            );
+        } else if model.claude_pane.is_some() {
+            let presses = if submit && !has_draft {
+                crate::mission::answer::message_presses(reply)
+            } else {
+                paste
+            };
+            if has_draft {
+                self.say(
+                    Some(client),
+                    "That tab's Claude had a draft, so it was pasted into it without sending: press Enter to send both.",
+                );
+            }
             // Into Claude's prompt, `i` first in vim's Normal mode.
-            self.type_into_claude(pane, paste);
+            self.type_into_claude(pane, presses);
         } else {
             self.press(pane, paste);
         }

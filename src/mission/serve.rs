@@ -3652,6 +3652,7 @@ impl Server {
             home: paths::home(),
             habit: &habit,
             to_tab: settings::is_on("notice_to_tab"),
+            to_tab_submits: settings::is_on("send_to_tab_submits"),
             slack_reply: settings::is_on("slack_reply"),
         };
         if *view == ViewId::Settings {
@@ -4384,6 +4385,7 @@ impl Server {
     }
 
     pub(crate) fn mission_do(&mut self, client: ClientId, act: Do, label: &str) {
+        let sends_to_tab = matches!(act, Do::ToTab(_));
         match act {
             Do::GoTo(tab) => self.mission_go(client, tab),
             Do::GoToMatch { tab, pane, text } => self.mission_go_to_match(client, tab, pane, &text),
@@ -4730,7 +4732,7 @@ impl Server {
                     None => self.pick_dir_for(client, "A tab for it", open),
                 }
             }
-            Do::ToTab(h) => {
+            Do::ToTab(h) | Do::PasteToTab(h) => {
                 self.mission_close(client);
                 // Only a tab's Claude takes it, never a shell, which would
                 // run its lines, someone else's words, as commands.
@@ -4755,9 +4757,17 @@ impl Server {
                     self.say(Some(client), "No tab runs Claude to send it to.");
                     return;
                 }
-                let picker = Picker::new(format!("Send to: {}…", h.name), items)
+                // Choosing the tab is the confirmation, so the picker says
+                // what choosing one does.
+                let (title, says) = if sends_to_tab {
+                    ("Send to", "Sends it as written: choosing a tab sends it")
+                } else {
+                    ("Paste into", "Pastes it without sending, to add to first")
+                };
+                let picker = Picker::new(format!("{title}: {}…", h.name), items)
                     .named("send-to-tab")
-                    .prompt("send to> ");
+                    .prompt("send to> ")
+                    .header(says);
                 self.pick(client, picker, move |server, client, picked| {
                     let Some(tab) = picked.and_then(|p| p.value.parse().ok()).map(TabId) else {
                         return;
@@ -4773,7 +4783,7 @@ impl Server {
                         );
                         return;
                     }
-                    server.paste_into_tab(client, tab, &h.text);
+                    server.paste_into_tab(client, tab, &h.text, sends_to_tab);
                 });
             }
             Do::SlackReply(reply) => self.slack_reply_box(client, *reply, ""),
@@ -5363,7 +5373,7 @@ impl Server {
     // ── Answering a tab ─────────────────────────────────────────────────────
 
     /// The prompt a tab's Claude shows, read off its screen.
-    fn prompt_of(&self, tab: TabId) -> Option<answer::Prompt> {
+    pub(crate) fn prompt_of(&self, tab: TabId) -> Option<answer::Prompt> {
         let pane = self.claude_pane_of(tab)?;
         let slot = self.panes.get(&pane)?;
         answer::options_in(&slot.pane.text(60))
@@ -8457,6 +8467,7 @@ mod tests {
             home: PathBuf::from("/home"),
             habit: &habit,
             to_tab: false,
+            to_tab_submits: true,
             slack_reply: false,
         };
         let item = m.snap.views[0].data.items[1].clone();

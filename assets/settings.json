@@ -396,7 +396,14 @@
     "key": "notice_to_tab",
     "category": "Mission control",
     "label": "Notifications hand off to a tab",
-    "description": "Every notification's menu, and the Slack, Inbox, Calendar and Autopilot views' and a failing default branch's in the CI view, offers Send it to a tab, which pastes its words and link into the Claude of a tab you pick without sending, and Open a tab for it, which starts a tab with Claude told about it (a failing default branch's in its repository's main clone, told to fix it). Off, the menus keep their own choices only",
+    "description": "Every notification's menu, and the Slack, Inbox, Calendar and Autopilot views' and a failing default branch's in the CI view, offers Send it to a tab, which pastes its words and link into the Claude of a tab you pick and sends them (Paste it into a tab, beside it, without sending), and Open a tab for it, which starts a tab with Claude told about it (a failing default branch's in its repository's main clone, told to fix it). Off, the menus keep their own choices only",
+    "default": true
+  },
+  {
+    "key": "send_to_tab_submits",
+    "category": "Mission control",
+    "label": "Send it to a tab submits it",
+    "description": "An item's Send it to a tab pastes its words and link into the Claude of the tab you pick and presses Enter, so that Claude starts on it; Paste it into a tab, beside it, pastes them without sending, to add to first. Off, Send it to a tab pastes without sending and Paste it into a tab isn't offered",
     "default": true
   },
   {
