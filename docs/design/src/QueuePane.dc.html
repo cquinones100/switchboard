@@ -191,38 +191,42 @@ const claudePane = () => {
 };
 // THE QUEUE PANE: the tab's repository's queue, the kit's labels, marks, chips and rows; Enter on a row opens its menu.
 const ITEMS = {
-  working: [['working', 'ap-139', 'show uncommitted changes in M-d', ['tab 3', 'n3']], ['working', 'ap-141', 'note what an upgrade keeps', ['tab 7', 'n7']]],
-  needs: [['needs', 'ap-140', 'give each note a stable ID', ['tab 2 · git push', 'y']]],
-  next: [['ap-142', 'cycle through idle tabs', ['settled', 'd']], ['ap-145', 'faster hover highlight', ['after ap-140', 'm']], ['ap-147', 'a condensed sidebar for short screens', ['needs a choice', 'y']], ['ap-148', 'cache PR and ticket images', ['settled', 'd']]],
+  todo: [
+    ['ap-139', 'show uncommitted changes in M-d', ['tab 3 working', 'b'], 'working'],
+    ['ap-140', 'give each note a stable ID', ['tab 2 needs you', 'y'], 'needs'],
+    ['ap-141', 'note what an upgrade keeps', ['tab 7 working', 'b'], 'working'],
+    ['ap-142', 'cycle through idle tabs', ['settled', 'd']],
+    ['ap-145', 'faster hover highlight', ['after ap-140', 'm']],
+    ['ap-147', 'a condensed sidebar for short screens', ['needs a choice', 'y']],
+    ['ap-148', 'cache PR and ticket images', ['settled', 'd']],
+  ],
   landed: [['ap-138', 'land without asking', 'a501ce1 · 40m', 'Autopilot lands its tab\'s commit itself when "Land without asking" is on.'], ['ap-136', 'sealed review of PRs', '2505ca4 · 1h', 'A contributor\'s PR builds and runs only inside the sealed try.']],
 };
+// THE QUEUE PANE: two lists, To do in the order autopilot takes them (what a tab has now first, its state as a chip) and Done.
 const queuePane = (o) => {
   o = o || {};
   const R2 = QX + QW - 2, TX = QX + 10;
   fill(QX, 0, QW, H, '0');
   T(QX + 1, 0, ['Queue', 't', 'b'], ['  switchboard', 'd']); R(R2, 0, 'autopilot on · 2 of 2 working', 'd');
   hl(QX, 1, QW);
-  const line = (y, sel, m, id, title, right, num) => {
-    const bg = row(QX, y, QW, 1, sel);
-    if (num) put(QX + 2, y, num, 'd', '', bg); else if (m) mark(QX + 2, y, m, bg);
-    put(QX + 4, y, id, 'd', '', bg);
-    const rw = right ? [...right[0]].length + 3 : 0;
-    put(TX + 1, y, clip(title, R2 - TX - rw - 1), 't', sel ? 'b' : '', bg);
-    if (right) { if (right[1].startsWith('n')) R(R2, y, right[0], right[1], '', bg); else chip(R2 - [...right[0]].length - 1, y, right[0], right[1]); }
-  };
+  const todo = o.todo || ITEMS.todo;
   let y = 3;
-  label(QX + 1, y, 'Working', 'b', 2, R2); y++;
-  for (const [m, id, t, r] of ITEMS.working) line(y++, false, m, id, t, r);
-  y++; label(QX + 1, y, 'Needs you', 'y', 1, R2); y++;
-  for (const [m, id, t, r] of ITEMS.needs) line(y++, false, m, id, t, r);
-  y++; label(QX + 1, y, 'Next', 'd', 4, R2); y++;
-  const next = o.next || ITEMS.next;
-  next.forEach(([id, t, r], i) => { if (o.lifted === id) { const bg = '4'; fill(QX, y, QW, 1, bg); put(QX, y, '▌', 'a', '', bg); put(QX + 2, y, '⇅', 'a', 'b', bg); put(QX + 4, y, id, 'a', 'b', bg); put(TX + 1, y, clip(t, 34), 't', 'b', bg); chip(R2 - [...r[0]].length - 1, y, r[0], r[1]); K(QX + 0.3, y - 0.05, QW - 0.6, 1.1, 'border-radius:4px;box-shadow:0 6px 16px 2px rgba(0,0,0,.55)'); y++; return; } line(y++, o.sel === id, null, id, t, r, String(i + 1)); });
-  y++; T(QX + 1, y, ['▸ ', 'd'], ['PARKED', 'd', 'b']); R(R2, y, '3', 'd'); y++;
-  T(QX + 4, y, ['Neovim, lazygit and Ghostty config · and 2 more', 'f']); y += 2;
-  label(QX + 1, y, 'Landed today', 'g', 2, R2); y++;
-  for (const [id, t, when, done] of ITEMS.landed) { line(y, false, 'passed', id, t, null); R(R2, y, when, 'd'); put(QX + 4, y + 1, clip(done, QW - 6), 'd'); y += 3; }
-  T(QX + 1, y, ['all landed items › mission control\'s Autopilot', 'f']);
+  label(QX + 1, y, 'To do', 'd', todo.length, R2); y++;
+  todo.forEach(([id, t, r, m], i) => {
+    const lifted = o.lifted === id, sel = lifted || o.sel === id;
+    const bg = lifted ? '4' : row(QX, y, QW, 1, sel);
+    if (lifted) { fill(QX, y, QW, 1, '4'); put(QX, y, '▌', 'a', '', '4'); K(QX + 0.3, y - 0.05, QW - 0.6, 1.1, 'border-radius:4px;box-shadow:0 6px 16px 2px rgba(0,0,0,.55)'); }
+    if (lifted) put(QX + 2, y, '⇅', 'a', 'b', bg); else if (m) mark(QX + 2, y, m, bg); else R(QX + 2, y, String(i + 1), 'd', '', bg);
+    put(QX + 4, y, id, lifted ? 'a' : 'd', lifted ? 'b' : '', bg);
+    const rw = [...r[0]].length + 3;
+    put(TX + 1, y, clip(t, R2 - TX - rw - 1), 't', sel ? 'b' : '', bg);
+    chip(R2 - [...r[0]].length - 1, y, r[0], r[1]);
+    y++;
+  });
+  T(QX + 4, y, ['▸ 3 parked', 'f']); y += 2;
+  label(QX + 1, y, 'Done', 'g', 2, R2); R(R2 - 3, y, 'today', 'd'); y++;
+  for (const [id, t, when, done] of ITEMS.landed) { mark(QX + 2, y, 'passed'); put(QX + 4, y, id, 'd'); put(TX + 1, y, t, 't'); R(R2, y, when, 'd'); put(QX + 4, y + 1, clip(done, QW - 6), 'd'); y += 3; }
+  T(QX + 1, y, ['all done items › mission control\'s Autopilot', 'f']);
   return y;
 };
 const queueFooter = () => keys(QX + 1, H - 1, [['j/k', 'move'], ['Enter', 'actions'], ['m', 'queue actions'], ['/', 'filter']]);
@@ -234,7 +238,7 @@ let qy = queuePane({ sel: 'ap-147' });
 vl(QX + QW, 0, H);
 spare(QX + QW + 1, W - QX - QW - 1);
 rule(QX, qy + 2, QW);
-let py = pane(QX + 1, qy + 3, QW - 2, 'ap-147 · a condensed sidebar for short screens', '3rd in Next · from tab 11\'s note · feature');
+let py = pane(QX + 1, qy + 3, QW - 2, 'ap-147 · a condensed sidebar for short screens', '6th in To do · from tab 11\'s note · feature');
 T(QX + 1, py - 1, ['plan     ', 'd'], ['Plan - Condensed sidebar', 'a']);
 T(QX + 1, py, ['waits on ', 'd'], ['nothing', 't']);
 T(QX + 1, py + 1, ['choice   ', 'd'], ['does focus widen it?', 'y'], ['  not made', 'd']);
