@@ -724,6 +724,17 @@ pub fn idle_tabs<'a>(tabs: &'a [TabModel], r: &Rules) -> Vec<&'a TabModel> {
     idle
 }
 
+/// The tabs under Build failing, in the order the sidebar lists them: what
+/// M-a walks after Needs you (`walk_build_failing` setting).
+pub fn failing_tabs<'a>(tabs: &'a [TabModel], r: &Rules) -> Vec<&'a TabModel> {
+    let mut failing: Vec<&TabModel> = tabs
+        .iter()
+        .filter(|t| stage_of(t, r) == Stage::Failing)
+        .collect();
+    failing.sort_by(|a, b| Stage::Failing.order(a, b, r));
+    failing
+}
+
 /// Each tab's stage and place as `grouped` lays them out now.
 pub fn frozen_from(tabs: &[TabModel], r: &Rules) -> Frozen {
     grouped(tabs, None, r)

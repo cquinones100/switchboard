@@ -1,6 +1,7 @@
 //! M-a's walk through what needs you, in the sidebar's order: the tabs under
 //! Needs you (pinned and reminders come due first, then waiting, then done),
-//! then the notifications while there are any (`needs_notices` setting);
+//! then those under Build failing (`walk_build_failing` setting), then the
+//! notifications while there are any (`needs_notices` setting);
 //! and M-A's through the tabs under Idle (`next_idle`).
 //! What tmux/agent-state.sh's `next` did with the list the sidebar daemon
 //! wrote (`writeNeeds`), kept in `@agent_walk_window`, `@agent_walk_rest`,
@@ -13,7 +14,8 @@
 //! after a visit until you answer it, so "the most urgent tab" would keep
 //! coming back to the same one. A done tab leaves the list once seen, so
 //! pressed again from it, the walk carries on with the stops that were after
-//! it (`rest`). From a tab that only finished, or one not in the list, a tab
+//! it (`rest`). From a tab that only finished or whose build fails, or one
+//! not in the list, a tab
 //! pinned or waiting on you comes first, before the next finished one; the
 //! next press from there picks up where the finished ones were left
 //! (`after`), so the walk still reaches every one.
@@ -35,6 +37,7 @@ pub enum Why {
     Reminder,
     Waiting,
     Done,
+    BuildFailing,
     Notices,
 }
 
@@ -111,7 +114,8 @@ impl Walk {
         } else {
             None
         };
-        let from_finished = at.is_none_or(|i| matches!(stops[i].why, Why::Done | Why::Notices));
+        let from_finished =
+            at.is_none_or(|i| matches!(stops[i].why, Why::Done | Why::BuildFailing | Why::Notices));
         let to = match urgent {
             Some(u) if from_finished => {
                 if let Some(i) = at {
@@ -285,5 +289,26 @@ mod tests {
         assert_eq!(press(&mut w, &stops, 1), at(5));
         assert_eq!(press(&mut w, &stops, 5), at(6));
         assert_eq!(press(&mut w, &stops, 6), at(7));
+    }
+
+    #[test]
+    fn build_failing_tabs_come_after_those_that_need_you_and_stay_on_the_walk() {
+        let (waiting, failing_a, failing_b) = (1, 2, 3);
+        let stops = [
+            tab(waiting, Why::Waiting),
+            tab(failing_a, Why::BuildFailing),
+            tab(failing_b, Why::BuildFailing),
+        ];
+        let mut w = Walk::default();
+        assert_eq!(press(&mut w, &stops, 9), at(waiting));
+        assert_eq!(press(&mut w, &stops, waiting), at(failing_a));
+        // From a failing tab, one waiting on you comes first, then the walk
+        // picks up after the failing one it left.
+        assert_eq!(press(&mut w, &stops, failing_a), at(waiting));
+        assert_eq!(press(&mut w, &stops, waiting), at(failing_b));
+        // A lone failing tab is the only one that needs you.
+        let alone = [tab(failing_a, Why::BuildFailing)];
+        assert_eq!(w.next(&alone, TabId(failing_a)), Next::OnlyHere);
+        assert_eq!(w.next(&alone, TabId(waiting)), Next::Go(0));
     }
 }

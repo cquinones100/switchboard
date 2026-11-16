@@ -245,6 +245,13 @@
     "default": true
   },
   {
+    "key": "walk_build_failing",
+    "category": "Sidebar",
+    "label": "M-a visits Build failing tabs",
+    "description": "M-a's walk of what needs you goes on to the tabs under Build failing after those under Needs you, before the notifications; off, it passes them by",
+    "default": true
+  },
+  {
     "key": "notice_list",
     "category": "Sidebar",
     "label": "Notifications window",

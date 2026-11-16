@@ -680,3 +680,102 @@ fn a_failing_default_branch_landing_in_ci_is_in_the_ci_view_and_said_once_until_
     lands_in("here");
     none_after_a_refresh("no repository landing in CI");
 }
+
+/// The PR as GitHub's GraphQL gives it: open, in no merge queue, one of its
+/// checks failed.
+fn failing_pr() -> Value {
+    let mut pr = pr(false);
+    pr["mergeQueueEntry"] = Value::Null;
+    pr
+}
+
+#[test]
+fn m_a_visits_a_build_failing_tab_after_those_that_need_you() {
+    let fake = Fake::github("test-token", |request| {
+        if request.path() != "/graphql" {
+            return None;
+        }
+        let asked = request.text();
+        let answer = if asked.contains("pullRequest(number:") {
+            json!({"data": {"r0": {"a0": failing_pr()}}})
+        } else if asked.contains("pullRequests(headRefName") {
+            json!({"data": {"repository": {"pullRequests": {"nodes": [failing_pr()]}}}})
+        } else {
+            json!({"data": {}})
+        };
+        Some(Reply::json(200, answer))
+    });
+    let server = TestServer::start_with_env(&[
+        ("GH_TOKEN", "test-token"),
+        ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
+        ("SWITCHBOARD_GITHUB_API", &fake.url),
+    ]);
+    let settings = |extra: Value| {
+        let mut all = json!({"notifications": false, "linear": false, "pause_when_away": false,
+            "pr_notices": false, "needs_notices": false});
+        for (k, v) in extra.as_object().unwrap() {
+            all[k] = v.clone();
+        }
+        common::write_settings(&server.home, all);
+    };
+    settings(json!({}));
+    let work = server.dir.path().join("widgets");
+    std::fs::create_dir_all(&work).unwrap();
+    git(&work, &["init", "-q"]);
+    git(&work, &["symbolic-ref", "HEAD", "refs/heads/fix-login"]);
+    git(&work, &["commit", "-q", "--allow-empty", "-m", "first"]);
+    git(
+        &work,
+        &["remote", "add", "origin", "git@github.com:acme/widgets.git"],
+    );
+
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    client.type_text(&format!("cd {}\r", work.display()));
+    let tabs = || server.list()["sessions"][0]["tabs"].clone();
+    wait(
+        "the first tab's failing check",
+        || tabs()[0]["facts"].clone(),
+        |f| f["pr"]["checks"]["fail"] == 1,
+    );
+    // A pinned tab needs you; a third, plain, is where the walk starts.
+    server.ok(&["new-tab", "-n", "pinned"]);
+    client.wait_text("2:pinned");
+    let pinned = tabs()[1]["id"].as_str().unwrap().to_string();
+    server.ok(&["set", "-t", &pinned, "@pinned", "1"]);
+    server.ok(&["new-tab", "-n", "plain"]);
+    client.wait_text("3:plain");
+
+    let at = |n: usize| move |t: &Value| t[n]["current"] == true;
+    client.type_text("\x1ba");
+    wait("the pinned tab first", tabs, at(1));
+    client.type_text("\x1ba");
+    wait("then the failing one", tabs, at(0));
+    client.type_text("\x1ba");
+    wait("round to the pinned one", tabs, at(1));
+
+    // With only the failing tab left, M-a goes there.
+    server.ok(&["set", "-t", &pinned, "@pinned", "0"]);
+    client.type_text("\x1ba");
+    wait("the failing tab alone", tabs, at(0));
+
+    // Off, M-a passes it by.
+    settings(json!({"walk_build_failing": false}));
+    // Pressed until the server has read the setting.
+    let deadline = common::deadline(Duration::from_secs(10));
+    loop {
+        client.type_text("\x1ba");
+        if client
+            .screen()
+            .iter()
+            .any(|l| l.contains("Nothing needs you."))
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "M-a still visits the failing tab"
+        );
+        std::thread::sleep(Duration::from_millis(300));
+    }
+}

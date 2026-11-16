@@ -68,7 +68,7 @@ As a plugin, a Claude session outside Switchboard runs none of its hooks, so the
 
 | Key | What it does |
 |---|---|
-| `M-a` | Go to the next tab that needs you |
+| `M-a` | Go to the next tab that needs you, then the Build failing ones |
 | `M-j` | Find a tab by its name or what its panes show |
 | `M-{` `M-}`, `M-1` … `M-9` | Back or forward through the tabs and views you visited, or a tab by its number |
 | `M-t` | New tab, in a directory you pick |

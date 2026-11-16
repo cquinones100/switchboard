@@ -2792,7 +2792,8 @@ impl Server {
 
     // ── M-a ─────────────────────────────────────────────────────────────────
 
-    /// What M-a walks, in its order: the tabs under Needs you, then the
+    /// What M-a walks, in its order: the tabs under Needs you, then those
+    /// under Build failing (walk_build_failing setting), then the
     /// notifications while there are any (needs_notices setting).
     fn sidebar_needs_stops(&self, all: &[TabModel]) -> Vec<Stop> {
         let r = Rules::now();
@@ -2811,6 +2812,12 @@ impl Server {
                 },
             })
             .collect();
+        if settings::is_on("walk_build_failing") {
+            stops.extend(model::failing_tabs(all, &r).iter().map(|t| Stop {
+                place: Place::Tab(t.id),
+                why: Why::BuildFailing,
+            }));
+        }
         if settings::is_on("needs_notices") && !self.sidebar_notices().is_empty() {
             stops.push(Stop {
                 place: Place::Notices,
@@ -2838,7 +2845,8 @@ impl Server {
     }
 
     /// M-a: the next of what needs you, in the sidebar's order, across every
-    /// session: the tabs under Needs you, then the notifications while there
+    /// session: the tabs under Needs you, then those under Build failing
+    /// (walk_build_failing setting), then the notifications while there
     /// are any (needs_notices setting). Pressed from the sidebar, the cursor
     /// stays in a sidebar, on the tab it went to.
     pub fn sidebar_next_needs_you(&mut self, client: ClientId) {
