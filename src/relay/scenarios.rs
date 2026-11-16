@@ -1667,8 +1667,10 @@ fn the_home_tab_leads_with_next_and_reads_in_the_desktops_colors() {
     let calm = vec![rows[0].clone(), rows[5].clone()];
     let view = super::dashboard::dashboard_view(&rig.cx, &calm, 0, None);
     let buttons = &view["blocks"][2]["elements"];
-    assert_eq!(buttons.as_array().unwrap().len(), 1);
+    // New tab, and Autopilot while it is off.
+    assert_eq!(buttons.as_array().unwrap().len(), 2);
     assert_eq!(buttons[0]["text"]["text"], "New tab");
+    assert_eq!(buttons[1]["text"]["text"], "Autopilot");
 }
 
 #[test]
@@ -5576,4 +5578,142 @@ fn a_landing_tabs_header_shows_its_place_and_steps_and_its_push_question_is_two_
         rig.screen(&tab).ends_with("\n1"),
         "Yes presses Push to main"
     );
+}
+
+/// Autopilot set up to work `Plans.md` in a repository, off, as the
+/// computer's settings box would leave it.
+fn autopilot_set_up(rig: &Rig) {
+    crate::autopilot::Mode::update(&rig.cx.paths.switchboard_state, |m| {
+        m.note = "Plans.md".into();
+        m.repo = rig.root.join("repo");
+        m.slots = 2;
+        m.cap = 3;
+        m.spend_limit = 20.0;
+        m.ready_only = true;
+    })
+    .unwrap();
+}
+
+fn autopilot_form_sent(rig: &Rig, user: &str, values: Value) -> Option<super::slack::Form> {
+    let dm = rig.cx.state.borrow().dm();
+    let sent = json!({
+        "type": "view_submission", "user": { "id": user, "team_id": "T1" }, "team": { "id": "T1" },
+        "view": { "callback_id": "autopilot", "private_metadata": "{}", "state": { "values": values } },
+    });
+    submission_from(&dm, &sent, |_| {})
+}
+
+fn autopilot_values() -> Value {
+    json!({
+        "note": { "note": { "type": "static_select", "selected_option": { "value": "Other.md" } } },
+        "target": { "target": { "type": "static_select", "selected_option": { "value": ":default" } } },
+        "slots": { "slots": { "type": "static_select", "selected_option": { "value": "3" } } },
+        "limit": { "limit": { "type": "plain_text_input", "value": "$5" } },
+        "switches": { "switches": { "type": "checkboxes", "selected_options": [{ "value": "hands-free" }] } },
+    })
+}
+
+#[test]
+fn the_home_tabs_autopilot_opens_its_settings_as_a_form() {
+    let (rig, _) = rig_with(&[("notes_in_slack", json!(true))]);
+    autopilot_set_up(&rig);
+    std::fs::create_dir_all(rig.cx.paths.notes.clone()).unwrap();
+    std::fs::write(
+        rig.cx.paths.notes.join("Plans.md"),
+        "# Plans\n\n- [ ] FEAT: one\n",
+    )
+    .unwrap();
+    rig.block_on(refresh_dashboard(&rig.cx, Refresh::opened_quick()))
+        .unwrap();
+    let home = rig.calls("views.publish").last().unwrap().clone();
+    assert!(home.to_string().contains(r#"\"a\":\"autopilot\""#));
+    let dm = rig.cx.state.borrow().dm();
+    let press = json!({
+        "type": "block_actions", "user": { "id": "U1", "team_id": "T1" }, "team": { "id": "T1" }, "trigger_id": "TR1",
+        "container": { "type": "view", "view_id": "VHOME" }, "view": { "id": "VHOME", "type": "home" },
+        "actions": [{ "value": json!({ "a": "autopilot" }).to_string() }],
+    });
+    let p = press_from(&dm, &press, |_| {}).unwrap();
+    rig.block_on(super::presses::handle_press(&rig.cx, p))
+        .unwrap();
+    let opened = rig.calls("views.open")[0].clone();
+    assert_eq!(opened["trigger_id"], "TR1");
+    let form = &opened["view"];
+    assert_eq!(form["callback_id"], "autopilot");
+    let field = |id: &str| {
+        form["blocks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["block_id"] == id)
+            .unwrap()["element"]
+            .clone()
+    };
+    assert_eq!(field("note")["initial_option"]["value"], "Plans.md");
+    assert_eq!(field("slots")["initial_option"]["value"], "2");
+    assert_eq!(field("limit")["initial_value"], "$20.00");
+    assert_eq!(field("switches")["initial_options"][0]["value"], "planned");
+}
+
+#[test]
+fn the_autopilot_form_from_the_owner_starts_it_with_what_was_chosen() {
+    let (rig, _) = rig_with(&[("notes_in_slack", json!(true))]);
+    autopilot_set_up(&rig);
+    let form = autopilot_form_sent(&rig, "U1", autopilot_values()).unwrap();
+    assert_eq!(form.value("switches"), "hands-free");
+    rig.block_on(super::screens::handle_submission(&rig.cx, &form))
+        .unwrap();
+    let started = rig.mux.autopilot.borrow().clone();
+    assert_eq!(started.len(), 1);
+    let fields = &started[0];
+    assert_eq!(fields["note"], "Other.md");
+    assert_eq!(fields["target"], "");
+    assert_eq!(
+        (fields["slots"].clone(), fields["cap"].clone()),
+        (json!(3), json!(3))
+    );
+    assert_eq!(fields["limit"], "$5");
+    assert_eq!(fields["ready_only"], false);
+    assert_eq!(fields["hands_free"], true);
+    assert_eq!(fields["land_without_asking"], true);
+    let posts = rig.posts();
+    assert!(
+        posts
+            .iter()
+            .any(|p| p.body.contains("Autopilot: Working Other: 3 at a time")),
+        "{posts:?}"
+    );
+}
+
+#[test]
+fn the_autopilot_form_from_anyone_else_is_refused() {
+    let (rig, _) = rig_with(&[("notes_in_slack", json!(true))]);
+    autopilot_set_up(&rig);
+    assert!(autopilot_form_sent(&rig, "U2", autopilot_values()).is_none());
+    assert!(rig.mux.autopilot.borrow().is_empty());
+}
+
+#[test]
+fn without_notes_in_slack_the_autopilot_form_never_names_the_note() {
+    let rig = Rig::new();
+    autopilot_set_up(&rig);
+    std::fs::create_dir_all(rig.cx.paths.notes.clone()).unwrap();
+    std::fs::write(
+        rig.cx.paths.notes.join("Other.md"),
+        "# Other\n\n- [ ] FEAT: one\n",
+    )
+    .unwrap();
+    let shown = super::autopilot::read(&rig.cx.paths.switchboard_state, &rig.cx.paths.notes, false);
+    let view = super::autopilot::form(&shown);
+    assert!(!view.to_string().contains("Plans") && !view.to_string().contains("Other"));
+    let form = autopilot_form_sent(&rig, "U1", autopilot_values()).unwrap();
+    rig.block_on(super::screens::handle_submission(&rig.cx, &form))
+        .unwrap();
+    assert_eq!(rig.mux.autopilot.borrow()[0]["note"], "Plans.md");
+    let posts = rig.posts();
+    assert!(
+        posts.iter().any(|p| p.body.contains("Working its note")),
+        "{posts:?}"
+    );
+    assert!(!posts.iter().any(|p| p.body.contains("Plans")), "{posts:?}");
 }

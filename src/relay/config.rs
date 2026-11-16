@@ -55,8 +55,10 @@ pub struct Paths {
     /// claude/statusline-command.sh wrote it for the sidebar daemon.
     pub context_dirs: Vec<PathBuf>,
     /// Switchboard's state directory, where the statusline also writes
-    /// today's spend and the plan's limits (`usage/`).
+    /// today's spend and the plan's limits (`usage/`), and autopilot keeps its settings.
     pub switchboard_state: PathBuf,
+    /// The notes directory, for the Autopilot form's notes.
+    pub notes: PathBuf,
 }
 
 impl Paths {
@@ -72,12 +74,16 @@ impl Paths {
                 home.join(".local/state/tmux-sidebar/context"),
             ],
             switchboard_state: switchboard_state.to_path_buf(),
+            notes: home.join("Notes"),
         }
     }
 
     /// The relay's files where this run's home and state directory are.
     pub fn current() -> Paths {
-        Paths::under(&crate::paths::home(), &crate::paths::state_dir())
+        Paths {
+            notes: crate::cmd::worktree_from_note::notes_dir(),
+            ..Paths::under(&crate::paths::home(), &crate::paths::state_dir())
+        }
     }
 
     pub fn config_file(&self) -> PathBuf {

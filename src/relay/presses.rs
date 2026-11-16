@@ -84,6 +84,10 @@ pub async fn handle_press(cx: &Cx, press: Press) -> Result<()> {
         .await?;
         return Ok(());
     }
+    if a == "autopilot" {
+        let trigger = press.trigger_id.clone().unwrap_or_default();
+        return super::autopilot::open(cx, &trigger).await;
+    }
     let thread = press
         .message
         .as_ref()

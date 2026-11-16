@@ -96,7 +96,7 @@ pub use mode::Mode;
 pub use pilot::Pilot;
 pub use serve::{
     AUTOLAND, HANDS_FREE, ITEM, LAND, LANDED_AT, LEFT, NOTE, NUDGED, OPENED, PUSHED, REFUSED,
-    landed_at, said_by, target_refused,
+    START_LIMIT, landed_at, said_by, target_refused,
 };
 
 /// Whether the mode has its own view in mission control (UX 2.0 and the
@@ -198,6 +198,17 @@ pub enum AutopilotEvent {
     /// What following the note by its ID found; `followed` when it looked
     /// for the note or gave it an ID, rather than only tidying.
     Kept { kept: pilot::Kept, followed: bool },
+    /// The Slack relay's Autopilot form's fields (and the settings as
+    /// they were) checked off the task, for `autopilot-start` to answer on
+    /// `reply`.
+    Started {
+        fields: Box<(settings_box::Fields, settings_box::Fields)>,
+        checked: Result<serve::Checked, String>,
+        reply: tokio::sync::oneshot::Sender<crate::mux::server::Answer>,
+        /// When it was asked, so one checked too late to be waited for
+        /// starts nothing.
+        asked: std::time::Instant,
+    },
 }
 
 /// What says a file changed: its modified time and change time, each in

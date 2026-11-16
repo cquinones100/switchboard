@@ -312,6 +312,10 @@ pub fn dashboard_view(cx: &Cx, rows: &[Row], reminded: usize, stopped_at: Option
             );
         }
         buttons.push(Button::new("New tab", json!({ "a": "new" })));
+        // Autopilot's settings as a form that starts it, while it is off.
+        if super::autopilot::offered(cx) {
+            buttons.push(Button::new("Autopilot", json!({ "a": "autopilot" })));
+        }
         let closed = closed_threads(cx).len();
         if closed > 0 {
             buttons.push(cleanup_button(closed));

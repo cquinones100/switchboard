@@ -1416,6 +1416,13 @@
     "default": false
   },
   {
+    "key": "notes_in_slack",
+    "category": "Slack relay",
+    "label": "Notes in Slack",
+    "description": "Lets the Slack app's Autopilot form name your notes, so you can pick the note it works from Slack; only the notes' names are sent, never their items. Off, the form names no note and starts autopilot on the note it last worked",
+    "default": false
+  },
+  {
     "key": "relay_send_prompts",
     "category": "Slack relay",
     "label": "Prompts and questions",

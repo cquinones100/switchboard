@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
+use futures_util::future::LocalBoxFuture;
 use serde_json::Value;
 
 use crate::mux::proto::{self, ClientMsg, ServerMsg};
@@ -130,7 +131,18 @@ pub trait Mux {
     fn select_tab(&self, tab: &str) -> Result<()>;
     /// Marks a tab's finished Claude seen, as looking at it does.
     fn mark_seen(&self, tab: &str) -> Result<()>;
+    /// Starts autopilot with the Autopilot form's fields, as JSON: what
+    /// the server says of it, or why it didn't start.
+    /// Waited for off the relay's thread, since the server answers once
+    /// it has checked them, which can reach GitHub.
+    fn start_autopilot(&self, fields: String) -> LocalBoxFuture<'static, Result<String>>;
 }
+
+/// How long `autopilot-start` is waited for: longer than the server lets
+/// its check take before it refuses to start (`autopilot::START_LIMIT`),
+/// so an answer is never given up on while the server may still start it.
+const START_WAIT: Duration = Duration::from_secs(300);
+const _: () = assert!(START_WAIT.as_secs() > crate::autopilot::START_LIMIT.as_secs());
 
 /// The running server, on its socket.
 pub struct Server {
@@ -148,9 +160,14 @@ impl Server {
 
     /// Runs a command in the server: what it printed, or why it refused.
     pub fn ask(&self, args: &[&str]) -> Result<String> {
+        self.ask_waiting(args, Duration::from_secs(10))
+    }
+
+    /// `ask`, waiting at most `wait` for the answer.
+    pub fn ask_waiting(&self, args: &[&str], wait: Duration) -> Result<String> {
         let mut stream =
             UnixStream::connect(&self.socket).context("no Switchboard server is running")?;
-        stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+        stream.set_read_timeout(Some(wait))?;
         let msg = ClientMsg::Command {
             args: args.iter().map(|a| a.to_string()).collect(),
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
@@ -281,6 +298,18 @@ impl Mux for Server {
 
     fn mark_seen(&self, tab: &str) -> Result<()> {
         self.ask(&["seen", "-t", tab]).map(|_| ())
+    }
+
+    fn start_autopilot(&self, fields: String) -> LocalBoxFuture<'static, Result<String>> {
+        let server = Server {
+            socket: self.socket.clone(),
+        };
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                server.ask_waiting(&["autopilot-start", &fields], START_WAIT)
+            })
+            .await?
+        })
     }
 }
 

@@ -40,6 +40,7 @@
 //! - `landing`: a landing in its tab's thread, its steps and push question.
 //! - `dashboard`: the app's Home tab.
 //! - `screens`, `skills`, `places`: a tab's screen and its forms.
+//! - `autopilot`: autopilot's settings as a form that starts it.
 //! - `buttons`, `presses`, `quickreplies`: buttons, and acting on a press.
 //! - `files`, `slices`: images and videos, both ways.
 //! - `cleanup`: deleting closed tabs' threads.
@@ -55,6 +56,7 @@
 //! tabs being looked at every second.
 
 pub mod alerts;
+pub mod autopilot;
 pub mod buttons;
 pub mod cleanup;
 pub mod cli;

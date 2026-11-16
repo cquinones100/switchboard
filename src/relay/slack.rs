@@ -346,6 +346,7 @@ const HOME_ACTIONS: &[&str] = &[
     "open",
     "refresh",
     "new",
+    "autopilot",
     "cleanup",
     "home-opt",
     "home-dialog",
@@ -519,6 +520,15 @@ fn form_fields(kind: &str) -> Option<&'static [&'static str]> {
         "message" => &["text"],
         "skill" => &["skill", "typed", "args"],
         "new" => &["place", "typed", "prompt"],
+        "autopilot" => &[
+            "note",
+            "note_typed",
+            "target",
+            "target_typed",
+            "slots",
+            "limit",
+            "switches",
+        ],
         _ => return None,
     })
 }
@@ -552,7 +562,8 @@ pub fn submission_from(
     } else {
         serde_json::from_str(text("/view/private_metadata")?).ok()?
     };
-    // A text field's value, or a menu's chosen option.
+    // A text field's value, a menu's chosen option, or checkboxes' ticked
+    // options, joined by commas.
     let values = fields
         .iter()
         .map(|field| {
@@ -561,6 +572,16 @@ pub fn submission_from(
                 .and_then(|i| i.get("value").filter(|v| !v.is_null()))
                 .or_else(|| input.and_then(|i| i.pointer("/selected_option/value")))
                 .map(crate::util::js_string)
+                .or_else(|| {
+                    let ticked = input?.get("selected_options")?.as_array()?;
+                    Some(
+                        ticked
+                            .iter()
+                            .filter_map(|o| o.get("value").and_then(Value::as_str))
+                            .collect::<Vec<_>>()
+                            .join(","),
+                    )
+                })
                 .unwrap_or_default();
             (field.to_string(), value)
         })

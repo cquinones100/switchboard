@@ -837,6 +837,9 @@ pub async fn handle_screen_press(cx: &Cx, press: &Press, thread: Option<&str>) -
 /// that screen when the relay acknowledges it, which it does at once, so
 /// the tab's screen under it is drawn again with what was done.
 pub async fn handle_submission(cx: &Cx, form: &Form) -> Result<()> {
+    if form.kind == "autopilot" {
+        return super::autopilot::submitted(cx, form).await;
+    }
     if form.kind == "new" {
         static GAP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[\s:]+").expect("a regex"));
         let chosen = if form.value("typed").trim().is_empty() {

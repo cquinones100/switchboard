@@ -155,6 +155,9 @@ pub struct FakeMux {
     pub opened: RefCell<Vec<(PathBuf, Option<Vec<String>>)>>,
     /// Every tab marked seen.
     pub seen: RefCell<Vec<String>>,
+    /// The fields of every autopilot started, which it answers saying the
+    /// note it works, as the server does.
+    pub autopilot: RefCell<Vec<Value>>,
     next: Cell<u32>,
 }
 
@@ -331,6 +334,21 @@ impl Mux for Rc<FakeMux> {
             p.info.since = String::new();
         }
         Ok(())
+    }
+
+    fn start_autopilot(&self, fields: String) -> LocalBoxFuture<'static, Result<String>> {
+        let answer = serde_json::from_str::<Value>(&fields)
+            .map_err(anyhow::Error::from)
+            .map(|fields| {
+                let note = fields["note"].as_str().unwrap_or_default().to_string();
+                self.autopilot.borrow_mut().push(fields.clone());
+                format!(
+                    "Working {}: {} at a time",
+                    crate::autopilot::mode::note_title(&note),
+                    fields["slots"]
+                )
+            });
+        Box::pin(async move { answer })
     }
 }
 

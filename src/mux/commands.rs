@@ -106,6 +106,7 @@ pub const NAMES: &[&str] = &[
     "sidebar-repo",
     "server-version",
     "autopilot-next",
+    "autopilot-start",
     "slot-report",
 ];
 
@@ -214,6 +215,10 @@ pub const USAGE: &[(&str, &str)] = &[
     (
         "autopilot-next",
         "autopilot-next <note> <line>: the unticked item on that line of the note autopilot works put next in its queue",
+    ),
+    (
+        "autopilot-start",
+        "autopilot-start <fields>: autopilot, while off, started with the settings given as JSON, as its settings box starts it; the Slack relay's Autopilot form, refused run by hand",
     ),
     (
         "slot-report",

@@ -1104,3 +1104,59 @@ fn a_push_marks_when_its_tab_landed_once() {
     server.ok(&["set", "-t", &other, "@autopilot_pushed", "abc1234"]);
     assert_eq!(landed_at(&other), "");
 }
+
+/// The Slack relay's Autopilot form (board 52) starts it through
+/// `autopilot-start`, with the fields it sends checked and saved as the
+/// settings box saves them; run by hand it is refused, since it turns on
+/// Hands-free and Land without asking with no question, and so is a second
+/// start while it is on.
+#[test]
+fn autopilot_start_starts_it_with_the_forms_fields_and_refuses_one_by_hand() {
+    let notes = TempDir::new("sbn");
+    std::fs::write(
+        notes.path().join("Work.md"),
+        "# Work\n\n- [ ] First thing\n",
+    )
+    .unwrap();
+    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
+    common::write_settings(
+        &server.home,
+        json!({"notifications": false, "tips": false, "github": false, "linear": false}),
+    );
+    Claude::new().install(&server.home.join("bin"));
+    let repo = server.home.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q"]);
+    git(&repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "start"]);
+    let repo = repo.canonicalize().unwrap();
+    let config = server.home.join(".config/switchboard");
+    std::fs::write(
+        config.join("repos.json"),
+        json!({ repo.join(".git").to_str().unwrap(): { "landing": "direct" } }).to_string(),
+    )
+    .unwrap();
+    let fields = json!({
+        "note": "Work.md", "repo": repo.to_str().unwrap(), "target": "",
+        "slots": 2, "cap": 3, "limit": "$5",
+        "ready_only": false, "land_without_asking": false, "hands_free": true,
+        "skipped": [], "skipped_of": "", "taken_back": [],
+    })
+    .to_string();
+    let (code, _, err) = server.typed_in("%0", &["autopilot-start", &fields]);
+    assert_ne!(code, 0);
+    assert!(err.contains("never run by hand"), "{err}");
+    assert!(!server.state.join("autopilot.json").exists());
+    let said = server.ok(&["autopilot-start", &fields]);
+    assert_eq!(
+        said.trim(),
+        "Working Work: 2 at a time, up to 3 tabs, in ~/repo, landing on the default branch"
+    );
+    let m = mode(&server);
+    assert_eq!(m["on"], true);
+    assert_eq!(m["handsFree"], true);
+    assert_eq!(m["landWithoutAsking"], true);
+    let (code, _, err) = server.run(&["autopilot-start", &fields]);
+    assert_ne!(code, 0);
+    assert!(err.contains("already working"), "{err}");
+}

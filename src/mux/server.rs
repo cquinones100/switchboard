@@ -1235,6 +1235,13 @@ impl Server {
                     self.restore_layout_asked(super::persist::Asker::Command(reply), file);
                     return;
                 }
+                // Answered once its fields are checked, off this task.
+                if args.first().is_some_and(|a| a == "autopilot-start")
+                    && !matches!(args.get(1).map(String::as_str), Some("--help" | "-h"))
+                {
+                    self.autopilot_start_asked(&args, by_hand, reply);
+                    return;
+                }
                 let answer = self.command(&args, &cwd, pane.as_deref(), stdin.as_deref(), by_hand);
                 let _ = reply.send(Answer::Reply(answer));
             }

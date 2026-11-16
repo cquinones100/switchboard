@@ -350,6 +350,163 @@ fn dollars(text: &str) -> Option<f64> {
     (n.is_finite() && n >= 0.0).then_some(n)
 }
 
+/// The longest `autopilot-start`'s check may take and still start it:
+/// shorter than the Slack relay waits for its answer
+/// (`relay::mux::START_WAIT`), so the relay never says it didn't start
+/// while it still may.
+pub const START_LIMIT: std::time::Duration = std::time::Duration::from_secs(240);
+
+/// What is wrong with the fields that needs no look at the files, and the
+/// part of the settings box it is about.
+fn fields_problem(fields: &Fields) -> Option<(String, Part)> {
+    if fields.note.is_empty() {
+        return Some(("Pick a note to work".into(), Part::Note));
+    }
+    if fields.limit().is_none() {
+        return Some((
+            "Spend limit: dollars, or empty for none".into(),
+            Part::Limit,
+        ));
+    }
+    let target = fields.target.trim();
+    if !target.is_empty() && mode::typed_branch(target).is_none() {
+        return Some((format!("Not a branch name: {target}"), Part::Target));
+    }
+    None
+}
+
+/// The fields as checked against the files: the repository's main clone,
+/// the note to work and its ID (when it is new or the mode starts), and
+/// whether the mode starts.
+#[derive(Debug)]
+pub struct Checked {
+    repo: PathBuf,
+    note: String,
+    note_id: Option<String>,
+    starting: bool,
+}
+
+/// What the settings box (or the Slack relay's form) saving looks at off
+/// the server's task, taken from the fields and the mode as they are.
+struct FieldsCheck {
+    typed: PathBuf,
+    target: String,
+    note: String,
+    picked: bool,
+    starting: bool,
+    mode_repo: PathBuf,
+    mode_target: String,
+    notes: PathBuf,
+    github: bool,
+}
+
+impl FieldsCheck {
+    fn new(fields: &Fields, was: &Fields) -> FieldsCheck {
+        let mode = Mode::read(&paths::state_dir());
+        // The note picked, else the mode's own as it is now, which Notes
+        // may have renamed since the box opened.
+        let picked = fields.note != was.note || mode.note.is_empty();
+        FieldsCheck {
+            typed: fields.repo_path(),
+            target: fields.target.trim().to_string(),
+            note: if picked {
+                fields.note.clone()
+            } else {
+                mode.note.clone()
+            },
+            picked,
+            starting: !mode.on,
+            mode_repo: mode.repo,
+            mode_target: mode.target,
+            notes: worktree_from_note::notes_dir(),
+            github: settings::is_on("github"),
+        }
+    }
+
+    /// The repository's main clone and how it lands looked at when it is
+    /// new or the mode starts, the note given its ID when it is new, and a
+    /// branch named checked to be there: what was found, or the problem.
+    fn run(self) -> Result<Checked, String> {
+        let FieldsCheck {
+            typed,
+            target,
+            note,
+            picked,
+            starting,
+            mode_repo,
+            mode_target,
+            notes,
+            github,
+        } = self;
+        let repo = main_clone(&typed)
+            .ok_or_else(|| format!("Not a repository: {}", paths::tilde(&typed)))?;
+        // Its tabs are counted by the repository they work in, so it moves
+        // to another only once stopped, as before the box.
+        if !starting && repo != mode_repo {
+            return Err(format!(
+                "Its tabs work in {}: stop it to work another repository",
+                paths::tilde(&mode_repo)
+            ));
+        }
+        // How it lands, checked as starting or picking a note did before
+        // the box.
+        if starting || picked || repo != mode_repo {
+            match crate::repos::landing_for(&repo, false).map(|l| l.landing) {
+                Ok(l) if l == "direct" => {}
+                Ok(_) => return Err(PR_REFUSED.to_string()),
+                Err(e) => return Err(format!("Couldn't tell how it lands: {e}")),
+            }
+        }
+        // A note to start on, or picked, must be there to read.
+        let note_id = if picked || starting {
+            Some(
+                crate::notes::id::ensure_id(&notes.join(&note), &notes).map_err(|e| {
+                    format!(
+                        "Couldn't read the note {}, pick another: {e}",
+                        note_title(&note)
+                    )
+                })?,
+            )
+        } else {
+            None
+        };
+        let common = crate::tabs::git::locate(&repo).map(|p| p.common_dir);
+        // A branch named must be the repository's own, or one origin has,
+        // which an item starting makes a local one; one not fetched yet is
+        // fetched to tell, as an item starting would fetch it, while
+        // Settings' GitHub allows reaching it.
+        let known = |c: &Path| {
+            crate::tabs::git::local_branches(c).contains(&target)
+                || crate::tabs::git::on_origin(c, &target)
+        };
+        if !target.is_empty()
+            && (starting || target != mode_target || repo != mode_repo)
+            && !common.as_deref().is_some_and(known)
+        {
+            if !github {
+                return Err(format!(
+                    "{} has no branch {target} fetched, and GitHub is off in Settings, so it isn't fetched",
+                    paths::tilde(&repo)
+                ));
+            }
+            if !crate::worktree::fetch_branch(&repo, "origin", &target, "autopilot") {
+                return Err(format!("{} has no branch {target}", paths::tilde(&repo)));
+            }
+        }
+        if target != mode_target
+            && let Some(common) = &common
+        {
+            work_recent::pick_branch(common, &target);
+        }
+        Ok(Checked {
+            repo,
+            note,
+            note_id,
+            starting,
+        })
+    }
+}
+
 impl Server {
     // ── M-p ─────────────────────────────────────────────────────────────────
 
@@ -1142,178 +1299,193 @@ impl Server {
     /// when it is new or the mode starts, and the note given its ID when
     /// it is new; a problem opens the box again saying it.
     fn autopilot_box_write(&mut self, client: ClientId, fields: Fields, was: Fields) {
-        let again = |server: &mut Server, fields, was, problem: String, part| {
-            server.autopilot_box_again(client, fields, was, problem, part)
-        };
-        if fields.note.is_empty() {
-            again(self, fields, was, "Pick a note to work".into(), Part::Note);
+        if let Some((problem, part)) = fields_problem(&fields) {
+            self.autopilot_box_again(client, fields, was, problem, part);
             return;
         }
-        if fields.limit().is_none() {
-            again(
-                self,
-                fields,
-                was,
-                "Spend limit: dollars, or empty for none".into(),
-                Part::Limit,
-            );
-            return;
-        }
-        let target = fields.target.trim().to_string();
-        if !target.is_empty() && mode::typed_branch(&target).is_none() {
-            again(
-                self,
-                fields,
-                was,
-                format!("Not a branch name: {target}"),
-                Part::Target,
-            );
-            return;
-        }
-        let mode = Mode::read(&paths::state_dir());
-        let starting = !mode.on;
-        let notes = worktree_from_note::notes_dir();
-        let typed = fields.repo_path();
-        // The note picked in the box, else the mode's own as it is now,
-        // which Notes may have renamed since the box opened.
-        let picked = fields.note != was.note || mode.note.is_empty();
-        let note = if picked {
-            fields.note.clone()
-        } else {
-            mode.note.clone()
-        };
-        let (mode_repo, mode_target) = (mode.repo.clone(), mode.target.clone());
-        let github = settings::is_on("github");
+        let check = FieldsCheck::new(&fields, &was);
         self.off_task(
             client,
-            move || -> Result<(PathBuf, (String, Option<String>)), String> {
-                let repo = main_clone(&typed)
-                    .ok_or_else(|| format!("Not a repository: {}", paths::tilde(&typed)))?;
-                // Its tabs are counted by the repository they work in, so it
-                // moves to another only once stopped, as before the box.
-                if !starting && repo != mode_repo {
-                    return Err(format!(
-                        "Its tabs work in {}: stop it to work another repository",
-                        paths::tilde(&mode_repo)
-                    ));
-                }
-                // How it lands, checked as starting or picking a note did
-                // before the box.
-                if starting || picked || repo != mode_repo {
-                    match crate::repos::landing_for(&repo, false).map(|l| l.landing) {
-                        Ok(l) if l == "direct" => {}
-                        Ok(_) => return Err(PR_REFUSED.to_string()),
-                        Err(e) => return Err(format!("Couldn't tell how it lands: {e}")),
-                    }
-                }
-                // A note to start on, or picked, must be there to read.
-                let note_id = if picked || starting {
-                    Some(
-                        crate::notes::id::ensure_id(&notes.join(&note), &notes).map_err(|e| {
-                            format!(
-                                "Couldn't read the note {}, pick another: {e}",
-                                note_title(&note)
-                            )
-                        })?,
-                    )
-                } else {
-                    None
-                };
-                let note = (note, note_id);
-                let common = crate::tabs::git::locate(&repo).map(|p| p.common_dir);
-                // A branch named must be the repository's own, or one
-                // origin has, which an item starting makes a local one; one
-                // not fetched yet is fetched to tell, as an item starting
-                // would fetch it, while Settings' GitHub allows reaching it.
-                let known = |c: &Path| {
-                    crate::tabs::git::local_branches(c).contains(&target)
-                        || crate::tabs::git::on_origin(c, &target)
-                };
-                if !target.is_empty()
-                    && (starting || target != mode_target || repo != mode_repo)
-                    && !common.as_deref().is_some_and(known)
-                {
-                    if !github {
-                        return Err(format!(
-                            "{} has no branch {target} fetched, and GitHub is off in Settings, so it isn't fetched",
-                            paths::tilde(&repo)
-                        ));
-                    }
-                    if !crate::worktree::fetch_branch(&repo, "origin", &target, "autopilot") {
-                        return Err(format!("{} has no branch {target}", paths::tilde(&repo)));
-                    }
-                }
-                if target != mode_target
-                    && let Some(common) = &common
-                {
-                    work_recent::pick_branch(common, &target);
-                }
-                Ok((repo, note))
-            },
+            move || check.run(),
             move |server, client, checked| {
-                let (repo, (note, note_id)) = match checked {
+                let checked = match checked {
                     Ok(found) => found,
                     Err(problem) => {
                         server.autopilot_box_again(client, fields, was, problem, Part::Repo);
                         return;
                     }
                 };
-                let written = Mode::update(&paths::state_dir(), |m| {
-                    fields.apply(m);
-                    let other_note = m.note != note;
-                    if other_note || m.repo != repo {
-                        // What it said of the note or repository before no
-                        // longer holds, as starting anew clears it.
-                        m.said.clear();
-                    }
-                    if other_note {
-                        // As starting on another note does.
-                        m.skipped.retain(|x| !x.note.is_empty());
-                        m.note = note.clone();
-                        m.note_id = note_id.clone().unwrap_or_default();
-                    } else if let Some(id) = &note_id {
-                        m.note_id = id.clone();
-                    }
-                    m.repo = repo.clone();
-                    if starting {
-                        m.on = true;
-                        m.paused = false;
-                        m.said.clear();
-                    }
-                });
-                let m = match written {
-                    Ok(m) => m,
-                    Err(e) => {
-                        server.mission_note(client, format!("Couldn't save it: {e}"));
-                        return;
-                    }
-                };
-                server.autopilot.pilot.reset();
-                server.autopilot_tick();
-                let said = if starting {
-                    format!(
-                        "Working {}: {} at a time, up to {} tabs, in {}, landing on {}",
-                        note_title(&m.note),
-                        m.slots,
-                        m.cap,
-                        paths::tilde(&m.repo),
-                        if m.target.is_empty() {
-                            "the default branch"
-                        } else {
-                            &m.target
-                        }
-                    )
-                } else {
-                    let changes = fields.changes(&was);
-                    if changes.is_empty() {
-                        "Autopilot: nothing changed".to_string()
-                    } else {
-                        format!("Autopilot: {}", changes.join(", "))
-                    }
-                };
-                server.mission_note(client, said);
+                match server.autopilot_write_checked(&fields, &was, checked) {
+                    Ok(said) => server.mission_note(client, said),
+                    Err(e) => server.mission_note(client, e),
+                }
             },
         );
+    }
+
+    /// The fields, checked by `FieldsCheck::run`, written into the mode,
+    /// which starts it while it is off: what to say of it, or why it
+    /// couldn't be saved.
+    fn autopilot_write_checked(
+        &mut self,
+        fields: &Fields,
+        was: &Fields,
+        checked: Checked,
+    ) -> Result<String, String> {
+        let Checked {
+            repo,
+            note,
+            note_id,
+            starting,
+        } = checked;
+        let m = Mode::update(&paths::state_dir(), |m| {
+            fields.apply(m);
+            let other_note = m.note != note;
+            if other_note || m.repo != repo {
+                // What it said of the note or repository before no
+                // longer holds, as starting anew clears it.
+                m.said.clear();
+            }
+            if other_note {
+                // As starting on another note does.
+                m.skipped.retain(|x| !x.note.is_empty());
+                m.note = note.clone();
+                m.note_id = note_id.clone().unwrap_or_default();
+            } else if let Some(id) = &note_id {
+                m.note_id = id.clone();
+            }
+            m.repo = repo.clone();
+            if starting {
+                m.on = true;
+                m.paused = false;
+                m.said.clear();
+            }
+        })
+        .map_err(|e| format!("Couldn't save it: {e}"))?;
+        self.autopilot.pilot.reset();
+        self.autopilot_tick();
+        Ok(if starting {
+            format!(
+                "Working {}: {} at a time, up to {} tabs, in {}, landing on {}",
+                note_title(&m.note),
+                m.slots,
+                m.cap,
+                paths::tilde(&m.repo),
+                if m.target.is_empty() {
+                    "the default branch"
+                } else {
+                    &m.target
+                }
+            )
+        } else {
+            let changes = fields.changes(was);
+            if changes.is_empty() {
+                "Autopilot: nothing changed".to_string()
+            } else {
+                format!("Autopilot: {}", changes.join(", "))
+            }
+        })
+    }
+
+    /// `autopilot-start <fields>`, from the Slack relay's Autopilot form
+    /// (board 52): the mode, off, started with the fields as its settings
+    /// box would start it, answered on `reply` once they are checked off
+    /// the task, with what it says of it or why it didn't start. Run by
+    /// hand it is refused, as autopilot's marks are, since it can turn on
+    /// Land without asking and Hands-free, which the box asks a yes for
+    /// and the form's Start is.
+    pub fn autopilot_start_asked(
+        &mut self,
+        args: &[String],
+        by_hand: bool,
+        reply: tokio::sync::oneshot::Sender<crate::mux::server::Answer>,
+    ) {
+        let answer = |reply: tokio::sync::oneshot::Sender<_>, r| {
+            let _ = reply.send(crate::mux::server::Answer::Reply(r));
+        };
+        let fail = |why: String| crate::mux::server::Reply::fail(why);
+        if by_hand {
+            answer(
+                reply,
+                fail("autopilot-start is the Slack relay's, never run by hand".into()),
+            );
+            return;
+        }
+        if !settings::is_on("autopilot") {
+            answer(
+                reply,
+                fail("Autopilot is off in Settings (Autopilot)".into()),
+            );
+            return;
+        }
+        let Some(fields) = args
+            .get(1)
+            .and_then(|a| serde_json::from_str::<Fields>(a).ok())
+        else {
+            answer(
+                reply,
+                fail("autopilot-start takes its fields as JSON".into()),
+            );
+            return;
+        };
+        let mode = Mode::read(&paths::state_dir());
+        if mode.on {
+            answer(
+                reply,
+                // Not naming the note, which the Slack relay may not say.
+                fail("Autopilot is already working a note".into()),
+            );
+            return;
+        }
+        if !fields.note.is_empty() && !crate::notes::serve::in_notes(&fields.note) {
+            answer(reply, fail(format!("Not a note: {}", fields.note)));
+            return;
+        }
+        if let Some((problem, _)) = fields_problem(&fields) {
+            answer(reply, fail(problem));
+            return;
+        }
+        if fields.hands_free && !mode.hands_free && !settings::is_on("autopilot_handsfree") {
+            answer(
+                reply,
+                fail("Hands-free is off in Settings (Autopilot's hands-free mode)".into()),
+            );
+            return;
+        }
+        let was = Fields::from_mode(&mode);
+        let check = FieldsCheck::new(&fields, &was);
+        let tx = self.tx.clone();
+        let asked = std::time::Instant::now();
+        tokio::task::spawn_blocking(move || {
+            let checked = check.run();
+            let _ = tx.send(Event::Autopilot(AutopilotEvent::Started {
+                fields: Box::new((fields, was)),
+                checked,
+                reply,
+                asked,
+            }));
+        });
+    }
+
+    /// What `autopilot_start_asked` found, written and answered.
+    fn autopilot_started(
+        &mut self,
+        fields: &Fields,
+        was: &Fields,
+        checked: Result<Checked, String>,
+    ) -> crate::mux::server::Reply {
+        use crate::mux::server::Reply;
+        // Started on the computer meanwhile: left as it is.
+        if Mode::read(&paths::state_dir()).on {
+            return Reply::fail("Autopilot was started meanwhile");
+        }
+        match checked.and_then(|c| self.autopilot_write_checked(fields, was, c)) {
+            Ok(said) => {
+                self.say(None, &said);
+                Reply::ok(format!("{said}\n"))
+            }
+            Err(e) => Reply::fail(e),
+        }
     }
 
     // ── Its menu ────────────────────────────────────────────────────────────
@@ -2235,6 +2407,22 @@ impl Server {
     /// What the looks off the task found.
     pub fn autopilot_event(&mut self, event: AutopilotEvent) {
         match event {
+            AutopilotEvent::Started {
+                fields,
+                checked,
+                reply,
+                asked,
+            } => {
+                let (fields, was) = *fields;
+                let answer = if asked.elapsed() > START_LIMIT {
+                    crate::mux::server::Reply::fail(
+                        "Checking its settings took too long, so it didn't start",
+                    )
+                } else {
+                    self.autopilot_started(&fields, &was, checked)
+                };
+                let _ = reply.send(crate::mux::server::Answer::Reply(answer));
+            }
             AutopilotEvent::Next {
                 key,
                 text,
