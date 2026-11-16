@@ -650,6 +650,7 @@ mod tests {
             chapters: vec![story::Chapter {
                 title: "Change a".into(),
                 why: "It changes a.".into(),
+                watch: String::new(),
                 files: vec!["src/a.js".into()],
                 touches: vec!["src/a.js".into()],
             }],

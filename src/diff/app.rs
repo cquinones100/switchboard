@@ -594,6 +594,8 @@ pub struct App {
     /// The diff as the story reads it: its hunks and what Haiku is given.
     hunks: story::Hunks,
     input: String,
+    /// The story's context (`story::plan_context`), read from the tab once.
+    context: Option<String>,
     reading: Reading,
     /// Indexes into the change's files, in the order shown (a page's alone).
     order: Vec<usize>,
@@ -739,6 +741,7 @@ impl App {
             listed_files: 0,
             hunks: Default::default(),
             input: String::new(),
+            context: None,
             reading: Reading::default(),
             order: Vec::new(),
             at: 0,
@@ -961,13 +964,31 @@ impl App {
         self.ask_story(true);
     }
 
+    /// The story's context: the tab's plan note, with the diff_story_plan
+    /// setting on and the diff in a pane of the workspace, asked of the
+    /// server once.
+    fn story_context(&mut self) -> String {
+        if let Some(context) = &self.context {
+            return context.clone();
+        }
+        let context = if self.opts.server && settings::is_on("diff_story_plan") {
+            let plan = crate::mux::socket::tab_option(crate::notes::serve::PLAN_NOTE);
+            story::plan_context(&plan.unwrap_or_default())
+        } else {
+            String::new()
+        };
+        self.context = Some(context.clone());
+        context
+    }
+
     /// What Haiku is given of the whole change for a question (`ga`), and
     /// its hunks, which a question's cursor is found in: the whole diff
     /// shown, what isn't committed yet included.
     fn read_input(&mut self, change: &Change) {
         let (diffs, hunks) = story::split(&change.runs());
         let commits = story::commits(&change.raw_commits);
-        self.input = story::input(&story_entries(change), &diffs, &hunks, &commits);
+        let context = self.story_context();
+        self.input = story::input(&story_entries(change), &diffs, &hunks, &commits, &context);
         self.hunks = hunks;
     }
 
@@ -1241,6 +1262,7 @@ impl App {
     /// with nothing committed there is none to wait for, only the files not
     /// committed yet in their chapter.
     fn ask_story(&mut self, cover: bool) {
+        let context = self.story_context();
         let Some(change) = &self.change else {
             return;
         };
@@ -1250,7 +1272,10 @@ impl App {
         let (input, hunks) = if change.to_work_tree() {
             let (diffs, hunks) = story::split(&told.runs());
             let commits = story::commits(&told.raw_commits);
-            (story::input(&entries, &diffs, &hunks, &commits), hunks)
+            (
+                story::input(&entries, &diffs, &hunks, &commits, &context),
+                hunks,
+            )
         } else {
             (self.input.clone(), self.hunks.clone())
         };
@@ -5865,6 +5890,7 @@ mod tests {
                             .map(|n| story::Chapter {
                                 title: format!("Part {n}"),
                                 why: "Why.".into(),
+                                watch: String::new(),
                                 files: paths[n * 2..n * 2 + 2]
                                     .iter()
                                     .map(|p| p.to_string())

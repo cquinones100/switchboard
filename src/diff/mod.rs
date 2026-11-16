@@ -176,13 +176,15 @@ impl Command {
 /// its PR's base as M-d works it out, to the working tree with the
 /// diff_uncommitted setting on; with `--working`, the working tree's
 /// changes, staged and not; with `--ahead`, its story told and kept for
-/// M-d, with nothing drawn; with `--session`, `ga` asks a copy of that
+/// M-d, with nothing drawn, and with `--plan <note>` the tab's plan note
+/// (a path in the notes directory) as its context; with `--session`, `ga` asks a copy of that
 /// Claude session (the tab's, which M-d passes), resumed from the directory
 /// `--session-dir` names.
 pub fn main(args: Vec<String>) -> ExitCode {
     let mut base = None;
     let mut working = false;
     let mut ahead = false;
+    let mut plan = String::new();
     let mut dir = None;
     let (mut session, mut session_dir) = (None, None);
     let mut rest = args.into_iter();
@@ -193,6 +195,10 @@ pub fn main(args: Vec<String>) -> ExitCode {
                 _ => return usage(),
             },
             "--ahead" => ahead = true,
+            "--plan" => match rest.next() {
+                Some(p) => plan = p,
+                None => return usage(),
+            },
             "--session" => match rest.next() {
                 Some(id) => session = Some(id),
                 None => return usage(),
@@ -216,8 +222,11 @@ pub fn main(args: Vec<String>) -> ExitCode {
     if (working && (ahead || base.is_some())) || (ahead && base.is_some()) {
         return usage();
     }
+    if !plan.is_empty() && !ahead {
+        return usage();
+    }
     if ahead {
-        return ahead::main(&dir);
+        return ahead::main(&dir, &plan);
     }
     let session = match (session, session_dir) {
         (None, None) => None,
@@ -232,7 +241,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "Usage: switchboard diff [--base <ref> | --working] [--ahead] [--session <id> --session-dir <dir>] [dir]"
+        "Usage: switchboard diff [--base <ref> | --working] [--ahead [--plan <note>]] [--session <id> --session-dir <dir>] [dir]"
     );
     ExitCode::from(2)
 }

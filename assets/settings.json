@@ -382,7 +382,7 @@
     "key": "diff_story",
     "category": "Diff",
     "label": "Diff told as a story",
-    "description": "M-d's file list grouped into a few chapters Haiku names from the whole diff and the commits' messages, each with a heading and two or three sentences on what it does and why it is built so, read from the change's core to its edges ([c and ]c move between them, yS copies the story as Markdown); off, the files keep the reading order by kind. Sends the diff's text and the commit messages, not only the paths, to Claude",
+    "description": "M-d's file list grouped into a few chapters Haiku names from the whole diff and the commits' messages, each with a heading, two or three sentences that make the case for it to the colleagues reviewing it, and a line of what to watch for, read from the change's core to its edges ([c and ]c move between them, yS copies the story as Markdown); off, the files keep the reading order by kind. Sends the diff's text and the commit messages, not only the paths, to Claude",
     "default": true
   },
   {
@@ -491,10 +491,17 @@
     "default": true
   },
   {
+    "key": "diff_story_plan",
+    "category": "Diff",
+    "label": "Diff story reads the tab's plan",
+    "description": "M-d's story, told ahead or on opening, is given the tab's plan note (an autopilot item's plan) as well as the commits, so its chapters can say what problem each solves and what was passed over; off, it reads the commits and the diff alone. Sends the plan note's words to Claude (Haiku)",
+    "default": false
+  },
+  {
     "key": "diff_story_notes",
     "category": "Diff",
     "label": "Diff story notes on changes",
-    "description": "M-d's diff shows Haiku's note over each change worth one, what it does and what to check, and names the chapter of a change that belongs to another one than its file; off, only the list's chapters",
+    "description": "M-d's diff shows Haiku's note over each change worth one, why it is needed, and names the chapter of a change that belongs to another one than its file; off, only the list's chapters",
     "default": true
   },
   {

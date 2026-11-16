@@ -100,7 +100,7 @@ fn repository(root: &Path) -> std::path::PathBuf {
 /// session.
 fn stand_in_claude(home: &Path) {
     let pieces = [
-        r#"{"chapters": [{"title": "Change the core", "why": "a changes.", "hunks": [{"id": "src/a.js#1", "note": "Check a."}]}"#,
+        r#"{"chapters": [{"title": "Change the core", "why": "a changes.", "watch": "Old callers of a.", "hunks": [{"id": "src/a.js#1", "note": "Check a."}]}"#,
         r#", {"title": "Follow it", "why": "b follows.", "hunks": ["src/b.js#1"]}]}"#,
     ];
     // A session's first line names it and its model, as Claude Code's
@@ -135,7 +135,7 @@ fn stories_asked(home: &Path) -> usize {
     std::fs::read_to_string(home.join("claude-asked"))
         .unwrap_or_default()
         .lines()
-        .filter(|l| l.contains("telling it as a short story"))
+        .filter(|l| l.contains("defend it, as a short story"))
         .count()
 }
 
@@ -183,6 +183,7 @@ fn m_d_puts_the_diff_in_the_panes_place_and_q_puts_the_pane_back() {
         .unwrap();
     assert!(row < later, "the chapters in order: {screen:?}");
     client.wait_text("Check a.");
+    client.wait_text("⚠ Old callers of a.");
     let seen = client.wait_text("export const a = 2;");
     let row = seen
         .iter()
@@ -487,6 +488,10 @@ fn diff_story_prints_the_story_kept_for_the_branch_and_says_when_there_is_none()
     let story = text(&story);
     assert!(story.contains("### 1. Change the core"), "{story}");
     assert!(story.contains("`src/a.js:1` Check a."), "{story}");
+    assert!(
+        story.contains("a changes.\n\n> ⚠ Watch: Old callers of a."),
+        "{story}"
+    );
     assert!(story.contains("### 2. Follow it"), "{story}");
 
     // A file changed since the last commit: in a last chapter, as M-d shows it.

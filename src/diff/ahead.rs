@@ -59,13 +59,16 @@ impl Drop for Lock {
     }
 }
 
-/// `switchboard diff --ahead <dir>`.
-pub fn main(dir: &Path) -> ExitCode {
+/// `switchboard diff --ahead [--plan <note>] <dir>`.
+pub fn main(dir: &Path, plan: &str) -> ExitCode {
     let Ok(facts) = git::facts(dir) else {
         return ExitCode::SUCCESS;
     };
     let state = state_file(&facts.git_dir);
-    if util::read_text(&state).is_some_and(|t| t.trim() == facts.head) {
+    // The commit told and the prompt's version it was told with, so a new
+    // prompt tells it again.
+    let marker = format!("{} v{}", facts.head, story::VERSION);
+    if util::read_text(&state).is_some_and(|t| t.trim() == marker) {
         return ExitCode::SUCCESS;
     }
     let lock = PathBuf::from(format!("{}.lock", state.display()));
@@ -90,12 +93,12 @@ pub fn main(dir: &Path) -> ExitCode {
             }
         },
     };
-    match tell_ahead(&facts.top, &base) {
+    match tell_ahead(&facts.top, &base, plan) {
         Ok(warning) => {
             if let Some(w) = warning {
                 eprintln!("{w}");
             }
-            let _ = util::write_atomic(&state, format!("{}\n", facts.head));
+            let _ = util::write_atomic(&state, format!("{marker}\n"));
             ExitCode::SUCCESS
         }
         Err(why) => {
@@ -105,9 +108,10 @@ pub fn main(dir: &Path) -> ExitCode {
     }
 }
 
-/// Tells the story of the change against `base`, as M-d would; gives any
-/// warning it was told with, or why it couldn't be told.
-pub fn tell_ahead(top: &Path, base: &str) -> Result<Option<String>, String> {
+/// Tells the story of the change against `base`, as M-d would, the tab's
+/// plan note `plan` ("" for none) its context; gives any warning it was
+/// told with, or why it couldn't be told.
+pub fn tell_ahead(top: &Path, base: &str, plan: &str) -> Result<Option<String>, String> {
     let change = git::read_change(top, base).map_err(|e| e.to_string())?;
     let (key, paths) = story::key_of(&change);
     // Nothing to tell: told, as far as the next commit is concerned.
@@ -127,7 +131,13 @@ pub fn tell_ahead(top: &Path, base: &str) -> Result<Option<String>, String> {
     let commits = story::commits(&change.raw_commits);
     let asked = Asked {
         key,
-        input: story::input(&entries, &diffs, &hunks, &commits),
+        input: story::input(
+            &entries,
+            &diffs,
+            &hunks,
+            &commits,
+            &story::plan_context(plan),
+        ),
         paths,
         hunks,
     };
@@ -255,23 +265,29 @@ fn next<'a>(
 
 /// Tells the story of the first tab's branch with a commit not told yet, in
 /// the background, at most once a minute and one at a time. `dirs` are the
-/// tabs' directories in order; `exe` the program to run.
-pub fn story_ahead(dirs: &[PathBuf], exe: &str) {
+/// tabs' directories in order, each with its tab's plan note ("" for
+/// none); `exe` the program to run.
+pub fn story_ahead(dirs: &[(PathBuf, String)], exe: &str) {
     let mut guard = AHEAD.lock().unwrap_or_else(|e| e.into_inner());
     let state = guard.get_or_insert_with(Ahead::default);
     if state.running || state.looked.is_some_and(|at| at.elapsed() < LOOK_EVERY) {
         return;
     }
     state.looked = Some(Instant::now());
-    let heads: Vec<Head> = dirs.iter().filter_map(|d| head_of(d)).collect();
+    let heads: Vec<Head> = dirs.iter().filter_map(|(d, _)| head_of(d)).collect();
     let Some(head) = next(&heads, &state.told, &state.failed).cloned() else {
         return;
     };
+    let plan = dirs
+        .iter()
+        .find(|(d, _)| head_of(d).is_some_and(|h| h.top == head.top))
+        .map(|(_, p)| p.clone())
+        .unwrap_or_default();
     state.running = true;
     drop(guard);
     let exe = exe.to_string();
     std::thread::spawn(move || {
-        let outcome = run_program(&exe, &head.top);
+        let outcome = run_program(&exe, &head.top, &plan);
         let mut guard = AHEAD.lock().unwrap_or_else(|e| e.into_inner());
         let state = guard.get_or_insert_with(Ahead::default);
         state.running = false;
@@ -295,11 +311,15 @@ pub fn story_ahead(dirs: &[PathBuf], exe: &str) {
     });
 }
 
-/// Runs `switchboard diff --ahead <top>`: the last line it said, or why it
-/// failed.
-fn run_program(exe: &str, top: &Path) -> Result<String, String> {
-    let mut child = Command::new(exe)
-        .args(["diff", "--ahead"])
+/// Runs `switchboard diff --ahead [--plan <note>] <top>`: the last line it
+/// said, or why it failed.
+fn run_program(exe: &str, top: &Path, plan: &str) -> Result<String, String> {
+    let mut cmd = Command::new(exe);
+    cmd.args(["diff", "--ahead"]);
+    if !plan.is_empty() {
+        cmd.args(["--plan", plan]);
+    }
+    let mut child = cmd
         .arg(top)
         .stdin(Stdio::null())
         .stdout(Stdio::null())

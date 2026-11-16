@@ -506,6 +506,7 @@ impl App {
                             .fg(Color::Indexed(4))
                             .add_modifier(Modifier::BOLD),
                         StoryLook::Comment => self.comment(),
+                        StoryLook::Watch => Tone::Needs.style(&self.theme()),
                         StoryLook::Normal => Style::new(),
                     };
                     Self::put(buf, 1, y, w.saturating_sub(1), text, style);
@@ -719,7 +720,8 @@ impl App {
     /// UX 2.0's heading over the diff: the shown file's chapter, its
     /// number and title (or "Not committed yet" in the needs tone) with
     /// what the diff compares with at the right, its why under them in at
-    /// most `WHY_LINES` lines, and a rule; nothing without a story or UX
+    /// most `WHY_LINES` lines, its watch line (what a reviewer should check)
+    /// on one, and a rule; nothing without a story or UX
     /// 2.0.
     pub(super) fn chapter_head(&self, cols: usize) -> Vec<Vec<Span<'static>>> {
         if !self.opts.ux2 {
@@ -772,6 +774,16 @@ impl App {
             out.push(vec![
                 Span::raw(" "),
                 Span::styled(line, Tone::Dim.style(&theme)),
+            ]);
+        }
+        if !chapter.watch.is_empty() {
+            let mark = kit::mark(kit::Mark::Watch, 0, &theme);
+            let room = cols.saturating_sub(width(&mark.content) + 2);
+            out.push(vec![
+                Span::raw(" "),
+                mark,
+                Span::raw(" "),
+                Span::styled(cut(&chapter.watch, room), Tone::Dim.style(&theme)),
             ]);
         }
         out.push(vec![kit::rule(cols, &theme)]);

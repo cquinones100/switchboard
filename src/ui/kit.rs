@@ -195,6 +195,8 @@ pub enum Mark {
     /// A command waiting for a slot in the queue for heavy work, in place
     /// of the spinner (board 79).
     Slot,
+    /// What a reviewer should watch for, a diff story chapter's watch line.
+    Watch,
 }
 
 impl Mark {
@@ -241,6 +243,7 @@ impl Mark {
             Mark::Awake => ("☕", Tone::Dim),
             Mark::Selected => ("◆", Tone::Accent),
             Mark::Slot => ("◌", Tone::Working),
+            Mark::Watch => (crate::diff::story::WATCH_MARK, Tone::Needs),
         }
     }
 }

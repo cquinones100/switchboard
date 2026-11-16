@@ -277,16 +277,23 @@ impl Server {
         // Each tab's own directory, the one it is named after, as
         // story-ahead.js read each tab's path: not every pane's, which would
         // tell stories for branches no tab is about.
-        let mut dirs: Vec<PathBuf> = Vec::new();
+        // With each, its tab's plan note, the story's context when the
+        // diff_story_plan setting lets the story read it.
+        let with_plan = settings::is_on("diff_story_plan");
+        let mut dirs: Vec<(PathBuf, String)> = Vec::new();
         for s in &self.sessions {
             for tab in &s.tabs {
                 // Not a worktree of someone else's PR: its story is told
                 // only when you open its diff and ask.
                 if let Some(dir) = self.tab_path(*tab).map(PathBuf::from)
                     && !crate::trust::in_review_dir(&dir)
-                    && !dirs.contains(&dir)
+                    && !dirs.iter().any(|(d, _)| *d == dir)
                 {
-                    dirs.push(dir);
+                    let plan = with_plan
+                        .then(|| self.tab_opt(*tab, crate::notes::serve::PLAN_NOTE))
+                        .flatten()
+                        .unwrap_or_default();
+                    dirs.push((dir, plan));
                 }
             }
         }

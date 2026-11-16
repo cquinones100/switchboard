@@ -950,11 +950,14 @@ impl Server {
     /// server's task: the plan the item it works on links in its note
     /// (`@tab_note`, else the note autopilot works through). Empty while it
     /// is looked for and when there is none, so it is looked for only once.
+    /// Wanted by M-e's order (note_by_precedence) and by the diff story's
+    /// context (diff_story_plan), either on without the other.
     pub(crate) fn find_tab_plan(&mut self, tab: TabId) {
         let Some(t) = self.tabs.get(&tab) else {
             return;
         };
-        if t.opts.contains_key(PLAN_NOTE) || !settings::is_on("note_by_precedence") {
+        let wanted = settings::is_on("note_by_precedence") || settings::is_on("diff_story_plan");
+        if t.opts.contains_key(PLAN_NOTE) || !wanted {
             return;
         }
         let Some(item) = self.tab_opt(tab, crate::autopilot::ITEM) else {
