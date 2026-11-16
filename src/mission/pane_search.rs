@@ -156,6 +156,7 @@ pub fn narrowed(found: &HashMap<TabId, Found>, text: &str) -> HashMap<TabId, Fou
 pub fn found_items(items: &[Item], text: &str, found: &HashMap<TabId, Found>) -> Vec<Item> {
     let mut by_name = Vec::new();
     let mut by_content: Vec<(usize, Item)> = Vec::new();
+    let words = views::Words::new(text);
     for item in items {
         let Target::Tab(tab) = item.target else {
             continue;
@@ -163,7 +164,7 @@ pub fn found_items(items: &[Item], text: &str, found: &HashMap<TabId, Found>) ->
         if views::is_header(item) {
             continue;
         }
-        let named = views::search_text(item).contains(text);
+        let named = words.find(&views::search_text(item));
         let hit = found.get(&tab);
         if !named && hit.is_none() {
             continue;

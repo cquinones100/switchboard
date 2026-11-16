@@ -583,6 +583,30 @@ pub fn search_text(item: &Item) -> String {
     format!("{} {} {search}", item.title, item.detail).to_lowercase()
 }
 
+/// A `/` filter's words, each found somewhere in what it matches, in any
+/// order, as the palette finds its rows: "slack reply" finds "Reply from
+/// the Slack view". Each word is matched as written, case ignored, never by
+/// letters scattered through a long description, so a word narrows the list
+/// as it did before; what it keeps stays in the view's order.
+pub struct Words(Vec<String>);
+
+impl Words {
+    pub fn new(text: &str) -> Words {
+        Words(
+            text.to_lowercase()
+                .split_whitespace()
+                .map(String::from)
+                .collect(),
+        )
+    }
+
+    /// Whether `hay` has every word. No words match everything.
+    pub fn find(&self, hay: &str) -> bool {
+        let hay = hay.to_lowercase();
+        self.0.iter().all(|w| hay.contains(w.as_str()))
+    }
+}
+
 /// A view as one client sees it: its `/` filter's text, and for the Work
 /// map its scope and which repositories are folded or show their merged
 /// work.
@@ -596,11 +620,12 @@ pub fn shown(view: &View, filter: &str, scope: Option<Scope>, folds: &Folds) -> 
     let items = if work_map {
         work_map_shown(&view.data.items, &text, scope, folds)
     } else {
+        let words = Words::new(&text);
         let kept: Vec<Item> = view
             .data
             .items
             .iter()
-            .filter(|i| is_header(i) || is_summary(i) || search_text(i).contains(&text))
+            .filter(|i| is_header(i) || is_summary(i) || words.find(&search_text(i)))
             .cloned()
             .collect();
         // A filtered Settings or Keys view leaves out the headings with no
@@ -641,13 +666,14 @@ pub fn shown(view: &View, filter: &str, scope: Option<Scope>, folds: &Folds) -> 
 /// and those, once Enter there opens it; a typed filter opens every fold. A
 /// heading or fold line with nothing kept under it is left out.
 fn work_map_shown(items: &[Item], text: &str, scope: Option<Scope>, folds: &Folds) -> Vec<Item> {
+    let words = Words::new(text);
     let keeps = |i: &Item| {
         let scoped = match scope {
             None | Some(Scope::Reopen) => true,
             Some(Scope::Tabs) => matches!(i.target, Target::Tab(_)),
             Some(Scope::Untabbed) => !matches!(i.target, Target::Tab(_)),
         };
-        scoped && (text.is_empty() || search_text(i).contains(text))
+        scoped && (text.is_empty() || words.find(&search_text(i)))
     };
     let filtering = !text.is_empty();
     let mut out = Vec::new();
@@ -1936,7 +1962,43 @@ mod tests {
             .iter()
             .map(|i| i.title.as_str())
             .collect();
-        assert_eq!(titles, ["Notifications", "Push notifications"]);
+        assert_eq!(titles[..2], ["Notifications", "Push notifications"]);
+        assert!(!titles.contains(&"Integrations"));
+    }
+
+    #[test]
+    fn a_filter_finds_its_words_in_any_order() {
+        let view = View {
+            id: ViewId::Settings,
+            title: "Settings".into(),
+            data: ViewData {
+                items: settings_items(&[], false),
+                ..ViewData::default()
+            },
+            loaded: true,
+        };
+        let titles = |filter: &str| -> Vec<String> {
+            shown(&view, filter, None, &Folds::default())
+                .data
+                .items
+                .into_iter()
+                .map(|i| i.title)
+                .collect()
+        };
+        for filter in ["slack reply", "reply slack", "SLACK Reply"] {
+            let found = titles(filter);
+            assert!(
+                found.iter().any(|t| t == "Reply from the Slack view"),
+                "{filter}: {found:?}"
+            );
+            assert!(
+                found.iter().any(|t| t == "Mission control"),
+                "{filter}: its heading"
+            );
+        }
+        assert!(titles("zzqx nothing").is_empty());
+        // A word is found as written, digits and dashes before it too.
+        assert!(Words::new("01-client").find("client  /projects/01-client"));
     }
 
     #[test]

@@ -1120,8 +1120,9 @@ impl Server {
         let focused_id = m.current().map(|v| v.id.clone());
         let gridded = m.grid.is_some();
         if !text.is_empty() && (!gridded || m.view == 0) {
+            let words = views::Words::new(&text);
             tabs.retain(|t| {
-                [
+                let fields = [
                     t.name.to_lowercase(),
                     t.index.to_string(),
                     t.pr.map(|p| format!("#{p}")).unwrap_or_default(),
@@ -1129,9 +1130,8 @@ impl Server {
                         .as_ref()
                         .map(|p| p.to_string_lossy().to_lowercase())
                         .unwrap_or_default(),
-                ]
-                .iter()
-                .any(|f| !f.is_empty() && f.contains(&text))
+                ];
+                words.find(&fields.join(" "))
             });
         }
         // The Landing view stays while the client has it in front, or is
