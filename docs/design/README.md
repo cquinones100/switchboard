@@ -168,7 +168,7 @@ The relay's DM, threads and Home tab.
 - [103. Moving a repository while autopilot runs: Next up rearranged across the queues as it is put down](https://cquinones100.github.io/switchboard/design/103.html)
 - [104. Add a repository… in autopilot's settings: your repositories not yet in it, or a folder; it joins last, on, with a cap and spend of its own](https://cquinones100.github.io/switchboard/design/104.html)
 
-## Proposal: the diff's totals
+## The diff's totals
 
 - [105. M-d with the whole change's totals at the head of its file list, as GitHub's PR header: files, lines added and deleted, five cells shared out by them](https://cquinones100.github.io/switchboard/design/105.html)
 - [106. The diff's file list filtered by path with /: the totals count only the files left, of how many in all](https://cquinones100.github.io/switchboard/design/106.html)
