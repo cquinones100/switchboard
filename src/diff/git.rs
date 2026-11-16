@@ -5,7 +5,11 @@
 //!
 //! The base is the branch's PR's base branch (origin's default branch
 //! without a PR, main where origin doesn't say), as origin has it now, so it
-//! is fetched first: a base last fetched before the branch was rebased onto
+//! is fetched first. On the default branch itself that is its own copy on
+//! origin, so the change is its commits not yet pushed; a branch with no PR
+//! whose upstream is another branch (one cut from a feature branch) compares
+//! with that branch instead. What the base is to the branch (`Why`) is kept
+//! with it, for the diff's header to say. It is fetched first because a base last fetched before the branch was rebased onto
 //! a newer one would count that newer work as the branch's. M-d and the
 //! story told ahead share it, so both compare with the same base and so tell
 //! the same story. The cache holds, per worktree, the commit last compared
@@ -117,26 +121,169 @@ pub fn forget_base(git_dir: &Path) -> bool {
     std::fs::remove_file(base_cache(git_dir)).is_ok()
 }
 
+/// What the base is to the branch, which the diff's header says beside it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Why {
+    /// Named by whoever asked (`switchboard diff --base`), or a commit of
+    /// the history's parent: nothing to add.
+    #[default]
+    Named,
+    /// The base branch of the branch's PR, by its number.
+    Pr(u64),
+    /// The branch's own copy on origin: the default branch itself, whose
+    /// change is its commits not yet pushed.
+    Own,
+    /// The default branch, or the branch's upstream, for a branch with no
+    /// PR.
+    NoPr,
+}
+
+impl Why {
+    /// As the base's cache keeps it.
+    fn word(&self) -> String {
+        match self {
+            Why::Named => "named".into(),
+            Why::Pr(number) => format!("pr:{number}"),
+            Why::Own => "own".into(),
+            Why::NoPr => "none".into(),
+        }
+    }
+
+    fn from_word(word: &str) -> Option<Why> {
+        match word {
+            "named" => Some(Why::Named),
+            "own" => Some(Why::Own),
+            "none" => Some(Why::NoPr),
+            other => other.strip_prefix("pr:")?.parse().ok().map(Why::Pr),
+        }
+    }
+}
+
 /// The base kept for the branch's commit, while it is still there; nothing
 /// asked of the network (diff-base.sh's `cached`).
 pub fn cached_base(dir: &Path) -> Option<String> {
-    let facts = facts(dir).ok()?;
-    let text = util::read_text(base_cache(&facts.git_dir))?;
-    let (head, base) = text.trim_end().split_once('\t')?;
-    (head == facts.head && safe_ref(base) && verifies(dir, base)).then(|| base.to_string())
+    cached(dir).map(|(base, _)| base)
 }
 
-/// The base asked for: the ref to compare with, and whether it was fetched
-/// just now or has nowhere to be fetched from (else it is as last fetched).
+/// As `cached_base`, with what the base is to the branch. It is kept for
+/// the branch and its upstream too, which the base follows: another branch
+/// checked out at the same commit, or the same one given another upstream,
+/// asks again. A line an older build kept, which says neither, counts as
+/// none kept.
+pub fn cached(dir: &Path) -> Option<(String, Why)> {
+    let facts = facts(dir).ok()?;
+    let text = util::read_text(base_cache(&facts.git_dir))?;
+    let mut fields = text.trim_end_matches('\n').split('\t');
+    let (head, base, why, tracking) = (
+        fields.next()?,
+        fields.next()?,
+        fields.next()?,
+        fields.next()?,
+    );
+    let why = Why::from_word(why)?;
+    let still_there = head == facts.head && safe_ref(base) && verifies(dir, base);
+    (still_there && tracking == tracking_of(dir, current_branch(dir).as_deref()))
+        .then(|| (base.to_string(), why))
+}
+
+/// How long a base kept as a branch's with no PR is taken as it is: a PR
+/// opened since, at the same commit, shows once it is older.
+const NO_PR_KEPT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Whether a base kept that long ago may have a PR by now: only one kept
+/// as a branch's with no PR, and only while GitHub is asked at all.
+fn pr_may_have_come(why: &Why, kept_for: std::time::Duration, github: bool) -> bool {
+    github && *why == Why::NoPr && kept_for > NO_PR_KEPT
+}
+
+/// `cached` for M-d opening, which says what the base is to the branch: a
+/// base kept as a branch's with no PR counts as none kept once it is ten
+/// minutes old, so GitHub is asked again and a PR opened since is named,
+/// and its base taken. The story's own readers keep `cached_base`, whose
+/// base they need whatever its label.
+pub fn cached_for_opening(dir: &Path) -> Option<(String, Why)> {
+    let (base, why) = cached(dir)?;
+    let kept_for = facts(dir)
+        .ok()
+        .and_then(|f| std::fs::metadata(base_cache(&f.git_dir)).ok())
+        .and_then(|m| m.modified().ok())
+        .and_then(|at| at.elapsed().ok())
+        .unwrap_or_default();
+    (!pr_may_have_come(&why, kept_for, crate::settings::is_on("github"))).then_some((base, why))
+}
+
+/// The branch checked out in `dir`, `None` on none.
+fn current_branch(dir: &Path) -> Option<String> {
+    git(dir, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// A branch's upstream and its remote's name, as git's config has them:
+/// both empty with none, the remote "." or empty for a local branch.
+fn upstream_of(dir: &Path, branch: &str) -> (String, String) {
+    let out = git(
+        dir,
+        &[
+            "for-each-ref",
+            "--format=%(upstream:short)%09%(upstream:remotename)",
+            &format!("refs/heads/{branch}"),
+        ],
+    )
+    .unwrap_or_default();
+    let (upstream, remote) = out
+        .lines()
+        .next()
+        .unwrap_or("")
+        .split_once('\t')
+        .unwrap_or(("", ""));
+    (upstream.to_string(), remote.to_string())
+}
+
+/// What the base's cache is kept for beside the commit: the branch and its
+/// upstream, a space between them (a branch's name holds none).
+fn tracking_of(dir: &Path, branch: Option<&str>) -> String {
+    match branch {
+        Some(branch) => format!("{branch} {}", upstream_of(dir, branch).0),
+        None => String::new(),
+    }
+}
+
+/// The base asked for: the ref to compare with, what it is to the branch,
+/// and whether it was fetched just now or has nowhere to be fetched from
+/// (else it is as last fetched).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Base {
     pub base: String,
+    pub why: Why,
     pub fetched: bool,
 }
 
-/// The PR's base branch as GitHub has it, `None` with no PR, GitHub off or
-/// out of reach.
-fn pr_base(dir: &Path) -> Option<String> {
+/// The PR GitHub has for the branch: its base branch, its number and the
+/// branch it is of there. `None` with no PR, GitHub off or out of reach.
+struct Pr {
+    base: String,
+    number: u64,
+    head: String,
+}
+
+/// Whether a PR found for the branch is its upstream's rather than its own.
+/// GitHub is asked for the PR of the branch this one tracks, so a branch
+/// cut from another one (`upstream`, as `upstream_apart` finds it) gets that
+/// one's PR. It is the branch's own when it is of a branch by this one's
+/// name, or the worktree is `wtpr`'s for that very PR (`in_dir`, the number
+/// its directory carries), whose branch may be named otherwise.
+fn is_the_upstreams(
+    pr: &Pr,
+    branch: Option<&str>,
+    upstream: Option<&str>,
+    in_dir: Option<u64>,
+) -> bool {
+    upstream.is_some() && branch != Some(pr.head.as_str()) && in_dir != Some(pr.number)
+}
+
+fn pr_base(dir: &Path) -> Option<Pr> {
     if !crate::settings::is_on("github") {
         return None;
     }
@@ -146,9 +293,29 @@ fn pr_base(dir: &Path) -> Option<String> {
             .await
             .ok()
             .flatten()
-            .map(|pr| pr.base_ref_name)
+            .map(|pr| Pr {
+                base: pr.base_ref_name,
+                number: pr.number,
+                head: pr.head_ref_name,
+            })
     })
-    .filter(|b| !b.is_empty())
+    .filter(|pr| safe_ref(&pr.base))
+}
+
+/// The branch's upstream when it is another branch's: neither the default
+/// branch nor the branch's own copy on a remote, which a push with `-u`
+/// makes its upstream. A branch cut from a feature branch has that one.
+fn upstream_apart(dir: &Path, branch: &str, default: &str) -> Option<String> {
+    let (upstream, remote) = upstream_of(dir, branch);
+    if !safe_ref(&upstream) || !verifies(dir, &upstream) {
+        return None;
+    }
+    // A local branch's remote is "." (or nothing), its name the whole.
+    let name = upstream
+        .strip_prefix(remote.as_str())
+        .and_then(|rest| rest.strip_prefix('/'))
+        .unwrap_or(&upstream);
+    (name != branch && name != default).then(|| upstream.clone())
 }
 
 /// The base where neither the PR nor origin says: main, or master in a
@@ -166,41 +333,85 @@ fn default_base(dir: &Path) -> &'static str {
 /// repository.
 pub fn fetch_base(dir: &Path) -> Option<Base> {
     let facts = facts(dir).ok()?;
-    let mut base = pr_base(dir)
-        .or_else(|| {
-            git(dir, &["rev-parse", "--abbrev-ref", "origin/HEAD"])
-                .ok()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-        })
+    let branch = current_branch(dir);
+    let mut default = git(dir, &["rev-parse", "--abbrev-ref", "origin/HEAD"])
+        .ok()
+        .map(|s| s.trim().to_string())
         .unwrap_or_default();
-    if let Some(rest) = base.strip_prefix("origin/") {
-        base = rest.to_string();
+    if let Some(rest) = default.strip_prefix("origin/") {
+        default = rest.to_string();
     }
-    if base.is_empty() || !safe_ref(&base) {
-        base = default_base(dir).into();
+    if default.is_empty() || !safe_ref(&default) {
+        default = default_base(dir).into();
     }
-    // A repository with no origin has nothing to fetch, its own branch as
-    // fresh as it gets, so nothing is asked and nothing said.
-    let origin = git(dir, &["config", "--get", "remote.origin.url"]).is_ok();
-    let fetched = !origin || {
-        crate::worktree::count_fetch(&facts.top, "origin", "M-d diff: fetch base");
-        git(dir, &["fetch", "--quiet", "origin", &base]).is_ok()
+    let upstream = branch
+        .as_deref()
+        .and_then(|b| upstream_apart(dir, b, &default));
+    let in_dir = crate::integrations::github::pr_number_from_dir(&facts.top);
+    let pr = pr_base(dir)
+        .filter(|pr| !is_the_upstreams(pr, branch.as_deref(), upstream.as_deref(), in_dir));
+    // With no PR of its own, a branch cut from another branch compares with
+    // that one: on origin it is fetched as any base is, elsewhere taken as
+    // it is.
+    let mut as_it_is = None;
+    let base = match (&pr, upstream) {
+        (Some(pr), _) => pr
+            .base
+            .strip_prefix("origin/")
+            .unwrap_or(&pr.base)
+            .to_string(),
+        (None, Some(upstream)) => match upstream.strip_prefix("origin/") {
+            Some(rest) => rest.to_string(),
+            None => {
+                as_it_is = Some(upstream);
+                default
+            }
+        },
+        (None, None) => default,
     };
-    // A repository with no origin compares with its own branch.
-    let mut found = format!("origin/{base}");
-    if !verifies(dir, &found) {
-        found = base;
-    }
+    let (found, fetched) = match as_it_is {
+        Some(upstream) => (upstream, true),
+        None => {
+            // A repository with no origin has nothing to fetch, its own
+            // branch as fresh as it gets, so nothing is asked and nothing
+            // said.
+            let origin = git(dir, &["config", "--get", "remote.origin.url"]).is_ok();
+            let fetched = !origin || {
+                crate::worktree::count_fetch(&facts.top, "origin", "M-d diff: fetch base");
+                git(dir, &["fetch", "--quiet", "origin", &base]).is_ok()
+            };
+            // A repository with no origin compares with its own branch.
+            let found = format!("origin/{base}");
+            if verifies(dir, &found) {
+                (found, fetched)
+            } else {
+                (base, fetched)
+            }
+        }
+    };
+    let is_own_copy_on_origin = branch
+        .as_deref()
+        .is_some_and(|b| found.strip_prefix("origin/") == Some(b));
+    let why = match pr {
+        Some(pr) => Why::Pr(pr.number),
+        None if is_own_copy_on_origin => Why::Own,
+        None => Why::NoPr,
+    };
     // Only a comparison with a freshly fetched base is worth keeping.
     if fetched {
         let _ = util::write_atomic(
             base_cache(&facts.git_dir),
-            format!("{}\t{found}\n", facts.head),
+            format!(
+                "{}\t{found}\t{}\t{}\n",
+                facts.head,
+                why.word(),
+                tracking_of(dir, branch.as_deref())
+            ),
         );
     }
     Some(Base {
         base: found,
+        why,
         fetched,
     })
 }
@@ -274,11 +485,13 @@ impl Entry {
 /// `staged` and its changes not staged in `diff`, and no commits. One
 /// running from the merge base to the working tree has the files on disk
 /// for its new side, HEAD as `right`, and what isn't committed in
-/// `uncommitted`.
+/// `uncommitted`. `why` is what the base is to the branch, where M-d
+/// worked the base out itself.
 #[derive(Clone, Debug, Default)]
 pub struct Change {
     pub top: PathBuf,
     pub base: String,
+    pub why: Why,
     pub left: String,
     pub right: String,
     pub entries: Vec<Entry>,
@@ -337,22 +550,59 @@ impl Change {
         }
     }
 
+    /// What the diff's header says it compares with: the base and what it
+    /// is to the branch, a PR's base by the name GitHub has for it.
+    pub fn against(&self) -> String {
+        match &self.why {
+            Why::Named => format!("against {}", self.base),
+            Why::Pr(number) => format!(
+                "against {} (PR #{number})",
+                self.base.strip_prefix("origin/").unwrap_or(&self.base)
+            ),
+            Why::Own => match self.unpushed() {
+                0 => format!("against {} · nothing unpushed", self.base),
+                n => format!("against {} · {n} unpushed", self.base),
+            },
+            Why::NoPr => format!("against {} (no PR)", self.base),
+        }
+    }
+
+    /// How many commits the change holds, the committed part's in one
+    /// running to the working tree: on the default branch, those not yet
+    /// pushed.
+    fn unpushed(&self) -> usize {
+        self.told_part().raw_commits.matches('\x1e').count()
+    }
+
     /// What a box says when M-d has nothing to show, as pane-in-place.sh
     /// said it rather than open an empty diff: no change past the base (and,
-    /// running to the working tree, nothing uncommitted either). `None` when
+    /// running to the working tree, nothing uncommitted either), which on
+    /// the default branch is nothing its copy on origin lacks. `None` when
     /// there is something, and always for a working tree's changes.
     pub fn nothing_to_show(&self) -> Option<String> {
         if self.working() {
             return None;
         }
+        let (start, commits) = match (&self.why, self.base.split_once('/')) {
+            // Commits that undo each other are unpushed all the same.
+            (Why::Own, Some((remote, branch))) => (
+                format!("Nothing here that {remote}'s {branch} lacks"),
+                match self.unpushed() {
+                    0 => "no unpushed commits".to_string(),
+                    1 => "1 unpushed commit that changes no file".to_string(),
+                    n => format!("{n} unpushed commits that change no file"),
+                },
+            ),
+            _ => (
+                "Nothing to show".to_string(),
+                format!("no commits past {}", self.base),
+            ),
+        };
         match &self.uncommitted {
-            Some(u) if u.committed.entries.is_empty() && u.dirty.is_empty() => Some(format!(
-                "Nothing to show: no commits past {} and no uncommitted changes",
-                self.base
-            )),
-            None if self.entries.is_empty() => {
-                Some(format!("Nothing to show: no commits past {}", self.base))
+            Some(u) if u.committed.entries.is_empty() && u.dirty.is_empty() => {
+                Some(format!("{start}: {commits} and no uncommitted changes"))
             }
+            None if self.entries.is_empty() => Some(format!("{start}: {commits}")),
             _ => None,
         }
     }
@@ -548,6 +798,7 @@ fn read_range(top: &Path, base: &str, left: String, right: String) -> Result<Cha
     Ok(Change {
         top: top.to_path_buf(),
         base: base.to_string(),
+        why: Why::default(),
         left,
         right,
         entries,
@@ -597,6 +848,7 @@ pub fn read_working(top: &Path) -> Result<Change> {
     Ok(Change {
         top: top.to_path_buf(),
         base: String::new(),
+        why: Why::default(),
         left: head.clone(),
         right: head,
         entries,
@@ -697,6 +949,7 @@ pub fn read_to_work_tree(top: &Path, base: &str) -> Result<Change> {
     Ok(Change {
         top: top.to_path_buf(),
         base: base.to_string(),
+        why: Why::default(),
         left,
         right: committed.right.clone(),
         entries,
@@ -924,6 +1177,200 @@ mod tests {
             (change.left.clone(), WORK_TREE.to_string())
         );
         assert_eq!(change.order_sides(), (change.left.as_str(), ""));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_header_names_the_base_and_what_it_is_to_the_branch() {
+        let commit = "h\0subject\0body\x1e\n";
+        let change = |base: &str, why: Why, commits: usize| Change {
+            base: base.into(),
+            why,
+            raw_commits: commit.repeat(commits),
+            entries: Vec::new(),
+            ..Change::default()
+        };
+        assert_eq!(
+            change("origin/main", Why::NoPr, 1).against(),
+            "against origin/main (no PR)"
+        );
+        assert_eq!(
+            change("origin/main", Why::Own, 3).against(),
+            "against origin/main · 3 unpushed"
+        );
+        assert_eq!(
+            change("origin/main", Why::Own, 0).against(),
+            "against origin/main · nothing unpushed"
+        );
+        assert_eq!(
+            change("origin/main", Why::Pr(123), 2).against(),
+            "against main (PR #123)"
+        );
+        assert_eq!(
+            change("origin/feature-a", Why::NoPr, 2).against(),
+            "against origin/feature-a (no PR)"
+        );
+        assert_eq!(
+            change("abc1234", Why::Named, 1).against(),
+            "against abc1234"
+        );
+        // The unpushed commits are the committed part's, in a change running
+        // to the working tree.
+        let whole = Change {
+            uncommitted: Some(Uncommitted {
+                dirty: BTreeSet::new(),
+                committed: Box::new(change("origin/main", Why::Named, 2)),
+            }),
+            ..change("origin/main", Why::Own, 0)
+        };
+        assert_eq!(whole.against(), "against origin/main · 2 unpushed");
+        // With nothing unpushed, the default branch says what it lacks
+        // nothing of.
+        assert_eq!(
+            whole_of(change("origin/main", Why::Own, 0))
+                .nothing_to_show()
+                .as_deref(),
+            Some(
+                "Nothing here that origin's main lacks: no unpushed commits and no uncommitted changes"
+            )
+        );
+        assert_eq!(
+            change("origin/main", Why::Own, 0)
+                .nothing_to_show()
+                .as_deref(),
+            Some("Nothing here that origin's main lacks: no unpushed commits")
+        );
+        assert_eq!(
+            change("origin/main", Why::Own, 2)
+                .nothing_to_show()
+                .as_deref(),
+            Some("Nothing here that origin's main lacks: 2 unpushed commits that change no file"),
+            "a commit and its revert"
+        );
+        for why in [Why::Named, Why::Pr(7), Why::Own, Why::NoPr] {
+            assert_eq!(Why::from_word(&why.word()), Some(why));
+        }
+        assert_eq!(Why::from_word("pr:x"), None);
+    }
+
+    /// `change` as one running to a clean working tree, with no commits.
+    fn whole_of(change: Change) -> Change {
+        Change {
+            uncommitted: Some(Uncommitted {
+                dirty: BTreeSet::new(),
+                committed: Box::new(Change::default()),
+            }),
+            ..change
+        }
+    }
+
+    #[test]
+    fn a_base_kept_with_no_pr_is_asked_for_again_after_ten_minutes() {
+        let secs = std::time::Duration::from_secs;
+        assert!(!pr_may_have_come(&Why::NoPr, secs(60), true));
+        assert!(pr_may_have_come(&Why::NoPr, secs(11 * 60), true));
+        assert!(
+            !pr_may_have_come(&Why::NoPr, secs(11 * 60), false),
+            "GitHub off"
+        );
+        for why in [Why::Pr(3), Why::Own, Why::Named] {
+            assert!(!pr_may_have_come(&why, secs(3600), true), "{why:?}");
+        }
+    }
+
+    #[test]
+    fn a_pr_found_through_the_branchs_upstream_is_the_upstreams() {
+        let pr = Pr {
+            base: "main".into(),
+            number: 12,
+            head: "under".into(),
+        };
+        let upstream = Some("origin/under");
+        assert!(
+            is_the_upstreams(&pr, Some("over"), upstream, None),
+            "over was cut from under, whose PR it is"
+        );
+        assert!(!is_the_upstreams(&pr, Some("under"), None, None));
+        assert!(
+            !is_the_upstreams(&pr, Some("pr-review/12"), upstream, Some(12)),
+            "wtpr's worktree for that PR, its branch named otherwise"
+        );
+        assert!(is_the_upstreams(&pr, Some("over"), upstream, Some(7)));
+        assert!(
+            !is_the_upstreams(&pr, Some("over"), None, None),
+            "no upstream apart"
+        );
+    }
+
+    #[test]
+    fn a_branch_cut_from_another_branch_compares_with_that_one() {
+        let dir = std::env::temp_dir().join(format!("sb-diff-upstream-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(["-c", "user.name=T", "-c", "user.email=t@example.com"])
+                .args(["-c", "commit.gpgsign=false"])
+                .args(args)
+                .current_dir(&dir)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        run(&["init", "-q"]);
+        run(&["checkout", "-q", "-b", "main"]);
+        run(&["commit", "-q", "--allow-empty", "-m", "first"]);
+        run(&["branch", "-q", "feature-a"]);
+        // Origin's copies, as a fetch leaves them.
+        run(&["config", "remote.origin.url", "/nowhere"]);
+        run(&[
+            "config",
+            "remote.origin.fetch",
+            "+refs/heads/*:refs/remotes/origin/*",
+        ]);
+        for branch in ["main", "feature-a", "child"] {
+            run(&[
+                "update-ref",
+                &format!("refs/remotes/origin/{branch}"),
+                "HEAD",
+            ]);
+        }
+        run(&["checkout", "-q", "-b", "child", "--no-track"]);
+        assert_eq!(upstream_apart(&dir, "child", "main"), None, "no upstream");
+        run(&["branch", "-q", "--set-upstream-to=feature-a", "child"]);
+        assert_eq!(
+            upstream_apart(&dir, "child", "main").as_deref(),
+            Some("feature-a"),
+            "a local branch"
+        );
+        run(&[
+            "branch",
+            "-q",
+            "--set-upstream-to=origin/feature-a",
+            "child",
+        ]);
+        assert_eq!(
+            upstream_apart(&dir, "child", "main").as_deref(),
+            Some("origin/feature-a")
+        );
+        run(&["branch", "-q", "--set-upstream-to=origin/child", "child"]);
+        assert_eq!(
+            upstream_apart(&dir, "child", "main"),
+            None,
+            "its own copy on origin, as a push with -u leaves it"
+        );
+        for default in ["main", "origin/main"] {
+            run(&[
+                "branch",
+                "-q",
+                &format!("--set-upstream-to={default}"),
+                "child",
+            ]);
+            assert_eq!(upstream_apart(&dir, "child", "main"), None, "{default}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

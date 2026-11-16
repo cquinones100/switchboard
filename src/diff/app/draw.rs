@@ -756,7 +756,7 @@ impl App {
         let right = self
             .change
             .as_ref()
-            .map(|c| format!("vs {} ", c.base))
+            .map(|c| format!("{} ", c.against()))
             .unwrap_or_default();
         let room = cols.saturating_sub(width(&right) + 1);
         let mut first = kit::fit(title, room, Style::new());

@@ -16,7 +16,9 @@
 //! diff_uncommitted setting on, M-d runs to the working tree: what isn't
 //! committed is marked ● and listed in a last chapter after the commits'
 //! story, edits made while the diff is open come in on R, and a branch with
-//! nothing to show gets a box saying so in place of the diff.
+//! nothing to show gets a box saying so in place of the diff. On the default
+//! branch M-d shows its commits not yet pushed, and its heading names the
+//! base and what it is to the branch.
 
 use crate::common;
 
@@ -389,6 +391,100 @@ fn m_d_says_when_there_is_nothing_to_show_and_shows_uncommitted_changes_alone() 
         !screen.iter().any(|l| l.contains("no uncommitted changes")),
         "{screen:?}"
     );
+    back(&server);
+}
+
+#[test]
+fn m_d_shows_the_default_branchs_unpushed_commits_and_names_the_base_with_no_pr() {
+    let server = TestServer::start();
+    let all = json!({"notifications": false, "tips": false, "github": false, "linear": false, "ux2": true});
+    common::write_settings(&server.home, all);
+    stand_in_claude(&server.home);
+    let work = repository(server.dir.path());
+    // On main, two commits origin doesn't have yet.
+    git(&work, &["checkout", "-q", "main"]);
+    git(&work, &["merge", "-q", "--ff-only", "feature"]);
+    std::fs::write(work.join("src/b.js"), "export const b = 3;\n").unwrap();
+    git(&work, &["commit", "-q", "-am", "Change b again"]);
+    let mut client = server.attach(170, 36);
+    client.wait_text("$");
+    let first = panes(&server)[0]["id"].as_str().unwrap().to_string();
+    client.type_text(&format!("cd {}\r", work.display()));
+    wait_until("the shell to cd", || {
+        panes(&server)[0]["cwd"]
+            .as_str()
+            .is_some_and(|d| d.ends_with("work"))
+    });
+    let back = |server: &TestServer| {
+        wait_until("the pane back", || {
+            let now = panes(server);
+            now.len() == 1 && now[0]["id"] == first.as_str()
+        });
+    };
+
+    client.send(b"\x1bd");
+    let screen = client.wait_text("against origin/main · 2 unpushed");
+    for file in ["a.js", "b.js"] {
+        assert!(
+            screen.iter().any(|l| l.contains(file)),
+            "{file}: {screen:?}"
+        );
+    }
+    client.type_text("q");
+    back(&server);
+
+    // Pushed, with nothing uncommitted: nothing origin's main lacks.
+    git(&work, &["push", "-q", "origin", "main"]);
+    client.send(b"\x1bd");
+    client.wait_text("Nothing here that origin's main lacks: no unpushed commits and no");
+    back(&server);
+    client.type_text("\x1b");
+    client.wait_for("the box closed", |s| {
+        !s.iter().any(|l| l.contains("Nothing here"))
+    });
+
+    // A branch cut from another branch on origin compares with that one,
+    // whose own commit isn't shown as this branch's.
+    git(&work, &["checkout", "-q", "-b", "under"]);
+    std::fs::write(work.join("src/under.js"), "export const u = 1;\n").unwrap();
+    git(&work, &["add", "."]);
+    git(&work, &["commit", "-q", "-m", "Add under"]);
+    git(&work, &["push", "-q", "origin", "under"]);
+    git(
+        &work,
+        &["checkout", "-q", "-b", "over", "--track", "origin/under"],
+    );
+    std::fs::write(work.join("src/a.js"), "export const a = 4;\n").unwrap();
+    std::fs::write(work.join("src/b.js"), "export const b = 4;\n").unwrap();
+    git(&work, &["commit", "-q", "-am", "Change both over under"]);
+    client.send(b"\x1bd");
+    let screen = client.wait_text("against origin/under (no PR)");
+    assert!(!screen.iter().any(|l| l.contains("under.js")), "{screen:?}");
+    client.type_text("q");
+    back(&server);
+
+    // Another branch checked out at the same commit asks for its base
+    // again rather than take the one kept for the branch before it: with
+    // no upstream, the default branch, so under's commit is its own too.
+    git(&work, &["checkout", "-q", "-b", "same", "--no-track"]);
+    client.send(b"\x1bd");
+    let screen = client.wait_text("against origin/main (no PR)");
+    assert!(screen.iter().any(|l| l.contains("under.js")), "{screen:?}");
+    client.type_text("q");
+    back(&server);
+
+    // A branch with no PR and no upstream of its own names the default
+    // branch.
+    git(
+        &work,
+        &["checkout", "-q", "-b", "alone", "--no-track", "origin/main"],
+    );
+    std::fs::write(work.join("src/a.js"), "export const a = 5;\n").unwrap();
+    std::fs::write(work.join("src/b.js"), "export const b = 5;\n").unwrap();
+    git(&work, &["commit", "-q", "-am", "Change both alone"]);
+    client.send(b"\x1bd");
+    client.wait_text("against origin/main (no PR)");
+    client.type_text("q");
     back(&server);
 }
 

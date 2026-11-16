@@ -1077,8 +1077,12 @@ impl App {
     /// while its key is the same (the commits' own, for a change running to
     /// the working tree, so editing tells no new story), what isn't
     /// committed put in its last chapter again; else asked for, with no
-    /// cover over a diff already open.
-    fn refreshed(&mut self, change: Change) {
+    /// cover over a diff already open. What its base is to the branch is
+    /// the open change's, since it is read against the same base.
+    fn refreshed(&mut self, mut change: Change) {
+        if let Some(open) = &self.change {
+            change.why = open.why.clone();
+        }
         let keep = self.current().map(Entry::key);
         let was = self.at;
         // The view's file by key, read before the change is replaced.
@@ -4090,14 +4094,14 @@ fn load(dir: PathBuf, base: Option<String>, working: bool, uncommitted: bool, tx
             return Ok((Box::new(change), None));
         }
         let mut said = None;
-        let base = match base {
-            Some(b) => b,
-            None => match git::cached_base(&dir) {
-                Some(b) => b,
+        let (base, why) = match base {
+            Some(b) => (b, git::Why::Named),
+            None => match git::cached_for_opening(&dir) {
+                Some(kept) => kept,
                 None => {
-                    let _ = tx.send(Msg::Loading("Fetching the PR base branch...".into()));
+                    let _ = tx.send(Msg::Loading("Fetching the base branch...".into()));
                     let Some(found) = git::fetch_base(&dir) else {
-                        return Err("Couldn't work out the PR's base branch".into());
+                        return Err("Couldn't work out the branch's base".into());
                     };
                     if !found.fetched {
                         said = Some(format!(
@@ -4105,16 +4109,17 @@ fn load(dir: PathBuf, base: Option<String>, working: bool, uncommitted: bool, tx
                             found.base
                         ));
                     }
-                    found.base
+                    (found.base, found.why)
                 }
             },
         };
-        let change = if uncommitted {
+        let mut change = if uncommitted {
             git::read_to_work_tree(&facts.top, &base)
         } else {
             git::read_change(&facts.top, &base)
         }
         .map_err(|e| e.to_string())?;
+        change.why = why;
         Ok((Box::new(change), said))
     })();
     let nothing = result
@@ -4336,6 +4341,7 @@ mod tests {
         app.loaded(Change {
             top: PathBuf::from("/repo"),
             base: "origin/main".into(),
+            why: git::Why::default(),
             left: "L".into(),
             right: "R".into(),
             entries: vec![
@@ -4396,6 +4402,7 @@ mod tests {
         app.loaded(Change {
             top: PathBuf::from("/repo"),
             base: "origin/main".into(),
+            why: git::Why::default(),
             left: "L".into(),
             right: "R".into(),
             entries,
@@ -4678,6 +4685,7 @@ mod tests {
         app.loaded(Change {
             top: PathBuf::from("/repo"),
             base: "origin/main".into(),
+            why: git::Why::default(),
             left: "L".into(),
             right: "R".into(),
             entries,
@@ -4896,7 +4904,7 @@ mod tests {
             "{:?}",
             shown[0]
         );
-        assert!(shown[0].contains("vs origin/main"), "{:?}", shown[0]);
+        assert!(shown[0].contains("against origin/main"), "{:?}", shown[0]);
         assert!(shown[1].contains("a moves."), "{:?}", shown[1]);
         assert!(shown[2].contains("────"), "{:?}", shown[2]);
         assert!(shown[3].contains("src/a.js   +1 −1"), "{:?}", shown[3]);
@@ -5125,7 +5133,15 @@ mod tests {
         if let Some(u) = &mut moved.uncommitted {
             u.committed.diff = u.committed.diff.replace("+b = 2", "+b = 3");
         }
+        // What the base is to the branch stays the open change's.
+        if let Some(open) = &mut app.change {
+            open.why = git::Why::NoPr;
+        }
         app.refreshed(moved);
+        assert_eq!(
+            app.change.as_ref().unwrap().against(),
+            "against origin/main (no PR)"
+        );
         assert_eq!(
             app.telling,
             Telling::Untold("Haiku isn't asked here".into())
@@ -5556,6 +5572,7 @@ mod tests {
         app.loaded(Change {
             top: PathBuf::from("/repo"),
             base: "origin/main".into(),
+            why: git::Why::default(),
             left: "L".into(),
             right: "R".into(),
             entries: paths.iter().map(|p| entry(p, 'M', 1, 1)).collect(),
@@ -5758,6 +5775,7 @@ mod tests {
         app.loaded(Change {
             top: PathBuf::from("/repo"),
             base: "origin/main".into(),
+            why: git::Why::default(),
             left: "L".into(),
             right: "R".into(),
             entries: paths.iter().map(|p| entry(p, 'M', 1, 1)).collect(),
