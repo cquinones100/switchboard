@@ -119,7 +119,8 @@ pub enum Do {
         text: String,
     },
     /// The reply box for a Slack message, its thread or its conversation
-    /// (Settings' `slack_reply`), Send asked first.
+    /// (Settings' `slack_reply`), whose Send leaves a draft in Slack, or
+    /// asks first and sends (Settings' `slack_send_as`).
     SlackReply(Box<crate::day::slack_reply::Reply>),
     /// Every notification shown put away, each by its source and its own
     /// item, as dismissing it alone would.

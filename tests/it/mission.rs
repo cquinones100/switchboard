@@ -3778,10 +3778,18 @@ fn the_reminders_menu_shows_the_lists_a_narrow_screen_keeps_behind_i() {
 
 // The Slack reply box types as every box does: a line, S-Enter (as kitty's
 // keyboard protocol sends it, and as `ESC CR` from a terminal without it),
-// a dash and more words all land in it, and Enter sends them as typed.
+// a dash and more words all land in it, and Enter sends them as typed:
+// with "Slack messages go out as" at sent at once, after a yes, through
+// the connector's send tool alone.
 #[test]
 fn the_slack_reply_box_takes_s_enter_then_a_dash_and_the_words_after() {
     let server = TestServer::start();
+    let calls = slack_connector(
+        &server,
+        "mcp__claude_ai_Slack__slack_send_message",
+        "Message sent",
+        false,
+    );
     std::fs::create_dir_all(&server.state).unwrap();
     let secs = switchboard::util::now_ms() / 1000;
     std::fs::write(
@@ -3797,22 +3805,12 @@ fn the_slack_reply_box_takes_s_enter_then_a_dash_and_the_words_after() {
     settings(
         &server,
         json!({ "view_slack": true, "ux2": true, "slack_threads": false,
-            "slack_background": false, "photos": false, "slack_reply": true }),
+            "slack_background": false, "photos": false, "slack_reply": true,
+            "slack_send_as": "now" }),
     );
     let mut client = server.attach(204, 40);
-    client.wait_text("$");
-    open(&mut client);
-    client.type_text("vslack\r");
-    client.wait_text("a deploy question");
-    client.type_text("\r");
-    client.wait_text("Reply in Ben's thread");
-    client.type_text("\x1b[B");
-    client.wait_for("Reply in the thread chosen", |s| {
-        s.iter()
-            .any(|l| l.contains('›') && l.contains("Reply in Ben's thread"))
-    });
-    client.type_text("\r");
-    client.wait_text("Your reply");
+    slack_reply_box_open(&mut client);
+    client.wait_text("as you, from your Slack sign-in");
     client.type_text("On it");
     client.send(b"\x1b[13;2u");
     client.type_text("- the menu");
@@ -3829,7 +3827,196 @@ fn the_slack_reply_box_takes_s_enter_then_a_dash_and_the_words_after() {
     // Enter on the text sends, which asks before anything goes, with the
     // reply's first line.
     client.type_text("\r");
-    client.wait_text("\"On it\"");
+    let asked = client.wait_text("\"On it\"").join("\n");
+    assert!(asked.contains("[Y/n]"), "{asked}");
+    assert!(!calls.exists(), "nothing goes before the yes");
+    client.type_text("\r");
+    client.wait_text("Sent to #dev.");
+    let asked = std::fs::read_to_string(&calls).unwrap();
+    assert!(
+        asked.contains("ToolSearch,mcp__claude_ai_Slack__slack_send_message "),
+        "{asked}"
+    );
+    assert!(!asked.contains("slack_send_message_draft"), "{asked}");
+}
+
+/// A Claude whose Slack connector answers `tool` with `result` (an error
+/// of the tool's with `is_error`), in `server`'s home; gives the file it
+/// writes each prompt's arguments in, a line a call.
+fn slack_connector(
+    server: &TestServer,
+    tool: &str,
+    result: &str,
+    is_error: bool,
+) -> std::path::PathBuf {
+    let used = json!({ "type": "assistant", "message": { "content": [{
+        "type": "tool_use", "id": "t1", "name": tool, "input": {},
+    }] } });
+    let said = json!({ "type": "user", "message": { "content": [{
+        "type": "tool_result", "tool_use_id": "t1", "is_error": is_error,
+        "content": [{ "type": "text", "text": result }],
+    }] } });
+    let calls = server.home.join("connector-calls");
+    Claude::new()
+        .answer(&format!(
+            "case $CLAUDE_CALL in\n  print)\n    printf '%s\\n' \"$*\" >> {}\n    printf '%s\\n' {} {} ;;\nesac",
+            common::stand_in::sh_quote(&calls.to_string_lossy()),
+            common::stand_in::sh_quote(&used.to_string()),
+            common::stand_in::sh_quote(&said.to_string()),
+        ))
+        .install(&server.home.join("bin"));
+    calls
+}
+
+/// Opens the reply box on the thread of the Slack view's one message, from
+/// Ben. The server reads its settings again a moment after they are
+/// written, so the message's menu is opened again until it offers replies.
+fn slack_reply_box_open(client: &mut TestClient) {
+    client.wait_text("$");
+    open(client);
+    client.type_text("vslack\r");
+    client.wait_text("a deploy question");
+    let deadline = common::deadline(Duration::from_secs(10));
+    loop {
+        client.type_text("\r");
+        let menu = client.wait_text("Dismiss every message shown");
+        if menu.iter().any(|l| l.contains("Reply in Ben's thread")) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the menu offers no replies");
+        client.type_text("\x1b");
+        client.wait_for("the menu closed", |s| {
+            !s.iter().any(|l| l.contains("Dismiss every message shown"))
+        });
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    pick(client, "Reply in Ben's thread");
+}
+
+/// The Slack view with one message in #dev from Ben, replies on, and the
+/// reply box open on its thread with "On it" typed; gives the message's ts.
+fn slack_reply_typed(server: &TestServer, client: &mut TestClient) -> String {
+    slack_reply_box_open(client);
+    client.wait_text("as a draft in Slack, for you to send there");
+    client.type_text("On it");
+    client.wait_text("On it");
+    let kept = std::fs::read_to_string(server.state.join("slack.json")).unwrap();
+    let kept: Value = serde_json::from_str(&kept).unwrap();
+    kept["items"][0]["ts"].as_str().unwrap().to_string()
+}
+
+/// A server whose Slack view holds one message in #dev from Ben, with
+/// replies on and how they go out left at its default, a draft.
+fn slack_with_a_message() -> TestServer {
+    let server = TestServer::start();
+    std::fs::create_dir_all(&server.state).unwrap();
+    let secs = switchboard::util::now_ms() / 1000;
+    std::fs::write(
+        server.state.join("slack.json"),
+        json!({ "checked": secs * 1000, "items": [
+            { "kind": "channel", "channel": "C1", "from": "Ben", "where": "#dev",
+                "text": "a deploy question", "ts": format!("{}.000100", secs - 500),
+                "link": "https://acme.slack.com/archives/C1/p1" },
+        ] })
+        .to_string(),
+    )
+    .unwrap();
+    settings(
+        &server,
+        json!({ "view_slack": true, "ux2": true, "slack_threads": false,
+            "slack_background": false, "photos": false, "slack_reply": true }),
+    );
+    server
+}
+
+/// The lines of the test's desktop log that opened `url`.
+fn opened(server: &TestServer, url: &str) -> usize {
+    std::fs::read_to_string(server.home.join("desktop-log"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.contains(url))
+        .count()
+}
+
+// By default a reply leaves as a draft in Slack: Send makes it with the
+// connector's draft tool alone, asking nothing since nothing is sent,
+// opens the thread in Slack, and leaves a box saying where the draft is,
+// which offers to go there again.
+#[test]
+fn a_slack_reply_is_left_as_a_draft_in_slack_and_its_thread_opened() {
+    let server = slack_with_a_message();
+    let calls = slack_connector(
+        &server,
+        "mcp__claude_ai_Slack__slack_send_message_draft",
+        r#"{"channel_link":"https://acme.slack.com/archives/C1","draft_id":"Dr1"}"#,
+        false,
+    );
+    let mut client = server.attach(204, 40);
+    let ts = slack_reply_typed(&server, &mut client);
+    client.type_text("\r");
+    let screen = client.wait_text("Take me to the draft").join("\n");
+    assert!(screen.contains("Your reply is a draft in #dev"), "{screen}");
+    assert!(screen.contains("Send it from Slack."), "{screen}");
+    assert!(!screen.contains("[Y/n]"), "{screen}");
+    assert!(
+        screen.lines().any(|l| l.contains('›') && l.contains("OK")),
+        "OK is chosen as it opens: {screen}"
+    );
+    let asked = std::fs::read_to_string(&calls).unwrap();
+    assert_eq!(asked.lines().count(), 1, "{asked}");
+    assert!(
+        asked.contains("ToolSearch,mcp__claude_ai_Slack__slack_send_message_draft "),
+        "the draft tool alone: {asked}"
+    );
+    assert!(
+        asked.contains(&format!("\"thread_ts\":\"{ts}\"")),
+        "{asked}"
+    );
+    assert!(asked.contains("\"channel_id\":\"C1\""), "{asked}");
+    let thread = format!(
+        "https://acme.slack.com/archives/C1/p{}?thread_ts={ts}&cid=C1",
+        ts.replace('.', "")
+    );
+    assert_eq!(opened(&server, &thread), 1, "the thread, opened once");
+    pick(&mut client, "Take me to the draft");
+    let deadline = common::deadline(Duration::from_secs(10));
+    while opened(&server, &thread) < 2 {
+        assert!(Instant::now() < deadline, "the draft's link opened again");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        std::fs::read_to_string(&calls).unwrap().lines().count(),
+        1,
+        "no second draft"
+    );
+}
+
+// Slack keeps one draft a conversation: with one unsent there, the box
+// says so and offers to go to it, and the reply box comes back with what
+// was typed.
+#[test]
+fn a_draft_already_in_the_conversation_is_said_and_the_text_kept() {
+    let server = slack_with_a_message();
+    slack_connector(
+        &server,
+        "mcp__claude_ai_Slack__slack_send_message_draft",
+        "attached_draft_exists",
+        true,
+    );
+    let mut client = server.attach(204, 40);
+    slack_reply_typed(&server, &mut client);
+    client.type_text("\r");
+    let screen = client.wait_text("Take me to it").join("\n");
+    assert!(
+        screen.contains("Slack already has an unsent draft in this conversation"),
+        "{screen}"
+    );
+    assert_eq!(opened(&server, "acme.slack.com"), 0, "nothing opened");
+    client.type_text("\r");
+    let screen = client
+        .wait_text("as a draft in Slack, for you to send there")
+        .join("\n");
+    assert!(screen.contains("On it"), "the text kept: {screen}");
 }
 
 /// A Slack of the test's own for your own sign-in's calls, its token

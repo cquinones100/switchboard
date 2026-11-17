@@ -1658,6 +1658,24 @@ pub enum After {
         text: String,
         why: String,
     },
+    /// A Slack reply left as a draft in Slack: a box says where, and
+    /// offers to go there (`link`, when Slack gave one). `opening` is what
+    /// opening it said, when it didn't open.
+    SlackDrafted {
+        reply: Box<crate::day::slack_reply::Reply>,
+        link: Option<String>,
+        opening: Option<String>,
+    },
+    /// A draft Slack didn't make: a box says why, then the reply's box
+    /// again with the text kept.
+    SlackNoDraft {
+        reply: Box<crate::day::slack_reply::Reply>,
+        text: String,
+        why: String,
+        /// Slack already has an unsent draft there, which the box offers
+        /// to go to.
+        draft_there: bool,
+    },
     /// Linear has said which state closing a ticket moves it to: asked
     /// about first, since it changes Linear for everyone.
     CloseTicket {

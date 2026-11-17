@@ -4742,22 +4742,7 @@ impl Server {
                 // The busy box says where it is opening as soon as that is
                 // read, and lasts until the browser comes to the front.
                 let tx = self.tx.clone();
-                self.mission_busy(client, label, None, async move {
-                    let opened = tokio::task::spawn_blocking(move || {
-                        if crate::links::says_it() {
-                            let text = crate::links::opening_words(&url);
-                            let _ = tx.send(Event::Mission(MissionEvent::Relabel { client, text }));
-                        }
-                        crate::links::open_url_watched(&url)
-                    })
-                    .await;
-                    match opened {
-                        Ok(Ok(true)) => None,
-                        Ok(Ok(false)) => Some("The browser hasn't shown it yet.".into()),
-                        Ok(Err(e)) => Some(format!("Couldn't open it: {e}")),
-                        Err(e) => Some(format!("Couldn't open it: {e}")),
-                    }
-                });
+                self.mission_busy(client, label, None, open_under_busy(tx, client, url));
             }
             Do::ReadHere(url) => {
                 self.mission_close(client);
@@ -5216,10 +5201,12 @@ impl Server {
         self.refresh_sources(Some(crate::sources::INBOX));
     }
 
-    /// The Slack view's reply box (board 108), `text` typed to start with;
-    /// Send asks first (board 109), naming who can read it, and a no comes
-    /// back to the box with the text kept. Only a yes sends, the text as
-    /// typed, to the conversation and thread the item named.
+    /// The Slack view's reply box (board 108), `text` typed to start with.
+    /// Send leaves the text, as typed, as Settings' `slack_send_as` says,
+    /// for the conversation and thread the item named: as a draft in Slack
+    /// (board 109), with nothing asked since nothing is sent, or at once,
+    /// which asks first, naming who can read it, a no coming back to the
+    /// box with the text kept, and only a yes sending.
     pub(crate) fn slack_reply_box(
         &mut self,
         client: ClientId,
@@ -5237,7 +5224,10 @@ impl Server {
         text: &str,
         failed: Option<String>,
     ) {
-        let boxed = super::reply_box::ReplyBox::new(reply.clone(), text).failed(failed);
+        use crate::day::slack_reply::Way;
+        let boxed = super::reply_box::ReplyBox::new(reply.clone(), text)
+            .failed(failed)
+            .as_draft(Way::now() == Way::Draft);
         self.open(
             client,
             Box::new(boxed),
@@ -5246,6 +5236,11 @@ impl Server {
                     return;
                 };
                 let text = p.query;
+                // As the setting says now, were it changed under the box.
+                if Way::now() == Way::Draft {
+                    server.slack_reply_deliver(client, reply, text, Way::Draft);
+                    return;
+                }
                 let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
                 let quoted = format!("\"{}\"", crate::ui::draw::cut(first, 60));
                 let question = Confirm::new(reply.question()).list(vec![reply.readers(), quoted]);
@@ -5254,33 +5249,123 @@ impl Server {
                         server.slack_reply_box(client, reply, &text);
                         return;
                     }
-                    server.mission_busy_with(client, "Sending it", async move {
-                        let sent =
-                            crate::day::slack_reply::send(&crate::day::ClaudeNow, &reply, &text)
-                                .await;
-                        match sent {
-                            Ok(ts) => (
-                                Some(format!("Sent to {}.", reply.place)),
-                                Some(After::SlackReplied {
-                                    channel: reply.channel.clone(),
-                                    thread: reply.thread.clone(),
-                                    ts,
-                                    shown: reply.shown.clone(),
-                                }),
-                            ),
-                            Err(e) => (
-                                None,
-                                Some(After::SlackReplyAgain {
-                                    reply: Box::new(reply),
-                                    text,
-                                    why: e,
-                                }),
-                            ),
-                        }
-                    });
+                    server.slack_reply_deliver(client, reply, text, Way::Now);
                 });
             })),
         );
+    }
+
+    /// Leaves `text` for where `reply` says, as `way` says, through
+    /// `slack_reply::deliver`, the one way a message leaves as you. A draft
+    /// made: its conversation opened in Slack, the thread for a thread's
+    /// reply, so the draft is in front of you, and the box left behind
+    /// saying where it is. Sent: said, and what came before it read. Not
+    /// delivered: said why, the reply's box back with the text kept.
+    fn slack_reply_deliver(
+        &mut self,
+        client: ClientId,
+        reply: crate::day::slack_reply::Reply,
+        text: String,
+        way: crate::day::slack_reply::Way,
+    ) {
+        use crate::day::slack_reply::{Delivered, Way, deliver};
+        let tx = self.tx.clone();
+        let label = match way {
+            Way::Draft => "Making the draft",
+            Way::Now => "Sending it",
+        };
+        self.mission_busy_with(client, label, async move {
+            match deliver(&crate::day::ClaudeNow, &reply, &text, way).await {
+                Ok(Delivered::Drafted(link)) => {
+                    let opening = match link.clone() {
+                        Some(link) => open_under_busy(tx, client, link).await,
+                        None => None,
+                    };
+                    let drafted = After::SlackDrafted {
+                        reply: Box::new(reply),
+                        link,
+                        opening,
+                    };
+                    (None, Some(drafted))
+                }
+                Ok(Delivered::Sent(ts)) => (
+                    Some(format!("Sent to {}.", reply.place)),
+                    Some(After::SlackReplied {
+                        channel: reply.channel.clone(),
+                        thread: reply.thread.clone(),
+                        ts,
+                        shown: reply.shown.clone(),
+                    }),
+                ),
+                Err(none) if way == Way::Draft => (
+                    None,
+                    Some(After::SlackNoDraft {
+                        reply: Box::new(reply),
+                        text,
+                        why: none.why,
+                        draft_there: none.draft_there,
+                    }),
+                ),
+                Err(none) => (
+                    None,
+                    Some(After::SlackReplyAgain {
+                        reply: Box::new(reply),
+                        text,
+                        why: none.why,
+                    }),
+                ),
+            }
+        });
+    }
+
+    /// The box a draft leaves behind: where it is, "OK" chosen, and "Take
+    /// me to the draft", which opens it again.
+    fn slack_drafted(
+        &mut self,
+        client: ClientId,
+        reply: crate::day::slack_reply::Reply,
+        link: Option<String>,
+        opening: Option<String>,
+    ) {
+        let mut body = reply.drafted();
+        if let Some(said) = opening {
+            body.push_str(&format!("\n{said}"));
+        }
+        let mut options = vec![MenuOption::new("OK")];
+        if link.is_some() {
+            options.push(MenuOption::new("Take me to the draft"));
+        }
+        let menu = Menu::new("A draft in Slack", options).body(body);
+        self.choose(client, menu, move |server, client, chose| {
+            if let (Some(1), Some(link)) = (chose, link) {
+                server.mission_do(client, Do::Open(link), "Take me to the draft");
+            }
+        });
+    }
+
+    /// The box a draft Slack didn't make leaves: why, and, where a draft
+    /// is already there, "Take me to it"; then the reply's box again with
+    /// the text kept.
+    fn slack_no_draft(
+        &mut self,
+        client: ClientId,
+        reply: crate::day::slack_reply::Reply,
+        text: String,
+        why: String,
+        draft_there: bool,
+    ) {
+        let there = reply.link.clone().filter(|_| draft_there);
+        let mut options = vec![MenuOption::new("OK")];
+        if there.is_some() {
+            options.push(MenuOption::new("Take me to it"));
+        }
+        let menu = Menu::new("No draft made", options).body(why);
+        self.choose(client, menu, move |server, client, chose| {
+            server.slack_reply_box(client, reply, &text);
+            if let (Some(1), Some(link)) = (chose, there) {
+                server.mission_do(client, Do::Open(link), "Take me to it");
+            }
+        });
     }
 
     /// What a busy option leaves the server to do once it has answered.
@@ -5305,6 +5390,17 @@ impl Server {
             After::SlackReplyAgain { reply, text, why } => {
                 self.slack_reply_box_with(client, *reply, &text, Some(why))
             }
+            After::SlackDrafted {
+                reply,
+                link,
+                opening,
+            } => self.slack_drafted(client, *reply, link, opening),
+            After::SlackNoDraft {
+                reply,
+                text,
+                why,
+                draft_there,
+            } => self.slack_no_draft(client, *reply, text, why, draft_there),
             After::Tickets => {
                 self.refresh_sources(Some(crate::sources::TICKETS));
                 self.refresh_sources(Some(crate::sources::INBOX));
@@ -8285,6 +8381,30 @@ fn jump_key(m: &mut Mission, k: Key) {
             .position(|n| n.starts_with(&text))
             .or_else(|| names.iter().position(|n| n.contains(&text)))
     };
+}
+
+/// Opens `url` under a busy box, which says where it is opening as soon as
+/// that is read and lasts until the browser comes to the front; gives what
+/// to say when it didn't open or hasn't shown yet.
+async fn open_under_busy(
+    tx: tokio::sync::mpsc::UnboundedSender<Event>,
+    client: ClientId,
+    url: String,
+) -> Option<String> {
+    let opened = tokio::task::spawn_blocking(move || {
+        if crate::links::says_it() {
+            let text = crate::links::opening_words(&url);
+            let _ = tx.send(Event::Mission(MissionEvent::Relabel { client, text }));
+        }
+        crate::links::open_url_watched(&url)
+    })
+    .await;
+    match opened {
+        Ok(Ok(true)) => None,
+        Ok(Ok(false)) => Some("The browser hasn't shown it yet.".into()),
+        Ok(Err(e)) => Some(format!("Couldn't open it: {e}")),
+        Err(e) => Some(format!("Couldn't open it: {e}")),
+    }
 }
 
 #[cfg(test)]

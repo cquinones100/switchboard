@@ -7,9 +7,11 @@
 //! too, pressed with Enter or Space, or a click; Esc cancels. Nothing is
 //! sent from here alone:
 //! Send closes it with what was typed (`Outcome::Picked`, its query the
-//! text, as typed), and the server asks before sending (board 109), coming
-//! back here with the text kept on a no, and on a send that failed, saying
-//! why in the box. New with UX 2.0, with no
+//! text, as typed), and the server makes a draft of it in Slack (board
+//! 109) or, with Settings' `slack_send_as` at once, asks before sending,
+//! coming back here with the text kept on a no, and on a draft or a send
+//! that failed, saying why in the box for a send. Its last row says which
+//! of the two Send does. New with UX 2.0, with no
 //! tmux-version file behind it.
 
 use ratatui::buffer::Buffer;
@@ -52,6 +54,8 @@ pub struct ReplyBox {
     field_lines: std::ops::Range<usize>,
     /// Why the last Send didn't send, when it didn't.
     failed: Option<String>,
+    /// Send makes a draft in Slack, rather than sending.
+    draft: bool,
     focus: Part,
     hover: Option<Part>,
     drawn: Option<Drawn>,
@@ -70,6 +74,7 @@ impl ReplyBox {
             field: Field::new().multi_line().keep_tabs().with_text(text),
             field_lines: 0..0,
             failed: None,
+            draft: false,
             focus: Part::Text,
             hover: None,
             drawn: None,
@@ -81,6 +86,12 @@ impl ReplyBox {
     /// The box again after a Send that failed, saying why.
     pub fn failed(mut self, why: Option<String>) -> ReplyBox {
         self.failed = why;
+        self
+    }
+
+    /// The box whose Send makes a draft in Slack (`draft`), or sends.
+    pub fn as_draft(mut self, draft: bool) -> ReplyBox {
+        self.draft = draft;
         self
     }
 
@@ -213,7 +224,11 @@ impl ReplyBox {
         let cancel = kit::button(" Cancel ", None, press(Part::Cancel), false, theme);
         let send = kit::button(" Send ", None, press(Part::Send), false, theme);
         let (cw, sw) = (kit::spans_width(&cancel), kit::spans_width(&send));
-        let note = " as you, from your Slack sign-in";
+        let note = if self.draft {
+            " as a draft in Slack, for you to send there"
+        } else {
+            " as you, from your Slack sign-in"
+        };
         let gap = inner.saturating_sub(draw::width(note) + cw + sw + 3);
         let mut row = vec![
             Span::styled(note, Tone::Faint.style(theme)),
@@ -358,6 +373,7 @@ mod tests {
             text: "can you look at the RSVP menu?".into(),
             replies: Some(3),
             shown: None,
+            link: None,
         }
     }
 
@@ -395,6 +411,17 @@ mod tests {
         assert!(text.contains("Your reply"), "{text}");
         assert!(text.contains("Send"), "{text}");
         assert!(text.contains("Cancel"), "{text}");
+    }
+
+    #[test]
+    fn its_last_row_says_whether_send_makes_a_draft() {
+        let text = text_of(&mut ReplyBox::new(reply(), "").as_draft(true));
+        assert!(
+            text.contains("as a draft in Slack, for you to send there"),
+            "{text}"
+        );
+        let text = text_of(&mut ReplyBox::new(reply(), ""));
+        assert!(text.contains("as you, from your Slack sign-in"), "{text}");
     }
 
     #[test]

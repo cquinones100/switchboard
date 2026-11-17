@@ -448,8 +448,25 @@
     "key": "slack_reply",
     "category": "Mission control: Slack",
     "label": "Reply from the Slack view",
-    "description": "A Slack message's Enter menu in the Slack view offers to reply in its thread or its channel, or in its DM: a box to type in, and Send asks before anything goes, naming who can read it, then sends your words as typed through Claude's Slack connector. Off, as it is by default since it sends your words to Slack, the menu offers no replies",
+    "description": "A Slack message's Enter menu in the Slack view offers to reply in its thread or its channel, or in its DM: a box to type in, and Send leaves your words as typed, through Claude's Slack connector, as Slack messages go out as says: a draft in Slack for you to send there, or sent at once after asking, naming who can read it. Off, as it is by default since it sends your words to Slack, the menu offers no replies",
     "default": false
+  },
+  {
+    "key": "slack_send_as",
+    "category": "Mission control: Slack",
+    "label": "Slack messages go out as",
+    "description": "How a message Switchboard sends as you leaves, the Slack view's reply among them: a draft in Slack, made in the conversation's composer through Claude's Slack connector with nothing asked first, the conversation then opened in Slack for you to send it there, since a message the connector sends carries a Sent using Claude line that Slack adds and a draft you send carries none; sent at once, after a question naming who can read it, with that line",
+    "choices": [
+      {
+        "value": "draft",
+        "label": "a draft in Slack"
+      },
+      {
+        "value": "now",
+        "label": "sent at once"
+      }
+    ],
+    "default": "draft"
   },
   {
     "key": "slack_reminders",

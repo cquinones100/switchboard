@@ -20,7 +20,8 @@
 //!   the next meeting, RSVP.
 //! - `changes`: what changed on today's calendar since you last looked.
 //! - `slack`, `slack_look`: the Slack view, its saved look, and the look.
-//! - `slack_reply`: a reply sent from the Slack view, asked first.
+//! - `slack_reply`: a reply from the Slack view, left as a draft in Slack
+//!   or sent at once, asked first.
 //! - `slack_thread`: the chosen message's thread and its pictures.
 //! - `slack_user`: Slack with your own token, for your reminders and for
 //!   marking what you open read in Slack.
