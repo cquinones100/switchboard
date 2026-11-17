@@ -1472,7 +1472,7 @@ fn program_line(args: &[String], own_exe: &str) -> String {
     // (`--dir=/…`). Nothing after a `:`, which may name a path on another
     // host (`scp host:/…`).
     let short = |arg: &String| match arg.split_once('=') {
-        Some((key, value)) if value.starts_with('/') => {
+        Some((key, value)) if key.starts_with('-') && value.starts_with('/') => {
             format!("{key}={}", crate::paths::tilde(value))
         }
         _ if arg.starts_with('/') => crate::paths::tilde(arg),
@@ -1513,6 +1513,10 @@ mod tests {
         assert_eq!(
             line(&["node", &format!("--dir={home}/code")]),
             "node --dir=~/code"
+        );
+        assert_eq!(
+            line(&["grep", &format!("p={home}/x")]),
+            format!("grep p={home}/x")
         );
         assert_eq!(
             line(&["scp", &format!("host:{home}/f"), "."]),
