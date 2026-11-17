@@ -1508,9 +1508,10 @@ fn program_line(args: &[String], own_exe: &str) -> String {
 
 /// A title a program wrote over its arguments (npm on Linux: `npm exec
 /// @scope/x` all in its first one), as its program and the rest; `None`
-/// for a first argument that is a path or a word alone.
+/// for a word alone or a path, one with a space in a folder's name
+/// included (`./Build Tools/bin/worker`), whose first word holds a `/`.
 fn title_of(first: &str) -> Option<(&str, &str)> {
-    first.split_once(' ').filter(|_| !first.starts_with('/'))
+    first.split_once(' ').filter(|(exe, _)| !exe.contains('/'))
 }
 
 /// Text cut to `cols` columns from its left, an `…` in front, so a path
@@ -1573,6 +1574,7 @@ mod tests {
             format!("scp host:{home}/f .")
         );
         assert_eq!(line(&["lazygit"]), "lazygit");
+        assert_eq!(line(&["./Build Tools/bin/worker", "-v"]), "worker -v");
         assert_eq!(
             line(&["npm exec @angular/cli serve"]),
             "npm exec @angular/cli serve"

@@ -151,7 +151,7 @@ fn closing_a_busy_pane_asks_first() {
         panes(&list) == 2 && right_pane_at_prompt(s) && is_shell(&front_command(&list))
     });
     // Started by its path, it is listed by its name.
-    client.type_text("/bin/sleep 100\r");
+    client.type_text("\"$(command -v sleep)\" 100\r");
     client.wait_for("sleep in front", |_| {
         front_command(&server.list()) == "sleep"
     });
