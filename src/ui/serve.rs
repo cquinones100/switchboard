@@ -1436,9 +1436,13 @@ fn program_line(args: &[String]) -> String {
         return String::new();
     };
     let name = program_name(first);
+    let mode = rest.get(1).map(String::as_str);
     let app = match (name.as_str(), rest.first().map(String::as_str)) {
         ("switchboard-notes", _) | ("switchboard", Some("notes")) => Some("Notes"),
         ("switchboard-diff", _) | ("switchboard", Some("diff")) => Some("the diff"),
+        ("switchboard", Some("pr-view")) if mode == Some("--checks") => {
+            Some("the PR's failing checks")
+        }
         ("switchboard", Some("pr-view")) => Some("the PR view"),
         ("switchboard", Some("ticket-view")) => Some("the ticket view"),
         ("switchboard", Some("link-view")) => Some("the link view"),
@@ -1447,11 +1451,12 @@ fn program_line(args: &[String]) -> String {
     if let Some(app) = app {
         return app.to_string();
     }
-    let words = std::iter::once(name).chain(rest.iter().map(|arg| match arg.split_once('=') {
-        Some((key, value)) if value.starts_with('/') => {
-            format!("{key}={}", crate::paths::tilde(value))
+    // A path is an argument of its own, or attached to an option after `=`
+    // or `:` (`--dir=/…`, `-javaagent:/…`).
+    let words = std::iter::once(name).chain(rest.iter().map(|arg| match arg.find('/') {
+        Some(at) if at == 0 || arg[..at].ends_with(['=', ':']) => {
+            format!("{}{}", &arg[..at], crate::paths::tilde(&arg[at..]))
         }
-        _ if arg.starts_with('/') => crate::paths::tilde(arg),
         _ => arg.clone(),
     }));
     draw::cut(&words.collect::<Vec<_>>().join(" "), 60)
@@ -1487,11 +1492,19 @@ mod tests {
             line(&["node", &format!("--dir={home}/code")]),
             "node --dir=~/code"
         );
+        assert_eq!(
+            line(&["java", &format!("-javaagent:{home}/a.jar")]),
+            "java -javaagent:~/a.jar"
+        );
         assert_eq!(line(&["lazygit"]), "lazygit");
         let bin = format!("{home}/.local/bin/switchboard");
         assert_eq!(line(&[&bin, "notes", "--tab"]), "Notes");
         assert_eq!(line(&[&bin, "diff"]), "the diff");
         assert_eq!(line(&[&bin, "pr-view", "/x"]), "the PR view");
+        assert_eq!(
+            line(&[&bin, "pr-view", "--checks", "/x"]),
+            "the PR's failing checks"
+        );
         assert_eq!(line(&[&bin, "tabs"]), "switchboard tabs");
         let long = line(&["/bin/sleep", &"9".repeat(80)]);
         assert_eq!(draw::width(&long), 60);
