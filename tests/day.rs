@@ -582,6 +582,7 @@ fn a_reply_from_the_slack_view_goes_as_typed_to_its_thread_and_marks_it_read() {
             down: None,
             now: at,
             threads: &threads,
+            yours: Default::default(),
         })
     };
     let item = view(now).items.remove(0);

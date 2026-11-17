@@ -109,8 +109,15 @@ pub enum Do {
     PasteToTab(Handoff),
     /// A new tab whose Claude is told what an item is about.
     TabFor(Handoff),
-    /// Slack messages dismissed until their threads get more.
+    /// Slack messages dismissed until their threads get more, and Slack
+    /// reminders until Slack no longer lists them as due.
     SlackDismiss(Vec<Item>),
+    /// One of your Slack reminders marked complete in Slack, asked first:
+    /// its ID and what it says.
+    SlackReminderDone {
+        id: String,
+        text: String,
+    },
     /// The reply box for a Slack message, its thread or its conversation
     /// (Settings' `slack_reply`), Send asked first.
     SlackReply(Box<crate::day::slack_reply::Reply>),
@@ -334,6 +341,8 @@ pub fn handoff(source: &str, item: &Item, ctx: &Ctx<'_>) -> Option<Handoff> {
     };
     let handoff = match source {
         "habits" | "behind" => return None,
+        // A reminder is yours alone, with no thread to read.
+        "slack" if item.data.get("reminder").is_some() => return None,
         "slack" => {
             let who = slack_who(item);
             Handoff {
@@ -1254,6 +1263,27 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
                 out.push(choice('y', "Copy its link", Do::Copy(url)));
             }
         }
+        // One of your reminders: completing it in Slack, asked first,
+        // where Slack lists it, then dismissing it here.
+        ViewId::Slack if item.data.get("reminder").is_some() => {
+            let id = text(&item.data, "/reminder").to_string();
+            out.push(choice(
+                'c',
+                "Mark it complete",
+                Do::SlackReminderDone {
+                    id,
+                    text: whole(item),
+                },
+            ));
+            if let Target::Url(url) = &item.target {
+                out.push(choice('o', "Open it in Slack", Do::Open(url.clone())));
+            }
+            out.push(choice(
+                'x',
+                "Dismiss it",
+                Do::SlackDismiss(vec![item.clone()]),
+            ));
+        }
         // Opening it, replying (board 107), a tab for its thread, sending
         // it to a tab, its link, then dismissing.
         ViewId::Slack => {
@@ -1747,15 +1777,15 @@ pub fn item_body(view: &ViewId, item: &Item) -> Option<String> {
     Some(body).filter(|b| !b.is_empty())
 }
 
-/// The Slack message an item's menu marks seen whatever is picked in it: the
-/// Slack view's item, or its notification.
+/// The Slack message, or reminder, an item's menu marks seen whatever is
+/// picked in it: the Slack view's item, or its notification.
 pub fn is_slack_message(view: &ViewId, item: &Item) -> bool {
     let from_slack = match view {
         ViewId::Slack => true,
         ViewId::Notifications => notices::view_of(&notice_of(item).0) == Some(ViewId::Slack),
         _ => false,
     };
-    from_slack && item.data.get("message").is_some()
+    from_slack && (item.data.get("message").is_some() || item.data.get("reminder").is_some())
 }
 
 /// What a notification's menu puts away after whatever is picked in it:
@@ -1800,6 +1830,8 @@ pub fn led_to_words(
         Do::SlackReply(_) => "you chose to reply".into(),
         // Said once Linear answers (`After::DropInbox`).
         Do::MarkRead(_) => return None,
+        // Asked for: it asks first, and may be told no.
+        Do::SlackReminderDone { .. } => "you chose to mark it complete in Slack".into(),
         Do::CloseTicket { .. } => "you chose to close it in Linear".into(),
         Do::Rsvp(_, answer) => match answer {
             crate::day::calendar::Rsvp::Yes => "you chose yes".into(),
@@ -2393,6 +2425,47 @@ mod tests {
         );
         let choices = item_choices(&ViewId::Ci, &ci(false), &[], &ctx(&tabs, &repo));
         assert_eq!(keys(&choices), "cgovpy", "no log kept, nothing to read");
+    }
+
+    #[test]
+    fn a_slack_reminder_offers_completing_it_opening_it_and_dismissing_it() {
+        let tabs: Vec<TabModel> = Vec::new();
+        let repo = |_: &Path| Vec::new();
+        let ctx = ctx(&tabs, &repo);
+        let mut reminder = Item::new("reminder:Rm1", "◷ Reminder · due")
+            .target(Target::Url("https://app.slack.com/client/T1/later".into()))
+            .data(json!({ "kind": "reminder", "reminder": "Rm1", "old": false }));
+        reminder.lines = vec!["water".into(), "the plants".into()];
+        let choices = item_choices(&ViewId::Slack, &reminder, &[], &ctx);
+        assert_eq!(
+            choices.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(),
+            ["Mark it complete", "Open it in Slack", "Dismiss it"]
+        );
+        assert_eq!(
+            choices[0].act,
+            Do::SlackReminderDone {
+                id: "Rm1".into(),
+                text: "water\nthe plants".into()
+            }
+        );
+        assert_eq!(choices[2].act, Do::SlackDismiss(vec![reminder.clone()]));
+        assert!(is_slack_message(&ViewId::Slack, &reminder));
+        // Its notification: shown in the view first, never handed to a tab.
+        let mut notice = reminder.clone();
+        notice.id = "slack\treminder:Rm1".into();
+        let labels: Vec<String> = notice_choices(&notice, &ctx)
+            .into_iter()
+            .map(|c| c.label)
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                "Show it in the Slack view",
+                "Mark it complete",
+                "Open it in Slack",
+                "Dismiss it"
+            ]
+        );
     }
 
     #[test]

@@ -822,6 +822,10 @@ impl Server {
             .filter(|v| super::render::slack_board_shown(m, v))
             .cloned()
         else {
+            // The board isn't in front, so it shows no thread: a Slack
+            // cell without the focus, among views shown at once, has no
+            // message chosen.
+            self.slack_pane_shows(None);
             m.slack_thread_open = false;
             // The plain list shows the whole look, so leaving marks it all
             // seen, whatever the board showed before or after.
@@ -843,6 +847,11 @@ impl Server {
                 .flat_map(|i| super::slack_board::members(&view.data.items[i]))
                 .map(|item| (item.id.clone(), item)),
         );
+        // Its thread beside the list, or in its place: opened once it has
+        // shown a moment.
+        let pane_shown = settings::is_on("slack_threads")
+            && (super::slack_board::beside(m.laid().0 as usize) || m.slack_thread_open);
+        self.slack_pane_shows(m.chosen_item().filter(|_| pane_shown));
         let extras = self.slack_extras(m.chosen_item());
         let (thread, pictures) = (extras.thread, extras.pictures);
         m.snap.slack_thread_failed = extras.failed;
@@ -3692,6 +3701,10 @@ impl Server {
             return;
         }
         let body = choices::item_body(view, &item);
+        // Opened in the Slack view: read in Slack too, while that is on.
+        if *view == ViewId::Slack {
+            self.slack_item_opened(&item);
+        }
         // A Slack message acted on, whatever was picked, is seen.
         let seen = choices::is_slack_message(view, &item);
         // A notification is dismissed after whatever is picked in its menu.
@@ -4893,6 +4906,27 @@ impl Server {
                 });
             }
             Do::SlackReply(reply) => self.slack_reply_box(client, *reply, ""),
+            // It changes your reminders in Slack, so it asks first.
+            Do::SlackReminderDone { id, text } => {
+                let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+                let quoted = format!("\"{}\"", crate::ui::draw::cut(first, 60));
+                let question =
+                    Confirm::new("Mark this reminder complete in Slack?").list(vec![quoted]);
+                self.ask(client, question, move |server, client, yes| {
+                    if !yes {
+                        return;
+                    }
+                    server.mission_busy_with(client, "Marking it complete", async move {
+                        match crate::day::slack_user::complete(&id).await {
+                            Ok(()) => (
+                                Some("Marked complete in Slack.".into()),
+                                Some(After::SlackReminderDone(id)),
+                            ),
+                            Err(e) => (Some(format!("Couldn't mark it complete: {e}")), None),
+                        }
+                    });
+                });
+            }
             Do::SlackDismiss(items) => {
                 self.slack_dismiss(&items);
                 self.mission_note(client, "Dismissed.");
@@ -5241,6 +5275,7 @@ impl Server {
                 self.mission_revived(true);
             }
             After::Calendar => self.calendar_reread(),
+            After::SlackReminderDone(id) => self.slack_reminder_done(&id),
             After::SlackReplied {
                 channel,
                 thread,

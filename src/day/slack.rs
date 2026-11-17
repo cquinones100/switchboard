@@ -17,6 +17,12 @@
 //! One message acted on from its menu is seen on its own
 //! (`slack-seen-items.json`), and one dismissed is gone until something
 //! newer comes in its thread (`slack-dismissed.json`), both kept two days.
+//!
+//! With a Slack sign-in of your own (`slack_user`), the view also lists
+//! your reminders that are due, as items of kind "reminder" under the
+//! messages' own order (new ones needing you), and says on a message's row
+//! when marking it read in Slack failed; without one, while either is on,
+//! it says once how to sign in (`head.note`).
 
 use std::path::{Path, PathBuf};
 
@@ -263,6 +269,71 @@ pub struct Look<'a> {
     /// The threads kept (`slack_thread`), for each message's reply count,
     /// as the server last read them off its task.
     pub threads: &'a std::collections::BTreeMap<String, super::slack_thread::Thread>,
+    /// What only your own Slack sign-in gives (`slack_user`).
+    pub yours: Yours<'a>,
+}
+
+/// What the view shows from your own Slack sign-in.
+#[derive(Clone, Copy, Default)]
+pub struct Yours<'a> {
+    /// The reminders due, as last read, while Settings' `slack_reminders`
+    /// is on and there is a sign-in.
+    pub reminders: Option<&'a super::slack_user::Reminders>,
+    /// Where "Open it in Slack" takes a reminder.
+    pub later: Option<&'a str>,
+    /// What to say under the view's header: how to sign in, with none.
+    pub note: Option<&'a str>,
+    /// The messages that couldn't be marked read in Slack, `<channel>:<ts>`,
+    /// each with why.
+    pub mark_failed: Option<&'a std::collections::HashMap<String, String>>,
+}
+
+/// The reminders due as the view's items: new until seen in the view,
+/// then faded, the dismissed ones left out.
+fn reminder_items(yours: &Yours) -> Vec<(bool, i64, Item)> {
+    let Some(kept) = yours.reminders else {
+        return Vec::new();
+    };
+    kept.reminders
+        .iter()
+        .filter(|r| !kept.dismissed.contains(&r.id))
+        .map(|r| {
+            let old = kept.seen.contains(&r.id);
+            let time = r.time * 1000;
+            let mut item = Item::new(
+                format!("reminder:{}", r.id),
+                // Its words never change with the time, so its notification
+                // is one notification however long it stays due.
+                format!("◷ Reminder · due{}", if old { " · seen" } else { "" }),
+            )
+            .detail(r.text.split_whitespace().collect::<Vec<_>>().join(" "))
+            .state(if old { State::Idle } else { State::Attention })
+            .time(time)
+            .data(json!({
+                "kind": "reminder",
+                "old": old,
+                "reminder": r.id,
+                "from": "Reminder",
+                "where": "Reminders",
+                "ts": format!("{}.000000", r.time),
+            }));
+            item.lines = r.text.split('\n').map(str::to_string).collect();
+            if let Some(later) = yours.later {
+                item = item.target(Target::Url(later.to_string()));
+            }
+            (old, time, item)
+        })
+        .collect()
+}
+
+/// The view's head: what it says under its header.
+fn head_note(head: &mut Value, yours: &Yours) {
+    if let Some(note) = yours.note {
+        if !head.is_object() {
+            *head = json!({});
+        }
+        head["note"] = json!(note);
+    }
 }
 
 /// The Slack view: always there, saying, before anything is saved, that a
@@ -277,7 +348,16 @@ pub struct Look<'a> {
 /// new, faded (`State::Idle`), with "· seen" after the title. With nothing to
 /// list, `at` says when it last looked (`empty_words`).
 pub fn slack_view(look: &Look) -> ViewData {
-    let Some(data) = read(look.state) else {
+    let reminders = reminder_items(&look.yours);
+    let saved = read(look.state);
+    // Reminders alone, before any look at the messages is saved, are
+    // listed as of when they were read.
+    let Some(data) = saved.clone().or_else(|| {
+        (!reminders.is_empty()).then(|| Saved {
+            checked: look.yours.reminders.map_or(0, |r| r.checked),
+            ..Saved::default()
+        })
+    }) else {
         let note = if look.background {
             look.down
                 .clone()
@@ -288,8 +368,16 @@ pub fn slack_view(look: &Look) -> ViewData {
             "Nothing saved yet: resume the Slack routine in mission control's Routines view, which looks every 15 minutes, or turn on Settings' \"Slack without a tab\"."
                 .into()
         };
+        let mut head = Value::Null;
+        head_note(&mut head, &look.yours);
+        // Your reminders' look failing is said here too, with what to do.
+        let note = match look.yours.reminders.and_then(|r| r.error.as_ref()) {
+            Some(why) => format!("{note} Couldn't read your Slack reminders: {why}"),
+            None => note,
+        };
         return ViewData {
             error: Some(note),
+            head,
             ..ViewData::default()
         };
     };
@@ -368,9 +456,19 @@ pub fn slack_view(look: &Look) -> ViewData {
             if let Some(link) = &m.link {
                 item = item.target(Target::Url(link.clone()));
             }
+            // Said on its row, after the one more try.
+            if let Some(why) = look
+                .yours
+                .mark_failed
+                .and_then(|failed| failed.get(&format!("{}:{}", m.channel, m.ts)))
+            {
+                item.data["mark_failed"] = json!(why);
+                item.more = vec![format!("Couldn't mark it read in Slack: {why}")];
+            }
             (old, time, item)
         })
         .collect();
+    items.extend(reminders);
     items.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
     let catching = if look.background {
         "mission control looks every minute while you're here"
@@ -381,20 +479,19 @@ pub fn slack_view(look: &Look) -> ViewData {
     };
     // Its connector down says so first: nothing else will fix it.
     let error = look.down.clone().filter(|_| look.background).or_else(|| {
-        stale(Some(&data), look.now).then(|| {
+        stale(saved.as_ref(), look.now).then(|| {
             format!(
                 "Out of date, last looked {} ago: {catching}.",
                 ago(data.checked.div_euclid(1000), look.now)
             )
         })
     });
-    ViewData {
-        items: items.into_iter().map(|(_, _, i)| i).collect(),
-        error,
-        at: Some(data.checked),
-        // Since when replies are new, for the thread beside the list, and
-        // the threads read since on their own.
-        head: json!({
+    // Your reminders' look failing says so when nothing else is wrong.
+    let error = error.or_else(|| {
+        let why = look.yours.reminders?.error.as_ref()?;
+        Some(format!("Couldn't read your Slack reminders: {why}"))
+    });
+    let mut head = json!({
             "seen": seen,
             // The messages seen on their own, `<channel>:<ts>`, for the
             // thread beside the list.
@@ -403,7 +500,15 @@ pub fn slack_view(look: &Look) -> ViewData {
                 .iter()
                 .filter_map(|(k, at)| Some((k.strip_prefix("thread:")?.to_string(), at.clone())))
                 .collect::<Map<String, Value>>(),
-        }),
+    });
+    head_note(&mut head, &look.yours);
+    ViewData {
+        items: items.into_iter().map(|(_, _, i)| i).collect(),
+        error,
+        at: Some(data.checked),
+        // Since when replies are new, for the thread beside the list, and
+        // the threads read since on their own.
+        head,
         ..ViewData::default()
     }
 }
@@ -665,6 +770,7 @@ mod tests {
             down: None,
             threads: &Default::default(),
             now,
+            yours: Yours::default(),
         })
         .items
         .into_iter()
@@ -687,6 +793,7 @@ mod tests {
             down: None,
             threads: &Default::default(),
             now,
+            yours: Yours::default(),
         });
         assert_eq!(
             empty.error.as_deref(),
@@ -716,6 +823,7 @@ mod tests {
             down: None,
             threads: &Default::default(),
             now,
+            yours: Yours::default(),
         });
         let got: Vec<(&str, Option<&Target>)> = view
             .items
@@ -797,6 +905,7 @@ mod tests {
             down: None,
             threads: &Default::default(),
             now: reply_at + 3_600_000,
+            yours: Yours::default(),
         });
         assert_eq!(
             old.error.as_deref(),
@@ -804,6 +913,119 @@ mod tests {
                 "Out of date, last looked 1h ago: mission control looks every minute while you're here."
             )
         );
+        let _ = std::fs::remove_dir_all(state.parent().unwrap());
+    }
+
+    #[test]
+    fn your_reminders_due_are_listed_new_until_seen_and_a_failed_mark_is_said() {
+        use crate::day::slack_user::{Reminder, Reminders};
+        let (state, relay) = dirs("yours");
+        let now = 1_800_000_000_000;
+        let kept = Reminders {
+            checked: now - 30_000,
+            reminders: vec![
+                Reminder {
+                    id: "Rm1".into(),
+                    text: "water\nthe plants".into(),
+                    time: now / 1000 - 600,
+                },
+                Reminder {
+                    id: "Rm2".into(),
+                    text: "seen already".into(),
+                    time: now / 1000 - 7200,
+                },
+                Reminder {
+                    id: "Rm3".into(),
+                    text: "dismissed".into(),
+                    time: now / 1000 - 60,
+                },
+            ],
+            seen: vec!["Rm2".into()],
+            dismissed: vec!["Rm3".into()],
+            error: None,
+        };
+        let failed: std::collections::HashMap<String, String> =
+            [("C1:1799999900.000100".to_string(), "no network".to_string())].into();
+        let view = |yours: Yours| {
+            slack_view(&Look {
+                state: &state,
+                background: true,
+                looping: false,
+                down: None,
+                threads: &Default::default(),
+                now,
+                yours,
+            })
+        };
+        // With no sign-in, the view says how to sign in, and lists nothing.
+        let none = view(Yours {
+            note: Some(crate::day::slack_user::NO_SIGN_IN),
+            ..Yours::default()
+        });
+        assert_eq!(none.head["note"], crate::day::slack_user::NO_SIGN_IN);
+        assert!(none.items.is_empty());
+        // A look at your reminders that failed says so, before anything
+        // is saved.
+        let failing = Reminders {
+            error: Some("no network".into()),
+            ..Reminders::default()
+        };
+        let said = view(Yours {
+            reminders: Some(&failing),
+            ..Yours::default()
+        });
+        assert_eq!(
+            said.error.as_deref(),
+            Some(
+                "Nothing saved yet: mission control is looking. Couldn't read your Slack reminders: no network"
+            )
+        );
+        // Reminders alone are listed before any look at the messages.
+        let yours = Yours {
+            reminders: Some(&kept),
+            later: Some("https://app.slack.com/client/T1/later"),
+            note: None,
+            mark_failed: Some(&failed),
+        };
+        let alone = view(yours);
+        assert_eq!(alone.at, Some(now - 30_000));
+        assert_eq!(alone.error, None);
+        assert_eq!(
+            alone
+                .items
+                .iter()
+                .map(|i| i.title.as_str())
+                .collect::<Vec<_>>(),
+            ["◷ Reminder · due", "◷ Reminder · due · seen"]
+        );
+        let first = &alone.items[0];
+        assert_eq!(first.id, "reminder:Rm1");
+        assert_eq!(first.state, State::Attention);
+        assert_eq!(first.detail, "water the plants");
+        assert_eq!(first.lines, ["water", "the plants"]);
+        assert_eq!(first.data["old"], false);
+        assert_eq!(
+            first.target,
+            Target::Url("https://app.slack.com/client/T1/later".into())
+        );
+        // Among the messages, and a message that couldn't be marked read
+        // says so.
+        save(
+            &state,
+            &relay,
+            &json!({ "items": [{ "kind": "dm", "channel": "C1", "where": "Bo", "user": "U9", "from": "Bo", "text": "hi", "ts": "1799999900.000100" }] }),
+            now,
+        )
+        .unwrap();
+        let both = view(yours);
+        assert_eq!(both.items.len(), 3);
+        let message = both
+            .items
+            .iter()
+            .find(|i| i.id == "C1:1799999900.000100")
+            .unwrap();
+        assert_eq!(message.data["mark_failed"], "no network");
+        assert_eq!(message.more, ["Couldn't mark it read in Slack: no network"]);
         let _ = std::fs::remove_dir_all(state.parent().unwrap());
     }
 

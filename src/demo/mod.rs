@@ -74,6 +74,8 @@ pub const SETTINGS: &[(&str, &str)] = &[
     ("auto_restore", "false"),
     ("keep_awake", "false"),
     ("slack_background", "false"),
+    // Your own Slack sign-in, which the demo has none of.
+    ("slack_reminders", "false"),
     ("search_slack", "false"),
     ("standup_note", "false"),
     ("standup_summary", "false"),

@@ -3825,3 +3825,241 @@ fn the_slack_reply_box_takes_s_enter_then_a_dash_and_the_words_after() {
     client.type_text("\r");
     client.wait_text("\"On it\"");
 }
+
+/// A Slack of the test's own for your own sign-in's calls, its token
+/// `xoxp-test`, and a server that reaches it with that token, signed in.
+fn slack_signed_in(
+    answer: impl Fn(&common::http::Request) -> Option<common::http::Reply> + Send + Sync + 'static,
+    signed_in: bool,
+) -> (common::http::Fake, TestServer) {
+    let slack = common::http::Fake::start(
+        common::http::Service::Slack {
+            token: "xoxp-test".into(),
+        },
+        answer,
+    );
+    let server = TestServer::start_with_env(&[
+        ("SWITCHBOARD_SLACK_API", &format!("{}/api", slack.url)),
+        ("SWITCHBOARD_SLACK_USER_TOKEN", "xoxp-test"),
+    ]);
+    std::fs::create_dir_all(&server.state).unwrap();
+    if signed_in {
+        std::fs::write(
+            server.state.join("slack-user.json"),
+            json!({ "team": "T1", "url": "https://example.slack.com/", "user": "U1" }).to_string(),
+        )
+        .unwrap();
+    }
+    (slack, server)
+}
+
+/// The calls a stand-in Slack was asked, each as its method and API method.
+fn slack_calls(slack: &common::http::Fake) -> Vec<String> {
+    slack
+        .seen()
+        .iter()
+        .map(|r| format!("{} {}", r.method, r.path().trim_start_matches("/api/")))
+        .collect()
+}
+
+// With your own Slack sign-in, the Slack view lists your reminders that
+// are due under Reminders, a completed one left out, and "Mark it
+// complete" marks one complete in Slack only after a yes.
+#[test]
+fn your_slack_reminders_are_listed_and_marked_complete_after_a_yes() {
+    let secs = switchboard::util::now_ms() / 1000;
+    let (slack, server) = slack_signed_in(
+        move |request| {
+            let body = match request.path() {
+                "/api/reminders.list" => json!({ "ok": true, "reminders": [
+                    { "id": "Rm1", "text": "water the plants", "time": secs - 600, "complete_ts": 0 },
+                    { "id": "Rm2", "text": "already done", "time": secs - 900, "complete_ts": secs - 60 },
+                ] }),
+                "/api/reminders.complete" => json!({ "ok": true }),
+                _ => return None,
+            };
+            Some(common::http::Reply::json(200, body))
+        },
+        true,
+    );
+    std::fs::write(
+        server.state.join("slack.json"),
+        json!({ "checked": secs * 1000, "items": [
+            { "kind": "mention", "channel": "C1", "where": "#dev", "from": "Ada", "user": "UAda",
+              "text": "mention words", "ts": format!("{}.000100", secs - 300) },
+        ] })
+        .to_string(),
+    )
+    .unwrap();
+    settings(
+        &server,
+        json!({ "view_slack": true, "ux2": true, "slack_threads": false, "slack_reminders": true, "photos": false }),
+    );
+    let mut client = server.attach(204, 40);
+    client.wait_text("$");
+    open(&mut client);
+    client.wait_for("the views grouped", |s| {
+        s.iter().any(|l| l.starts_with(" WORK ")) && s.iter().any(|l| l.starts_with(" SYSTEM "))
+    });
+    client.type_text("vslack\r");
+    // Going to the view reads the reminders, which get a section.
+    client.wait_text("◷ Reminders");
+    client.type_text("h");
+    client.type_text("j");
+    let screen = client.wait_text("water the plants");
+    let all = screen.join("\n");
+    assert!(!all.contains("already done"), "a completed one: {all}");
+    assert!(!all.contains("need your Slack sign-in"), "signed in: {all}");
+    // Its menu: completing it asks first, and a yes tells Slack.
+    client.type_text("l");
+    client.type_text("\r");
+    pick(&mut client, "Mark it complete");
+    client.wait_text("Mark this reminder complete in Slack?");
+    assert!(
+        !slack_calls(&slack)
+            .iter()
+            .any(|c| c.ends_with("reminders.complete")),
+        "nothing before the yes"
+    );
+    client.type_text("\r");
+    let deadline = common::deadline(Duration::from_secs(10));
+    while !slack_calls(&slack)
+        .iter()
+        .any(|c| c == "POST reminders.complete")
+    {
+        assert!(
+            Instant::now() < deadline,
+            "asked: {:?}",
+            slack_calls(&slack)
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let asked = slack.seen();
+    let completed = asked
+        .iter()
+        .find(|r| r.path() == "/api/reminders.complete")
+        .unwrap();
+    assert_eq!(completed.json(), json!({ "reminder": "Rm1" }));
+    // Off the view at once.
+    client.wait_for("the reminder gone", |s| {
+        !s.join("\n").contains("water the plants")
+    });
+}
+
+// Enter on a message in the Slack view marks its conversation read in
+// Slack up to it, only with "Mark what you open read in Slack" on, and
+// only past where Slack has it read.
+#[test]
+fn opening_a_slack_message_marks_it_read_in_slack_only_with_the_setting_on() {
+    let secs = switchboard::util::now_ms() / 1000;
+    let ts = format!("{}.000100", secs - 300);
+    let (slack, server) = slack_signed_in(
+        |request| {
+            let body = match request.path() {
+                "/api/conversations.info" => {
+                    json!({ "ok": true, "channel": { "id": "D1", "last_read": "1.000000" } })
+                }
+                "/api/conversations.mark" => json!({ "ok": true }),
+                _ => return None,
+            };
+            Some(common::http::Reply::json(200, body))
+        },
+        true,
+    );
+    std::fs::write(
+        server.state.join("slack.json"),
+        json!({ "checked": secs * 1000, "items": [
+            { "kind": "dm", "channel": "D1", "where": "Bo", "from": "Bo", "user": "UBo",
+              "text": "dm words", "ts": ts, "link": "https://slack.example/m" },
+        ] })
+        .to_string(),
+    )
+    .unwrap();
+    let with = |mark: bool| {
+        settings(
+            &server,
+            json!({ "view_slack": true, "ux2": true, "slack_threads": false, "slack_mark_read": mark, "photos": false }),
+        );
+    };
+    with(false);
+    let mut client = server.attach(204, 40);
+    client.wait_text("$");
+    open(&mut client);
+    client.wait_for("the views grouped", |s| {
+        s.iter().any(|l| l.starts_with(" WORK ")) && s.iter().any(|l| l.starts_with(" SYSTEM "))
+    });
+    client.type_text("vslack\r");
+    client.wait_text("dm words");
+    // Off: its menu opens, and Slack hears nothing.
+    client.type_text("\r");
+    client.wait_text("Open it in Slack");
+    client.type_text("\x1b");
+    std::thread::sleep(Duration::from_millis(500) * common::patience());
+    assert_eq!(slack_calls(&slack), Vec::<String>::new());
+    // On: opening it again marks it read up to it.
+    with(true);
+    let deadline = common::deadline(Duration::from_secs(15));
+    loop {
+        client.type_text("\r");
+        client.wait_text("Open it in Slack");
+        client.type_text("\x1b");
+        std::thread::sleep(Duration::from_millis(300) * common::patience());
+        if slack_calls(&slack)
+            .iter()
+            .any(|c| c == "POST conversations.mark")
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "asked: {:?}",
+            slack_calls(&slack)
+        );
+    }
+    assert_eq!(
+        slack_calls(&slack),
+        ["GET conversations.info", "POST conversations.mark"],
+        "once, however often it is opened"
+    );
+    let asked = slack.seen();
+    assert_eq!(asked[0].target, "/api/conversations.info?channel=D1");
+    assert_eq!(asked[1].json(), json!({ "channel": "D1", "ts": ts }));
+}
+
+// With no Slack sign-in of your own, the Slack view says how to make one
+// on a line under its header, lists its messages as before, and asks Slack
+// nothing.
+#[test]
+fn without_a_slack_sign_in_the_slack_view_says_how_to_make_one_and_asks_nothing() {
+    let secs = switchboard::util::now_ms() / 1000;
+    let (slack, server) = slack_signed_in(|_| None, false);
+    std::fs::write(
+        server.state.join("slack.json"),
+        json!({ "checked": secs * 1000, "items": [
+            { "kind": "dm", "channel": "D1", "where": "Bo", "from": "Bo", "user": "UBo",
+              "text": "dm words", "ts": format!("{}.000100", secs - 300) },
+        ] })
+        .to_string(),
+    )
+    .unwrap();
+    settings(
+        &server,
+        json!({ "view_slack": true, "ux2": true, "slack_threads": false, "slack_reminders": true,
+            "slack_mark_read": true, "photos": false }),
+    );
+    let mut client = server.attach(204, 40);
+    client.wait_text("$");
+    open(&mut client);
+    client.wait_for("the views grouped", |s| {
+        s.iter().any(|l| l.starts_with(" WORK ")) && s.iter().any(|l| l.starts_with(" SYSTEM "))
+    });
+    client.type_text("vslack\r");
+    let screen = client.wait_text(
+        "Slack reminders and read marks need your Slack sign-in: switchboard setup slack-user",
+    );
+    assert!(screen.join("\n").contains("dm words"));
+    client.type_text("\r");
+    client.wait_text("Dismiss it, until its thread gets a reply");
+    std::thread::sleep(Duration::from_millis(500) * common::patience());
+    assert_eq!(slack_calls(&slack), Vec::<String>::new());
+}

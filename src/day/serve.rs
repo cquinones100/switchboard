@@ -15,6 +15,12 @@
 //! The connectors down are asked about again here too, as soon as `/mcp`
 //! writes Claude Code's config, and every minute while the Slack view shows
 //! Slack missing (`connector::Watch`), so a reconnect shows in seconds.
+//!
+//! With a Slack sign-in of your own (`slack_user`), your reminders are
+//! read every `slack_user::REMINDERS_MS` while you're here and when you go
+//! to the Slack view, and a message whose thread you open there is marked
+//! read in Slack (Settings' `slack_mark_read`), each in a task of its own,
+//! where the token is read.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -25,7 +31,8 @@ use serde_json::Value;
 
 use super::calendar::{self, CalEvent, Feed, Fetched, SavedDay};
 use super::{
-    Claude, ClaudeAsk, Dirs, changes, log, new_notes, slack, slack_look, slack_thread, standup,
+    Claude, ClaudeAsk, Dirs, changes, log, new_notes, slack, slack_look, slack_thread, slack_user,
+    standup,
 };
 use crate::connector::Connection;
 use crate::items::{Item, ViewData};
@@ -50,6 +57,15 @@ pub enum DayEvent {
     ),
     /// A kept Slack picture decoded, by its file's ID.
     SlackPicture(String, Option<image::RgbaImage>),
+    /// Your Slack reminders read, with a line for the log.
+    SlackReminders(Result<String, String>),
+    /// A message marked read in Slack, or why it couldn't be: whether the
+    /// mark moved, since Slack may have had it read already.
+    SlackMarked {
+        channel: String,
+        ts: String,
+        result: Result<bool, String>,
+    },
     /// A connector down asked about again at `at`, with what Claude Code
     /// said of it; `client` the one that asked by hand, else the watch did.
     Connector {
@@ -117,6 +133,21 @@ pub struct Day {
     slack_thread_failed: HashMap<String, (i64, String)>,
     /// The files that failed to read, until one is read.
     slack_file_failed: HashMap<String, String>,
+    /// When your Slack reminders were last asked for, and whether they
+    /// are being read.
+    reminders_asked: Option<i64>,
+    reminders_busy: bool,
+    /// How far each conversation was last marked read in Slack from here
+    /// (or is being), by its ts, and when: the same message opened again
+    /// within `SLACK_MARK_AGAIN_MS` asks Slack nothing, and after it asks
+    /// again, since you may have marked it unread there since.
+    slack_marked: HashMap<String, (f64, i64)>,
+    /// The messages that couldn't be marked read, `<channel>:<ts>`, each
+    /// with why, until one in its conversation is.
+    slack_mark_failed: HashMap<String, String>,
+    /// The message whose thread the Slack board shows, `(channel, ts)`,
+    /// since when, and whether it has been marked read for it.
+    slack_pane: Option<((String, String), i64, bool)>,
     /// When to ask about the connectors down again, whether the watch's
     /// asking is under way, and when a view showing each service missing
     /// was last in front.
@@ -155,6 +186,13 @@ const SLACK_FIRST_MS: i64 = 11_000;
 const MINUTE_MS: i64 = 60_000;
 // Going to the Slack view asks for a look when the last is older than this.
 const SLACK_NOW_MS: i64 = 60_000;
+/// How long a message's thread shows on the Slack board before it counts
+/// as opened, and is marked read in Slack.
+const SLACK_PANE_READ_MS: i64 = 2_000;
+const REMINDERS_FIRST_MS: i64 = 13_000;
+/// How long a mark made from here stands before the same message opened
+/// again asks Slack how far you have read once more.
+const SLACK_MARK_AGAIN_MS: i64 = 60_000;
 /// How long a view showing a connector missing counts as in front after
 /// mission control last made it ready.
 const SHOWN_FOR_MS: i64 = 10_000;
@@ -228,6 +266,26 @@ impl Server {
             )
         {
             self.look_at_slack();
+        }
+        if !away
+            && due(
+                self.day.reminders_asked,
+                slack_user::REMINDERS_MS,
+                started,
+                REMINDERS_FIRST_MS,
+                ms,
+            )
+        {
+            self.read_reminders();
+        }
+        // A thread shown on the Slack board long enough is opened.
+        if let Some((message, since, marked)) = &mut self.day.slack_pane
+            && !*marked
+            && ms - *since >= SLACK_PANE_READ_MS
+        {
+            *marked = true;
+            let (channel, ts) = message.clone();
+            self.slack_mark_read(&channel, &ts);
         }
         self.connectors_tick(ms);
         if due(self.day.minute, MINUTE_MS, started, 9_000, ms) {
@@ -342,6 +400,36 @@ impl Server {
                     }
                 }
             }
+            DayEvent::SlackReminders(result) => {
+                self.day.reminders_busy = false;
+                match result {
+                    Ok(line) => log(&dirs.state, &line),
+                    Err(e) => log(&dirs.state, &format!("slack: reminders: {e}")),
+                }
+            }
+            DayEvent::SlackMarked {
+                channel,
+                ts,
+                result,
+            } => match result {
+                Ok(moved) => {
+                    if moved {
+                        log(&dirs.state, &format!("slack: marked {channel} read"));
+                    }
+                    let of_channel = format!("{channel}:");
+                    self.day
+                        .slack_mark_failed
+                        .retain(|key, _| !key.starts_with(&of_channel));
+                }
+                Err(why) => {
+                    log(&dirs.state, &format!("slack: marking {channel}: {why}"));
+                    // Opening it again tries again.
+                    self.day.slack_marked.remove(&channel);
+                    self.day
+                        .slack_mark_failed
+                        .insert(format!("{channel}:{ts}"), why);
+                }
+            },
             DayEvent::Connector {
                 service,
                 at,
@@ -447,6 +535,13 @@ impl Server {
     pub fn slack_opened(&mut self) {
         let dirs = Dirs::here();
         let ms = util::now_ms();
+        if self
+            .day
+            .reminders_asked
+            .is_none_or(|at| ms - at >= SLACK_NOW_MS)
+        {
+            self.read_reminders();
+        }
         if slack::read(&dirs.state).is_some_and(|d| ms - d.checked < SLACK_NOW_MS)
             || self
                 .day
@@ -512,6 +607,18 @@ impl Server {
     /// Leaving the Slack view: what its look brought is seen, or with
     /// `only`, those messages alone (the board showed no others).
     pub fn slack_left(&mut self, only: Option<Vec<Item>>) {
+        self.day.slack_pane = None;
+        let reminders_of = |items: &[Item]| -> Vec<String> {
+            items
+                .iter()
+                .filter_map(|i| i.data.get("reminder")?.as_str().map(str::to_string))
+                .collect()
+        };
+        let seen = reminders_of(only.as_deref().unwrap_or(&self.day.slack.items));
+        if !seen.is_empty() {
+            let ids: Vec<&str> = seen.iter().map(String::as_str).collect();
+            slack_user::mark_seen(&Dirs::here().state, &ids);
+        }
         if let Some(items) = only {
             let dirs = Dirs::here();
             let now = util::now_ms();
@@ -563,7 +670,83 @@ impl Server {
                 let get = |k: &str| m.get(k).and_then(Value::as_str).unwrap_or("");
                 slack::mark_item_seen(&dirs.state, get("channel"), get("ts"), util::now_ms());
             }
+            if let Some(id) = item.data.get("reminder").and_then(Value::as_str) {
+                slack_user::mark_seen(&dirs.state, &[id]);
+            }
         }
+        self.day_views(&dirs, &util::local_now());
+    }
+
+    /// A message whose thread was opened in the Slack view (Enter on it, or
+    /// its thread shown a moment on the board): marked read in Slack up to
+    /// it, off the task, while Settings' `slack_mark_read` is on and there
+    /// is a sign-in. One marked that far from here within the last minute
+    /// is left alone.
+    pub fn slack_mark_read(&mut self, channel: &str, ts: &str) {
+        let Ok(at) = ts.parse::<f64>() else {
+            return;
+        };
+        let now = util::now_ms();
+        if !settings::is_on("slack_mark_read")
+            || channel.is_empty()
+            || tokio::runtime::Handle::try_current().is_err()
+            || self
+                .day
+                .slack_marked
+                .get(channel)
+                .is_some_and(|(to, when)| *to >= at && now - *when < SLACK_MARK_AGAIN_MS)
+            || slack_user::signed_in(&Dirs::here().state).is_none()
+        {
+            return;
+        }
+        self.day.slack_marked.insert(channel.to_string(), (at, now));
+        let (channel, ts, tx) = (channel.to_string(), ts.to_string(), self.tx.clone());
+        tokio::spawn(async move {
+            let result = slack_user::mark_read(&channel, &ts).await;
+            let _ = tx.send(Event::Day(DayEvent::SlackMarked {
+                channel,
+                ts,
+                result,
+            }));
+        });
+    }
+
+    /// The Slack view's item opened with Enter: its message marked read in
+    /// Slack, as `slack_mark_read` says. A thread's row is its newest
+    /// message.
+    pub fn slack_item_opened(&mut self, item: &Item) {
+        if let Some(m) = item.data.get("message") {
+            let get = |k: &str| m.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+            self.slack_mark_read(&get("channel"), &get("ts"));
+        }
+    }
+
+    /// The message whose thread the Slack board shows beside its list (or
+    /// in its place), or `None` while it shows none: once it has shown for
+    /// `SLACK_PANE_READ_MS`, the tick marks it read in Slack.
+    pub fn slack_pane_shows(&mut self, item: Option<&Item>) {
+        let message = item.and_then(|i| {
+            let m = i.data.get("message")?;
+            let get = |k: &str| m.get(k).and_then(Value::as_str).map(str::to_string);
+            Some((get("channel")?, get("ts")?))
+        });
+        match (message, &self.day.slack_pane) {
+            (Some(m), Some((shown, _, _))) if m == *shown => {}
+            (Some(m), _) => self.day.slack_pane = Some((m, util::now_ms(), false)),
+            (None, _) => self.day.slack_pane = None,
+        }
+    }
+
+    /// Your reminder `id` marked complete in Slack: off the view at once.
+    pub fn slack_reminder_done(&mut self, id: &str) {
+        let dirs = Dirs::here();
+        slack_user::drop_reminder(&dirs.state, id);
+        self.notice_history_mark(
+            "slack",
+            &format!("reminder:{id}"),
+            crate::sidebar::history::Sidebar::Read,
+            true,
+        );
         self.day_views(&dirs, &util::local_now());
     }
 
@@ -609,6 +792,12 @@ impl Server {
             .filter_map(|i| serde_json::from_value(i.data.get("message")?.clone()).ok())
             .collect();
         slack::dismiss(&dirs.state, &refs, util::now_ms());
+        for id in items
+            .iter()
+            .filter_map(|i| i.data.get("reminder")?.as_str())
+        {
+            slack_user::dismiss(&dirs.state, id);
+        }
         self.day_views(&dirs, &util::local_now());
         // Dismissed in the history too, however seeing them on the way
         // and their list changing left them there.
@@ -647,6 +836,9 @@ impl Server {
                     .and_then(|m| serde_json::from_value::<slack::Ref>(m.clone()).ok())
                 {
                     slack::dismiss(&dirs.state, &[r], util::now_ms());
+                }
+                if let Some(id) = item.data.get("reminder").and_then(Value::as_str) {
+                    slack_user::dismiss(&dirs.state, id);
                 }
             }
             "calendar" => {
@@ -993,6 +1185,27 @@ impl Server {
         });
     }
 
+    // Your Slack reminders read off the task, one read at a time, while
+    // Settings' `slack_reminders` and the Slack view are on and there is a
+    // sign-in (a small file, so no token is asked for on the task).
+    fn read_reminders(&mut self) {
+        self.day.reminders_asked = Some(util::now_ms());
+        if self.day.reminders_busy
+            || !settings::is_on("slack_reminders")
+            || !settings::is_on("view_slack")
+            || tokio::runtime::Handle::try_current().is_err()
+            || slack_user::signed_in(&Dirs::here().state).is_none()
+        {
+            return;
+        }
+        self.day.reminders_busy = true;
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = slack_user::look(&Dirs::here().state, util::now_ms()).await;
+            let _ = tx.send(Event::Day(DayEvent::SlackReminders(result)));
+        });
+    }
+
     fn look_at_slack(&mut self) {
         self.day.slack_asked = Some(util::now_ms());
         if self.day.slack_busy || tokio::runtime::Handle::try_current().is_err() {
@@ -1114,6 +1327,16 @@ impl Server {
             moves: &moves,
         });
         let background = settings::is_on("slack_background");
+        // What your own Slack sign-in adds, from two small files.
+        let signed_in = slack_user::signed_in(&dirs.state);
+        let reminders_on = settings::is_on("slack_reminders");
+        let reminders = signed_in
+            .as_ref()
+            .filter(|_| reminders_on)
+            .and_then(|_| slack_user::read_reminders(&dirs.state));
+        let later = signed_in.as_ref().and_then(slack_user::SignIn::later);
+        let needs_sign_in =
+            signed_in.is_none() && (reminders_on || settings::is_on("slack_mark_read"));
         let slack = slack::slack_view(&slack::Look {
             state: &dirs.state,
             background,
@@ -1123,6 +1346,12 @@ impl Server {
                 .flatten(),
             now: ms,
             threads: &self.day.slack_threads,
+            yours: slack::Yours {
+                reminders: reminders.as_ref(),
+                later: later.as_deref(),
+                note: needs_sign_in.then_some(slack_user::NO_SIGN_IN),
+                mark_failed: Some(&self.day.slack_mark_failed),
+            },
         });
         if settings::is_on("slack_threads") {
             self.slack_threads_changed(dirs);

@@ -2909,6 +2909,22 @@ fn list(
             );
         }
     }
+    // The Slack view's line on what your own sign-in would add.
+    if let Some(note) = data
+        .head
+        .get("note")
+        .and_then(serde_json::Value::as_str)
+        .filter(|_| view.id == ViewId::Slack)
+    {
+        for w in text::wrap(note, cols.saturating_sub(4)) {
+            lines.push(
+                Row::default()
+                    .put(format!("  {w}"), fg(theme.dim))
+                    .take()
+                    .line(cols, None),
+            );
+        }
+    }
     if !view.loaded {
         lines.push(
             Row::default()

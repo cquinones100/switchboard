@@ -22,6 +22,8 @@
 //! - `slack`, `slack_look`: the Slack view, its saved look, and the look.
 //! - `slack_reply`: a reply sent from the Slack view, asked first.
 //! - `slack_thread`: the chosen message's thread and its pictures.
+//! - `slack_user`: Slack with your own token, for your reminders and for
+//!   marking what you open read in Slack.
 //! - `standup`: the note written for you. Today's todo note and the
 //!   meeting notes are starter routines now (src/routines/starters.rs).
 //! - `new_notes`: the notifications for them until you read them.
@@ -38,6 +40,7 @@ pub mod slack;
 pub mod slack_look;
 pub mod slack_reply;
 pub mod slack_thread;
+pub mod slack_user;
 pub mod standup;
 
 use std::future::Future;

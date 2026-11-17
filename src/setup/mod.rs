@@ -47,6 +47,10 @@
 //! plugin; after a yes, taking out what it put in your files isn't asked
 //! about again.
 //!
+//! `switchboard setup slack-user` is apart from the parts (`slack_user`):
+//! it asks for a Slack user token of your own and stores it as a secret,
+//! so it runs only when named, alone.
+//!
 //! What the parts write is compiled into the binary, so a binary built from
 //! a clone brings new skills, hooks and settings that reach the plugin and
 //! `~/.claude` only through a run of setup (or, for the plugin, the
@@ -64,6 +68,7 @@ pub mod optional;
 pub mod permissions;
 pub mod plugin;
 pub mod skills;
+pub mod slack_user;
 pub mod terminal;
 pub mod way;
 
@@ -170,6 +175,7 @@ fn part_named(name: &str) -> Option<&'static Part> {
 /// `switchboard setup`.
 pub fn main(args: Vec<String>) -> ExitCode {
     let mut check = false;
+    let mut slack_sign_in = false;
     let mut named = Vec::new();
     for arg in &args {
         match arg.as_str() {
@@ -194,6 +200,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
                 usage();
                 return ExitCode::SUCCESS;
             }
+            "slack-user" | "slack_user" => slack_sign_in = true,
             other => match part_named(other) {
                 Some(part) => named.push(part),
                 None => {
@@ -206,6 +213,16 @@ pub fn main(args: Vec<String>) -> ExitCode {
                 }
             },
         }
+    }
+    // It stores a token, so it has no dry run and runs with no part.
+    if slack_sign_in {
+        if check || !named.is_empty() {
+            eprintln!(
+                "slack-user runs alone: it asks for a token and stores it, so it takes no --check and no other part"
+            );
+            return ExitCode::from(1);
+        }
+        return slack_user::main();
     }
     if named.is_empty() {
         return guided(check);
@@ -238,6 +255,8 @@ fn usage() {
     for part in PARTS {
         println!("  {:10} {}", part.name, part.about);
     }
+    println!("\nAnd one apart from them, run only when named:\n");
+    println!("  {:10} {}", "slack-user", slack_user::ABOUT);
 }
 
 /// Runs one part, its changes under its name, or `<name>: up to date` when

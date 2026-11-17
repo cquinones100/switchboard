@@ -309,7 +309,7 @@ impl ViewId {
                 "Each tab M-p's \"Remind me about this tab later\" set, with the time left, on a month with UX 2.0. Enter goes to the tab. Settings' \"Reminders\" (reminders)."
             }
             ViewId::Slack => {
-                "From the last day: direct messages and mentions first, then replies in your threads and the channels in slack-updates.json. Enter opens one in Slack or a tab for its thread. Settings' \"Slack\" (view_slack)."
+                "From the last day: direct messages and mentions first, then replies in your threads and the channels in slack-updates.json; with your own Slack sign-in (switchboard setup slack-user), your reminders that are due too. Enter opens one in Slack or a tab for its thread, or marks a reminder complete. Settings' \"Slack\" (view_slack)."
             }
             ViewId::Relay => {
                 "Whether the relay runs and what it sent today, then each kind of message it sends (prompts, finished turns, stuck tabs, commits and pushes, failures, full context, notices) with where it goes: Notify, Thread only or Off, three presets, autopilot's tabs and quiet hours. Settings' \"Slack relay\" (view_relay)."

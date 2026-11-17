@@ -1530,6 +1530,8 @@ pub enum After {
     Tickets,
     /// An invitation answered: the calendar feed read again.
     Calendar,
+    /// One of your Slack reminders marked complete: off the view at once.
+    SlackReminderDone(String),
     /// A Slack reply sent: what came before it in its conversation and
     /// thread read, and the look made again so the reply shows.
     SlackReplied {

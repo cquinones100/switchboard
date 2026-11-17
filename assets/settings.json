@@ -452,6 +452,20 @@
     "default": false
   },
   {
+    "key": "slack_reminders",
+    "category": "Mission control: Slack",
+    "label": "Slack reminders in the Slack view",
+    "description": "With a Slack sign-in of your own (switchboard setup slack-user), the Slack view lists your Slack reminders that are due under Reminders, read from Slack every two minutes while you're here, with their notifications among the view's; a reminder's menu marks it complete in Slack after asking. Without a sign-in the view says how to make one. Off, no reminders are read or listed",
+    "default": true
+  },
+  {
+    "key": "slack_mark_read",
+    "category": "Mission control: Slack",
+    "label": "Mark what you open read in Slack",
+    "description": "With a Slack sign-in of your own (switchboard setup slack-user), a message whose thread you open in the Slack view (Enter on it, or its thread shown for two seconds) is marked read in Slack up to it, unless you have read further there. Off, as it is by default since it changes what Slack shows you as unread, opening a message marks it seen only here",
+    "default": false
+  },
+  {
     "key": "view_reopen",
     "category": "Mission control: Reopen",
     "label": "Reopen",

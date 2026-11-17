@@ -65,6 +65,9 @@ pub const QUIET: &[(&str, bool)] = &[
     ("standup_note", false),
     ("standup_summary", false),
     ("slack_background", false),
+    // Your Slack reminders too, without which the Slack view says how to
+    // sign in to Slack.
+    ("slack_reminders", false),
     ("keep_awake", false),
     ("turn_summaries", false),
 ];

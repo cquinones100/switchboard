@@ -1,7 +1,8 @@
 //! UX 2.0's Slack view, board 21 of the canvas ("Slack: what is new for
 //! you, by section as Slack's sidebar lists them, newest first in each"):
 //! a column of sections as Slack's own sidebar lists them (Mentions,
-//! Threads, each direct message by its people, each channel by its name),
+//! Threads, your reminders that are due while your own Slack sign-in
+//! lists them, each direct message by its people, each channel by its name),
 //! each with its count, bold in the accent while it holds something new;
 //! beside it the chosen section one row per thread (`in_order`), so a
 //! thread with several new replies is one row and nothing shows twice
@@ -150,6 +151,8 @@ fn get<'a>(item: &'a Item, key: &str) -> &'a str {
 pub enum Kind {
     Mentions,
     Threads,
+    /// Your reminders that are due (`day::slack_user`).
+    Reminders,
     Direct,
     Channel,
 }
@@ -182,6 +185,7 @@ fn section_key(item: &Item) -> (Kind, String) {
     match get(item, "kind") {
         "mention" => (Kind::Mentions, String::new()),
         "thread" => (Kind::Threads, String::new()),
+        "reminder" => (Kind::Reminders, String::new()),
         "dm" => (Kind::Direct, conversation()),
         _ => (Kind::Channel, conversation()),
     }
@@ -307,6 +311,7 @@ pub fn sections(items: &[Item]) -> Vec<Section> {
         let title = match kind {
             Kind::Mentions => "Mentions".to_string(),
             Kind::Threads => "Threads".to_string(),
+            Kind::Reminders => "Reminders".to_string(),
             Kind::Direct => match (get(item, "where"), get(item, "from")) {
                 ("", "") => "Someone".to_string(),
                 ("", from) => from.to_string(),
@@ -480,6 +485,19 @@ pub fn board(view: &View, look: &Look) -> (Vec<Line>, Vec<HitBox>, Vec<Image>) {
     });
     let mut rows = look.rows.saturating_sub(1);
     let mut top_row = look.top_row + 1;
+    // What your own Slack sign-in would add, said once, dim, with none.
+    if let Some(note) = view.data.head.get("note").and_then(Value::as_str) {
+        lines.push(Line {
+            spans: kit::fit(
+                vec![Span::styled(format!(" {note}"), Tone::Dim.style(theme))],
+                cols,
+                Style::new(),
+            ),
+            fill: None,
+        });
+        rows = rows.saturating_sub(1);
+        top_row += 1;
+    }
 
     let secs = sections(&view.data.items);
     let front = look
@@ -923,10 +941,11 @@ fn list_lines(
         out.push(Vec::new());
         owners.push(None);
     }
-    out.push(texts(vec![Span::styled(
-        " Older messages stay in Slack.",
-        Tone::Faint.style(theme),
-    )]));
+    let after = match section.kind {
+        Kind::Reminders => " A reminder stays until it is complete in Slack.",
+        _ => " Older messages stay in Slack.",
+    };
+    out.push(texts(vec![Span::styled(after, Tone::Faint.style(theme))]));
     owners.push(None);
     // The chosen message whole on the screen; a message taller than the
     // screen shows from its top.
@@ -944,6 +963,7 @@ fn section_name(section: &Section) -> (&'static str, Tone, String) {
     match section.kind {
         Kind::Mentions => ("@", Tone::Working, section.title.clone()),
         Kind::Threads => ("◇", Tone::Working, section.title.clone()),
+        Kind::Reminders => ("◷", Tone::Working, section.title.clone()),
         Kind::Direct => ("", Tone::Dim, section.title.clone()),
         Kind::Channel => ("#", Tone::Dim, section.title.clone()),
     }
@@ -1374,6 +1394,13 @@ fn message_lines(item: &Item, look: &Look, w: usize, chosen: bool, lit: bool) ->
     if answered && !is_thread {
         facts.push("↩ replied".into());
     }
+    if get(item, "kind") == "reminder" {
+        facts.push("due".into());
+    }
+    // Marking it read in Slack failed, after the one more try.
+    if item.data.get("mark_failed").is_some() {
+        facts.push("not marked read".into());
+    }
     let facts = facts.join(" · ");
     let wide = look.cols >= NAMES_AT;
     let when = ago(get(item, "ts"), look.now_ms);
@@ -1581,6 +1608,7 @@ fn brought_by(kind: &str) -> &'static str {
         "mention" => "opened from your mention",
         "dm" => "a direct message",
         "thread" => "a reply in your thread",
+        "reminder" => "a reminder of yours, due",
         _ => "from a channel you follow",
     }
 }
@@ -1742,8 +1770,22 @@ fn thread_lines(
             out.push(vec![mark_again(&mark), Run::Text(Span::styled(words, dim))]);
         }
     }
-    // Why it couldn't be read, under what was kept when it was read before.
-    if look.threads_on && (look.thread.is_none() || look.failed.is_some()) {
+    // Marking it read in Slack failed: why, whole.
+    if let Some(why) = item.data.get("mark_failed").and_then(Value::as_str) {
+        out.push(Vec::new());
+        for line in wrap(
+            &format!("Couldn't mark it read in Slack: {why}"),
+            w.saturating_sub(2),
+        ) {
+            out.push(texts(vec![Span::styled(
+                format!(" {line}"),
+                Tone::Needs.style(theme),
+            )]));
+        }
+    }
+    // Why it couldn't be read, under what was kept when it was read before;
+    // a reminder has no thread to read.
+    if look.threads_on && kind != "reminder" && (look.thread.is_none() || look.failed.is_some()) {
         out.push(Vec::new());
         let what = if look.thread.is_some() {
             "Couldn't read it again"
@@ -2840,5 +2882,85 @@ mod tests {
         );
         let line: String = spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(width(&line) <= 80 && line.contains("# xxx"), "{line}");
+    }
+
+    #[test]
+    fn your_reminders_are_a_section_of_their_own_and_the_sign_in_line_is_under_the_bar() {
+        let t = ts(600);
+        let mut reminder = Item::new("reminder:Rm1", "◷ Reminder · due").data(json!({
+            "kind": "reminder", "old": false, "reminder": "Rm1", "from": "Reminder",
+            "where": "Reminders", "ts": t,
+        }));
+        reminder.lines = vec!["water the plants".into()];
+        let mut failed = message("dm", "Bo", "lunch?", 300, json!({}));
+        failed.data["mark_failed"] = json!("no network");
+        let mut view = channel(vec![
+            message("mention", "Ada", "a mention", 120, json!({})),
+            reminder,
+            failed,
+        ]);
+        let kinds: Vec<Kind> = sections(&view.data.items).iter().map(|s| s.kind).collect();
+        assert_eq!(kinds, [Kind::Mentions, Kind::Reminders, Kind::Direct]);
+        view.data.head["note"] = json!("Slack reminders need your Slack sign-in");
+        let draw_at = |cursor: usize| {
+            let tz = TimeZone::UTC;
+            let pictures = HashMap::new();
+            let look = Look {
+                cols: 200,
+                rows: 40,
+                top_row: 1,
+                cursor: Some(cursor),
+                theme: &Theme::DARK,
+                caps: false,
+                now_ms: NOW,
+                tz: &tz,
+                thread: None,
+                threads_on: true,
+                pictures: &pictures,
+                graphics: false,
+                work: &[],
+                tabs: &[],
+                side_top: 0,
+                thread_open: false,
+                failed: None,
+                files_failed: &Default::default(),
+                files_kept: &Default::default(),
+                hover: None,
+                hover_section: None,
+                sections_focused: false,
+            };
+            texts(&board(&view, &look).0)
+        };
+        let lines = draw_at(1);
+        let all = lines.join("\n");
+        assert_eq!(
+            lines[1].trim(),
+            "Slack reminders need your Slack sign-in",
+            "under the bar: {all}"
+        );
+        assert!(all.contains("◷ Reminders"), "{all}");
+        let row = lines
+            .iter()
+            .position(|l| l.contains("Reminder") && l.contains("due") && l.contains("10m"))
+            .unwrap_or_else(|| panic!("its row: {all}"));
+        assert!(lines[row + 1].contains("water the plants"), "{all}");
+        assert!(all.contains("a reminder of yours, due"), "{all}");
+        assert!(
+            !all.contains("Reading the thread"),
+            "a reminder has no thread: {all}"
+        );
+        assert!(
+            all.contains("A reminder stays until it is complete in Slack."),
+            "{all}"
+        );
+        // A message that couldn't be marked read says so on its row, and
+        // why beside it.
+        let lines = draw_at(2);
+        let all = lines.join("\n");
+        assert!(all.contains("not marked read"), "{all}");
+        assert!(
+            all.contains("Couldn't mark it read in Slack: no network"),
+            "{all}"
+        );
     }
 }

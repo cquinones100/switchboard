@@ -2355,6 +2355,25 @@ fn parts_are_listed_and_an_unknown_one_refused() {
     let unknown = h.run(&["setup", "tmux"]);
     assert_eq!(unknown.status.code(), Some(1));
     assert!(stderr(&unknown).contains("Unknown part: tmux"));
+    // The Slack sign-in stores a token, so it has no dry run and runs with
+    // no part: refused before it asks for anything.
+    for args in [
+        &["setup", "--check", "slack-user"][..],
+        &["setup", "slack-user", "--check"],
+        &["setup", "skills", "slack-user"],
+    ] {
+        let refused = h.run(args);
+        assert_eq!(refused.status.code(), Some(1), "{args:?}");
+        assert!(
+            stderr(&refused).contains("slack-user runs alone"),
+            "{args:?}: {}",
+            stderr(&refused)
+        );
+        assert!(
+            !String::from_utf8_lossy(&refused.stdout).contains("Paste the token"),
+            "{args:?}"
+        );
+    }
 }
 
 // ── The statusline ──────────────────────────────────────────────────────────
