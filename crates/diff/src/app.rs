@@ -486,6 +486,7 @@ pub const KEYS: &[(&str, &[KeyRow])] = &[
                 "]p [p",
                 "next chapter as a page of its own, the one before (from the first, the whole diff)",
             ),
+            key_row("]f [f", "next, last file, opened at its first change"),
             key_row("J K", "scroll the chosen file down, up from the file list"),
             key_row("E", "widen the file list, or narrow it again"),
             key_row(
@@ -606,6 +607,12 @@ pub struct App {
     /// the list scrolls to the cursor only when the cursor has moved, so
     /// the wheel scrolls it past the cursor.
     list_followed: Option<usize>,
+    /// Whether the view was scrolled off the cursor's file, in the one
+    /// scroll of files: the cursor stays where it is, out of sight, until
+    /// a key moves it, which brings the view back.
+    adrift: bool,
+    /// Whether the end of a file has said how to go on to the next.
+    said_end: bool,
     /// The scroll bar whose thumb is being dragged, the screen row its
     /// first row is on, and where the drag started (`kit::scroll_grab`).
     bar_drag: Option<(BarDrag, u16, kit::Grab)>,
@@ -744,6 +751,8 @@ impl App {
             list_top: 0,
             list_width: LIST_WIDTH,
             list_followed: None,
+            adrift: false,
+            said_end: false,
             bar_drag: None,
             focus: Focus::List,
             moved: false,
@@ -1389,6 +1398,7 @@ impl App {
     /// Shows the list's file at `at`, opened at its first change.
     fn show_at(&mut self, at: usize) {
         self.visual = None;
+        self.adrift = false;
         if self.order.is_empty() {
             return;
         }
@@ -1399,17 +1409,23 @@ impl App {
     }
 
     /// The shown file now the list's file at `at`, the cursor on its line
-    /// `cur`, the view where it was: the cursor moving on from one file into
-    /// the next while UX 2.0 reads them as one scroll.
+    /// `cur`, the view where it was: a change, a click or the scroll bar's
+    /// end taking the cursor from one file into another while UX 2.0 reads
+    /// them as one scroll.
     fn cross_to(&mut self, at: usize, cur: usize) {
         self.visual = None;
+        self.adrift = false;
         self.at = at;
         self.load_shown();
         self.cur = cur;
         self.col = 0;
         self.moved = true;
-        // The side with the focus kept where the file has it, else its
-        // other: an added file has no old side, a deleted one no new.
+        self.keep_side();
+    }
+
+    /// The side with the focus kept where the shown file has it, else its
+    /// other: an added file has no old side, a deleted one no new.
+    fn keep_side(&mut self) {
         let (ow, nw) = self.side_widths();
         self.focus = match self.focus {
             Focus::New if nw == 0 => Focus::Old,
@@ -2224,6 +2240,8 @@ impl App {
             ('[', 'c') if self.focus == Focus::List => self.chapter_jump(-1),
             (']', 'c') => self.change_jump(count, true),
             ('[', 'c') => self.change_jump(count, false),
+            (']', 'f') => self.file_jump(count as isize),
+            ('[', 'f') => self.file_jump(-(count as isize)),
             (']', 'p') => self.turn_page(1),
             ('[', 'p') => self.turn_page(-1),
             ('z', 'o' | 'a' | 'v') => self.open_fold(),
@@ -2305,24 +2323,32 @@ impl App {
         }
     }
 
-    fn move_cursor(&mut self, by: isize) {
-        // G and gg (and Home and End) go to the file's own ends, so they
-        // never read every file of the scroll.
-        let to_an_end = by.unsigned_abs() >= (isize::MAX / 4) as usize;
-        if self.one_scroll() && !to_an_end && !self.order.is_empty() {
-            let (k, c) = self.lines_on(by);
-            if k != self.at {
-                self.cross_to(k, c);
-            }
-            self.cur = c;
-            self.col = 0;
-            self.moved = true;
-            self.keep_cursor();
-            return;
+    /// ]f and [f: the next file or the one before, opened at its first
+    /// change as the list opens it, from the list or a side of the diff.
+    fn file_jump(&mut self, by: isize) {
+        self.move_list(by);
+        if self.focus != Focus::List {
+            self.keep_side();
         }
+    }
+
+    /// The cursor moved `by` lines within the shown file, stopping at its
+    /// first and last lines: while the files read as one scroll too, where
+    /// another file is the list's to choose, or ]f and [f's.
+    fn move_cursor(&mut self, by: isize) {
+        self.adrift = false;
         let n = self.screen_lines().len();
         if n == 0 {
             return;
+        }
+        let to_an_end = by.unsigned_abs() >= (isize::MAX / 4) as usize;
+        let stopped_at_the_end_with_a_file_after =
+            by > 0 && !to_an_end && self.cur + 1 >= n && self.at + 1 < self.order.len();
+        if stopped_at_the_end_with_a_file_after && self.one_scroll() && !self.said_end {
+            self.said_end = true;
+            let path = self.current().map(|e| e.path.clone()).unwrap_or_default();
+            let name = path.rsplit('/').next().unwrap_or_default();
+            self.say(format!("End of {name} · ]f for the next file"));
         }
         self.cur = (self.cur as isize + by).clamp(0, n as isize - 1) as usize;
         self.col = 0;
@@ -2330,51 +2356,25 @@ impl App {
         self.keep_cursor();
     }
 
-    /// The file and line `by` lines on from the cursor in the files read
-    /// as one scroll, passing from a file's last line to the next's first.
-    fn lines_on(&mut self, by: isize) -> (usize, usize) {
-        let (mut k, mut c) = (self.at, self.cur);
-        let mut left = by.unsigned_abs();
-        if by >= 0 {
-            loop {
-                let n = self.lines_of(k).len();
-                if left == 0 || c + left < n {
-                    return (k, (c + left).min(n.saturating_sub(1)));
-                }
-                if k + 1 >= self.order.len() {
-                    return (k, n.saturating_sub(1));
-                }
-                left -= n.saturating_sub(c).max(1).min(left);
-                k += 1;
-                c = 0;
-            }
-        }
-        loop {
-            if c >= left {
-                return (k, c - left);
-            }
-            if k == 0 {
-                return (0, 0);
-            }
-            left -= c + 1;
-            k -= 1;
-            c = self.lines_of(k).len().saturating_sub(1);
-        }
-    }
-
     /// The view's file the shown one, but while the files read as one
-    /// scroll and it is still a file before it.
+    /// scroll and it is still a file before it, or one after it the view
+    /// was scrolled to, off the cursor's file.
     fn fix_view(&mut self) {
-        if !self.one_scroll() || self.view > self.at || self.view >= self.order.len() {
+        let past = self.view > self.at && !self.adrift;
+        if !self.one_scroll() || past || self.view >= self.order.len() {
             self.view = self.at;
         }
     }
 
-    /// The view scrolled so the cursor is in it.
+    /// The view scrolled so the cursor is in it, but one scrolled off the
+    /// cursor's file, which stays until the cursor moves.
     fn keep_cursor(&mut self) {
         let h = self.body_height().max(1);
         self.fix_view();
         if self.one_scroll() {
+            if self.adrift {
+                return;
+            }
             match self.rows_from_view(self.at, self.cur) {
                 None => (self.view, self.top) = (self.at, self.cur),
                 Some(d) if d >= h => {
@@ -2388,6 +2388,26 @@ impl App {
             self.top = self.cur;
         } else if self.cur >= self.top + h {
             self.top = self.cur + 1 - h;
+        }
+    }
+
+    /// The cursor kept on the lines of its own file the view shows, after
+    /// the view scrolled: on its file's first or last line in sight, never
+    /// in another file, and left where it is once its file has scrolled out.
+    fn cursor_into_view(&mut self, h: usize) {
+        let n = self.lines_of(self.at).len();
+        let first = match self.view.cmp(&self.at) {
+            std::cmp::Ordering::Less => Some(0),
+            std::cmp::Ordering::Equal => Some(self.top),
+            std::cmp::Ordering::Greater => None,
+        };
+        let in_sight = first.filter(|&lo| lo < n).and_then(|lo| {
+            let down = self.rows_from_view(self.at, lo)?;
+            (down < h).then(|| (lo, (lo + h - 1 - down).min(n - 1)))
+        });
+        self.adrift = in_sight.is_none();
+        if let Some((lo, hi)) = in_sight {
+            self.cur = self.cur.clamp(lo, hi);
         }
     }
 
@@ -2421,6 +2441,7 @@ impl App {
             0
         };
         self.view = self.at;
+        self.adrift = false;
         self.top = if down {
             (from + by).min(last)
         } else {
@@ -2580,6 +2601,7 @@ impl App {
             self.cross_to(0, 0);
         }
         self.cur = 0;
+        self.adrift = false;
         (self.view, self.top) = (0, 0);
         self.moved = true;
     }
@@ -2599,11 +2621,14 @@ impl App {
             self.cross_to(k, last);
         }
         self.cur = last;
+        self.adrift = false;
         (self.view, self.top) = (k, n.saturating_sub(h));
         self.moved = true;
     }
 
-    /// The diff scrolled `by` lines, the cursor kept in view.
+    /// The diff scrolled `by` lines, the cursor kept in view: within its
+    /// own file while the files read as one scroll, where the view goes on
+    /// into the next file and the cursor doesn't.
     fn scroll_diff(&mut self, by: usize, down: bool) {
         let h = self.body_height().max(1);
         if self.one_scroll() && !self.order.is_empty() {
@@ -2615,29 +2640,7 @@ impl App {
             } else {
                 self.stream_back(self.view, self.top, by)
             };
-            // The cursor brought into the view: to its first line, or its
-            // last, past a rule and a bar to a file's line.
-            let into = match self.rows_from_view(self.at, self.cur) {
-                None => {
-                    let (k, t) = (self.view, self.top);
-                    if t < self.lines_of(k).len() {
-                        Some((k, t))
-                    } else {
-                        Some(((k + 1).min(self.order.len() - 1), 0))
-                    }
-                }
-                Some(d) if d >= h => {
-                    let (k, t) = self.stream_ahead(self.view, self.top, h - 1);
-                    Some((k, t.min(self.lines_of(k).len().saturating_sub(1))))
-                }
-                Some(_) => None,
-            };
-            if let Some((k, c)) = into {
-                if k != self.at {
-                    self.cross_to(k, c);
-                }
-                self.cur = c;
-            }
+            self.cursor_into_view(h);
             self.moved = true;
             return;
         }
@@ -2658,6 +2661,7 @@ impl App {
     /// to the next file's first, and one before the first to the last of
     /// the file before.
     fn change_jump(&mut self, count: usize, forward: bool) {
+        self.adrift = false;
         for _ in 0..count {
             let starts = self.change_starts(self.at);
             let next = if forward {
@@ -3936,6 +3940,7 @@ impl App {
                 if self.rows_from_view(k, t) != Some(row) || t >= self.lines_of(k).len() {
                     return Act::Redraw;
                 }
+                self.adrift = false;
                 if k != self.at {
                     self.cross_to(k, t);
                 }
@@ -4827,16 +4832,87 @@ mod tests {
             press(&mut app, "K");
         }
         assert_eq!((app.at, app.view, app.top), (1, 1, 0));
-        // The diff's own j still goes on into the third file.
+        // The diff's own j stops at the file's last line too.
         press(&mut app, "l");
         for _ in 0..n {
             press(&mut app, "j");
         }
-        assert_eq!(app.at, 2);
+        assert_eq!((app.at, app.cur), (1, n - 1));
         // A file shorter than the diff's area doesn't move.
         let mut short = added_files(&["a.js", "b.js", "c.js"], 3);
         press(&mut short, "J");
         assert_eq!((short.at, short.view, short.top), (1, 1, 0));
+    }
+
+    #[test]
+    fn with_ux2_the_cursor_stays_in_its_file_and_the_view_scrolls_on_past_it() {
+        let mut app = added_files(&["a.js", "b.js", "c.js"], 40);
+        let h = app.body_height();
+        let n = app.lines_of(1).len();
+        let ctrl = |app: &mut App, c: char| {
+            app.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL));
+        };
+        press(&mut app, "l");
+        // k at the file's first line stays there.
+        press(&mut app, "ggk");
+        assert_eq!((app.at, app.cur), (1, 0));
+        // C-d near the end stops at the last line, and so does a count.
+        app.cur = n - 3;
+        ctrl(&mut app, 'd');
+        assert_eq!((app.at, app.cur), (1, n - 1));
+        assert!(app.message.is_none());
+        press(&mut app, "gg99j");
+        assert_eq!((app.at, app.cur), (1, n - 1));
+        // j there stays, saying once how to go on.
+        press(&mut app, "j");
+        assert_eq!((app.at, app.cur), (1, n - 1));
+        let said = app.message.clone().map(|(t, _)| t);
+        assert_eq!(said.as_deref(), Some("End of b.js · ]f for the next file"));
+        press(&mut app, "j");
+        press(&mut app, "j");
+        assert_eq!((app.at, app.cur), (1, n - 1));
+        assert!(app.message.is_none());
+        // ]f goes to the next file's first change and [f back, the focus
+        // still in the diff.
+        press(&mut app, "]f");
+        assert_eq!((app.at, app.cur, app.focus), (2, 0, Focus::New));
+        press(&mut app, "]f");
+        assert_eq!(app.at, 2);
+        press(&mut app, "[f");
+        assert_eq!((app.at, app.cur), (1, 0));
+        press(&mut app, "2[f");
+        assert_eq!(app.at, 0);
+        press(&mut app, "]f");
+        // The wheel scrolls into the next file, the cursor on its file's
+        // last line in sight and the list's file unchanged.
+        app.scroll_diff(n - 3, true);
+        assert_eq!((app.at, app.view, app.top, app.cur), (1, 1, n - 3, n - 3));
+        app.scroll_diff(2, true);
+        assert_eq!((app.at, app.cur), (1, n - 1));
+        let shown = screen(&mut app);
+        assert!(shown.iter().any(|l| l.contains("c.js line 1")), "{shown:?}");
+        // Its file scrolled out, the cursor is left where it is.
+        for _ in 0..4 {
+            app.scroll_diff(h, true);
+        }
+        assert_eq!((app.at, app.view, app.cur), (1, 2, n - 1));
+        let shown = screen(&mut app);
+        assert!(
+            shown.iter().any(|l| l.contains("c.js line 40")),
+            "{shown:?}"
+        );
+        assert_eq!((app.at, app.view), (1, 2));
+        // Scrolled back, it is on its file's first line in sight again.
+        app.scroll_diff(h, false);
+        assert_eq!(app.at, 1);
+        assert!(app.rows_from_view(1, app.cur).is_some_and(|d| d < h));
+        // A key that moves it brings the view back to it.
+        for _ in 0..4 {
+            app.scroll_diff(h, true);
+        }
+        press(&mut app, "k");
+        assert_eq!(app.at, 1);
+        assert!(app.rows_from_view(1, app.cur).is_some_and(|d| d < h));
     }
 
     #[test]
@@ -4929,15 +5005,14 @@ mod tests {
                 .any(|l| l.contains("src/new.js   +1 −0  added")),
             "{shown:?}"
         );
-        // Moving on past a.js's last line goes into b.js, its chapter now
-        // over the diff.
+        // Moving on past a.js's last line stays in a.js; ]f goes into
+        // b.js, its chapter now over the diff.
         press(&mut app, "l");
         for _ in 0..8 {
-            if app.current().unwrap().path == "src/b.js" {
-                break;
-            }
             press(&mut app, "j");
         }
+        assert_eq!(app.current().unwrap().path, "src/a.js");
+        press(&mut app, "]f");
         assert_eq!(app.current().unwrap().path, "src/b.js");
         let shown = screen(&mut app);
         assert!(
@@ -4945,17 +5020,17 @@ mod tests {
             "{:?}",
             shown[0]
         );
-        // And back up into a.js.
-        press(&mut app, "k");
+        // And back into a.js.
+        press(&mut app, "[f");
         assert_eq!(app.current().unwrap().path, "src/a.js");
         // The wheel scrolls through the files as one, as far as the last
-        // file's end at the bottom, the cursor brought along.
+        // file's end at the bottom, the cursor left in its file.
         app.resize(160, 12);
         press(&mut app, "gg");
         for _ in 0..10 {
             app.scroll_diff(3, true);
         }
-        assert_ne!(app.current().unwrap().path, "src/a.js");
+        assert_eq!(app.current().unwrap().path, "src/a.js");
         let shown = screen(&mut app);
         assert!(shown[10].contains("more"), "{shown:?}");
         assert!(

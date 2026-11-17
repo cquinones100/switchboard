@@ -33,7 +33,7 @@ switchboard-diff --base origin/develop  # against another branch or commit, used
 switchboard-diff --working [dir]        # the changes not yet committed, staged and not
 ```
 
-The keys are Vim's, and the same as in Switchboard: [Keys in the diff](../../docs/guide.md#keys-in-the-diff) lists them. `q` closes it.
+The keys are Vim's, and the same as in Switchboard: [Keys in the diff](../../docs/guide.md#keys-in-the-diff) lists them. The cursor stays in the file it is in, stopping at its first and last lines: `]f` and `[f` go to the next file and the one before. `q` closes it.
 
 ## What it sends
 
