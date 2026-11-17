@@ -111,8 +111,8 @@ pub struct Handover {
     /// The build handing over, as `switchboard --version` names it.
     #[serde(default)]
     pub from: String,
-    /// What M-p's build adds to the message after the restart (a fetch
-    /// that failed), else empty.
+    /// What M-p's build adds to the message after the restart (whether it
+    /// built, a fetch that failed), else empty.
     #[serde(default)]
     pub note: String,
     /// The listening socket's descriptor.

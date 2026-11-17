@@ -29,7 +29,14 @@
 //! started from (`Stamp`: its device, inode, size and modified time, noted
 //! as it starts): when it is, nothing restarts. One put there by hand since
 //! (a build of another worktree installed) is restarted on as it is, with
-//! nothing built over it.
+//! nothing built over it, only when it was built from the commit the main
+//! clone is at once brought up to date, or from one ahead of it (the commit
+//! its `--version` says, `built_from_head`): a tab installs its landing's
+//! build, and main moves on after it, so an installed build that lacks
+//! main's commits, or whose commit can't be read, is built over in the same
+//! press. A checkout built as it is (a try's worktree) has no main to be
+//! behind, so a build put there by hand is the latest. The message after
+//! the restart says which it was (`BUILT`, `ALREADY_BUILT`).
 //!
 //! A server running from a cargo target directory (`target/debug`, or one
 //! `CARGO_TARGET_DIR` shares between worktrees) never restarts on that
@@ -41,7 +48,7 @@
 //! and the restart runs from there, whether or not the build changed
 //! anything, so the server leaves the target directory on the first press,
 //! unless a build was installed there since the server started, which is
-//! restarted on as it is.
+//! restarted on as it is when it has main's commits, as above.
 //! The link `switchboard try` makes at the first into the worktree's target
 //! directory is pointed at the second, which the next try links back. With
 //! nothing to build it restarts on the installed build as it is, unless
@@ -605,51 +612,97 @@ fn put(home: &Path, built: &Path, on: &Path) -> Result<(), String> {
 }
 
 /// What M-p's build gives: the binary to restart on, `None` when there is
-/// nothing new, and a note for the message after the restart (the fetch
-/// that failed), else empty.
+/// nothing new, and a note for the message after the restart (whether it
+/// was built for it, the fetch that failed), else empty.
 #[derive(Debug, Default)]
 pub struct Brought {
     pub on: Option<PathBuf>,
     pub note: String,
 }
 
+/// What git prints for `args` in `dir`, when it succeeds.
+fn git_says(dir: &Path, args: &[&str]) -> Option<String> {
+    Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+}
+
 /// Brings the main clone up to date when `checkout` is one, telling
-/// `report` what that brought and once it is about to build, then builds
-/// it.
-fn make(
-    checkout: &Checkout,
-    report: &dyn Fn(Report),
-    note: &mut String,
-) -> Result<PathBuf, String> {
-    let dir = &checkout.dir;
-    let git = |args: &[&str]| {
-        Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-    };
-    if checkout.main_clone {
-        may_build(dir)?;
-        let fetch = crate::integrations::ensure_on("github", "GitHub").is_ok();
-        let started = Instant::now();
-        let before = git(&["rev-parse", "HEAD"]);
-        let not_fetched = update(dir, fetch)?;
-        let commits = before
-            .filter(|_| not_fetched.is_none())
-            .and_then(|b| git(&["rev-list", "--count", &format!("{b}..HEAD")]))
-            .and_then(|n| n.parse().ok());
-        *note = not_fetched.unwrap_or_default();
-        report(Report::Fetched {
-            commits,
-            took: started.elapsed(),
-        });
+/// `report` what that brought, and gives the note of a fetch not made;
+/// a checkout built as it is has nothing to bring.
+fn refresh(checkout: &Checkout, report: &dyn Fn(Report)) -> Result<String, String> {
+    if !checkout.main_clone {
+        return Ok(String::new());
     }
+    let dir = &checkout.dir;
+    let git = |args: &[&str]| git_says(dir, args);
+    may_build(dir)?;
+    let fetch = crate::integrations::ensure_on("github", "GitHub").is_ok();
+    let started = Instant::now();
+    let before = git(&["rev-parse", "HEAD"]);
+    let not_fetched = update(dir, fetch)?;
+    let commits = before
+        .filter(|_| not_fetched.is_none())
+        .and_then(|b| git(&["rev-list", "--count", &format!("{b}..HEAD")]))
+        .and_then(|n| n.parse().ok());
+    report(Report::Fetched {
+        commits,
+        took: started.elapsed(),
+    });
+    Ok(not_fetched.unwrap_or_default())
+}
+
+/// The commit a version line names: the hash between the brackets of
+/// `0.2.0 (1a2b3c4d5e6f)`, and nothing that isn't one ("unknown").
+fn commit_in(version: &str) -> Option<&str> {
+    let commit = version.trim().strip_suffix(')')?.rsplit_once('(')?.1;
+    let is_hash = commit.len() >= 7 && commit.bytes().all(|b| b.is_ascii_hexdigit());
+    is_hash.then_some(commit)
+}
+
+/// Whether the build at `binary` was made from the commit `dir` is at,
+/// or from one ahead of it: the commit its `--version` says has `dir`'s
+/// HEAD in its history. One that doesn't say, or names a commit the clone
+/// doesn't have, wasn't.
+fn built_from_head(dir: &Path, binary: &Path) -> bool {
+    let Ok(version) = crate::update::install::says_version(binary) else {
+        return false;
+    };
+    let Some(commit) = commit_in(&version) else {
+        return false;
+    };
+    let built_from = format!("{commit}^{{commit}}");
+    git_says(dir, &["merge-base", "--is-ancestor", "HEAD", &built_from]).is_some()
+}
+
+/// Whether a build put at `installed` by hand is the latest: of a
+/// checkout built as it is, always; of a main clone, brought up to date
+/// by now, only when it has the clone's commits.
+fn is_latest(checkout: &Checkout, installed: &Path) -> bool {
+    !checkout.main_clone || built_from_head(&checkout.dir, installed)
+}
+
+/// The words after the restart's message for a build made for it, and for
+/// one found already made.
+const BUILT: &str = "It was built for this restart.";
+const ALREADY_BUILT: &str = "It was already built, so nothing was built.";
+
+/// `how` and the note of a fetch not made, as one note.
+fn noted(how: &str, note: &str) -> String {
+    format!("{how} {note}").trim_end().to_string()
+}
+
+/// Builds `checkout`, telling `report` once it is about to.
+fn make(checkout: &Checkout, report: &dyn Fn(Report)) -> Result<PathBuf, String> {
+    let dir = &checkout.dir;
+    let git = |args: &[&str]| git_says(dir, args);
     let head = match (
         git(&["symbolic-ref", "--short", "HEAD"]),
         git(&["rev-parse", "--short", "HEAD"]),
@@ -668,11 +721,12 @@ fn make(
 
 /// Builds and installs as the module's comment says (unless `build` is
 /// off), and gives the binary to restart on, or `None` when there is
-/// nothing new. A binary already put at the server's path since it started
-/// (a build of another checkout installed by hand) is the latest one, so
-/// nothing is built over it, unless that path is in a cargo target
-/// directory, where the restart moves to `restart_on` as the module's
-/// comment says.
+/// nothing new. The main clone is brought up to date first, so that a
+/// binary already put at the server's path since it started (a build of
+/// another checkout installed by hand) is restarted on as it is only when
+/// it is the latest (`is_latest`), and built over otherwise; with nothing
+/// to build it is taken as it is. From a cargo target directory the
+/// restart moves to `restart_on`, as the module's comment says.
 pub fn bring_up_to_date(
     home: &Path,
     binary: &Path,
@@ -680,13 +734,12 @@ pub fn bring_up_to_date(
     report: &dyn Fn(Report),
 ) -> Result<Brought, String> {
     let to_build = checkout().filter(|_| build_first);
-    let mut note = String::new();
     let brought = |on: Option<PathBuf>, note: String| Ok(Brought { on, note });
     if in_target_dir(binary) {
         let Some(to_build) = to_build else {
             return match installed(home) {
-                Some(installed) => brought(Some(installed), note),
-                None if !is_new(binary) => brought(None, note),
+                Some(installed) => brought(Some(installed), String::new()),
+                None if !is_new(binary) => brought(None, String::new()),
                 None => Err(
                     "Switchboard runs from a cargo target directory, which other worktrees' builds write over, and has no checkout to build; install a build (install.sh) to restart on it"
                         .to_string(),
@@ -695,35 +748,41 @@ pub fn bring_up_to_date(
         };
         let mut last_built = LAST_BUILT.lock().unwrap_or_else(|e| e.into_inner());
         // A build installed since the server started (another worktree's,
-        // as this repository's CLAUDE.md installs one before M-p) is the
-        // latest: restarted on as it is, with nothing built over it.
-        if let Some(installed) = installed(home) {
-            let now = Stamp::of(&installed);
+        // as this repository's CLAUDE.md installs one before M-p).
+        let by_hand = installed(home).filter(|installed| {
+            let now = Stamp::of(installed);
             let since_start = INSTALLED.get().is_some_and(|started| *started != now);
-            if since_start && *last_built != now {
-                return brought(Some(installed), note);
-            }
+            since_start && *last_built != now
+        });
+        let note = refresh(&to_build, report)?;
+        if let Some(installed) = by_hand.filter(|i| is_latest(&to_build, i)) {
+            return brought(Some(installed), noted(ALREADY_BUILT, &note));
         }
         let on = restart_on(home, binary);
-        let built = make(&to_build, report, &mut note)?;
+        let built = make(&to_build, report)?;
         report(Report::Installing(on.clone()));
         put(home, &built, &on)?;
         *last_built = Stamp::of(&on);
-        return brought(Some(on), note);
+        return brought(Some(on), noted(BUILT, &note));
     }
     let mut last_built = LAST_BUILT.lock().unwrap_or_else(|e| e.into_inner());
     let now = Stamp::of(binary);
     let installed_by_hand = now.is_some() && is_new(binary) && *last_built != now;
-    if installed_by_hand {
-        return brought(Some(binary.to_path_buf()), note);
+    let Some(to_build) = to_build else {
+        return brought(is_new(binary).then(|| binary.to_path_buf()), String::new());
+    };
+    let note = refresh(&to_build, report)?;
+    if installed_by_hand && is_latest(&to_build, binary) {
+        return brought(Some(binary.to_path_buf()), noted(ALREADY_BUILT, &note));
     }
-    if let Some(to_build) = to_build {
-        let built = make(&to_build, report, &mut note)?;
-        report(Report::Installing(binary.to_path_buf()));
-        install(&built, binary)?;
-        *last_built = Stamp::of(binary);
+    let built = make(&to_build, report)?;
+    report(Report::Installing(binary.to_path_buf()));
+    install(&built, binary)?;
+    *last_built = Stamp::of(binary);
+    if is_new(binary) {
+        return brought(Some(binary.to_path_buf()), noted(BUILT, &note));
     }
-    brought(is_new(binary).then(|| binary.to_path_buf()), note)
+    brought(None, note)
 }
 
 #[cfg(test)]
@@ -1010,6 +1069,52 @@ mod tests {
         git(&main, &["update-ref", "-d", "refs/remotes/origin/main"]);
         let unknown = update(&main, true).unwrap_err();
         assert!(unknown.contains("has no origin/main"), "{unknown}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_version_line_names_its_commit_only_as_a_hash() {
+        assert_eq!(commit_in("0.2.0 (1a2b3c4d5e6f)"), Some("1a2b3c4d5e6f"));
+        assert_eq!(commit_in("0.2.0 (1a2b3c4d5e6f)\n"), Some("1a2b3c4d5e6f"));
+        assert_eq!(commit_in("0.2.0 (unknown)"), None);
+        assert_eq!(commit_in("0.2.0 (--all)"), None);
+        assert_eq!(commit_in("0.2.0 (abc)"), None);
+        assert_eq!(commit_in("0.2.0"), None);
+    }
+
+    #[test]
+    fn a_build_is_from_head_when_its_commit_has_heads_history() {
+        let dir = fresh("built-from");
+        let clone = dir.join("clone");
+        git(&dir, &["init", "-q", "-b", "main", clone.to_str().unwrap()]);
+        git(&clone, &["commit", "-q", "--allow-empty", "-m", "one"]);
+        let one = git(&clone, &["rev-parse", "--short=12", "HEAD"]);
+        git(&clone, &["commit", "-q", "--allow-empty", "-m", "two"]);
+        let two = git(&clone, &["rev-parse", "--short=12", "HEAD"]);
+        git(&clone, &["checkout", "-q", "-b", "item"]);
+        git(&clone, &["commit", "-q", "--allow-empty", "-m", "three"]);
+        let ahead = git(&clone, &["rev-parse", "--short=12", "HEAD"]);
+        git(&clone, &["checkout", "-q", "main"]);
+        let says = |name: &str, line: &str| {
+            let path = dir.join(name);
+            std::fs::write(&path, format!("#!/bin/sh\necho '{line}'\n")).unwrap();
+            let mut mode = std::fs::metadata(&path).unwrap().permissions();
+            std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+            std::fs::set_permissions(&path, mode).unwrap();
+            path
+        };
+        let build = |name: &str, commit: &str| says(name, &format!("switchboard 0.0.1 ({commit})"));
+        assert!(built_from_head(&clone, &build("tip", &two)));
+        assert!(built_from_head(&clone, &build("ahead", &ahead)));
+        assert!(!built_from_head(&clone, &build("behind", &one)));
+        // A commit the clone lacks, none named, or a file that says nothing.
+        assert!(!built_from_head(
+            &clone,
+            &build("elsewhere", "0123456789ab")
+        ));
+        assert!(!built_from_head(&clone, &build("unknown", "unknown")));
+        assert!(!built_from_head(&clone, &says("other", "something else")));
+        assert!(!built_from_head(&clone, &dir.join("missing")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

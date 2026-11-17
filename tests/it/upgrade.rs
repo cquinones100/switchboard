@@ -717,11 +717,47 @@ fn m_p_brings_the_main_clone_up_to_date_and_builds_it() {
     assert!(!target.join("args").exists(), "cargo wasn't run");
     std::fs::remove_file(main.join("file")).unwrap();
 
-    // Behind origin: fast-forwarded, then built and restarted on.
+    // A build that says it was made from `commit`, as a tab's landing
+    // installs one.
+    let built_from = |name: &str, commit: &str| {
+        let path = dir.path().join(name);
+        common::stand_in::install(
+            &path,
+            &format!(
+                "#!/bin/sh\n# {name}\nif [ \"$1\" = --version ]; then echo 'switchboard 0.0.0 ({commit})'; else exec {} \"$@\"; fi\n",
+                common::BIN
+            ),
+        );
+        path
+    };
+    let install_by_hand = |build: &std::path::Path, at: &std::path::Path| {
+        let _ = std::fs::remove_file(at);
+        std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+        std::fs::copy(build, at).unwrap();
+    };
+    let wait_says = |client: &mut common::TestClient, text: &str| {
+        let deadline = common::deadline(Duration::from_secs(30));
+        while !says(client, text) {
+            assert!(
+                Instant::now() < deadline,
+                "{:?}\n{}",
+                client.screen(),
+                server.log()
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+
+    // Behind origin, with a build a tab installed since the server started
+    // that main has moved on from: fast-forwarded, then built over it and
+    // restarted on in the one press, not restarted on as it is.
+    let one = git(&main, &["rev-parse", "--short=12", "HEAD"]);
+    install_by_hand(&built_from("older", &one), &bin);
     git(&other, &["commit", "-q", "--allow-empty", "-m", "two"]);
     git(&other, &["push", "-q", "origin", "HEAD:main"]);
     std::fs::write(main.join("new"), wrapper("first").to_str().unwrap()).unwrap();
     server.ok(&["press", "upgrade"]);
+    wait_says(&mut client, "It was built for this restart.");
     wait_restarted(&server, &mut client);
     assert_eq!(git(&main, &["log", "-1", "--format=%s"]), "two");
     assert!(target.join("args").exists(), "the main clone was built");
@@ -729,24 +765,38 @@ fn m_p_brings_the_main_clone_up_to_date_and_builds_it() {
         std::fs::read(&bin).unwrap(),
         std::fs::read(dir.path().join("first")).unwrap()
     );
-
-    // An origin that can't be reached: built as it is, and said after the
-    // restart's message.
-    std::fs::rename(&origin, dir.path().join("gone.git")).unwrap();
     std::fs::remove_file(target.join("args")).unwrap();
+
+    // The server now runs the test's binary through that build, from a
+    // cargo target directory, so its restarts go to the installed build.
+    // One installed since that was made from main as it now is: restarted
+    // on as it is, with nothing built over it.
+    let installed = server.home.join(".local/bin/switchboard");
+    let two = git(&main, &["rev-parse", "--short=12", "HEAD"]);
+    let latest = built_from("latest", &two);
+    install_by_hand(&latest, &installed);
+    server.ok(&["press", "upgrade"]);
+    wait_says(&mut client, "It was already built, so nothing was built.");
+    wait_restarted(&server, &mut client);
+    assert!(!target.join("args").exists(), "cargo wasn't run");
+    assert_eq!(
+        std::fs::read(&installed).unwrap(),
+        std::fs::read(&latest).unwrap()
+    );
+
+    // An origin that can't be reached: an installed build behind the clone
+    // is built over from the clone as it is, and said after the restart's
+    // message.
+    std::fs::rename(&origin, dir.path().join("gone.git")).unwrap();
+    install_by_hand(&built_from("behind", &one), &installed);
     std::fs::write(main.join("new"), wrapper("second").to_str().unwrap()).unwrap();
     server.ok(&["press", "upgrade"]);
-    let deadline = common::deadline(Duration::from_secs(30));
-    while !says(&mut client, "(couldn't fetch origin:") {
-        assert!(
-            Instant::now() < deadline,
-            "{:?}\n{}",
-            client.screen(),
-            server.log()
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    wait_says(&mut client, "(couldn't fetch origin:");
     assert!(target.join("args").exists(), "the main clone was built");
+    assert_eq!(
+        std::fs::read(&installed).unwrap(),
+        std::fs::read(dir.path().join("second")).unwrap()
+    );
 }
 
 /// A stand-in cargo that builds slowly, a crate every few tenths of a
