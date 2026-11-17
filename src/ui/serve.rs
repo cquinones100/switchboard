@@ -1436,29 +1436,48 @@ fn program_line(args: &[String]) -> String {
         return String::new();
     };
     let name = program_name(first);
-    let mode = rest.get(1).map(String::as_str);
-    let app = match (name.as_str(), rest.first().map(String::as_str)) {
-        ("switchboard-notes", _) | ("switchboard", Some("notes")) => Some("Notes"),
-        ("switchboard-diff", _) | ("switchboard", Some("diff")) => Some("the diff"),
-        ("switchboard", Some("pr-view")) if mode == Some("--checks") => {
-            Some("the PR's failing checks")
-        }
-        ("switchboard", Some("pr-view")) => Some("the PR view"),
-        ("switchboard", Some("ticket-view")) => Some("the ticket view"),
-        ("switchboard", Some("link-view")) => Some("the link view"),
+    // Switchboard's own command and its words: the binary under any name
+    // starting `switchboard` (a versioned copy), or a link named after a
+    // view, which runs that view.
+    let own: Option<Vec<&str>> = match name.as_str() {
+        "switchboard-notes" => Some(vec!["notes"]),
+        "switchboard-diff" => Some(vec!["diff"]),
+        "pr-view" | "ticket-view" | "link-view" => Some(vec![name.as_str()]),
+        n if n.starts_with("switchboard") => Some(vec![]),
         _ => None,
     };
+    let app = own.and_then(|mut words| {
+        words.extend(rest.iter().map(String::as_str));
+        match words.as_slice() {
+            ["notes", "away", ..] => Some("the place Notes left in its tab"),
+            ["notes", ..] => Some("Notes"),
+            ["diff", ..] => Some("the diff"),
+            ["pr-view", "--checks", ..] => Some("the PR's failing checks"),
+            ["pr-view", ..] => Some("the PR view"),
+            ["ticket-view", ..] => Some("the ticket view"),
+            ["link-view", ..] => Some("the link view"),
+            _ => None,
+        }
+    });
     if let Some(app) = app {
         return app.to_string();
     }
     // A path is an argument of its own, or attached to an option after `=`
-    // or `:` (`--dir=/…`, `-javaagent:/…`).
-    let words = std::iter::once(name).chain(rest.iter().map(|arg| match arg.find('/') {
-        Some(at) if at == 0 || arg[..at].ends_with(['=', ':']) => {
-            format!("{}{}", &arg[..at], crate::paths::tilde(&arg[at..]))
-        }
-        _ => arg.clone(),
-    }));
+    // or `:`, one of a list of them included (`--dir=/…`, `-javaagent:/…`,
+    // `-Dpath=/usr/lib:/…`).
+    let short = |arg: &String| {
+        arg.split_inclusive(['=', ':'])
+            .map(|part| {
+                let path = part.trim_end_matches(['=', ':']);
+                if path.starts_with('/') {
+                    format!("{}{}", crate::paths::tilde(path), &part[path.len()..])
+                } else {
+                    part.to_string()
+                }
+            })
+            .collect::<String>()
+    };
+    let words = std::iter::once(name.clone()).chain(rest.iter().map(short));
     draw::cut(&words.collect::<Vec<_>>().join(" "), 60)
 }
 
@@ -1496,6 +1515,14 @@ mod tests {
             line(&["java", &format!("-javaagent:{home}/a.jar")]),
             "java -javaagent:~/a.jar"
         );
+        assert_eq!(
+            line(&["java", &format!("-Xbootclasspath/a:{home}/c")]),
+            "java -Xbootclasspath/a:~/c"
+        );
+        assert_eq!(
+            line(&["java", &format!("-Dp=/usr/lib:{home}/lib")]),
+            "java -Dp=/usr/lib:~/lib"
+        );
         assert_eq!(line(&["lazygit"]), "lazygit");
         let bin = format!("{home}/.local/bin/switchboard");
         assert_eq!(line(&[&bin, "notes", "--tab"]), "Notes");
@@ -1506,6 +1533,13 @@ mod tests {
             "the PR's failing checks"
         );
         assert_eq!(line(&[&bin, "tabs"]), "switchboard tabs");
+        assert_eq!(
+            line(&[&bin, "notes", "away"]),
+            "the place Notes left in its tab"
+        );
+        assert_eq!(line(&["switchboard-0.2.0", "diff"]), "the diff");
+        assert_eq!(line(&["pr-view", "--checks"]), "the PR's failing checks");
+        assert_eq!(line(&["/usr/bin/diff", "a", "b"]), "diff a b");
         let long = line(&["/bin/sleep", &"9".repeat(80)]);
         assert_eq!(draw::width(&long), 60);
         assert!(long.starts_with("sleep 999"));
