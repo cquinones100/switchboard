@@ -498,7 +498,7 @@
       "page": "design"
     },
     "StoryMap.dc.html": {
-      "title": "121. M-d opens on the story as a map: a box a chapter, the goal at the top, an arrow from each to what it builds on, dashed where the code can't confirm the link, read chapters marked, the stories' tab bar over it",
+      "title": "121. In Map mode, M-d opens on the story as a map: a box a chapter, the goal at the top, an arrow from each to what it builds on, dashed where the code can't confirm the link, read chapters marked, the stories' tab bar over it",
       "page": "design"
     },
     "StoryChapterMap.dc.html": {
@@ -511,6 +511,10 @@
     },
     "StoryTabs.dc.html": {
       "title": "124. The stories' tab bar on Side work: what the main story can be read without, its own map; Loading outlines a thread of its own; [s ]s or a click between them",
+      "page": "design"
+    },
+    "StoryFiles.dc.html": {
+      "title": "125. Files mode, today's diff unchanged: the Map / Files switch leading the row of buttons on Files (g m and g f too), the diff opening in the mode used last",
       "page": "design"
     }
   }

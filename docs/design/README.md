@@ -204,7 +204,8 @@ The relay's DM, threads and Home tab.
 
 ## The diff's story as a map
 
-- [121. M-d opens on the story as a map: a box a chapter, the goal at the top, an arrow from each to what it builds on, dashed where the code can't confirm the link, read chapters marked, the stories' tab bar over it](https://cquinones100.github.io/switchboard/design/121.html)
+- [121. In Map mode, M-d opens on the story as a map: a box a chapter, the goal at the top, an arrow from each to what it builds on, dashed where the code can't confirm the link, read chapters marked, the stories' tab bar over it](https://cquinones100.github.io/switchboard/design/121.html)
 - [122. A chapter opened on its own map: the functions, types and tables it adds or changes, an arrow from each to what it uses, over its files and hunks; Enter on a thing goes to its hunk](https://cquinones100.github.io/switchboard/design/122.html)
 - [123. A hunk a second chapter can't be read without, shown whole there under a dim also in chapter 5 line that goes to its home; its file listed in both chapters](https://cquinones100.github.io/switchboard/design/123.html)
 - [124. The stories' tab bar on Side work: what the main story can be read without, its own map; Loading outlines a thread of its own; \[s \]s or a click between them](https://cquinones100.github.io/switchboard/design/124.html)
+- [125. Files mode, today's diff unchanged: the Map / Files switch leading the row of buttons on Files (g m and g f too), the diff opening in the mode used last](https://cquinones100.github.io/switchboard/design/125.html)

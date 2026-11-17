@@ -186,6 +186,12 @@ const ARROW = (x1, yb, x2, yt, dashed) => { const v = dashed ? '┆' : '│', h 
   if (x1 === x2) { for (let y = m; y < yt - 1; y++) put(x1, y, v, c); }
   else { put(x1, m, x2 < x1 ? '╯' : '╰', c); const lo = Math.min(x1, x2) + 1, hi = Math.max(x1, x2); for (let x = lo; x < hi; x++) put(x, m, h, c); put(x2, m, x2 < x1 ? '╭' : '╮', c); for (let y = m + 1; y < yt - 1; y++) put(x2, y, v, c); }
   put(x2, yt - 1, '▼', c); };
+
+// THE ROW OF BUTTONS (board 118), led by the Map / Files switch (the kit's choice switch: its parts on the neutral
+// tint, the chosen one dark on the accent); g m and g f switch too, and the diff opens in the mode used last.
+const btn = (x, y, label, st) => { const s = st === "hover" ? "4" : "2"; put(x, y, "\uE0B6", s); const n = put(x + 1, y, label, "a", "b", s); put(x + 1 + n, y, "\uE0B4", s); return n + 3; };
+const modeSwitch = (x, y, on) => { put(x, y, "\uE0B6", "5"); let n = 1; for (const p of ["Map", "Files"]) { const lit = p === on; n += put(x + n, y, " " + p + " ", lit ? "k" : "d", lit ? "b" : "", lit ? "A" : "5"); } put(x + n, y, "\uE0B4", "5"); return n + 2; };
+const buttonRow = (on, hint) => { let x = 36 + modeSwitch(36, 44, on); for (const l of ["◀ Chapter", "Chapter ▶", "◀ Page", "Page ▶", "Widen", "Copy link", "Refresh", "Ask", "Close"]) x += btn(x, 44, l); put(x + 1, 44, hint || "g m map · g f files", "d"); };
 // Restore the box edge the arrow's first cell drew over.
 const EDGEFIX = (x, y, c) => put(x, y, '┬', c || 'L');
 fill(35, 4, 34, 40, '2'); vl(69, 4, 40);
@@ -226,7 +232,7 @@ pair(30, [0, ''], [2, '', 'G']);
 pair(31, [0, ''], [3, 'export function TopicsCallout({ rows }: Props) {', 'G']);
 pair(32, [0, ''], [4, '  const topics = countTopics(rows);', 'G']);
 vl(114, 28, 6);
-keys(36, 44, [['j/k', 'move'], ['J/K', 'scroll'], ['Enter', 'actions'], [']c', 'next unread'], ['g m', 'the map'], ['m', 'view actions']]);
+buttonRow("Map");
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Lines and blocks are drawn to fill the cell, as Ghostty draws them, not taken from the font.
