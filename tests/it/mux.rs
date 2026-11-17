@@ -1327,6 +1327,198 @@ fn a_box_not_about_the_tab_goes_in_the_middle_beside_a_narrow_pane() {
     }
 }
 
+/// What the desktop's opener (the test's `open`, or `xdg-open` on Linux) was
+/// asked to open, in order.
+fn opened(server: &TestServer) -> Vec<String> {
+    std::fs::read_to_string(server.home.join("desktop-log"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| {
+            l.strip_prefix("open ")
+                .or_else(|| l.strip_prefix("xdg-open "))
+        })
+        .map(str::to_string)
+        .collect()
+}
+
+/// Waits until the test's `open` has been asked for `count` files.
+fn wait_opened(server: &TestServer, count: usize) -> Vec<String> {
+    let deadline = common::deadline(std::time::Duration::from_secs(10));
+    loop {
+        let files = opened(server);
+        if files.len() >= count {
+            return files;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{count} files opened: {files:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// A picture of the test's own in its directory, by its full path.
+fn picture_at(server: &TestServer, name: &str) -> String {
+    let file = server.dir.path().join(name);
+    common::four_colours(&file, 64);
+    real(&file)
+}
+
+/// A file's path with links followed, as `look` hands it on.
+fn real(file: &std::path::Path) -> String {
+    file.canonicalize()
+        .expect("the file is there")
+        .to_string_lossy()
+        .into_owned()
+}
+
+#[test]
+fn look_shows_pictures_beside_a_narrow_pane_stacked_when_there_are_two() {
+    let server = TestServer::start_with_settings(r#"{"lone_pane_width": "80"}"#);
+    let mut client = server.attach_as("xterm-ghostty", 240, 40);
+    client.wait_text("BESIDE THIS PANE");
+    let side = server.list()["sessions"][0]["sidebar"]["columns"]
+        .as_u64()
+        .unwrap_or(0) as usize;
+    let rule = side + 80;
+    let shot = picture_at(&server, "shot.png");
+    // One picture: a pane right of the rule, its header naming the file
+    // and the tab, the hints gone, drawn inline, nothing opened outside.
+    server.ok(&["look", &shot]);
+    let screen = client.wait_text("shot.png   tab 1 · ");
+    let (x, y) = cell_of(&screen, "shot.png   tab 1 · ").unwrap();
+    assert!(x > rule && y == 0, "at {x},{y}:\n{}", screen.join("\n"));
+    assert!(cell_of(&screen, "BESIDE THIS PANE").is_none());
+    let (kx, ky) = cell_of(&screen, "M-Esc close").unwrap();
+    assert!(kx > rule && ky > 30, "keys at {kx},{ky}");
+    assert!(
+        !screen.iter().any(|l| l.contains('╭') || l.contains('▀')),
+        "no box edge or shadow:\n{}",
+        screen.join("\n")
+    );
+    client.wait_sent("the picture's data, inline", b"t=d");
+    assert!(opened(&server).is_empty(), "{:?}", opened(&server));
+    // The pane keeps its keys while they show.
+    let pane = server.list()["sessions"][0]["tabs"][0]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    client.type_text("echo typed-beside\r");
+    client.wait_text("typed-beside");
+    client.wait_text("shot.png   tab 1 · ");
+    // M-Esc closes them and brings the hints back.
+    client.send(b"\x1b\x1b");
+    client.wait_for("the hints back", |s| {
+        cell_of(s, "M-Esc close").is_none() && cell_of(s, "BESIDE THIS PANE").is_some()
+    });
+    // Two, named by their place in the directory the command runs in:
+    // stacked, each under its name, the first above the second.
+    picture_at(&server, "before.png");
+    picture_at(&server, "after.png");
+    server.ok(&["look", "-t", &pane, "before.png", "after.png"]);
+    let screen = client.wait_text("Before and after   tab 1 · ");
+    let (bx, by) = cell_of(&screen, "before.png").unwrap();
+    let (ax, ay) = cell_of(&screen, "after.png").unwrap();
+    assert!(bx > rule && ax == bx, "names at {bx} and {ax}");
+    assert!(by > 0 && ay > by + 8, "names on rows {by} and {ay}");
+    // A click on them closes them.
+    let (col, row) = (bx + 6, by + 5);
+    let click = format!("\x1b[<0;{col};{row}M\x1b[<0;{col};{row}m");
+    client.send(click.as_bytes());
+    client.wait_for("the pictures gone", |s| {
+        cell_of(s, "Before and after").is_none() && cell_of(s, "BESIDE THIS PANE").is_some()
+    });
+    // Shown while a box is up, they go under it: the box keeps its keys.
+    server.ok(&["press", "palette"]);
+    client.wait_for("the palette", |s| cell_of(s, "BESIDE THIS PANE").is_some());
+    server.ok(&["look", &shot]);
+    client.wait_text("shot.png   tab 1 · ");
+    client.type_text("zzqq");
+    client.wait_text("zzqq");
+    let typed = server.ok(&["capture-pane", "-t", &pane]);
+    assert!(
+        !typed.contains("zzqq"),
+        "the palette took the keys: {typed}"
+    );
+    client.send(b"\x1b");
+    client.wait_for("the palette gone", |s| cell_of(s, "zzqq").is_none());
+    client.send(b"\x1b\x1b");
+    client.wait_for("the pictures gone", |s| cell_of(s, "M-Esc close").is_none());
+    // Shown again, a split takes the columns and they go with them.
+    server.ok(&["look", &shot]);
+    client.wait_text("shot.png   tab 1 · ");
+    server.ok(&["split", "-R"]);
+    client.wait_for("the pictures gone with the columns", |s| {
+        cell_of(s, "M-Esc close").is_none()
+    });
+    assert!(opened(&server).is_empty(), "{:?}", opened(&server));
+}
+
+#[test]
+fn look_opens_the_desktops_viewer_where_no_picture_shows_beside_the_pane() {
+    let server = TestServer::start_with_settings(r#"{"lone_pane_width": "80"}"#);
+    let mut client = server.attach_as("xterm-ghostty", 240, 40);
+    client.wait_text("BESIDE THIS PANE");
+    let shot = picture_at(&server, "shot.png");
+    let other = picture_at(&server, "other.png");
+    // A video always goes to the desktop's viewer.
+    let clip = server.dir.path().join("clip.mp4");
+    std::fs::write(&clip, b"a video").unwrap();
+    let clip = real(&clip);
+    server.ok(&["look", &clip]);
+    assert_eq!(wait_opened(&server, 1), std::slice::from_ref(&clip));
+    // Anything but a picture, a video or a PDF is refused, and a file
+    // that isn't there.
+    let script = server.dir.path().join("run.command");
+    std::fs::write(&script, "echo ran").unwrap();
+    let (code, _, err) = server.run(&["look", &shot, script.to_str().unwrap()]);
+    assert_ne!(code, 0);
+    assert!(err.contains("isn't a picture, a video or a PDF"), "{err}");
+    // A link named as a picture is the file it leads to.
+    let link = server.dir.path().join("link.png");
+    std::os::unix::fs::symlink(&script, &link).unwrap();
+    let (code, _, err) = server.run(&["look", link.to_str().unwrap()]);
+    assert_ne!(code, 0);
+    assert!(err.contains("isn't a picture, a video or a PDF"), "{err}");
+    let (code, _, err) = server.run(&["look", "nowhere.png"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("no file"), "{err}");
+    assert_eq!(opened(&server).len(), 1, "neither opened anything");
+    // With a split there are no columns beside the pane: each is opened.
+    server.ok(&["split", "-R"]);
+    client.wait_for("the hints gone", |s| {
+        cell_of(s, "BESIDE THIS PANE").is_none()
+    });
+    server.ok(&["look", &shot, &other]);
+    assert_eq!(
+        wait_opened(&server, 3),
+        [clip.clone(), shot.clone(), other.clone()]
+    );
+    assert!(cell_of(&client.screen(), "M-Esc close").is_none());
+    drop(client);
+
+    // Off, a picture opens in the desktop's viewer beside a narrow pane too.
+    let server = TestServer::start_with_settings(
+        r#"{"lone_pane_width": "80", "images_beside_pane": false}"#,
+    );
+    let mut client = server.attach_as("xterm-ghostty", 240, 40);
+    client.wait_text("BESIDE THIS PANE");
+    let shot = picture_at(&server, "shot.png");
+    server.ok(&["look", &shot]);
+    assert_eq!(wait_opened(&server, 1), [shot]);
+    assert!(cell_of(&client.screen(), "M-Esc close").is_none());
+    drop(client);
+
+    // And so does one for a terminal that draws none of the server's images.
+    let server = TestServer::start_with_settings(r#"{"lone_pane_width": "80"}"#);
+    let mut client = server.attach(240, 40);
+    client.wait_text("BESIDE THIS PANE");
+    let shot = picture_at(&server, "shot.png");
+    server.ok(&["look", &shot]);
+    assert_eq!(wait_opened(&server, 1), [shot]);
+    assert!(cell_of(&client.screen(), "M-Esc close").is_none());
+}
+
 /// Settings' `lone_pane_width` as the server wrote it to the test's file.
 fn lone_setting(server: &TestServer) -> Option<String> {
     let file = server.home.join(".config/switchboard/settings.json");

@@ -4046,6 +4046,7 @@ impl Server {
         self.trail_sync(id);
         self.history_before_draw(id);
         self.pictures_before_draw(id);
+        self.looks_before_draw(id);
         let Some(c) = self.clients.get(&id) else {
             return;
         };
@@ -4240,6 +4241,11 @@ impl Server {
                 // columns as a pane.
                 let boxed = c.overlays.layers.iter().any(|l| l.about.is_some())
                     && crate::settings::is_on("boxes_beside_narrow_pane");
+                // So do pictures shown there (`switchboard look`).
+                let boxed = boxed
+                    || c.overlays
+                        .find::<crate::ui::pictures::Pictures>()
+                        .is_some_and(|p| p.area.is_some());
                 if crate::settings::is_on("spare_hints")
                     && !boxed
                     && let Some(spare) = super::beside::spare_of(spread, area)

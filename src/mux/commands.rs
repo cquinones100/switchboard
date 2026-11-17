@@ -51,6 +51,11 @@
 //!                                        the pane, Esc going back; fails
 //!                                        where the terminal draws no images
 //!                                        (src/ui/picture.rs)
+//! look [-t pane] <file>...               pictures shown beside the tab's
+//!                                        narrow lone pane, stacked when
+//!                                        several; in the desktop's viewer
+//!                                        with no room there, and a video
+//!                                        or a PDF always (src/ui/pictures.rs)
 //! seen [-t tab]                          the tab seen, as if looked at: its
 //!                                        finished Claude and a reminder come
 //!                                        due (the Slack relay's Open)
@@ -100,6 +105,7 @@ pub const NAMES: &[&str] = &[
     "upgrade",
     "say",
     "picture",
+    "look",
     "seen",
     "tip",
     "press",
@@ -185,6 +191,10 @@ pub const USAGE: &[(&str, &str)] = &[
     (
         "picture",
         "picture [-t pane] <file>: the picture shown full size over the pane, Esc going back; fails where the terminal does not draw the server's images",
+    ),
+    (
+        "look",
+        "look [-t pane] <file>...: pictures shown beside the tab's narrow lone pane, stacked when there are several, M-Esc or a click closing them; opened with the desktop's viewer where there is no room beside it, and a video or a PDF always",
     ),
     (
         "seen",
@@ -450,6 +460,7 @@ impl Server {
             }
             "say" => Ok(self.cmd_say(rest, caller)),
             "picture" => Ok(self.cmd_picture(rest, caller)),
+            "look" => Ok(self.cmd_look(rest, cwd, caller)),
             "seen" => Args::parse(rest, "t")
                 .and_then(|a| self.tab_from(&a, caller))
                 .map(|tab| {
@@ -1174,7 +1185,7 @@ impl Server {
 }
 
 /// A directory given to a command, relative to where it ran.
-fn resolve(cwd: &Path, dir: &str) -> PathBuf {
+pub(crate) fn resolve(cwd: &Path, dir: &str) -> PathBuf {
     let expanded = match dir.strip_prefix("~") {
         Some(rest) if rest.is_empty() || rest.starts_with('/') => {
             crate::paths::home().join(rest.trim_start_matches('/'))

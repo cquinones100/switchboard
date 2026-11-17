@@ -67,6 +67,7 @@ pub mod keylist;
 pub mod layout;
 pub mod palette;
 pub mod picture;
+pub mod pictures;
 mod serve;
 pub mod tip;
 pub mod when;
@@ -275,6 +276,19 @@ pub enum UiEvent {
         pane: crate::mux::PaneId,
         title: String,
         read: Result<image::RgbaImage, String>,
+    },
+    /// Something a task of the overlays' has to say (a file `switchboard
+    /// look` couldn't open), on a client or the one used last.
+    Said {
+        client: Option<ClientId>,
+        text: String,
+    },
+    /// Pictures read off the server's task for `switchboard look`, to show
+    /// beside the tab's narrow lone pane.
+    Look {
+        client: ClientId,
+        tab: crate::mux::TabId,
+        shown: Vec<pictures::Shown>,
     },
 }
 

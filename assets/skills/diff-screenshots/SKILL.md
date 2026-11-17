@@ -4,6 +4,7 @@ description: Render a branch's or PR's diff with git delta, side by side and in 
 argument-hint: "[base ref or PR number] [unified]"
 allowed-tools:
   - Bash(switchboard skill-path *)
+  - Bash(switchboard look *)
 ---
 
 # Diff screenshots
@@ -72,7 +73,7 @@ If something is off, fix it and render again, into a fresh folder, so old images
 ## 5. Show them
 
 ```bash
-for png in "$OUT"/*.png; do switchboard platform open "$png"; done
+switchboard look "$OUT"/*.png
 ```
 
-opens them in the desktop's image viewer (Preview on macOS). In the final message, list every PNG with its full absolute path, in order, each with its label. Mention any files the plan skipped.
+shows up to six of them beside the tab's pane where there is room, and otherwise opens them in the desktop's image viewer (Preview on macOS). In the final message, list every PNG with its full absolute path, in order, each with its label. Mention any files the plan skipped.

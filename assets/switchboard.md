@@ -46,6 +46,10 @@ When I name one of these, I mean what Switchboard shows me:
 - The PR view (`M-v`) and the ticket view (`M-i`): the tab's PR description and its Linear ticket.
 - Notes (`M-e`): see "# Notes".
 
+# Showing me an image
+
+To show me an image for feedback (a screenshot, a rendering, a chart), run `switchboard look <file>`, with both files for a before and after, rather than `open`: it shows them beside this tab's pane where there is room, without taking me out of the workspace, and in the desktop's viewer otherwise, as it does a video or a PDF.
+
 # The Slack relay
 
 When I ask to change which of the Slack relay's messages reach me, or which notify me, change its settings rather than its code: `switchboard setting relay_send_<kind> <notify|thread|off>` for a kind (`prompts`, `dialogs`, `finished`, `stuck`, `milestones`, `failures`, `context`, `notices`; prompts and dialogs can't be off, notices can't be thread), `switchboard setting relay_send_autopilot <same|landings>` for autopilot's tabs, `switchboard setting relay_quiet_hours on` with `relay_quiet_from` and `relay_quiet_to` (an hour, 0 to 23) and `relay_quiet_prompts` for quiet hours, or `switchboard slack-relay sends <needs-me|everything|quiet>` for a preset, which prints what it changed. `switchboard setting relay_send_<kind>` alone reads one. A change takes effect with the next message, the relay running or not. An answer to a message I sent a tab from Slack always reaches me, whatever they say. Mission control's Slack relay view shows the same choices.

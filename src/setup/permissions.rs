@@ -182,6 +182,7 @@ mod tests {
                 "Bash(switchboard diff-story)",
                 "Bash(switchboard diff-story *)",
                 "Bash(switchboard show *)",
+                "Bash(switchboard look *)",
                 "Bash(switchboard set *)",
                 "Bash(switchboard setting relay_*)",
             ]

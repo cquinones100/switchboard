@@ -17,6 +17,7 @@ use super::draw;
 use super::palette::{self, Entry};
 use super::picker::Order;
 use super::picture::{self, Picture};
+use super::pictures::{self, Pictures};
 use super::{
     Confirm, Layer, Look, Menu, Message, Outcome, Overlay, PickItem, Picked, Picker, Step, Then,
     Tip, Ui, UiEvent, keylist, message, tip,
@@ -26,6 +27,86 @@ use crate::mux::proto::ServerMsg;
 use crate::mux::server::{ClientId, Event, Reply, Server};
 use crate::mux::{PaneId, TabId};
 use crate::{paths, settings, util};
+
+/// Where pictures shown beside a tab's pane go on a client
+/// (`Server::look_spare`).
+enum Spare {
+    /// Nowhere any more: no such columns, tab or client.
+    Gone,
+    /// The columns are behind another tab or mission control for now.
+    Hidden,
+    At(Rect),
+}
+
+/// What `switchboard look` does with a file, by its name's ending.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// One the server may draw itself.
+    Picture,
+    /// A picture it doesn't decode, a video or a PDF: the desktop's viewer.
+    Viewer,
+}
+
+impl Kind {
+    fn of(file: &std::path::Path) -> Option<Kind> {
+        let ending = file.extension()?.to_str()?.to_ascii_lowercase();
+        match ending.as_str() {
+            "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff" => Some(Kind::Picture),
+            // No SVG: one may carry a script, and a browser may be what
+            // the desktop opens it with.
+            "heic" | "avif" | "pdf" | "mp4" | "mov" | "m4v" | "webm" => Some(Kind::Viewer),
+            _ => None,
+        }
+    }
+}
+
+/// What reaches the server's task from one of its own.
+type ToServer = tokio::sync::mpsc::UnboundedSender<Event>;
+
+/// Opens a file with what the desktop opens it with, from a task of its
+/// own; one it couldn't open is said on the client, since whoever asked
+/// was already told it would show.
+fn open_file(file: &std::path::Path, tx: &ToServer, client: Option<ClientId>) {
+    if let Err(why) = crate::platform::open(&file.to_string_lossy()) {
+        let _ = tx.send(Event::Ui(UiEvent::Said {
+            client,
+            text: format!("{why:#}"),
+        }));
+    }
+}
+
+/// Whether a file is in a worktree holding someone else's PR
+/// (`trust::is_untrusted`, which runs git, so from a task of its own),
+/// said on the client when it is: nothing of such a worktree is decoded
+/// or handed to the desktop.
+fn untrusted(file: &std::path::Path, tx: &ToServer, client: Option<ClientId>) -> bool {
+    let held = file.parent().is_some_and(crate::trust::is_untrusted);
+    if held {
+        let _ = tx.send(Event::Ui(UiEvent::Said {
+            client,
+            text: format!("look: {} is in a PR's untrusted worktree", file.display()),
+        }));
+    }
+    held
+}
+
+/// Opens files with what the desktop opens them with, in order, off the
+/// server's task; `vetted` for files a task already found in no untrusted
+/// worktree.
+fn open_outside(
+    files: Vec<std::path::PathBuf>,
+    tx: ToServer,
+    client: Option<ClientId>,
+    vetted: bool,
+) {
+    tokio::task::spawn_blocking(move || {
+        for file in files {
+            if vetted || !untrusted(&file, &tx, client) {
+                open_file(&file, &tx, client);
+            }
+        }
+    });
+}
 
 /// What became of input handed to a client's overlays.
 pub enum Handed {
@@ -381,6 +462,200 @@ impl Server {
                     Err(why) => self.say(Some(client), &why),
                 }
             }
+            UiEvent::Said { client, text } => self.say(client, &text),
+            UiEvent::Look { client, tab, shown } => {
+                if shown.is_empty() {
+                    return;
+                }
+                // The columns may have gone while the pictures were read.
+                if !matches!(self.look_spare(client, tab), Spare::At(_)) {
+                    let files = shown.into_iter().map(|s| s.file).collect();
+                    open_outside(files, self.tx.clone(), Some(client), true);
+                    return;
+                }
+                self.close_overlays(client, "pictures");
+                let about = format!("tab {} · {}", self.tab_number(tab), self.tab_label(tab));
+                let pictures = Pictures::new(tab, &about, shown);
+                // Under every box already up: they pass keys on to the tab,
+                // which would take them from a menu or a question open
+                // when Claude shows them, were they on top of it.
+                if let Some(c) = self.clients.get_mut(&client) {
+                    c.overlays.look = Look::read_for(c.truecolor());
+                    c.overlays.layers.insert(
+                        0,
+                        Layer {
+                            overlay: Box::new(pictures),
+                            then: None,
+                            about: None,
+                        },
+                    );
+                }
+                self.overlays_changed(client);
+            }
+        }
+    }
+
+    /// `look [-t pane] <file>...`: pictures shown to you beside the pane's
+    /// tab, in the empty columns at the right of its narrow lone pane, read
+    /// off the server's task (Settings' `images_beside_pane`). Where there
+    /// are no such columns in front of a terminal that draws the server's
+    /// images (a split, a wide pane, another tab in front, mission control
+    /// up), with more than `pictures::MOST` of them, or with the setting
+    /// off, each opens with what the desktop opens it with, as a video or
+    /// a PDF always does, and a picture this can't decode. Anything else is
+    /// refused, by the ending of the file a name leads to with links
+    /// followed, and so is a file in a PR's untrusted worktree, since Claude
+    /// may run this without asking and the desktop runs some kinds of file
+    /// it is handed.
+    pub fn cmd_look(
+        &mut self,
+        args: &[String],
+        cwd: &std::path::Path,
+        caller: Option<PaneId>,
+    ) -> Reply {
+        let (target, rest) = match args {
+            [flag, t, rest @ ..] if flag == "-t" => (Some(t.as_str()), rest),
+            rest => (None, rest),
+        };
+        if rest.is_empty() {
+            return Reply::fail("usage: switchboard look [-t pane] <file>...");
+        }
+        let pane = match target {
+            Some(t) => match t.strip_prefix('%').and_then(|p| p.parse::<PaneId>().ok()) {
+                Some(p) if self.panes.contains_key(&p) => Some(p),
+                _ => return Reply::fail(format!("no pane {t}")),
+            },
+            None => caller,
+        };
+        let mut files = Vec::new();
+        for name in rest {
+            let named = crate::mux::commands::resolve(cwd, name);
+            // The file a name leads to, links followed, is what is read
+            // or opened, so its own ending decides its kind: a link named
+            // as a picture may lead to a file the desktop would run.
+            let file = match named.canonicalize() {
+                Ok(real) if real.is_file() => real,
+                _ => return Reply::fail(format!("look: no file {}", named.display())),
+            };
+            // A PR checked out untrusted is its author's: nothing of it is
+            // handed to the desktop. One marked so elsewhere is found off
+            // this task, before its file is read or opened (`untrusted`).
+            if crate::trust::in_review_dir(&file) {
+                return Reply::fail(format!(
+                    "look: {} is in a PR's untrusted worktree",
+                    file.display()
+                ));
+            }
+            let Some(kind) = Kind::of(&file) else {
+                return Reply::fail(format!(
+                    "look: {} isn't a picture, a video or a PDF",
+                    file.display()
+                ));
+            };
+            files.push((file, kind));
+        }
+        let client = self.client_for(pane);
+        let tab = pane
+            .and_then(|p| self.panes.get(&p))
+            .map(|slot| slot.tab)
+            .or_else(|| {
+                let c = self.clients.get(&client?)?;
+                Some(self.session(&c.session)?.current)
+            });
+        let pictures = files.iter().filter(|(_, k)| *k == Kind::Picture).count();
+        let beside = match (client, tab) {
+            (Some(client), Some(tab))
+                if (1..=pictures::MOST).contains(&pictures)
+                    && settings::is_on("images_beside_pane")
+                    && matches!(self.look_spare(client, tab), Spare::At(_)) =>
+            {
+                Some((client, tab))
+            }
+            _ => None,
+        };
+        let Some((client, tab)) = beside else {
+            let files = files.into_iter().map(|(f, _)| f).collect();
+            open_outside(files, self.tx.clone(), client, false);
+            return Reply::ok("");
+        };
+        let tx = self.tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut shown = Vec::new();
+            for (file, kind) in files {
+                if untrusted(&file, &tx, Some(client)) {
+                    continue;
+                }
+                let read = (kind == Kind::Picture)
+                    .then(|| picture::decode(&file).ok())
+                    .flatten();
+                match read {
+                    Some(img) => shown.push(pictures::Shown {
+                        title: file
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default(),
+                        file,
+                        img,
+                    }),
+                    None => {
+                        open_file(&file, &tx, Some(client));
+                    }
+                }
+            }
+            let _ = tx.send(Event::Ui(UiEvent::Look { client, tab, shown }));
+        });
+        Reply::ok("")
+    }
+
+    /// Where pictures shown beside a tab's pane go on a client: the empty
+    /// columns at the right of its narrow lone pane, while the tab is the
+    /// one in front, nothing fills the screen over it and the terminal
+    /// draws the server's images.
+    fn look_spare(&self, client: ClientId, tab: TabId) -> Spare {
+        let Some(c) = self.clients.get(&client) else {
+            return Spare::Gone;
+        };
+        let (Some(s), Some(t)) = (self.session(&c.session), self.tabs.get(&tab)) else {
+            return Spare::Gone;
+        };
+        if self.graphics_of(c).is_none() {
+            return Spare::Gone;
+        }
+        let covered = c.overlays.layers.iter().any(|l| l.overlay.covers_screen());
+        if s.current != tab || covered {
+            return Spare::Hidden;
+        }
+        crate::mux::beside::spare_of(s.spread_for(t), s.area_for(t))
+            .filter(|r| r.width >= pictures::LEAST_COLS && r.height >= pictures::LEAST_HEIGHT)
+            .map_or(Spare::Gone, Spare::At)
+    }
+
+    /// Keeps the pictures shown beside a tab's pane on the spare columns
+    /// before a client is drawn: hidden while another tab or mission
+    /// control is in front, closed once the columns have gone.
+    pub fn looks_before_draw(&mut self, id: ClientId) {
+        let Some(tab) = self
+            .clients
+            .get(&id)
+            .and_then(|c| c.overlays.find::<Pictures>())
+            .map(|p| p.tab)
+        else {
+            return;
+        };
+        let area = match self.look_spare(id, tab) {
+            Spare::Gone => {
+                self.close_overlays(id, "pictures");
+                return;
+            }
+            Spare::Hidden => None,
+            Spare::At(area) => Some(area),
+        };
+        if let Some(p) = self
+            .clients
+            .get_mut(&id)
+            .and_then(|c| c.overlays.find_mut::<Pictures>())
+        {
+            p.area = area;
         }
     }
 
