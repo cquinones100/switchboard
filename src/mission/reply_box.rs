@@ -2,9 +2,10 @@
 //! menu with Settings' `slack_reply` on: where the reply goes in its title
 //! and first line, the message it answers quoted, a box to type in, and
 //! Send and Cancel as buttons. What is typed is a multi-line `ui::field`,
-//! as every box's typing is (the cursor keys, wrapping, undo): Enter is a
-//! new line there, as S-Enter and M-Enter are; Send is Tab then Enter (or
-//! Space), or a click; Esc cancels. Nothing is sent from here alone:
+//! as every box's typing is (the cursor keys, wrapping, undo): Enter on the
+//! text is Send, and S-Enter and M-Enter a new line; Send is a Tab stop
+//! too, pressed with Enter or Space, or a click; Esc cancels. Nothing is
+//! sent from here alone:
 //! Send closes it with what was typed (`Outcome::Picked`, its query the
 //! text, as typed), and the server asks before sending (board 109), coming
 //! back here with the text kept on a no, and on a send that failed, saying
@@ -27,6 +28,9 @@ const WIDTH: usize = 80;
 const TEXT_ROWS: usize = 4;
 /// The lines of the message it answers shown at most.
 const QUOTE_ROWS: usize = 2;
+
+/// The keys on the box's last row.
+const KEYS: &str = "↵ send  S-↵ new line  esc cancel";
 
 /// What Tab's focus or the mouse is on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -255,7 +259,7 @@ impl Overlay for ReplyBox {
         let (lines, parts) = self.lines(inner, look);
         self.parts = parts;
         let mut spec = BoxSpec::new(&self.title, &lines);
-        spec.keys = Some("↵ S-↵ new line  tab Send, Cancel  esc cancel");
+        spec.keys = Some(KEYS);
         spec.width = inner as u16;
         spec.place = self.place;
         spec.close_lit = self.focus == Part::Close || self.hover == Some(Part::Close);
@@ -285,14 +289,10 @@ impl Overlay for ReplyBox {
         }
         // Typing on a button types in the text.
         self.focus = Part::Text;
-        let edit = match self.field.key(k) {
-            // Enter on the text is a new line too: Send is its button.
-            Edit::Not if k.code == KeyCode::Enter => {
-                self.field.key(Key::new(KeyCode::Enter, Mods::SHIFT))
-            }
-            edit => edit,
-        };
-        match edit {
+        match self.field.key(k) {
+            // Enter on the text is Send; S-Enter and M-Enter are the field's
+            // new lines.
+            Edit::Not if k.code == KeyCode::Enter => self.press(Part::Send),
             Edit::Changed | Edit::Moved => Step::Redraw,
             Edit::Same | Edit::Up | Edit::Down | Edit::Not => Step::Same,
         }
@@ -410,23 +410,40 @@ mod tests {
     }
 
     #[test]
-    fn enter_is_a_new_line_and_send_is_tab_then_enter_with_the_text_as_typed() {
+    fn enter_on_the_text_sends_it_as_typed_and_nothing_when_empty() {
+        let look = Look::default();
+        let mut b = ReplyBox::new(reply(), "");
+        // Nothing typed, or only blanks: the box stays, with nothing added.
+        assert_eq!(b.key(key(KeyCode::Enter), &look), Step::Redraw);
+        typed(&mut b, &chars("  "));
+        assert_eq!(b.key(key(KeyCode::Enter), &look), Step::Redraw);
+        assert_eq!(b.field.text(), "  ");
+        let mut b = ReplyBox::new(reply(), "");
+        typed(&mut b, &chars("On it"));
+        typed(&mut b, &[Key::new(KeyCode::Enter, Mods::SHIFT)]);
+        typed(&mut b, &chars("before 3:00 "));
+        match b.key(key(KeyCode::Enter), &look) {
+            Step::Close(Outcome::Picked(p)) => assert_eq!(p.query, "On it\nbefore 3:00 "),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_keys_line_says_enter_sends_and_s_enter_is_a_new_line() {
+        assert_eq!(KEYS, "↵ send  S-↵ new line  esc cancel");
+    }
+
+    #[test]
+    fn tab_reaches_send_and_cancel_and_esc_cancels() {
         let look = Look::default();
         let mut b = ReplyBox::new(reply(), "");
         // Send with nothing typed stays.
         b.key(key(KeyCode::Tab), &look);
         assert_eq!(b.key(key(KeyCode::Enter), &look), Step::Redraw);
-        for c in "On it".chars() {
-            b.key(key(KeyCode::Char(c)), &look);
-        }
-        assert_eq!(b.key(key(KeyCode::Enter), &look), Step::Redraw);
-        for c in "before 3:00 ".chars() {
-            b.key(key(KeyCode::Char(c)), &look);
-        }
-        assert!(text_of(&mut b).contains("before 3:00"));
+        typed(&mut b, &chars("On it"));
         b.key(key(KeyCode::Tab), &look);
         match b.key(key(KeyCode::Enter), &look) {
-            Step::Close(Outcome::Picked(p)) => assert_eq!(p.query, "On it\nbefore 3:00 "),
+            Step::Close(Outcome::Picked(p)) => assert_eq!(p.query, "On it"),
             other => panic!("{other:?}"),
         }
         let mut b = ReplyBox::new(reply(), "kept");
@@ -466,6 +483,8 @@ mod tests {
     fn s_enter_and_m_enter_are_new_lines_and_the_keys_after_them_land() {
         for new_line in [
             Key::new(KeyCode::Enter, Mods::SHIFT),
+            // S-Enter from a terminal without kitty's keyboard protocol.
+            Key::new(KeyCode::Char('\r'), Mods::ALT),
             Key::new(KeyCode::Enter, Mods::ALT),
         ] {
             let mut b = ReplyBox::new(reply(), "");

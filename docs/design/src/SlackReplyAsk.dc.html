@@ -279,7 +279,7 @@ keys(36, 44, [['j/k', 'move'], ['h/l', 'sections, messages, thread'], ['Enter', 
 
 {
 // THE REPLY BOX: where it goes in its title and first line, the message it answers quoted, a box to type in, Send and Cancel
-// as buttons (Tab stops, clicks). Enter is a new line; Send is Tab then Enter, or a click. Nothing is sent from here alone.
+// as buttons (Tab stops, clicks). Enter sends, S-Enter is a new line; Send is a Tab stop and a click too. Nothing is sent from here alone.
 const MX = 52, MY = 8, MW = 84;
 box(MX, MY, MW, 18, 'Reply in Ana\'s thread · #web-app');
 T(MX + 3, MY + 2, ['To ', 'd', '', 'E'], ['#web-app', 't', 'b', 'E'], [', in the thread Ana started 4m ago · 3 replies', 'd', '', 'E']);
@@ -292,7 +292,7 @@ put(MX + 3, MY + 12, 'as you, from your Slack sign-in', 'f', '', 'E');
 keycap(MX + MW - 24, MY + 12, '', 'Cancel', false);
 { const bx = MX + MW - 13; put(bx, MY + 12, '\uE0B6', 'A'); put(bx + 1, MY + 12, ' Send ', 'k', 'b', 'A'); put(bx + 7, MY + 12, '\uE0B4', 'A'); }
 hl(MX + 1, MY + 15, MW - 2, 'L');
-keys(MX + 2, MY + 16, [["↵","new line"],["Tab","Send, Cancel"],["esc","cancel"]]); for (let x = MX + 1; x < MX + MW - 1; x++) if (g[MY + 16][x].bg === '0') g[MY + 16][x].bg = 'E';
+keys(MX + 2, MY + 16, [["↵","send"],["S-↵","new line"],["esc","cancel"]]); for (let x = MX + 1; x < MX + MW - 1; x++) if (g[MY + 16][x].bg === '0') g[MY + 16][x].bg = 'E';
 
 const QX = 56, QY = 14, QW = 76;
 box(QX, QY, QW, 9, 'Send it?', 'y');

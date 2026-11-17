@@ -3772,7 +3772,7 @@ fn the_reminders_menu_shows_the_lists_a_narrow_screen_keeps_behind_i() {
 
 // The Slack reply box types as every box does: a line, S-Enter (as kitty's
 // keyboard protocol sends it, and as `ESC CR` from a terminal without it),
-// a dash and more words all land in it, and Send takes them as typed.
+// a dash and more words all land in it, and Enter sends them as typed.
 #[test]
 fn the_slack_reply_box_takes_s_enter_then_a_dash_and_the_words_after() {
     let server = TestServer::start();
@@ -3820,7 +3820,8 @@ fn the_slack_reply_box_takes_s_enter_then_a_dash_and_the_words_after() {
         "each on a line of its own: {}",
         screen.join("\n")
     );
-    // Send asks before anything goes, with the reply's first line.
-    client.type_text("\t\r");
+    // Enter on the text sends, which asks before anything goes, with the
+    // reply's first line.
+    client.type_text("\r");
     client.wait_text("\"On it\"");
 }
