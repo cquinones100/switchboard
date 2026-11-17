@@ -287,28 +287,46 @@ fn a_demo_home_that_is_a_link_is_refused() {
     );
 }
 
-#[test]
-fn the_tour_saves_a_board_for_each_step() {
-    let d = Demo::new();
+/// Walks the tour of a demo of its own at `size` and gives the folder its
+/// boards are in: the tour succeeded (a wait that failed says in its error
+/// what the screen showed), every step's board is there with the text it
+/// waits for, and every board it says it saved is there, a view of mission
+/// control each besides the steps'.
+fn toured(d: &Demo, size: &str) -> PathBuf {
     let tour = d.dir.path().join("tour");
-    let out = d.run(&[
-        "demo",
-        "--tour",
-        &tour.to_string_lossy(),
-        "--size",
-        "140x40",
-    ]);
+    let out = d.run(&["demo", "--tour", &tour.to_string_lossy(), "--size", size]);
     assert!(
         out.status.success(),
-        "demo --tour failed: {}",
+        "demo --tour at {size} failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     // Each step reached its board: the text it waits for is on it.
-    for step in demo::tour::STEPS.iter().chain(demo::tour::LAST) {
+    let steps = demo::tour::STEPS.iter().chain(demo::tour::LAST);
+    for step in steps.clone() {
         let board =
             std::fs::read_to_string(tour.join(format!("{}.txt", step.name))).unwrap_or_default();
         assert!(board.contains(step.wait), "{}: {board}", step.name);
     }
+    // None skipped: as many boards as it says, each view's among them.
+    let said = String::from_utf8_lossy(&out.stdout).into_owned();
+    let boards = std::fs::read_dir(&tour)
+        .unwrap()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "txt"))
+        .count();
+    assert!(said.contains(&format!("Saved {boards} boards")), "{said}");
+    assert!(
+        boards > steps.count() + 10,
+        "{boards} boards: mission control's views are missing"
+    );
+    tour
+}
+
+#[test]
+fn the_tour_saves_a_board_for_each_step() {
+    let d = Demo::new();
+    // The size the tour walks when none is given.
+    let tour = toured(&d, "200x56");
     // The views that have nothing to show without the demo's own data.
     for (board, text) in [
         ("work-routines", "Triage new tickets"),
@@ -330,6 +348,22 @@ fn the_tour_saves_a_board_for_each_step() {
             );
         }
     }
+    // The waiting agent's welcome box is a box, painted again at the tour's
+    // size while it waits on a choice: its second line starts under its
+    // first, not where the first ended.
+    let waiting = std::fs::read_to_string(tour.join("tab-waiting.txt")).unwrap();
+    let lines: Vec<&str> = waiting.lines().collect();
+    let column = |line: &str, edge: &str| line.find(edge).map(|at| line[..at].chars().count());
+    let name = lines
+        .iter()
+        .position(|l| l.contains("◆ Coding agent"))
+        .unwrap_or_else(|| panic!("no welcome box: {waiting}"));
+    assert_eq!(
+        column(lines[name], "│ ◆"),
+        column(lines[name - 1], "╭─"),
+        "{waiting}"
+    );
+
     // The PR's card, its title wrapped over two lines.
     let code_prs = std::fs::read_to_string(tour.join("code-prs.txt")).unwrap();
     assert!(
@@ -368,6 +402,12 @@ fn the_tour_saves_a_board_for_each_step() {
                 && e["description"].as_str().is_some_and(|t| !t.is_empty())),
         "{calendar}"
     );
+}
+
+#[test]
+fn the_tour_saves_every_board_at_a_narrower_size() {
+    let d = Demo::new();
+    toured(&d, "160x45");
 }
 
 #[test]

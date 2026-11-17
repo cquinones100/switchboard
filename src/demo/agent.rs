@@ -522,6 +522,15 @@ fn out(text: &str) {
     let _ = stdout.flush();
 }
 
+/// `text` with a carriage return before each new line, so every line starts
+/// in the first column whatever the terminal's mode: while a choice is
+/// waited for the terminal is raw (`read_choice`) and adds none itself, and
+/// the pane painted again then (a resize) drew a piece of several lines,
+/// the welcome box, as a staircase.
+fn from_first_column(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\n', "\r\n")
+}
+
 /// The pane's size, columns and rows.
 fn size() -> (usize, usize) {
     crossterm::terminal::size()
@@ -570,7 +579,6 @@ struct Screen {
     /// The pane's size when last painted, columns and rows.
     size: (usize, usize),
     written: std::collections::VecDeque<String>,
-    block: Vec<String>,
 }
 
 /// How many pieces of the conversation are kept to paint again.
@@ -594,13 +602,14 @@ impl Screen {
             status: String::new(),
             size,
             written: std::collections::VecDeque::new(),
-            block: Vec::new(),
         }
     }
 
-    /// Waits for something typed, painting again whenever the pane is
-    /// resized meanwhile; `at` puts the cursor back where typing goes.
-    fn wait_for_input(&mut self, at: impl Fn(&Screen)) {
+    /// Waits for something typed; `paint` paints the pane again whenever
+    /// it is resized meanwhile, its block made for the new width (one kept
+    /// from the old width wraps in a narrower pane, each row over two, and
+    /// its last rows, a dialog's question, fall off the bottom).
+    fn wait_for_input(&mut self, paint: impl Fn(&mut Screen)) {
         loop {
             let mut fd = libc::pollfd {
                 fd: 0,
@@ -615,9 +624,7 @@ impl Screen {
             if size() != self.size {
                 // A resize comes in steps; paint once it has settled.
                 std::thread::sleep(Duration::from_millis(200));
-                let block = self.block.clone();
-                self.show(&block);
-                at(self);
+                paint(self);
             }
         }
     }
@@ -632,7 +639,7 @@ impl Screen {
     }
 
     fn write(&mut self, text: &str) {
-        out(&format!("\x1b[{};1H{text}", self.row));
+        out(&format!("\x1b[{};1H{}", self.row, from_first_column(text)));
         // Past the region's bottom, printing scrolls the rows above.
         self.row = (self.row + rows_of(text, self.size.0)).min(self.bottom);
     }
@@ -644,7 +651,6 @@ impl Screen {
         let (cols, rows) = self.size;
         let height = block.len().min(rows.saturating_sub(2));
         self.bottom = rows - height;
-        self.block = block.to_vec();
         // The pieces from the last back, as many as fill the rows above.
         let mut used = 0;
         let mut first = self.written.len();
@@ -689,7 +695,10 @@ impl Screen {
         // the statusline under it).
         let into_box = |s: &Screen| out(&format!("\x1b[{};5H", s.size.1 - 3));
         into_box(self);
-        self.wait_for_input(into_box);
+        self.wait_for_input(|s| {
+            s.input(None);
+            into_box(s);
+        });
         let line = read_line();
         out(&format!("\x1b[{};1H", self.row));
         line
@@ -705,11 +714,11 @@ impl Drop for Screen {
 /// A choice, a key at a time as a coding agent takes one: a digit picks
 /// that option at once (mission control answers a tab with the digit
 /// alone), Enter the first; `None` once the terminal is gone.
-fn read_choice(screen: &mut Screen) -> Option<usize> {
+fn read_choice(screen: &mut Screen, paint: impl Fn(&mut Screen)) -> Option<usize> {
     use std::io::Read;
     // Raw before waiting, so a key alone wakes the wait.
     let raw = crossterm::terminal::enable_raw_mode().is_ok();
-    screen.wait_for_input(|_| {});
+    screen.wait_for_input(paint);
     let mut byte = [0u8; 1];
     let chosen = loop {
         match std::io::stdin().read(&mut byte) {
@@ -888,8 +897,9 @@ fn play(s: &mut Session, screen: &mut Screen, turn: &Turn) -> bool {
                         "Notification",
                         json!({ "message": format!("Claude needs your permission to use {name}"), "notification_type": "permission_prompt" }),
                     );
-                    screen.show(&permission_rows(input));
-                    let Some(answer) = read_choice(screen) else {
+                    let dialog = |s: &mut Screen| s.show(&permission_rows(input));
+                    dialog(screen);
+                    let Some(answer) = read_choice(screen, dialog) else {
                         return false;
                     };
                     // The second option is a refusal: the tool doesn't run.
@@ -917,8 +927,10 @@ fn play(s: &mut Session, screen: &mut Screen, turn: &Turn) -> bool {
                         "PreToolUse",
                         json!({ "tool_name": "AskUserQuestion", "tool_input": input, "tool_use_id": call }),
                     );
-                    screen.show(&question_rows("Choice", question, options));
-                    let Some(n) = read_choice(screen) else {
+                    let dialog =
+                        |s: &mut Screen| s.show(&question_rows("Choice", question, options));
+                    dialog(screen);
+                    let Some(n) = read_choice(screen, dialog) else {
                         return false;
                     };
                     let chosen = options.get(n - 1).unwrap_or(&options[0]);

@@ -155,7 +155,7 @@ fn run(mode: Mode, reset: bool, size: (u16, u16)) -> Result<ExitCode> {
         Mode::Tour(dir) => {
             demo::start_server(&home, &bin, &env)?;
             let dir = absolute(&dir)?;
-            let saved = demo::tour::run(&demo::socket_of(&home), &dir, size.0, size.1)?;
+            let saved = demo::tour::run(&home, &dir, size.0, size.1)?;
             println!("Saved {} boards in {}.", saved.len(), dir.display());
             Ok(ExitCode::SUCCESS)
         }
