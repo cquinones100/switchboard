@@ -880,10 +880,37 @@ impl Try {
     /// Your `~/.config/switchboard` copied to `staged`, with `TURNED_OFF`
     /// over your settings.
     fn stage_own(&self, staged: &Path) -> Result<()> {
-        match self.real.join(".config/switchboard").canonicalize() {
+        let local = self.real.join(".config/switchboard");
+        // Your files kept in a git repository (src/files) are the ones in
+        // its clone, with those that stay on this computer beside them;
+        // files.json is left out, so the try reads its own copy and never
+        // the clone, which is under the `~/.local/share` it links, and
+        // pushes nothing.
+        let from_repo = crate::files::dir().filter(|_| paths::home() == self.real);
+        match from_repo.clone().unwrap_or(local.clone()).canonicalize() {
             Ok(source) => copy_own(&source, staged, true, false)?,
             Err(_) => fs::create_dir_all(staged)?,
         }
+        if from_repo.is_some() {
+            let _ = fs::remove_dir_all(staged.join(".git"));
+            for name in crate::files::LOCAL {
+                // The clone's copy of one, if it has any, is never read.
+                let to = staged.join(name);
+                let _ = fs::remove_dir_all(&to);
+                let _ = fs::remove_file(&to);
+                match fs::metadata(local.join(name)) {
+                    Ok(m) if m.is_file() => {
+                        fs::copy(local.join(name), &to)?;
+                    }
+                    Ok(m) if m.is_dir() => {
+                        let source = local.join(name).canonicalize()?;
+                        copy_own(&source, &to, false, *name == "sidebar-plugins")?;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let _ = fs::remove_file(staged.join("files.json"));
         let file = staged.join("settings.json");
         let mut settings = match fs::read_to_string(&file) {
             Ok(text) if !text.trim().is_empty() => match serde_json::from_str(&text) {

@@ -1240,7 +1240,9 @@ impl Server {
             self.usage.plugins_seen = Some(modified);
             let config = util::read_json(&file).unwrap_or(Value::Null);
             let (mut loaded, problems) =
-                plugins::load(&config, &paths::config_dir().join("sidebar-plugins"));
+                // The programs are this computer's own, never a pull's
+                // (`files::LOCAL`).
+                plugins::load(&config, &crate::files::file("sidebar-plugins"));
             for p in problems {
                 eprintln!("{p}");
             }

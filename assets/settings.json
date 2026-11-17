@@ -1511,6 +1511,13 @@
     "default": true
   },
   {
+    "key": "files_from_repo",
+    "category": "Updates",
+    "label": "Your files from a git repository",
+    "description": "Your own files (settings.json, keys.json, sidebar.json and the rest of ~/.config/switchboard) are read from and written to a clone of the git repository files.json names (Settings' Your files' repository), in ~/.local/share/switchboard/files: pulled as Switchboard starts and every ten minutes, and each change committed and pushed at once, after leak-check has read it and asked about anything it found. files.json, trusted-dirs, repos.json, sidebar-plugins, slack-relay.json, linear.json, oncall.json, oncall-rules.md, slack-updates.json, secrets.json and leak-check.txt stay on this computer, as this setting does. Off, files.json is ignored and your files are the ones in ~/.config/switchboard",
+    "default": false
+  },
+  {
     "key": "view_relay",
     "category": "Slack relay",
     "label": "Slack relay",

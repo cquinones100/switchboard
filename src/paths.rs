@@ -20,9 +20,25 @@ pub fn home_join(rel: impl AsRef<Path>) -> PathBuf {
     home().join(rel)
 }
 
-/// Someone's own files: `~/.config/switchboard`.
+/// Someone's own files: `~/.config/switchboard`, or, while they are kept
+/// in a git repository (src/files), the folder in its clone that holds them.
 pub fn config_dir() -> PathBuf {
+    crate::files::dir().unwrap_or_else(local_config_dir)
+}
+
+/// `~/.config/switchboard` whatever `config_dir` is: where the files that
+/// never leave this computer are (`files::LOCAL`: files.json, trusted-dirs,
+/// repos.json, sidebar-plugins, slack-relay.json, linear.json, oncall.json,
+/// oncall-rules.md, slack-updates.json, secrets.json,
+/// leak-check.txt, the `.bak` copies).
+pub fn local_config_dir() -> PathBuf {
     home_join(".config/switchboard")
+}
+
+/// `config_dir` as it is shown: `~/.config/switchboard`, or the clone's
+/// folder written from `~`.
+pub fn config_shown() -> String {
+    tilde(config_dir())
 }
 
 /// Switchboard's own state: `SWITCHBOARD_STATE_DIR`, else

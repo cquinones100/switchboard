@@ -153,6 +153,8 @@ pub enum Action {
     StopSlackRelay,
     /// M-p's "Update Switchboard" and "Run Switchboard's setup" (src/update).
     Update(crate::update::Command),
+    /// M-p's "Sync your Switchboard files now" (src/files).
+    Files(crate::files::serve::Command),
     /// Build the checkout a build from a clone came from, then restart the
     /// server on it when it is new, keeping every pane, tab and terminal
     /// attached (src/mux/latest.rs, src/mux/upgrade.rs).
@@ -220,6 +222,9 @@ impl Action {
         }
         if let Some(command) = crate::update::Command::parse(name) {
             return Some(Action::Update(command));
+        }
+        if let Some(command) = crate::files::serve::Command::parse(name) {
+            return Some(Action::Files(command));
         }
         if let Some(command) = crate::diff::Command::parse(name) {
             return Some(Action::Diff(command));
@@ -368,6 +373,7 @@ impl Action {
             Action::SlackRelay => "slack-relay".into(),
             Action::StopSlackRelay => "stop-slack-relay".into(),
             Action::Update(command) => command.name().into(),
+            Action::Files(command) => command.name().into(),
             Action::Upgrade => "upgrade".into(),
             Action::HideBuildRow => "hide-build-row".into(),
             Action::RestoreLayout => "restore-layout".into(),
@@ -471,6 +477,7 @@ impl Action {
             Action::SlackRelay => "Open the Slack relay in its own tab".into(),
             Action::StopSlackRelay => "Stop the Slack relay".into(),
             Action::Update(command) => command.about().into(),
+            Action::Files(command) => command.about().into(),
             Action::Upgrade => "Restart Switchboard on the latest main".into(),
             Action::HideBuildRow => "Hide the restart's progress".into(),
             Action::RestoreLayout => "Restore the layout from before the last start".into(),
@@ -641,6 +648,7 @@ impl Action {
                 "Runs switchboard slack-relay stop, which says when it has stopped; Slack hears nothing more from the tabs until it starts again.".into()
             }
             Action::Update(command) => command.detail().into(),
+            Action::Files(command) => command.detail().into(),
             Action::Upgrade => {
                 "Builds the checkout the running binary came from, then the server runs the new build in its own process, handing it every pane, so nothing in a pane ends.".into()
             }
@@ -719,6 +727,7 @@ impl Action {
             Action::Diff(command) => command.tags(),
             Action::SlackRelay | Action::StopSlackRelay => &["slack", "relay", "remote"],
             Action::Update(command) => command.tags(),
+            Action::Files(command) => command.tags(),
             // "build" and "disk" from its old name, "on the latest build on disk".
             Action::Upgrade => &[
                 "switchboard",
@@ -853,6 +862,7 @@ impl Action {
         .chain(notes)
         .chain(extras)
         .chain(crate::update::Command::ALL.map(Action::Update))
+        .chain(crate::files::serve::Command::ALL.map(Action::Files))
         .chain(crate::autopilot::Command::ALL.map(Action::Autopilot))
         .chain(crate::routines::Command::ALL.map(Action::Routines))
         .collect()

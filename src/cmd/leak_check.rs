@@ -16,7 +16,8 @@
 //!   made up (and ABC-…, XYZ-…, #123 and #12345 anywhere, the made-up ones
 //!   the docs use);
 //! - home directory paths (/Users/<name>), email addresses (but noreply and
-//!   example ones), and token shapes (GitHub's, OpenAI-style sk-, Slack's).
+//!   example ones), and token shapes (GitHub's, OpenAI-style sk-, Slack's,
+//!   Linear's).
 //!
 //! A hit in a file's added line is left out when the range's base (the
 //! merge base of an `a..b` range's two ends) already has its text in its
@@ -48,9 +49,16 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-/// The file of words to find, in your own files.
+/// The file of words to find, in your own files: always the one on this
+/// computer, never one read from a repository your files are kept in
+/// (src/files), since the list names what must not be published.
 pub fn words_file() -> PathBuf {
-    crate::paths::config_dir().join("leak-check.txt")
+    // In the library's own unit tests, whose home is yours, a file that
+    // isn't there, as `settings::settings_file` does.
+    if cfg!(test) {
+        return PathBuf::from("/nonexistent/switchboard-unit-tests/leak-check.txt");
+    }
+    crate::paths::local_config_dir().join("leak-check.txt")
 }
 
 /// The words of the list, or why it can't be read; none when there is no
@@ -108,7 +116,7 @@ static OK_TEST_EMAIL: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)@(google|github|gitlab)\.com$").unwrap());
 static TOKEN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,})",
+        r"(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|lin_(api|oauth)_[A-Za-z0-9]{20,})",
     )
     .unwrap()
 });
@@ -382,7 +390,7 @@ pub fn leave_out(
 /// The commit an `a..b` range starts from, the merge base of its ends;
 /// none for a single revision, whose log reads all that came before it, or
 /// when there is none.
-fn base_of(range: &str) -> Option<String> {
+fn base_of(dir: Option<&Path>, range: &str) -> Option<String> {
     let end = |s: &str| {
         if s.is_empty() {
             "HEAD".to_string()
@@ -392,14 +400,18 @@ fn base_of(range: &str) -> Option<String> {
     };
     let (a, b) = range.split_once("..")?;
     let b = b.strip_prefix('.').unwrap_or(b);
-    git(&["merge-base", &end(a), &end(b)])
+    git(dir, &["merge-base", &end(a), &end(b)])
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
 }
 
-fn git(args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
+fn git(dir: Option<&Path>, args: &[&str]) -> Result<String, String> {
+    let mut cmd = Command::new("git");
+    if let Some(dir) = dir {
+        cmd.arg("-C").arg(dir);
+    }
+    let out = cmd
         .args(args)
         .stdin(std::process::Stdio::null())
         .output()
@@ -410,6 +422,59 @@ fn git(args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// What a look at a range found: the hits to report, those its base
+/// already has, and that base.
+pub struct Looked {
+    pub kept: Vec<Hit>,
+    pub left: Vec<Hit>,
+    pub base: Option<String>,
+}
+
+/// Looks at `range` in the repository at `dir` (the one the command runs
+/// in when `None`), or says why it can't.
+pub fn look(dir: Option<&Path>, range: &str) -> Result<Looked, String> {
+    let words = read_words(&words_file())?;
+    let diff = git(
+        dir,
+        &[
+            "-c",
+            "core.quotePath=false",
+            "log",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--text",
+            "--unified=0",
+            "--no-renames",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "--no-relative",
+            "-p",
+            "-m",
+            "--format=",
+            range,
+            "--",
+        ],
+    )?;
+    let log = git(
+        dir,
+        &[
+            "log",
+            "--no-color",
+            "--no-textconv",
+            "--format=%h%x00%B%x00",
+            range,
+            "--",
+        ],
+    )?;
+    let base = base_of(dir, range);
+    let (kept, left) = leave_out(hits(&diff, &log, &words), &words, |file| {
+        let base = base.as_deref()?;
+        git(dir, &["show", "--no-textconv", &format!("{base}:{file}")]).ok()
+    });
+    Ok(Looked { kept, left, base })
+}
+
 pub fn main(args: Vec<String>) -> ExitCode {
     let all = args.iter().any(|a| a == "--all");
     let rest: Vec<&String> = args.iter().filter(|a| *a != "--all").collect();
@@ -417,56 +482,13 @@ pub fn main(args: Vec<String>) -> ExitCode {
         eprintln!("usage: leak-check [--all] <range>");
         return ExitCode::from(2);
     };
-    let range = range.as_str();
-    let words = match read_words(&words_file()) {
-        Ok(w) => w,
+    let Looked { kept, left, base } = match look(None, range) {
+        Ok(looked) => looked,
         Err(e) => {
             eprintln!("leak-check: {e}");
             return ExitCode::from(2);
         }
     };
-    let looked = git(&[
-        "-c",
-        "core.quotePath=false",
-        "log",
-        "--no-color",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--text",
-        "--unified=0",
-        "--no-renames",
-        "--src-prefix=a/",
-        "--dst-prefix=b/",
-        "--no-relative",
-        "-p",
-        "-m",
-        "--format=",
-        range,
-        "--",
-    ])
-    .and_then(|diff| {
-        let log = git(&[
-            "log",
-            "--no-color",
-            "--no-textconv",
-            "--format=%h%x00%B%x00",
-            range,
-            "--",
-        ])?;
-        Ok((diff, log))
-    });
-    let (diff, log) = match looked {
-        Ok(both) => both,
-        Err(e) => {
-            eprintln!("leak-check: {e}");
-            return ExitCode::from(2);
-        }
-    };
-    let base = base_of(range);
-    let (kept, left) = leave_out(hits(&diff, &log, &words), &words, |file| {
-        let base = base.as_deref()?;
-        git(&["show", "--no-textconv", &format!("{base}:{file}")]).ok()
-    });
     for hit in &kept {
         println!("{}", hit.shown);
     }

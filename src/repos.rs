@@ -44,9 +44,11 @@ use serde_json::{Map, Value, json};
 use crate::integrations::github;
 use crate::{paths, requests, settings, util, worktree};
 
-/// `~/.config/switchboard/repos.json`.
+/// `~/.config/switchboard/repos.json`: always this computer's own, never
+/// read from a repository your files are kept in (src/files), since a
+/// landing runs the commands it holds.
 pub fn file() -> PathBuf {
-    paths::config_dir().join("repos.json")
+    paths::local_config_dir().join("repos.json")
 }
 
 /// `owner/name` of a git remote's URL on GitHub, as the URL has them, or

@@ -196,14 +196,17 @@ fn enter_words(item: &Item) -> String {
     let d = &item.data;
     let words = |k: &str| d.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     if d.get("repo_setting").is_some() {
-        return "in ~/.config/switchboard/repos.json · Enter changes it".into();
+        return format!(
+            "in {} · Enter changes it",
+            crate::files::shown("repos.json")
+        );
     }
     if let Some(file) = d.pointer("/own/file").and_then(Value::as_str) {
         let what = match d.pointer("/own/kind").and_then(Value::as_str) {
             Some("file") => "Enter opens it",
             _ => "Enter changes it",
         };
-        return format!("in ~/.config/switchboard/{file} · {what}");
+        return format!("in {} · {what}", crate::files::shown(file));
     }
     let (default, next) = (words("default"), words("next"));
     if d["choice"] == true {
@@ -384,8 +387,9 @@ fn pane_head(
         // A category of your files may hold several, so the chosen row
         // names its own file (`enter_words`).
         None => format!(
-            "{count} {} in ~/.config/switchboard",
-            if count == 1 { "setting" } else { "settings" }
+            "{count} {} in {}",
+            if count == 1 { "setting" } else { "settings" },
+            crate::paths::config_shown()
         ),
     };
     kit::pane(

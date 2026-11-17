@@ -238,7 +238,7 @@ enum ViewAct {
 /// the settings file, with the folder it is in.
 fn settings_file_of(item: Option<&Item>) -> (PathBuf, String) {
     if let Some(file) = super::settings_board::file_of(item) {
-        return (crate::usage::own::own_dir(), file);
+        return (crate::usage::own::dir_of(&file), file);
     }
     // A relative SWITCHBOARD_SETTINGS is the server's, not the editor's,
     // which starts in the file's folder.
@@ -6033,7 +6033,7 @@ impl Server {
             "rules" => own::Kind::Rules,
             _ => own::Kind::Text,
         };
-        let dir = own::own_dir();
+        let dir = own::dir_of(&file);
         match kind {
             own::Kind::Rules => self.change_rules(client, dir),
             own::Kind::Profile => {
@@ -6068,7 +6068,7 @@ impl Server {
                         return;
                     };
                     let said = match own::write_own(&dir, &file, &key, kind, value, min) {
-                        Ok(()) => format!("Saved {label} in ~/.config/switchboard/{file}"),
+                        Ok(()) => format!("Saved {label} in {}", crate::files::shown(&file)),
                         Err(e) => format!("Not saved: {e}"),
                     };
                     server.mission.own = None;
@@ -6095,7 +6095,7 @@ impl Server {
                         };
                         let saved = own::write_own(&dir, &file, &key, kind, &p.value, min);
                         let said = match &saved {
-                            Ok(()) => format!("Saved {label} in ~/.config/switchboard/{file}"),
+                            Ok(()) => format!("Saved {label} in {}", crate::files::shown(&file)),
                             Err(e) => format!("Not saved: {e}"),
                         };
                         if file == "sidebar.json" {
@@ -6127,7 +6127,10 @@ impl Server {
         let now = r["value"].clone();
         let save = move |server: &mut Server, client: ClientId, value: Value| {
             let said = match crate::repos::set_repo(&repo, &field, value) {
-                Ok(()) => format!("Saved {repo}'s {field} in ~/.config/switchboard/repos.json"),
+                Ok(()) => format!(
+                    "Saved {repo}'s {field} in {}",
+                    crate::files::shown("repos.json")
+                ),
                 Err(e) => format!("Not saved: {e}"),
             };
             server.mission.own = None;
@@ -6175,7 +6178,10 @@ impl Server {
             "squash" => {
                 let on = now.as_bool().unwrap_or(true);
                 let said = match crate::repos::set_repo(&name, "squash", Value::Bool(!on)) {
-                    Ok(()) => format!("Saved {name}'s squash in ~/.config/switchboard/repos.json"),
+                    Ok(()) => format!(
+                        "Saved {name}'s squash in {}",
+                        crate::files::shown("repos.json")
+                    ),
                     Err(e) => format!("Not saved: {e}"),
                 };
                 self.mission.own = None;
@@ -6263,7 +6269,7 @@ impl Server {
         let menu = Menu::new(
             "Where your CLAUDE.md's rules come from",
             vec![
-                MenuOption::new("Local file, ~/.config/switchboard/CLAUDE.md"),
+                MenuOption::new(format!("Local file, {}", crate::files::shown("CLAUDE.md"))),
                 MenuOption::new("Another file…"),
                 MenuOption::new("A git repository…"),
             ],

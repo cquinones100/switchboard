@@ -9,7 +9,7 @@
 use serde_json::Value;
 
 use crate::integrations::{github, linear};
-use crate::{day, paths, platform, relay, settings, util, views};
+use crate::{day, platform, relay, settings, util, views};
 
 /// One optional part: whether it is there, the line said of it, and its
 /// name, for the list at the end.
@@ -49,7 +49,7 @@ pub fn all() -> Vec<Optional> {
             "Linear (M-i, the Tickets and Inbox views, ticket titles in tab names)",
             "Linear, for M-i, the Tickets and Inbox views and ticket titles in tab names: a personal API key from Linear's Settings, Security & access, stored with switchboard platform secret-set linear-api-key",
         ));
-        let team = util::read_json(paths::config_dir().join("linear.json"))
+        let team = util::read_json(crate::files::file("linear.json"))
             .and_then(|v| {
                 v.get("linearTeam")
                     .and_then(Value::as_str)
@@ -69,7 +69,7 @@ pub fn all() -> Vec<Optional> {
     ));
     let relay = relay::slack::token(relay::slack::BOT_TOKEN_SERVICE).is_some()
         && relay::slack::token(relay::slack::APP_TOKEN_SERVICE).is_some()
-        && util::read_json(paths::config_dir().join("slack-relay.json"))
+        && util::read_json(crate::files::file("slack-relay.json"))
             .is_some_and(|v| v.get("owner").and_then(Value::as_str).is_some());
     all.push(line(
         relay,

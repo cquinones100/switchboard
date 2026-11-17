@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 
 use super::{Credential, Remembered, ensure_on, env_value, stored_secret};
 use crate::net::{self, Audit, ErrorKind, Response, ServiceError};
-use crate::{paths, util};
+use crate::util;
 
 const SERVICE: &str = "Linear";
 
@@ -55,7 +55,7 @@ async fn credential() -> Result<Credential> {
             value,
             from: "the stored secret linear-api-key".to_string(),
         }),
-        None => util::read_json_object(paths::config_dir().join("linear.json"))
+        None => util::read_json_object(crate::files::file("linear.json"))
             .get("linearApiKey")
             .and_then(Value::as_str)
             .map(|v| v.trim().to_string())

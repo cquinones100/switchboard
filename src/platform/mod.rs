@@ -193,9 +193,10 @@ pub fn reveal(file: &std::path::Path) -> Result<()> {
 }
 
 /// Where secrets go on a computer with no keyring to keep them: a file only
-/// its owner can read, `{ "<service>": "<secret>" }`.
+/// its owner can read, `{ "<service>": "<secret>" }`. Always on this
+/// computer, never in a repository your files are kept in (src/files).
 pub fn secrets_file() -> PathBuf {
-    crate::paths::config_dir().join("secrets.json")
+    crate::paths::local_config_dir().join("secrets.json")
 }
 
 /// Saves the clipboard's image to `file` as a PNG, for a picture pasted

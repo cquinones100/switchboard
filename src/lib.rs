@@ -25,6 +25,8 @@
 //! - `facts`: what GitHub and the landing queue say of each tab.
 //! - `items`: what mission control's views list, in one shape for every source.
 //! - `repos`: your settings for each repository, `repos.json`.
+//! - `files`: your own files kept in a git repository, pulled and pushed
+//!   as they change.
 //! - `mux`: the multiplexer (in place of tmux).
 //! - `agent`: what each Claude session is doing, from its hooks.
 //! - `tabs`: what each tab is called and the color it wears.
@@ -95,6 +97,7 @@ pub mod demo;
 pub mod diff;
 pub mod extras;
 pub mod facts;
+pub mod files;
 pub mod history;
 pub mod integrations;
 pub mod items;

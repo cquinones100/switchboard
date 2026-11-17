@@ -142,6 +142,8 @@ pub enum Event {
     Views(crate::views::ViewsEvent),
     /// A look for a new release answered (src/update).
     Update(crate::update::UpdateEvent),
+    /// What a look at your files' repository found (src/files).
+    Files(crate::files::FilesEvent),
     /// The status line's counts answered (src/status).
     Status(crate::status::StatusEvent),
     /// The rest of what a Notes key does, back from off the task
@@ -516,7 +518,11 @@ pub struct Server {
     /// made in the Settings view or by hand takes effect on the next tick,
     /// and the settings list's in the clone the build came from
     /// (src/assets.rs), so a default or option landed there does too.
-    settings_seen: (Option<std::time::SystemTime>, Option<std::time::SystemTime>),
+    settings_seen: (
+        Option<std::time::SystemTime>,
+        Option<std::time::SystemTime>,
+        Option<std::time::SystemTime>,
+    ),
     /// What the desktop says of whether you're at the computer, read at
     /// most every `PRESENCE_EVERY` off the server's task (src/presence.rs).
     presence: crate::presence::Desktop,
@@ -545,6 +551,8 @@ pub struct Server {
     pub status: crate::status::Status,
     /// The look for a new release, and its box (src/update).
     pub update: crate::update::Updates,
+    /// Your files' repository: a question waiting (src/files).
+    pub files: crate::files::serve::Files,
     /// The clients waiting on C-w's next key (src/extras).
     pub extras: crate::extras::Extras,
     /// Autopilot (src/autopilot).
@@ -608,7 +616,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
 async fn run(handover: Option<PathBuf>) -> Result<()> {
     super::upgrade::remember_binary();
     crate::util::make_private(&[
-        crate::paths::config_dir(),
+        crate::paths::local_config_dir(),
         crate::paths::state_dir(),
         crate::paths::cache_dir(),
     ]);
@@ -657,6 +665,9 @@ async fn run(handover: Option<PathBuf>) -> Result<()> {
         });
         tokio::spawn(crate::setup::plugin::follow_clone());
     }
+    // Your files, when a git repository holds them (src/files): pulled and
+    // pushed by a task of its own.
+    tokio::spawn(crate::files::follow(tx.clone()));
     // A setting saved under its old name is read as its new one once,
     // before anything reads them.
     if let Err(e) = crate::settings::migrate() {
@@ -1176,7 +1187,7 @@ impl Server {
             quit: false,
             last_input: Instant::now(),
             typed: false,
-            settings_seen: (None, None),
+            settings_seen: (None, None, None),
             presence: Default::default(),
             presence_asked: None,
             persist: Default::default(),
@@ -1189,6 +1200,7 @@ impl Server {
             views: Default::default(),
             status: Default::default(),
             update: Default::default(),
+            files: Default::default(),
             extras: Default::default(),
             terminal: Default::default(),
             autopilot: Default::default(),
@@ -1289,6 +1301,7 @@ impl Server {
             Event::Mission(event) => self.mission_event(event),
             Event::Views(event) => self.views_event(event),
             Event::Update(event) => self.update_event(event),
+            Event::Files(event) => self.files_event(event),
             Event::Status(event) => self.status_event(event),
             Event::Notes(event) => self.notes_event(event),
             Event::Autopilot(event) => self.autopilot_event(event),
@@ -1315,6 +1328,7 @@ impl Server {
                 self.mission_tick();
                 self.diff_tick();
                 self.update_tick();
+                self.files_tick();
                 self.behind_tick();
                 self.autopilot_tick();
                 self.routines_tick();
@@ -1379,14 +1393,17 @@ impl Server {
     fn reload_settings_if_changed(&mut self) {
         let modified =
             |file: std::path::PathBuf| std::fs::metadata(file).and_then(|m| m.modified()).ok();
+        // This computer's own file too, which says whether the rest come
+        // from a repository (src/files).
         let seen = (
             modified(crate::settings::settings_file()),
             crate::assets::dir().and_then(|dir| modified(dir.join("settings.json"))),
+            modified(crate::settings::local_settings_file()),
         );
         if seen == self.settings_seen {
             return;
         }
-        let first = self.settings_seen == (None, None) && seen != (None, None);
+        let first = self.settings_seen == (None, None, None) && seen != (None, None, None);
         self.settings_seen = seen;
         crate::settings::reload_settings();
         // Your PRs' news follows its setting at once, and the terminals'
@@ -3276,6 +3293,7 @@ impl Server {
             Action::SlackRelay => self.slack_relay(true),
             Action::StopSlackRelay => self.slack_relay(false),
             Action::Update(command) => self.update_command(id, command),
+            Action::Files(command) => self.files_command(id, command),
             Action::Upgrade => self.latest_asked(id),
             Action::HideBuildRow => self.build_steps_hide(id),
             Action::RestoreLayout => {

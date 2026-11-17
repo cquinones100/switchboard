@@ -107,9 +107,14 @@ fn own_rules() -> PathBuf {
     paths::config_dir().join("CLAUDE.md")
 }
 
-/// The clone of your rules' repository.
+/// The clone of your rules' repository: the one your files are kept in
+/// (src/files) when claude.json names the same repository, so one clone
+/// holds both, else a clone of its own.
 pub fn clone_dir() -> PathBuf {
-    paths::home_join(".local/share/switchboard/claude-md")
+    match crate::files::repo() {
+        Some(repo) if repo == config("repo") => crate::files::clone_dir(),
+        _ => paths::home_join(".local/share/switchboard/claude-md"),
+    }
 }
 
 /// A field of `claude.json`, empty when it isn't there.
@@ -191,7 +196,7 @@ fn lock(file: &Path, wait: Duration) -> Result<fs::File> {
 /// Given to git after the helpers already set, which it asks first, so a
 /// sign-in that works keeps working. gh's path is quoted for the shell git
 /// runs the helper in.
-fn gh_helper(repo: &str) -> Option<String> {
+pub(crate) fn gh_helper(repo: &str) -> Option<String> {
     // A user in the URL (https://me@github.com/...) is still GitHub.
     let github = regex::Regex::new(r"^https://([^/@]+@)?(gist\.)?github\.com/").ok()?;
     if !github.is_match(repo) {
@@ -346,6 +351,25 @@ pub fn without_import(text: &str) -> Option<String> {
     Some(
         text.split_inclusive('\n')
             .filter(|l| !imports_ours(l.trim_end_matches('\n')))
+            .collect(),
+    )
+}
+
+/// A CLAUDE.md setup wrote without its line importing your rules from the
+/// clone your files were kept in (`clone`, written from `~`), or `None`
+/// when setup didn't write it or it has no such line.
+pub fn without_files_import(text: &str, clone: &str) -> Option<String> {
+    let from_clone = |line: &str| {
+        line.strip_prefix('@')
+            .and_then(|path| path.strip_prefix(clone))
+            .is_some_and(|rest| rest.starts_with('/'))
+    };
+    if !text.contains(MARK_START) || !text.lines().any(from_clone) {
+        return None;
+    }
+    Some(
+        text.split_inclusive('\n')
+            .filter(|l| !from_clone(l.trim_end_matches('\n')))
             .collect(),
     )
 }
@@ -625,6 +649,21 @@ fn now(r: &mut Report, pulled: bool, moving: bool) -> Result<()> {
                 ),
             });
         }
+    } else if let Some(left) = current
+        .as_deref()
+        .and_then(|text| without_files_import(text, &home_tilde(&crate::files::clone_dir())))
+    {
+        // No rules named any more, and the file setup wrote still imports
+        // them from the clone your files were kept in (src/files): the
+        // line goes. The file stays, with setup's first line, so it is
+        // still known as set up (`set_up`) and imports your rules again
+        // when your files come from the repository again.
+        if !r.check {
+            util::write_atomic(&file, &left)?;
+        }
+        r.change(format!(
+            "take the import of your rules out of {shown}: they were in your files' repository, which your files no longer come from"
+        ));
     } else if way == Way::Plugin {
         if let Some(text) = current {
             take_out(r, &file, &text)?;
@@ -678,6 +717,34 @@ fn add_import(r: &mut Report, file: &Path, text: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod files_import_tests {
+    use super::*;
+
+    #[test]
+    fn the_import_of_rules_from_the_files_clone_is_taken_out_of_a_file_setup_wrote() {
+        let clone = "~/.local/share/switchboard/files";
+        let wrote = format!("{MARK}\n\n@{clone}/switchboard/CLAUDE.md\n");
+        assert_eq!(
+            without_files_import(&wrote, clone),
+            Some(format!("{MARK}\n\n"))
+        );
+        let old = format!("{MARK_WITH_PART}\n\n@{clone}/switchboard/CLAUDE.md\n{IMPORT}\n");
+        assert_eq!(
+            without_files_import(&old, clone),
+            Some(format!("{MARK_WITH_PART}\n\n{IMPORT}\n"))
+        );
+        // Rules from elsewhere, a sibling folder, or a file of your own stay.
+        for kept in [
+            format!("{MARK}\n\n@~/.config/switchboard/CLAUDE.md\n"),
+            format!("{MARK}\n\n@{clone}-other/CLAUDE.md\n"),
+            format!("mine\n@{clone}/switchboard/CLAUDE.md\n"),
+        ] {
+            assert_eq!(without_files_import(&kept, clone), None, "{kept}");
+        }
+    }
 }
 
 #[cfg(test)]

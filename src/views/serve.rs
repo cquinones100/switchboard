@@ -70,7 +70,7 @@ fn linear_workspace() -> Option<String> {
         .ok()
         .filter(|w| !w.trim().is_empty())
         .or_else(|| {
-            util::read_json_object(paths::config_dir().join("linear.json"))
+            util::read_json_object(crate::files::file("linear.json"))
                 .get("linearWorkspace")
                 .and_then(Value::as_str)
                 .map(str::to_string)

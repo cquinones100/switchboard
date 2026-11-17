@@ -76,7 +76,9 @@ impl Dirs {
         Dirs {
             state: paths::state_dir(),
             notes: var("NOTES_DIR").unwrap_or_else(|| paths::home_join("Notes")),
-            config: paths::config_dir(),
+            // slack-updates.json alone, which stays on this computer
+            // (`files::LOCAL`): the slack-updates skill reads it there.
+            config: paths::local_config_dir(),
             relay: var("SLACK_RELAY_STATE")
                 .unwrap_or_else(|| paths::home_join(".local/state/slack-relay")),
         }

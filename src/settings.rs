@@ -266,6 +266,43 @@ pub fn settings_file() -> PathBuf {
     }
 }
 
+/// The options that are this computer's own, read from and written to
+/// `~/.config/switchboard/settings.json` even while your files are kept in
+/// a git repository (src/files): whether they are is one, since it says
+/// where the rest are read from.
+pub const LOCAL: &[&str] = &[crate::files::SETTING];
+
+/// This computer's own settings file: `settings_file` unless your files
+/// come from a repository, then the one in `~/.config/switchboard`.
+pub fn local_settings_file() -> PathBuf {
+    match std::env::var_os("SWITCHBOARD_SETTINGS") {
+        Some(f) if !f.is_empty() => PathBuf::from(f),
+        _ if cfg!(test) => PathBuf::from("/nonexistent/switchboard-unit-tests/settings.json"),
+        _ => paths::local_config_dir().join("settings.json"),
+    }
+}
+
+/// `settings.json.bak`, the version before the last write: beside this
+/// computer's own settings file, whichever file the write was to.
+fn bak_file() -> PathBuf {
+    let mut bak = local_settings_file().into_os_string();
+    bak.push(".bak");
+    let bak = PathBuf::from(bak);
+    if let Some(dir) = bak.parent() {
+        let _ = util::make_dirs(dir);
+    }
+    bak
+}
+
+/// The file an option is kept in.
+fn file_of(key: &str) -> PathBuf {
+    if LOCAL.contains(&key) {
+        local_settings_file()
+    } else {
+        settings_file()
+    }
+}
+
 /// The options as listed, each with its default as its value.
 pub fn schema() -> Vec<Setting> {
     let mut options: Vec<Setting> =
@@ -280,7 +317,18 @@ pub fn schema() -> Vec<Setting> {
 
 /// What you have changed, or nothing when the file is missing or isn't an object.
 fn saved() -> Map<String, Value> {
-    util::read_json_object(settings_file())
+    let mut mine = util::read_json_object(settings_file());
+    let local = local_settings_file();
+    if local != settings_file() {
+        let own = util::read_json_object(local);
+        for key in LOCAL {
+            match own.get(*key) {
+                Some(value) => mine.insert(key.to_string(), value.clone()),
+                None => mine.shift_remove(*key),
+            };
+        }
+    }
+    mine
 }
 
 /// Settings that were on/off and became choices: each old value's choice.
@@ -394,7 +442,7 @@ pub fn write_setting(key: &str, value: Value) -> Result<()> {
     if !option.valid(&value) {
         bail!("not a value for {key}: {}", util::json_compact(&value));
     }
-    let file = settings_file();
+    let file = file_of(key);
     let mut mine = Map::new();
     if file.exists() {
         match fs::read_to_string(&file)
@@ -407,9 +455,8 @@ pub fn write_setting(key: &str, value: Value) -> Result<()> {
                 paths::tilde(&file)
             ),
         }
-        let mut bak = file.clone().into_os_string();
-        bak.push(".bak");
-        fs::copy(&file, PathBuf::from(bak))?;
+        // The copy stays on this computer, whatever file it is of.
+        fs::copy(&file, bak_file())?;
     }
     if value == option.default {
         mine.shift_remove(key);
@@ -484,9 +531,7 @@ pub fn migrate() -> Result<()> {
     let Some(out) = migrated(&mine) else {
         return Ok(());
     };
-    let mut bak = file.clone().into_os_string();
-    bak.push(".bak");
-    fs::copy(&file, PathBuf::from(bak))?;
+    fs::copy(&file, bak_file())?;
     util::write_atomic(
         &file,
         format!("{}\n", util::json_pretty(&Value::Object(out))),

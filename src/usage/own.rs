@@ -17,7 +17,7 @@ use anyhow::{Result, anyhow};
 use serde_json::{Map, Value, json};
 
 use crate::items::{Item, State};
-use crate::{paths, platform, util};
+use crate::{files, paths, platform, util};
 
 /// How a row's value is typed in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -298,6 +298,24 @@ pub const OWN_FILES: &[OwnFile] = &[
         )],
     },
     OwnFile {
+        file: "files.json",
+        category: "Your files' repository (files.json)",
+        rows: &[
+            row(
+                "repo",
+                "Repository",
+                Kind::Text,
+                "The git repository your files are kept in, its URL as git clone takes it, read while Settings' \"Your files from a git repository\" is on: cloned into ~/.local/share/switchboard/files, pulled every ten minutes and pushed as your files change. This file, trusted-dirs, repos.json, sidebar-plugins, slack-relay.json, linear.json, oncall.json, oncall-rules.md, slack-updates.json, secrets.json and leak-check.txt stay on this computer",
+            ),
+            row(
+                "dir",
+                "Folder in the repository",
+                Kind::Text,
+                "The folder in it that holds your files (switchboard when not set, . for the repository's root)",
+            ),
+        ],
+    },
+    OwnFile {
         file: "oncall-rules.md",
         category: "Your files",
         rows: &[whole(
@@ -379,7 +397,7 @@ fn natural(a: &str, b: &str) -> std::cmp::Ordering {
 /// A JSON file of yours: a file that isn't there is empty; one that is
 /// there but can't be read or parsed is an error, so nothing writes over it.
 pub fn read_own(dir: &Path, file: &str) -> Result<Map<String, Value>> {
-    let full = dir.join(file);
+    let full = at(dir, file);
     let link = fs::symlink_metadata(&full).is_ok_and(|m| m.file_type().is_symlink());
     if link && !full.exists() {
         return Err(anyhow!("it is a link to nothing"));
@@ -484,8 +502,8 @@ pub fn write_own(
         return Err(e);
     }
     let mut data = read_own(dir, file)
-        .map_err(|e| format!("~/.config/switchboard/{file} can't be read ({e}); fix it first"))?;
-    let full = dir.join(file);
+        .map_err(|e| format!("{} can't be read ({e}); fix it first", files::shown(file)))?;
+    let full = at(dir, file);
     let full = fs::canonicalize(&full).unwrap_or(full);
     match parsed {
         Typed::Remove => {
@@ -511,7 +529,7 @@ pub fn write_own(
         fs::set_permissions(&tmp, fs::Permissions::from_mode(mode))?;
         fs::rename(&tmp, &full)
     };
-    write().map_err(|e| format!("Couldn't write ~/.config/switchboard/{file}: {e}"))
+    write().map_err(|e| format!("Couldn't write {}: {e}", files::shown(file)))
 }
 
 /// Where your CLAUDE.md's rules come from, as claude.json says: its kind
@@ -532,11 +550,11 @@ pub fn rules_source(dir: &Path, data: &Map<String, Value>) -> (&'static str, Str
         return ("a file", path);
     }
     let local = if dir.join("CLAUDE.md").exists() {
-        "~/.config/switchboard/CLAUDE.md"
+        files::shown("CLAUDE.md")
     } else {
-        "none yet"
+        "none yet".to_string()
     };
-    ("local file", local.to_string())
+    ("local file", local)
 }
 
 /// Where your rules come from, written to claude.json: a repository, a
@@ -639,7 +657,7 @@ pub fn landing_rows(
         let method = set.or(worked.as_ref().map(|c| c.landing.as_str()));
         let (detail, value) = match (&broken, set, &worked) {
             (Some(e), _, _) => (
-                format!("~/.config/switchboard/repos.json can't be read: {e}"),
+                format!("{} can't be read: {e}", files::shown("repos.json")),
                 "unreadable".to_string(),
             ),
             (None, Some(m), _) => (
@@ -784,7 +802,7 @@ fn items_with(dir: &Path, profiles: &Option<Vec<Profile>>) -> Vec<Item> {
             } else {
                 (Map::new(), None)
             };
-            let exists = dir.join(f.file).exists();
+            let exists = at(dir, f.file).exists();
             for r in f.rows {
                 let value = r.key.and_then(|k| data.get(k));
                 // A list with a comma inside one of its entries, or a map with
@@ -802,9 +820,9 @@ fn items_with(dir: &Path, profiles: &Option<Vec<Profile>>) -> Vec<Item> {
                 let kind = if tangled { Kind::File } else { r.kind };
                 let typed = typed_of(r.kind, value);
                 let detail = match &broken {
-                    Some(why) => format!("~/.config/switchboard/{} can't be read: {why}", f.file),
+                    Some(why) => format!("{} can't be read: {why}", files::shown(f.file)),
                     None if !typed.is_empty() => format!("{}: {typed}", r.detail),
-                    None => format!("{} (~/.config/switchboard/{})", r.detail, f.file),
+                    None => format!("{} ({})", r.detail, files::shown(f.file)),
                 };
                 let short = if broken.is_some() {
                     "unreadable".to_string()
@@ -850,6 +868,26 @@ fn items_with(dir: &Path, profiles: &Option<Vec<Profile>>) -> Vec<Item> {
 /// Your own files' directory.
 pub fn own_dir() -> PathBuf {
     paths::config_dir()
+}
+
+/// The directory one file of yours is in: `~/.config/switchboard` for one
+/// that stays on this computer (`files::LOCAL`), else `own_dir`.
+pub fn dir_of(file: &str) -> PathBuf {
+    if files::is_local(file) {
+        paths::local_config_dir()
+    } else {
+        own_dir()
+    }
+}
+
+/// A file of yours under `dir`; under `own_dir`, one that stays on this
+/// computer is where `dir_of` says.
+fn at(dir: &Path, file: &str) -> PathBuf {
+    if files::is_local(file) && dir == own_dir() {
+        paths::local_config_dir().join(file)
+    } else {
+        dir.join(file)
+    }
 }
 
 #[cfg(test)]

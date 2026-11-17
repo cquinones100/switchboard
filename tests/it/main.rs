@@ -19,6 +19,7 @@ mod codex_review;
 mod demo;
 mod design_docs;
 mod diff;
+mod files;
 mod graphics;
 mod guard_hooks;
 mod headless;
