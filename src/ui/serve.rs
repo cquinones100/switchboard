@@ -1565,14 +1565,12 @@ mod tests {
             line(&["node", &format!("--dir={home}/code")]),
             "node --dir=~/code"
         );
-        assert_eq!(
-            line(&["grep", &format!("p={home}/x")]),
-            format!("grep p={home}/x")
-        );
-        assert_eq!(
-            line(&["scp", &format!("host:{home}/f"), "."]),
-            format!("scp host:{home}/f .")
-        );
+        // A literal holding `=` and a path on another host stay as they
+        // are (however long the home, which the 60 columns may cut).
+        let literal = line(&["grep", &format!("p={home}/x")]);
+        assert!(literal.starts_with("grep p=/") && !literal.contains('~'));
+        let remote = line(&["scp", &format!("host:{home}/f"), "."]);
+        assert!(remote.starts_with("scp host:/") && !remote.contains('~'));
         assert_eq!(line(&["lazygit"]), "lazygit");
         assert_eq!(line(&["./Build Tools/bin/worker", "-v"]), "worker -v");
         assert_eq!(
