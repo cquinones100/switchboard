@@ -11,6 +11,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line as Spans, Span};
 
+use super::select::{Pane, Spot};
 use super::{
     ACCENT, ADDED, App, BUTTONS, Button, COVER_BLANK, Cell, Focus, Line, ListRow, REMOVED,
     SHORT_WHY, Telling, UNCOMMITTED, blend,
@@ -47,6 +48,7 @@ impl App {
         self.cols = area.width.max(20);
         self.rows = area.height.max(5);
         self.buttons.clear();
+        self.spots.clear();
         self.ask_rect = None;
         self.answer_rect = None;
         if let Some(text) = self.failed.clone() {
@@ -109,6 +111,7 @@ impl App {
             self.draw_answer(buf);
             cursor = None;
         }
+        self.read_spots(buf);
         if let Some((text, _)) = self.message.clone() {
             let lines: Vec<BoxLine> = text
                 .lines()
@@ -359,8 +362,22 @@ impl App {
         if pinned > 0 {
             self.draw_filter_line(buf, w, &theme);
         }
-        for (y, row) in rows.iter().skip(self.list_top).take(h).enumerate() {
-            let y = y as u16 + pinned;
+        let mut lit: Vec<u16> = Vec::new();
+        // The rows of the files the keys selected (v), lit below.
+        let selected = self
+            .list_visual
+            .filter(|_| self.focus == Focus::List)
+            .and_then(|from| {
+                let place = |k: usize| rows.iter().position(|r| *r == ListRow::File(k));
+                let (a, b) = (place(from)?, place(self.at)?);
+                Some(a.min(b)..=a.max(b))
+            });
+        for (i, row) in rows.iter().enumerate().skip(self.list_top).take(h) {
+            let y = (i - self.list_top) as u16 + pinned;
+            self.spot(Pane::List, Rect::new(0, y, w, 1), 0, i as i64, false);
+            if selected.as_ref().is_some_and(|s| s.contains(&i)) {
+                lit.push(y);
+            }
             match row {
                 ListRow::Header(section) if self.opts.ux2 => {
                     // What is listed apart under "Not committed yet" counted
@@ -605,6 +622,11 @@ impl App {
                         with(self.faint()),
                     );
                 }
+            }
+        }
+        for y in lit {
+            for x in 0..w {
+                buf[(x, y)].modifier.insert(Modifier::REVERSED);
             }
         }
         if self.order.is_empty() {
@@ -987,6 +1009,11 @@ impl App {
         }
         let bar_y = area.y + head.len() as u16;
         let body_y = bar_y + 1;
+        // The heading and the bar, which stay as the diff scrolls.
+        for y in area.y..body_y {
+            let row = Rect::new(area.x, y, area.width, 1);
+            self.spot(Pane::Head, row, area.x, i64::from(y), false);
+        }
         let h = self.body_height();
         if self.one_scroll() {
             return self.draw_scroll(buf, bar_y, body_y, h);
@@ -1030,6 +1057,7 @@ impl App {
         self.keep_cursor();
         self.top = self.top.min(n.saturating_sub(1));
         let (at, top) = (self.at, self.top);
+        self.diff_moved((at, top), body_y);
         self.draw_rows(buf, at, top, h, body_y)
     }
 
@@ -1065,6 +1093,8 @@ impl App {
             &Spans::from(bar_of(self, self.view)),
         );
         let (mut k, mut t) = (self.view, self.top);
+        self.diff_moved((k, t), body_y);
+        let across = Rect::new(area.x, 0, self.body_width(), 1);
         let mut y = body_y;
         let bottom = body_y + h as u16;
         let mut cursor = None;
@@ -1097,6 +1127,14 @@ impl App {
                     area.width,
                     &Spans::from(bar_of(self, k + 1)),
                 );
+                let row = Rect { y, ..across };
+                self.spot(
+                    Pane::Wide,
+                    row,
+                    area.x,
+                    self.diff_base + i64::from(y),
+                    false,
+                );
                 y += 1;
                 k += 1;
                 t = 0;
@@ -1124,10 +1162,31 @@ impl App {
         let new_x = if ow > 0 { area.x + ow + 1 } else { area.x };
         let palette = self.palette();
         let dimmed = self.dimmed(&entry);
+        let across = Rect::new(area.x, 0, self.body_width(), 1);
+        let base = self.diff_base;
+        let mut spots: Vec<Spot> = Vec::new();
         let s = self.files.get(&entry.key())?;
         let mut cursor = None;
         for (k, line) in lines.iter().skip(from).take(count).enumerate() {
             let y = y0 + k as u16;
+            let place = base + i64::from(y);
+            match line {
+                Line::Fold { .. } | Line::Card(_) => {
+                    let whole = Rect { y, ..across };
+                    spots.push(Spot::new(Pane::Wide, whole, area.x, place, false));
+                }
+                Line::Note { new_side, .. } => {
+                    let (x, w) = if *new_side { (new_x, nw) } else { (old_x, ow) };
+                    spots.push(Spot::new(
+                        Pane::Wide,
+                        Rect::new(x, y, w, 1),
+                        x,
+                        place,
+                        false,
+                    ));
+                }
+                Line::Pair { .. } => {}
+            }
             match line {
                 Line::Fold { count, .. } => {
                     let text = format!(" ⋯ {count} unchanged lines");
@@ -1188,6 +1247,22 @@ impl App {
                         // The line's number on its first screen line, faint,
                         // at the right of the gutter.
                         let gutter = s.gutter(w as usize) as u16;
+                        if w > gutter {
+                            // The piece's own cells: a line wrapped at a
+                            // space ends short of the side's width.
+                            let used: usize =
+                                text[range.clone()].chars().map(sides::char_width).sum();
+                            spots.push(
+                                Spot::new(
+                                    if new_side { Pane::New } else { Pane::Old },
+                                    Rect::new(x + gutter, y, w - gutter, 1),
+                                    x,
+                                    place,
+                                    range.start > 0,
+                                )
+                                .fitted(used as u16),
+                            );
+                        }
                         if gutter > 0 && range.start == 0 {
                             let number = (*line + 1).to_string();
                             let nx = x + gutter - 1 - width(&number) as u16;
@@ -1252,7 +1327,14 @@ impl App {
                 cursor = Some((x + (self.col as u16).min(w.saturating_sub(1)), y));
             }
         }
+        self.spots.append(&mut spots);
         cursor
+    }
+
+    /// The columns the diff's rows take, less the scroll bar's.
+    fn body_width(&self) -> u16 {
+        let (ow, nw) = self.widths_of_alone(None);
+        ow + 1 + nw
     }
 
     /// The lines of the hunks of another chapter than the page's, which a
@@ -1546,8 +1628,16 @@ impl App {
                 self.answer_bar = Some((x, y, body));
             }
         }
+        let selected = self
+            .answer
+            .as_ref()
+            .and_then(|a| a.visual)
+            .map(|from| from.min(cursor)..=from.max(cursor));
+        let text = Rect::new(inner.x + 1, 0, inner.width.saturating_sub(2), 1);
         for (k, (_, spans)) in lines.iter().skip(top).take(body).enumerate() {
             let y = inner.y + 1 + k as u16;
+            let row = Rect { y, ..text };
+            self.spot(Pane::Answer, row, inner.x, (top + k) as i64, false);
             let mut x = inner.x + 1;
             for (text, style) in spans {
                 x = Self::put(
@@ -1562,6 +1652,11 @@ impl App {
             if top + k == cursor {
                 for cx in inner.x..inner.right() {
                     buf[(cx, y)].set_bg(Color::Indexed(if self.opts.light { 254 } else { 236 }));
+                }
+            }
+            if selected.as_ref().is_some_and(|s| s.contains(&(top + k))) {
+                for cx in inner.x..inner.right() {
+                    buf[(cx, y)].modifier.insert(Modifier::REVERSED);
                 }
             }
         }

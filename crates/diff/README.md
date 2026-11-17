@@ -22,7 +22,7 @@ install -m 755 target/release/switchboard-diff ~/.local/bin/
 ## Requirements
 
 - git.
-- A terminal that draws 256 colors. One that reports the mouse lets you click and scroll.
+- A terminal that draws 256 colors. One that reports the mouse lets you click, scroll and select text.
 - Claude Code (`claude` on your PATH, or in `~/.local/bin`), only for the story, the reading order of the files and questions about the change. Without it the files are listed by kind and nothing is sent anywhere.
 
 ## Using it
@@ -33,7 +33,7 @@ switchboard-diff --base origin/develop  # against another branch or commit, used
 switchboard-diff --working [dir]        # the changes not yet committed, staged and not
 ```
 
-The keys are Vim's, and the same as in Switchboard: [Keys in the diff](../../docs/guide.md#keys-in-the-diff) lists them. The cursor stays in the file it is in, stopping at its first and last lines: `]f` and `[f` go to the next file and the one before. `q` closes it.
+The keys are Vim's, and the same as in Switchboard: [Keys in the diff](../../docs/guide.md#keys-in-the-diff) lists them. The cursor stays in the file it is in, stopping at its first and last lines: `]f` and `[f` go to the next file and the one before. `q` closes it. A drag of the mouse selects text in the part of the screen it starts in and copies it when the button is let go, a side of the diff without its line numbers or the other side; a double click takes a word and a triple click a line. With the keys, `v` selects lines and `y` copies their text.
 
 ## What it sends
 

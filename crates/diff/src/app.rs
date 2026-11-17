@@ -49,7 +49,8 @@
 //! `yp` copies the cursor's `path:line` and `yl` a GitHub link to it; `v`
 //! or `V` in a side of the diff selects lines, as Visual mode did in
 //! diffview's buffers, and then `yp` and `yl` copy the lines selected
-//! (`path:12-20`, `#L12-L20`).
+//! (`path:12-20`, `#L12-L20`), and `y` their text. A drag of the mouse
+//! selects any text on the screen and copies it (select.rs).
 //!
 //! The screen is drawn into a cell buffer and only what changed is sent,
 //! through the renderer the multiplexer's is (`switchboard_ui::screen`), so the
@@ -88,6 +89,7 @@ use crate::host::host;
 use crate::{settings, util};
 
 mod draw;
+mod select;
 
 /// The list's narrow width, and how wide a list must be to head a chapter
 /// with its whole why (narrower, its first sentence, the rest in the bar).
@@ -417,6 +419,8 @@ struct Answer {
     /// Who was asked, once that is known: the tab's session on its model,
     /// or Haiku in its place.
     who: Option<String>,
+    /// Where a selection of lines started (`v`), as a line of the answer.
+    visual: Option<usize>,
 }
 
 /// A button of easy mode's row, or of a box's.
@@ -501,7 +505,10 @@ pub const KEYS: &[(&str, &[KeyRow])] = &[
                 "R",
                 "read the change again, edits made since it opened included",
             ),
-            key_row("v V", "select lines in a side of the diff, for yp and yl"),
+            key_row(
+                "v V",
+                "select lines in the file list or a side of the diff: y then copies their text",
+            ),
             key_row("yp", "copy path:line"),
             key_row(
                 "yl",
@@ -532,6 +539,7 @@ pub const KEYS: &[(&str, &[KeyRow])] = &[
         "M-d: an answer (ga)",
         &[
             ask_row("ga", "ask another question"),
+            ask_row("v", "select lines of the answer; y copies them"),
             ask_row("yy", "copy the answer"),
             ask_row("yS", "copy the story as Markdown"),
             ask_row(
@@ -670,8 +678,29 @@ pub struct App {
     /// The first key of a pair (y, g, ], [, z, C-w as w), and a count typed.
     pending: Option<char>,
     /// Where a selection of lines started (`v`, `V`), as a screen line of
-    /// the diff, on the side with the focus.
+    /// the diff, on the side with the focus; where one started in the list,
+    /// as the file the cursor was on, kept only while the list has the
+    /// focus; and whether `y` has just copied its text, so the key after it
+    /// ends it.
     visual: Option<usize>,
+    list_visual: Option<usize>,
+    yanked: bool,
+    /// What the mouse selected (select.rs), the rows of text last drawn,
+    /// where its button was pressed, and the last press with how many in a
+    /// row it made.
+    selection: Option<select::Selection>,
+    spots: Vec<select::Spot>,
+    pressed: Option<(u16, u16)>,
+    clicks: Option<(Instant, u16, u16, u8)>,
+    /// The path:line of an answer the button was pressed on, gone to when
+    /// it is let go with nothing selected, so a drag can select it.
+    pressed_cite: Option<ask::Cited>,
+    /// Where the diff's rows were last drawn from, how many rows that is
+    /// from where they were first, and what a screen row adds to for its
+    /// row's number.
+    diff_drawn: Option<(usize, usize)>,
+    diff_scrolled: i64,
+    diff_base: i64,
     count: Option<usize>,
     spin: usize,
     hover: Option<Button>,
@@ -783,6 +812,16 @@ impl App {
             message: None,
             pending: None,
             visual: None,
+            list_visual: None,
+            yanked: false,
+            selection: None,
+            spots: Vec::new(),
+            pressed: None,
+            clicks: None,
+            pressed_cite: None,
+            diff_drawn: None,
+            diff_scrolled: 0,
+            diff_base: 0,
             count: None,
             spin: 0,
             hover: None,
@@ -838,6 +877,7 @@ impl App {
         self.cols = cols.max(20);
         self.rows = rows.max(5);
         self.lines.clear();
+        self.selection = None;
         if let Some(h) = &mut self.history {
             h.app.resize(cols, rows);
         }
@@ -889,6 +929,18 @@ impl App {
     }
 
     fn event_now(&mut self, msg: Msg) {
+        // What lays the screen out again ends the mouse's selection, whose
+        // rows would be other text.
+        let same_rows = matches!(
+            msg,
+            Msg::Coloured { .. }
+                | Msg::Asked(..)
+                | Msg::History(..)
+                | Msg::Heard(_, Heard::Progress(_))
+        );
+        if !same_rows {
+            self.selection = None;
+        }
         match msg {
             Msg::Loading(text) => self.loading = Some(text),
             Msg::Loaded(Err(why)) => {
@@ -1189,6 +1241,8 @@ impl App {
     /// The files in the order known now, those the path filter leaves,
     /// the cursor kept on its file.
     fn sort(&mut self) {
+        // The list's selection is by its files' places, which change here.
+        self.list_visual = None;
         let keep = self.current().map(Entry::key);
         let view = self
             .order
@@ -2037,10 +2091,40 @@ impl App {
         // A message closes on the next key, which goes on to do what it
         // does, as vim.notify's never held one up; Esc only closes it.
         let closed = self.history.is_none() && self.message.take().is_some();
+        // The list's selection is gone once the focus has left the list,
+        // however it left.
+        if self.focus != Focus::List {
+            self.list_visual = None;
+        }
+        // What the mouse selected: Esc clears it, y copies it again (and
+        // goes on, so yp and yl still copy the place), any other key ends it.
+        if self.selection.is_some() {
+            match key.code {
+                KeyCode::Esc => {
+                    // With the y that copied it, were it the key before.
+                    self.selection = None;
+                    self.pending = None;
+                    self.count = None;
+                    self.yanked = false;
+                    return Act::Redraw;
+                }
+                KeyCode::Char('y') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.copy_selection();
+                    self.yanked = true;
+                }
+                _ => self.selection = None,
+            }
+        }
         if closed && key.code == KeyCode::Esc {
             return Act::Redraw;
         }
-        match self.key_on(key) {
+        let act = self.key_on(key);
+        // A y that copied waits for its second key, or it was no pair's
+        // first (typed into a box).
+        if self.pending.is_none() {
+            self.yanked = false;
+        }
+        match act {
             Act::Same if closed => Act::Redraw,
             act => act,
         }
@@ -2153,6 +2237,12 @@ impl App {
             KeyCode::Char(c @ ('y' | 'g' | ']' | '[' | 'z')) if !ctrl => {
                 self.pending = Some(c);
                 self.count = Some(count).filter(|n| *n > 1);
+                // y on the lines selected copies their text.
+                let selected = if list { self.list_visual } else { self.visual };
+                if c == 'y' && selected.is_some() {
+                    self.copy_visual();
+                    return Act::Redraw;
+                }
                 return Act::Same;
             }
             KeyCode::Char('w') if ctrl => {
@@ -2160,7 +2250,10 @@ impl App {
                 return Act::Same;
             }
             KeyCode::Char('E') => self.widen(),
-            KeyCode::Char('/') if list && !ctrl => self.filtering = true,
+            KeyCode::Char('/') if list && !ctrl => {
+                self.filtering = true;
+                self.list_visual = None;
+            }
             KeyCode::Char('R') if !ctrl => self.refresh(),
             KeyCode::Char('c') if !ctrl && self.in_history => self.wants = Some(Wants::Leave),
             KeyCode::Char('c') if !ctrl => self.open_history(),
@@ -2170,10 +2263,17 @@ impl App {
             KeyCode::BackTab => {
                 self.focus = if list { self.main_side() } else { Focus::List };
             }
+            KeyCode::Esc if list && self.list_visual.is_some() => self.list_visual = None,
             KeyCode::Esc if list => return Act::Quit,
             KeyCode::Esc if self.visual.is_some() => self.visual = None,
             KeyCode::Esc => self.focus = Focus::List,
-            KeyCode::Char('v' | 'V') if !list && !ctrl => {
+            KeyCode::Char('v' | 'V') if list && !ctrl => {
+                self.list_visual = match self.list_visual {
+                    Some(_) => None,
+                    None => Some(self.at),
+                };
+            }
+            KeyCode::Char('v' | 'V') if !ctrl => {
                 self.visual = match self.visual {
                     Some(_) => None,
                     None => Some(self.cur),
@@ -2221,6 +2321,22 @@ impl App {
 
     /// The second key of a pair: y, g, ], [, z and C-w's.
     fn second_key(&mut self, first: char, key: KeyEvent) -> Act {
+        // After a y that copied the lines selected, only yp and yl go on
+        // with the selection, which is still lit: Esc and v end it and do
+        // nothing more, as they end any selection, and any other key ends
+        // it and does its own work.
+        let yanked = std::mem::take(&mut self.yanked);
+        let ends = matches!(key.code, KeyCode::Esc | KeyCode::Char('v' | 'V'));
+        if yanked && !matches!(key.code, KeyCode::Char('p' | 'l')) {
+            self.visual = None;
+            self.list_visual = None;
+            if ends {
+                return Act::Redraw;
+            }
+            if key.code != KeyCode::Char('S') {
+                return self.normal_key(key);
+            }
+        }
         let KeyCode::Char(c) = key.code else {
             return Act::Redraw;
         };
@@ -3296,6 +3412,7 @@ impl App {
             Focus::List => self.main_side() == Focus::New,
         };
         let line = self.line_under(new_side).unwrap_or(1);
+        self.list_visual = None;
         let (first, last) = match self.visual.take().filter(|_| self.focus != Focus::List) {
             Some(from) => {
                 let other = self.line_at(new_side, from).unwrap_or(line);
@@ -3499,6 +3616,7 @@ impl App {
             cursor: 0,
             asking: asking.clone(),
             who: None,
+            visual: None,
         });
         if !self.opts.haiku {
             return;
@@ -3566,6 +3684,20 @@ impl App {
 
     fn answer_key(&mut self, key: KeyEvent) -> Act {
         if let Some(first) = self.pending.take() {
+            // After a y that copied the lines selected, the selection ends:
+            // Esc and v do nothing more, and a key that isn't y's does its
+            // own work.
+            if std::mem::take(&mut self.yanked) {
+                if let Some(a) = &mut self.answer {
+                    a.visual = None;
+                }
+                if matches!(key.code, KeyCode::Esc | KeyCode::Char('v' | 'V')) {
+                    return Act::Redraw;
+                }
+                if !matches!(key.code, KeyCode::Char('y' | 'S')) {
+                    return self.answer_key(key);
+                }
+            }
             let KeyCode::Char(c) = key.code else {
                 return Act::Redraw;
             };
@@ -3594,10 +3726,23 @@ impl App {
         };
         let last = lines.saturating_sub(1);
         match key.code {
+            KeyCode::Esc if a.visual.is_some() => a.visual = None,
             KeyCode::Char('q') | KeyCode::Esc => self.close_answer(),
             KeyCode::Char('d') if ctrl => a.cursor = (a.cursor + half).min(last),
             KeyCode::Char('u') if ctrl => a.cursor = a.cursor.saturating_sub(half),
-            KeyCode::Char(c @ ('g' | 'y')) if !ctrl => self.pending = Some(c),
+            KeyCode::Char('v' | 'V') if !ctrl => {
+                a.visual = match a.visual {
+                    Some(_) => None,
+                    None => Some(a.cursor),
+                };
+            }
+            KeyCode::Char(c @ ('g' | 'y')) if !ctrl => {
+                self.pending = Some(c);
+                // y on the lines selected copies their text.
+                if c == 'y' {
+                    self.copy_answer_lines();
+                }
+            }
             KeyCode::Char('j') | KeyCode::Down => a.cursor = (a.cursor + 1).min(last),
             KeyCode::Char('k') | KeyCode::Up => a.cursor = a.cursor.saturating_sub(1),
             KeyCode::Char('G') | KeyCode::End => a.cursor = last,
@@ -3804,6 +3949,10 @@ impl App {
                 self.bar_drag = None;
                 return Act::Same;
             }
+            MouseEventKind::Drag(MouseButton::Left) if self.pressed.is_some() => {
+                return self.drag_select(x, y);
+            }
+            MouseEventKind::Up(MouseButton::Left) => return self.release_select(),
             MouseEventKind::Moved | MouseEventKind::Drag(_) => {
                 if !self.opts.hover || hit == self.hover {
                     return Act::Same;
@@ -3842,7 +3991,11 @@ impl App {
             }
             _ => return Act::Same,
         }
-        // A click closes a message and goes on to do what it does.
+        // A click closes a message and goes on to do what it does; but on
+        // a scroll bar, which scrolls under a selection, it ends what was
+        // selected.
+        self.pressed = None;
+        self.pressed_cite = None;
         let closed = self.message.take().is_some();
         // A click anywhere but the filter's line ends typing in it, the
         // filter kept, so a button's keys or a click in the diff act as
@@ -3856,6 +4009,9 @@ impl App {
             return if closed { Act::Redraw } else { Act::Same };
         }
         if let Some(button) = hit {
+            self.selection = None;
+            self.visual = None;
+            self.list_visual = None;
             return self.press(button);
         }
         if let Some((bar, row)) = self.on_scroll_bar(x, y) {
@@ -3872,7 +4028,19 @@ impl App {
             self.bar_drag = Some((bar, y - row as u16, (row, top)));
             return Act::Redraw;
         }
+        self.selection = None;
         self.visual = None;
+        self.list_visual = None;
+        if let Some(a) = &mut self.answer {
+            a.visual = None;
+        }
+        // A drag from here selects; a second press on the cell selects its
+        // word and a third its line, in place of what a click does.
+        self.pressed = Some((x, y));
+        let clicks = self.count_click(x, y);
+        if clicks > 1 && self.select_unit(x, y, clicks == 3) {
+            return Act::Redraw;
+        }
         // A click outside a box closes it.
         let inside = |r: Option<Rect>| {
             r.is_some_and(|r| x >= r.x && x < r.right() && y >= r.y && y < r.bottom())
@@ -3899,9 +4067,8 @@ impl App {
                         .get(at)
                         .and_then(|line| ask::cited(&line.0, (x.saturating_sub(r.x + 2)) as usize));
                 }
-                if let Some(found) = found {
-                    self.cited(found);
-                }
+                // Gone to once the button is let go, unless it dragged.
+                self.pressed_cite = found;
             }
             return Act::Redraw;
         }
@@ -6182,5 +6349,351 @@ mod tests {
         assert!(app.answer.is_none());
         assert_eq!(app.current().unwrap().path, "src/a.js");
         assert_eq!(app.line_under(true), Some(2));
+    }
+
+    fn mouse(app: &mut App, kind: MouseEventKind, x: u16, y: u16) -> Act {
+        app.mouse(MouseEvent {
+            kind,
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    const DOWN: MouseEventKind = MouseEventKind::Down(MouseButton::Left);
+    const DRAG: MouseEventKind = MouseEventKind::Drag(MouseButton::Left);
+    const UP: MouseEventKind = MouseEventKind::Up(MouseButton::Left);
+
+    /// Where `text` is on the screen: its column and row.
+    fn place_of(shown: &[String], text: &str) -> (u16, u16) {
+        let y = line_with(shown, text);
+        let before = &shown[y][..shown[y].find(text).unwrap()];
+        (before.chars().count() as u16, y as u16)
+    }
+
+    /// What was last put on the clipboard, read back from the escape sent
+    /// for it (OSC 52), which is taken.
+    fn clipboard(app: &mut App) -> String {
+        let sent = String::from_utf8(std::mem::take(&mut app.out)).unwrap();
+        let Some(at) = sent.rfind("\x1b]52;c;") else {
+            return String::new();
+        };
+        let coded = sent[at + 7..].trim_end_matches('\x07');
+        let value = |c: u8| match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            _ => 63,
+        };
+        let mut bytes = Vec::new();
+        for four in coded.trim_end_matches('=').as_bytes().chunks(4) {
+            let n = four
+                .iter()
+                .fold(0u32, |n, c| (n << 6) | u32::from(value(*c)))
+                << (6 * (4 - four.len()));
+            bytes.extend_from_slice(&n.to_be_bytes()[1..four.len()]);
+        }
+        String::from_utf8(bytes).unwrap()
+    }
+
+    #[test]
+    fn a_drag_in_a_side_copies_its_text_without_line_numbers_or_the_other_side() {
+        let mut app = app();
+        press(&mut app, "j");
+        let shown = screen(&mut app);
+        let (x, y) = place_of(&shown, "function f() {");
+        let (x, y) = {
+            // The new side's copy of the line, right of the old side's.
+            let (ow, _) = app.side_widths();
+            let from = (app.diff_area().x + ow) as usize;
+            let rest: String = shown[y as usize].chars().skip(from).collect();
+            let _ = x;
+            (from as u16 + place_of(&[rest], "function f() {").0, y)
+        };
+        // Three whole lines, from the first's start to the last's end.
+        mouse(&mut app, DOWN, x, y);
+        assert_eq!(mouse(&mut app, DRAG, x + 40, y + 2), Act::Redraw);
+        mouse(&mut app, UP, x + 40, y + 2);
+        assert_eq!(clipboard(&mut app), "function f() {\n  return 2;\n}");
+        assert_eq!(app.message.as_ref().unwrap().0, "Copied 3 lines");
+        // What is selected is lit, and stays until a key or a click.
+        app.message = None;
+        let drawn = draw(&mut app);
+        assert_eq!(drawn[(x, y + 1)].bg, Color::Indexed(239));
+        assert_ne!(
+            drawn[(x - 2, y + 1)].bg,
+            Color::Indexed(239),
+            "not the numbers"
+        );
+        // y copies it again; Esc clears it before anything else.
+        press(&mut app, "y");
+        assert_eq!(clipboard(&mut app), "function f() {\n  return 2;\n}");
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.selection.is_none() && app.message.is_none());
+        assert_eq!(app.focus, Focus::New, "Esc cleared the selection alone");
+        // The y before it waits for no second key: the next key is its own.
+        let at = app.cur;
+        press(&mut app, "j");
+        assert_eq!(app.cur, at + 1);
+        // And so is the key after y, when it isn't yp's or yl's.
+        draw(&mut app);
+        mouse(&mut app, DOWN, x, y);
+        mouse(&mut app, DRAG, x + 3, y);
+        mouse(&mut app, UP, x + 3, y);
+        let at = app.cur;
+        press(&mut app, "yj");
+        assert!(app.selection.is_none());
+        assert_eq!(app.cur, at + 1);
+        // By characters: from inside one line to inside the next, backwards.
+        draw(&mut app);
+        mouse(&mut app, DOWN, x + 7, y + 1);
+        mouse(&mut app, DRAG, x + 9, y);
+        mouse(&mut app, UP, x + 9, y);
+        assert_eq!(clipboard(&mut app), "f() {\n  return");
+        assert_eq!(app.message.as_ref().unwrap().0, "Copied 2 lines");
+    }
+
+    #[test]
+    fn a_double_click_copies_a_word_and_a_triple_click_its_line() {
+        let mut app = app();
+        press(&mut app, "j");
+        let shown = screen(&mut app);
+        let (x, y) = place_of(&shown, "return 2;");
+        mouse(&mut app, DOWN, x + 2, y);
+        mouse(&mut app, UP, x + 2, y);
+        assert!(app.out.is_empty(), "a click copies nothing");
+        mouse(&mut app, DOWN, x + 2, y);
+        mouse(&mut app, UP, x + 2, y);
+        assert_eq!(clipboard(&mut app), "return");
+        assert_eq!(app.message.as_ref().unwrap().0, "Copied 1 line");
+        mouse(&mut app, DOWN, x + 2, y);
+        mouse(&mut app, UP, x + 2, y);
+        assert_eq!(clipboard(&mut app), "  return 2;");
+    }
+
+    #[test]
+    fn v_then_y_copies_the_lines_text_and_yp_still_their_place() {
+        let mut app = app();
+        press(&mut app, "j");
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        press(&mut app, "ggVjy");
+        assert_eq!(clipboard(&mut app), "function f() {\n  return 2;");
+        assert_eq!(app.message.as_ref().unwrap().0, "Copied 2 lines");
+        press(&mut app, "p");
+        assert_eq!(app.message.as_ref().unwrap().0, "Copied src/a.js:1-2");
+        assert_eq!(app.visual, None);
+        // The file's own text, a tab a tab, though the screen shows spaces.
+        app.give_text("R", "src/a.js", Some("if (x) {\n\treturn 2;\n}\n".into()));
+        app.files.clear();
+        app.lines.clear();
+        press(&mut app, "ggVjy");
+        assert_eq!(clipboard(&mut app), "if (x) {\n\treturn 2;");
+        press(&mut app, "j");
+        // Any other key after y ends the selection and does its own work.
+        press(&mut app, "ggVjy");
+        let at = app.cur;
+        press(&mut app, "j");
+        assert_eq!((app.visual, app.cur), (None, at + 1));
+        // An arrow too, which is no character.
+        press(&mut app, "ggVy");
+        app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!((app.visual, app.cur), (None, 1));
+        // In the list, v selects files and y copies their paths.
+        app.focus = Focus::List;
+        press(&mut app, "ggvjy");
+        assert_eq!(clipboard(&mut app), "README.md\nsrc/a.js");
+        // Esc closes the message, then ends the selection, still lit after
+        // y, before it would close the diff.
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(app.key(esc), Act::Redraw);
+        assert!(app.list_visual.is_some());
+        assert_eq!(app.key(esc), Act::Redraw);
+        assert_eq!(app.list_visual, None);
+        assert_eq!(app.key(esc), Act::Quit);
+        // A side's selection is none of the list's: easy mode's buttons
+        // move to the list with it left behind.
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        press(&mut app, "v");
+        app.press(Button::Bar(0));
+        assert_eq!((app.focus, app.list_visual), (Focus::List, None));
+    }
+
+    #[test]
+    fn a_drag_in_the_file_list_copies_its_rows_and_a_click_still_chooses_a_file() {
+        let mut app = app();
+        let shown = screen(&mut app);
+        let (_, first) = place_of(&list(&shown), "README.md");
+        let (_, second) = place_of(&list(&shown), "a.js");
+        mouse(&mut app, DOWN, 0, first);
+        mouse(&mut app, DRAG, 29, second);
+        mouse(&mut app, UP, 29, second);
+        let rows: Vec<String> = [first, second]
+            .iter()
+            .map(|y| list(&shown)[*y as usize].trim_end().to_string())
+            .collect();
+        assert!(rows[0].contains("README.md") && rows[1].contains("a.js"));
+        assert_eq!(clipboard(&mut app), rows.join("\n"));
+        assert_eq!(app.message.as_ref().unwrap().0, "Copied 2 lines");
+        // A press and a release on one cell selects nothing.
+        app.message = None;
+        let shown = screen(&mut app);
+        let (x, y) = place_of(&list(&shown), "new.js");
+        mouse(&mut app, DOWN, x, y);
+        mouse(&mut app, DRAG, x, y);
+        mouse(&mut app, UP, x, y);
+        assert_eq!(app.current().unwrap().path, "src/new.js");
+        assert!(app.selection.is_none() && app.out.is_empty() && app.message.is_none());
+        // A drag from the list's empty rows selects nothing of the diff
+        // beside them.
+        draw(&mut app);
+        mouse(&mut app, DOWN, 5, 12);
+        mouse(&mut app, DRAG, 20, 13);
+        mouse(&mut app, UP, 20, 13);
+        assert!(app.selection.is_none() && app.out.is_empty());
+    }
+
+    #[test]
+    fn a_selection_stays_on_its_text_as_the_wheel_scrolls_and_copies_what_scrolled_away() {
+        let mut app = added_files(&["a.rs", "b.rs"], 60);
+        let shown = screen(&mut app);
+        let path = app.current().unwrap().path.clone();
+        let (x, y) = place_of(&shown, &format!("{path} line 6"));
+        mouse(&mut app, DOWN, x, y);
+        draw(&mut app);
+        mouse(&mut app, DRAG, x + 4, y + 1);
+        // The wheel under the held mouse: the end follows the text there.
+        for _ in 0..4 {
+            mouse(&mut app, MouseEventKind::ScrollDown, x + 4, y + 1);
+            draw(&mut app);
+        }
+        let shown = screen(&mut app);
+        assert!(!shown.iter().any(|l| l.ends_with(&format!("{path} line 6"))));
+        mouse(&mut app, UP, x + 4, y + 1);
+        // To the fifth column of line 19, now under the mouse.
+        let lines: Vec<String> = (6..=18).map(|i| format!("{path} line {i}")).collect();
+        assert_eq!(clipboard(&mut app), format!("{}\n{path}", lines.join("\n")));
+        assert_eq!(app.message.as_ref().unwrap().0, "Copied 14 lines");
+        // A press on the scroll bar scrolls under the selection, kept.
+        app.opts.scroll_bars = true;
+        app.message = None;
+        draw(&mut app);
+        let bar = app.diff_area().right() - 1;
+        let row = app.diff_area().y + app.head_height() as u16 + 1;
+        mouse(&mut app, DOWN, bar, row);
+        mouse(&mut app, UP, bar, row);
+        assert!(app.selection.is_some());
+    }
+
+    #[test]
+    fn a_turn_of_the_wheel_under_a_held_drag_copies_the_rows_it_took_off_the_screen() {
+        let mut app = added_files(&["a.rs", "b.rs"], 60);
+        let shown = screen(&mut app);
+        let path = app.current().unwrap().path.clone();
+        // A drag along the first row in sight, then the wheel, which takes
+        // that row and the two after it off the screen at once.
+        let (x, y) = place_of(&shown, &format!("{path} line 1"));
+        mouse(&mut app, DOWN, x, y);
+        draw(&mut app);
+        mouse(&mut app, DRAG, x + 3, y);
+        mouse(&mut app, MouseEventKind::ScrollDown, x + 3, y);
+        draw(&mut app);
+        mouse(&mut app, UP, x + 3, y);
+        assert_eq!(
+            clipboard(&mut app),
+            format!("{path} line 1\n{path} line 2\n{path} line 3\n{path}")
+        );
+    }
+
+    #[test]
+    fn a_line_wrapped_is_copied_as_one_with_nothing_added_where_it_wraps() {
+        let (tx, _rx) = channel();
+        let mut app = App::new(opts(), 100, 16, tx);
+        let long = "let answer = compute(first_argument, second_argument, third_argument);";
+        app.give_text("R", "src/long.rs", Some(format!("{long}\nshort\n")));
+        app.loaded(Change {
+            top: PathBuf::from("/repo"),
+            base: "origin/main".into(),
+            why: git::Why::default(),
+            left: "L".into(),
+            right: "R".into(),
+            entries: vec![entry("src/long.rs", 'A', 2, 0)],
+            diff: format!(
+                "diff --git a/src/long.rs b/src/long.rs\n--- /dev/null\n+++ b/src/long.rs\n@@ -0,0 +1,2 @@\n+{long}\n+short\n"
+            ),
+            staged: None,
+            raw_commits: String::new(),
+            uncommitted: None,
+        });
+        let shown = screen(&mut app);
+        let (x, y) = place_of(&shown, "let answer");
+        let (_, last) = place_of(&shown, "short");
+        assert!(
+            last > y + 1,
+            "the long line takes more than a row: {shown:?}"
+        );
+        mouse(&mut app, DOWN, x, y);
+        mouse(&mut app, DRAG, x + 60, last);
+        mouse(&mut app, UP, x + 60, last);
+        assert_eq!(clipboard(&mut app), format!("{long}\nshort"));
+        // A triple click on its second row takes the whole line.
+        app.message = None;
+        draw(&mut app);
+        for _ in 0..3 {
+            mouse(&mut app, DOWN, x + 2, y + 1);
+            mouse(&mut app, UP, x + 2, y + 1);
+        }
+        assert_eq!(clipboard(&mut app), long);
+    }
+
+    #[test]
+    fn a_drag_over_an_answers_path_selects_it_and_a_click_still_goes_there() {
+        let mut app = app();
+        press(&mut app, "gaWhy?");
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let id = app.answer.as_ref().unwrap().id;
+        app.event(Msg::Asked(id, Said::Text("See src/a.js:2 there.".into())));
+        app.event(Msg::Asked(id, Said::Done(Ok("whole".into()))));
+        let shown = screen(&mut app);
+        let (x, y) = place_of(&shown, "src/a.js:2");
+        mouse(&mut app, DOWN, x, y);
+        mouse(&mut app, DRAG, x + 9, y);
+        mouse(&mut app, UP, x + 9, y);
+        assert_eq!(clipboard(&mut app), "src/a.js:2");
+        assert!(app.answer.is_some(), "the answer stays under a drag");
+        // A press and a release on it goes to the line.
+        app.message = None;
+        draw(&mut app);
+        mouse(&mut app, DOWN, x + 1, y);
+        assert!(app.answer.is_some());
+        mouse(&mut app, UP, x + 1, y);
+        assert!(app.answer.is_none());
+        assert_eq!(app.current().unwrap().path, "src/a.js");
+    }
+
+    #[test]
+    fn v_in_an_answer_selects_lines_and_y_copies_them() {
+        let mut app = app();
+        press(&mut app, "gaWhy?");
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let id = app.answer.as_ref().unwrap().id;
+        app.event(Msg::Asked(id, Said::Text("One.\n\nTwo.\n\nThree.".into())));
+        app.event(Msg::Asked(id, Said::Done(Ok("whole".into()))));
+        let lines = app.answer_lines(app.answer_width());
+        let one = lines.iter().position(|l| l.0.contains("One.")).unwrap();
+        app.answer.as_mut().unwrap().cursor = one;
+        press(&mut app, "vjjy");
+        assert_eq!(clipboard(&mut app), "One.\n\nTwo.");
+        // A drag in the answer selects its words.
+        press(&mut app, "j");
+        assert_eq!(app.answer.as_ref().unwrap().visual, None);
+        app.message = None;
+        let shown = screen(&mut app);
+        let (x, y) = place_of(&shown, "Three.");
+        mouse(&mut app, DOWN, x, y);
+        mouse(&mut app, DRAG, x + 3, y);
+        mouse(&mut app, UP, x + 3, y);
+        assert_eq!(clipboard(&mut app), "Thre");
+        assert!(app.answer.is_some());
     }
 }
