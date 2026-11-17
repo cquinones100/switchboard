@@ -1459,6 +1459,9 @@ fn program_line(args: &[String], own_exe: &str) -> String {
         match words.as_slice() {
             ["notes", "away", ..] => Some("the place Notes left in its tab"),
             ["notes", ..] => Some("Notes"),
+            ["diff", rest @ ..] if rest.contains(&"--working") => {
+                Some("the diff of uncommitted changes")
+            }
             ["diff", ..] => Some("the diff"),
             ["pr-view", "--checks", ..] => Some("the PR's failing checks"),
             ["pr-view", ..] => Some("the PR view"),
@@ -1587,6 +1590,10 @@ mod tests {
         let bin = format!("{home}/.local/bin/switchboard");
         assert_eq!(line(&[&bin, "notes", "--tab"]), "Notes");
         assert_eq!(line(&[&bin, "diff"]), "the diff");
+        assert_eq!(
+            line(&[&bin, "diff", "--working"]),
+            "the diff of uncommitted changes"
+        );
         assert_eq!(line(&[&bin, "pr-view", "/x"]), "the PR view");
         assert_eq!(
             line(&[&bin, "pr-view", "--checks", "/x"]),
