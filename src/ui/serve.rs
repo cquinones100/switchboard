@@ -1474,7 +1474,12 @@ fn program_line(args: &[String], own_exe: &str) -> String {
                         .strip_prefix('+')
                         .is_some_and(|n| n.parse::<usize>().is_ok()) =>
             {
-                Some(format!("the pager: {}", program_name(file)))
+                let path = if file.starts_with('/') {
+                    crate::paths::tilde(file)
+                } else {
+                    file.to_string()
+                };
+                Some(format!("the pager: {}", cut_left(&path, 49)))
             }
             _ => None,
         })
@@ -1494,6 +1499,25 @@ fn program_line(args: &[String], own_exe: &str) -> String {
     };
     let words = std::iter::once(name.clone()).chain(rest.iter().map(short));
     draw::cut(&words.collect::<Vec<_>>().join(" "), 60)
+}
+
+/// Text cut to `cols` columns from its left, an `…` in front, so a path
+/// keeps its file's name.
+fn cut_left(text: &str, cols: usize) -> String {
+    if draw::width(text) <= cols {
+        return text.to_string();
+    }
+    let mut kept = Vec::new();
+    let mut used = 1;
+    for c in text.chars().rev() {
+        let w = draw::width(c.encode_utf8(&mut [0; 4]));
+        if used + w > cols {
+            break;
+        }
+        used += w;
+        kept.push(c);
+    }
+    std::iter::once('…').chain(kept.into_iter().rev()).collect()
 }
 
 /// Whether a program is a shell, by its name (a login shell's has a `-`
@@ -1557,12 +1581,16 @@ mod tests {
         );
         assert_eq!(
             line(&[&bin, "view", "--log", "+12", &format!("{home}/a/b/job.log")]),
-            "the pager: job.log"
+            "the pager: ~/a/b/job.log"
         );
         assert_eq!(
             line(&[&bin, "view", "--log", "logs/ci.log"]),
-            "the pager: ci.log"
+            "the pager: logs/ci.log"
         );
+        let deep = format!("{}/job.log", "d/".repeat(40));
+        let long = line(&[&bin, "view", &deep]);
+        assert!(long.starts_with("the pager: …") && long.ends_with("/job.log"));
+        assert_eq!(draw::width(&long), 60);
         assert_eq!(
             line(&[&bin, "view", "+42", "+page.svelte"]),
             "the pager: +page.svelte"
