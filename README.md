@@ -4,7 +4,7 @@ A terminal workspace for working with coding agents, built around Claude Code. E
 
 Switchboard is its own terminal multiplexer: a server in the background owns every pane, so closing the terminal never stops an agent, and `switchboard` attaches to it again, as tmux did. The sidebar, mission control, the command palette, the PR and ticket views, a diff viewer that tells a change as a story, a notes app and a Slack relay for when you are away are built in. It is one program, `switchboard`.
 
-![Switchboard with tabs in every state in the sidebar and a coding agent asking to push](docs/images/main-screen.png)
+![Switchboard with tabs in every state in the sidebar and a coding agent at work on a ticket](docs/images/main-screen.png)
 
 It is opinionated: the defaults are how it is meant to be used, and Settings (`M-p`, then Settings) turns off the parts you don't want.
 
