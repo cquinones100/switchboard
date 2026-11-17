@@ -220,7 +220,7 @@ The rest follow the prefix, `M-b`. While it waits for the next key, a `^` shows 
 
 `C-w` waits for the next key: `h`, `j`, `k` or `l` moves to the pane on that side (from the sidebar too), `C-w` again sends `C-w` itself to the pane (deleting a word in a shell or in Claude's prompt), and any other key does what it would have done. Settings' "C-w then h, j, k or l moves between panes" (`ctrl_w_panes`) off leaves `C-w` to the pane, and Settings' "Alt-arrows move between panes" (`pane_arrows`) off hands Alt-arrows to the pane.
 
-Vim takes `C-w` for its own windows. The diff (`M-d`) and Notes take both `C-w` and the Alt-arrows: they move between their own windows (the file list and the diff's two sides; the notes sidebar and the note) and, at their edge, on to the pane on that side, as Neovim with vim-tmux-navigator did, and each greys what doesn't have the keys (the diff its file list or the file, Notes its sidebar, the note or the plan beside it); in Notes, `C-w` while typing deletes a word, as in Vim.
+Vim takes `C-w` for its own windows. The diff (`M-d`) and Notes take both `C-w` and the Alt-arrows: they move between their own windows (the file list and the diff's two sides; the notes sidebar and the note) and, at their edge, on to the pane on that side, as Neovim with vim-tmux-navigator did, and each greys what doesn't have the keys (the diff its file list while the file has them, and nothing while the list does, since the file beside it is what the list is showing; Notes its sidebar, the note or the plan beside it); in Notes, `C-w` while typing deletes a word, as in Vim.
 
 ### Option as Alt on a Mac
 

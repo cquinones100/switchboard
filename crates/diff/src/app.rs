@@ -4866,7 +4866,7 @@ mod tests {
     }
 
     #[test]
-    fn the_file_is_greyed_while_the_list_has_the_keys_and_the_list_while_the_file_does() {
+    fn the_file_is_never_greyed_and_the_list_is_while_the_file_has_the_keys() {
         let mut app = added_files(&["src/one.js", "src/two.js"], 3);
         let file = app.diff_area();
         // The colors of the text in the list and in the file, and whether
@@ -4892,18 +4892,31 @@ mod tests {
             assert_eq!(a.len(), b.len());
             a.iter().zip(b).filter(|(a, b)| a != b).count() * 2 > a.len()
         };
-        let (list, greyed_file) = texts(&mut app);
+        // With the keys in the list, the file it shows is as it is with
+        // the keys in it: no cell of it greyed.
+        let (list, file_from_list) = texts(&mut app);
         app.focus = app.main_side();
         let (greyed_list, shown) = texts(&mut app);
         assert!(changed(&list, &greyed_list), "the list had the keys");
-        assert!(changed(&shown, &greyed_file), "the file has them now");
+        assert_eq!(shown, file_from_list, "the file is lit from the list");
+        // And nothing of the screen is greyed while the list has them.
+        app.focus = Focus::List;
+        let from_list = draw(&mut app);
+        let mut greyed = from_list.clone();
+        kit::unfocused(&mut greyed, file, &app.theme());
+        let differ = |a: &Buffer, b: &Buffer| {
+            (0..file.bottom())
+                .flat_map(|y| (file.x..file.right()).map(move |x| (x, y)))
+                .any(|at| a[at] != b[at])
+        };
+        assert!(differ(&from_list, &greyed), "greying the file would show");
     }
 
     #[test]
     fn with_ux2_an_added_files_lines_are_numbered_and_tinted_as_added_and_a_footer_names_the_keys()
     {
         let mut app = added_files(&["src/one.js", "src/two.js"], 3);
-        // With the keys in the file, which is greyed while the list has them.
+        // With the keys in the file.
         app.focus = app.main_side();
         let buf = draw(&mut app);
         app.focus = Focus::List;
@@ -5545,7 +5558,7 @@ mod tests {
         );
         // The changed word in the stronger shade, the rest of the line in
         // the fainter one.
-        // With the keys in the file, which is greyed while the list has them.
+        // With the keys in the file.
         app.focus = app.main_side();
         let buf = draw(&mut app);
         app.focus = Focus::List;
