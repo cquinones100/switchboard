@@ -1473,7 +1473,7 @@ fn program_line(args: &[String], own_exe: &str) -> String {
             // The pager (a CI log, a landing's output, a file), by the
             // file's name, which a long folder would cut away.
             // `view [--log] [+<line>] <file>`: the file is always last.
-            ["view", .., file]
+            ["view", flags @ .., file]
                 if *file != "--log"
                     && !file
                         .strip_prefix('+')
@@ -1484,7 +1484,14 @@ fn program_line(args: &[String], own_exe: &str) -> String {
                 } else {
                     file.to_string()
                 };
-                Some(format!("the pager: {}", cut_left(&path, 49)))
+                // From its line, `file:<line>`, so two of one file differ.
+                let at = flags
+                    .iter()
+                    .find_map(|f| f.strip_prefix('+'))
+                    .map(|n| format!(":{n}"))
+                    .unwrap_or_default();
+                let room = 49usize.saturating_sub(draw::width(&at));
+                Some(format!("the pager: {}{at}", cut_left(&path, room)))
             }
             _ => None,
         })
@@ -1597,7 +1604,7 @@ mod tests {
         );
         assert_eq!(
             line(&[&bin, "view", "--log", "+12", &format!("{home}/a/b/job.log")]),
-            "the pager: ~/a/b/job.log"
+            "the pager: ~/a/b/job.log:12"
         );
         assert_eq!(
             line(&[&bin, "view", "--log", "logs/ci.log"]),
@@ -1609,7 +1616,7 @@ mod tests {
         assert_eq!(draw::width(&long), 60);
         assert_eq!(
             line(&[&bin, "view", "+42", "+page.svelte"]),
-            "the pager: +page.svelte"
+            "the pager: +page.svelte:42"
         );
         assert_eq!(
             line(&[&bin, "pr-image", "--ticket", "X-1"]),
