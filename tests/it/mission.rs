@@ -198,7 +198,13 @@ fn with_ux2_moving_through_many_tabs_still_shows_their_output_and_a_tab_closing(
         };
         value.as_str().unwrap().to_string()
     };
+    // Pinned, each is a card under Needs you, showing its screen as a tab
+    // with no Claude does; unpinned they would be lines on the shelf.
+    for at in 0..6 {
+        server.ok(&["set", "-t", &id(at, "tab"), "@pinned", "1"]);
+    }
     open(&mut client);
+    client.wait_text("NEEDS YOU");
     // Three cards along, Enter opens the fourth tab's menu.
     for _ in 0..3 {
         client.type_text("l");

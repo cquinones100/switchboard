@@ -13,8 +13,7 @@
 //!
 //! In a pane it tells the server it drew and the context used (`context`,
 //! over the socket as a hook does, waiting at most a second), which the
-//! server keeps beside the pane's Claude for the tab's header and its card,
-//! since nothing on the drawing path reads a file; a pane whose Claude ends
+//! server keeps beside the pane's Claude for the tab's header, since nothing on the drawing path reads a file; a pane whose Claude ends
 //! a turn with no draw had the statusline skipped, which the server says.
 //!
 //! It also keeps what Claude Code tells the statusline alone, for mission
@@ -107,8 +106,8 @@ pub fn main(_args: Vec<String>) -> ExitCode {
 
 /// Tells the server this pane's Claude drew its statusline, which tells a
 /// statusline a plugin skipped from one that works, and how full its context
-/// is once that is known, for the tab's header and its card, which read only
-/// what the server holds. A headless Claude in the pane draws no statusline,
+/// is once that is known, for the tab's header, which reads only what the
+/// server holds. A headless Claude in the pane draws no statusline,
 /// so it is always the tab's own.
 fn tell_server(payload: &Value) {
     let Some(pane) = std::env::var("SWITCHBOARD_PANE")

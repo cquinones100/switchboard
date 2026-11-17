@@ -498,7 +498,7 @@ pub struct Mission {
     /// cursor it was asked at: moving the cursor puts the card back.
     pub card_screen: Option<(TabId, isize)>,
     /// With UX 2.0 on a screen with room for one column of cards, whether
-    /// the shelf's Landing and Idle show their tabs or only their labels.
+    /// the shelf's groups show their tabs or only their labels.
     pub shelf_open: bool,
     /// Several views at once (from a view's `m` menu), the one with the focus being `view`.
     pub grid: Option<grid::Grid>,

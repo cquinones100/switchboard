@@ -230,16 +230,22 @@ fn with_ux2_mission_control_s_cards_show_a_picture_s_cells_blank_and_draw_no_pie
     let (line, col) = server.show_picture(&mut client, &pane);
     let at = format!("\x1b[{};{}H\x1bP0;1;0q\"1;1;52;48", line + 1, col + 1);
     client.wait_sent("the picture drawn", at.as_bytes());
-    // Mission control over the tab, its card showing the pane's last
-    // lines, the picture's cells among them, copied from the pane: blank
-    // there, and drawn nowhere, the picture under mission control erased.
+    // Mission control over the tab, pinned so it is a card, showing the
+    // pane's last lines as a tab with no Claude does, the picture's cells
+    // among them, copied from the pane: blank there, and drawn nowhere,
+    // the picture under mission control erased.
+    let tab = server.list()["sessions"][0]["tabs"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["set", "-t", &tab, "@pinned", "1"]);
     let before = client.raw.len();
     client.type_text("\x1b ");
     client.wait_text("MISSION CONTROL");
     let erased = format!("\x1b[{};{}H\x1b[4X", line + 1, col + 1);
     client.wait_sent("the picture erased", erased.as_bytes());
     let screen = client.wait_for("the card drawn whole", |s| {
-        s.iter().filter(|l| l.contains("▎ Q7")).count() == 2
+        s.iter().filter(|l| l.contains("│ Q7")).count() == 2
     });
     assert!(
         pictures(&client.raw[before..]).is_empty(),

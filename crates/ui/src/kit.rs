@@ -4,8 +4,8 @@
 //!
 //! Tones (`Tone`) and surfaces (`Surface`) are the colors, one mark per
 //! state (`mark`), and the atoms: a section's `label`, the `rule`s, a
-//! list's `row`, a `chip`, a stage's `cell`, a `keycap`, a `card` (a box),
-//! an `open_card` (the Tabs view's card: a top rule and its tone's bar), a
+//! list's `row`, a `chip`, a stage's `cell`, a `keycap`, a `card` (a box,
+//! and the Tabs view's cards), a
 //! `board_card` (a board's card, as tall as what it holds) and the `board`
 //! they make (board 0c, "The kit's board": columns of cards, the PRs,
 //! Tickets and Autopilot boards' one look), a box's
@@ -995,103 +995,6 @@ pub fn card(
         )]);
     }
     out
-}
-
-/// A card drawn open, as the canvas draws the Tabs view's (board 3), `cols`
-/// wide and `rows` tall: its title and `right` on a rule along its top in
-/// the faint color, laid out by `columns`, a bar (`▎`) of its tone down the
-/// left of every row under it, and no other edge. The caller's lines sit
-/// a space after the bar, `cols - 3` wide, so its right column stays empty.
-/// Chosen, the rule and the bar are the accent and every row has the
-/// Chosen surface; under the mouse, they are `hover`.
-#[allow(clippy::too_many_arguments)]
-pub fn open_card(
-    cols: usize,
-    rows: usize,
-    title: Vec<Span<'static>>,
-    right: Vec<Span<'static>>,
-    inside: &[Vec<Span<'static>>],
-    tone: Tone,
-    chosen: bool,
-    hover: Option<Color>,
-    theme: &Theme,
-) -> Vec<Vec<Span<'static>>> {
-    let (rule_color, bar_color) = match (chosen, hover) {
-        (true, _) => (Tone::Accent.fg(theme), Tone::Accent.fg(theme)),
-        (false, Some(h)) => (h, h),
-        (false, None) => (theme.faint, tone.fg(theme)),
-    };
-    let e = Style::new().fg(rule_color);
-    // `─ title ─── right ─`: the words between a column of rule at each
-    // end, a space either side of the rule between them.
-    let right_w = spans_width(&right);
-    let at = columns(
-        &[
-            Col::Stretch {
-                weight: 1,
-                min: 1,
-                max: None,
-            },
-            Col::Right {
-                natural: right_w,
-                cap: right_w,
-            },
-        ],
-        cols.saturating_sub(4),
-        2,
-        &[],
-    );
-    let mut top = vec![Span::styled("─", e), Span::raw(" ")];
-    if let Some(Some((_, w))) = at.first() {
-        top.extend(fit(title, *w, Style::new()));
-        while top
-            .last()
-            .is_some_and(|s| s.content.trim().is_empty() && s.style == Style::new())
-        {
-            top.pop();
-        }
-    }
-    top.push(Span::raw(" "));
-    let fill_to = match at.get(1) {
-        Some(Some((x, _))) if right_w > 0 => 2 + x - 1,
-        _ => cols,
-    };
-    let used = spans_width(&top);
-    top.push(Span::styled("─".repeat(fill_to.saturating_sub(used)), e));
-    if right_w > 0 {
-        top.push(Span::raw(" "));
-        top.extend(right);
-        top.push(Span::raw(" "));
-        top.push(Span::styled("─", e));
-    }
-    let mut out = vec![fit(top, cols, Style::new())];
-    let bar = Style::new().fg(bar_color);
-    let inner = cols.saturating_sub(3);
-    for i in 0..rows.saturating_sub(1) {
-        let line = inside.get(i).cloned().unwrap_or_default();
-        let mut row = vec![Span::styled("▎", bar), Span::raw(" ")];
-        row.extend(fit(line, inner, Style::new()));
-        row.push(Span::raw(" "));
-        out.push(fit(row, cols, Style::new()));
-    }
-    if !chosen {
-        return out;
-    }
-    let bg = Surface::Chosen.color(theme);
-    out.into_iter()
-        .map(|line| {
-            line.into_iter()
-                .map(|s| {
-                    let style = if s.style.bg.is_none() {
-                        s.style.bg(bg)
-                    } else {
-                        s.style
-                    };
-                    Span::styled(s.content, style)
-                })
-                .collect()
-        })
-        .collect()
 }
 
 /// How a board's card shows its title: live, a past one's (dim, under the
@@ -2258,65 +2161,6 @@ mod tests {
             border(&T),
         );
         assert_eq!(text(&narrow[0]), "╭ #12345  ✓ ─╮");
-    }
-
-    #[test]
-    fn an_open_card_has_a_top_rule_and_its_tone_s_bar_and_no_other_edge() {
-        let draw = |chosen: bool, hover: Option<Color>| {
-            open_card(
-                20,
-                4,
-                vec![Span::raw("● "), Span::raw("api")],
-                vec![Span::raw("idle")],
-                &[vec![Span::raw("hello")]],
-                Tone::Working,
-                chosen,
-                hover,
-                &T,
-            )
-        };
-        let lines = draw(false, None);
-        assert_eq!(lines.len(), 4);
-        let top = text(&lines[0]);
-        assert_eq!(top, "─ ● api ───── idle ─", "{top:?}");
-        assert_eq!(lines[0][0].style.fg, Some(T.faint));
-        assert_eq!(text(&lines[1]), format!("▎ hello{}", " ".repeat(13)));
-        for l in &lines[1..] {
-            assert_eq!(l[0].content, "▎");
-            assert_eq!(l[0].style.fg, Some(Tone::Working.fg(&T)));
-            assert!(text(l).ends_with(' '), "nothing in its right column");
-        }
-        for l in &lines {
-            assert_eq!(spans_width(l), 20);
-            assert!(!text(l).contains(['╭', '╮', '╰', '╯', '│']));
-        }
-        // Chosen: the rule and the bar in the accent, on the Chosen surface.
-        let chosen = draw(true, None);
-        assert_eq!(chosen[0][0].style.fg, Some(Tone::Accent.fg(&T)));
-        assert_eq!(chosen[2][0].style.fg, Some(Tone::Accent.fg(&T)));
-        assert!(
-            chosen
-                .iter()
-                .flatten()
-                .all(|s| s.style.bg == Some(Surface::Chosen.color(&T)))
-        );
-        // Under the mouse, both in the hover color.
-        let lit = draw(false, Some(T.text));
-        assert_eq!(lit[0][0].style.fg, Some(T.text));
-        assert_eq!(lit[3][0].style.fg, Some(T.text));
-        // A narrow card keeps a PR's number whole beside its checks' mark.
-        let narrow = open_card(
-            14,
-            2,
-            vec![Span::raw("#12345")],
-            vec![Span::raw("✓")],
-            &[],
-            Tone::Dim,
-            false,
-            None,
-            &T,
-        );
-        assert_eq!(text(&narrow[0]), "─ #12345 ─ ✓ ─");
     }
 
     fn board_card_of(title: &str, chosen: bool) -> BoardCard {

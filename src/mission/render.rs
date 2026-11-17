@@ -527,45 +527,108 @@ fn card(
 
 // ── UX 2.0's Tabs: cards grouped as the sidebar, then the shelf (board 3) ──
 
-/// A card's least width with UX 2.0, and its height.
+/// A card's least width with UX 2.0, and the most rows one takes: each is
+/// as tall as what it holds, up to this. A request counts as shown whole
+/// (`ask_fits`) only when its kind, its words, a row clear and its options
+/// with their descriptions fit the rows this leaves inside (`ASK_ROWS`):
+/// less the card's edges, the row clear under the top one, the foot and
+/// the row over it.
 pub const CARD_W: usize = 40;
-const CARD_H: usize = 17;
+const CARD_H: usize = 20;
 /// The columns between two cards side by side.
 const CARD_GAP: usize = 2;
 /// The most cards side by side, however wide the screen.
 const MOST_ACROSS: usize = 4;
-/// The longest name a card's top edge shows, and a shelf line.
-const CARD_NAME: usize = 20;
+/// The longest name a shelf line shows.
 const SHELF_NAME: usize = 26;
+
+/// The group of cards a stage's tabs are drawn in (board 3): Needs you
+/// (a finished tab's too), and Working, which the stages of work under way
+/// without you (a monitor, a review loop, a CI loop, queue-and-clean) are
+/// part of here; `None` for a stage whose tabs are lines on the shelf
+/// under the cards.
+fn card_group(stage: model::Stage) -> Option<model::Stage> {
+    use model::Stage;
+    match stage {
+        Stage::Needs => Some(Stage::Needs),
+        Stage::Working | Stage::Monitoring | Stage::Review | Stage::Ci | Stage::Queue => {
+            Some(Stage::Working)
+        }
+        _ => None,
+    }
+}
 
 /// Whether a stage's tabs are lines on the shelf under the cards rather
 /// than cards.
 fn on_shelf(stage: model::Stage) -> bool {
-    matches!(stage, model::Stage::Landing | model::Stage::Idle)
+    card_group(stage).is_none()
 }
+
+/// The group of cards a tab in `stage` is drawn in: its stage's, and
+/// Working for one whose Claude is at work while its build fails, which
+/// the sidebar keeps under Build failing; `None` for a line on the shelf.
+/// A tab landing, queued, testing a deploy or merged is a line there
+/// whatever its Claude is doing, as board 3 draws a landing one.
+fn card_group_of(tab: &TabModel, stage: model::Stage) -> Option<model::Stage> {
+    card_group(stage).or_else(|| {
+        (stage == model::Stage::Failing && tab.state.busy()).then_some(model::Stage::Working)
+    })
+}
+
+/// Whether a tab is a line on the shelf rather than a card.
+pub fn on_shelf_tab(tab: &TabModel, r: &Rules) -> bool {
+    card_group_of(tab, model::stage_of(tab, r)).is_none()
+}
+
+/// The shelf's stages in the board's order: where a tab's PR or landing
+/// stands, then the loops and reminders, then the idle tabs and those with
+/// no Claude, then other repositories'. A stage not listed here follows
+/// them (`tab_groups`), so no tab is left out of the view.
+const SHELF: [model::Stage; 11] = [
+    model::Stage::Failing,
+    model::Stage::Landing,
+    model::Stage::Queued,
+    model::Stage::Deploy,
+    model::Stage::Merged,
+    model::Stage::Scheduled,
+    model::Stage::Later,
+    model::Stage::Idle,
+    model::Stage::Other,
+    model::Stage::RemindersElsewhere,
+    model::Stage::OtherRepos,
+];
+
+/// The column the cards start at, under their group's label.
+const CARD_X: usize = 1;
 
 /// How many cards go side by side on a screen `cols` wide: as many as fit
-/// at their least width, at most `MOST_ACROSS`.
+/// at their least width after the column they start at, at most
+/// `MOST_ACROSS`.
 pub fn across(cols: usize) -> usize {
-    ((cols + CARD_GAP) / (CARD_W + CARD_GAP)).clamp(1, MOST_ACROSS)
+    ((cols.saturating_sub(CARD_X) + CARD_GAP) / (CARD_W + CARD_GAP)).clamp(1, MOST_ACROSS)
 }
 
-/// The card columns' x and width, sharing the screen's width equally.
-fn card_columns(cols: usize, across: usize) -> Vec<(usize, usize)> {
+/// The card columns' x and width, sharing the screen's width equally from
+/// `x0`: the column under their label's first letter (`CARD_X`) to the
+/// screen's edge, or, from 0, to the column before the last, which a
+/// scroll bar takes.
+fn card_columns(cols: usize, across: usize, x0: usize) -> Vec<(usize, usize)> {
+    let room = cols.saturating_sub(CARD_X);
     let each = Col::Stretch {
         weight: 1,
-        min: CARD_W.min(cols),
+        min: CARD_W.min(room),
         max: None,
     };
-    kit::columns(&vec![each; across], cols, CARD_GAP, &[])
+    kit::columns(&vec![each; across], room, CARD_GAP, &[])
         .into_iter()
         .flatten()
+        .map(|(x, w)| (x + x0, w))
         .collect()
 }
 
-/// The tabs' groups as UX 2.0 draws them: the stages of cards in the
-/// sidebar's order, then the shelf's (Landing, then Idle), each with its
-/// tabs as indices into `tabs`.
+/// The tabs' groups as UX 2.0 draws them: the groups of cards (Needs you,
+/// then Working, each stage in it in the sidebar's order), then the
+/// shelf's stages, each with its tabs as indices into `tabs`.
 fn tab_groups(tabs: &[TabModel], r: &Rules) -> Vec<(model::Stage, Vec<usize>)> {
     let staged: Vec<(model::Stage, Vec<usize>)> = model::grouped(tabs, None, r)
         .into_iter()
@@ -578,8 +641,50 @@ fn tab_groups(tabs: &[TabModel], r: &Rules) -> Vec<(model::Stage, Vec<usize>)> {
             (s.stage, at)
         })
         .collect();
-    let (shelf, cards): (Vec<_>, Vec<_>) = staged.into_iter().partition(|(s, _)| on_shelf(*s));
-    cards.into_iter().chain(shelf).collect()
+    let mut groups: Vec<(model::Stage, Vec<usize>)> = Vec::new();
+    for group in [model::Stage::Needs, model::Stage::Working] {
+        let mut at: Vec<usize> = staged
+            .iter()
+            .flat_map(|(s, at)| {
+                at.iter()
+                    .copied()
+                    .filter(move |&i| card_group_of(&tabs[i], *s) == Some(group))
+            })
+            .collect();
+        // Working's stages as one group, by the tabs' numbers, as each
+        // of them orders its own.
+        if group == model::Stage::Working {
+            at.sort_by_key(|&i| (tabs[i].index, tabs[i].place));
+        }
+        if !at.is_empty() {
+            groups.push((group, at));
+        }
+    }
+    // The shelf: each stage's tabs that are no card, the stages the list
+    // names first.
+    let shelved = |stage: model::Stage, at: &[usize]| -> Option<(model::Stage, Vec<usize>)> {
+        let left: Vec<usize> = at
+            .iter()
+            .copied()
+            .filter(|&i| card_group_of(&tabs[i], stage).is_none())
+            .collect();
+        (!left.is_empty()).then_some((stage, left))
+    };
+    for stage in SHELF {
+        groups.extend(
+            staged
+                .iter()
+                .filter(|(s, _)| *s == stage)
+                .filter_map(|(s, at)| shelved(*s, at)),
+        );
+    }
+    groups.extend(
+        staged
+            .iter()
+            .filter(|(s, _)| !SHELF.contains(s))
+            .filter_map(|(s, at)| shelved(*s, at)),
+    );
+    groups
 }
 
 /// The Tabs view's grid for whichever look it has: UX 2.0's groups and
@@ -648,9 +753,10 @@ fn state_for(tab: &TabModel, r: &Rules) -> String {
     }
 }
 
-/// A tab's PR's checks as the board's chip: all passed, how many of them
-/// have run, or how many failed; "no PR" dim without one.
-fn checks_chip(tab: &TabModel, caps: bool, theme: &Theme) -> Vec<Span<'static>> {
+/// A tab's PR's checks as the board writes them, in their mark's tone: all
+/// passed, how many of them have run, or how many failed; "no PR" dim
+/// without one.
+fn checks_words(tab: &TabModel, theme: &Theme) -> Vec<Span<'static>> {
     let Some(c) = tab.checks else {
         let words = match tab.pr {
             Some(n) => format!("#{n}"),
@@ -667,103 +773,42 @@ fn checks_chip(tab: &TabModel, caps: bool, theme: &Theme) -> Vec<Span<'static>> 
         (Mark::Passed, format!("{} passed", c.pass))
     };
     let (glyph, tone) = mark.look();
-    let mut chip = kit::chip(&format!("{glyph} {words}"), tone, caps, theme);
-    chip.pop();
-    chip
+    vec![Span::styled(format!("{glyph} {words}"), tone.style(theme))]
 }
 
-/// The cells of a card's context meter.
-const CONTEXT_CELLS: usize = 10;
-
-/// A card's context meter, `ctx` and its cells, in the needs-you tone once
-/// it is as full as the Usage view's Sessions call full.
-fn context_meter(tab: &TabModel, theme: &Theme) -> Vec<Span<'static>> {
-    let Some(used) = tab.context else {
-        return Vec::new();
-    };
-    let tone = if f64::from(used) >= crate::usage::sessions::FULL {
-        Tone::Needs
-    } else {
-        Tone::Dim
-    };
-    let mut out = vec![Span::styled("ctx ", Tone::Dim.style(theme))];
-    out.extend(kit::meter(used, CONTEXT_CELLS, tone, theme));
-    out
-}
-
-/// A card's foot: its branch dim, how long the tab has been open dim, its
-/// context meter, its checks' chip at the right edge; the age goes first
-/// where the card is too narrow, then the meter.
+/// A card's foot, as board 3 draws it: its branch dim, whole where it
+/// fits, then its checks two columns after it, and how long the tab has
+/// been open dim at the right edge; the age goes first where the card is
+/// too narrow, then the branch is cut, never the checks.
 fn card_foot(
     tab: &TabModel,
     branch: Option<&str>,
     inner: usize,
     now_secs: i64,
-    caps: bool,
     theme: &Theme,
 ) -> Vec<Span<'static>> {
-    let chip = checks_chip(tab, caps, theme);
-    let chip_w = spans_width(&chip);
+    let checks = checks_words(tab, theme);
+    let checks_w = spans_width(&checks);
+    let branch = branch.unwrap_or_default();
+    let lead = if branch.is_empty() { 0 } else { 2 };
+    let room = inner.saturating_sub(checks_w + lead).max(1);
+    let mut line = Vec::new();
+    if !branch.is_empty() {
+        line.push(Span::styled(
+            text::cut(branch, room),
+            Tone::Dim.style(theme),
+        ));
+        line.push(Span::raw("  "));
+    }
+    line.extend(checks);
     let opened = tab
         .opened
         .map(|at| format!("opened {}", text::span(now_secs - at)))
         .unwrap_or_default();
-    let opened_w = width(&opened);
-    let meter = context_meter(tab, theme);
-    let meter_w = spans_width(&meter);
-    let at = kit::columns(
-        &[
-            Col::Stretch {
-                weight: 1,
-                min: 1,
-                max: None,
-            },
-            Col::Fixed {
-                min: opened_w,
-                natural: opened_w,
-                cap: opened_w,
-            },
-            Col::Fixed {
-                min: meter_w,
-                natural: meter_w,
-                cap: meter_w,
-            },
-            Col::Right {
-                natural: chip_w,
-                cap: chip_w,
-            },
-        ],
-        inner,
-        1,
-        &[1, 2],
-    );
-    let mut line = Vec::new();
-    if let Some(Some(place)) = at.first() {
-        kit::place(
-            &mut line,
-            vec![Span::styled(
-                branch.unwrap_or_default().to_string(),
-                Tone::Dim.style(theme),
-            )],
-            *place,
-        );
-    }
-    if let Some(Some(place)) = at.get(1)
-        && !opened.is_empty()
-    {
-        kit::place(
-            &mut line,
-            vec![Span::styled(opened, Tone::Dim.style(theme))],
-            *place,
-        );
-    }
-    if let Some(Some(place)) = at.get(2)
-        && !meter.is_empty()
-    {
-        kit::place(&mut line, meter, *place);
-    }
-    if let Some(Some(place)) = at.get(3) {
-        kit::place(&mut line, chip, *place);
+    let used = spans_width(&line);
+    if !opened.is_empty() && used + 2 + width(&opened) <= inner {
+        line.push(Span::raw(" ".repeat(inner - used - width(&opened))));
+        line.push(Span::styled(opened, Tone::Dim.style(theme)));
     }
     line
 }
@@ -815,11 +860,15 @@ fn turn_words(tab: &TabModel) -> Option<String> {
 /// which of its lines are a numbered option (its line, its number).
 struct Inside {
     lines: Vec<Vec<Span<'static>>>,
+    /// Whether its last line is a row of chips, which the foot follows
+    /// with no row clear between them.
+    tight: bool,
 }
 
 /// Where a card is and how it is drawn.
 struct CardLook<'a> {
     w: usize,
+    /// The most rows it may take.
     h: usize,
     chosen: bool,
     hovered: bool,
@@ -836,6 +885,10 @@ struct CardLook<'a> {
 /// that at a card's least width isn't answered from the card, a number
 /// going to the tab, whose prompt shows all of it (`ask_fits`).
 const ASK_LINES: usize = 6;
+
+/// The rows inside a card at its tallest, which a request shown whole
+/// fits in.
+const ASK_ROWS: usize = CARD_H - 5;
 
 /// What a waiting tab asks: its kind, its words and its options. A number
 /// answers what the screen shows, so the screen's options win over the
@@ -943,22 +996,59 @@ fn ask_words(tab: &TabModel, screen: Option<&super::Screen>) -> (String, String,
 const DETAIL_LINES: usize = 2;
 
 /// Whether a waiting card shows all of what its tab asks, at a card's
-/// least width, else it says the tab has all of it: a question asking one thing,
-/// its options' descriptions short enough to show, or a Bash command,
-/// which its words are whole. Any other permission (an edit's change, a
-/// connector's input), or a call of several questions (whose later
-/// options' descriptions the hook doesn't give), is more than the card
-/// keeps.
+/// least width, else it says the tab has all of it: a request known whole
+/// (`ask_whole`) that takes no more than the rows a card has (`ASK_ROWS`).
 pub fn ask_fits(tab: &TabModel, screen: Option<&super::Screen>) -> bool {
+    ask_sized(tab, screen, true)
+}
+
+/// Whether what a waiting tab asks is known whole, whatever a card has
+/// room for: what a menu opened away from a UX 2.0 card answers from (the
+/// sidebar's, a reminder's, the cards' with UX 2.0 off), which shows the
+/// request itself.
+pub fn ask_whole(tab: &TabModel, screen: Option<&super::Screen>) -> bool {
+    ask_sized(tab, screen, false)
+}
+
+/// `ask_fits` with `on_card`, else `ask_whole`: a question asking one
+/// thing, its options' descriptions short enough to show, or a Bash
+/// command, which its words are whole; on a card, all of it within the
+/// card's rows too. Any other permission (an edit's change, a connector's
+/// input), or a call of several questions (whose later options'
+/// descriptions the hook doesn't give), is more than is kept.
+fn ask_sized(tab: &TabModel, screen: Option<&super::Screen>, on_card: bool) -> bool {
     let whole = tab.ask.as_ref().is_some_and(|a| match a.kind {
         crate::agent::WaitKind::Question => a.questions <= 1,
         crate::agent::WaitKind::Permission => a.tool == "Bash" && !a.words.is_empty(),
     });
     let (_, words, options) = ask_words(tab, screen);
+    // A description's rows as the card lays them out, a blank one between
+    // its paragraphs counted, since the card takes its first
+    // `DETAIL_LINES` whatever they hold; none for an option without one.
+    let detail_rows = |d: &str| {
+        if d.trim().is_empty() {
+            0
+        } else {
+            text::wrap(d, CARD_W - 4 - 3).len()
+        }
+    };
     let details_fit = options
         .iter()
-        .all(|(_, d, _)| text::wrap(d, CARD_W - 4 - 3).len() <= DETAIL_LINES);
-    whole && details_fit && ask_lines(tab, &words, CARD_W - 4).is_some_and(|l| l.len() <= ASK_LINES)
+        .all(|(_, d, _)| detail_rows(d) <= DETAIL_LINES);
+    // Its options under a row clear, each with its description's rows.
+    let option_rows = if options.is_empty() {
+        0
+    } else {
+        1 + options
+            .iter()
+            .map(|(_, d, _)| 1 + detail_rows(d))
+            .sum::<usize>()
+    };
+    whole
+        && details_fit
+        && ask_lines(tab, &words, CARD_W - 4).is_some_and(|l| {
+            l.len() <= ASK_LINES && (!on_card || 1 + l.len() + option_rows <= ASK_ROWS)
+        })
 }
 
 /// What a tab asks laid out in `cols`: a command character for character,
@@ -1052,13 +1142,17 @@ fn asks_inside(tab: &TabModel, look: &CardLook, rows: usize, theme: &Theme) -> I
             }
         }
     }
-    if !before.is_empty() {
+    // Only with room for its label and a line of it under what it asks.
+    if !before.is_empty() && lines.len() + 3 <= rows {
         lines.push(Vec::new());
         lines.push(card_label("Before it asked", Tone::Dim, theme));
         let room = rows.saturating_sub(lines.len()).clamp(1, 5);
         lines.extend(wrapped(&before, inner, room, Tone::Dim.style(theme)));
     }
-    Inside { lines }
+    Inside {
+        lines,
+        tight: false,
+    }
 }
 
 /// A working card: this turn so far, then the call it is on now and for
@@ -1157,6 +1251,7 @@ fn doing_inside(tab: &TabModel, look: &CardLook, r: &Rules, theme: &Theme) -> In
         }
     }
     lines.push(now);
+    let mut tight = false;
     if look.chips {
         let mut chips: Vec<Span<'static>> = Vec::new();
         // The slot it waits for, with its place, or the one it holds, dim.
@@ -1190,16 +1285,23 @@ fn doing_inside(tab: &TabModel, look: &CardLook, r: &Rules, theme: &Theme) -> In
         if !chips.is_empty() {
             lines.push(Vec::new());
             lines.push(chips);
+            tight = true;
         }
     }
-    Inside { lines }
+    Inside { lines, tight }
 }
 
 /// A card neither waiting nor working: what its last turn did, and its
 /// state in words.
 fn last_inside(tab: &TabModel, look: &CardLook, r: &Rules, theme: &Theme) -> Inside {
     let inner = look.w.saturating_sub(4);
-    let mut lines = vec![card_label("Last turn", Tone::Dim, theme)];
+    // A finished tab's in the tone of its mark, until you look at it.
+    let tone = if tab.state == TabState::Done {
+        Tone::Done
+    } else {
+        Tone::Dim
+    };
+    let mut lines = vec![card_label("Last turn", tone, theme)];
     match turn_words(tab) {
         Some(words) => lines.extend(wrapped(&words, inner, 5, Tone::Text.style(theme))),
         None => lines.push(vec![Span::styled(
@@ -1217,44 +1319,92 @@ fn last_inside(tab: &TabModel, look: &CardLook, r: &Rules, theme: &Theme) -> Ins
         2,
         Tone::Dim.style(theme),
     ));
-    Inside { lines }
+    Inside {
+        lines,
+        tight: false,
+    }
 }
 
-/// A tab's card with UX 2.0, drawn open: its mark, number and name on the
-/// top rule, its state and how long at the rule's right end, the bar down
-/// its left in its group's tone (the accent when chosen), what it is about inside by what it is
-/// doing (or, with `s` or no Claude in it, its screen's last lines), and
-/// its branch and checks at its foot.
-fn card_2(
-    tab: &TabModel,
-    tone: Tone,
-    look: &CardLook,
-    frame: usize,
-    m: &Mission,
-) -> Vec<Vec<Span<'static>>> {
+/// What a tab's card holds with UX 2.0, before it is drawn at its row's
+/// height: its top edge's words, the lines inside it, and its foot.
+struct Card {
+    title: Vec<Span<'static>>,
+    right: Vec<Span<'static>>,
+    lines: Vec<Vec<Span<'static>>>,
+    /// Whether the foot follows the lines with no row clear between.
+    tight: bool,
+    foot: Vec<Span<'static>>,
+    edge: Color,
+    w: usize,
+}
+
+impl Card {
+    /// The rows it takes: its edges, a row clear under the top one, its
+    /// lines, a row clear over the foot unless they end in chips, and the
+    /// foot.
+    fn height(&self) -> usize {
+        4 + self.lines.len() + usize::from(!self.tight)
+    }
+
+    /// The card `rows` tall, as the kit's card: the foot on its last row
+    /// inside, whatever its lines leave clear over it.
+    fn drawn(self, rows: usize) -> Vec<Vec<Span<'static>>> {
+        let inside_rows = rows.saturating_sub(2);
+        let mut inside = vec![Vec::new()];
+        inside.extend(self.lines);
+        inside.truncate(inside_rows.saturating_sub(1));
+        inside.resize(inside_rows.saturating_sub(1), Vec::new());
+        inside.push(self.foot);
+        kit::card(self.w, rows, self.title, self.right, &inside, self.edge)
+    }
+}
+
+/// A tab's card with UX 2.0 (board 3), the kit's card: its mark, its
+/// number in its color and its name on the top edge, cut only where the
+/// edge has no room, its state and how long at the edge's right end, the
+/// edge in its group's tone (the accent when chosen, the tab's color under
+/// the mouse), what it is about inside by what it is doing (or, with `s`,
+/// its screen's last lines), and its branch and checks at its foot.
+fn card_2(tab: &TabModel, tone: Tone, look: &CardLook, frame: usize, m: &Mission) -> Card {
     let snap = &m.snap;
     let (r, theme) = (&snap.rules, &snap.theme);
     let inner = look.w.saturating_sub(4);
-    // Its rows under the top rule, less the foot.
-    let rows = look.h.saturating_sub(2);
+    // The most rows inside it: less its edges, the row under the top one,
+    // the foot and the row over it.
+    let rows = look.h.saturating_sub(5);
     let mark = Mark::of_badge(model::badge_state(tab, r));
-    let hover =
-        (look.hovered && !look.chosen).then(|| tab.color.map(Color::from).unwrap_or(theme.bright));
+    let color = tab.color.map(Color::from).unwrap_or(theme.bright);
+    let edge = if look.chosen {
+        Tone::Accent.fg(theme)
+    } else if look.hovered {
+        color
+    } else {
+        tone.fg(theme)
+    };
     let words = state_for(tab, r);
+    let number = tab.index.to_string();
+    // The edge's corner and spaces, the mark and the number before the
+    // name, and the state after it.
+    let name_room = look
+        .w
+        .saturating_sub(5 + width(&words) + 2 + 2 + width(&number) + 1);
     let right = vec![Span::styled(words, mark.look().1.style(theme))];
     let title = vec![
         kit::mark(mark, frame, theme),
         Span::raw(" "),
-        Span::styled(tab.index.to_string(), Tone::Dim.style(theme)),
+        Span::styled(number, bold(color)),
         Span::raw(" "),
-        Span::styled(text::cut(&tab.name, CARD_NAME), bold(theme.bright)),
+        Span::styled(text::cut(&tab.name, name_room.max(1)), bold(theme.bright)),
     ];
     let inside = if look.shows_screen {
         let lines: &[Vec<Span<'static>>] = look.screen.map_or(&[], |s| &s.lines[..]);
         let shown = &lines[lines.len().saturating_sub(rows)..];
         let mut out = vec![Vec::new(); rows - shown.len()];
         out.extend(shown.iter().cloned());
-        Inside { lines: out }
+        Inside {
+            lines: out,
+            tight: false,
+        }
     } else {
         match tab.state {
             TabState::Waiting => asks_inside(tab, look, rows, theme),
@@ -1264,28 +1414,17 @@ fn card_2(
             _ => last_inside(tab, look, r, theme),
         }
     };
-    let mut lines: Vec<Vec<Span<'static>>> = inside.lines.into_iter().take(rows).collect();
-    lines.resize(rows, Vec::new());
+    let most = rows + usize::from(inside.tight);
     let branch = look.screen.and_then(|s| s.branch.as_deref());
-    lines.push(card_foot(
-        tab,
-        branch,
-        inner,
-        r.now_secs(),
-        snap.caps,
-        theme,
-    ));
-    kit::open_card(
-        look.w,
-        look.h,
+    Card {
         title,
         right,
-        &lines,
-        tone,
-        look.chosen,
-        hover,
-        theme,
-    )
+        lines: inside.lines.into_iter().take(most).collect(),
+        tight: inside.tight,
+        foot: card_foot(tab, branch, inner, r.now_secs(), theme),
+        edge,
+        w: look.w,
+    }
 }
 
 /// A shelf line: its mark, its number in its color, its name, how long (or
@@ -1306,7 +1445,14 @@ fn shelf_line(
         text::ago(tab.since, r.now_secs())
     };
     // A landing tab's state is its place in line, said already.
+    // A tab with no Claude is where it is.
     let what = turn_words(tab)
+        .or_else(|| {
+            tab.claude
+                .is_none()
+                .then(|| tab.path.as_ref().map(crate::paths::tilde))
+                .flatten()
+        })
         .or_else(|| tab.landing.is_none().then(|| model::state_words(tab, r)))
         .unwrap_or_default();
     let number = tab.index.to_string();
@@ -1356,7 +1502,10 @@ fn shelf_line(
             m.snap.frame,
             theme,
         )],
-        vec![Span::styled(number, fg(color))],
+        vec![Span::styled(
+            right_aligned(number, at[1].map_or(0, |(_, w)| w)),
+            bold(color),
+        )],
         vec![Span::styled(tab.name.clone(), name_style)],
         vec![Span::styled(
             right_aligned(when, at[3].map_or(0, |(_, w)| w)),
@@ -1377,10 +1526,12 @@ fn shelf_line(
 }
 
 /// UX 2.0's Tabs (board 3, laid out as board 45 says): each group of cards
-/// under its label with its count, as many cards side by side as fit at
-/// their least width sharing the width equally; then the shelf, Landing and
-/// Idle a line a tab, folded to their labels when only one card fits;
-/// scrolled to keep the chosen one in view.
+/// (Needs you, Working) under its label with its count, as many cards side
+/// by side as fit at their least width sharing the width equally, a row of
+/// them as tall as its tallest holds; then the shelf, every other stage a
+/// line a tab, folded to their labels when only one card fits; scrolled to
+/// keep the chosen one in view, the cards a column to the left while a
+/// scroll bar has the last one.
 fn cards_ux2(
     m: &Mission,
     cols: usize,
@@ -1402,9 +1553,11 @@ fn cards_ux2(
         return;
     }
     let n = across(cols);
-    let xs = card_columns(cols, n);
     let folded = shelf_folded(cols, m.shelf_open);
-    let card_h = if body > CARD_H + 1 {
+    // A card showing its screen is as tall as the view has room for under
+    // its label; any other keeps the rows a request shown whole counts on
+    // (`ask_fits`), whatever the view's height, and scrolls with the rest.
+    let screen_h = if body > CARD_H + 1 {
         CARD_H
     } else {
         body.saturating_sub(1).max(8)
@@ -1426,108 +1579,139 @@ fn cards_ux2(
         })
         .max()
         .unwrap_or(0);
-    let mut drawn: Vec<Line> = Vec::new();
     // Each card's or line's place: its first and last line, its columns,
     // its place in the order.
-    let mut at: Vec<(usize, usize, usize, usize, usize)> = Vec::new();
-    let mut place = 0usize;
-    let (mut cursor_top, mut cursor_bottom) = (0, 0);
-    for (stage, tabs_in) in &groups {
-        if !drawn.is_empty() {
-            drawn.push(Line {
-                spans: vec![Span::raw(" ".repeat(cols))],
-                fill: None,
-            });
-        }
-        let tone = Mark::of_badge(stage.color()).look().1;
-        let label_at = drawn.len();
-        let mut label = kit::label(stage.title(), tone, Some(tabs_in.len()), cols, theme);
-        if on_shelf(*stage) && folded {
-            let chosen = m.cursor == place as isize;
-            if chosen {
-                label = label
-                    .into_iter()
-                    .map(|s| {
-                        let style = s.style.add_modifier(Modifier::REVERSED);
-                        Span::styled(s.content, style)
-                    })
-                    .collect();
-                cursor_top = label_at;
-                cursor_bottom = label_at + 1;
+    type Places = Vec<(usize, usize, usize, usize, usize)>;
+    // The view's lines with the cards from column `x0`, each card's and
+    // line's place, and the chosen one's first line and the one after its
+    // last.
+    let lay = |x0: usize| -> (Vec<Line>, Places, usize, usize) {
+        let xs = card_columns(cols, n, x0);
+        let mut drawn: Vec<Line> = Vec::new();
+        let mut at: Places = Vec::new();
+        let mut place = 0usize;
+        let (mut cursor_top, mut cursor_bottom) = (0, 0);
+        for (stage, tabs_in) in &groups {
+            if !drawn.is_empty() {
+                drawn.push(Line {
+                    spans: vec![Span::raw(" ".repeat(cols))],
+                    fill: None,
+                });
+            }
+            let tone = Mark::of_badge(stage.color()).look().1;
+            let label_at = drawn.len();
+            let mut label = kit::label(stage.title(), tone, Some(tabs_in.len()), cols, theme);
+            if on_shelf(*stage) && folded {
+                let chosen = m.cursor == place as isize;
+                if chosen {
+                    label = label
+                        .into_iter()
+                        .map(|s| {
+                            let style = s.style.add_modifier(Modifier::REVERSED);
+                            Span::styled(s.content, style)
+                        })
+                        .collect();
+                    cursor_top = label_at;
+                    cursor_bottom = label_at + 1;
+                }
+                drawn.push(Line {
+                    spans: label,
+                    fill: None,
+                });
+                at.push((label_at, label_at, 0, cols, place));
+                place += 1;
+                continue;
             }
             drawn.push(Line {
                 spans: label,
                 fill: None,
             });
-            at.push((label_at, label_at, 0, cols, place));
-            place += 1;
-            continue;
-        }
-        drawn.push(Line {
-            spans: label,
-            fill: None,
-        });
-        if on_shelf(*stage) {
-            for &i in tabs_in {
-                let tab = &snap.tabs[i];
-                let chosen = m.cursor == place as isize;
-                let y = drawn.len();
-                if chosen {
-                    // Its label kept in sight with it while both fit.
-                    cursor_top = if y + 1 - label_at <= body {
-                        label_at
-                    } else {
-                        y
-                    };
-                    cursor_bottom = y + 1;
+            if on_shelf(*stage) {
+                for &i in tabs_in {
+                    let tab = &snap.tabs[i];
+                    let chosen = m.cursor == place as isize;
+                    let y = drawn.len();
+                    if chosen {
+                        // Its label kept in sight with it while both fit.
+                        cursor_top = if y + 1 - label_at <= body {
+                            label_at
+                        } else {
+                            y
+                        };
+                        cursor_bottom = y + 1;
+                    }
+                    drawn.push(shelf_line(tab, (name_w, when_w), cols, chosen, m));
+                    at.push((y, y, 0, cols, place));
+                    place += 1;
                 }
-                drawn.push(shelf_line(tab, (name_w, when_w), cols, chosen, m));
-                at.push((y, y, 0, cols, place));
-                place += 1;
+                continue;
             }
-            continue;
-        }
-        for row in tabs_in.chunks(n) {
-            let top = drawn.len();
-            let mut row_lines: Vec<Vec<Span<'static>>> = vec![Vec::new(); card_h];
-            for (c, &i) in row.iter().enumerate() {
-                let tab = &snap.tabs[i];
-                let (x, w) = xs[c];
-                let chosen = m.cursor == place as isize;
-                let look = CardLook {
-                    w,
-                    h: card_h,
-                    chosen,
-                    hovered: m.hover == Some(Spot::Index(place as isize)),
-                    chips: n >= 3,
-                    screen: snap.screens.get(&tab.id),
-                    // A tab with no Claude is about what its screen shows.
-                    shows_screen: tab.claude.is_none()
-                        || (m.card_screen == Some((tab.id, m.cursor)) && chosen),
-                };
-                let card = card_2(tab, tone, &look, snap.frame, m);
-                for (line, spans) in row_lines.iter_mut().zip(card) {
-                    kit::place(line, spans, (x, w));
+            for row in tabs_in.chunks(n) {
+                let top = drawn.len();
+                let held: Vec<Card> = row
+                    .iter()
+                    .enumerate()
+                    .map(|(c, &i)| {
+                        let tab = &snap.tabs[i];
+                        let at = place + c;
+                        let chosen = m.cursor == at as isize;
+                        // A tab with no Claude is about what its screen shows.
+                        let shows_screen = tab.claude.is_none()
+                            || (m.card_screen == Some((tab.id, m.cursor)) && chosen);
+                        let look = CardLook {
+                            w: xs[c].1,
+                            h: if shows_screen { screen_h } else { CARD_H },
+                            chosen,
+                            hovered: m.hover == Some(Spot::Index(at as isize)),
+                            chips: n >= 3,
+                            screen: snap.screens.get(&tab.id),
+                            shows_screen,
+                        };
+                        card_2(tab, tone, &look, snap.frame, m)
+                    })
+                    .collect();
+                // The row as tall as its tallest card holds.
+                let card_h = held
+                    .iter()
+                    .map(Card::height)
+                    .max()
+                    .unwrap_or(CARD_H)
+                    .min(CARD_H);
+                let mut row_lines: Vec<Vec<Span<'static>>> = vec![Vec::new(); card_h];
+                for (c, card) in held.into_iter().enumerate() {
+                    let (x, w) = xs[c];
+                    let chosen = m.cursor == place as isize;
+                    for (line, spans) in row_lines.iter_mut().zip(card.drawn(card_h)) {
+                        kit::place(line, spans, (x, w));
+                    }
+                    at.push((top, top + card_h - 1, x, x + w, place));
+                    if chosen {
+                        cursor_top = if row.as_ptr() == tabs_in.as_ptr() {
+                            label_at
+                        } else {
+                            top
+                        };
+                        cursor_bottom = top + card_h;
+                    }
+                    place += 1;
                 }
-                at.push((top, top + card_h - 1, x, x + w, place));
-                if chosen {
-                    cursor_top = if row.as_ptr() == tabs_in.as_ptr() {
-                        label_at
-                    } else {
-                        top
-                    };
-                    cursor_bottom = top + card_h;
+                for spans in row_lines {
+                    drawn.push(Line {
+                        spans: fit(spans, cols, Style::new()),
+                        fill: None,
+                    });
                 }
-                place += 1;
-            }
-            for spans in row_lines {
-                drawn.push(Line {
-                    spans: fit(spans, cols, Style::new()),
-                    fill: None,
-                });
             }
         }
+        (drawn, at, cursor_top, cursor_bottom)
+    };
+    let mut laid = lay(CARD_X);
+    // With more than the screen holds, a scroll bar has the last column,
+    // so the cards end before it.
+    if r.scroll_bars && laid.0.len() > body {
+        laid = lay(0);
     }
+    let (drawn, at, cursor_top, cursor_bottom) = laid;
     let start = cursor_top.min(cursor_bottom.saturating_sub(body));
     let end = start + body;
     let from = lines.len();
@@ -1702,8 +1886,8 @@ fn cards(
 
 /// A scroll bar in the last column of a view's rows, `cols` wide, while
 /// they run past the screen (Settings' `scroll_bars`): the Tabs view's
-/// cards, whose last cell (a card's edge or the gap after it) the bar takes
-/// in place, and a list's rows, laid out a column narrower for it. They
+/// cards, which end a column before it then, and a list's rows, laid out a
+/// column narrower for it. They
 /// scroll to keep the chosen card or row in view, so the bar shows where
 /// that is and takes no click.
 fn rows_bar(
@@ -5894,12 +6078,30 @@ fn key_footer(
 }
 
 /// The bar's first row, with easy mode's × at its right end when it has
-/// one.
-fn with_close(head: Row, m: &Mission, cols: usize, hits: &mut Vec<HitBox>) -> Line {
-    if !(m.snap.close && cols > 8) {
+/// one, and `right` flush against that end, a column in, where the row
+/// leaves it room two columns clear of what is before it.
+fn with_close(
+    mut head: Row,
+    right: Vec<Span<'static>>,
+    m: &Mission,
+    cols: usize,
+    hits: &mut Vec<HitBox>,
+) -> Line {
+    let closes = m.snap.close && cols > 8;
+    let room = if closes {
+        cols - width(CLOSE) - 1
+    } else {
+        cols
+    };
+    let right_w = spans_width(&right);
+    if right_w > 0 && head.width() + 2 + right_w < room {
+        head.put(" ".repeat(room - 1 - right_w - head.width()), Style::new());
+        head.spans.extend(right);
+    }
+    if !closes {
         return head.line(cols, None);
     }
-    let mut spans = head.fitted(cols - width(CLOSE) - 1, Style::new());
+    let mut spans = head.fitted(room, Style::new());
     let lit = m.focus == Some(Focus::Close) || m.hover == Some(Spot::Close);
     let mut style = bold(m.snap.theme.bright);
     if lit {
@@ -5919,8 +6121,23 @@ fn with_close(head: Row, m: &Mission, cols: usize, hits: &mut Vec<HitBox>) -> Li
     Line { spans, fill: None }
 }
 
-/// What the header shows besides the view's name: the tabs' counts, the
-/// filter, and whether the filter takes a click.
+/// How many tabs the Tabs view holds and how many of them need you, as
+/// board 3 ends its header: "11 tabs · 3 need you".
+fn tabs_words(tabs: &[TabModel], r: &Rules) -> String {
+    let n = tabs.len();
+    let needs = model::needs_you(tabs, r).len();
+    let all = format!("{n} tab{}", if n == 1 { "" } else { "s" });
+    match needs {
+        0 => all,
+        1 => format!("{all} · 1 needs you"),
+        _ => format!("{all} · {needs} need you"),
+    }
+}
+
+/// What the header shows besides the view's name: the view's facts (the
+/// Reminders' or the Routines' words; on Tabs, how many tabs there are and
+/// how many need you, at its right end), the filter, and whether the
+/// filter takes a click.
 struct Bar {
     counts: Vec<Span<'static>>,
     filter: Vec<Span<'static>>,
@@ -5953,11 +6170,12 @@ fn bar_skip(
 
 /// With UX 2.0, the header over the view in front (board 64), since its
 /// groups and views are listed down the side (src/mission/nav.rs): the
-/// view's name, its group and its facts (the tabs' counts, the Reminders'
-/// or the Routines' words, with several views at once how many), then the
-/// filter; a rule under it and a line clear, so the view starts where it
-/// did under the two-row bar.
-fn header(m: &Mission, bar: Bar, cols: usize, lines: &mut Vec<Line>, hits: &mut Vec<HitBox>) {
+/// view's name, its group and its facts (the Reminders' or the Routines'
+/// words, with several views at once how many), then the filter, and on
+/// Tabs how many tabs there are and how many need you at its right end
+/// (board 3); a rule under it and a line clear, so the view starts where
+/// it did under the two-row bar.
+fn header(m: &Mission, mut bar: Bar, cols: usize, lines: &mut Vec<Line>, hits: &mut Vec<HitBox>) {
     let theme = &m.snap.theme;
     let gridded = m.grid_shown().len();
     let (name, group) = super::nav::header_words(m, m.view);
@@ -5974,11 +6192,16 @@ fn header(m: &Mission, bar: Bar, cols: usize, lines: &mut Vec<Line>, hits: &mut 
         );
     } else if !bar.counts.is_empty()
         && m.current()
-            .is_none_or(|v| matches!(v.id, ViewId::Reminders | ViewId::Routines))
+            .is_some_and(|v| matches!(v.id, ViewId::Reminders | ViewId::Routines))
     {
         head.put("   ", Style::new());
-        head.spans.extend(bar.counts);
+        head.spans.extend(std::mem::take(&mut bar.counts));
     }
+    let right = if gridded == 0 && m.current().is_none() {
+        std::mem::take(&mut bar.counts)
+    } else {
+        Vec::new()
+    };
     if !bar.filter.is_empty() && bar.filter_hit {
         let x = head.width() + 2;
         hits.push(HitBox {
@@ -5989,7 +6212,7 @@ fn header(m: &Mission, bar: Bar, cols: usize, lines: &mut Vec<Line>, hits: &mut 
         });
     }
     head.spans.extend(bar.filter);
-    lines.push(with_close(head, m, cols, hits));
+    lines.push(with_close(head, right, m, cols, hits));
     lines.push(Line {
         spans: vec![kit::rule(cols, theme)],
         fill: None,
@@ -6081,6 +6304,10 @@ pub(super) fn bar(m: &Mission, cols: usize, hits: &mut Vec<HitBox>) -> Vec<Line>
             )]
         }
         Some(v) => vec![Span::styled(super::reminders::bar_words(v), fg(theme.dim))],
+        None if m.groups().is_some() => vec![Span::styled(
+            tabs_words(&snap.tabs, &snap.rules),
+            Tone::Dim.style(theme),
+        )],
         None => tally(&snap.tabs, &snap.rules, theme),
     };
     let mut lines = Vec::new();
@@ -6178,7 +6405,7 @@ pub(super) fn bar(m: &Mission, cols: usize, hits: &mut Vec<HitBox>) -> Vec<Line>
             });
         }
         head.spans.extend(filter);
-        lines.push(with_close(head, m, cols, hits));
+        lines.push(with_close(head, Vec::new(), m, cols, hits));
     }
     lines
 }
@@ -6478,14 +6705,27 @@ mod tests {
         let mut t = tab(1, "work");
         t.opened = Some(1_000);
         let now = 1_000 + 72 * 60;
-        let wide = words(card_foot(&t, Some("main"), 50, now, false, &Theme::DARK));
-        assert!(wide.starts_with("main"), "{wide}");
+        let wide = words(card_foot(&t, Some("main"), 50, now, &Theme::DARK));
+        assert!(wide.starts_with("main  no PR"), "{wide}");
+        assert!(
+            wide.ends_with("opened 1h12m") && width(&wide) == 50,
+            "{wide}"
+        );
         assert!(wide.contains("opened 1h12m"), "{wide}");
-        let narrow = words(card_foot(&t, Some("main"), 16, now, false, &Theme::DARK));
+        let narrow = words(card_foot(&t, Some("main"), 16, now, &Theme::DARK));
         assert!(!narrow.contains("opened"), "{narrow}");
         t.opened = None;
-        let none = words(card_foot(&t, Some("main"), 50, now, false, &Theme::DARK));
+        let none = words(card_foot(&t, Some("main"), 50, now, &Theme::DARK));
         assert!(!none.contains("opened"), "{none}");
+        // A branch too long for the card is cut, never the checks.
+        let long = words(card_foot(
+            &t,
+            Some("note/a-branch-with-a-long-name"),
+            24,
+            now,
+            &Theme::DARK,
+        ));
+        assert!(long.ends_with("…  no PR") && width(&long) == 24, "{long}");
     }
 
     #[test]
@@ -6848,8 +7088,11 @@ mod tests {
                 .position(|l| l.contains(has))
                 .unwrap_or_else(|| panic!("{has}: {text:#?}"))
         };
+        // The header ends with how many tabs there are and how many need
+        // you, in place of the counts' chips.
+        assert!(text[0].ends_with("5 tabs · 1 needs you"), "{text:#?}");
         // Each group a label with its count at the right edge, no frame
-        // round it, over open cards whose bars wear its tone.
+        // round it, over closed cards whose edges wear its tone.
         let needs = row("NEEDS YOU");
         assert!(
             text[needs].ends_with('1') && width(&text[needs]) == 159,
@@ -6859,28 +7102,46 @@ mod tests {
         assert!(text[working].ends_with('2'), "{text:#?}");
         // A working card shows its review loop's round among its chips.
         row("round 2");
-        let bar = lines[needs + 2]
-            .spans
-            .iter()
-            .find(|s| s.content.contains('▎'))
-            .unwrap();
-        assert_eq!(bar.style.fg, Some(Tone::Needs.fg(&Theme::DARK)));
-        assert!(text[needs + 1].starts_with("─ "), "{text:#?}");
+        let edge_of = |y: usize, corner: char| {
+            lines[y]
+                .spans
+                .iter()
+                .find(|s| s.content.contains(corner))
+                .unwrap_or_else(|| panic!("{corner} on {y}: {text:#?}"))
+                .style
+                .fg
+        };
+        assert_eq!(edge_of(needs + 1, '╭'), Some(Tone::Needs.fg(&Theme::DARK)));
         assert!(
-            !text.iter().any(|l| l.contains(['╭', '╮', '╰', '╯', '│'])),
+            text[needs + 1].starts_with(" ╭ ● 1 relay images ─"),
             "{text:#?}"
         );
-        // The chosen card's bar in the accent.
-        let chosen_bar = lines[working + 2]
-            .spans
-            .iter()
-            .find(|s| s.content.contains('▎'))
-            .unwrap();
-        assert_eq!(chosen_bar.style.fg, Some(Tone::Accent.fg(&Theme::DARK)));
+        // The chosen card's edge alone in the accent, its rows unfilled.
+        assert_eq!(
+            edge_of(working + 1, '╭'),
+            Some(Tone::Accent.fg(&Theme::DARK))
+        );
+        assert_eq!(
+            lines[working + 1]
+                .spans
+                .iter()
+                .rfind(|s| s.content.contains('╮'))
+                .and_then(|s| s.style.fg),
+            Some(Tone::Working.fg(&Theme::DARK)),
+            "the card beside it keeps its group's tone"
+        );
+        let chosen_shade = kit::Surface::Chosen.color(&Theme::DARK);
+        assert!(
+            lines[working + 1..working + 6]
+                .iter()
+                .all(|l| l.fill.is_none()
+                    && l.spans.iter().all(|s| s.style.bg != Some(chosen_shade))),
+            "{text:#?}"
+        );
         // The waiting card: how long on its edge, its question word for
         // word under its kind, its options with no numbers, and why it asked.
         assert!(text[needs + 1].contains("waiting 4m"), "{text:#?}");
-        assert!(text[row("QUESTION · LAYOUT")].starts_with("▎ "));
+        assert!(text[row("QUESTION · LAYOUT")].starts_with(" │ "));
         row("Which layout should the cards use?");
         let cards = row("Cards");
         assert!(
@@ -6892,7 +7153,10 @@ mod tests {
         assert_eq!(row("one line a tab, as the sidebar"), row("Rows") + 1);
         row("BEFORE IT ASKED");
         row("Two layouts fit the board.");
-        assert!(text[row("✕ 1 of 13")].contains('▎'));
+        // No branch known, its checks alone at its foot, over its bottom edge.
+        let checks = row("✕ 1 of 13");
+        assert!(text[checks].starts_with(" │ ✕ 1 of 13"), "{text:#?}");
+        assert!(text[checks + 1].starts_with(" ╰"), "{text:#?}");
         // The working card: this turn, then the call it is on and for how
         // long, then its chips, and its branch with no PR at its foot.
         assert!(text[working + 1].contains("working 2m"), "{text:#?}");
@@ -6902,13 +7166,17 @@ mod tests {
         assert!(text[now_line].contains("Bash") && text[now_line].contains("1m"));
         row("+10 −2");
         let foot = row("note/summaries");
-        assert!(text[foot].contains("no PR"), "{text:#?}");
+        assert!(text[foot].contains("note/summaries  no PR"), "{text:#?}");
+        // Each row of cards as tall as its tallest holds: the working
+        // cards end at their chips, shorter than the one that asks.
+        assert_eq!(foot, row("+10 −2") + 1, "{text:#?}");
+        assert!(foot + 1 - working < working - 1 - needs, "{text:#?}");
         // Its screen shows only once s asks for it.
         assert!(!text.iter().any(|l| l.contains("line 40")));
         m.card_screen = Some((TabId(2), 1));
         let shown = texts(&screen(&m, 160, 60).0);
         assert!(shown.iter().any(|l| l.contains("line 40")), "{shown:#?}");
-        // Landing and Idle are the shelf, a line a tab under the cards.
+        // Every other stage is the shelf, a line a tab under the cards.
         let landing = row("LANDING");
         assert!(landing > foot);
         assert!(text[landing + 1].contains("landing one"));
@@ -7052,20 +7320,237 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_a_card_s_foot_meters_its_context_beside_its_branch() {
-        let mut t = tab(1, "work 1");
+    fn with_ux2_a_card_s_foot_is_its_branch_and_checks_with_no_context_meter() {
+        let mut t = tab(1, "a tab with quite a long name");
         t.state = TabState::Working;
         t.context = Some(62);
         let mut m = mission(vec![t], Vec::new());
         m.snap.rules.ux2 = true;
-        let text = texts(&screen(&m, 120, 40).0);
+        m.snap.screens.insert(
+            TabId(1),
+            crate::mission::Screen {
+                branch: Some("note/a-branch-named-at-length".into()),
+                ..Default::default()
+            },
+        );
+        let text = texts(&screen(&m, 160, 40).0);
+        assert!(!text.iter().any(|l| l.contains("ctx ")), "{text:#?}");
         assert!(
-            text.iter().any(|l| l.contains("ctx ▰▰▰▰▰▰▱▱▱▱")),
+            text.iter()
+                .any(|l| l.contains("note/a-branch-named-at-length  no PR")),
             "{text:#?}"
         );
-        m.snap.tabs[0].context = None;
-        let text = texts(&screen(&m, 120, 40).0);
-        assert!(!text.iter().any(|l| l.contains("ctx ")), "{text:#?}");
+        // Its name whole on an edge with room for it, cut only on one
+        // without.
+        assert!(
+            text.iter()
+                .any(|l| l.contains("1 a tab with quite a long name ─")),
+            "{text:#?}"
+        );
+        let narrow = texts(&screen(&m, 44, 40).0);
+        assert!(
+            narrow
+                .iter()
+                .any(|l| l.contains("1 a tab with quite a long …") && l.contains("working ─╮")),
+            "{narrow:#?}"
+        );
+    }
+
+    #[test]
+    fn with_ux2_a_request_that_fits_keeps_every_option_on_its_card() {
+        let mut m = board_3();
+        if let Some(a) = m.snap.tabs[0].ask.as_mut() {
+            // Six lines of question at a card's least width, and three
+            // options with a description each.
+            a.words = (1..=6)
+                .map(|n| format!("line {n} of the question, as long"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            a.options = vec!["First".into(), "Second".into(), "Third".into()];
+            a.details = vec![
+                "one way".into(),
+                "another way".into(),
+                "the last way".into(),
+            ];
+        }
+        assert!(ask_fits(&m.snap.tabs[0], None));
+        let text = texts(&screen(&m, 125, 60).0);
+        let row = |has: &str| {
+            text.iter()
+                .position(|l| l.contains(has))
+                .unwrap_or_else(|| panic!("{has}: {text:#?}"))
+        };
+        assert!(row("line 6 of the") < row("First"), "{text:#?}");
+        assert_eq!(row("the last way"), row("Third") + 1, "{text:#?}");
+        // No room left for what it said before asking, so no label of it.
+        assert!(
+            !text.iter().any(|l| l.contains("BEFORE IT ASKED")),
+            "{text:#?}"
+        );
+        // Its checks still at its foot, under them.
+        assert!(row("✕ 1 of 13") > row("the last way"), "{text:#?}");
+        // On a screen of 24 rows the card keeps its rows, so the request
+        // is still whole on it.
+        let short = texts(&screen(&m, 125, 24).0);
+        let third = short.iter().position(|l| l.contains("Third")).unwrap();
+        assert!(short[third + 1].contains("the last way"), "{short:#?}");
+        // With descriptions of two lines each it is more than a card
+        // holds, so it isn't answered from the card, which says so.
+        if let Some(a) = m.snap.tabs[0].ask.as_mut() {
+            a.details = vec!["a description long enough to wrap onto a second line".into(); 3];
+        }
+        assert!(!ask_fits(&m.snap.tabs[0], None));
+        // Away from a card it is still known whole, for a menu that shows
+        // the request itself.
+        assert!(ask_whole(&m.snap.tabs[0], None));
+        let text = texts(&screen(&m, 125, 60).0);
+        assert!(
+            text.iter().any(|l| l.contains("the tab shows all of it")),
+            "{text:#?}"
+        );
+        // Nor is one whose description has a second paragraph the card
+        // would cut.
+        if let Some(a) = m.snap.tabs[0].ask.as_mut() {
+            a.words = "Which one?".into();
+            a.details = vec![
+                "Uses the new layout.\n\nRemoves the saved one.".into(),
+                String::new(),
+                String::new(),
+            ];
+        }
+        assert!(!ask_fits(&m.snap.tabs[0], None));
+    }
+
+    #[test]
+    fn with_ux2_a_scroll_bar_takes_the_last_column_and_the_cards_end_before_it() {
+        let tabs: Vec<TabModel> = (1..=9)
+            .map(|n| {
+                let mut t = tab(n, &format!("work {n}"));
+                t.state = TabState::Working;
+                t
+            })
+            .collect();
+        let mut m = mission(tabs, Vec::new());
+        m.snap.rules.ux2 = true;
+        m.snap.rules.scroll_bars = true;
+        // Three rows of cards on a screen with room for two.
+        let text = texts(&screen(&m, 125, 20).0);
+        let tops: Vec<&String> = text.iter().filter(|l| l.contains('╭')).collect();
+        assert!(!tops.is_empty(), "{text:#?}");
+        for top in tops {
+            assert_eq!(top.matches('╭').count(), 3, "{text:#?}");
+            assert_eq!(top.matches('╮').count(), 3, "{text:#?}");
+            let edge = top.rfind('╮').map(|i| width(&top[..i]));
+            assert_eq!(edge, Some(123), "the bar's column clear: {text:#?}");
+        }
+        // With all of it on the screen, they start under their label and
+        // end at the screen's edge.
+        let text = texts(&screen(&m, 125, 60).0);
+        let top = text.iter().find(|l| l.contains('╭')).unwrap();
+        assert!(top.starts_with(" ╭") && width(top) == 125, "{text:#?}");
+    }
+
+    #[test]
+    fn with_ux2_only_what_needs_you_and_what_works_are_cards_and_the_rest_the_shelf() {
+        let now = rules().now_secs();
+        let mut finished = tab(1, "full titles");
+        finished.state = TabState::Done;
+        finished.since = Some(now - 60);
+        finished.summary = Some("Found why two tests fail.".into());
+        let mut reviewing = tab(2, "review round");
+        reviewing.state = TabState::Working;
+        reviewing.loop_skill = Some("review".into());
+        let mut monitoring = tab(3, "fork parity");
+        monitoring.state = TabState::Background;
+        monitoring.monitors = vec!["fork parity".into()];
+        let mut shell = tab(4, "a shell");
+        shell.claude = None;
+        let idle = tab(5, "quiet");
+        let mut m = mission(
+            vec![finished, reviewing, monitoring, shell, idle],
+            Vec::new(),
+        );
+        m.snap.rules.ux2 = true;
+        let text = texts(&screen(&m, 160, 60).0);
+        let row = |has: &str| {
+            text.iter()
+                .position(|l| l.contains(has))
+                .unwrap_or_else(|| panic!("{has}: {text:#?}"))
+        };
+        // A finished tab is a card under Needs you: its last turn, done.
+        let needs = row("NEEDS YOU");
+        assert!(
+            text[needs + 1].starts_with(" ╭ ✓ 1 full titles ─")
+                && text[needs + 1].contains("done 1m"),
+            "{text:#?}"
+        );
+        assert_eq!(row("LAST TURN"), needs + 3, "{text:#?}");
+        // A review loop's tab and one watching a monitor count as Working,
+        // with no section of their own.
+        let working = row("WORKING");
+        assert!(text[working].ends_with('2'), "{text:#?}");
+        assert!(
+            text[working + 1].contains("2 review round")
+                && text[working + 1].contains("3 fork parity"),
+            "{text:#?}"
+        );
+        assert!(
+            !text
+                .iter()
+                .any(|l| l.contains("REVIEW LOOP") || l.contains("MONITORING")),
+            "{text:#?}"
+        );
+        // An idle tab and one with no Claude are lines on the shelf, the
+        // shell's saying where it is.
+        let cards = text.iter().filter(|l| l.contains('╭')).count();
+        assert_eq!(cards, 2, "{text:#?}");
+        let idle = row("IDLE");
+        assert!(text[idle + 1].contains("quiet"), "{text:#?}");
+        let other = row("OTHER");
+        assert!(other > idle, "{text:#?}");
+        assert!(
+            text[other + 1].contains("a shell") && text[other + 1].contains("/work"),
+            "{text:#?}"
+        );
+        // Every stage is a group of cards or on the shelf's list, so no
+        // tab is left out.
+        for stage in model::Stage::ALL {
+            assert!(
+                card_group(stage).is_some() || SHELF.contains(&stage),
+                "{stage:?}"
+            );
+        }
+        // A tab whose Claude works while its build fails is a Working
+        // card; idle, it is a line under Build failing.
+        let mut failing = tab(7, "red build");
+        failing.pr = Some(12345);
+        failing.pr_state = Some(crate::facts::PrState::Open);
+        failing.checks = Some(crate::facts::Checks {
+            pass: 1,
+            fail: 1,
+            pending: 0,
+        });
+        let mut fixing = failing.clone();
+        fixing.state = TabState::Working;
+        let mut both = mission(vec![failing.clone()], Vec::new());
+        both.snap.rules.ux2 = true;
+        both.snap.rules.build_failing = true;
+        assert!(on_shelf_tab(&failing, &both.snap.rules));
+        assert!(!on_shelf_tab(&fixing, &both.snap.rules));
+        both.snap.tabs = vec![fixing];
+        let fixed = texts(&screen(&both, 160, 40).0);
+        assert!(
+            fixed.iter().any(|l| l.contains("WORKING"))
+                && fixed
+                    .iter()
+                    .any(|l| l.contains("╭") && l.contains("7 red build"))
+                && !fixed.iter().any(|l| l.contains("BUILD FAILING")),
+            "{fixed:#?}"
+        );
+        // The keys move through them in that order.
+        let g = grid_ux2(&m.snap.tabs, &m.snap.rules, 160, false);
+        assert_eq!(g.order, vec![0, 1, 2, 4, 3]);
+        assert_eq!(g.rows, vec![vec![0], vec![1, 2], vec![3], vec![4]]);
     }
 
     #[test]
@@ -7089,15 +7574,18 @@ mod tests {
             let (lines, _) = screen(&m, cols, 80);
             let text = texts(&lines);
             let first = text.iter().position(|l| l.contains("work 1")).unwrap();
-            // Each card open: its bar under its top rule, no corner of a box.
-            let bars: Vec<usize> = text[first + 1]
+            // Each card the kit's, closed: a corner each on the row of
+            // their top edges, the first under its label's first letter
+            // and the last ending at the screen's edge.
+            let bars: Vec<usize> = text[first]
                 .char_indices()
-                .filter(|(_, c)| *c == '▎')
-                .map(|(i, _)| width(&text[first + 1][..i]))
+                .filter(|(_, c)| *c == '╭')
+                .map(|(i, _)| width(&text[first][..i]))
                 .collect();
             assert_eq!(bars.len(), across, "{cols}: {text:#?}");
+            assert_eq!(bars[0], 1, "{cols}: {text:#?}");
             assert!(
-                !text.iter().any(|l| l.contains(['╭', '╮', '╰', '╯'])),
+                text[first].ends_with('╮') && width(&text[first]) == cols,
                 "{cols}: {text:#?}"
             );
             // Equal shares of the width: every card as wide, give or take
@@ -8120,7 +8608,11 @@ mod tests {
         m.focus = Some(Focus::Filter);
         let (lines, hits) = screen(&m, 48, 12);
         let t = texts(&lines);
-        assert!(t[0].ends_with(" / filter"), "{:?}", t[0]);
+        assert!(
+            t[0].contains(" / filter") && t[0].ends_with("1 tab"),
+            "{:?}",
+            t[0]
+        );
         let filter = hits.iter().find(|h| h.spot == Spot::Filter).unwrap();
         assert_eq!(filter.y, 0);
         assert!(filter.x1 < 48, "{filter:?}");

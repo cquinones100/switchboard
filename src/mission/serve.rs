@@ -3500,7 +3500,9 @@ impl Server {
         let inner = ((cols * 2 / 3).min(72).saturating_sub(2))
             .max(crate::ui::draw::width(crate::ui::menu::KEYS) + 3)
             .min(cols.saturating_sub(2));
-        let mut after_go = self.answer_choices(tab, inner.saturating_sub(5));
+        // `screen` is there only for a UX 2.0 card, whose rows then bound
+        // what counts as shown whole.
+        let mut after_go = self.answer_choices(tab, inner.saturating_sub(5), screen.is_some());
         // What its answers answer, whole above them, wherever the menu is
         // opened (a card, a reminder): the request's kind and its words.
         let body = (!after_go.is_empty())
@@ -3575,9 +3577,10 @@ impl Server {
 
     /// A waiting tab's question's options, each answering it as its number
     /// typed into the tab, only where what is answered is known whole: a
-    /// request its card shows all of (`ask_fits`: a question asking one
-    /// thing, or a Bash command, never an edit whose change it doesn't
-    /// show), a question of one choice, never the option that takes words of
+    /// request its card shows all of (with `on_card`, a UX 2.0 card's
+    /// menu: `ask_fits`, given the options its screen shows as the card
+    /// is; else one known whole, `ask_whole`: a question asking one thing,
+    /// or a Bash command, never an edit whose change it doesn't show), a question of one choice, never the option that takes words of
     /// your own, one whose screen shows more than its label (`more`: words
     /// cut or lines under it), one wider than the menu shows whole, or one
     /// whose line reached the pane's edge, which may go on in a line the
@@ -3587,15 +3590,33 @@ impl Server {
         &self,
         tab: &crate::sidebar::model::TabModel,
         label_room: usize,
+        on_card: bool,
     ) -> Vec<Choice> {
-        if tab.state != crate::sidebar::model::TabState::Waiting
-            || !super::render::ask_fits(tab, None)
-        {
+        if tab.state != crate::sidebar::model::TabState::Waiting {
             return Vec::new();
         }
-        let Some(prompt) = self.prompt_of(tab.id).filter(|p| !p.multi) else {
+        let Some(prompt) = self.prompt_of(tab.id) else {
             return Vec::new();
         };
+        // From a UX 2.0 card, the request as the card lays it out, the
+        // screen's own options (an answer of your own) among them, so the
+        // menu answers only what the card shows whole; from anywhere else
+        // (the sidebar, a reminder, a card with UX 2.0 off), where the
+        // menu shows the request itself, one known whole.
+        let whole = if on_card {
+            let shown = super::Screen {
+                options: prompt.options.iter().map(|o| o.label.clone()).collect(),
+                question: prompt.question.clone(),
+                more: prompt.more.clone(),
+                ..Default::default()
+            };
+            super::render::ask_fits(tab, Some(&shown))
+        } else {
+            super::render::ask_whole(tab, None)
+        };
+        if prompt.multi || !whole {
+            return Vec::new();
+        }
         let pane_cols = self
             .claude_pane_of(tab.id)
             .and_then(|p| self.panes.get(&p))
@@ -3634,10 +3655,9 @@ impl Server {
             else {
                 return;
             };
-            let screen = m
-                .snap
-                .rules
-                .ux2
+            // Only a card has a screen to show in its place: a line on
+            // the shelf has none.
+            let screen = (m.snap.rules.ux2 && !super::render::on_shelf_tab(&tab, &m.snap.rules))
                 .then(|| m.card_screen == Some((tab.id, m.cursor)));
             self.tab_menu(client, &tab, screen, false);
             return;
@@ -7511,13 +7531,10 @@ fn shelf_label_chosen(m: &Mission) -> bool {
         return false;
     }
     chosen_tab(m).is_some_and(|tab| {
-        m.snap.tabs.iter().any(|t| {
-            t.id == tab
-                && matches!(
-                    crate::sidebar::model::stage_of(t, &m.snap.rules),
-                    crate::sidebar::model::Stage::Landing | crate::sidebar::model::Stage::Idle
-                )
-        })
+        m.snap
+            .tabs
+            .iter()
+            .any(|t| t.id == tab && super::render::on_shelf_tab(t, &m.snap.rules))
     })
 }
 

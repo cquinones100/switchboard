@@ -50,7 +50,7 @@ impl Server {
     /// (`hands_free_answer`).
     /// `context [<percent> [model]]`: the calling pane's statusline drew,
     /// saying how full its Claude's context is once that is known, which the
-    /// tab's header and its card show. Says nothing back, as a hook doesn't.
+    /// tab's header shows. Says nothing back, as a hook doesn't.
     pub fn agent_context(&mut self, rest: &[String], caller: Option<PaneId>) -> Reply {
         if let Some(pane) = caller {
             self.agents.statusline_spoke(pane);
