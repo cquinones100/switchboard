@@ -202,7 +202,7 @@ The relay's DM, threads and Home tab.
 - [119. switchboard-diff run alone: its own header, and a Settings button before Close (also M-m) that it has only when standalone](https://cquinones100.github.io/switchboard/design/119.html)
 - [120. The diff's own settings view (M-m, or Settings lit): its options as Switchboard's Settings rows draw them, and when one is out, a dim 0.2.0 is out · switchboard-diff update under the title and a row to update](https://cquinones100.github.io/switchboard/design/120.html)
 
-## Proposal: the diff's story as a map
+## The diff's story as a map
 
 - [121. M-d opens on the story as a map: a box a chapter, the goal at the top, an arrow from each to what it builds on, dashed where the code can't confirm the link, read chapters marked, the stories' tab bar over it](https://cquinones100.github.io/switchboard/design/121.html)
 - [122. A chapter opened on its own map: the functions, types and tables it adds or changes, an arrow from each to what it uses, over its files and hunks; Enter on a thing goes to its hunk](https://cquinones100.github.io/switchboard/design/122.html)
