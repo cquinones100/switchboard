@@ -1461,7 +1461,6 @@ fn program_line(args: &[String], own_exe: &str) -> String {
             ["link-view", ..] => Some("the link view"),
             ["pr-image", "--ticket", ..] => Some("the ticket's images"),
             ["pr-image", ..] => Some("the PR's images"),
-            ["view", "--log", ..] => Some("the CI log"),
             _ => None,
         }
     });
@@ -1541,7 +1540,10 @@ mod tests {
             line(&["switchboard-backup", "notes"]),
             "switchboard-backup notes"
         );
-        assert_eq!(line(&[&bin, "view", "--log", "/x"]), "the CI log");
+        assert_eq!(
+            line(&[&bin, "view", "--log", &format!("{home}/l")]),
+            "switchboard view --log ~/l"
+        );
         assert_eq!(
             line(&[&bin, "pr-image", "--ticket", "X-1"]),
             "the ticket's images"
