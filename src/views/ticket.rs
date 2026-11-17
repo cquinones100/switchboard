@@ -24,6 +24,7 @@ use regex::Regex;
 use serde_json::{Value, json};
 
 use super::board::{self, Board, Part, Piece};
+use super::follow;
 use super::pager::{self, Content};
 use crate::integrations::linear;
 use crate::photos::{Service, Who};
@@ -537,6 +538,7 @@ pub fn board(issue: &Value, now: jiff::Timestamp) -> Board {
         keys: [
             ("j/k", "scroll"),
             ("/", "search"),
+            ("r", "read again"),
             ("M-l", "in Linear"),
             ("M-v", "its PR"),
             ("M-c", "back to Claude"),
@@ -576,7 +578,8 @@ pub(crate) fn cache_file(id: &str) -> std::path::PathBuf {
         .join(format!("{id}.json"))
 }
 
-/// The ticket view: the last copy at once, then the ticket read again.
+/// The ticket view: the last copy at once, then the ticket read again, and
+/// again as it changes (`follow`).
 pub fn main(id: Option<String>) -> ExitCode {
     let Some(id) = id else {
         return pager::run(
@@ -591,24 +594,9 @@ pub fn main(id: Option<String>) -> ExitCode {
         Some(issue) => content(issue),
         None => Content::Loading(format!("Reading {id}...")),
     };
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || match util::block_on(fetch(&id)) {
-        Ok(issue) => {
-            if cached.as_ref() == Some(&issue) {
-                return;
-            }
-            if let Some(parent) = cache.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let _ = util::write_atomic(&cache, util::json_compact(&issue));
-            let _ = tx.send(content(&issue));
-        }
-        Err(why) if cached.is_none() => {
-            let _ = tx.send(Content::Failed(why));
-        }
-        Err(_) => {}
-    });
-    pager::run(initial, Some(rx), None)
+    let read = move || util::block_on(fetch(&id));
+    let file = move || Some(cache.clone());
+    pager::run_following(initial, follow::start(cached, file, read, content))
 }
 
 #[cfg(test)]

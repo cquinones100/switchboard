@@ -22,6 +22,7 @@
 //! - `pager`: less's part: keys, search, resize, links.
 //! - `board`: the PR and the ticket as UX 2.0's boards draw them, a column
 //!   and a panel beside it.
+//! - `follow`: how the PR and ticket views read again what they show.
 //! - `pr`: the branch's PR (pr-view.sh, pr-view.js's `prepare`).
 //! - `ticket`: a Linear ticket (ticket-view.sh, pr-view.js's `ticket`).
 //! - `image`: the PR or ticket as GitHub draws it, as pictures in a pane's
@@ -44,6 +45,7 @@ use std::process::ExitCode;
 
 pub mod board;
 pub mod conversation;
+pub mod follow;
 pub mod given;
 pub mod image;
 pub mod page;
@@ -55,6 +57,7 @@ pub mod search;
 pub mod search_box;
 pub mod seen;
 mod serve;
+pub(crate) use serve::{PR_VIEW, TICKET_ID, TICKET_VIEW};
 pub mod shown;
 pub mod ticket;
 

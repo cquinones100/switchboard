@@ -43,6 +43,10 @@ use crate::{links, paths, settings, util};
 /// The options marking the panes the views open.
 pub const PR_VIEW: &str = "@pr_view";
 pub const TICKET_VIEW: &str = "@ticket_view";
+/// The ticket a ticket view's pane shows (M-i's, or a link view reading a
+/// Linear link), for telling it when the lookups see the ticket change
+/// (`Server::views_follow`).
+pub const TICKET_ID: &str = "@ticket_view_id";
 pub const LINK_VIEW: &str = "@link_view";
 pub const LINK_URL: &str = "@link_url";
 pub const CHECKS_VIEW: &str = "@checks_view";
@@ -291,6 +295,12 @@ impl Server {
         ) && let Some(slot) = self.panes.get_mut(&view)
         {
             slot.opts.insert(LINK_URL.into(), url.to_string());
+            // A Linear link is read by the ticket view, which follows its
+            // ticket here as M-i's does.
+            if let Ok(page::Kind::Ticket(id)) = page::kind_of(url, std::path::Path::new("")) {
+                slot.opts.insert(TICKET_ID.into(), id);
+                self.views_follow(None);
+            }
         }
     }
 
@@ -305,6 +315,8 @@ impl Server {
         }
         let dir = dir.to_string_lossy().into_owned();
         self.open_beside(pane, PR_VIEW, vec!["pr-view".into(), dir], VIEW_PERCENT);
+        // What the lookups know now is where the view starts following.
+        self.views_follow(None);
     }
 
     /// The ticket a tab's work is on: its branch's, else its name's.
@@ -351,12 +363,16 @@ impl Server {
             self.say(Some(client), "No Linear ticket in this branch or tab name");
             return;
         };
-        self.open_beside(
+        if let Some(view) = self.open_beside(
             pane,
             TICKET_VIEW,
-            vec!["ticket-view".into(), id],
+            vec!["ticket-view".into(), id.clone()],
             VIEW_PERCENT,
-        );
+        ) && let Some(slot) = self.panes.get_mut(&view)
+        {
+            slot.opts.insert(TICKET_ID.into(), id);
+        }
+        self.views_follow(None);
     }
 
     /// Says something on `client` from off the task.

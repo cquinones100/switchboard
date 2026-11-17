@@ -1792,6 +1792,7 @@ impl Server {
         let s = self
             .session_mut(session)
             .expect("the session was just found");
+        let left = (opened == Opened::Front).then_some(s.current);
         if opened == Opened::Front {
             s.last = Some(s.current);
             s.trail.visited(s.trail.here(s.current));
@@ -1803,6 +1804,10 @@ impl Server {
                 c.trail_view = None;
                 c.view_held = None;
             }
+        }
+        // The tab it opened over has lost the focus.
+        if let Some(left) = left {
+            self.tab_focus(left, false);
         }
         // Opened from the Notifications window, it goes before it.
         self.notices_last(session);
@@ -2047,13 +2052,18 @@ impl Server {
             self.session_ended(&name);
             return;
         }
+        let mut came_to = None;
         if s.current == tab {
             // As tmux does: the tab you were on before, else the one beside it.
             s.current = s.last.take().unwrap_or(s.tabs[at.min(s.tabs.len() - 1)]);
             // The tab it falls back to is a new place, as a visit is.
             s.trail.forward.clear();
+            came_to = Some(s.current);
         }
         let name = s.name.clone();
+        if let Some(tab) = came_to {
+            self.tab_focus(tab, true);
+        }
         self.dirty_session(&name);
     }
 
@@ -2233,6 +2243,7 @@ impl Server {
             return;
         };
         let switched = s.current != tab && s.tabs.contains(&tab);
+        let left = s.current;
         if switched {
             s.last = Some(s.current);
             if !stepping {
@@ -2253,6 +2264,8 @@ impl Server {
         self.dirty_session(session);
         self.agent_focus(tab);
         if switched {
+            self.tab_focus(left, false);
+            self.tab_focus(tab, true);
             self.tab_switched(session);
         }
     }
@@ -2318,6 +2331,16 @@ impl Server {
             self.sidebar_enter(&name, None);
         } else if let Some(next) = tab.layout.wrap(s.spread_for(tab), pane, dir) {
             self.focus_pane(next);
+        }
+    }
+
+    /// The focus leaving a tab as another comes to the front, or coming
+    /// to it as it does, told to its active pane as tmux told a window's
+    /// with focus-events on: a program that asked hears it, as it does
+    /// between a tab's panes.
+    fn tab_focus(&mut self, tab: TabId, focused: bool) {
+        if let Some(pane) = self.tabs.get(&tab).map(|t| t.active) {
+            self.send_focus(pane, focused);
         }
     }
 

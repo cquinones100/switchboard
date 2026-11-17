@@ -1627,3 +1627,40 @@ fn the_state_and_config_folders_are_the_owners_alone() {
     // The cache, missing, is made so, for the parts that make folders in it.
     assert_eq!(mode(&server.home.join(".cache/switchboard")), 0o700);
 }
+
+/// A program that asked for the focus (1004) hears it leave as another tab
+/// comes to the front and come back with its own, as it does between a
+/// tab's panes, and as tmux told a window's pane with focus-events on.
+#[test]
+fn a_tab_switch_tells_a_pane_that_asked_of_the_focus() {
+    let server = TestServer::start();
+    let mut client = server.attach(80, 24);
+    client.wait_text("$");
+    let first = server.list()["sessions"][0]["tabs"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // cat -v shows the escapes it is sent: ^[[O out, ^[[I in.
+    // "asked" on a line of its own says the request before it was read.
+    client.type_text("printf '\\033[?1004h'; echo asked; cat -v\r");
+    client.wait_for("the pane to have asked for the focus", |s| {
+        s.iter().any(|l| l.trim() == "asked")
+    });
+    server.ok(&["new-tab"]);
+    client.wait_for("the new tab in front", |s| {
+        !s.iter().any(|l| l.contains("cat -v"))
+    });
+    server.ok(&["select-tab", "-t", &first]);
+    client.wait_text("^[[O^[[I");
+    // Left for the other tab by going to it, and back as that one closes.
+    let second = server.list()["sessions"][0]["tabs"][1]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["select-tab", "-t", &second]);
+    client.wait_for("the other tab in front", |s| {
+        !s.iter().any(|l| l.contains("cat -v"))
+    });
+    server.ok(&["kill-tab", "-t", &second]);
+    client.wait_text("^[[O^[[I^[[O^[[I");
+}

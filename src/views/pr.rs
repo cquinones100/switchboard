@@ -24,6 +24,7 @@ use std::process::ExitCode;
 use serde_json::{Value, json};
 
 use super::board::{self, Board, Part, Piece};
+use super::follow;
 use super::pager::{self, Content};
 use crate::integrations::github;
 use crate::photos::{Service, Who};
@@ -433,6 +434,7 @@ pub fn board(pr: &Value, now: jiff::Timestamp) -> Board {
         keys: [
             ("j/k", "scroll"),
             ("/", "search"),
+            ("r", "read again"),
             ("M-r", "on GitHub"),
             ("M-m", "ready?"),
             ("M-d", "its diff"),
@@ -512,7 +514,8 @@ pub async fn for_dir(dir: &Path) -> Result<Value, String> {
         .map_err(|e| e.to_string())
 }
 
-/// The PR view: the last copy at once, then the PR read again.
+/// The PR view: the last copy at once, then the PR read again, and again
+/// as it changes (`follow`).
 pub fn main(dir: PathBuf) -> ExitCode {
     let cache = cache_file(&dir);
     let cached = cache.as_ref().and_then(util::read_json);
@@ -520,30 +523,14 @@ pub fn main(dir: PathBuf) -> ExitCode {
         Some(pr) => content(pr),
         None => Content::Loading("Reading the PR...".into()),
     };
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        match util::block_on(for_dir(&dir)) {
-            Ok(pr) => {
-                if cached.as_ref() == Some(&pr) {
-                    return;
-                }
-                if let Some(file) = &cache {
-                    if let Some(parent) = file.parent() {
-                        let _ = std::fs::create_dir_all(parent);
-                    }
-                    let _ = util::write_atomic(file, util::json_compact(&pr));
-                }
-                let _ = tx.send(content(&pr));
-            }
-            // With a copy shown, it stays; only with nothing to show is
-            // the reason the view.
-            Err(why) if cached.is_none() => {
-                let _ = tx.send(Content::Failed(why));
-            }
-            Err(_) => {}
-        }
-    });
-    pager::run(initial, Some(rx), None)
+    // The branch checked out is read each time, so its file is too: a
+    // branch switched to since never has its PR kept as the first one's.
+    let file = {
+        let dir = dir.clone();
+        move || cache_file(&dir)
+    };
+    let read = move || util::block_on(for_dir(&dir));
+    pager::run_following(initial, follow::start(cached, file, read, content))
 }
 
 #[cfg(test)]

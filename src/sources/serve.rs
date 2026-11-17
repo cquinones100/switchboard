@@ -14,6 +14,11 @@
 //! goes to its view (`came_to_view`) or asks for it (`refresh_sources`).
 //! The landing queue is read on every tick, on a blocking thread, since it
 //! is files alone.
+//!
+//! A PR or ticket view open in a tab is told to read again when what the
+//! lookups know of its PR or ticket changes (`views_follow`), so the view
+//! follows them and asks nothing by a timer of its own
+//! (src/views/follow.rs).
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -31,8 +36,8 @@ use super::{
 use crate::facts::{Facts, Landing, Merge, Method, PrFacts, PrState, TabFacts};
 use crate::integrations::github::{self, Repo};
 use crate::items::{Item, ViewData};
-use crate::mux::TabId;
 use crate::mux::server::{Event, Reply, Server};
+use crate::mux::{PaneId, TabId};
 use crate::{paths, settings, util};
 
 /// How long a directory's repository is kept before its config is read again.
@@ -95,6 +100,9 @@ pub(super) struct Kept {
     inbox_links_for: Vec<String>,
     inbox_links_at: Option<Instant>,
     inbox_links_busy: bool,
+    /// What the lookups last said of the PR or ticket each open PR and
+    /// ticket view shows; `None` where they have said nothing yet.
+    views_seen: HashMap<PaneId, Option<String>>,
 }
 
 impl Kept {
@@ -166,6 +174,7 @@ impl Server {
         self.start_landing(&tabs);
         self.sources_tabs_changed(&tabs);
         self.update_facts(&tabs);
+        self.views_follow(None);
         if !enabled(INBOX) && self.notices.contains_key("inbox") {
             self.set_notices("inbox", Vec::new());
         }
@@ -174,6 +183,13 @@ impl Server {
     /// A lookup answered.
     pub fn source_answer(&mut self, answer: Answer) {
         let tabs = self.source_tabs();
+        // The views that follow the lookup answering: the PR views the
+        // tabs' PRs, the ticket views your tickets.
+        let views_lookup = match &answer {
+            Answer::Merges(Ok(_)) => Some(crate::views::PR_VIEW),
+            Answer::Tickets(Ok(_)) => Some(crate::views::TICKET_VIEW),
+            _ => None,
+        };
         match answer {
             Answer::Merges(result) => {
                 self.sources.schedule.done("merges");
@@ -276,7 +292,66 @@ impl Server {
             }
         }
         self.update_facts(&tabs);
+        self.views_follow(views_lookup);
         self.redraw_everywhere();
+    }
+
+    /// Tells each open PR and ticket view what the lookups know of its PR
+    /// (the tab's facts) or its ticket (the Tickets lookup's copy: its
+    /// state and when it was last changed), as a word that changes when
+    /// that does, on the view's socket and off this task: when it differs
+    /// from what they knew before, and each time the lookup that knows it
+    /// answers (`answered`, the mark of the views that follow it: a PR
+    /// view is never told by Linear's answer, which GitHub's limit doesn't
+    /// slow), so a view whose read failed reads again then
+    /// (it reads only for a word it hasn't read for, src/views/follow.rs). What
+    /// they know as the view opens is where it starts, the view having
+    /// just read, and a view open before they knew anything (a branch with
+    /// no PR yet) is told once they do; a view that has gone has its socket removed, which a
+    /// killed pane's program leaves behind.
+    pub(crate) fn views_follow(&mut self, answered: Option<&str>) {
+        use crate::views::follow;
+        let mut seen = HashMap::new();
+        for (&pane, slot) in &self.panes {
+            let marked = |mark: &str| slot.opts.get(mark).is_some_and(|v| v == "1");
+            let (mark, known) = if marked(crate::views::PR_VIEW) {
+                let known = self
+                    .facts
+                    .get(&slot.tab)
+                    .and_then(|facts| facts.pr.as_ref())
+                    .and_then(|pr| serde_json::to_string(pr).ok());
+                (crate::views::PR_VIEW, known)
+            } else if slot.opts.contains_key(crate::views::TICKET_ID) {
+                let issues = self.sources.kept.ticket_issues.iter().flatten();
+                let known = slot
+                    .opts
+                    .get(crate::views::TICKET_ID)
+                    .and_then(|id| ticket_known(issues, id));
+                (crate::views::TICKET_VIEW, known)
+            } else {
+                continue;
+            };
+            let seen_before = self.sources.kept.views_seen.get(&pane);
+            let before = seen_before.cloned().flatten();
+            if let Some(known) = &known
+                && (answered == Some(mark) || view_reads_again(seen_before, Some(known)))
+            {
+                use std::hash::{Hash, Hasher};
+                let mut word = std::collections::hash_map::DefaultHasher::new();
+                known.hash(&mut word);
+                crate::notes::serve::tell_at(
+                    follow::socket_for(&pane.to_string()),
+                    format!("{} {:x}", follow::REREAD, word.finish()),
+                );
+            }
+            seen.insert(pane, known.or(before));
+        }
+        for pane in self.sources.kept.views_seen.keys() {
+            if !seen.contains_key(pane) {
+                let _ = std::fs::remove_file(follow::socket_for(&pane.to_string()));
+            }
+        }
+        self.sources.kept.views_seen = seen;
     }
 
     /// The Inbox's items as notifications, those dismissed there left out,
@@ -938,6 +1013,25 @@ impl Server {
     }
 }
 
+/// Whether an open view is told to read again: the lookups know something
+/// of its PR or ticket (`known`) that differs from what they knew when it
+/// was last looked at (`seen`: `None` for a view first seen now, which has
+/// just read; `Some(None)` for one they knew nothing of).
+fn view_reads_again(seen: Option<&Option<String>>, known: Option<&String>) -> bool {
+    match (seen, known) {
+        (Some(before), Some(known)) => before.as_ref() != Some(known),
+        _ => false,
+    }
+}
+
+/// What the Tickets lookup last said of ticket `id`, as far as its view
+/// follows it: when it was last changed, and its state.
+fn ticket_known<'a>(mut issues: impl Iterator<Item = &'a Value>, id: &str) -> Option<String> {
+    let issue = issues.find(|i| i.get("identifier").and_then(Value::as_str) == Some(id))?;
+    let said = |at: &str| issue.pointer(at).and_then(Value::as_str).unwrap_or("");
+    Some(format!("{} {}", said("/updatedAt"), said("/state/name")))
+}
+
 /// A PR's place in its repository's merge queue, as landing there: from the
 /// merge queue last asked about, else the PR's own lookup; none once GitHub
 /// has said it merged, whatever the queue said last.
@@ -1080,5 +1174,25 @@ mod tests {
         std::fs::create_dir_all(&outside).unwrap();
         kept.remotes(&outside);
         assert!(kept.origin_kept(&outside).is_none(), "outside a repository");
+    }
+}
+
+#[cfg(test)]
+mod follow_tests {
+    use super::view_reads_again;
+
+    #[test]
+    fn a_view_reads_again_when_the_lookups_know_something_new_of_it() {
+        let failing = Some("1 failing".to_string());
+        let passing = "0 failing".to_string();
+        assert!(view_reads_again(Some(&failing), Some(&passing)));
+        assert!(!view_reads_again(Some(&failing), failing.as_ref()));
+        // A view just opened has read what they know.
+        assert!(!view_reads_again(None, Some(&passing)));
+        // One open before its PR was known is told once it is.
+        assert!(view_reads_again(Some(&None), Some(&passing)));
+        // Knowing nothing now (GitHub turned off) says nothing new.
+        assert!(!view_reads_again(Some(&failing), None));
+        assert!(!view_reads_again(Some(&None), None));
     }
 }

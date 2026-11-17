@@ -33,6 +33,11 @@
 //! browser, where it has one; q or Esc closes, and Ctrl-C does nothing, as
 //! in less. The wheel scrolls.
 //!
+//! A view that follows what it shows (`super::follow`, the PR and the
+//! ticket) reads it again on r, and when it takes the focus after five
+//! minutes or more without it, and says at the prompt line's right end how
+//! old its copy is once that is five minutes ("read 12m ago").
+//!
 //! Markdown and a board's column have a cursor, with Settings' "A cursor in the views"
 //! (`view_cursor`) on: a yellow `›` in the margin of the line it is on,
 //! which the line keys move, the screen scrolling only to keep it in sight,
@@ -45,7 +50,7 @@
 use std::io::{self, Write};
 use std::process::ExitCode;
 use std::sync::mpsc::{Receiver, channel};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
@@ -54,6 +59,7 @@ use crossterm::event::{
 use crossterm::terminal;
 
 use super::board::{self, Board};
+use super::follow::{self, Follow, Update};
 use super::markdown::{Doc, Markdown, Span, Style, expand_tabs};
 use super::pictures::{Got, Pictures};
 use crate::ui::draw::wrap;
@@ -100,6 +106,8 @@ pub enum Act {
     Open(String),
     /// A link to open, and then close.
     OpenAndQuit(String),
+    /// The PR or ticket read again (`super::follow`).
+    Again,
     /// A picture or diagram to show full size over the view: its key
     /// (`markdown::Wanted::key`) and what it is called.
     Full {
@@ -140,7 +148,19 @@ pub struct Pager {
     bar: bool,
     /// The scroll bar's thumb being dragged, from where (`kit::scroll_grab`).
     dragging: Option<crate::ui::kit::Grab>,
+    /// Whether it follows what it shows (`super::follow`), so r reads it
+    /// again.
+    follows: bool,
+    /// When the copy shown was read.
+    read_at: Option<SystemTime>,
+    /// Whether r asked for the read under way, which then says how it went.
+    asked: bool,
+    /// Since when the view has been without the focus.
+    unfocused: Option<Instant>,
 }
+
+/// What the prompt line says while r's read is under way.
+const READING: &str = "Reading it again...";
 
 fn said(text: &str, style: Style) -> Vec<Span> {
     vec![Span::new(format!("  {text}"), style)]
@@ -167,6 +187,10 @@ impl Pager {
             cursor: 0,
             bar: false,
             dragging: None,
+            follows: false,
+            read_at: None,
+            asked: false,
+            unfocused: None,
         };
         pager.set_content(content);
         pager
@@ -180,6 +204,55 @@ impl Pager {
             self.lay_out();
         }
         self
+    }
+
+    /// Follows what it shows, a copy read at `read_at`.
+    pub fn following(mut self, read_at: Option<SystemTime>) -> Pager {
+        self.follows = true;
+        self.read_at = read_at;
+        // A failure's keys depend on whether it can be read again.
+        if matches!(self.content, Content::Failed(_)) {
+            self.lay_out();
+        }
+        self
+    }
+
+    /// What a read came to: a new copy laid out where the old was, and
+    /// when it was read; one r asked for says when it couldn't be read.
+    pub fn update(&mut self, update: Update, now: SystemTime) {
+        if self.note.as_deref() == Some(READING) {
+            self.note = None;
+        }
+        match update {
+            Update::Show(content) => {
+                if !matches!(content, Content::Failed(_)) {
+                    self.read_at = Some(now);
+                }
+                self.set_content(content);
+            }
+            Update::Same => self.read_at = Some(now),
+            Update::Kept(why) if self.asked => {
+                self.note = Some(format!("Couldn't read it again: {why}"));
+            }
+            Update::Kept(_) => {}
+        }
+        self.asked = false;
+    }
+
+    /// The focus taken or lost. Whether to read again: taken after
+    /// `follow::STALE` or more without it.
+    pub fn focus(&mut self, gained: bool, now: Instant) -> bool {
+        if !gained {
+            self.unfocused.get_or_insert(now);
+            return false;
+        }
+        let since = self.unfocused.take();
+        self.follows && since.is_some_and(|at| now.duration_since(at) >= follow::STALE)
+    }
+
+    /// How old the copy shown is, once that is worth saying.
+    pub fn age(&self, now: SystemTime) -> Option<String> {
+        follow::age(self.read_at.filter(|_| self.follows)?, now)
     }
 
     /// Gives Markdown a cursor, on the first line with something on it.
@@ -370,6 +443,8 @@ impl Pager {
                 lines.push(vec![]);
                 let keys = if self.url.is_some() {
                     "o opens it in the browser · any other key closes"
+                } else if self.follows {
+                    "r reads it again · any other key closes"
                 } else {
                     "Press any key to close."
                 };
@@ -750,6 +825,12 @@ impl Pager {
             Content::Failed(_) => {
                 return match (key.code, &self.url) {
                     (KeyCode::Char('o'), Some(url)) => Act::OpenAndQuit(url.clone()),
+                    // A read that failed with nothing to show is tried again.
+                    (KeyCode::Char('r'), _) if self.follows => {
+                        self.note = Some(READING.into());
+                        self.asked = true;
+                        Act::Again
+                    }
                     _ => Act::Quit,
                 };
             }
@@ -818,6 +899,11 @@ impl Pager {
                 Some(url) => Act::Open(url.clone()),
                 None => Act::Same,
             },
+            KeyCode::Char('r') if self.follows => {
+                self.note = Some(READING.into());
+                self.asked = true;
+                Act::Again
+            }
             _ => Act::Same,
         };
         if had_note { act_or_redraw(act) } else { act }
@@ -945,6 +1031,11 @@ impl Pager {
     /// The screen, as the bytes that draw it whole, held back until done
     /// (synchronized output) so it never shows half drawn.
     pub fn frame(&self) -> String {
+        self.frame_at(SystemTime::now())
+    }
+
+    /// `frame` at a time, which says how old the copy is.
+    pub fn frame_at(&self, now: SystemTime) -> String {
         let mut out = String::from("\x1b[?2026h\x1b[?25l");
         let body = self.body();
         let gutter = self.gutter();
@@ -992,7 +1083,25 @@ impl Pager {
             }
         }
         out.push_str(&format!("\x1b[{};1H\x1b[0m\x1b[K", self.rows));
-        out.push_str(&self.prompt());
+        // How old the copy is, at the line's right end, the keys cut short
+        // of it; a search being typed or a message has the line.
+        let age = self
+            .age(now)
+            .filter(|_| self.typing.is_none() && self.note.is_none())
+            .map(|age| (crate::ui::draw::width(&age), age))
+            .filter(|(wide, _)| *wide < self.cols);
+        let room = match &age {
+            Some((wide, _)) => self.cols.saturating_sub(wide + 2),
+            None => self.cols,
+        };
+        out.push_str(&self.prompt(room));
+        if let Some((wide, age)) = age {
+            out.push_str(&format!(
+                "\x1b[0m\x1b[{};{}H\x1b[38;5;{DIM}m{age}\x1b[0m",
+                self.rows,
+                self.cols - wide + 1
+            ));
+        }
         if self.typing.is_some() {
             out.push_str("\x1b[?25h");
         }
@@ -1034,8 +1143,9 @@ impl Pager {
     }
 
     /// The prompt line, as less's `-Ps'?e(END) .'` and its search, then
-    /// what Enter does on a picture under the cursor.
-    fn prompt(&self) -> String {
+    /// what Enter does on a picture under the cursor; a board's keys in
+    /// `room` columns.
+    fn prompt(&self, room: usize) -> String {
         if let Some(typed) = &self.typing {
             return format!("/{typed}");
         }
@@ -1055,7 +1165,7 @@ impl Pager {
                 keys.insert(0, ("Enter".to_string(), "full size".to_string()));
             }
             let line = board::hints(&keys, &self.look);
-            return line.ansi(&[], 0, self.cols, &[]);
+            return line.ansi(&[], 0, room, &[]);
         }
         let mut out = String::new();
         if self.markdown.is_some() && self.at_end() {
@@ -1130,10 +1240,15 @@ fn act_or_redraw(act: Act) -> Act {
 struct Screen;
 
 impl Screen {
-    fn enter() -> io::Result<Screen> {
+    /// `focus` has the terminal say when the view takes and loses the
+    /// focus (1004), for a view that follows what it shows.
+    fn enter(focus: bool) -> io::Result<Screen> {
         terminal::enable_raw_mode()?;
         let mut out = io::stdout();
         out.write_all(b"\x1b[?1049h\x1b[?25l\x1b[?1002h\x1b[?1006h")?;
+        if focus {
+            out.write_all(b"\x1b[?1004h")?;
+        }
         out.flush()?;
         Ok(Screen)
     }
@@ -1142,7 +1257,7 @@ impl Screen {
 impl Drop for Screen {
     fn drop(&mut self) {
         let mut out = io::stdout();
-        let _ = out.write_all(b"\x1b[?1006l\x1b[?1002l\x1b[0m\x1b[?25h\x1b[?1049l");
+        let _ = out.write_all(b"\x1b[?1004l\x1b[?1006l\x1b[?1002l\x1b[0m\x1b[?25h\x1b[?1049l");
         let _ = out.flush();
         let _ = terminal::disable_raw_mode();
     }
@@ -1151,14 +1266,20 @@ impl Drop for Screen {
 /// Runs the pager on this terminal until it is closed, showing `content`
 /// and then whatever `updates` hands over; `url` is the page o opens.
 pub fn run(content: Content, updates: Option<Receiver<Content>>, url: Option<String>) -> ExitCode {
-    run_with(content, updates, url, true)
+    run_with(content, updates, url, true, None)
+}
+
+/// `run` for a view that follows what it shows: `follow`'s reads shown as
+/// they come, and asked for on r and on taking the focus again.
+pub fn run_following(content: Content, follow: Follow) -> ExitCode {
+    run_with(content, None, None, true, Some(follow))
 }
 
 /// `run` for a file of yours or a note, whose picture links are never
 /// fetched, since a link is your words and nothing of a note leaves the
 /// computer; its diagrams are drawn here as anywhere.
 pub fn run_local(content: Content) -> ExitCode {
-    run_with(content, None, None, false)
+    run_with(content, None, None, false, None)
 }
 
 fn run_with(
@@ -1166,15 +1287,19 @@ fn run_with(
     updates: Option<Receiver<Content>>,
     url: Option<String>,
     fetch_pictures: bool,
+    follow: Option<Follow>,
 ) -> ExitCode {
     let (cols, rows) = terminal::size().unwrap_or((80, 24));
     let mut pager = Pager::new(content, cols as usize, rows as usize)
         .with_url(url)
         .with_cursor(crate::settings::is_on("view_cursor"));
+    if let Some(follow) = &follow {
+        pager = pager.following(follow.read_at);
+    }
     let (pictures_tx, pictures) = channel();
     // A link opened from here: what was said meanwhile, and how it went.
     let (opened_tx, opened) = channel::<(String, Result<bool, String>)>();
-    let screen = match Screen::enter() {
+    let screen = match Screen::enter(follow.is_some()) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("switchboard: can't take the terminal: {e}");
@@ -1204,8 +1329,20 @@ fn run_with(
         let _ = out.flush();
     };
     draw(&mut pager);
+    let mut age = pager.age(SystemTime::now());
     loop {
         let mut redraw = false;
+        if let Some(follow) = &follow {
+            while let Ok(update) = follow.updates.try_recv() {
+                pager.update(update, SystemTime::now());
+                redraw = true;
+            }
+        }
+        let age_now = pager.age(SystemTime::now());
+        if age_now != age {
+            age = age_now;
+            redraw = true;
+        }
         if let Some(rx) = &updates {
             while let Ok(content) = rx.try_recv() {
                 pager.set_content(content);
@@ -1242,6 +1379,11 @@ fn run_with(
                 Ok(Event::Resize(c, r)) => {
                     pager.resize(c as usize, r as usize);
                     Act::Redraw
+                }
+                Ok(Event::FocusGained) if pager.focus(true, Instant::now()) => Act::Again,
+                Ok(Event::FocusLost) => {
+                    pager.focus(false, Instant::now());
+                    Act::Same
                 }
                 Ok(_) => Act::Same,
                 Err(_) => Act::Quit,
@@ -1290,6 +1432,12 @@ fn run_with(
             Act::Full { key, title } => {
                 if let Some(p) = &pager.pictures {
                     p.show_full(&key, &title);
+                }
+                redraw = true;
+            }
+            Act::Again => {
+                if let Some(follow) = &follow {
+                    follow.again();
                 }
                 redraw = true;
             }
@@ -1739,5 +1887,105 @@ mod tests {
         pager.key(key(KeyCode::Enter));
         assert_eq!(pager.top(), 1);
         assert!(!pager.frame().contains("›"));
+    }
+
+    #[test]
+    fn r_reads_a_followed_view_again_and_says_when_it_could_not() {
+        let at = SystemTime::UNIX_EPOCH;
+        let mut plain = Pager::new(markdown("# A PR"), 80, 10);
+        assert_eq!(plain.key(key(KeyCode::Char('r'))), Act::Same);
+
+        let mut pager = Pager::new(markdown("# A PR\n\nfailing"), 80, 10).following(Some(at));
+        assert_eq!(pager.key(key(KeyCode::Char('r'))), Act::Again);
+        assert!(pager.frame().contains(READING));
+        pager.update(Update::Show(markdown("# A PR\n\npassing")), at);
+        assert!(pager.screen().join("\n").contains("passing"));
+        assert!(!pager.frame().contains(READING), "said until it is read");
+
+        // A read nobody asked for that fails says nothing; r's says why.
+        pager.update(Update::Kept("GitHub is down".into()), at);
+        assert!(!pager.frame().contains("GitHub is down"));
+        pager.key(key(KeyCode::Char('r')));
+        pager.update(Update::Kept("GitHub is down".into()), at);
+        assert!(
+            pager
+                .frame()
+                .contains("Couldn't read it again: GitHub is down")
+        );
+        assert!(
+            pager.screen().join("\n").contains("passing"),
+            "the copy stays"
+        );
+
+        // A first read that failed, with nothing to show, is tried again
+        // by r, where any other key closes the view.
+        let failed = || Content::Failed("GitHub is down".into());
+        let mut pager =
+            Pager::new(Content::Loading("Reading the PR...".into()), 80, 10).following(None);
+        pager.update(Update::Show(failed()), at);
+        assert!(
+            pager
+                .screen()
+                .join("\n")
+                .contains("r reads it again · any other key closes")
+        );
+        assert_eq!(pager.key(key(KeyCode::Char('r'))), Act::Again);
+        pager.update(Update::Show(markdown("# A PR\n\npassing")), at);
+        assert!(pager.screen().join("\n").contains("passing"));
+        pager.update(Update::Show(failed()), at);
+        assert_eq!(pager.key(key(KeyCode::Char('x'))), Act::Quit);
+        let mut plain = Pager::new(failed(), 80, 10);
+        assert!(
+            plain
+                .screen()
+                .join("\n")
+                .contains("Press any key to close.")
+        );
+        assert_eq!(plain.key(key(KeyCode::Char('r'))), Act::Quit);
+    }
+
+    #[test]
+    fn a_followed_view_says_how_old_its_copy_is_once_it_is_stale() {
+        let at = SystemTime::UNIX_EPOCH;
+        let later = |minutes: u64| at + Duration::from_secs(minutes * 60);
+        let mut pager = Pager::new(markdown("# A PR"), 80, 10).following(Some(at));
+        assert!(!pager.frame_at(later(4)).contains("read "));
+        let frame = pager.frame_at(later(12));
+        assert!(
+            frame.contains(&format!("\x1b[10;69H\x1b[38;5;{DIM}mread 12m ago")),
+            "at the prompt line's right end: {frame:?}"
+        );
+        // Read again, the same or new, it is as old as that read.
+        pager.update(Update::Same, later(12));
+        assert_eq!(pager.age(later(13)), None);
+        assert_eq!(pager.age(later(20)).as_deref(), Some("read 8m ago"));
+        // A copy that couldn't be read again stays as old as it was.
+        pager.update(Update::Kept("GitHub is down".into()), later(30));
+        assert_eq!(pager.age(later(30)).as_deref(), Some("read 18m ago"));
+        // A view that follows nothing says nothing.
+        let plain = Pager::new(markdown("# A file"), 80, 10);
+        assert_eq!(plain.age(later(60)), None);
+    }
+
+    #[test]
+    fn taking_the_focus_after_five_minutes_without_it_reads_again() {
+        let start = Instant::now();
+        let after = |secs: u64| start + Duration::from_secs(secs);
+        let mut pager = Pager::new(markdown("# A PR"), 80, 10).following(None);
+        assert!(!pager.focus(true, start), "never without it");
+        pager.focus(false, after(10));
+        assert!(
+            !pager.focus(true, after(60)),
+            "back within the five minutes"
+        );
+        pager.focus(false, after(100));
+        // Lost twice with no gain between (a terminal's and a pane's),
+        // it counts from the first.
+        pager.focus(false, after(350));
+        assert!(pager.focus(true, after(400)));
+        assert!(!pager.focus(true, after(401)), "once");
+        let mut plain = Pager::new(markdown("# A file"), 80, 10);
+        plain.focus(false, start);
+        assert!(!plain.focus(true, after(900)));
     }
 }

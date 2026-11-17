@@ -83,6 +83,9 @@ fn close_message(client: &mut common::TestClient, text: &str) {
 mod with_github {
     use super::*;
     use crate::common::http::{Fake, Reply};
+    use std::io::Write;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     /// A stand-in for GitHub (tests/common/http.rs), as strict as GitHub
     /// about how it is asked: the PR on a branch for a question about pull
@@ -247,6 +250,156 @@ mod with_github {
 
         client.send(b"\x1bv");
         client.wait_for("the board gone", |s| !s.iter().any(|l| l.contains("FILES")));
+    }
+
+    /// A stand-in for GitHub whose PR has one check, `build`, failing until
+    /// `green`, answering the view's questions and the tabs' PR lookup
+    /// (its aliased query), and nothing at all while `down`.
+    fn changing_github(green: Arc<AtomicBool>, down: Arc<AtomicBool>) -> Fake {
+        Fake::github("test-token", move |request| {
+            if request.path() != "/graphql" {
+                return None;
+            }
+            if down.load(Ordering::SeqCst) {
+                return Some(Reply::json(500, json!({"message": "down"})));
+            }
+            let asked = request.text();
+            let conclusion = if green.load(Ordering::SeqCst) {
+                "SUCCESS"
+            } else {
+                "FAILURE"
+            };
+            let contexts = json!({
+                "checkRunCountsByState": [{"state": conclusion, "count": 1}],
+                "statusContextCountsByState": [],
+                "nodes": [{"__typename": "CheckRun", "name": "build", "status": "COMPLETED", "conclusion": conclusion}]
+            });
+            let commit = json!({"nodes": [{"commit": {"statusCheckRollup": {"state": conclusion, "contexts": contexts}}}]});
+            let mut commits = commit.clone();
+            commits["totalCount"] = json!(2);
+            let pr = json!({
+                "number": 12, "url": "https://github.com/acme/widgets/pull/12",
+                "title": "Fix the login", "state": "OPEN", "isDraft": false,
+                "baseRefName": "main", "headRefName": "feature-x",
+                "headRepositoryOwner": {"login": "acme"}, "author": {"login": "jo"},
+                "repository": {"nameWithOwner": "acme/widgets"},
+                "additions": 3, "deletions": 1, "mergedAt": null, "mergeQueueEntry": null,
+                "commits": commits, "last": commit, "changedFiles": 1,
+                "files": {"nodes": [{"path": "src/login.rs", "additions": 3, "deletions": 1}]},
+                "body": "The token went stale."
+            });
+            let answer = if asked.contains("r0:") && asked.contains("pullRequest(number:") {
+                json!({"data": {"r0": {"a0": pr}}})
+            } else if asked.contains("r0:") {
+                json!({"data": {"r0": {"a0": {"nodes": [pr]}}}})
+            } else if asked.contains("pullRequests") {
+                json!({"data": {"repository": {"pullRequests": {"nodes": [pr]}}}})
+            } else {
+                json!({"data": {"repository": {"pullRequest": pr}}})
+            };
+            Some(Reply::json(200, answer))
+        })
+    }
+
+    #[test]
+    fn an_open_pr_view_follows_the_pr_as_the_lookups_see_it_change() {
+        let green = Arc::new(AtomicBool::new(false));
+        let down = Arc::new(AtomicBool::new(false));
+        let fake = changing_github(green.clone(), down.clone());
+        // poll_fast off, so the PR is asked about again within its minute
+        // only when something asks for it.
+        let server = TestServer::start_with_env_and_settings(
+            &[
+                ("GH_TOKEN", "test-token"),
+                ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
+                ("SWITCHBOARD_GITHUB_API", &fake.url),
+            ],
+            &json!({"notifications": false, "tips": false, "linear": false, "ux2": true, "sidebar": false,
+                "photos": false, "pause_when_away": false, "poll_fast": false}).to_string(),
+        );
+        let work = server.dir.path().join("widgets");
+        std::fs::create_dir_all(&work).unwrap();
+        git(&work, &["init", "-q"]);
+        git(&work, &["symbolic-ref", "HEAD", "refs/heads/feature-x"]);
+        git(&work, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        git(
+            &work,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/widgets.git",
+            ],
+        );
+        let mut client = server.attach(140, 36);
+        client.wait_for("the header", |s| s[2].contains("M-c Claude"));
+        client.wait_text("$");
+        client.type_text(&format!("cd {}\r", work.display()));
+        let fails = |server: &TestServer| {
+            server.list()["sessions"][0]["tabs"][0]["facts"]["pr"]["checks"]["fail"].clone()
+        };
+        let wait_fails = |n: u64| {
+            let deadline = common::deadline(Duration::from_secs(30));
+            while fails(&server) != n {
+                assert!(
+                    Instant::now() < deadline,
+                    "the lookup's checks: {n} failing"
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        };
+        wait_fails(1);
+
+        client.send(b"\x1bv");
+        client.wait_text("✕ build");
+        let failing = |s: &[String]| s.iter().any(|l| l.contains("✕ build"));
+        let checks = |s: &[String], count: &str| {
+            s.iter()
+                .any(|l| l.contains("CHECKS") && l.trim_end().ends_with(count))
+        };
+        client.wait_for("the failing check counted", |s| checks(s, "0 of 1"));
+        client.wait_text("r read again");
+
+        // The check passes, and something that just asked GitHub says so in
+        // the github file: the lookup sees it, and the view, left open,
+        // shows it.
+        let asked_github = || {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(server.state.join("github"))
+                .unwrap()
+                .write_all(b"\n")
+                .unwrap();
+        };
+        green.store(true, Ordering::SeqCst);
+        asked_github();
+        client.wait_for("the check passing in the open view", |s| {
+            !failing(s) && checks(s, "1 of 1")
+        });
+
+        // It fails again with no lookup to see it: r reads it at once.
+        wait_fails(0);
+        green.store(false, Ordering::SeqCst);
+        client.type_text("r");
+        client.wait_for("r read it again", |s| failing(s) && checks(s, "0 of 1"));
+
+        // With GitHub not answering, a view opened on a copy kept two hours
+        // ago shows it, and says how old it is.
+        client.send(b"\x1bv");
+        client.wait_for("the board gone", |s| !s.iter().any(|l| l.contains("FILES")));
+        down.store(true, Ordering::SeqCst);
+        let cache = server.home.join(".cache/switchboard/pr-view");
+        let copy = std::fs::read_dir(&cache).unwrap().next().unwrap().unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(copy.path())
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - Duration::from_secs(2 * 3600))
+            .unwrap();
+        client.send(b"\x1bv");
+        client.wait_text("✕ build");
+        client.wait_text("read 2h ago");
     }
 
     /// A stand-in for GitHub with a PR whose first hundred checks all pass,
@@ -543,6 +696,109 @@ mod with_github {
             std::thread::sleep(Duration::from_millis(50));
         }
     }
+}
+
+/// M-i's ticket view, left open, follows its ticket as the Tickets lookup
+/// sees it change, and r reads it again at once.
+#[cfg(feature = "net")]
+#[test]
+fn an_open_ticket_view_follows_the_ticket_as_the_lookup_sees_it_change() {
+    use crate::common::http::{Fake, Reply};
+    use std::sync::{Arc, Mutex};
+
+    // The ticket's state and when it was last changed, as Linear has them.
+    let now = Arc::new(Mutex::new(("In Progress", "2026-11-17T10:00:00Z")));
+    let linear = Fake::linear("test-key", {
+        let now = now.clone();
+        move |request| {
+            let query = request.query();
+            let (state, updated) = *now.lock().unwrap();
+            let issue = json!({
+                "identifier": "ENG-42", "title": "Fix the login",
+                "url": "https://linear.app/acme/issue/ENG-42", "updatedAt": updated,
+                "state": { "name": state, "type": "started" },
+                "priority": 2, "priorityLabel": "High", "description": "The token went stale.",
+            });
+            let answer = if query.contains("assignedIssues") {
+                json!({ "data": { "viewer": { "assignedIssues": { "nodes": [issue] }, "canceled": { "nodes": [] } } } })
+            } else if query.contains("issue(id") {
+                json!({ "data": { "issue": issue } })
+            } else {
+                json!({ "data": {} })
+            };
+            Some(Reply::json(200, answer))
+        }
+    });
+    let server = TestServer::start_with_env_and_settings(
+        &[
+            ("LINEAR_API_KEY", "test-key"),
+            ("SWITCHBOARD_LINEAR_API", &linear.graphql_url()),
+        ],
+        &json!({"notifications": false, "tips": false, "github": false, "ux2": true, "sidebar": false,
+            "photos": false, "pause_when_away": false, "poll_fast": false}).to_string(),
+    );
+    let mut client = server.attach(140, 36);
+    client.wait_for("the header", |s| s[2].contains("M-c Claude"));
+    client.wait_text("$");
+    let tab = server.list()["sessions"][0]["tabs"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["set", "-t", &tab, "@tab_name", "ENG-42: fix the login"]);
+    // The lookup knows the ticket before the view opens.
+    let known = || {
+        let sources = serde_json::from_str::<Value>(&server.ok(&["sources"])).unwrap();
+        sources["views"]["tickets"]["items"]
+            .to_string()
+            .contains("ENG-42")
+    };
+    let deadline = common::deadline(Duration::from_secs(30));
+    while !known() {
+        assert!(Instant::now() < deadline, "the Tickets lookup's answer");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    client.send(b"\x1bi");
+    client.wait_text("In Progress");
+    client.wait_text("r read again");
+
+    // It moves to review, and the lookup is asked again: the view, left
+    // open, shows the new state.
+    *now.lock().unwrap() = ("In Review", "2026-11-17T11:00:00Z");
+    server.ok(&["sources", "refresh", "tickets"]);
+    client.wait_for("the new state in the open view", |s| {
+        s.iter().any(|l| l.contains("In Review")) && !s.iter().any(|l| l.contains("In Progress"))
+    });
+
+    // It changes again with no lookup to see it: r reads it at once.
+    *now.lock().unwrap() = ("Blocked", "2026-11-17T12:00:00Z");
+    client.type_text("r");
+    client.wait_text("Blocked");
+
+    // With Linear turned off since the view opened, r asks it nothing: the
+    // copy stays, and the view says it couldn't read.
+    let asked = |linear: &Fake| {
+        linear
+            .seen()
+            .iter()
+            .filter(|r| r.query().contains("issue(id"))
+            .count()
+    };
+    let before = asked(&linear);
+    common::write_settings(
+        &server.home,
+        json!({"notifications": false, "tips": false, "github": false, "linear": false, "ux2": true,
+            "sidebar": false, "photos": false, "pause_when_away": false, "poll_fast": false}),
+    );
+    *now.lock().unwrap() = ("Done", "2026-11-17T13:00:00Z");
+    client.type_text("r");
+    client.wait_text("Couldn't read it again");
+    client.wait_text("Blocked");
+    assert_eq!(
+        asked(&linear),
+        before,
+        "Linear asked nothing once it is off"
+    );
 }
 
 #[test]
