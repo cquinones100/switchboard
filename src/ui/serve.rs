@@ -1320,7 +1320,8 @@ impl Server {
         })
     }
 
-    /// What a pane runs in front, its command line, or `None` when it is a
+    /// What a pane runs in front, its command line as `program_line` writes
+    /// it, or `None` when it is a
     /// shell at its prompt or its program has ended. A shell running a
     /// command puts it in a process group of its own in front, so the
     /// group in front being the pane's own process, and a shell, is a
@@ -1335,12 +1336,11 @@ impl Server {
         if front.is_some() && front == slot.pane.pid() && is_shell(&command) {
             return None;
         }
-        let line = front
+        let args = front
             .and_then(crate::mux::procinfo::args_of)
-            .map(|args| args.join(" "))
-            .filter(|l| !l.trim().is_empty())
-            .unwrap_or(command);
-        Some(draw::cut(&line, 60))
+            .filter(|args| args.first().is_some_and(|a| !a.trim().is_empty()))
+            .unwrap_or_else(|| vec![command]);
+        Some(program_line(&args))
     }
 
     /// What a pane runs in front, by its program's name alone (`claude`
@@ -1426,6 +1426,37 @@ fn program_name(path: &str) -> String {
     path.rsplit('/').next().unwrap_or(path).to_string()
 }
 
+/// A command line as the close questions list it: the program by its name
+/// rather than its path, its arguments after it with paths under the home
+/// written from `~`, cut to 60 columns (`npm run dev`, `vim ~/code/a.rs`),
+/// and Switchboard's own apps by what they are (Notes, the diff, the PR
+/// view).
+fn program_line(args: &[String]) -> String {
+    let Some((first, rest)) = args.split_first() else {
+        return String::new();
+    };
+    let name = program_name(first);
+    let app = match (name.as_str(), rest.first().map(String::as_str)) {
+        ("switchboard-notes", _) | ("switchboard", Some("notes")) => Some("Notes"),
+        ("switchboard-diff", _) | ("switchboard", Some("diff")) => Some("the diff"),
+        ("switchboard", Some("pr-view")) => Some("the PR view"),
+        ("switchboard", Some("ticket-view")) => Some("the ticket view"),
+        ("switchboard", Some("link-view")) => Some("the link view"),
+        _ => None,
+    };
+    if let Some(app) = app {
+        return app.to_string();
+    }
+    let words = std::iter::once(name).chain(rest.iter().map(|arg| match arg.split_once('=') {
+        Some((key, value)) if value.starts_with('/') => {
+            format!("{key}={}", crate::paths::tilde(value))
+        }
+        _ if arg.starts_with('/') => crate::paths::tilde(arg),
+        _ => arg.clone(),
+    }));
+    draw::cut(&words.collect::<Vec<_>>().join(" "), 60)
+}
+
 /// Whether a program is a shell, by its name (a login shell's has a `-`
 /// before it).
 fn is_shell(command: &str) -> bool {
@@ -1441,6 +1472,31 @@ fn is_shell(command: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_close_question_lists_a_program_by_its_name() {
+        let line =
+            |args: &[&str]| program_line(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>());
+        let home = crate::paths::home().display().to_string();
+        assert_eq!(line(&["/usr/local/bin/npm", "run", "dev"]), "npm run dev");
+        assert_eq!(
+            line(&["/usr/bin/vim", &format!("{home}/code/a.rs")]),
+            "vim ~/code/a.rs"
+        );
+        assert_eq!(
+            line(&["node", &format!("--dir={home}/code")]),
+            "node --dir=~/code"
+        );
+        assert_eq!(line(&["lazygit"]), "lazygit");
+        let bin = format!("{home}/.local/bin/switchboard");
+        assert_eq!(line(&[&bin, "notes", "--tab"]), "Notes");
+        assert_eq!(line(&[&bin, "diff"]), "the diff");
+        assert_eq!(line(&[&bin, "pr-view", "/x"]), "the PR view");
+        assert_eq!(line(&[&bin, "tabs"]), "switchboard tabs");
+        let long = line(&["/bin/sleep", &"9".repeat(80)]);
+        assert_eq!(draw::width(&long), 60);
+        assert!(long.starts_with("sleep 999"));
+    }
 
     #[test]
     fn a_program_is_named_without_its_folder() {

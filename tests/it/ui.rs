@@ -150,15 +150,16 @@ fn closing_a_busy_pane_asks_first() {
         let list = server.list();
         panes(&list) == 2 && right_pane_at_prompt(s) && is_shell(&front_command(&list))
     });
-    client.type_text("sleep 100\r");
+    // Started by its path, it is listed by its name.
+    client.type_text("/bin/sleep 100\r");
     client.wait_for("sleep in front", |_| {
         front_command(&server.list()) == "sleep"
     });
     client.type_text(&format!("{ALT}w"));
     let screen = client.wait_text("Close pane? [Y/n]");
     assert!(
-        screen.iter().any(|l| l.contains("sleep 100")),
-        "it says what runs:\n{}",
+        screen.iter().any(|l| l.contains("│   sleep 100 ")),
+        "it says what runs, by its name:\n{}",
         screen.join("\n")
     );
     client.type_text("n");
