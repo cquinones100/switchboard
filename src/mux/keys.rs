@@ -553,7 +553,7 @@ impl Action {
                 "Every key bound now, yours from keys.json included, in a box j and k scroll. M-/ shows them with every part's keys in mission control.".into()
             }
             Action::NextNeedsYou => {
-                "Pinned tabs and reminders come due go first, then those waiting on you, then the finished, then the Build failing tabs (Settings' walk_build_failing), then the notifications. Pressed again, it walks on, coming round.".into()
+                "Pinned tabs and reminders come due go first, then those waiting on you, then the finished, then the Build failing tabs (Settings' walk_build_failing), then a filtered sidebar's Reminders elsewhere, then the notifications. Pressed again, it walks on, coming round.".into()
             }
             Action::NextIdle => {
                 "Pressed again, it walks on through the idle tabs of every session, coming round. A tab with no Claude isn't on the list.".into()

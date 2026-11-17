@@ -490,8 +490,8 @@ impl Server {
 
     /// A session's tabs as its sidebar groups them: those of another
     /// repository than its filter marked `elsewhere`, for Other repos, but
-    /// one with a reminder come due, which stays in Needs you with its
-    /// repository named.
+    /// one with a reminder come due, which goes under Reminders elsewhere
+    /// with its repository named.
     pub(crate) fn sidebar_marked(&self, session: &str) -> Vec<TabModel> {
         let mut tabs = self.sidebar_tabs(session);
         if let Some(repo) = self.sidebar_repo(session) {
@@ -513,6 +513,25 @@ impl Server {
             }
         }
         tabs
+    }
+
+    /// A tab about to be seen, which does with its reminder: one under
+    /// Reminders elsewhere is held there in its sidebar's held layout, so
+    /// it doesn't fold away into Other repos while you browse.
+    pub(crate) fn sidebar_hold_reminder_elsewhere(&mut self, tab: TabId) {
+        let Some(session) = self.session_of_tab(tab).map(|s| s.name.clone()) else {
+            return;
+        };
+        let due_elsewhere = self
+            .sidebar_marked(&session)
+            .iter()
+            .any(|t| t.id == tab && t.outside_filter);
+        if !due_elsewhere {
+            return;
+        }
+        if let Some(frozen) = self.sidebar.side(&session).frozen.as_mut() {
+            model::hold_under(frozen, tab, Stage::RemindersElsewhere);
+        }
     }
 
     /// Every session's tabs as M-a and M-A walk them: those under a
@@ -2837,8 +2856,9 @@ impl Server {
     // ── M-a ─────────────────────────────────────────────────────────────────
 
     /// What M-a walks, in its order: the tabs under Needs you, then those
-    /// under Build failing (walk_build_failing setting), then the
-    /// notifications while there are any (needs_notices setting).
+    /// under Build failing (walk_build_failing setting), then those under
+    /// a filtered sidebar's Reminders elsewhere, then the notifications
+    /// while there are any (needs_notices setting).
     fn sidebar_needs_stops(&self, all: &[TabModel]) -> Vec<Stop> {
         let r = Rules::now();
         let mut stops: Vec<Stop> = model::needs_you(all, &r)
@@ -2862,6 +2882,10 @@ impl Server {
                 why: Why::BuildFailing,
             }));
         }
+        stops.extend(model::reminders_elsewhere(all, &r).iter().map(|t| Stop {
+            place: Place::Tab(t.id),
+            why: Why::ReminderElsewhere,
+        }));
         if settings::is_on("needs_notices") && !self.sidebar_notices().is_empty() {
             stops.push(Stop {
                 place: Place::Notices,
@@ -2890,8 +2914,9 @@ impl Server {
 
     /// M-a: the next of what needs you, in the sidebar's order, across every
     /// session: the tabs under Needs you, then those under Build failing
-    /// (walk_build_failing setting), then the notifications while there
-    /// are any (needs_notices setting). Pressed from the sidebar, the cursor
+    /// (walk_build_failing setting), then those under a filtered sidebar's
+    /// Reminders elsewhere, then the notifications while there are any
+    /// (needs_notices setting). Pressed from the sidebar, the cursor
     /// stays in a sidebar, on the tab it went to.
     pub fn sidebar_next_needs_you(&mut self, client: ClientId) {
         let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {

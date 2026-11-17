@@ -169,9 +169,9 @@ pub struct TabModel {
     /// (`Side::repo`), so under Other repos whatever it is doing; only the
     /// sidebar's own model sets it, never mission control's.
     pub elsewhere: bool,
-    /// Outside the repository the sidebar is filtered to but left in its
-    /// own group, as a tab with a reminder come due is; only the sidebar's
-    /// own model sets it.
+    /// Outside the repository the sidebar is filtered to with a reminder
+    /// come due, so under Reminders elsewhere rather than folded away in
+    /// Other repos; only the sidebar's own model sets it.
     pub outside_filter: bool,
     /// Such a tab's repository, by its folder's name, `None` outside one.
     pub from_repo: Option<String>,
@@ -478,12 +478,16 @@ pub enum Stage {
     Idle,
     Later,
     Other,
+    /// The tabs of another repository than the one the sidebar is filtered
+    /// to whose reminder has come due, after the filtered repository's
+    /// groups, so Needs you holds that repository's tabs alone.
+    RemindersElsewhere,
     /// The tabs of every repository but the one the sidebar is filtered to.
     OtherRepos,
 }
 
 impl Stage {
-    pub const ALL: [Stage; 16] = [
+    pub const ALL: [Stage; 17] = [
         Stage::Needs,
         Stage::Failing,
         Stage::Working,
@@ -499,6 +503,7 @@ impl Stage {
         Stage::Idle,
         Stage::Later,
         Stage::Other,
+        Stage::RemindersElsewhere,
         Stage::OtherRepos,
     ];
 
@@ -519,6 +524,7 @@ impl Stage {
             Stage::Idle => "idle",
             Stage::Later => "later",
             Stage::Other => "other",
+            Stage::RemindersElsewhere => "reminders-elsewhere",
             Stage::OtherRepos => "other-repos",
         }
     }
@@ -545,6 +551,7 @@ impl Stage {
             Stage::Idle => "Idle",
             Stage::Later => "Reminders",
             Stage::Other => "Other",
+            Stage::RemindersElsewhere => "Reminders elsewhere",
             Stage::OtherRepos => "Other repos",
         }
     }
@@ -566,6 +573,7 @@ impl Stage {
             Stage::Merged => Badge::Merged,
             Stage::Idle | Stage::Other | Stage::OtherRepos => Badge::Idle,
             Stage::Later => Badge::Later,
+            Stage::RemindersElsewhere => Badge::Reminder,
         }
     }
 
@@ -598,8 +606,12 @@ impl Stage {
 }
 
 /// The one stage a tab is in: Other repos for one of another repository
-/// than the sidebar's filter, whatever it is doing; else its own.
+/// than the sidebar's filter, whatever it is doing, or Reminders elsewhere
+/// for one of those whose reminder has come due; else its own.
 pub fn stage_of(tab: &TabModel, r: &Rules) -> Stage {
+    if tab.outside_filter {
+        return Stage::RemindersElsewhere;
+    }
     if tab.elsewhere {
         return Stage::OtherRepos;
     }
@@ -679,12 +691,18 @@ pub struct Staged<'a> {
 /// them.
 pub fn grouped<'a>(tabs: &'a [TabModel], frozen: Option<&Frozen>, r: &Rules) -> Vec<Staged<'a>> {
     // A tab held under Other repos that the filter no longer sends there (a
-    // reminder come due while browsing) leaves it, since that group folds.
+    // reminder come due while browsing) leaves it, since that group folds;
+    // one held under Reminders elsewhere stays while it is of another
+    // repository, its reminder done with or not, and leaves with the filter.
     let held = |t: &TabModel| {
         frozen
             .and_then(|f| f.get(&t.id))
             .copied()
-            .filter(|(s, _)| *s != Stage::OtherRepos || t.elsewhere)
+            .filter(|(s, _)| match s {
+                Stage::OtherRepos => t.elsewhere,
+                Stage::RemindersElsewhere => t.elsewhere || t.outside_filter,
+                _ => true,
+            })
     };
     Stage::ALL
         .iter()
@@ -750,6 +768,17 @@ pub fn failing_tabs<'a>(tabs: &'a [TabModel], r: &Rules) -> Vec<&'a TabModel> {
     failing
 }
 
+/// The tabs under Reminders elsewhere, in the order the sidebar lists
+/// them: what M-a walks after Needs you and Build failing.
+pub fn reminders_elsewhere<'a>(tabs: &'a [TabModel], r: &Rules) -> Vec<&'a TabModel> {
+    let mut due: Vec<&TabModel> = tabs
+        .iter()
+        .filter(|t| stage_of(t, r) == Stage::RemindersElsewhere)
+        .collect();
+    due.sort_by(|a, b| Stage::RemindersElsewhere.order(a, b, r));
+    due
+}
+
 /// Each tab's stage and place as `grouped` lays them out now.
 pub fn frozen_from(tabs: &[TabModel], r: &Rules) -> Frozen {
     grouped(tabs, None, r)
@@ -758,6 +787,18 @@ pub fn frozen_from(tabs: &[TabModel], r: &Rules) -> Frozen {
         .enumerate()
         .map(|(at, (id, stage))| (id, (stage, at)))
         .collect()
+}
+
+/// Holds a tab under `stage` in a held layout, after the tabs it already
+/// holds, unless it is held there already: a reminder that came due on
+/// another repository's tab while you browse is under Reminders elsewhere
+/// now, and stays there once going to it has done with the reminder.
+pub fn hold_under(frozen: &mut Frozen, tab: TabId, stage: Stage) {
+    if frozen.get(&tab).is_some_and(|(s, _)| *s == stage) {
+        return;
+    }
+    let after = frozen.values().map(|(_, at)| at + 1).max().unwrap_or(0);
+    frozen.insert(tab, (stage, after));
 }
 
 /// The badge a tab wears (render.js's `badgeState`): pinned, whatever else
@@ -1346,6 +1387,107 @@ pub(crate) mod tests {
         );
     }
 
+    // Filtered to a repository, another's tab whose reminder is due is
+    // under Reminders elsewhere, after the filtered repository's groups and
+    // before Other repos, and the filtered repository's own stays under
+    // Needs you; M-a's Needs you passes it by, and with no filter there is
+    // no such group.
+    #[test]
+    fn another_repositorys_due_reminder_is_under_reminders_elsewhere() {
+        let r = rules();
+        let mut mine = tab(1, "mine due", TabState::Idle);
+        mine.remind_at = Some(1);
+        let mut bee = tab(2, "bee due", TabState::Idle);
+        bee.remind_at = Some(1);
+        bee.outside_filter = true;
+        let mut wasp = tab(3, "wasp", TabState::Idle);
+        wasp.elsewhere = true;
+        let resting = tab(4, "resting", TabState::Idle);
+        let tabs = vec![bee, wasp, mine, resting];
+        assert_eq!(
+            names(&grouped(&tabs, None, &r)),
+            vec![
+                ("Needs you", v(&["mine due"])),
+                ("Idle", v(&["resting"])),
+                ("Reminders elsewhere", v(&["bee due"])),
+                ("Other repos", v(&["wasp"])),
+            ]
+        );
+        assert_eq!(Stage::RemindersElsewhere.color(), Badge::Reminder);
+        let walked = |tabs: &[&TabModel]| tabs.iter().map(|t| t.name.clone()).collect::<Vec<_>>();
+        assert_eq!(walked(&needs_you(&tabs, &r)), v(&["mine due"]));
+        assert_eq!(walked(&reminders_elsewhere(&tabs, &r)), v(&["bee due"]));
+
+        let unfiltered: Vec<TabModel> = tabs
+            .into_iter()
+            .map(|mut t| {
+                t.elsewhere = false;
+                t.outside_filter = false;
+                t
+            })
+            .collect();
+        assert_eq!(
+            names(&grouped(&unfiltered, None, &r)),
+            vec![
+                ("Needs you", v(&["mine due", "bee due"])),
+                ("Idle", v(&["wasp", "resting"])),
+            ]
+        );
+        assert!(reminders_elsewhere(&unfiltered, &r).is_empty());
+    }
+
+    // Browsing, a tab held under Reminders elsewhere stays there once its
+    // reminder is done with, and leaves it when the filter is cleared.
+    #[test]
+    fn a_frozen_layout_keeps_a_tab_under_reminders_elsewhere() {
+        let r = rules();
+        let mut before = vec![
+            tab(1, "mine", TabState::Idle),
+            tab(2, "bee", TabState::Idle),
+        ];
+        before[1].outside_filter = true;
+        before[1].remind_at = Some(1);
+        let frozen = frozen_from(&before, &r);
+        let mut seen = before.clone();
+        seen[1].outside_filter = false;
+        seen[1].elsewhere = true;
+        seen[1].remind_at = None;
+        assert_eq!(
+            names(&grouped(&seen, Some(&frozen), &r)),
+            vec![("Idle", v(&["mine"])), ("Reminders elsewhere", v(&["bee"]))]
+        );
+        let mut cleared = seen.clone();
+        cleared[1].elsewhere = false;
+        assert_eq!(
+            names(&grouped(&cleared, Some(&frozen), &r)),
+            vec![("Idle", v(&["mine", "bee"]))]
+        );
+    }
+
+    // A reminder that came due while browsing, on a tab held under Other
+    // repos: held under Reminders elsewhere as you go to it, the tab stays
+    // there once its reminder is done with.
+    #[test]
+    fn a_reminder_due_while_browsing_stays_under_reminders_elsewhere_once_seen() {
+        let r = rules();
+        let mut before = vec![
+            tab(1, "mine", TabState::Idle),
+            tab(2, "bee", TabState::Idle),
+        ];
+        before[1].elsewhere = true;
+        let mut frozen = frozen_from(&before, &r);
+        hold_under(&mut frozen, TabId(2), Stage::RemindersElsewhere);
+        // Gone to, its reminder is done with and the filter marks it
+        // elsewhere again.
+        assert_eq!(
+            names(&grouped(&before, Some(&frozen), &r)),
+            vec![("Idle", v(&["mine"])), ("Reminders elsewhere", v(&["bee"]))]
+        );
+        let held = frozen.clone();
+        hold_under(&mut frozen, TabId(2), Stage::RemindersElsewhere);
+        assert_eq!(frozen, held);
+    }
+
     // Browsing a filtered sidebar, a tab held under Other repos that the
     // filter keeps out of it now (its reminder come due) leaves the folded
     // group; one still of another repository stays held there.
@@ -1362,12 +1504,13 @@ pub(crate) mod tests {
         let frozen = frozen_from(&before, &r);
         let mut after = before.clone();
         after[1].elsewhere = false;
+        after[1].outside_filter = true;
         after[1].remind_at = Some(1);
         assert_eq!(
             names(&grouped(&after, Some(&frozen), &r)),
             vec![
-                ("Needs you", v(&["bee"])),
                 ("Idle", v(&["mine"])),
+                ("Reminders elsewhere", v(&["bee"])),
                 ("Other repos", v(&["wasp"])),
             ]
         );

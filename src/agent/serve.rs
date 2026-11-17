@@ -522,6 +522,7 @@ impl Server {
         // A reminder come due (tmux/remind.sh) is done with once you are
         // at its tab.
         let now = util::now_secs();
+        self.sidebar_hold_reminder_elsewhere(tab);
         if let Some(t) = self.tabs.get_mut(&tab)
             && t.opts
                 .get("@remind_at")

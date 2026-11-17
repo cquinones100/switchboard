@@ -1,6 +1,7 @@
 //! M-a's walk through what needs you, in the sidebar's order: the tabs under
 //! Needs you (pinned and reminders come due first, then waiting, then done),
-//! then those under Build failing (`walk_build_failing` setting), then the
+//! then those under Build failing (`walk_build_failing` setting), then
+//! those under Reminders elsewhere (a filtered sidebar's), then the
 //! notifications while there are any (`needs_notices` setting);
 //! and M-A's through the tabs under Idle (`next_idle`).
 //! What tmux/agent-state.sh's `next` did with the list the sidebar daemon
@@ -40,6 +41,9 @@ pub enum Why {
     Waiting,
     Done,
     BuildFailing,
+    /// Another repository's reminder come due, in a filtered sidebar:
+    /// after the filtered repository's own, so never first as its are.
+    ReminderElsewhere,
     Notices,
 }
 
@@ -123,8 +127,12 @@ impl Walk {
         } else {
             None
         };
-        let from_finished =
-            at.is_none_or(|i| matches!(stops[i].why, Why::Done | Why::BuildFailing | Why::Notices));
+        let from_finished = at.is_none_or(|i| {
+            matches!(
+                stops[i].why,
+                Why::Done | Why::BuildFailing | Why::ReminderElsewhere | Why::Notices
+            )
+        });
         let to = match urgent {
             Some(u) if from_finished => {
                 // Where the walk was going before it turned aside to a
@@ -164,14 +172,19 @@ impl Walk {
             Some(i) != at && stops[i].why == Why::Done && !self.visited.contains(&stops[i].place)
         });
         let to = match unvisited_done {
-            Some(done) if matches!(stops[to].why, Why::BuildFailing | Why::Notices) => {
+            Some(done)
+                if matches!(
+                    stops[to].why,
+                    Why::BuildFailing | Why::ReminderElsewhere | Why::Notices
+                ) =>
+            {
                 self.after = Some(stops[to].place);
                 done
             }
             _ => to,
         };
         match stops[to].why {
-            Why::BuildFailing | Why::Notices => self.visited.clear(),
+            Why::BuildFailing | Why::ReminderElsewhere | Why::Notices => self.visited.clear(),
             Why::Done => self.visited.push(stops[to].place),
             _ => {}
         }
@@ -323,6 +336,36 @@ mod tests {
         assert_eq!(press(&mut w, &stops, 1), at(5));
         assert_eq!(press(&mut w, &stops, 5), at(6));
         assert_eq!(press(&mut w, &stops, 6), at(7));
+    }
+
+    // Another repository's reminder come due is walked after Needs you and
+    // Build failing, never first as the filtered repository's own is.
+    #[test]
+    fn reminders_elsewhere_come_after_needs_you_and_build_failing() {
+        let (done, failing, elsewhere) = (2, 3, 4);
+        let stops = [
+            tab(done, Why::Done),
+            tab(failing, Why::BuildFailing),
+            tab(elsewhere, Why::ReminderElsewhere),
+        ];
+        let mut w = Walk::default();
+        assert_eq!(press(&mut w, &stops, 9), at(done));
+        // Seen, the finished tab leaves the list.
+        let stops = [
+            tab(failing, Why::BuildFailing),
+            tab(elsewhere, Why::ReminderElsewhere),
+        ];
+        assert_eq!(press(&mut w, &stops, done), at(failing));
+        assert_eq!(press(&mut w, &stops, failing), at(elsewhere));
+        assert_eq!(press(&mut w, &stops, elsewhere), at(failing));
+
+        // A tab that finished since comes before it.
+        let stops = [
+            tab(done, Why::Done),
+            tab(failing, Why::BuildFailing),
+            tab(elsewhere, Why::ReminderElsewhere),
+        ];
+        assert_eq!(press(&mut w, &stops, failing), at(done));
     }
 
     #[test]

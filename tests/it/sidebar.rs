@@ -1521,13 +1521,16 @@ fn the_sidebar_filtered_to_one_repository_folds_the_others_under_other_repos() {
     assert!(err.contains("sidebar_repo_filter"), "{err}");
 }
 
-// Filtered to one repository, another's tab with a reminder come due stays
-// in Needs you with its repository named, one without stays in Other repos,
-// and once its reminder is done with it goes there too.
+// Filtered to one repository, another's tab with a reminder come due is
+// under Reminders elsewhere with its repository named, after the filtered
+// repository's own under Needs you, which M-a goes to first; one without
+// stays in Other repos, and once its reminder is done with it goes there
+// too. With no filter there is no such group.
 #[test]
 fn a_reminder_come_due_shows_through_the_repository_filter() {
     let server = TestServer::start();
-    settings(&server, json!({}));
+    // A reminder's box would take the M-a pressed under it.
+    settings(&server, json!({"message_boxes": false}));
     let alpha = server.dir.path().join("alpha");
     let beta = server.dir.path().join("beta");
     for dir in [&alpha, &beta] {
@@ -1550,12 +1553,30 @@ fn a_reminder_come_due_shows_through_the_repository_filter() {
         .unwrap()
         .to_string();
     server.ok(&["set", "-t", &bee, "@remind_at", "1"]);
+    server.ok(&["new-tab", "-d", "-c", &alpha.to_string_lossy(), "-n", "ant"]);
+    row_of(&mut client, "ant");
+    let list = server.list();
+    let ant = tabs(&list).iter().find(|t| t["name"] == "ant").unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["set", "-t", &ant, "@remind_at", "1"]);
+    row_of(&mut client, "NEEDS YOU");
+    assert!(
+        !client
+            .screen()
+            .iter()
+            .any(|l| left(l, 34).contains("REMINDERS ELSEWHERE")),
+        "no such group with no filter"
+    );
 
     server.ok(&["sidebar-repo", &alpha.to_string_lossy()]);
     let fold = row_of(&mut client, "1 tab · beta");
     let needs = row_of(&mut client, "NEEDS YOU");
+    let mine = row_of(&mut client, "ant");
+    let group = row_of(&mut client, "REMINDERS ELSEWHERE 1");
     let row = row_of(&mut client, "bee");
-    assert!(needs < row && row < fold);
+    assert!(needs < mine && mine < group && group < row && row < fold);
     let screen = client.screen();
     assert!(
         screen[row + 1..fold - 1]
@@ -1563,7 +1584,7 @@ fn a_reminder_come_due_shows_through_the_repository_filter() {
             .any(|l| left(l, 34).contains("beta")),
         "{screen:?}"
     );
-    assert!(left(&screen[0], 34).contains("1 of 3"), "{:?}", screen[0]);
+    assert!(left(&screen[0], 34).contains("2 of 4"), "{:?}", screen[0]);
     assert!(
         !screen.iter().any(|l| left(l, 34).contains("wasp")),
         "{screen:?}"
@@ -1573,6 +1594,25 @@ fn a_reminder_come_due_shows_through_the_repository_filter() {
     row_of(&mut client, "2 tabs · beta");
     client.wait_for("bee folded away", |s| {
         !s.iter().any(|l| left(l, 34).contains("bee"))
+    });
+
+    server.ok(&["set", "-t", &bee, "@remind_at", "1"]);
+    row_of(&mut client, "REMINDERS ELSEWHERE 1");
+    // M-a: the filtered repository's reminder first, then the other's.
+    let current = |server: &TestServer| {
+        let list = server.list();
+        tabs(&list)
+            .iter()
+            .find(|t| t["current"] == true)
+            .map(|t| t["name"].as_str().unwrap_or_default().to_string())
+    };
+    client.type_text(&format!("{ALT}a"));
+    wait_list(&server, "M-a at the filtered repository's tab", |_| {
+        current(&server).as_deref() == Some("ant")
+    });
+    client.type_text(&format!("{ALT}a"));
+    wait_list(&server, "M-a at the other repository's tab", |_| {
+        current(&server).as_deref() == Some("bee")
     });
 }
 
