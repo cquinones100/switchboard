@@ -860,3 +860,35 @@ fn m_w_on_the_pane_left_in_notes_tab_closes_that_tab() {
         tabs(l).len() == 1 && !pane_ids(&tabs(l)[0]).contains(&stand_in)
     });
 }
+
+#[test]
+fn which_note_is_the_tabs_lists_the_newest_first_as_you_type() {
+    let rig = Rig::new();
+    let notes = rig.notes_dir();
+    // The old note's name is the tighter match for what is typed.
+    std::fs::write(notes.join("Standup.md"), "# Standup\n").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(notes.join("Standup.md"))
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - Duration::from_secs(3 * 86_400 + 60))
+        .unwrap();
+    std::fs::write(notes.join("Standup notes from the spring.md"), "# Spring\n").unwrap();
+    let mut client = rig.server.attach(140, 36);
+    client.wait_text("$");
+    rig.server.ok(&["press", "choose-tab-note"]);
+    client.wait_text("Which note is this tab's?");
+    client.type_text("standup");
+    let row = |screen: &[String], text: &str| screen.iter().position(|l| l.contains(text));
+    let screen = client.wait_for("the two notes matched alone", |s| {
+        row(s, "2/").is_some() && row(s, "Standup notes from the spring").is_some()
+    });
+    let new = row(&screen, "› Standup notes from the spring").expect("the new one chosen");
+    let old = row(&screen, "  Standup ").expect("the old one listed");
+    assert!(new < old, "the newest first: {screen:#?}");
+    assert!(screen[old].contains("3d"), "its age: {screen:#?}");
+    client.type_text("\r");
+    rig.wait("the newest taken as the tab's note", |l| {
+        tabs(l)[0]["options"]["@tab_note"] == "Standup notes from the spring.md"
+    });
+}

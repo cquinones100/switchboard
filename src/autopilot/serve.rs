@@ -689,7 +689,8 @@ impl Server {
         }
         let picker = Picker::new("Work which note continuously?", items)
             .named("notes")
-            .prompt("note> ");
+            .prompt("note> ")
+            .keep_order();
         self.pick(client, picker, move |server, client, picked| match picked {
             Some(p) if p.value == MORE => {
                 let rest = mode::NoteChoices {
@@ -1304,7 +1305,8 @@ impl Server {
                     .collect();
                 let picker = Picker::new("Work which note continuously?", items)
                     .named("notes")
-                    .prompt("note> ");
+                    .prompt("note> ")
+                    .keep_order();
                 server.pick(client, picker, move |server, client, picked| {
                     let mut fields = fields;
                     let Some(p) = picked.filter(|p| p.value != fields.note) else {

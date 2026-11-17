@@ -78,7 +78,7 @@ pub mod away;
 mod pick;
 mod tab;
 
-pub use pick::rank;
+pub use pick::list;
 pub use tab::new_tab_context;
 
 /// What Notes' keys and its palette's commands do in the server, an action

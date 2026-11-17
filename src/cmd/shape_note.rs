@@ -260,6 +260,7 @@ impl Server {
                 let picker = Picker::new("The note whose checklist to shape", rows)
                     .named("notes")
                     .prompt("note> ")
+                    .keep_order()
                     .previews(previews);
                 server.pick(client, picker, move |server, client, picked| {
                     if let Some(picked) = picked {

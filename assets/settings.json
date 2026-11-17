@@ -977,7 +977,7 @@
     "key": "ask_tab_note",
     "category": "Notes",
     "label": "Ask for a tab's note",
-    "description": "When M-e brings Notes beside a tab with no note of its own yet, ask which note is the tab's, the likely ones first, and show that note beside it from then on",
+    "description": "When M-e brings Notes beside a tab with no note of its own yet, ask which note is the tab's, a few likely ones and then every note newest first, and show that note beside it from then on",
     "default": true
   },
   {

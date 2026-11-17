@@ -8,7 +8,11 @@
 //! is written (`exact`), as palette.sh ran fzf with `--exact`, so "shape"
 //! doesn't match the letters scattered through "Close the pane". Rows that
 //! match are shown best first, or in the order a list gives them
-//! (`order`), as palette.sh ranked its rows itself on every keystroke.
+//! (`order`), as palette.sh ranked its rows itself on every keystroke, or
+//! in the order they were given (`keep_order`), for a list whose order says
+//! something, as the notes' newest first: the rows holding each word typed
+//! as it is written first, then those matched only as scattered letters,
+//! so a row matched loosely never leads one matched as written.
 //!
 //! Each row has its text, tags (matched too, and dimmed) and a key (shown
 //! in a column of its own at the end): the columns are fitted to the box,
@@ -18,6 +22,11 @@
 //! A list that takes what is typed as well as its rows (`free`, as fzf's
 //! `--print-query` let pick-dir.zsh take a path typed in) gives back the
 //! text typed when Enter finds no row matching it, or at once on Alt-Enter.
+//!
+//! A row that is off is shown dim and never taken. In a list whose off rows
+//! are headings among its rows (`headings`), the moving keys never stop on
+//! one, and with the kit each is drawn as its label atom, a number in its
+//! key as the label's count (board 126).
 //!
 //! A list may show the chosen row whole below the rows (`previews`, as
 //! fzf's `--preview` window at the bottom showed wtn-open.zsh's item), when
@@ -103,7 +112,8 @@ pub struct Picked {
 }
 
 /// Orders the rows that matched what is typed: given the query and the
-/// matched items' indices (in the list's order), the order to show them in.
+/// matched items' indices (in the list's order, or as `keep_order` puts
+/// them), the order to show them in.
 pub type Order = Box<dyn Fn(&str, &[usize]) -> Vec<usize> + Send>;
 
 /// The index a `free` list gives what was typed, picked in place of a row.
@@ -123,6 +133,8 @@ pub struct Picker {
     exact: bool,
     free: bool,
     order: Option<Order>,
+    /// The rows matched kept in the list's order, not best match first.
+    kept: bool,
     matcher: Matcher,
     /// What Enter does and what Ctrl-O does, for a list that does two
     /// things with a row, named on the keys row.
@@ -153,6 +165,9 @@ pub struct Picker {
     /// Drawn with UX 2.0's atoms, and whether the kit's half circles are
     /// written (src/mux/graphics.rs's `round_ends`); none for fzf's look.
     kit: Option<bool>,
+    /// The rows that are off are headings: the moving keys never stop on
+    /// one.
+    headings: bool,
 }
 
 impl Picker {
@@ -168,6 +183,7 @@ impl Picker {
             exact: false,
             free: false,
             order: None,
+            kept: false,
             matcher: Matcher::new(Config::DEFAULT),
             also: None,
             shown: Vec::new(),
@@ -184,6 +200,7 @@ impl Picker {
             multi: false,
             marked: Vec::new(),
             kit: None,
+            headings: false,
         };
         picker.refilter();
         picker
@@ -227,6 +244,27 @@ impl Picker {
     pub fn order(mut self, order: Order) -> Picker {
         self.order = Some(order);
         self.refilter();
+        self
+    }
+
+    /// The rows matched kept in the order the list was given in rather than
+    /// best match first, as fzf's `--no-sort`: those holding every word
+    /// typed as it is written, then those matched only as letters scattered
+    /// through them, each in the list's order. An `order` given too is
+    /// handed the rows so.
+    pub fn keep_order(mut self) -> Picker {
+        self.kept = true;
+        self.refilter();
+        self
+    }
+
+    /// The rows that are off taken as headings among the rows, which the
+    /// moving keys and the wheel never stop on: Up on the first row under
+    /// one goes round to the last row, and the heading stays in view above
+    /// its rows. Without it, the keys reach a row that is off when no row
+    /// that can be taken is left that way.
+    pub fn headings(mut self) -> Picker {
+        self.headings = true;
         self
     }
 
@@ -416,11 +454,28 @@ impl Picker {
                 found.push((i, score, indices));
             }
         }
+        let mut matched: Vec<usize> = found.iter().map(|(i, _, _)| *i).collect();
+        if self.kept {
+            let words: Vec<String> = self
+                .query
+                .split_whitespace()
+                .map(str::to_lowercase)
+                .collect();
+            let written = |i: &usize| {
+                let item = &self.items[*i];
+                let hay = if self.text_only {
+                    item.text.to_lowercase()
+                } else {
+                    item.haystack().to_lowercase()
+                };
+                words.iter().all(|w| hay.contains(w.as_str()))
+            };
+            // Stable, so each half stays in the list's order.
+            matched.sort_by_key(|i| !written(i));
+        }
         let order: Vec<usize> = match &self.order {
-            Some(order) => order(
-                &self.query,
-                &found.iter().map(|(i, _, _)| *i).collect::<Vec<_>>(),
-            ),
+            Some(order) => order(&self.query, &matched),
+            None if self.kept => matched,
             None => {
                 let mut by_score: Vec<_> = found.iter().map(|(i, s, _)| (*i, *s)).collect();
                 by_score.sort_by_key(|(i, s)| (std::cmp::Reverse(*s), *i));
@@ -496,7 +551,14 @@ impl Picker {
     /// on the first to the last (`menu::wrap_step`), passing over the rows
     /// that are off the way it moves.
     fn step(&mut self, down: bool) -> Step {
-        let to = super::menu::wrap_step(self.cursor, self.shown.len(), down);
+        let len = self.shown.len();
+        let mut to = super::menu::wrap_step(self.cursor, len, down);
+        // Headings are passed over the whole way round.
+        let mut passed = 0;
+        while self.headings && passed < len && !self.takes(to) {
+            to = super::menu::wrap_step(to, len, down);
+            passed += 1;
+        }
         self.move_toward(to, down)
     }
 
@@ -512,15 +574,27 @@ impl Picker {
         if to == self.cursor {
             return Step::Same;
         }
-        let Some(to) = self.on_row(to, down) else {
+        let Some(mut to) = self.on_row(to, down) else {
             return Step::Same;
         };
+        // Only headings left that way (PageUp into the one at the top): the
+        // nearest row past them that can be taken.
+        if self.headings && !self.takes(to) {
+            match self.on_row(to, !down) {
+                Some(back) if self.takes(back) => to = back,
+                _ => return Step::Same,
+            }
+        }
         if to == self.cursor {
             return Step::Same;
         }
         self.cursor = to;
         if self.cursor < self.top {
             self.top = self.cursor;
+            // A heading stays in view above the row under it.
+            while self.headings && self.top > 0 && !self.takes(self.top - 1) {
+                self.top -= 1;
+            }
         } else if self.cursor >= self.top + self.room.max(1) {
             self.top = self.cursor + 1 - self.room.max(1);
         }
@@ -581,6 +655,24 @@ impl Picker {
         let item = &self.items[*i];
         let chosen = row == self.cursor;
         let (text_w, tags_w, key_w) = widths;
+        // A heading with the kit: its label atom, the count at the right.
+        if self.headings && item.off && self.kit.is_some() {
+            if item.text.is_empty() {
+                return BoxLine::blank();
+            }
+            let cols = 3
+                + text_w
+                + usize::from(tags_w > 0) * (1 + tags_w)
+                + usize::from(key_w > 0) * (1 + key_w)
+                + 1;
+            return BoxLine::spans(kit::label(
+                &item.text,
+                Tone::Dim,
+                item.key.parse().ok(),
+                cols,
+                &look.theme,
+            ));
+        }
         let fill = if chosen {
             Some(look.theme.highlight)
         } else if self.hover == Some(row) {
@@ -1129,6 +1221,24 @@ mod tests {
     }
 
     #[test]
+    fn a_list_that_keeps_its_order_shows_the_matches_as_they_were_given() {
+        let rows = || {
+            ["Put a new entry", "xpanex", "pane"]
+                .iter()
+                .map(|t| PickItem::new(*t, *t))
+                .collect::<Vec<_>>()
+        };
+        let mut best = Picker::new("Pick", rows());
+        typed(&mut best, "pane");
+        assert_eq!(best.shown(), vec!["pane", "Put a new entry", "xpanex"]);
+        let mut kept = Picker::new("Pick", rows()).keep_order();
+        typed(&mut kept, "pane");
+        // The rows holding the word as written, in the list's order, then
+        // the one matched as scattered letters.
+        assert_eq!(kept.shown(), vec!["xpanex", "pane", "Put a new entry"]);
+    }
+
+    #[test]
     fn exact_matches_words_as_written() {
         let mut p = Picker::new("Pick", items()).exact();
         typed(&mut p, "pane");
@@ -1221,6 +1331,67 @@ mod tests {
             s.iter().any(|l| l.contains("4/4 (none can be picked)")),
             "{s:#?}"
         );
+    }
+
+    #[test]
+    fn rows_that_are_off_as_headings_are_never_stopped_on() {
+        let look = Look::default();
+        let key = |code| Key::new(code, Mods::NONE);
+        let mut rows = items();
+        rows[0].off = true;
+        rows[2].off = true;
+        let mut p = Picker::new("Pick", rows).headings();
+        assert_eq!(p.chosen().unwrap().text, "Close the pane");
+        // Up under the heading goes round to the last row, and Down there
+        // comes back under it.
+        p.key(key(KeyCode::Up), &look);
+        assert_eq!(p.chosen().unwrap().text, "Zoom the pane in or out");
+        p.key(key(KeyCode::Down), &look);
+        assert_eq!(p.chosen().unwrap().text, "Close the pane");
+        assert_eq!(p.key(key(KeyCode::PageUp), &look), Step::Same);
+        assert_eq!(p.key(key(KeyCode::BackTab), &look), Step::Same);
+        assert_eq!(p.chosen().unwrap().text, "Close the pane");
+        // PageUp from lower down stops under the heading, not short of it.
+        p.key(key(KeyCode::Up), &look);
+        assert_eq!(p.chosen().unwrap().text, "Zoom the pane in or out");
+        assert_eq!(p.key(key(KeyCode::PageUp), &look), Step::Redraw);
+        assert_eq!(p.chosen().unwrap().text, "Close the pane");
+    }
+
+    #[test]
+    fn with_the_kit_a_heading_is_its_label_with_its_count() {
+        let look = Look::default();
+        let rows = vec![
+            PickItem {
+                off: true,
+                key: "41".into(),
+                ..PickItem::new("Every note", "")
+            },
+            PickItem {
+                key: "2h".into(),
+                ..PickItem::new("Standup", "Standup.md")
+            },
+        ];
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, 30));
+        let mut p = Picker::new("Notes", rows.clone()).headings().kit(false);
+        p.draw(&mut buf, &look);
+        let s = screen(&buf);
+        let label = s
+            .iter()
+            .find(|l| l.contains("EVERY NOTE"))
+            .expect("the label");
+        assert!(
+            label
+                .trim_end()
+                .trim_end_matches('│')
+                .trim_end()
+                .ends_with("41"),
+            "{s:#?}"
+        );
+        // Without the kit, the heading is the row as written.
+        let mut p = Picker::new("Notes", rows).headings();
+        p.draw(&mut buf, &look);
+        assert!(screen(&buf).iter().any(|l| l.contains("Every note")));
     }
 
     #[test]

@@ -992,7 +992,8 @@ impl Server {
                     .collect();
                 let picker = Picker::new("Which note", items)
                     .named("notes")
-                    .prompt("note> ");
+                    .prompt("note> ")
+                    .keep_order();
                 server.pick(client, picker, move |server, client, picked| {
                     let Some(picked) = picked else {
                         return;
