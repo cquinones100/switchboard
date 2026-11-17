@@ -472,6 +472,18 @@
     "AutopilotBlockedMenu.dc.html": {
       "title": "114. Enter on a blocked card: a choice per item it waits on leads its menu, going to the tab working it or, with none, opening its plan",
       "page": "design"
+    },
+    "NotificationsGrouped.dc.html": {
+      "title": "115. Notifications by where they come from: a heading per source (its view, else its app) with its count, the sources ordered by their newest; a source of more than 5 split by channel, repository, tab or routine; a folded source its heading alone; the headings in the keycaps' place",
+      "page": "design"
+    },
+    "NotificationsGroupMenu.dc.html": {
+      "title": "116. Enter on a source's heading: fold it, or dismiss every notification of it the sidebar shows, after asking",
+      "page": "design"
+    },
+    "NotificationsSidebarGroups.dc.html": {
+      "title": "117. The sidebar's notifications, one line a source: its mark, its name, its count and its newest one's words; Enter opens the Notifications view on that source",
+      "page": "design"
     }
   }
 }

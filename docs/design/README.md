@@ -189,3 +189,9 @@ The relay's DM, threads and Home tab.
 
 - [113. Autopilot's Blocked column: an item held by an After: line on an open item stands between Next and Working, its card naming each item it waits on, the mark of where that one stands and its tab's number; drawn only while any is blocked](https://cquinones100.github.io/switchboard/design/113.html)
 - [114. Enter on a blocked card: a choice per item it waits on leads its menu, going to the tab working it or, with none, opening its plan](https://cquinones100.github.io/switchboard/design/114.html)
+
+## Proposal: notifications by source
+
+- [115. Notifications by where they come from: a heading per source (its view, else its app) with its count, the sources ordered by their newest; a source of more than 5 split by channel, repository, tab or routine; a folded source its heading alone; the headings in the keycaps' place](https://cquinones100.github.io/switchboard/design/115.html)
+- [116. Enter on a source's heading: fold it, or dismiss every notification of it the sidebar shows, after asking](https://cquinones100.github.io/switchboard/design/116.html)
+- [117. The sidebar's notifications, one line a source: its mark, its name, its count and its newest one's words; Enter opens the Notifications view on that source](https://cquinones100.github.io/switchboard/design/117.html)
