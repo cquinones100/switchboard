@@ -420,7 +420,7 @@ fn make_repo(home: &Path, repo: &fixtures::Repo) -> Result<()> {
     Ok(())
 }
 
-/// The demo note's stable ID (src/notes/id.rs), which autopilot follows it
+/// The demo note's stable ID (crates/notes/src/id.rs), which autopilot follows it
 /// by.
 const NOTE_ID: &str = "n-0de0d0de0001";
 

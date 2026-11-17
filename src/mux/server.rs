@@ -431,7 +431,7 @@ pub struct Client {
     /// the mouse (src/mux/header.rs).
     pub header_keys: super::header::Keys,
     pub header_hover: Option<super::header::Button>,
-    /// The mouse pointer's shape last sent to its terminal (src/ui/pointer.rs),
+    /// The mouse pointer's shape last sent to its terminal (crates/ui/src/pointer.rs),
     /// none until one is.
     pub pointer: Option<crate::ui::pointer::Pointer>,
     /// Where the left click being handled was pressed, while it is handled
@@ -452,7 +452,7 @@ pub struct Client {
 
 impl Client {
     /// Whether the mouse pointer's shape follows what is under it in this
-    /// client's terminal (src/ui/pointer.rs): one that takes the shapes
+    /// client's terminal (crates/ui/src/pointer.rs): one that takes the shapes
     /// (src/mux/graphics.rs), with the `hover_highlight` setting on.
     pub fn takes_pointer(&self) -> bool {
         super::graphics::pointer_shapes(&self.term) && crate::settings::is_on("hover_highlight")

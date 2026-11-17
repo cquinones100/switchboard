@@ -1,7 +1,8 @@
 //! Every link Switchboard opens says where it is going while the browser
 //! comes up (src/links.rs): the server's through `Server::open_link`, the
-//! notes app's and the pager's on their message lines, mission control's
-//! under its busy box. So nothing else opens one with the plain calls.
+//! notes app's (asked of its host, src/notes/host.rs) and the pager's on
+//! their message lines, mission control's under its busy box. So nothing
+//! else opens one with the plain calls.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,7 +12,8 @@ use std::path::{Path, PathBuf};
 const ALLOWED: &[&str] = &[
     "src/links.rs",
     "src/views/serve.rs",
-    "src/notes/app.rs",
+    "src/notes/host.rs",
+    "crates/notes/src/app.rs",
     "src/views/pager.rs",
 ];
 

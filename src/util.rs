@@ -2,7 +2,6 @@
 //! private, JSON read leniently, commands run with their output, and an async
 //! runtime for the parts that wait on several things at once.
 
-use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Write};
 use std::os::unix::fs::OpenOptionsExt;
@@ -15,8 +14,9 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 use serde_json::Value;
 pub use switchboard_plugin_api::sdk::{
-    base64, exe, json_compact, make_dirs, make_private, now_ms, now_secs, output_of, read_text,
-    which, write_atomic,
+    base64, exe, is_alive, json_compact, json_pretty, make_dirs, make_private, now_ms, now_secs,
+    output_of, read_json, read_json_object, read_text, run, run_command, try_run, which,
+    write_atomic,
 };
 
 // ── Time ────────────────────────────────────────────────────────────────────
@@ -40,45 +40,6 @@ pub fn ymd(at: &jiff::Zoned) -> String {
 }
 
 // ── Processes ───────────────────────────────────────────────────────────────
-
-/// Whether a process is running: `kill(pid, 0)`, EPERM counting as running,
-/// since it is there but someone else's.
-pub fn is_alive(pid: i64) -> bool {
-    if pid <= 0 || pid > i32::MAX as i64 {
-        return false;
-    }
-    // SAFETY: signal 0 only checks that the process exists.
-    let r = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    r == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
-
-/// A command's stdout, as `execFileSync(command, args, { encoding: "utf8" })`
-/// gives it: an error, carrying the first line of stderr, when it can't start
-/// or exits non-zero. Its stdin is closed.
-pub fn run<I, S>(command: &str, args: I) -> Result<String>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    let mut cmd = Command::new(command);
-    cmd.args(args);
-    run_command(&mut cmd)
-}
-
-/// As `run`, for a command built by the caller (its directory, environment).
-pub fn run_command(cmd: &mut Command) -> Result<String> {
-    let output = output_of(cmd)?;
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-/// A command's stdout, or `None` when it fails in any way.
-pub fn try_run<I, S>(command: &str, args: I) -> Option<String>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    run(command, args).ok()
-}
 
 /// A command run with its stdin fed `input`, its stdout returned.
 pub fn run_with_input(cmd: &mut Command, input: &[u8]) -> Result<String> {
@@ -172,20 +133,6 @@ pub fn nearest_existing(dir: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-/// A file read as JSON, or `None` when it is missing or isn't JSON.
-pub fn read_json(path: impl AsRef<Path>) -> Option<Value> {
-    serde_json::from_str(&fs::read_to_string(path).ok()?).ok()
-}
-
-/// A file read as a JSON object, or an empty one, as the Node parts read
-/// their state files: `try { JSON.parse(...) } catch { return {} }`.
-pub fn read_json_object(path: impl AsRef<Path>) -> serde_json::Map<String, Value> {
-    match read_json(path) {
-        Some(Value::Object(map)) => map,
-        _ => serde_json::Map::new(),
-    }
-}
-
 /// Writes (or, with `append`, appends to) a file only its owner can read,
 /// whatever the umask, as `fs.writeFileSync(file, text, { mode: 0o600 })`.
 pub fn write_private(
@@ -229,11 +176,6 @@ pub fn js_number(n: f64) -> Value {
         // JSON.stringify writes NaN and Infinity as null.
         Value::Null
     }
-}
-
-/// `JSON.stringify(value, null, 2)`.
-pub fn json_pretty(value: &impl serde::Serialize) -> String {
-    serde_json::to_string_pretty(value).unwrap_or_else(|_| "null".into())
 }
 
 /// Whether a JSON value is truthy as JavaScript sees it.

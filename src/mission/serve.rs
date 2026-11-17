@@ -3487,7 +3487,7 @@ impl Server {
             .map_or((80, 24), |c| (c.cols as usize, c.rows as usize));
         // The menu's inside on this screen, at its least: its box two thirds
         // of the screen or 72 columns, never narrower than its keys' row
-        // (src/ui/menu.rs); a label has five columns less.
+        // (crates/ui/src/menu.rs); a label has five columns less.
         let inner = ((cols * 2 / 3).min(72).saturating_sub(2))
             .max(crate::ui::draw::width(crate::ui::menu::KEYS) + 3)
             .min(cols.saturating_sub(2));
@@ -3537,7 +3537,7 @@ impl Server {
             list.insert(0, peek);
         }
         // Answers only with the request whole above them: the menu shows its
-        // options first and its text in the rows left (src/ui/menu.rs).
+        // options first and its text in the rows left (crates/ui/src/menu.rs).
         let room = rows.saturating_sub(6).max(1);
         let body_room = room.saturating_sub(list.len().min(room) + 1);
         // A command is shown character for character: answers only where

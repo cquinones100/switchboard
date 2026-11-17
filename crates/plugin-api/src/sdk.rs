@@ -4,6 +4,7 @@
 //! file whole and run a command one way.
 
 use std::env;
+use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
@@ -12,6 +13,7 @@ use std::process::{Command, Output, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, anyhow};
+use serde_json::Value;
 
 /// `$HOME`, read every time, so a test or a try that changes it is followed.
 pub fn home() -> PathBuf {
@@ -292,4 +294,92 @@ pub fn make_private(dirs: &[PathBuf]) {
             let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
         }
     }
+}
+
+/// Whether a process is running: `kill(pid, 0)`, EPERM counting as running,
+/// since it is there but someone else's.
+pub fn is_alive(pid: i64) -> bool {
+    if pid <= 0 || pid > i32::MAX as i64 {
+        return false;
+    }
+    // SAFETY: signal 0 only checks that the process exists.
+    let r = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    r == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// A command's stdout, as `execFileSync(command, args, { encoding: "utf8" })`
+/// gives it: an error, carrying the first line of stderr, when it can't start
+/// or exits non-zero. Its stdin is closed.
+pub fn run<I, S>(command: &str, args: I) -> Result<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut cmd = Command::new(command);
+    cmd.args(args);
+    run_command(&mut cmd)
+}
+
+/// As `run`, for a command built by the caller (its directory, environment).
+pub fn run_command(cmd: &mut Command) -> Result<String> {
+    let output = output_of(cmd)?;
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// A command's stdout, or `None` when it fails in any way.
+pub fn try_run<I, S>(command: &str, args: I) -> Option<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    run(command, args).ok()
+}
+
+/// A file read as JSON, or `None` when it is missing or isn't JSON.
+pub fn read_json(path: impl AsRef<Path>) -> Option<Value> {
+    serde_json::from_str(&fs::read_to_string(path).ok()?).ok()
+}
+
+/// A file read as a JSON object, or an empty one, as the Node parts read
+/// their state files: `try { JSON.parse(...) } catch { return {} }`.
+pub fn read_json_object(path: impl AsRef<Path>) -> serde_json::Map<String, Value> {
+    match read_json(path) {
+        Some(Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    }
+}
+
+/// `JSON.stringify(value, null, 2)`.
+pub fn json_pretty(value: &impl serde::Serialize) -> String {
+    serde_json::to_string_pretty(value).unwrap_or_else(|_| "null".into())
+}
+
+/// Claude Code's command: on the PATH, else where its installer puts it,
+/// `~/.local/bin`, which the PATH of a program the server starts may leave out.
+pub fn claude_command() -> Option<PathBuf> {
+    which("claude").or_else(|| {
+        let installed = home_join(".local/bin/claude");
+        is_executable(&installed).then_some(installed)
+    })
+}
+
+/// Runs git in `dir`: what it printed, trimmed, or an error carrying the
+/// first line of what it said went wrong.
+pub fn git_at(dir: &Path, args: &[&str]) -> Result<String> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(dir).args(args);
+    Ok(run_command(&mut cmd)?.trim().to_string())
+}
+
+/// Runs git in `dir`, its output thrown away; whether it succeeded.
+pub fn git_ok(dir: &Path, args: &[&str]) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
 }

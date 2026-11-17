@@ -113,7 +113,7 @@ struct Attached {
 static ATTACHED: Mutex<Option<Attached>> = Mutex::new(None);
 
 /// Whether the terminal takes `OSC 22`, whose pointer the server may have
-/// made a hand (src/ui/pointer.rs), so it is put back to the text beam as
+/// made a hand (crates/ui/src/pointer.rs), so it is put back to the text beam as
 /// the terminal is put back.
 static POINTER: AtomicBool = AtomicBool::new(false);
 

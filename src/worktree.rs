@@ -332,26 +332,7 @@ pub fn ensure_worktree(worktree: &Path, branch: &str, purpose: &Purpose) -> Resu
 
 // ── Running in a repository ─────────────────────────────────────────────────
 
-/// git's output in `dir`, trimmed; an error when git fails. Its stderr is
-/// thrown away.
-pub fn git_at(dir: &Path, args: &[&str]) -> Result<String> {
-    let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(dir).args(args);
-    Ok(util::run_command(&mut cmd)?.trim().to_string())
-}
-
-/// Runs git in `dir`, its output thrown away; whether it succeeded.
-pub fn git_ok(dir: &Path, args: &[&str]) -> bool {
-    Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
-}
+pub use switchboard_plugin_api::sdk::{git_at, git_ok};
 
 /// Runs git in `dir` with its output on this program's stderr, so it can't
 /// pollute anything a caller parses, and its own errors shown or not;

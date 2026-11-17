@@ -3,7 +3,7 @@
 //! slots, cap, paused, readyOnly, skipped, spendLimit, weeklyLimit,
 //! landWithoutAsking, handsFree, said, closed, landed, next }`.
 //! `note` is the note's path within the notes directory and `noteId` its
-//! stable ID (src/notes/id.rs), which the mode follows the note by when it
+//! stable ID (crates/notes/src/id.rs), which the mode follows the note by when it
 //! has been renamed or moved, outside Notes too, writing its path back;
 //! `repo` the main clone its items are worked in, `skipped` the items
 //! skipped, `[{ note, text }]`, each by its note's ID and first line, so a
@@ -22,7 +22,7 @@
 //! settled ones until each lands (Notes' "Work on this item" box).
 //!
 //! The notes app writes the file too, when a note it works is renamed or
-//! moved (src/notes/store.rs's `relink_mode`), so it is read again on every
+//! moved (crates/notes/src/store.rs's `relink_mode`), so it is read again on every
 //! check rather than kept, and written back with whatever keys it holds
 //! that this doesn't know. A file that isn't there or can't be read is the
 //! mode off with its defaults; a `skipped` that isn't a list (Lua's JSON

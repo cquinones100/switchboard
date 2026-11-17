@@ -22,7 +22,7 @@
 //! item a worktree had comes back once that worktree is removed.
 //!
 //! Every item it keeps is by its note's ID and first line (`Key`), the
-//! note's stable ID (src/notes/id.rs): those skipped, those of its tabs
+//! note's stable ID (crates/notes/src/id.rs): those skipped, those of its tabs
 //! (`@autopilot_note`) and those opened lately, so an item skipped or held
 //! in one note never hides one worded the same in another. A tab opened
 //! before tabs kept their note's ID takes the ID of the note it was opened

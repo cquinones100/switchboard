@@ -9,7 +9,7 @@
 //! row and column and colored with its id) and adds a `Placed` to the
 //! frame's `images`, saying how to raster it, or draws its text form where
 //! the frame carries no `Graphics`. The panes' (Notes, the image view, the
-//! PR and ticket views: src/notes/images.rs, src/views/) are given by a
+//! PR and ticket views: crates/notes/src/images.rs, src/views/) are given by a
 //! pane's program as kitty's graphics commands and its placeholder cells,
 //! which reach the server through the pane, only from the panes allowed to
 //! send them (src/mux/passthrough.rs). Either way a picture's placeholders
@@ -87,7 +87,7 @@
 //! the notes pane's commands on and the server drew no pictures of its
 //! own): its code was gathered here from where each kind of picture chose
 //! its own way, `ImageCache` and its commands from src/ui/images.rs, the
-//! commands given by a path and tmux's wrapping from src/notes/images.rs
+//! commands given by a path and tmux's wrapping from crates/notes/src/images.rs
 //! and src/views/image/mod.rs, and `apps_draw` from Notes' `terminal_can`.
 
 use std::collections::{HashMap, HashSet};
@@ -324,7 +324,7 @@ pub fn truecolor(term: &str) -> bool {
 }
 
 /// Whether a terminal takes the mouse pointer's shapes (`OSC 22 ; <name>
-/// ST`, src/ui/pointer.rs): Ghostty and kitty do; any other is never sent
+/// ST`, crates/ui/src/pointer.rs): Ghostty and kitty do; any other is never sent
 /// one, its pointer left as it is.
 pub fn pointer_shapes(term: &str) -> bool {
     let term = term.to_lowercase();

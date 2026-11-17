@@ -64,8 +64,10 @@
 //!   your tabs while you are away.
 //! - `update`: keeping Switchboard current: `switchboard update`, and the
 //!   hourly look for a new release, offered in a box.
-//! - `notes`: the notes app, `switchboard notes`, in place of the Neovim
-//!   plugin.
+//! - `notes`: the server's side of Notes, whose app is a crate of its own
+//!   (`switchboard-notes`, crates/notes, in place of the Neovim plugin)
+//!   loaded here as a plugin: `switchboard notes`, the workspace answering
+//!   what it asks, and Notes on the server (M-N, M-e, a tab's note).
 //! - `extras`: the rest of tmux.conf's keys and M-p's commands: renaming the
 //!   tab, mission control on a view, the habits report, a reply sent to
 //!   another tab, setup checked, the loop tabs, a PR or ticket by number,

@@ -22,7 +22,7 @@
 //! opened back on it, in the session used last, as the palette's "Start
 //! work on a note's checklist items" opens one (`Server::open_item_tab`).
 //!
-//! The note is followed by its stable ID (src/notes/id.rs): each tick reads
+//! The note is followed by its stable ID (crates/notes/src/id.rs): each tick reads
 //! the ID at the note's path (its last bytes, again only once the file
 //! changes), and what following it needs, giving it an ID, looking for it
 //! by its ID, giving older tabs their note's ID, bringing wtn's claims to

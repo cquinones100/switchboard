@@ -37,7 +37,7 @@
 //! the app records a note opened there as soon as it is, dropping the
 //! arrival marker `@tab_note_arrived`). Both are paths in the notes
 //! directory. M-e opens it in the running app through the socket it listens
-//! on (src/notes/socket.rs), or, for an app not yet running, by making it
+//! on (crates/notes/src/socket.rs), or, for an app not yet running, by making it
 //! the note the app opens with (`.notes.json`'s last). A tab with neither is
 //! asked which note is its (`pick`), with the ask_tab_note setting on, until
 //! it is told to keep what is open (`@tab_note_asked`).
@@ -165,13 +165,8 @@ impl Command {
     }
 }
 
-/// What Notes presses to start work on a checklist item (`gw`), with the
-/// note and the item's line.
-pub const WORK_ON_ITEM: &str = "work-on-item";
-
-/// What Notes presses for M-Enter in "Add an item": a tab whose Claude adds
-/// the item to the note and writes its plan, with `/plan-item`.
-pub const PLAN_ITEM: &str = "plan-item";
+pub use switchboard_notes::store::in_notes;
+pub use switchboard_notes::{BY_YOU, PLAN_ITEM, PLAN_NOTE, WORK_ON_ITEM};
 
 /// The rest of what a key does, back on the server's task once what it read
 /// off the task (the notes, for ranking them) is in.
@@ -180,11 +175,6 @@ pub struct NotesEvent(Box<dyn FnOnce(&mut Server) + Send>);
 /// A pane option or tab option that is set: not empty and not "0".
 fn is_on(value: Option<&String>) -> bool {
     value.is_some_and(|v| !v.is_empty() && v != "0")
-}
-
-/// A path that stays in the notes directory.
-pub fn in_notes(rel: &str) -> bool {
-    !rel.is_empty() && !rel.starts_with('/') && !rel.split('/').any(|p| p == "..")
 }
 
 /// An app in each tab, rather than one Notes moving between them
@@ -242,16 +232,6 @@ fn exe() -> String {
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| "switchboard".into())
 }
-
-/// Marks the note you linked to a tab yourself (the picker, Notes' `t`,
-/// M-p's "Choose the tab's note"), set with `@tab_note`; what the workspace
-/// links leaves it alone.
-pub const BY_YOU: &str = "@tab_note_by_you";
-
-/// The plan note of an autopilot tab's item, a path in the notes directory,
-/// found once off the server's task (`find_tab_plan`); empty while it is
-/// looked for, or when the item links none.
-pub const PLAN_NOTE: &str = "@tab_plan_note";
 
 /// Why a tab's note is the one M-e shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

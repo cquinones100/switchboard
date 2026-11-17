@@ -23,8 +23,8 @@ default-run = "switchboard"
 # `default-members` names them all, so fmt, clippy and the tests run over
 # every crate with no flag.
 [workspace]
-members = ["crates/ui", "crates/plugin-api", "crates/diff"]
-default-members = [".", "crates/ui", "crates/plugin-api", "crates/diff"]
+members = ["crates/ui", "crates/plugin-api", "crates/diff", "crates/notes"]
+default-members = [".", "crates/ui", "crates/plugin-api", "crates/diff", "crates/notes"]
 
 [[bin]]
 name = "switchboard"
@@ -45,6 +45,9 @@ switchboard-plugin-api = { path = "crates/plugin-api" }
 # The diff (crates/diff), an app of its own and the first plugin, which
 # `switchboard diff` loads in its own process.
 switchboard-diff = { path = "crates/diff" }
+# Notes (crates/notes), an app of its own and a plugin, which
+# `switchboard notes` loads in its own process.
+switchboard-notes = { path = "crates/notes" }
 libc = "0.2"
 regex = "1"
 serde = { version = "1", features = ["derive"] }

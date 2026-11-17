@@ -146,7 +146,7 @@ fn claude_takes_every_call_switchboard_makes_of_it() {
     summary.extend(["--system-prompt", "Sum up.", "--output-format", "json"]);
     assert_eq!(run(&summary, Some("thread")), "call=print\nthread");
     // A squash: the prompt as the argument, the notes on stdin
-    // (src/notes/squash.rs).
+    // (crates/notes/src/squash.rs).
     assert_eq!(
         run(
             &[

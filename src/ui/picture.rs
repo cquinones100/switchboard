@@ -114,7 +114,10 @@ impl Overlay for Picture {
 
     fn draw(&mut self, _buf: &mut Buffer, _look: &Look) {}
 
-    fn draw_frame(&mut self, frame: &mut Frame, look: &Look) {
+    fn draw_frame(&mut self, canvas: &mut dyn crate::ui::Canvas, look: &Look) {
+        let Some(frame) = Frame::of(canvas) else {
+            return;
+        };
         let Some(area) = self.area.map(|a| a.intersection(frame.buf.area)) else {
             return;
         };

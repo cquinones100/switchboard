@@ -12,9 +12,11 @@
 # ~/.local/bin, saying how to add that to your PATH when it isn't there.
 # Then it runs `switchboard setup`, the guided setup, which asks before it
 # changes anything. With `--diff` it installs `switchboard-diff` instead,
-# the diff alone, which has releases of its own in the same repository,
-# tagged `diff-v<version>` and signed with the same key. Run again, it installs the newest release over the one
-# there; `switchboard update` does the same from then on.
+# the diff alone, and with `--notes` `switchboard-notes`, Notes alone: each
+# has releases of its own in the same repository, tagged `diff-v<version>`
+# and `notes-v<version>`, signed with the same key. Run again, it installs
+# the newest release over the one there; `switchboard update` does the same
+# from then on.
 #
 # It needs only what macOS and common Linux distributions ship: a POSIX sh,
 # curl or wget, tar, shasum or sha256sum, and OpenSSH's ssh-keygen (8.1 or
@@ -22,7 +24,8 @@
 #
 # What changes it (for a release other than the newest, or for the tests):
 #   SWITCHBOARD_VERSION      a release's tag, as v0.2.0 (diff-v0.2.0 with
-#                            --diff), in place of the newest
+#                            --diff, notes-v0.2.0 with --notes), in place
+#                            of the newest
 #   SWITCHBOARD_BIN_DIR      where the binary goes, in place of ~/.local/bin
 #   SWITCHBOARD_GITHUB_API   GitHub's API, in place of https://api.github.com
 #   SWITCHBOARD_NO_SETUP     set, the setup isn't run
@@ -36,6 +39,10 @@
 #                            its own newest release (tagged `diff-v<version>`),
 #                            checked the same way, with no setup to run;
 #                            piped, `curl … | sh -s -- --diff`
+#   sh install.sh --notes    installs `switchboard-notes` instead, Notes as
+#                            an app of its own (crates/notes/README.md), from
+#                            its own newest release (tagged
+#                            `notes-v<version>`), the same way
 #
 # Everything is in functions called from the last line, so the whole script
 # is read before any of it runs: piped into sh, the rest of the script is
@@ -162,8 +169,13 @@ main() {
       called="Switchboard's diff"
       tagged=diff-v
       ;;
+    --notes)
+      app=switchboard-notes
+      called="Switchboard's Notes"
+      tagged=notes-v
+      ;;
     "") ;;
-    *) fail "it takes --target or --diff, not \"$1\"." ;;
+    *) fail "it takes --target, --diff or --notes, not \"$1\"." ;;
   esac
   api=${SWITCHBOARD_GITHUB_API:-https://api.github.com}
   api=${api%/}
@@ -175,8 +187,8 @@ main() {
   elif [ "$app" = switchboard ]; then
     url="$api/repos/$REPO/releases/latest"
   else
-    # The repository's latest release is Switchboard's, so the diff's newest
-    # is found in the list, which GitHub gives newest first, a hundred a
+    # The repository's latest release is Switchboard's, so the newest of the
+    # diff or of Notes is found in the list, which GitHub gives newest first, a hundred a
     # page: read page by page until one is there or a page comes short,
     # which is the last. Only a plain version counts (diff-v1.2.3), as
     # GitHub's latest leaves pre-releases out: one tagged diff-v1.3.0-rc.1
@@ -267,10 +279,16 @@ main() {
       ;;
   esac
 
-  # The diff alone has nothing to set up: it runs in any repository.
+  # The diff alone has nothing to set up: it runs in any repository. Nor
+  # has Notes alone: it opens the notes in ~/Notes.
   if [ "$app" = switchboard-diff ]; then
     say ""
     say "Run it in a repository: switchboard-diff"
+    return 0
+  fi
+  if [ "$app" = switchboard-notes ]; then
+    say ""
+    say "Run it on the notes in ~/Notes: switchboard-notes"
     return 0
   fi
   [ -z "${SWITCHBOARD_NO_SETUP:-}" ] || return 0

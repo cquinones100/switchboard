@@ -1977,7 +1977,7 @@ mod tests {
     #[test]
     fn kittys_placeholder_cells_keep_their_marks_and_colour_through_a_frame() {
         // Two cells of an image whose id is 42: U+10EEEE, its row's and
-        // column's marks, in the id's colour (src/notes/images.rs).
+        // column's marks, in the id's colour (crates/notes/src/images.rs).
         let mut run = idle(10, 2);
         run.pane.process(
             "\x1b[38;2;0;0;42m\u{10EEEE}\u{305}\u{305}\u{10EEEE}\u{305}\u{30D}\x1b[0mz".as_bytes(),

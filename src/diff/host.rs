@@ -158,6 +158,20 @@ impl Host for Core {
                     None => Answer::None,
                 }
             }
+            // What Notes alone asks is answered where it is loaded
+            // (src/notes/host.rs), which hands the rest on to here.
+            Action::Settings { .. }
+            | Action::Paste
+            | Action::PasteImage { .. }
+            | Action::Preview { .. }
+            | Action::LinkWords { .. }
+            | Action::OpenLink { .. }
+            | Action::Draws
+            | Action::Picture { .. }
+            | Action::PictureGone { .. }
+            | Action::ItemClaim { .. }
+            | Action::Queued
+            | Action::Item { .. } => Answer::None,
         }
     }
 }

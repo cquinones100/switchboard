@@ -15,7 +15,7 @@
 //! answers with that option, `s` submits a question of several answers, `t`
 //! types your own answer where the question takes one; Tab and Shift-Tab
 //! move a highlight round the options (and easy mode's ×), Enter taking it.
-//! `/` searches the options as it searches every menu (src/ui/menu.rs's
+//! `/` searches the options as it searches every menu (crates/ui/src/menu.rs's
 //! `Filter`), each keeping its number, since that is what is pressed.
 //! What is typed is a multi-line `ui::field`: S-Enter and M-Enter start a
 //! new line, pasted with the rest, and Enter sends it.

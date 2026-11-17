@@ -19,7 +19,7 @@
 //! `unclaimed`, `plan_of` and `queue`, for the server's palette command and
 //! the autopilot.
 //!
-//! A branch's item is kept by its note's stable ID (src/notes/id.rs, the
+//! A branch's item is kept by its note's stable ID (crates/notes/src/id.rs, the
 //! note given one here when it has none), so a note renamed or moved, in
 //! Notes or outside it, keeps its items' worktrees: the picker and the mode
 //! still leave them out, and wtn on one reuses its worktree. Claims from
@@ -504,17 +504,10 @@ static AFTER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s+After:\s*(\S.*
 static NEEDS_CHOICE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"needs (a )?choices?").unwrap());
 static HEADING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(#+)\s").unwrap());
-// The words a section of parked work is named with, as lib/sidebar/todo.js
-// has them.
-static PARKED: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(^|[^a-z])(later|defer+ed|parked|someday|backlog)([^a-z]|$)").unwrap()
-});
-
 /// Whether a heading names a section of parked work (`## Defered`,
-/// `## Later`), which `items` leaves out and Notes shows folded.
-pub fn parked_heading(line: &str) -> bool {
-    PARKED.is_match(&line.to_lowercase())
-}
+/// `## Later`), which `items` leaves out and Notes shows folded: Notes'
+/// own reading of it.
+pub use crate::notes::render::parked_heading;
 
 /// The open item the item on a note's line (1-based) waits on, by its
 /// `After:` lines, as `items` reads them, whether the item is parked or not.
@@ -725,12 +718,6 @@ pub enum Plan {
     None,
 }
 
-static DECISION: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)^#+[ \t]+decisions?[ \t]+needed").unwrap());
-// A choice made: a ticked option at the section's top level (a ticked task
-// nested under an option doesn't choose it), or the plans' own "Chose A." line.
-static MADE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)^(?:[-*+]\s+\[x\]|\s*(?:[-*+]\s+)?chose\b)").unwrap());
 // An item that says what was chosen: "(chose B)".
 static CHOSE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\(chose\b").unwrap());
 
@@ -752,50 +739,7 @@ static REVIEWED: LazyLock<Regex> = LazyLock::new(|| {
 static OPTION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*(?:[-*+]|\d+[.)]|#+)\s").unwrap());
 
-/// A plan note's open choices: each "## Decision needed" section (up to
-/// the next heading of its level or above, its subheadings in it) with no
-/// ticked option and no `Chose …` line, as its lines. The heading is often
-/// left in place once the choice is made, so the heading alone doesn't say
-/// it is open.
-fn open_choices(plan: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut section: Vec<&str> = Vec::new();
-    let mut open = false;
-    // The level of the decision section the lines are in, if any.
-    let mut decision: Option<usize> = None;
-    for line in plan.lines() {
-        if let Some(m) = HEADING.captures(line) {
-            let level = m[1].len();
-            if decision.is_some_and(|d| level > d) {
-                section.push(line);
-                continue;
-            }
-            if open {
-                out.push(section.join("\n"));
-            }
-            section.clear();
-            decision = DECISION.is_match(line).then_some(level);
-            open = decision.is_some();
-            if open {
-                section.push(line);
-            }
-        } else if decision.is_some() {
-            section.push(line);
-            if MADE.is_match(line) {
-                open = false;
-            }
-        }
-    }
-    if open {
-        out.push(section.join("\n"));
-    }
-    out
-}
-
-/// Whether a plan note leaves any choice open, as `open_choices` reads it.
-pub fn open_choice(plan: &str) -> bool {
-    !open_choices(plan).is_empty()
-}
+pub use crate::notes::plan::{open_choice, open_choices};
 
 /// What an open choice waits on when it is a design review: the boards it
 /// names, else a design, as "your review of …"; none for any other choice.

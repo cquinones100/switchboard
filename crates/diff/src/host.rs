@@ -130,6 +130,19 @@ impl Host for Alone {
             | Action::ReviewedPr { .. }
             | Action::HeadlessClaude
             | Action::Plan { .. } => Answer::None,
+            // What only Notes asks.
+            Action::Settings { .. }
+            | Action::Paste
+            | Action::PasteImage { .. }
+            | Action::Preview { .. }
+            | Action::LinkWords { .. }
+            | Action::OpenLink { .. }
+            | Action::Draws
+            | Action::Picture { .. }
+            | Action::PictureGone { .. }
+            | Action::ItemClaim { .. }
+            | Action::Queued
+            | Action::Item { .. } => Answer::None,
         }
     }
 }

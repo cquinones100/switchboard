@@ -19,7 +19,7 @@
 //! where they were when it changed, or when something the pages shown
 //! loaded had failed. Each page is shown through the kitty graphics
 //! protocol's Unicode placeholders, as the notes app draws a note's
-//! pictures (src/notes/images.rs): the terminal is given the page's PNG by
+//! pictures (crates/notes/src/images.rs): the terminal is given the page's PNG by
 //! its path, and the pane is filled with placeholder cells coloured with
 //! the picture's id, which the multiplexer places as text (and, with
 //! Settings' "Image protocol" on sixel, draws the page over as sixel

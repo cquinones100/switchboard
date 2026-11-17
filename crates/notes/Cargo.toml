@@ -1,0 +1,53 @@
+[package]
+name = "switchboard-notes"
+# Its own version, apart from Switchboard's: a bump here, on main, is a
+# release of Notes alone (.github/workflows/release-notes.yml, tagged
+# `notes-v<version>`). A version ending `-dev` is never released.
+version = "0.1.0-dev"
+edition = "2024"
+rust-version = "1.99"
+description = "Notes as the macOS Notes app keeps them, in a terminal, edited with Vim's keys: Switchboard's notes app, alone in any terminal or in a pane of the workspace as a plugin"
+publish = false
+
+# Alone in a terminal, on `$NOTES_DIR` or `~/Notes`, with no server.
+[[bin]]
+name = "switchboard-notes"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+# Of the workspace's crates, only the plugin API and what everything draws
+# with: never `switchboard`, so the compiler holds the boundary. Pure-Rust
+# crates only, as the workspace's root says.
+[dependencies]
+switchboard-plugin-api = { path = "../plugin-api" }
+switchboard-ui = { path = "../ui" }
+anyhow = "1"
+libc = "0.2"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+jiff = "0.2"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+crossterm = "0.29"
+unicode-width = "0.2"
+unicode-segmentation = "1"
+# A note's text as a rope, whose clones share their pieces, so each undo
+# step keeps the whole text for little.
+ropey = { version = "1.6", default-features = false, features = ["simd"] }
+# The notes directory watched for files changed from outside.
+notify = "8.2"
+# A picture in a note other than a PNG made one, the only kind the terminal
+# draws, as macOS's sips did.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
+# Matching what is typed in Ctrl-F, as the pickers do.
+nucleo-matcher = "0.3"
+# What changed in a note, for its folds and for one changed from outside.
+similar = "3.2.1"
+# A note's stable ID: SHA-256 of what it is made from.
+sha2 = "0.11"
+
+[dev-dependencies]
+# The test of the binary alone runs it in a terminal of its own.
+portable-pty = "0.9"

@@ -38,19 +38,7 @@ const FOLLOW_FRESH: Duration = Duration::from_secs(10);
 /// A followed ask whose partial hasn't changed for this long has stopped.
 const FOLLOW_STALE: Duration = Duration::from_secs(30);
 
-/// Claude Code's command: on the PATH, else where its installer puts it,
-/// `~/.local/bin`, which the PATH of a program the server starts may leave out.
-pub fn claude_command() -> Option<PathBuf> {
-    util::which("claude").or_else(|| {
-        let installed = paths::home_join(".local/bin/claude");
-        is_executable(&installed).then_some(installed)
-    })
-}
-
-fn is_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-}
+pub use switchboard_plugin_api::sdk::claude_command;
 
 /// A headless Claude's environment: `~/.local/bin` on the PATH, and not
 /// the pane's, so its hooks don't speak for the tab it runs under, nor

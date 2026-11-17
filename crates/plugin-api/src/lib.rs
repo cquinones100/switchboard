@@ -3,10 +3,11 @@
 //!
 //! A plugin is a program built without the workspace: it depends on this
 //! crate (and on `switchboard-ui` to draw), never on `switchboard`, so the
-//! compiler holds the boundary. The diff (`switchboard-diff`) is the first:
-//! it runs in a pane, where `switchboard` loads it in its own process
-//! through `Plugin`, and alone in any terminal with no server, where it
-//! answers for the workspace itself.
+//! compiler holds the boundary. The diff (`switchboard-diff`) is the first
+//! and the notes app (`switchboard-notes`) the second: each runs in a pane,
+//! where `switchboard` loads it in its own process through `Plugin`, and
+//! alone in any terminal with no server, where it answers for the
+//! workspace itself.
 //!
 //! - `Manifest`: what a plugin says of itself: its name, the protocol it
 //!   was built for, and each setting it reads with its default.
@@ -223,6 +224,56 @@ pub enum Action {
     /// directory, or `None` for the note of the tab the plugin runs in.
     /// `Answer::Text`, or `Answer::None`.
     Plan { plan: Option<String> },
+    /// Each of these settings' values as the settings are now, in their
+    /// order, for a plugin that runs long enough to see one change.
+    /// `Answer::Values`.
+    Settings { keys: Vec<String> },
+    /// The text on the desktop's clipboard. `Answer::Text`, or
+    /// `Answer::None` with none, or no way to read it.
+    Paste,
+    /// The picture on the desktop's clipboard written to `file` as a PNG.
+    /// `Answer::Flag`, on when it was.
+    PasteImage { file: PathBuf },
+    /// A file shown in the desktop's viewer (Quick Look). `Answer::Done`,
+    /// or `Answer::None` when it couldn't be.
+    Preview { file: PathBuf },
+    /// The words that say where a link is going while its browser comes
+    /// to the front, for the plugin to show. `Answer::Text`, or
+    /// `Answer::None` while you have turned them off.
+    LinkWords { url: String },
+    /// A link opened in the browser the workspace gives its site, waited
+    /// on until the browser is in front with `watched`. `Answer::Flag`, on
+    /// when the browser was seen to come to the front; `Answer::Text`, why
+    /// it couldn't be opened; `Answer::None` with nothing to open links.
+    OpenLink { url: String, watched: bool },
+    /// What the terminal the plugin draws in is given, as words:
+    /// `pictures` when a picture the plugin places is drawn, `round` when
+    /// the rounded ends of a chip are. `Answer::Text`, or `Answer::None`
+    /// with nobody to say, when neither is drawn.
+    Draws,
+    /// What the plugin writes to its terminal to place the PNG at `png`,
+    /// `cols` by `rows` cells, where its placeholder cells of `id` are.
+    /// `Answer::Text`.
+    Picture {
+        id: u32,
+        cols: u16,
+        rows: u16,
+        png: PathBuf,
+    },
+    /// What takes a picture placed by `Picture` back. `Answer::Text`.
+    PictureGone { id: u32 },
+    /// The checklist item the branch in `dir` was started for.
+    /// `Answer::Value`, `{"note": <the note's ID, or null>, "item": <its
+    /// first line>}`, or `Answer::None`.
+    ItemClaim { dir: PathBuf },
+    /// The items the workspace works next by itself. `Answer::Value`,
+    /// `{"note": <the note's ID>, "items": [<first line>...]}`, or
+    /// `Answer::None` while it works none.
+    Queued,
+    /// Whether work can be started on the item at `line` (from 1) of a
+    /// note's `text`. `Answer::Done`, or `Answer::Text`, why not, to say
+    /// after "that line ".
+    Item { text: String, line: usize },
 }
 
 /// Where a plugin keeps what it writes.
@@ -271,6 +322,10 @@ pub enum Answer {
     Done,
     Value {
         value: Value,
+    },
+    /// Several values in the order asked, `null` for one not known.
+    Values {
+        values: Vec<Option<Value>>,
     },
     Text {
         text: String,
@@ -394,6 +449,115 @@ pub trait Host: Send + Sync {
             _ => String::new(),
         }
     }
+
+    /// Each of these settings as they are now, in their order.
+    fn settings(&self, keys: &[&str]) -> Vec<Option<Value>> {
+        let asked = keys.iter().map(|k| k.to_string()).collect();
+        match self.ask(Action::Settings { keys: asked }) {
+            Answer::Values { values } if values.len() == keys.len() => values,
+            _ => keys.iter().map(|key| self.setting(key)).collect(),
+        }
+    }
+
+    fn paste(&self) -> Option<String> {
+        match self.ask(Action::Paste) {
+            Answer::Text { text } => Some(text),
+            _ => None,
+        }
+    }
+
+    fn paste_image(&self, file: &Path) -> bool {
+        self.ask(Action::PasteImage { file: file.into() }) == Answer::Flag { on: true }
+    }
+
+    fn preview(&self, file: &Path) -> bool {
+        self.ask(Action::Preview { file: file.into() }) == Answer::Done
+    }
+
+    fn link_words(&self, url: &str) -> Option<String> {
+        match self.ask(Action::LinkWords { url: url.into() }) {
+            Answer::Text { text } => Some(text),
+            _ => None,
+        }
+    }
+
+    /// Opens a link: whether its browser was seen to come to the front,
+    /// or why it couldn't be opened.
+    fn open_link(&self, url: &str, watched: bool) -> Result<bool, String> {
+        let url = url.to_string();
+        match self.ask(Action::OpenLink { url, watched }) {
+            Answer::Flag { on } => Ok(on),
+            Answer::Text { text } => Err(text),
+            _ => Err("nothing here opens a link".into()),
+        }
+    }
+
+    /// Whether the terminal is given `what` (`pictures`, `round`).
+    fn draws(&self, what: &str) -> bool {
+        match self.ask(Action::Draws) {
+            Answer::Text { text } => text.split_whitespace().any(|w| w == what),
+            _ => false,
+        }
+    }
+
+    /// What places a PNG by its path, "" with nobody to say.
+    fn picture(&self, id: u32, cols: u16, rows: u16, png: &Path) -> String {
+        let png = png.to_path_buf();
+        match self.ask(Action::Picture {
+            id,
+            cols,
+            rows,
+            png,
+        }) {
+            Answer::Text { text } => text,
+            _ => String::new(),
+        }
+    }
+
+    fn picture_gone(&self, id: u32) -> String {
+        match self.ask(Action::PictureGone { id }) {
+            Answer::Text { text } => text,
+            _ => String::new(),
+        }
+    }
+
+    /// The note's ID (when the claim has one) and the item the branch in
+    /// `dir` was started for.
+    fn item_claim(&self, dir: &Path) -> Option<(Option<String>, String)> {
+        match self.ask(Action::ItemClaim { dir: dir.into() }) {
+            Answer::Value { value } => Some((
+                value["note"].as_str().map(str::to_string),
+                value["item"].as_str()?.to_string(),
+            )),
+            _ => None,
+        }
+    }
+
+    /// The note's ID and the items worked next, none while none are.
+    fn queued(&self) -> Option<(String, Vec<String>)> {
+        match self.ask(Action::Queued) {
+            Answer::Value { value } => Some((
+                value["note"].as_str()?.to_string(),
+                value["items"]
+                    .as_array()?
+                    .iter()
+                    .filter_map(|i| i.as_str().map(str::to_string))
+                    .collect(),
+            )),
+            _ => None,
+        }
+    }
+
+    /// Why work can't be started on a note's line, `None` when it can. A
+    /// host that doesn't say starts none.
+    fn item_refused(&self, text: &str, line: usize) -> Option<String> {
+        let text = text.to_string();
+        match self.ask(Action::Item { text, line }) {
+            Answer::Done => None,
+            Answer::Text { text } => Some(text),
+            _ => Some("can't be started here".into()),
+        }
+    }
 }
 
 /// A plugin loaded in the workspace's own process.
@@ -472,6 +636,39 @@ mod tests {
             Action::Plan {
                 plan: Some("Plans/Plan - x.md".into()),
             },
+            Action::Settings {
+                keys: vec!["notes_images".into()],
+            },
+            Action::Paste,
+            Action::PasteImage {
+                file: "/n/a.png".into(),
+            },
+            Action::Preview {
+                file: "/n/a.png".into(),
+            },
+            Action::LinkWords {
+                url: "https://rfc.example/1".into(),
+            },
+            Action::OpenLink {
+                url: "https://rfc.example/1".into(),
+                watched: true,
+            },
+            Action::Draws,
+            Action::Picture {
+                id: 7,
+                cols: 10,
+                rows: 3,
+                png: "/n/a.png".into(),
+            },
+            Action::PictureGone { id: 7 },
+            Action::ItemClaim {
+                dir: "/repo".into(),
+            },
+            Action::Queued,
+            Action::Item {
+                text: "- [ ] one".into(),
+                line: 1,
+            },
         ] {
             round(action);
         }
@@ -479,6 +676,9 @@ mod tests {
             Answer::None,
             Answer::Done,
             Answer::Value { value: json!("75") },
+            Answer::Values {
+                values: vec![Some(json!(true)), None],
+            },
             Answer::Text {
                 text: "main".into(),
             },
@@ -608,5 +808,19 @@ mod tests {
         assert_eq!(quiet.plan(None), "");
         assert_eq!(quiet.headless_claude(), Env::default());
         assert_eq!(quiet.command(&["say", "x"]), None);
+        assert_eq!(quiet.settings(&["x", "y"]), vec![None, None]);
+        assert_eq!(quiet.paste(), None);
+        assert!(!quiet.paste_image(Path::new("/n/a.png")));
+        assert!(!quiet.preview(Path::new("/n/a.png")));
+        assert_eq!(quiet.link_words("https://rfc.example/1"), None);
+        assert!(quiet.open_link("https://rfc.example/1", false).is_err());
+        assert!(!quiet.draws("pictures"));
+        assert_eq!(quiet.picture(7, 10, 3, Path::new("/n/a.png")), "");
+        assert_eq!(quiet.item_claim(Path::new("/r")), None);
+        assert_eq!(quiet.queued(), None);
+        assert!(
+            quiet.item_refused("- [ ] one", 1).is_some(),
+            "not said: no work is started"
+        );
     }
 }

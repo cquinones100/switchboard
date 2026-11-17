@@ -2910,6 +2910,7 @@ dependencies = [
  "similar",
  "ssh-key",
  "switchboard-diff",
+ "switchboard-notes",
  "switchboard-plugin-api",
  "switchboard-ui",
  "syntect",
@@ -2948,6 +2949,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "switchboard-notes"
+version = "0.1.0-dev"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "image",
+ "jiff",
+ "libc",
+ "notify",
+ "nucleo-matcher",
+ "portable-pty",
+ "ratatui",
+ "regex",
+ "ropey",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "similar",
+ "switchboard-plugin-api",
+ "switchboard-ui",
+ "unicode-segmentation",
+ "unicode-width",
+]
+
+[[package]]
 name = "switchboard-plugin-api"
 version = "0.9.1"
 dependencies = [
@@ -2963,6 +2989,7 @@ version = "0.9.1"
 dependencies = [
  "crossterm",
  "libc",
+ "nucleo-matcher",
  "pulldown-cmark",
  "ratatui",
  "regex",

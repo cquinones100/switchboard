@@ -621,7 +621,7 @@ pub fn notes(dir: &Path, query: &str) -> Vec<Found> {
     let mut hits: Vec<(std::time::SystemTime, PathBuf, String)> = files
         .into_iter()
         .filter_map(|file| {
-            // Without the note's ID line (src/notes/id.rs), which every
+            // Without the note's ID line (crates/notes/src/id.rs), which every
             // note has.
             let text = crate::notes::id::strip(&std::fs::read_to_string(&file).ok()?);
             let lower = text.to_lowercase();

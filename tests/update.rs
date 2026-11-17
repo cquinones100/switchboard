@@ -222,15 +222,31 @@ impl Fake {
     /// holds both, the diff's first, as GitHub lists the newer first, and
     /// the latest stays Switchboard's.
     fn publish_diff(&self, tag: &str, switchboard: &Value, wrong: Wrong) -> Value {
-        let version = tag.trim_start_matches("diff-v");
-        let binary = format!("#!/bin/sh\necho \"switchboard-diff {version}\"\n").into_bytes();
+        self.publish_alone("switchboard-diff", "diff-v", tag, switchboard, wrong)
+    }
+
+    /// A release of Notes alone, `notes-<tag>`, as `publish_diff` makes
+    /// the diff's.
+    fn publish_notes(&self, tag: &str, switchboard: &Value, wrong: Wrong) -> Value {
+        self.publish_alone("switchboard-notes", "notes-v", tag, switchboard, wrong)
+    }
+
+    /// A release of an app that ships alone (`app`, its tags starting
+    /// `tagged`).
+    fn publish_alone(
+        &self,
+        app: &str,
+        tagged: &str,
+        tag: &str,
+        switchboard: &Value,
+        wrong: Wrong,
+    ) -> Value {
+        let version = tag.trim_start_matches(tagged);
+        let binary = format!("#!/bin/sh\necho \"{app} {version}\"\n").into_bytes();
         let mut assets = Vec::new();
         for target in TARGETS {
-            let name = format!("switchboard-diff-{version}-{target}.tar.gz");
-            let archive = archive_of(
-                &format!("switchboard-diff-{version}-{target}/switchboard-diff"),
-                &binary,
-            );
+            let name = format!("{app}-{version}-{target}.tar.gz");
+            let archive = archive_of(&format!("{app}-{version}-{target}/{app}"), &binary);
             let sum = if wrong == Wrong::Checksum {
                 install::sha256_hex(b"something else")
             } else {
@@ -266,7 +282,7 @@ impl Fake {
         }
         let json = json!({
             "tag_name": tag,
-            "name": format!("switchboard-diff {version}"),
+            "name": format!("{app} {version}"),
             "body": "",
             "draft": false,
             "prerelease": false,
@@ -947,13 +963,72 @@ fn install_sh_installs_the_diff_alone_from_its_own_release_with_no_setup() {
     );
 
     // Anything else it is given is refused before anything is asked.
-    let out = diff(&["--notes"]);
+    let out = diff(&["--nope"]);
     assert!(!out.status.success());
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains("it takes --target or --diff"),
+        String::from_utf8_lossy(&out.stderr).contains("it takes --target, --diff or --notes"),
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+#[test]
+fn install_sh_installs_notes_alone_from_its_own_release_with_no_setup() {
+    if !(has("curl") || has("wget")) || !(has("sha256sum") || has("shasum")) || !has("ssh-keygen") {
+        eprintln!("skipped: no curl or wget, no sha256sum or shasum, or no ssh-keygen");
+        return;
+    }
+    let fake = Fake::start();
+    let dir = TempDir::new("sbin");
+    let stubs = stubbed_platform(dir.path(), "Linux", "x86_64", "");
+    let installed = dir.path().join(".local/bin/switchboard-notes");
+    let notes = |args: &[&str]| run_install_with(&fake, dir.path(), &stubs, args);
+
+    // With no release of Notes yet, it says so and installs nothing: a
+    // release of Switchboard or of the diff is none of its.
+    let switchboard = fake.publish("v9.9.9", &stub("9.9.9"), Wrong::Nothing);
+    fake.publish_diff("diff-v0.3.0", &switchboard, Wrong::Nothing);
+    let out = notes(&["--notes"]);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("there is no release of switchboard-notes yet"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!installed.exists());
+
+    // Its archive is checked as Switchboard's is: a checksum that doesn't
+    // agree installs nothing.
+    fake.publish_notes("notes-v0.2.0", &switchboard, Wrong::Checksum);
+    let out = notes(&["--notes"]);
+    assert!(!out.status.success(), "{out:?}");
+    assert!(!installed.exists());
+
+    // Its own newest release, whatever Switchboard's version is.
+    fake.publish_notes("notes-v0.2.0", &switchboard, Wrong::Nothing);
+    let out = notes(&["--notes"]);
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{said}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        said.contains("Downloading Switchboard's Notes 0.2.0"),
+        "{said}"
+    );
+    assert!(said.contains("Installed switchboard-notes 0.2.0"), "{said}");
+    assert!(
+        said.contains("Run it on the notes in ~/Notes: switchboard-notes"),
+        "{said}"
+    );
+    assert!(installed.is_file());
+    // Notes alone: neither Switchboard nor the diff is installed, and no
+    // setup is run.
+    assert!(!dir.path().join(".local/bin/switchboard").exists());
+    assert!(!dir.path().join(".local/bin/switchboard-diff").exists());
+    assert!(!dir.path().join("mark").exists(), "a setup was run");
 }
 
 #[test]

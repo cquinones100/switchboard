@@ -848,7 +848,7 @@ pub fn checks_main(dir: PathBuf) -> ExitCode {
 /// nothing to do, any key closes it, as pr-ready.sh's popup did.
 pub struct ReadyBox {
     answer: Option<Result<Answer, String>>,
-    /// The search `/` opens over its choices (src/ui/menu.rs).
+    /// The search `/` opens over its choices (crates/ui/src/menu.rs).
     filter: Filter,
     cursor: usize,
     /// The first choice drawn, past those scrolled off while searching,

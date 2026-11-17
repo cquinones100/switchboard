@@ -4,7 +4,7 @@
 //! `allow-passthrough` for the pictures in a note, and tmux.conf binding
 //! the Cmd keys to reach only a pane Notes marked `@notes_cmd_keys`.
 //!
-//! The pictures (src/notes/images.rs) are given to the terminal as kitty
+//! The pictures (crates/notes/src/images.rs) are given to the terminal as kitty
 //! graphics commands, `ESC _ G <keys> ; <data> ESC \`, each laid over cells
 //! of the note that hold the placeholder character U+10EEEE, marked with
 //! its row and column and coloured with the image's id. The emulator keeps

@@ -138,6 +138,24 @@ pub struct Frame {
     pub pictures: Vec<Placed>,
 }
 
+impl crate::ui::Canvas for Frame {
+    fn cells(&mut self) -> &mut Buffer {
+        &mut self.buf
+    }
+
+    fn whole(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+impl Frame {
+    /// The server's frame an overlay was handed to draw into whole
+    /// (`Overlay::draw_frame`); `None` for any other program's.
+    pub fn of(canvas: &mut dyn crate::ui::Canvas) -> Option<&mut Frame> {
+        canvas.whole().downcast_mut()
+    }
+}
+
 impl Frame {
     pub fn new(cols: u16, rows: u16) -> Frame {
         Frame {

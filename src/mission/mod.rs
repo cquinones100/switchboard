@@ -1438,8 +1438,11 @@ impl Overlay for Mission {
         crate::sidebar::render::draw(buf, area, &lines);
     }
 
-    fn draw_frame(&mut self, frame: &mut crate::mux::compose::Frame, look: &Look) {
-        self.draw(&mut frame.buf, look);
+    fn draw_frame(&mut self, canvas: &mut dyn crate::ui::Canvas, look: &Look) {
+        self.draw(canvas.cells(), look);
+        let Some(frame) = crate::mux::compose::Frame::of(canvas) else {
+            return;
+        };
         for image in &self.meters {
             let area = ratatui::layout::Rect::new(image.x, image.y, image.width, image.height);
             match &image.shape {

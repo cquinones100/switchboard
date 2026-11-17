@@ -1174,7 +1174,7 @@ switchboard-diff --working [dir]        # the changes not yet committed
 
 It has a version and releases of its own, apart from Switchboard's (tagged `diff-v<version>` in the same repository): each holds `switchboard-diff-<version>-<target>.tar.gz` with its checksum and its signature by the same release key, which the install line checks before it puts `switchboard-diff` in `~/.local/bin`. Run the line again for a newer one. Alone, it knows no pull request, so it compares with the default branch, or with the branch its own tracks when that is another one, tells its story through `claude -p` directly (and without Claude Code lists the files by kind and sends nothing), follows what you set for the diff in `~/.config/switchboard/settings.json` when you have one, and keeps its stories in `~/.cache/switchboard-diff`. It has no list of trusted directories, so it reads any repository as your own code: open someone else's pull request with `wtpr` and `M-d` instead. [Its README](../crates/diff/README.md) has the rest.
 
-`switchboard diff` and `M-d` are this same program, loaded by the workspace as its first plugin (the plugin API, `crates/plugin-api`), which answers what it asks: the pull request's base, your settings, the request audit, the pane beside it.
+`switchboard diff` and `M-d` are this same program, loaded by the workspace as its first plugin (the plugin API, `crates/plugin-api`), which answers what it asks: the pull request's base, your settings, the request audit, the pane beside it. The notes app is the second ("Notes alone").
 
 ## The notes app
 
@@ -1323,7 +1323,7 @@ Beside another tab's pane, Notes' sidebar is put away, so the note has the room 
 
 **A note's tab.** `t` in the sidebar, or M-p's "Open the tab for the note in Notes" (for the note Notes shows), goes to the tab linked to the note. With none, it asks which tab is the note's: one of the open tabs, linked to the note then, or a new one, in a directory you pick as `M-t`'s does, linked to the note and named after it. The new tab's Claude starts knowing which note it is for: its title and file are added to its system prompt, so no turn is spent on it, and the note itself is read when you ask, or before the first reply while "Point Claude at the tab's note" is on (Settings' "Tell a note's new tab its note", `note_tab_prompt`). Either way Notes moves beside the tab's Claude showing the note, as `M-e` puts it there, the cursor left in Claude's pane (Settings' "Notes beside a note's tab", `note_tab_beside`).
 
-These need the workspace: in a plain terminal `switchboard notes` runs alone, and the palette's workspace commands say so.
+These need the workspace: in a plain terminal `switchboard notes` runs alone, and its palette leaves the workspace's commands out (a key for one says it needs the workspace).
 
 The workspace reaches the running app through a socket, `~/.local/state/switchboard/notes.sock` (or `$NOTES_SOCKET`), which you can use from a shell too:
 
@@ -1333,6 +1333,22 @@ switchboard notes open <note>       show a note, by its path in the notes direct
 switchboard notes sidebar on|off    show or put away the sidebar
 switchboard notes shown             the note shown, as its path
 ```
+
+### Notes alone
+
+The notes app is also an app of its own, `switchboard-notes`, for a terminal with no Switchboard running: the same program and the same keys, on the same notes (`$NOTES_DIR`, else `~/Notes`).
+
+```
+curl -fsSL https://raw.githubusercontent.com/cquinones100/switchboard/main/install.sh | sh -s -- --notes
+switchboard-notes                  # the app, on the note open last
+switchboard-notes open <note>      # show a note in the running app
+switchboard-notes sidebar on|off   # show or put away the running app's list
+switchboard-notes shown            # print the note the running app shows
+```
+
+It has a version and releases of its own, apart from Switchboard's (tagged `notes-v<version>` in the same repository): each holds `switchboard-notes-<version>-<target>.tar.gz` with its checksum and its signature by the same release key, which the install line checks before it puts `switchboard-notes` in `~/.local/bin`. Run the line again for a newer one. Alone, it has no workspace to ask, so what needs one is left out: there is no tab's note, no tab to go to, no work started on an item (`gw` says it needs the workspace) and no chips for the tabs working on one, and `Ctrl-Shift-P` lists none of those commands; a link followed says it can't be opened; pictures stay the lines that name them; and what you copy goes to the terminal's own clipboard, while `p` puts only what was yanked in the app. It follows what you set for Notes in `~/.config/switchboard/settings.json` when you have one, and keeps its socket and the palette's picks in `~/.local/state/switchboard-notes`. Squashing notes still asks Claude through `claude -p`, after a yes. [Its README](../crates/notes/README.md) has the rest.
+
+`switchboard notes` and `M-e` are this same program, loaded by the workspace as a plugin (the plugin API, `crates/plugin-api`), which answers what it asks: your settings, the server's commands, the desktop's clipboard and viewer, a link opened in its site's browser, how a picture reaches your terminal, and which line of a note work can be started on.
 
 ## Setting Claude Code up
 

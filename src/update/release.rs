@@ -285,8 +285,8 @@ const ENOUGH: usize = 10;
 
 /// The published releases of Switchboard, newest first, from the list
 /// GitHub gives thirty at a time. The repository holds other releases too
-/// (the diff's own, tagged `diff-v<version>`, which `Release::from_json`
-/// leaves out), so the next page is read while fewer than `ENOUGH` of
+/// (the diff's own and Notes', tagged `diff-v<version>` and
+/// `notes-v<version>`, which `Release::from_json` leaves out), so the next page is read while fewer than `ENOUGH` of
 /// Switchboard's have come and the list goes on: releases of the diff
 /// neither hide a newer Switchboard nor the ones just before it.
 /// `source` says what asked, for the request audit. The API's address is

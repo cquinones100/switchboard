@@ -43,3 +43,88 @@ pub fn placeholder(row: u16, col: u16) -> String {
     };
     format!("{PLACEHOLDER}{}{}", mark(row), mark(col))
 }
+
+/// The ids the workspace's own images take: those with the top of their 24
+/// bits set, so they never meet a note's (Notes' `images`, which clears it).
+pub const SERVER_IDS: u32 = 0x80_0000;
+
+/// The color a placeholder carries: the image's 24-bit id.
+pub fn id_color(id: u32) -> ratatui::style::Color {
+    ratatui::style::Color::Rgb((id >> 16) as u8, (id >> 8 & 0xff) as u8, (id & 0xff) as u8)
+}
+
+/// The id of one of the workspace's images, from the stable name its caller
+/// gives it (`"usage/chart"`): FNV-1a over the name, in the server's range.
+pub fn id_of(name: &str) -> u32 {
+    let mut h: u32 = 2_166_136_261;
+    for b in name.bytes() {
+        h = (h ^ b as u32).wrapping_mul(16_777_619);
+    }
+    SERVER_IDS | (h & (SERVER_IDS - 1))
+}
+
+/// The shadow under a box as text: half blocks down its right and along its
+/// bottom in a near-black shade, meeting at the corner in a quadrant (the
+/// right edge's left half and the bottom's top half), for a terminal that
+/// draws no images, and for the apps in panes, which draw into a buffer of
+/// their own.
+pub fn shadow_cells(buf: &mut ratatui::buffer::Buffer, area: ratatui::layout::Rect) {
+    use ratatui::style::{Color, Style};
+    let screen = buf.area;
+    let shade = Style::new().fg(Color::Indexed(233));
+    let right = area.right();
+    let below = area.bottom();
+    if right < screen.right() {
+        for y in area.top() + 1..below.min(screen.bottom()) {
+            buf[(right, y)].set_symbol("▌").set_style(shade);
+        }
+    }
+    if below < screen.bottom() {
+        for x in area.left() + 1..right.min(screen.right()) {
+            buf[(x, below)].set_symbol("▀").set_style(shade);
+        }
+        // The corner a quadrant, so it ends where both edges do.
+        if right < screen.right() {
+            buf[(right, below)].set_symbol("▘").set_style(shade);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    use super::*;
+
+    #[test]
+    fn a_text_shadow_meets_at_its_corner_and_stops_at_the_screen() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 10, 8));
+        let area = Rect::new(2, 1, 4, 3);
+        shadow_cells(&mut buf, area);
+        for y in 2..4 {
+            assert_eq!(buf[(6, y)].symbol(), "▌", "row {y}");
+        }
+        assert_eq!(buf[(6, 1)].symbol(), " ");
+        for x in 3..6 {
+            assert_eq!(buf[(x, 4)].symbol(), "▀", "column {x}");
+        }
+        assert_eq!(buf[(2, 4)].symbol(), " ");
+        assert_eq!(buf[(6, 4)].symbol(), "▘");
+        assert_eq!(buf[(7, 4)].symbol(), " ");
+        assert_eq!(buf[(6, 5)].symbol(), " ");
+
+        // At the screen's right and bottom edges, nothing past them.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 4));
+        shadow_cells(&mut buf, area);
+        assert!(
+            buf.content.iter().all(|c| c.symbol() == " "),
+            "{:?}",
+            buf.content
+        );
+        let mut buf = Buffer::empty(Rect::new(0, 0, 10, 4));
+        shadow_cells(&mut buf, area);
+        assert_eq!(buf[(6, 3)].symbol(), "▌");
+        assert!((0..10).all(|x| buf[(x, 3)].symbol() != "▀"));
+    }
+}

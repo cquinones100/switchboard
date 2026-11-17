@@ -13,7 +13,7 @@
 //! its worktree, so a failed `wtn` doesn't have its item opened again and
 //! again. Only the tabs it opened count: each is marked `@autopilot` with
 //! the time it opened, `@autopilot_item` with the item's first line,
-//! `@autopilot_note` with its note's stable ID (src/notes/id.rs), and
+//! `@autopilot_note` with its note's stable ID (crates/notes/src/id.rs), and
 //! `@autopilot_in` once seen in its worktree; a tab whose pane
 //! queue-and-clean has moved back to the main clone leaves the mode, and,
 //! unless the autopilot_close setting says never, is marked landed

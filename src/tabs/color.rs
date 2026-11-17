@@ -62,7 +62,7 @@ impl Rgb {
 
     /// The same hue at 55% of each channel, for words on a light background.
     pub fn darker(self) -> Rgb {
-        let dim = |c: u8| (c as u16 * 55 / 100) as u8;
+        let dim = switchboard_ui::theme::darker;
         Rgb::new(dim(self.r), dim(self.g), dim(self.b))
     }
 
@@ -89,15 +89,7 @@ pub fn words_on(fill: ratatui::style::Color) -> ratatui::style::Color {
     ratatui::style::Color::Indexed(if light { 255 } else { 232 })
 }
 
-/// A tab's color as words on the light theme's pale backgrounds, where a
-/// soft color (or a light vivid one) would barely show: the same hue at 55%
-/// of each channel. Any other color, or on the dark theme, as it is.
-pub fn as_words(color: ratatui::style::Color, light: bool) -> ratatui::style::Color {
-    match color {
-        ratatui::style::Color::Rgb(r, g, b) if light => Rgb::new(r, g, b).darker().into(),
-        other => other,
-    }
-}
+pub use switchboard_ui::theme::as_words;
 
 impl From<Rgb> for ratatui::style::Color {
     fn from(c: Rgb) -> Self {

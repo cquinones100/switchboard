@@ -289,6 +289,22 @@ fn reply_channels(raw: &[u8]) -> Option<(f64, f64, f64)> {
     Some((parts.next()??, parts.next()??, parts.next()??))
 }
 
+/// A color's channel at 55%, for the same hue as words on a light
+/// background.
+pub fn darker(channel: u8) -> u8 {
+    (channel as u16 * 55 / 100) as u8
+}
+
+/// A tab's color as words on the light theme's pale backgrounds, where a
+/// soft color (or a light vivid one) would barely show: the same hue at 55%
+/// of each channel. Any other color, or on the dark theme, as it is.
+pub fn as_words(color: Color, light: bool) -> Color {
+    match color {
+        Color::Rgb(r, g, b) if light => Color::Rgb(darker(r), darker(g), darker(b)),
+        other => other,
+    }
+}
+
 /// A color as the pixels it is: an indexed one by xterm's 256-color
 /// palette, the named ANSI ones by xterm's defaults.
 pub fn rgb(color: Color) -> [u8; 3] {

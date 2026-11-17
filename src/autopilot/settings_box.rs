@@ -38,7 +38,6 @@ use ratatui::text::Span;
 use serde::{Deserialize, Serialize};
 
 use super::mode::{Mode, note_title};
-use crate::mux::compose::Frame;
 use crate::mux::input::{Key, KeyCode, Mods, Mouse};
 use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
 use crate::ui::images::{self, Tones};
@@ -1505,8 +1504,11 @@ impl Overlay for SettingsBox {
         self.drawn = Some(draw::draw_box(buf, &spec, look));
     }
 
-    fn draw_frame(&mut self, frame: &mut Frame, look: &Look) {
-        self.draw(&mut frame.buf, look);
+    fn draw_frame(&mut self, canvas: &mut dyn crate::ui::Canvas, look: &Look) {
+        self.draw(canvas.cells(), look);
+        let Some(frame) = crate::mux::compose::Frame::of(canvas) else {
+            return;
+        };
         let Some(drawn) = &self.drawn else {
             return;
         };

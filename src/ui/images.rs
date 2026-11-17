@@ -9,7 +9,7 @@
 //! protocol, sixel (src/mux/sixel), or the atom's text form.
 //!
 //! An atom is placed with kitty's Unicode placeholders, as a note's
-//! picture is (src/notes/images.rs): its cells in the frame are U+10EEEE
+//! picture is (crates/notes/src/images.rs): its cells in the frame are U+10EEEE
 //! marked with their row and column and colored with the image's id, so
 //! they ride in the frame as text, move with their cells, and a box drawn
 //! over them covers them as it covers text. A kitty terminal draws the
@@ -38,36 +38,19 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use image::RgbaImage;
-use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use tiny_skia::{
     FillRule, Mask, Paint, PathBuilder, Pixmap, PixmapPaint, Rect as SkRect, Transform,
 };
 
-pub use switchboard_ui::placeholder::{MARKS, PLACEHOLDER, placeholder};
 pub use switchboard_ui::theme::rgb;
 
 use crate::mux::compose::Frame;
 
-/// The ids the server's images take: those with the top of their 24 bits
-/// set, so they never meet a note's (`notes::images`, which clears it).
-pub const SERVER_IDS: u32 = 0x80_0000;
-
-/// The color a placeholder carries: the image's 24-bit id.
-pub fn id_color(id: u32) -> Color {
-    Color::Rgb((id >> 16) as u8, (id >> 8 & 0xff) as u8, (id & 0xff) as u8)
-}
-
-/// The id of one of the server's images, from the stable name its caller
-/// gives it (`"usage/chart"`): FNV-1a over the name, in the server's range.
-pub fn id_of(name: &str) -> u32 {
-    let mut h: u32 = 2_166_136_261;
-    for b in name.bytes() {
-        h = (h ^ b as u32).wrapping_mul(16_777_619);
-    }
-    SERVER_IDS | (h & (SERVER_IDS - 1))
-}
+pub use switchboard_ui::placeholder::{
+    MARKS, PLACEHOLDER, SERVER_IDS, id_color, id_of, placeholder, shadow_cells,
+};
 
 // ── Colors ──────────────────────────────────────────────────────────────────
 
@@ -1168,32 +1151,6 @@ pub fn shadow(frame: &mut Frame, name: &str, area: Rect) {
     shadow_cells(&mut frame.buf, area);
 }
 
-/// The shadow under a box as text: half blocks down its right and along its
-/// bottom in a near-black shade, meeting at the corner in a quadrant (the
-/// right edge's left half and the bottom's top half), for a terminal that
-/// draws no images, and for the apps in panes, which draw into a buffer of
-/// their own.
-pub fn shadow_cells(buf: &mut Buffer, area: Rect) {
-    let screen = buf.area;
-    let shade = Style::new().fg(Color::Indexed(233));
-    let right = area.right();
-    let below = area.bottom();
-    if right < screen.right() {
-        for y in area.top() + 1..below.min(screen.bottom()) {
-            buf[(right, y)].set_symbol("▌").set_style(shade);
-        }
-    }
-    if below < screen.bottom() {
-        for x in area.left() + 1..right.min(screen.right()) {
-            buf[(x, below)].set_symbol("▀").set_style(shade);
-        }
-        // The corner a quadrant, so it ends where both edges do.
-        if right < screen.right() {
-            buf[(right, below)].set_symbol("▘").set_style(shade);
-        }
-    }
-}
-
 // ── A tab's history (board 6) ───────────────────────────────────────────────
 
 /// A vertical line across a lane or a chart, at a fraction of its width: the
@@ -1682,37 +1639,6 @@ mod tests {
         let mut f = Frame::new(cols, rows);
         f.graphics = Some(crate::mux::graphics::Graphics::kitty(CELL));
         f
-    }
-
-    #[test]
-    fn a_text_shadow_meets_at_its_corner_and_stops_at_the_screen() {
-        let mut buf = Buffer::empty(Rect::new(0, 0, 10, 8));
-        let area = Rect::new(2, 1, 4, 3);
-        shadow_cells(&mut buf, area);
-        for y in 2..4 {
-            assert_eq!(buf[(6, y)].symbol(), "▌", "row {y}");
-        }
-        assert_eq!(buf[(6, 1)].symbol(), " ");
-        for x in 3..6 {
-            assert_eq!(buf[(x, 4)].symbol(), "▀", "column {x}");
-        }
-        assert_eq!(buf[(2, 4)].symbol(), " ");
-        assert_eq!(buf[(6, 4)].symbol(), "▘");
-        assert_eq!(buf[(7, 4)].symbol(), " ");
-        assert_eq!(buf[(6, 5)].symbol(), " ");
-
-        // At the screen's right and bottom edges, nothing past them.
-        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 4));
-        shadow_cells(&mut buf, area);
-        assert!(
-            buf.content.iter().all(|c| c.symbol() == " "),
-            "{:?}",
-            buf.content
-        );
-        let mut buf = Buffer::empty(Rect::new(0, 0, 10, 4));
-        shadow_cells(&mut buf, area);
-        assert_eq!(buf[(6, 3)].symbol(), "▌");
-        assert!((0..10).all(|x| buf[(x, 3)].symbol() != "▀"));
     }
 
     #[test]
