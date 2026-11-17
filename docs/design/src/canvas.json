@@ -516,6 +516,10 @@
     "StoryFiles.dc.html": {
       "title": "125. Files mode, today's diff unchanged: the Map / Files switch leading the row of buttons on Files (g m and g f too), the diff opening in the mode used last",
       "page": "design"
+    },
+    "NotePicker.dc.html": {
+      "title": "126. Which note is this tab's (M-e with none): every note newest first with its age, at most three suggestions above under a label, and typing keeps the matches newest first, written matches before scattered ones",
+      "page": "design"
     }
   }
 }

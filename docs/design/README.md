@@ -209,3 +209,7 @@ The relay's DM, threads and Home tab.
 - [123. A hunk a second chapter can't be read without, shown whole there under a dim also in chapter 5 line that goes to its home; its file listed in both chapters](https://cquinones100.github.io/switchboard/design/123.html)
 - [124. The stories' tab bar on Side work: what the main story can be read without, its own map; Loading outlines a thread of its own; \[s \]s or a click between them](https://cquinones100.github.io/switchboard/design/124.html)
 - [125. Files mode, today's diff unchanged: the Map / Files switch leading the row of buttons on Files (g m and g f too), the diff opening in the mode used last](https://cquinones100.github.io/switchboard/design/125.html)
+
+## Proposal: which note is the tab's
+
+- [126. Which note is this tab's (M-e with none): every note newest first with its age, at most three suggestions above under a label, and typing keeps the matches newest first, written matches before scattered ones](https://cquinones100.github.io/switchboard/design/126.html)
