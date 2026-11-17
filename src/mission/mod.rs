@@ -241,7 +241,7 @@ pub struct Snapshot {
     /// Every tab, whatever the filter leaves of `tabs`, for finding the tab
     /// a PR is open in (`Mission::pr_tab`).
     pub all_tabs: Vec<TabModel>,
-    /// The client's terminal draws the kit's half circles (src/ui/kit.rs).
+    /// The client's terminal draws the kit's half circles (crates/ui/src/kit.rs).
     pub caps: bool,
     /// The terminal's cell in pixels where the description beside a board
     /// draws its diagrams as pictures: the client draws the server's images

@@ -312,7 +312,7 @@ pub fn apps_draw() -> bool {
 pub const WINDOWS_TERMINAL: &str = "WindowsTerminal";
 
 /// Whether a terminal draws truecolor, so the dark theme is drawn in the
-/// UX 2.0 canvas's colors for it (src/status/theme.rs): it says so
+/// UX 2.0 canvas's colors for it (crates/ui/src/theme.rs): it says so
 /// (`COLORTERM`'s `truecolor` or `24bit`), or it is Ghostty, kitty or
 /// Windows Terminal, which always do; else the 256-color palette.
 pub fn truecolor(term: &str) -> bool {
@@ -331,7 +331,7 @@ pub fn pointer_shapes(term: &str) -> bool {
     term.contains("ghostty") || term.contains("kitty")
 }
 
-/// How the rounded ends of kit's objects (src/ui/kit.rs: a chip, a keycap,
+/// How the rounded ends of kit's objects (crates/ui/src/kit.rs: a chip, a keycap,
 /// a cell, an input), the half circles U+E0B6 and U+E0B4, reach a terminal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ends {

@@ -1,0 +1,45 @@
+[package]
+name = "switchboard-diff"
+# Its own version, apart from Switchboard's: a bump here, on main, is a
+# release of the diff alone (.github/workflows/release-diff.yml, tagged
+# `diff-v<version>`). A version ending `-dev` is never released.
+version = "0.1.0-dev"
+edition = "2024"
+rust-version = "1.99"
+description = "A branch's changes as GitHub's \"Files changed\" shows them, side by side in a terminal, told as a story: Switchboard's diff, alone in any terminal or in a pane of the workspace as its first plugin"
+publish = false
+
+# Alone in a terminal, in any repository, with no server.
+[[bin]]
+name = "switchboard-diff"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+# Of the workspace's crates, only the plugin API and what everything draws
+# with: never `switchboard`, so the compiler holds the boundary. Pure-Rust
+# crates only, as the workspace's root says.
+[dependencies]
+switchboard-plugin-api = { path = "../plugin-api" }
+switchboard-ui = { path = "../ui" }
+anyhow = "1"
+libc = "0.2"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+crossterm = "0.29"
+unicode-width = "0.2"
+unicode-segmentation = "1"
+syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
+# The grammars: bat's set for syntect, which holds the languages syntect's
+# own leaves out (TypeScript, TSX, TOML, Dockerfile and more).
+two-face = { version = "0.5.2", default-features = false, features = ["syntect-fancy"] }
+similar = "3.2.1"
+# The cache keys of a story and an order: SHA-256 of the diff.
+sha2 = "0.11"
+
+[dev-dependencies]
+# The test of the binary alone runs it in a terminal of its own.
+portable-pty = "0.9"

@@ -1,0 +1,24 @@
+[package]
+name = "switchboard-ui"
+version.workspace = true
+edition = "2024"
+rust-version = "1.99"
+description = "What Switchboard and the apps that run in its panes draw with: text measured in columns, the box, UX 2.0's atoms, the themes, Markdown, and the keys a terminal sends"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+# Pure-Rust crates only, as the workspace's root says.
+[dependencies]
+libc = "0.2"
+regex = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+crossterm = "0.29"
+unicode-width = "0.2"
+unicode-segmentation = "1"
+pulldown-cmark = { version = "0.13", default-features = false }
+# A terminal's colour as the emulator names it (`Rgb`): alacritty_terminal's
+# own vte, so the multiplexer's panes and the apps share the type.
+vte = { version = "0.15", default-features = false, features = ["ansi"] }

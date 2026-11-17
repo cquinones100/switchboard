@@ -17,8 +17,8 @@ use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use super::Look;
-use crate::mux::input::{Mouse, MouseButton, MouseKind};
+use crate::Look;
+use crate::input::{Mouse, MouseButton, MouseKind};
 
 /// The edge of every box: tmux.conf's `popup-border-style`.
 pub const EDGE: Color = Color::Indexed(81);
@@ -270,7 +270,7 @@ pub fn edge_bar(
     if !look.scroll_bars {
         return;
     }
-    let Some((at, len)) = super::kit::thumb(total, top, room, room) else {
+    let Some((at, len)) = crate::kit::thumb(total, top, room, room) else {
         return;
     };
     let x = drawn.outer.right().saturating_sub(1);
@@ -533,7 +533,7 @@ fn draw_pane(
     let header = Rect::new(m.x, m.y, m.width, 1);
     buf.set_style(
         header,
-        Style::new().bg(super::kit::Surface::Panel.color(&look.theme)),
+        Style::new().bg(crate::kit::Surface::Panel.color(&look.theme)),
     );
     let close_w = if close { width(CLOSE) as u16 } else { 0 };
     // The close button a column in from the edge, as the board has it.
@@ -626,27 +626,10 @@ fn draw_inside(
     (drawn_rows, clickable)
 }
 
-#[cfg(test)]
-pub(crate) mod tests {
-    use super::*;
-
-    #[test]
-    fn both_widths_count_what_a_terminal_draws() {
-        for (text, cols) in [("plain text", 10), ("漢字", 4), ("⏱️ 5m", 5), ("⚠️", 2)] {
-            assert_eq!(width(text), cols, "ui::draw::width of {text:?}");
-            assert_eq!(
-                crate::sidebar::text::width(text),
-                cols,
-                "sidebar::text::width of {text:?}"
-            );
-        }
-        // Where they part: a ZWJ sequence is one grapheme here, as ratatui
-        // draws it, and two emoji in the sidebar, which counts and writes
-        // its cells by the code point (`sidebar::render::put`).
-        let coder = "👩\u{200d}💻";
-        assert_eq!(width(coder), 2);
-        assert_eq!(crate::sidebar::text::width(coder), 4);
-    }
+/// What the tests read a buffer with, here and in the programs drawn with
+/// this crate.
+pub mod tests {
+    use ratatui::buffer::Buffer;
 
     /// A row of a buffer as text.
     pub fn row(buf: &Buffer, y: u16) -> String {
@@ -660,6 +643,30 @@ pub(crate) mod tests {
         (0..buf.area.height)
             .map(|y| row(buf, y).trim_end().to_string())
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod cases {
+    use super::tests::{row, screen};
+    use super::*;
+
+    #[test]
+    fn both_widths_count_what_a_terminal_draws() {
+        for (text, cols) in [("plain text", 10), ("漢字", 4), ("⏱️ 5m", 5), ("⚠️", 2)] {
+            assert_eq!(width(text), cols, "ui::draw::width of {text:?}");
+            assert_eq!(
+                crate::text::width(text),
+                cols,
+                "sidebar::text::width of {text:?}"
+            );
+        }
+        // Where they part: a ZWJ sequence is one grapheme here, as ratatui
+        // draws it, and two emoji in the sidebar, which counts and writes
+        // its cells by the code point (`sidebar::render::put`).
+        let coder = "👩\u{200d}💻";
+        assert_eq!(width(coder), 2);
+        assert_eq!(crate::text::width(coder), 4);
     }
 
     #[test]

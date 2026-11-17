@@ -1,7 +1,9 @@
 //! M-d's diff story told ahead of time, so M-d opens on the story at once
-//! rather than waiting on Haiku: ported from lib/sidebar/story-ahead.js
-//! (the server's part) and tmux/diff-story-ahead.sh (`switchboard diff
-//! --ahead`, the program's).
+//! rather than waiting on Haiku: the server's part, ported from
+//! lib/sidebar/story-ahead.js. The telling itself is the diff's
+//! (`switchboard-diff`'s `ahead`), which the server hands a tab's new
+//! commit as the plugin API's `Event::Commit`, by running
+//! `switchboard diff --ahead <dir>`.
 //!
 //! When a tab's branch has a commit whose story isn't told yet, the server
 //! runs `switchboard diff --ahead <dir>` in the background, one branch at a
@@ -12,15 +14,6 @@
 //! being empty. Only with the diff_story and diff_story_ahead settings on
 //! (diff_order too, which the story needs), and github, which finds the
 //! PR's base.
-//!
-//! The program compares with the same base M-d would (git.rs), tells the
-//! story as M-d would (tell.rs), keeping it in the cache by the diff's own
-//! text, and quits once it is told: exit 0 when told (or there was none to
-//! tell), else not, with why on stderr, which the server's log keeps. A
-//! story told with a warning (its answer mostly named hunks the diff
-//! doesn't have) exits 0 with the warning on stderr. The commit told is
-//! kept per worktree, and a second run on the same one, or while one runs,
-//! does nothing.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -28,12 +21,10 @@ use std::process::{Command, ExitCode, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use super::tell::{Asked, Heard, Teller};
-use super::{git, order, story};
-use crate::{paths, settings, util};
+use switchboard_plugin_api::Event;
 
-/// How long the program gives the story, its own wait and a bit.
-const GIVE_UP: Duration = Duration::from_secs(330);
+use crate::{settings, util};
+
 /// How long the server gives the program.
 const PROGRAM_TIMEOUT: Duration = Duration::from_secs(360);
 /// A commit whose story couldn't be told is tried again after this.
@@ -43,126 +34,21 @@ const LOOK_EVERY: Duration = Duration::from_secs(60);
 
 // ── The program ─────────────────────────────────────────────────────────────
 
-fn state_file(git_dir: &Path) -> PathBuf {
-    paths::state_dir()
-        .join("diff-story-ahead")
-        .join(git_dir.to_string_lossy().replace('/', "%"))
-}
-
-/// The lock that keeps a worktree to one run at a time, taken away however
-/// the run ends.
-struct Lock(PathBuf);
-
-impl Drop for Lock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir(&self.0);
-    }
-}
-
-/// `switchboard diff --ahead [--plan <note>] <dir>`.
+/// `switchboard diff --ahead [--plan <note>] <dir>`: the commit handed to
+/// the diff as the event it is. Exit 0 when its story is told (or there was
+/// none to tell), else not, with why on stderr, which the server's log
+/// keeps.
 pub fn main(dir: &Path, plan: &str) -> ExitCode {
-    let Ok(facts) = git::facts(dir) else {
-        return ExitCode::SUCCESS;
+    let event = Event::Commit {
+        dir: dir.to_path_buf(),
+        plan: plan.to_string(),
     };
-    let state = state_file(&facts.git_dir);
-    // The commit told and the prompt's version it was told with, so a new
-    // prompt tells it again.
-    let marker = format!("{} v{}", facts.head, story::VERSION);
-    if util::read_text(&state).is_some_and(|t| t.trim() == marker) {
-        return ExitCode::SUCCESS;
-    }
-    let lock = PathBuf::from(format!("{}.lock", state.display()));
-    let _ = std::fs::create_dir_all(state.parent().unwrap_or(Path::new("/")));
-    if std::fs::create_dir(&lock).is_err() {
-        return ExitCode::SUCCESS;
-    }
-    let _lock = Lock(lock);
-    // A base that couldn't be fetched isn't the one M-d will compare with
-    // once it can: left to try again rather than told against the old one.
-    let base = match git::cached_base(&facts.top) {
-        Some(b) => b,
-        None => match git::fetch_base(&facts.top) {
-            Some(found) if found.fetched => found.base,
-            Some(found) => {
-                eprintln!("Could not fetch {}", found.base);
-                return ExitCode::from(3);
-            }
-            None => {
-                eprintln!("Couldn't work out the PR's base branch");
-                return ExitCode::from(3);
-            }
-        },
-    };
-    match tell_ahead(&facts.top, &base, plan) {
-        Ok(warning) => {
-            if let Some(w) = warning {
-                eprintln!("{w}");
-            }
-            let _ = util::write_atomic(&state, format!("{marker}\n"));
-            ExitCode::SUCCESS
-        }
+    match super::plugin().on(event, super::host::core()) {
+        Ok(()) => ExitCode::SUCCESS,
         Err(why) => {
             eprintln!("{why}");
             ExitCode::from(2)
         }
-    }
-}
-
-/// Tells the story of the change against `base`, as M-d would, the tab's
-/// plan note `plan` ("" for none) its context; gives any warning it was
-/// told with, or why it couldn't be told.
-pub fn tell_ahead(top: &Path, base: &str, plan: &str) -> Result<Option<String>, String> {
-    let change = git::read_change(top, base).map_err(|e| e.to_string())?;
-    let (key, paths) = story::key_of(&change);
-    // Nothing to tell: told, as far as the next commit is concerned.
-    if paths.len() < 2 || paths.iter().all(|p| order::generated(p)) {
-        return Ok(None);
-    }
-    let (diffs, hunks) = story::split(&[change.diff.as_str()]);
-    let entries: Vec<story::Entry> = change
-        .entries
-        .iter()
-        .map(|e| story::Entry {
-            path: e.path.clone(),
-            additions: e.additions,
-            deletions: e.deletions,
-        })
-        .collect();
-    let commits = story::commits(&change.raw_commits);
-    let asked = Asked {
-        key,
-        input: story::input(
-            &entries,
-            &diffs,
-            &hunks,
-            &commits,
-            &story::plan_context(plan),
-        ),
-        paths,
-        hunks,
-    };
-    let teller = Teller::default();
-    let (tx, rx) = std::sync::mpsc::channel::<Heard>();
-    {
-        let teller = teller.clone();
-        std::thread::spawn(move || {
-            teller.tell(&asked, &|heard| {
-                if !matches!(heard, Heard::Progress(_)) {
-                    let _ = tx.send(heard);
-                }
-            });
-        });
-    }
-    let heard = rx.recv_timeout(GIVE_UP);
-    teller.stop();
-    match heard {
-        Ok(Heard::Told(story)) => Ok(story::missed_text(&story)),
-        Ok(Heard::Untold(why)) => Err(why),
-        Ok(Heard::Progress(_)) => Err("the story stopped".into()),
-        Err(_) => Err(format!(
-            "gave up waiting after {} seconds",
-            GIVE_UP.as_secs()
-        )),
     }
 }
 

@@ -473,6 +473,8 @@ pub fn is_command(name: &str) -> bool {
 }
 
 pub fn run(name: Option<&str>, args: Vec<String>) -> ExitCode {
+    crate::settings::share_with_ui();
+    crate::diff::host::install();
     match name {
         None => workspace::main(args),
         Some("help" | "-h" | "--help") => {

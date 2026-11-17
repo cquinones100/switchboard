@@ -56,9 +56,10 @@
 //!   Switchboard's plugin (its hooks, skills and instructions, for the
 //!   Claude in its panes) or the same in `~/.claude`, the statusline and
 //!   permissions, and your CLAUDE.md.
-//! - `diff`: M-d's diff in a pane's place, told as a story, with questions
-//!   about it answered, a commit or the working tree at a time; lazygit in
-//!   a pane's place.
+//! - `diff`: the server's side of M-d's diff, which is a crate of its own
+//!   (`switchboard-diff`, crates/diff) loaded here as a plugin: the diff in
+//!   a pane's place, the workspace answering what it asks, the story told
+//!   ahead; lazygit in a pane's place.
 //! - `relay`: the Slack relay, a Slack app talking to you in its DM about
 //!   your tabs while you are away.
 //! - `update`: keeping Switchboard current: `switchboard update`, and the

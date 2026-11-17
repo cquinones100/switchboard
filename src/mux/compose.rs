@@ -9,7 +9,7 @@
 //! background (its `window-style`) and the focused one on the terminal's
 //! own, and the status line at the bottom with the session's name and the
 //! tabs; theme.sh's light shades in place of the dark ones with the theme
-//! light (src/status/theme.rs).
+//! light (crates/ui/src/theme.rs).
 //!
 //! A cell a pane's program made part of a hyperlink (OSC 8) carries it in
 //! the frame's `links`, beside the cells, since a ratatui cell can't, and
@@ -47,7 +47,7 @@ use crate::agent::State;
 use crate::status::{Hits, Left, Palette};
 
 /// tmux.conf's colours, by the 256-colour palette's numbers: the dark
-/// theme's (src/status/theme.rs has both).
+/// theme's (crates/ui/src/theme.rs has both).
 pub mod colors {
     use ratatui::style::Color;
     pub const STATUS_BG: Color = Color::Indexed(235);

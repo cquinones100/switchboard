@@ -128,9 +128,11 @@ fn touching(changed: &[String], patterns: &[&str]) -> Vec<String> {
 
 // ── Switchboard ─────────────────────────────────────────────────────────────
 
-/// What the binary is built from.
+/// What the binary is built from: its own crate, and the workspace's
+/// others (crates/), which it links.
 const BUILT_FROM: &[&str] = &[
     r"^src/",
+    r"^crates/",
     r"^assets/",
     r"^build\.rs$",
     r"^Cargo\.(toml|lock)$",
@@ -141,6 +143,7 @@ const RELAY_RUNS: &[&str] = &[
     r"^src/relay/",
     r"^src/platform/",
     r"^src/[^/]+\.rs$",
+    r"^crates/",
     r"^Cargo\.(toml|lock)$",
 ];
 
@@ -672,7 +675,12 @@ mod tests {
         let mut relay = cx(&["src/relay/run.rs"]);
         relay.relay = true;
         assert_eq!(keys(&actions(&relay)), ["install", "relay", "restart"]);
-        let mut elsewhere = cx(&["src/diff/app.rs"]);
+        // The workspace's other crates are built into the binary, and the
+        // relay runs what they hold.
+        let mut crates = cx(&["crates/diff/src/app.rs"]);
+        crates.relay = true;
+        assert_eq!(keys(&actions(&crates)), ["install", "relay", "restart"]);
+        let mut elsewhere = cx(&["src/diff/serve.rs"]);
         elsewhere.relay = true;
         assert_eq!(
             keys(&actions(&elsewhere)),

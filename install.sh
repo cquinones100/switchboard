@@ -11,7 +11,9 @@
 # even with its checksum changed to match), and puts `switchboard` in
 # ~/.local/bin, saying how to add that to your PATH when it isn't there.
 # Then it runs `switchboard setup`, the guided setup, which asks before it
-# changes anything. Run again, it installs the newest release over the one
+# changes anything. With `--diff` it installs `switchboard-diff` instead,
+# the diff alone, which has releases of its own in the same repository,
+# tagged `diff-v<version>` and signed with the same key. Run again, it installs the newest release over the one
 # there; `switchboard update` does the same from then on.
 #
 # It needs only what macOS and common Linux distributions ship: a POSIX sh,
@@ -19,7 +21,8 @@
 # newer, from 2019).
 #
 # What changes it (for a release other than the newest, or for the tests):
-#   SWITCHBOARD_VERSION      a release's tag, as v0.2.0, in place of the newest
+#   SWITCHBOARD_VERSION      a release's tag, as v0.2.0 (diff-v0.2.0 with
+#                            --diff), in place of the newest
 #   SWITCHBOARD_BIN_DIR      where the binary goes, in place of ~/.local/bin
 #   SWITCHBOARD_GITHUB_API   GitHub's API, in place of https://api.github.com
 #   SWITCHBOARD_NO_SETUP     set, the setup isn't run
@@ -28,6 +31,11 @@
 #
 #   sh install.sh --target   prints the release target for this computer and
 #                            stops, changing nothing
+#   sh install.sh --diff     installs `switchboard-diff` instead, the diff as
+#                            an app of its own (crates/diff/README.md), from
+#                            its own newest release (tagged `diff-v<version>`),
+#                            checked the same way, with no setup to run;
+#                            piped, `curl … | sh -s -- --diff`
 #
 # Everything is in functions called from the last line, so the whole script
 # is read before any of it runs: piped into sh, the rest of the script is
@@ -139,10 +147,24 @@ field() {
 }
 
 main() {
-  if [ "${1:-}" = --target ]; then
-    target
-    return
-  fi
+  # The program installed, and what it is called when said.
+  app=switchboard
+  called=Switchboard
+  # What a release's tag starts with before its version.
+  tagged=v
+  case ${1:-} in
+    --target)
+      target
+      return
+      ;;
+    --diff)
+      app=switchboard-diff
+      called="Switchboard's diff"
+      tagged=diff-v
+      ;;
+    "") ;;
+    *) fail "it takes --target or --diff, not \"$1\"." ;;
+  esac
   api=${SWITCHBOARD_GITHUB_API:-https://api.github.com}
   api=${api%/}
   bin_dir=${SWITCHBOARD_BIN_DIR:-$HOME/.local/bin}
@@ -150,14 +172,37 @@ main() {
 
   if [ -n "${SWITCHBOARD_VERSION:-}" ]; then
     url="$api/repos/$REPO/releases/tags/$SWITCHBOARD_VERSION"
-  else
+  elif [ "$app" = switchboard ]; then
     url="$api/repos/$REPO/releases/latest"
+  else
+    # The repository's latest release is Switchboard's, so the diff's newest
+    # is found in the list, which GitHub gives newest first, a hundred a
+    # page: read page by page until one is there or a page comes short,
+    # which is the last. Only a plain version counts (diff-v1.2.3), as
+    # GitHub's latest leaves pre-releases out: one tagged diff-v1.3.0-rc.1
+    # is installed only when SWITCHBOARD_VERSION names it.
+    newest=
+    page=1
+    while [ -z "$newest" ] && [ "$page" -le 50 ]; do
+      list=$(fetch "$api/repos/$REPO/releases?per_page=100&page=$page") \
+        || fail "couldn't read the releases from GitHub ($api/repos/$REPO/releases)."
+      tags=$(printf '%s\n' "$list" | field tag_name)
+      newest=$(printf '%s\n' "$tags" | grep -E "^$tagged[0-9]+\.[0-9]+\.[0-9]+\$" | head -n 1 || true)
+      [ "$(printf '%s\n' "$tags" | grep -c .)" -ge 100 ] || break
+      page=$((page + 1))
+    done
+    [ -n "$newest" ] || fail "there is no release of $app yet; build it from source with cargo."
+    url="$api/repos/$REPO/releases/tags/$newest"
   fi
   json=$(fetch "$url") || fail "couldn't read the release from GitHub ($url)."
   tag=$(printf '%s\n' "$json" | field tag_name | head -n 1)
   [ -n "$tag" ] || fail "GitHub's answer named no release."
-  version=${tag#v}
-  archive="switchboard-$version-$t.tar.gz"
+  case $tag in
+    "$tagged"*) ;;
+    *) fail "release $tag isn't one of $app." ;;
+  esac
+  version=${tag#"$tagged"}
+  archive="$app-$version-$t.tar.gz"
   archive_url=$(printf '%s\n' "$json" | field browser_download_url | grep "/$archive\$" | head -n 1 || true)
   sum_url=$(printf '%s\n' "$json" | field browser_download_url | grep "/$archive.sha256\$" | head -n 1 || true)
   sig_url=$(printf '%s\n' "$json" | field browser_download_url | grep "/$archive.sig\$" | head -n 1 || true)
@@ -167,7 +212,7 @@ main() {
   tmp=$(mktemp -d 2>/dev/null || mktemp -d -t switchboard)
   trap 'rm -rf "$tmp"' EXIT
   trap 'exit 130' INT TERM
-  say "Downloading Switchboard $version for ${t}…"
+  say "Downloading $called $version for ${t}…"
   fetch "$archive_url" "$tmp/$archive" || fail "couldn't download $archive."
   fetch "$sum_url" "$tmp/$archive.sha256" || fail "couldn't download $archive.sha256."
   fetch "$sig_url" "$tmp/$archive.sig" || fail "couldn't download $archive.sig."
@@ -183,8 +228,8 @@ main() {
 
   mkdir "$tmp/unpacked"
   tar -xzf "$tmp/$archive" -C "$tmp/unpacked" || fail "couldn't unpack $archive."
-  binary=$(find "$tmp/unpacked" -type f -name switchboard | head -n 1)
-  [ -n "$binary" ] || fail "$archive has no switchboard in it."
+  binary=$(find "$tmp/unpacked" -type f -name "$app" | head -n 1)
+  [ -n "$binary" ] || fail "$archive has no $app in it."
 
   # Copied beside the old one and renamed over it, so a switchboard running
   # now goes on running, and nothing half-copied is ever in its place. It
@@ -193,15 +238,15 @@ main() {
   mkdir -p "$bin_dir" || fail "couldn't make $bin_dir."
   new="$bin_dir/.switchboard.new.$$"
   mkdir "$new" || fail "couldn't write in $bin_dir."
-  cp "$binary" "$new/switchboard" || { rm -rf "$new"; fail "couldn't write in $bin_dir."; }
-  chmod 755 "$new/switchboard"
-  if ! started=$("$new/switchboard" --version 2>&1); then
+  cp "$binary" "$new/$app" || { rm -rf "$new"; fail "couldn't write in $bin_dir."; }
+  chmod 755 "$new/$app"
+  if ! started=$("$new/$app" --version 2>&1); then
     rm -rf "$new"
-    fail "the switchboard in $archive won't start on this computer ($started). Nothing was installed."
+    fail "the $app in $archive won't start on this computer ($started). Nothing was installed."
   fi
-  mv -f "$new/switchboard" "$bin_dir/switchboard"
+  mv -f "$new/$app" "$bin_dir/$app"
   rmdir "$new"
-  say "Installed $("$bin_dir/switchboard" --version) in $bin_dir."
+  say "Installed $("$bin_dir/$app" --version) in $bin_dir."
 
   case ":$PATH:" in
     *":$bin_dir:"*) ;;
@@ -222,6 +267,12 @@ main() {
       ;;
   esac
 
+  # The diff alone has nothing to set up: it runs in any repository.
+  if [ "$app" = switchboard-diff ]; then
+    say ""
+    say "Run it in a repository: switchboard-diff"
+    return 0
+  fi
   [ -z "${SWITCHBOARD_NO_SETUP:-}" ] || return 0
   say ""
   # The setup's questions are read from the terminal: this script's own

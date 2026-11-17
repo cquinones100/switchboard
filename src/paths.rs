@@ -5,20 +5,9 @@
 //! skills) is compiled in from `assets/`.
 
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-/// `$HOME`, read every time, so a test or a try that changes it is followed.
-pub fn home() -> PathBuf {
-    match env::var_os("HOME") {
-        Some(h) if !h.is_empty() => PathBuf::from(h),
-        _ => env::home_dir().unwrap_or_else(|| PathBuf::from("/")),
-    }
-}
-
-/// A path under the home directory: `home_join(".config/switchboard")`.
-pub fn home_join(rel: impl AsRef<Path>) -> PathBuf {
-    home().join(rel)
-}
+pub use switchboard_plugin_api::sdk::{home, home_join, tilde};
 
 /// Someone's own files: `~/.config/switchboard`, or, while they are kept
 /// in a git repository (src/files), the folder in its clone that holds them.
@@ -78,47 +67,6 @@ pub const FORMER_PLUGIN: &str = ".local/share/switchboard/plugin";
 /// `~/.local/share/switchboard/plugin`.
 pub fn former_plugin_dir() -> PathBuf {
     home_join(FORMER_PLUGIN)
-}
-
-/// A path under the home directory written from `~` (`~/code/web`, or `~`
-/// for the home itself), any other path as it is. The home's real path
-/// counts too, since a worktree's root is read canonical: under a home in
-/// `/tmp` on macOS it starts `/private/tmp`. The Node scripts wrote
-/// `file.replace(os.homedir(), "~")`, which also matched the home inside
-/// that real path (`/private~/code`).
-pub fn tilde(path: impl AsRef<Path>) -> String {
-    let path = path.as_ref();
-    let home = home();
-    if home.as_os_str().is_empty() || home == Path::new("/") {
-        return path.display().to_string();
-    }
-    let rest = match path.strip_prefix(&home) {
-        Ok(rest) => Some(rest),
-        Err(_) => real_home(&home).and_then(|r| path.strip_prefix(r).ok()),
-    };
-    match rest {
-        Some(rest) if rest.as_os_str().is_empty() => "~".into(),
-        Some(rest) => format!("~/{}", rest.display()),
-        None => path.display().to_string(),
-    }
-}
-
-/// The home's real path, read once per home and kept, since `tilde` runs
-/// on the drawing path, which never waits on the file system again.
-fn real_home(home: &Path) -> Option<&'static Path> {
-    static KNOWN: std::sync::Mutex<Vec<(PathBuf, Option<&'static Path>)>> =
-        std::sync::Mutex::new(Vec::new());
-    let mut known = KNOWN.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((_, real)) = known.iter().find(|(h, _)| h == home) {
-        return *real;
-    }
-    let real = home
-        .canonicalize()
-        .ok()
-        .filter(|r| r != home)
-        .map(|r| &*Box::leak(r.into_boxed_path()));
-    known.push((home.to_path_buf(), real));
-    real
 }
 
 #[cfg(test)]

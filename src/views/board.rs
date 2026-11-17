@@ -11,7 +11,7 @@
 //! A board is plain data (`Board`, its `Part`s and `Piece`s), which
 //! `super::pr` and `super::ticket` build from what GitHub and Linear
 //! answered, and `lay_out` turns into the pager's lines for a width, the
-//! kit's atoms (src/ui/kit.rs) for its chips, marks and labels, so a state
+//! kit's atoms (crates/ui/src/kit.rs) for its chips, marks and labels, so a state
 //! has the mark and tone it has everywhere. The pager (`super::pager`) puts
 //! the panel beside the column where the pane is wide enough
 //! (`PANEL_MIN`), fixed while the column scrolls, its lists cut short by

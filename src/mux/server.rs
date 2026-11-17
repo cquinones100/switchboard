@@ -452,7 +452,7 @@ impl Client {
     }
 
     /// Whether its terminal draws truecolor, so the dark theme is drawn in
-    /// the canvas's colors for it (src/status/theme.rs), as
+    /// the canvas's colors for it (crates/ui/src/theme.rs), as
     /// src/mux/graphics.rs says.
     pub fn truecolor(&self) -> bool {
         super::graphics::truecolor(&self.term)
@@ -4001,7 +4001,7 @@ impl Server {
     }
 
     /// Draws a client, in the canvas's colors when its terminal draws
-    /// truecolor (src/status/theme.rs's `drawing_for`).
+    /// truecolor (crates/ui/src/theme.rs's `drawing_for`).
     fn draw(&mut self, id: ClientId) {
         let truecolor = self.clients.get(&id).is_some_and(Client::truecolor);
         crate::status::theme::drawing_for(truecolor, || self.draw_now(id));

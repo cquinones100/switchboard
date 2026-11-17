@@ -26,7 +26,7 @@
 //! from the tab's focused pane: a tool in Claude's place (`@in_place`), a
 //! view marked as the PR's or the ticket's, or the notes pane.
 //!
-//! It is drawn with the kit's atoms (src/ui/kit.rs): the state's mark, a
+//! It is drawn with the kit's atoms (crates/ui/src/kit.rs): the state's mark, a
 //! keycap for each key (the half circles at its ends where the client's
 //! terminal draws them) and the rule.
 //!

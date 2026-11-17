@@ -89,7 +89,7 @@ pub const KEYS: &[(&str, &str)] = &[
 ];
 
 /// The shades the sidebar is drawn in: the light ones when the theme is
-/// light, the canvas's for a truecolor terminal (src/status/theme.rs), as
+/// light, the canvas's for a truecolor terminal (crates/ui/src/theme.rs), as
 /// the boxes are.
 fn theme() -> Theme {
     crate::status::theme::theme()

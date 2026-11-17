@@ -44,7 +44,9 @@ fn names(text: &str, call: &str) -> bool {
 fn only_the_places_that_say_so_open_a_link() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
+    // The workspace's other crates too, which hold code that was under src.
     rust_files(&root.join("src"), &mut files);
+    rust_files(&root.join("crates"), &mut files);
     let offending: Vec<String> = files
         .iter()
         .filter_map(|f| {

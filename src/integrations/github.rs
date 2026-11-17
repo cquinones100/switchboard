@@ -655,60 +655,11 @@ impl Repo {
 // anything else out of the REST paths they go into.
 static PART: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z0-9._-]+$").unwrap());
 
-// Whether a remote's host is GitHub's: github.com and its ssh and www hosts,
-// or an ssh alias for it of the kind kept for a second account
-// (`github.com-work`, `github-personal`), which ~/.ssh/config maps to
-// github.com. A host with a dot after such a prefix is a server of its own
-// (GitHub Enterprise), whose API isn't api.github.com, so it isn't taken.
-fn github_host(host: &str) -> bool {
-    let host = host.to_ascii_lowercase();
-    if matches!(
-        host.as_str(),
-        "github.com" | "ssh.github.com" | "www.github.com"
-    ) {
-        return true;
-    }
-    ["github.com-", "github-", "github_"].iter().any(|prefix| {
-        host.strip_prefix(prefix)
-            .is_some_and(|rest| !rest.contains('.'))
-    })
-}
-
-/// The repository a remote URL names, in any form git takes for GitHub:
-/// `git@github.com:owner/name.git`, `ssh://git@github.com/owner/name`,
-/// `https://github.com/owner/name.git` (with a user or token before the
-/// host), `git://...`. `None` for a remote elsewhere.
+/// The repository a remote URL names, in any form git takes for GitHub
+/// (`switchboard_plugin_api::sdk::github_remote`, which the diff reads its
+/// links' repository with too). `None` for a remote elsewhere.
 pub fn parse_remote(url: &str) -> Option<Repo> {
-    let url = url.trim();
-    let (host, path) = if let Some((_, rest)) = url.split_once("://") {
-        let (authority, path) = rest.split_once('/')?;
-        let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
-        // A port (`ssh.github.com:443`), and IPv6's brackets, are not the host.
-        let host = host.split(':').next().unwrap_or(host);
-        (host, path)
-    } else {
-        // scp's form, `[user@]host:path`, which git reads only when the
-        // colon comes before any slash.
-        let (authority, path) = url.split_once(':')?;
-        if authority.contains('/') {
-            return None;
-        }
-        let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
-        (host, path)
-    };
-    if !github_host(host) {
-        return None;
-    }
-    let path = path.trim_matches('/');
-    let path = path.strip_suffix(".git").unwrap_or(path);
-    let mut parts = path.split('/');
-    let (Some(owner), Some(name), None) = (parts.next(), parts.next(), parts.next()) else {
-        return None;
-    };
-    (PART.is_match(owner) && PART.is_match(name) && name != "." && name != "..").then(|| Repo {
-        owner: owner.to_string(),
-        name: name.to_string(),
-    })
+    switchboard_plugin_api::sdk::github_remote(url).map(|(owner, name)| Repo { owner, name })
 }
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(10);

@@ -23,7 +23,10 @@
 # are pinned by commit, so a tag moved in an action's repository changes
 # nothing here.
 #
-# The version is Cargo.toml's `version`, which the binary compares
+# The version is Cargo.toml's `version` (the workspace's, the first line of
+# the file that sets one, which the `switchboard`, `switchboard-ui` and
+# `switchboard-plugin-api` crates take; the diff, crates/diff, has a version
+# and releases of its own, release-diff.yml), which the binary compares
 # (CARGO_PKG_VERSION) with the releases' to know when one is newer. Bump it
 # in a commit of its own (`cargo check` updates Cargo.lock to match): once
 # that commit is on main, the bump is the whole release. Every push to main
@@ -186,7 +189,7 @@ jobs:
             ~/.cargo/git/db
           key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
       - name: Build
-        run: cargo build --locked --release --target "$TARGET"
+        run: cargo build --locked --release --target "$TARGET" -p switchboard
       - name: Check it starts and names its version
         if: matrix.native
         run: |

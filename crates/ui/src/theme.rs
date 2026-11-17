@@ -13,7 +13,7 @@
 //! theme for every client: the latest terminal to answer says which.
 //!
 //! Dark is drawn in the UX 2.0 canvas's own colors (`Palette::DARK_TRUE`,
-//! `ui::Theme::DARK_TRUE`) for a terminal that draws truecolor, by what it
+//! `Theme::DARK_TRUE`) for a terminal that draws truecolor, by what it
 //! attached as (src/mux/graphics.rs's `truecolor`, which takes Windows
 //! Terminal by the word its client adds), and in the 256-color palette for one
 //! that doesn't: the server draws each client inside `drawing_for`, so
@@ -33,6 +33,49 @@ use ratatui::style::Color;
 use serde_json::Value;
 
 use crate::settings;
+
+/// The shades of grey the boxes are drawn in (lib/sidebar/text.js's
+/// `PALETTES`), for a dark terminal or a light one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Theme {
+    pub text: Color,
+    pub dim: Color,
+    pub faint: Color,
+    pub bright: Color,
+    /// The chosen option's background.
+    pub highlight: Color,
+    /// A row under the mouse, fainter than the chosen one.
+    pub panel: Color,
+}
+
+impl Theme {
+    pub const DARK: Theme = Theme {
+        text: Color::Indexed(250),
+        dim: Color::Indexed(244),
+        faint: Color::Indexed(240),
+        bright: Color::Indexed(255),
+        highlight: Color::Indexed(238),
+        panel: Color::Indexed(236),
+    };
+    /// The dark shades as the UX 2.0 canvas's tokens give them, for a
+    /// terminal that draws truecolor (crates/ui/src/theme.rs's `truecolor`).
+    pub const DARK_TRUE: Theme = Theme {
+        text: Color::Rgb(0xc9, 0xcd, 0xd9),
+        dim: Color::Rgb(0x8d, 0x93, 0xa8),
+        faint: Color::Rgb(0x56, 0x5b, 0x6e),
+        bright: Color::Rgb(0xff, 0xff, 0xff),
+        highlight: Color::Rgb(0x26, 0x2b, 0x40),
+        panel: Color::Rgb(0x1b, 0x1e, 0x29),
+    };
+    pub const LIGHT: Theme = Theme {
+        text: Color::Indexed(236),
+        dim: Color::Indexed(242),
+        faint: Color::Indexed(248),
+        bright: Color::Indexed(232),
+        highlight: Color::Indexed(252),
+        panel: Color::Indexed(254),
+    };
+}
 
 /// The shades one mode draws in, by the 256-colour palette's numbers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -172,13 +215,13 @@ pub fn palette() -> &'static Palette {
 
 /// The shades the boxes, the sidebar and mission control are drawn in now,
 /// chosen as `palette` is.
-pub fn theme() -> crate::ui::Theme {
+pub fn theme() -> Theme {
     if light() {
-        crate::ui::Theme::LIGHT
+        Theme::LIGHT
     } else if truecolor() {
-        crate::ui::Theme::DARK_TRUE
+        Theme::DARK_TRUE
     } else {
-        crate::ui::Theme::DARK
+        Theme::DARK
     }
 }
 
@@ -246,6 +289,63 @@ fn reply_channels(raw: &[u8]) -> Option<(f64, f64, f64)> {
     Some((parts.next()??, parts.next()??, parts.next()??))
 }
 
+/// A color as the pixels it is: an indexed one by xterm's 256-color
+/// palette, the named ANSI ones by xterm's defaults.
+pub fn rgb(color: Color) -> [u8; 3] {
+    const ANSI: [[u8; 3]; 16] = [
+        [0, 0, 0],
+        [205, 0, 0],
+        [0, 205, 0],
+        [205, 205, 0],
+        [0, 0, 238],
+        [205, 0, 205],
+        [0, 205, 205],
+        [229, 229, 229],
+        [127, 127, 127],
+        [255, 0, 0],
+        [0, 255, 0],
+        [255, 255, 0],
+        [92, 92, 255],
+        [255, 0, 255],
+        [0, 255, 255],
+        [255, 255, 255],
+    ];
+    let indexed = |n: u8| -> [u8; 3] {
+        match n {
+            0..=15 => ANSI[n as usize],
+            16..=231 => {
+                let n = n - 16;
+                let level = |v: u8| if v == 0 { 0 } else { 55 + v * 40 };
+                [level(n / 36), level(n / 6 % 6), level(n % 6)]
+            }
+            _ => {
+                let v = 8 + (n - 232) * 10;
+                [v, v, v]
+            }
+        }
+    };
+    match color {
+        Color::Rgb(r, g, b) => [r, g, b],
+        Color::Indexed(n) => indexed(n),
+        Color::Black => ANSI[0],
+        Color::Red => ANSI[1],
+        Color::Green => ANSI[2],
+        Color::Yellow => ANSI[3],
+        Color::Blue => ANSI[4],
+        Color::Magenta => ANSI[5],
+        Color::Cyan => ANSI[6],
+        Color::Gray => ANSI[7],
+        Color::DarkGray => ANSI[8],
+        Color::LightRed => ANSI[9],
+        Color::LightGreen => ANSI[10],
+        Color::LightYellow => ANSI[11],
+        Color::LightBlue => ANSI[12],
+        Color::LightMagenta => ANSI[13],
+        Color::LightCyan => ANSI[14],
+        Color::White | Color::Reset => ANSI[15],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,7 +393,7 @@ mod tests {
         }
         assert_eq!(palette(), &Palette::DARK);
         assert_eq!(drawing_for(true, palette), &Palette::DARK_TRUE);
-        assert_eq!(drawing_for(true, theme), crate::ui::Theme::DARK_TRUE);
+        assert_eq!(drawing_for(true, theme), Theme::DARK_TRUE);
         assert_eq!(palette(), &Palette::DARK, "put back after the draw");
         assert_eq!(Palette::DARK_TRUE.status_fg, Color::Rgb(0xc9, 0xcd, 0xd9));
     }

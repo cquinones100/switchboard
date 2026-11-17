@@ -272,7 +272,7 @@ impl Picker {
         self
     }
 
-    /// Drawn with UX 2.0's atoms (src/ui/kit.rs), as board 15 draws the
+    /// Drawn with UX 2.0's atoms (crates/ui/src/kit.rs), as board 15 draws the
     /// palette: what is typed in the input atom, the count matched at its
     /// right and a rule under it, and the chosen row's preview after a
     /// blank line, its first line bold and the rest dim, as tall as the

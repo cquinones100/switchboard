@@ -1,43 +1,36 @@
-//! M-d's diff: a branch's changes as GitHub's "Files changed" shows them,
-//! in place of the pane you are in, ported from diffview.nvim as M-d set it
-//! up (nvim/lua/plugins/diffview.lua, nvim/lua/diffstory.lua,
-//! nvim/lua/diffask.lua, nvim/diff.lua) and the scripts around it
-//! (tmux/pane-in-place.sh, tmux/diff-base.sh, tmux/diff-story-ahead.sh,
-//! lib/sidebar/story-ahead.js).
+//! M-d's diff in the workspace: the server's side of it. The diff itself
+//! is a crate of its own, `switchboard-diff` (crates/diff), an app that
+//! runs alone in any terminal and the first plugin on Switchboard's plugin
+//! API (`switchboard-plugin-api`): it never depends on this crate, and
+//! reaches the workspace only through the API's `Host`. What is here is
+//! what loads it and answers it, ported from the scripts around M-d
+//! (tmux/pane-in-place.sh, lib/sidebar/story-ahead.js).
 //!
 //! Under tmux, M-d ran a stripped-down Neovim in a pane's place; here it is
-//! `switchboard diff`, a program of Switchboard's own the server runs in
-//! the pane's place (`in_place`), the pane parked until the diff ends.
+//! `switchboard diff`, which the server runs in the pane's place
+//! (`in_place`), the pane parked until the diff ends, and which loads the
+//! plugin in its own process (`main`).
 //!
-//! - `git`: what the branch is compared with, and the change itself.
-//! - `order`: the files in reading order, generated files last.
-//! - `sides`: one file's two sides lined up, its changed words, its folds.
-//! - `highlight`: syntax colours.
-//! - `story`: the diff told as a story: what Haiku reads, its answer read.
-//! - `tell`: telling it, cached, and followed while another program tells it.
-//! - `ask`: a question about the diff, answered by Haiku.
-//! - `app`: the program on the screen.
-//! - `ahead`: the story told ahead of time for each tab's new commit.
+//! - `host`: this program answering the diff for the workspace.
+//! - `ahead`: which tab's new commit the diff is handed to tell ahead.
 //! - `in_place`: a tool in a pane's place, in the server.
-//! - `clear`: M-p's "Clear this tab's diff cache".
 //! - `serve`: the server's keys: M-d, lazygit in a pane's place, and the
 //!   palette's commands.
+//!
+//! The diff's own modules are given at the paths they had (`diff::git`,
+//! `diff::story`, `diff::tell` and the rest), for the parts that read a
+//! change or a story themselves (`switchboard diff-story`, the keys list).
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 pub mod ahead;
-pub mod app;
-pub mod ask;
-pub mod clear;
-pub mod git;
-pub mod highlight;
+pub mod host;
 pub mod in_place;
-pub mod order;
 mod serve;
-pub mod sides;
-pub mod story;
-pub mod tell;
+
+pub use switchboard_diff::{app, ask, clear, git, highlight, order, sides, story, tell};
+use switchboard_plugin_api::Plugin;
 
 /// What the diff's keys do in the server, an action of the multiplexer's
 /// (`mux::keys::Action::Diff`).
@@ -170,73 +163,48 @@ impl Command {
     }
 }
 
-/// `switchboard diff [--base <ref> | --working] [--ahead] [--session <id>
-/// --session-dir <dir>] [dir]`: the
-/// change in `dir` (where it runs, else) against `<ref>`, or, without one,
-/// its PR's base as M-d works it out, to the working tree with the
-/// diff_uncommitted setting on; with `--working`, the working tree's
-/// changes, staged and not; with `--ahead`, its story told and kept for
-/// M-d, with nothing drawn, and with `--plan <note>` the tab's plan note
-/// (a path in the notes directory) as its context; with `--session`, `ga` asks a copy of that
-/// Claude session (the tab's, which M-d passes), resumed from the directory
-/// `--session-dir` names.
+/// The diff, as the plugin it is.
+pub fn plugin() -> &'static dyn Plugin {
+    &switchboard_diff::Diff
+}
+
+/// `switchboard diff [--base <ref> | --working] [--session <id>
+/// --session-dir <dir>] [dir]`: the diff run on this terminal, loaded as a
+/// plugin (a build can't load one built for a newer protocol) with this
+/// program answering for the workspace (`host`). `switchboard diff --ahead
+/// [--plan <note>] [dir]` hands it a tab's new commit instead (`ahead`):
+/// its story told and kept for M-d, with nothing drawn, the tab's plan note
+/// (a path in the notes directory) its context.
 pub fn main(args: Vec<String>) -> ExitCode {
-    let mut base = None;
-    let mut working = false;
-    let mut ahead = false;
+    if let Err(why) = plugin().manifest().check() {
+        eprintln!("switchboard diff: {why}");
+        return ExitCode::FAILURE;
+    }
+    if !args.iter().any(|a| a == "--ahead" || a == "--plan") {
+        return plugin().run("switchboard diff", args, host::core());
+    }
     let mut plan = String::new();
+    let mut ahead = false;
     let mut dir = None;
-    let (mut session, mut session_dir) = (None, None);
     let mut rest = args.into_iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
-            "--base" => match rest.next() {
-                Some(b) if git::safe_ref(&b) => base = Some(b),
-                _ => return usage(),
-            },
             "--ahead" => ahead = true,
             "--plan" => match rest.next() {
                 Some(p) => plan = p,
                 None => return usage(),
             },
-            "--session" => match rest.next() {
-                Some(id) => session = Some(id),
-                None => return usage(),
-            },
-            "--session-dir" => match rest.next() {
-                Some(d) => session_dir = Some(d),
-                None => return usage(),
-            },
-            "--working" => working = true,
-            "-h" | "--help" => {
-                usage();
-                return ExitCode::SUCCESS;
-            }
             _ if arg.starts_with('-') => return usage(),
             _ => dir = Some(PathBuf::from(arg)),
         }
     }
+    if !ahead {
+        return usage();
+    }
     let dir = dir
         .filter(|d| !d.as_os_str().is_empty())
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| crate::paths::home()));
-    if (working && (ahead || base.is_some())) || (ahead && base.is_some()) {
-        return usage();
-    }
-    if !plan.is_empty() && !ahead {
-        return usage();
-    }
-    if ahead {
-        return ahead::main(&dir, &plan);
-    }
-    let session = match (session, session_dir) {
-        (None, None) => None,
-        (Some(id), Some(at)) => match ask::Session::new(&id, &at) {
-            Some(s) => Some(s),
-            None => return usage(),
-        },
-        _ => return usage(),
-    };
-    app::run(dir, base, working, session)
+    ahead::main(&dir, &plan)
 }
 
 fn usage() -> ExitCode {

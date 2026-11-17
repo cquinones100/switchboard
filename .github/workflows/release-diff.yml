@@ -1,0 +1,338 @@
+# A release of the diff alone, `switchboard-diff` (crates/diff), from a bump
+# of its own version on main: apart from Switchboard's releases
+# (release.yml), so the diff ships when it changes, whatever Switchboard's
+# version is. The three targets are built in release mode, each packed as
+# switchboard-diff-<version>-<target>.tar.gz (a folder of that name holding
+# the binary) with its SHA-256 beside it in <archive>.sha256 and its
+# signature in <archive>.sig, and all nine published as a GitHub release
+# tagged `diff-v<version>`, whose notes are the commits to crates/diff since
+# the diff's tag before. `install.sh --diff` takes the newest such release's
+# archive for its computer and refuses it unless its checksum matches and
+# its signature is by a key in src/update/release-signing-keys.pub.
+#
+# It is never the repository's "latest" release, which stays Switchboard's:
+# install.sh reads that one for Switchboard, and `switchboard update` reads
+# only tags that are `v<version>`, reading past a page of the list that
+# holds none, so a diff release is none of theirs and hides none of them.
+#
+# The version is crates/diff/Cargo.toml's `version`. Bump it in a commit of
+# its own (`cargo check` updates Cargo.lock to match): once that commit is
+# on main, the bump is the whole release, as with Switchboard's. A version
+# ending `-dev` is never released, which is how the crate sits between
+# releases that aren't wanted yet. Every push to main runs the first job,
+# which reads the version and looks for its release; with the release there,
+# nothing else runs.
+#
+# Signing, the tag and the runs are as release.yml's, for its reasons: the
+# signature is OpenSSH's (`ssh-keygen -Y sign`, namespace
+# switchboard-release), made in the publish job with the private key in the
+# RELEASE_SIGNING_KEY secret of the `release` environment, which only main
+# may deploy from; runs start only from main, never from a pushed tag; the
+# tag is made here once every target has built; and the actions are pinned
+# by commit. Linux's is built in PyPA's manylinux_2_28 image, so it starts
+# on any distribution with glibc 2.28 or newer.
+
+name: Release the diff
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release-diff
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  version:
+    name: Whether this commit is a release of the diff
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.version.outputs.release }}
+      version: ${{ steps.version.outputs.version }}
+      commit: ${{ steps.version.outputs.commit }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Main's history, to find the commit that set the version.
+          fetch-depth: 0
+      - id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          manifest=crates/diff/Cargo.toml
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$manifest" | head -n 1)
+          if [ -z "$version" ]; then
+            echo "::error::$manifest names no version."
+            exit 1
+          fi
+          # Between releases: nothing to publish.
+          case "$version" in
+            *-dev)
+              echo "::notice::switchboard-diff is at $version, which isn't released."
+              {
+                echo "release=false"
+                echo "version=$version"
+                echo "commit=$(git rev-parse HEAD)"
+              } >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+          tag="diff-v$version"
+          # The commit its tag names, when it has one (the last line is the
+          # commit of a tag with a message of its own). Asked on a line of
+          # its own, so the job fails when GitHub can't be asked, rather
+          # than taking that for no tag.
+          tagged=$(git ls-remote origin "refs/tags/$tag" "refs/tags/$tag^{}")
+          commit=$(printf '%s\n' "$tagged" | tail -n 1 | cut -f 1)
+          if [ -z "$commit" ]; then
+            # Else the one that set the version: the oldest of main's latest
+            # commits to the manifest that says it.
+            commit=$(git rev-parse HEAD)
+            for changed in $(git rev-list --first-parent HEAD -- "$manifest"); do
+              said=$(git show "$changed:$manifest" | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n 1)
+              [ "$said" = "$version" ] || break
+              commit="$changed"
+            done
+          fi
+          # Only main's code is signed, whichever way the commit was found.
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          if ! git merge-base --is-ancestor "$commit" origin/main; then
+            echo "::error::$tag names $commit, which main doesn't hold; only main's commits are released."
+            exit 1
+          fi
+          # Published already, as after any ordinary commit to main: nothing
+          # to do. Only GitHub saying there is no such release counts as none.
+          release=true
+          if found=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" --jq .tag_name 2>&1); then
+            echo "::notice::switchboard-diff $version is already published."
+            release=false
+          else
+            case "$found" in
+              *"HTTP 404"*) ;;
+              *) echo "::error::Couldn't ask GitHub for the release $tag: $found"; exit 1 ;;
+            esac
+          fi
+          echo "Version $version, set by $commit: release=$release"
+          {
+            echo "release=$release"
+            echo "version=$version"
+            echo "commit=$commit"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            container: quay.io/pypa/manylinux_2_28_x86_64
+            native: true
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            native: true
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            native: false
+    runs-on: ${{ matrix.os }}
+    # Empty for the Macs, which build on the runner itself.
+    container: ${{ matrix.container }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+      - name: Install rustup in the container
+        if: matrix.container
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Install the pinned toolchain and the target
+        run: |
+          rustup toolchain install
+          rustup target add "$TARGET"
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Build
+        run: cargo build --locked --release --target "$TARGET" -p switchboard-diff
+      - name: Check it starts and names its version
+        if: matrix.native
+        run: |
+          said=$("target/$TARGET/release/switchboard-diff" --version)
+          echo "$said"
+          if [ "$said" != "switchboard-diff $VERSION" ]; then
+            echo "::error::It says '$said', not version $VERSION"
+            exit 1
+          fi
+      - name: Pack it with its checksum
+        run: |
+          name="switchboard-diff-$VERSION-$TARGET"
+          mkdir -p "dist/$name"
+          cp "target/$TARGET/release/switchboard-diff" "dist/$name/"
+          cd dist
+          tar -czf "$name.tar.gz" "$name"
+          # The same `<hash>  <name>` line from either: the container has
+          # sha256sum, a Mac shasum.
+          if command -v sha256sum > /dev/null; then
+            sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+          else
+            shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+          fi
+          cat "$name.tar.gz.sha256"
+          rm -r "$name"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  tag:
+    name: Tag the commit
+    needs: [version, build]
+    # The tag may be there already, from a run that failed after tagging.
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.version.outputs.version }}
+      COMMIT: ${{ needs.version.outputs.commit }}
+    steps:
+      - name: Make the tag, or find it made on this commit
+        run: |
+          tag="diff-v$VERSION"
+          if gh api "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f "ref=refs/tags/$tag" -f "sha=$COMMIT" > /dev/null; then
+            echo "Tagged $COMMIT as $tag."
+            exit 0
+          fi
+          # One there already is the same release when it names this commit
+          # (the last line is the commit of a tag with a message of its own).
+          tagged=$(git ls-remote "https://x-access-token:$GH_TOKEN@github.com/$GITHUB_REPOSITORY" \
+            "refs/tags/$tag" "refs/tags/$tag^{}")
+          there=$(printf '%s\n' "$tagged" | tail -n 1 | cut -f 1)
+          if [ "$there" != "$COMMIT" ]; then
+            echo "::error::Couldn't tag $COMMIT as $tag (the tag names '$there')."
+            exit 1
+          fi
+          echo "$tag is already on $COMMIT."
+
+  publish:
+    name: Publish the release
+    needs: [version, build, tag]
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.tag.result == 'success' }}
+    runs-on: ubuntu-latest
+    # The environment holds RELEASE_SIGNING_KEY and lets only main deploy, so
+    # no run but main's can read the key.
+    environment: release
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      COMMIT: ${{ needs.version.outputs.commit }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+          # Every tag and commit, for the notes since the tag before.
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Check every archive against its checksum
+        run: |
+          cd dist
+          ls -l
+          [ "$(ls switchboard-diff-*.tar.gz | wc -l)" -eq 3 ] || { echo "::error::Expected three archives"; exit 1; }
+          [ "$(ls *.tar.gz | wc -l)" -eq 3 ] || { echo "::error::Expected only the diff's archives"; exit 1; }
+          sha256sum --check *.sha256
+      - name: Sign every archive with the release key
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          if [ -z "$RELEASE_SIGNING_KEY" ]; then
+            echo "::error::The RELEASE_SIGNING_KEY secret isn't set, so the release can't be signed (CLAUDE.md's release paragraph)."
+            exit 1
+          fi
+          key="$RUNNER_TEMP/release-signing-key"
+          (umask 077 && printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key")
+          signed=0
+          ssh-keygen -Y sign -q -f "$key" -n switchboard-release dist/*.tar.gz && signed=1
+          rm -f "$key"
+          [ "$signed" = 1 ] || { echo "::error::Couldn't sign the archives."; exit 1; }
+          # Checked against the keys install.sh carries, so a secret that
+          # isn't one of them fails here rather than in every install.
+          awk 'NF >= 2 && $1 !~ /^#/ { printf "switchboard-release namespaces=\"switchboard-release\" %s %s\n", $1, $2 }' \
+            src/update/release-signing-keys.pub > "$RUNNER_TEMP/allowed_signers"
+          for archive in dist/*.tar.gz; do
+            ssh-keygen -Y verify -f "$RUNNER_TEMP/allowed_signers" -I switchboard-release \
+              -n switchboard-release -s "$archive.sig" < "$archive"
+          done
+      - name: Write the notes from the diff's commits since its tag before
+        run: |
+          previous=$(git describe --tags --abbrev=0 --match 'diff-v*' "$COMMIT^" 2>/dev/null || true)
+          if [ -n "$previous" ]; then
+            range="$previous..$COMMIT"
+          else
+            range="$COMMIT"
+          fi
+          # Only what changed the diff: a commit to the rest of the
+          # repository is no part of this release.
+          git log --no-merges --format='- %s (%h)' "$range" -- crates/diff > commits.md
+          limit=60000
+          {
+            if [ -n "$previous" ]; then
+              echo "Changes to the diff since $previous:"
+            else
+              echo "The first release of the diff as an app of its own."
+            fi
+            echo
+            if [ "$(wc -c < commits.md)" -le "$limit" ]; then
+              cat commits.md
+            else
+              head -c "$limit" commits.md | sed '$d' > kept.md
+              cat kept.md
+              echo "- …and $(( $(wc -l < commits.md) - $(wc -l < kept.md) )) earlier commits: https://github.com/$GITHUB_REPOSITORY/commits/diff-v$VERSION/crates/diff"
+            fi
+            echo
+            echo "Install it with:"
+            echo
+            echo '```'
+            echo "curl -fsSL https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/install.sh | sh -s -- --diff"
+            echo '```'
+          } > notes.md
+          cat notes.md
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Never the repository's latest, which is Switchboard's. A version
+          # with a suffix (0.2.0-rc.1) is a pre-release, which install.sh
+          # takes only when asked for by its tag.
+          pre=
+          case "$VERSION" in *-*) pre=--prerelease ;; esac
+          gh release create "diff-v$VERSION" dist/* \
+            --title "switchboard-diff $VERSION" \
+            --notes-file notes.md \
+            --latest=false \
+            --verify-tag $pre

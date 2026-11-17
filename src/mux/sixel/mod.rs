@@ -15,7 +15,7 @@
 //! each picture's PNG by its path as a kitty virtual placement, and the
 //! Markdown views (the PR, ticket, link and file views) its data inline,
 //! and both write its placeholder cells (src/notes/images.rs,
-//! src/views/markdown.rs), which the panes' emulators keep as text; with
+//! crates/ui/src/markdown.rs), which the panes' emulators keep as text; with
 //! sixel chosen, `graphics::apps_draw` lets them draw inside the workspace
 //! whatever the terminal is called. The server reads the commands from the
 //! panes allowed to send them, as before, and keeps what each image is

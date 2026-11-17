@@ -24,8 +24,8 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 use unicode_segmentation::UnicodeSegmentation;
 
-use super::draw::width;
-use crate::mux::input::{Key, KeyCode, Mods};
+use crate::draw::width;
+use crate::input::{Key, KeyCode, Mods};
 
 /// The field's keys, as mission control's Keys view lists them under
 /// "Boxes" (`mission::keymap`).

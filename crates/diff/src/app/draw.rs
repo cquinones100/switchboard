@@ -15,12 +15,12 @@ use super::{
     ACCENT, ADDED, App, BUTTONS, Button, COVER_BLANK, Cell, Focus, Line, ListRow, REMOVED,
     SHORT_WHY, Telling, UNCOMMITTED, blend,
 };
-use crate::diff::git::{self, Entry, Section};
-use crate::diff::sides::{self, Kind};
-use crate::diff::story::{self, Look as StoryLook};
-use crate::ui::draw::{BoxLine, BoxSpec, Place, cut, draw_box, put_line, width, wrap};
-use crate::ui::kit::{self, Surface, Tone};
+use crate::git::{self, Entry, Section};
+use crate::sides::{self, Kind};
+use crate::story::{self, Look as StoryLook};
 use crate::util;
+use switchboard_ui::draw::{BoxLine, BoxSpec, Place, cut, draw_box, put_line, width, wrap};
+use switchboard_ui::kit::{self, Surface, Tone};
 
 /// The most lines of a chapter's why UX 2.0 puts over the diff.
 const WHY_LINES: usize = 3;
@@ -108,7 +108,7 @@ impl App {
             let mut spec = BoxSpec::new("", &lines);
             spec.width = 10;
             spec.place = Place::Center;
-            draw_box(buf, &spec, &crate::ui::Look::default());
+            draw_box(buf, &spec, &switchboard_ui::Look::default());
             cursor = None;
         }
         if self.focus == Focus::List {
@@ -137,7 +137,7 @@ impl App {
     /// The terminal's background and text, when it said both and its
     /// background agrees with the theme drawn in.
     fn ends(&self) -> Option<(u32, u32)> {
-        let rgb = |c: alacritty_terminal::vte::ansi::Rgb| {
+        let rgb = |c: switchboard_ui::terminal::Rgb| {
             (u32::from(c.r) << 16) | (u32::from(c.g) << 8) | u32::from(c.b)
         };
         let (bg, fg) = (self.term.bg?, self.term.fg?);
@@ -266,7 +266,7 @@ impl App {
 
     /// The path filter's line, pinned at the list's top: what is typed and
     /// how many files it leaves of how many.
-    fn draw_filter_line(&self, buf: &mut Buffer, w: u16, theme: &crate::ui::Theme) {
+    fn draw_filter_line(&self, buf: &mut Buffer, w: u16, theme: &switchboard_ui::Theme) {
         let (left, of) = self.filtered_count();
         let count = format!("{left} of {of} files");
         if self.opts.ux2 {
@@ -922,7 +922,7 @@ impl App {
             let room = (cols as usize).saturating_sub(used + 3);
             if room > 10 {
                 out.push((
-                    format!("   {}", crate::ui::draw::cut(&chapter.why, room)),
+                    format!("   {}", switchboard_ui::draw::cut(&chapter.why, room)),
                     self.comment(),
                 ));
             }
@@ -1388,7 +1388,7 @@ impl App {
             if text.is_empty() {
                 continue;
             }
-            let text = crate::ui::draw::cut(text, room as usize);
+            let text = switchboard_ui::draw::cut(text, room as usize);
             let x = l + (area.width.saturating_sub(width(&text) as u16)) / 2;
             Self::put(buf, x, y, room, &text, style);
         }
@@ -1498,7 +1498,7 @@ impl App {
             .unwrap_or_default();
         let title = format!(
             " {} ",
-            crate::ui::draw::cut(&question, w.saturating_sub(6) as usize)
+            switchboard_ui::draw::cut(&question, w.saturating_sub(6) as usize)
         );
         let inner = Self::frame(
             buf,

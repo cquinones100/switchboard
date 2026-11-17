@@ -56,11 +56,17 @@ impl Pointer {
     }
 }
 
-impl Drawn {
+/// The pointer over a box drawn (`draw::Drawn`, which `switchboard-ui`
+/// holds, so its method is a trait's here).
+pub trait BoxPointer {
+    fn pointer(&self, col: u16, row: u16, clicks: bool) -> Option<Pointer>;
+}
+
+impl BoxPointer for Drawn {
     /// The shape over a cell of a box: a hand on its close button and on a
     /// line a click means something on (while clicks are on), the arrow
     /// elsewhere inside it, and nothing outside it.
-    pub fn pointer(&self, col: u16, row: u16, clicks: bool) -> Option<Pointer> {
+    fn pointer(&self, col: u16, row: u16, clicks: bool) -> Option<Pointer> {
         let hand = |on: bool| {
             if on && clicks {
                 Pointer::Hand

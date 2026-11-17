@@ -1,6 +1,13 @@
+# Switchboard's version, which the crates built into it take with it
+# (switchboard-ui, switchboard-plugin-api). Bumped here, on the first line
+# that sets a version, which is the one the release workflow reads. The
+# diff (crates/diff) has a version and releases of its own.
+[workspace.package]
+version = "0.9.1"
+
 [package]
 name = "switchboard"
-version = "0.9.1"
+version.workspace = true
 edition = "2024"
 rust-version = "1.99"
 description = "A terminal workspace for working with coding agents: its own multiplexer, with the sidebar, mission control, the diff, notes and the Slack relay built in, as one binary"
@@ -9,6 +16,16 @@ default-run = "switchboard"
 
 # One binary for every program: it runs the program its first argument
 # names (`switchboard <name>`), or the one a link to it is named after.
+# The workspace: the multiplexer and everything built into it is this
+# package, at the root, so `cargo build` here still makes
+# `target/release/switchboard`; the crates beside it are what an app that
+# runs in a pane, or alone in a terminal, is built from without it.
+# `default-members` names them all, so fmt, clippy and the tests run over
+# every crate with no flag.
+[workspace]
+members = ["crates/ui", "crates/plugin-api", "crates/diff"]
+default-members = [".", "crates/ui", "crates/plugin-api", "crates/diff"]
+
 [[bin]]
 name = "switchboard"
 path = "src/main.rs"
@@ -21,6 +38,13 @@ path = "src/lib.rs"
 # and no crate links a system library the person would have to install.
 [dependencies]
 anyhow = "1"
+# What the workspace and the apps in its panes draw with (crates/ui).
+switchboard-ui = { path = "crates/ui" }
+# What a plugin and the workspace say to each other (crates/plugin-api).
+switchboard-plugin-api = { path = "crates/plugin-api" }
+# The diff (crates/diff), an app of its own and the first plugin, which
+# `switchboard diff` loads in its own process.
+switchboard-diff = { path = "crates/diff" }
 libc = "0.2"
 regex = "1"
 serde = { version = "1", features = ["derive"] }

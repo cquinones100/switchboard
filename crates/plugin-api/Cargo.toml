@@ -1,0 +1,16 @@
+[package]
+name = "switchboard-plugin-api"
+version.workspace = true
+edition = "2024"
+rust-version = "1.99"
+description = "What a Switchboard plugin and the workspace say to each other: the plugin's manifest, the events it is told, what it asks of the workspace and the answers, as plain versioned types"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }

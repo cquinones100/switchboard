@@ -52,6 +52,12 @@ Then start it:
 switchboard
 ```
 
+The diff is also an app of its own, `switchboard-diff`, for any terminal with no Switchboard running ([its README](crates/diff/README.md)):
+
+```
+curl -fsSL https://raw.githubusercontent.com/cquinones100/switchboard/main/install.sh | sh -s -- --diff
+```
+
 `switchboard setup` puts in place what Claude Code needs for the workspace. It asks before it changes anything, and run again changes only what isn't in place (`switchboard setup --check` only says what would change):
 
 - **A Claude Code plugin** (`~/.local/share/switchboard/claude/plugin`) holds Switchboard's hooks, which tell each tab what its Claude is doing, its instructions, its statusline and the skills that ship with it (`/wt`, `/shape`, `/review-loop` and the rest). Only the Claude in Switchboard's panes loads it, so Claude elsewhere stays as you set it up.

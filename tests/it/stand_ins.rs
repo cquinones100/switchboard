@@ -104,13 +104,13 @@ fn claude_takes_every_call_switchboard_makes_of_it() {
         "--strict-mcp-config",
         "--disable-slash-commands",
     ];
-    // The diff's order and a repository's CLAUDE.md read (src/diff/order.rs,
+    // The diff's order and a repository's CLAUDE.md read (crates/diff/src/order.rs,
     // src/repos.rs), the todo note's (src/day/todo.rs).
     let mut order = quiet.to_vec();
     order.extend(["--system-prompt", "Order them.", "--output-format", "text"]);
     assert_eq!(run(&order, Some("a.rs\n")), "call=print\na.rs\n");
-    // The story and the questions about it, streamed (src/diff/tell.rs,
-    // src/diff/ask.rs).
+    // The story and the questions about it, streamed (crates/diff/src/tell.rs,
+    // crates/diff/src/ask.rs).
     let mut story = quiet.to_vec();
     story.extend([
         "--system-prompt",

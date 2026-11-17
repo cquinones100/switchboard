@@ -90,7 +90,7 @@ pub enum Action {
     /// Show every tip again, each once more.
     ResetTips,
     /// Switch between the light and dark theme (the theme setting;
-    /// src/status/theme.rs).
+    /// crates/ui/src/theme.rs).
     ToggleTheme,
     /// Into the sidebar, or back out of it (M-s).
     FocusSidebar,

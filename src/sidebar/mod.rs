@@ -30,7 +30,6 @@ pub mod notices;
 pub mod peek;
 pub mod render;
 mod serve;
-pub mod text;
 pub mod walk;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -39,6 +38,8 @@ use std::time::{Instant, SystemTime};
 
 use crate::mux::server::ClientId;
 use crate::mux::{PaneId, TabId};
+
+pub use switchboard_ui::text;
 
 pub use model::{Rules, Stage, TabModel, TabState};
 pub use render::{Filter, Owner};

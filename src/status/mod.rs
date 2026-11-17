@@ -22,7 +22,6 @@ pub mod health;
 pub mod push;
 pub mod second;
 mod serve;
-pub mod theme;
 
 use std::sync::atomic::{AtomicU16, Ordering};
 
@@ -30,6 +29,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
+pub use switchboard_ui::theme;
 pub use theme::Palette;
 
 use crate::mux::compose::{TabSpans, put};

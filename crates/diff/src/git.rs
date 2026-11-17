@@ -44,6 +44,7 @@ use std::sync::LazyLock;
 
 use anyhow::{Result, anyhow, bail};
 use regex::Regex;
+use switchboard_plugin_api::Pr;
 
 use crate::{paths, util};
 
@@ -260,14 +261,6 @@ pub struct Base {
     pub fetched: bool,
 }
 
-/// The PR GitHub has for the branch: its base branch, its number and the
-/// branch it is of there. `None` with no PR, GitHub off or out of reach.
-struct Pr {
-    base: String,
-    number: u64,
-    head: String,
-}
-
 /// Whether a PR found for the branch is its upstream's rather than its own.
 /// GitHub is asked for the PR of the branch this one tracks, so a branch
 /// cut from another one (`upstream`, as `upstream_apart` finds it) gets that
@@ -283,23 +276,11 @@ fn is_the_upstreams(
     upstream.is_some() && branch != Some(pr.head.as_str()) && in_dir != Some(pr.number)
 }
 
+/// The PR GitHub has for the branch, as the workspace knows it: its base
+/// branch, its number and the branch it is of there. `None` with no PR,
+/// GitHub off or out of reach, or no workspace to ask.
 fn pr_base(dir: &Path) -> Option<Pr> {
-    if !crate::settings::is_on("github") {
-        return None;
-    }
-    let dir = dir.to_path_buf();
-    util::block_on(async move {
-        crate::integrations::github::pr_for_branch(&dir, "M-d diff: PR base")
-            .await
-            .ok()
-            .flatten()
-            .map(|pr| Pr {
-                base: pr.base_ref_name,
-                number: pr.number,
-                head: pr.head_ref_name,
-            })
-    })
-    .filter(|pr| safe_ref(&pr.base))
+    crate::host::host().pr(dir).filter(|pr| safe_ref(&pr.base))
 }
 
 /// The branch's upstream when it is another branch's: neither the default
@@ -347,7 +328,7 @@ pub fn fetch_base(dir: &Path) -> Option<Base> {
     let upstream = branch
         .as_deref()
         .and_then(|b| upstream_apart(dir, b, &default));
-    let in_dir = crate::integrations::github::pr_number_from_dir(&facts.top);
+    let in_dir = crate::host::host().reviewed_pr(&facts.top);
     let pr = pr_base(dir)
         .filter(|pr| !is_the_upstreams(pr, branch.as_deref(), upstream.as_deref(), in_dir));
     // With no PR of its own, a branch cut from another branch compares with
@@ -377,7 +358,7 @@ pub fn fetch_base(dir: &Path) -> Option<Base> {
             // said.
             let origin = git(dir, &["config", "--get", "remote.origin.url"]).is_ok();
             let fetched = !origin || {
-                crate::worktree::count_fetch(&facts.top, "origin", "M-d diff: fetch base");
+                crate::host::host().count_fetch(&facts.top, "origin", "M-d diff: fetch base");
                 git(dir, &["fetch", "--quiet", "origin", &base]).is_ok()
             };
             // A repository with no origin compares with its own branch.
@@ -658,7 +639,7 @@ const PLAIN: &[&str] = &[
 /// file binary to hide its lines, as `pr-risk` reads it.
 fn plain(top: &Path) -> Vec<&'static str> {
     let mut args = PLAIN.to_vec();
-    if crate::trust::is_untrusted(top) {
+    if crate::host::host().untrusted(top) {
         args.push("--text");
     }
     args
@@ -1019,7 +1000,7 @@ pub fn text_at(top: &Path, commit: &str, path: &str) -> Option<String> {
 /// The GitHub repository `origin` names, as `owner/name`.
 pub fn github_repo(top: &Path) -> Option<String> {
     let url = git(top, &["remote", "get-url", "origin"]).ok()?;
-    crate::integrations::github::parse_remote(url.trim()).map(|r| r.to_string())
+    util::github_remote(url.trim()).map(|(owner, name)| format!("{owner}/{name}"))
 }
 
 #[cfg(test)]
@@ -1168,8 +1149,8 @@ mod tests {
         let committed = change.told_part();
         assert_eq!(committed.entries.len(), 1, "the commits' part alone");
         assert_eq!(
-            crate::diff::story::key_of(committed).0,
-            crate::diff::story::key_of(&read_change(&dir, "main").unwrap()).0,
+            crate::story::key_of(committed).0,
+            crate::story::key_of(&read_change(&dir, "main").unwrap()).0,
             "its story the one told ahead"
         );
         assert_eq!(

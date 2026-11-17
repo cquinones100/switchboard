@@ -249,10 +249,9 @@ pub fn order_file(top: &Path, left: &str, right: &str, files: &[Ordered]) -> std
         names.join("\n"),
     ]
     .join("\0");
-    paths::cache_dir().join("diff-order").join(format!(
-        "{}.json",
-        hex(&crate::tabs::color::sha256(joined.as_bytes()))
-    ))
+    paths::cache_dir()
+        .join("diff-order")
+        .join(format!("{}.json", hex(&crate::sha256(joined.as_bytes()))))
 }
 
 /// An order as Haiku gave it: each path's place, from 1, each once.

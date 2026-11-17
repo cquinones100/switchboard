@@ -1,6 +1,6 @@
 //! A note's ```` ```mermaid ```` blocks drawn as their diagrams, as UX 2.0
 //! boards 83 and 84 draw them: while the cursor is outside a block, the
-//! diagram src/views/mermaid.rs draws takes the block's rows on the screen
+//! diagram crates/ui/src/mermaid.rs draws takes the block's rows on the screen
 //! (as a closed fold takes a section's), and while it is in the block, its
 //! code shows, so editing is always on the code. A diagram wider than the
 //! note is cut at its edge with a `›` on each row cut and a line saying

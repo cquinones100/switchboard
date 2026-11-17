@@ -48,7 +48,6 @@ pub mod compose;
 pub mod extkeys;
 pub mod graphics;
 pub mod header;
-pub mod input;
 pub mod keys;
 pub mod latest;
 pub mod layout;
@@ -67,6 +66,9 @@ pub mod socket;
 pub mod terminal;
 pub mod trail;
 pub mod upgrade;
+
+pub use switchboard_ui::input;
+pub use switchboard_ui::input::{MouseReporting, PaneModes};
 
 use serde::{Deserialize, Serialize};
 
@@ -122,53 +124,6 @@ pub enum Direction {
     Right,
     Up,
     Down,
-}
-
-/// Which mouse events a pane's program asked to be told of.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum MouseReporting {
-    /// None: the multiplexer keeps the mouse (selecting, scrolling).
-    #[default]
-    Off,
-    /// Presses and releases (mode 1000).
-    Press,
-    /// And movement with a button held (1002).
-    Drag,
-    /// And every movement (1003).
-    Motion,
-}
-
-/// How a pane's program asked the terminal to behave, as far as what is sent
-/// to it depends on it: `input`'s encoders read this, `pane` reads it from
-/// the emulator.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct PaneModes {
-    /// Cursor keys as SS3 (`\eOA`) rather than CSI (`\e[A`): DECCKM.
-    pub app_cursor: bool,
-    /// The keypad's application mode: DECKPAM.
-    pub app_keypad: bool,
-    /// Pasted text between `\e[200~` and `\e[201~` (2004).
-    pub bracketed_paste: bool,
-    /// Focus in and out as `\e[I` and `\e[O` (1004).
-    pub focus_events: bool,
-    pub mouse: MouseReporting,
-    /// Mouse events in SGR form (1006), else the X10 form.
-    pub mouse_sgr: bool,
-    /// Mouse coordinates as UTF-8 (1005), for the X10 form.
-    pub mouse_utf8: bool,
-    /// The alternate screen is up (a full-screen program runs).
-    pub alt_screen: bool,
-    /// The wheel sends arrow keys on the alternate screen (alacritty's
-    /// ALTERNATE_SCROLL, 1007), for programs that don't take the mouse.
-    pub alternate_scroll: bool,
-    /// The kitty keyboard protocol's flags the program set (`CSI > 1 u`
-    /// and the rest): 1 has keys the old forms can't tell apart sent as
-    /// CSI u, 8 every key, 16 with the text it types. 0 when it set none.
-    pub kitty_keys: u8,
-    /// xterm's modifyOtherKeys level the program set (`CSI > 4 ; 2 m`): 1
-    /// has the keys the old forms lose a modifier of sent as CSI u, 2 every
-    /// key with Ctrl or Alt. 0 when it set none.
-    pub modify_other_keys: u8,
 }
 
 /// What a pane's terminal emulator reports to the server after it has read

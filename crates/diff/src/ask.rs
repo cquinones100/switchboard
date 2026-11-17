@@ -410,10 +410,10 @@ enum Ended {
 pub fn run(q: &Question, asking: &Asking, said: &dyn Fn(Said)) {
     // Claude started in a worktree of someone else's PR would load its
     // author's CLAUDE.md and settings (src/trust.rs).
-    let untrusted = crate::trust::is_untrusted(&q.top)
+    let untrusted = crate::host::host().untrusted(&q.top)
         || q.session
             .as_ref()
-            .is_some_and(|s| crate::trust::is_untrusted(&s.dir));
+            .is_some_and(|s| crate::host::host().untrusted(&s.dir));
     if untrusted {
         return said(Said::Done(Err(UNTRUSTED.into())));
     }

@@ -114,7 +114,9 @@ fn escapes(code: &str) -> Vec<String> {
 fn only_the_pipeline_writes_graphics_escapes() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
+    // The workspace's other crates too, which hold code that was under src.
     rust_files(&root.join("src"), &mut files);
+    rust_files(&root.join("crates"), &mut files);
     files.sort();
     let mut test_files = HashSet::new();
     let code: Vec<(PathBuf, String)> = files
@@ -554,7 +556,9 @@ fn terminal_names(code: &str) -> Vec<String> {
 fn only_the_pipeline_decides_by_what_a_terminal_is() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
+    // The workspace's other crates too, which hold code that was under src.
     rust_files(&root.join("src"), &mut files);
+    rust_files(&root.join("crates"), &mut files);
     files.sort();
     let mut test_files = HashSet::new();
     let code: Vec<(String, String)> = files

@@ -87,8 +87,9 @@ mod tests {
         // The grid, reminders, Usage, autopilot and the Slack Home tab
         // write `CLOCK` as it reads; History, Reopen, the Inbox and the
         // menus' words name it. None writes a 24-hour clock.
-        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut stack = vec![src];
+        // The workspace's other crates too, which hold code that was under src.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut stack = vec![root.join("src"), root.join("crates")];
         let mut found = Vec::new();
         while let Some(dir) = stack.pop() {
             for entry in std::fs::read_dir(&dir).unwrap().flatten() {

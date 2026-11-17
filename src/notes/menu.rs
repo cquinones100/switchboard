@@ -9,7 +9,7 @@
 //! style to write in it. The toolbar's buttons (easy.rs) and the palette
 //! (palette.rs) run the same items.
 //!
-//! It is drawn as every box is (src/ui/draw.rs), and is an overlay of the
+//! It is drawn as every box is (crates/ui/src/draw.rs), and is an overlay of the
 //! ui module's, so the app stacks it with the palette and the questions.
 
 use ratatui::buffer::Buffer;

@@ -313,7 +313,7 @@ pub enum Opening {
 
 /// The shades mission control is drawn in for a client: the light ones
 /// when the theme is light, the canvas's when its terminal draws truecolor
-/// (src/status/theme.rs), as the sidebar's. Asked of the client itself,
+/// (crates/ui/src/theme.rs), as the sidebar's. Asked of the client itself,
 /// since its snapshot is also made outside a draw (opening it, a key).
 fn theme_for(truecolor: bool) -> Theme {
     crate::status::theme::drawing_for(truecolor, crate::status::theme::theme)

@@ -480,20 +480,16 @@ pub fn context(text: &str) -> String {
     format!("<context>\n{text}\n</context>")
 }
 
-/// The context of the change for the story: the tab's plan note (`plan`,
-/// a path under the notes directory, or "" for none; never one leaving it)
-/// with its stable ID left out, read when it is there and the
-/// diff_story_plan setting is on,
-/// since nothing in a note is sent anywhere unless you turn it on; ""
-/// otherwise.
-pub fn plan_context(plan: &str) -> String {
-    if !crate::notes::serve::in_notes(plan) || !crate::settings::is_on("diff_story_plan") {
-        return String::new();
+/// The context of the change for the story: the tab's plan note as the
+/// workspace gives it (`plan` a path under the notes directory, or `None`
+/// for the note of the tab the diff runs in), which it does only while the
+/// diff_story_plan setting is on, since nothing in a note is sent anywhere
+/// unless you turn it on; "" otherwise, and alone.
+pub fn plan_context(plan: Option<&str>) -> String {
+    match crate::host::host().plan(plan) {
+        text if text.is_empty() => text,
+        text => context(&text),
     }
-    let file = crate::notes::store::notes_dir().join(plan);
-    std::fs::read_to_string(file)
-        .map(|text| context(&crate::notes::id::strip(&text)))
-        .unwrap_or_default()
 }
 
 /// The cache key of a story: the repository, the paths, the diff itself and
@@ -508,7 +504,7 @@ pub fn key(top: &str, paths: &[String], diff: &str, commits: &str) -> String {
         commits.to_string(),
     ]
     .join("\0");
-    hex(&crate::tabs::color::sha256(joined.as_bytes()))
+    hex(&crate::sha256(joined.as_bytes()))
 }
 
 /// A change's story key (`key`) and the paths it names, sorted, each once,
@@ -1129,7 +1125,7 @@ pub enum Look {
 }
 
 /// The mark a chapter's watch line starts with.
-pub const WATCH_MARK: &str = "⚠";
+pub use switchboard_ui::kit::WATCH_MARK;
 
 /// The lines over a chapter's first file in the list: its number and
 /// title, then its why (with `short`, its first sentence alone) and its
@@ -1707,13 +1703,9 @@ mod tests {
         assert!(!without.contains("<context>"));
         let long = context(&"x".repeat(CONTEXT_CHARS + 50));
         assert!(long.contains(&format!("{} …\n</context>", "x".repeat(CONTEXT_CHARS))));
-        assert_eq!(plan_context(""), "");
-        assert_eq!(
-            plan_context("/etc/hosts"),
-            "",
-            "never a file outside the notes"
-        );
-        assert_eq!(plan_context("../secret.md"), "");
+        // Alone, there is no note to read.
+        assert_eq!(plan_context(Some("Plans/Plan - x.md")), "");
+        assert_eq!(plan_context(None), "");
     }
 
     #[test]

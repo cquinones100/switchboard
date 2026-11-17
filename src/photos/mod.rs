@@ -45,6 +45,7 @@ use crate::net::{self, Audit};
 use crate::{integrations, paths, util};
 
 pub use serve::{Photos, PhotosEvent};
+pub use switchboard_ui::who::{Service, Who};
 
 /// How long a photo, or knowing there is none, is kept before it is
 /// fetched again.
@@ -62,72 +63,40 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 /// A photo larger than this is refused as it arrives.
 const LARGEST: usize = 20 * 1024 * 1024;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Service {
-    Slack,
-    Linear,
-    GitHub,
-    /// Someone known only by their email address.
-    Address,
-}
-
-impl Service {
-    fn dir(self) -> &'static str {
-        match self {
-            Service::Slack => "slack",
-            Service::Linear => "linear",
-            Service::GitHub => "github",
-            Service::Address => "address",
-        }
+/// The folder a service's photos are kept in.
+fn dir_of(service: Service) -> &'static str {
+    match service {
+        Service::Slack => "slack",
+        Service::Linear => "linear",
+        Service::GitHub => "github",
+        Service::Address => "address",
     }
 }
 
-/// Someone, by their id in a service: a Slack member ID (`U…`), a Linear
-/// user's id, a GitHub login.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Who {
-    pub service: Service,
-    pub id: String,
-}
-
-impl Who {
-    pub fn new(service: Service, id: &str) -> Who {
-        Who {
-            service,
-            id: id.to_string(),
-        }
+/// The id as a file's name, `None` for one that couldn't be a service's
+/// id (empty, too long, or with anything but letters, digits, `-` and
+/// `_`; for an address, one with no `@` or with a space in it), which
+/// is never looked up. An address is kept by its SHA-256 in hex.
+fn file_name(who: &Who) -> Option<String> {
+    if who.service == Service::Address {
+        let fits = who.id.contains('@')
+            && who.id.len() <= 254
+            && !who.id.chars().any(|c| c.is_whitespace() || c.is_control());
+        return fits.then(|| {
+            use sha2::Digest;
+            sha2::Sha256::digest(who.id.as_bytes())
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect()
+        });
     }
-
-    /// Someone by their email address, as an invitation names them.
-    pub fn address(address: &str) -> Who {
-        Who::new(Service::Address, &address.trim().to_lowercase())
-    }
-
-    /// The id as a file's name, `None` for one that couldn't be a service's
-    /// id (empty, too long, or with anything but letters, digits, `-` and
-    /// `_`; for an address, one with no `@` or with a space in it), which
-    /// is never looked up. An address is kept by its SHA-256 in hex.
-    fn file_name(&self) -> Option<String> {
-        if self.service == Service::Address {
-            let fits = self.id.contains('@')
-                && self.id.len() <= 254
-                && !self.id.chars().any(|c| c.is_whitespace() || c.is_control());
-            return fits.then(|| {
-                use sha2::Digest;
-                sha2::Sha256::digest(self.id.as_bytes())
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect()
-            });
-        }
-        let fits = !self.id.is_empty()
-            && self.id.len() <= 100
-            && self
-                .id
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-        fits.then(|| self.id.clone())
-    }
+    let fits = !who.id.is_empty()
+        && who.id.len() <= 100
+        && who
+            .id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    fits.then(|| who.id.clone())
 }
 
 /// What the cache holds of someone, with how long it stays fresh (zero
@@ -155,9 +124,9 @@ impl Store {
     }
 
     fn path(&self, who: &Who, none: bool) -> Option<PathBuf> {
-        let name = who.file_name()?;
+        let name = file_name(who)?;
         let name = name.as_str();
-        let dir = self.dir.join(who.service.dir());
+        let dir = self.dir.join(dir_of(who.service));
         Some(if none {
             dir.join(format!("{name}.none"))
         } else {
@@ -263,7 +232,7 @@ pub async fn load(store: &Store, who: &Who) -> Result<Loaded> {
 
 /// The photo's bytes from its service, `None` when they have none.
 pub async fn fetch(who: &Who) -> Result<Option<Vec<u8>>> {
-    if who.file_name().is_none() {
+    if file_name(who).is_none() {
         bail!("{} isn't an id to look a photo up by", who.id);
     }
     match who.service {

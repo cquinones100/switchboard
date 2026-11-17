@@ -66,7 +66,13 @@ pub fn headless(cmd: &mut Command) {
         .env_remove("SWITCHBOARD")
         .env_remove("TMUX")
         .env_remove("TMUX_PANE");
-    crate::setup::plugin::headless(cmd);
+    let env = crate::host::host().headless_claude();
+    for (key, value) in env.set {
+        cmd.env(key, value);
+    }
+    for key in env.remove {
+        cmd.env_remove(key);
+    }
 }
 
 /// A command's stdout, fed `input`, killed after `seconds`: an error, with

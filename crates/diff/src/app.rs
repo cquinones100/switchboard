@@ -52,7 +52,7 @@
 //! (`path:12-20`, `#L12-L20`).
 //!
 //! The screen is drawn into a cell buffer and only what changed is sent,
-//! through the multiplexer's own renderer (`mux::compose::Screen`), so the
+//! through the renderer the multiplexer's is (`switchboard_ui::screen`), so the
 //! program is tested by drawing into a buffer and reading it back.
 
 use std::collections::{HashMap, HashSet};
@@ -80,9 +80,11 @@ use super::order;
 use super::sides::{self, Item};
 use super::story::{self, Look as StoryLook, Progress, Reading, Story};
 use super::tell::{self, Asked, Heard, Teller};
-use crate::mux::compose::{Frame, Screen};
-use crate::ui::draw::width;
-use crate::ui::kit::{self, Tone};
+use switchboard_ui::draw::width;
+use switchboard_ui::kit::{self, Tone};
+use switchboard_ui::screen::Screen;
+
+use crate::host::host;
 use crate::{settings, util};
 
 mod draw;
@@ -164,12 +166,7 @@ pub struct Options {
 
 impl Options {
     pub fn read() -> Options {
-        let all = settings::read_settings();
-        let on = |key: &str| {
-            all.iter()
-                .find(|s| s.key == key)
-                .is_none_or(|s| s.value != serde_json::Value::Bool(false))
-        };
+        let on = settings::is_on;
         let order = on("diff_order");
         let story = order && on("diff_story");
         Options {
@@ -183,17 +180,14 @@ impl Options {
             ask: on("diff_ask"),
             easy: on("easy_keys"),
             key_help: on("key_help_line"),
-            ux2: all
-                .iter()
-                .any(|s| s.key == "ux2" && s.value == serde_json::Value::Bool(true)),
+            ux2: settings::value("ux2") == Some(serde_json::Value::Bool(true)),
             hover: on("hover_highlight"),
-            light: all
-                .iter()
-                .any(|s| s.key == "theme" && crate::status::theme::light_for(&s.value)),
+            light: settings::value("theme")
+                .is_some_and(|theme| switchboard_ui::theme::light_for(&theme)),
             pane_arrows: on("pane_arrows"),
             scroll_bars: on("scroll_bars"),
             haiku: true,
-            server: crate::mux::socket::in_pane(),
+            server: host().in_pane(),
             clipboard: true,
         }
     }
@@ -697,7 +691,7 @@ pub struct App {
     title: Option<(String, String)>,
     /// The colours the terminal said it draws in, as the diff started
     /// (src/mux/terminal.rs): its background, for the tints, and its text.
-    term: crate::mux::terminal::Colors,
+    term: switchboard_ui::terminal::Colors,
     /// Set while the screen is drawn, when no file is read.
     drawing: bool,
 }
@@ -971,9 +965,8 @@ impl App {
         if let Some(context) = &self.context {
             return context.clone();
         }
-        let context = if self.opts.server && settings::is_on("diff_story_plan") {
-            let plan = crate::mux::socket::tab_option(crate::notes::serve::PLAN_NOTE);
-            story::plan_context(&plan.unwrap_or_default())
+        let context = if self.opts.server {
+            story::plan_context(None)
         } else {
             String::new()
         };
@@ -999,7 +992,9 @@ impl App {
     fn nothing_to_show(&mut self, text: String) {
         self.loading = None;
         let said = self.opts.server
-            && crate::mux::socket::ask(&["say", "--", &text]).is_ok_and(|(code, ..)| code == 0);
+            && host()
+                .command(&["say", "--", &text])
+                .is_some_and(|(code, ..)| code == 0);
         if said {
             self.closed = true;
         } else {
@@ -1882,11 +1877,11 @@ impl App {
     }
 
     /// The kit's colors for the theme the diff is drawn in.
-    fn theme(&self) -> crate::ui::Theme {
+    fn theme(&self) -> switchboard_ui::Theme {
         if self.opts.light {
-            crate::ui::Theme::LIGHT
+            switchboard_ui::Theme::LIGHT
         } else {
-            crate::ui::Theme::DARK
+            switchboard_ui::Theme::DARK
         }
     }
 
@@ -1931,7 +1926,7 @@ impl App {
             ow + nw
         };
         let inside: Vec<Vec<Span<'static>>> =
-            crate::ui::draw::wrap(&hunk.note, cols.saturating_sub(4).max(10))
+            switchboard_ui::draw::wrap(&hunk.note, cols.saturating_sub(4).max(10))
                 .into_iter()
                 .filter(|l| !l.is_empty())
                 .map(|l| vec![Span::styled(l, Tone::Text.style(&theme))])
@@ -2275,7 +2270,7 @@ impl App {
             _ => "-R",
         };
         std::thread::spawn(move || {
-            let _ = crate::mux::socket::ask(&["select-pane", side]);
+            let _ = host().command(&["select-pane", side]);
         });
     }
 
@@ -2870,7 +2865,7 @@ impl App {
         }
         let cols = self.list_width.saturating_sub(2).max(8) as usize;
         if let Some((_, subject)) = &self.title {
-            for line in crate::ui::draw::wrap(subject, cols) {
+            for line in switchboard_ui::draw::wrap(subject, cols) {
                 rows.push(ListRow::Heading(line, StoryLook::Title));
             }
             rows.push(ListRow::Heading(
@@ -3281,7 +3276,7 @@ impl App {
         if self.opts.clipboard && std::env::var_os("SWITCHBOARD").is_none() {
             let text = text.to_string();
             std::thread::spawn(move || {
-                let _ = crate::platform::copy(&text);
+                host().copy(&text);
             });
         }
     }
@@ -3725,7 +3720,7 @@ impl App {
         }
         std::thread::spawn(move || {
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
-            let _ = crate::mux::socket::ask(&args);
+            let _ = host().command(&args);
         });
         true
     }
@@ -3759,7 +3754,7 @@ impl App {
                 text.push_str(" reading the diff");
             }
         }
-        let doc = crate::views::markdown::Markdown::parse(&text, "").layout(inner);
+        let doc = switchboard_ui::markdown::Markdown::parse(&text, "").layout(inner);
         doc.lines
             .iter()
             .map(|l| {
@@ -4212,9 +4207,9 @@ pub fn run(
     // The terminal's colours: its background for the tints and for the
     // `system` theme, which Neovim followed through Ghostty's, its text's
     // for the faint words and the buttons.
-    let (colors, _) = crate::mux::terminal::ask(ASK_WAIT);
+    let (colors, _) = switchboard_ui::terminal::ask(ASK_WAIT);
     if let Some(light) = colors.light() {
-        crate::status::theme::set_system(light);
+        switchboard_ui::theme::set_system(light);
     }
     app.opts.light = Options::read().light;
     app.term = colors;
@@ -4237,9 +4232,9 @@ pub fn run(
         }
         if dirty {
             let (cols, rows) = terminal::size().unwrap_or((cols, rows));
-            let mut frame = Frame::new(cols, rows);
-            frame.cursor = app.draw(&mut frame.buf);
-            let mut bytes = screen.render(&frame);
+            let mut buf = ratatui::buffer::Buffer::empty(Rect::new(0, 0, cols, rows));
+            let cursor = app.draw(&mut buf);
+            let mut bytes = screen.render(&buf, cursor);
             bytes.append(&mut app.out);
             let mut out = io::stdout().lock();
             let _ = out.write_all(&bytes);
@@ -5698,7 +5693,7 @@ mod tests {
     fn the_tints_are_mixed_over_the_terminals_own_background() {
         let mut app = app();
         assert_eq!(app.palette().0, blend(REMOVED, 0x1d1f21, 0.14), "unsaid");
-        let mut said = crate::mux::terminal::Colors::default();
+        let mut said = switchboard_ui::terminal::Colors::default();
         said.take(b"\x1b]11;rgb:28/2a/36\x07");
         said.take(b"\x1b]10;rgb:f8/f8/f2\x07");
         app.term = said;

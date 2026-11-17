@@ -430,6 +430,22 @@ pub fn folder(key: &str) -> Option<PathBuf> {
         .filter(|d| d.is_dir())
 }
 
+/// Tells the drawing crate (`switchboard-ui`, which knows no settings file)
+/// where the settings it follows are: these. Every program of the binary
+/// says so as it starts (`cmd::run`); until then that crate answers the
+/// defaults it lists, which a test here keeps the same as the schema's.
+pub fn share_with_ui() {
+    switchboard_ui::settings::install(switchboard_ui::settings::Source {
+        cached,
+        fresh: |keys| {
+            let all = read_settings();
+            keys.iter()
+                .map(|key| all.iter().find(|o| o.key == *key).map(|o| o.value.clone()))
+                .collect()
+        },
+    });
+}
+
 /// Sets one option. Keeps the file to what differs from the defaults, written
 /// to a temporary file and renamed into place, so a reader never sees half of
 /// it. A file that is there but can't be read as a JSON object is never
@@ -543,6 +559,19 @@ pub fn migrate() -> Result<()> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn the_drawing_crate_s_defaults_are_the_schema_s() {
+        let schema = schema();
+        for (key, default) in switchboard_ui::settings::DEFAULTS {
+            let listed = schema.iter().find(|o| o.key == *key);
+            assert_eq!(
+                listed.map(|o| o.default.clone()),
+                Some(default.value()),
+                "{key}"
+            );
+        }
+    }
 
     #[test]
     fn a_setting_saved_under_its_old_name_is_read_as_its_new_one_once() {

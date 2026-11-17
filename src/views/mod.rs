@@ -46,8 +46,6 @@ pub mod board;
 pub mod conversation;
 pub mod given;
 pub mod image;
-pub mod markdown;
-pub mod mermaid;
 pub mod page;
 pub mod pager;
 pub mod pictures;
@@ -59,6 +57,8 @@ pub mod seen;
 mod serve;
 pub mod shown;
 pub mod ticket;
+
+pub use switchboard_ui::{markdown, mermaid};
 
 use crate::mux::server::ClientId;
 

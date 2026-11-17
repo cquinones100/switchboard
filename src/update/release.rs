@@ -273,11 +273,40 @@ fn audit(source: &str) -> Audit<'_> {
     }
 }
 
-/// The published releases, the newest thirty GitHub lists. `source` says
-/// what asked, for the request audit. The API's address is GitHub's own,
-/// moved by `SWITCHBOARD_GITHUB_API` as every GitHub call is.
+/// How many releases GitHub is asked for at a time.
+const PER_PAGE: usize = 30;
+
+/// The most pages of the list read to find Switchboard's releases.
+const PAGES_MOST: usize = 10;
+
+/// How many of Switchboard's releases the list is read for: enough to
+/// offer the newest and to find one a few back by its tag.
+const ENOUGH: usize = 10;
+
+/// The published releases of Switchboard, newest first, from the list
+/// GitHub gives thirty at a time. The repository holds other releases too
+/// (the diff's own, tagged `diff-v<version>`, which `Release::from_json`
+/// leaves out), so the next page is read while fewer than `ENOUGH` of
+/// Switchboard's have come and the list goes on: releases of the diff
+/// neither hide a newer Switchboard nor the ones just before it.
+/// `source` says what asked, for the request audit. The API's address is
+/// GitHub's own, moved by `SWITCHBOARD_GITHUB_API` as every GitHub call is.
 pub async fn list(source: &str) -> Result<Vec<Release>> {
-    let path = format!("repos/{REPO}/releases?per_page=30");
+    let mut found = Vec::new();
+    for page in 1..=PAGES_MOST {
+        let (mut releases, listed) = list_page(page, source).await?;
+        found.append(&mut releases);
+        if found.len() >= ENOUGH || listed < PER_PAGE {
+            break;
+        }
+    }
+    Ok(found)
+}
+
+/// One page of the list: Switchboard's releases on it, and how many
+/// releases of any kind it held.
+async fn list_page(page: usize, source: &str) -> Result<(Vec<Release>, usize)> {
+    let path = format!("repos/{REPO}/releases?per_page={PER_PAGE}&page={page}");
     let response = github::get_public(&path, source).await?;
     if !response.ok() {
         let said = response.body["message"].as_str().unwrap_or("").to_string();
@@ -305,7 +334,10 @@ pub async fn list(source: &str) -> Result<Vec<Release>> {
         .body
         .as_array()
         .ok_or_else(|| anyhow!("GitHub's list of releases wasn't a list"))?;
-    Ok(listed.iter().filter_map(Release::from_json).collect())
+    Ok((
+        listed.iter().filter_map(Release::from_json).collect(),
+        listed.len(),
+    ))
 }
 
 /// How long a release's file may take to arrive.
@@ -466,6 +498,8 @@ mod tests {
             json!({"tag_name": "v0.3.0-rc.1", "prerelease": true}),
             json!({"tag_name": "v0.3.0"}),
             json!({"tag_name": "nightly"}),
+            // A release of the diff alone, which is none of Switchboard's.
+            json!({"tag_name": "diff-v9.0.0"}),
             json!({"tag_name": "v0.1.0"}),
         ]
         .iter()

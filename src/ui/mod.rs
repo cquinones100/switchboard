@@ -56,15 +56,12 @@ use ratatui::text::Span;
 use crate::mux::compose::Frame;
 use crate::mux::input::{Key, Mouse};
 use crate::mux::server::{ClientId, Server};
-use crate::settings;
+use crate::ui::pointer::BoxPointer;
 
 pub mod confirm;
-pub mod draw;
-pub mod field;
 pub mod headless;
 pub mod images;
 pub mod keylist;
-pub mod kit;
 pub mod layout;
 pub mod menu;
 pub mod message;
@@ -76,162 +73,14 @@ mod serve;
 pub mod tip;
 pub mod when;
 
+pub use switchboard_ui::{Look, Theme, draw, field, kit};
+
 pub use confirm::Confirm;
 pub use menu::{Menu, MenuOption};
 pub use message::Message;
 pub use picker::{PickItem, Picked, Picker};
 pub use serve::Handed;
 pub use tip::Tip;
-
-/// The shades of grey the boxes are drawn in (lib/sidebar/text.js's
-/// `PALETTES`), for a dark terminal or a light one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Theme {
-    pub text: Color,
-    pub dim: Color,
-    pub faint: Color,
-    pub bright: Color,
-    /// The chosen option's background.
-    pub highlight: Color,
-    /// A row under the mouse, fainter than the chosen one.
-    pub panel: Color,
-}
-
-impl Theme {
-    pub const DARK: Theme = Theme {
-        text: Color::Indexed(250),
-        dim: Color::Indexed(244),
-        faint: Color::Indexed(240),
-        bright: Color::Indexed(255),
-        highlight: Color::Indexed(238),
-        panel: Color::Indexed(236),
-    };
-    /// The dark shades as the UX 2.0 canvas's tokens give them, for a
-    /// terminal that draws truecolor (src/status/theme.rs's `truecolor`).
-    pub const DARK_TRUE: Theme = Theme {
-        text: Color::Rgb(0xc9, 0xcd, 0xd9),
-        dim: Color::Rgb(0x8d, 0x93, 0xa8),
-        faint: Color::Rgb(0x56, 0x5b, 0x6e),
-        bright: Color::Rgb(0xff, 0xff, 0xff),
-        highlight: Color::Rgb(0x26, 0x2b, 0x40),
-        panel: Color::Rgb(0x1b, 0x1e, 0x29),
-    };
-    pub const LIGHT: Theme = Theme {
-        text: Color::Indexed(236),
-        dim: Color::Indexed(242),
-        faint: Color::Indexed(248),
-        bright: Color::Indexed(232),
-        highlight: Color::Indexed(252),
-        panel: Color::Indexed(254),
-    };
-}
-
-/// The settings the boxes follow, read as an overlay opens.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Look {
-    /// A click takes an option, Yes or No, and closes a box from outside it
-    /// (menu_mouse).
-    pub mouse: bool,
-    /// What a click would press lights under the mouse (hover_highlight,
-    /// with menu_mouse).
-    pub hover: bool,
-    /// Easy mode's × in a box's top edge (easy_keys with menu_mouse), as
-    /// render.js's `closable`.
-    pub close: bool,
-    /// Tab and Shift-Tab move focus as on a webpage (tab_focus). A box's
-    /// own options take Tab whatever it says.
-    pub tab_focus: bool,
-    pub theme: Theme,
-    /// A box whose list runs past it has a scroll bar on its right edge
-    /// (scroll_bars).
-    pub scroll_bars: bool,
-    /// The empty columns beside a tab's narrow lone pane, where a box about
-    /// the tab that goes in the middle is drawn as a pane instead when it
-    /// fits there (boxes_beside_narrow_pane); set as the overlays are drawn
-    /// for such a box alone (`Layer::about`), never under a view that
-    /// covers the screen.
-    pub middle: Option<Rect>,
-}
-
-impl Default for Look {
-    /// The settings' defaults: clicks and hover on, easy mode off, dark.
-    fn default() -> Look {
-        Look {
-            mouse: true,
-            hover: true,
-            close: false,
-            tab_focus: true,
-            theme: Theme::DARK,
-            scroll_bars: true,
-            middle: None,
-        }
-    }
-}
-
-impl Look {
-    /// The look the settings give now. The theme is light when the theme
-    /// setting says light, or says system on a terminal whose background is
-    /// light (src/status/theme.rs).
-    /// The dark theme in the canvas's colors for a terminal that draws
-    /// truecolor (`truecolor`), else as `read`.
-    pub fn read_for(truecolor: bool) -> Look {
-        let mut look = Look::read();
-        if truecolor && look.theme == Theme::DARK {
-            look.theme = Theme::DARK_TRUE;
-        }
-        look
-    }
-
-    pub fn read() -> Look {
-        let all = settings::read_settings();
-        let on = |key: &str| {
-            all.iter()
-                .find(|s| s.key == key)
-                .is_none_or(|s| s.value != serde_json::Value::Bool(false))
-        };
-        let light = all
-            .iter()
-            .any(|s| s.key == "theme" && crate::status::theme::light_for(&s.value));
-        let mouse = on("menu_mouse");
-        Look {
-            mouse,
-            hover: mouse && on("hover_highlight"),
-            close: mouse && on("easy_keys"),
-            tab_focus: on("tab_focus"),
-            theme: if light { Theme::LIGHT } else { Theme::DARK },
-            scroll_bars: on("scroll_bars"),
-            middle: None,
-        }
-    }
-
-    pub fn text(&self) -> Style {
-        Style::new().fg(self.theme.text)
-    }
-
-    pub fn dim(&self) -> Style {
-        Style::new().fg(self.theme.dim)
-    }
-
-    pub fn faint(&self) -> Style {
-        Style::new().fg(self.theme.faint)
-    }
-
-    pub fn bright(&self) -> Style {
-        Style::new().fg(self.theme.bright)
-    }
-
-    pub fn bold_bright(&self) -> Style {
-        self.bright().add_modifier(Modifier::BOLD)
-    }
-
-    /// The yellow bold `›` beside the chosen option.
-    pub fn pointer(&self) -> Span<'static> {
-        Span::styled(
-            "›",
-            Style::new().fg(draw::YELLOW).add_modifier(Modifier::BOLD),
-        )
-    }
-}
 
 /// How an overlay ended.
 #[derive(Clone, Debug, PartialEq, Eq)]

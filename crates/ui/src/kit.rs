@@ -50,10 +50,14 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 
-use super::Theme;
-use super::draw::{cut, width};
-use crate::mux::compose::colors::ACCENT;
-use crate::sidebar::text::{Badge, SPINNER};
+use crate::Theme;
+use crate::draw::{cut, width};
+use crate::text::{Badge, SPINNER};
+use crate::theme::ACCENT;
+
+/// The mark a watch line starts with (`Mark::Watch`), which the diff's
+/// story writes its chapters' watch lines with.
+pub const WATCH_MARK: &str = "⚠";
 
 /// The half circle that opens a rounded object, and the one that closes it.
 pub const CAP_LEFT: &str = "\u{E0B6}";
@@ -243,7 +247,7 @@ impl Mark {
             Mark::Awake => ("☕", Tone::Dim),
             Mark::Selected => ("◆", Tone::Accent),
             Mark::Slot => ("◌", Tone::Working),
-            Mark::Watch => (crate::diff::story::WATCH_MARK, Tone::Needs),
+            Mark::Watch => (WATCH_MARK, Tone::Needs),
         }
     }
 }
@@ -1132,7 +1136,7 @@ impl BoardCard {
 /// A title wrapped to two lines at most of `cols`, by words, the second
 /// ending in … when the rest doesn't fit; one line when it fits on one.
 pub fn title_lines(title: &str, cols: usize) -> Vec<String> {
-    let wrapped = crate::sidebar::text::wrap(title, cols);
+    let wrapped = crate::text::wrap(title, cols);
     let first = cut(wrapped.first().map_or("", String::as_str), cols);
     match wrapped.get(1..).filter(|rest| !rest.is_empty()) {
         Some(rest) => vec![first, cut(&rest.join(" "), cols)],
@@ -1405,7 +1409,7 @@ pub fn option(
             Span::styled(
                 "›",
                 Style::new()
-                    .fg(super::draw::YELLOW)
+                    .fg(crate::draw::YELLOW)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
@@ -1531,7 +1535,7 @@ pub fn input_prompted(
 #[allow(clippy::too_many_arguments)]
 pub fn input_field(
     prompt: &str,
-    field: &super::field::Field,
+    field: &crate::field::Field,
     placeholder: &str,
     cols: usize,
     right: Vec<Span<'static>>,
@@ -1717,7 +1721,7 @@ pub fn initial(name: &str, color: Color) -> Vec<Span<'static>> {
         .map(|c| c.to_uppercase().collect())
         .filter(|i: &String| width(i) <= 2)
         .unwrap_or_else(|| "?".into());
-    let [r, g, b] = super::images::rgb(color);
+    let [r, g, b] = crate::theme::rgb(color);
     let lum = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
     let fg = if lum > 140.0 {
         Color::Indexed(232)
@@ -1807,7 +1811,7 @@ pub fn draw_scrollbar(
     let spans = scrollbar(total, top, visible, height as usize, theme);
     for (r, span) in spans.iter().enumerate() {
         let line = ratatui::text::Line::from(span.clone());
-        super::draw::put_line(buf, x, y + r as u16, 1, &line);
+        crate::draw::put_line(buf, x, y + r as u16, 1, &line);
     }
     !spans.is_empty()
 }

@@ -1155,9 +1155,24 @@ switchboard diff --working [dir]        # the changes not yet committed, staged 
 switchboard diff --ahead [--plan <note>] [dir]  # tell the story and keep it for M-d, drawing nothing
 ```
 
-With `--ahead` it compares with the base `M-d` would (`--plan` naming the tab's plan note, a path in the notes directory, which the server passes with Diff story reads the tab's plan on), and exits 0 once the story is told (or there was none to tell), or 2 or 3 with why on its error output; a second run on the same commit does nothing.
+With `--ahead` it compares with the base `M-d` would (`--plan` naming the tab's plan note, a path in the notes directory, which the server passes with Diff story reads the tab's plan on), and exits 0 once the story is told (or there was none to tell), or 2 with why on its error output; a second run on the same commit does nothing.
 
 `switchboard diff-story [--path] [dir]` prints the story `M-d` tells of the branch's change as Markdown, as `yS` copies it, so the tab's Claude can read the story you are looking at; Switchboard's instructions to Claude name it, and Claude Code may run it without asking. Without a directory it reads the pane's, as `M-d` would, else the current one. It only reads what the diff kept: the base `M-d` last compared the branch's commit with, never fetched, and the story kept under the change's key, never asked of Haiku, so with neither it prints "No story told for this change yet: open M-d and press its story key." and exits 0; while Settings' "Diff told as a story" or "Files in reading order" is off, it says `M-d` tells no story. With "Uncommitted changes in M-d" on, the files changed only since the last commit follow in a last "Not committed yet" chapter, as `M-d` shows them. `--path` prints the story's file in `~/.cache/switchboard/diff-story/` instead.
+
+### The diff alone
+
+The diff is also an app of its own, `switchboard-diff`, for a terminal with no Switchboard running: the same program and the same keys, in any git repository.
+
+```
+curl -fsSL https://raw.githubusercontent.com/cquinones100/switchboard/main/install.sh | sh -s -- --diff
+switchboard-diff [dir]                  # the branch in dir (else here) against the default branch, or the branch it was cut from
+switchboard-diff --base origin/develop  # against another branch or commit
+switchboard-diff --working [dir]        # the changes not yet committed
+```
+
+It has a version and releases of its own, apart from Switchboard's (tagged `diff-v<version>` in the same repository): each holds `switchboard-diff-<version>-<target>.tar.gz` with its checksum and its signature by the same release key, which the install line checks before it puts `switchboard-diff` in `~/.local/bin`. Run the line again for a newer one. Alone, it knows no pull request, so it compares with the default branch, or with the branch its own tracks when that is another one, tells its story through `claude -p` directly (and without Claude Code lists the files by kind and sends nothing), follows what you set for the diff in `~/.config/switchboard/settings.json` when you have one, and keeps its stories in `~/.cache/switchboard-diff`. It has no list of trusted directories, so it reads any repository as your own code: open someone else's pull request with `wtpr` and `M-d` instead. [Its README](../crates/diff/README.md) has the rest.
+
+`switchboard diff` and `M-d` are this same program, loaded by the workspace as its first plugin (the plugin API, `crates/plugin-api`), which answers what it asks: the pull request's base, your settings, the request audit, the pane beside it.
 
 ## The notes app
 

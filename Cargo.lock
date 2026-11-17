@@ -2909,6 +2909,9 @@ dependencies = [
  "sha2 0.11.1",
  "similar",
  "ssh-key",
+ "switchboard-diff",
+ "switchboard-plugin-api",
+ "switchboard-ui",
  "syntect",
  "tar",
  "tiny-skia",
@@ -2920,6 +2923,53 @@ dependencies = [
  "unicode-width",
  "url",
  "zbus",
+]
+
+[[package]]
+name = "switchboard-diff"
+version = "0.1.0-dev"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "libc",
+ "portable-pty",
+ "ratatui",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "similar",
+ "switchboard-plugin-api",
+ "switchboard-ui",
+ "syntect",
+ "two-face",
+ "unicode-segmentation",
+ "unicode-width",
+]
+
+[[package]]
+name = "switchboard-plugin-api"
+version = "0.9.1"
+dependencies = [
+ "anyhow",
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "switchboard-ui"
+version = "0.9.1"
+dependencies = [
+ "crossterm",
+ "libc",
+ "pulldown-cmark",
+ "ratatui",
+ "regex",
+ "serde_json",
+ "unicode-segmentation",
+ "unicode-width",
+ "vte",
 ]
 
 [[package]]

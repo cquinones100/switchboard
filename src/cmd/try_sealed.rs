@@ -38,9 +38,13 @@
 //! The crates are fetched outside the sandbox, which `cargo fetch` can do
 //! without running anything of theirs, only from crates.io, each with its
 //! checksum in `Cargo.lock`: a git, path or other registry's dependency is
-//! refused (`manifest_problem`, read with cargo's own TOML parser, and
-//! `lock_problem`, which takes `Cargo.lock` only as cargo writes it),
-//! since cargo would fetch it from wherever the PR says. They are fetched
+//! refused (`packages_problem`, each manifest read with cargo's own TOML
+//! parser, and `lock_problem`, which takes `Cargo.lock` only as cargo
+//! writes it), since cargo would fetch it from wherever the PR says. The
+//! one path a dependency may have is another package of the same
+//! workspace, a folder inside the worktree by its real path (Switchboard is
+//! such a workspace, its crates under `crates/`): the PR's own code, which
+//! cargo fetches nothing for and builds only inside the sandbox. They are fetched
 //! into `~/.cache/switchboard/sealed/cargo`, which no sandbox can write,
 //! with no environment or config of yours: from an empty folder of the
 //! system's temporary directory, outside your home (cargo reads
@@ -230,32 +234,98 @@ fn remove(path: &Path) {
 
 // ── Whether its crates may be fetched ───────────────────────────────────────
 
-/// The package `Cargo.toml` names, or why its crates aren't fetched: read
+/// What a `Cargo.toml` of the worktree names: its package, and for the one
+/// at the top the folders of its workspace's other packages.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Manifest {
+    pub name: String,
+    pub members: Vec<String>,
+}
+
+/// A folder under the worktree's top as its plain parts, `None` for one
+/// that isn't written plainly: absolute, with `..`, a glob or a backslash.
+fn plain_folder(folder: &str) -> Option<Vec<&str>> {
+    let parts: Vec<&str> = folder.trim_end_matches('/').split('/').collect();
+    let fits = |part: &&str| {
+        !part.is_empty()
+            && *part != "."
+            && *part != ".."
+            && !part.contains(['*', '?', '[', ']', '\\'])
+    };
+    parts.iter().all(fits).then_some(parts)
+}
+
+/// Where a dependency's `path`, written in the manifest of the folder
+/// `dir` (its parts, none at the top), leads from the worktree's top;
+/// `None` for one that leaves the worktree or isn't written plainly.
+fn path_from_top(dir: &[&str], path: &str) -> Option<String> {
+    if path.starts_with('/') || path.contains('\\') {
+        return None;
+    }
+    let mut at: Vec<&str> = dir.to_vec();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                at.pop()?;
+            }
+            part => at.push(part),
+        }
+    }
+    Some(at.join("/"))
+}
+
+/// The package the worktree's `Cargo.toml` names, with its workspace's
+/// other packages, or why its crates aren't fetched; `manifest_problem_in`
+/// for the manifest at the top.
+pub fn manifest_problem(text: &str) -> Result<Manifest, String> {
+    manifest_problem_in(text, "", None)
+}
+
+/// The package a `Cargo.toml` names, or why its crates aren't fetched: read
 /// with cargo's own TOML parser, every dependency must come from crates.io
-/// (no `git`, `path` or `registry` of its own), and nothing may stand in for
-/// a crate (`[patch]`, `[replace]`) or name a workspace elsewhere, since
-/// cargo would fetch any of them from wherever the PR says, outside the
-/// sandbox.
-pub fn manifest_problem(text: &str) -> Result<String, String> {
+/// (no `git` or `registry` of its own) or be another package of the same
+/// workspace by its `path`, and nothing may stand in for a crate
+/// (`[patch]`, `[replace]`) or name a workspace elsewhere, since cargo would
+/// fetch any of them from wherever the PR says, outside the sandbox.
+///
+/// `folder` is the manifest's folder under the worktree's top ("" for the
+/// one at the top), and `members` the workspace's folders as the top's
+/// manifest lists them (`None` while reading that one, which lists them
+/// itself). A workspace's members are folders written plainly, each inside
+/// the worktree, so every package cargo reads is the PR's own code, built
+/// only inside the sandbox; a member holds no workspace of its own.
+pub fn manifest_problem_in(
+    text: &str,
+    folder: &str,
+    members: Option<&[String]>,
+) -> Result<Manifest, String> {
+    let said = if folder.is_empty() {
+        "Cargo.toml".to_string()
+    } else {
+        format!("{folder}/Cargo.toml")
+    };
+    let said = said.as_str();
     let manifest: toml::Table = text
         .parse()
-        .map_err(|e| format!("Cargo.toml doesn't read as TOML: {e}"))?;
+        .map_err(|e| format!("{said} doesn't read as TOML: {e}"))?;
     for key in ["patch", "replace"] {
         if manifest.contains_key(key) {
             return Err(format!(
-                "Cargo.toml has a [{key}] section, whose crates come from elsewhere"
+                "{said} has a [{key}] section, whose crates come from elsewhere"
             ));
         }
     }
     let package = manifest.get("package").and_then(|p| p.as_table());
     let Some(name) = package.and_then(|p| p.get("name")).and_then(|n| n.as_str()) else {
-        return Err("Cargo.toml names no package".into());
+        return Err(format!("{said} names no package"));
     };
     if package.is_some_and(|p| p.contains_key("workspace")) {
-        return Err("Cargo.toml names a workspace elsewhere".into());
+        return Err(format!("{said} names a workspace elsewhere"));
     }
     /// A table's dependency tables, each named as Cargo.toml names it.
     fn deps_of<'a>(
+        said: &str,
         at: &str,
         table: &'a toml::Table,
         out: &mut Vec<(String, &'a toml::Table)>,
@@ -270,44 +340,74 @@ pub fn manifest_problem(text: &str) -> Result<String, String> {
             if let Some(deps) = table.get(kind) {
                 let deps = deps
                     .as_table()
-                    .ok_or_else(|| format!("Cargo.toml's {at}{kind} isn't a table"))?;
+                    .ok_or_else(|| format!("{said}'s {at}{kind} isn't a table"))?;
                 out.push((format!("{at}{kind}"), deps));
             }
         }
         Ok(())
     }
     let mut tables: Vec<(String, &toml::Table)> = Vec::new();
-    deps_of("", &manifest, &mut tables)?;
+    deps_of(said, "", &manifest, &mut tables)?;
     if let Some(targets) = manifest.get("target").and_then(|t| t.as_table()) {
         for (cfg, target) in targets {
             if let Some(target) = target.as_table() {
-                deps_of(&format!("target.{cfg}."), target, &mut tables)?;
+                deps_of(said, &format!("target.{cfg}."), target, &mut tables)?;
             }
         }
     }
-    if let Some(workspace) = manifest.get("workspace").and_then(|w| w.as_table()) {
-        if workspace
-            .get("members")
-            .and_then(|m| m.as_array())
-            .is_some_and(|m| !m.is_empty())
-        {
-            return Err("Cargo.toml is a workspace of several packages".into());
+    let mut own_members: Vec<String> = Vec::new();
+    if let Some(workspace) = manifest.get("workspace") {
+        if members.is_some() {
+            return Err(format!("{said} holds a workspace of its own"));
+        }
+        let workspace = workspace
+            .as_table()
+            .ok_or_else(|| format!("{said}'s workspace isn't a table"))?;
+        if let Some(listed) = workspace.get("members") {
+            let listed = listed
+                .as_array()
+                .ok_or_else(|| format!("{said}'s workspace members aren't a list"))?;
+            for member in listed {
+                let folder = member
+                    .as_str()
+                    .and_then(|m| plain_folder(m).map(|parts| parts.join("/")))
+                    .ok_or_else(|| {
+                        format!(
+                            "{said}'s workspace member {member:?} isn't a folder of the worktree written plainly"
+                        )
+                    })?;
+                own_members.push(folder);
+            }
         }
         if let Some(deps) = workspace.get("dependencies").and_then(|d| d.as_table()) {
             tables.push(("workspace.dependencies".into(), deps));
         }
     }
+    let members: &[String] = members.unwrap_or(&own_members);
+    let dir = plain_folder(folder).unwrap_or_default();
     for (at, deps) in tables {
         for (dep, spec) in deps {
             let Some(spec) = spec.as_table() else {
                 if spec.is_str() {
                     continue;
                 }
-                return Err(format!("{at}'s {dep} isn't a version or a table"));
+                return Err(format!("{said}'s {at}'s {dep} isn't a version or a table"));
             };
+            // Another package of the same workspace, by its folder: the
+            // PR's own code, which cargo fetches nothing for.
+            if let Some(path) = spec.get("path") {
+                let leads = path.as_str().and_then(|p| path_from_top(&dir, p));
+                let in_workspace = leads
+                    .as_ref()
+                    .is_some_and(|to| to.is_empty() || members.contains(to));
+                if !in_workspace {
+                    return Err(format!(
+                        "{said}'s {at}'s {dep} comes from its path, not crates.io or the workspace"
+                    ));
+                }
+            }
             for key in [
                 "git",
-                "path",
                 "registry",
                 "registry-index",
                 "branch",
@@ -316,21 +416,53 @@ pub fn manifest_problem(text: &str) -> Result<String, String> {
                 "base",
             ] {
                 if spec.contains_key(key) {
-                    return Err(format!("{at}'s {dep} comes from its {key}, not crates.io"));
+                    return Err(format!(
+                        "{said}'s {at}'s {dep} comes from its {key}, not crates.io"
+                    ));
                 }
             }
         }
     }
-    Ok(name.to_string())
+    Ok(Manifest {
+        name: name.to_string(),
+        members: own_members,
+    })
+}
+
+/// The packages a worktree holds (the one its `Cargo.toml` names and its
+/// workspace's others), or why its crates aren't fetched: each one's
+/// manifest read as `manifest_problem_in` reads it, and each member's
+/// found inside the worktree by its real path, so a member that is a link
+/// out of it is refused.
+pub fn packages_problem(wt: &Path) -> Result<Vec<String>, String> {
+    let read = |file: &Path, said: &str| {
+        util::read_text(file).ok_or_else(|| format!("{} has no {said}", wt.display()))
+    };
+    let top = manifest_problem(&read(&wt.join("Cargo.toml"), "Cargo.toml")?)?;
+    let real_top = fs::canonicalize(wt).map_err(|e| format!("{}: {e}", wt.display()))?;
+    let mut names = vec![top.name.clone()];
+    for member in &top.members {
+        let said = format!("{member}/Cargo.toml");
+        let file = wt.join(member).join("Cargo.toml");
+        let inside = fs::canonicalize(&file).is_ok_and(|real| real.starts_with(&real_top));
+        if !inside {
+            return Err(format!(
+                "{said}, a workspace member's, isn't a file inside the worktree"
+            ));
+        }
+        let package = manifest_problem_in(&read(&file, &said)?, member, Some(&top.members))?;
+        names.push(package.name);
+    }
+    Ok(names)
 }
 
 /// How many crates `Cargo.lock` lists, or why its crates aren't fetched:
-/// each from crates.io with its checksum, but the package itself (`own`),
-/// which has neither. Read only as cargo writes it (a version line, then
+/// each from crates.io with its checksum, but the worktree's own packages
+/// (`own`, as `packages_problem` names them), which have neither. Read only as cargo writes it (a version line, then
 /// `[[package]]` tables of plain `name`, `version`, `source`, `checksum` and
 /// `dependencies` lines), so what this reads is what cargo reads: a line of
 /// any other form is refused rather than parsed.
-pub fn lock_problem(lock: &str, own: &str) -> Result<usize, String> {
+pub fn lock_problem(lock: &str, own: &[String]) -> Result<usize, String> {
     #[derive(Default)]
     struct Package {
         name: Option<String>,
@@ -413,7 +545,7 @@ pub fn lock_problem(lock: &str, own: &str) -> Result<usize, String> {
     for p in &packages {
         let name = p.name.as_deref().unwrap_or("");
         match (&p.source, &p.checksum) {
-            (None, None) if name == own => {}
+            (None, None) if own.iter().any(|o| o == name) => {}
             (None, _) => {
                 return Err(format!(
                     "Cargo.lock's {name} (line {}) isn't from a registry: a path dependency",
@@ -859,12 +991,10 @@ impl Sealed {
     /// The crates the build needs, fetched outside the sandbox only from
     /// crates.io with their checksums, then copied into `stage`'s cargo.
     fn crates(&self, stage: &Path, fetch: bool) -> Result<()> {
-        let manifest = util::read_text(self.wt.join("Cargo.toml"))
-            .ok_or_else(|| anyhow!("{} has no Cargo.toml", self.wt.display()))?;
         let lock = util::read_text(self.wt.join("Cargo.lock"))
             .ok_or_else(|| anyhow!("{} has no Cargo.lock", self.wt.display()))?;
-        let own = manifest_problem(&manifest)
-            .map_err(|e| anyhow!("{e}, so its crates aren't fetched"))?;
+        let own =
+            packages_problem(&self.wt).map_err(|e| anyhow!("{e}, so its crates aren't fetched"))?;
         let count =
             lock_problem(&lock, &own).map_err(|e| anyhow!("{e}, so its crates aren't fetched"))?;
         let yours = util::read_text(self.main_clone.join("Cargo.lock"));
@@ -1245,7 +1375,10 @@ mod tests {
             manifest_problem(
                 "[package]\nname = \"switchboard\"\n[dependencies]\nregex = \"1\"\nserde = { version = \"1\", features = [\"derive\"] }\n[target.'cfg(target_os = \"linux\")'.dependencies]\nzbus = { version = \"6\", default-features = false }\n[dev-dependencies]\n"
             ),
-            Ok("switchboard".to_string())
+            Ok(Manifest {
+                name: "switchboard".to_string(),
+                members: Vec::new(),
+            })
         );
         for (manifest, why) in [
             (
@@ -1277,8 +1410,32 @@ mod tests {
                 "workspace elsewhere",
             ),
             (
-                "[package]\nname = \"x\"\n[workspace]\nmembers = [\"y\"]\n",
-                "several packages",
+                "[package]\nname = \"x\"\n[dependencies]\ny = { path = \"crates/y\" }\n",
+                "comes from its path",
+            ),
+            (
+                "[package]\nname = \"x\"\n[workspace]\nmembers = [\"crates/y\"]\n[dependencies]\ny = { path = \"crates/y\", git = \"https://evil.example/y\" }\n",
+                "comes from its git",
+            ),
+            (
+                "[package]\nname = \"x\"\n[workspace]\nmembers = [\"crates/y\"]\n[dependencies]\nz = { path = \"crates/y/../z\" }\n",
+                "comes from its path",
+            ),
+            (
+                "[package]\nname = \"x\"\n[workspace]\nmembers = [\"crates/*\"]\n",
+                "written plainly",
+            ),
+            (
+                "[package]\nname = \"x\"\n[workspace]\nmembers = [\"../y\"]\n",
+                "written plainly",
+            ),
+            (
+                "[package]\nname = \"x\"\n[workspace]\nmembers = [\"/tmp/y\"]\n",
+                "written plainly",
+            ),
+            (
+                "[package]\nname = \"x\"\n[workspace]\nmembers = \"crates/y\"\n",
+                "aren't a list",
             ),
             (
                 "[package]\nname = \"x\"\n[workspace.dependencies]\ny = { git = \"https://evil.example/y\" }\n",
@@ -1293,17 +1450,128 @@ mod tests {
     }
 
     #[test]
+    fn a_workspace_s_own_packages_are_read_and_nothing_outside_the_worktree() {
+        // The top's manifest names its members, and may depend on them
+        // by their folders.
+        let top = "[package]\nname = \"x\"\n[workspace]\nmembers = [\"crates/y\", \"crates/z/\"]\ndefault-members = [\".\", \"crates/y\"]\n[dependencies]\ny = { path = \"crates/y\" }\nregex = \"1\"\n";
+        let read = manifest_problem(top).unwrap();
+        assert_eq!(read.name, "x");
+        assert_eq!(read.members, ["crates/y", "crates/z"]);
+        // A member depends on another member, or on the top, by a path
+        // read from its own folder, and on nothing else by one.
+        let member = "[package]\nname = \"y\"\n[dependencies]\nz = { path = \"../z\" }\nx = { path = \"../..\" }\n";
+        assert_eq!(
+            manifest_problem_in(member, "crates/y", Some(&read.members)).map(|m| m.name),
+            Ok("y".to_string())
+        );
+        for (manifest, why) in [
+            (
+                "[package]\nname = \"y\"\n[dependencies]\nw = { path = \"../w\" }\n",
+                "crates/y/Cargo.toml's dependencies's w comes from its path",
+            ),
+            (
+                "[package]\nname = \"y\"\n[dependencies]\nw = { path = \"../../../w\" }\n",
+                "comes from its path",
+            ),
+            (
+                "[package]\nname = \"y\"\n[dependencies]\nw = { path = \"/w\" }\n",
+                "comes from its path",
+            ),
+            (
+                "[package]\nname = \"y\"\n[dependencies]\nw = { git = \"https://evil.example/w\" }\n",
+                "comes from its git",
+            ),
+            (
+                "[package]\nname = \"y\"\n[workspace]\n",
+                "a workspace of its own",
+            ),
+            (
+                "[package]\nname = \"y\"\nworkspace = \"../..\"\n",
+                "workspace elsewhere",
+            ),
+            (
+                "[package]\nname = \"y\"\n[patch.crates-io]\nw = { path = \"../z\" }\n",
+                "[patch]",
+            ),
+        ] {
+            let got = manifest_problem_in(manifest, "crates/y", Some(&read.members)).unwrap_err();
+            assert!(got.contains(why), "{manifest}: {got}");
+        }
+
+        // On disk: every member's manifest is read, and one that is a link
+        // out of the worktree is refused. This repository's own reads.
+        let ours = packages_problem(Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
+        assert_eq!(ours[0], "switchboard");
+        assert!(ours.contains(&"switchboard-ui".to_string()), "{ours:?}");
+
+        let tmp = std::env::temp_dir().join(format!("sb-sealed-members-{}", std::process::id()));
+        remove(&tmp);
+        let (wt, outside) = (tmp.join("wt"), tmp.join("outside"));
+        std::fs::create_dir_all(wt.join("crates/y")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(
+            wt.join("Cargo.toml"),
+            "[package]\nname = \"x\"\n[workspace]\nmembers = [\"crates/y\", \"crates/z\"]\n",
+        )
+        .unwrap();
+        std::fs::write(wt.join("crates/y/Cargo.toml"), "[package]\nname = \"y\"\n").unwrap();
+        std::fs::write(outside.join("Cargo.toml"), "[package]\nname = \"z\"\n").unwrap();
+        symlink(&outside, wt.join("crates/z")).unwrap();
+        let got = packages_problem(&wt).unwrap_err();
+        assert!(
+            got.contains("crates/z/Cargo.toml") && got.contains("inside the worktree"),
+            "{got}"
+        );
+        std::fs::remove_file(wt.join("crates/z")).unwrap();
+        std::fs::create_dir_all(wt.join("crates/z")).unwrap();
+        std::fs::write(
+            wt.join("crates/z/Cargo.toml"),
+            "[package]\nname = \"z\"\n[dependencies]\nw = { path = \"../w\" }\n",
+        )
+        .unwrap();
+        let got = packages_problem(&wt).unwrap_err();
+        assert!(
+            got.contains("crates/z/Cargo.toml") && got.contains("its path"),
+            "{got}"
+        );
+        std::fs::write(
+            wt.join("crates/z/Cargo.toml"),
+            "[package]\nname = \"z\"\n[dependencies]\ny = { path = \"../y\" }\n",
+        )
+        .unwrap();
+        assert_eq!(
+            packages_problem(&wt),
+            Ok(vec!["x".to_string(), "y".into(), "z".into()])
+        );
+        remove(&tmp);
+    }
+
+    #[test]
     fn the_lockfile_is_read_only_as_cargo_writes_it() {
+        let own = ["switchboard".to_string()];
+        let own = &own[..];
         let sum = "a".repeat(64);
         let good = format!(
             "# This file is automatically @generated by Cargo.\n# It is not intended for manual editing.\nversion = 4\n\n[[package]]\nname = \"regex\"\nversion = \"1.12.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"{sum}\"\ndependencies = [\n \"aho-corasick\",\n \"memchr 2.7.4 (registry+https://github.com/rust-lang/crates.io-index)\",\n]\n\n[[package]]\nname = \"switchboard\"\nversion = \"0.1.1\"\ndependencies = [\n \"regex\",\n]\n"
         );
-        assert_eq!(lock_problem(&good, "switchboard"), Ok(2));
+        assert_eq!(lock_problem(&good, own), Ok(2));
         // The repository's own lockfile reads.
         let ours =
             std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.lock"))
                 .unwrap();
-        assert!(lock_problem(&ours, "switchboard").is_ok());
+        let packages = packages_problem(Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
+        assert!(lock_problem(&ours, &packages).is_ok());
+        // A workspace's other package has no source either, and only it.
+        let two = format!("{good}\n[[package]]\nname = \"switchboard-ui\"\nversion = \"0.1.0\"\n");
+        assert!(
+            lock_problem(&two, own)
+                .unwrap_err()
+                .contains("a path dependency")
+        );
+        assert_eq!(
+            lock_problem(&two, &["switchboard".to_string(), "switchboard-ui".into()]),
+            Ok(3)
+        );
 
         for (lock, why) in [
             (good.replace("registry+https://github.com/rust-lang/crates.io-index\"\nchecksum", "git+https://evil.example/r#abc\"\nchecksum"), "not crates.io"),
@@ -1315,7 +1583,7 @@ mod tests {
             (format!("{good}[[patch.unused]]\nname = \"y\"\n"), "isn't as cargo writes it"),
             (good.replace(" \"aho-corasick\",", " \"aho-corasick\" ,"), "isn't as cargo writes it"),
         ] {
-            let got = lock_problem(&lock, "switchboard").unwrap_err();
+            let got = lock_problem(&lock, own).unwrap_err();
             assert!(got.contains(why), "{got}");
         }
     }

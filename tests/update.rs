@@ -116,9 +116,12 @@ impl Fake {
             } else {
                 "application/json; charset=utf-8"
             };
-            r.lock()
-                .unwrap()
-                .get(request.path())
+            // A route served with its query (a page of a list) comes before
+            // the path's own.
+            let routes = r.lock().unwrap();
+            routes
+                .get(request.target.as_str())
+                .or_else(|| routes.get(request.path()))
                 .map(|(status, body)| Reply::bytes(*status, kind, body.clone()))
         });
         Fake {
@@ -209,6 +212,71 @@ impl Fake {
         let base = format!("/repos/{}/releases", update::REPO);
         self.serve(&base, 200, json!([json]).to_string());
         self.serve(&format!("{base}/latest"), 200, json.to_string());
+        json
+    }
+
+    /// A release of the diff alone, `diff-<tag>`, beside the Switchboard
+    /// release `publish` made (`switchboard`, its JSON): its archive for
+    /// every target holds a `switchboard-diff` that says its version, each
+    /// with its checksum and signature (one of them `wrong`). The list
+    /// holds both, the diff's first, as GitHub lists the newer first, and
+    /// the latest stays Switchboard's.
+    fn publish_diff(&self, tag: &str, switchboard: &Value, wrong: Wrong) -> Value {
+        let version = tag.trim_start_matches("diff-v");
+        let binary = format!("#!/bin/sh\necho \"switchboard-diff {version}\"\n").into_bytes();
+        let mut assets = Vec::new();
+        for target in TARGETS {
+            let name = format!("switchboard-diff-{version}-{target}.tar.gz");
+            let archive = archive_of(
+                &format!("switchboard-diff-{version}-{target}/switchboard-diff"),
+                &binary,
+            );
+            let sum = if wrong == Wrong::Checksum {
+                install::sha256_hex(b"something else")
+            } else {
+                install::sha256_hex(&archive)
+            };
+            let by = if wrong == Wrong::Signature {
+                UNTRUSTED
+            } else {
+                TRUSTED
+            };
+            let signature = signing_key(by)
+                .sign(install::SIGNATURE_NAMESPACE, HashAlg::Sha512, &archive)
+                .unwrap()
+                .to_pem(LineEnding::LF)
+                .unwrap();
+            self.serve(&format!("/dl/{name}.sig"), 200, signature);
+            self.serve(&format!("/dl/{name}"), 200, archive);
+            self.serve(
+                &format!("/dl/{name}.sha256"),
+                200,
+                format!("{sum}  {name}\n"),
+            );
+            for file in [
+                name.clone(),
+                format!("{name}.sha256"),
+                format!("{name}.sig"),
+            ] {
+                assets.push(json!({
+                    "name": file,
+                    "browser_download_url": format!("{}/dl/{file}", self.url),
+                }));
+            }
+        }
+        let json = json!({
+            "tag_name": tag,
+            "name": format!("switchboard-diff {version}"),
+            "body": "",
+            "draft": false,
+            "prerelease": false,
+            "published_at": "2026-11-02T12:00:00Z",
+            "html_url": format!("https://github.com/{}/releases/tag/{tag}", update::REPO),
+            "assets": assets,
+        });
+        let base = format!("/repos/{}/releases", update::REPO);
+        self.serve(&base, 200, json!([json, switchboard]).to_string());
+        self.serve(&format!("{base}/tags/{tag}"), 200, json.to_string());
         json
     }
 
@@ -631,6 +699,42 @@ fn the_releases_are_read_with_ghs_token_and_without_it_when_refused_spent_or_off
 }
 
 #[test]
+fn releases_of_the_diff_never_hide_a_newer_switchboard() {
+    // Thirty releases of the diff since Switchboard's newest fill the
+    // list's first page: the look reads on to the page that has it.
+    let fake = Fake::start();
+    let switchboard = fake.publish("v9.9.9", &stub("9.9.9"), Wrong::Nothing);
+    let diffs: Vec<Value> = (0..30)
+        .map(|n| json!({ "tag_name": format!("diff-v1.0.{n}") }))
+        .collect();
+    let list = Fake::list_path();
+    fake.serve(
+        &format!("{list}?per_page=30&page=1"),
+        200,
+        json!(diffs).to_string(),
+    );
+    // The page it is on holds one before it too, which a tag still finds.
+    fake.serve(
+        &format!("{list}?per_page=30&page=2"),
+        200,
+        json!([switchboard, { "tag_name": "v9.9.8" }]).to_string(),
+    );
+    let home = TempDir::new("sbu-diffs");
+    let out = command(&own_copy(home.path()), &fake, home.path())
+        .args(["update", "--check"])
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        out.status.success(),
+        "{said}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(said.contains("Switchboard 9.9.9 is out"), "{said}");
+    assert_eq!(fake.asked(&list), 2);
+}
+
+#[test]
 fn the_server_doesnt_look_with_the_check_off() {
     let fake = Fake::start();
     fake.publish("v9.9.9", &stub("9.9.9"), Wrong::Nothing);
@@ -716,9 +820,18 @@ fn has(program: &str) -> bool {
 }
 
 fn run_install(fake: &Fake, dir: &Path, stubs: &Path) -> std::process::Output {
+    run_install_with(fake, dir, stubs, &[])
+}
+
+/// install.sh piped in with `args`, as `curl … | sh -s -- <args>` runs it.
+fn run_install_with(fake: &Fake, dir: &Path, stubs: &Path, args: &[&str]) -> std::process::Output {
     let script = std::fs::read(INSTALL_SH).unwrap();
     // Piped in, as `curl … | sh` runs it.
-    let mut child = Command::new("sh")
+    let mut command = Command::new("sh");
+    if !args.is_empty() {
+        command.args(["-s", "--"]).args(args);
+    }
+    let mut child = command
         .env("HOME", dir)
         .env("PATH", with_stubs(stubs))
         .env("SHELL", "/bin/zsh")
@@ -736,6 +849,111 @@ fn run_install(fake: &Fake, dir: &Path, stubs: &Path) -> std::process::Output {
         assert_eq!(e.kind(), std::io::ErrorKind::BrokenPipe, "{e}");
     }
     child.wait_with_output().unwrap()
+}
+
+#[test]
+fn install_sh_installs_the_diff_alone_from_its_own_release_with_no_setup() {
+    if !(has("curl") || has("wget")) || !(has("sha256sum") || has("shasum")) || !has("ssh-keygen") {
+        eprintln!("skipped: no curl or wget, no sha256sum or shasum, or no ssh-keygen");
+        return;
+    }
+    let fake = Fake::start();
+    let dir = TempDir::new("sbid");
+    let stubs = stubbed_platform(dir.path(), "Linux", "x86_64", "");
+    let installed = dir.path().join(".local/bin/switchboard-diff");
+    let diff = |args: &[&str]| run_install_with(&fake, dir.path(), &stubs, args);
+
+    // With no release of the diff yet, it says so and installs nothing,
+    // Switchboard's own release being none of its.
+    let switchboard = fake.publish("v9.9.9", &stub("9.9.9"), Wrong::Nothing);
+    let out = diff(&["--diff"]);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("there is no release of switchboard-diff yet"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Its archive is checked as Switchboard's is: a signature that isn't
+    // by a release key installs nothing.
+    fake.publish_diff("diff-v0.3.0", &switchboard, Wrong::Signature);
+    let out = diff(&["--diff"]);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("isn't signed by Switchboard's release key"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!installed.exists());
+
+    // Its own newest release, whatever Switchboard's version is.
+    let released = fake.publish_diff("diff-v0.3.0", &switchboard, Wrong::Nothing);
+    let out = diff(&["--diff"]);
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{said}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        said.contains("Downloading Switchboard's diff 0.3.0"),
+        "{said}"
+    );
+    assert!(said.contains("Installed switchboard-diff 0.3.0"), "{said}");
+    assert!(
+        said.contains("Run it in a repository: switchboard-diff"),
+        "{said}"
+    );
+    assert!(installed.is_file());
+    // The diff alone: Switchboard isn't installed, and no setup is run.
+    assert!(!dir.path().join(".local/bin/switchboard").exists());
+    assert!(!dir.path().join("mark").exists(), "a setup was run");
+
+    // A hundred releases of Switchboard since: the diff's is on the list's
+    // second page, which is read once the first, a full one, has none.
+    std::fs::remove_file(&installed).unwrap();
+    // A release candidate of the diff listed first is not the newest
+    // release: only a plain version is.
+    let mut full: Vec<Value> = (0..99)
+        .map(|n| json!({ "tag_name": format!("v9.9.{n}") }))
+        .collect();
+    full.insert(
+        0,
+        json!({ "tag_name": "diff-v0.4.0-rc.1", "prerelease": true }),
+    );
+    let list = Fake::list_path();
+    fake.serve(
+        &format!("{list}?per_page=100&page=1"),
+        200,
+        json!(full).to_string(),
+    );
+    fake.serve(
+        &format!("{list}?per_page=100&page=2"),
+        200,
+        json!([released]).to_string(),
+    );
+    let out = diff(&["--diff"]);
+    assert!(out.status.success(), "{out:?}");
+    assert!(installed.is_file());
+
+    // Switchboard's install is still the repository's latest release, the
+    // diff's being listed before it or not.
+    let out = run_install(&fake, dir.path(), &stubs);
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("Installed switchboard 9.9.9 (stub)"),
+        "{out:?}"
+    );
+
+    // Anything else it is given is refused before anything is asked.
+    let out = diff(&["--notes"]);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("it takes --target or --diff"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]

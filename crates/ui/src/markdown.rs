@@ -46,7 +46,7 @@ use regex::Regex;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use super::mermaid;
+use crate::mermaid;
 
 // glow-style.json's colours, as 256-colour indices.
 pub const TEXT: u8 = 252;
@@ -428,7 +428,7 @@ fn placeholder_cells(p: PictureRow, at: usize, from: usize, to: usize) -> String
         p.id & 0xff
     );
     for c in first..last {
-        out.push_str(&crate::ui::images::placeholder(p.row, c as u16));
+        out.push_str(&crate::placeholder::placeholder(p.row, c as u16));
     }
     out.push_str("\x1b[0m");
     out
@@ -442,7 +442,7 @@ pub enum Wanted {
     /// A Mermaid diagram, by its source.
     Diagram(String),
     /// Someone's photo, for an avatar on a board (`super::board`).
-    Photo(crate::photos::Who),
+    Photo(crate::who::Who),
 }
 
 impl Wanted {
@@ -457,7 +457,7 @@ impl Wanted {
 }
 
 /// What an avatar's photo is known by among a view's pictures.
-pub fn photo_key(who: &crate::photos::Who) -> String {
+pub fn photo_key(who: &crate::who::Who) -> String {
     format!("photo:{:?}:{}", who.service, who.id)
 }
 
@@ -491,7 +491,7 @@ pub fn picture_cells(
     width: usize,
     max_rows: usize,
 ) -> (u16, u16) {
-    let most = crate::ui::images::MARKS.len();
+    let most = crate::placeholder::MARKS.len();
     let (cw, ch) = (cell.0.max(1) as f64, cell.1.max(1) as f64);
     let (w, h) = (px.0.max(1) as f64, px.1.max(1) as f64);
     let (max_cols, max_rows) = (width.clamp(1, most) as f64, max_rows.clamp(1, most) as f64);
@@ -2108,12 +2108,12 @@ mod tests {
             ansi.contains(&format!("  \x1b[0m\x1b]8;;https://x/a.png\x07{color}")),
             "{ansi:?}"
         );
-        assert!(ansi.contains(&crate::ui::images::placeholder(1, 20)));
-        assert!(!ansi.contains(&crate::ui::images::placeholder(1, 21)));
+        assert!(ansi.contains(&crate::placeholder::placeholder(1, 20)));
+        assert!(!ansi.contains(&crate::placeholder::placeholder(1, 21)));
         // Scrolled across, the cells start where the screen does.
         let across = rows[1].ansi(&doc.links, 12, 80, &[]);
-        assert!(across.contains(&crate::ui::images::placeholder(1, 10)));
-        assert!(!across.contains(&crate::ui::images::placeholder(1, 9)));
+        assert!(across.contains(&crate::placeholder::placeholder(1, 10)));
+        assert!(!across.contains(&crate::placeholder::placeholder(1, 9)));
     }
 
     #[test]
