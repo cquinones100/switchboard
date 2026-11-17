@@ -11,6 +11,12 @@
 //! passed that in the tab's environment as NEW_TAB_CONTEXT, out of reach of
 //! the shell; here it is a word of the command, which no shell reads either.
 //!
+//! "Attach this note to a tab" (`attach_note`, the plan "Attach a note to a
+//! tab") is the same link made whatever tab the note has, and without going
+//! there: every open tab listed with the note it has now, a tab with none
+//! taking the note at once, one with another note asked about first, and
+//! the note leaving the tab it was attached to, since a note is one tab's.
+//!
 //! Whichever tab it goes to, Notes moves beside the tab's Claude showing the
 //! note, as M-e puts it there, the cursor left in Claude's pane (the
 //! note_tab_beside setting).
@@ -21,7 +27,7 @@ use super::{in_notes, shown};
 use crate::mux::server::{ClientId, Server};
 use crate::mux::{PaneId, TabId};
 use crate::notes::store;
-use crate::ui::{PickItem, Picker};
+use crate::ui::{Confirm, PickItem, Picker};
 use crate::{paths, settings, worktree};
 
 /// What a note's new tab tells its Claude, added to its system prompt
@@ -65,10 +71,20 @@ fn title_of(note: &str) -> String {
     }
 }
 
+/// A note as a tab's row names it: its file's name, which is its title,
+/// without reading it.
+fn name_of(note: &str) -> String {
+    Path::new(note)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| note.to_string())
+}
+
 impl Server {
-    /// The tab for `note` (the one Notes shows when `None`): the one linked
-    /// to it, else a question which.
-    pub(super) fn note_tab(&mut self, client: ClientId, note: Option<String>) {
+    /// The note a command is about: the one named, else the one the Notes
+    /// in the tab in front shows, else the one Notes shows; none when it is
+    /// no file in the notes directory.
+    fn note_asked(&mut self, client: ClientId, note: Option<String>) -> Option<String> {
         let dir = store::notes_dir();
         // The note of the Notes in the tab in front, of several apps.
         let here = self
@@ -77,12 +93,154 @@ impl Server {
             .map(|s| s.tab)
             .and_then(|tab| self.notes_in_tab(tab))
             .and_then(|p| self.shown_in(p));
-        let note = note
-            .filter(|n| !n.is_empty())
+        note.filter(|n| !n.is_empty())
             .or(here)
             .or_else(shown)
-            .filter(|n| in_notes(n) && dir.join(n).is_file());
-        let Some(note) = note else {
+            .filter(|n| in_notes(n) && dir.join(n).is_file())
+    }
+
+    /// The open tabs a note can be a tab's, in the tab bar's order: all but
+    /// Notes' own and the Notifications window, which is no tab
+    /// (note-tab.sh's `choose`).
+    fn tabs_for_a_note(&self) -> Vec<TabId> {
+        self.sessions
+            .iter()
+            .flat_map(|s| s.tabs.iter().copied())
+            .filter(|t| {
+                self.tab_opt(*t, "@notes").as_deref() != Some("1") && !self.is_notices_tab(*t)
+            })
+            .collect()
+    }
+
+    /// The note a tab has, as the picker and a note's tab set it.
+    fn note_of_tab(&self, tab: TabId) -> Option<String> {
+        self.tab_opt(tab, "@tab_note").filter(|n| !n.is_empty())
+    }
+
+    /// "Attach this note to a tab", for `note` (the one Notes shows when
+    /// `None`): every open tab, each with the note it has now, the one the
+    /// note is attached to marked. Picking one attaches the note and stays
+    /// where it is.
+    pub(super) fn attach_note(&mut self, client: ClientId, note: Option<String>) {
+        let Some(note) = self.note_asked(client, note) else {
+            self.say(Some(client), "No note to attach to a tab");
+            return;
+        };
+        let title = title_of(&note);
+        let items: Vec<PickItem> = self
+            .tabs_for_a_note()
+            .into_iter()
+            .map(|tab| PickItem {
+                text: format!("{} {}", self.tab_number(tab), self.tab_label(tab)),
+                tags: match self.note_of_tab(tab) {
+                    Some(has) if has == note => "attached".to_string(),
+                    // Labeled, since the picker drops a tags column
+                    // under six wide, as a short name alone would be.
+                    Some(has) => format!("note: {}", name_of(&has)),
+                    None => String::new(),
+                },
+                value: tab.to_string(),
+                ..PickItem::default()
+            })
+            .collect();
+        if items.is_empty() {
+            self.say(Some(client), &format!("No tab to attach {title} to"));
+            return;
+        }
+        let picker = Picker::new(format!("Attach {title} to which tab?"), items)
+            .named("attach-note")
+            .prompt("Tab: ");
+        self.pick(client, picker, move |server, client, picked| {
+            let tab = picked
+                .and_then(|p| p.value.parse::<TabId>().ok())
+                .filter(|t| server.tabs.contains_key(t));
+            if let Some(tab) = tab {
+                server.attach_note_to(client, tab, note, title);
+            }
+        });
+    }
+
+    /// The note attached to the tab picked: at once when the tab has none,
+    /// after a yes when it has another, and not at all when it has this one.
+    fn attach_note_to(&mut self, client: ClientId, tab: TabId, note: String, title: String) {
+        let number = self.tab_number(tab);
+        let Some(has) = self.note_of_tab(tab) else {
+            self.make_tabs_note(client, tab, &note, &title);
+            return;
+        };
+        if has == note {
+            self.say(
+                Some(client),
+                &format!("{title} is already attached to tab {number}"),
+            );
+            return;
+        }
+        let leaves: Vec<String> = self
+            .tabs_for_a_note()
+            .into_iter()
+            .filter(|t| *t != tab && self.note_of_tab(*t).as_deref() == Some(note.as_str()))
+            .map(|t| format!("{title} will no longer be tab {}'s", self.tab_number(t)))
+            .collect();
+        let question = Confirm::new(format!(
+            "Tab {number} has {}. Attach {title} to it in its place?",
+            name_of(&has)
+        ))
+        .list(leaves);
+        self.ask(client, question, move |server, client, yes| {
+            if yes {
+                server.make_tabs_note(client, tab, &note, &title);
+            }
+        });
+    }
+
+    /// Makes `note` the tab's, linked by you, and no other tab's: a tab it
+    /// was attached to is left with no note, the one shown there last
+    /// included when it is this one, so M-e there asks rather than showing
+    /// a note that has moved. A Notes beside that tab that shows the note
+    /// goes on showing it, so the tab is marked with it (`LEFT`), and
+    /// Notes leaving doesn't keep it as the tab's last.
+    fn make_tabs_note(&mut self, client: ClientId, tab: TabId, note: &str, title: &str) {
+        if !self.tabs.contains_key(&tab) {
+            return;
+        }
+        let mut left = Vec::new();
+        for other in self.tabs_for_a_note() {
+            if other == tab || self.note_of_tab(other).as_deref() != Some(note) {
+                continue;
+            }
+            for option in ["@tab_note", super::BY_YOU, "@tab_note_last"] {
+                if self.tab_opt(other, option).as_deref() == Some(note) {
+                    self.set_tab_opt(other, option, None);
+                }
+            }
+            // Only the note a Notes beside that tab shows now, so a mark
+            // for the one it shows isn't lost to another note leaving.
+            let shown_there = self
+                .notes_in_tab(other)
+                .and_then(|pane| self.shown_in(pane));
+            if shown_there.as_deref() == Some(note) {
+                self.set_tab_opt(other, super::LEFT, Some(note));
+            }
+            left.push(format!("tab {}'s", self.tab_number(other)));
+        }
+        self.set_tab_opt(tab, "@tab_note", Some(note));
+        self.set_tab_opt(tab, super::BY_YOU, Some(note));
+        // Its own note back; a mark for another note stays while Notes may
+        // still show that one.
+        if self.tab_opt(tab, super::LEFT).as_deref() == Some(note) {
+            self.set_tab_opt(tab, super::LEFT, None);
+        }
+        let mut said = format!("Attached {title} to tab {}", self.tab_number(tab));
+        if !left.is_empty() {
+            said.push_str(&format!(", no longer {}", left.join(" or ")));
+        }
+        self.say(Some(client), &said);
+    }
+
+    /// The tab for `note` (the one Notes shows when `None`): the one linked
+    /// to it, else a question which.
+    pub(super) fn note_tab(&mut self, client: ClientId, note: Option<String>) {
+        let Some(note) = self.note_asked(client, note) else {
             self.say(Some(client), "No note to open a tab for");
             return;
         };
@@ -103,23 +261,20 @@ impl Server {
             return;
         }
         let title = title_of(&note);
-        // The open tabs, as the tab bar names them, but Notes' own and the
-        // Notifications window, which is no tab (note-tab.sh's `choose`).
+        // The open tabs, as the tab bar names them.
         let mut items = vec![PickItem::new("+ New tab, in a directory you pick", "new")];
-        for s in &self.sessions {
-            for t in &s.tabs {
-                if self.tab_opt(*t, "@notes").as_deref() == Some("1") || self.is_notices_tab(*t) {
-                    continue;
-                }
-                items.push(PickItem::new(
-                    format!("{} {}", self.tab_number(*t), self.tab_label(*t)),
-                    t.to_string(),
-                ));
-            }
+        for tab in self.tabs_for_a_note() {
+            items.push(PickItem::new(
+                format!("{} {}", self.tab_number(tab), self.tab_label(tab)),
+                tab.to_string(),
+            ));
         }
         let picker = Picker::new(
-            format!("Which tab is {title}'s? Enter links it and goes there"),
+            format!("Which tab is {title}'s? Enter attaches it and goes there"),
             items,
+        )
+        .header(
+            "As \"Attach this note to a tab\", which stays here and asks before replacing a note",
         )
         .named("note-tab")
         .prompt("Tab: ");

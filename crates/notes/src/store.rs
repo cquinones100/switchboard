@@ -136,6 +136,9 @@ pub struct TabLinks {
     pub by_you: String,
     /// Its autopilot item's plan (`@tab_plan_note`).
     pub plan: String,
+    /// The note attached to another tab from it while its Notes showed it
+    /// (`@tab_note_left`).
+    pub left: String,
 }
 
 fn dirname(rel: &str) -> &str {
@@ -1099,6 +1102,7 @@ pub fn tab_links(listed: &str) -> Vec<TabLinks> {
                 pilot_note: opt("@autopilot_note"),
                 by_you: opt(crate::BY_YOU),
                 plan: opt(crate::PLAN_NOTE),
+                left: opt(crate::LEFT),
             });
         }
     }
@@ -1119,12 +1123,14 @@ pub fn relink_plan(
         let to_arrived = followed(&tab.arrived);
         let to_by_you = followed(&tab.by_you);
         let to_plan = followed(&tab.plan);
+        let to_left = followed(&tab.left);
         for (option, to) in [
             ("@tab_note_arrived", &to_arrived),
             ("@tab_note", &to_note),
             ("@tab_note_last", &to_last),
             (crate::BY_YOU, &to_by_you),
             (crate::PLAN_NOTE, &to_plan),
+            (crate::LEFT, &to_left),
         ] {
             if let Some(to) = to {
                 plan.push((tab.id.clone(), option.to_string(), to.clone()));
@@ -1544,6 +1550,7 @@ pub(crate) mod tests {
                 id: "@3".into(),
                 last: "Work/Ideas.md".into(),
                 arrived: "Work/Ideas.md".into(),
+                left: "Work/Ideas.md".into(),
                 ..Default::default()
             },
             TabLinks {
@@ -1594,6 +1601,11 @@ pub(crate) mod tests {
                 (
                     "@3".to_string(),
                     "@tab_note_last".to_string(),
+                    "Home/Ideas.md".to_string()
+                ),
+                (
+                    "@3".to_string(),
+                    "@tab_note_left".to_string(),
                     "Home/Ideas.md".to_string()
                 ),
                 (

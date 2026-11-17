@@ -37,6 +37,8 @@ pub enum Act {
     Mark,
     Squash,
     NoteTab,
+    /// Which tab the note is attached to, asked whatever tab it has.
+    AttachNote,
     /// Start work on the checklist item under the cursor in a new tab.
     WorkOnItem,
     /// UX 2.0: the item's plan note (Enter).
@@ -68,7 +70,7 @@ impl Act {
     pub fn needs_workspace(self) -> bool {
         matches!(
             self,
-            Act::Press(_) | Act::NoteTab | Act::WorkOnItem | Act::ItemTab
+            Act::Press(_) | Act::NoteTab | Act::AttachNote | Act::WorkOnItem | Act::ItemTab
         )
     }
 
@@ -149,6 +151,7 @@ pub fn commands(from_list: bool, in_note: bool, ux2: bool) -> Vec<Command> {
         command("Mark the note to squash", "s", "note", Act::Mark),
         command("Squash the marked notes into one", "S", "note", Act::Squash),
         command("Open the note's tab", "t", "tabs", Act::NoteTab),
+        command("Attach this note to a tab", "", "tabs", Act::AttachNote),
         command(
             "Move Notes beside your work, or back to its own tab",
             "M-e",
@@ -234,10 +237,11 @@ pub fn commands(from_list: bool, in_note: bool, ux2: bool) -> Vec<Command> {
             "fold",
             Act::UnfoldAll,
         ));
-        // The Format menu's own way to start work is the command above.
+        // The Format menu's own ways to start work and to attach the note
+        // are the commands above.
         for (heading, item) in menu::items()
             .into_iter()
-            .filter(|(_, i)| i.act != menu::Act::WorkOnItem)
+            .filter(|(_, i)| !matches!(i.act, menu::Act::WorkOnItem | menu::Act::AttachNote))
         {
             list.push(command(
                 format!("{heading}: {}", item.label),
@@ -326,6 +330,15 @@ mod tests {
                 .iter()
                 .any(|c| c.name.starts_with("Move Notes beside your work") && c.key == "M-e"),
             "Switchboard's commands for Notes"
+        );
+        assert_eq!(
+            from_note
+                .iter()
+                .filter(|c| c.name.ends_with("Attach this note to a tab"))
+                .map(|c| (c.act, c.key.as_str()))
+                .collect::<Vec<_>>(),
+            [(Act::AttachNote, "")],
+            "once, with no key, the Format menu's left out"
         );
         assert!(!from_note.iter().any(|c| c.act == Act::AddItem));
         assert!(

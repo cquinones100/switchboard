@@ -314,6 +314,7 @@ fn press_runs_an_action_by_name_and_opens_a_notes_tab() {
     // The note's tab: none is linked to it, so which, a new one first.
     rig.server.ok(&["press", "note-tab", "Plan.md"]);
     client.wait_text("Which tab is Plan's?");
+    client.wait_text("As \"Attach this note to a tab\"");
     client.type_text("\r");
     client.wait_text("A tab for Plan");
     client.type_text("\r");
@@ -356,6 +357,134 @@ fn press_runs_an_action_by_name_and_opens_a_notes_tab() {
     rig.server.ok(&["press", "note-tab", "Plan.md"]);
     rig.wait("the note's tab in front", |l| tabs(l)[1]["current"] == true);
     assert_eq!(tabs(&rig.list()).len(), 2, "no other tab opened");
+}
+
+#[test]
+fn attach_this_note_to_a_tab_asks_before_it_replaces_a_tabs_note() {
+    let rig = Rig::new();
+    std::fs::write(rig.notes_dir().join("Work/Ideas.md"), "# Ideas\n").unwrap();
+    let mut client = rig.server.attach(140, 36);
+    client.wait_text("$");
+    rig.server.ok(&["new-tab", "-d"]);
+    let two = tabs(&rig.list())[1]["id"].as_str().unwrap().to_string();
+    rig.server
+        .ok(&["set", "-t", &two, "@tab_note", "Work/Ideas.md"]);
+    let note = |l: &Value, tab: usize| tabs(l)[tab]["options"]["@tab_note"].clone();
+    // A message closed, so the next key is the next box's.
+    let close = |client: &mut TestClient, said: &str| {
+        client.wait_text(said);
+        client.type_text("\x1b");
+        client.wait_for("the message gone", |s| !s.iter().any(|l| l.contains(said)));
+    };
+
+    // Every open tab, each with the note it has now.
+    rig.server.ok(&["press", "attach-note", "Plan.md"]);
+    let screen = client.wait_text("Attach Plan to which tab?");
+    assert!(
+        screen
+            .iter()
+            .any(|l| l.contains("│   2 ") && l.contains("note: Ideas")),
+        "the second tab's note on its row: {screen:#?}"
+    );
+    // A tab with no note takes it, and Notes' tab stays where it is.
+    client.type_text("\r");
+    let list = rig.wait("the note attached to the first tab", |l| {
+        note(l, 0) == "Plan.md" && tabs(l)[0]["options"]["@tab_note_by_you"] == "Plan.md"
+    });
+    assert_eq!(tabs(&list)[0]["current"], true, "nowhere gone to");
+    assert_eq!(note(&list, 1), "Work/Ideas.md");
+    close(&mut client, "Attached Plan to tab 1");
+
+    // Its own tab is marked, and picking it changes nothing.
+    rig.server.ok(&["press", "attach-note", "Plan.md"]);
+    client.wait_text("Attach Plan to which tab?");
+    let screen = client.wait_text("attached");
+    assert!(
+        screen
+            .iter()
+            .any(|l| l.contains("› 1 ") && l.contains("attached")),
+        "{screen:#?}"
+    );
+    client.type_text("\r");
+    close(&mut client, "Plan is already attached to tab 1");
+    let list = rig.list();
+    assert_eq!(note(&list, 0), "Plan.md");
+    assert_eq!(note(&list, 1), "Work/Ideas.md");
+
+    // A tab with another note asks first, saying whose it no longer is,
+    // and no leaves both as they are.
+    rig.server.ok(&["press", "attach-note", "Plan.md"]);
+    client.wait_text("Attach Plan to which tab?");
+    client.type_text("\x1b[B\r");
+    client.wait_text("Tab 2 has Ideas. Attach Plan to it in its place? [Y/n]");
+    client.wait_text("Plan will no longer be tab 1's");
+    client.type_text("n");
+    client.wait_for("the question gone", |s| {
+        !s.iter().any(|l| l.contains("in its place?"))
+    });
+    let list = rig.list();
+    assert_eq!(note(&list, 0), "Plan.md");
+    assert_eq!(note(&list, 1), "Work/Ideas.md");
+
+    // Yes replaces it, and the note is no longer the first tab's.
+    rig.server.ok(&["press", "attach-note", "Plan.md"]);
+    client.wait_text("Attach Plan to which tab?");
+    client.type_text("\x1b[B\r");
+    client.wait_text("in its place? [Y/n]");
+    client.type_text("\r");
+    let list = rig.wait("the note moved to the second tab", |l| {
+        note(l, 1) == "Plan.md" && note(l, 0).is_null()
+    });
+    assert_eq!(tabs(&list)[1]["options"]["@tab_note_by_you"], "Plan.md");
+    assert!(tabs(&list)[0]["options"]["@tab_note_by_you"].is_null());
+    assert_eq!(tabs(&list)[0]["current"], true, "still nowhere gone to");
+    close(&mut client, "Attached Plan to tab 2, no longer tab 1's");
+}
+
+#[test]
+fn a_note_attached_elsewhere_is_not_remembered_by_the_tab_it_left() {
+    let rig = Rig::new();
+    std::fs::write(rig.notes_dir().join("Work/Ideas.md"), "# Ideas\n").unwrap();
+    let mut client = rig.server.attach(140, 36);
+    client.wait_text("$");
+    rig.server.ok(&["new-tab", "-d"]);
+    let one = tabs(&rig.list())[0]["id"].as_str().unwrap().to_string();
+    rig.server.ok(&["set", "-t", &one, "@tab_note", "Plan.md"]);
+    // The first tab showed another note last, before it had this one.
+    rig.server
+        .ok(&["set", "-t", &one, "@tab_note_last", "Work/Ideas.md"]);
+    // Notes beside the first tab, showing its note, another opened there
+    // and the note come back to since, which lets the arrival marker go.
+    client.type_text(&format!("{ALT}e"));
+    rig.wait("Notes beside the first tab's pane", |l| {
+        pane_ids(&tabs(l)[0]).len() == 2 && marked(l, "@notes_pane").is_some()
+    });
+    client.wait_text("notes-stand-in");
+    rig.server
+        .ok(&["set", "-t", &one, "-u", "@tab_note_arrived"]);
+
+    // Attached to the second tab, it is no longer the first's.
+    rig.server.ok(&["press", "attach-note", "Plan.md"]);
+    client.wait_text("Attach Plan to which tab?");
+    client.type_text("\x1b[B\r");
+    rig.wait("the note moved to the second tab", |l| {
+        tabs(l)[1]["options"]["@tab_note"] == "Plan.md"
+            && tabs(l)[0]["options"]["@tab_note"].is_null()
+    });
+    client.wait_text("Attached Plan to tab 2, no longer tab 1's");
+    client.type_text("\x1b");
+
+    // Notes leaving the first tab, still showing the note, doesn't make
+    // it that tab's last: the one before it stays.
+    client.type_text(&format!("{ALT}e"));
+    let list = rig.wait("Notes gone from the first tab", |l| {
+        pane_ids(&tabs(l)[0]).len() == 1
+    });
+    assert_eq!(
+        tabs(&list)[0]["options"]["@tab_note_last"],
+        "Work/Ideas.md",
+        "{list:#}"
+    );
 }
 
 /// A note written for you, as the meeting notes and the standup record it.

@@ -116,6 +116,14 @@ pub const BY_YOU: &str = "@tab_note_by_you";
 /// the item links none.
 pub const PLAN_NOTE: &str = "@tab_plan_note";
 
+/// Marks a tab with the note "Attach this note to a tab" took from it for
+/// another, while a Notes beside it may still show that note: Notes
+/// leaving the tab doesn't make it the tab's last note again (the
+/// workspace's `remember_note`). The mark stays until the note is attached
+/// to the tab again, since a close asked about and canceled leaves Notes
+/// there.
+pub const LEFT: &str = "@tab_note_left";
+
 /// Notes as a plugin, which the workspace loads in its own process.
 pub struct Notes;
 

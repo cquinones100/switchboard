@@ -2475,6 +2475,18 @@ impl App {
     }
 
     fn note_tab(&mut self) {
+        self.press_for_note("note-tab");
+    }
+
+    /// "Attach this note to a tab": the workspace lists its tabs, and asks
+    /// before the note takes the place of a tab's.
+    fn attach_note(&mut self) {
+        self.press_for_note("attach-note");
+    }
+
+    /// Asks the workspace for `action` on the note under the list's cursor,
+    /// or the one open, from a note.
+    fn press_for_note(&mut self, action: &str) {
         let path = match self.focus {
             Focus::List => self.list_note(),
             Focus::Note => self.current_path().map(Path::to_path_buf),
@@ -2483,7 +2495,7 @@ impl App {
             return;
         };
         let rel = self.store.relative(&path);
-        self.press(&["note-tab", &rel]);
+        self.press(&[action, &rel]);
     }
 
     /// `gw`: work on the checklist item on the cursor's line in a new tab,
@@ -2962,6 +2974,10 @@ impl App {
                 self.switch_diagram_code();
                 return;
             }
+            FormatAct::AttachNote => {
+                self.attach_note();
+                return;
+            }
             _ => {}
         }
         self.editor.change(|doc| match act {
@@ -2982,7 +2998,8 @@ impl App {
             FormatAct::Link
             | FormatAct::PasteImage
             | FormatAct::WorkOnItem
-            | FormatAct::DiagramCode => {}
+            | FormatAct::DiagramCode
+            | FormatAct::AttachNote => {}
         });
         self.take_insert();
         if act.typing() && sel.is_none() && self.editor.mode != Mode::Insert {
@@ -3787,6 +3804,7 @@ impl App {
                 self.press(&[name]);
             }
             PaletteAct::NoteTab => self.note_tab(),
+            PaletteAct::AttachNote => self.attach_note(),
             PaletteAct::WorkOnItem => self.work_on_item(),
             PaletteAct::OpenPlan => {
                 if !self.open_plan() {

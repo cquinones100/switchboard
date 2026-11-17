@@ -43,6 +43,8 @@ pub enum Act {
     DeleteColumn,
     /// The note's mermaid blocks shown as their code, or drawn again.
     DiagramCode,
+    /// Attach the note to a tab, from Switchboard, which asks which.
+    AttachNote,
 }
 
 impl Act {
@@ -150,6 +152,10 @@ pub const SECTIONS: &[(&str, &[Item])] = &[
         ],
     ),
     ("Diagram", &[item("", SHOW_DIAGRAM_CODE, Act::DiagramCode)]),
+    (
+        "Note",
+        &[item("", "Attach this note to a tab", Act::AttachNote)],
+    ),
 ];
 
 /// Every item, in the menu's order, each with its heading.
@@ -680,7 +686,12 @@ mod tests {
                 assert!(by_label(label).is_some(), "{label}");
             }
         }
-        let keys: Vec<&str> = items().iter().map(|(_, i)| i.key).collect();
+        // An item with no key is picked with the arrows or a search alone.
+        let keys: Vec<&str> = items()
+            .iter()
+            .map(|(_, i)| i.key)
+            .filter(|k| !k.is_empty())
+            .collect();
         let mut unique = keys.clone();
         unique.sort();
         unique.dedup();

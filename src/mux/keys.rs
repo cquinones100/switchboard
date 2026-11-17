@@ -202,7 +202,8 @@ impl Action {
     /// `copy-ticket-url`, `copy-pr-number`, `copy-pr-url`,
     /// `clear-image-cache`), updates' (`update-switchboard`, `run-setup`),
     /// `upgrade`,
-    /// Notes' (`notes`, `notes-beside`, `note-tab`, `choose-tab-note`), and
+    /// Notes' (`notes`, `notes-beside`, `note-tab`, `choose-tab-note`,
+    /// `attach-note`), and
     /// the extras'
     /// (`rename-tab`, `go-to-tab`, `pane-nav`, `mission-<view>`,
     /// `notifications`, `habits-report`, `send-reply`, `update-main`,

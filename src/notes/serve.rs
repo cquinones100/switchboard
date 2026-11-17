@@ -44,7 +44,9 @@
 //!
 //! A note's own tab (`tab`): Notes' `t` and M-p's "Open the tab for the note
 //! in Notes" go to the tab linked to the note, or ask which tab is its, a
-//! new one among them.
+//! new one among them. "Attach this note to a tab" (M-p, Notes' palette and
+//! its Format menu) lists every open tab whatever tab the note has, and
+//! asks before it replaces a tab's note.
 //!
 //! The app's palette asks for the workspace's commands by name (`switchboard
 //! press <name> [arg]`, `cmd_press`), as the tmux version's pressed their
@@ -91,14 +93,18 @@ pub enum Command {
     NoteTab,
     /// Which note is this tab's, asked whatever it has.
     ChooseNote,
+    /// Which tab the note Notes shows (or, from `press`, the note named)
+    /// is attached to, asked whatever tab it has.
+    AttachNote,
 }
 
 impl Command {
-    pub const ALL: [Command; 4] = [
+    pub const ALL: [Command; 5] = [
         Command::Open,
         Command::Beside,
         Command::NoteTab,
         Command::ChooseNote,
+        Command::AttachNote,
     ];
 
     /// Its name in keys.json, and what the app presses.
@@ -108,6 +114,7 @@ impl Command {
             Command::Beside => "notes-beside",
             Command::NoteTab => "note-tab",
             Command::ChooseNote => "choose-tab-note",
+            Command::AttachNote => "attach-note",
         }
     }
 
@@ -124,6 +131,9 @@ impl Command {
                 "Open the tab for the note in Notes: the one linked to it, or a new one"
             }
             Command::ChooseNote => "Choose this tab's note, the one M-e shows beside it",
+            Command::AttachNote => {
+                "Attach the note in Notes to a tab, asking before it replaces a tab's note"
+            }
         }
     }
 
@@ -142,6 +152,9 @@ impl Command {
             Command::ChooseNote => {
                 "The notes are ranked on the computer, those naming the tab's ticket or PR first, then those sharing words with its name. \"Keep whatever is open\" stops the question for this tab."
             }
+            Command::AttachNote => {
+                "Lists every open tab with the note it has now, the one this note is attached to marked. A tab with none takes the note at once; one with another note asks first. The note leaves the tab it was attached to, and Notes stays where it is."
+            }
         }
     }
 
@@ -151,7 +164,7 @@ impl Command {
             Command::Open => &["notes", "navigate"],
             Command::Beside => &["notes", "panes"],
             Command::NoteTab => &["notes", "tabs", "new"],
-            Command::ChooseNote => &["notes", "tabs"],
+            Command::ChooseNote | Command::AttachNote => &["notes", "tabs"],
         }
     }
 
@@ -166,7 +179,7 @@ impl Command {
 }
 
 pub use switchboard_notes::store::in_notes;
-pub use switchboard_notes::{BY_YOU, PLAN_ITEM, PLAN_NOTE, WORK_ON_ITEM};
+pub use switchboard_notes::{BY_YOU, LEFT, PLAN_ITEM, PLAN_NOTE, WORK_ON_ITEM};
 
 /// The rest of what a key does, back on the server's task once what it read
 /// off the task (the notes, for ranking them) is in.
@@ -339,6 +352,7 @@ impl Server {
                     self.ask_tab_note(tab, Some(client));
                 }
             }
+            Command::AttachNote => self.attach_note(client, None),
         }
     }
 
@@ -968,19 +982,21 @@ impl Server {
 
     /// Notes leaving a tab: the note it shows becomes the tab's last, once
     /// the tab has a note or another was opened there than the one Notes
-    /// came with.
+    /// came with; never the note attached to another tab from this one
+    /// while Notes showed it (`LEFT`).
     fn remember_note(&mut self, tab: TabId) {
         if self.tab_opt(tab, "@notes").as_deref() == Some("1") {
             return;
         }
         let arrived = self.tab_opt(tab, "@tab_note_arrived");
         self.set_tab_opt(tab, "@tab_note_arrived", None);
+        let left = self.tab_opt(tab, LEFT);
         let note = if per_tab() {
             self.tab_notes_pane(tab).and_then(|p| self.shown_in(p))
         } else {
             shown()
         };
-        let Some(note) = note else {
+        let Some(note) = note.filter(|n| Some(n) != left.as_ref()) else {
             return;
         };
         if self.note_for(tab).is_none() && Some(&note) == arrived.as_ref() {
@@ -1091,7 +1107,7 @@ impl Server {
 
     /// `press <name> [arg]`: runs the action named as its key would, in the
     /// client used last on the caller's session (the app's palette asks
-    /// this); `note-tab` takes the note as `arg`. `work-on-item <note>
+    /// this); `note-tab` and `attach-note` take the note as `arg`. `work-on-item <note>
     /// <line>`, Notes' `gw`, is no key's: it starts work on the item on
     /// that line of the note (src/cmd/work.rs). Nor is UX 2.0's
     /// `plan-item <note> <text>` (M-Enter in "Add an item": a tab whose
@@ -1131,7 +1147,11 @@ impl Server {
         let Some(action) = Action::parse(name) else {
             return Reply::fail(format!("press: no action named {name}"));
         };
-        if arg.is_some() && action != Action::Notes(Command::NoteTab) {
+        let takes_a_note = matches!(
+            action,
+            Action::Notes(Command::NoteTab | Command::AttachNote)
+        );
+        if arg.is_some() && !takes_a_note {
             return Reply::fail(format!("press: {name} takes nothing more"));
         }
         let Some(client) = self.press_client(caller) else {
@@ -1139,6 +1159,7 @@ impl Server {
         };
         match action {
             Action::Notes(Command::NoteTab) => self.note_tab(client, arg),
+            Action::Notes(Command::AttachNote) => self.attach_note(client, arg),
             action => self.act(client, action),
         }
         Reply::ok("")
