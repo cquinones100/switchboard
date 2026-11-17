@@ -164,6 +164,9 @@ impl Button {
 /// What the header says about a tab.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Header {
+    /// The tab's number, as the sidebar shows it; 0 for a window that
+    /// takes none (Notifications), which shows none.
+    pub number: usize,
     pub name: String,
     /// Where the tab works, as it is shown (`~/code/app`).
     pub path: String,
@@ -326,6 +329,18 @@ pub fn draw(
     let must: Vec<&str> = std::iter::once(h.path.as_str())
         .chain(state.as_deref())
         .collect();
+    // The tab's number before its name, bold as the name is: M-1…9,
+    // `switchboard tabs` and messages between tabs name a tab by it. It
+    // is kept at any width: the name after it is what is cut.
+    if h.number > 0 {
+        x = compose::put(
+            buf,
+            x + 1,
+            first,
+            &h.number.to_string(),
+            band.fg(name_fg).add_modifier(Modifier::BOLD),
+        );
+    }
     // The name, the path and the state, then where M-a goes next at the
     // right: the name is cut to keep their room, down to a few words, then
     // the path, and where even both at their least leave too little, M-a's
@@ -512,6 +527,7 @@ mod tests {
 
     fn header(shown: Shown) -> Header {
         Header {
+            number: 0,
             name: "planning".into(),
             path: "~/switchboard".into(),
             branch: String::new(),
@@ -590,6 +606,33 @@ mod tests {
         assert!(text(&buf, 3).starts_with("───"));
         let shown: Vec<Button> = keys.iter().map(|(_, s)| *s).collect();
         assert_eq!(shown, Shown::ALL.map(Button::Show).to_vec());
+    }
+
+    #[test]
+    fn the_tabs_number_comes_before_its_name_and_outlasts_it() {
+        let area = Rect::new(0, 0, 90, ROWS);
+        let mut buf = Buffer::empty(area);
+        let h = Header {
+            number: 4,
+            ..header(Shown::Claude)
+        };
+        draw(&mut buf, area, &h, None, &Palette::DARK, false, false);
+        assert_eq!(text(&buf, 0), " ⠹ 4 planning   ~/switchboard · working 2m");
+        // Bold, as the name is.
+        assert!(buf[(3, 0)].modifier.contains(Modifier::BOLD));
+        // A narrow header cuts the name and keeps the number.
+        let narrow = Rect::new(0, 0, 44, ROWS);
+        let mut buf = Buffer::empty(narrow);
+        let h = Header {
+            number: 12,
+            name: "a tab with a long name that can't fit".into(),
+            ..header(Shown::Claude)
+        };
+        draw(&mut buf, narrow, &h, None, &Palette::DARK, false, false);
+        let first = text(&buf, 0);
+        assert!(first.starts_with(" ⠹ 12 a tab with"), "{first:?}");
+        assert!(!first.contains("can't fit"), "{first:?}");
+        assert!(first.contains("working 2m"), "{first:?}");
     }
 
     #[test]
@@ -953,6 +996,7 @@ mod history_tests {
         let area = Rect::new(0, 0, 120, ROWS);
         let mut buf = Buffer::empty(area);
         let h = Header {
+            number: 0,
             name: "planning".into(),
             path: "~/switchboard".into(),
             branch: String::new(),
@@ -989,6 +1033,7 @@ mod viewing_tests {
         let area = Rect::new(0, 0, 70, ROWS);
         let mut buf = Buffer::empty(area);
         let h = Header {
+            number: 0,
             name: "a long tab name".into(),
             path: "~/code/a/very/long/path/to/somewhere".into(),
             branch: "note/a-long-branch-name".into(),

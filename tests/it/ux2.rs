@@ -58,6 +58,16 @@ fn with_ux2_a_header_names_the_tab_in_place_of_the_status_line() {
 }
 
 #[test]
+fn with_ux2_the_header_says_the_tabs_number_before_its_name() {
+    let server = TestServer::start();
+    settings(&server, json!({"ux2": true, "sidebar": false}));
+    let mut client = server.attach(120, 24);
+    client.wait_for("the first tab's number", |s| s[0].contains("○ 1 "));
+    server.ok(&["new-tab"]);
+    client.wait_for("the second tab's number", |s| s[0].contains("○ 2 "));
+}
+
+#[test]
 fn with_ux2_and_message_boxes_off_a_message_is_said_in_a_box() {
     let server = TestServer::start();
     settings(&server, json!({"ux2": true, "message_boxes": false}));

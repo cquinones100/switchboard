@@ -4352,6 +4352,7 @@ impl Server {
             .map(|a| a.since);
         let dir = self.tab_path(tab);
         super::header::Header {
+            number: self.tab_number(tab),
             name: self.tab_label(tab),
             // The repository it works in, by its main clone, as tab naming
             // last worked it out: a worktree's own path, deep under the
