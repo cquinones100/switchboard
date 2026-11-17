@@ -1340,7 +1340,10 @@ impl Server {
             .and_then(crate::mux::procinfo::args_of)
             .filter(|args| args.first().is_some_and(|a| !a.trim().is_empty()))
             .unwrap_or_else(|| vec![command]);
-        Some(program_line(&args))
+        let own_exe = crate::util::exe()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        Some(program_line(&args, &own_exe))
     }
 
     /// What a pane runs in front, by its program's name alone (`claude`
@@ -1431,19 +1434,20 @@ fn program_name(path: &str) -> String {
 /// written from `~`, cut to 60 columns (`npm run dev`, `vim ~/code/a.rs`),
 /// and Switchboard's own apps by what they are (Notes, the diff, the PR
 /// view).
-fn program_line(args: &[String]) -> String {
+fn program_line(args: &[String], own_exe: &str) -> String {
     let Some((first, rest)) = args.split_first() else {
         return String::new();
     };
     let name = program_name(first);
-    // Switchboard's own command and its words: the binary under any name
-    // starting `switchboard` (a versioned copy), or a link named after a
-    // view, which runs that view.
+    // Switchboard's own command and its words: `switchboard`, the binary
+    // the server runs by its path (which starts the views, under whatever
+    // name it has), or a link named after a view, which runs that view.
     let own: Option<Vec<&str>> = match name.as_str() {
+        _ if first == own_exe => Some(vec![]),
+        "switchboard" => Some(vec![]),
         "switchboard-notes" => Some(vec!["notes"]),
         "switchboard-diff" => Some(vec!["diff"]),
-        "pr-view" | "ticket-view" | "link-view" => Some(vec![name.as_str()]),
-        n if n.starts_with("switchboard") => Some(vec![]),
+        "pr-view" | "ticket-view" | "link-view" | "pr-image" => Some(vec![name.as_str()]),
         _ => None,
     };
     let app = own.and_then(|mut words| {
@@ -1456,6 +1460,9 @@ fn program_line(args: &[String]) -> String {
             ["pr-view", ..] => Some("the PR view"),
             ["ticket-view", ..] => Some("the ticket view"),
             ["link-view", ..] => Some("the link view"),
+            ["pr-image", "--ticket", ..] => Some("the ticket's images"),
+            ["pr-image", ..] => Some("the PR's images"),
+            ["view", "--log", ..] => Some("the CI log"),
             _ => None,
         }
     });
@@ -1464,11 +1471,12 @@ fn program_line(args: &[String]) -> String {
     }
     // A path is an argument of its own, or attached to an option after `=`
     // or `:`, one of a list of them included (`--dir=/…`, `-javaagent:/…`,
-    // `-Dpath=/usr/lib:/…`).
+    // `-Dpath=/usr/lib:/…`, `-DPREFIX=/opt;/…`).
+    const SEPARATORS: [char; 3] = ['=', ':', ';'];
     let short = |arg: &String| {
-        arg.split_inclusive(['=', ':'])
+        arg.split_inclusive(SEPARATORS)
             .map(|part| {
-                let path = part.trim_end_matches(['=', ':']);
+                let path = part.trim_end_matches(SEPARATORS);
                 if path.starts_with('/') {
                     format!("{}{}", crate::paths::tilde(path), &part[path.len()..])
                 } else {
@@ -1499,8 +1507,10 @@ mod tests {
 
     #[test]
     fn a_close_question_lists_a_program_by_its_name() {
-        let line =
-            |args: &[&str]| program_line(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>());
+        let line = |args: &[&str]| {
+            let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            program_line(&args, "/opt/sb/switchboard-0.2.0")
+        };
         let home = crate::paths::home().display().to_string();
         assert_eq!(line(&["/usr/local/bin/npm", "run", "dev"]), "npm run dev");
         assert_eq!(
@@ -1537,7 +1547,20 @@ mod tests {
             line(&[&bin, "notes", "away"]),
             "the place Notes left in its tab"
         );
-        assert_eq!(line(&["switchboard-0.2.0", "diff"]), "the diff");
+        assert_eq!(line(&["/opt/sb/switchboard-0.2.0", "diff"]), "the diff");
+        assert_eq!(
+            line(&["switchboard-backup", "notes"]),
+            "switchboard-backup notes"
+        );
+        assert_eq!(line(&[&bin, "view", "--log", "/x"]), "the CI log");
+        assert_eq!(
+            line(&["pr-image", "--ticket", "X-1"]),
+            "the ticket's images"
+        );
+        assert_eq!(
+            line(&["cmake", &format!("-DP=/opt;{home}/sdk")]),
+            "cmake -DP=/opt;~/sdk"
+        );
         assert_eq!(line(&["pr-view", "--checks"]), "the PR's failing checks");
         assert_eq!(line(&["/usr/bin/diff", "a", "b"]), "diff a b");
         let long = line(&["/bin/sleep", &"9".repeat(80)]);
