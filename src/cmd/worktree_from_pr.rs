@@ -41,6 +41,7 @@
 //! terminal reads escape sequences in it.
 
 use std::collections::BTreeSet;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -506,7 +507,7 @@ fn run(given: &Given, asked: Asked, target: &str, input: &str) -> Result<ExitCod
     // A fork's PR is someone else's code: untrusted unless asked otherwise.
     let fork = pr.is_cross_repository;
     if asked == Asked::Untrusted || (fork && asked != Asked::Trusted) {
-        return untrusted(given, &pr, &repo, &root);
+        return untrusted(given, &pr, &repo, &root, named.is_none());
     }
     // A teammate's PR is their code too: Claude would load its CLAUDE.md,
     // settings and hooks, so it opens untrusted unless all its commits are
@@ -516,11 +517,10 @@ fn run(given: &Given, asked: Asked, target: &str, input: &str) -> Result<ExitCod
         let (others, against) = others_on_pr(&pr, &repo, &root)?;
         if !others.is_empty() {
             eprintln!(
-                "Commits:  not all yours ({}), so it opens untrusted; switchboard worktree-from-pr --trusted {} opens it as your own.",
-                others.join(", "),
-                pr.number
+                "Commits:  not all yours ({}), so it opens untrusted",
+                others.join(", ")
             );
-            return untrusted(given, &pr, &repo, &root);
+            return untrusted(given, &pr, &repo, &root, named.is_none());
         }
         checked_against = Some(against);
     }
@@ -616,7 +616,7 @@ fn run(given: &Given, asked: Asked, target: &str, input: &str) -> Result<ExitCod
                  Read them, then run switchboard worktree-from-pr --trusted {} to open it as your own.",
                 paths::tilde(&finished),
                 others.join(", "),
-                pr.number
+                named_again(&repo, pr.number, named.is_none())
             ));
         }
     }
@@ -711,7 +711,13 @@ fn others_on_pr(
 /// newest commit, and what to know about it printed. Exit code 3 for the
 /// `wtpr` function, the only caller with `--cd-file`: nothing to cd into
 /// or start.
-fn untrusted(given: &Given, pr: &PrDetails, repo: &Repo, root: &Path) -> Result<ExitCode, String> {
+fn untrusted(
+    given: &Given,
+    pr: &PrDetails,
+    repo: &Repo,
+    root: &Path,
+    by_number: bool,
+) -> Result<ExitCode, String> {
     let from = match (pr.is_cross_repository, pr.head_owner.as_deref()) {
         (true, Some(owner)) => format!(" from {owner}'s fork"),
         (true, None) => " from a fork since deleted".to_string(),
@@ -719,7 +725,7 @@ fn untrusted(given: &Given, pr: &PrDetails, repo: &Repo, root: &Path) -> Result<
     };
     eprintln!("PR:       #{}{from}", pr.number);
     let (dir, base) = untrusted_worktree(pr, repo, root)?;
-    print_facts(pr, &dir, &base, root);
+    print_facts(pr, repo, &dir, &base, root, by_number);
     if given.cd_file.is_some() {
         return Ok(ExitCode::from(3));
     }
@@ -944,6 +950,19 @@ fn untrusted_worktree(
     Ok((dir, format!("{base}/{}", pr.base_ref_name)))
 }
 
+/// The PR as a command to open it trusted names it. Asked for by its number,
+/// the number names it again. Asked for by its URL, the command names it in
+/// full, so the trust given is this PR's and never the same number's in the
+/// repository a bare number is read in (another clone's, or this clone's
+/// other remote).
+fn named_again(repo: &Repo, number: u64, by_number: bool) -> String {
+    if by_number {
+        number.to_string()
+    } else {
+        format!("https://github.com/{repo}/pull/{number}")
+    }
+}
+
 /// How long an account made at `created` (RFC 3339) has been on GitHub, in
 /// words: whole years, or days under one.
 fn on_github_for(created: &str, now_ms: i64) -> Option<String> {
@@ -959,8 +978,9 @@ fn on_github_for(created: &str, now_ms: i64) -> Option<String> {
 
 /// What to know about a PR before reading it: who wrote it, how long they
 /// have been on GitHub, its size, what in it runs without being asked, and
-/// how to go on from your main clone.
-fn print_facts(pr: &PrDetails, dir: &Path, base: &str, root: &Path) {
+/// how to open it as your own, a block of its own since the command was
+/// missed at the end of a long line, and how to go on from your main clone.
+fn print_facts(pr: &PrDetails, repo: &Repo, dir: &Path, base: &str, root: &Path, by_number: bool) {
     let login = pr.author.as_deref().unwrap_or("unknown");
     let since = pr
         .author_since
@@ -990,6 +1010,22 @@ fn print_facts(pr: &PrDetails, dir: &Path, base: &str, root: &Path) {
             }
         }
         Err(e) => eprintln!("pr-risk: {e}"),
+    }
+    // A fork's PR opens as a branch of the fork's, never one of yours.
+    let how = match (pr.is_cross_repository, pr.head_owner.as_deref()) {
+        (true, Some(owner)) => format!(", {owner}'s fork a remote of your clone"),
+        _ => String::new(),
+    };
+    eprintln!("\nOpen it as your own{how}, with Claude in its worktree:");
+    eprintln!(
+        "  switchboard worktree-from-pr --trusted {}",
+        named_again(repo, pr.number, by_number)
+    );
+    let caution = "Only for a PR whose author you trust: its hooks, settings and scripts then run.";
+    if std::io::stderr().is_terminal() {
+        eprintln!("  \x1b[2m{caution}\x1b[0m");
+    } else {
+        eprintln!("  {caution}");
     }
     let at = shell_quote(&dir.to_string_lossy());
     let switchboard = super::try_::is_switchboard(root);

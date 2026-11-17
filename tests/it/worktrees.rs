@@ -589,6 +589,26 @@ fn a_pr_url_from_another_repository_opens_in_a_clone_of_that_one_found_among_you
         "not in the one you were in"
     );
 
+    // Opened untrusted from there, the command that opens it as your own
+    // names the PR by its URL: its number alone would be acme/widgets' #5.
+    let tip = w.git(&thing, &["rev-parse", "HEAD"]);
+    w.git(&origin, &["update-ref", "refs/pull/5/head", &tip]);
+    let untrusted = w.run(
+        &here,
+        &[
+            "worktree-from-pr",
+            "--untrusted",
+            "https://github.com/other/thing/pull/5",
+        ],
+    );
+    assert!(
+        stderr(&untrusted).contains(
+            "\n  switchboard worktree-from-pr --trusted https://github.com/other/thing/pull/5\n"
+        ),
+        "{}",
+        stderr(&untrusted)
+    );
+
     let none = w.run(
         &here,
         &[
@@ -822,6 +842,13 @@ fn a_forks_pr_opens_untrusted_by_default_outside_the_clone_running_no_hook_with_
         "not the title its author wrote: {said}"
     );
     assert!(said.contains("switchboard codex-review -C"), "{said}");
+    assert!(
+        said.contains(
+            "\nOpen it as your own, alice's fork a remote of your clone, with Claude in its worktree:\n  \
+             switchboard worktree-from-pr --trusted 9\n"
+        ),
+        "{said}"
+    );
 
     // A commit and a merge there run no hook or filter, theirs or yours.
     std::fs::write(worktree.join("g.txt"), "x\n").unwrap();
@@ -953,13 +980,21 @@ fn a_prs_commits_someone_else_wrote_open_it_untrusted_as_a_forks_would() {
         ],
     );
     assert_eq!(out.status.code(), Some(3), "{}", stderr(&out));
+    let said = stderr(&out);
     assert!(
-        stderr(&out).contains(
-            "not all yours (them@e), so it opens untrusted; switchboard worktree-from-pr --trusted 7 opens it as your own."
-        ),
-        "{}",
-        stderr(&out)
+        said.contains("Commits:  not all yours (them@e), so it opens untrusted\n"),
+        "{said}"
     );
+    // How to open it as your own is a block of its own, before the review's.
+    let own = said
+        .find(
+            "\nOpen it as your own, with Claude in its worktree:\n  \
+             switchboard worktree-from-pr --trusted 7\n  \
+             Only for a PR whose author you trust: its hooks, settings and scripts then run.\n",
+        )
+        .unwrap_or_else(|| panic!("{said}"));
+    let review = said.find("\nReview it from your main clone").unwrap();
+    assert!(own < review, "{said}");
     assert!(read(&cd).is_empty());
     let worktree = w.path(".cache/switchboard/pr-review/o-r/7");
     assert_eq!(w.git(&worktree, &["rev-parse", "HEAD"]), last);
