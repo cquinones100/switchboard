@@ -45,6 +45,21 @@
 //! rest of the landing runs them here too; `--here` does so by hand (the
 //! user's "Run them here").
 //!
+//! A commit tested again (a run that failed for the default branch's
+//! reasons, a job run again by hand) keeps the check runs of its earlier
+//! runs, so before anything else leaves it asks for the commit's GitHub
+//! Actions runs (`wait_ci::earlier`). When its own earlier pushes' runs
+//! passed, each workflow's
+//! latest run that wasn't canceled, and the commit's other checks and
+//! statuses agree (another CI's among them), it says `passed in CI before,
+//! run <id>` and passes with no leak-check and no push, the commit having
+//! been pushed and tested as it is. GitHub not answering for those runs
+//! runs the tests here, since a wait that didn't know them would answer
+//! from them. Otherwise the wait leaves those runs' check
+//! runs out, so the answer is the run this push started, and a canceled
+//! job is neither passed nor failed there: a run with nothing failed and
+//! something canceled is `canceled in CI`, to run again.
+//!
 //! Tests run here, and a push to CI (which runs the repository's pre-push
 //! hook) is made, only where a landing may run the repository's code, as
 //! for `beforePush` (`land_push::may_run_its_code`): your own and
@@ -64,6 +79,7 @@
 //! failed in CI <sha> <run id> <job names>     exit 1, the change's failures; run id "-" for another CI than GitHub's
 //! mixed in CI <sha> <run id> <job names>      exit 1, some or maybe the default branch's
 //! base-failing in CI <sha> <run id> <jobs>    exit 4, every failure the default branch's too
+//! canceled in CI <sha> <run id> <job names>   exit 8, nothing failed, the run canceled
 //! leak-check found <n>                        exit 3, its hits above it
 //! not set                                     exit 5
 //! untrusted                                   exit 7
@@ -351,6 +367,31 @@ impl Run {
             );
             return ExitCode::from(2);
         };
+        let sha = worktree::git_at(&self.top, &["rev-parse", "HEAD"]).unwrap_or_default();
+        crate::integrations::run_by_you();
+        let earlier = match super::wait_ci::earlier(
+            &ci.repo,
+            &sha,
+            &ci.branch,
+            super::wait_ci::poll(),
+        ) {
+            Ok(earlier) => earlier,
+            Err(e) => {
+                println!(
+                    "GitHub didn't say which runs the commit already has ({e}): running the tests here"
+                );
+                return self.here();
+            }
+        };
+        if let Some(runs) = &earlier.passed {
+            let ids: Vec<String> = runs.iter().map(u64::to_string).collect();
+            let before = format!("passed in CI before, run {}", ids.join(", "));
+            self.keep_output(&format!("{before}: every check of {sha} passed\n"));
+            self.record_tests(true, &Counts::default());
+            println!("{before}");
+            println!("passed");
+            return ExitCode::SUCCESS;
+        }
         if !leak_ok {
             let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("switchboard"));
             let out = Command::new(exe)
@@ -394,12 +435,10 @@ impl Run {
             println!("the push to {} failed: running the tests here", ci.branch);
             return self.here();
         }
-        let sha = worktree::git_at(&self.top, &["rev-parse", "HEAD"]).unwrap_or_default();
         // The commit the change sits on, whose CI tells the default
         // branch's failures from the change's.
         let same_as = Some(published);
         set_phase("testing in CI");
-        crate::integrations::run_by_you();
         let answer = super::wait_ci::wait(
             &ci.repo,
             &sha,
@@ -407,6 +446,7 @@ impl Run {
             Duration::from_secs(45 * 60),
             Duration::from_secs(3 * 60),
             super::wait_ci::poll(),
+            Some(&earlier.suites),
         );
         ci.delete();
         drop(cleanup);
@@ -428,7 +468,7 @@ impl Run {
             .find_map(|word| Some((word, answer.strip_prefix(word)?.strip_prefix(' ')?)));
         if let Some((word, rest)) = failure {
             let jobs = rest.splitn(3, ' ').nth(2).unwrap_or("").to_string();
-            let logs = super::wait_ci::failed_logs(&ci.repo, &sha);
+            let logs = super::wait_ci::failed_logs(&ci.repo, &sha, &earlier.suites);
             self.keep_output(&format!("{answer}\n{logs}"));
             let counts = Counts {
                 first: Some(jobs),
@@ -443,6 +483,11 @@ impl Run {
             let word = if word == "mixed" { "mixed" } else { "failed" };
             println!("{word} in CI {rest}");
             return ExitCode::FAILURE;
+        }
+        if let Some(rest) = answer.strip_prefix("canceled ") {
+            self.keep_output(&format!("{answer}\n"));
+            println!("canceled in CI {rest}");
+            return ExitCode::from(8);
         }
         if answer == "none" {
             let mut record = util::read_json_object(self.own.join(crate::sources::landing::RECORD));

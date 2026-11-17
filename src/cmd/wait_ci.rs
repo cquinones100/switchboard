@@ -60,6 +60,15 @@
 //! never as `none`; one GitHub refuses (no token, or one it won't take) ends
 //! it with the reason on stderr and exit 1, as `wait-deploy` does.
 //!
+//! A landing's wait (`land-lock test`) is for the run its own push started,
+//! since a commit pushed again keeps the check runs of its earlier runs:
+//! before pushing it asks for the commit's GitHub Actions runs (`earlier`),
+//! takes them as its answer when they passed, a job run again by hand
+//! included, and the commit's other checks agree, and otherwise leaves their check runs out of the wait (`own`),
+//! by each check run's check suite. There a canceled check run is neither
+//! passed nor failed: a run with nothing failed and something canceled is
+//! `canceled <sha> <run id> <job names>`, for the landing to run again.
+//!
 //! GitHub is asked over its REST API (src/integrations/github.rs), which
 //! counts each request, every 30 seconds, or every `WAIT_CI_POLL_SECS`, for
 //! the tests.
@@ -489,6 +498,148 @@ fn seen(check_runs: &[Value]) -> Seen {
     }
 }
 
+/// What a commit's GitHub Actions runs said before a landing pushed it
+/// again.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Earlier {
+    /// Their check suites, whose check runs aren't the new push's.
+    pub suites: BTreeSet<u64>,
+    /// Their ids when they passed: of the landing's own pushes, every
+    /// workflow's latest run that wasn't canceled finished with nothing failing, one at least succeeding. A
+    /// job run again by hand is its run's latest attempt, which is what
+    /// GitHub gives as the run's conclusion.
+    pub passed: Option<Vec<u64>>,
+}
+
+/// The commit `sha`'s GitHub Actions runs in `repo`, asked before a landing
+/// pushes it again to `branch`. An error when GitHub doesn't answer in three tries, a
+/// `poll` apart, or refuses the token: a wait that didn't know the earlier
+/// runs would answer from them, so the landing doesn't start one. Runs that
+/// passed count as passed only while one of their jobs succeeded
+/// (`a_job_succeeded`) and the commit's other checks agree
+/// (`others_agree`).
+pub fn earlier(repo: &str, sha: &str, branch: &str, poll: Duration) -> Result<Earlier, String> {
+    // No commit named would ask for every commit's runs.
+    if sha.is_empty() {
+        return Err("no commit to ask about".to_string());
+    }
+    let path = format!("repos/{repo}/actions/runs?head_sha={sha}&per_page=100");
+    let mut failed = 0;
+    let answer = loop {
+        match util::block_on(github::rest("GET", &path, None, SOURCE)) {
+            Ok(answer) => break answer,
+            Err(e) if refused(&e) || failed == 2 => return Err(e.to_string()),
+            Err(_) => failed += 1,
+        }
+        std::thread::sleep(poll);
+    };
+    let mut earlier = earlier_of(&answer, branch);
+    if let Some(passed) = &earlier.passed {
+        let agreed = util::block_on(check_runs(repo, sha, SOURCE))
+            .is_ok_and(|(_, all)| others_agree(all, &earlier.suites));
+        if !agreed || !util::block_on(a_job_succeeded(repo, passed)) {
+            earlier.passed = None;
+        }
+    }
+    Ok(earlier)
+}
+
+/// Whether a job of the GitHub Actions `runs` in `repo` succeeded, in each
+/// run's latest attempt: a run whose jobs all skipped ends as a success
+/// too, having run no test, as check runs all skipped are `Nothing`. No
+/// when GitHub doesn't answer for one.
+async fn a_job_succeeded(repo: &str, runs: &[u64]) -> bool {
+    let mut succeeded = false;
+    for run in runs {
+        let path = format!("repos/{repo}/actions/runs/{run}/jobs?per_page=100");
+        let Ok(answer) = github::rest("GET", &path, None, SOURCE).await else {
+            return false;
+        };
+        succeeded |= answer
+            .get("jobs")
+            .and_then(Value::as_array)
+            .is_some_and(|jobs| jobs.iter().any(|job| text(job, "conclusion") == "success"));
+    }
+    succeeded
+}
+
+fn earlier_of(answer: &Value, branch: &str) -> Earlier {
+    let none = Vec::new();
+    let runs = answer
+        .get("workflow_runs")
+        .and_then(Value::as_array)
+        .unwrap_or(&none);
+    let number = |run: &Value, key: &str| run.get(key).and_then(Value::as_u64);
+    let suites = runs
+        .iter()
+        .filter_map(|r| number(r, "check_suite_id"))
+        .collect();
+    // Each workflow's latest run that wasn't canceled, which a workflow
+    // whose every run was canceled has none of. Only a push of `branch`
+    // counts, the landing's own earlier one: a run of another event (one
+    // started by hand, a pull request's) may have run other jobs than a
+    // push's tests.
+    let mut latest: BTreeMap<u64, Option<&Value>> = BTreeMap::new();
+    let pushes = runs
+        .iter()
+        .filter(|run| text(run, "event") == "push" && text(run, "head_branch") == branch);
+    for run in pushes {
+        let slot = latest
+            .entry(number(run, "workflow_id").unwrap_or(0))
+            .or_default();
+        let newer = slot.is_none_or(|kept| number(run, "id") > number(kept, "id"));
+        if text(run, "conclusion") != "cancelled" && newer {
+            *slot = Some(run);
+        }
+    }
+    let finished_clean = |run: &Value| {
+        text(run, "status") == "completed"
+            && matches!(text(run, "conclusion"), "success" | "skipped" | "neutral")
+    };
+    let all_clean = latest.values().all(|run| run.is_some_and(finished_clean));
+    let one_succeeded = latest
+        .values()
+        .flatten()
+        .any(|run| text(run, "conclusion") == "success");
+    let passed = (all_clean && one_succeeded).then(|| {
+        latest
+            .values()
+            .flatten()
+            .filter_map(|run| number(run, "id"))
+            .collect()
+    });
+    Earlier { suites, passed }
+}
+
+/// `all` without the check runs of the check suites `suites`.
+fn not_of(all: Vec<Value>, suites: &BTreeSet<u64>) -> impl Iterator<Item = Value> + '_ {
+    all.into_iter().filter(|c| {
+        c.pointer("/check_suite/id")
+            .and_then(Value::as_u64)
+            .is_none_or(|suite| !suites.contains(&suite))
+    })
+}
+
+/// Whether what isn't GitHub Actions' on a commit lets its earlier runs'
+/// pass stand: of `all`, its check runs and commit statuses, those of no
+/// run of GitHub Actions (`suites`, every run's, since the runs speak for
+/// their own jobs, of which GitHub lists only the latest by name) are all
+/// finished with none failing, a canceled one failing as anywhere but a
+/// landing's own wait. None at all agrees.
+fn others_agree(all: Vec<Value>, suites: &BTreeSet<u64>) -> bool {
+    let others: Vec<Value> = not_of(all, suites).collect();
+    matches!(seen(&others), Seen::Passed | Seen::Nothing)
+}
+
+/// The check runs of a landing's own push, and those of them that were
+/// canceled, taken out: `all` without the check runs of the `earlier`
+/// check suites. A commit status, and a check run of another CI, has no
+/// run of GitHub's to tell it by, so it stays.
+fn own(all: Vec<Value>, earlier: &BTreeSet<u64>) -> (Vec<Value>, Vec<Value>) {
+    not_of(all, earlier)
+        .partition(|c| !(text(c, "status") == "completed" && text(c, "conclusion") == "cancelled"))
+}
+
 pub fn main(args: Vec<String>) -> ExitCode {
     // A program you run asks the services whatever Settings says.
     crate::integrations::run_by_you();
@@ -542,7 +693,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
             }
         };
     }
-    match wait(&repo, &sha, same_as.as_deref(), timeout, grace, poll) {
+    match wait(&repo, &sha, same_as.as_deref(), timeout, grace, poll, None) {
         Ok(answer) => {
             println!("{answer}");
             ExitCode::SUCCESS
@@ -585,7 +736,10 @@ fn failure_line(
 /// gives the line `wait-ci` prints (`passed <sha>`, `failed <sha> <run id>
 /// <job names>` or, with `same_as`, whose failure it is, `none` or
 /// `timeout`); an error when GitHub refuses the token, which waiting won't
-/// mend. `land-lock test` waits on it too.
+/// mend. `land-lock test` waits on it too, with `earlier`, the check suites
+/// the commit had before its push: their check runs are left out, so the
+/// answer is the new run's, and a run of it with nothing failed and
+/// something canceled is `canceled <sha> <run id> <job names>`.
 pub fn wait(
     repo: &str,
     sha: &str,
@@ -593,17 +747,24 @@ pub fn wait(
     timeout: Duration,
     grace: Duration,
     poll: Duration,
+    earlier: Option<&BTreeSet<u64>>,
 ) -> Result<String, String> {
     let started = Instant::now();
     let mut passed_before = false;
     loop {
-        let (now, all) = match util::block_on(check_runs(repo, sha, SOURCE)) {
-            Ok((_, all)) => (Some(seen(&all)), all),
+        let (now, all, canceled) = match util::block_on(check_runs(repo, sha, SOURCE)) {
+            Ok((_, all)) => {
+                let (all, canceled) = match earlier {
+                    Some(earlier) => own(all, earlier),
+                    None => (all, Vec::new()),
+                };
+                (Some(seen(&all)), all, canceled)
+            }
             // No token, or one GitHub refuses, won't mend by waiting, so
             // it is said at once rather than spending the whole timeout.
             Err(e) if refused(&e) => return Err(e.to_string()),
             // A network blip or a rate limit: try again next round.
-            Err(_) => (None, Vec::new()),
+            Err(_) => (None, Vec::new(), Vec::new()),
         };
         let answer = match &now {
             Some(Seen::Failed { run, names, .. }) => {
@@ -611,6 +772,15 @@ pub fn wait(
                     None if started.elapsed() > timeout => Some("timeout".to_string()),
                     line => line,
                 }
+            }
+            Some(Seen::Passed | Seen::Nothing) if !canceled.is_empty() => {
+                let run = canceled.iter().find_map(run_of);
+                let names: Vec<&str> = canceled.iter().map(|c| text(c, "name")).collect();
+                Some(format!(
+                    "canceled {sha} {} {}",
+                    run.unwrap_or_else(|| "-".into()),
+                    names.join(", ")
+                ))
             }
             Some(Seen::Passed) if passed_before => Some(format!("passed {sha}")),
             Some(Seen::Nothing) if started.elapsed() > grace => Some("none".to_string()),
@@ -628,12 +798,14 @@ pub fn wait(
 /// The logs of the commit `sha`'s failed check runs in `repo`, each under
 /// a line naming its job and read as `ciboard::readable` shows them (no
 /// timestamps, colors or group marks, so a runner's summary starts its line), for `land-lock test` to keep as a CI run's
-/// output; empty when GitHub gives none.
-pub fn failed_logs(repo: &str, sha: &str) -> String {
+/// output, without those of the `earlier` check suites, which another
+/// push's run made; empty when GitHub gives none.
+pub fn failed_logs(repo: &str, sha: &str, earlier: &BTreeSet<u64>) -> String {
     util::block_on(async {
         let Ok((_, all)) = check_runs(repo, sha, SOURCE).await else {
             return String::new();
         };
+        let (all, _) = own(all, earlier);
         let mut out = String::new();
         for job in all.iter().filter(|c| has_failed(c)) {
             out.push_str(&format!("==> {} <==\n", text(job, "name")));
@@ -869,6 +1041,134 @@ mod tests {
         assert_eq!(blame(&parts_of(None, &base, &none, true)), Blame::Mixed);
         assert_eq!(blame(&[Part::Change, Part::Change]), Blame::Change);
         assert_eq!(blame(&[]), Blame::Mixed);
+    }
+
+    fn workflow_run(id: u64, workflow: u64, status: &str, conclusion: Value) -> Value {
+        json!({ "id": id, "workflow_id": workflow, "check_suite_id": id + 1000,
+            "event": "push", "head_branch": "ci/land-1",
+            "status": status, "conclusion": conclusion })
+    }
+
+    #[test]
+    fn a_commit_s_earlier_runs_pass_by_each_workflow_s_latest_that_wasn_t_canceled() {
+        let runs = |runs: Vec<Value>| earlier_of(&json!({ "workflow_runs": runs }), "ci/land-1");
+        let done = |id, workflow, conclusion: &str| {
+            workflow_run(id, workflow, "completed", json!(conclusion))
+        };
+        assert_eq!(runs(vec![]), Earlier::default(), "a first push");
+        assert_eq!(earlier_of(&json!({}), "ci/land-1"), Earlier::default());
+        let mut by_hand = done(2, 7, "success");
+        by_hand["event"] = json!("workflow_dispatch");
+        let after_a_failure = runs(vec![done(1, 7, "failure"), by_hand.clone()]);
+        assert_eq!(
+            after_a_failure.passed, None,
+            "a run started by hand may not have run a push's tests"
+        );
+        assert_eq!(after_a_failure.suites, BTreeSet::from([1001, 1002]));
+        assert_eq!(runs(vec![by_hand]).passed, None);
+        let mut elsewhere = done(1, 7, "success");
+        elsewhere["head_branch"] = json!("other");
+        assert_eq!(runs(vec![elsewhere]).passed, None, "another branch's push");
+        let rerun_green = runs(vec![done(1, 7, "success"), done(2, 7, "cancelled")]);
+        assert_eq!(
+            rerun_green.passed,
+            Some(vec![1]),
+            "a run that passed, with a later one canceled"
+        );
+        assert_eq!(rerun_green.suites, BTreeSet::from([1001, 1002]));
+        assert_eq!(
+            runs(vec![done(1, 7, "failure"), done(2, 7, "cancelled")]).passed,
+            None,
+            "a run with failures is never reused"
+        );
+        assert_eq!(
+            runs(vec![done(1, 7, "success"), done(2, 7, "failure")]).passed,
+            None,
+            "the latest run counts, not an earlier pass"
+        );
+        assert_eq!(
+            runs(vec![done(1, 7, "success"), done(2, 8, "cancelled")]).passed,
+            None,
+            "a workflow whose only run was canceled never ran"
+        );
+        assert_eq!(runs(vec![done(1, 7, "cancelled")]).passed, None);
+        assert_eq!(
+            runs(vec![
+                done(1, 7, "success"),
+                workflow_run(2, 8, "in_progress", Value::Null)
+            ])
+            .passed,
+            None,
+            "one still running"
+        );
+        assert_eq!(
+            runs(vec![done(1, 7, "skipped")]).passed,
+            None,
+            "runs that all skipped ran nothing"
+        );
+        assert_eq!(
+            runs(vec![done(1, 7, "success"), done(2, 8, "skipped")]).passed,
+            Some(vec![1, 2])
+        );
+    }
+
+    #[test]
+    fn an_earlier_pass_stands_only_while_the_commit_s_other_checks_agree() {
+        let suites = BTreeSet::from([1001, 1002]);
+        let of = |suite: u64, conclusion: &str| {
+            let mut c = check("Tests", "completed", json!(conclusion));
+            c["check_suite"] = json!({ "id": suite });
+            c
+        };
+        let other = |status: &str, conclusion: Value| {
+            json!({ "name": "other-ci", "status": status, "conclusion": conclusion,
+                "check_suite": { "id": 5 }, "details_url": "https://ci.example/build/9" })
+        };
+        // The canceled later run's jobs, the only ones GitHub lists by name.
+        let actions = vec![of(1002, "cancelled")];
+        let with = |more: Value| {
+            let mut all = actions.clone();
+            all.push(more);
+            all
+        };
+        assert!(others_agree(actions.clone(), &suites), "none besides");
+        assert!(others_agree(
+            with(other("completed", json!("success"))),
+            &suites
+        ));
+        for (status, conclusion) in [
+            ("completed", json!("failure")),
+            ("completed", json!("cancelled")),
+            ("in_progress", Value::Null),
+        ] {
+            assert!(
+                !others_agree(with(other(status, conclusion.clone())), &suites),
+                "{status} {conclusion}"
+            );
+        }
+        let status = |state: &str| as_check_run(&json!({ "context": "ci/tests", "state": state }));
+        assert!(others_agree(with(status("success")), &suites));
+        assert!(!others_agree(with(status("failure")), &suites));
+        assert!(!others_agree(with(status("pending")), &suites));
+    }
+
+    #[test]
+    fn a_landing_s_own_check_runs_leave_out_earlier_runs_and_set_canceled_ones_apart() {
+        let of = |name: &str, suite: u64, conclusion: &str| {
+            let mut c = check(name, "completed", json!(conclusion));
+            c["check_suite"] = json!({ "id": suite });
+            c
+        };
+        let status = as_check_run(&json!({ "context": "ci/tests", "state": "success" }));
+        let all = vec![
+            of("Tests", 1001, "failure"),
+            of("Tests", 1002, "success"),
+            of("Lint", 1002, "cancelled"),
+            status.clone(),
+        ];
+        let (kept, canceled) = own(all, &BTreeSet::from([1001]));
+        assert_eq!(kept, vec![of("Tests", 1002, "success"), status]);
+        assert_eq!(canceled, vec![of("Lint", 1002, "cancelled")]);
     }
 
     #[test]

@@ -6,7 +6,10 @@
 //! repository standing in for GitHub's (an `insteadOf` from its github.com
 //! address) and deleted after a pass, a failure and an interrupt, against a
 //! small GitHub of the test's own on 127.0.0.1, whose default branch's
-//! run tells the change's failure from its own.
+//! run tells the change's failure from its own; and a commit tested again,
+//! which waits for the run its own push started rather than answering from
+//! an earlier one, takes an earlier run that passed with no push, and says
+//! a canceled run as canceled.
 
 use crate::common;
 
@@ -247,7 +250,8 @@ mod in_ci {
     }
 
     /// A GitHub whose check runs are `base` for the commit `base_sha` and
-    /// `runs` for every other, every commit with no statuses, and job 5's
+    /// `runs` for every other, every commit with no statuses and no earlier
+    /// run of GitHub Actions, and job 5's
     /// log failing `tabs::names` under nextest.
     fn github(runs: Value, base_sha: String, base: Value) -> http::Fake {
         http::Fake::github("test-token", move |request| {
@@ -258,6 +262,9 @@ mod in_ci {
                 let log =
                     "2026-11-15T10:00:00.1Z         FAIL [   1.204s] switchboard::it tabs::names";
                 return Some(Reply::json(200, Value::String(log.into())));
+            }
+            if request.target.contains("/actions/runs?head_sha=") {
+                return Some(Reply::json(200, json!({ "workflow_runs": [] })));
             }
             if !request.target.starts_with("/repos/o/r/commits/") {
                 return None;
@@ -365,6 +372,247 @@ mod in_ci {
             "",
             "deleted after the default branch's failure"
         );
+    }
+
+    /// A GitHub for a commit tested again: `workflow_runs` are its GitHub
+    /// Actions runs, and its check runs are `looks`' entry for how many
+    /// times they were asked for before (the last from then on); the
+    /// default branch's commit `base_sha` passes, and job 5's log fails
+    /// `tabs::names` under nextest.
+    fn github_again(workflow_runs: Value, base_sha: String, looks: Vec<Value>) -> http::Fake {
+        github_with_jobs(workflow_runs, base_sha, looks, "success")
+    }
+
+    /// `github_again`, each run's one job ending as `job`.
+    fn github_with_jobs(
+        workflow_runs: Value,
+        base_sha: String,
+        looks: Vec<Value>,
+        job: &'static str,
+    ) -> http::Fake {
+        let asked = std::sync::atomic::AtomicUsize::new(0);
+        http::Fake::github("test-token", move |request| {
+            if request.method != "GET" {
+                return None;
+            }
+            if request.target == "/repos/o/r/actions/jobs/5/logs" {
+                let log =
+                    "2026-11-15T10:00:00.1Z         FAIL [   1.204s] switchboard::it tabs::names";
+                return Some(Reply::json(200, Value::String(log.into())));
+            }
+            if request
+                .target
+                .starts_with("/repos/o/r/actions/runs?head_sha=")
+            {
+                return Some(Reply::json(200, json!({ "workflow_runs": workflow_runs })));
+            }
+            if request.target.starts_with("/repos/o/r/actions/runs/")
+                && request.target.ends_with("/jobs?per_page=100")
+            {
+                let jobs = json!([{ "name": "Tests", "status": "completed", "conclusion": job }]);
+                return Some(Reply::json(200, json!({ "jobs": jobs })));
+            }
+            if !request.target.starts_with("/repos/o/r/commits/") {
+                return None;
+            }
+            let body = if !request.target.contains("/check-runs") {
+                json!({ "state": "pending", "statuses": [] })
+            } else if request.target.contains(&format!("/commits/{base_sha}/")) {
+                json!({ "check_runs": [check(json!("success"), "completed")] })
+            } else {
+                let at = asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                json!({ "check_runs": looks[at.min(looks.len() - 1)] })
+            };
+            Some(Reply::json(200, body))
+        })
+    }
+
+    /// A check run of the GitHub Actions run `run`, whose check suite is
+    /// `run + 1000`.
+    fn check_of(run: u64, conclusion: Value, status: &str) -> Value {
+        json!({ "name": "Tests", "status": status, "conclusion": conclusion,
+            "check_suite": { "id": run + 1000 },
+            "details_url": format!("https://github.com/o/r/actions/runs/{run}/job/5") })
+    }
+
+    fn workflow_run(id: u64, conclusion: &str) -> Value {
+        // The branch is `ci/land-` and git's hash of `feature`, the
+        // worktree's branch, and a newline.
+        json!({ "id": id, "workflow_id": 7, "check_suite_id": id + 1000,
+            "event": "push", "head_branch": "ci/land-a7453f07505c",
+            "status": "completed", "conclusion": conclusion })
+    }
+
+    #[test]
+    fn a_commit_tested_again_waits_for_the_run_its_own_push_started() {
+        let tmp = TempDir::new("land-test-again");
+        let home = tmp.path();
+        let dir = worktree(home);
+        let bare = origin(home, &dir);
+        repos(home, "o/r", json!({ "landing": "direct", "testIn": "ci" }));
+        let head = git(&dir, &["rev-parse", "HEAD"]);
+        let main = git(&dir, &["rev-parse", "main"]);
+        // Run 77 failed and run 78 was canceled before this push, whose own
+        // run, 79, registers only at the third look.
+        let earlier = json!([workflow_run(77, "failure"), workflow_run(78, "cancelled")]);
+        let before = vec![
+            check_of(77, json!("failure"), "completed"),
+            check_of(78, json!("cancelled"), "completed"),
+        ];
+        let with = |own: Value| {
+            let mut all = before.clone();
+            all.push(own);
+            Value::Array(all)
+        };
+        let fake = github_again(
+            earlier.clone(),
+            main.clone(),
+            vec![
+                Value::Array(before.clone()),
+                Value::Array(before.clone()),
+                with(check_of(79, Value::Null, "in_progress")),
+                with(check_of(79, json!("success"), "completed")),
+            ],
+        );
+        let passed = in_ci(home, &dir, &fake).output().unwrap();
+        assert_eq!(
+            said(&passed),
+            "passed\n",
+            "the earlier runs' failure and canceled job aren't the answer"
+        );
+        assert_eq!(passed.status.code(), Some(0));
+        assert_eq!(record(&dir)["tests"]["ok"], true);
+        assert_eq!(ci_branches(&bare), "", "deleted after the pass");
+
+        let fake = github_again(
+            earlier.clone(),
+            main.clone(),
+            vec![with(check_of(79, json!("failure"), "completed"))],
+        );
+        let failed = in_ci(home, &dir, &fake).output().unwrap();
+        assert_eq!(
+            said(&failed),
+            format!("failed in CI {head} 79 Tests\n"),
+            "the new run's failure, named by its own run"
+        );
+
+        let fake = github_again(
+            earlier,
+            main,
+            vec![with(check_of(79, json!("cancelled"), "completed"))],
+        );
+        let canceled = in_ci(home, &dir, &fake).output().unwrap();
+        assert_eq!(
+            said(&canceled),
+            format!("canceled in CI {head} 79 Tests\n"),
+            "a canceled run is said as canceled, not failed"
+        );
+        assert_eq!(canceled.status.code(), Some(8));
+        assert_eq!(ci_branches(&bare), "", "deleted after a canceled run");
+    }
+
+    #[test]
+    fn a_commit_whose_earlier_run_passed_is_not_pushed_again() {
+        let tmp = TempDir::new("land-test-before");
+        let home = tmp.path();
+        let dir = worktree(home);
+        let bare = origin(home, &dir);
+        repos(home, "o/r", json!({ "landing": "direct", "testIn": "ci" }));
+        let head = git(&dir, &["rev-parse", "HEAD"]);
+        let main = git(&dir, &["rev-parse", "main"]);
+        // Run 77's failed job was run again and passed, which GitHub gives
+        // as the run's conclusion; run 78 was canceled.
+        let fake = github_again(
+            json!([workflow_run(77, "success"), workflow_run(78, "cancelled")]),
+            main,
+            vec![json!([
+                check_of(77, json!("success"), "completed"),
+                check_of(78, json!("cancelled"), "completed")
+            ])],
+        );
+        let passed = in_ci(home, &dir, &fake).output().unwrap();
+        assert_eq!(said(&passed), "passed in CI before, run 77\npassed\n");
+        assert_eq!(passed.status.code(), Some(0));
+        assert_eq!(record(&dir)["tests"]["ok"], true);
+        assert_eq!(record(&dir)["tests"]["head"], head);
+        let pushed = Command::new("git")
+            .args(["cat-file", "-e", &head])
+            .current_dir(&bare)
+            .status()
+            .unwrap();
+        assert!(!pushed.success(), "nothing was pushed");
+
+        // A run that succeeded with every job skipped ran no test, so the
+        // commit is pushed and its new run waited for.
+        let fake = github_with_jobs(
+            json!([workflow_run(77, "success")]),
+            git(&dir, &["rev-parse", "main"]),
+            vec![json!([
+                check_of(77, json!("skipped"), "completed"),
+                check_of(79, json!("failure"), "completed")
+            ])],
+            "skipped",
+        );
+        let skipped = in_ci(home, &dir, &fake).output().unwrap();
+        assert_eq!(
+            said(&skipped),
+            format!("failed in CI {head} 79 Tests\n"),
+            "no job of the earlier run succeeded"
+        );
+
+        // Another CI's check failing on the commit: the Actions pass alone
+        // is no answer, so it is pushed and waited for.
+        let elsewhere = json!({ "name": "other-ci", "status": "completed",
+            "conclusion": "failure", "details_url": "https://ci.example/build/9" });
+        let fake = github_again(
+            json!([workflow_run(77, "success")]),
+            git(&dir, &["rev-parse", "main"]),
+            vec![json!([
+                check_of(77, json!("success"), "completed"),
+                elsewhere
+            ])],
+        );
+        let failed = in_ci(home, &dir, &fake).output().unwrap();
+        assert_eq!(
+            said(&failed).lines().last(),
+            Some(format!("mixed in CI {head} - other-ci").as_str()),
+            "{}",
+            said(&failed)
+        );
+    }
+
+    #[test]
+    fn github_not_answering_for_the_commit_s_earlier_runs_runs_the_tests_here() {
+        let tmp = TempDir::new("land-test-unknown");
+        let home = tmp.path();
+        let dir = worktree(home);
+        let bare = origin(home, &dir);
+        repos(
+            home,
+            "o/r",
+            json!({ "landing": "direct", "test": "true", "testIn": "ci" }),
+        );
+        let failing = json!([check(json!("failure"), "completed")]);
+        let fake = http::Fake::github("test-token", move |request| {
+            if request.target.contains("/actions/runs?head_sha=") {
+                return Some(Reply::json(502, json!({ "message": "Bad gateway" })));
+            }
+            let body = if request.target.contains("/check-runs") {
+                json!({ "check_runs": failing })
+            } else {
+                json!({ "state": "pending", "statuses": [] })
+            };
+            Some(Reply::json(200, body))
+        });
+        let here = in_ci(home, &dir, &fake).output().unwrap();
+        assert_eq!(
+            said(&here).lines().last(),
+            Some("passed"),
+            "never answered from check runs it can't tell apart: {}",
+            said(&here)
+        );
+        assert!(said(&here).contains("running the tests here"));
+        assert_eq!(ci_branches(&bare), "", "nothing pushed");
     }
 
     #[test]
