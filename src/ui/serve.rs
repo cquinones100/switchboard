@@ -1360,7 +1360,9 @@ impl Server {
             .and_then(|args| args.into_iter().next())
             .filter(|a| !a.trim().is_empty())
             .or_else(|| slot.pane.foreground_command())?;
-        Some(program_name(&first))
+        Some(program_name(
+            title_of(&first).map_or(first.as_str(), |(exe, _)| exe),
+        ))
     }
 
     // ── Commands ─────────────────────────────────────────────────────────────
@@ -1438,7 +1440,10 @@ fn program_line(args: &[String], own_exe: &str) -> String {
     let Some((first, rest)) = args.split_first() else {
         return String::new();
     };
-    let name = program_name(first);
+    let name = match title_of(first) {
+        Some((exe, title)) => format!("{} {title}", program_name(exe)),
+        None => program_name(first),
+    };
     // Switchboard's own command and its words: `switchboard`, or the
     // binary the server runs by its path, which starts the views under
     // whatever name it has.
@@ -1501,6 +1506,13 @@ fn program_line(args: &[String], own_exe: &str) -> String {
     draw::cut(&words.collect::<Vec<_>>().join(" "), 60)
 }
 
+/// A title a program wrote over its arguments (npm on Linux: `npm exec
+/// @scope/x` all in its first one), as its program and the rest; `None`
+/// for a first argument that is a path or a word alone.
+fn title_of(first: &str) -> Option<(&str, &str)> {
+    first.split_once(' ').filter(|_| !first.starts_with('/'))
+}
+
 /// Text cut to `cols` columns from its left, an `…` in front, so a path
 /// keeps its file's name.
 fn cut_left(text: &str, cols: usize) -> String {
@@ -1561,6 +1573,10 @@ mod tests {
             format!("scp host:{home}/f .")
         );
         assert_eq!(line(&["lazygit"]), "lazygit");
+        assert_eq!(
+            line(&["npm exec @angular/cli serve"]),
+            "npm exec @angular/cli serve"
+        );
         let bin = format!("{home}/.local/bin/switchboard");
         assert_eq!(line(&[&bin, "notes", "--tab"]), "Notes");
         assert_eq!(line(&[&bin, "diff"]), "the diff");
