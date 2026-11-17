@@ -224,7 +224,7 @@ The relay's DM, threads and Home tab.
 
 - [130. Marks for the sidebar's Review loop and Queue-and-clean groups, three options beside today's shared spinner: A turning (◐ and △▲), B still (◎ and ⏏), C still (⌕ and ⇡), each in a row and its group header](https://cquinones100.github.io/switchboard/design/130.html)
 
-## Proposal: the pr and ticket conversations in boxes
+## The pr and ticket conversations in boxes
 
 - [131. The PR view's conversation in boxes, as GitHub draws it: the author's avatar beside a box a comment, its header bar naming who, what and when, a line down the side joining them; a bot's long body folded; a review comment with its line of code; the checks, reviewers and files beside it](https://cquinones100.github.io/switchboard/design/131.html)
 - [132. The same at 80 columns: no panel, its facts one line under the head; the avatar Small in each box's header bar, the line down the side at the boxes' left](https://cquinones100.github.io/switchboard/design/132.html)
