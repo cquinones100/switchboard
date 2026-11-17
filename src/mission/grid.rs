@@ -290,6 +290,7 @@ pub fn drawn(m: &mut Mission, cols: usize, rows: usize) -> Drawn {
     });
     let mut cells: Vec<Option<Vec<Line>>> = vec![None; shown.len()];
     m.cells.clear();
+    m.cell_front = None;
     for (i, x, y, w, h) in areas(&columns) {
         let Some(&(cell, at)) = shown.get(i) else {
             continue;
@@ -301,6 +302,7 @@ pub fn drawn(m: &mut Mission, cols: usize, rows: usize) -> Drawn {
         let (cell_lines, cell_hits, cell_meters) = draw_cell(m, at, focused, saved, w, h);
         let (dx, dy) = (x as u16, (top + y) as u16);
         if focused {
+            m.cell_front = Some((dx, dy, w as u16, h as u16));
             hits.extend(cell_hits.into_iter().map(|hit| HitBox {
                 y: hit.y + dy,
                 x0: hit.x0 + dx,
@@ -1133,6 +1135,39 @@ mod tests {
             .iter()
             .map(|l| l.text().trim_end().to_string())
             .collect()
+    }
+
+    #[test]
+    fn among_several_views_every_one_but_the_focused_is_greyed() {
+        use ratatui::layout::Rect;
+        let mut m = board_11();
+        let (_, hits, ..) = drawn(&mut m, 125, 24);
+        m.hits = hits;
+        let (x, y, w, h) = m.cell_front.expect("the focused view's cell");
+        let front = Rect::new(x, y, w, h);
+        let greyed = m.without_keys(Rect::new(0, 0, 125, 24));
+        // Three cells' rows, none of them the focused view's.
+        let others: std::collections::HashSet<usize> = m
+            .hits
+            .iter()
+            .filter_map(|hit| match hit.spot {
+                Spot::Cell(cell) => Some(cell),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(others.len(), 3);
+        assert!(!greyed.is_empty());
+        assert!(
+            greyed.iter().all(|r| !r.intersects(front)),
+            "{front:?} in {greyed:?}"
+        );
+        // Each of another view's rows is greyed whole.
+        let rows = m
+            .hits
+            .iter()
+            .filter(|hit| matches!(hit.spot, Spot::Cell(_)))
+            .count();
+        assert_eq!(greyed.len(), rows);
     }
 
     #[test]

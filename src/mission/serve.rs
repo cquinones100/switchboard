@@ -9725,6 +9725,53 @@ mod tests {
     }
 
     #[test]
+    fn every_pane_without_the_keys_is_greyed_and_the_view_while_the_list_of_views_has_them() {
+        use ratatui::layout::Rect;
+        let key = |k: &str| Key::parse(k).unwrap();
+        let mut m = ci_mission();
+        let (nav, area) = (Rect::new(0, 0, 20, 10), Rect::new(21, 0, 139, 10));
+        m.nav_area = Some(nav);
+        assert_eq!(
+            m.without_keys(area),
+            vec![nav],
+            "a view of one pane: only the list of views"
+        );
+        for y in 2..9 {
+            m.hits.push(HitBox {
+                y,
+                x0: 80,
+                x1: 138,
+                spot: Spot::Side(10),
+            });
+        }
+        // The list has the keys: the pane beside is greyed, row by row,
+        // down to the footer.
+        let greyed = m.without_keys(area);
+        assert_eq!((greyed[0], greyed.len()), (nav, 8));
+        assert!(
+            greyed[1..]
+                .iter()
+                .all(|r| (r.x, r.right(), r.height) == (21 + 80, 160, 1)),
+            "{greyed:?}"
+        );
+        assert_eq!((greyed[1].y, greyed[7].y), (2, 8));
+        // The pane beside has them: the list is, up to the rule between.
+        window_key(&mut m, key("l"));
+        assert_eq!(m.pane_now(), Pane::Beside);
+        let greyed = m.without_keys(area);
+        assert_eq!((greyed[0], greyed.len()), (nav, 8));
+        assert!(
+            greyed[1..]
+                .iter()
+                .all(|r| (r.x, r.right()) == (21, 21 + 80 - super::super::RULE_ROOM)),
+            "{greyed:?}"
+        );
+        // The list of views has them: the whole view is.
+        m.focus = Some(Focus::View(1));
+        assert_eq!(m.without_keys(area), vec![area]);
+    }
+
+    #[test]
     fn c_w_l_focuses_the_pane_beside_whose_j_scrolls_it_and_another_view_has_its_list() {
         let key = |k: &str| Key::parse(k).unwrap();
         let mut m = ci_mission();

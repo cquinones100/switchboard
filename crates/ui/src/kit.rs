@@ -47,6 +47,8 @@
 //! `Buffer` through `ui::draw::put_line`. Text is measured with
 //! `ui::draw::width`.
 
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 
@@ -1452,6 +1454,71 @@ pub fn pane(
     ]
 }
 
+/// How much of its own color a cell of a pane without the keys keeps; the
+/// rest is the surface's.
+const KEPT_UNFOCUSED: f32 = 0.6;
+
+/// Greys a pane that doesn't have the keys, after it is drawn: the look a
+/// tab's pane without the focus has (`Palette::inactive_bg`, the theme's
+/// `panel`), so the pane with the keys is the one at full strength. Cells
+/// left on the terminal's own background get the surface, and every other
+/// color is mixed toward it, text and tints alike, so a chosen row and a
+/// mark still show, fainter. The terminal's own colors (its default and
+/// the 16 its theme names) can't be mixed by their pixels, so text in one
+/// is drawn faint instead. An image's placeholder cells keep their color,
+/// which is the image's id, so pictures stay as they are. One of the 256
+/// colors (all a theme uses on a terminal that doesn't draw truecolor) is
+/// mixed to the nearest of the 256, never to a truecolor one such a
+/// terminal couldn't draw; a truecolor one stays truecolor. One pass over
+/// the pane's cells, reading nothing.
+pub fn unfocused(buf: &mut Buffer, area: Rect, theme: &Theme) {
+    let surface = theme.panel;
+    let to = crate::theme::rgb(surface);
+    let named = |color: Color| match color {
+        Color::Indexed(n) => n < 16,
+        Color::Rgb(..) => false,
+        _ => true,
+    };
+    // A pane has few colors, so each is mixed once.
+    let mut mixed: Vec<(Color, Color)> = Vec::new();
+    let mut mix = |color: Color| -> Color {
+        if let Some((_, to)) = mixed.iter().find(|(from, _)| *from == color) {
+            return *to;
+        }
+        let from = crate::theme::rgb(color);
+        let m = |i: usize| {
+            (from[i] as f32 * KEPT_UNFOCUSED + to[i] as f32 * (1.0 - KEPT_UNFOCUSED)) as u8
+        };
+        let pixels = [m(0), m(1), m(2)];
+        let to = if matches!(color, Color::Rgb(..)) {
+            Color::Rgb(pixels[0], pixels[1], pixels[2])
+        } else {
+            crate::theme::nearest_indexed(pixels)
+        };
+        mixed.push((color, to));
+        to
+    };
+    let area = area.intersection(buf.area);
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            let cell = &mut buf[(x, y)];
+            if cell.symbol().starts_with(crate::placeholder::PLACEHOLDER) {
+                continue;
+            }
+            if named(cell.fg) {
+                cell.modifier.insert(Modifier::DIM);
+            } else {
+                cell.fg = mix(cell.fg);
+            }
+            if cell.bg == Color::Reset {
+                cell.bg = surface;
+            } else if !named(cell.bg) {
+                cell.bg = mix(cell.bg);
+            }
+        }
+    }
+}
+
 /// A log's line that says why it failed, `cols` wide on the failed tint:
 /// a `▶` at its left, its number (right-aligned `num_w` wide) in the
 /// failed tone, its text bold; the other lines of the log beside it put a
@@ -1901,6 +1968,59 @@ mod tests {
     }
 
     const T: Theme = Theme::DARK;
+
+    #[test]
+    fn a_pane_without_the_keys_is_greyed_toward_the_surface_in_light_and_dark() {
+        for theme in [Theme::DARK, Theme::DARK_TRUE, Theme::LIGHT] {
+            let mut buf = Buffer::empty(Rect::new(0, 0, 4, 1));
+            buf[(0, 0)].set_symbol("a").set_fg(theme.text);
+            buf[(1, 0)]
+                .set_symbol("b")
+                .set_fg(theme.bright)
+                .set_bg(theme.highlight);
+            buf[(2, 0)].set_symbol("c");
+            buf[(3, 0)].set_symbol("d").set_fg(theme.text);
+            unfocused(&mut buf, Rect::new(0, 0, 3, 1), &theme);
+            let (text, surface) = (
+                crate::theme::rgb(theme.text),
+                crate::theme::rgb(theme.panel),
+            );
+            let between = |color: Color, from: [u8; 3]| {
+                let got = crate::theme::rgb(color);
+                (0..3).all(|i| {
+                    let (low, high) = (from[i].min(surface[i]), from[i].max(surface[i]));
+                    (low..=high).contains(&got[i])
+                }) && got != from
+            };
+            // Text moves toward the surface, on the surface.
+            assert!(between(buf[(0, 0)].fg, text), "{theme:?}");
+            assert_eq!(buf[(0, 0)].bg, theme.panel);
+            // The chosen row's highlight stays apart from the surface.
+            assert!(between(buf[(1, 0)].bg, crate::theme::rgb(theme.highlight)));
+            assert_ne!(buf[(1, 0)].bg, buf[(0, 0)].bg);
+            // The terminal's own text color is drawn faint.
+            assert!(buf[(2, 0)].modifier.contains(Modifier::DIM));
+            assert_eq!(buf[(2, 0)].fg, Color::Reset);
+            // A theme of the 256 colors is greyed within them.
+            let indexed = matches!(theme.panel, Color::Indexed(_));
+            assert_eq!(matches!(buf[(0, 0)].fg, Color::Indexed(_)), indexed);
+            assert_eq!(matches!(buf[(1, 0)].bg, Color::Indexed(_)), indexed);
+            // Past the pane, nothing changes.
+            assert_eq!((buf[(3, 0)].fg, buf[(3, 0)].bg), (theme.text, Color::Reset));
+        }
+    }
+
+    #[test]
+    fn a_picture_in_a_pane_without_the_keys_keeps_its_cells() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 1, 1));
+        let id = Color::Rgb(0, 0, 7);
+        buf[(0, 0)]
+            .set_symbol(&crate::placeholder::PLACEHOLDER.to_string())
+            .set_fg(id);
+        let area = buf.area;
+        unfocused(&mut buf, area, &T);
+        assert_eq!((buf[(0, 0)].fg, buf[(0, 0)].bg), (id, Color::Reset));
+    }
 
     #[test]
     fn a_diff_meter_shares_its_cells_by_the_lines_added_and_deleted() {

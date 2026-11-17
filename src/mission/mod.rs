@@ -505,6 +505,10 @@ pub struct Mission {
     /// Each shown view's cell as last drawn, by its place in the grid: its
     /// columns and rows, which the keys lay out by.
     pub cells: Vec<(usize, (u16, u16))>,
+    /// Among several views at once, where the one with the focus was last
+    /// drawn in the view's area: its x, y, columns and rows, which its
+    /// panes without the keys are greyed within (`without_keys`).
+    pub cell_front: Option<(u16, u16, u16, u16)>,
     /// Whether Slack was shown as the view was last put together, alone or
     /// among several, so that it is seen once it no longer shows.
     pub slack_was_shown: bool,
@@ -550,6 +554,10 @@ pub enum Pane {
     List,
     Beside,
 }
+
+/// The columns before a pane beside a list where its rule may stand
+/// (`render::light_divider`).
+pub const RULE_ROOM: u16 = 3;
 
 /// How long `C-w` waits for its second key.
 pub const WINDOW_WAIT_MS: i64 = 1000;
@@ -618,6 +626,7 @@ impl Mission {
             shelf_open: false,
             grid: None,
             cells: Vec::new(),
+            cell_front: None,
             slack_was_shown: false,
             slack_viewed: Default::default(),
             slack_plain_shown: false,
@@ -1162,6 +1171,103 @@ impl Mission {
             .is_some_and(|at| now.saturating_sub(at) <= WINDOW_WAIT_MS)
     }
 
+    /// What of the screen doesn't have the keys, to grey (`kit::unfocused`)
+    /// once it is drawn, with the view in `area`: the whole view while the
+    /// focus is in the list of groups and views, else that list and every
+    /// pane of the view but `pane_now`; among several views at once, every
+    /// view but the one with the focus too. Where the panes are comes from the
+    /// hit boxes the view was just drawn with, so no board says it twice:
+    /// the pane beside is its `Spot::Side` rows, the panel its categories'
+    /// or sections' columns, and the list what is left of each row.
+    fn without_keys(&self, area: ratatui::layout::Rect) -> Vec<ratatui::layout::Rect> {
+        use ratatui::layout::Rect;
+        let mut out = Vec::new();
+        if let Some(nav) = self.nav_area {
+            if matches!(self.focus, Some(Focus::View(_) | Focus::Group(_))) {
+                return vec![area];
+            }
+            out.push(nav);
+        }
+        // Among several views at once, every view but the one with the
+        // focus, whose panes are greyed within its own cell.
+        out.extend(
+            self.hits
+                .iter()
+                .filter(|h| matches!(h.spot, Spot::Cell(_)))
+                .map(|h| Rect::new(area.x + h.x0, area.y + h.y, h.x1 + 1 - h.x0, 1)),
+        );
+        // The last row is the footer's keys.
+        let whole = (0, 0, area.width, area.height.saturating_sub(1));
+        let (left, first, cols, rows) = match (&self.grid, self.cell_front) {
+            (Some(_), Some(cell)) => cell,
+            (Some(_), None) => return out,
+            (None, _) => whole,
+        };
+        let (right, end) = ((left + cols).min(whole.2), (first + rows).min(whole.3));
+        let panes = self.panes();
+        if panes.len() < 2 {
+            return out;
+        }
+        let now = self.pane_now();
+        let sections = self
+            .current()
+            .is_some_and(|v| render::slack_board_shown(self, v));
+        let in_panel = |h: &HitBox| match h.spot {
+            Spot::Category(_) => true,
+            Spot::Choose(_) => sections && usize::from(h.x1 - h.x0) + 1 == slack_board::SECTIONS_W,
+            _ => false,
+        };
+        let in_pane = |h: &HitBox| {
+            in_panel(h)
+                || matches!(
+                    h.spot,
+                    Spot::Side(_)
+                        | Spot::Index(_)
+                        | Spot::Menu(_)
+                        | Spot::Part(..)
+                        | Spot::Check(..)
+                        | Spot::Choose(_)
+                )
+        };
+        let Some(top) = self.hits.iter().filter(|h| in_pane(h)).map(|h| h.y).min() else {
+            return out;
+        };
+        // The panel's columns, down every row of the view's body.
+        let panel = panes.contains(&Pane::Panel).then(|| {
+            let of = self.hits.iter().filter(|h| in_panel(h));
+            (
+                of.clone().map(|h| h.x0).min().unwrap_or(0),
+                of.map(|h| h.x1 + 1).max().unwrap_or(0),
+            )
+        });
+        let mut put = |x0: u16, x1: u16, y: u16| {
+            if x1 > x0 {
+                out.push(Rect::new(area.x + x0, area.y + y, x1 - x0, 1));
+            }
+        };
+        for y in top.max(first)..end {
+            let beside = self
+                .hits
+                .iter()
+                .find(|h| h.y == y && matches!(h.spot, Spot::Side(_)))
+                .map(|h| (h.x0, (h.x1 + 1).min(right)));
+            if let (Some((x0, x1)), true) = (beside, now != Pane::Beside) {
+                put(x0, x1, y);
+            }
+            if let (Some((x0, x1)), true) = (panel, now != Pane::Panel) {
+                put(x0, x1, y);
+            }
+            if now != Pane::List {
+                let from = panel.map_or(left, |(_, x1)| x1);
+                // The rule before the pane beside is left, which the pane
+                // with the keys lights (`render::light_divider`).
+                let to = beside.map_or(right, |(x0, _)| x0.saturating_sub(RULE_ROOM));
+                put(from, to, y);
+            }
+        }
+        out
+    }
+
     pub fn side_last(&self) -> Option<usize> {
         self.hits.iter().find_map(|h| match h.spot {
             Spot::Side(last) => Some(last),
@@ -1436,6 +1542,9 @@ impl Overlay for Mission {
             })
             .collect();
         crate::sidebar::render::draw(buf, area, &lines);
+        for rect in self.without_keys(area) {
+            crate::ui::kit::unfocused(buf, rect, &look.theme);
+        }
     }
 
     fn draw_frame(&mut self, canvas: &mut dyn crate::ui::Canvas, look: &Look) {

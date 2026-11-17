@@ -4699,10 +4699,47 @@ mod tests {
     }
 
     #[test]
+    fn the_file_is_greyed_while_the_list_has_the_keys_and_the_list_while_the_file_does() {
+        let mut app = added_files(&["src/one.js", "src/two.js"], 3);
+        let file = app.diff_area();
+        // The colors of the text in the list and in the file, and whether
+        // it is drawn faint, as text in the terminal's own color is.
+        let texts = |app: &mut App| {
+            let buf = draw(app);
+            let of = |x0: u16, x1: u16| -> Vec<(Color, bool)> {
+                (0..file.bottom())
+                    .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+                    .filter(|&at| buf[at].symbol().trim() != "")
+                    .map(|at| {
+                        (
+                            buf[at].fg,
+                            buf[at].modifier.contains(ratatui::style::Modifier::DIM),
+                        )
+                    })
+                    .collect()
+            };
+            (of(0, file.x - 1), of(file.x, file.right()))
+        };
+        // How much of one pane's text changed color between two draws.
+        let changed = |a: &[(Color, bool)], b: &[(Color, bool)]| {
+            assert_eq!(a.len(), b.len());
+            a.iter().zip(b).filter(|(a, b)| a != b).count() * 2 > a.len()
+        };
+        let (list, greyed_file) = texts(&mut app);
+        app.focus = app.main_side();
+        let (greyed_list, shown) = texts(&mut app);
+        assert!(changed(&list, &greyed_list), "the list had the keys");
+        assert!(changed(&shown, &greyed_file), "the file has them now");
+    }
+
+    #[test]
     fn with_ux2_an_added_files_lines_are_numbered_and_tinted_as_added_and_a_footer_names_the_keys()
     {
         let mut app = added_files(&["src/one.js", "src/two.js"], 3);
+        // With the keys in the file, which is greyed while the list has them.
+        app.focus = app.main_side();
         let buf = draw(&mut app);
+        app.focus = Focus::List;
         let shown = screen(&mut app);
         let first = line_with(&shown, "src/two.js line 1");
         assert!(
@@ -5341,7 +5378,10 @@ mod tests {
         );
         // The changed word in the stronger shade, the rest of the line in
         // the fainter one.
+        // With the keys in the file, which is greyed while the list has them.
+        app.focus = app.main_side();
         let buf = draw(&mut app);
+        app.focus = Focus::List;
         let x = row[..row.find("Old").unwrap()].chars().count() as u16;
         let y = y as u16;
         assert_eq!(

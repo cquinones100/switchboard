@@ -3235,6 +3235,31 @@ fn drawn(app: &mut App) -> (Vec<String>, Option<(u16, u16)>) {
 }
 
 #[test]
+fn the_note_is_greyed_while_the_plan_has_the_keys_and_the_plan_while_the_note_does() {
+    let (_dir, mut app, _path, _plan) = with_plan("beside greyed", 160);
+    app.rows = 14;
+    keys(&mut app, "4G<CR>");
+    let surface = app.look.theme.panel;
+    // The background at the foot of the note and of the plan.
+    let feet = |app: &mut App| {
+        let mut buf = Buffer::empty(Rect::new(0, 0, app.cols, app.rows));
+        app.draw(&mut buf);
+        let (note, plan) = (app.geo.note, app.geo.plan);
+        (
+            buf[(note.right() - 2, note.bottom() - 1)].bg,
+            buf[(plan.right() - 2, plan.bottom() - 1)].bg,
+        )
+    };
+    let (note, plan) = feet(&mut app);
+    assert_ne!(note, surface, "the note has the keys");
+    assert_eq!(plan, surface);
+    keys(&mut app, "<C-w>l");
+    let (note, plan) = feet(&mut app);
+    assert_eq!(note, surface);
+    assert_ne!(plan, surface, "the plan has the keys");
+}
+
+#[test]
 fn the_plan_with_the_keys_shows_the_cursor_and_its_keys() {
     let (_dir, mut app, _path, plan) = with_plan("beside cursor", 160);
     app.rows = 14;

@@ -6365,7 +6365,7 @@ fn light_divider(lines: &mut [Line], hits: &[HitBox], theme: &Theme) {
         let Some(line) = lines.get_mut(h.y as usize) else {
             continue;
         };
-        let from = (h.x0 as usize).saturating_sub(3);
+        let from = (h.x0 as usize).saturating_sub(super::RULE_ROOM as usize);
         let mut x = 0;
         for span in line.spans.iter_mut() {
             let w = width(&span.content);

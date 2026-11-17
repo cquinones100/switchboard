@@ -305,6 +305,19 @@ pub fn as_words(color: Color, light: bool) -> Color {
     }
 }
 
+/// The color of xterm's 256-color palette nearest to these pixels, among
+/// its cube and its greys (16 to 255, never the 16 a terminal's theme
+/// names), for a terminal that doesn't draw truecolor.
+pub fn nearest_indexed(pixels: [u8; 3]) -> Color {
+    let far = |n: u8| -> u32 {
+        let of = rgb(Color::Indexed(n));
+        (0..3)
+            .map(|i| (of[i] as i32 - pixels[i] as i32).pow(2) as u32)
+            .sum()
+    };
+    Color::Indexed((16..=255).min_by_key(|&n| far(n)).unwrap_or(16))
+}
+
 /// A color as the pixels it is: an indexed one by xterm's 256-color
 /// palette, the named ANSI ones by xterm's defaults.
 pub fn rgb(color: Color) -> [u8; 3] {

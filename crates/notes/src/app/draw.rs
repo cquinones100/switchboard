@@ -170,6 +170,22 @@ impl App {
         } else if self.focus == Focus::Note {
             cursor = note_cursor;
         }
+        // Every pane but the one with the keys, greyed.
+        let theme = self.look.theme;
+        let (note, plan) = (self.geo.note, self.geo.plan);
+        if plan_focused {
+            switchboard_ui::kit::unfocused(buf, note, &theme);
+        } else if plan.width > 0 {
+            switchboard_ui::kit::unfocused(buf, plan, &theme);
+        }
+        if list_w > 0 {
+            let without = if self.focus == Focus::List {
+                note
+            } else {
+                Rect::new(0, 0, list_w, body_h)
+            };
+            switchboard_ui::kit::unfocused(buf, without, &theme);
+        }
         cursor = self.draw_bottom(buf, body_h).or(cursor);
         if self.focus == Focus::List && self.list_shown && self.prompt.is_none() {
             cursor = None;

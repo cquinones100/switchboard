@@ -81,6 +81,15 @@ impl App {
         }
         self.draw_list(buf);
         let mut cursor = self.draw_diff(buf);
+        // The pane without the keys, greyed: the file while the list has
+        // them, else the list.
+        let file = self.diff_area();
+        let without = if self.focus == Focus::List {
+            file
+        } else {
+            Rect::new(0, 0, file.x.saturating_sub(1), file.height)
+        };
+        kit::unfocused(buf, without, &self.theme());
         if self.opts.easy {
             self.draw_buttons(buf);
         }
