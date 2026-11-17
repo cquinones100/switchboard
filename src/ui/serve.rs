@@ -1467,7 +1467,13 @@ fn program_line(args: &[String], own_exe: &str) -> String {
         .or_else(|| match words.as_slice() {
             // The pager (a CI log, a landing's output, a file), by the
             // file's name, which a long folder would cut away.
-            ["view", .., file] if !file.starts_with(['-', '+']) => {
+            // `view [--log] [+<line>] <file>`: the file is always last.
+            ["view", .., file]
+                if *file != "--log"
+                    && !file
+                        .strip_prefix('+')
+                        .is_some_and(|n| n.parse::<usize>().is_ok()) =>
+            {
                 Some(format!("the pager: {}", program_name(file)))
             }
             _ => None,
@@ -1556,6 +1562,10 @@ mod tests {
         assert_eq!(
             line(&[&bin, "view", "--log", "logs/ci.log"]),
             "the pager: ci.log"
+        );
+        assert_eq!(
+            line(&[&bin, "view", "+42", "+page.svelte"]),
+            "the pager: +page.svelte"
         );
         assert_eq!(
             line(&[&bin, "pr-image", "--ticket", "X-1"]),
