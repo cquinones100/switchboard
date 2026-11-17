@@ -220,6 +220,6 @@ The relay's DM, threads and Home tab.
 - [128. Its card in the Tabs view: the current PR's number in its title, its PRs under what it is doing, the current one first, each one's repository when not the tab's and where it stands](https://cquinones100.github.io/switchboard/design/128.html)
 - [129. Show another of this tab's PRs (M-v's and M-d's menus, M-p): a picker as every list is, each PR's repository, title and state, the current one marked; Enter makes the chosen one current](https://cquinones100.github.io/switchboard/design/129.html)
 
-## Proposal: marks for review loop and queue-and-clean
+## Marks for review loop and queue-and-clean
 
 - [130. Marks for the sidebar's Review loop and Queue-and-clean groups, three options beside today's shared spinner: A turning (◐ and △▲), B still (◎ and ⏏), C still (⌕ and ⇡), each in a row and its group header](https://cquinones100.github.io/switchboard/design/130.html)
