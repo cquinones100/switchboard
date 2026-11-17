@@ -536,6 +536,18 @@
     "MarksReviewQueue.dc.html": {
       "title": "130. Marks for the sidebar's Review loop and Queue-and-clean groups, three options beside today's shared spinner: A turning (◐ and △▲), B still (◎ and ⏏), C still (⌕ and ⇡), each in a row and its group header",
       "page": "design"
+    },
+    "PrBoxes.dc.html": {
+      "title": "131. The PR view's conversation in boxes, as GitHub draws it: the author's avatar beside a box a comment, its header bar naming who, what and when, a line down the side joining them; a bot's long body folded; a review comment with its line of code; the checks, reviewers and files beside it",
+      "page": "design"
+    },
+    "PrBoxesNarrow.dc.html": {
+      "title": "132. The same at 80 columns: no panel, its facts one line under the head; the avatar Small in each box's header bar, the line down the side at the boxes' left",
+      "page": "design"
+    },
+    "TicketBoxes.dc.html": {
+      "title": "133. The ticket view (M-i) with the same atom: the description as its first box, each comment in its own, a reply inside its thread's box; sub-issues and the facts beside it as before",
+      "page": "design"
     }
   }
 }
