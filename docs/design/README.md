@@ -214,7 +214,7 @@ The relay's DM, threads and Home tab.
 
 - [126. Which note is this tab's (M-e with none): every note newest first with its age, at most three suggestions above under a label, and typing keeps the matches newest first, written matches before scattered ones](https://cquinones100.github.io/switchboard/design/126.html)
 
-## Proposal: a tab following several prs
+## A tab following several prs
 
 - [127. A tab following every PR its session opens: the current one's number first in its label, +2 after its name, each PR's state under it in the sidebar, M-v naming which of them it shows](https://cquinones100.github.io/switchboard/design/127.html)
 - [128. Its card in the Tabs view: the current PR's number in its title, its PRs under what it is doing, the current one first, each one's repository when not the tab's and where it stands](https://cquinones100.github.io/switchboard/design/128.html)
