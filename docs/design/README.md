@@ -196,7 +196,7 @@ The relay's DM, threads and Home tab.
 - [116. Enter on a source's heading: fold it, or dismiss every notification of it the sidebar shows, after asking](https://cquinones100.github.io/switchboard/design/116.html)
 - [117. The sidebar's notifications, one line a source: its mark, its name, its count and its newest one's words; Enter opens the Notifications view on that source](https://cquinones100.github.io/switchboard/design/117.html)
 
-## Proposal: the diff's buttons and its own settings
+## The diff's buttons and its own settings
 
 - [118. The diff's row of buttons as the kit draws Switchboard's own: bold in the accent on the panel surface between rounded ends, on the chosen surface under the mouse or reached by Tab](https://cquinones100.github.io/switchboard/design/118.html)
 - [119. switchboard-diff run alone: its own header, and a Settings button before Close (also M-m) that it has only when standalone](https://cquinones100.github.io/switchboard/design/119.html)
