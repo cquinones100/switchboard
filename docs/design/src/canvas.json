@@ -484,6 +484,18 @@
     "NotificationsSidebarGroups.dc.html": {
       "title": "117. The sidebar's notifications, one line a source: its mark, its name, its count and its newest one's words; Enter opens the Notifications view on that source",
       "page": "design"
+    },
+    "DiffButtons.dc.html": {
+      "title": "118. The diff's row of buttons as the kit draws Switchboard's own: bold in the accent on the panel surface between rounded ends, on the chosen surface under the mouse or reached by Tab",
+      "page": "design"
+    },
+    "DiffStandalone.dc.html": {
+      "title": "119. switchboard-diff run alone: its own header, and a Settings button before Close (also M-m) that it has only when standalone",
+      "page": "design"
+    },
+    "DiffSettings.dc.html": {
+      "title": "120. The diff's own settings view (M-m, or Settings lit): its options as Switchboard's Settings rows draw them, and when one is out, a dim 0.2.0 is out · switchboard-diff update under the title and a row to update",
+      "page": "design"
     }
   }
 }
