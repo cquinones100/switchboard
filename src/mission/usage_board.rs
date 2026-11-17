@@ -1,7 +1,8 @@
 //! UX 2.0's Usage view as a board, board 24 of the UX 2.0 canvas ("Usage
 //! as charts"): the day's spend as a chart stacked by tab, the tabs beside
 //! it with each one's spend and share, the rate limits as meters with their
-//! pace, and the request audit with a sparkline and a meter a service. New
+//! pace, today's spend by model as meters of each one's share, and the
+//! request audit with a sparkline and a meter a service. New
 //! with UX 2.0, with no tmux-version file behind it.
 //!
 //! Everything it draws comes from the model `usage::charts` works out off
@@ -26,7 +27,7 @@ use crate::status::theme::RED;
 use crate::ui::Theme;
 use crate::ui::images::{Bar, Marks};
 use crate::ui::kit::{self, Col, Tone};
-use crate::usage::charts::{Limit, Model, SpanSpend, TabSpend};
+use crate::usage::charts::{Limit, Model, ModelSpend, SpanSpend, TabSpend};
 
 /// How wide the screen must be for the board; narrower, the plain list.
 pub const BOARD_AT: usize = 136;
@@ -287,6 +288,7 @@ pub fn board(
         span, &tabs, chosen_tab, items, m, cols, lines, hits, images, week,
     );
     limits(&model, cols, theme, now_ms, lines, images);
+    by_model(&model.by_model, cols, theme, lines, images);
     requests(&model, week, items, chosen_id, m, cols, lines, hits, images);
     sessions(items, chosen_id, m, cols, lines, hits);
     // Scrolled up as far as the chosen row (and the line under a chosen
@@ -757,6 +759,90 @@ fn limits(
             lines.len(),
             images,
         ));
+    }
+}
+
+/// Today's spend by model under the limits, drawn as they are: a row a
+/// model, the most spent first, its share of the day as the meter and the
+/// percentage, then its dollars; with nothing spent today it says so.
+fn by_model(
+    models: &[ModelSpend],
+    cols: usize,
+    theme: &Theme,
+    lines: &mut Vec<Line>,
+    images: &mut Vec<Image>,
+) {
+    lines.push(Line {
+        spans: vec![kit::rule(cols, theme)],
+        fill: None,
+    });
+    let mut p = Placer::default();
+    p.put(" BY MODEL", Tone::Dim.bold(theme))
+        .put("   today's spend", Tone::Dim.style(theme))
+        .right(
+            "share of today",
+            cols.saturating_sub(1),
+            Tone::Faint.style(theme),
+        );
+    lines.push(p.line(cols));
+    if models.is_empty() {
+        let mut p = Placer::default();
+        p.put("  nothing spent yet today", Tone::Faint.style(theme));
+        lines.push(p.line(cols));
+        return;
+    }
+    let spent: Vec<String> = models.iter().map(|m| dollars(m.spent)).collect();
+    let at = limit_columns(
+        kit::natural(models.iter().map(|m| m.name.as_str())),
+        kit::natural(spent.iter().map(String::as_str)),
+        cols,
+    );
+    for (model, spent) in models.iter().zip(&spent) {
+        let y = lines.len();
+        let mut spans = Vec::new();
+        if let Some(name) = at[0] {
+            kit::place(
+                &mut spans,
+                vec![Span::styled(model.name.clone(), Tone::Text.style(theme))],
+                name,
+            );
+        }
+        if let Some((x, w)) = at[1] {
+            images.push(Image {
+                name: format!("usage/model/{}", model.name),
+                x: x as u16,
+                y: y as u16,
+                width: w as u16,
+                height: 1,
+                shape: Shape::Meter {
+                    frac: model.share as f32,
+                    color: Tone::Accent.fg(theme),
+                    tick: None,
+                },
+            });
+            kit::place(&mut spans, Vec::new(), (x, w));
+        }
+        if let Some(pct) = at[2] {
+            kit::place(
+                &mut spans,
+                vec![Span::styled(
+                    format!("{:>3}%", (model.share * 100.0).round() as i64),
+                    Tone::Text.bold(theme),
+                )],
+                pct,
+            );
+        }
+        if let Some(d) = at[3] {
+            kit::place(
+                &mut spans,
+                vec![Span::styled(spent.clone(), Tone::Dim.style(theme))],
+                d,
+            );
+        }
+        lines.push(Line {
+            spans: kit::fit(spans, cols, Style::new()),
+            fill: None,
+        });
     }
 }
 

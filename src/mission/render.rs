@@ -10698,7 +10698,7 @@ mod tests {
     #[test]
     fn with_ux2_the_usage_view_is_a_board_of_charts_tabs_limits_and_requests() {
         use crate::requests::{ServiceCount, Tally};
-        use crate::usage::charts::{self, Limit, Model, SpanSpend, TabSpend};
+        use crate::usage::charts::{self, Limit, Model, ModelSpend, SpanSpend, TabSpend};
         let now = rules().now_secs();
         let start = now * 1000 - 2 * charts::QUARTER_MS;
         let tab = |key: &str, index: usize, name: &str, spent: f64, share: f64| TabSpend {
@@ -10756,6 +10756,18 @@ mod tests {
                     .collect();
                 week
             },
+            by_model: vec![
+                ModelSpend {
+                    name: "Fable 5.2".into(),
+                    spent: 3.0,
+                    share: 0.75,
+                },
+                ModelSpend {
+                    name: "Haiku 5.5".into(),
+                    spent: 1.0,
+                    share: 0.25,
+                },
+            ],
             limits: vec![
                 Limit {
                     key: "five_hour".into(),
@@ -10831,6 +10843,16 @@ mod tests {
         assert_eq!(ticks, 1);
         let named = |prefix: &str| images.iter().filter(|i| i.name.starts_with(prefix)).count();
         assert_eq!(named("usage/limit/"), 2);
+        // Today's spend by model under the limits, a meter of its share each.
+        let models_at = text.find("BY MODEL").expect("the models' block");
+        assert!(models_at > text.find("LIMITS").unwrap(), "{text}");
+        assert!(models_at < text.find("REQUESTS").unwrap(), "{text}");
+        let fable = texts(&lines)
+            .into_iter()
+            .find(|l| l.contains("Fable 5.2"))
+            .expect("a row a model");
+        assert!(fable.contains("75%") && fable.contains("$3.00"), "{fable}");
+        assert_eq!(named("usage/model/"), 2);
         // Slack, with requests this week and none today, has no row today.
         assert_eq!(named("usage/spark/"), 2);
         assert!(!text.contains("Slack"), "{text}");

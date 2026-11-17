@@ -8,7 +8,12 @@
 //! The statusline keeps one total a session a day (`spend-<session>`),
 //! which says nothing of when it was spent, so it also appends each amount
 //! it adds to the day's log, `usage/spent-<day>.tsv`, a line
-//! `<epoch>\t<session>\t<dollars added>` (`log_spent`), kept `KEEP_DAYS`.
+//! `<epoch>\t<session>\t<dollars added>\t<model>` (`log_spent`), kept
+//! `KEEP_DAYS`. The model is the one the session ran as it spent the
+//! amount, so a day's spend splits by model (`by_model`) though a session
+//! changes model; a line from before the model was logged, and what a
+//! session's total has past its logged amounts, counts under the model the
+//! session runs now (`context/<session>`).
 //! A session is tied to its tab by the survey of which pane runs which
 //! Claude, which writes `usage/sessions-tabs.tsv`, a line
 //! `<day>\t<session>\t<tab number>\t<tab name>\t<color>`, so a tab closed
@@ -23,7 +28,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::sessions::{shares_today, usage_dir};
+use super::sessions::{context_of, limit_keys, limit_name, shares_today, usage_dir, window_now};
 use crate::items::{Item, Target};
 use crate::mux::TabId;
 use crate::requests::Tally;
@@ -70,12 +75,26 @@ pub fn added(old: &str, new: &str, today: &str) -> Option<f64> {
 
 /// Appends what a session just spent to today's log; the first line of a
 /// day prunes the logs past `KEEP_DAYS`.
-pub fn log_spent(state: &Path, today: &str, session: &str, dollars: f64, now_secs: i64) {
+pub fn log_spent(
+    state: &Path,
+    today: &str,
+    session: &str,
+    model: &str,
+    dollars: f64,
+    now_secs: i64,
+) {
     let file = spent_file(state, today);
     if !file.exists() {
         prune_spent(state, now_secs * 1000);
     }
-    util::append_quietly(&file, format!("{now_secs}\t{session}\t{dollars:.4}\n"));
+    let model = clean(model);
+    let model = model.trim();
+    let line = if model.is_empty() {
+        format!("{now_secs}\t{session}\t{dollars:.4}\n")
+    } else {
+        format!("{now_secs}\t{session}\t{dollars:.4}\t{model}\n")
+    };
+    util::append_quietly(&file, line);
 }
 
 /// Removes the spend logs from before `KEEP_DAYS` ago.
@@ -248,11 +267,26 @@ pub struct Limit {
     pub detail: Option<String>,
 }
 
+/// A model's spend today, and its share of the day's.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ModelSpend {
+    pub name: String,
+    pub spent: f64,
+    pub share: f64,
+}
+
+/// What spend no model is known for is counted under: a session whose
+/// `context/<session>` is gone, logged before the log named the model.
+pub const NO_MODEL: &str = "model not recorded";
+
 /// Everything the board draws.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Model {
     pub today: SpanSpend,
     pub week: SpanSpend,
+    /// Today's spend by model, the most spent first.
+    #[serde(default)]
+    pub by_model: Vec<ModelSpend>,
     pub limits: Vec<Limit>,
     /// When the statusline last wrote the limits.
     pub limits_at: Option<i64>,
@@ -261,12 +295,15 @@ pub struct Model {
     pub requests_file: String,
 }
 
-/// A window's length, for its pace.
+/// A window's length, for its pace: a window of a model's own
+/// (`seven_day_<model>`) is as long as the one it is named after.
 fn window_secs(key: &str) -> Option<i64> {
-    match key {
-        "five_hour" => Some(5 * 3600),
-        "seven_day" => Some(7 * 86400),
-        _ => None,
+    if key.starts_with("five_hour") {
+        Some(5 * 3600)
+    } else if key.starts_with("seven_day") {
+        Some(7 * 86400)
+    } else {
+        None
     }
 }
 
@@ -280,31 +317,21 @@ pub fn pace(used: f64, window: i64, resets_at: i64, now: i64) -> Option<f64> {
 fn limits(state: &Path, now: i64) -> Vec<Limit> {
     let limits = util::read_json(usage_dir(state).join("limits")).unwrap_or(Value::Null);
     let mut out = Vec::new();
-    for (key, name) in [
-        ("five_hour", "5-hour"),
-        ("seven_day", "Week"),
-        ("spend_limit", "Spend"),
-    ] {
-        let window = &limits[key];
-        let Some(used) = window["used_percentage"].as_f64().filter(|u| u.is_finite()) else {
+    for key in limit_keys(&limits) {
+        let window = &limits[key.as_str()];
+        let Some((used, resets_at)) = window_now(window, now) else {
             continue;
         };
-        let Some(resets_at) = window["resets_at"].as_f64().map(|r| r as i64) else {
-            continue;
-        };
-        if resets_at <= now {
-            continue;
-        }
         let detail = window["used_usd"]
             .as_f64()
             .map(|usd| format!("${usd:.2} of ${}", util::js_string(&window["limit_usd"])));
         out.push(Limit {
-            key: key.into(),
-            name: name.into(),
+            name: limit_name(&key),
             used,
             resets_at,
-            pace: window_secs(key).and_then(|w| pace(used, w, resets_at, now)),
+            pace: window_secs(&key).and_then(|w| pace(used, w, resets_at, now)),
             detail,
+            key,
         });
     }
     out
@@ -322,6 +349,64 @@ fn read_log(state: &Path, day: &str) -> Vec<(i64, String, f64)> {
             (dollars > 0.0).then_some((at * 1000, session, dollars))
         })
         .collect()
+}
+
+/// Today's spend by model, the most spent first: each session's logged
+/// amounts under the model the log names, and the rest of its total (a
+/// line with no model, what the log doesn't have) under the model it runs
+/// now, else under `NO_MODEL`. A session's total is its spend file's, and
+/// never less than what the log has for it, as a tab's is.
+fn by_model(state: &Path, today: &str, shares: &[(String, f64)]) -> Vec<ModelSpend> {
+    let text = fs::read_to_string(spent_file(state, today)).unwrap_or_default();
+    let mut logged: HashMap<String, f64> = HashMap::new();
+    let mut named: HashMap<String, f64> = HashMap::new();
+    let mut models: Vec<ModelSpend> = Vec::new();
+    let add = |models: &mut Vec<ModelSpend>, name: &str, dollars: f64| match models
+        .iter_mut()
+        .find(|m| m.name == name)
+    {
+        Some(m) => m.spent += dollars,
+        None => models.push(ModelSpend {
+            name: name.to_string(),
+            spent: dollars,
+            share: 0.0,
+        }),
+    };
+    for line in text.lines() {
+        let mut f = line.split('\t');
+        let (Some(_), Some(session), Some(dollars)) = (f.next(), f.next(), f.next()) else {
+            continue;
+        };
+        let Some(dollars) = dollars.trim().parse::<f64>().ok().filter(|d| *d > 0.0) else {
+            continue;
+        };
+        *logged.entry(session.to_string()).or_insert(0.0) += dollars;
+        if let Some(model) = f.next().map(str::trim).filter(|m| !m.is_empty()) {
+            *named.entry(session.to_string()).or_insert(0.0) += dollars;
+            add(&mut models, model, dollars);
+        }
+    }
+    let mut totals: HashMap<&str, f64> = shares.iter().map(|(s, d)| (s.as_str(), *d)).collect();
+    for (session, sum) in &logged {
+        let total = totals.entry(session.as_str()).or_insert(0.0);
+        *total = total.max(*sum);
+    }
+    let mut totals: Vec<(&str, f64)> = totals.into_iter().collect();
+    totals.sort_by(|a, b| a.0.cmp(b.0));
+    for (session, total) in totals {
+        let rest = total - named.get(session).copied().unwrap_or(0.0);
+        if rest <= 0.000_05 {
+            continue;
+        }
+        let now = context_of(state, session).1.filter(|m| m != "null");
+        add(&mut models, now.as_deref().unwrap_or(NO_MODEL), rest);
+    }
+    let total = models.iter().fold(0.0, |all, m| all + m.spent);
+    for m in &mut models {
+        m.share = if total > 0.0 { m.spent / total } else { 0.0 };
+    }
+    models.sort_by(|a, b| b.spent.total_cmp(&a.spent).then(a.name.cmp(&b.name)));
+    models
 }
 
 /// Which tab a session ran in: its open tab's, else the one the tabs' file
@@ -561,6 +646,7 @@ pub fn model(
     Model {
         today: today_span,
         week: week_span,
+        by_model: by_model(state, &today, &shares),
         limits: limits(state, now_ms.div_euclid(1000)),
         limits_at,
         requests,
@@ -587,9 +673,10 @@ pub fn model_of(items: &[Item]) -> Option<Model> {
 }
 
 /// The Usage view's rows with the board's model: the list's rows, the
-/// total carrying the model, then a row per tab that spent this week
-/// after it, today's first, and a row for each service with requests this
-/// week but none today; what isn't a tab or a service passed over.
+/// total carrying the model, then, after the limits, a row per model that
+/// spent today and a row per tab that spent this week, today's first, and
+/// a row for each service with requests this week but none today; what
+/// isn't a tab or a service passed over.
 pub fn items(base: Vec<Item>, model: &Model) -> Vec<Item> {
     let week_only: Vec<Item> = model
         .requests
@@ -622,9 +709,20 @@ pub fn items(base: Vec<Item>, model: &Model) -> Vec<Item> {
             tabs.push(t);
         }
     }
+    let model_rows = model.by_model.iter().map(|m| {
+        Item::new(
+            format!("model:{}", m.name),
+            format!("{} ${:.2}", m.name, m.spent),
+        )
+        .detail(format!(
+            "{}% of today's spend",
+            (m.share * 100.0).round() as i64
+        ))
+        .data(serde_json::json!({ "still": true }))
+    });
     let mut tab_rows = Some(
-        tabs.iter()
-            .map(|t| {
+        model_rows
+            .chain(tabs.iter().map(|t| {
                 let today = model.today.tabs.iter().find(|x| x.key == t.key);
                 let detail = match today {
                     Some(d) => format!(
@@ -641,7 +739,7 @@ pub fn items(base: Vec<Item>, model: &Model) -> Vec<Item> {
                     Some(id) => row.target(Target::Tab(TabId(id))),
                     None => row,
                 }
-            })
+            }))
             .collect::<Vec<_>>(),
     );
     for mut item in base {
@@ -667,8 +765,9 @@ pub fn items(base: Vec<Item>, model: &Model) -> Vec<Item> {
             );
         }
         item.data = Value::Object(data);
-        // The tabs after the total and the limits, so a long list of tabs
-        // never leaves the limits below every row the cursor reaches.
+        // The models and the tabs after the total and the limits, so a long
+        // list of tabs never leaves the limits below every row the cursor
+        // reaches.
         let past_the_limits = !first && !item.id.starts_with("limit:");
         if past_the_limits && let Some(rows) = tab_rows.take() {
             out.extend(rows);
@@ -773,6 +872,90 @@ mod tests {
         // The week's last day holds today's totals.
         assert_eq!(model.week.bins.len(), 7);
         assert!((model.week.bins[6].iter().sum::<f64>() - 4.0).abs() < 1e-9);
+        let _ = fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn todays_spend_splits_by_the_model_each_amount_was_logged_with() {
+        let state = temp("by-model");
+        let now = at(12, 7);
+        let today = util::ymd(&util::local_at_ms(now));
+        let usage = usage_dir(&state);
+        // Nothing spent yet: no model.
+        assert_eq!(model(&state, now, &[], None).by_model, Vec::new());
+        // Session a changed model through the day; b's lines are from
+        // before the log named one, so they count under the model it runs
+        // now; c has neither a model logged nor a context file.
+        fs::write(usage.join("spend-a"), format!("{today}\t4.0000\t4\t1\t2")).unwrap();
+        fs::write(usage.join("spend-b"), format!("{today}\t1.5000\t1.5\t2\t2")).unwrap();
+        fs::write(usage.join("spend-c"), format!("{today}\t0.5000\t0.5\t3\t2")).unwrap();
+        log_spent(&state, &today, "a", "Fable 5.2", 3.0, at(10, 5) / 1000);
+        log_spent(&state, &today, "a", "Opus 5.5", 1.0, at(11, 5) / 1000);
+        log_spent(&state, &today, "b", "", 1.0, at(11, 10) / 1000);
+        let context = crate::usage::sessions::context_dir(&state);
+        fs::create_dir_all(&context).unwrap();
+        fs::write(context.join("b"), "12\tOpus 5.5").unwrap();
+        let model = model(&state, now, &[], None);
+        let rows: Vec<(&str, f64, i64)> = model
+            .by_model
+            .iter()
+            .map(|m| (m.name.as_str(), m.spent, (m.share * 100.0).round() as i64))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("Fable 5.2", 3.0, 50),
+                ("Opus 5.5", 2.5, 42),
+                (NO_MODEL, 0.5, 8)
+            ]
+        );
+        // The models' sum is the day's.
+        assert!((model.today.total - 6.0).abs() < 1e-9);
+        // The plain list names each after the limits, passed over by the
+        // cursor.
+        let base = vec![
+            Item::new("spent", "Spent today $6.00"),
+            Item::new("limit:five_hour", "5-hour limit 10% used"),
+            Item::new("requests", "Requests today 0"),
+        ];
+        let rows = items(base, &model);
+        assert_eq!(rows[2].id, "model:Fable 5.2");
+        assert_eq!(rows[2].title, "Fable 5.2 $3.00");
+        assert_eq!(rows[2].detail, "50% of today's spend");
+        assert!(is_still(&rows[2]));
+        let _ = fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn a_window_claude_code_starts_reporting_is_a_limit_named_from_its_key() {
+        let state = temp("windows");
+        let now = util::now_secs();
+        fs::write(
+            usage_dir(&state).join("limits"),
+            serde_json::json!({
+                "seven_day_fable": { "used_percentage": 61, "resets_at": now + 4 * 86400 },
+                "five_hour": { "used_percentage": 20, "resets_at": now + 3 * 3600 },
+                "seven_day": { "used_percentage": 30, "resets_at": now + 4 * 86400 },
+                "note": "not a window",
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let limits = limits(&state, now);
+        let names: Vec<(&str, &str)> = limits
+            .iter()
+            .map(|l| (l.key.as_str(), l.name.as_str()))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("five_hour", "5-hour"),
+                ("seven_day", "Week"),
+                ("seven_day_fable", "Week (Fable)")
+            ]
+        );
+        // Its pace is a week's, as the window it is named after.
+        assert!((limits[2].pace.unwrap() - 61.0 * 7.0 / 3.0).abs() < 1e-6);
         let _ = fs::remove_dir_all(&state);
     }
 

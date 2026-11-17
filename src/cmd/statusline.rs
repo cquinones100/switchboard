@@ -22,7 +22,9 @@
 //! `paths::state_dir()`: `context/<session>` (`<percent>\t<model>`), and
 //! `usage/spend-<session>` (`<day>\t<spent that day>\t<the session's cost so
 //! far>\t<the Claude process's pid>\t2`, the last field marking a record
-//! written since a resume counts only its growth) with `usage/limits` (the
+//! written since a resume counts only its growth), each amount it adds also a
+//! line of the day's log with the model that spent it (`usage/spent-<day>.tsv`,
+//! src/usage/charts.rs), with `usage/limits` (the
 //! account's `rate_limits`, the same for every session). Each is written only when it
 //! changes, and only its owner can read it, as the script's `umask 077` had
 //! it. The limits are written only by a session whose cost grew past the one
@@ -289,7 +291,8 @@ pub fn keep(payload: &Value, state: &Path, sessions: &Path, today: &str) {
     if new != old {
         write_changed(&spend_file, &new);
         if let Some(more) = crate::usage::charts::added(&old, &new, today) {
-            crate::usage::charts::log_spent(state, today, &session, more, util::now_secs());
+            let model = or_empty(&payload["model"]["display_name"]).unwrap_or_default();
+            crate::usage::charts::log_spent(state, today, &session, &model, more, util::now_secs());
         }
     }
     let cost_kept = old

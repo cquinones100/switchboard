@@ -474,12 +474,58 @@ pub fn github_left(rows: &mut [Item], left: Option<(i64, i64)>) {
 /// A rate limit's window from the `limits` file: how much of it is used
 /// (percent) and when it resets (seconds), while it hasn't reset by `now`
 /// (seconds); `None` for one missing, unreadable or past.
-fn window_now(window: &Value, now: i64) -> Option<(f64, i64)> {
+pub fn window_now(window: &Value, now: i64) -> Option<(f64, i64)> {
     let used = window["used_percentage"]
         .as_f64()
         .filter(|u| u.is_finite())?;
     let resets_at = window["resets_at"].as_f64().map(|r| r as i64)?;
     (resets_at > now).then_some((used, resets_at))
+}
+
+/// The windows of the `limits` file by their keys: the 5-hour, the week
+/// and the spend limit first, then every other one Claude Code reports
+/// (one of a model's own, say), by name, so a new one shows by itself.
+pub fn limit_keys(limits: &Value) -> Vec<String> {
+    const KNOWN: [&str; 3] = ["five_hour", "seven_day", "spend_limit"];
+    let mut keys: Vec<String> = KNOWN.iter().map(|k| k.to_string()).collect();
+    let mut others: Vec<String> = limits
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(key, window)| {
+            !KNOWN.contains(&key.as_str()) && window.get("used_percentage").is_some()
+        })
+        .map(|(key, _)| key.clone())
+        .collect();
+    others.sort();
+    keys.extend(others);
+    keys
+}
+
+/// A window's name from its key: `5-hour`, `Week`, `Spend`, a window of
+/// something's own after the one it is named for (`seven_day_opus` is
+/// `Week (Opus)`), and any other its key's words.
+pub fn limit_name(key: &str) -> String {
+    let words = |text: &str| {
+        let text = text.trim_matches('_').replace('_', " ");
+        let mut chars = text.chars();
+        match chars.next() {
+            Some(first) => first.to_uppercase().chain(chars).collect::<String>(),
+            None => String::new(),
+        }
+    };
+    match key {
+        "five_hour" => return "5-hour".into(),
+        "seven_day" => return "Week".into(),
+        "spend_limit" => return "Spend".into(),
+        _ => {}
+    }
+    for (prefix, name) in [("five_hour_", "5-hour"), ("seven_day_", "Week")] {
+        if let Some(rest) = key.strip_prefix(prefix).filter(|r| !r.is_empty()) {
+            return format!("{name} ({})", words(rest));
+        }
+    }
+    words(key)
 }
 
 /// The week's use of Claude Code's weekly rate limit, as the statusline
@@ -490,8 +536,8 @@ pub fn weekly_used(state: &Path, now_ms: i64) -> Option<(f64, i64)> {
     window_now(&limits["seven_day"], now_ms.div_euclid(1000))
 }
 
-/// The Usage view's rows: today's spend, each rate limit not yet reset, and
-/// with `requests` the request audit's.
+/// The Usage view's rows: today's spend, each rate limit Claude Code reports
+/// that hasn't reset, and with `requests` the request audit's.
 pub fn usage_items(state: &Path, now_ms: i64, requests: Option<&Tally>) -> Vec<Item> {
     let today = util::ymd(&util::local_at_ms(now_ms));
     let shares = shares_today(state, &today);
@@ -506,14 +552,14 @@ pub fn usage_items(state: &Path, now_ms: i64, requests: Option<&Tally>) -> Vec<I
             if shares.len() == 1 { "" } else { "s" }
         )),
     ];
-    for (key, name) in [
-        ("five_hour", "5-hour limit"),
-        ("seven_day", "Weekly limit"),
-        ("spend_limit", "Spend limit"),
-    ] {
-        let window = &limits[key];
+    for key in limit_keys(&limits) {
+        let window = &limits[key.as_str()];
         let Some((used, resets_at)) = window_now(window, now) else {
             continue;
+        };
+        let name = match key.as_str() {
+            "seven_day" => "Weekly limit".to_string(),
+            _ => format!("{} limit", limit_name(&key)),
         };
         let mut detail = Vec::new();
         if let Some(usd) = window["used_usd"].as_f64() {
@@ -665,6 +711,8 @@ mod tests {
                 "five_hour": { "used_percentage": 42.4, "resets_at": now + 7_830 },
                 "seven_day": { "used_percentage": 85, "resets_at": now + 3_030 },
                 "spend_limit": { "used_percentage": 99, "resets_at": now - 5 },
+                // A window Claude Code may start reporting, of a model's own.
+                "seven_day_fable": { "used_percentage": 12, "resets_at": now + 3_030 },
             })
             .to_string(),
         )
@@ -690,6 +738,11 @@ mod tests {
                     "Weekly limit 85% used".to_string(),
                     "resets in 50m".to_string(),
                     State::Attention
+                ),
+                (
+                    "Week (Fable) limit 12% used".to_string(),
+                    "resets in 50m".to_string(),
+                    State::Idle
                 ),
             ],
             "a window that has reset is left out"

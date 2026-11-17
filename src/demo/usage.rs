@@ -99,6 +99,9 @@ fn tabs(home: &Path) -> Vec<Tab> {
 /// The tab closed before today.
 const CLOSED: &str = "Trim the onboarding checklist";
 
+/// The models the demo's tabs run, in turn, for the Usage view's By model.
+const MODELS: [&str; 3] = ["Fable 5.2", "Opus 5.5", "Haiku 5.5"];
+
 /// Lays out the usage files under the state directory, `now_ms` being
 /// when the demo is laid out.
 pub fn lay_out(state: &Path, home: &Path, now_ms: i64) -> Result<()> {
@@ -129,7 +132,8 @@ pub fn lay_out(state: &Path, home: &Path, now_ms: i64) -> Result<()> {
             let lean = if t == 0 { 1.4 - through } else { 0.5 + through };
             let dollars = (tab.weight * lean * (0.2 + 0.6 * seed.next())).max(0.01);
             total += dollars;
-            writeln!(log, "{}\t{session}\t{dollars:.4}", at / 1000)?;
+            let model = MODELS[t % MODELS.len()];
+            writeln!(log, "{}\t{session}\t{dollars:.4}\t{model}", at / 1000)?;
             at += 15 * 60_000 + (seed.next() * 10.0 * 60_000.0) as i64;
         }
         util::write_atomic(
