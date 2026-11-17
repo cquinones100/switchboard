@@ -1439,15 +1439,14 @@ fn program_line(args: &[String], own_exe: &str) -> String {
         return String::new();
     };
     let name = program_name(first);
-    // Switchboard's own command and its words: `switchboard`, the binary
-    // the server runs by its path (which starts the views, under whatever
-    // name it has), or a link named after a view, which runs that view.
+    // Switchboard's own command and its words: `switchboard`, or the
+    // binary the server runs by its path, which starts the views under
+    // whatever name it has.
     let own: Option<Vec<&str>> = match name.as_str() {
         _ if first == own_exe => Some(vec![]),
         "switchboard" => Some(vec![]),
         "switchboard-notes" => Some(vec!["notes"]),
         "switchboard-diff" => Some(vec!["diff"]),
-        "pr-view" | "ticket-view" | "link-view" | "pr-image" => Some(vec![name.as_str()]),
         _ => None,
     };
     let app = own.and_then(|mut words| {
@@ -1469,21 +1468,15 @@ fn program_line(args: &[String], own_exe: &str) -> String {
     if let Some(app) = app {
         return app.to_string();
     }
-    // A path is an argument of its own, or attached to an option after `=`
-    // or `:`, one of a list of them included (`--dir=/…`, `-javaagent:/…`,
-    // `-Dpath=/usr/lib:/…`, `-DPREFIX=/opt;/…`).
-    const SEPARATORS: [char; 3] = ['=', ':', ';'];
-    let short = |arg: &String| {
-        arg.split_inclusive(SEPARATORS)
-            .map(|part| {
-                let path = part.trim_end_matches(SEPARATORS);
-                if path.starts_with('/') {
-                    format!("{}{}", crate::paths::tilde(path), &part[path.len()..])
-                } else {
-                    part.to_string()
-                }
-            })
-            .collect::<String>()
+    // A local path: an argument of its own, or an option's value after `=`
+    // (`--dir=/…`). Nothing after a `:`, which may name a path on another
+    // host (`scp host:/…`).
+    let short = |arg: &String| match arg.split_once('=') {
+        Some((key, value)) if value.starts_with('/') => {
+            format!("{key}={}", crate::paths::tilde(value))
+        }
+        _ if arg.starts_with('/') => crate::paths::tilde(arg),
+        _ => arg.clone(),
     };
     let words = std::iter::once(name.clone()).chain(rest.iter().map(short));
     draw::cut(&words.collect::<Vec<_>>().join(" "), 60)
@@ -1522,16 +1515,8 @@ mod tests {
             "node --dir=~/code"
         );
         assert_eq!(
-            line(&["java", &format!("-javaagent:{home}/a.jar")]),
-            "java -javaagent:~/a.jar"
-        );
-        assert_eq!(
-            line(&["java", &format!("-Xbootclasspath/a:{home}/c")]),
-            "java -Xbootclasspath/a:~/c"
-        );
-        assert_eq!(
-            line(&["java", &format!("-Dp=/usr/lib:{home}/lib")]),
-            "java -Dp=/usr/lib:~/lib"
+            line(&["scp", &format!("host:{home}/f"), "."]),
+            format!("scp host:{home}/f .")
         );
         assert_eq!(line(&["lazygit"]), "lazygit");
         let bin = format!("{home}/.local/bin/switchboard");
@@ -1554,14 +1539,10 @@ mod tests {
         );
         assert_eq!(line(&[&bin, "view", "--log", "/x"]), "the CI log");
         assert_eq!(
-            line(&["pr-image", "--ticket", "X-1"]),
+            line(&[&bin, "pr-image", "--ticket", "X-1"]),
             "the ticket's images"
         );
-        assert_eq!(
-            line(&["cmake", &format!("-DP=/opt;{home}/sdk")]),
-            "cmake -DP=/opt;~/sdk"
-        );
-        assert_eq!(line(&["pr-view", "--checks"]), "the PR's failing checks");
+        assert_eq!(line(&["/opt/x/pr-view", "--checks"]), "pr-view --checks");
         assert_eq!(line(&["/usr/bin/diff", "a", "b"]), "diff a b");
         let long = line(&["/bin/sleep", &"9".repeat(80)]);
         assert_eq!(draw::width(&long), 60);
