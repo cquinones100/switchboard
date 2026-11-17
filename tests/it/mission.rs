@@ -1412,6 +1412,127 @@ fn paste_it_into_a_tab_leaves_a_notification_unsent_in_the_tab_picked() {
     assert!(got.ends_with("> a question"), "no Enter after it: {got:?}");
 }
 
+// A view a notification's "Show it in" led to is a place on the trail, and
+// the one left by "Open a tab for it": M-Tab from the new tab comes back
+// to it, however long the directory was asked for, and back from it goes
+// to the Notifications view.
+#[test]
+fn m_tab_returns_to_the_view_a_notification_led_to_after_a_tab_opened_for_its_item() {
+    let server = TestServer::start();
+    Claude::new()
+        .answer("exec sleep 30")
+        .install(&server.home.join("bin"));
+    std::fs::create_dir_all(&server.state).unwrap();
+    let secs = switchboard::util::now_ms() / 1000;
+    std::fs::write(
+        server.state.join("slack.json"),
+        json!({ "checked": secs * 1000, "items": [
+            { "kind": "dm", "channel": "D1", "from": "Ada", "where": "Ada",
+                "text": "hello from ada", "ts": format!("{}.000100", secs - 100),
+                "link": "https://slack.example/a" },
+        ] })
+        .to_string(),
+    )
+    .unwrap();
+    settings(
+        &server,
+        json!({ "view_slack": true, "ux2": true, "slack_threads": true,
+            "slack_background": false, "photos": false }),
+    );
+    let mut client = server.attach(204, 40);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("vnotifications\r");
+    let on = |view: &'static str| {
+        move |s: &[String]| {
+            header(s).trim_start().starts_with(view) && s.iter().any(|l| l.contains("Ada"))
+        }
+    };
+    client.wait_for("the Notifications view in front", on("Notifications"));
+    client.type_text("\r");
+    pick(&mut client, "Show it in the Slack view");
+    client.wait_for("the Slack view in front", on("Slack"));
+    client.type_text("\r");
+    pick(&mut client, "Open a tab for it");
+    client.wait_text("A tab for it");
+    client.type_text("\r");
+    wait_list(&server, "the tab for it in front", |l| {
+        tabs(l).len() == 2 && tabs(l)[1]["current"] == true
+    });
+    client.wait_for("mission control closed", closed);
+    // Back from the new tab is the Slack view, over the tab it was opened
+    // over, and back from that the Notifications view it was reached from.
+    client.type_text(&format!("{ALT}{{"));
+    client.wait_for("the Slack view again", on("Slack"));
+    wait_list(&server, "the first tab under it", |l| {
+        tabs(l)[0]["current"] == true
+    });
+    client.type_text(&format!("{ALT}{{"));
+    client.wait_for("the Notifications view before it", on("Notifications"));
+    let new_tab_in_front = |client: &mut TestClient| {
+        client.wait_for("mission control closed", closed);
+        wait_list(&server, "the new tab in front", |l| {
+            tabs(l)[1]["current"] == true
+        });
+    };
+    client.type_text(&format!("{ALT}}}"));
+    client.wait_for("the Slack view, forward", on("Slack"));
+    client.type_text(&format!("{ALT}}}"));
+    new_tab_in_front(&mut client);
+    // M-Tab from the tab is the Slack view too, and again the tab.
+    client.type_text(&format!("{ALT}\t"));
+    client.wait_for("the Slack view by M-Tab", on("Slack"));
+    client.type_text(&format!("{ALT}\t"));
+    new_tab_in_front(&mut client);
+}
+
+// A tab picker left with no tab chosen lets the view go: the tab under it
+// is the place, and M-Tab from it the view.
+#[test]
+fn m_tab_returns_to_a_view_left_by_send_it_to_a_tab_with_no_tab_chosen() {
+    let server = TestServer::start();
+    std::fs::create_dir_all(&server.state).unwrap();
+    let ts = format!("{}.000100", switchboard::util::now_ms() / 1000);
+    std::fs::write(
+        server.state.join("slack.json"),
+        json!({ "checked": 1, "items": [{
+            "kind": "dm", "channel": "D1", "from": "Ada", "where": "Ada",
+            "text": "a question", "ts": ts, "link": "https://slack.example/m",
+        }] })
+        .to_string(),
+    )
+    .unwrap();
+    settings(&server, json!({ "view_slack": true }));
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-n", "second"]);
+    client.wait_text("2:second");
+    // The second tab's shell counts as its Claude, so the picker has a tab.
+    let pid = tabs(&server.list())[1]["panes"][0]["pid"].as_u64().unwrap();
+    session_file(&server.home, pid, "s-second");
+    wait_list(&server, "the second tab's Claude", |l| {
+        !tabs(l)[1]["panes"][0]["claude"].is_null()
+    });
+    open(&mut client);
+    client.type_text("vslack\r");
+    client.wait_text("a question");
+    client.type_text("\r");
+    pick(&mut client, "Send it to a tab");
+    client.wait_text("Send to: Slack: Ada");
+    client.type_text("\x1b");
+    client.wait_for("the picker gone", |s| {
+        closed(s) && !s.iter().any(|l| l.contains("Send to: Slack: Ada"))
+    });
+    client.type_text(&format!("{ALT}\t"));
+    client.wait_text("MISSION CONTROL");
+    client.wait_text("a question");
+    client.type_text(&format!("{ALT}\t"));
+    client.wait_for("mission control closed", closed);
+    wait_list(&server, "still the second tab", |l| {
+        tabs(l)[1]["current"] == true
+    });
+}
+
 // "Open a tab for it" on a notification: a directory asked for, then a new
 // tab named for it whose Claude is told about it; a note's by its name and
 // path alone.

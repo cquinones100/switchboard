@@ -4831,7 +4831,10 @@ impl Server {
                     |d: &Path| crate::cmd::work::main_clone(d).unwrap_or(d.to_path_buf());
                 match h.dir.as_deref().map(main_clone) {
                     Some(dir) => open(self, client, dir),
-                    None => self.pick_dir_for(client, "A tab for it", open),
+                    None => {
+                        self.hold_view_left(client);
+                        self.pick_dir_for(client, "A tab for it", open);
+                    }
                 }
             }
             Do::ToTab(h) | Do::PasteToTab(h) => {
@@ -4870,6 +4873,7 @@ impl Server {
                     .named("send-to-tab")
                     .prompt("send to> ")
                     .header(says);
+                self.hold_view_left(client);
                 self.pick(client, picker, move |server, client, picked| {
                     let Some(tab) = picked.and_then(|p| p.value.parse().ok()).map(TabId) else {
                         return;

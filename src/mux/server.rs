@@ -401,6 +401,13 @@ pub struct Client {
     /// its tab), so only a client whose own view changed moves the trail,
     /// never two showing the session differently in turn.
     pub trail_view: Option<String>,
+    /// Its mission control closed for a tab a menu's option leads to by a
+    /// question (which directory, which tab): the view left stays its
+    /// session's place until that tab comes to the front, so M-Tab from
+    /// the tab comes back to the view, or until the question goes with no
+    /// tab chosen. Whether the question has been up yet, which a
+    /// directory's is only once they are found.
+    pub view_held: Option<bool>,
     pub tx: mpsc::UnboundedSender<ServerMsg>,
     /// Its connection's task, for handing it to a new build.
     pub(super) hold: mpsc::UnboundedSender<Hold>,
@@ -1794,6 +1801,7 @@ impl Server {
             // view back on the trail over the new tab.
             for c in self.clients.values_mut().filter(|c| c.session == session) {
                 c.trail_view = None;
+                c.view_held = None;
             }
         }
         // Opened from the Notifications window, it goes before it.
@@ -2152,16 +2160,39 @@ impl Server {
         let Some(c) = self.clients.get_mut(&client) else {
             return;
         };
-        let now = c
-            .overlays
-            .find::<crate::mission::Mission>()
-            .and_then(crate::mission::Mission::trail_view);
+        let mission = c.overlays.find::<crate::mission::Mission>();
+        if let Some(asked) = c.view_held {
+            let asking = !c.overlays.lets_through();
+            let still_held = mission.is_none() && (asking || !asked);
+            c.view_held = still_held.then_some(asking || asked);
+            if still_held {
+                return;
+            }
+        }
+        let now = mission.and_then(crate::mission::Mission::trail_view);
         if c.trail_view == now {
             return;
         }
         c.trail_view = now.clone();
         let session = c.session.clone();
         self.trail_view_is(&session, now);
+    }
+
+    /// A client's mission control just closed for a question that leads to
+    /// a tab: the view it left is held as its session's place
+    /// (`Client::view_held`), when it is on one.
+    pub fn hold_view_left(&mut self, client: ClientId) {
+        let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
+            return;
+        };
+        let on_a_view = self
+            .session(&session)
+            .is_some_and(|s| s.trail.view.is_some());
+        if let Some(c) = self.clients.get_mut(&client)
+            && on_a_view
+        {
+            c.view_held = Some(false);
+        }
     }
 
     /// `trail_sync`, the view mission control's list of views was walked
@@ -2214,6 +2245,7 @@ impl Server {
             // tab, at its next draw.
             for c in self.clients.values_mut().filter(|c| c.session == session) {
                 c.trail_view = None;
+                c.view_held = None;
             }
         }
         self.refresh_name(tab);
@@ -2378,6 +2410,7 @@ impl Server {
             options_taken: 0,
             terminal_colors: false,
             trail_view: None,
+            view_held: None,
         };
         // Its colours, for the panes' programs that ask (src/mux/terminal.rs),
         // the background's for the `system` theme too (src/status).
@@ -2468,6 +2501,7 @@ impl Server {
             options_taken: 0,
             terminal_colors: false,
             trail_view: None,
+            view_held: None,
         };
         self.clients.insert(id, client);
         self.terminal_colors_sync();
