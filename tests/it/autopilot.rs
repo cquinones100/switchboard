@@ -342,6 +342,51 @@ fn with_ux2_the_boards_m_pauses_lands_and_stops_while_a_cards_enter_keeps_to_its
 }
 
 #[test]
+fn with_ux2_a_blocked_cards_enter_goes_to_the_tab_working_the_item_it_waits_on() {
+    let (_notes, _note, server, mut client, _repo) = set_up_with(
+        json!({ "ux2": true }),
+        "# Work\n\n- [ ] First thing\n- [ ] Second thing\n  After: First thing\n",
+        &[],
+    );
+    // The second item waits on the first, whose tab opened: it stands in
+    // the Blocked column, the leftmost with a card, naming that item.
+    client.wait_text("BLOCKED");
+    let on_its_card = |s: &[String]| {
+        s.iter().any(|l| l.contains("blocked ─"))
+            && s.iter().any(|l| l.contains("Blocked: opens once the item"))
+    };
+    let deadline = common::deadline(Duration::from_secs(40));
+    while !on_its_card(&client.screen()) {
+        assert!(Instant::now() < deadline, "{:#?}", client.screen());
+        client.type_text("h");
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    let screen = client.screen();
+    assert!(
+        screen
+            .windows(2)
+            .any(|w| w[0].contains("First thing") && w[1].contains("tab ")),
+        "the pane says where what it waits on stands: {screen:#?}"
+    );
+    // Enter's first choice goes to the tab working the item it waits on.
+    client.type_text("\r");
+    let screen = client.wait_text(": First thing");
+    assert!(
+        screen
+            .iter()
+            .any(|l| l.contains("Go to tab") && l.contains(": First thing")),
+        "{screen:#?}"
+    );
+    client.type_text("\r");
+    wait("its tab in front", &server, || {
+        opened(&server)
+            .iter()
+            .any(|t| t["options"]["@autopilot_item"] == "First thing" && t["current"] == true)
+    });
+    drop(server);
+}
+
+#[test]
 fn with_ux2_the_boards_side_panel_shows_the_chosen_items_plan_under_its_stages() {
     let (notes, note, server, mut client, _repo) = set_up(json!({ "ux2": true }));
     client.wait_text("WAITING ON YOU");
@@ -1290,6 +1335,7 @@ fn the_relays_commands_start_change_show_and_pause_it_and_a_start_by_hand_is_ref
         columns,
         [
             "Next up",
+            "Blocked",
             "Working",
             "Waiting on you",
             "Landing",

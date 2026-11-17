@@ -1950,10 +1950,10 @@ impl Server {
             .iter()
             .filter(|r| r.closed.is_none())
             .map(|r| (super::view::column(r, &super::view::stages(r)), r))
-            .filter(|(c, _)| (1..=3).contains(c))
+            .filter(|(c, _)| (super::view::WORKING..=super::view::LANDING).contains(c))
             .collect();
         // Waiting on you first, then landing, then working, as board 81 lists them.
-        flying.sort_by_key(|(c, r)| ([3, 0, 1][*c - 1], r.index));
+        flying.sort_by_key(|(c, r)| ([3, 0, 1][*c - super::view::WORKING], r.index));
         let tabs: Vec<serde_json::Value> = flying
             .into_iter()
             .map(|(c, r)| {
@@ -1983,7 +1983,7 @@ impl Server {
         let now = util::now_ms();
         let landed_today = rows
             .iter()
-            .filter(|r| super::view::column(r, &super::view::stages(r)) == 4)
+            .filter(|r| super::view::column(r, &super::view::stages(r)) == super::view::LANDED)
             .filter(|r| r.ended.is_some_and(|e| mode::same_day(e * 1000, now)))
             .count();
         json!({
@@ -2643,15 +2643,15 @@ impl Server {
         tokio::task::spawn_blocking(move || {
             let (queue, held) = job.items_and_held(&notes, &state).unwrap_or_default();
             let left = autopilot_left(&job, &notes, &state, &queue, &held);
+            // Every open item each held one waits on and where it stands,
+            // from the note as it is now and the whole queue, before the
+            // view's share of it is cut.
+            let note = std::fs::read_to_string(notes.join(&job.note)).unwrap_or_default();
+            let held = super::pilot::held_shown(&note, &queue, held);
             let queue: Vec<String> = queue
                 .into_iter()
                 .take(super::pilot::QUEUE_SHOWN)
                 .map(|i| i.text)
-                .collect();
-            let held: Vec<(String, String)> = held
-                .into_iter()
-                .take(super::pilot::QUEUE_SHOWN)
-                .filter_map(|i| Some((i.text, i.waits_on?)))
                 .collect();
             let text = queue.first().cloned().unwrap_or_default();
             let plans = job.plans(&notes);

@@ -464,6 +464,14 @@
     "BesideNotice.dc.html": {
       "title": "112. A notification while the links picker is beside a lone pane: raised in the middle of the whole screen with its shadow, as every message, question and notification is; the pane beside dims and keeps its place",
       "page": "design"
+    },
+    "AutopilotBlocked.dc.html": {
+      "title": "113. Autopilot's Blocked column: an item held by an After: line on an open item stands between Next and Working, its card naming each item it waits on, the mark of where that one stands and its tab's number; drawn only while any is blocked",
+      "page": "design"
+    },
+    "AutopilotBlockedMenu.dc.html": {
+      "title": "114. Enter on a blocked card: a choice per item it waits on leads its menu, going to the tab working it or, with none, opening its plan",
+      "page": "design"
     }
   }
 }

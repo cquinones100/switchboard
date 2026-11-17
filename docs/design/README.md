@@ -1,6 +1,6 @@
 # The design of UX 2.0
 
-The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from the kit's first board, every page beside a sidebar of them all. Drawn from the boards' sources in [`src/`](https://github.com/cquinones100/switchboard/tree/main/docs/design/src) on 2026-11-16 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again: a board is changed in its source, never in its page.
+The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from the kit's first board, every page beside a sidebar of them all. Drawn from the boards' sources in [`src/`](https://github.com/cquinones100/switchboard/tree/main/docs/design/src) on 2026-11-17 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again: a board is changed in its source, never in its page.
 
 ## The kit and the index
 
@@ -184,3 +184,8 @@ The relay's DM, threads and Home tab.
 
 - [111. Beside a lone pane, a box about the tab (here M-u's links picker) drawn as a pane: the spare columns' full height, a header line naming it and the tab, the rule at the pane's edge its only border, no shadow; M-p, M-F and the pickers stay in the middle](https://cquinones100.github.io/switchboard/design/111.html)
 - [112. A notification while the links picker is beside a lone pane: raised in the middle of the whole screen with its shadow, as every message, question and notification is; the pane beside dims and keeps its place](https://cquinones100.github.io/switchboard/design/112.html)
+
+## Proposal: autopilot's blocked column
+
+- [113. Autopilot's Blocked column: an item held by an After: line on an open item stands between Next and Working, its card naming each item it waits on, the mark of where that one stands and its tab's number; drawn only while any is blocked](https://cquinones100.github.io/switchboard/design/113.html)
+- [114. Enter on a blocked card: a choice per item it waits on leads its menu, going to the tab working it or, with none, opening its plan](https://cquinones100.github.io/switchboard/design/114.html)

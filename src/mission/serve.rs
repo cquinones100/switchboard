@@ -1928,6 +1928,25 @@ impl Server {
         self.say(Some(client), &said);
     }
 
+    /// A click on the `n`th after line of the chosen blocked card: to the
+    /// item it names, as that item's choice in the card's menu goes.
+    fn pilot_blocker(&mut self, client: ClientId, n: usize) {
+        let Some(item) = self
+            .mission_mut(client)
+            .and_then(|m| m.chosen_item().cloned())
+        else {
+            return;
+        };
+        let list = self.item_choices(&ViewId::Autopilot, &item, &[]);
+        match super::choices::blocker_act(&item, n, &list) {
+            Some(c) => self.mission_do(client, c.act, &c.label),
+            None => self.say(
+                Some(client),
+                "No tab is working that item and it has no plan to open.",
+            ),
+        }
+    }
+
     /// A click on part `n` of the chosen row's switch: set at once.
     fn relay_part(&mut self, client: ClientId, n: usize) {
         let part = self
@@ -3330,7 +3349,18 @@ impl Server {
                 self.mission_dirty(client);
             }
             Then::SlackPlay => self.slack_play_now(client, None),
-            Then::Part(n) => self.relay_part(client, n),
+            // A blocked card's after line on the Autopilot board, else a
+            // part of the Slack relay view's switch.
+            Then::Part(n) => {
+                let on_autopilot = self
+                    .mission_mut(client)
+                    .is_some_and(|m| m.current().is_some_and(|v| v.id == ViewId::Autopilot));
+                if on_autopilot {
+                    self.pilot_blocker(client, n);
+                } else {
+                    self.relay_part(client, n);
+                }
+            }
         }
     }
 

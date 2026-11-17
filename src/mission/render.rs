@@ -4407,7 +4407,11 @@ fn pilot_board(
     let theme = &m.snap.theme;
     let items = &view.data.items;
     let chosen = |i: usize| m.cursor >= 0 && i == m.cursor as usize;
-    let lit = |i: usize| !chosen(i) && m.hover == Some(Spot::Index(i as isize));
+    // Under the mouse: the card, or one of a blocked card's after lines.
+    let lit = |i: usize| {
+        !chosen(i)
+            && matches!(m.hover, Some(Spot::Index(at) | Spot::Part(at, _)) if at == i as isize)
+    };
     if let Some((at, head)) = items.iter().enumerate().find(|(_, i)| views::is_summary(i)) {
         let spend = head.data.get("spend").and_then(serde_json::Value::as_array);
         let spend_w = if spend.is_some() { SPEND_W + 2 } else { 0 };
@@ -4494,7 +4498,7 @@ fn pilot_board(
             tone: pilot_column_tone(column),
             cards: indices
                 .iter()
-                .map(|&i| pilot_card(&items[i], chosen(i), lit(i), m))
+                .map(|&i| pilot_card(&items[i], i, chosen(i), lit(i), m))
                 .collect(),
         })
         .collect();
@@ -4506,6 +4510,29 @@ fn pilot_board(
         m.snap.rules.scroll_bars,
         theme,
     );
+    // A blocked card's after lines, each a click of its own that goes to
+    // the item it names, ahead of the card's own click.
+    for p in &drawn.placed {
+        let at = held[p.column][p.card];
+        let blockers = items[at].data["after"]
+            .as_array()
+            .map_or(0, Vec::len)
+            .min(PILOT_BLOCKERS_SHOWN);
+        let title = &board_columns[p.column].cards[p.card].title;
+        let first = 2 + kit::title_lines(title, p.w.saturating_sub(4)).len();
+        for n in 0..blockers {
+            let dy = first + n;
+            if dy + 1 >= p.h {
+                break;
+            }
+            hits.push(HitBox {
+                y: (top + p.y + dy) as u16,
+                x0: (p.x + 1) as u16,
+                x1: (p.x + p.w).saturating_sub(2) as u16,
+                spot: Spot::Part(at as isize, n),
+            });
+        }
+    }
     board_hits(&drawn, top, hits, |c, i| held[c][i]);
     for p in &drawn.placed {
         let card = &board_columns[p.column].cards[p.card];
@@ -4549,17 +4576,25 @@ fn pilot_column_tone(column: &str) -> Tone {
     }
 }
 
+/// How many of the items a blocked item waits on its card names, the rest
+/// counted in a line under them.
+const PILOT_BLOCKERS_SHOWN: usize = 3;
+
 /// An Autopilot item's card: on its top edge its state's mark and its
 /// tab's number (or its place in line, or "closed"), a red ✕ at the right
 /// once a stage failed; its first line, where it is and how long it has
 /// worked as its facts, and a meter of its stages done. A skipped item's
-/// card says "skipped by you", and one held by the open item it waits on
-/// says so, both dim with no meter.
-fn pilot_card(item: &Item, chosen: bool, hovered: bool, m: &Mission) -> kit::BoardCard {
+/// card says "skipped by you", and one held by a board's review says what
+/// it waits on, both dim with no meter. A blocked one (board 113) is named
+/// "blocked" with the idle mark, and under a dim "after" names each item it
+/// waits on, a line each (`blocker_line`), `PILOT_BLOCKERS_SHOWN` at most
+/// and then how many more.
+fn pilot_card(item: &Item, at: usize, chosen: bool, hovered: bool, m: &Mission) -> kit::BoardCard {
     let theme = &m.snap.theme;
     let pilot = item.data.get("pilot");
     let skipped = item.data.get("skipped").is_some();
     let held = item.data.get("waitsOn").is_some();
+    let after = item.data["after"].as_array();
     // An item in line whose last start failed (`view::say_failed_starts`).
     let start_failed = item.data["startFailed"].as_str();
     let failed = pilot.and_then(|p| p["failed"].as_bool()) == Some(true) || start_failed.is_some();
@@ -4567,7 +4602,8 @@ fn pilot_card(item: &Item, chosen: bool, hovered: bool, m: &Mission) -> kit::Boa
     let (name, where_, meter) = match pilot {
         // A skipped item has no place in line and no stages.
         None if skipped => (String::new(), "skipped by you".to_string(), None),
-        // Nor has one held by the open item it waits on.
+        // Nor has one blocked by open items, or held by a board's review.
+        None if after.is_some() => ("blocked".to_string(), "after".to_string(), None),
         None if held => (String::new(), item.detail.clone(), None),
         Some(p) if p["closed"] == true => {
             ("closed".to_string(), item.detail.clone(), Some(stages(p)))
@@ -4598,6 +4634,7 @@ fn pilot_card(item: &Item, chosen: bool, hovered: bool, m: &Mission) -> kit::Boa
     } else {
         match item.group.as_deref() {
             Some("Next up") => Some(Mark::Pending),
+            Some("Blocked") => Some(Mark::Idle),
             Some("Working") => Some(Mark::Working),
             Some("Waiting on you") => Some(Mark::Needs),
             Some("Landing") => Some(Mark::Landing),
@@ -4617,16 +4654,34 @@ fn pilot_card(item: &Item, chosen: bool, hovered: bool, m: &Mission) -> kit::Boa
     if let Some(words) = pilot.and_then(|p| pilot_timer(p, m.snap.now_secs)) {
         facts.push(vec![Span::styled(words, fg(theme.dim))]);
     }
+    let blockers = after.map_or(&[][..], Vec::as_slice);
+    for (n, on) in blockers.iter().take(PILOT_BLOCKERS_SHOWN).enumerate() {
+        let lit = m.hover == Some(Spot::Part(at as isize, n));
+        facts.push(blocker_line(on, lit, m.snap.frame, theme));
+    }
+    // The rest are counted, so a card stays short enough to be drawn; the
+    // pane beside the board and the menu have every one.
+    if let Some(more) = blockers.len().checked_sub(PILOT_BLOCKERS_SHOWN + 1) {
+        facts.push(vec![Span::styled(
+            format!("and {} more", more + 1),
+            fg(theme.dim),
+        )]);
+    }
+    let name_tone = if after.is_some() {
+        Tone::Dim
+    } else {
+        Tone::Text
+    };
     kit::BoardCard {
         mark: mark.map(|k| kit::mark(k, m.snap.frame, theme)),
-        name: Span::styled(name, Tone::Text.bold(theme)),
+        name: Span::styled(name, name_tone.bold(theme)),
         state: if failed {
             vec![kit::mark(Mark::Failed, 0, theme)]
         } else {
             Vec::new()
         },
         title,
-        title_look: if skipped || held {
+        title_look: if skipped || (held && after.is_none()) {
             kit::Title::Past
         } else {
             kit::Title::Live
@@ -4637,6 +4692,55 @@ fn pilot_card(item: &Item, chosen: bool, hovered: bool, m: &Mission) -> kit::Boa
             .map(|frac| (frac, pilot_tone(item))),
         chosen,
         hovered,
+    }
+}
+
+/// One item a blocked item waits on (`view::blockers`), as a line of its
+/// card and of the pane beside the board: the mark of where it stands
+/// (its tab's column, idle when it is blocked itself, pending while it
+/// waits in line or the queue won't take it), its tab's number
+/// when one works it, and its first line, dim, underlined under the mouse.
+fn blocker_line(
+    on: &serde_json::Value,
+    lit: bool,
+    frame: usize,
+    theme: &Theme,
+) -> Vec<Span<'static>> {
+    let mark = match on["column"].as_str() {
+        Some("Blocked") => Mark::Idle,
+        Some("Working") => Mark::Working,
+        Some("Waiting on you") => Mark::Needs,
+        Some("Landing") => Mark::Landing,
+        Some("Landed") => Mark::Passed,
+        _ => Mark::Pending,
+    };
+    let mut line = vec![kit::mark(mark, frame, theme), Span::raw(" ")];
+    if let Some(index) = on["index"].as_u64() {
+        line.push(Span::styled(format!("{index} "), bold(theme.bright)));
+    }
+    let words = fg(if lit { theme.bright } else { theme.dim });
+    line.push(Span::styled(
+        on["item"].as_str().unwrap_or_default().to_string(),
+        if lit {
+            words.add_modifier(Modifier::UNDERLINED)
+        } else {
+            words
+        },
+    ));
+    line
+}
+
+/// Where an item a blocked item waits on stands, in words, for the pane.
+fn blocker_stands(on: &serde_json::Value) -> String {
+    match (
+        on["index"].as_u64(),
+        on["column"].as_str(),
+        on["place"].as_u64(),
+    ) {
+        (Some(index), Some(column), _) => format!("tab {index}, {}", column.to_lowercase()),
+        (_, Some(_), _) => "blocked itself".to_string(),
+        (_, None, Some(place)) => format!("{} in line, no tab yet", ordinal(place)),
+        (_, None, None) => "open, not in line".to_string(),
     }
 }
 
@@ -4660,7 +4764,14 @@ fn pilot_about(item: &Item, side_w: usize, theme: &Theme, images: Option<&Images
         .into_iter()
         .map(|l| vec![Span::styled(l, bold(theme.bright))])
         .collect();
+    let after = item.data["after"].as_array();
     let detail = match item.data["place"].as_u64() {
+        None if after.is_some_and(|a| a.len() == 1) => {
+            "Blocked: opens once the item it waits on is ticked".to_string()
+        }
+        None if after.is_some() => {
+            "Blocked: opens once every item it waits on is ticked".to_string()
+        }
         None if item.data.get("waitsOn").is_some() => format!(
             "Waits on {}, still open: opens once it is ticked",
             item.data["waitsOn"].as_str().unwrap_or_default()
@@ -4675,6 +4786,36 @@ fn pilot_about(item: &Item, side_w: usize, theme: &Theme, images: Option<&Images
     };
     for l in text::wrap(&detail, inner) {
         out.push(vec![Span::styled(l, fg(theme.dim))]);
+    }
+    // What a blocked item waits on: each item whole, wrapped under its
+    // mark and tab's number, then where it stands on a line of its own.
+    if let Some(after) = after {
+        out.push(Vec::new());
+        out.push(kit::label("After", Tone::Dim, None, inner, theme));
+        for on in after {
+            let mut lead = blocker_line(on, false, 0, theme);
+            lead.pop();
+            let indent = spans_width(&lead);
+            let name = on["item"].as_str().unwrap_or_default();
+            for (n, l) in text::wrap(name, inner.saturating_sub(indent).max(1))
+                .into_iter()
+                .enumerate()
+            {
+                let mut line = if n == 0 {
+                    lead.clone()
+                } else {
+                    vec![Span::raw(" ".repeat(indent))]
+                };
+                line.push(Span::styled(l, fg(theme.text)));
+                out.push(line);
+            }
+            for l in text::wrap(&blocker_stands(on), inner.saturating_sub(indent).max(1)) {
+                out.push(vec![
+                    Span::raw(" ".repeat(indent)),
+                    Span::styled(l, fg(theme.dim)),
+                ]);
+            }
+        }
     }
     let stages = item
         .data
@@ -9383,6 +9524,7 @@ mod tests {
                             "## Today\n\nNotes are found by name.\n\n## Steps\n\n1. Give each a line of its own."
                                 .into(),
                         ),
+                    file: None,
                     },
                 ),
                 (
@@ -9390,6 +9532,7 @@ mod tests {
                     crate::cmd::worktree_from_note::PlanNote {
                         name: "Plan - Third".into(),
                         text: None,
+                    file: None,
                     },
                 ),
             ]),
@@ -9447,9 +9590,10 @@ mod tests {
             text[at]
         );
         let heads = &text[at + 2];
-        for column in crate::autopilot::view::COLUMNS {
+        for column in crate::autopilot::view::board_columns(&m.snap.views[0].data.items) {
             assert!(heads.contains(&column.to_uppercase()), "{heads}");
         }
+        assert!(!heads.contains("BLOCKED"), "nothing is blocked: {heads}");
         assert!(
             heads.contains("NEXT UP 2") && heads.contains("LANDED 0"),
             "{heads}"
@@ -9544,10 +9688,139 @@ mod tests {
             .iter()
             .find(|l| l.contains("NEXT UP 1"))
             .unwrap_or_else(|| panic!("{text:#?}"));
-        for column in &crate::autopilot::view::COLUMNS[..5] {
+        for column in ["Next up", "Working", "Waiting on you", "Landing", "Landed"] {
             assert!(heads.contains(&column.to_uppercase()), "{heads}");
         }
         assert!(!text.iter().any(|l| l.contains("SKIPPED")), "{text:#?}");
+        assert!(!text.iter().any(|l| l.contains("BLOCKED")), "{text:#?}");
+    }
+
+    #[test]
+    fn with_ux2_a_blocked_item_stands_in_its_own_column_naming_each_item_it_waits_on() {
+        let rows = vec![pilot_row(3, "The base", TabState::Working)];
+        let held = [crate::autopilot::pilot::Held {
+            text: "Builds on both".into(),
+            waits_on: "The base".into(),
+            after: vec![
+                ("The base".into(), crate::autopilot::pilot::Stands::Open),
+                ("Third".into(), crate::autopilot::pilot::Stands::Queued(1)),
+            ],
+        }];
+        let list = crate::autopilot::view::items(
+            &pilot_summary(),
+            "",
+            "",
+            &rows,
+            &["Third".into()],
+            &held,
+            &[],
+            &std::collections::HashMap::new(),
+        );
+        let blocked = list
+            .iter()
+            .position(|i| i.id == "held:Builds on both")
+            .unwrap();
+        let mut m = mission(
+            Vec::new(),
+            vec![list_view(ViewId::Autopilot, "Autopilot", list)],
+        );
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.size = (200, 40);
+        m.cursor = blocked as isize;
+        let (lines, hits, _, _) = drawn(&m, 200, 40);
+        let text = texts(&lines);
+        let heads = text
+            .iter()
+            .find(|l| l.contains("NEXT UP 1"))
+            .unwrap_or_else(|| panic!("{text:#?}"));
+        let col = |l: &str, s: &str| {
+            l[..l.find(s).unwrap_or_else(|| panic!("{s} in {l}"))]
+                .chars()
+                .count()
+        };
+        // Between Next up and Working.
+        assert!(col(heads, "NEXT UP") < col(heads, "BLOCKED 1"), "{heads}");
+        assert!(col(heads, "BLOCKED 1") < col(heads, "WORKING"), "{heads}");
+        // Its card: named blocked, its item, a dim "after", then a line for
+        // each item it waits on: the tab working one, the other in line.
+        let row_of = |s: &str| {
+            text.iter()
+                .position(|l| l.contains(s))
+                .unwrap_or_else(|| panic!("{s} in {text:#?}"))
+        };
+        let top = row_of("blocked ─");
+        let under = col(heads, "BLOCKED 1");
+        assert!(col(&text[top], "blocked ─") >= under, "{}", text[top]);
+        assert!(
+            text[top + 1].contains("Builds on both"),
+            "{}",
+            text[top + 1]
+        );
+        assert!(text[top + 2].contains("after"), "{}", text[top + 2]);
+        assert!(text[top + 3].contains("3 The base"), "{}", text[top + 3]);
+        assert!(text[top + 4].contains("◌ Third"), "{}", text[top + 4]);
+        // Each of those lines is a click of its own, ahead of its card's.
+        for (n, dy) in [(0, 3), (1, 4)] {
+            let spot = Spot::Part(blocked as isize, n);
+            let hit = hits
+                .iter()
+                .find(|h| h.y as usize == top + dy && h.x0 as usize >= under)
+                .unwrap_or_else(|| panic!("a click on line {dy}"));
+            assert_eq!(hit.spot, spot, "the after line before the card");
+        }
+        // Under the mouse, the line is underlined and its card lit.
+        m.hover = Some(Spot::Part(blocked as isize, 1));
+        let (lines, _, _, _) = drawn(&m, 200, 40);
+        let lit = lines[top + 4]
+            .spans
+            .iter()
+            .find(|s| s.content.contains("Third"))
+            .unwrap();
+        assert!(lit.style.add_modifier.contains(Modifier::UNDERLINED));
+        // A card names three of them at most, then counts the rest, which
+        // take no click.
+        let item = &mut m.snap.views[0].data.items[blocked];
+        item.data["after"] = serde_json::json!(
+            (1..=6)
+                .map(|n| serde_json::json!({ "item": format!("Dep {n}") }))
+                .collect::<Vec<_>>()
+        );
+        m.hover = None;
+        let (lines, hits, _, _) = drawn(&m, 200, 40);
+        let card = texts(&lines);
+        assert!(card[top + 5].contains("◌ Dep 3"), "{}", card[top + 5]);
+        assert!(card[top + 6].contains("and 3 more"), "{}", card[top + 6]);
+        assert!(card[top + 7].contains("╰"), "{}", card[top + 7]);
+        assert!(
+            !hits
+                .iter()
+                .any(|h| matches!(h.spot, Spot::Part(_, n) if n >= 3)),
+            "only the lines shown take a click"
+        );
+        // The pane beside it says where each one stands.
+        let board = text.join("\n");
+        assert!(
+            board.contains("Blocked: opens once every item it waits on is ticked"),
+            "{board}"
+        );
+        assert!(board.contains("AFTER"), "{board}");
+        // Each item it waits on whole, where it stands on the line under.
+        let stands = |name: &str, words: &str| {
+            assert!(
+                text.windows(2)
+                    .any(|w| w[0].contains(name) && w[1].contains(words)),
+                "{name}, then {words}: {board}"
+            );
+        };
+        stands("3 The base", "tab 3, working");
+        stands("◌ Third", "1st in line, no tab yet");
+        let blocked_itself = serde_json::json!({ "item": "Middle", "column": "Blocked" });
+        assert_eq!(blocker_stands(&blocked_itself), "blocked itself");
+        assert_eq!(
+            blocker_line(&blocked_itself, false, 0, &m.snap.theme)[0].content,
+            kit::mark(Mark::Idle, 0, &m.snap.theme).content
+        );
     }
 
     #[test]
@@ -9566,6 +9839,7 @@ mod tests {
                 crate::cmd::worktree_from_note::PlanNote {
                     name: "Plan - Stable IDs".into(),
                     text: Some("## Today\n\nNotes are found by name.".into()),
+                    file: None,
                 },
             )]),
         );
@@ -10338,6 +10612,7 @@ mod tests {
                 crate::cmd::worktree_from_note::PlanNote {
                     name: "Plan - Stable IDs".into(),
                     text: Some(long_description(40)),
+                    file: None,
                 },
             )]),
         );

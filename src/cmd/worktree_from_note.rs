@@ -262,12 +262,13 @@ pub fn plan_file(dir: &Path, name: &str) -> Option<PathBuf> {
 }
 
 /// The plan note an item links, for the pane beside the Autopilot board:
-/// its file's name, and its words (`plan_body`), none when no note has the
-/// name.
+/// its file's name, its words (`plan_body`), none when no note has the
+/// name, and its file under the notes directory, for a menu to open it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PlanNote {
     pub name: String,
     pub text: Option<String>,
+    pub file: Option<String>,
 }
 
 /// A plan note's words for a pane its item already heads: without its ID,
@@ -373,11 +374,14 @@ pub fn plan_notes(notes: &Path, text: &str) -> HashMap<String, PlanNote> {
     linked
         .into_iter()
         .map(|(first, name)| {
-            let text = files
-                .get(&name)
+            let found = files.get(&name);
+            let text = found
                 .and_then(|file| fs::read_to_string(file).ok())
                 .map(|text| plan_body(&text));
-            (first, PlanNote { name, text })
+            let file = found
+                .and_then(|file| file.strip_prefix(notes).ok())
+                .map(|rel| rel.to_string_lossy().into_owned());
+            (first, PlanNote { name, text, file })
         })
         .collect()
 }
@@ -1844,6 +1848,7 @@ mod tests {
             Some(&PlanNote {
                 name: "Plan - Stable IDs".into(),
                 text: Some("## Today\n\nNotes are found by name.".into()),
+                file: Some("Plans/Plan - Stable IDs.md".into()),
             })
         );
         assert_eq!(plans.get("No plan here"), None);
@@ -1852,6 +1857,7 @@ mod tests {
             Some(&PlanNote {
                 name: "Plan - Gone".into(),
                 text: None,
+                file: None,
             }),
             "a ticked item's own link, past its sub-item's, its note in the trash not found"
         );

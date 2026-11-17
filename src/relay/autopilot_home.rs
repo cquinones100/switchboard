@@ -212,12 +212,7 @@ pub fn blocks(cx: &Cx, board: &Value, named: bool, tabs: &[Tab]) -> Vec<Value> {
     ];
     // The board's columns, two to a row as board 81 sets them; Skipped
     // only while an item is.
-    let count = |name: &str| {
-        if name == "Landed"
-            && let Some(n) = board["landedToday"].as_u64()
-        {
-            return n;
-        }
+    let in_column = |name: &str| {
         board["columns"]
             .as_array()
             .into_iter()
@@ -225,6 +220,19 @@ pub fn blocks(cx: &Cx, board: &Value, named: bool, tabs: &[Tab]) -> Vec<Value> {
             .find(|c| c[0] == name)
             .and_then(|c| c[1].as_u64())
             .unwrap_or(0)
+    };
+    let count = |name: &str| {
+        // The Home tab has no Blocked column: its items are counted with
+        // those in line, as they were before the board had one.
+        if name == "Next up" {
+            return ["Next up", "Blocked"].iter().map(|c| in_column(c)).sum();
+        }
+        if name == "Landed"
+            && let Some(n) = board["landedToday"].as_u64()
+        {
+            return n;
+        }
+        in_column(name)
     };
     let mut fields = Vec::new();
     for (name, shown_as) in [

@@ -183,8 +183,8 @@ pub enum AutopilotEvent {
         text: String,
         /// The items it will open, in order, for its view.
         queue: Vec<String>,
-        /// The items held by the open item each waits on, with that item.
-        held: Vec<(String, String)>,
+        /// The items held, each with what it waits on.
+        held: Vec<pilot::Held>,
         /// The plan each of the note's items links, by its first line.
         plans: std::collections::HashMap<String, crate::cmd::worktree_from_note::PlanNote>,
         /// Today's spend, while there is a spend limit.

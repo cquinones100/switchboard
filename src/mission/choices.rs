@@ -549,13 +549,66 @@ pub fn every_choice(option: &crate::settings::Setting) -> Vec<Choice> {
     out
 }
 
-/// A card's menu in Autopilot's view (src/autopilot/view.rs): its tab, its
+/// A blocked card's way to an item it waits on (`view::blockers`): the
+/// tab working it while one of autopilot's is open on it, else its plan
+/// note; nothing when it has neither.
+fn blocker_choice(on: &Value, ctx: &Ctx<'_>) -> Option<Choice> {
+    let item = on["item"].as_str().unwrap_or_default();
+    let tab = on["tab"]
+        .as_str()
+        .and_then(|t| ctx.tabs.iter().find(|m| m.id.to_string() == t));
+    if let Some(t) = tab {
+        return Some(choice(
+            'b',
+            format!("Go to tab {}: {item}", t.index),
+            Do::GoTo(t.id),
+        ));
+    }
+    let plan = on["plan"].as_str().filter(|p| !p.is_empty())?;
+    Some(choice(
+        'b',
+        format!("Open the plan of: {item}"),
+        Do::OpenNote(plan.to_string()),
+    ))
+}
+
+/// What a click on the `n`th after line of a blocked card does: the act of
+/// its choice in the card's menu (`list`, `pilot_choices`), found by where
+/// it leads, since an item with no tab and no plan has no choice: its tab
+/// while the menu goes there, else its plan, as the menu falls back to it
+/// once the tab has closed.
+pub fn blocker_act(item: &Item, n: usize, list: &[Choice]) -> Option<Choice> {
+    let on = item.data["after"].get(n)?;
+    let tab = on["tab"].as_str();
+    let plan = on["plan"].as_str();
+    let to_tab = list
+        .iter()
+        .find(|c| matches!(&c.act, Do::GoTo(t) if tab == Some(t.to_string().as_str())));
+    let to_plan = list
+        .iter()
+        .find(|c| matches!(&c.act, Do::OpenNote(p) if plan == Some(p.as_str())));
+    to_tab.or(to_plan).cloned()
+}
+
+/// A card's menu in Autopilot's view (src/autopilot/view.rs): for a
+/// blocked one (boards 113 and 114), first a choice per item it waits on
+/// (`blocker_choice`) and its own plan in Notes; then its tab, its
 /// item skipped (an item to open next too) or a skipped one taken again.
 /// What changes the whole mode is on the view's own menu (`m`,
 /// `Server::view_menu`), not on every card.
 fn pilot_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
     use crate::autopilot::Act;
     let mut out = Vec::new();
+    if let Some(after) = item.data["after"].as_array() {
+        out.extend(after.iter().filter_map(|on| blocker_choice(on, ctx)));
+        if let Some(file) = item.data["planFile"].as_str() {
+            out.push(choice(
+                'p',
+                "Open its plan in Notes",
+                Do::OpenNote(file.to_string()),
+            ));
+        }
+    }
     let tab = item
         .data
         .pointer("/pilot/tab")
@@ -2076,6 +2129,68 @@ mod tests {
         assert!(handed(&item_choices(&ViewId::Ci, &main, &[], &c)).is_empty());
         let note = Item::new("new-notes\tnote:/n/A.md", "A").data(json!({ "path": "/n/A.md" }));
         assert!(handed(&notice_choices(&note, &c)).is_empty());
+    }
+
+    #[test]
+    fn a_blocked_cards_menu_leads_with_a_way_to_each_item_it_waits_on() {
+        let repo = |_: &Path| Vec::new();
+        let tabs = [tab(3, "base")];
+        let c = ctx(&tabs, &repo);
+        let item = Item::new("held:Builds on them", "Builds on them").data(json!({
+            "next": "Builds on them",
+            "waitsOn": "The base",
+            "planFile": "Plans/Plan - Builds.md",
+            "after": [
+                { "item": "The base", "tab": "@3", "index": 3, "column": "Working" },
+                { "item": "In line", "place": 1, "plan": "Plans/Plan - In line.md" },
+                { "item": "No plan", "place": 2 },
+                { "item": "Its tab closed", "tab": "@9", "index": 9, "column": "Working", "plan": "Plans/Plan - Closed.md" },
+            ],
+        }));
+        let list = item_choices(&ViewId::Autopilot, &item, &[], &c);
+        let menu: Vec<(&str, &Do)> = list.iter().map(|c| (c.label.as_str(), &c.act)).collect();
+        assert_eq!(
+            menu[..5],
+            [
+                ("Go to tab 3: The base", &Do::GoTo(TabId(3))),
+                (
+                    "Open the plan of: In line",
+                    &Do::OpenNote("Plans/Plan - In line.md".into())
+                ),
+                (
+                    "Open the plan of: Its tab closed",
+                    &Do::OpenNote("Plans/Plan - Closed.md".into())
+                ),
+                (
+                    "Open its plan in Notes",
+                    &Do::OpenNote("Plans/Plan - Builds.md".into())
+                ),
+                (
+                    "Skip its item: Builds on them",
+                    &Do::Autopilot(crate::autopilot::Act::Skip("Builds on them".into()))
+                ),
+            ]
+        );
+        // A click on an after line does what its choice does; one with no
+        // tab and no plan leads nowhere.
+        let act = |n: usize| blocker_act(&item, n, &list).map(|c| c.act);
+        assert_eq!(act(0), Some(Do::GoTo(TabId(3))));
+        assert_eq!(act(1), Some(Do::OpenNote("Plans/Plan - In line.md".into())));
+        assert_eq!(act(2), None);
+        assert_eq!(
+            act(3),
+            Some(Do::OpenNote("Plans/Plan - Closed.md".into())),
+            "its tab closed, so its plan, as the menu has it"
+        );
+        assert_eq!(act(9), None);
+        // An item in line, not blocked, keeps its menu.
+        let next = Item::new("next:One", "1. One")
+            .data(json!({ "next": "One", "place": 1, "planFile": "Plans/Plan - One.md" }));
+        let labels: Vec<String> = item_choices(&ViewId::Autopilot, &next, &[], &c)
+            .into_iter()
+            .map(|c| c.label)
+            .collect();
+        assert_eq!(labels[0], "Skip its item: One");
     }
 
     #[test]

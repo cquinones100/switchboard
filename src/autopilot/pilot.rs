@@ -102,6 +102,72 @@ pub const LOST_MS: i64 = 30_000;
 /// An item, by its note's ID and its first line.
 pub type Key = (String, String);
 
+/// An item the queue would take but for what it waits on: its first line,
+/// what holds it (`Item::waits_on`: the first open item an `After:` line of
+/// its names, or the review of a design board), and every open item its
+/// `After:` lines name (`held_by_all`), each with where it stands in the
+/// note (`Stands`), none when a review alone holds it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Held {
+    pub text: String,
+    pub waits_on: String,
+    pub after: Vec<(String, Stands)>,
+}
+
+/// Where an open item another waits on stands in the note, read from the
+/// whole queue and the note's own text, past the `QUEUE_SHOWN` the view is
+/// given: its place in the queue (from 1); blocked itself by open items,
+/// as its `After:` lines in the note say, whether or not the queue would
+/// take it (an unplanned, skipped or parked one too); or open with the
+/// queue not taking it and nothing holding it (at work in a tab, skipped,
+/// parked, waiting on a choice or a review).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stands {
+    Queued(usize),
+    Blocked,
+    Open,
+}
+
+/// The held items the view shows (`QUEUE_SHOWN` of `held`, in its order),
+/// each with every open item its `After:` lines name in the note `text`
+/// and where that one stands, from the whole `queue` and the note.
+pub fn held_shown(text: &str, queue: &[Item], held: Vec<Item>) -> Vec<Held> {
+    use crate::cmd::worktree_from_note::held_by_all;
+    // An open item of the note, by its first line, that waits on another.
+    let blocked_itself = |on: &str| {
+        text.split('\n').enumerate().any(|(at, line)| {
+            line.strip_prefix("- [ ] ")
+                .is_some_and(|first| first.trim() == on)
+                && !held_by_all(text, at + 1).is_empty()
+        })
+    };
+    let stands = |on: &str| {
+        if let Some(at) = queue.iter().position(|i| i.text == on) {
+            Stands::Queued(at + 1)
+        } else if blocked_itself(on) {
+            Stands::Blocked
+        } else {
+            Stands::Open
+        }
+    };
+    held.into_iter()
+        .take(QUEUE_SHOWN)
+        .filter_map(|i| {
+            Some(Held {
+                after: held_by_all(text, i.line)
+                    .into_iter()
+                    .map(|on| {
+                        let stands = stands(&on);
+                        (on, stands)
+                    })
+                    .collect(),
+                text: i.text,
+                waits_on: i.waits_on?,
+            })
+        })
+        .collect()
+}
+
 /// The item it will take next, as last read, for mission control.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Next {
@@ -114,9 +180,8 @@ pub struct Next {
     /// The items it will open, in that order, for its view (the first is
     /// `text`), at most `QUEUE_SHOWN`.
     pub queue: Vec<String>,
-    /// The items it would open but for the open item each waits on, by
-    /// their first lines and that item's, for its view.
-    pub held: Vec<(String, String)>,
+    /// The items it would open but for what each waits on, for its view.
+    pub held: Vec<Held>,
     /// The plan each of the note's items links, by the item's first line,
     /// read with them for the board's side panel.
     pub plans: HashMap<String, PlanNote>,
@@ -988,6 +1053,43 @@ mod tests {
     use super::*;
     use crate::autopilot::place::tests::mine;
     use crate::sidebar::model::TabState;
+
+    #[test]
+    fn a_held_item_says_where_each_item_it_waits_on_stands_past_what_the_view_shows() {
+        // Nine ready items, then ten held: the first waits on the ninth
+        // ready one, on the last held one and on one a tab works; the rest
+        // each wait on the one a tab works.
+        let mut note = String::from("# Work\n\n- [ ] At work\n");
+        for n in 1..=9 {
+            note.push_str(&format!("- [ ] Ready {n}\n"));
+        }
+        note.push_str("- [ ] Held 1\n  After: Ready 9\n  After: Held 10\n  After: At work\n");
+        for n in 2..=10 {
+            note.push_str(&format!("- [ ] Held {n}\n  After: At work\n"));
+        }
+        let all = crate::cmd::worktree_from_note::items(&note);
+        // The queue leaves out the item a tab works and those held.
+        let (held, free): (Vec<Item>, Vec<Item>) =
+            all.into_iter().partition(|i| i.waits_on.is_some());
+        let queue: Vec<Item> = free.into_iter().filter(|i| i.text != "At work").collect();
+        // The last held one is left out of what the queue holds, as an
+        // unplanned item is with only planned ones taken.
+        let held: Vec<Item> = held.into_iter().filter(|i| i.text != "Held 10").collect();
+        let shown = held_shown(&note, &queue, held);
+        assert_eq!(shown.len(), QUEUE_SHOWN, "the view's share of them");
+        assert_eq!(shown[0].text, "Held 1");
+        assert_eq!(shown[0].waits_on, "Ready 9");
+        assert_eq!(
+            shown[0].after,
+            [
+                ("Ready 9".to_string(), Stands::Queued(9)),
+                ("Held 10".to_string(), Stands::Blocked),
+                ("At work".to_string(), Stands::Open),
+            ],
+            "from the whole queue and the note itself, not the eight shown"
+        );
+        assert_eq!(shown[1].after, [("At work".to_string(), Stands::Open)]);
+    }
 
     #[test]
     fn a_start_that_fails_is_tried_again_and_the_third_in_an_hour_skips_the_item() {

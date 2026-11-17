@@ -4,7 +4,9 @@
 //! without asking, today's spend against its limit, and whether it is
 //! paused and why; then every item it works in the column of the board
 //! where it stands (`COLUMNS`: the items it will open next, in the order
-//! it opens them, then its tabs working, waiting on you, landing and
+//! it opens them, then those blocked, each held by an `After:` line on an
+//! open item its card names, a column only while any is (board 113), then
+//! its tabs working, waiting on you, landing and
 //! landed, today's landings whose tabs are closed with them, then the ones
 //! skipped, a column only while any is), the least far along first, so
 //! landed ones come last of the tabs. Each tab keeps a cell per stage,
@@ -35,6 +37,7 @@ use serde_json::{Value, json};
 use super::eta;
 use super::line::Summary;
 use super::mode::Landed;
+use super::pilot::{Held, Stands};
 use super::serve::{LANDED_AT, LEFT, OPENED};
 use crate::cmd::worktree_from_note::{PlanNote, WAITS_ON_SHOWN};
 use crate::items::{Item, State, Target};
@@ -58,8 +61,9 @@ pub const STAGES: [&str; 8] = [
 ];
 
 /// The board's columns, left to right: where an item stands.
-pub const COLUMNS: [&str; 6] = [
+pub const COLUMNS: [&str; 7] = [
     "Next up",
+    "Blocked",
     "Working",
     "Waiting on you",
     "Landing",
@@ -67,15 +71,27 @@ pub const COLUMNS: [&str; 6] = [
     "Skipped",
 ];
 
-/// The columns the board draws: every one of `COLUMNS` but Skipped while
-/// no item stands in it, so an empty Skipped column takes none of the
-/// width and comes back with the first item skipped.
+/// Each column's place in `COLUMNS`.
+pub const NEXT: usize = 0;
+pub const BLOCKED: usize = 1;
+pub const WORKING: usize = 2;
+pub const WAITING: usize = 3;
+pub const LANDING: usize = 4;
+pub const LANDED: usize = 5;
+pub const SKIPPED: usize = 6;
+
+/// The columns the board draws: every one of `COLUMNS` but Blocked and
+/// Skipped while no item stands in them, so an empty one takes none of
+/// the width and comes back with the first item blocked or skipped.
 pub fn board_columns(items: &[Item]) -> Vec<&'static str> {
     COLUMNS
         .into_iter()
-        .filter(|column| {
-            *column != COLUMNS[5] || items.iter().any(|i| i.group.as_deref() == Some(*column))
+        .enumerate()
+        .filter(|(at, column)| {
+            ![BLOCKED, SKIPPED].contains(at)
+                || items.iter().any(|i| i.group.as_deref() == Some(*column))
         })
+        .map(|(_, column)| column)
         .collect()
 }
 
@@ -313,7 +329,8 @@ fn failed(rest: &str, or: &str) -> Cell {
     )
 }
 
-/// The column a tab stands in (an index into `COLUMNS`, never Next up):
+/// The column a tab stands in (an index into `COLUMNS`, never Next up or
+/// Blocked):
 /// landed once back in the main clone; waiting on you while its Claude
 /// waits on you, a landing asking before its push included; landing once
 /// its worktree is in the landing queue or its Claude runs queue-and-clean;
@@ -321,17 +338,17 @@ fn failed(rest: &str, or: &str) -> Cell {
 /// ended); else working (opening its worktree too).
 pub fn column(r: &Row, stages: &[Cell; 8]) -> usize {
     if r.left {
-        4
+        LANDED
     } else if r.state == TabState::Waiting {
-        2
+        WAITING
     } else if r.landing.as_ref().is_some_and(Value::is_object)
         || r.loop_skill.as_deref() == Some("queue")
     {
-        3
+        LANDING
     } else if stages[1].0 == "asks" {
-        2
+        WAITING
     } else {
-        1
+        WORKING
     }
 }
 
@@ -397,6 +414,9 @@ fn elsewhere(mut data: Value) -> Value {
 fn with_plan(mut data: Value, plans: &HashMap<String, PlanNote>, item: &str) -> Value {
     if let Some(plan) = plans.get(item) {
         data["planName"] = json!(plan.name);
+        if let Some(file) = &plan.file {
+            data["planFile"] = json!(file);
+        }
         if let Some(text) = &plan.text {
             data["plan"] = json!(text);
         }
@@ -453,7 +473,7 @@ pub fn eta(
         .filter(|r| r.closed.is_none() && !r.left)
         .collect();
     let (asking, others): (Vec<&Row>, Vec<&Row>) =
-        open.iter().partition(|r| column(r, &stages(r)) == 2);
+        open.iter().partition(|r| column(r, &stages(r)) == WAITING);
     let at_work: Vec<&Row> = others.into_iter().filter(|r| r.ended.is_none()).collect();
     let items: Vec<String> = at_work.iter().map(|r| r.item.clone()).collect();
     let (ready, on_you) = left.counts(&items);
@@ -467,7 +487,10 @@ pub fn eta(
 }
 
 /// The view's items: the heading, the next items under a heading the
-/// cursor passes over, those held by an open item after them, a row per tab under one too, in its column's order
+/// cursor passes over, those held after them (one held by an `After:` line
+/// on an open item in the Blocked column, its data's `after` saying where
+/// each item it waits on stands, `blockers`; one held by a design board's
+/// review dim in Next up), a row per tab under one too, in its column's order
 /// and, within a column, the least far along first, then the skipped ones
 /// under a heading, the board's last column. Every item on the board has
 /// its column as its `group`, and the plan its item links (`with_plan`);
@@ -479,7 +502,7 @@ pub fn items(
     said: &str,
     rows: &[Row],
     next: &[String],
-    held: &[(String, String)],
+    held: &[Held],
     skipped: &[String],
     plans: &HashMap<String, PlanNote>,
 ) -> Vec<Item> {
@@ -537,7 +560,7 @@ pub fn items(
         for (at, text) in next.iter().enumerate() {
             out.push(
                 Item::new(format!("next:{text}"), format!("{}. {text}", at + 1))
-                    .group(COLUMNS[0])
+                    .group(COLUMNS[NEXT])
                     .data(with_plan(
                         json!({ "next": text, "place": at + 1 }),
                         plans,
@@ -545,19 +568,32 @@ pub fn items(
                     )),
             );
         }
-        // After the free ones, dim on the board: those held by the open item
-        // each waits on, which the queue takes once it is ticked.
-        for (text, other) in held {
-            let waits = format!("waits on {}", crate::ui::draw::cut(other, WAITS_ON_SHOWN));
+        // After the free ones: those held by the open items each waits
+        // on, which the queue takes once they are ticked, in the Blocked
+        // column; one held by a board's review stays in Next up, dim.
+        for Held {
+            text,
+            waits_on,
+            after,
+        } in held
+        {
+            let more = match after.len() {
+                0 | 1 => String::new(),
+                n => format!(" and {} more", n - 1),
+            };
+            let waits = format!(
+                "waits on {}{more}",
+                crate::ui::draw::cut(waits_on, WAITS_ON_SHOWN)
+            );
+            let mut data = json!({ "next": text, "waitsOn": waits_on });
+            if !after.is_empty() {
+                data["after"] = blockers(after, rows, plans);
+            }
             out.push(
                 Item::new(format!("held:{text}"), text.clone())
                     .detail(waits)
-                    .group(COLUMNS[0])
-                    .data(with_plan(
-                        json!({ "next": text, "waitsOn": other }),
-                        plans,
-                        text,
-                    )),
+                    .group(COLUMNS[if after.is_empty() { NEXT } else { BLOCKED }])
+                    .data(with_plan(data, plans, text)),
             );
         }
     }
@@ -634,12 +670,47 @@ pub fn items(
             out.push(
                 Item::new(format!("skipped:{text}"), text.clone())
                     .detail("skipped by you from autopilot's menu")
-                    .group(COLUMNS[5])
+                    .group(COLUMNS[SKIPPED])
                     .data(with_plan(json!({ "skipped": text }), plans, text)),
             );
         }
     }
     out
+}
+
+/// Where each open item a blocked item waits on stands, for its card, the
+/// pane beside the board and its menu: its first line (`item`); the tab
+/// working it, when one of the mode's is open on it in this note, never a
+/// tab left from a note worked before whose item reads the same (`tab`, its number
+/// `index`, and `column`, where that tab stands); else its place in line
+/// (`place`, in the whole queue) when the queue will take it, or `column`
+/// Blocked alone when it is blocked itself; and its plan note's file
+/// (`plan`), for the menu to open while no tab works it.
+fn blockers(after: &[(String, Stands)], rows: &[Row], plans: &HashMap<String, PlanNote>) -> Value {
+    after
+        .iter()
+        .map(|(item, stands)| {
+            let mut on = json!({ "item": item });
+            let tab = rows
+                .iter()
+                .find(|r| r.in_note && r.closed.is_none() && !r.left && r.item == *item);
+            if let Some(r) = tab {
+                on["tab"] = json!(r.tab.to_string());
+                on["index"] = json!(r.index);
+                on["column"] = json!(COLUMNS[column(r, &stages(r))]);
+            } else {
+                match stands {
+                    Stands::Queued(place) => on["place"] = json!(place),
+                    Stands::Blocked => on["column"] = json!(COLUMNS[BLOCKED]),
+                    Stands::Open => {}
+                }
+            }
+            if let Some(file) = plans.get(item).and_then(|p| p.file.as_deref()) {
+                on["plan"] = json!(file);
+            }
+            on
+        })
+        .collect()
 }
 
 /// Each item in Next up whose last start failed (`failed`, by its first
@@ -796,6 +867,7 @@ mod tests {
                 PlanNote {
                     name: "Plan - Stable IDs".into(),
                     text: Some("## Today\n\nFound by name.".into()),
+                    file: None,
                 },
             ),
             (
@@ -803,6 +875,7 @@ mod tests {
                 PlanNote {
                     name: "Plan - Next".into(),
                     text: None,
+                    file: None,
                 },
             ),
         ]);
@@ -922,7 +995,18 @@ mod tests {
             items[5].group, None,
             "its heading leads only the plain list"
         );
-        assert_eq!(board_columns(&items), COLUMNS);
+        assert_eq!(
+            board_columns(&items),
+            [
+                "Next up",
+                "Working",
+                "Waiting on you",
+                "Landing",
+                "Landed",
+                "Skipped"
+            ],
+            "Blocked left out while nothing is blocked"
+        );
         let none_skipped = super::items(
             &s,
             "",
@@ -933,7 +1017,10 @@ mod tests {
             &[],
             &HashMap::new(),
         );
-        assert_eq!(board_columns(&none_skipped), COLUMNS[..5]);
+        assert_eq!(
+            board_columns(&none_skipped),
+            ["Next up", "Working", "Waiting on you", "Landing", "Landed"]
+        );
     }
 
     #[test]
@@ -996,25 +1083,104 @@ mod tests {
                 asks_to_push,
             ],
             &["Later".into()],
-            &[("Builds on it".into(), "The base".into())],
+            &[Held {
+                text: "Builds on it".into(),
+                waits_on: "item 6".into(),
+                // One a tab works, one ninth in line, past the eight the
+                // view is given, one the queue won't take.
+                after: vec![
+                    ("item 6".into(), Stands::Queued(3)),
+                    ("Far back".into(), Stands::Queued(9)),
+                    ("Elsewhere".into(), Stands::Open),
+                ],
+            }],
             &[],
             &HashMap::new(),
         );
         let held = items.iter().find(|i| i.title == "Builds on it").unwrap();
-        assert_eq!(held.detail, "waits on The base");
-        assert_eq!(held.data["waitsOn"], "The base");
+        assert_eq!(held.detail, "waits on item 6 and 2 more");
+        assert_eq!(held.data["waitsOn"], "item 6");
+        assert_eq!(
+            held.data["after"],
+            json!([
+                { "item": "item 6", "tab": "@6", "index": 6, "column": "Working" },
+                { "item": "Far back", "place": 9 },
+                { "item": "Elsewhere" },
+            ]),
+            "each item it waits on, with the tab working it or its place in line"
+        );
+        assert!(board_columns(&items).contains(&"Blocked"));
+        // One that waits on an item blocked itself says so.
+        let chain = super::items(
+            &s,
+            "",
+            "",
+            &[],
+            &[],
+            &[
+                Held {
+                    text: "Middle".into(),
+                    waits_on: "item 6".into(),
+                    after: vec![("item 6".into(), Stands::Open)],
+                },
+                Held {
+                    text: "Last".into(),
+                    waits_on: "Middle".into(),
+                    after: vec![("Middle".into(), Stands::Blocked)],
+                },
+            ],
+            &[],
+            &HashMap::new(),
+        );
+        let last = chain.iter().find(|i| i.title == "Last").unwrap();
+        assert_eq!(
+            last.data["after"],
+            json!([{ "item": "Middle", "column": "Blocked" }])
+        );
+        // A tab left from a note worked before, its item reading the same,
+        // isn't the one it waits on.
+        let elsewhere = Row {
+            in_note: false,
+            ..tab(8, TabState::Working)
+        };
+        let other = super::items(
+            &s,
+            "",
+            "",
+            &[elsewhere],
+            &[],
+            &[Held {
+                text: "Builds on it".into(),
+                waits_on: "item 8".into(),
+                after: vec![("item 8".into(), Stands::Open)],
+            }],
+            &[],
+            &HashMap::new(),
+        );
+        let held = other.iter().find(|i| i.title == "Builds on it").unwrap();
+        assert_eq!(held.data["after"], json!([{ "item": "item 8" }]));
         let review = super::items(
             &s,
             "",
             "",
             &[],
             &[],
-            &[("New list".into(), "your review of board 69".into())],
+            &[Held {
+                text: "New list".into(),
+                waits_on: "your review of board 69".into(),
+                after: Vec::new(),
+            }],
             &[],
             &HashMap::new(),
         );
         let review = review.iter().find(|i| i.title == "New list").unwrap();
         assert_eq!(review.detail, "waits on your review of board 69");
+        assert_eq!(
+            review.group.as_deref(),
+            Some("Next up"),
+            "held by a board's review, not by an item"
+        );
+        assert_eq!(review.data.get("after"), None);
         let placed: Vec<(&str, &str)> = items
             .iter()
             .filter_map(|i| Some((i.group.as_deref()?, i.title.as_str())))
@@ -1023,7 +1189,7 @@ mod tests {
             placed,
             [
                 ("Next up", "1. Later"),
-                ("Next up", "Builds on it"),
+                ("Blocked", "Builds on it"),
                 ("Working", "item 6"),
                 ("Working", "item 5"),
                 ("Waiting on you", "item 4"),
