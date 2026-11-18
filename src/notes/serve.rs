@@ -285,7 +285,10 @@ pub fn by_precedence(
     precedence: bool,
     there: impl Fn(&str) -> bool,
 ) -> Option<(String, Why)> {
-    let autopilot_tab = opt(crate::autopilot::OPENED).is_some_and(|v| v != "0");
+    // An issue's tab works no note of autopilot's.
+    let autopilot_tab = opt(crate::autopilot::OPENED).is_some_and(|v| v != "0")
+        && !opt(crate::autopilot::ITEM)
+            .is_some_and(|i| crate::autopilot::issues::is_issue_text(&i));
     let mut order: Vec<(Option<String>, Why)> = Vec::new();
     if precedence {
         order.push((opt(BY_YOU), Why::Linked));
@@ -957,6 +960,10 @@ impl Server {
         let Some(item) = self.tab_opt(tab, crate::autopilot::ITEM) else {
             return;
         };
+        // An issue's tab has no note, its plan being its body.
+        if crate::autopilot::issues::is_issue_text(&item) {
+            return;
+        }
         let note = self
             .tab_opt(tab, "@tab_note")
             .unwrap_or_else(|| self.autopilot.mode.note.clone());

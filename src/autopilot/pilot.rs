@@ -246,9 +246,11 @@ pub struct Job {
     pub key: String,
     /// When the note last changed (ms).
     pub mtime: i64,
-    /// Where the work comes from: the note alone while the
-    /// autopilot_github_issues setting is off (`Mode::taken_from`).
+    /// Where the work comes from.
     pub sources: Sources,
+    /// Whether GitHub issues may be read now (`Mode::issues_on`); off, a
+    /// source of issues gives none.
+    pub issues_on: bool,
     /// The label an issue carries to be taken.
     pub label: String,
 }
@@ -261,6 +263,7 @@ impl Job {
         // GitHub's answer.
         if self.sources.note()
             && self.sources.issues()
+            && self.issues_on
             && let Ok((items, _)) = self.note_items(notes, state)
             && let Some(item) = items.into_iter().find(|i| !self.retrying.contains(&i.text))
         {
@@ -286,7 +289,7 @@ impl Job {
         } else {
             (Vec::new(), Vec::new())
         };
-        if self.sources.issues() {
+        if self.sources.issues() && self.issues_on {
             match self.issue_items(state) {
                 Ok(issues) => items.extend(issues),
                 // With the note's items left, they are still worked; with
@@ -868,14 +871,15 @@ impl Pilot {
             weekly_limit: mode.weekly_limit,
             key,
             mtime,
-            sources: mode.taken_from(),
+            sources: mode.sources,
+            issues_on: mode.issues_on(),
             label: mode.issue_label.clone(),
         };
         // The item it will take next, read again for mission control.
         let mut skipped: Vec<&String> = skip.iter().collect();
         skipped.sort();
         let key = format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             mode.note,
             mtime.unwrap_or(0),
             skipped
@@ -886,7 +890,8 @@ impl Pilot {
             mode.ready_only,
             mode.hands_free,
             mode.next_here().join("\n"),
-            mode.taken_from().name(),
+            mode.sources.name(),
+            mode.issues_on(),
             mode.issue_label
         );
         if mtime.is_some()
@@ -1232,6 +1237,7 @@ mod tests {
             key: String::new(),
             mtime: 0,
             sources: Sources::Both,
+            issues_on: true,
             label: "autopilot".into(),
         };
         let texts = |job: &Job| -> Vec<String> {
@@ -1246,6 +1252,10 @@ mod tests {
         assert_eq!(texts(&job), ["acme/widgets#4: Issue 4"]);
         job.sources = Sources::Note;
         assert_eq!(texts(&job), ["From the note"]);
+        // GitHub off: issues alone take nothing, never the note's items.
+        job.sources = Sources::Issues;
+        job.issues_on = false;
+        assert!(texts(&job).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1272,6 +1282,7 @@ mod tests {
             key: String::new(),
             mtime: 0,
             sources: Sources::Note,
+            issues_on: true,
             label: String::new(),
         };
         let found = job.find(&dir, &dir, 0);
@@ -1339,6 +1350,7 @@ mod tests {
             key: String::new(),
             mtime: 0,
             sources: Sources::Note,
+            issues_on: true,
             label: String::new(),
         };
         let item = |found: Found| matches!(found, Found::Item(Some(ref i)) if i.text == "One");

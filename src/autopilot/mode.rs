@@ -439,16 +439,12 @@ impl Mode {
         Ok(mode)
     }
 
-    /// Where its work comes from now: the note alone while the
-    /// autopilot_github_issues setting is off, or GitHub's, whatever was
-    /// chosen.
-    pub fn taken_from(&self) -> Sources {
+    /// Whether GitHub issues may be read now: the autopilot_github_issues
+    /// and github settings on. Off, issues alone take nothing, and with the
+    /// note too, the note's items alone.
+    pub fn issues_on(&self) -> bool {
         let on = crate::settings::is_on;
-        if on("autopilot_github_issues") && on("github") {
-            self.sources
-        } else {
-            Sources::Note
-        }
+        on("autopilot_github_issues") && on("github")
     }
 
     /// Whether it is set up to work a note.

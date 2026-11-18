@@ -197,6 +197,9 @@ pub enum AutopilotEvent {
         weekly: Option<(f64, i64)>,
         /// What is left of the note, for the view's estimate.
         left: eta::Left,
+        /// Why GitHub issues couldn't be read, when that left the queue
+        /// empty, to say rather than show it drained.
+        failed: Option<String>,
     },
     /// What looking for the next item to open found, for a note last
     /// changed at `mtime` (ms).

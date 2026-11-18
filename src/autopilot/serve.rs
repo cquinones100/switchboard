@@ -2789,7 +2789,14 @@ impl Server {
         let tx = self.tx.clone();
         let state = paths::state_dir();
         tokio::task::spawn_blocking(move || {
-            let (queue, held) = job.items_and_held(&notes, &state).unwrap_or_default();
+            let (queue, held, failed) = match job.items_and_held(&notes, &state) {
+                Ok((queue, held)) => (queue, held, None),
+                Err(e) => (
+                    Vec::new(),
+                    Vec::new(),
+                    e.starts_with("GitHub issues:").then_some(e),
+                ),
+            };
             let left = autopilot_left(&job, &notes, &state, &queue, &held);
             // Every open item each held one waits on and where it stands,
             // from the note as it is now and the whole queue, before the
@@ -2822,6 +2829,7 @@ impl Server {
                 spent,
                 weekly,
                 left,
+                failed,
             }));
         });
     }
@@ -2871,7 +2879,13 @@ impl Server {
                 spent,
                 weekly,
                 left,
+                failed,
             } => {
+                if let Some(e) = failed
+                    && !self.autopilot.mode.said.contains(&e)
+                {
+                    self.autopilot_say(&format!("Can't read {e}"));
+                }
                 let changed = self.autopilot.pilot.next.text != text
                     || self.autopilot.pilot.next.left != left
                     || self.autopilot.pilot.next.queue != queue
@@ -2925,7 +2939,8 @@ impl Server {
         // the look began (its landing recorded meanwhile, say).
         if let Some((repo, number)) = super::issues::issue_of(&item) {
             let reference = format!("{repo}#{number}: ");
-            if !mode.taken_from().issues() || mode.skipped_here().any(|t| t.starts_with(&reference))
+            if !(mode.sources.issues() && mode.issues_on())
+                || mode.skipped_here().any(|t| t.starts_with(&reference))
             {
                 return;
             }

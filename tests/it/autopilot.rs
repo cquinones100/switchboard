@@ -836,7 +836,7 @@ fn its_settings_box_saves_what_changed_at_once_and_asks_before_leaving_changes()
     let before = mode(&server);
 
     // + on Tabs at once, then M-↵: that count alone written.
-    open_box(&mut client, 4);
+    open_box(&mut client, 3);
     client.type_text("+");
     client.wait_text(" −  4  + ");
     client.type_text("\x1b\r");
@@ -856,7 +856,7 @@ fn its_settings_box_saves_what_changed_at_once_and_asks_before_leaving_changes()
     }
 
     // A change left with Esc is asked about, and not written.
-    open_box(&mut client, 4);
+    open_box(&mut client, 3);
     client.type_text("+");
     client.wait_text(" −  5  + ");
     client.type_text("\x1b");
@@ -872,7 +872,7 @@ fn its_settings_box_saves_what_changed_at_once_and_asks_before_leaving_changes()
     said["said"] = json!("Stopped opening tabs: today's Claude spend passed $5");
     said["skipped"] = json!([{ "note": said["noteId"], "text": "Second thing" }]);
     std::fs::write(server.state.join("autopilot.json"), said.to_string()).unwrap();
-    open_box(&mut client, 6);
+    open_box(&mut client, 5);
     client.type_text("20");
     client.wait_text("› 20");
     client.type_text("\x1b\r");
@@ -882,7 +882,7 @@ fn its_settings_box_saves_what_changed_at_once_and_asks_before_leaving_changes()
     assert_eq!(now["said"], "", "what it said of the limit passed goes");
 
     // The weekly limit's stepper: off, then 50 and up by fives.
-    open_box(&mut client, 7);
+    open_box(&mut client, 6);
     client.type_text("++");
     client.wait_text(" − 55  + ");
     client.type_text("\x1b\r");
@@ -905,7 +905,7 @@ fn its_settings_box_saves_what_changed_at_once_and_asks_before_leaving_changes()
     assert_eq!(mode(&server)["skipped"], json!([]));
 
     // Land without asking, after its question.
-    open_box(&mut client, 9);
+    open_box(&mut client, 8);
     client.type_text(" \x1b\r");
     let screen = client.wait_text("without asking to push?");
     assert!(
@@ -917,15 +917,6 @@ fn its_settings_box_saves_what_changed_at_once_and_asks_before_leaving_changes()
     client.type_text("\r");
     client.wait_text("Autopilot: land without asking on");
     assert_eq!(mode(&server)["landWithoutAsking"], true);
-
-    // Takes from: → steps the note to its GitHub issues, saved by name.
-    open_box(&mut client, 3);
-    client.type_text("\x1b[C");
-    client.wait_text("Issue label");
-    client.type_text("\x1b\r");
-    client.wait_text("Autopilot: takes from GitHub issues");
-    assert_eq!(mode(&server)["sources"], "issues");
-    assert_eq!(mode(&server)["issueLabel"], "autopilot");
 
     // p pauses at once.
     settings_box(&mut client);

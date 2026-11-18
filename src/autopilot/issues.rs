@@ -114,6 +114,14 @@ pub fn issue_of(item: &Item) -> Option<(String, u64)> {
     Some((m[1].to_string(), m[2].parse().ok()?))
 }
 
+/// Whether a tab's item (`@autopilot_item`) is an issue's, by its first
+/// line, for what reads a tab's options alone: such a tab has no note.
+pub fn is_issue_text(text: &str) -> bool {
+    REFERENCE
+        .captures(text)
+        .is_some_and(|m| text[m[0].len()..].starts_with(": "))
+}
+
 /// The repository and number `<owner>/<repo>#<number>` names, alone.
 pub fn parse_reference(text: &str) -> Option<(Repo, u64)> {
     let m = REFERENCE.captures(text.trim())?;
