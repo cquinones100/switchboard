@@ -1674,12 +1674,18 @@ pub(crate) fn duplicates_first(note: Option<&Path>) -> String {
         ),
         None => String::new(),
     };
+    // GitHub only while Switchboard may reach it.
+    let github = if crate::settings::is_on("github") {
+        "the repository's open and merged PRs and its GitHub issues, and "
+    } else {
+        ""
+    };
     format!(
-        "Before starting, look for the same work started or done elsewhere: {places}{DUPLICATES}"
+        "Before starting, look for the same work started or done elsewhere: {places}{github}{DUPLICATES}"
     )
 }
 
-const DUPLICATES: &str = "the repository's open and merged PRs and its GitHub issues, and the open tabs (`switchboard tabs`). \
+const DUPLICATES: &str = "the open tabs (`switchboard tabs`). \
      When another item, issue, PR or tab already has it, stop without changing anything: run `switchboard autopilot-duplicate '<which>'` and say which, so autopilot skips this one with that reason and moves on. \
      Work already on the branch it lands on is not a duplicate: the check below covers it. ";
 

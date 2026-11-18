@@ -319,13 +319,21 @@ impl Job {
             super::issues::unclaimed(&self.repo, issues, &claims, &self.skip, util::now_secs())
         {
             let item = super::issues::item_of(&issue);
-            match crate::cmd::worktree_from_note::review_hold(&issue.body) {
-                Some(what) => held.push(Item {
+            if let Some(what) = crate::cmd::worktree_from_note::review_hold(&issue.body) {
+                held.push(Item {
                     waits_on: Some(what),
                     ..item
-                }),
-                None => ready.push(item),
+                });
+                continue;
             }
+            // Its body is its plan: none is no plan, which Planned only
+            // leaves out, and an open choice is taken only hands-free, as a
+            // note item's plan is.
+            let open = crate::cmd::worktree_from_note::open_choice(&issue.body);
+            if (self.ready_only && issue.body.trim().is_empty()) || (open && !self.with_choices) {
+                continue;
+            }
+            ready.push(item);
         }
         Ok((ready, held))
     }

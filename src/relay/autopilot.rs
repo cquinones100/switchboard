@@ -308,7 +308,11 @@ pub fn form(shown: &Shown) -> Value {
             switch(
                 "land",
                 "Land without asking",
-                "Pushes once tests, two clean reviews and leak-check pass.",
+                if mode.sources.issues() {
+                    "Pushes once tests, two clean reviews and leak-check pass, then comments on and closes each landed GitHub issue."
+                } else {
+                    "Pushes once tests, two clean reviews and leak-check pass."
+                },
             ),
         ),
     ];

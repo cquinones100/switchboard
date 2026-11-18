@@ -57,6 +57,14 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
         anyhow::Ok((repo, found))
     })
     .map_err(|e| e.to_string())?;
+    // One that came to wait on a design review since the queue read it waits
+    // still: the start fails, to be tried again, and the queue holds it.
+    if let Some(what) = found
+        .as_ref()
+        .and_then(|i| crate::cmd::worktree_from_note::review_hold(&i.body))
+    {
+        return Err(format!("{repo}#{number} waits on {what}"));
+    }
     let Some(issue) = found else {
         let why = format!(
             "{repo}#{number} isn't an open issue assigned to you and labeled \"{label}\" by you or someone with write access"
