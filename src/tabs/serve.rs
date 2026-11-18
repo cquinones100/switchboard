@@ -302,14 +302,16 @@ impl Server {
     /// A tab's full title where its name is a note item cut short: its
     /// `@tab_title`, else, for a tab opened before there was one, the
     /// autopilot's `@autopilot_item`, either only while the tab's
-    /// name is still that item cut short (src/tabs/title.rs).
+    /// name is still that item cut short (src/tabs/title.rs), or a GitHub
+    /// issue's reference it starts with (`<owner>/<repo>#<n>: <title>`).
     pub fn tab_full_title(&self, tab: TabId) -> Option<String> {
         let opts = &self.tabs.get(&tab)?.opts;
         let name = opts.get("@tab_name").map(String::as_str).unwrap_or("");
+        let issue = |whole: &str| !name.is_empty() && whole.starts_with(&format!("{name}: "));
         ["@tab_title", "@autopilot_item"]
             .iter()
             .filter_map(|k| opts.get(*k))
-            .find(|whole| title::cut_of(name, whole))
+            .find(|whole| title::cut_of(name, whole) || issue(whole))
             .cloned()
     }
 

@@ -24,8 +24,8 @@ use std::process::ExitCode;
 use crate::autopilot::issues::{self, Issue};
 use crate::autopilot::mode::Mode;
 use crate::cmd::worktree_from_note::{
-    after_claim, claim, duplicates_first, hand_over, in_hands_free_tab, make_worktree, onto_words,
-    refused_in_autopilot, slug_of, target_of,
+    after_claim, claim, duplicates_first, hand_over, in_autopilot_tab, in_hands_free_tab,
+    make_worktree, onto_words, refused_in_autopilot, slug_of, target_of,
 };
 use crate::integrations::github;
 use crate::paths;
@@ -85,7 +85,7 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
     let mode = Mode::read(&paths::state_dir());
     // Started by autopilot, only while it still takes issues: turned off
     // while GitHub was being asked, nothing starts.
-    let by_autopilot = crate::mux::socket::tab_option(crate::autopilot::OPENED).is_some();
+    let by_autopilot = in_autopilot_tab();
     if by_autopilot && !(mode.sources.issues() && mode.issues_on()) {
         return Err("autopilot no longer takes GitHub issues".into());
     }
@@ -154,7 +154,7 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
         &format!("#{}", issue.number),
     );
     after_claim(&root, &path, &branch, target)?;
-    let in_autopilot = crate::mux::socket::tab_option(crate::autopilot::OPENED).is_some();
+    let in_autopilot = by_autopilot;
     if in_autopilot {
         let _ = crate::mux::socket::ask(&["set", crate::autopilot::ISSUE, &issue.reference()]);
     }

@@ -1564,6 +1564,14 @@ fn open_anyway(question: &str) -> bool {
     }
 }
 
+/// Whether the tab this runs in is autopilot's now: opened by it
+/// (`@autopilot`) and not made yours since (`@autopilot_yours`).
+pub(crate) fn in_autopilot_tab() -> bool {
+    use crate::mux::socket::tab_option;
+    tab_option(crate::autopilot::OPENED).is_some()
+        && tab_option(crate::autopilot::YOURS).is_none_or(|v| v.is_empty())
+}
+
 /// Whether the tab this runs in is one of autopilot's, hands-free
 /// (`@autopilot_handsfree`, which autopilot sets as it opens the tab).
 pub(crate) fn in_hands_free_tab() -> bool {
@@ -1664,7 +1672,7 @@ pub(crate) fn check_first(hands_free: bool) -> String {
 /// items are looked at too while Settings' tab_note_context is on; an
 /// issue's tab is pointed at no note.
 pub(crate) fn duplicates_first(note: Option<&Path>) -> String {
-    if crate::mux::socket::tab_option(crate::autopilot::OPENED).is_none() {
+    if !in_autopilot_tab() {
         return String::new();
     }
     // A note's other items only while Settings shares the tab's note with
