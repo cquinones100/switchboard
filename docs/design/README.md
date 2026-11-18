@@ -230,6 +230,6 @@ The relay's DM, threads and Home tab.
 - [132. The same at 80 columns: no panel, its facts one line under the head; the avatar Small in each box's header bar, the line down the side at the boxes' left](https://cquinones100.github.io/switchboard/design/132.html)
 - [133. The ticket view (M-i) with the same atom: the description as its first box, each comment in its own, a reply inside its thread's box; sub-issues and the facts beside it as before](https://cquinones100.github.io/switchboard/design/133.html)
 
-## Proposal: the map across the whole width
+## The map across the whole width
 
 - [134. Map mode with no chapter list: the map, the stories' strip and the chosen chapter's text across the whole width; the strip names how many of the story's chapters are read, and In the files only as a chip at its right opening Files mode on those files](https://cquinones100.github.io/switchboard/design/134.html)
