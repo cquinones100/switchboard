@@ -214,9 +214,11 @@ struct Start {
 /// default branch as last fetched, since a failed fetch is most often a
 /// moment's network, or from the ticket's branch on origin as last fetched
 /// when the clone has it and its own fetch failed rather than found none
-/// (`worktree::Fetched`), so an outage never hides work already started;
+/// (`worktree::Fetched`), so an outage never hides work already started,
+/// and only when its commits are all yours (or `--trusted`), checked before
+/// it is checked out;
 /// with neither fetched before, it stops.
-fn ticket_start(root: &Path, branch: &str) -> Result<Start, String> {
+fn ticket_start(root: &Path, branch: &str, trusted: bool) -> Result<Start, String> {
     const SOURCE: &str = "wt: fetch the base";
     let has_origin = worktree::remotes(root).iter().any(|r| r == "origin");
     let tracking = |offline| Start {
@@ -251,6 +253,17 @@ fn ticket_start(root: &Path, branch: &str) -> Result<Start, String> {
     if ticket == Fetched::Failed
         && worktree::git_ok(root, &["show-ref", "--verify", "--quiet", &cached])
     {
+        // Checked before anything is checked out, since a checkout can run
+        // the branch's hooks; online, origin's tip is what wt checks.
+        if !trusted {
+            let others = crate::trust::others_on(root, &cached, None)?;
+            if !others.is_empty() {
+                return Err(format!(
+                    "couldn't reach origin, and the ticket's branch as last fetched has commits by {}: run wt again once origin is back, or with --trusted",
+                    others.join(", ")
+                ));
+            }
+        }
         let words = format!("origin/{branch} as last fetched");
         eprintln!("Starting from {words}: couldn't reach origin");
         return Ok(tracking(Some(words)));
@@ -344,7 +357,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
     // reused as it is, so only a new branch needs a start point.
     let is_new = !path.exists() && !worktree::branch_exists(&root, &branch);
     let start = if is_new {
-        match ticket_start(&root, &branch) {
+        match ticket_start(&root, &branch, trusted) {
             Ok(start) => Some(start),
             Err(e) => return worktree::fail(&e),
         }

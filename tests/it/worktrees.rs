@@ -1129,6 +1129,7 @@ fn started_answer(body: &Value) -> Value {
         3 => "eng-3-local",
         5 => "eng-5-offline",
         6 => "eng-6-cached",
+        8 => "eng-8-theirs",
         _ => "eng-4-offline",
     };
     json!({ "data": { "issues": { "nodes": [{ "identifier": format!("ENG-{number}"), "title": "Work", "branchName": branch, "state": { "name": "Todo", "type": "unstarted" } }] } } })
@@ -1159,6 +1160,18 @@ fn a_tickets_branch_starts_from_origins_fetched_main_or_its_branch_on_origin_and
     w.git(&other, &["commit", "-q", "--allow-empty", "-m", "cached"]);
     w.git(&other, &["push", "-q", "origin", "eng-6-cached"]);
     let cached = w.git(&other, &["rev-parse", "HEAD"]);
+    w.git(&other, &["checkout", "-q", "-b", "eng-8-theirs", "main"]);
+    commit_as_them(&w, &other);
+    w.git(&other, &["push", "-q", "origin", "eng-8-theirs"]);
+    w.git(
+        &clone,
+        &[
+            "fetch",
+            "-q",
+            "origin",
+            "+refs/heads/eng-8-theirs:refs/remotes/origin/eng-8-theirs",
+        ],
+    );
     w.git(
         &clone,
         &[
@@ -1289,6 +1302,18 @@ fn a_tickets_branch_starts_from_origins_fetched_main_or_its_branch_on_origin_and
         ),
         "{}",
         read(&cd)
+    );
+
+    let theirs = w.run(&clone, &["worktree-from-ticket", "--no-claude", "ENG-8"]);
+    assert_ne!(theirs.status.code(), Some(0));
+    assert!(
+        stderr(&theirs).contains("as last fetched has commits by them@e"),
+        "{}",
+        stderr(&theirs)
+    );
+    assert!(
+        !clone.join(".claude/worktrees/eng-8-theirs").exists(),
+        "nothing checked out before the trust check"
     );
 
     w.git(&clone, &["update-ref", "-d", "refs/remotes/origin/main"]);
