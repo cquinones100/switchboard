@@ -33,9 +33,18 @@ use crate::worktree::{self, Given};
 
 /// `made` is set once the issue's worktree is made, which claims it.
 pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, String> {
-    let number: u64 = number
-        .parse()
-        .map_err(|_| format!("--issue takes the issue's number, not \"{number}\""))?;
+    // A number, or `<owner>/<repo>#<number>` (what autopilot passes), whose
+    // repository must be the clone's, so an issue read for one repository
+    // never starts in another.
+    let (wanted, number): (Option<github::Repo>, u64) = match issues::parse_reference(number) {
+        Some((repo, n)) => (Some(repo), n),
+        None => (
+            None,
+            number
+                .parse()
+                .map_err(|_| format!("--issue takes the issue's number, not \"{number}\""))?,
+        ),
+    };
     let under = given
         .positional
         .first()
@@ -47,6 +56,9 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
     // which autopilot tries again; only an answer without it refuses it.
     let (repo, found) = issues::wait_for(async {
         let repo = github::repo_of(&root).await?;
+        if let Some(w) = wanted.as_ref().filter(|w| !w.same(&repo)) {
+            anyhow::bail!("{w}#{number} isn't an issue of {repo}, this clone's repository");
+        }
         let found = issues::fetch(&repo, &label).await?;
         // The search's index can lag a label taken off or an issue closed,
         // so the issue found is asked about itself.

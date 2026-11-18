@@ -1014,6 +1014,8 @@ impl Pilot {
             Found::Failed(e) => {
                 if e.starts_with("GitHub issues:") && !mode.said.contains(&e) {
                     out.said = Some(format!("Can't read {e}"));
+                    // Nothing left is said again once a read succeeds.
+                    self.empty_said = false;
                 }
                 out.failed = Some(e);
             }

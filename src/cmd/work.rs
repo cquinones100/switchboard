@@ -1767,17 +1767,18 @@ impl Server {
     /// A tab for one of the repository's GitHub issues, as `open_item_tab`
     /// opens one for a note's item: named after the issue, cut short, its
     /// whole first line (`<owner>/<repo>#<number>: <title>`) its full title,
-    /// running `wtn --issue <number>`, with `--target` as an item's.
+    /// running `wtn --issue <owner>/<repo>#<number>`, with `--target` as an
+    /// item's.
     pub fn open_issue_tab(
         &mut self,
         client: ClientId,
         repo: &Path,
-        number: u64,
+        reference: &str,
         text: &str,
         target: &str,
         opened: Opened,
     ) -> Option<TabId> {
-        let mut args = vec!["--issue".to_string(), number.to_string()];
+        let mut args = vec!["--issue".to_string(), reference.to_string()];
         if !target.is_empty() {
             args.extend(["--target".to_string(), target.to_string()]);
         }

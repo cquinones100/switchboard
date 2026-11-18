@@ -93,6 +93,8 @@ pub const REFUSED: &str = "@autopilot_refused";
 /// sets as it starts one (src/cmd/worktree_from_issue.rs): commented on and
 /// closed once the tab lands, and commented on when it is a duplicate.
 pub const ISSUE: &str = "@autopilot_issue";
+/// What it says while GitHub issues can't be read, a good read taking it back.
+const ISSUES_UNREAD: &str = "Can't read GitHub issues";
 /// What its notification says of a refused item, after the item.
 const REFUSED_SAID: &str = "wtn refused it";
 /// Why wtn stopped before making the item's worktree in the tab (a fetch of origin
@@ -2897,9 +2899,24 @@ impl Server {
                 left,
                 failed,
             } => {
+                // A good read takes back what a failed one said.
+                if failed.is_none() && self.autopilot.mode.said.contains(ISSUES_UNREAD) {
+                    match Mode::update(&paths::state_dir(), |m| {
+                        m.said = super::pilot::unsay(&m.said, ISSUES_UNREAD)
+                    }) {
+                        Ok(mode) => {
+                            self.autopilot_notices(&mode);
+                            self.autopilot.mode = mode;
+                        }
+                        Err(e) => eprintln!("autopilot: couldn't save what it said: {e}"),
+                    }
+                }
                 if let Some(e) = failed {
                     if !self.autopilot.mode.said.contains(&e) {
-                        self.autopilot_say(&format!("Can't read {e}"));
+                        self.autopilot_say(&format!(
+                            "{ISSUES_UNREAD}{}",
+                            e.trim_start_matches("GitHub issues")
+                        ));
                     }
                     // The queue as last read stands: a failed read isn't an
                     // empty one, and is read again on the next check.
@@ -2966,10 +2983,10 @@ impl Server {
             }
         }
         let opened = match super::issues::issue_of(&item) {
-            Some((_, number)) => self.open_issue_tab(
+            Some((repo, number)) => self.open_issue_tab(
                 client,
                 &mode.repo,
-                number,
+                &format!("{repo}#{number}"),
                 &item.text,
                 &mode.target,
                 crate::mux::server::Opened::Background,
