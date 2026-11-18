@@ -1230,13 +1230,8 @@ impl Server {
     // whatever asked for it.
     fn look_at_slack(&mut self) {
         let now = util::now_ms();
-        let pace = &self.day.slack_pace;
-        let too_soon = pace.slowed()
-            && self
-                .day
-                .slack_asked
-                .is_some_and(|at| now - at < pace.every(slack_look_every(&Dirs::here())));
-        if !pace.may_look(now) || too_soon {
+        let every = slack_look_every(&Dirs::here());
+        if !self.day.slack_pace.may_look(now, every) {
             return;
         }
         self.day.slack_asked = Some(now);
@@ -1244,7 +1239,7 @@ impl Server {
             return;
         }
         self.day.slack_busy = true;
-        self.day.slack_pace.looked();
+        self.day.slack_pace.looked(now);
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let dirs = Dirs::here();

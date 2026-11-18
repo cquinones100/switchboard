@@ -70,6 +70,9 @@ pub fn look_every(chosen: Option<&Value>, by_token: bool) -> i64 {
 pub struct Pace {
     wait_until: Option<i64>,
     slow_left: u32,
+    /// When the last look started, kept apart from the tick's schedule,
+    /// which coming back to the computer resets.
+    last: Option<i64>,
 }
 
 impl Pace {
@@ -79,14 +82,19 @@ impl Pace {
         self.slow_left = SLOW_LOOKS;
     }
 
-    /// A look started, one fewer of the slow ones left.
-    pub fn looked(&mut self) {
+    /// A look started at `now`, one fewer of the slow ones left.
+    pub fn looked(&mut self, now: i64) {
         self.slow_left = self.slow_left.saturating_sub(1);
+        self.last = Some(now);
     }
 
-    /// Whether Slack's wait has passed, so a look may go out at `now`.
-    pub fn may_look(&self, now: i64) -> bool {
-        self.wait_until.is_none_or(|at| now >= at)
+    /// Whether a look may go out at `now`, whatever asked for it: Slack's
+    /// wait has passed, and while slowed down, the slowed time apart
+    /// (`every` doubled) since the last look.
+    pub fn may_look(&self, now: i64, every: i64) -> bool {
+        let waited = self.wait_until.is_none_or(|at| now >= at);
+        let too_soon = self.slowed() && self.last.is_some_and(|at| now - at < self.every(every));
+        waited && !too_soon
     }
 
     /// The time between looks, `every` doubled while slowed down.
@@ -466,15 +474,14 @@ pub async fn look_slack(
             // A look through the connector, each a model call, goes out at
             // most once a minute, however often the token is tried and
             // whatever asked for it (the tick, going to the view, a reply).
+            // Only a look that got through counts, saved with the rest
+            // below, so one that failed (the connector down, which starts no
+            // model call) doesn't hold back the look once it is back.
             let last = state.get("connector_at").and_then(Value::as_i64);
             if last.is_some_and(|at| now - at < CONNECTOR_EVERY_MS) {
                 return Ok("slack: the connector looked under a minute ago".into());
             }
             state.insert("connector_at".into(), json!(now));
-            util::write_atomic(
-                &state_file,
-                util::json_compact(&Value::Object(state.clone())),
-            )?;
             let me = me_by_connector(call, &mut state).await?;
             let messages = search_by_connector(call, &day, from).await?;
             (me, messages)
@@ -629,13 +636,24 @@ mod tests {
     #[test]
     fn slack_asking_to_slow_down_waits_then_doubles_the_next_ten_looks() {
         let mut pace = Pace::default();
-        assert!(pace.may_look(0) && !pace.slowed());
+        assert!(pace.may_look(0, 30_000) && !pace.slowed());
+        pace.looked(0);
+        assert!(
+            pace.may_look(1_000, 30_000),
+            "not slowed: the tick paces it"
+        );
         pace.slow_down(45_000, 1_000);
-        assert!(!pace.may_look(45_999), "Slack's wait first");
-        assert!(pace.may_look(46_000));
+        assert!(!pace.may_look(45_999, 30_000), "Slack's wait first");
+        assert!(pace.may_look(60_000, 30_000));
+        let mut at = 60_000;
         for _ in 0..SLOW_LOOKS {
             assert_eq!(pace.every(30_000), 60_000);
-            pace.looked();
+            pace.looked(at);
+            at += 30_000;
+            if pace.slowed() {
+                assert!(!pace.may_look(at, 30_000), "a minute apart while slowed");
+            }
+            at += 30_000;
         }
         assert!(!pace.slowed());
         assert_eq!(pace.every(30_000), 30_000);
