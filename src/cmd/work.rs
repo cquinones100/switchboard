@@ -1765,8 +1765,8 @@ impl Server {
     }
 
     /// A tab for one of the repository's GitHub issues, as `open_item_tab`
-    /// opens one for a note's item: named after the issue, cut short, its
-    /// whole first line (`<owner>/<repo>#<number>: <title>`) its full title,
+    /// opens one for a note's item: named by its reference, its whole first
+    /// line (`<owner>/<repo>#<number>: <title>`) its full title,
     /// running `wtn --issue <owner>/<repo>#<number>`, with `--target` as an
     /// item's.
     pub fn open_issue_tab(
@@ -1784,9 +1784,11 @@ impl Server {
         }
         let command = worktree::tab_running("worktree-from-note", "wtn", &args);
         let tab = self.work_tab(client, repo, command, opened)?;
+        // Named by its reference, since a tab's name goes into its Claude's
+        // starting context, and the title is someone else's words; the
+        // whole first line is its full title, for the sidebar.
         if let Some(t) = self.tabs.get_mut(&tab) {
-            t.opts
-                .insert("@tab_name".into(), crate::tabs::title::short_name(text));
+            t.opts.insert("@tab_name".into(), reference.to_string());
             t.opts.insert("@tab_title".into(), text.to_string());
         }
         self.dirty_tab(tab);
