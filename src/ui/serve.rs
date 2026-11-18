@@ -1523,14 +1523,24 @@ fn program_line(args: &[String], own_exe: &str) -> String {
     // A local path: an argument of its own, or an option's value after `=`
     // (`--dir=/…`). Nothing after a `:`, which may name a path on another
     // host (`scp host:/…`).
+    // From `~`, keeping a trailing slash, which says `rsync` copies a
+    // folder's contents rather than the folder.
+    let from_home = |path: &str| {
+        let short = crate::paths::tilde(path);
+        if path.ends_with('/') && !short.ends_with('/') {
+            format!("{short}/")
+        } else {
+            short
+        }
+    };
     // A link's word first, so no path rule shows what follows its host.
     let short = |arg: &String| {
         let arg = without_query(arg);
         match arg.split_once('=') {
             Some((key, value)) if key.starts_with('-') && value.starts_with('/') => {
-                format!("{key}={}", crate::paths::tilde(value))
+                format!("{key}={}", from_home(value))
             }
-            _ if arg.starts_with('/') => crate::paths::tilde(&arg),
+            _ if arg.starts_with('/') => from_home(&arg),
             _ => arg,
         }
     };
@@ -1697,6 +1707,10 @@ mod tests {
         let remote = line(&["scp", &format!("host:{home}/f"), "."]);
         assert!(remote.starts_with("scp host:/") && !remote.contains('~'));
         assert_eq!(line(&["lazygit"]), "lazygit");
+        assert_eq!(
+            line(&["rsync", &format!("{home}/p/"), "b:d"]),
+            "rsync ~/p/ b:d"
+        );
         // A word holding a link shows it up to its host, nothing of its
         // user, password, path or query.
         let link = |args: &[&str], shown: &str| assert_eq!(line(args), shown);
