@@ -300,7 +300,11 @@ pub fn form(shown: &Shown) -> Value {
             switch(
                 "hands-free",
                 "Hands-free",
-                "Answers its tabs' questions itself.",
+                if mode.sources.issues() {
+                    "Answers questions and lands unasked, closing landed issues."
+                } else {
+                    "Answers its tabs' questions itself."
+                },
             ),
         ),
         (
