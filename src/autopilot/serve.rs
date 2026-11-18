@@ -297,7 +297,7 @@ fn box_context(mode: &Mode, fields: &Fields, notes: &Path) -> Context {
         branches,
         needs_choice,
         offer_hands_free: settings::is_on("autopilot_handsfree"),
-        offer_issues: settings::is_on("autopilot_github_issues"),
+        offer_issues: settings::is_on("autopilot_github_issues") && settings::is_on("github"),
         problem: String::new(),
     }
 }
@@ -2472,9 +2472,9 @@ impl Server {
         // Landed without asking only as the tab was marked to (`@autopilot_land`,
         // which nothing in a pane can set), not by its own say alone.
         let without_asking = set(AUTOLAND).is_some() && set(LAND) == Some("1");
-        let hash: Option<String> = set(AUTOLAND)
-            .or(set(PUSHED))
-            .map(|h| h.chars().take(7).collect());
+        // Whole, as the landing marked it, for GitHub's check; cut short only
+        // where it is shown.
+        let hash: Option<String> = set(AUTOLAND).or(set(PUSHED)).map(str::to_string);
         let issue = set(ISSUE).map(str::to_string).zip(hash);
         let mut fresh = false;
         let written = Mode::update(&paths::state_dir(), |mode| {
@@ -2504,8 +2504,9 @@ impl Server {
             Err(e) => eprintln!("autopilot: couldn't keep the tab that landed: {e}"),
         }
         if let Some((issue, hash)) = issue.filter(|_| fresh) {
-            let comment = super::issues::landed_comment(&hash);
-            let question = format!("Comment on {issue} that it landed in {hash}, and close it?");
+            let short: String = hash.chars().take(7).collect();
+            let comment = super::issues::landed_comment(&short);
+            let question = format!("Comment on {issue} that it landed in {short}, and close it?");
             self.autopilot_write_back(&issue, comment, Some(hash), without_asking, question);
         }
     }

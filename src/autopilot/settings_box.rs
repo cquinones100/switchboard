@@ -293,7 +293,7 @@ pub struct Context {
     /// Whether Hands-free is offered (the autopilot_handsfree setting).
     pub offer_hands_free: bool,
     /// Whether GitHub issues are offered as a source (the
-    /// autopilot_github_issues setting).
+    /// autopilot_github_issues and github settings).
     pub offer_issues: bool,
     /// Why it couldn't save, shown under the Repository field.
     pub problem: String,
@@ -916,7 +916,7 @@ impl SettingsBox {
             let words = if ctx.offer_issues {
                 "open issues assigned to you with this label, opened by you or labeled by someone with write access, after the note's items"
             } else {
-                "GitHub issues are off in Settings (autopilot_github_issues), so none are taken"
+                "GitHub issues are off in Settings (autopilot_github_issues or github), so none are taken"
             };
             lines.extend(under(words, Tone::Faint.style(theme)));
         }

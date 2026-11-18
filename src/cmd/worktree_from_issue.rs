@@ -121,7 +121,7 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
         &label,
         in_autopilot,
         in_hands_free_tab(),
-        &duplicates_first(),
+        &duplicates_first(None),
         target,
     );
     hand_over(given, &root, &path, &start, target, prompt)

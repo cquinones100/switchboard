@@ -1406,7 +1406,7 @@ fn run(given: &Given, note: &str, item: &str, made: &mut bool) -> Result<ExitCod
          Commit the work on this worktree's branch, following the repository's CLAUDE.md, and don't push it or tick the item in the note. \
          When the work is done, say so in a line, then land it as /queue-and-clean does, which only I can start, so read the file `switchboard skill-path queue-and-clean` prints and follow it: it asks me before pushing, lands it and ticks the item, as `switchboard landing` says for the repository: straight on {onto}, with the steps it gives, or else through a PR it offers to open.",
         file.display(),
-        duplicates_first(),
+        duplicates_first(Some(&file)),
         check_first(hands_free),
     );
     hand_over(given, &root, &path, &start, target, prompt)
@@ -1653,15 +1653,26 @@ pub(crate) fn check_first(hands_free: bool) -> String {
 /// marking the tab so autopilot skips the item with that reason
 /// (`switchboard autopilot-duplicate`, which sets `@autopilot_refused`)
 /// and moves on. Empty in a tab autopilot didn't
-/// open, where you decide.
-pub(crate) fn duplicates_first() -> String {
+/// open, where you decide. `note` names the note the item is in, whose other
+/// items are looked at too; an issue's tab is pointed at no note, since
+/// nothing in a note goes to Claude unasked.
+pub(crate) fn duplicates_first(note: Option<&Path>) -> String {
     if crate::mux::socket::tab_option(crate::autopilot::OPENED).is_none() {
         return String::new();
     }
-    DUPLICATES.to_string()
+    let places = match note {
+        Some(file) => format!(
+            "the other ticked and open items of my note ({}), ",
+            file.display()
+        ),
+        None => String::new(),
+    };
+    format!(
+        "Before starting, look for the same work started or done elsewhere: {places}{DUPLICATES}"
+    )
 }
 
-const DUPLICATES: &str = "Before starting, look for the same work started or done elsewhere: the note's ticked and open items, the repository's open and merged PRs and its GitHub issues, and the open tabs (`switchboard tabs`). \
+const DUPLICATES: &str = "the repository's open and merged PRs and its GitHub issues, and the open tabs (`switchboard tabs`). \
      When another item, issue, PR or tab already has it, stop without changing anything: run `switchboard autopilot-duplicate '<which>'` and say which, so autopilot skips this one with that reason and moves on. \
      Work already on the branch it lands on is not a duplicate: the check below covers it. ";
 
