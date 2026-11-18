@@ -1506,6 +1506,10 @@ fn app_of(args: &[String], own_exe: &str, short: bool) -> Option<String> {
         ["diff", ..] => ("the diff", "diff"),
         ["pr-view", "--checks", ..] => ("the PR's failing checks", "PR checks"),
         ["pr-view", ..] => ("the PR view", "PR view"),
+        // By its ticket's ID when it was given one rather than a folder.
+        ["ticket-view", id, ..] if !short && !id.starts_with('/') => {
+            return Some(format!("the ticket view: {id}"));
+        }
         ["ticket-view", ..] => ("the ticket view", "ticket view"),
         // By its link, so two read side by side differ, written
         // without its scheme and cut from the left, where links differ.
@@ -1621,6 +1625,11 @@ mod tests {
         let bin = format!("{home}/.local/bin/switchboard");
         assert_eq!(line(&[&bin, "notes", "--tab"]), "Notes");
         assert_eq!(line(&[&bin, "diff"]), "the diff");
+        assert_eq!(
+            line(&[&bin, "ticket-view", "ENG-42"]),
+            "the ticket view: ENG-42"
+        );
+        assert_eq!(line(&[&bin, "ticket-view", "/x/y"]), "the ticket view");
         assert_eq!(
             line(&[&bin, "link-view", "https://a.dev/x"]),
             "the link view: a.dev/x"
