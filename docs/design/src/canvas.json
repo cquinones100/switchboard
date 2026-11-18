@@ -548,6 +548,10 @@
     "TicketBoxes.dc.html": {
       "title": "133. The ticket view (M-i) with the same atom: the description as its first box, each comment in its own, a reply inside its thread's box; sub-issues and the facts beside it as before",
       "page": "design"
+    },
+    "StoryMapWide.dc.html": {
+      "title": "134. Map mode with no chapter list: the map, the stories' strip and the chosen chapter's text across the whole width; the strip names how many of the story's chapters are read, and In the files only as a chip at its right opening Files mode on those files",
+      "page": "design"
     }
   }
 }

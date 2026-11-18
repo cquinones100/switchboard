@@ -1,6 +1,6 @@
 # The design of UX 2.0
 
-The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from the kit's first board, every page beside a sidebar of them all. Drawn from the boards' sources in [`src/`](https://github.com/cquinones100/switchboard/tree/main/docs/design/src) on 2026-11-17 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again: a board is changed in its source, never in its page.
+The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from the kit's first board, every page beside a sidebar of them all. Drawn from the boards' sources in [`src/`](https://github.com/cquinones100/switchboard/tree/main/docs/design/src) on 2026-11-18 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again: a board is changed in its source, never in its page.
 
 ## The kit and the index
 
@@ -229,3 +229,7 @@ The relay's DM, threads and Home tab.
 - [131. The PR view's conversation in boxes, as GitHub draws it: the author's avatar beside a box a comment, its header bar naming who, what and when, a line down the side joining them; a bot's long body folded; a review comment with its line of code; the checks, reviewers and files beside it](https://cquinones100.github.io/switchboard/design/131.html)
 - [132. The same at 80 columns: no panel, its facts one line under the head; the avatar Small in each box's header bar, the line down the side at the boxes' left](https://cquinones100.github.io/switchboard/design/132.html)
 - [133. The ticket view (M-i) with the same atom: the description as its first box, each comment in its own, a reply inside its thread's box; sub-issues and the facts beside it as before](https://cquinones100.github.io/switchboard/design/133.html)
+
+## Proposal: the map across the whole width
+
+- [134. Map mode with no chapter list: the map, the stories' strip and the chosen chapter's text across the whole width; the strip names how many of the story's chapters are read, and In the files only as a chip at its right opening Files mode on those files](https://cquinones100.github.io/switchboard/design/134.html)
