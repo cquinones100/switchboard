@@ -1525,11 +1525,11 @@ fn program_line(args: &[String], own_exe: &str) -> String {
     // host (`scp host:/…`).
     // From `~`, the rest kept exactly as written (a trailing slash, or
     // rsync's `/./`, says what is copied).
+    // The home without a trailing slash, so `HOME=/home/me/` matches too.
     let home = crate::paths::home().display().to_string();
-    let from_home = |path: &str| match path.strip_prefix(home.as_str()) {
-        Some(rest)
-            if !home.is_empty() && home != "/" && (rest.is_empty() || rest.starts_with('/')) =>
-        {
+    let home = home.trim_end_matches('/');
+    let from_home = |path: &str| match path.strip_prefix(home) {
+        Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => {
             format!("~{rest}")
         }
         _ => path.to_string(),
