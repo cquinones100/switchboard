@@ -674,6 +674,33 @@ fn review_pr_runs_none_of_the_prs_code_outside_the_sealed_try() {
 }
 
 #[test]
+fn push_unreviewed_only_puts_the_push_on_your_clipboard() {
+    let all = project_skills();
+    let (_, text) = all
+        .iter()
+        .find(|(name, _)| name == "push-unreviewed")
+        .unwrap();
+    assert!(
+        text.lines().any(|l| l == "disable-model-invocation: true"),
+        "it pushes past the review rule, so only you start it"
+    );
+    for said in [
+        "`switchboard leak-check <range>`",
+        "`switchboard skill-path resolve-conflicts`",
+        "`pbcopy < <that file>`",
+        "never run the push yourself",
+        "Never run the push yourself",
+    ] {
+        assert!(text.contains(said), "{said}");
+    }
+    let runs_a_push = regex::Regex::new(r"`git push[^`]*`").unwrap();
+    assert!(
+        !runs_a_push.is_match(text),
+        "it names no push command to run, only the one it writes for you"
+    );
+}
+
+#[test]
 fn switchboard_s_own_copy_is_printed_whatever_is_installed() {
     let tmp = TempDir::new("sb-skill-own");
     let run = |name: &str| {
