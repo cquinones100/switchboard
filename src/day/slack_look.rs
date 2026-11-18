@@ -511,9 +511,9 @@ pub async fn look_slack(
             // A look through the connector, each a model call, goes out at
             // most once a minute, however often the token is tried and
             // whatever asked for it (the tick, going to the view, a reply).
-            // Only a look that got through counts, saved with the rest
-            // below, so one that failed (the connector down, which starts no
-            // model call) doesn't hold back the look once it is back.
+            // Counted as it starts, saved at once, so one whose model call
+            // fails counts too; one held back after the connector comes back
+            // goes out once the minute is up (`Looked::Skipped`).
             if let Some(at) = state.get("connector_at").and_then(Value::as_i64)
                 && now - at < CONNECTOR_EVERY_MS
             {
@@ -525,6 +525,10 @@ pub async fn look_slack(
                 });
             }
             state.insert("connector_at".into(), json!(now));
+            util::write_atomic(
+                &state_file,
+                util::json_compact(&Value::Object(state.clone())),
+            )?;
             let me = me_by_connector(call, &mut state).await?;
             let messages = search_by_connector(call, &day, from).await?;
             (me, messages)
