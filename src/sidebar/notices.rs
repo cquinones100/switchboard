@@ -250,6 +250,10 @@ pub struct Look<'a> {
     pub bars: bool,
 }
 
+/// A window's rows as last drawn: the size drawn at (columns, rows), and
+/// what each row is.
+pub type DrawnRows = ((u16, u16), Vec<Option<Spot>>);
+
 /// What the server keeps of each session's window.
 #[derive(Debug, Default)]
 pub struct Windows {
@@ -266,6 +270,11 @@ pub struct Windows {
     pub menu: HashSet<String>,
     /// What the mouse is over in a client's window.
     pub hover: HashMap<ClientId, Spot>,
+    /// What each row of a session's window was as it was last drawn, at
+    /// the size it was drawn at, for the pointer's shape over it, so a
+    /// still mouse over the window lays the notifications out once a frame,
+    /// not twice. Kept as it draws, which reads the server's state alone.
+    pub drawn: std::cell::RefCell<HashMap<String, DrawnRows>>,
 }
 
 /// A notification's whole message, wrapped to `cols`: its lines as its

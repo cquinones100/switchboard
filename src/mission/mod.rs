@@ -1475,8 +1475,8 @@ impl Overlay for Mission {
 
     /// A hand over anything a click presses (a view's name, a card, a row,
     /// a chip, a footer's key), the arrow elsewhere, among them the pane
-    /// beside a board, which only the wheel scrolls; left of its parts, the
-    /// sidebar's.
+    /// beside a board, which only the wheel scrolls, and the spare columns
+    /// beside a capped view; left of its parts, the sidebar's.
     fn pointer(&self, col: u16, row: u16, _look: &Look) -> Option<crate::ui::pointer::Pointer> {
         use crate::ui::pointer::Pointer;
         // Over its list of groups and views, a hand on what a click presses.
@@ -1489,7 +1489,11 @@ impl Overlay for Mission {
                 .any(|h| h.y == row && col >= h.x0 && col <= h.x1);
             return Some(if on { Pointer::Hand } else { Pointer::Arrow });
         }
-        let col = self.col_in(col)?;
+        // The spare columns beside a capped view take no clicks, and cover
+        // what is under them, a pane's own shape included.
+        let Some(col) = self.col_in(col) else {
+            return (col >= self.left).then_some(Pointer::Arrow);
+        };
         let hit = self
             .hits
             .iter()

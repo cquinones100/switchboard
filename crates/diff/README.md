@@ -94,6 +94,7 @@ It is the same program in both. Alone, it answers for the workspace itself:
 | Updates | Its own look once a day, and `switchboard-diff update` | `switchboard update`, which covers the diff built into Switchboard |
 | Its files | `~/.cache/switchboard-diff` and `~/.local/state/switchboard-diff` | Switchboard's own cache and state |
 | Copying | Through the terminal (OSC 52) | The desktop's clipboard too |
+| The mouse pointer (a hand over what a click presses, the text beam over text, with `hover_highlight`) | Set by the diff, in Ghostty and kitty | Shown by the workspace over the diff's pane |
 | The pane beside it, a file opened below, a message in a box | Not there | The workspace's |
 | Someone else's pull request | Read as your own code | A worktree opened untrusted is read as one: binary files as text, and no Claude started in it |
 

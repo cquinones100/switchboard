@@ -893,6 +893,14 @@ impl App {
         self.menu_step(step)
     }
 
+    /// The pointer's shape over the menu while it is up: a hand on its
+    /// options, the arrow elsewhere, where a click closes it.
+    pub(super) fn menu_pointer(&self, x: u16, y: u16) -> Option<switchboard_ui::pointer::Pointer> {
+        use switchboard_ui::overlay::Overlay;
+        let Open { menu, look, .. } = self.menu.as_ref()?;
+        menu.pointer(x, y, look)
+    }
+
     pub(super) fn menu_mouse(&mut self, m: MouseEvent) -> Act {
         let (Some(Open { menu, look, .. }), Some(mouse)) = (&mut self.menu, ui_mouse(&m)) else {
             return Act::Same;

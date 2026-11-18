@@ -99,6 +99,9 @@ impl App {
         self.hits.clear();
         self.ask_rect = None;
         self.answer_rect = None;
+        self.answer_shown.clear();
+        self.diff_bar = None;
+        self.body_top = None;
         if let Some(text) = self.failed.clone() {
             self.centred(
                 buf,
@@ -392,6 +395,14 @@ impl App {
         let h = self.list_height();
         let pinned = self.list_pinned();
         let rows = self.list_rows();
+        // How many rows the list has and where its last file is, kept for
+        // the pointer's shape over it.
+        self.list_drawn = (
+            rows.len(),
+            rows.iter()
+                .rposition(|r| matches!(r, ListRow::File(_)))
+                .map(|i| i + 1),
+        );
         // The cursor's file in sight, with its heading where there's room,
         // once it has moved (or the story has moved its row): the wheel
         // scrolls the list past it.
@@ -1157,13 +1168,16 @@ impl App {
     /// The diff, and its scroll bar in the column kept for it.
     fn draw_diff(&mut self, buf: &mut Buffer) -> Option<(u16, u16)> {
         let cursor = self.draw_diff_body(buf);
+        self.body_top = Some(self.diff_area().y + self.head_height() as u16);
         if self.opts.scroll_bars && self.current().is_some() {
             let area = self.diff_area();
             let h = self.body_height();
             let (total, top) = self.diff_extent();
             let y = area.y + self.head_height() as u16;
             let x = area.right().saturating_sub(1);
-            kit::draw_scrollbar(buf, (x, y, h as u16), (total, top, h), &self.theme());
+            if kit::draw_scrollbar(buf, (x, y, h as u16), (total, top, h), &self.theme()) {
+                self.diff_bar = Some((x, y, h));
+            }
         }
         cursor
     }
@@ -1844,6 +1858,13 @@ impl App {
         }
         a.top = a.top.min(lines.len().saturating_sub(1));
         let (top, cursor) = (a.top, a.cursor);
+        // The rows shown, kept for the pointer's shape over them.
+        self.answer_shown = lines
+            .iter()
+            .skip(top)
+            .take(body)
+            .map(|(plain, _)| plain.clone())
+            .collect();
         // Its scroll bar in the column the text leaves at its right.
         self.answer_bar = None;
         if self.opts.scroll_bars {

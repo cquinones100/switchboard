@@ -92,6 +92,7 @@ use super::story::{self, Look as StoryLook, Progress, Reading, Story};
 use super::tell::{self, Asked, Heard, Teller};
 use switchboard_ui::draw::width;
 use switchboard_ui::kit::{self, Tone};
+use switchboard_ui::pointer::Pointer;
 use switchboard_ui::screen::Screen;
 
 use crate::host::host;
@@ -190,6 +191,10 @@ pub struct Options {
     /// A click takes an option of a menu, and a right click opens one
     /// (menu_mouse).
     pub menu_mouse: bool,
+    /// Alone in a terminal that takes the mouse pointer's shapes (Ghostty,
+    /// kitty), the diff sets the pointer itself (with hover_highlight); in
+    /// a pane the workspace does, told the shape; off in the tests.
+    pub pointer: bool,
 }
 
 impl Options {
@@ -221,6 +226,7 @@ impl Options {
             haiku: true,
             server: host().in_pane(),
             clipboard: true,
+            pointer: !host().in_pane() && switchboard_ui::pointer::here(),
         }
     }
 }
@@ -825,11 +831,33 @@ pub struct App {
     count: Option<usize>,
     spin: usize,
     hover: Option<Button>,
+    /// Where the mouse was last, and the pointer's shape last said for it
+    /// (`point`), none until one is.
+    mouse_at: Option<(u16, u16)>,
+    pointer: Option<Pointer>,
     /// Where each button was last drawn.
     buttons: Vec<(Button, Rect)>,
     /// Where the boxes were last drawn, for clicks outside them.
     ask_rect: Option<Rect>,
     answer_rect: Option<Rect>,
+    /// The list as last drawn: how many rows it has, and how many of them
+    /// run down to its last file (none with no file), which a click shows
+    /// a file from; the pointer's shape is read from these, so a movement
+    /// of the mouse never builds the list's rows again.
+    list_drawn: (usize, Option<usize>),
+    /// The diff's scroll bar where it was last drawn: its column, first
+    /// row and height, for the pointer's shape over it.
+    diff_bar: Option<(u16, u16, usize)>,
+    /// The row the diff's text started on as last drawn, under its
+    /// heading, for the pointer's shape over it.
+    body_top: Option<u16>,
+    /// Who tells the workspace the pointer's shape, off the thread that
+    /// draws and reads the keys, started with the first shape (`tell`).
+    pointer_tx: Option<(Sender<Option<&'static str>>, std::thread::JoinHandle<()>)>,
+    /// The rows of the answer last drawn, as text, from its window's first:
+    /// the pointer's shape over them is read from these, so a movement of
+    /// the mouse never lays the whole answer out again.
+    answer_shown: Vec<String>,
     /// The answer window's scroll bar where it was last drawn: its column,
     /// first row and height.
     answer_bar: Option<(u16, u16, usize)>,
@@ -984,9 +1012,16 @@ impl App {
             count: None,
             spin: 0,
             hover: None,
+            mouse_at: None,
+            pointer: None,
             buttons: Vec::new(),
             ask_rect: None,
             answer_rect: None,
+            list_drawn: (0, None),
+            diff_bar: None,
+            body_top: None,
+            pointer_tx: None,
+            answer_shown: Vec::new(),
             answer_bar: None,
             out: Vec::new(),
             teller: Teller::default(),
@@ -1029,6 +1064,19 @@ impl App {
 
     /// Ends the work under way, as the program quits.
     pub fn stop(&mut self) {
+        // The pane gets its beam back; alone, the terminal does as it is
+        // put back (`Term`).
+        // Once what waits to be told has been, this is asked on this
+        // thread, which has nothing left to draw: the diff may have been
+        // run from a shell that stays in the pane, which must not keep the
+        // diff's shape.
+        if self.opts.server && self.pointer.take().is_some() {
+            if let Some((tx, told)) = self.pointer_tx.take() {
+                drop(tx);
+                let _ = told.join();
+            }
+            host().pointer(None);
+        }
         self.teller.stop();
         if let Some(a) = &self.answer {
             a.asking.stop();
@@ -1894,13 +1942,20 @@ impl App {
         );
     }
 
+    /// The columns the list is drawn in: its width, or fewer in a pane too
+    /// narrow to leave the diff ten beside it. A click and the pointer's
+    /// shape take the list to end where it is drawn.
+    fn list_cols(&self) -> u16 {
+        self.list_width.min(self.cols.saturating_sub(10))
+    }
+
     /// The diff area's columns, and each side's.
     fn diff_area(&self) -> Rect {
         // The map has no list beside it: it takes the whole width.
         let x = if self.on_map() {
             0
         } else {
-            self.list_width.min(self.cols.saturating_sub(10)) + 1
+            self.list_cols() + 1
         };
         let bottom = u16::from(self.has_buttons() || self.has_footer());
         Rect::new(
@@ -3111,21 +3166,49 @@ impl App {
             let on = x == bx && y >= by && ((y - by) as usize) < body;
             return on.then(|| (BarDrag::Answer, (y - by) as usize));
         }
-        let h = self.list_height();
+        // The list's bar is there while the list last drawn ran past the
+        // screen, so nothing is built to find it.
         let pinned = self.list_pinned();
-        let (rows, w) = self.list_extent();
-        if w > 0 && x + 1 == w && y >= pinned && rows > h {
+        let w = self.list_width.min(self.cols.saturating_sub(10));
+        let h = self.list_height();
+        let on_track = y >= pinned && usize::from(y - pinned) < h;
+        if w > 0 && x + 1 == w && on_track && self.list_drawn.0 > h {
             return Some((BarDrag::List, (y - pinned) as usize));
         }
         let area = self.diff_area();
+        if x + 1 != area.right() {
+            return None;
+        }
         let body = area.y + self.head_height() as u16;
-        if x + 1 == area.right() && y >= body && y < area.bottom() {
+        if y >= body && y < area.bottom() {
             let (total, _) = self.diff_extent();
             if total > self.body_height() {
                 return Some((BarDrag::Diff, (y - body) as usize));
             }
         }
         None
+    }
+
+    /// Whether the mouse is over a scroll bar a press would take
+    /// (`on_scroll_bar`), found from what was last drawn, so a movement of
+    /// the mouse measures nothing: the answer's and the diff's by where
+    /// they were drawn, the list's by its rows then, with the filter's
+    /// typing ended as a press ends it before it looks.
+    fn over_scroll_bar(&mut self, x: u16, y: u16) -> bool {
+        let at = |bar: Option<(u16, u16, usize)>| {
+            bar.is_some_and(|(bx, by, h)| x == bx && y >= by && usize::from(y - by) < h)
+        };
+        if !self.opts.scroll_bars || self.ask_box.is_some() {
+            return false;
+        }
+        if self.answer.is_some() {
+            return at(self.answer_bar);
+        }
+        let pinned = u16::from(!self.path_filter.is_empty());
+        let h = usize::from(self.diff_area().height.saturating_sub(pinned));
+        let w = self.list_width.min(self.cols.saturating_sub(10));
+        let on_track = y >= pinned && usize::from(y - pinned) < h;
+        (w > 0 && x + 1 == w && on_track && self.list_drawn.0 > h) || at(self.diff_bar)
     }
 
     /// The first line a scroll bar's surface shows now.
@@ -4273,6 +4356,11 @@ impl App {
         if let Some(a) = self.answer.take() {
             a.asking.stop();
         }
+        // A key typed in the answer, or a copy made in it, was the
+        // answer's, never the first of a pair in the diff.
+        self.pending = None;
+        self.count = None;
+        self.yanked = false;
     }
 
     fn answer_key(&mut self, key: KeyEvent) -> Act {
@@ -4520,6 +4608,9 @@ impl App {
     // ── The mouse ───────────────────────────────────────────────────────────
 
     pub fn mouse(&mut self, mut m: MouseEvent) -> Act {
+        // Where the mouse is on the screen, header and all, for the
+        // pointer's shape (`shape_at`).
+        self.mouse_at = Some((m.column, m.row));
         // The header's row, alone, takes no click; the rest is the diff's,
         // counted from under it.
         if self.has_header() {
@@ -4542,6 +4633,235 @@ impl App {
             .iter()
             .find(|(_, r)| x >= r.x && x < r.right() && y >= r.y && y < r.bottom())
             .map(|(b, _)| *b)
+    }
+
+    /// Says the mouse pointer's shape for where the mouse is, when it has
+    /// changed since it was last said (crates/ui/src/pointer.rs): in a
+    /// pane to the workspace, which shows it over the pane, and alone as
+    /// what to write to a terminal that takes it. Called once the screen
+    /// is drawn and after the mouse, so the shape follows what is under
+    /// the mouse now; nothing with hover_highlight off.
+    pub fn point(&mut self) -> Vec<u8> {
+        // Nobody to show it: nothing is looked up.
+        if !self.opts.server && !self.opts.pointer {
+            return Vec::new();
+        }
+        // hover_highlight turned off while it runs: the beam once.
+        if !self.opts.hover && self.pointer.take().is_some() {
+            if self.opts.server {
+                self.tell(Pointer::Text.name());
+                return Vec::new();
+            }
+            return Pointer::Text.osc();
+        }
+        let Some(shape) = self.point_now() else {
+            return Vec::new();
+        };
+        if self.opts.server {
+            self.tell(shape.name());
+        } else if self.opts.pointer {
+            return shape.osc();
+        }
+        Vec::new()
+    }
+
+    /// Tells the workspace the shape over the diff's pane from a thread of
+    /// its own, so the thread that draws and reads
+    /// the keys never waits on the server; of several waiting, only the
+    /// last is told.
+    fn tell(&mut self, shape: &'static str) {
+        let (tx, _) = self.pointer_tx.get_or_insert_with(|| {
+            let (tx, rx) = channel::<Option<&'static str>>();
+            let told = std::thread::spawn(move || {
+                while let Ok(mut shape) = rx.recv() {
+                    while let Ok(newer) = rx.try_recv() {
+                        shape = newer;
+                    }
+                    host().pointer(shape);
+                }
+            });
+            (tx, told)
+        });
+        let _ = tx.send(Some(shape));
+    }
+
+    /// The shape to say now: the one under the mouse, when it differs from
+    /// the one last said.
+    fn point_now(&mut self) -> Option<Pointer> {
+        if !self.opts.hover {
+            return None;
+        }
+        let (x, y) = self.mouse_at?;
+        let shape = self.shape_at(x, y);
+        (self.pointer != Some(shape)).then(|| {
+            self.pointer = Some(shape);
+            shape
+        })
+    }
+
+    /// The pointer's shape over a cell, by what a click there does
+    /// (`mouse_now`): the hand over a button, the list's rows down to its
+    /// last file (a click on a row over a file shows that file), a fold in
+    /// the diff and a `path:line` in an answer;
+    /// the text beam over the diff's text, an answer's, and where a click
+    /// types (the filter's line, the question's box); the arrow over the
+    /// rest, a scroll bar included, as the workspace's own have it.
+    fn shape_at(&mut self, x: u16, mut y: u16) -> Pointer {
+        // The header's row takes no click; the rest is counted from under
+        // it, as the mouse is (`mouse`).
+        if self.has_header() {
+            if y == 0 {
+                return Pointer::Arrow;
+            }
+            y -= 1;
+        }
+        // Nothing is read for it, as nothing is while the screen is drawn:
+        // a file not read yet is no row of text, in a commit's diff of the
+        // history too.
+        let drawing = std::mem::replace(&mut self.drawing, true);
+        let shape = self.shape_under_header(x, y);
+        self.drawing = drawing;
+        shape
+    }
+
+    fn shape_under_header(&mut self, x: u16, y: u16) -> Pointer {
+        // The menu (m, a right click) and the settings view take every
+        // click while they are up, over a commit's diff of the history too.
+        if let Some(shape) = self.menu_pointer(x, y) {
+            return shape;
+        }
+        if self.settings.is_some() {
+            return if self.hit(x, y).is_some() {
+                Pointer::Hand
+            } else {
+                Pointer::Arrow
+            };
+        }
+        if let Some(h) = &mut self.history {
+            // A commit's diff reads nothing for it either.
+            let drawing = std::mem::replace(&mut h.app.drawing, true);
+            let shape = h.app.shape_under_header(x, y);
+            h.app.drawing = drawing;
+            return shape;
+        }
+        // A scroll bar's thumb being dragged has the mouse until it is let
+        // go, over the row's buttons too.
+        if self.bar_drag.is_some() {
+            return Pointer::Arrow;
+        }
+        // The row's buttons press wherever it is drawn, the change being
+        // read and under the story's cover too; while a refreshed map is
+        // told, whose place takes only closing, Close alone of its keys.
+        let map_told = self.mode == Mode::Map && !self.mapped() && self.telling == Telling::Waiting;
+        if let Some(button) = self.hit(x, y) {
+            let inert = map_told && matches!(button, Button::Bar(i) if self.bar_keys(i) != "q");
+            return if inert { Pointer::Arrow } else { Pointer::Hand };
+        }
+        let inside = |r: Option<Rect>| {
+            r.is_some_and(|r| x >= r.x && x < r.right() && y >= r.y && y < r.bottom())
+        };
+        // As a click: the cover, and a refreshed map still being told,
+        // take nothing but the row's buttons.
+        let waiting = self.cover.is_some() && self.telling == Telling::Waiting;
+        // With nothing to show, or the change unread, a click anywhere
+        // closes the diff, as any key does.
+        if self.failed.is_some() || self.nothing.is_some() {
+            return Pointer::Hand;
+        }
+        if self.bar_drag.is_some() || self.loading.is_some() || waiting || map_told {
+            return Pointer::Arrow;
+        }
+        // The story's map: a hand over a chapter, a story, a thing and the
+        // way back, which a click takes; the arrow over the rest of it.
+        if self.ask_box.is_none() && self.answer.is_none() {
+            if self.hit_at(x, y).is_some() {
+                return Pointer::Hand;
+            }
+            if self.on_map() {
+                return Pointer::Arrow;
+            }
+        }
+        if self.over_scroll_bar(x, y) {
+            return Pointer::Arrow;
+        }
+        if self.ask_box.is_some() {
+            return if inside(self.ask_rect) {
+                Pointer::Text
+            } else {
+                Pointer::Arrow
+            };
+        }
+        if self.answer.is_some() {
+            let Some(r) = self.answer_rect.filter(|r| inside(Some(*r))) else {
+                return Pointer::Arrow;
+            };
+            let Some((row, col)) = self.answer_cell(r, x, y) else {
+                return Pointer::Arrow;
+            };
+            let cells = usize::from(r.width.saturating_sub(4));
+            let cited = self
+                .answer_shown
+                .get(row)
+                .and_then(|line| Self::cited_shown(line, col, cells))
+                .is_some();
+            return if cited { Pointer::Hand } else { Pointer::Text };
+        }
+        let area = self.diff_area();
+        if y >= area.bottom() {
+            return Pointer::Arrow;
+        }
+        if x < self.list_cols() {
+            let pinned = self.list_pinned();
+            if y < pinned {
+                return Pointer::Text;
+            }
+            // A click shows the file at the row or the next one under it,
+            // so every row down to the last file is pressed; those under
+            // it are not.
+            let from = self.list_top + (y - pinned) as usize;
+            let pressed = self.list_drawn.1.is_some_and(|files| from < files);
+            return if pressed {
+                Pointer::Hand
+            } else {
+                Pointer::Arrow
+            };
+        }
+        // Where the diff's rows start, as last drawn: the heading over them
+        // (a chapter's why, its map of things) isn't laid out again.
+        let Some(body) = self.body_top else {
+            return Pointer::Arrow;
+        };
+        // The rule beside the list is the diff's body to a click.
+        if y < body || self.order.is_empty() {
+            return Pointer::Arrow;
+        }
+        let row = (y - body) as usize;
+        let line = if self.one_scroll() {
+            // A rule or a bar between two files of the scroll is no text.
+            let view = if self.view < self.order.len() {
+                self.view
+            } else {
+                self.at
+            };
+            let (k, t) = self.stream_ahead(view, self.top, row);
+            let on_a_line = self.view == view && self.rows_from_view(k, t) == Some(row);
+            self.lines_of(k).get(t).filter(|_| on_a_line).cloned()
+        } else if self.shown_binary() {
+            // A binary file shows only a line saying so.
+            None
+        } else {
+            // A click under the file's last line goes to that line, and
+            // opens it when it is a fold, so it has that line's shape.
+            let at = self.top + row;
+            let lines = self.screen_lines();
+            lines.get(at).or(lines.last()).cloned()
+        };
+        match line {
+            // A fold opens, and an "also in chapter" line goes there.
+            Some(Line::Fold { .. } | Line::Also(..)) => Pointer::Hand,
+            Some(_) => Pointer::Text,
+            None => Pointer::Arrow,
+        }
     }
 
     fn mouse_now(&mut self, m: MouseEvent) -> Act {
@@ -4658,7 +4978,7 @@ impl App {
                         };
                         a.cursor = a.cursor.clamp(a.top, a.top + body - 1).min(last);
                     }
-                } else if x < self.list_width {
+                } else if x < self.list_cols() {
                     // The list alone moves; the cursor stays on its file.
                     // Reading the list: a story arriving keeps it.
                     self.moved = true;
@@ -4702,7 +5022,7 @@ impl App {
         // filter kept, so a button's keys or a click in the diff act as
         // they would; one on that line types into it again.
         let pinned = self.list_pinned();
-        self.filtering = false;
+        let typing = std::mem::take(&mut self.filtering);
         // The Settings button, wherever the row is drawn: with nothing to
         // show, while the change is read and under the story's cover.
         if hit == Some(Button::Settings) {
@@ -4770,6 +5090,8 @@ impl App {
             self.bar_drag = Some((bar, y - row as u16, (row, top)));
             return Act::Redraw;
         }
+        let selected =
+            self.selection.is_some() || self.visual.is_some() || self.list_visual.is_some();
         self.selection = None;
         self.visual = None;
         self.list_visual = None;
@@ -4798,16 +5120,18 @@ impl App {
                 self.close_answer();
                 return Act::Redraw;
             }
-            if let Some(r) = self.answer_rect {
-                let row = (y.saturating_sub(r.y + 2)) as usize;
+            if let Some(r) = self.answer_rect
+                && let Some((row, col)) = self.answer_cell(r, x, y)
+            {
                 let lines = self.answer_lines(r.width);
                 let mut found = None;
                 if let Some(a) = &mut self.answer {
                     let at = a.top + row;
                     a.cursor = at.min(lines.len().saturating_sub(1));
+                    let cells = usize::from(r.width.saturating_sub(4));
                     found = lines
                         .get(at)
-                        .and_then(|line| ask::cited(&line.0, (x.saturating_sub(r.x + 2)) as usize));
+                        .and_then(|line| Self::cited_shown(&line.0, col, cells));
                 }
                 // Gone to once the button is let go, unless it dragged.
                 self.pressed_cite = found;
@@ -4815,9 +5139,16 @@ impl App {
             return Act::Redraw;
         }
         if y >= self.diff_area().bottom() {
-            return Act::Same;
+            // Drawn again when the click closed a message, ended a
+            // selection or the filter's typing, so they are gone from the
+            // screen too.
+            return if closed || selected || typing {
+                Act::Redraw
+            } else {
+                Act::Same
+            };
         }
-        if x < self.list_width {
+        if x < self.list_cols() {
             self.focus = Focus::List;
             if y < pinned {
                 self.filtering = true;
@@ -4878,21 +5209,107 @@ impl App {
                 .map_or(0, |s| s.gutter(side_w as usize));
             self.col = (x.saturating_sub(side_x) as usize).saturating_sub(gutter);
             let cur = self.cur;
-            if matches!(self.screen_lines().get(cur), Some(Line::Fold { .. })) {
+            // A binary file shown alone shows no lines, so no fold of it
+            // is opened.
+            if !self.binary_alone()
+                && matches!(self.screen_lines().get(cur), Some(Line::Fold { .. }))
+            {
                 self.open_fold();
             }
-            // Gone to as the mouse is let go, so a drag from it selects.
-            if let Some(also) = self.also_under() {
+            // Gone to as the mouse is let go, so a drag from it selects;
+            // a binary file shown alone shows no such line.
+            if !self.binary_alone()
+                && let Some(also) = self.also_under()
+            {
                 self.also_on_up = Some(also);
             }
         }
         Act::Redraw
     }
 
+    /// The line of an answer's body and the column of its text a screen
+    /// cell is, in its window `r`: none on the window's edges, its
+    /// padding, its scroll bar's column and its heading, which hold none
+    /// of the answer's text, for a click and for the pointer's shape alike.
+    fn answer_cell(&self, r: Rect, x: u16, y: u16) -> Option<(usize, usize)> {
+        let row = usize::from(y.checked_sub(r.y + 2)?);
+        let col = usize::from(x.checked_sub(r.x + 2)?);
+        (row < self.answer_body() && x + 2 < r.right()).then_some((row, col))
+    }
+
+    /// The `path:line` drawn at column `col` of an answer's line shown in
+    /// `cells` columns: only one the window shows whole, since a line cut
+    /// at its right edge (a row of code, which doesn't wrap) may show
+    /// `a.rs:12` of `a.rs:1234`, which names another line.
+    fn cited_shown(line: &str, col: usize, cells: usize) -> Option<ask::Cited> {
+        let shown = line
+            .char_indices()
+            .map(|(i, c)| i + c.len_utf8())
+            .take_while(|end| width(&line[..*end]) <= cells)
+            .last()
+            .map_or("", |end| &line[..end]);
+        // What is shown is looked in first, so a movement over a row with
+        // no path:line under the mouse reads no more than the window shows;
+        // then the line on to the end of the word cut at the window's edge,
+        // whose path:line must be the same.
+        let seen = Self::cited_at(shown, col)?;
+        let end = line[shown.len()..]
+            .find(char::is_whitespace)
+            .map_or(line.len(), |i| shown.len() + i);
+        (Self::cited_at(&line[..end], col).as_ref() == Some(&seen)).then_some(seen)
+    }
+
+    /// The `path:line` drawn at column `col` of an answer's line, the
+    /// column counted in cells as the line is drawn, whatever bytes its
+    /// characters before it take.
+    fn cited_at(line: &str, col: usize) -> Option<ask::Cited> {
+        // The text up to and with each character is measured whole, as it
+        // is drawn, so characters drawn as one (an emoji of several) count
+        // the cells they take together.
+        let (byte, _) = line
+            .char_indices()
+            .find(|(i, c)| width(&line[..i + c.len_utf8()]) > col)?;
+        ask::cited(line, byte)
+    }
+
+    /// The keys easy mode's `i`th button presses, as the row is drawn.
+    fn bar_keys(&self, i: usize) -> &'static str {
+        BUTTONS
+            .iter()
+            .filter(|(_, k)| self.opts.ask || *k != "ga")
+            .nth(i)
+            .map(|(_, k)| *k)
+            .unwrap_or("")
+    }
+
+    /// Whether the file shown is binary and shown alone, a line saying
+    /// so in place of its rows (`draw_diff_body`); in the one scroll of
+    /// UX 2.0 its rows are drawn as built.
+    fn binary_alone(&self) -> bool {
+        !self.one_scroll() && self.shown_binary()
+    }
+
+    /// Whether the file shown is binary.
+    fn shown_binary(&self) -> bool {
+        self.current()
+            .and_then(|e| self.files.get(&e.key()))
+            .is_some_and(|s| s.binary)
+    }
+
+    /// The button at a cell, as a click and the pointer's shape find it:
+    /// while the question's box or an answer is open, only its own, since
+    /// the row's keys would go to the box (typed into the question, or not
+    /// an answer's keys); a click on another closes the box, as a click
+    /// anywhere outside it does.
     /// A button pressed, as its keys would be.
     fn press(&mut self, button: Button) -> Act {
         // A button takes the keys from a page's own map.
         self.thing = None;
+        // A button does its own work, never finishing a pair, a count or
+        // a copy made before the click.
+        self.pending = None;
+        self.count = None;
+        self.yanked = false;
         match button {
             // While a question is typed, the row's buttons do nothing: its
             // keys would be typed into the draft.
@@ -4904,12 +5321,7 @@ impl App {
                 return Act::Redraw;
             }
             Button::Bar(i) => {
-                let keys = BUTTONS
-                    .iter()
-                    .filter(|(_, k)| self.opts.ask || *k != "ga")
-                    .nth(i)
-                    .map(|(_, k)| *k)
-                    .unwrap_or("");
+                let keys = self.bar_keys(i);
                 // Over the settings view, a button goes back to the diff
                 // and does its work there; Close only closes the view, and
                 // so does any of them over a question's draft, which its
@@ -4917,6 +5329,16 @@ impl App {
                 let over_view = self.settings.take().is_some();
                 if over_view && (keys == "q" || self.ask_box.is_some()) {
                     return Act::Redraw;
+                }
+                // Its keys may go on to a commit's diff of the history,
+                // which they reach as its own: no pair, count or copy of
+                // its own finishes them, and typing in its filter ends,
+                // the filter kept, as a click ends it here.
+                if let Some(h) = &mut self.history {
+                    h.app.pending = None;
+                    h.app.count = None;
+                    h.app.yanked = false;
+                    h.app.filtering = false;
                 }
                 // Over an answer, whose keys they aren't, the answer goes
                 // first, so the button does its work in the diff.
@@ -5096,10 +5518,14 @@ fn load(dir: PathBuf, base: Option<String>, working: bool, uncommitted: bool, tx
 /// crossterm reads), so Shift-Enter there adds a line, as Neovim asked
 /// for them. In a pane the workspace sends keys so only while the diff
 /// asks.
-struct Term;
+struct Term {
+    /// Whether the diff set the mouse pointer's shape, so the terminal's
+    /// text beam is put back, as the workspace's client puts it back.
+    pointer: bool,
+}
 
 impl Term {
-    fn enter(motion: bool) -> io::Result<Term> {
+    fn enter(motion: bool, pointer: bool) -> io::Result<Term> {
         terminal::enable_raw_mode()?;
         let mut out = io::stdout();
         out.write_all(b"\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?2004h\x1b[>1u")?;
@@ -5107,13 +5533,16 @@ impl Term {
             out.write_all(b"\x1b[?1003h")?;
         }
         out.flush()?;
-        Ok(Term)
+        Ok(Term { pointer })
     }
 }
 
 impl Drop for Term {
     fn drop(&mut self) {
         let mut out = io::stdout();
+        if self.pointer {
+            let _ = out.write_all(&Pointer::Text.osc());
+        }
         let _ = out.write_all(
             b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[0m\x1b[?25h\x1b[?1049l",
         );
@@ -5159,8 +5588,9 @@ pub fn run(
         }
     }
     // Every movement with the hover on: the menu (m, a right click) lights
-    // its option under the mouse, whatever else is on.
-    let term = match Term::enter(opts.hover) {
+    // its option under the mouse, whatever else is on, and the pointer's
+    // shape follows what is under it.
+    let mut term = match Term::enter(opts.hover, opts.hover && opts.pointer) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("switchboard diff: can't take the terminal: {e}");
@@ -5178,6 +5608,7 @@ pub fn run(
     app.term = colors;
     let mut screen = Screen::default();
     let mut dirty = true;
+    let mut point = false;
     let mut last_tick = Instant::now();
     // Alone, the look for a newer release, once the diff has drawn.
     let mut looks = crate::update::allowed();
@@ -5209,6 +5640,16 @@ pub fn run(
             let _ = out.write_all(&bytes);
             let _ = out.flush();
             dirty = false;
+            point = true;
+        }
+        // The pointer's shape, once what is under the mouse is drawn.
+        if std::mem::take(&mut point) {
+            let shape = app.point();
+            if !shape.is_empty() {
+                let mut out = io::stdout().lock();
+                let _ = out.write_all(&shape);
+                let _ = out.flush();
+            }
         }
         // The first look once the diff has drawn, then hourly.
         // The settings read anew each hour first, so one turned off since
@@ -5243,7 +5684,10 @@ pub fn run(
         let act = match event::poll(Duration::from_millis(50)) {
             Ok(true) => match event::read() {
                 Ok(TermEvent::Key(key)) => app.key(key),
-                Ok(TermEvent::Mouse(m)) => app.mouse(m),
+                Ok(TermEvent::Mouse(m)) => {
+                    point = true;
+                    app.mouse(m)
+                }
                 Ok(TermEvent::Paste(text)) => app.paste(&text),
                 Ok(TermEvent::Resize(c, r)) => {
                     app.resize(c, r);
@@ -5263,6 +5707,8 @@ pub fn run(
         }
     }
     app.stop();
+    // The terminal's beam is put back only when the diff changed it.
+    term.pointer = app.opts.pointer && app.pointer.is_some();
     drop(term);
     // An update started from the settings view is finished, not left half
     // done: said on the terminal given back, with what came of it.
@@ -5332,6 +5778,7 @@ mod tests {
             map: true,
             keep: false,
             menu_mouse: true,
+            pointer: false,
         }
     }
 
@@ -5552,6 +5999,155 @@ mod tests {
         let last = row.last().unwrap();
         assert_eq!(last.content, "", "no faint cells");
         assert_eq!(row[row.len() - 2].content, "■", "the deleted cell kept");
+    }
+
+    #[test]
+    fn the_pointer_is_a_hand_over_what_a_click_presses_the_beam_over_text_and_the_arrow_elsewhere()
+    {
+        let mut app = app();
+        app.opts.easy = true;
+        app.resize(220, 16);
+        screen(&mut app);
+        let over = |app: &mut App, x: u16, y: u16| {
+            app.mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: x,
+                row: y,
+                modifiers: KeyModifiers::NONE,
+            });
+            screen(app);
+            app.point_now()
+        };
+        assert_eq!(
+            app.point_now(),
+            None,
+            "nothing until the mouse is somewhere"
+        );
+        // A button, said once however far the mouse moves on it.
+        let (_, at) = *app
+            .buttons
+            .iter()
+            .find(|(b, _)| *b == Button::Bar(1))
+            .unwrap();
+        assert_eq!(over(&mut app, at.x + 1, at.y), Some(Pointer::Hand));
+        assert_eq!(over(&mut app, at.x + 2, at.y), None);
+        // The diff's text, and the bar over it.
+        let area = app.diff_area();
+        let body = area.y + app.head_height() as u16;
+        assert_eq!(over(&mut app, area.x + 8, body), Some(Pointer::Text));
+        assert_eq!(over(&mut app, area.x + 9, body), None);
+        assert_eq!(over(&mut app, area.x + 8, area.y), Some(Pointer::Arrow));
+        // A file's row in the list and the rows over it, which a click
+        // shows the file from, then the rows under its last file.
+        let rows = app.list_rows();
+        let file = rows
+            .iter()
+            .position(|r| matches!(r, ListRow::File(_)))
+            .unwrap();
+        let y = (file - app.list_top) as u16 + app.list_pinned();
+        assert_eq!(over(&mut app, 3, y), Some(Pointer::Hand));
+        assert!(matches!(rows[0], ListRow::Header(_)));
+        assert_eq!(over(&mut app, 3, 0), None, "a heading shows its first file");
+        assert_eq!(
+            over(&mut app, 3, rows.len() as u16 + 1),
+            Some(Pointer::Arrow)
+        );
+        // The filter's line takes typing, the question's box too; outside
+        // the box a click only closes it.
+        app.key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        assert_eq!(over(&mut app, 3, 0), Some(Pointer::Text));
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(over(&mut app, 3, 0), Some(Pointer::Hand));
+        for c in "ga".chars() {
+            app.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        screen(&mut app);
+        let ask = app.ask_rect.expect("the question's box");
+        let send = app
+            .buttons
+            .iter()
+            .find(|(b, _)| *b == Button::AskSend)
+            .map(|(_, r)| *r)
+            .expect("the box's Send");
+        assert_ne!(send.y, ask.y + 2, "the typing is on a row of its own");
+        assert_eq!(over(&mut app, ask.x + 2, ask.y + 2), Some(Pointer::Text));
+        assert_eq!(over(&mut app, send.x, send.y), Some(Pointer::Hand));
+        // Outside the box, over the list, the arrow: a click there only
+        // closes the box.
+        assert_eq!(over(&mut app, 3, y), Some(Pointer::Arrow));
+        // While a question is typed the row is Close alone, which closes
+        // it: a hand.
+        let (_, close) = *app
+            .buttons
+            .iter()
+            .find(|(b, _)| matches!(b, Button::Bar(_)))
+            .unwrap();
+        assert_eq!(over(&mut app, close.x, close.y), Some(Pointer::Hand));
+        app.mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: close.x,
+            row: close.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(app.ask_box.is_none(), "the click closed the box");
+    }
+
+    #[test]
+    fn a_citation_is_found_by_the_cell_it_is_drawn_at() {
+        let line = "See ‘src/a.rs:12’.";
+        let at = |col| App::cited_at(line, col).map(|c| c.line);
+        // The quote before it and the quote and the full stop after it are
+        // no part of it, though the quotes take three bytes each.
+        assert_eq!(at(4), None);
+        assert_eq!(at(5), Some(12));
+        assert_eq!(at(15), Some(12));
+        assert_eq!(at(16), None);
+        assert_eq!(at(17), None);
+        assert_eq!(at(40), None);
+        // Cut at the window's edge, a citation that shows another line is
+        // none; one shown whole is.
+        assert_eq!(App::cited_shown("src/a.rs:1234", 2, 11), None);
+        assert_eq!(
+            App::cited_shown("src/a.rs:1234", 2, 13).map(|c| c.line),
+            Some(1234)
+        );
+        // An emoji of several characters is drawn as one, two cells wide.
+        let line = "👩‍💻 src/a.rs:12.";
+        let at = |col| App::cited_at(line, col).map(|c| c.line);
+        assert_eq!(at(2), None);
+        assert_eq!(at(3), Some(12));
+        assert_eq!(at(13), Some(12));
+        assert_eq!(at(14), None);
+    }
+
+    #[test]
+    fn alone_the_shape_is_written_to_a_terminal_that_takes_it_and_never_with_hover_off() {
+        let moved = |app: &mut App, x: u16, y: u16| {
+            app.mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: x,
+                row: y,
+                modifiers: KeyModifiers::NONE,
+            });
+            screen(app);
+            app.point()
+        };
+        let mut app = app();
+        screen(&mut app);
+        let area = app.diff_area();
+        let body = area.y + app.head_height() as u16;
+        // A terminal that doesn't take the shapes is sent none.
+        assert_eq!(moved(&mut app, area.x + 8, body), b"");
+        assert_eq!(moved(&mut app, area.x + 8, area.y), b"");
+        app.opts.pointer = true;
+        assert_eq!(moved(&mut app, area.x + 8, body), Pointer::Text.osc());
+        assert_eq!(moved(&mut app, area.x + 9, body), b"", "once per change");
+        assert_eq!(moved(&mut app, area.x + 8, area.y), Pointer::Arrow.osc());
+        // With hover_highlight turned off the beam is given back once, and
+        // then nothing follows the mouse.
+        app.opts.hover = false;
+        assert_eq!(moved(&mut app, area.x + 8, body), Pointer::Text.osc());
+        assert_eq!(moved(&mut app, area.x + 8, area.y), b"");
     }
 
     #[test]
@@ -8253,6 +8849,8 @@ mod tests {
             .find(|(hit, _)| *hit == map::Hit::Page(1))
             .copied()
             .unwrap();
+        // The pointer is a hand over the box, a click choosing it.
+        assert_eq!(app.shape_at(at.x + 1, at.y + 1), Pointer::Hand);
         let click = MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: at.x + 1,

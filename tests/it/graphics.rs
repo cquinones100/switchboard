@@ -515,6 +515,10 @@ const NAMES_ALLOWED: &[(&str, &str)] = &[
     ),
     ("src/ui/headless.rs", "attaches as Ghostty and says so"),
     (
+        "crates/ui/src/pointer.rs",
+        "says which terminals take the pointer's shapes, for an app alone too",
+    ),
+    (
         "src/mux/pane.rs",
         "tells the panes' programs they draw truecolor",
     ),

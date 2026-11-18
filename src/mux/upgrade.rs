@@ -202,6 +202,12 @@ pub struct HandedClient {
     /// Bytes of frames not yet written.
     #[serde(default)]
     pub output: Vec<u8>,
+    /// The cell its mouse was last reported at, so the pointer's shape is
+    /// set again for what is under it once the new build draws (the shape
+    /// last sent isn't kept, so that one is sent whatever it was); none
+    /// from a build before it was kept.
+    #[serde(default)]
+    pub mouse_at: Option<(u16, u16)>,
 }
 
 /// Writes the handover, readable only by you, in place of any left before.
@@ -872,6 +878,7 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
                     // What its parser held came before the frame half read.
                     input: [server.held_keys(*id), held.input.clone()].concat(),
                     output: held.output.clone(),
+                    mouse_at: c.mouse_at,
                 })
             })
             .collect(),
@@ -1067,6 +1074,8 @@ pub fn adopt(server: &mut Server, handover: Handover) {
             c.output,
         ) {
             lost.push(format!("terminal {} ({e:#})", c.id));
+        } else if let Some(client) = server.clients.get_mut(&ClientId(c.id)) {
+            client.mouse_at = c.mouse_at;
         }
     }
     for slot in server.panes.values() {
@@ -1232,6 +1241,7 @@ mod tests {
                 idle_ms: 1500,
                 input: vec![1, 0, 0],
                 output: b"\x1b[H".to_vec(),
+                mouse_at: Some((40, 12)),
             }],
             next_pane: 9,
             next_tab: 4,

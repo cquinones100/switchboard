@@ -266,6 +266,85 @@ fn m_d_puts_the_diff_in_the_panes_place_and_q_puts_the_pane_back() {
 
 /// Whether a row of the screen holding `name` (the list's row for it) is
 /// marked ● as not committed yet.
+#[test]
+fn the_pointer_over_the_diff_s_pane_is_the_shape_the_diff_names() {
+    let server = TestServer::start();
+    settings(&server);
+    stand_in_claude(&server.home);
+    let work = repository(server.dir.path());
+    let mut client = server.attach_as("xterm-ghostty", 140, 36);
+    client.wait_text("$");
+    client.type_text(&format!("cd {}\r", work.display()));
+    wait_until("the shell to cd", || {
+        panes(&server)[0]["cwd"]
+            .as_str()
+            .is_some_and(|d| d.ends_with("work"))
+    });
+    let count = |client: &mut common::TestClient, name: &str| {
+        client.screen();
+        let needle = format!("\x1b]22;{name}\x1b\\").into_bytes();
+        client
+            .raw
+            .windows(needle.len())
+            .filter(|w| *w == needle)
+            .count()
+    };
+    // Over the shell's pane, the beam.
+    client.send(b"\x1b[<35;100;20M");
+    client.wait_sent("the beam over the shell", b"\x1b]22;text\x1b\\");
+
+    client.send(b"\x1bd");
+    client.wait_text("1/2 Change the core");
+    let screen = client.wait_text("export const a = 2;");
+    // Where `text` is on the screen, as a mouse report names a cell in it.
+    let place = |text: &str| {
+        let row = screen.iter().position(|l| l.contains(text)).unwrap();
+        let col = screen[row].find(text).unwrap();
+        (screen[row][..col].chars().count() + 2, row + 1)
+    };
+    // A file's row in the diff's list is pressed by a click: a hand.
+    let (col, row) = place("M a.js");
+    client.send(format!("\x1b[<35;{col};{row}M").as_bytes());
+    wait_until("a hand over the file's row", || {
+        count(&mut client, "pointer") == 1
+    });
+    assert_eq!(panes(&server)[0]["options"]["@pointer"], "pointer");
+    // The diff's text takes the beam again, said by the diff.
+    let beams = count(&mut client, "text");
+    let (col, row) = place("export const a = 2;");
+    client.send(format!("\x1b[<35;{col};{row}M").as_bytes());
+    wait_until("the beam over the diff's text", || {
+        count(&mut client, "text") == beams + 1
+    });
+    assert_eq!(panes(&server)[0]["options"]["@pointer"], "text");
+    assert_eq!(count(&mut client, "pointer"), 1);
+    // M-d closes the diff under a mouse that stays where it is: the shell
+    // back in its place has the beam at once, whatever the diff last said.
+    let (col, row) = place("M a.js");
+    client.send(format!("\x1b[<35;{col};{row}M").as_bytes());
+    wait_until("the hand again", || count(&mut client, "pointer") == 2);
+    // Copy mode entered by its keys takes the clicks, so the beam is back
+    // under the same mouse, and the hand once copy mode is left.
+    let beams = count(&mut client, "text");
+    client.send(b"\x1bb[");
+    wait_until("the beam in copy mode", || {
+        count(&mut client, "text") == beams + 1
+    });
+    client.send(b"q");
+    wait_until("the hand after copy mode", || {
+        count(&mut client, "pointer") == 3
+    });
+    let beams = count(&mut client, "text");
+    client.send(b"\x1bd");
+    wait_until("the pane back", || {
+        panes(&server)[0]["options"]["@in_place"].is_null()
+    });
+    wait_until("the beam over the shell again", || {
+        count(&mut client, "text") == beams + 1
+    });
+    assert!(panes(&server)[0]["options"]["@pointer"].is_null());
+}
+
 fn marked(screen: &[String], name: &str) -> bool {
     screen
         .iter()

@@ -397,6 +397,34 @@ impl Server {
             .filter(|s| *s != Spot::ViewActions || (from..to).contains(&(col as usize)))
     }
 
+    /// What a cell of the Notifications window's pane is for the pointer's
+    /// shape: from its rows as last drawn at the pane's size, else as
+    /// `notice_spot` works them out.
+    pub fn notice_spot_drawn(
+        &self,
+        session: &str,
+        pane: PaneId,
+        col: u16,
+        row: u16,
+    ) -> Option<Spot> {
+        let size = self.panes.get(&pane).map(|s| s.pane.size());
+        let drawn = self.sidebar.windows.drawn.borrow();
+        match drawn.get(session) {
+            Some((at, spots)) if Some(*at) == size => {
+                let (from, to) = notices::view_actions_at();
+                spots
+                    .get(row as usize)
+                    .copied()
+                    .flatten()
+                    .filter(|s| *s != Spot::ViewActions || (from..to).contains(&(col as usize)))
+            }
+            _ => {
+                drop(drawn);
+                self.notice_spot(session, pane, col, row)
+            }
+        }
+    }
+
     /// What a row of the Notifications window's pane is, where its lines
     /// were drawn.
     fn notice_row(&self, session: &str, pane: PaneId, row: u16) -> Option<Spot> {
@@ -507,8 +535,13 @@ impl Server {
             bars: crate::ui::kit::scroll_bars(),
         };
         let items = self.notice_items(&entries);
-        let (lines, _) =
+        let (lines, spots) =
             notices::list_lines(&items, &look, area.width as usize, area.height as usize);
         super::super::render::draw(buf, area, &lines);
+        self.sidebar
+            .windows
+            .drawn
+            .borrow_mut()
+            .insert(session.to_string(), ((area.width, area.height), spots));
     }
 }

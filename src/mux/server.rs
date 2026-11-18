@@ -434,6 +434,11 @@ pub struct Client {
     /// The mouse pointer's shape last sent to its terminal (crates/ui/src/pointer.rs),
     /// none until one is.
     pub pointer: Option<crate::ui::pointer::Pointer>,
+    /// The cell its mouse was last reported at, none until it is, so the
+    /// pointer follows what changes under a mouse that hasn't moved: each
+    /// frame drawn (`Server::draw`), and a pane's app naming another shape
+    /// (`Server::sync_pointers`).
+    pub mouse_at: Option<(u16, u16)>,
     /// Where the left click being handled was pressed, while it is handled
     /// alone, so a box it opens opens beside it (`Server::open`); never
     /// set while a key is handled.
@@ -2070,6 +2075,8 @@ impl Server {
     /// A session has no tabs left: its clients move to another session, or
     /// end; with no sessions left, the server ends too.
     fn session_ended(&mut self, name: &str) {
+        // Its Notifications window's rows as drawn go with it.
+        self.sidebar.windows.drawn.borrow_mut().remove(name);
         let other = self.sessions.first().map(|s| s.name.clone());
         for client in self.clients.values_mut().filter(|c| c.session == name) {
             match &other {
@@ -2435,6 +2442,7 @@ impl Server {
             header_keys: Default::default(),
             header_hover: None,
             pointer: None,
+            mouse_at: None,
             pressed_at: None,
             overlays: Default::default(),
             activity: Instant::now(),
@@ -2524,6 +2532,7 @@ impl Server {
             header_keys: Default::default(),
             header_hover: None,
             pointer: None,
+            mouse_at: None,
             pressed_at: None,
             overlays: Default::default(),
             activity: Instant::now()
@@ -2875,7 +2884,25 @@ impl Server {
             c.pressed_at = None;
         }
         if let Some(m) = mouse {
+            if let Some(c) = self.clients.get_mut(&id) {
+                c.mouse_at = Some((m.col, m.row));
+            }
             self.sync_pointer(id, m.col, m.row);
+        }
+    }
+
+    /// Sets every client's pointer again where its mouse last was: a
+    /// pane's app has named another shape for its pane (`@pointer`), which
+    /// it does once it has read the movement the server passed it, after
+    /// the server set the pointer for that movement.
+    pub(crate) fn sync_pointers(&mut self) {
+        let at: Vec<(ClientId, u16, u16)> = self
+            .clients
+            .values()
+            .filter_map(|c| c.mouse_at.map(|(col, row)| (c.id, col, row)))
+            .collect();
+        for (id, col, row) in at {
+            self.sync_pointer(id, col, row);
         }
     }
 
@@ -2903,8 +2930,9 @@ impl Server {
 
     /// The pointer's shape over a cell of a client's screen: the overlays'
     /// from the top down, then the sidebar's rows, the header's keys, the
-    /// status line's button and tabs, the beam over a pane and a resizing
-    /// arrow over a line between panes (or while one is dragged).
+    /// status line's button and tabs, over a pane the shape its app names
+    /// for it (`@pointer`, as the diff does) and else the beam, and a
+    /// resizing arrow over a line between panes (or while one is dragged).
     fn pointer_at(&self, id: ClientId, col: u16, row: u16) -> crate::ui::pointer::Pointer {
         use crate::ui::pointer::Pointer;
         let Some(c) = self.clients.get(&id) else {
@@ -2955,9 +2983,16 @@ impl Server {
                 return Pointer::Arrow;
             }
             if !self.is_notices_pane(pane) {
-                return Pointer::Text;
+                // In copy mode the clicks are the server's, selecting text.
+                let named = self
+                    .panes
+                    .get(&pane)
+                    .filter(|s| s.copy.is_none())
+                    .and_then(|s| s.opts.get(crate::ui::pointer::PANE_OPTION))
+                    .and_then(|name| Pointer::named(name));
+                return named.unwrap_or(Pointer::Text);
             }
-            return match self.notice_spot(&c.session, pane, col, row) {
+            return match self.notice_spot_drawn(&c.session, pane, col, row) {
                 Some(_) => Pointer::Hand,
                 None => Pointer::Arrow,
             };
@@ -4070,6 +4105,13 @@ impl Server {
     fn draw(&mut self, id: ClientId) {
         let truecolor = self.clients.get(&id).is_some_and(Client::truecolor);
         crate::status::theme::drawing_for(truecolor, || self.draw_now(id));
+        // The pointer follows what was just drawn under a mouse that stayed
+        // where it was: a key may have put another tab, a box or copy mode
+        // there, or closed the diff whose pane named a shape, and a box's
+        // rows are known only once it is drawn.
+        if let Some((col, row)) = self.clients.get(&id).and_then(|c| c.mouse_at) {
+            self.sync_pointer(id, col, row);
+        }
     }
 
     fn draw_now(&mut self, id: ClientId) {

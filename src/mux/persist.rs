@@ -751,7 +751,15 @@ impl Persist {
                             .cwd()
                             .and_then(|d| util::nearest_existing(&d))
                             .map(|d| d.to_string_lossy().into_owned()),
-                        opts: slot.opts.clone(),
+                        // The pointer's shape a pane's app named is of the
+                        // moment, never the layout's, so moving the mouse
+                        // never saves it.
+                        opts: slot
+                            .opts
+                            .iter()
+                            .filter(|(name, _)| *name != crate::ui::pointer::PANE_OPTION)
+                            .map(|(name, value)| (name.clone(), value.clone()))
+                            .collect(),
                         command,
                         claude,
                         text: None,

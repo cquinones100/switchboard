@@ -168,7 +168,8 @@ impl Host for Alone {
             | Action::PictureGone { .. }
             | Action::ItemClaim { .. }
             | Action::Queued
-            | Action::Item { .. } => Answer::None,
+            | Action::Item { .. }
+            | Action::Pointer { .. } => Answer::None,
         }
     }
 }

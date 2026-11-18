@@ -108,6 +108,34 @@ fn repository(tmp: &Tmp) -> PathBuf {
     repo
 }
 
+/// What sets a terminal's mouse pointer to a shape, by its CSS name.
+fn pointer(name: &str) -> String {
+    format!("\x1b]22;{name}\x1b\\")
+}
+
+#[test]
+fn alone_it_sets_the_pointer_in_a_terminal_that_takes_it_and_puts_the_beam_back() {
+    let tmp = Tmp::new("pointer");
+    let home = tmp.home();
+    let repo = repository(&tmp);
+    let mut diff = Running::start(&repo, &home, &[("TERM", "xterm-ghostty".into())]);
+    diff.wait_drawn("listed the branch's files", &["alpha.txt", "beta.txt"]);
+    // The mouse down the list's rows: a hand over a file's.
+    for row in 1..=12 {
+        diff.send(format!("\x1b[<35;4;{row}M").as_bytes());
+    }
+    diff.wait_drawn(
+        "made the pointer a hand over a file's row",
+        &[&pointer("pointer")],
+    );
+    let drawn = diff.quit_reading();
+    let (beam, hand) = (
+        drawn.rfind(&pointer("text")),
+        drawn.rfind(&pointer("pointer")),
+    );
+    assert!(beam > hand, "the beam is put back as it quits: {drawn:?}");
+}
+
 #[test]
 fn it_shows_a_branch_s_changes_in_a_terminal_with_no_server() {
     let tmp = Tmp::new("alone");
@@ -122,61 +150,17 @@ fn it_shows_a_branch_s_changes_in_a_terminal_with_no_server() {
         std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    let pty = native_pty_system()
-        .openpty(PtySize {
-            rows: 40,
-            cols: 140,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .expect("a PTY");
-    let mut command = CommandBuilder::new(BINARY);
-    command.arg(&repo);
-    command.cwd(&repo);
-    command.env_clear();
-    for (key, value) in env(&home) {
-        command.env(key, value);
-    }
-    let mut child = pty.slave.spawn_command(command).expect("it starts");
-    drop(pty.slave);
-    let mut reader = pty.master.try_clone_reader().unwrap();
-    let mut writer = pty.master.take_writer().unwrap();
-    let (tx, rx) = mpsc::channel::<Vec<u8>>();
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 8192];
-        while let Ok(n) = reader.read(&mut buf) {
-            if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
-                break;
-            }
-        }
-    });
-
     // Both files of the branch's change are listed, drawn by the diff itself.
-    let mut drawn = String::new();
-    let deadline = Instant::now() + PATIENCE;
-    while !(drawn.contains("alpha.txt") && drawn.contains("beta.txt")) {
-        let left = deadline.saturating_duration_since(Instant::now());
-        match rx.recv_timeout(left.max(Duration::from_millis(1))) {
-            Ok(bytes) => drawn.push_str(&String::from_utf8_lossy(&bytes)),
-            Err(_) => panic!("the diff never listed the branch's files; it drew: {drawn:?}"),
-        }
+    let mut diff = Running::start(&repo, &home, &[]);
+    diff.wait_drawn("listed the branch's files", &["alpha.txt", "beta.txt"]);
+    // A terminal that doesn't say it takes the pointer's shapes is sent none.
+    for row in 1..=12 {
+        diff.send(format!("\x1b[<35;4;{row}M").as_bytes());
     }
 
     // q ends it, the terminal given back.
-    writer.write_all(b"q").unwrap();
-    writer.flush().unwrap();
-    let deadline = Instant::now() + PATIENCE;
-    let status = loop {
-        match child.try_wait().unwrap() {
-            Some(status) => break status,
-            None if Instant::now() >= deadline => {
-                let _ = child.kill();
-                panic!("q didn't end the diff");
-            }
-            None => std::thread::sleep(Duration::from_millis(20)),
-        }
-    };
-    assert!(status.success(), "{status:?}");
+    let drawn = diff.quit_reading();
+    assert!(!drawn.contains("\x1b]22;"), "{drawn:?}");
 
     // Its files are its own, and nothing of a workspace was made: no
     // server was started, asked or needed.
@@ -314,6 +298,39 @@ impl Running {
     fn send(&mut self, keys: &[u8]) {
         self.writer.write_all(keys).unwrap();
         self.writer.flush().unwrap();
+    }
+
+    /// Waits until what it has written holds each of `words`, keeping it.
+    fn wait_drawn(&mut self, what: &str, words: &[&str]) {
+        let deadline = Instant::now() + PATIENCE;
+        while !words.iter().all(|w| self.drawn.contains(w)) {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match self.rx.recv_timeout(left.max(Duration::from_millis(1))) {
+                Ok(bytes) => self.drawn.push_str(&String::from_utf8_lossy(&bytes)),
+                Err(_) => panic!("the diff never {what}; it drew: {:?}", self.drawn),
+            }
+        }
+    }
+
+    /// q, the program ended, and everything it wrote, read until the
+    /// terminal's reader ends with it.
+    fn quit_reading(mut self) -> String {
+        self.send(b"q");
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match self.rx.recv_timeout(left.max(Duration::from_millis(1))) {
+                Ok(bytes) => self.drawn.push_str(&String::from_utf8_lossy(&bytes)),
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    let _ = self.child.kill();
+                    panic!("q didn't end the diff");
+                }
+            }
+        }
+        let status = self.child.wait().unwrap();
+        assert!(status.success(), "{status:?}");
+        std::mem::take(&mut self.drawn)
     }
 
     /// q, and the program ended.

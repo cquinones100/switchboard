@@ -1049,6 +1049,11 @@ impl Server {
                     slot.opts.insert(name.clone(), value);
                 }
                 let tab = slot.tab;
+                // The shape its app names over the pane shows at once.
+                if name == crate::ui::pointer::PANE_OPTION {
+                    self.sync_pointers();
+                    return Ok(Reply::ok(""));
+                }
                 self.dirty_tab(tab);
             }
             Target::Tab(t) => {

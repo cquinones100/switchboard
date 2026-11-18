@@ -318,6 +318,13 @@ pub enum Action {
     /// note's `text`. `Answer::Done`, or `Answer::Text`, why not, to say
     /// after "that line ".
     Item { text: String, line: usize },
+    /// The mouse pointer's shape over the plugin's pane, by its CSS cursor
+    /// name (`pointer` the hand, `default` the arrow, `text` the beam,
+    /// `ew-resize`, `ns-resize`), which the workspace shows there in the
+    /// beam's place while the mouse is over the pane; `None` gives the pane
+    /// its beam back. `Answer::Done`, or `Answer::None` with no workspace
+    /// to show it, when the plugin sets its terminal's pointer itself.
+    Pointer { shape: Option<String> },
 }
 
 /// Where a plugin keeps what it writes.
@@ -501,6 +508,13 @@ pub trait Host: Send + Sync {
             Answer::Values { values } if values.len() == keys.len() => values,
             _ => keys.iter().map(|key| self.setting(key)).collect(),
         }
+    }
+
+    /// Names the pointer's shape over the plugin's pane (none: the beam
+    /// again); whether a workspace took it.
+    fn pointer(&self, shape: Option<&str>) -> bool {
+        let shape = shape.map(str::to_string);
+        self.ask(Action::Pointer { shape }) == Answer::Done
     }
 
     fn paste(&self) -> Option<String> {

@@ -327,8 +327,7 @@ pub fn truecolor(term: &str) -> bool {
 /// ST`, crates/ui/src/pointer.rs): Ghostty and kitty do; any other is never sent
 /// one, its pointer left as it is.
 pub fn pointer_shapes(term: &str) -> bool {
-    let term = term.to_lowercase();
-    term.contains("ghostty") || term.contains("kitty")
+    crate::ui::pointer::takes_shapes(term)
 }
 
 /// How the rounded ends of kit's objects (crates/ui/src/kit.rs: a chip, a keycap,

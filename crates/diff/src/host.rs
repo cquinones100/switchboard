@@ -252,6 +252,8 @@ impl Host for Alone {
             | Action::ItemClaim { .. }
             | Action::Queued
             | Action::Item { .. } => Answer::None,
+            // The terminal's pointer is the diff's own to set (`App::point`).
+            Action::Pointer { .. } => Answer::None,
         }
     }
 }

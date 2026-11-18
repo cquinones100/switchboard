@@ -167,6 +167,39 @@ impl Host for Core {
                     String::new()
                 },
             },
+            // Kept as the pane's option, which the server shows over the
+            // pane (`Server::pointer_at`); only a shape it knows. The pane
+            // is named, so a diff whose pane has just gone (it is told to
+            // end, and gives the beam back as it does) changes no other's.
+            Action::Pointer { shape } => {
+                use crate::ui::pointer::{PANE_OPTION, Pointer};
+                // A pane's id (`%<n>`), never a tab's.
+                let Some(pane) = std::env::var("SWITCHBOARD_PANE")
+                    .ok()
+                    .filter(|p| p.starts_with('%'))
+                else {
+                    return Answer::None;
+                };
+                let set = |rest: &[&str]| {
+                    let args = ["set", "-t", &pane]
+                        .iter()
+                        .chain(rest)
+                        .map(|a| a.to_string())
+                        .collect();
+                    // Never waited on for long: the diff asks this as it
+                    // quits too, before it gives the terminal back.
+                    socket::ask_quiet(args, Some(pane.clone()), None)
+                };
+                let asked = match shape.as_deref().map(Pointer::named) {
+                    Some(Some(shape)) => set(&[PANE_OPTION, shape.name()]),
+                    Some(None) => return Answer::None,
+                    None => set(&["-u", PANE_OPTION]),
+                };
+                match asked {
+                    Some((0, ..)) => Answer::Done,
+                    _ => Answer::None,
+                }
+            }
             // What Notes alone asks is answered where it is loaded
             // (src/notes/host.rs), which hands the rest on to here.
             Action::Settings { .. }
