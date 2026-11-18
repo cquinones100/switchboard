@@ -2763,3 +2763,80 @@ fn m_w_on_a_sidebar_row_asks_to_close_that_tab() {
     client.type_text("\r");
     wait_list(&server, "the second tab closed", |l| tabs(l).len() == 1);
 }
+
+// M-O goes to the notifications: the Notifications window in front, from a
+// tab and from mission control.
+#[test]
+fn m_o_goes_to_the_notifications() {
+    let notes = common::TempDir::new("sbmo");
+    std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
+    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
+    settings(&server, json!({}));
+    std::fs::create_dir_all(&server.state).unwrap();
+    std::fs::write(
+        server.state.join("new-notes.json"),
+        json!([{ "path": "Plan.md", "title": "Plan", "source": "Fathom", "at": 1 }]).to_string(),
+    )
+    .unwrap();
+    let mut client = server.attach(140, 36);
+    client.wait_text("● New note: Plan");
+
+    client.type_text(&format!("{ALT}O"));
+    wait_list(&server, "the Notifications window in front", |l| {
+        notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == true)
+    });
+    client.wait_text("NOTIFICATIONS 1");
+
+    // Again, it stays there, as M-p's command does.
+    client.type_text(&format!("{ALT}O"));
+    let list = server.list();
+    assert!(
+        notices_tab(&list).is_some_and(|i| tabs(&list)[i]["current"] == true),
+        "still in front: {list}"
+    );
+
+    // k in the sidebar: back up to the tab.
+    client.type_text("k");
+    wait_list(&server, "the tab in front", |l| {
+        tabs(l)[0]["current"] == true
+    });
+
+    // From mission control, M-O closes it and goes to the notifications.
+    client.type_text(&format!("{ALT} "));
+    client.wait_text("MISSION CONTROL");
+    client.type_text(&format!("{ALT}O"));
+    wait_list(&server, "the window in front from mission control", |l| {
+        notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == true)
+    });
+    client.wait_for("mission control closed", |s| {
+        !s.iter().any(|l| l.contains("MISSION CONTROL"))
+    });
+}
+
+// With the Notifications window off, M-O puts the sidebar's cursor on the
+// first notification.
+#[test]
+fn without_the_window_m_o_moves_the_sidebar_cursor_onto_the_first_notification() {
+    let notes = common::TempDir::new("sbmn");
+    std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
+    let server = TestServer::start_with_env_and_settings(
+        &[("NOTES_DIR", notes.path().to_str().unwrap())],
+        &json!({ "notifications": false, "tips": false, "notice_list": false }).to_string(),
+    );
+    std::fs::create_dir_all(&server.state).unwrap();
+    std::fs::write(
+        server.state.join("new-notes.json"),
+        json!([{ "path": "Plan.md", "title": "Plan", "source": "Fathom", "at": 1 }]).to_string(),
+    )
+    .unwrap();
+    let mut client = server.attach(140, 36);
+    client.wait_text("● New note: Plan");
+
+    client.type_text(&format!("{ALT}O"));
+    let list = wait_list(&server, "the sidebar focused", focused);
+    assert_eq!(notices_tab(&list), None, "no window opened");
+    client.wait_for("the cursor on the notification", |s| {
+        s.iter()
+            .any(|l| l.contains("▌") && l.contains("New note: Plan"))
+    });
+}

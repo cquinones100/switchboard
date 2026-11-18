@@ -2545,6 +2545,25 @@ impl Server {
                 }));
                 return;
             }
+            // Its key for the notifications closes it and goes there, once
+            // its state is put back, so a view the notifications open isn't
+            // written over.
+            // An Alt key alone, so a plain key bound to it in keys.json
+            // stays mission control's.
+            Some(crate::mux::keys::Action::Extra(crate::extras::Command::Notifications))
+                if k.mods.alt =>
+            {
+                self.count_key(&key.notation());
+                self.mission_close_from(client, m);
+                self.mission.after_key = Some(Box::new(move |server: &mut Server| {
+                    let action =
+                        crate::mux::keys::Action::Extra(crate::extras::Command::Notifications);
+                    if !server.sidebar_before_action(client, &action).0 {
+                        server.go_to_notifications(client);
+                    }
+                }));
+                return;
+            }
             Some(crate::mux::keys::Action::Palette) => {
                 // A view's name or a filter being typed ends, the filter's
                 // words kept, so the keys after a pick act on what it shows.

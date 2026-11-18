@@ -425,7 +425,7 @@ impl Server {
     /// "Go to the notifications", as `sidebar.sh notices` did: the
     /// sidebar's cursor onto the first of them, which brings the
     /// Notifications window to the front with notice_list on.
-    fn go_to_notifications(&mut self, client: ClientId) {
+    pub(crate) fn go_to_notifications(&mut self, client: ClientId) {
         self.sidebar_to_notices(client);
     }
 

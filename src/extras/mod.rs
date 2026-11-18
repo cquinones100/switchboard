@@ -302,6 +302,7 @@ impl Command {
             Command::PaneNav => Some("C-w"),
             Command::Keys => Some("M-/"),
             Command::SidebarRepo => Some("M-R"),
+            Command::Notifications => Some("M-O"),
             _ => None,
         }
     }
@@ -470,7 +471,7 @@ mod tests {
             "the Merge queues view's old name opens the Landing view"
         );
         let keyed: Vec<_> = Command::all().iter().filter_map(|c| c.key()).collect();
-        assert_eq!(keyed, ["M-0", "C-w", "M-/", "M-R"]);
+        assert_eq!(keyed, ["M-0", "C-w", "M-O", "M-/", "M-R"]);
         assert!(!Command::PaneNav.in_palette());
     }
 

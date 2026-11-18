@@ -182,6 +182,7 @@ Each notification Claude Code sends (it waits on your permission or an answer, o
 | `M-Space` | Open or close mission control |
 | `M-s` | Into the sidebar, or back out of it |
 | `M-R` | Filter the sidebar to a repository, or back to every repository |
+| `M-O` | Go to the notifications |
 | `M-v` | The branch's PR description in a pane to the right, or close it |
 | `M-i` | The branch's Linear ticket, with its comments, in a pane to the right, or close it |
 | `M-d` | The branch's diff against its PR's base in place of the pane, or close it |
@@ -267,7 +268,7 @@ The actions, by the names the file uses:
 - The diff: `diff`, `diff-working-tree`, `lazygit`, `tool-beside`, `tool-alone`, `copy-diff-story`, `ask-about-diff`, `clear-diff-cache`.
 - Notes: `notes`, `notes-beside`, `note-tab`, `choose-tab-note`, `attach-note`.
 
-These have no key by default and are in `M-p` alone: `work-on-pr`, `work-on-note`, `work-note-continuously`, `continue-shaping`, `shape-note`, `shape-new-ticket`, `pr-image`, `ticket-image`, `clear-image-cache`, `lazygit`, `diff-working-tree`, `settings`, `remind-tab`, `toggle-sidebar`, `toggle-theme`, `reset-tips`, `stop-slack-relay`, `open-repo`, `read-link`, `open-link`, `copy-link`, `go-to-mentioned-tab`, `copy-mentioned-tab`, `open-media`, `open-link-being-read`, `tool-beside`, `tool-alone`, `copy-diff-story`, `ask-about-diff`, `clear-diff-cache`, `note-tab`, `choose-tab-note`, `attach-note`, `update-switchboard`, `run-setup`, `sync-your-files`, `upgrade`, `keep-awake`, and those of [More in the palette](#more-in-the-palette): `rename-tab`, the `mission-<view>` commands, `notifications`, `habits-report`, `send-reply`, `update-main`, `update-target`, `check-setup`, `setup-part`, `open-pr-number`, `open-ticket-id` and `aws-login`. Give any of them a key in `keys.json` to have it on one, `open-merge-queue`, `open-linear-project`, `copy-ticket-id`, `copy-ticket-url`, `copy-pr-number`, `copy-pr-url`.
+These have no key by default and are in `M-p` alone: `work-on-pr`, `work-on-note`, `work-note-continuously`, `continue-shaping`, `shape-note`, `shape-new-ticket`, `pr-image`, `ticket-image`, `clear-image-cache`, `lazygit`, `diff-working-tree`, `settings`, `remind-tab`, `toggle-sidebar`, `toggle-theme`, `reset-tips`, `stop-slack-relay`, `open-repo`, `read-link`, `open-link`, `copy-link`, `go-to-mentioned-tab`, `copy-mentioned-tab`, `open-media`, `open-link-being-read`, `tool-beside`, `tool-alone`, `copy-diff-story`, `ask-about-diff`, `clear-diff-cache`, `note-tab`, `choose-tab-note`, `attach-note`, `update-switchboard`, `run-setup`, `sync-your-files`, `upgrade`, `keep-awake`, and those of [More in the palette](#more-in-the-palette): `rename-tab`, the `mission-<view>` commands, `habits-report`, `send-reply`, `update-main`, `update-target`, `check-setup`, `setup-part`, `open-pr-number`, `open-ticket-id` and `aws-login`. Give any of them a key in `keys.json` to have it on one, `open-merge-queue`, `open-linear-project`, `copy-ticket-id`, `copy-ticket-url`, `copy-pr-number`, `copy-pr-url`.
 
 ## Tabs and the status line
 
@@ -366,12 +367,12 @@ While GitHub or Linear is off in Settings, the commands tagged `#github` or `#li
 
 ### More in the palette
 
-These are in `M-p` alone, with no key unless you give them one in `keys.json`:
+These are in `M-p`, with no key but the one named, unless you give them one in `keys.json`:
 
 - **Rename the tab**: a name typed in a box, starting from the one it has; empty gives the tab its own name back, as "Rename it" in mission control's menu does.
 - **Mission control: \<view\>**, one for every view mission control shows with your settings as they are (Notifications, Calendar, Reminders, Slack, Reopen, PRs, CI, Landing, Autopilot, Routines, Tickets, Inbox, Resources, Usage, Keys, Settings, and each sidebar plugin's view by its title): mission control opened on that view, or switched to it when it is open. A view turned off in Settings isn't listed, and one needing GitHub or Linear goes while that service is off. Keys opens as `M-/` does, Settings as M-p's "Settings" does.
 - **New routine**: the box a [routine](#routines) is made in, in the directory of the pane you are in.
-- **Go to the notifications**: the Notifications window, every notification with its whole message and Enter opening its actions; with Settings' "Notifications window" (`notice_list`) off, the sidebar's cursor on the first notification instead, as `M-a` reaches them, or, in a window with no sidebar, mission control on the first one's view (its Slack, Inbox or Calendar view, Settings for a suggestion), else a box saying why there is nowhere to show them.
+- **Go to the notifications** (`M-O`): the Notifications window, every notification with its whole message and Enter opening its actions; with Settings' "Notifications window" (`notice_list`) off, the sidebar's cursor on the first notification instead, as `M-a` reaches them, or, in a window with no sidebar, mission control on the first one's view (its Slack, Inbox or Calendar view, Settings for a suggestion), else a box saying why there is nowhere to show them.
 - **How you use Switchboard**: what [Suggestions from how you work](#suggestions-from-how-you-work) has counted, in a box: the keys you press most this week and month, the commands you pick in `M-p`, the views you open, and the suggestions now. `j` and `k` scroll it, and any other key closes it.
 - **Send Claude's last reply to another tab**: the last thing this tab's Claude said in its last turn, from its transcript, pasted into the Claude of a tab you pick (its active pane when it runs none) without Enter, and that tab brought to the front, so you can add to it before sending. A Claude behind the diff, lazygit or a view in its pane's place comes back beside it first. Its line breaks stay in the text.
 - **Update local main to origin's, without switching branches**: `switchboard update-main` (below) for the pane's repository, what it did in a box.
