@@ -631,8 +631,8 @@ fn review_loop_notes_carry_fixed_disputed_and_known_gap_lines() {
     for said in [
         "`review-notes-<branch>.md`",
         "so no two branches share one",
-        "take out any that no longer holds",
-        "a `Fixed` line whose fix is no longer in the code",
+        "keep only its `Fixed` lines",
+        "take out every `Disputed` and `Known gap` line",
         "three kinds of entries",
         "`- Fixed: <title> (<file>:<line>): <what was changed, in a sentence>, in <short hash>`",
         "`- Disputed: <title> (<file>:<line>): <why the finding is wrong>`",
