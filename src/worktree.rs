@@ -493,16 +493,44 @@ pub fn count_fetch(root: &Path, remote: &str, source: &str) {
 /// remote-tracking ref is always written whatever the remote's configured
 /// refspec is. Whether the remote has the branch.
 pub fn fetch_branch(root: &Path, remote: &str, branch: &str, source: &str) -> bool {
+    fetch_branch_answer(root, remote, branch, source) == Fetched::Yes
+}
+
+/// What a fetch of one branch found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fetched {
+    Yes,
+    /// The remote answered that it has no such branch.
+    NoSuchBranch,
+    /// The request failed: the network, the remote's host, its sign-in.
+    Failed,
+}
+
+/// `fetch_branch`, telling a branch the remote answered it lacks from a
+/// request that failed, by git's own words for the first ("couldn't find
+/// remote ref"), read in the C locale so a translation can't hide them.
+pub fn fetch_branch_answer(root: &Path, remote: &str, branch: &str, source: &str) -> Fetched {
     count_fetch(root, remote, source);
-    git_loud(
-        root,
-        &[
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args([
             "fetch",
             remote,
             &format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}"),
-        ],
-        false,
-    )
+        ])
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .stdout(std::io::stderr())
+        .stderr(Stdio::piped())
+        .output();
+    match out {
+        Ok(o) if o.status.success() => Fetched::Yes,
+        Ok(o) if String::from_utf8_lossy(&o.stderr).contains("couldn't find remote ref") => {
+            Fetched::NoSuchBranch
+        }
+        _ => Fetched::Failed,
+    }
 }
 
 /// The commit a new branch starts from: origin's default branch (from

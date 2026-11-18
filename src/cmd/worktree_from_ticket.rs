@@ -35,7 +35,7 @@ use serde_json::{Value, json};
 
 use crate::integrations::linear;
 use crate::util;
-use crate::worktree::{self, Given, Purpose};
+use crate::worktree::{self, Fetched, Given, Purpose};
 
 fn usage() -> ExitCode {
     eprintln!(
@@ -213,49 +213,47 @@ struct Start {
 /// (`worktree::FETCH_RETRIES_S`), then the branch starts from origin's
 /// default branch as last fetched, since a failed fetch is most often a
 /// moment's network, or from the ticket's branch on origin as last fetched
-/// when the clone has it, so an outage never hides work already started;
+/// when the clone has it and its own fetch failed rather than found none
+/// (`worktree::Fetched`), so an outage never hides work already started;
 /// with neither fetched before, it stops.
 fn ticket_start(root: &Path, branch: &str) -> Result<Start, String> {
     const SOURCE: &str = "wt: fetch the base";
     let has_origin = worktree::remotes(root).iter().any(|r| r == "origin");
-    if has_origin && worktree::fetch_branch(root, "origin", branch, SOURCE) {
-        return Ok(Start {
-            commit: format!("refs/remotes/origin/{branch}"),
-            tracks: true,
-            offline: None,
-        });
+    let tracking = |offline| Start {
+        commit: format!("refs/remotes/origin/{branch}"),
+        tracks: true,
+        offline,
+    };
+    let mut ticket = if has_origin {
+        worktree::fetch_branch_answer(root, "origin", branch, SOURCE)
+    } else {
+        Fetched::NoSuchBranch
+    };
+    if ticket == Fetched::Yes {
+        return Ok(tracking(None));
     }
     let name = worktree::origin_head(root).unwrap_or_else(|| "main".into());
-    let retried = std::cell::Cell::new(false);
     let fetched = worktree::with_retries(
         &worktree::fetch_waits(),
-        || {
-            retried.set(true);
-            eprintln!("Fetching origin's {name} again");
-        },
+        || eprintln!("Fetching origin's {name} again"),
         || worktree::default_start(root, SOURCE),
     );
-    // A fetch failed along the way, so the ticket's own may have failed
-    // with it rather than found no branch: ask again once origin answers, and
-    // else start from its copy here, so an outage never hides work started.
+    // The ticket's fetch failed rather than finding no branch: ask again
+    // once origin answers, and else start from its copy here, so an outage
+    // never hides work already started.
+    if ticket == Fetched::Failed && fetched.is_ok() {
+        ticket = worktree::fetch_branch_answer(root, "origin", branch, SOURCE);
+        if ticket == Fetched::Yes {
+            return Ok(tracking(None));
+        }
+    }
     let cached = format!("refs/remotes/origin/{branch}");
-    if fetched.is_err() || retried.get() {
-        if fetched.is_ok() && worktree::fetch_branch(root, "origin", branch, SOURCE) {
-            return Ok(Start {
-                commit: cached,
-                tracks: true,
-                offline: None,
-            });
-        }
-        if worktree::git_ok(root, &["show-ref", "--verify", "--quiet", &cached]) {
-            let words = format!("origin/{branch} as last fetched");
-            eprintln!("Starting from {words}: couldn't reach origin");
-            return Ok(Start {
-                commit: cached,
-                tracks: true,
-                offline: Some(words),
-            });
-        }
+    if ticket == Fetched::Failed
+        && worktree::git_ok(root, &["show-ref", "--verify", "--quiet", &cached])
+    {
+        let words = format!("origin/{branch} as last fetched");
+        eprintln!("Starting from {words}: couldn't reach origin");
+        return Ok(tracking(Some(words)));
     }
     let (commit, offline) = match fetched {
         Ok(commit) => (commit, None),
