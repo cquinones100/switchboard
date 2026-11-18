@@ -116,7 +116,7 @@ fn a_fixed_line_in_the_notes_reaches_the_prompt_with_its_rule() {
         "{out}"
     );
     assert!(
-        out.contains("A finding that restates a fixed or disputed one, the same failure in other words or at a nearby line, is not a finding; a different failure at a nearby line is."),
+        out.contains("A finding that restates a fixed or disputed one whose fix still stands and whose reason still holds, the same failure in other words or at a nearby line, is not a finding; a different failure at a nearby line is."),
         "{out}"
     );
 }
