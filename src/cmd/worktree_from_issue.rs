@@ -89,7 +89,7 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
     // Started by autopilot, only while it still takes issues: turned off
     // while GitHub was being asked, nothing starts.
     let by_autopilot = in_autopilot_tab();
-    if by_autopilot && !(mode.sources.issues() && mode.issues_on()) {
+    if by_autopilot && !(mode.on && mode.sources.issues() && mode.issues_on()) {
         return Err("autopilot no longer takes GitHub issues".into());
     }
     if let Some(i) = &found {

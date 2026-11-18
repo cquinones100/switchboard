@@ -96,6 +96,8 @@ pub const ISSUE: &str = "@autopilot_issue";
 /// How what it says while GitHub issues can't be read starts
 /// (`pilot::unread_said`), a good read taking it back.
 const ISSUES_UNREAD: &str = "Can't read GitHub issues";
+/// What a failed write on an issue starts with, kept until dismissed.
+const WRITE_FAILED: &str = "Couldn't write on ";
 /// What a duplicate's reason starts with, kept in what it says until
 /// dismissed as a refusal's is.
 const DUPLICATE_SAID: &str = ": Duplicate of ";
@@ -2585,9 +2587,7 @@ impl Server {
                     },
                 )
                 .await;
-                let said = done
-                    .err()
-                    .map(|e| format!("Couldn't write on {issue}: {e}"));
+                let said = done.err().map(|e| format!("{WRITE_FAILED}{issue}: {e}"));
                 let _ = tokio::task::spawn_blocking(move || {
                     let state = paths::state_dir();
                     super::issues::forget(&state);
@@ -2605,7 +2605,9 @@ impl Server {
                 .await;
             });
         };
-        if without_asking {
+        // Stopped, it writes nothing unasked: the tabs still working finish,
+        // and what they land is asked about.
+        if without_asking && Mode::read(&paths::state_dir()).on {
             write(self);
             return;
         }
@@ -3095,7 +3097,8 @@ impl Server {
             let was = &without_empty(was);
             let kept = was.contains(REFUSED_SAID)
                 || was.contains(FAILED_SAID)
-                || was.contains(DUPLICATE_SAID);
+                || was.contains(DUPLICATE_SAID)
+                || was.contains(WRITE_FAILED);
             if said.is_empty() || !kept {
                 said.to_string()
             } else if was.contains(said) {
