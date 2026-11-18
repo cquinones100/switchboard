@@ -1523,15 +1523,16 @@ fn program_line(args: &[String], own_exe: &str) -> String {
     // A local path: an argument of its own, or an option's value after `=`
     // (`--dir=/…`). Nothing after a `:`, which may name a path on another
     // host (`scp host:/…`).
-    // From `~`, keeping a trailing slash, which says `rsync` copies a
-    // folder's contents rather than the folder.
-    let from_home = |path: &str| {
-        let short = crate::paths::tilde(path);
-        if path.ends_with('/') && !short.ends_with('/') {
-            format!("{short}/")
-        } else {
-            short
+    // From `~`, the rest kept exactly as written (a trailing slash, or
+    // rsync's `/./`, says what is copied).
+    let home = crate::paths::home().display().to_string();
+    let from_home = |path: &str| match path.strip_prefix(home.as_str()) {
+        Some(rest)
+            if !home.is_empty() && home != "/" && (rest.is_empty() || rest.starts_with('/')) =>
+        {
+            format!("~{rest}")
         }
+        _ => path.to_string(),
     };
     // A link's word first, so no path rule shows what follows its host.
     let short = |arg: &String| {
@@ -1575,7 +1576,9 @@ fn app_of(args: &[String], own_exe: &str, short: bool) -> Option<String> {
     words.extend(rest.iter().map(String::as_str));
     let (long, brief) = match words.as_slice() {
         ["notes", "away", ..] => ("the place Notes left in its tab", "Notes' place"),
-        ["notes", ..] => ("Notes", "Notes"),
+        // The app itself, which takes no words; `open`, `shown` and the
+        // rest only ask it something.
+        ["notes"] => ("Notes", "Notes"),
         // Not the story told in the background (`--ahead`, `--plan`),
         // which draws nothing.
         ["diff", rest @ ..] if rest.iter().any(|a| *a == "--ahead" || *a == "--plan") => {
@@ -1711,6 +1714,10 @@ mod tests {
             line(&["rsync", &format!("{home}/p/"), "b:d"]),
             "rsync ~/p/ b:d"
         );
+        assert_eq!(
+            line(&["rsync", "-R", &format!("{home}/./d/"), "b/"]),
+            "rsync -R ~/./d/ b/"
+        );
         // A word holding a link shows it up to its host, nothing of its
         // user, password, path or query.
         let link = |args: &[&str], shown: &str| assert_eq!(line(args), shown);
@@ -1777,7 +1784,8 @@ mod tests {
             "npm exec @angular/cli serve"
         );
         let bin = "/usr/local/bin/switchboard".to_string();
-        assert_eq!(line(&[&bin, "notes", "--tab"]), "Notes");
+        assert_eq!(line(&[&bin, "notes"]), "Notes");
+        assert_eq!(line(&[&bin, "notes", "shown"]), "switchboard notes shown");
         assert_eq!(
             line(&[&bin, "notes", "away"]),
             "the place Notes left in its tab"
