@@ -2469,7 +2469,9 @@ impl Server {
             .map(|t| t.opts.clone())
             .unwrap_or_default();
         let set = |k: &str| opts.get(k).map(|v| v.trim()).filter(|v| !v.is_empty());
-        let without_asking = set(AUTOLAND).is_some();
+        // Landed without asking only as the tab was marked to (`@autopilot_land`,
+        // which nothing in a pane can set), not by its own say alone.
+        let without_asking = set(AUTOLAND).is_some() && set(LAND) == Some("1");
         let hash: Option<String> = set(AUTOLAND)
             .or(set(PUSHED))
             .map(|h| h.chars().take(7).collect());
@@ -2480,6 +2482,18 @@ impl Server {
                 return;
             }
             fresh = true;
+            // A landed issue stays out of the queue whatever becomes of its
+            // comment and closing (declined, failed, nobody there to ask),
+            // kept among the skipped items, which can take it back.
+            if opts.contains_key(ISSUE) {
+                let done = mode::Skipped {
+                    note: landed.note.clone(),
+                    text: landed.item.clone(),
+                };
+                if !mode.skipped.contains(&done) {
+                    mode.skipped.push(done);
+                }
+            }
             // An item put next is next no more once it lands.
             mode.next
                 .retain(|x| x.note != landed.note || x.text != landed.item);
