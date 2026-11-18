@@ -1549,7 +1549,8 @@ fn app_of(args: &[String], own_exe: &str, short: bool) -> Option<String> {
 }
 
 /// A link (`http://`, `https://`, alone or an option's value after `=`)
-/// without its query or fragment, where a signed link keeps its token;
+/// without its password, query or fragment, where a signed link keeps its
+/// token;
 /// any other word as it is, a pattern that only starts like a link
 /// (`https://[^/]+/v?`), which doesn't parse as one, among them.
 fn without_query(word: &str) -> String {
@@ -1564,18 +1565,17 @@ fn without_query(word: &str) -> String {
         .ok()
         .filter(|_| !link.contains('\\'))
         .filter(|u| matches!(u.scheme(), "http" | "https") && u.host().is_some());
-    let Some(parsed) = parsed else {
+    let Some(mut parsed) = parsed else {
         return word.to_string();
     };
-    let mut shown = match link.find(['?', '#']) {
-        Some(at) => format!("{}…", &link[..at]),
-        None => link.to_string(),
-    };
-    // Its password too, `user:…@host`.
-    if let Some(password) = parsed.password() {
-        shown = shown.replacen(&format!(":{password}@"), ":…@", 1);
-    }
-    format!("{}{shown}", &word[..start])
+    // Written from the parsed link with its password, query and fragment
+    // taken out, an `…` where either of the last two was.
+    let cut = parsed.query().is_some() || parsed.fragment().is_some();
+    let _ = parsed.set_password(None);
+    parsed.set_query(None);
+    parsed.set_fragment(None);
+    let more = if cut { "…" } else { "" };
+    format!("{}{parsed}{more}", &word[..start])
 }
 
 /// A title a program wrote over its arguments (npm on Linux: `npm exec
@@ -1639,7 +1639,7 @@ mod tests {
         assert_eq!(line(&["rg", "https://a\\.dev/v?"]), "rg https://a\\.dev/v?");
         assert_eq!(
             line(&["curl", "https://me:secret@a.dev/f"]),
-            "curl https://me:…@a.dev/f"
+            "curl https://me@a.dev/f"
         );
         assert_eq!(
             line(&["curl", "https://build+ci@a.dev/f?token=secret"]),
@@ -1647,7 +1647,7 @@ mod tests {
         );
         assert_eq!(
             line(&["curl", "--url=HTTPS://a.dev/f?token=secret"]),
-            "curl --url=HTTPS://a.dev/f…"
+            "curl --url=https://a.dev/f…"
         );
         assert_eq!(line(&["./Build Tools/bin/worker", "-v"]), "worker -v");
         assert_eq!(
