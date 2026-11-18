@@ -1412,6 +1412,7 @@ impl Server {
             .filter(|a| !a.trim().is_empty())
             .or_else(|| slot.pane.foreground_command())?;
         Some(match title_of(&first) {
+            Some((exe, _)) if has_link(exe) => scheme_only(exe),
             Some((exe, _)) => program_name(exe),
             None if has_link(&first) => scheme_only(&first),
             None => program_name(&first),
@@ -1497,6 +1498,8 @@ fn program_line(args: &[String], own_exe: &str) -> String {
         return draw::cut(&app, 60);
     }
     let name = match title_of(first) {
+        // A title that starts with a link, by its scheme alone.
+        Some((exe, _)) if has_link(exe) => scheme_only(exe),
         Some((exe, title)) => {
             // Up to the first word holding a link, which may run on past a
             // space the title lost its boundary at, so nothing after it.
@@ -1694,6 +1697,7 @@ mod tests {
         link(&["worker https://a.dev/f?token=secret"], "worker https://…");
         link(&["/usr/bin/worker https://a.dev"], "worker https://…");
         link(&["https://a.dev/f?token=secret"], "https://…");
+        link(&["https://a.dev/f?sig=x https://b.dev/"], "https://…");
         link(
             &["worker https://a.dev/?q=two words&token=secret"],
             "worker https://…",
