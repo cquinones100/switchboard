@@ -831,7 +831,13 @@ impl Server {
         }
         self.day_views(&dirs, &util::local_now());
         if settings::is_on("slack_background") {
-            self.look_at_slack();
+            // A look still running may have read before the reply: look
+            // again once it ends.
+            if self.day.slack_busy {
+                self.day.slack_look_at = Some(util::now_ms());
+            } else {
+                self.look_at_slack();
+            }
         }
     }
 
