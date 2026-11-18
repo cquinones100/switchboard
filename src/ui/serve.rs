@@ -1621,7 +1621,7 @@ fn without_query(word: &str) -> String {
     // punctuation, so nothing of it is shown.
     let path_at = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let host_end = rest
-        .find(|c: char| !(c.is_ascii_alphanumeric() || ".-_:%[]".contains(c)))
+        .find(|c: char| !(c.is_ascii_alphanumeric() || ".-_:[]".contains(c)))
         .unwrap_or(rest.len());
     // Shown only when it ends cleanly, at a path, a query, a fragment or
     // the word's end, so an escaped `@` or a quote can't hide a user.
@@ -1732,6 +1732,10 @@ mod tests {
             "curl https://a.dev:8080/…",
         );
         link(
+            &["curl", "next=https://me:s%40a.dev/f"],
+            "curl next=https://…",
+        );
+        link(
             &["curl", "-d", "{\"u\":\"https://al:s\\u0040a.dev/f\"}"],
             "curl -d {\"u\":\"https://…",
         );
@@ -1805,7 +1809,7 @@ mod tests {
         assert_eq!(brief(&["vim"]), None);
         let notes = "/x/switchboard-notes".to_string();
         assert_eq!(
-            app_of(&[notes.clone()], &notes, false).as_deref(),
+            app_of(std::slice::from_ref(&notes), &notes, false).as_deref(),
             Some("Notes")
         );
         assert_eq!(line(&["/usr/bin/diff", "a", "b"]), "diff a b");
