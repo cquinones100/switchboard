@@ -309,7 +309,8 @@ pub fn form(shown: &Shown) -> Value {
                 "land",
                 "Land without asking",
                 if mode.sources.issues() {
-                    "Pushes once tests, two clean reviews and leak-check pass, then comments on and closes each landed GitHub issue."
+                    // Slack's option descriptions hold 75 characters.
+                    "Pushes after tests, reviews and leak-check; closes landed issues."
                 } else {
                     "Pushes once tests, two clean reviews and leak-check pass."
                 },
