@@ -43,9 +43,9 @@ use crate::{connector, settings, util};
 #[derive(Debug)]
 pub enum DayEvent {
     Feed(Fetched),
-    /// A look's line for the log, and how long Slack asked it to wait when
-    /// it refused the look for its rate limit.
-    SlackLooked(Result<String, String>, Option<i64>),
+    /// A look's line for the log, and, when Slack refused the look for its
+    /// rate limit, when the look started and how long Slack asked it to wait.
+    SlackLooked(Result<String, String>, Option<(i64, i64)>),
     /// The threads a look found something new in, read.
     SlackThreadsRead(Result<slack_thread::Read, String>),
     /// The chosen Slack message's thread read, by its key.
@@ -323,8 +323,10 @@ impl Server {
             }
             DayEvent::SlackLooked(result, slowed) => {
                 self.day.slack_busy = false;
-                if let Some(wait) = slowed {
-                    self.day.slack_pace.slow_down(wait, util::now_ms());
+                // From when the look started, near Slack's answer, rather than
+                // after the connector read in its place.
+                if let Some((started, wait)) = slowed {
+                    self.day.slack_pace.slow_down(wait, started);
                 }
                 let looked = result.is_ok();
                 match result {
@@ -1234,10 +1236,12 @@ impl Server {
         if !self.day.slack_pace.may_look(now, every) {
             return;
         }
-        self.day.slack_asked = Some(now);
+        // Counted only once a look starts, so a tick that finds one still
+        // running looks again on the next tick after it ends.
         if self.day.slack_busy || tokio::runtime::Handle::try_current().is_err() {
             return;
         }
+        self.day.slack_asked = Some(now);
         self.day.slack_busy = true;
         self.day.slack_pace.looked(now);
         let tx = self.tx.clone();
@@ -1252,7 +1256,8 @@ impl Server {
                 .map_err(|e| e.to_string());
             let slowed = by_token
                 .then(|| slack_api::look_slowed(&dirs.state))
-                .flatten();
+                .flatten()
+                .map(|wait| (now, wait));
             let _ = tx.send(Event::Day(DayEvent::SlackLooked(result, slowed)));
         });
     }
