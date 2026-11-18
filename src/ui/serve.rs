@@ -1353,11 +1353,22 @@ impl Server {
     fn running_name(&self, pane: PaneId) -> Option<String> {
         self.running(pane)?;
         let slot = self.panes.get(&pane)?;
-        let first = slot
+        let args = slot
             .pane
             .foreground_pgid()
             .and_then(crate::mux::procinfo::args_of)
-            .and_then(|args| args.into_iter().next())
+            .unwrap_or_default();
+        // One of Switchboard's apps by what it is, as the close-pane
+        // question names it.
+        let own_exe = crate::util::exe()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if let Some(app) = app_of(&args, &own_exe) {
+            return Some(app);
+        }
+        let first = args
+            .into_iter()
+            .next()
             .filter(|a| !a.trim().is_empty())
             .or_else(|| slot.pane.foreground_command())?;
         Some(program_name(
@@ -1440,21 +1451,43 @@ fn program_line(args: &[String], own_exe: &str) -> String {
     let Some((first, rest)) = args.split_first() else {
         return String::new();
     };
+    if let Some(app) = app_of(args, own_exe) {
+        return draw::cut(&app, 60);
+    }
     let name = match title_of(first) {
         Some((exe, title)) => format!("{} {title}", program_name(exe)),
         None => program_name(first),
     };
+    // A local path: an argument of its own, or an option's value after `=`
+    // (`--dir=/…`). Nothing after a `:`, which may name a path on another
+    // host (`scp host:/…`).
+    let short = |arg: &String| match arg.split_once('=') {
+        Some((key, value)) if key.starts_with('-') && value.starts_with('/') => {
+            format!("{key}={}", crate::paths::tilde(value))
+        }
+        _ if arg.starts_with('/') => crate::paths::tilde(arg),
+        _ => arg.clone(),
+    };
+    let words = std::iter::once(name.clone()).chain(rest.iter().map(short));
+    draw::cut(&words.collect::<Vec<_>>().join(" "), 60)
+}
+
+/// What one of Switchboard's own apps is, by its command line (Notes, the
+/// diff, the PR view, the pager and its file), as both close questions
+/// name it; `None` for any other program.
+fn app_of(args: &[String], own_exe: &str) -> Option<String> {
+    let (first, rest) = args.split_first()?;
     // Switchboard's own command and its words: `switchboard`, or the
     // binary the server runs by its path, which starts the views under
     // whatever name it has.
-    let own: Option<Vec<&str>> = match name.as_str() {
+    let own: Option<Vec<&str>> = match program_name(first).as_str() {
         _ if first == own_exe => Some(vec![]),
         "switchboard" => Some(vec![]),
         "switchboard-notes" => Some(vec!["notes"]),
         "switchboard-diff" => Some(vec!["diff"]),
         _ => None,
     };
-    let app = own.and_then(|mut words| {
+    own.and_then(|mut words| {
         words.extend(rest.iter().map(String::as_str));
         match words.as_slice() {
             ["notes", "away", ..] => Some("the place Notes left in its tab"),
@@ -1501,22 +1534,7 @@ fn program_line(args: &[String], own_exe: &str) -> String {
             }
             _ => None,
         })
-    });
-    if let Some(app) = app {
-        return draw::cut(&app, 60);
-    }
-    // A local path: an argument of its own, or an option's value after `=`
-    // (`--dir=/…`). Nothing after a `:`, which may name a path on another
-    // host (`scp host:/…`).
-    let short = |arg: &String| match arg.split_once('=') {
-        Some((key, value)) if key.starts_with('-') && value.starts_with('/') => {
-            format!("{key}={}", crate::paths::tilde(value))
-        }
-        _ if arg.starts_with('/') => crate::paths::tilde(arg),
-        _ => arg.clone(),
-    };
-    let words = std::iter::once(name.clone()).chain(rest.iter().map(short));
-    draw::cut(&words.collect::<Vec<_>>().join(" "), 60)
+    })
 }
 
 /// A title a program wrote over its arguments (npm on Linux: `npm exec
