@@ -3539,7 +3539,7 @@ impl App {
                         None => ListRow::Label(
                             FILES_ONLY.into(),
                             Tone::Dim,
-                            Some(Self::files_only(map).1),
+                            Some(self.files_only(map).1),
                         ),
                     });
                 }
@@ -3559,7 +3559,7 @@ impl App {
                                 None => ListRow::Label(
                                     FILES_ONLY.into(),
                                     Tone::Dim,
-                                    Some(Self::files_only(map).1),
+                                    Some(self.files_only(map).1),
                                 ),
                             });
                         }

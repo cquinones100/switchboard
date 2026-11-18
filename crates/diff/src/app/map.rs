@@ -398,9 +398,16 @@ impl App {
 
     /// Page `n` named from where the reader is, the chapter shown: its
     /// number alone in it, its chapter and number in another.
-    pub(super) fn page_named(&self, n: usize) -> String {
+    pub(super) fn page_named(&self, n: usize, path: &str) -> String {
         match self.told_map() {
-            Some(story) => story::page_name(story, n, Some(self.chapter())),
+            // From the page showing it: the open one, else its file's.
+            Some(story) => {
+                let from = self
+                    .alone
+                    .or_else(|| self.home(path))
+                    .and_then(|p| story::chapter_of(story, p));
+                story::page_name(story, n, from)
+            }
             None => n.to_string(),
         }
     }
@@ -953,7 +960,8 @@ impl App {
             }
             // A page that heads no file of the list has only its page.
             None => self.say(format!(
-                "Page {n} heads no file in the list: its page shows it, with Settings' \"Diff story a page at a time\" (diff_story_pages) on."
+                "{} heads no file in the list: its page shows it, with Settings' \"Diff story a page at a time\" (diff_story_pages) on.",
+                self.page_heading(n)
             )),
         }
     }
@@ -1109,9 +1117,10 @@ impl App {
         // A run of rows of one group each, as the list shows them (a
         // working tree's changes and its staged ones may each hold the
         // same chapters).
-        let mut groups: Vec<(Option<usize>, usize)> = Vec::new();
+        let mut groups: Vec<(_, usize)> = Vec::new();
         for k in 0..self.order.len() {
-            let group = chapter_at(self, k);
+            let section = self.entries()[self.order[k]].section;
+            let group = (section, chapter_at(self, k));
             if groups.last().is_none_or(|(g, _)| *g != group) {
                 groups.push((group, k));
             }
@@ -1223,7 +1232,7 @@ impl App {
         let at = self.strip?;
         let story = self.told_map()?;
         let chapters = story.chapters.len();
-        let last = if Self::files_only(story).1 > 0 {
+        let last = if self.files_only(story).1 > 0 {
             chapters
         } else {
             chapters.saturating_sub(1)
@@ -1472,8 +1481,15 @@ impl App {
         match hit {
             // The chosen page opens as the mouse is let go, so a drag
             // from it selects its text instead.
-            Hit::Page(n) if n == self.map_at => self.open_on_up = Some(n),
-            Hit::Page(n) => self.map_at = n,
+            // A click on the map gives it the keys back from the strip.
+            Hit::Page(n) if n == self.map_at => {
+                self.strip = None;
+                self.open_on_up = Some(n);
+            }
+            Hit::Page(n) => {
+                self.strip = None;
+                self.map_at = n;
+            }
             Hit::Chapter(t) => self.show_chapter(t),
             Hit::FilesOnly => self.open_files_only(),
             Hit::Thing(i) => self.go_to_thing(i),
@@ -1635,13 +1651,20 @@ impl App {
 
     /// The pages no chapter holds (what isn't committed yet, generated
     /// files, changes Haiku left out), which Files mode alone shows, and
-    /// how many files they have.
-    pub(super) fn files_only(story: &Story) -> (Vec<usize>, usize) {
+    /// how many of the diff's files, as it is now, they have.
+    pub(super) fn files_only(&self, story: &Story) -> (Vec<usize>, usize) {
         let pages: Vec<usize> = (1..=story.pages.len())
             .filter(|&n| story::chapter_of(story, n).is_none())
             .collect();
-        let files = story.page.values().filter(|n| pages.contains(n)).count();
-        (pages, files)
+        let mut paths: Vec<&str> = self
+            .entries()
+            .iter()
+            .filter(|e| story.page.get(&e.path).is_some_and(|n| pages.contains(n)))
+            .map(|e| e.path.as_str())
+            .collect();
+        paths.sort();
+        paths.dedup();
+        (pages, paths.len())
     }
 
     /// The chapters' strip, as board 135 draws it: each chapter's number,
@@ -1662,7 +1685,7 @@ impl App {
             .as_ref()
             .map(|c| format!("{} · {}", c.against(), counted(self.totals.files, "file")))
             .unwrap_or_default();
-        let (_, only) = Self::files_only(story);
+        let (_, only) = self.files_only(story);
         let strip_at = self.strip;
         let chip = (only > 0).then(|| {
             let chosen = strip_at == Some(story.chapters.len());
@@ -2351,7 +2374,7 @@ impl App {
         let Some(story) = self.told_map() else {
             return;
         };
-        let (pages, _) = Self::files_only(story);
+        let (pages, _) = self.files_only(story);
         self.strip = None;
         self.show_files(true);
         // The whole list, a filter or a page kept with Files mode's place

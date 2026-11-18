@@ -728,7 +728,7 @@ impl App {
                     // Left out where it would leave the name no room.
                     let counts = match self.also_of(&e.path, self.run_of(e)) {
                         Some(n) => {
-                            let also = format!(" also {}{counts}", self.page_named(n));
+                            let also = format!(" also {}{counts}", self.page_named(n, &e.path));
                             if width(&also) + 12 <= w as usize {
                                 also
                             } else {
@@ -877,7 +877,7 @@ impl App {
         // In an open page, a file shown from another one says which.
         let also = self
             .also_of(&e.path, self.run_of(e))
-            .map(|n| format!("also {} ", self.page_named(n)));
+            .map(|n| format!("also {} ", self.page_named(n, &e.path)));
         // Left out where it would leave the name no room.
         let counts = match also {
             Some(also) if width(&also) + width(&counts) + 13 <= cols => format!("{also}{counts}"),

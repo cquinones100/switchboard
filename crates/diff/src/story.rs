@@ -1677,19 +1677,28 @@ pub fn missed_text(story: &Story) -> Option<String> {
 /// What Haiku has written so far, as its answer streams in, for the cover:
 /// the titles of the pages whose title is whole, and how many pages
 /// have started, one more than the titles while the last one's title is
-/// still being written. Read without parsing the JSON, which is cut short.
+/// still being written, and each started page's number in its chapter,
+/// counted again from 1 after each chapter's name as a map writes it.
+/// Read without parsing the JSON, which is cut short.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Partial {
     pub titles: Vec<String>,
     pub started: usize,
+    pub numbers: Vec<usize>,
 }
 
 static TITLE_KEY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#""title"\s*:\s*""#).unwrap());
+
+/// A chapter's name as a map's answer writes it, or a story's in an
+/// answer told before chapters had that name.
+static CHAPTER_KEY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"[^\\]"(chapter|story)"\s*:\s*""#).unwrap());
 
 pub fn partial(text: &str) -> Partial {
     let mut out = Partial::default();
     let bytes = text.as_bytes();
     let mut at = 0;
+    let mut since = 0;
     while let Some(m) = TITLE_KEY.find_at(text, at) {
         let (s, e) = (m.start(), m.end() - 1);
         at = e + 1;
@@ -1698,6 +1707,13 @@ pub fn partial(text: &str) -> Partial {
             continue;
         }
         out.started += 1;
+        let fresh = CHAPTER_KEY.is_match(&text[since..s]);
+        let number = match out.numbers.last() {
+            Some(n) if !fresh => n + 1,
+            _ => 1,
+        };
+        out.numbers.push(number);
+        since = s;
         let mut i = e + 1;
         let mut closed = None;
         while i < bytes.len() && closed.is_none() {
@@ -1770,12 +1786,13 @@ pub fn progress(
         ));
     }
     let part = partial(p.map_or("", |p| p.text.as_str()));
+    let number = |i: usize| part.numbers.get(i).copied().unwrap_or(i + 1);
     for (i, title) in part.titles.iter().enumerate() {
         let mark = if i + 1 < part.started { "✓" } else { spin };
-        lines.push(format!("  {mark} {}. {title}", i + 1));
+        lines.push(format!("  {mark} {}. {title}", number(i)));
     }
     if part.started > part.titles.len() {
-        lines.push(format!("  {spin} {}. …", part.started));
+        lines.push(format!("  {spin} {}. …", number(part.titles.len())));
     }
     lines
 }
@@ -2282,9 +2299,13 @@ mod tests {
             partial(cut),
             Partial {
                 titles: strings(&["Add the \"pick\" column", "Default it on"]),
-                started: 3
+                started: 3,
+                numbers: vec![1, 2, 3],
             }
         );
+        // A map's pages are counted again in each chapter.
+        let map = r#"{"chapters": [{"chapter": "Main", "kind": "main", "pages": [{"id": "p1", "title": "A"}, {"id": "p2", "title": "B"}]}, {"chapter": "Side work", "kind": "side", "pages": [{"id": "p3", "title": "C"}"#;
+        assert_eq!(partial(map).numbers, [1, 2, 1]);
         let p = Progress {
             text: cut.into(),
             started: 100,
