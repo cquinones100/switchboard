@@ -1148,7 +1148,7 @@ impl Server {
             // is left of the line, so no program is cut away.
             let programs = running.join(", ");
             // 68 columns, what the box shows of a line on an 80-column client.
-            let room = 68usize.saturating_sub(draw::width(&programs) + 3).max(20);
+            let room = 68usize.saturating_sub(draw::width(&programs) + 3).max(8);
             let mut line = draw::cut(&format!("{index} {}", self.tab_label(tab)), room);
             if !running.is_empty() {
                 line.push_str(" · ");
