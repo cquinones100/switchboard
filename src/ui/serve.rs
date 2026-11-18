@@ -1514,6 +1514,18 @@ fn app_of(args: &[String], own_exe: &str, short: bool) -> Option<String> {
         // By its link, so two read side by side differ, written
         // without its scheme and cut from the left, where links differ.
         ["link-view", url, ..] if !short => {
+            // A ticket or a PR by what the link view reads it as.
+            use crate::views::page::{Kind, kind_of};
+            if url.starts_with("https://") {
+                match kind_of(url, std::path::Path::new("")) {
+                    Ok(Kind::Ticket(id)) => return Some(format!("the link view: {id}")),
+                    Ok(Kind::Pr { repo, number }) => {
+                        let pr = format!("{}/{}#{number}", repo.owner, repo.name);
+                        return Some(format!("the link view: {}", cut_left(&pr, 45)));
+                    }
+                    _ => {}
+                }
+            }
             let url = url.split_once("://").map_or(*url, |(_, rest)| rest);
             return Some(format!("the link view: {}", cut_left(url, 45)));
         }
