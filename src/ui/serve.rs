@@ -1359,11 +1359,12 @@ impl Server {
             .and_then(crate::mux::procinfo::args_of)
             .unwrap_or_default();
         // One of Switchboard's apps by what it is, as the close-pane
-        // question names it.
+        // question names it, a pager's path kept short, since every
+        // program of a tab shares one line.
         let own_exe = crate::util::exe()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default();
-        if let Some(app) = app_of(&args, &own_exe) {
+        if let Some(app) = app_of(&args, &own_exe, 20) {
             return Some(app);
         }
         let first = args
@@ -1451,7 +1452,7 @@ fn program_line(args: &[String], own_exe: &str) -> String {
     let Some((first, rest)) = args.split_first() else {
         return String::new();
     };
-    if let Some(app) = app_of(args, own_exe) {
+    if let Some(app) = app_of(args, own_exe, 49) {
         return draw::cut(&app, 60);
     }
     let name = match title_of(first) {
@@ -1474,8 +1475,9 @@ fn program_line(args: &[String], own_exe: &str) -> String {
 
 /// What one of Switchboard's own apps is, by its command line (Notes, the
 /// diff, the PR view, the pager and its file), as both close questions
-/// name it; `None` for any other program.
-fn app_of(args: &[String], own_exe: &str) -> Option<String> {
+/// name it, a path in it cut from the left to `room` columns; `None` for
+/// any other program.
+fn app_of(args: &[String], own_exe: &str, room: usize) -> Option<String> {
     let (first, rest) = args.split_first()?;
     // Switchboard's own command and its words: `switchboard`, or the
     // binary the server runs by its path, which starts the views under
@@ -1529,7 +1531,7 @@ fn app_of(args: &[String], own_exe: &str) -> Option<String> {
                     .find_map(|f| f.strip_prefix('+'))
                     .map(|n| format!(":{n}"))
                     .unwrap_or_default();
-                let room = 49usize.saturating_sub(draw::width(&at));
+                let room = room.saturating_sub(draw::width(&at));
                 Some(format!("the pager: {}{at}", cut_left(&path, room)))
             }
             _ => None,
