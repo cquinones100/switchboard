@@ -1401,7 +1401,7 @@ impl Server {
         // Another command of Switchboard's by its subcommand too
         // (`switchboard update`), so it reads as more than Switchboard.
         if let [first, sub, ..] = args.as_slice()
-            && program_name(first) == "switchboard"
+            && (program_name(first) == "switchboard" || *first == own_exe)
             && !sub.starts_with('-')
         {
             return Some(format!("switchboard {sub}"));
@@ -1570,9 +1570,15 @@ fn without_query(word: &str) -> String {
         let lower = w.to_ascii_lowercase();
         lower.starts_with("http://") || lower.starts_with("https://")
     };
-    let start = match word.split_once('=') {
-        Some((key, value)) if !starts_as_link(word) && starts_as_link(value) => key.len() + 1,
-        _ => 0,
+    let start = if starts_as_link(word) {
+        0
+    } else {
+        // After whichever `=` a link follows, a nested one included
+        // (`--post-data=next=https://…`).
+        word.match_indices('=')
+            .map(|(at, _)| at + 1)
+            .find(|at| starts_as_link(&word[*at..]))
+            .unwrap_or(0)
     };
     let link = &word[start..];
     // Written as a link (`http://`, `https://`, in any case), and with no
@@ -1661,6 +1667,10 @@ mod tests {
         assert_eq!(line(&["rg", "https://[^/]+/v?"]), "rg https://[^/]+/v?");
         assert_eq!(line(&["rg", "https://[a-z]?/v"]), "rg https://[a-z]?/v");
         assert_eq!(line(&["rg", "https:/a.dev/v1?"]), "rg https:/a.dev/v1?");
+        assert_eq!(
+            line(&["wget", "--post-data=next=https://a.dev/?sig=x"]),
+            "wget --post-data=next=https://a.dev/…"
+        );
         assert_eq!(
             line(&["git", "-c", "http.proxy=https://u:pw@p.dev", "fetch"]),
             "git -c http.proxy=https://p.dev/… fetch"
