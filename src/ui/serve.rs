@@ -1693,7 +1693,9 @@ mod tests {
             let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
             program_line(&args, "/opt/sb/switchboard-0.2.0")
         };
+        // As the formatter matches it, without a trailing slash.
         let home = crate::paths::home().display().to_string();
+        let home = home.trim_end_matches('/');
         assert_eq!(line(&["/usr/local/bin/npm", "run", "dev"]), "npm run dev");
         assert_eq!(
             line(&["/usr/bin/vim", &format!("{home}/code/a.rs")]),
