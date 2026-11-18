@@ -235,28 +235,31 @@ fn ticket_start(root: &Path, branch: &str) -> Result<Start, String> {
         },
         || worktree::default_start(root, SOURCE),
     );
-    // Origin back after a failure: the ticket's first fetch may have
-    // failed with it, so ask for the ticket's branch once more.
-    if fetched.is_ok() && retried.get() && worktree::fetch_branch(root, "origin", branch, SOURCE) {
-        return Ok(Start {
-            commit: format!("refs/remotes/origin/{branch}"),
-            tracks: true,
-            offline: None,
-        });
+    // A fetch failed along the way, so the ticket's own may have failed
+    // with it rather than found no branch: ask again once origin answers, and
+    // else start from its copy here, so an outage never hides work started.
+    let cached = format!("refs/remotes/origin/{branch}");
+    if fetched.is_err() || retried.get() {
+        if fetched.is_ok() && worktree::fetch_branch(root, "origin", branch, SOURCE) {
+            return Ok(Start {
+                commit: cached,
+                tracks: true,
+                offline: None,
+            });
+        }
+        if worktree::git_ok(root, &["show-ref", "--verify", "--quiet", &cached]) {
+            let words = format!("origin/{branch} as last fetched");
+            eprintln!("Starting from {words}: couldn't reach origin");
+            return Ok(Start {
+                commit: cached,
+                tracks: true,
+                offline: Some(words),
+            });
+        }
     }
     let (commit, offline) = match fetched {
         Ok(commit) => (commit, None),
         Err(e) => {
-            let cached = format!("refs/remotes/origin/{branch}");
-            if worktree::git_ok(root, &["rev-parse", "--verify", "--quiet", &cached]) {
-                let words = format!("origin/{branch} as last fetched");
-                eprintln!("Starting from {words}: couldn't reach origin");
-                return Ok(Start {
-                    commit: cached,
-                    tracks: true,
-                    offline: Some(words),
-                });
-            }
             let (commit, words) = worktree::last_fetched(root, None).ok_or(e)?;
             (commit, Some(words))
         }

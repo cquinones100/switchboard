@@ -611,7 +611,7 @@ pub fn last_fetched(root: &Path, default: Option<&str>) -> Option<(String, Strin
             let r = format!("refs/remotes/origin/{n}");
             (n, r)
         })
-        .find(|(_, r)| git_ok(root, &["rev-parse", "--verify", "--quiet", r]))?;
+        .find(|(_, r)| git_ok(root, &["show-ref", "--verify", "--quiet", r]))?;
     // The ref's reflog says when it was last moved, which a fetch does.
     let at = git_at(
         root,
