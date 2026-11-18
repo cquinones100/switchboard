@@ -280,8 +280,11 @@ impl Job {
         if self.sources.issues() {
             match self.issue_items(state) {
                 Ok(issues) => items.extend(issues),
-                // With the note too, its items are still worked.
-                Err(e) if self.sources.note() => eprintln!("autopilot: GitHub issues: {e}"),
+                // With the note's items left, they are still worked; with
+                // none, the failure is said rather than nothing being left.
+                Err(e) if self.sources.note() && !items.is_empty() => {
+                    eprintln!("autopilot: GitHub issues: {e}")
+                }
                 Err(e) => return Err(format!("GitHub issues: {e}")),
             }
         }
@@ -967,7 +970,12 @@ impl Pilot {
                     out.said = Some(weekly_said(mode.weekly_limit, resets_at));
                 }
             }
-            Found::Failed(e) => out.failed = Some(e),
+            Found::Failed(e) => {
+                if e.starts_with("GitHub issues:") && !mode.said.contains(&e) {
+                    out.said = Some(format!("Can't read {e}"));
+                }
+                out.failed = Some(e);
+            }
             Found::Item(None) => {
                 // Said once, and only with none of its tabs open: while some
                 // still work, the view's heading says nothing more starts, nor

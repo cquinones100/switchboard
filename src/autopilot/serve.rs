@@ -2485,7 +2485,7 @@ impl Server {
             // A landed issue stays out of the queue whatever becomes of its
             // comment and closing (declined, failed, nobody there to ask),
             // kept among the skipped items, which can take it back.
-            if opts.contains_key(ISSUE) {
+            if issue.is_some() {
                 let done = mode::Skipped {
                     note: landed.note.clone(),
                     text: landed.item.clone(),
@@ -2673,7 +2673,7 @@ impl Server {
     /// Each of its tabs whose wtn refused the item (`REFUSED`): the item
     /// skipped in its note, why said, and the tab closed.
     fn autopilot_refused(&mut self) {
-        type Refused = (TabId, String, String, Option<String>, Option<String>, bool);
+        type Refused = (TabId, String, String, Option<String>, Option<String>);
         let refused: Vec<Refused> = self
             .tabs
             .iter()
@@ -2682,18 +2682,16 @@ impl Server {
                 let why = t.opts.get(REFUSED).filter(|v| !v.is_empty())?;
                 let item = t.opts.get(ITEM).filter(|v| !v.is_empty())?;
                 let issue = t.opts.get(ISSUE).filter(|v| !v.is_empty()).cloned();
-                let land = t.opts.get(LAND).is_some_and(|v| v == "1");
                 Some((
                     *id,
                     item.clone(),
                     why.clone(),
                     t.opts.get(NOTE).cloned(),
                     issue,
-                    land,
                 ))
             })
             .collect();
-        for (tab, item, why, note, issue, land) in refused {
+        for (tab, item, why, note, issue) in refused {
             let written = Mode::update(&paths::state_dir(), |m| {
                 let skipped = mode::Skipped {
                     note: note
@@ -2724,7 +2722,9 @@ impl Server {
             if let Some(issue) = issue.filter(|_| duplicate) {
                 let comment = super::issues::duplicate_comment();
                 let question = format!("Comment on {issue} that autopilot left it open: {why}?");
-                self.autopilot_write_back(&issue, comment, None, land, question);
+                // Always asked: landing without asking says nothing of posting
+                // about a duplicate, which pushes nothing.
+                self.autopilot_write_back(&issue, comment, None, false, question);
             }
         }
     }
