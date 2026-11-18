@@ -284,14 +284,17 @@ impl Job {
         notes: &Path,
         state: &Path,
     ) -> Result<(Vec<Item>, Vec<Item>), String> {
-        let (mut items, held) = if self.sources.note() {
+        let (mut items, mut held) = if self.sources.note() {
             self.note_items(notes, state)?
         } else {
             (Vec::new(), Vec::new())
         };
         if self.sources.issues() && self.issues_on {
             match self.issue_items(state) {
-                Ok(issues) => items.extend(issues),
+                Ok((issues, waiting)) => {
+                    items.extend(issues);
+                    held.extend(waiting);
+                }
                 // With the note's items left, they are still worked; with
                 // none, the failure is said rather than nothing being left.
                 Err(e) if self.sources.note() && !items.is_empty() => {
@@ -305,16 +308,26 @@ impl Job {
 
     /// The repository's GitHub issues it may take, oldest first, as items:
     /// those no worktree has, wtn didn't start lately and weren't skipped.
-    fn issue_items(&self, state: &Path) -> Result<Vec<Item>, String> {
+    /// Apart from them, those whose body's open choice waits on your review
+    /// of a design board, which hands-free never decides.
+    fn issue_items(&self, state: &Path) -> Result<(Vec<Item>, Vec<Item>), String> {
         let issues = super::issues::issues(&self.repo, &self.label, state, util::now_ms())?;
         let claims = std::fs::read_to_string(crate::cmd::worktree_from_note::claims_in(state))
             .unwrap_or_default();
-        Ok(
+        let (mut ready, mut held) = (Vec::new(), Vec::new());
+        for issue in
             super::issues::unclaimed(&self.repo, issues, &claims, &self.skip, util::now_secs())
-                .iter()
-                .map(super::issues::item_of)
-                .collect(),
-        )
+        {
+            let item = super::issues::item_of(&issue);
+            match crate::cmd::worktree_from_note::review_hold(&issue.body) {
+                Some(what) => held.push(Item {
+                    waits_on: Some(what),
+                    ..item
+                }),
+                None => ready.push(item),
+            }
+        }
+        Ok((ready, held))
     }
 
     /// The note's items, and those held, in the order it opens them.
@@ -1222,15 +1235,20 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("Work.md"), "# Work\n\n- [ ] From the note\n").unwrap();
         let issue = |n: u64| {
+            let body = if n == 5 {
+                "## Decision needed\n\n- [ ] Option A, once boards 21 and 22 are reviewed\n- [ ] Option B\n"
+            } else {
+                ""
+            };
             serde_json::json!({ "repo": "acme/widgets", "number": n, "title": format!("Issue {n}"),
-                "body": "", "url": "" })
+                "body": body, "url": "" })
         };
         // A fresh read kept, so no request is made.
         std::fs::write(
             dir.join(super::super::issues::FILE),
             serde_json::json!({
                 "at": util::now_ms(), "dir": dir.to_string_lossy(), "label": "autopilot",
-                "issues": [issue(4), issue(9)],
+                "issues": [issue(4), issue(5), issue(9)],
             })
             .to_string(),
         )
@@ -1259,6 +1277,12 @@ mod tests {
                 .collect()
         };
         assert_eq!(texts(&job), ["From the note", "acme/widgets#4: Issue 4"]);
+        let (_, held) = job.items_and_held(&dir, &dir).unwrap();
+        assert_eq!(held.len(), 1, "a design review holds issue 5");
+        assert_eq!(
+            held[0].waits_on.as_deref(),
+            Some("your review of boards 21 and 22")
+        );
         job.sources = Sources::Issues;
         assert_eq!(texts(&job), ["acme/widgets#4: Issue 4"]);
         job.sources = Sources::Note;

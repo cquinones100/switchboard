@@ -140,7 +140,7 @@ pub fn prompt_of(
     target: Option<&str>,
 ) -> String {
     let decide = if hands_free {
-        "Its body is its plan. This tab is hands-free: where it leaves a choice open, take the option you recommend, saying each decision as a `Decided hands-free: <question> → <choice>` line in your reply, then build it, as long as `switchboard show @autopilot_handsfree` still prints 1 when you decide (otherwise hands-free was turned off: ask me before building anything it leaves open). "
+        "Its body is its plan. This tab is hands-free: where it leaves a choice open, take the option you recommend, saying each decision as a `Decided hands-free: <question> → <choice>` line in your reply, then build it, as long as `switchboard show @autopilot_handsfree` still prints 1 when you decide (otherwise hands-free was turned off: ask me before building anything it leaves open). A choice that approves a design board (one naming a board, or waiting until it is reviewed) is never decided hands-free: ask it with `[always ask]` as the question's header. "
     } else {
         "Its body is its plan: before building, ask me about any choice it leaves open. "
     };

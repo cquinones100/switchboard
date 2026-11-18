@@ -36,6 +36,10 @@ To name a tab, set its `@tab_name`; never `switchboard rename-tab`, whose name s
 switchboard set @tab_name 'Review loop: settings page layout'
 ```
 
+## A duplicate in autopilot's tab
+
+In a tab autopilot opened, when the work it was opened for is already started or done elsewhere (another item, issue, PR or tab), mark it so with `switchboard autopilot-duplicate '<which>'`, which `switchboard set` can't do: autopilot skips the item with that reason and closes the tab.
+
 # What I see in the workspace
 
 When I name one of these, I mean what Switchboard shows me:

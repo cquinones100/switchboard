@@ -1356,6 +1356,8 @@ impl Server {
             Some((line::hands_free_question(), Part::HandsFree))
         } else if lands(&fields) && !lands(&was) {
             Some((line::land_question(), Part::Land))
+        } else if lands(&fields) && fields.sources().issues() && !was.sources().issues() {
+            Some((line::issues_question(), Part::Sources))
         } else {
             None
         };

@@ -106,20 +106,43 @@ pub fn decided_line(question: &str, choice: &str) -> String {
     format!("Decided hands-free: {question} → {choice}")
 }
 
+/// Where a hands-free tab's decided lines are written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Record {
+    /// By the server, into the item's notes.
+    Server,
+    /// By Claude, under the item in its plan or note.
+    Note,
+    /// By Claude, in its reply: a GitHub issue's tab, which has no note.
+    Reply,
+}
+
+impl Record {
+    /// What Claude is told of writing the lines down.
+    fn words(self) -> &'static str {
+        match self {
+            Record::Server => {
+                "The server writes each `Decided hands-free: <question> → <choice>` line into the item's plan note (with no plan, under the item in its note) itself: don't write it."
+            }
+            Record::Note => {
+                "Write `Decided hands-free: <question> → <choice>` under the item in its plan note (with no plan, indented under the item in its note)."
+            }
+            Record::Reply => {
+                "Say each as a `Decided hands-free: <question> → <choice>` line in your reply: this tab works a GitHub issue, with no note to write it in."
+            }
+        }
+    }
+}
+
 /// The deny for a question box, as PreToolUse's output: the server's
-/// choices, which it writes into the item's notes itself while it
-/// `writes`, else (a tab with no item to write under) left for Claude to.
-pub fn deny_question(chosen: &[(String, String)], writes: bool) -> String {
+/// choices, and where the lines recording them are written (`record`).
+pub fn deny_question(chosen: &[(String, String)], record: Record) -> String {
     let choices = chosen
         .iter()
         .map(|(q, c)| format!("{q} → {c}"))
         .collect::<Vec<_>>()
         .join("; ");
-    let record = if writes {
-        "The server writes each `Decided hands-free: <question> → <choice>` line into the item's plan note (with no plan, under the item in its note) itself: don't write it."
-    } else {
-        "Write `Decided hands-free: <question> → <choice>` under the item in its plan note (with no plan, indented under the item in its note)."
-    };
+    let record = record.words();
     let reason = format!(
         "Hands-free (autopilot): don't ask. Chose: {choices}. {record} Go on with these choices. {EXCEPTIONS} For one of those, ask again with `{ALWAYS_ASK}` as the question's header, which takes the decided line back."
     );
@@ -134,9 +157,17 @@ pub fn deny_question(chosen: &[(String, String)], writes: bool) -> String {
 }
 
 /// The block for a turn that ended on a question, as Stop's output.
-pub fn block_stop() -> String {
+pub fn block_stop(record: Record) -> String {
+    let write = match record {
+        Record::Reply => {
+            "say each decision as a `Decided hands-free: <question> → <choice>` line in your reply"
+        }
+        _ => {
+            "write `Decided hands-free: <question> → <choice>` under the item in its plan note (with no plan, indented under the item in its note)"
+        }
+    };
     let reason = format!(
-        "Hands-free (autopilot): don't wait for an answer. Carry on with what you recommend; write `Decided hands-free: <question> → <choice>` under the item in its plan note (with no plan, indented under the item in its note); then go on to land it. {EXCEPTIONS} For one of those, stop again with `{ALWAYS_ASK}` in your message, saying which rule or skill says it must be asked."
+        "Hands-free (autopilot): don't wait for an answer. Carry on with what you recommend; {write}; then go on to land it. {EXCEPTIONS} For one of those, stop again with `{ALWAYS_ASK}` in your message, saying which rule or skill says it must be asked."
     );
     json!({ "decision": "block", "reason": reason }).to_string()
 }
@@ -587,7 +618,8 @@ mod tests {
     #[test]
     fn the_answers_are_what_claude_code_reads() {
         let deny: Value =
-            serde_json::from_str(&deny_question(&[("Q?".into(), "A".into())], true)).unwrap();
+            serde_json::from_str(&deny_question(&[("Q?".into(), "A".into())], Record::Server))
+                .unwrap();
         assert_eq!(deny["hookSpecificOutput"]["permissionDecision"], "deny");
         assert_eq!(deny["hookSpecificOutput"]["hookEventName"], "PreToolUse");
         assert!(
@@ -596,7 +628,7 @@ mod tests {
                 .unwrap()
                 .contains("Chose: Q? → A.")
         );
-        let block: Value = serde_json::from_str(&block_stop()).unwrap();
+        let block: Value = serde_json::from_str(&block_stop(Record::Note)).unwrap();
         assert_eq!(block["decision"], "block");
         assert!(block["reason"].as_str().unwrap().contains("[always ask]"));
         for reason in [

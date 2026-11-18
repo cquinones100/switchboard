@@ -747,6 +747,13 @@ static OPTION: LazyLock<Regex> =
 
 pub use crate::notes::plan::{open_choice, open_choices};
 
+/// What a plan's text waits on when one of its open choices approves a
+/// design board ("your review of board 21"): an issue's body read as its
+/// plan, held as a note item's plan is.
+pub fn review_hold(plan: &str) -> Option<String> {
+    open_choices(plan).iter().find_map(|c| review_of(c))
+}
+
 /// What an open choice waits on when it is a design review: the boards it
 /// names, else a design, as "your review of …"; none for any other choice.
 fn review_of(choice: &str) -> Option<String> {

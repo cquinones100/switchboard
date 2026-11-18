@@ -227,6 +227,20 @@ pub fn hands_free_question() -> (String, Vec<String>) {
             "Turned on with it: Land without asking, and off with it: Ask before landing".into(),
             "Still asked: what your rules or a skill say must be asked, permission prompts, and a question a tab ends on a fourth time".into(),
             "Only for its own tabs; tabs open now too".into(),
+            "With GitHub issues among its sources, a landed issue is commented on and closed without asking too".into(),
+        ],
+    )
+}
+
+/// The question before a mode landing without asking takes GitHub issues,
+/// whose landings then write on GitHub unasked.
+pub fn issues_question() -> (String, Vec<String>) {
+    (
+        "Comment on and close each issue its tabs land, without asking?".into(),
+        vec![
+            "Its tabs land without asking, so each landed issue gets a comment naming the commit and is closed".into(),
+            "Only once the commit is on the repository's default branch on GitHub".into(),
+            "Still asked: the comment on an issue found a duplicate".into(),
         ],
     )
 }

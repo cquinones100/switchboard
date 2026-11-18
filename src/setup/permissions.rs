@@ -185,6 +185,7 @@ mod tests {
                 "Bash(switchboard look *)",
                 "Bash(switchboard set *)",
                 "Bash(switchboard setting relay_*)",
+                "Bash(switchboard autopilot-duplicate *)",
             ]
         );
     }

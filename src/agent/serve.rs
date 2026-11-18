@@ -297,6 +297,7 @@ impl Server {
         {
             return None;
         }
+        let issue_tab = t.opts.contains_key(crate::autopilot::ISSUE);
         match hook.event.as_str() {
             "PreToolUse" if hook.tool == "AskUserQuestion" => {
                 let place = self.decided_place(tab);
@@ -306,7 +307,12 @@ impl Server {
                     return None;
                 }
                 let chosen = hands_free::choose(payload);
-                let answer = hands_free::deny_question(&chosen, place.is_some());
+                let record = match (&place, issue_tab) {
+                    (_, true) => hands_free::Record::Reply,
+                    (Some(_), _) => hands_free::Record::Server,
+                    (None, _) => hands_free::Record::Note,
+                };
+                let answer = hands_free::deny_question(&chosen, record);
                 self.record_decided(place, hands_free::Change::Decide(chosen));
                 Some(answer)
             }
@@ -317,7 +323,11 @@ impl Server {
                 }
                 t.opts.insert(NUDGED.into(), (nudged + 1).to_string());
                 self.dirty_tab(tab);
-                Some(hands_free::block_stop())
+                Some(hands_free::block_stop(if issue_tab {
+                    hands_free::Record::Reply
+                } else {
+                    hands_free::Record::Note
+                }))
             }
             _ => None,
         }
