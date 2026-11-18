@@ -1226,10 +1226,17 @@ impl Server {
     }
 
     // Every look starts here, so none goes out inside the wait Slack asked
-    // for (`slack_look::Pace`).
+    // for, nor sooner than its slowed looks' time apart (`slack_look::Pace`),
+    // whatever asked for it.
     fn look_at_slack(&mut self) {
         let now = util::now_ms();
-        if !self.day.slack_pace.may_look(now) {
+        let pace = &self.day.slack_pace;
+        let too_soon = pace.slowed()
+            && self
+                .day
+                .slack_asked
+                .is_some_and(|at| now - at < pace.every(slack_look_every(&Dirs::here())));
+        if !pace.may_look(now) || too_soon {
             return;
         }
         self.day.slack_asked = Some(now);
@@ -1243,7 +1250,9 @@ impl Server {
             let dirs = Dirs::here();
             let token = slack_api::client(&dirs.state).await;
             let by_token = matches!(token, Some(Ok(_)));
-            let result = slack_look::look_slack(&dirs, &Claude, token, util::now_ms())
+            // The time it was asked, so looks the tick paces a minute apart
+            // through the connector stay a minute apart there.
+            let result = slack_look::look_slack(&dirs, &Claude, token, now)
                 .await
                 .map_err(|e| e.to_string());
             let slowed = by_token
