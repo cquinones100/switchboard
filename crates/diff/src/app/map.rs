@@ -1111,6 +1111,9 @@ impl App {
         if story.chapters.is_empty() {
             return;
         }
+        if self.order.is_empty() {
+            return self.say("The filter leaves no files.\n/ then esc clears it.");
+        }
         // The list's groups in its order, each chapter with a file in it
         // and the files no chapter holds, past those a filter leaves
         // empty: the next group's first file, or the one before's.
@@ -1135,6 +1138,12 @@ impl App {
             .ok()
             .and_then(|j| groups.get(j))
         else {
+            if !self.path_filter.trim().is_empty() {
+                let way = if step > 0 { "after" } else { "before" };
+                self.say(format!(
+                    "No chapter {way} this one has a file the filter leaves.\n/ then esc clears it."
+                ));
+            }
             return;
         };
         self.moved = true;

@@ -3489,7 +3489,8 @@ impl App {
         let starts = self.starts();
         let apart = self.not_committed_apart();
         // The chapter whose pages are listed last, in a story told as a map.
-        let mut listed_chapter: Option<Option<usize>> = None;
+        // A chapter's staged copy is a group of its own, as ]c walks them.
+        let mut listed_chapter: Option<(Section, Option<usize>)> = None;
         for (k, &i) in self.order.iter().enumerate() {
             // A working tree's staged changes under a heading of their own.
             if let Some(e) = self.entry(i)
@@ -3525,12 +3526,14 @@ impl App {
                 // chapter holds under In the files only, in either layout.
                 let chapter_row = self.told_map().and_then(|map| {
                     let chapter = story::chapter_of(map, n);
-                    (listed_chapter != Some(chapter)).then_some((map, chapter))
+                    let section = self.entry(i).map(|e| e.section);
+                    let group = section.map(|s| (s, chapter));
+                    (listed_chapter != group).then_some((map, chapter, group))
                 });
                 if !self.opts.ux2
-                    && let Some((map, chapter)) = chapter_row
+                    && let Some((map, chapter, group)) = chapter_row
                 {
-                    listed_chapter = Some(chapter);
+                    listed_chapter = group;
                     if k > 0 {
                         rows.push(ListRow::Blank);
                     }
@@ -3550,19 +3553,16 @@ impl App {
                     if k > 0 {
                         rows.push(ListRow::Blank);
                     }
-                    if let Some(map) = self.told_map() {
-                        let chapter = story::chapter_of(map, n);
-                        if listed_chapter != Some(chapter) {
-                            listed_chapter = Some(chapter);
-                            rows.push(match chapter {
-                                Some(c) => ListRow::Chapter(c),
-                                None => ListRow::Label(
-                                    FILES_ONLY.into(),
-                                    Tone::Dim,
-                                    Some(self.files_only(map).1),
-                                ),
-                            });
-                        }
+                    if let Some((map, chapter, group)) = chapter_row {
+                        listed_chapter = group;
+                        rows.push(match chapter {
+                            Some(c) => ListRow::Chapter(c),
+                            None => ListRow::Label(
+                                FILES_ONLY.into(),
+                                Tone::Dim,
+                                Some(self.files_only(map).1),
+                            ),
+                        });
                     }
                     if self.uncommitted_page() == Some(n) {
                         let files = self
@@ -4744,8 +4744,10 @@ impl App {
         // A click anywhere else takes the keys from the open page's
         // own map.
         self.thing = None;
-        // Nothing else of the map takes a click.
+        // Nothing else of the map takes a click, which gives the map the
+        // keys back from the strip.
         if self.on_map() && self.ask_box.is_none() && self.answer.is_none() {
+            self.strip = None;
             let had = self.selection.take().is_some();
             self.pressed = Some((x, y));
             return if closed || had {
