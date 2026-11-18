@@ -76,9 +76,9 @@ pub struct Pace {
 }
 
 impl Pace {
-    /// Slack asked to wait `wait_ms` from `now`.
-    pub fn slow_down(&mut self, wait_ms: i64, now: i64) {
-        self.wait_until = Some(now.saturating_add(wait_ms));
+    /// Slack asked to wait until `until`.
+    pub fn slow_down(&mut self, until: i64) {
+        self.wait_until = Some(until);
         self.slow_left = SLOW_LOOKS;
     }
 
@@ -444,6 +444,11 @@ pub async fn look_slack(
                         }
                         Err(why) => {
                             slack_api::failed(&dirs.state, slack_api::Part::Look, &why);
+                            // Slack's wait counts from its answer, before the
+                            // connector reads in its place.
+                            if let Some(wait) = slack_user::retry_after_ms(&why) {
+                                slack_api::look_waits_until(&dirs.state, util::now_ms() + wait);
+                            }
                             None
                         }
                     }
@@ -642,7 +647,7 @@ mod tests {
             pace.may_look(1_000, 30_000),
             "not slowed: the tick paces it"
         );
-        pace.slow_down(45_000, 1_000);
+        pace.slow_down(46_000);
         assert!(!pace.may_look(45_999, 30_000), "Slack's wait first");
         assert!(pace.may_look(60_000, 30_000));
         let mut at = 60_000;

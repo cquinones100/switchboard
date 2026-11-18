@@ -208,6 +208,20 @@ pub fn one_worked(state: &Path, part: Part, key: &str) {
 pub fn worked(state: &Path, part: Part) {
     change_note(state, |kept| {
         kept.remove(part.key());
+        if part == Part::Look {
+            kept.remove(LOOK_UNTIL);
+        }
+    });
+}
+
+/// Where the time Slack asked the look to wait until is kept.
+const LOOK_UNTIL: &str = "look_until";
+
+/// The look's read was refused for Slack's rate limit, which asked it to
+/// wait until `until`, kept from when Slack answered.
+pub fn look_waits_until(state: &Path, until: i64) {
+    change_note(state, |kept| {
+        kept.insert(LOOK_UNTIL.into(), json!(until));
     });
 }
 
@@ -235,14 +249,18 @@ pub fn look_works(state: &Path) -> bool {
     !kept.contains_key(Part::Look.key()) && !kept.contains_key(Part::Token.key())
 }
 
-/// How long Slack asked the look to wait, while its last read through the
-/// token was refused for Slack's rate limit; `None` otherwise. A small
+/// When Slack asked the look to wait until, while its last read through
+/// the token was refused for Slack's rate limit; `None` otherwise. A small
 /// file, read off the server's task as the look ends.
 pub fn look_slowed(state: &Path) -> Option<i64> {
-    util::read_json_object(note_file(state))
+    let kept = util::read_json_object(note_file(state));
+    let refused = kept
         .get(Part::Look.key())
         .and_then(Value::as_str)
-        .and_then(slack_user::retry_after_ms)
+        .is_some_and(|why| why.starts_with(slack_user::RATE_LIMIT));
+    kept.get(LOOK_UNTIL)
+        .and_then(Value::as_i64)
+        .filter(|_| refused)
 }
 
 /// What the view says under its header while a read through the token

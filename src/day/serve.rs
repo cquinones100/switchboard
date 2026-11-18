@@ -44,8 +44,8 @@ use crate::{connector, settings, util};
 pub enum DayEvent {
     Feed(Fetched),
     /// A look's line for the log, and, when Slack refused the look for its
-    /// rate limit, when the look started and how long Slack asked it to wait.
-    SlackLooked(Result<String, String>, Option<(i64, i64)>),
+    /// rate limit, when Slack asked it to wait until.
+    SlackLooked(Result<String, String>, Option<i64>),
     /// The threads a look found something new in, read.
     SlackThreadsRead(Result<slack_thread::Read, String>),
     /// The chosen Slack message's thread read, by its key.
@@ -323,10 +323,8 @@ impl Server {
             }
             DayEvent::SlackLooked(result, slowed) => {
                 self.day.slack_busy = false;
-                // From when the look started, near Slack's answer, rather than
-                // after the connector read in its place.
-                if let Some((started, wait)) = slowed {
-                    self.day.slack_pace.slow_down(wait, started);
+                if let Some(until) = slowed {
+                    self.day.slack_pace.slow_down(until);
                 }
                 let looked = result.is_ok();
                 match result {
@@ -1256,8 +1254,7 @@ impl Server {
                 .map_err(|e| e.to_string());
             let slowed = by_token
                 .then(|| slack_api::look_slowed(&dirs.state))
-                .flatten()
-                .map(|wait| (now, wait));
+                .flatten();
             let _ = tx.send(Event::Day(DayEvent::SlackLooked(result, slowed)));
         });
     }
@@ -1393,12 +1390,15 @@ impl Server {
         // The connector being down says nothing while the look reads
         // through your token.
         let reads_by_token = by_token && slack_api::look_works(&dirs.state);
-        // Slack asking the look to slow down, said over why it went to the
-        // connector, which is the same refusal.
+        // Slack asking the look to slow down, said over the rate limit that
+        // sent a read to the connector, which is the same refusal, but never
+        // over another reason, which says what to do.
         let slowed = (background && self.day.slack_pace.slowed())
             .then(|| slack_look::slowed_note(self.day.slack_pace.every(slack_look_every(dirs))));
-        let note = slowed
-            .or(token_note)
+        let token_note =
+            token_note.filter(|n| slowed.is_none() || !n.contains(slack_user::RATE_LIMIT));
+        let note = token_note
+            .or(slowed)
             .or_else(|| needs_sign_in.then(|| slack_user::NO_SIGN_IN.to_string()));
         let slack = slack::slack_view(&slack::Look {
             state: &dirs.state,
