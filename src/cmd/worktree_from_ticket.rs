@@ -226,11 +226,24 @@ fn ticket_start(root: &Path, branch: &str) -> Result<Start, String> {
         });
     }
     let name = worktree::origin_head(root).unwrap_or_else(|| "main".into());
+    let retried = std::cell::Cell::new(false);
     let fetched = worktree::with_retries(
         &worktree::fetch_waits(),
-        || eprintln!("Fetching origin's {name} again"),
+        || {
+            retried.set(true);
+            eprintln!("Fetching origin's {name} again");
+        },
         || worktree::default_start(root, SOURCE),
     );
+    // Origin back after a failure: the ticket's first fetch may have
+    // failed with it, so ask for the ticket's branch once more.
+    if fetched.is_ok() && retried.get() && worktree::fetch_branch(root, "origin", branch, SOURCE) {
+        return Ok(Start {
+            commit: format!("refs/remotes/origin/{branch}"),
+            tracks: true,
+            offline: None,
+        });
+    }
     let (commit, offline) = match fetched {
         Ok(commit) => (commit, None),
         Err(e) => {
