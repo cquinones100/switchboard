@@ -1203,7 +1203,9 @@ impl Server {
 
     /// M-w: closes the pane, asking first when its program isn't a shell at
     /// its prompt (confirm.sh's question), unless the confirm_close setting
-    /// is off; in the tab's Claude pane it closes the tab instead. The pane
+    /// is off; in the tab's Claude pane, or in a tab whose one pane it is,
+    /// it closes the tab instead, since a lone pane closed alone would only
+    /// get a fresh shell in its place. The pane
     /// is the one M-w was pressed in, whatever has the focus by the time it
     /// is answered.
     pub fn close_here(&mut self, client: ClientId, pane: PaneId) {
@@ -1211,7 +1213,12 @@ impl Server {
             return;
         };
         let from_claude = setting_on("close_tab_from_claude");
-        if from_claude && self.tab_claude_pane(tab) == Some(pane) {
+        let is_tabs_one_pane = self
+            .tabs
+            .get(&tab)
+            .is_some_and(|t| t.layout.panes() == [pane])
+            && !self.closes_as_before(pane);
+        if from_claude && (self.tab_claude_pane(tab) == Some(pane) || is_tabs_one_pane) {
             self.close_tab_from_key(client, tab);
             return;
         }
@@ -1248,8 +1255,9 @@ impl Server {
     }
 
     /// Ends a pane M-w closed and takes it out, leaving its tab: the tab's
-    /// last pane gets a shell in its place rather than closing the tab,
-    /// which M-w closes only from its Claude pane or its sidebar row. A tool
+    /// last pane (beside Notes, or left last while M-w's question waited)
+    /// gets a shell in its place rather than closing the tab, which M-w
+    /// closes from its Claude pane, its one pane or its sidebar row. A tool
     /// in a pane's place gives the place back, and Notes' own tab closes
     /// with its last pane, as before. With `keep_tab` off (Settings'
     /// close_tab_from_claude), the last pane closes its tab.
@@ -1257,14 +1265,6 @@ impl Server {
         let Some(slot) = self.panes.get(&pane) else {
             return;
         };
-        let is_tool = slot.opts.contains_key(crate::diff::in_place::IN_PLACE);
-        // Notes, or anything in Notes' own tab (its placeholder while Notes
-        // is beside another tab), closes as before.
-        let is_notes = slot.opts.contains_key("@notes_pane")
-            || self
-                .tabs
-                .get(&slot.tab)
-                .is_some_and(|t| t.opts.get("@notes").map(String::as_str) == Some("1"));
         // Notes brought beside it doesn't count: left alone, it would go
         // home and take the tab with it (notes_orphan).
         let is_tabs_last_pane = self.tabs.get(&slot.tab).is_some_and(|t| {
@@ -1279,7 +1279,7 @@ impl Server {
                             .is_some_and(|s| s.opts.contains_key("@notes_pane"))
             })
         });
-        if keep_tab && is_tabs_last_pane && !is_tool && !is_notes {
+        if keep_tab && is_tabs_last_pane && !self.closes_as_before(pane) {
             // A fresh shell, not other work handed the tab: what the tab is
             // about (its directory, a sealed review) stays, which
             // respawn_pane clears.
@@ -1304,6 +1304,20 @@ impl Server {
             return;
         }
         self.kill_pane(pane);
+    }
+
+    /// A tool in a pane's place, Notes, or anything in Notes' own tab (its
+    /// placeholder while Notes is beside another tab): M-w closes it as the
+    /// prefix's `x` does, never its tab.
+    fn closes_as_before(&self, pane: PaneId) -> bool {
+        self.panes.get(&pane).is_some_and(|slot| {
+            slot.opts.contains_key(crate::diff::in_place::IN_PLACE)
+                || slot.opts.contains_key("@notes_pane")
+                || self
+                    .tabs
+                    .get(&slot.tab)
+                    .is_some_and(|t| t.opts.get("@notes").map(String::as_str) == Some("1"))
+        })
     }
 
     /// What a pane runs in front, its command line, or `None` when it is a

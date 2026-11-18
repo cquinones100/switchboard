@@ -2631,6 +2631,39 @@ fn m_w_in_a_tabs_claude_pane_asks_to_close_the_tab() {
             })
             && split_at_its_prompt
     });
+    // In its Claude pane M-w asks about the tab even with the split there,
+    // not only as the tab's one pane.
+    let split = tabs(&server.list())[1]["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] != claude.as_str())
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["select-pane", "-t", &claude]);
+    wait_list(&server, "Claude's pane in front beside the split", |l| {
+        tabs(l)[1]["panes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["id"] == claude.as_str() && p["active"] == true)
+    });
+    client.type_text(&format!("{ALT}w"));
+    client.wait_text("Close tab 2");
+    client.type_text("n");
+    client.wait_for("the question gone", |s| {
+        !s.iter().any(|l| l.contains("Close tab 2"))
+    });
+    server.ok(&["select-pane", "-t", &split]);
+    wait_list(&server, "the split in front again", |l| {
+        tabs(l)[1]["panes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["id"] == split.as_str() && p["active"] == true)
+    });
     client.type_text(&format!("{ALT}w"));
     wait_list(&server, "the split closed alone", |l| {
         tabs(l).len() == 2 && tabs(l)[1]["panes"].as_array().unwrap().len() == 1
@@ -2658,32 +2691,30 @@ fn m_w_in_a_tabs_claude_pane_asks_to_close_the_tab() {
 }
 
 #[test]
-fn m_w_in_a_tabs_last_pane_without_claude_keeps_the_tab() {
+fn m_w_in_a_tabs_one_pane_without_claude_closes_the_tab() {
     let server = TestServer::start();
     settings(&server, json!({}));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
     server.ok(&["new-tab", "-n", "second"]);
     client.wait_text("2:second");
-    let pane = tabs(&server.list())[1]["panes"][0]["id"].clone();
-    let tab = tabs(&server.list())[1]["id"].as_str().unwrap().to_string();
-    let dir = server.home.to_string_lossy().to_string();
-    server.ok(&["set", "-t", &tab, "@tab_dir", &dir]);
-    let old_pid = |l: &Value| tabs(l)[1]["panes"][0]["pid"].as_u64();
-    let before = old_pid(&server.list());
     client.type_text("sleep 100\r");
     wait_list(&server, "sleep in front", |l| {
         tabs(l)[1]["panes"][0]["command"] == "sleep"
     });
+    // Closing the pane alone would only give it a fresh shell, so M-w asks
+    // about the tab, as from its Claude pane.
     client.type_text(&format!("{ALT}w"));
-    client.wait_text("Close pane?");
-    client.type_text("\r");
-    wait_list(&server, "a fresh shell in the tab's pane", |l| {
-        tabs(l).len() == 2 && old_pid(l).is_some() && old_pid(l) != before
+    client.wait_text("Close tab 2");
+    client.type_text("n");
+    client.wait_for("the question gone", |s| {
+        !s.iter().any(|l| l.contains("Close tab 2"))
     });
-    assert_eq!(tabs(&server.list())[1]["panes"][0]["id"], pane);
-    // A fresh shell isn't other work: what the tab is about stays.
-    assert_eq!(tabs(&server.list())[1]["options"]["@tab_dir"], dir.as_str());
+    assert_eq!(tabs(&server.list()).len(), 2, "no is no");
+    client.type_text(&format!("{ALT}w"));
+    client.wait_text("Close tab 2");
+    client.type_text("\r");
+    wait_list(&server, "the tab closed", |l| tabs(l).len() == 1);
 }
 
 #[test]
