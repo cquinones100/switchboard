@@ -52,6 +52,162 @@ static LINK: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+").expect("a regex")
 });
 
+/// A link written without its scheme ("api.slack.com/apps"): a lowercase
+/// host of two or more labels, then a port, a path, a query or a fragment, or
+/// none, which holds no quote, so a quoted one ends at its closing quote.
+static BARE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)*\.([a-z]{2,})(?::[0-9]{1,5})?([/?#][A-Za-z0-9._~:/?#\[\]@!$&()*+,;=%-]*)?",
+    )
+    .expect("a regex")
+});
+
+/// A Markdown link's text, its brackets and the parenthesis that opens its
+/// address, which holds no bare link of its own.
+static LABEL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[[^\[\]\n]*\]\(").expect("a regex"));
+
+/// The top-level domains a bare link may end in besides a country's
+/// (`COUNTRIES`): the common ones, since a word ending in any other
+/// (`self.name`, `Cargo.toml`, `index.js`) is code or a file far more
+/// often than a site.
+const DOMAINS: &[&str] = &[
+    "com", "org", "net", "edu", "gov", "mil", "int", "io", "dev", "app", "ai", "info", "biz",
+    "xyz", "tech", "site", "online", "cloud", "page", "blog", "news", "design", "shop", "store",
+];
+
+/// The countries' domains, ISO 3166's two letters with `uk`, `eu` and `ac`,
+/// separated by spaces.
+const COUNTRIES: &str = "ac ad ae af ag ai al am ao aq ar as at au aw ax az ba bb bd be bf bg bh bi bj bm bn bo br bs bt bw by bz ca cc cd cf cg ch ci ck cl cm cn co cr cu cv cw cx cy cz de dj dk dm do dz ec ee eg er es et eu fi fj fk fm fo fr ga gd ge gf gg gh gi gl gm gn gp gq gr gs gt gu gw gy hk hm hn hr ht hu id ie il im in io iq ir is it je jm jo jp ke kg kh ki km kn kp kr kw ky kz la lb lc li lk lr ls lt lu lv ly ma mc md me mg mh mk ml mm mn mo mp mq mr ms mt mu mv mw mx my mz na nc ne nf ng ni nl no np nr nu nz om pa pe pf pg ph pk pl pm pn pr ps pt pw py qa re ro rs ru rw sa sb sc sd se sg sh si sk sl sm sn so sr ss st sv sx sy sz tc td tf tg th tj tk tl tm tn to tr tt tv tw tz ua ug uk us uy uz va vc ve vg vi vn vu wf ws ye yt za zm zw";
+
+/// The domains that are also a file's extension (`main.rs`,
+/// `notes.md`, `run.sh`, `main.rs#L42`), which a bare link ends in only
+/// with a path after.
+const FILE_LIKE: &[&str] = &[
+    "md", "rs", "py", "sh", "pl", "so", "mk", "cc", "ml", "ps", "sc", "in", "tf", "mm", "re", "cr",
+    "ai", "pm", "nu", "ac",
+];
+
+/// The links in a pane's text written without their scheme, by where they
+/// start, as `https://` and what was written: each a whole word, which no
+/// `/`, `.`, `@` or word character comes before (a path, an email
+/// address), Markdown's `*` taken off its end when it opened with one, followed by a space, a
+/// closing bracket or quote, or a sentence's punctuation; not one a
+/// Markdown link's text (`[x.io](https://...)`), nor one a
+/// hyperlink's text overlaps (`hyperlinks`) or that starts inside a link
+/// written with its scheme, though one whose query holds such a link is.
+/// One on the line under a wrapped link stays listed beside the join, as
+/// the half does, since a join can't be told from a link of its own.
+fn bare_links(text: &str, hyperlinks: &[(Range<usize>, String)]) -> Vec<(usize, String)> {
+    let schemed: Vec<Range<usize>> = LINK.find_iter(text).map(|m| m.range()).collect();
+    let labels: Vec<Range<usize>> = LABEL.find_iter(text).map(|m| m.range()).collect();
+    // The hyperlinks by where they start, each with the furthest any of
+    // them up to it reaches, so whether one overlaps a span is a search.
+    let mut linked: Vec<Range<usize>> = hyperlinks.iter().map(|(r, _)| r.clone()).collect();
+    linked.sort_by_key(|r| r.start);
+    let reach: Vec<usize> = linked
+        .iter()
+        .scan(0, |far, r| {
+            *far = (*far).max(r.end);
+            Some(*far)
+        })
+        .collect();
+    let mut found = Vec::new();
+    for c in BARE.captures_iter(text) {
+        let whole = c.get(0).expect("the match");
+        let domain = &c[1];
+        let path = c.get(2);
+        let before = text[..whole.start()].chars().last();
+        let end = whole.end();
+        let starts = before.is_none_or(|b| {
+            b.is_whitespace()
+                || "([{<\"'`*=,;".contains(b)
+                || (!b.is_ascii() && !b.is_alphanumeric())
+        });
+        let mut rest = text[end..].chars();
+        let next = rest.next();
+        let ends = match next {
+            None => true,
+            // An apostrophe inside a path's word (`o'connor`) doesn't close a
+            // link; one after a host is a possessive's (`slack.com's`), and one
+            // after a quote that opened the link closes it.
+            Some('\'' | '’') => {
+                path.is_none()
+                    || matches!(before, Some('\'' | '‘'))
+                    || rest.next().is_none_or(|c| !c.is_alphanumeric())
+            }
+            Some(c) if c.is_whitespace() || "\"'`)]}>*,;".contains(c) => true,
+            // Any script's punctuation (`。`, `—`, `”`) after it.
+            Some(c) if !c.is_ascii() && !c.is_alphanumeric() => true,
+            Some('.' | ':' | '!' | '?') => rest.next().is_none_or(|c| {
+                c.is_whitespace()
+                    || ".\"'`)]}>*".contains(c)
+                    || (!c.is_ascii() && !c.is_alphanumeric())
+            }),
+            Some(_) => false,
+        };
+        let known = (DOMAINS.contains(&domain)
+            || (domain.len() == 2 && COUNTRIES.split(' ').any(|c| c == domain)))
+            && (path.is_some_and(|p| p.as_str().starts_with('/')) || !FILE_LIKE.contains(&domain));
+        let label_of_link = labels
+            .partition_point(|r| r.start < whole.start())
+            .checked_sub(1)
+            .is_some_and(|i| labels[i].end > whole.start());
+        if !(starts && ends && known) || label_of_link {
+            continue;
+        }
+        let after = schemed.partition_point(|r| r.start <= whole.start());
+        let before_end = linked.partition_point(|r| r.start < end);
+        let inside = before_end
+            .checked_sub(1)
+            .is_some_and(|i| reach[i] > whole.start())
+            || after
+                .checked_sub(1)
+                .is_some_and(|i| schemed[i].contains(&whole.start()));
+        if inside {
+            continue;
+        }
+        // Off its end, once over it: Markdown's `*` when it opened with one or
+        // closes the bold its line opened before it, a sentence's punctuation,
+        // and a closing bracket it didn't open.
+        let mut written = &text[whole.start()..end];
+        // The line is read only for a link ending in `**`, which is rare.
+        let bold_closes = || {
+            let line_start = text[..whole.start()].rfind('\n').map_or(0, |at| at + 1);
+            text[line_start..whole.start()].matches("**").count() % 2 == 1
+        };
+        let emphasized = before == Some('*')
+            || (written
+                .trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']'])
+                .ends_with("**")
+                && bold_closes());
+        let count = |c: char| written.matches(c).count();
+        let (mut parens, mut squares) = (
+            count('(') as isize - count(')') as isize,
+            count('[') as isize - count(']') as isize,
+        );
+        while let Some(last) = written.chars().last() {
+            let off = match last {
+                '*' => emphasized,
+                ')' if parens < 0 => {
+                    parens += 1;
+                    true
+                }
+                ']' if squares < 0 => {
+                    squares += 1;
+                    true
+                }
+                c => ".,;:!?'".contains(c),
+            };
+            if !off {
+                break;
+            }
+            written = &written[..written.len() - last.len_utf8()];
+        }
+        found.push((whole.start(), format!("https://{written}")));
+    }
+    found
+}
+
 /// A link's text as a list shows it: one line, its spaces single, cut to
 /// 60 columns; nothing when it is the address itself.
 fn label(text: &str, url: &str) -> String {
@@ -117,6 +273,9 @@ fn found_links(text: &str, hyperlinks: &[(Range<usize>, String)], wrapped: bool)
                 found.push((m.start(), joined, String::new()));
             }
         }
+    }
+    for (at, url) in bare_links(text, hyperlinks) {
+        found.push((at, url, String::new()));
     }
     found.sort_by_key(|(at, _, _)| *at);
     let mut out: Vec<Shown> = Vec::new();
@@ -562,6 +721,214 @@ mod tests {
                 "https://x.example/b/",
                 "https://x.example/a"
             ]
+        );
+    }
+
+    #[test]
+    fn a_link_written_without_its_scheme_is_found_with_https() {
+        assert_eq!(
+            urls(&links_in("Create it at api.slack.com/apps from this", &[])),
+            vec!["https://api.slack.com/apps"]
+        );
+        assert_eq!(
+            urls(&links_in("see (github.com/acme/widgets).", &[])),
+            vec!["https://github.com/acme/widgets"]
+        );
+        assert_eq!(
+            urls(&links_in_unwrapped("`example.co.uk` and x.io")),
+            vec!["https://x.io", "https://example.co.uk"]
+        );
+        for text in [
+            "ada@example.com",
+            "src/main.rs",
+            "edit main.rs",
+            "Cargo.toml",
+            "v1.2.3",
+            "self.name",
+            "README.md",
+            "Terminal.app",
+            "e.g. this",
+            "foo.comment",
+        ] {
+            assert!(links_in(text, &[]).is_empty(), "{text}");
+        }
+        assert_eq!(
+            urls(&links_in("at https://x.com/a and www.x.com/a", &[])),
+            vec!["https://www.x.com/a", "https://x.com/a"]
+        );
+        assert_eq!(
+            urls(&links_in(
+                "x.io:8443/apps, x.io?view=apps and [api.slack.com/apps]",
+                &[]
+            )),
+            vec![
+                "https://api.slack.com/apps",
+                "https://x.io?view=apps",
+                "https://x.io:8443/apps",
+            ]
+        );
+        assert_eq!(
+            urls(&links_in("--url=x.io/a and x.com,y.io", &[])),
+            vec!["https://y.io", "https://x.com", "https://x.io/a"]
+        );
+        assert_eq!(
+            urls(&links_in("x.com/search?q=foo*bar", &[])),
+            vec!["https://x.com/search?q=foo*bar"]
+        );
+        assert_eq!(
+            urls(&links_in("**api.slack.com/apps** [**x.io/a**]", &[])),
+            vec!["https://x.io/a", "https://api.slack.com/apps"]
+        );
+        assert_eq!(
+            urls(&links_in("x.com/in?next=https://y.org/home", &[])),
+            vec![
+                "https://y.org/home",
+                "https://x.com/in?next=https://y.org/home"
+            ]
+        );
+        assert_eq!(
+            urls(&links_in("Open “api.slack.com/apps” to", &[])),
+            vec!["https://api.slack.com/apps"]
+        );
+        assert_eq!(
+            urls(&links_in("x.com/items?name=report*", &[])),
+            vec!["https://x.com/items?name=report*"]
+        );
+        assert_eq!(
+            urls(&links_in(
+                "Open x.io—then y.io... or z.io… board—w.io/a",
+                &[]
+            )),
+            vec![
+                "https://w.io/a",
+                "https://z.io",
+                "https://y.io",
+                "https://x.io"
+            ]
+        );
+        assert_eq!(
+            urls(&links_in("https://x.com/s?q=closing]", &[])),
+            vec!["https://x.com/s?q=closing]"]
+        );
+        assert_eq!(
+            urls(&links_in("x.com/issues?labels[]=bug", &[])),
+            vec!["https://x.com/issues?labels[]=bug"]
+        );
+        assert_eq!(
+            urls(&links_in(
+                "curl 'api.slack.com/apps'& f(u='x.io/a',t=5)",
+                &[]
+            )),
+            vec!["https://x.io/a", "https://api.slack.com/apps"]
+        );
+        assert_eq!(
+            urls(&links_in("U='api.slack.com/apps';F='x.org/docs'", &[])),
+            vec!["https://x.org/docs", "https://api.slack.com/apps"]
+        );
+        assert!(links_in("x.com/people/o'connor", &[]).is_empty());
+        assert_eq!(
+            urls(&links_in("rief „Besucht api.slack.com!“", &[])),
+            vec!["https://api.slack.com"]
+        );
+        assert_eq!(
+            urls(&links_in("请访问‘api.slack.com/apps’完成", &[])),
+            vec!["https://api.slack.com/apps"]
+        );
+        assert_eq!(
+            urls(&links_in("curl 'x.com/files/**'", &[])),
+            vec!["https://x.com/files/**"]
+        );
+        assert_eq!(
+            urls(&links_in("**Open api.slack.com/apps**.", &[])),
+            vec!["https://api.slack.com/apps"]
+        );
+        let long = format!("x.io/a{}", "]".repeat(20_000));
+        assert_eq!(urls(&links_in(&long, &[])), vec!["https://x.io/a"]);
+        assert_eq!(
+            urls(&links_in("Öffne „api.slack.com/apps“ für", &[])),
+            vec!["https://api.slack.com/apps"]
+        );
+        assert_eq!(
+            urls(&links_in("詳しくは api.slack.com/apps。", &[])),
+            vec!["https://api.slack.com/apps"]
+        );
+        assert_eq!(
+            urls(&links_in("Check api.slack.com’s and x.io's settings", &[])),
+            vec!["https://x.io", "https://api.slack.com"]
+        );
+        assert_eq!(
+            urls(&links_in("(Go to api.slack.com.)", &[])),
+            vec!["https://api.slack.com"]
+        );
+        for text in [
+            "x.io:٤٤٣/apps",
+            "x.io:abc",
+            "x.io|y",
+            "x.io.uk.foo",
+            "see main.rs#L42",
+            "Edit index.js, app.ts, or main.go",
+            "main.tf#L42",
+            "logo.ai and config.pm#L42 or config.nu#L3",
+            "configure.ac:42: error",
+        ] {
+            assert!(links_in(text, &[]).is_empty(), "{text}");
+        }
+        assert_eq!(
+            urls(&links_in(
+                "see https://x.example/docs/\n  api.slack.com/apps",
+                &[]
+            )),
+            vec![
+                "https://api.slack.com/apps",
+                "https://x.example/docs/api.slack.com/apps",
+                "https://x.example/docs/",
+            ]
+        );
+        let text = "see x.io/a then api.slack.com/apps";
+        let at = text.find("api").unwrap();
+        assert_eq!(
+            urls(&links_in(
+                text,
+                &[
+                    (0..3, "https://see.example/".into()),
+                    (at..at + 3, "https://slack.example/".into()),
+                ]
+            )),
+            vec![
+                "https://slack.example/",
+                "https://x.io/a",
+                "https://see.example/"
+            ]
+        );
+        assert_eq!(
+            urls(&links_in_unwrapped(
+                "[api.slack.com](https://api.slack.com/apps) [x.io guide](https://y.org/a)"
+            )),
+            vec!["https://y.org/a", "https://api.slack.com/apps"]
+        );
+        assert_eq!(
+            urls(&links_in_unwrapped("[api.slack.com/apps] and [x.io]")),
+            vec!["https://x.io", "https://api.slack.com/apps"]
+        );
+        assert_eq!(
+            urls(&links_in_unwrapped(
+                "a `[` then x.io/a or [the guide](https://y.org/s)"
+            )),
+            vec!["https://y.org/s", "https://x.io/a"]
+        );
+        assert_eq!(
+            urls(&links_in_unwrapped("[api.slack.com/apps] and [x.io]")),
+            vec!["https://x.io", "https://api.slack.com/apps"]
+        );
+        assert_eq!(
+            urls(&links_in_unwrapped(
+                "[api.slack.com](https://api.slack.com/apps)"
+            )),
+            vec!["https://api.slack.com/apps"]
+        );
+        assert_eq!(
+            urls(&links_in("at https://x.com/a", &[])),
+            vec!["https://x.com/a"]
         );
     }
 
