@@ -1486,7 +1486,10 @@ fn program_line(args: &[String], own_exe: &str) -> String {
         return draw::cut(&app, 60);
     }
     let name = match title_of(first) {
-        Some((exe, title)) => format!("{} {title}", program_name(exe)),
+        Some((exe, title)) => {
+            let title: Vec<String> = title.split(' ').map(without_query).collect();
+            format!("{} {}", program_name(exe), title.join(" "))
+        }
         None => program_name(first),
     };
     // A local path: an argument of its own, or an option's value after `=`
@@ -1497,13 +1500,7 @@ fn program_line(args: &[String], own_exe: &str) -> String {
             format!("{key}={}", crate::paths::tilde(value))
         }
         _ if arg.starts_with('/') => crate::paths::tilde(arg),
-        // A link without its query or fragment, where a signed link keeps
-        // its token.
-        _ if arg.contains("://") => match arg.find(['?', '#']) {
-            Some(at) => format!("{}…", &arg[..at]),
-            None => arg.clone(),
-        },
-        _ => arg.clone(),
+        _ => without_query(arg),
     };
     let words = std::iter::once(name.clone()).chain(rest.iter().map(short));
     draw::cut(&words.collect::<Vec<_>>().join(" "), 60)
@@ -1549,6 +1546,16 @@ fn app_of(args: &[String], own_exe: &str, short: bool) -> Option<String> {
         _ => return None,
     };
     Some(if short { brief } else { long }.to_string())
+}
+
+/// A link (`http://`, `https://`) without its query or fragment, where a
+/// signed link keeps its token; any other word as it is.
+fn without_query(word: &str) -> String {
+    let is_link = word.starts_with("http://") || word.starts_with("https://");
+    match word.find(['?', '#']).filter(|_| is_link) {
+        Some(at) => format!("{}…", &word[..at]),
+        None => word.to_string(),
+    }
 }
 
 /// A title a program wrote over its arguments (npm on Linux: `npm exec
@@ -1602,6 +1609,11 @@ mod tests {
             line(&["link-view", "https://a.dev/f?token=secret"]),
             "link-view https://a.dev/f…"
         );
+        assert_eq!(
+            line(&["worker https://a.dev/f?token=secret"]),
+            "worker https://a.dev/f…"
+        );
+        assert_eq!(line(&["rg", "https?://a.dev"]), "rg https?://a.dev");
         assert_eq!(line(&["./Build Tools/bin/worker", "-v"]), "worker -v");
         assert_eq!(
             line(&["npm exec @angular/cli serve"]),
