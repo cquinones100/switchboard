@@ -38,9 +38,10 @@
 //!                     straight on main, it is origin's copy, fetched first:
 //!                     the commits not yet pushed. Pass --base <commit> to
 //!                     review pushed ones.
-//!   --notes <file>    extra context appended to the prompt: findings from a
-//!                     previous round the author disputes, and known gaps the
-//!                     author has accepted, each with a reason
+//!   --notes <file>    extra context appended to the prompt: findings from
+//!                     earlier rounds the author fixed (and how) or disputes,
+//!                     and known gaps the author has accepted, each with a
+//!                     reason
 //!   --include-low     ask Codex to report low-severity findings too
 //!   --round <step>    run the round as one of review-loop's (`start` its
 //!                     first, `next` each after it), as "The loop's rounds"
@@ -204,7 +205,7 @@ reviewer of the current branch and prints its findings as JSON.
   -C <dir>           review the repository at <dir> (someone else's PR, from your main clone)
   --pr <number|url>  the PR to read the description of, when the branch doesn't lead to it
   --base <ref>       base to diff against (default: the PR's remote base, else origin's default)
-  --notes <file>     disputed findings and accepted known gaps, each with a reason
+  --notes <file>     fixed and disputed findings and accepted known gaps, each with a reason
   --include-low      report low-severity findings too
   --round <step>     a round of review-loop's: start, or next; counts the rounds and says what comes next
   --no-rules         leave the repository's and your own CLAUDE.md rules out of the prompt
@@ -903,7 +904,7 @@ Severity: critical is data loss, an exploitable security hole, or a crash on a c
 
 {low_rule}
 
-The author's notes may list disputed findings from earlier rounds and known gaps the author has chosen to accept for this PR. Do not raise a disputed finding again unless the author's reasoning is wrong, and do not report a known gap unless its impact is larger than the note admits or the stated reason does not hold. In either case say specifically why. A gap the notes do not mention is fair game.
+The author's notes may list findings from earlier rounds the author fixed (`Fixed` lines, each saying what was changed), findings the author disputes, and known gaps the author has chosen to accept for this PR. A fixed finding's concern is settled: do not raise it again unless the fix itself is wrong, and then report what is wrong with the fix, naming the line. Do not raise a disputed finding again unless the author's reasoning is wrong, and do not report a known gap unless its impact is larger than the note admits or the stated reason does not hold. In each case say specifically why. A finding that restates a fixed or disputed one, or a variant of it, in other words or at a nearby line, is not a finding. A gap the notes do not mention is fair game.
 
 Respond only with the JSON the schema asks for.",
         commits = untrusted("commit messages", p.commits),

@@ -59,8 +59,9 @@ skill tells the runner to read those before acting.
 
 In a Claude Code session on a branch that is ready for review, type
 `/review-loop`. Add `all` to also act on low-severity findings from the first
-round. The skill commits per round, records disputed findings and accepted
-known gaps in a notes file it passes back to Codex, stops after two consecutive
+round. The skill commits per round, records fixed and disputed findings and
+accepted known gaps in a notes file it passes back to Codex, so a later round
+doesn't raise what an earlier one settled, stops after two consecutive
 clean rounds or five rounds, and asks before pushing.
 
 `switchboard codex-review` can also be run by hand for a one-off second

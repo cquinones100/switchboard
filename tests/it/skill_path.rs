@@ -617,6 +617,43 @@ fn review_loop_runs_twenty_rounds_hands_free_and_five_otherwise() {
     );
 }
 
+// The loop's notes carry what each round fixed, per branch, so a later round
+// or loop doesn't fix it again.
+#[test]
+fn review_loop_notes_carry_fixed_disputed_and_known_gap_lines() {
+    let all = skills();
+    let (_, text) = all.iter().find(|(name, _)| name == "review-loop").unwrap();
+    let before = text
+        .split("## Before the first round\n")
+        .nth(1)
+        .and_then(|rest| rest.split("\n## ").next())
+        .expect("the section");
+    for said in [
+        "`review-notes-<branch>.md`",
+        "keep it and go on adding to it",
+        "three kinds of entries",
+        "`- Fixed: <title> (<file>:<line>): <what was changed, in a sentence>, in <short hash>`",
+        "`- Disputed: <title> (<file>:<line>): <why the finding is wrong>`",
+        "`- Known gap: <what is not handled> (<file>): <why that is acceptable for this PR>`",
+    ] {
+        assert!(before.contains(said), "{said}");
+    }
+    let rounds = text
+        .split("## Each round (at most 5, or 20 hands-free)\n")
+        .nth(1)
+        .and_then(|rest| rest.split("\n## ").next())
+        .expect("the rounds' section");
+    for said in [
+        "**Dispute it at once** when it restates a `Fixed` or `Disputed` line",
+        "add a `Fixed` line to the notes file for each finding fixed",
+    ] {
+        assert!(
+            rounds.to_lowercase().contains(&said.to_lowercase()),
+            "{said}"
+        );
+    }
+}
+
 #[test]
 fn review_loop_reviews_someone_elses_pr_from_outside_its_worktree_and_only_reports() {
     let all = skills();

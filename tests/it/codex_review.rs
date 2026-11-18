@@ -79,6 +79,48 @@ fn clone(tmp: &Path) -> std::path::PathBuf {
     work
 }
 
+// What an earlier round fixed reaches the reviewer, told it is settled
+// unless the fix itself is wrong, so the loop doesn't go round on it.
+#[test]
+fn a_fixed_line_in_the_notes_reaches_the_prompt_with_its_rule() {
+    let tmp = TempDir::new("cr-fixed");
+    let home = tmp.path();
+    let work = clone(home);
+    fs::write(work.join("a.txt"), "a\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "Pushed already"]);
+    git(home, &work, &["push", "-q", "origin", "main"]);
+    fs::write(work.join("b.txt"), "b\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "A change"]);
+    let notes = home.join("notes.md");
+    let fixed = "- Fixed: Off by one (a.txt:1): counted from 1, in abc1234";
+    fs::write(&notes, format!("{fixed}\n")).unwrap();
+
+    let run = review(
+        home,
+        &work,
+        &[
+            "--dry-run",
+            "--reviewer",
+            "claude",
+            "--notes",
+            &notes.to_string_lossy(),
+        ],
+    );
+    assert!(run.status.success(), "{}", text(&run.stderr));
+    let out = text(&run.stdout);
+    assert!(out.contains(fixed), "{out}");
+    assert!(
+        out.contains("A fixed finding's concern is settled: do not raise it again unless the fix itself is wrong, and then report what is wrong with the fix, naming the line."),
+        "{out}"
+    );
+    assert!(
+        out.contains("A finding that restates a fixed or disputed one, or a variant of it, in other words or at a nearby line, is not a finding."),
+        "{out}"
+    );
+}
+
 #[test]
 fn on_main_with_no_pr_it_reviews_the_commits_not_yet_on_origin() {
     let tmp = TempDir::new("cr-main");
