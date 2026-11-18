@@ -653,11 +653,13 @@ mod tests {
                 watch: String::new(),
                 files: vec!["src/a.js".into()],
                 touches: vec!["src/a.js".into()],
+                ..Default::default()
             }],
             place: Default::default(),
             chapter: Default::default(),
             hunks: Default::default(),
             missed: None,
+            ..Default::default()
         };
         let at = Cursor {
             path: Some("src/a.js".into()),

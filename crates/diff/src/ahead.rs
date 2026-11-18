@@ -49,7 +49,7 @@ pub fn commit(dir: &Path, plan: &str) -> Result<Option<String>, String> {
     let state = state_file(&facts.git_dir);
     // The commit told and the prompt's version it was told with, so a new
     // prompt tells it again.
-    let marker = format!("{} v{}", facts.head, story::VERSION);
+    let marker = format!("{} v{}", facts.head, story::version());
     if util::read_text(&state).is_some_and(|t| t.trim() == marker) {
         return Ok(None);
     }

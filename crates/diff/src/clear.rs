@@ -66,11 +66,15 @@ pub fn clear(dir: &Path) -> Result<Cleared, String> {
                     remove(&file, &mut done);
                 }
             }
-            let (key, _) = story::key_of(change);
-            if tell::being_told(&key) {
-                done.telling = true;
-            } else {
-                remove(&tell::story_dir().join(format!("{key}.txt")), &mut done);
+            // The story told as a map and as a list, each under its key.
+            for key in story::keys_of(change) {
+                if tell::being_told(&key) {
+                    done.telling = true;
+                } else {
+                    remove(&tell::story_dir().join(format!("{key}.txt")), &mut done);
+                    // The chapters read of it, kept beside it.
+                    let _ = std::fs::remove_file(tell::story_dir().join(format!("{key}.read")));
+                }
             }
         }
     }

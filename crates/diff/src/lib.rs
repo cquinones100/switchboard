@@ -112,6 +112,11 @@ pub fn manifest() -> Manifest {
                     "Diff story notes on changes",
                     "M-d's diff shows Haiku's note over each change worth one, why it is needed, and names the chapter of a change that belongs to another one than its file; off, only the list's chapters",
                 ),
+            Setting::new("diff_story_map", true)
+                .said(
+                    "Tell the diff's story as a map",
+                    "M-d tells the diff's story as a map: its chapters in stories (the main one, a thread for each part it can be read without, and the side work), each chapter with the chapters it builds on, as Haiku tells it, and a change shown in every chapter that can't be read without it. The diff gets a Map mode beside its files (g m and g f, or m), opening in the mode used last; off, the story is one list of chapters and there is no Map mode. A story already told is told again the first time either way",
+                ),
             Setting::new("diff_story_ahead", true)
                 .said(
                     "Diff story told ahead",

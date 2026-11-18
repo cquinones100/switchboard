@@ -690,6 +690,13 @@
     "default": false
   },
   {
+    "key": "diff_story_map",
+    "category": "Diff",
+    "label": "Tell the diff's story as a map",
+    "description": "M-d tells the diff's story as a map: its chapters in stories (the main one, a thread for each part it can be read without, and the side work), each chapter with the chapters it builds on, as Haiku tells it, and a change shown in every chapter that can't be read without it. The diff gets a Map mode beside its files (g m and g f, or m), opening in the mode used last; off, the story is one list of chapters and there is no Map mode. A story already told is told again the first time either way",
+    "default": true
+  },
+  {
     "key": "diff_story_notes",
     "category": "Diff",
     "label": "Diff story notes on changes",

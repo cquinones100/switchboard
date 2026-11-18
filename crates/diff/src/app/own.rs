@@ -62,6 +62,8 @@ pub(super) enum Choice {
     WorkspaceSettings,
     /// One of the row's buttons, by its place in `BUTTONS`.
     Keys(usize),
+    /// The story's map or the files, with a story told as a map.
+    Mode(super::Mode),
 }
 
 /// The diff's menu, and what each of its options does.
@@ -821,16 +823,26 @@ impl App {
         self.visual = None;
         self.list_visual = None;
         self.count = None;
-        let mut choices = vec![if self.opts.alone {
+        let mut choices = Vec::new();
+        let mut options = Vec::new();
+        // With a story told as a map, its two modes first, the one shown
+        // chosen as the menu opens.
+        if self.mapped() {
+            for (label, mode) in super::map::MENU {
+                choices.push(Choice::Mode(mode));
+                options.push(MenuOption::new(label));
+            }
+        }
+        choices.push(if self.opts.alone {
             Choice::Settings
         } else {
             Choice::WorkspaceSettings
-        }];
-        let mut options = vec![MenuOption::new(if self.opts.alone {
+        });
+        options.push(MenuOption::new(if self.opts.alone {
             "Settings"
         } else {
             "Settings are in Switchboard's Settings (Diff)"
-        })];
+        }));
         for (i, (label, keys)) in BUTTONS.iter().enumerate() {
             // Ask only with diff_ask; in a commit of the history, which
             // doesn't change, no Refresh.
@@ -840,7 +852,11 @@ impl App {
             choices.push(Choice::Keys(i));
             options.push(MenuOption::new(*label));
         }
-        let mut menu = Menu::new("Diff", options);
+        let shown = choices
+            .iter()
+            .position(|c| *c == Choice::Mode(self.mode))
+            .unwrap_or(0);
+        let mut menu = Menu::new("Diff", options).at(shown);
         // Beside the click, unless boxes go in the middle (boxes_near_click).
         if let Some(at) = near.filter(|_| switchboard_ui::settings::is_on("boxes_near_click")) {
             menu.open_near(at);
@@ -906,6 +922,7 @@ impl App {
     fn take_choice(&mut self, choice: Option<Choice>) -> Act {
         match choice {
             Some(Choice::Settings) => self.toggle_settings(),
+            Some(Choice::Mode(mode)) => self.choose_mode(mode),
             Some(Choice::WorkspaceSettings) => {
                 // Mission control's Settings, where the Diff category holds
                 // them; with no server to ask, where they are is said.

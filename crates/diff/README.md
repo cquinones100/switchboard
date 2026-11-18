@@ -1,6 +1,6 @@
 # switchboard-diff
 
-A branch's changes as GitHub's "Files changed" shows them, side by side in your terminal: the changed files in reading order on the left, the chosen file's two sides on the right, with syntax colors and the changed words marked. With Claude Code installed, the change is told as a story, in chapters, each with why it is there.
+A branch's changes as GitHub's "Files changed" shows them, side by side in your terminal: the changed files in reading order on the left, the chosen file's two sides on the right, with syntax colors and the changed words marked. With Claude Code installed, the change is told as a story, in chapters, each with why it is there, and as a map of which chapter builds on which, read from the chapter the change exists for down.
 
 It is [Switchboard](../../README.md)'s diff (`M-d` there) as an app of its own. It runs in any terminal and any git repository, with no Switchboard running. It is also the first plugin on Switchboard's plugin API ([`switchboard-plugin-api`](../plugin-api/src/lib.rs)), which is how the workspace loads it.
 
@@ -35,6 +35,8 @@ switchboard-diff --working [dir]        # the changes not yet committed, staged 
 
 The keys are Vim's, and the same as in Switchboard: [Keys in the diff](../../docs/guide.md#keys-in-the-diff) lists them. The cursor stays in the file it is in, stopping at its first and last lines: `]f` and `[f` go to the next file and the one before. `q` closes it. A drag of the mouse selects text in the part of the screen it starts in and copies it when the button is let go, a side of the diff without its line numbers or the other side; a double click takes a word and a triple click a line. With the keys, `v` selects lines and `y` copies their text.
 
+A story told as a map opens on the map: a box for each chapter, the goal at the top, an arrow from each to the chapters it builds on, as Haiku tells it. `j`, `k`, `h` and `l` move box to box, `Enter` opens a chapter with its own map of the things it adds or changes, and `]c` and `[c` read the story from the goal down. A change shown in a second chapter that can't be read without it sits under an "also in chapter" line. `g m` shows the map, `g f` the chosen chapter's file in the file view, `m` a menu of the two, and `]s` and `[s` the change's other stories (a part the main story can be read without, and the side work). `"diff_story_map": false` in the settings tells the story as one list instead.
+
 The first line of the screen is its header: its name, the repository and what the branch is compared with, and its version. The last is a row of buttons, each pressing its keys in the file list, with Settings before Close. `m` in the file list, or a right click, opens a menu of the same.
 
 ## Settings
@@ -48,6 +50,7 @@ The first line of the screen is its header: its name, the repository and what th
 | Diff story progress | `diff_story_progress` | on |
 | Diff story a page at a time | `diff_story_pages` | on |
 | Diff story notes on changes | `diff_story_notes` | on |
+| Tell the diff's story as a map | `diff_story_map` | on |
 | Uncommitted changes in M-d | `diff_uncommitted` | on |
 | Diff file list wide | `diff_list_wide` | on |
 | Ask Claude about the diff | `diff_ask` | on |

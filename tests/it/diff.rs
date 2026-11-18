@@ -137,7 +137,7 @@ fn stories_asked(home: &Path) -> usize {
     std::fs::read_to_string(home.join("claude-asked"))
         .unwrap_or_default()
         .lines()
-        .filter(|l| l.contains("defend it, as a short story"))
+        .filter(|l| l.contains("You present a code change to the colleagues reviewing it"))
         .count()
 }
 

@@ -206,6 +206,13 @@ pub struct Asked {
     pub hunks: Hunks,
 }
 
+impl Asked {
+    /// An answer read as this diff's story.
+    pub fn parse(&self, text: &str) -> Result<Story, Option<String>> {
+        story::parse(text, &self.paths, super::order::generated, &self.hunks)
+    }
+}
+
 /// Where stories are kept: the cache's `diff-story/`.
 pub fn story_dir() -> PathBuf {
     paths::cache_dir().join("diff-story")
@@ -250,9 +257,7 @@ impl Teller {
         let dir = story_dir();
         let file = dir.join(format!("{}.txt", asked.key));
         let partial = dir.join(format!("{}.partial", asked.key));
-        let parse =
-            |text: &str| story::parse(text, &asked.paths, super::order::generated, &asked.hunks);
-        let kept = || -> Option<Story> { parse(&util::read_text(&file)?).ok() };
+        let kept = || -> Option<Story> { asked.parse(&util::read_text(&file)?).ok() };
         if let Some(story) = kept() {
             return heard(Heard::Told(Box::new(story)));
         }
@@ -305,7 +310,7 @@ impl Teller {
             "--strict-mcp-config",
             "--disable-slash-commands",
             "--system-prompt",
-            story::PROMPT,
+            story::prompt(),
             "--output-format",
             "stream-json",
             "--include-partial-messages",
@@ -445,9 +450,7 @@ impl Teller {
             (ended && error_text.is_none() && !streamed_text.is_empty()).then_some(streamed_text);
         let text = if code == 0 { answer.or(whole) } else { None };
         let first = |s: &str| s.lines().next().unwrap_or("").trim().to_string();
-        let told = text
-            .as_deref()
-            .map(|t| story::parse(t, &asked.paths, super::order::generated, &asked.hunks));
+        let told = text.as_deref().map(|t| asked.parse(t));
         let why = if code == 124 {
             Some(format!(
                 "Haiku took longer than {} seconds",

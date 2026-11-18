@@ -160,7 +160,21 @@ pub fn story_ahead(dirs: &[(PathBuf, String)], exe: &str) {
         return;
     }
     state.looked = Some(Instant::now());
-    let heads: Vec<Head> = dirs.iter().filter_map(|(d, _)| head_of(d)).collect();
+    // Each commit told once in each shape: a map and a list are kept under
+    // keys of their own, so turning diff_story_map tells it again.
+    let shape = if settings::is_on("diff_story_map") {
+        "map"
+    } else {
+        "list"
+    };
+    let heads: Vec<Head> = dirs
+        .iter()
+        .filter_map(|(d, _)| head_of(d))
+        .map(|h| Head {
+            sha: format!("{} {shape}", h.sha),
+            ..h
+        })
+        .collect();
     let Some(head) = next(&heads, &state.told, &state.failed).cloned() else {
         return;
     };

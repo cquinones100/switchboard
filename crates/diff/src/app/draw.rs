@@ -96,6 +96,7 @@ impl App {
         self.rows = area.height.max(5);
         self.buttons.clear();
         self.spots.clear();
+        self.hits.clear();
         self.ask_rect = None;
         self.answer_rect = None;
         if let Some(text) = self.failed.clone() {
@@ -147,15 +148,26 @@ impl App {
             self.draw_message(buf);
             return None;
         }
-        self.draw_list(buf);
-        let mut cursor = self.draw_diff(buf);
-        // The list greyed while the file has the keys. The file is never
-        // greyed: with the keys in the list it shows the list's chosen
-        // file, which is what is being read from there.
-        if self.focus != Focus::List {
-            let file = self.diff_area();
-            let list = Rect::new(0, 0, file.x.saturating_sub(1), file.height);
-            kit::unfocused(buf, list, &self.theme());
+        let mut cursor = None;
+        if self.on_map() {
+            // The story's map, one pane with the keys.
+            self.draw_map(buf);
+        } else if self.mode == super::Mode::Map && self.telling == Telling::Waiting {
+            // The map of the change read again, still being told.
+            let line = format!("{} Telling the story as a map", self.spinner());
+            self.centred(buf, &[(line, Style::new().add_modifier(Modifier::BOLD))]);
+        } else {
+            self.draw_list(buf);
+            cursor = self.draw_diff(buf);
+            self.things_hits();
+            // The list greyed while the file (or a chapter's own map) has the
+            // keys. The file is never greyed: with the keys in the list it
+            // shows the list's chosen file, which is what is being read.
+            if self.focus != Focus::List || self.thing.is_some() {
+                let file = self.diff_area();
+                let list = Rect::new(0, 0, file.x.saturating_sub(1), file.height);
+                kit::unfocused(buf, list, &self.theme());
+            }
         }
         if self.has_buttons() {
             self.draw_buttons(buf);
@@ -184,7 +196,7 @@ impl App {
             self.draw_menu(buf);
             cursor = None;
         }
-        if self.focus == Focus::List {
+        if self.focus == Focus::List || self.thing.is_some() {
             cursor = None;
         }
         cursor
@@ -196,6 +208,12 @@ impl App {
     pub(super) fn footer_keys(&self) -> Vec<(&'static str, &'static str)> {
         let mut keys = if self.filtering {
             vec![("↑↓", "move"), ("↵", "keep"), ("esc", "clear")]
+        } else if self.on_map() {
+            vec![("↑↓←→", "move"), ("↵", "open"), ("esc", "close")]
+        } else if self.thing.is_some() {
+            vec![("↑↓", "move"), ("↵", "its hunk"), ("esc", "list")]
+        } else if self.focus == Focus::List && self.in_chapter() {
+            vec![("↑↓", "move"), ("↵", "read"), ("esc", "the map")]
         } else if self.focus == Focus::List {
             vec![("↑↓", "move"), ("↵", "read"), ("esc", "close")]
         } else {
@@ -433,6 +451,9 @@ impl App {
                 let (a, b) = (place(from)?, place(self.at)?);
                 Some(a.min(b)..=a.max(b))
             });
+        // The way back heads only the list's first section; a later one
+        // (staged after not staged) keeps its own label.
+        let first_header = rows.iter().position(|r| matches!(r, ListRow::Header(_)));
         for (i, row) in rows.iter().enumerate().skip(self.list_top).take(h) {
             let y = (i - self.list_top) as u16 + pinned;
             self.spot(Pane::List, Rect::new(0, y, w, 1), 0, i as i64, false);
@@ -458,6 +479,26 @@ impl App {
                             Span::raw(" "),
                             Span::styled(title.clone(), Tone::Text.bold(&theme)),
                         ],
+                        // A chapter opened from the map: the way back to
+                        // its story's map.
+                        (None, Some(_), Some(_))
+                            if self.in_chapter() && Some(i) == first_header =>
+                        {
+                            self.hits
+                                .push((super::map::Hit::Back, Rect::new(0, y, w, 1)));
+                            let lit = self.lit == Some(super::map::Hit::Back);
+                            vec![
+                                Span::styled(" ‹ ", Tone::Accent.bold(&theme)),
+                                Span::styled(
+                                    self.shown_story_title(),
+                                    if lit {
+                                        Tone::Text.bold(&theme)
+                                    } else {
+                                        Tone::Dim.bold(&theme)
+                                    },
+                                ),
+                            ]
+                        }
                         // The page of what isn't committed yet is named, the
                         // others counted among the chapters told.
                         (None, Some(p), Some(_)) if self.uncommitted_chapter() == Some(p) => {
@@ -569,6 +610,14 @@ impl App {
                         .count();
                     let text = match (&self.title, self.page, &self.story) {
                         (Some((title, _)), _, _) => title.clone(),
+                        // A chapter opened from the map: the way back to it.
+                        (None, Some(_), Some(_))
+                            if self.in_chapter() && Some(i) == first_header =>
+                        {
+                            self.hits
+                                .push((super::map::Hit::Back, Rect::new(0, y, w, 1)));
+                            format!(" ‹ {}", self.shown_story_title())
+                        }
                         (None, Some(p), Some(s)) => {
                             format!(" Page {p} of {} ({n})", s.chapters.len())
                         }
@@ -631,6 +680,11 @@ impl App {
                         " bin".to_string()
                     } else {
                         format!(" +{} −{}", e.additions, e.deletions)
+                    };
+                    // A file the open chapter shows a hunk of from another.
+                    let counts = match self.also_of(&e.path, self.run_of(e)) {
+                        Some(n) => format!(" also {n}{counts}"),
+                        None => counts,
                     };
                     let cw = width(&counts) as u16;
                     let (dir, name) = match e.path.rsplit_once('/') {
@@ -769,6 +823,14 @@ impl App {
             format!("+{} −{}", e.additions, e.deletions)
         };
         let mark = if self.changed_since(e) { "●" } else { " " };
+        // In an open chapter, a file shown from another one says which.
+        let also = self
+            .also_of(&e.path, self.run_of(e))
+            .map(|n| format!("also {n} "));
+        let counts = match also {
+            Some(also) => format!("{also}{counts}"),
+            None => counts,
+        };
         let (dir, name) = match e.path.rsplit_once('/') {
             Some((d, n)) => (format!("{d}/"), n.to_string()),
             None => (String::new(), e.path.clone()),
@@ -816,6 +878,16 @@ impl App {
     /// on one, and a rule; nothing without a story or UX
     /// 2.0.
     pub(super) fn chapter_head(&self, cols: usize) -> Vec<Vec<Span<'static>>> {
+        let mut out = self.chapter_title(cols);
+        out.extend(self.things_rows(cols));
+        out
+    }
+
+    /// The chapter's lines over the diff with UX 2.0: its number and title
+    /// with what the change is compared with at the right (in a chapter
+    /// opened from the map, how much of its story is read and the way
+    /// back), its why, its watch line, and a rule.
+    pub(super) fn chapter_title(&self, cols: usize) -> Vec<Vec<Span<'static>>> {
         if !self.opts.ux2 {
             return Vec::new();
         }
@@ -845,11 +917,15 @@ impl App {
                 Tone::Text.bold(&theme),
             ));
         }
-        let right = self
-            .change
-            .as_ref()
-            .map(|c| format!("{} ", c.against()))
-            .unwrap_or_default();
+        let right = if self.in_chapter() {
+            let (read, of) = self.read_of_shown();
+            format!("✓ {read} of {of} read · g m the map ")
+        } else {
+            self.change
+                .as_ref()
+                .map(|c| format!("{} ", c.against()))
+                .unwrap_or_default()
+        };
         let room = cols.saturating_sub(width(&right) + 1);
         let mut first = kit::fit(title, room, Style::new());
         first.push(Span::raw(" "));
@@ -1040,7 +1116,12 @@ impl App {
         let area = self.diff_area();
         let Some(entry) = self.current().cloned() else {
             if let Some(change) = &self.change {
-                let text = if !self.path_filter.trim().is_empty() {
+                let text = if self.page.is_some()
+                    && self.order.is_empty()
+                    && self.path_filter.trim().is_empty()
+                {
+                    "This chapter's files aren't in the diff as it is now: they changed back since its commits.".to_string()
+                } else if !self.path_filter.trim().is_empty() {
                     format!(
                         "No file's path matches “{}”. Backspace or esc widens it.",
                         self.path_filter.trim()
@@ -1232,7 +1313,7 @@ impl App {
             let y = y0 + k as u16;
             let place = base + i64::from(y);
             match line {
-                Line::Fold { .. } | Line::Card(_) => {
+                Line::Fold { .. } | Line::Card(_) | Line::Also(..) => {
                     let whole = Rect { y, ..across };
                     spots.push(Spot::new(Pane::Wide, whole, area.x, place, false));
                 }
@@ -1264,7 +1345,7 @@ impl App {
                             .bg(Color::Indexed(if self.opts.light { 254 } else { 235 })),
                     );
                 }
-                Line::Card(spans) => {
+                Line::Card(spans) | Line::Also(_, _, spans) => {
                     put_line(buf, area.x, y, area.width, &Spans::from(spans.clone()));
                 }
                 Line::Note { new_side, text } => {
@@ -1419,7 +1500,13 @@ impl App {
             .iter()
             .filter(|h| run.is_none_or(|r| h.run == r))
         {
-            if hunk.chapter == page {
+            // The page's own hunks, and those it shows again from another
+            // chapter, at full strength.
+            let again = story
+                .repeats
+                .get(&hunk.id)
+                .is_some_and(|shown| shown.contains(&page));
+            if hunk.chapter == page || again {
                 continue;
             }
             for (new_side, first, span) in [
@@ -1459,7 +1546,6 @@ impl App {
     pub(super) fn draw_buttons(&mut self, buf: &mut Buffer) {
         let theme = self.theme();
         let y = self.rows.saturating_sub(1);
-        let mut x = 1;
         // Alone, Settings and Close are always there: on a screen too
         // narrow for the row, the buttons before them give way.
         let bar = self.bar_buttons();
@@ -1468,6 +1554,18 @@ impl App {
             .iter()
             .map(|(_, label)| width(label) as u16 + 3)
             .sum();
+        // The Map / Files switch leads the row (board 125) only where every
+        // button still fits after it; else m and a right click switch.
+        let buttons: u16 = bar.iter().map(|(_, label)| width(label) as u16 + 3).sum();
+        let switch = {
+            let (spans, _) = kit::choice_switch(&["Map", "Files"], None, None, &[], false, &theme);
+            kit::spans_width(&spans) as u16 + 1
+        };
+        let mut x = if self.settings.is_none() && 1 + switch + buttons < self.cols {
+            self.draw_switch(buf, 1, y)
+        } else {
+            1
+        };
         let mut full = false;
         for (i, (button, label)) in bar.iter().copied().enumerate() {
             let w = width(label) as u16 + 2;
@@ -1494,6 +1592,9 @@ impl App {
             }
             if self.opts.alone {
                 help.push_str(" · M-m settings");
+            }
+            if self.mapped() {
+                help.insert_str(0, "g m map · g f files · ");
             }
             help.push_str(" · q close");
             help

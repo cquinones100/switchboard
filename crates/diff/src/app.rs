@@ -17,6 +17,10 @@
 //! Markdown. Without a story, the files keep the kinds' order and Haiku's
 //! order of the code by its paths (order.rs).
 //!
+//! A story told as a map (the diff_story_map setting) opens on the map of
+//! its chapters, a mode beside the file view (app/map.rs): `g m` and `g f`
+//! switch between the two, and `m` asks which.
+//!
 //! `ga` asks Haiku a question about the change (ask.rs): a box to type it
 //! in, then a window on the right half with the answer streamed in.
 //!
@@ -94,8 +98,12 @@ use crate::host::host;
 use crate::{settings, util};
 
 mod draw;
+mod map;
 mod own;
 mod select;
+
+pub use map::Mode;
+use map::{Hit, Laid, Place_};
 
 /// The list's narrow width, and how wide a list must be to head a chapter
 /// with its whole why (narrower, its first sentence, the rest in the bar).
@@ -173,6 +181,15 @@ pub struct Options {
     /// The diff runs alone, as `switchboard-diff`: its own header, its
     /// Settings button and its settings view on M-m.
     pub alone: bool,
+    /// The story told as a map, with a Map mode beside the files
+    /// (diff_story_map, with diff_story).
+    pub map: bool,
+    /// The mode used last and the chapters read are kept between runs;
+    /// off in the tests.
+    pub keep: bool,
+    /// A click takes an option of a menu, and a right click opens one
+    /// (menu_mouse).
+    pub menu_mouse: bool,
 }
 
 impl Options {
@@ -198,6 +215,9 @@ impl Options {
             pane_arrows: on("pane_arrows"),
             scroll_bars: on("scroll_bars"),
             alone: crate::host::is_alone(),
+            map: story && on("diff_story_map"),
+            keep: true,
+            menu_mouse: on("menu_mouse"),
             haiku: true,
             server: host().in_pane(),
             clipboard: true,
@@ -325,6 +345,10 @@ enum Line {
     /// With UX 2.0, a row of the card a hunk's note is drawn in under the
     /// hunk, across both sides.
     Card(Vec<Span<'static>>),
+    /// The line over a hunk a chapter shows from another, across both
+    /// sides: that chapter's number and the hunk's id (none for the line at
+    /// a file's head), which Enter and a click go to.
+    Also(usize, Option<String>, Vec<Span<'static>>),
 }
 
 /// A hunk's note card with the last lines of its hunk, a side and a
@@ -451,6 +475,8 @@ enum Button {
     Settings,
     /// A row of the settings view.
     Option(usize),
+    /// One of the two modes, in the switch at the head of the row.
+    Mode(Mode),
     AskSend,
     AskCancel,
     AnswerClose,
@@ -540,6 +566,11 @@ pub const KEYS: &[(&str, &[KeyRow])] = &[
                 "copy a link to the line on GitHub (the lines selected)",
             ),
             key_row("yS", "copy the story as Markdown"),
+            key_row(
+                "gm gf",
+                "the story's map, and the chosen chapter's file in the file view",
+            ),
+            key_row("m", "the view's menu: the map or the files"),
             ask_row("ga", "ask Claude about the diff"),
             key_row(
                 "m",
@@ -548,6 +579,22 @@ pub const KEYS: &[(&str, &[KeyRow])] = &[
             key_row("S-F10", "the diff's menu, from the list or the diff"),
             key_row("q esc", "close the diff (esc in the file list)"),
             key_row("^c", "close the diff and go back to the pane"),
+        ],
+    ),
+    (
+        "M-d: the story's map",
+        &[
+            key_row(
+                "j k h l",
+                "down a level to what the chapter builds on, up to what needs it, across a level",
+            ),
+            key_row("↵", "open the chosen chapter, with its own map"),
+            key_row(
+                "]c [c",
+                "the next chapter read from the goal down, the one before",
+            ),
+            key_row("]s [s", "the next story's map, the one before"),
+            key_row("gf", "the chosen chapter's file in the file view"),
         ],
     ),
     (
@@ -697,6 +744,33 @@ pub struct App {
     /// The chapter shown as a page, and the file the whole diff showed.
     page: Option<usize>,
     whole_at: Option<String>,
+    /// With a story told as a map (map.rs): which of the two modes is
+    /// shown, the story whose map it is, the chapter chosen on it, and the
+    /// chapters read.
+    mode: Mode,
+    thread: usize,
+    map_at: usize,
+    read: HashSet<usize>,
+    /// The open chapter's own map laid out, and the thing chosen on it
+    /// while it has the keys.
+    things: Option<Laid>,
+    thing: Option<usize>,
+    /// Where each thing of the map a click lands on was last drawn, and
+    /// the one under the mouse.
+    hits: Vec<(Hit, Rect)>,
+    lit: Option<Hit>,
+    /// The chosen chapter a press landed on, opened once the mouse is let
+    /// go with nothing dragged over.
+    open_on_up: Option<usize>,
+    /// The "also in chapter" line a press landed on, gone to once the
+    /// mouse is let go with nothing dragged over.
+    also_on_up: Option<(usize, Option<String>)>,
+    /// Where Files mode was left, for the way back from the map.
+    files_place: Option<Place_>,
+    /// The chapter open on the map when the menu switched to the files,
+    /// which the menu's Map opens again.
+    map_page: Option<usize>,
+    map_place: Option<Place_>,
     ask_box: Option<AskBox>,
     answer: Option<Answer>,
     asks: u64,
@@ -858,6 +932,19 @@ impl App {
             raw: false,
             page: None,
             whole_at: None,
+            mode: Mode::Files,
+            thread: 0,
+            map_at: 1,
+            read: HashSet::new(),
+            things: None,
+            thing: None,
+            hits: Vec::new(),
+            lit: None,
+            open_on_up: None,
+            also_on_up: None,
+            files_place: None,
+            map_page: None,
+            map_place: None,
             ask_box: None,
             answer: None,
             asks: 0,
@@ -1088,6 +1175,7 @@ impl App {
                 self.telling = Telling::Untold(why);
                 self.cover = None;
                 self.show_story(None);
+                let _ = self.settle_mode();
                 self.sort();
                 self.ask_order();
             }
@@ -1218,6 +1306,10 @@ impl App {
             _ => told.clone(),
         };
         self.told = told;
+        if !self.mapped() {
+            self.thing = None;
+            self.things = None;
+        }
         if self
             .page
             .is_some_and(|p| self.story.as_ref().is_none_or(|s| p > s.chapters.len()))
@@ -1226,6 +1318,17 @@ impl App {
             self.whole_at = None;
             self.lines.clear();
         }
+    }
+
+    /// No map, and none coming (the change read again has no story, or
+    /// one that is told as a list): the files as they were left before
+    /// the map took their place. A map still being told keeps the mode.
+    fn settle_mode(&mut self) -> bool {
+        let falls = !self.mapped() && self.mode == Mode::Map && self.telling != Telling::Waiting;
+        if falls {
+            self.files_again();
+        }
+        falls
     }
 
     /// R: the change read again off the screen's thread, as it was read
@@ -1309,8 +1412,23 @@ impl App {
                 self.teller.stop();
                 self.teller = Teller::default();
             }
+            // The story to come is another one, whose chapters aren't
+            // this one's by number: a chapter open from the map closes,
+            // and the new story's map shows.
+            if self.mode == Mode::Map {
+                self.page = None;
+                self.whole_at = None;
+                self.thing = None;
+                self.things = None;
+            }
+            self.forget_pages();
             self.show_story(None);
             self.ask_story(false);
+            // The files where they were left: nothing of the chapter's
+            // place is put back over them.
+            if self.settle_mode() {
+                return;
+            }
         }
         self.sort();
         let entries = self.entries();
@@ -1364,10 +1482,41 @@ impl App {
                 .and_then(|s| s.chapters.get(p - 1))
                 .map(|c| c.touches.iter().map(String::as_str).collect())
         });
+        // A file listed twice (staged, and changed since) is on the page
+        // by the diff its hunks there are from; one with no hunk of the
+        // story's (binary, renamed) by its path alone.
+        let of_page = |entry: &Entry| -> bool {
+            // A story told as a list lists a page's files by their path,
+            // as it did.
+            if !self.mapped() {
+                return true;
+            }
+            let (Some(page), Some(story), Some(run)) = (self.page, &self.story, self.run_of(entry))
+            else {
+                return true;
+            };
+            let hunks: Vec<&story::HunkNote> = story
+                .hunks
+                .get(&entry.path)
+                .map(Vec::as_slice)
+                .unwrap_or(&[])
+                .iter()
+                .filter(|h| {
+                    h.chapter == page || story.repeats.get(&h.id).is_some_and(|c| c.contains(&page))
+                })
+                .collect();
+            // An entry whose diff has no hunk of the file's at all (a
+            // staged rename beside an unstaged edit) by its path.
+            let own_run = story
+                .hunks
+                .get(&entry.path)
+                .is_some_and(|all| all.iter().any(|h| h.run == run));
+            hunks.is_empty() || !own_run || hunks.iter().any(|h| h.run == run)
+        };
         (0..entries.len())
             .filter(|&i| {
                 page.as_ref()
-                    .is_none_or(|p| p.contains(entries[i].path.as_str()))
+                    .is_none_or(|p| p.contains(entries[i].path.as_str()) && of_page(&entries[i]))
             })
             .collect()
     }
@@ -1465,15 +1614,12 @@ impl App {
         let told = change.told_part();
         let (key, paths) = story::key_of(told);
         let entries = story_entries(told);
-        let (input, hunks) = if change.to_work_tree() {
-            let (diffs, hunks) = story::split(&told.runs());
+        let (diffs, hunks) = story::split(&told.runs());
+        let input = if change.to_work_tree() {
             let commits = story::commits(&told.raw_commits);
-            (
-                story::input(&entries, &diffs, &hunks, &commits, &context),
-                hunks,
-            )
+            story::input(&entries, &diffs, &hunks, &commits, &context)
         } else {
-            (self.input.clone(), self.hunks.clone())
+            self.input.clone()
         };
         let nothing_committed = change.to_work_tree() && told.entries.is_empty();
         let conflict = change.entries.iter().any(|e| e.status == 'U');
@@ -1574,6 +1720,7 @@ impl App {
         self.show_story(Some(story));
         self.telling = Telling::Told;
         self.cover = None;
+        self.enter_story();
         self.sort();
         if !self.moved {
             self.pick_first();
@@ -1912,26 +2059,40 @@ impl App {
         let Some(s) = self.files.get(&entry.key()) else {
             return Vec::new();
         };
+        // A file changed since its commits has its hunks at lines the
+        // working tree may have moved: one it shows from another chapter
+        // is said at the file's head, where it can still be gone to.
+        let mut head: Vec<Line> = Vec::new();
+        if self.opts.notes
+            && self.changed_since(entry)
+            && let Some(story) = &self.story
+        {
+            for home in self.also_any(&entry.path, self.run_of(entry)) {
+                head.push(self.also_line(story, home, None));
+            }
+        }
         // In the one scroll a binary file says so in its place.
         if self.opts.ux2 && s.binary {
             let faint = Tone::Faint.style(&self.theme());
-            return vec![Line::Card(vec![Span::styled(
+            head.push(Line::Card(vec![Span::styled(
                 " A binary file: no text to compare.",
                 faint,
-            )])];
+            )]));
+            return head;
         }
         // An empty file, added or deleted, gets a line saying so, for the
         // cursor and ]c to stop on.
         if self.opts.ux2 && s.rows.is_empty() {
             let faint = Tone::Faint.style(&self.theme());
-            return vec![Line::Card(vec![Span::styled(" An empty file.", faint)])];
+            head.push(Line::Card(vec![Span::styled(" An empty file.", faint)]));
+            return head;
         }
         // Each note goes over the line its hunk starts at, on the side it
         // changes: the new, or the old for lines only taken out. A file
         // changed since its commits has none: its story's hunks are at the
         // committed lines, which the working tree may have moved. With UX
         // 2.0 each is a card under the hunk's last line instead.
-        let mut notes: HashMap<(bool, usize), Vec<String>> = HashMap::new();
+        let mut notes: HashMap<(bool, usize), Vec<Line>> = HashMap::new();
         // Each card with the last line of each side its hunk has, both
         // to be passed before the card goes in.
         let mut cards: Vec<WaitingCard> = Vec::new();
@@ -1958,6 +2119,41 @@ impl App {
                 } else {
                     (hunk.old_start, hunk.old_count)
                 };
+                // A hunk shown here from another chapter, which this one
+                // can't be read without: a line over it saying where its
+                // home is, its note left there.
+                if hunk.chapter != home
+                    && story
+                        .repeats
+                        .get(&hunk.id)
+                        .is_some_and(|shown| shown.contains(&home))
+                {
+                    // Over the hunk's earliest row as drawn, on either side.
+                    let within = |line: Option<usize>, start: usize, span: usize| {
+                        line.is_some_and(|l| l + 1 >= start && l + 1 < start + span.max(1))
+                    };
+                    let row = s.rows.iter().find(|r| {
+                        within(r.old, hunk.old_start, hunk.old_count)
+                            || within(r.new, hunk.new_start, hunk.new_count)
+                    });
+                    let key = match row {
+                        Some(r) => match (r.old, r.new) {
+                            (Some(o), _) => (false, o),
+                            (None, Some(n)) => (true, n),
+                            (None, None) => (new_side, first.max(1) - 1),
+                        },
+                        None => {
+                            let line = (if count == 0 { first + 1 } else { first }).max(1);
+                            (new_side, line - 1)
+                        }
+                    };
+                    notes.entry(key).or_default().push(self.also_line(
+                        story,
+                        hunk.chapter,
+                        Some(hunk.id.clone()),
+                    ));
+                    continue;
+                }
                 if self.opts.ux2 {
                     // A card under the hunk, after the last line of each side
                     // it has, which a replacement can leave on different rows.
@@ -1985,21 +2181,20 @@ impl App {
                 let line = (if count == 0 { first + 1 } else { first }).max(1);
                 let cols = if new_side { nw } else { ow }.max(10);
                 if let Some(text) = story::note_lines(story, hunk, home, cols) {
-                    notes.entry((new_side, line - 1)).or_default().extend(text);
+                    notes
+                        .entry((new_side, line - 1))
+                        .or_default()
+                        .extend(text.into_iter().map(|text| Line::Note { new_side, text }));
                 }
             }
         }
         let mut out = Vec::new();
+        out.append(&mut head);
         let put_notes = |out: &mut Vec<Line>,
                          key: (bool, usize),
-                         notes: &mut HashMap<(bool, usize), Vec<String>>| {
-            if let Some(texts) = notes.remove(&key) {
-                for text in texts {
-                    out.push(Line::Note {
-                        new_side: key.0,
-                        text,
-                    });
-                }
+                         notes: &mut HashMap<(bool, usize), Vec<Line>>| {
+            if let Some(lines) = notes.remove(&key) {
+                out.extend(lines);
             }
         };
         let put_cards = |out: &mut Vec<Line>, row: &sides::Row, cards: &mut Vec<WaitingCard>| {
@@ -2311,9 +2506,19 @@ impl App {
             self.pending = None;
             self.message = None;
             self.filtering = false;
+            self.menu = None;
             return Act::Redraw;
         }
         if ctrl && key.code == KeyCode::Char('n') && self.ask_box.is_none() {
+            return Act::Same;
+        }
+        // A refreshed map still being told moves no focus among files out
+        // of sight.
+        if alt_arrow(&key).is_some()
+            && self.mode == Mode::Map
+            && !self.mapped()
+            && self.telling == Telling::Waiting
+        {
             return Act::Same;
         }
         if let Some(dir) = alt_arrow(&key) {
@@ -2393,6 +2598,22 @@ impl App {
 
     fn normal_key(&mut self, key: KeyEvent) -> Act {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        // While a refreshed map is told, its place takes only closing and
+        // g f, back to the files: nothing acts on files out of sight.
+        if self.mode == Mode::Map && !self.mapped() && self.telling == Telling::Waiting {
+            return match (self.pending.take(), key.code) {
+                (Some('g'), KeyCode::Char('f')) => {
+                    self.show_files(false);
+                    Act::Redraw
+                }
+                (None, KeyCode::Char('g')) => {
+                    self.pending = Some('g');
+                    Act::Same
+                }
+                (None, KeyCode::Char('q') | KeyCode::Esc) => Act::Quit,
+                _ => Act::Same,
+            };
+        }
         if let Some(first) = self.pending.take() {
             return self.second_key(first, key);
         }
@@ -2405,6 +2626,21 @@ impl App {
             return Act::Same;
         }
         let count = self.count.take().unwrap_or(1).max(1);
+        // The map has the keys while it is on the screen, and the open
+        // chapter's own map while a thing of it is chosen.
+        if self.on_map()
+            && let Some(act) = self.map_key(key)
+        {
+            return act;
+        }
+        if !self.things_shown() {
+            self.thing = None;
+        }
+        if self.in_chapter()
+            && let Some(act) = self.thing_key(key)
+        {
+            return act;
+        }
         let list = self.focus == Focus::List;
         let page = self.body_height().max(1);
         match key.code {
@@ -2435,6 +2671,10 @@ impl App {
             KeyCode::Char('R') if !ctrl => self.refresh(),
             KeyCode::Char('c') if !ctrl && self.in_history => self.wants = Some(Wants::Leave),
             KeyCode::Char('c') if !ctrl => self.open_history(),
+            // From an open chapter's list, Tab reaches its own map first.
+            KeyCode::Tab if list && self.things_shown() => {
+                self.thing = Some(0);
+            }
             KeyCode::Tab => {
                 self.focus = if list { self.main_side() } else { Focus::List };
             }
@@ -2442,6 +2682,8 @@ impl App {
                 self.focus = if list { self.main_side() } else { Focus::List };
             }
             KeyCode::Esc if list && self.list_visual.is_some() => self.list_visual = None,
+            // From an open chapter, back to the map it was opened from.
+            KeyCode::Esc if list && self.in_chapter() => self.show_map(),
             KeyCode::Esc if list => return Act::Quit,
             KeyCode::Esc if self.visual.is_some() => self.visual = None,
             KeyCode::Esc => self.focus = Focus::List,
@@ -2463,6 +2705,13 @@ impl App {
             KeyCode::Char('k') | KeyCode::Up if list => self.move_list(-(count as isize)),
             KeyCode::Char('d') if ctrl && list => self.move_list((page / 2) as isize),
             KeyCode::Char('u') if ctrl && list => self.move_list(-((page / 2) as isize)),
+            // On the last file already, the list scrolls to its end, where
+            // an open chapter names its links and what it uses.
+            KeyCode::Char('G') | KeyCode::End
+                if list && self.at + 1 >= self.order.len() && self.in_chapter() =>
+            {
+                self.list_top = self.list_rows().len().saturating_sub(self.list_height());
+            }
             KeyCode::Char('G') | KeyCode::End if list => self.move_list(isize::MAX / 2),
             KeyCode::Home if list => self.move_list(isize::MIN / 2),
             KeyCode::Enter | KeyCode::Char('l' | 'o') | KeyCode::Right if list => {
@@ -2480,7 +2729,10 @@ impl App {
             KeyCode::Char('y') if ctrl => self.scroll_diff(count, false),
             KeyCode::Char('G') | KeyCode::End => self.move_cursor(isize::MAX / 2),
             KeyCode::Home => self.move_cursor(isize::MIN / 2),
-            KeyCode::Enter => self.open_fold(),
+            KeyCode::Enter => match self.also_under() {
+                Some((chapter, hunk)) => self.go_to_also(chapter, hunk),
+                None => self.open_fold(),
+            },
             KeyCode::Left => {
                 self.focus = match self.focus {
                     Focus::New if self.side_widths().0 > 0 => Focus::Old,
@@ -2519,7 +2771,30 @@ impl App {
             return Act::Redraw;
         };
         let count = self.count.take().unwrap_or(1);
+        // The map has no line under a cursor to copy.
+        if self.on_map() && first == 'y' && matches!(c, 'l' | 'p') {
+            self.say("The map has no line to copy: g f shows the chosen chapter's file.");
+            return Act::Redraw;
+        }
+        if self.on_map() && !Self::pair_on_map(first, c) {
+            return Act::Redraw;
+        }
+        let in_map = self.mapped() && self.mode == Mode::Map;
         match (first, c) {
+            ('g', 'm') => self.show_map(),
+            ('g', 'f') => self.show_files(false),
+            (']', 's') => self.story_step(1),
+            ('[', 's') => self.story_step(-1),
+            (']', 'c') if in_map && (self.page.is_none() || self.focus == Focus::List) => {
+                self.map_step(1);
+            }
+            ('[', 'c') if in_map && (self.page.is_none() || self.focus == Focus::List) => {
+                self.map_step(-1);
+            }
+            // The map is one pane, with no window of the diff to go to.
+            ('w', 'w') if self.on_map() => {}
+            // A window asked for takes the keys from the chapter's map.
+            ('w', 'w') if self.thing.take().is_some() => self.focus = self.main_side(),
             ('y', 'p') => self.copy_path(),
             ('y', 'l') => self.copy_link(),
             ('y', 'S') => self.copy_story(),
@@ -2559,6 +2834,12 @@ impl App {
     /// moved between diffview's windows and handed off to tmux at the
     /// edges.
     fn window_move(&mut self, dir: char) {
+        // A window asked for takes the keys from the chapter's own map.
+        self.thing = None;
+        // The map is one pane: every way from it is to a pane beside.
+        if self.on_map() {
+            return self.beside(dir);
+        }
         let (old, new) = self.side_widths();
         self.focus = match (dir, self.focus) {
             ('h', Focus::New) if old > 0 => Focus::Old,
@@ -2837,6 +3118,8 @@ impl App {
     fn scroll_bar_to(&mut self, bar: BarDrag, row: usize, drag: Option<kit::Grab>) {
         match bar {
             BarDrag::List => {
+                // Reading the list: a story arriving keeps it.
+                self.moved = true;
                 let h = self.list_height();
                 let (rows, _) = self.list_extent();
                 self.list_top = if let Some(grab) = drag {
@@ -3188,7 +3471,20 @@ impl App {
             {
                 rows.push(ListRow::Header(e.section));
             }
-            if let (Some(story), Some(path)) = (&self.story, self.entry(i).map(|e| &e.path))
+            // A chapter opened from the map heads its files once, the
+            // ones it shows from another chapter among them.
+            let opened = self.page.filter(|_| self.in_chapter());
+            if let Some(page) = opened {
+                if k == 0 && self.opts.ux2 {
+                    rows.push(ListRow::Chapter(page));
+                } else if k == 0
+                    && let Some(story) = &self.story
+                {
+                    for (text, look) in story::heading(story, page, cols, short) {
+                        rows.push(ListRow::Heading(text, look));
+                    }
+                }
+            } else if let (Some(story), Some(path)) = (&self.story, self.entry(i).map(|e| &e.path))
                 && starts[k]
                 && let Some(&n) = story.chapter.get(path)
             {
@@ -3274,6 +3570,13 @@ impl App {
                 rows.push(ListRow::Label(GENERATED_LAST.into(), Tone::Dim, None));
             }
             rows.push(ListRow::File(k));
+        }
+        // Under an open chapter's files: what it builds on, and what
+        // needs it.
+        for (label, lines) in self.chapter_links() {
+            rows.push(ListRow::Blank);
+            rows.push(ListRow::Label(label, Tone::Dim, None));
+            rows.extend(lines.into_iter().map(ListRow::Hint));
         }
         // What the filter hides, under the list, and how to clear it.
         let hidden = self.listed_files.saturating_sub(self.left.files);
@@ -3400,6 +3703,9 @@ impl App {
         if !self.opts.pages {
             return;
         }
+        if self.mapped() && self.mode == Mode::Map {
+            return self.map_page(step);
+        }
         let Some(story) = &self.story else {
             return self.no_story();
         };
@@ -3421,25 +3727,41 @@ impl App {
                     })
                     .unwrap_or(0);
                 self.show_at(at);
+                self.page_opened();
             }
             return;
         }
+        self.open_page(index as usize);
+    }
+
+    /// A chapter shown as a page of its own, on the first of its files
+    /// someone wrote.
+    fn open_page(&mut self, index: usize) {
         if self.page.is_none() {
             self.whole_at = self.current().map(Entry::key);
         }
-        self.page = Some(index as usize);
+        self.page = Some(index);
+        // The list from its top, as a page of its own.
+        self.list_top = 0;
+        self.list_followed = None;
         // Each file's notes name chapters by the page's: laid out again.
         self.lines.clear();
         self.at = 0;
         self.sort();
         self.at = 0;
-        // The first of the page's files someone wrote, else its first.
-        let first = self
-            .order
-            .iter()
-            .position(|&i| !order::generated(&self.entries()[i].path))
-            .unwrap_or(0);
+        let first = self.first_written();
         self.show_at(first);
+        self.page_opened();
+    }
+
+    /// The chapter the line under the diff's cursor says its hunk is also
+    /// in, when it is such a line.
+    fn also_under(&mut self) -> Option<(usize, Option<String>)> {
+        let cur = self.cur;
+        match self.screen_lines().get(cur) {
+            Some(Line::Also(chapter, hunk, _)) => Some((*chapter, hunk.clone())),
+            _ => None,
+        }
     }
 
     // ── The branch's commits one at a time ─────────────────────────────────
@@ -3489,6 +3811,7 @@ impl App {
         });
         let opts = Options {
             story: false,
+            map: false,
             pages: false,
             progress: false,
             notes: false,
@@ -3663,6 +3986,11 @@ impl App {
     /// Where the cursor is, for a question: the file and line of the diff
     /// side it is in, or the file under it in the list.
     fn ask_cursor(&mut self) -> ask::Cursor {
+        // On the map no file is under a cursor: the file list's is out
+        // of sight, and not what the question is about.
+        if self.on_map() {
+            return ask::Cursor::default();
+        }
         let Some(entry) = self.current().cloned() else {
             return ask::Cursor::default();
         };
@@ -3984,6 +4312,13 @@ impl App {
             .unwrap_or(path)
             .to_string();
         self.close_answer();
+        // From the map or an open chapter, the line cited is in the files.
+        // Only for a file the diff has: one outside it opens beside, the
+        // map or the chapter left as it is.
+        let changed = self.entries().iter().any(|e| e.path == path);
+        if changed && self.mapped() && self.mode == Mode::Map {
+            self.whole_files();
+        }
         let found = self
             .order
             .iter()
@@ -4184,17 +4519,68 @@ impl App {
             MouseEventKind::Drag(MouseButton::Left) if self.pressed.is_some() => {
                 return self.drag_select(x, y);
             }
-            MouseEventKind::Up(MouseButton::Left) => return self.release_select(),
+            MouseEventKind::Up(MouseButton::Left) => {
+                let open = self.open_on_up.take().filter(|_| self.selection.is_none());
+                let also = self.also_on_up.take().filter(|_| self.selection.is_none());
+                let act = self.release_select();
+                if let Some((chapter, hunk)) = also {
+                    self.go_to_also(chapter, hunk);
+                    return Act::Redraw;
+                }
+                return match open {
+                    Some(n) => {
+                        self.open_chapter(n);
+                        Act::Redraw
+                    }
+                    None => act,
+                };
+            }
             MouseEventKind::Moved | MouseEventKind::Drag(_) => {
-                if !self.opts.hover || hit == self.hover {
+                let lit = self.hit_at(x, y);
+                if !self.opts.hover || (hit == self.hover && lit == self.lit) {
                     return Act::Same;
                 }
                 self.hover = hit;
+                self.lit = lit;
                 return Act::Redraw;
             }
             MouseEventKind::Down(MouseButton::Left) => {}
+            // The place of a refreshed map still being told takes no wheel.
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
+                if self.mode == Mode::Map && !self.mapped() && self.telling == Telling::Waiting =>
+            {
+                return Act::Same;
+            }
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
                 let down = m.kind == MouseEventKind::ScrollDown;
+                // Over a chapter's own map, the wheel moves among its
+                // things, which brings one cut off into sight.
+                if self.answer.is_none() && x >= self.diff_area().x && self.over_things(y) {
+                    let count = self
+                        .story
+                        .as_ref()
+                        .zip(self.page)
+                        .and_then(|(s, p)| s.chapters.get(p - 1))
+                        .map_or(0, |c| c.things.len());
+                    let at = self.thing.unwrap_or(0);
+                    self.thing = Some(if down {
+                        (at + 1).min(count.saturating_sub(1))
+                    } else {
+                        at.saturating_sub(1)
+                    });
+                    return Act::Redraw;
+                }
+                // Over the map's list, the wheel moves between the stories,
+                // so one cut off the list and the bar is still reached.
+                if self.on_map() && self.answer.is_none() && x < self.list_width {
+                    self.story_step(if down { 1 } else { -1 });
+                    return Act::Redraw;
+                }
+                // Over the map, the wheel reads on from the goal down.
+                if self.on_map() && self.answer.is_none() && self.ask_box.is_none() {
+                    self.map_step(if down { 1 } else { -1 });
+                    return Act::Redraw;
+                }
                 if self.answer.is_some() {
                     // The view moved and the cursor brought into it, as
                     // the answer's window was a Neovim float's.
@@ -4211,6 +4597,8 @@ impl App {
                     }
                 } else if x < self.list_width {
                     // The list alone moves; the cursor stays on its file.
+                    // Reading the list: a story arriving keeps it.
+                    self.moved = true;
                     self.list_top = if down {
                         self.list_top + 3
                     } else {
@@ -4260,7 +4648,13 @@ impl App {
         if self.failed.is_some() || self.nothing.is_some() {
             return Act::Quit;
         }
-        if self.loading.is_some() || (self.cover.is_some() && self.telling == Telling::Waiting) {
+        // The cover, and the place of a refreshed map still being told,
+        // take no click but the row's buttons: nothing out of sight is chosen.
+        let map_told = self.mode == Mode::Map && !self.mapped() && self.telling == Telling::Waiting;
+        if self.loading.is_some()
+            || (self.cover.is_some() && self.telling == Telling::Waiting)
+            || map_told
+        {
             // A button of the row drawn there presses its keys, which do
             // there what they do from the keyboard: Close closes.
             if let Some(button @ Button::Bar(_)) = hit {
@@ -4273,6 +4667,29 @@ impl App {
             self.visual = None;
             self.list_visual = None;
             return self.press(button);
+        }
+        // A press on something of the map does what it does, and a drag
+        // from it still selects the map's text.
+        if self.ask_box.is_none()
+            && self.answer.is_none()
+            && let Some(hit) = self.hit_at(x, y)
+        {
+            self.selection = None;
+            self.pressed = Some((x, y));
+            return self.map_click(hit);
+        }
+        // A click anywhere else takes the keys from the open chapter's
+        // own map.
+        self.thing = None;
+        // Nothing else of the map takes a click.
+        if self.on_map() && self.ask_box.is_none() && self.answer.is_none() {
+            let had = self.selection.take().is_some();
+            self.pressed = Some((x, y));
+            return if closed || had {
+                Act::Redraw
+            } else {
+                Act::Same
+            };
         }
         if let Some((bar, row)) = self.on_scroll_bar(x, y) {
             // The press focuses the side its bar is on, as a press there does.
@@ -4399,12 +4816,18 @@ impl App {
             if matches!(self.screen_lines().get(cur), Some(Line::Fold { .. })) {
                 self.open_fold();
             }
+            // Gone to as the mouse is let go, so a drag from it selects.
+            if let Some(also) = self.also_under() {
+                self.also_on_up = Some(also);
+            }
         }
         Act::Redraw
     }
 
     /// A button pressed, as its keys would be.
     fn press(&mut self, button: Button) -> Act {
+        // A button takes the keys from a chapter's own map.
+        self.thing = None;
         match button {
             // While a question is typed, the row's buttons do nothing: its
             // keys would be typed into the draft.
@@ -4448,6 +4871,7 @@ impl App {
             }
             Button::Settings => self.toggle_settings(),
             Button::Option(_) => {}
+            Button::Mode(mode) => self.choose_mode(mode),
             Button::AskSend => self.send_question(),
             Button::AskCancel => self.ask_box = None,
             Button::AnswerClose => self.close_answer(),
@@ -4828,6 +5252,9 @@ mod tests {
             clipboard: false,
             scroll_bars: false,
             alone: false,
+            map: true,
+            keep: false,
+            menu_mouse: true,
         }
     }
 
@@ -6852,6 +7279,7 @@ mod tests {
                                     .iter()
                                     .map(|p| p.to_string())
                                     .collect(),
+                                ..Default::default()
                             })
                             .collect(),
                         place: HashMap::new(),
@@ -6862,6 +7290,7 @@ mod tests {
                             .collect(),
                         hunks: HashMap::new(),
                         missed: None,
+                        ..Default::default()
                     });
                     press(&mut app, "/nothing");
                     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -6926,6 +7355,7 @@ mod tests {
             let mut app = app();
             match title {
                 "M-d's diff" => {}
+                "M-d: the story's map" => app = map_app(),
                 "M-d: the cover while the story is told" => {
                     app.telling = Telling::Waiting;
                     app.cover = Some(Instant::now());
@@ -6962,8 +7392,8 @@ mod tests {
             .flat_map(|(_, rows)| rows.into_iter().map(|(k, _)| k))
             .collect();
         assert!(!without.contains(&"ga".to_string()));
-        assert_eq!(key_groups(false).len(), 2);
-        assert_eq!(key_groups(true).len(), 4);
+        assert_eq!(key_groups(false).len(), 3);
+        assert_eq!(key_groups(true).len(), 5);
     }
 
     #[test]
@@ -7353,5 +7783,408 @@ mod tests {
         mouse(&mut app, UP, x + 3, y);
         assert_eq!(clipboard(&mut app), "Thre");
         assert!(app.answer.is_some());
+    }
+
+    /// The answer `map_app` is told: a main story of four chapters and
+    /// the side work. Wiring the page (the goal) builds on counting and on
+    /// the topics; the topics build on the store and show the count's hunk
+    /// again; counting builds on the store.
+    const MAP_ANSWER: &str = r#"{"stories": [
+        {"story": "Signups map", "kind": "main", "chapters": [
+            {"id": "c1", "title": "Store each outline", "why": "The map needs outlines kept.", "watch": "", "goal": false, "needs": [],
+             "hunks": [{"id": "src/store.rs#1", "note": "The store."}], "files": [],
+             "things": [{"name": "store_outline", "kind": "function", "hunk": "src/store.rs#1", "new": true, "uses": []}]},
+            {"id": "c2", "title": "Count the signups", "why": "The map shows counts. They are folded.", "watch": "", "goal": false, "needs": ["c1"],
+             "hunks": [{"id": "src/count.rs#1", "note": "The count."}], "files": [],
+             "things": [{"name": "count_signups", "kind": "function", "hunk": "src/count.rs#1", "new": true, "uses": ["fold_small"]},
+                        {"name": "fold_small", "kind": "function", "hunk": "src/count.rs#1", "new": true, "uses": []},
+                        {"name": "never_there", "kind": "function", "hunk": "src/count.rs#1", "new": true, "uses": []}]},
+            {"id": "c3", "title": "Draw the topics", "why": "Topics get a callout.", "watch": "", "goal": false, "needs": ["c1"],
+             "hunks": [{"id": "src/topics.rs#1", "note": ""}, {"id": "src/count.rs#1", "note": "", "repeat": true}], "files": [], "things": []},
+            {"id": "c4", "title": "Wire the page", "why": "The page shows both.", "watch": "", "goal": true, "needs": ["c2", "c3"],
+             "hunks": [{"id": "src/page.rs#1", "note": ""}], "files": [], "things": []}
+        ]},
+        {"story": "Side work", "kind": "side", "chapters": [
+            {"id": "c5", "title": "Format the helpers", "why": "Spacing only.", "watch": "", "goal": true, "needs": [],
+             "hunks": [{"id": "src/fmt.rs#1", "note": ""}], "files": [], "things": []}
+        ]}
+    ]}"#;
+
+    /// A change of five files told as a map (`MAP_ANSWER`), on a screen
+    /// large enough for the map, with UX 2.0.
+    fn map_app_with(opts: Options) -> App {
+        let (tx, _rx) = channel();
+        let mut app = App::new(opts, 120, 40, tx);
+        let added = [
+            (
+                "src/store.rs",
+                "pub fn store_outline(zip: &str) {\n    keep(zip);\n}\n",
+            ),
+            (
+                "src/count.rs",
+                "pub fn count_signups() -> usize {\n    store_outline(\"x\");\n    fold_small(0)\n}\nfn fold_small(n: usize) -> usize {\n    n\n}\n",
+            ),
+            ("src/topics.rs", "pub fn topics() -> usize {\n    3\n}\n"),
+            (
+                "src/page.rs",
+                "pub fn page() {\n    count_signups();\n    topics();\n}\n",
+            ),
+        ];
+        let mut diff = String::new();
+        let mut entries = Vec::new();
+        for (path, text) in added {
+            let lines = text.lines().count();
+            diff.push_str(&format!(
+                "diff --git a/{path} b/{path}\nnew file mode 100644\n--- /dev/null\n+++ b/{path}\n@@ -0,0 +1,{lines} @@\n"
+            ));
+            for line in text.lines() {
+                diff.push_str(&format!("+{line}\n"));
+            }
+            app.give_text("R", path, Some(text.into()));
+            entries.push(entry(path, 'A', lines, 0));
+        }
+        diff.push_str(
+            "diff --git a/src/fmt.rs b/src/fmt.rs\n--- a/src/fmt.rs\n+++ b/src/fmt.rs\n@@ -1 +1 @@\n-fn  spaced() {}\n+fn spaced() {}\n",
+        );
+        app.give_text("L", "src/fmt.rs", Some("fn  spaced() {}\n".into()));
+        app.give_text("R", "src/fmt.rs", Some("fn spaced() {}\n".into()));
+        entries.push(entry("src/fmt.rs", 'M', 1, 1));
+        let change = Change {
+            top: PathBuf::from("/repo"),
+            base: "origin/main".into(),
+            why: git::Why::default(),
+            left: "L".into(),
+            right: "R".into(),
+            entries,
+            diff,
+            staged: None,
+            raw_commits: String::new(),
+            uncommitted: None,
+        };
+        let (_, hunks) = story::split(&change.runs());
+        let (_, paths) = story::key_of(&change);
+        let told = story::parse(MAP_ANSWER, &paths, order::generated, &hunks).unwrap();
+        app.loaded(change);
+        app.told(told);
+        app
+    }
+
+    fn map_app() -> App {
+        map_app_with(Options {
+            ux2: true,
+            ..opts()
+        })
+    }
+
+    #[test]
+    fn a_story_told_as_a_map_opens_on_its_map_the_goal_at_the_top() {
+        let mut app = map_app();
+        assert!(app.on_map(), "Map the first time, once a story is told");
+        let shown = screen(&mut app);
+        let row = |text: &str| line_with(&shown, text);
+        // The goal first, each chapter under what builds on it.
+        assert!(row("THE GOAL") < row("│     4 Wire the page"));
+        assert!(row("│     4 Wire the page") < row("│ 3 Draw the topics"));
+        assert!(row("│     4 Wire the page") < row("│ 2 Count the signups"));
+        assert!(row("│ 2 Count the signups") < row("│ 1 Store each outline"));
+        assert!(row("│ 3 Draw the topics") < row("│ 1 Store each outline"));
+        // Every link as Haiku gave it, none dotted.
+        assert!(!shown.iter().any(|l| l.contains('┆')), "{shown:#?}");
+        assert!(shown[row("▼ builds on, as Haiku tells it")].contains("✓ read"));
+        // The list reads from the goal down, and names the other story.
+        let list: Vec<String> = shown
+            .iter()
+            .map(|l| l.chars().take(30).collect::<String>().trim().to_string())
+            .collect();
+        let at = |text: &str| list.iter().position(|l| l.contains(text)).unwrap();
+        assert!(at("4 Wire the page") < at("2 Count the signups"));
+        assert!(at("2 Count the signups") < at("1 Store each outline"));
+        assert!(at("1 Store each outline") < at("3 Draw the topics"));
+        assert!(list[at("READ")].ends_with("0 of 4"));
+        assert!(at("OTHER STORIES") < at("Side work"));
+        assert!(shown[0].contains("Signups map 4") && shown[0].contains("Side work 1"));
+    }
+
+    #[test]
+    fn the_maps_cursor_moves_along_the_arrows_and_c_reads_from_the_goal_down() {
+        let mut app = map_app();
+        assert_eq!(app.map_at, 4);
+        press(&mut app, "j");
+        assert_eq!(
+            app.map_at, 2,
+            "down to the first chapter the goal builds on"
+        );
+        press(&mut app, "j");
+        assert_eq!(app.map_at, 1);
+        press(&mut app, "k");
+        assert_eq!(app.map_at, 2, "up to a chapter that needs it");
+        // From the goal, what it builds on before its sibling.
+        press(&mut app, "kk");
+        let mut read = vec![app.map_at];
+        for _ in 0..4 {
+            press(&mut app, "]c");
+            read.push(app.map_at);
+        }
+        assert_eq!(read, [4, 2, 1, 3, 3]);
+        press(&mut app, "[c");
+        assert_eq!(app.map_at, 1, "[c goes back the way it came");
+        // ]s and [s move between the stories.
+        press(&mut app, "]s");
+        assert_eq!((app.thread, app.map_at), (1, 5));
+        assert!(screen(&mut app)[0].contains("SIDE WORK"));
+        press(&mut app, "[s");
+        assert_eq!((app.thread, app.map_at), (0, 4));
+    }
+
+    #[test]
+    fn enter_opens_a_chapter_on_its_own_map_and_a_thing_goes_to_its_hunk() {
+        let mut app = map_app();
+        press(&mut app, "j");
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.in_chapter());
+        assert_eq!(app.page, Some(2));
+        let shown = screen(&mut app);
+        assert!(shown[0].contains("‹ Signups map"));
+        assert!(shown[0].contains("✓ 1 of 4 read · g m the map"));
+        let label = line_with(&shown, "WHAT IT ADDS OR CHANGES");
+        assert!(shown[label].contains("3 things"), "each thing Haiku named");
+        assert!(line_with(&shown, "count_signups") < line_with(&shown, "fold_small"));
+        assert!(line_with(&shown, "BUILDS ON") < line_with(&shown, "NEEDED BY"));
+        assert!(shown[line_with(&shown, "BUILDS ON") + 1].contains("1 Store each outline"));
+        // Tab reaches the chapter's own map; Enter on a thing goes to its hunk.
+        app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.thing, Some(0));
+        press(&mut app, "j");
+        assert_eq!(app.thing, Some(1));
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.thing, None);
+        assert_eq!(app.focus, Focus::New);
+        assert_eq!(app.current().map(|e| e.path.as_str()), Some("src/count.rs"));
+        // Esc from the list goes back to the map, the chapter read.
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.on_map());
+        let shown = screen(&mut app);
+        assert!(shown.iter().any(|l| l.contains("✓ 2 Count the signups")));
+        assert!(shown[line_with(&shown, "READ")].contains("1 of 4"));
+        // ]c in an open chapter opens the next from the goal down.
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        press(&mut app, "]c");
+        assert_eq!(app.page, Some(1));
+    }
+
+    #[test]
+    fn a_hunk_in_two_chapters_is_shown_in_both_under_its_also_line() {
+        let mut app = map_app();
+        app.open_chapter(3);
+        let shown = screen(&mut app);
+        let also = line_with(&shown, "also in chapter 2: Count the signups");
+        assert!(shown[also + 1].contains("pub fn count_signups"));
+        assert!(shown.iter().any(|l| l.contains("src/count.rs  also 2")));
+        assert!(shown.iter().any(|l| l.contains("src/topics.rs")));
+        assert!(shown.iter().any(|l| l.contains("1 Store each outline")));
+        // Enter on the line goes to the hunk's home.
+        let at = app
+            .order
+            .iter()
+            .position(|&i| app.entries()[i].path == "src/count.rs")
+            .unwrap();
+        app.show_at(at);
+        app.focus = Focus::New;
+        app.cur = 0;
+        assert_eq!(app.also_under().map(|(n, _)| n), Some(2));
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.page, Some(2));
+        // In its home the hunk has its note and no such line.
+        let shown = screen(&mut app);
+        assert!(!shown.iter().any(|l| l.contains("also in chapter")));
+        assert!(shown.iter().any(|l| l.contains("The count.")));
+    }
+
+    #[test]
+    fn each_mode_keeps_its_place_and_files_mode_draws_as_it_did() {
+        let mut app = map_app();
+        // g f: the chosen chapter's file, in Files mode.
+        press(&mut app, "jgf");
+        assert_eq!(app.mode, Mode::Files);
+        assert_eq!(app.current().map(|e| e.path.as_str()), Some("src/count.rs"));
+        // Files mode is the diff as it is with no map at all.
+        let mut plain = map_app_with(Options {
+            ux2: true,
+            map: false,
+            ..opts()
+        });
+        assert!(!plain.mapped());
+        let at = app.at;
+        plain.show_at(at);
+        assert_eq!(screen(&mut app), screen(&mut plain));
+        // The menu switches, each mode back where it was left.
+        press(&mut app, "j");
+        let left = app.current().map(|e| e.path.clone());
+        press(&mut app, "m");
+        assert!(screen(&mut app).iter().any(|l| l.contains("› Files")));
+        press(&mut app, "k");
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.on_map());
+        assert_eq!(app.map_at, 2, "the map where it was left");
+        press(&mut app, "mj");
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Files);
+        assert_eq!(app.current().map(|e| e.path.clone()), left);
+        // g m comes back to the map from anywhere, the diff's side included.
+        app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        press(&mut app, "gm");
+        assert!(app.on_map());
+    }
+
+    #[test]
+    fn easy_mode_leads_its_buttons_with_the_map_and_files_switch() {
+        let mut app = map_app_with(Options {
+            ux2: true,
+            easy: true,
+            ..opts()
+        });
+        let shown = screen(&mut app);
+        let last = shown.last().unwrap();
+        assert!(last.find("Map").unwrap() < last.find("Files").unwrap());
+        assert!(last.find("Files").unwrap() < last.find("◀ Chapter").unwrap());
+        let (_, files) = app
+            .buttons
+            .iter()
+            .find(|(b, _)| *b == Button::Mode(Mode::Files))
+            .copied()
+            .unwrap();
+        app.mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: files.x,
+            row: files.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.mode, Mode::Files);
+        // A click on a box chooses its chapter, and a second opens it.
+        press(&mut app, "gm");
+        screen(&mut app);
+        let (_, at) = app
+            .hits
+            .iter()
+            .rev()
+            .find(|(hit, _)| *hit == map::Hit::Chapter(1))
+            .copied()
+            .unwrap();
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: at.x + 1,
+            row: at.y + 1,
+            modifiers: KeyModifiers::NONE,
+        };
+        let up = MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            ..click
+        };
+        app.mouse(click);
+        app.mouse(up);
+        assert_eq!((app.map_at, app.page), (1, None));
+        app.mouse(click);
+        assert_eq!(app.page, None, "it opens as the mouse is let go");
+        app.mouse(up);
+        assert_eq!(app.page, Some(1));
+    }
+
+    #[test]
+    fn with_the_setting_off_there_is_no_map_mode() {
+        let mut app = map_app_with(Options {
+            ux2: true,
+            map: false,
+            ..opts()
+        });
+        assert_eq!(app.mode, Mode::Files);
+        assert!(!app.on_map());
+        press(&mut app, "gm");
+        assert!(!app.on_map());
+        assert!(
+            app.message
+                .as_ref()
+                .is_some_and(|(text, _)| text.contains("diff_story_map"))
+        );
+        // A story told as a list has none either, whatever the setting.
+        let mut list = five();
+        list.told(Story {
+            chapters: vec![story::Chapter {
+                title: "All of it".into(),
+                files: vec!["src/a.rs".into()],
+                touches: vec!["src/a.rs".into()],
+                ..Default::default()
+            }],
+            place: HashMap::from([("src/a.rs".to_string(), 1)]),
+            chapter: HashMap::from([("src/a.rs".to_string(), 1)]),
+            ..Default::default()
+        });
+        assert!(!list.mapped());
+        // The menu has no Map or Files with no map.
+        press(&mut list, "m");
+        assert!(list.menu.is_some());
+        assert!(!screen(&mut list).iter().any(|l| l.contains("Files")));
+    }
+
+    #[test]
+    fn the_diff_opens_in_the_mode_used_last() {
+        let kept = Options {
+            ux2: true,
+            keep: true,
+            ..opts()
+        };
+        let _ = std::fs::remove_file(crate::paths::state_dir().join("diff-mode"));
+        let mut app = map_app_with(kept);
+        assert_eq!(app.mode, Mode::Map, "Map the first time");
+        press(&mut app, "gf");
+        assert_eq!(map_app_with(kept).mode, Mode::Files);
+        press(&mut app, "gm");
+        assert_eq!(map_app_with(kept).mode, Mode::Map);
+        let _ = std::fs::remove_file(crate::paths::state_dir().join("diff-mode"));
+    }
+
+    #[test]
+    fn the_pages_keys_work_from_the_map_and_the_palettes_reset_closes_the_menu() {
+        let mut app = map_app();
+        press(&mut app, "j]p");
+        assert_eq!(app.page, Some(2), "]p opens the chosen chapter");
+        press(&mut app, "]p");
+        assert_eq!(app.page, Some(1), "then the next read from the goal down");
+        press(&mut app, "[p[p[p");
+        assert!(app.on_map(), "[p from the first goes back to the map");
+        // The palette's commands press C-\ C-n first, then their keys.
+        press(&mut app, "m");
+        assert!(app.menu.is_some());
+        app.key(KeyEvent::new(KeyCode::Char('\\'), KeyModifiers::CONTROL));
+        assert!(app.menu.is_none());
+        press(&mut app, "yS");
+        assert!(
+            app.message
+                .as_ref()
+                .is_some_and(|(text, _)| text.contains("Copied the story"))
+        );
+        // A right click opens the menu too, and the map keeps the keys.
+        press(&mut app, "gm");
+        app.mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: 60,
+            row: 20,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(app.menu.is_some());
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        app.key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL));
+        press(&mut app, "w");
+        assert_eq!(app.focus, Focus::List);
+        let before = app.map_at;
+        press(&mut app, "]c");
+        assert_ne!(app.map_at, before);
+        // / searches the menu, as it searches every menu.
+        press(&mut app, "m/fil");
+        let shown = screen(&mut app);
+        assert!(shown.iter().any(|l| l.contains("› Files")));
+        assert!(!shown.iter().any(|l| l.contains("   Map ")), "{shown:#?}");
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Files);
     }
 }
