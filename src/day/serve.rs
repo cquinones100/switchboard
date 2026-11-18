@@ -116,8 +116,8 @@ pub struct Day {
     slack_threads_at: Option<std::time::SystemTime>,
     slack_threads_loading: bool,
     /// The threads and files asked for once the Slack view's message is
-    /// chosen, and when, so one that fails waits `SLACK_RETRY_MS`; one of
-    /// each at a time.
+    /// chosen, and when, so one that fails, or was just read, waits
+    /// `SLACK_RETRY_MS`; one of each at a time.
     slack_reading: HashMap<String, i64>,
     slack_fetching: HashMap<String, i64>,
     slack_thread_busy: bool,
@@ -357,7 +357,11 @@ impl Server {
                 self.day.slack_thread_busy = false;
                 match result {
                     Ok(()) => {
-                        self.day.slack_reading.remove(&key);
+                        // Marked asked as it ends, however long the read
+                        // took, so a draw before the file it wrote is taken
+                        // in (`slack_threads_changed`) doesn't read it
+                        // again.
+                        self.day.slack_reading.insert(key.clone(), util::now_ms());
                         self.day.slack_thread_failed.remove(&key);
                     }
                     Err(e) => {
@@ -393,6 +397,18 @@ impl Server {
                 self.day
                     .slack_thread_failed
                     .retain(|key, (at, _)| threads.get(key).is_none_or(|t| t.read < *at));
+                // A thread taken in fresh needs no wait to keep it from being
+                // read again; one that failed keeps its wait, and so does one
+                // whose snapshot is still from before its read. A wait that
+                // has run out holds nothing back, so it goes too.
+                let now = util::now_ms();
+                self.day.slack_reading.retain(|key, at| {
+                    let fresh = threads
+                        .get(key)
+                        .is_some_and(|t| now - t.read < slack_thread::STALE_MS);
+                    now - *at < SLACK_RETRY_MS
+                        && (!fresh || self.day.slack_thread_failed.contains_key(key))
+                });
                 self.day.slack_threads = threads;
             }
             DayEvent::SlackPicture(id, img) => {

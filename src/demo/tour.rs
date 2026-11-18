@@ -262,7 +262,7 @@ const SHOWN: usize = 15;
 /// least 1 and at most 8, read at each wait, as the tests' waits are
 /// (tests/common's `patience`), so a busy computer makes the tour slower
 /// rather than failed.
-fn patience() -> u32 {
+pub(crate) fn patience() -> u32 {
     let mut load = [0f64; 3];
     // SAFETY: getloadavg writes at most the 3 samples asked for.
     let read = unsafe { libc::getloadavg(load.as_mut_ptr(), 3) };
@@ -447,27 +447,37 @@ fn press_to_view(client: &mut Client, dir: &Path, name: &str, key: &str, view: &
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    // The list moves before the view beside it has drawn, and a view whose
-    // lookup hasn't answered says it is loading: its board is saved once
-    // it has, and a view still loading at the deadline fails the tour.
-    client.settle();
-    let deadline = Instant::now() + Duration::from_secs(10) * patience();
-    // The view's own row: a cell between the panes' rules holding the
-    // words alone, never a tab's name that ends with them.
-    let loading = |lines: &[String]| {
-        lines
-            .iter()
-            .any(|l| l.split('│').any(|cell| cell.trim() == "Loading…"))
-    };
-    while client.read(|s| loading(&s.lines())) {
+    loaded(client, dir, name)
+}
+
+/// What mission control draws in a view whose data hasn't come yet
+/// (src/mission/render.rs), a row of the view's alone.
+const LOADING: &str = "Loading…";
+
+/// Whether a screen's line has the loading row in one of its panes, as a
+/// row of its own rather than in a name that happens to hold the word.
+fn placeholder(line: &str) -> bool {
+    line.split('│').any(|part| part.trim() == LOADING)
+}
+
+/// Waits, at most `WAIT` times `patience`, until the view in front no
+/// longer has `LOADING` as a row of its own (`placeholder`), then for its
+/// screen to settle, so the board saved next has the view's data rather than its placeholder: the list moves
+/// before the view beside it has drawn, and a view's lookup can take
+/// seconds on a busy computer. Fails when it never loads, the screen saved
+/// as the board `name`.
+fn loaded(client: &Client, dir: &Path, name: &str) -> Result<()> {
+    let deadline = Instant::now() + WAIT * patience();
+    loop {
+        client.settle();
+        if !client.read(|s| s.lines().iter().any(|l| placeholder(l))) {
+            return Ok(());
+        }
         if Instant::now() >= deadline || client.ended().is_some() {
-            let what = format!("{view} was still loading");
-            return Err(fail(client, dir, name, &what));
+            return Err(fail(client, dir, name, "the view never loaded"));
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    client.settle();
-    Ok(())
 }
 
 fn words(keys: &[&str]) -> Vec<String> {
@@ -496,6 +506,9 @@ fn walk(client: &mut Client, dir: &Path, steps: &[Step], saved: &mut Vec<String>
     Ok(drew_png)
 }
 
+/// Escape as kitty's keyboard protocol sends it, never part of another key.
+const ESCAPE: &str = "\x1b[27u";
+
 /// Sends `keys`, waiting at each `@wait:<text>` (`shown`, as the board
 /// `name`) for the text to show, and failing when it doesn't.
 fn press(client: &mut Client, dir: &Path, name: &str, keys: &[&str]) -> Result<()> {
@@ -504,6 +517,11 @@ fn press(client: &mut Client, dir: &Path, name: &str, keys: &[&str]) -> Result<(
             // A box that never opened would take the next keys meant for it
             // somewhere else, so the tour stops there.
             Some(text) => shown(client, dir, name, text)?,
+            // A bare Escape followed at once by the next key's bytes (an
+            // Escape, or M-/'s Escape and /) can be read as one Alt key, so
+            // it is sent in the form that can't (kitty's CSI u), which the
+            // server reads as Escape.
+            None if *key == "Escape" => client.keys(&words(&[ESCAPE]))?,
             None => client.keys(&words(&[key]))?,
         }
     }
@@ -528,7 +546,7 @@ pub fn run(home: &Path, dir: &Path, cols: u16, rows: u16) -> Result<Vec<String>>
             let name = format!("{}-{}", slug(group), slug(view));
             match (g, v) {
                 // Mission control opens on the first group's first view.
-                (0, 0) => {}
+                (0, 0) => loaded(&client, dir, &name)?,
                 // The next group's first view.
                 (_, 0) => press_to_view(&mut client, dir, &name, "M-]", view)?,
                 _ => press_to_view(&mut client, dir, &name, "]", view)?,
@@ -551,6 +569,12 @@ pub fn run(home: &Path, dir: &Path, cols: u16, rows: u16) -> Result<Vec<String>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_row_of_its_own_says_a_view_is_loading() {
+        assert!(placeholder(" MISSION CONTROL   │  Loading…"));
+        assert!(!placeholder(" │ ○ 1 Rate-limit Loading… · idle"));
+    }
 
     #[test]
     fn a_busy_computer_waits_longer_within_bounds() {

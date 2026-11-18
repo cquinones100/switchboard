@@ -802,8 +802,9 @@ fn slack_anchor(laid_out: i64, now: i64) -> i64 {
     laid_out + (now - laid_out).max(0) / SLACK_ANCHOR_MS * SLACK_ANCHOR_MS
 }
 
-/// Stops the demo's services, when they are running.
-pub fn stop_services(home: &Path) {
+/// Stops the demo's services, when they are running, failing when they
+/// haven't ended by the deadline.
+pub fn stop_services(home: &Path) -> Result<()> {
     let pid = util::read_json(own_state(home).join("services.json"))
         .and_then(|v| v.get("pid").and_then(Value::as_i64));
     // Only while that pid is still the demo's services: one that has ended
@@ -817,7 +818,16 @@ pub fn stop_services(home: &Path) {
         unsafe {
             libc::kill(pid as libc::pid_t, libc::SIGTERM);
         }
+        // Ended before its home is laid out again, which it writes into.
+        let deadline = Instant::now() + Duration::from_secs(5) * tour::patience();
+        while ours(pid) {
+            if Instant::now() >= deadline {
+                bail!("the demo's services didn't end in time; run this again once they have");
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
+    Ok(())
 }
 
 /// Runs a server command on the demo's server, giving what it printed.
@@ -920,13 +930,9 @@ pub fn start_server(home: &Path, bin: &Path, env: &[(String, String)]) -> Result
         eprintln!(
             "The demo was started by another build ({theirs}); starting it again on this one ({ours})."
         );
-        crate::cmd::try_::stop_server(&socket);
-        if UnixStream::connect(&socket).is_ok() {
-            bail!(
-                "the demo's server from another build didn't end; switchboard demo --clean ends it"
-            );
-        }
+        stop_server(home)?;
     }
+    wait_ended(home)?;
     let state = home.join(".local/state/switchboard");
     let log = fs::OpenOptions::new()
         .create(true)
@@ -939,12 +945,13 @@ pub fn start_server(home: &Path, bin: &Path, env: &[(String, String)]) -> Result
         .stdout(log.try_clone()?)
         .stderr(log);
     detach(&mut c);
-    c.spawn().context("couldn't start the demo's server")?;
+    let mut child = c.spawn().context("couldn't start the demo's server")?;
     // A busy computer can take a while to start a server; this only waits
-    // while it hasn't answered.
-    let deadline = Instant::now() + Duration::from_secs(30);
+    // while it hasn't answered and is still running.
+    let deadline = Instant::now() + Duration::from_secs(30) * tour::patience();
     while UnixStream::connect(&socket).is_err() {
-        if Instant::now() >= deadline {
+        let ended = child.try_wait().ok().flatten().is_some();
+        if ended || Instant::now() >= deadline {
             bail!(
                 "the demo's server didn't start; {} says why",
                 state.join("server.log").display()
@@ -987,11 +994,38 @@ pub fn start_server(home: &Path, bin: &Path, env: &[(String, String)]) -> Result
     Ok(())
 }
 
+/// Ends the demo's server, waiting until it has ended its panes and let
+/// go of its lock, as long as `start_server` waits for one to start: one
+/// that has stopped answering may still be writing into the home, and a
+/// server started meanwhile finds the lock held and gives up.
+pub fn stop_server(home: &Path) -> Result<()> {
+    crate::cmd::try_::stop_server(&socket_of(home));
+    wait_ended(home)
+}
+
+/// Waits until no server of the demo answers or holds its lock: one ending
+/// has taken its socket away before it lets the lock go.
+fn wait_ended(home: &Path) -> Result<()> {
+    let state = home.join(".local/state/switchboard");
+    let deadline = Instant::now() + Duration::from_secs(30) * tour::patience();
+    while UnixStream::connect(socket_of(home)).is_ok() || crate::mux::socket::locked(&state) {
+        if Instant::now() >= deadline {
+            bail!("the demo's server didn't end in time; run this again once it has");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
+}
+
 /// Ends the demo's server and services and removes its home.
 pub fn clean(home: &Path) -> Result<()> {
     check_home(home)?;
-    crate::cmd::try_::stop_server(&socket_of(home));
-    stop_services(home);
+    // Both are asked to end whichever fails, and the home stays while
+    // either is still running.
+    let server = stop_server(home);
+    let services = stop_services(home);
+    server?;
+    services?;
     if home.exists() {
         fs::remove_dir_all(home).with_context(|| format!("couldn't remove {}", home.display()))?;
     }

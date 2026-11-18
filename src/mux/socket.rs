@@ -492,6 +492,17 @@ fn take_lock(path: &Path) -> Result<File> {
     Ok(file)
 }
 
+/// Whether a server holds the lock in the state directory `dir`: one that
+/// has stopped answering on its socket may still be ending its panes.
+pub fn locked(dir: &Path) -> bool {
+    let Ok(file) = File::open(dir.join("server.lock")) else {
+        return false;
+    };
+    // SAFETY: flock on a descriptor this function owns; closing it as it
+    // returns lets the shared lock go.
+    unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) != 0 }
+}
+
 /// The descriptor of the lock this process holds, for handing it to the
 /// build the server replaces itself with (src/mux/upgrade.rs): the lock
 /// belongs to the open file, so the new build holds it from the start and

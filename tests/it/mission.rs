@@ -95,17 +95,75 @@ fn open(client: &mut TestClient) -> Vec<String> {
 /// Takes a menu's option by its label, as the daemon's menus were used:
 /// j down to it, Enter. Its options have no letters of their own.
 fn pick(client: &mut TestClient, label: &str) {
+    // Waits for the menu's cursor itself, since the label may already be
+    // on the screen in the view behind it, and a `j` sent before the menu
+    // opens moves the view instead.
     for _ in 0..20 {
-        let screen = client.wait_text(label);
-        if screen.iter().any(|l| l.contains('›') && l.contains(label)) {
+        let screen = client.wait_for(&format!("a menu offering {label}"), |s| {
+            menu_cursor(s).is_some()
+                && menu_rows(s).is_some_and(|rows| rows.iter().any(|l| l.contains(label)))
+        });
+        let at = menu_cursor(&screen).unwrap();
+        if at.contains(label) {
             client.type_text("\r");
             return;
         }
-        let before = screen.join("\n");
         client.type_text("j");
-        client.wait_for("the cursor to move", |s| s.join("\n") != before);
+        client.wait_for("the cursor to move", |s| {
+            menu_cursor(s).is_some_and(|now| now != at)
+        });
     }
     panic!("{label} not reached");
+}
+
+/// The screen once it reads the same twice, a moment apart.
+fn steady(client: &mut TestClient) -> Vec<String> {
+    let deadline = common::deadline(Duration::from_secs(10));
+    let mut last = client.screen();
+    loop {
+        std::thread::sleep(Duration::from_millis(300) * common::patience());
+        let now = client.screen();
+        if now == last {
+            return now;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the screen never settled:\n{}",
+            now.join("\n")
+        );
+        last = now;
+    }
+}
+
+/// The rows of the menu open, inside its box: its keys (`↵ choose`) give
+/// the box's edges, and its top is the last row above them with `╭` at
+/// the left edge; each row cut to the box's columns, so neither the view
+/// behind nor a card's own `›` counts.
+fn menu_rows(screen: &[String]) -> Option<Vec<String>> {
+    let keys = screen.iter().rposition(|l| l.contains("↵ choose"))?;
+    let row: Vec<char> = screen[keys].chars().collect();
+    let at = row
+        .windows(8)
+        .position(|w| w.iter().collect::<String>() == "↵ choose")?;
+    let left = row[..at].iter().rposition(|c| *c == '│')?;
+    let right = row[at..].iter().position(|c| *c == '│')? + at;
+    let top = screen[..keys]
+        .iter()
+        .rposition(|l| l.chars().nth(left) == Some('╭'))?;
+    Some(
+        screen[top + 1..keys]
+            .iter()
+            .map(|l| l.chars().skip(left + 1).take(right - left - 1).collect())
+            .collect(),
+    )
+}
+
+/// The option the open menu's `›` is on.
+fn menu_cursor(screen: &[String]) -> Option<String> {
+    menu_rows(screen)?.iter().find_map(|l| {
+        let (_, after) = l.split_once('›')?;
+        Some(after.trim().to_string())
+    })
 }
 
 #[test]
@@ -255,6 +313,10 @@ fn with_ux2_a_waiting_cards_menu_answers_its_prompt_and_a_number_does_not() {
         json!({"pid": pid, "sessionId": "s-1", "entrypoint": "cli"}).to_string(),
     )
     .unwrap();
+    // A hook from a pane the server doesn't yet know runs Claude is let go.
+    wait_list(&server, "the pane's Claude", |l| {
+        !tabs(l)[0]["panes"][0]["claude"].is_null()
+    });
     // A permission prompt on its screen, then one key read as it comes.
     let prompt = server.dir.path().join("prompt.txt");
     std::fs::write(
@@ -653,6 +715,9 @@ fn reopen_lists_the_worktrees_no_tab_has_open_and_its_menus_open_and_remove_them
         assert!(Instant::now() < deadline, "the clean worktree removed");
         std::thread::sleep(Duration::from_millis(50));
     }
+    // Said once the removal's task has answered, so the next key goes to
+    // the view rather than to the busy box.
+    client.wait_text("Removed wt-clean.");
     // One with a change is kept, saying so.
     client.type_text("\x1b");
     menu(&mut client, "feat-dirty");
@@ -2987,8 +3052,14 @@ fn on_a_wide_screen_one_view_is_capped_against_the_sidebar_and_its_side_takes_no
         })
     });
     assert!(screen.iter().any(|l| l.contains("MISSION CONTROL")));
-    // A click in the spare columns leaves mission control as it was.
-    let before = screen.join("\n");
+    // A click in the spare columns leaves mission control as it was, once
+    // what the tab's card learns late (its program, read on a tick) has
+    // drawn.
+    client.wait_for("the card's program", |s| {
+        s.iter()
+            .any(|l| l.contains("idle for") && l.contains(" · "))
+    });
+    let before = steady(&mut client).join("\n");
     client.send(b"\x1b[<0;200;10M\x1b[<0;200;10m");
     client.send(b"\x1b[<0;340;10M\x1b[<0;340;10m");
     std::thread::sleep(Duration::from_millis(300) * common::patience());
@@ -3155,15 +3226,26 @@ fn run_in(server: &TestServer, tab: usize, command: &str, done: &str) {
         .as_str()
         .unwrap()
         .to_string();
+    // Keys typed before the shell has started can be lost as it sets up
+    // the terminal, so its prompt comes first.
+    let deadline = common::deadline(Duration::from_secs(10));
+    loop {
+        let screen = server.ok(&["capture-pane", "-t", &pane]);
+        if screen.contains('$') {
+            break;
+        }
+        assert!(Instant::now() < deadline, "no prompt: {screen}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
     server.ok(&["send-keys", "-t", &pane, "-l", command]);
     server.ok(&["send-keys", "-t", &pane, "Enter"]);
     let deadline = common::deadline(Duration::from_secs(10));
-    while !server
-        .ok(&["capture-pane", "-t", &pane])
-        .lines()
-        .any(|l| l.trim() == done)
-    {
-        assert!(Instant::now() < deadline, "{done} not shown");
+    loop {
+        let screen = server.ok(&["capture-pane", "-t", &pane]);
+        if screen.lines().any(|l| l.trim() == done) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{done} not shown: {screen}");
         std::thread::sleep(Duration::from_millis(50));
     }
 }

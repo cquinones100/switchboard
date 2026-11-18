@@ -1819,12 +1819,9 @@ fn claude_context_gives_an_interactive_session_switchboard_s_instructions_and_a_
             cmd.env("CLAUDE_CODE_ENTRYPOINT", e);
         }
         let mut child = cmd.spawn().unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(input.as_bytes())
-            .unwrap();
+        // One that has nothing to say may end before reading its input, so
+        // a pipe it closed is no failure.
+        let _ = child.stdin.take().unwrap().write_all(input.as_bytes());
         child.wait_with_output().unwrap()
     };
     let part = read(&Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/switchboard.md"));

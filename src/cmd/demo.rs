@@ -118,8 +118,8 @@ fn run(mode: Mode, reset: bool, size: (u16, u16)) -> Result<ExitCode> {
             eprintln!("The demo was laid out by an older build; laying it out again for this one.");
         }
         if home.exists() {
-            crate::cmd::try_::stop_server(&demo::socket_of(&home));
-            demo::stop_services(&home);
+            demo::stop_server(&home)?;
+            demo::stop_services(&home)?;
         }
         eprintln!("Laying out the demo in {}…", home.display());
         demo::lay_out(&home, &bin)?;

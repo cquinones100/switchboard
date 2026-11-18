@@ -1301,11 +1301,19 @@ fn a_hands_free_tab_s_choices_are_written_into_its_plan_by_the_server() {
         "# Plan - X\n\n## Steps\n\n1. Build it.\n- Decided hands-free: Which way? → B (Recommended)\n\n<!-- note-id: n-0123456789ab -->\n",
         "at the plan's end, its ID kept last"
     );
-    assert_eq!(
-        std::fs::metadata(&plan).unwrap().modified().unwrap(),
-        plan_time,
-        "its modified time kept"
-    );
+    // The time is put back a moment after the text is written.
+    let deadline = common::deadline(Duration::from_secs(10));
+    loop {
+        let now = std::fs::metadata(&plan).unwrap().modified().unwrap();
+        if now == plan_time {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "its modified time kept: {now:?}, not {plan_time:?}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
     assert!(!std::fs::read_to_string(&note).unwrap().contains("Decided"));
 
     // Asked again as one that must be asked: the line is taken back.

@@ -286,6 +286,12 @@ fn notes_gw_press_opens_a_tab_for_the_item_on_its_line_and_offers_it_the_next_ti
     server.ok(&["press", "work-on-item", "Plan.md", "5"]);
     client.wait_text("Line 5 of Plan is ticked");
     client.send(b"\r");
+    // The key reaches the server on the client's connection and the next
+    // press on a command's own, so one could overtake the other and the
+    // key answer the next box.
+    client.wait_for("the box closed", |s| {
+        !s.iter().any(|l| l.contains("Line 5 of Plan is ticked"))
+    });
 
     let before = tabs(&server).len();
     server.ok(&["press", "work-on-item", "Plan.md", "4"]);
