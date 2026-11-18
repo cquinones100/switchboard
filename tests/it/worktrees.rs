@@ -1218,7 +1218,7 @@ fn a_tickets_branch_starts_from_origins_fetched_main_or_its_branch_on_origin_and
         "tried twice more: {said}"
     );
     assert!(
-        said.contains("Starting from origin/main as of just now: couldn't reach origin"),
+        said.contains("Starting from origin/main, last updated just now: couldn't reach origin"),
         "{said}"
     );
     let written = read(&cd);
@@ -1231,7 +1231,7 @@ fn a_tickets_branch_starts_from_origins_fetched_main_or_its_branch_on_origin_and
     );
     assert!(
         lines.next().unwrap().contains(
-            "This branch starts from origin/main as of just now, since origin couldn't be reached"
+            "This branch starts from origin/main, last updated just now, since origin couldn't be reached"
         ),
         "{written}"
     );
@@ -1800,7 +1800,7 @@ fn with_an_origin_an_items_branch_starts_from_origins_default_branch_as_last_fet
         "tried twice more: {said}"
     );
     assert!(
-        said.contains("Starting from origin/main as of just now: couldn't reach origin"),
+        said.contains("Starting from origin/main, last updated just now: couldn't reach origin"),
         "{said}"
     );
     let worktree = PathBuf::from(read(&cd).lines().next().unwrap());

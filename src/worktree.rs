@@ -589,19 +589,21 @@ pub fn origin_head(root: &Path) -> Option<String> {
 }
 
 /// Origin's default branch as last fetched (the landing's `default` alone
-/// when it names one, else the branch origin's `HEAD` names, else main or
-/// master), said on stderr with how long ago it was fetched: the ref and
-/// those words ("origin/main as of 2 hours ago"); none when the clone has
-/// none of them.
+/// when it names one, else the branch origin's `HEAD` names alone, as
+/// `default_start` fetches it, else main or master), said on stderr with
+/// when a fetch last moved it, which is all the ref's reflog knows (a fetch
+/// finding it unchanged writes nothing): the ref and those words
+/// ("origin/main, last updated 2 hours ago"); none when the clone has none
+/// of them.
 pub fn last_fetched(root: &Path, default: Option<&str>) -> Option<(String, String)> {
     // A default the landing names is the only branch to start from: another
     // cached one would bring that branch's commits into the item.
     let names: Vec<String> = match default {
         Some(d) => vec![d.to_string()],
-        None => origin_head(root)
-            .into_iter()
-            .chain(["main".to_string(), "master".to_string()])
-            .collect(),
+        None => match origin_head(root) {
+            Some(head) => vec![head],
+            None => vec!["main".to_string(), "master".to_string()],
+        },
     };
     let (name, fetched) = names
         .into_iter()
@@ -624,10 +626,10 @@ pub fn last_fetched(root: &Path, default: Option<&str>) -> Option<(String, Strin
             .ok()
     });
     let when = match at {
-        Some(at) => format!("as of {}", ago_words(util::now_secs() - at)),
-        None => "as last fetched".to_string(),
+        Some(at) => format!(", last updated {}", ago_words(util::now_secs() - at)),
+        None => " as last fetched".to_string(),
     };
-    let words = format!("origin/{name} {when}");
+    let words = format!("origin/{name}{when}");
     eprintln!("Starting from {words}: couldn't reach origin");
     Some((fetched, words))
 }
