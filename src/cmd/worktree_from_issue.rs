@@ -82,6 +82,9 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
     // The queue's rules for its body as it is now: Planned only leaves out
     // one with none, and an open choice is taken only hands-free; it fails
     // the start, and the queue leaves it out once it reads it again.
+    // Settings as they are now, not as this process first read them before
+    // asking GitHub.
+    crate::settings::reload_settings();
     let mode = Mode::read(&paths::state_dir());
     // Started by autopilot, only while it still takes issues: turned off
     // while GitHub was being asked, nothing starts.
