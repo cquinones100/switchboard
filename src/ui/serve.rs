@@ -1516,17 +1516,21 @@ fn app_of(args: &[String], own_exe: &str, short: bool) -> Option<String> {
         ["link-view", url, ..] if !short => {
             // A ticket or a PR by what the link view reads it as.
             use crate::views::page::{Kind, kind_of};
+            let url = url.trim();
             if url.starts_with("https://") {
                 match kind_of(url, std::path::Path::new("")) {
                     Ok(Kind::Ticket(id)) => return Some(format!("the link view: {id}")),
                     Ok(Kind::Pr { repo, number }) => {
-                        let pr = format!("{}/{}#{number}", repo.owner, repo.name);
-                        return Some(format!("the link view: {}", cut_left(&pr, 45)));
+                        // Its owner and number whole, the name cut between.
+                        let ends = format!("{}/#{number}", repo.owner);
+                        let room = 45usize.saturating_sub(draw::width(&ends)).max(4);
+                        let name = draw::cut(&repo.name, room);
+                        return Some(format!("the link view: {}/{name}#{number}", repo.owner));
                     }
                     _ => {}
                 }
             }
-            let url = url.split_once("://").map_or(*url, |(_, rest)| rest);
+            let url = url.split_once("://").map_or(url, |(_, rest)| rest);
             return Some(format!("the link view: {}", cut_left(url, 45)));
         }
         ["link-view", ..] => ("the link view", "link view"),
@@ -1653,6 +1657,25 @@ mod tests {
             &format!("https://github.com/{}/pull/124", "o/".repeat(30)),
         ]);
         assert!(pr.ends_with("/pull/124") && draw::width(&pr) == 60);
+        let pr = |owner: &str, name: &str, rest: &str| {
+            line(&[
+                &bin,
+                "link-view",
+                &format!(" https://github.com/{owner}/{name}/pull/{rest}"),
+            ])
+        };
+        let anchor = format!("124/files#diff-{}", "f".repeat(64));
+        assert_eq!(pr("o", "r", &anchor), "the link view: o/r#124");
+        let fork = pr("fork", &"n".repeat(60), "42");
+        assert!(fork.starts_with("the link view: fork/n") && fork.ends_with("…#42"));
+        assert_eq!(
+            line(&[
+                &bin,
+                "link-view",
+                &format!("https://linear.app/w/issue/x-1/{}", "slug-".repeat(12)),
+            ]),
+            "the link view: X-1"
+        );
         let brief = |args: &[&str]| {
             let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
             app_of(&args, "/opt/sb/switchboard-0.2.0", true)
