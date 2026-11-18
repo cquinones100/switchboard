@@ -42,6 +42,10 @@ pub type Steps = Vec<(Place, usize)>;
 
 /// How many places each way are kept.
 pub const CAP: usize = 50;
+/// The most tabs left read from a handover or a layout file, past any
+/// number of tabs open at once, so a file can't hand the server a list
+/// to search through on its own task.
+const LEFT_READ: usize = 1000;
 
 /// In a handover, `back` and `forward` hold the tabs alone, as a build
 /// from before views joined the trail reads them, so restarting onto one
@@ -64,6 +68,12 @@ pub struct Trail {
     /// The place before the current one, however it was left, for M-Tab.
     #[serde(skip)]
     pub last: Option<Place>,
+    /// The tabs left, the latest first, each once, whichever way it was
+    /// left (a step back or forward included, which the two lists above
+    /// can't say), for what orders by the tab in front most recently. It
+    /// holds only tabs still open, so it has no cap of its own.
+    #[serde(default)]
+    pub left: Vec<TabId>,
 }
 
 /// A trail as a handover keeps it (see `Trail`).
@@ -77,6 +87,9 @@ struct Saved {
     back_places: Option<Vec<Place>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     forward_places: Option<Vec<Place>>,
+    /// None in a handover from before the tabs left were kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    left: Option<Vec<TabId>>,
 }
 
 impl From<Trail> for Saved {
@@ -94,6 +107,7 @@ impl From<Trail> for Saved {
             forward: tabs(&t.forward),
             back_places: Some(t.back),
             forward_places: Some(t.forward),
+            left: Some(t.left),
         }
     }
 }
@@ -103,17 +117,39 @@ impl From<Saved> for Trail {
         let places = |kept: Option<Vec<Place>>, tabs: Vec<TabId>| {
             kept.unwrap_or_else(|| tabs.into_iter().map(Place::Tab).collect())
         };
-        Trail {
+        let mut trail = Trail {
             back: places(s.back_places, s.back),
             forward: places(s.forward_places, s.forward),
             ..Trail::default()
+        };
+        match s.left {
+            Some(mut left) => {
+                left.truncate(LEFT_READ);
+                trail.left = left;
+            }
+            // A handover from before the tabs left were kept: what the
+            // latest of its places each way, as many as a trail keeps, can
+            // still say, the latest first. Those forward were stepped back
+            // from, so they are taken as left after those before, which is
+            // only near the order they were left in: the two lists don't
+            // say which of a place before and a place forward was left
+            // last. Two tabs read in the wrong order stay so, through a
+            // later handover too, until one of them is left again.
+            None => {
+                let latest = |list: &[Place]| list[list.len().saturating_sub(CAP)..].to_vec();
+                let places = [latest(&trail.back), latest(&trail.forward)].concat();
+                for place in &places {
+                    trail.leave(place);
+                }
+            }
         }
+        trail
     }
 }
 
 impl Trail {
     pub fn is_empty(&self) -> bool {
-        self.back.is_empty() && self.forward.is_empty()
+        self.back.is_empty() && self.forward.is_empty() && self.left.is_empty()
     }
 
     /// Where the session is, its tab in front being `current`.
@@ -129,6 +165,7 @@ impl Trail {
 
     /// A move away from `left` that wasn't a step back or forward.
     pub fn visited(&mut self, left: Place) {
+        self.leave(&left);
         push(&mut self.back, left.clone());
         self.forward.clear();
         self.last = Some(left);
@@ -139,6 +176,7 @@ impl Trail {
     /// nothing before.
     pub fn back(&mut self, current: Place, usable: impl Fn(&Place) -> bool) -> Option<Place> {
         let to = pop_other(&mut self.back, &current, &usable)?;
+        self.leave(&current);
         push(&mut self.forward, current.clone());
         self.last = Some(current);
         Some(to)
@@ -147,9 +185,26 @@ impl Trail {
     /// The place to go forward to from `current`, which goes on `back`.
     pub fn forward(&mut self, current: Place, usable: impl Fn(&Place) -> bool) -> Option<Place> {
         let to = pop_other(&mut self.forward, &current, &usable)?;
+        self.leave(&current);
         push(&mut self.back, current.clone());
         self.last = Some(current);
         Some(to)
+    }
+
+    /// The tab of a place left goes to the front of `left`: the tab
+    /// itself, or the one a view sat over.
+    pub fn leave(&mut self, place: &Place) {
+        let (Place::Tab(tab) | Place::View { over: tab, .. }) = place;
+        self.left.retain(|t| t != tab);
+        self.left.insert(0, *tab);
+    }
+
+    /// The tabs by when each was last in front, the latest first:
+    /// `current`, the one in front, then those left.
+    pub fn fronted(&self, current: TabId) -> Vec<TabId> {
+        std::iter::once(current)
+            .chain(self.left.iter().copied().filter(|t| *t != current))
+            .collect()
     }
 
     /// The place a step back from `current` would go to, without taking it.
@@ -185,6 +240,7 @@ impl Trail {
         let gone = Place::Tab(tab);
         self.back.retain(|p| *p != gone);
         self.forward.retain(|p| *p != gone);
+        self.left.retain(|t| *t != tab);
         if self.last.as_ref() == Some(&gone) {
             self.last = None;
         }
@@ -199,6 +255,7 @@ impl Trail {
         };
         self.back.retain(kept);
         self.forward.retain(kept);
+        self.left.retain(|t| keep.contains(t));
         self
     }
 }
@@ -251,6 +308,41 @@ mod tests {
             view: name.into(),
             over: TabId(1),
         }
+    }
+
+    #[test]
+    fn the_tabs_left_are_kept_latest_first_through_a_step_back() {
+        let (a, b, c) = (TabId(1), TabId(2), TabId(3));
+        let mut t = Trail::default();
+        t.visited(A);
+        t.visited(B);
+        assert_eq!(t.fronted(c), [c, b, a]);
+        // A step back from C to B: C was in front more recently than A.
+        assert_eq!(t.back(C, any), Some(B));
+        assert_eq!(t.fronted(b), [b, c, a]);
+        // A view left counts as the tab it sat over.
+        t.visited(view("prs"));
+        assert_eq!(t.fronted(b), [b, a, c]);
+        t.forget(c);
+        assert_eq!(t.fronted(b), [b, a]);
+        // More tabs than the lists' cap are all kept, the first left last.
+        let mut many = Trail::default();
+        for n in 0..CAP as u32 + 10 {
+            many.visited(Place::Tab(TabId(n)));
+        }
+        assert_eq!(many.left.len(), CAP + 10);
+        assert_eq!(many.left.last(), Some(&TabId(0)));
+        // A handover with no tabs left takes them from its places before.
+        let old: Trail =
+            serde_json::from_str(r#"{"back":[1,2,1,3],"forward":[4]}"#).expect("an older trail");
+        assert_eq!(old.left, [TabId(4), c, a, b]);
+        let kept: Trail = serde_json::from_str(r#"{"back":[1,2],"left":[]}"#).expect("a trail");
+        assert_eq!(kept.left, []);
+        // Only the tabs left are still a trail to hand over.
+        t.back.clear();
+        t.forward.clear();
+        assert!(!t.is_empty());
+        assert_eq!(t.clone().keeping(&[b]).fronted(b), [b]);
     }
 
     #[test]

@@ -1191,6 +1191,7 @@ mod tests {
                     },
                     sidebar_repo: None,
                     sidebar_repo_open: false,
+                    sidebar_repo_recent: Vec::new(),
                     sidebar_folded: Vec::new(),
                     sidebar_notices_folded: false,
                     mission_width: None,

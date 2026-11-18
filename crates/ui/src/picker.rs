@@ -168,6 +168,8 @@ pub struct Picker {
     /// The rows that are off are headings: the moving keys never stop on
     /// one.
     headings: bool,
+    /// A tag column under six columns is drawn when its tags fit whole.
+    short_tags: bool,
 }
 
 impl Picker {
@@ -201,6 +203,7 @@ impl Picker {
             marked: Vec::new(),
             kit: None,
             headings: false,
+            short_tags: false,
         };
         picker.refilter();
         picker
@@ -255,6 +258,28 @@ impl Picker {
     pub fn keep_order(mut self) -> Picker {
         self.kept = true;
         self.refilter();
+        self
+    }
+
+    /// Tags shorter than six columns drawn when they fit whole ("now"),
+    /// for a list whose tags are a mark rather than words to search by;
+    /// without it a tag column that narrow is left out.
+    pub fn short_tags(mut self) -> Picker {
+        self.short_tags = true;
+        self
+    }
+
+    /// The cursor put, as it opens, on the item at `at` in the list given
+    /// rather than on the first row; what is typed puts it back on the
+    /// first row matched. Left where it is for an item that is off or not
+    /// shown.
+    pub fn start_on(mut self, at: usize) -> Picker {
+        if let Some(row) = self.shown.iter().position(|(i, _)| *i == at)
+            && self.takes(row)
+        {
+            // The draw scrolls it into view, by the room it then has.
+            self.cursor = row;
+        }
         self
     }
 
@@ -635,6 +660,7 @@ impl Picker {
             .max()
             .unwrap_or(0)
             .min(TAGS_MAX);
+        let whole = tags_w;
         // The pointer's three columns, a space before the tags and the key,
         // and one at the right edge.
         let fixed = |tags_w: usize| {
@@ -643,8 +669,10 @@ impl Picker {
         while tags_w > 0 && inner.saturating_sub(fixed(tags_w)) < TEXT_MIN {
             tags_w -= 1;
         }
-        // Tags too narrow to read a word of are left out.
-        if tags_w < 6 {
+        // Tags too narrow to read a word of are left out, but with
+        // `short_tags` those that are short and whole.
+        let least = if self.short_tags { whole.min(6) } else { 6 };
+        if tags_w < least {
             tags_w = 0;
         }
         (inner.saturating_sub(fixed(tags_w)), tags_w, key_w)
@@ -1100,6 +1128,36 @@ mod tests {
         for c in text.chars() {
             p.key(Key::new(KeyCode::Char(c), Mods::NONE), &Look::default());
         }
+    }
+
+    #[test]
+    fn a_short_tag_that_fits_whole_is_drawn_and_one_cut_short_is_left_out() {
+        let tagged = |tag: &str| {
+            let mut items = items();
+            items[1].tags = tag.into();
+            Picker::new("Pick", items)
+        };
+        assert_eq!(tagged("now").columns(60).1, 0, "left out unless asked for");
+        assert_eq!(tagged("now").short_tags().columns(60).1, 3);
+        assert_eq!(tagged("#tabs #panes").short_tags().columns(60).1, 12);
+        // No room for the text and six columns of a longer tag: none.
+        let narrow = 3 + 1 + 5 + 1 + TEXT_MIN;
+        assert_eq!(tagged("#tabs #panes").short_tags().columns(narrow).1, 0);
+    }
+
+    #[test]
+    fn it_opens_on_the_row_it_is_started_on_and_typing_goes_back_to_the_first() {
+        let mut p = Picker::new("Pick", items()).start_on(2);
+        assert_eq!(p.chosen().map(|i| i.text.as_str()), Some("New tab"));
+        typed(&mut p, "pane");
+        assert_eq!(p.cursor, 0);
+        // An item that is off, or past the list, leaves it on the first row.
+        let mut off = items();
+        off[2].off = true;
+        let p = Picker::new("Pick", off).start_on(2);
+        assert_eq!(p.cursor, 0);
+        let p = Picker::new("Pick", items()).start_on(9);
+        assert_eq!(p.cursor, 0);
     }
 
     #[test]

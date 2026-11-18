@@ -2259,6 +2259,9 @@ impl Server {
     /// folded away goes back to the tab in front.
     pub(crate) fn sidebar_set_repo(&mut self, session: &str, repo: Option<std::path::PathBuf>) {
         let side = self.sidebar.side(session);
+        if let Some(repo) = &repo {
+            side.filtered_to(repo);
+        }
         side.repo = repo;
         side.repo_open = false;
         if side.focused {
@@ -2271,8 +2274,12 @@ impl Server {
 
     /// M-p's "Filter the sidebar to a repository": a picker of the
     /// repositories the session's tabs are in, each with how many tabs,
-    /// "Every repository" first to clear it, the one filtered to now
-    /// marked; picking one filters to it and says so.
+    /// those filtered to most recently first (`super::repos_newest_first`),
+    /// the one filtered to now marked; picking one filters to it and says
+    /// so. "Every repository" is first while a filter is on, where it
+    /// clears it, and last, marked, with none, so the list opens on the
+    /// repositories. It opens on the first repository that isn't the one
+    /// filtered to now, so the key and Enter go back to the one before.
     pub(crate) fn sidebar_pick_repo(&mut self, client: ClientId) {
         let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
             return;
@@ -2281,7 +2288,26 @@ impl Server {
             .sidebar_repo(&session)
             .map(std::path::Path::to_path_buf);
         let mut repos: Vec<(std::path::PathBuf, usize)> = Vec::new();
-        for t in self.sidebar_tabs(&session) {
+        let tabs = self.sidebar_tabs(&session);
+        // The repositories the session's tabs were last in front in: the
+        // tab in front's, then those of the tabs left before it.
+        let visited: Vec<TabId> = self
+            .session(&session)
+            .map(|s| s.trail.fronted(s.current))
+            .unwrap_or_default();
+        let mut fronted: Vec<std::path::PathBuf> = Vec::new();
+        for id in visited {
+            let dir = tabs
+                .iter()
+                .find(|t| t.id == id)
+                .and_then(|t| t.repo_dir.clone());
+            if let Some(dir) = dir
+                && !fronted.contains(&dir)
+            {
+                fronted.push(dir);
+            }
+        }
+        for t in tabs {
             let Some(dir) = t.repo_dir else { continue };
             match repos.iter_mut().find(|(d, _)| *d == dir) {
                 Some((_, n)) => *n += 1,
@@ -2294,8 +2320,14 @@ impl Server {
                 .to_string_lossy()
                 .into_owned()
         };
-        repos.sort_by_key(|(d, _)| name(d).to_lowercase());
-        let mut items = vec![PickItem {
+        let recent = self
+            .sidebar
+            .sides
+            .get(&session)
+            .map(|s| s.repo_recent.clone())
+            .unwrap_or_default();
+        let repos = super::repos_newest_first(repos, &recent, &fronted);
+        let every = PickItem {
             text: "Every repository".into(),
             tags: if now.is_none() {
                 "now".into()
@@ -2303,7 +2335,11 @@ impl Server {
                 String::new()
             },
             ..PickItem::default()
-        }];
+        };
+        let mut items = Vec::new();
+        if now.is_some() {
+            items.push(every.clone());
+        }
         for (dir, n) in &repos {
             items.push(PickItem {
                 text: format!(
@@ -2320,9 +2356,18 @@ impl Server {
                 ..PickItem::default()
             });
         }
+        if now.is_none() {
+            items.push(every);
+        }
+        let repository_before = items
+            .iter()
+            .position(|i| !i.value.is_empty() && i.tags.is_empty())
+            .unwrap_or(0);
         let picker = Picker::new("Filter the sidebar to a repository", items)
             .named("sidebar-repo")
-            .prompt("repository> ");
+            .prompt("repository> ")
+            .short_tags()
+            .start_on(repository_before);
         self.pick(client, picker, move |server, client, picked| {
             let Some(picked) = picked else {
                 return;

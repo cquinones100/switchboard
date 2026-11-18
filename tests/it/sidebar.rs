@@ -1618,7 +1618,8 @@ fn a_reminder_come_due_shows_through_the_repository_filter() {
 
 // M-R opens "Filter the sidebar to a repository": choosing a repository
 // filters the sidebar to it, and M-R again offers "Every repository" first,
-// which Enter takes; M-p lists the command with its key.
+// above the repository it opens on, which typing its name and Enter takes,
+// clearing the filter; M-p lists the command with its key.
 #[test]
 fn m_shift_r_filters_the_sidebar_to_a_repository() {
     let server = TestServer::start();
@@ -1657,7 +1658,7 @@ fn m_shift_r_filters_the_sidebar_to_a_repository() {
     let every = screen.iter().position(|l| l.contains("Every repository"));
     let first_repo = screen.iter().position(|l| l.contains("beta  1 tab"));
     assert!(every.is_some() && every < first_repo, "{screen:?}");
-    client.type_text("\r");
+    client.type_text("Every\r");
     wait_list(&server, "every repository again", |l| repo(l).is_null());
     // Its box closes on any key, which goes no further.
     client.wait_text("Sidebar: every repository");
@@ -1672,6 +1673,199 @@ fn m_shift_r_filters_the_sidebar_to_a_repository() {
         s.iter()
             .any(|l| l.contains("Filter the sidebar to a repos") && l.contains("M-S-R"))
     });
+}
+
+// The repository filter's list leads with the repositories filtered to
+// most recently: with none filtered to, the one whose tab is in front (the
+// first tab's, "home"), then the rest by name, "Every repository" last; with a filter on, "Every
+// repository" first and the cursor on the repository before, which Enter
+// goes back to. A repository with no tabs left has no row, and the order is
+// kept through a restart.
+#[test]
+fn the_repository_filters_list_leads_with_the_repositories_filtered_to_last() {
+    let mut server = TestServer::start();
+    settings(&server, json!({}));
+    let repos: Vec<_> = ["alpha", "beta", "gamma"]
+        .iter()
+        .map(|name| {
+            let dir = server.dir.path().join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            git(&dir, &["init", "-q"]);
+            git(&dir, &["commit", "-q", "--allow-empty", "-m", "start"]);
+            dir.canonicalize().unwrap()
+        })
+        .collect();
+    let (alpha, beta, gamma) = (&repos[0], &repos[1], &repos[2]);
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    for (dir, name) in [(alpha, "ant"), (beta, "bee"), (gamma, "cee")] {
+        server.ok(&["new-tab", "-d", "-c", &dir.to_string_lossy(), "-n", name]);
+        row_of(&mut client, name);
+    }
+    let side = |l: &Value| l["sessions"][0]["sidebar"].clone();
+    let rows = |screen: &[String], texts: &[&str]| -> Vec<usize> {
+        texts
+            .iter()
+            .map(|t| {
+                screen
+                    .iter()
+                    .position(|l| l.contains(t))
+                    .unwrap_or_else(|| panic!("no {t:?} in {screen:?}"))
+            })
+            .collect()
+    };
+    let rising = |rows: &[usize]| rows.windows(2).all(|w| w[0] < w[1]);
+
+    // No filter: the repository of the tab in front, the rest by name, and
+    // "Every repository" last.
+    client.type_text(&format!("{ALT}R"));
+    client.wait_text("Filter the sidebar to a repository");
+    let screen = client.wait_text("gamma  1 tab");
+    let order = rows(
+        &screen,
+        &[
+            "home  1 tab",
+            "alpha  1 tab",
+            "beta  1 tab",
+            "gamma  1 tab",
+            "Every repository",
+        ],
+    );
+    assert!(rising(&order), "{screen:?}");
+    assert!(screen[order[4]].contains("now"), "{screen:?}");
+    client.type_text("\x1b");
+    client.wait_for("the list closed", |s| {
+        !s.iter().any(|l| l.contains("Every repository"))
+    });
+
+    server.ok(&["sidebar-repo", &alpha.to_string_lossy()]);
+    server.ok(&["sidebar-repo", &beta.to_string_lossy()]);
+    wait_list(&server, "filtered to beta after alpha", |l| {
+        side(l)["repo_recent"] == json!([beta.to_string_lossy(), alpha.to_string_lossy()])
+    });
+
+    // A filter on: "Every repository", then the latest first, and Enter
+    // goes back to the repository before.
+    client.type_text(&format!("{ALT}R"));
+    client.wait_text("Filter the sidebar to a repository");
+    let screen = client.wait_text("gamma  1 tab");
+    let order = rows(
+        &screen,
+        &[
+            "Every repository",
+            "beta  1 tab",
+            "alpha  1 tab",
+            "home  1 tab",
+            "gamma  1 tab",
+        ],
+    );
+    assert!(rising(&order), "{screen:?}");
+    assert!(
+        screen[order[1]].contains("now") && !screen[order[0]].contains("now"),
+        "{screen:?}"
+    );
+    client.type_text("\r");
+    wait_list(&server, "back at alpha", |l| {
+        side(l)["repo"] == json!(alpha.to_string_lossy())
+            && side(l)["repo_recent"] == json!([alpha.to_string_lossy(), beta.to_string_lossy()])
+    });
+    client.wait_text("Sidebar: alpha only");
+    client.type_text("x");
+    client.wait_for("the box closed", |s| {
+        !s.iter().any(|l| l.contains("Sidebar: alpha only"))
+    });
+
+    // Beta's only tab closed: no row for it.
+    let list = server.list();
+    let bee = tabs(&list).iter().find(|t| t["name"] == "bee").unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["kill-tab", "-t", &bee]);
+    wait_list(&server, "bee closed", |l| tabs(l).len() == 3);
+    client.type_text(&format!("{ALT}R"));
+    client.wait_text("Filter the sidebar to a repository");
+    let screen = client.wait_text("gamma  1 tab");
+    assert!(!screen.iter().any(|l| l.contains("beta  ")), "{screen:?}");
+    client.type_text("gamma\r");
+    wait_list(&server, "filtered to gamma", |l| {
+        side(l)["repo"] == json!(gamma.to_string_lossy())
+    });
+
+    // The order is kept with the layout.
+    server.ok(&["save"]);
+    drop(client);
+    server.restart();
+    let after = server.list();
+    assert_eq!(
+        side(&after)["repo_recent"],
+        json!([
+            gamma.to_string_lossy(),
+            alpha.to_string_lossy(),
+            beta.to_string_lossy()
+        ]),
+        "{after}"
+    );
+}
+
+// With no repository filtered to, the list ranks the repositories by the
+// tab of theirs in front most recently, a step back included: after ant,
+// bee and cee, M-{ goes back to bee, and cee's repository, left last, comes
+// before ant's, through a restart too.
+#[test]
+fn the_repository_filters_list_ranks_by_the_tabs_left_through_a_step_back() {
+    let mut server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    for (repo, name) in [("alpha", "ant"), ("beta", "bee"), ("gamma", "cee")] {
+        let dir = server.dir.path().join(repo);
+        std::fs::create_dir_all(&dir).unwrap();
+        git(&dir, &["init", "-q"]);
+        git(&dir, &["commit", "-q", "--allow-empty", "-m", "start"]);
+        server.ok(&["new-tab", "-d", "-c", &dir.to_string_lossy(), "-n", name]);
+        row_of(&mut client, name);
+    }
+    let in_front = |name: &'static str| {
+        move |l: &Value| {
+            tabs(l)
+                .iter()
+                .any(|t| t["name"] == name && t["current"] == true)
+        }
+    };
+    for (key, name) in [("2", "ant"), ("3", "bee"), ("4", "cee"), ("{", "bee")] {
+        client.type_text(&format!("{ALT}{key}"));
+        wait_list(&server, name, in_front(name));
+    }
+
+    client.type_text(&format!("{ALT}R"));
+    client.wait_text("Filter the sidebar to a repository");
+    let in_order = |screen: &[String]| {
+        let order: Vec<usize> = ["beta  1 tab", "gamma  1 tab", "alpha  1 tab", "home  1 tab"]
+            .iter()
+            .map(|t| {
+                screen
+                    .iter()
+                    .position(|l| l.contains(t))
+                    .unwrap_or_else(|| panic!("no {t:?} in {screen:?}"))
+            })
+            .collect();
+        assert!(order.windows(2).all(|w| w[0] < w[1]), "{screen:?}");
+    };
+    in_order(&client.wait_text("home  1 tab"));
+    client.type_text("\x1b");
+    client.wait_for("the list closed", |s| {
+        !s.iter().any(|l| l.contains("Every repository"))
+    });
+
+    server.ok(&["save"]);
+    drop(client);
+    server.restart();
+    let mut client = server.attach(120, 30);
+    row_of(&mut client, "cee");
+    client.type_text(&format!("{ALT}R"));
+    client.wait_text("Filter the sidebar to a repository");
+    in_order(&client.wait_text("home  1 tab"));
 }
 
 // A right press on a notification in the Notifications window opens its

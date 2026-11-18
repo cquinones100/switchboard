@@ -115,7 +115,9 @@ pub const STEPS: &[Step] = &[
             "sidebar to a repo",
             "@wait:Filter the sidebar to a repository",
             "Enter",
-            "@wait:Every repository",
+            // With no filter on, "Every repository" is the last row, which
+            // a short list may not show: the prompt is there either way.
+            "@wait:repository>",
             "api",
             "@wait:repository> api",
             "Enter",
@@ -445,7 +447,25 @@ fn press_to_view(client: &mut Client, dir: &Path, name: &str, key: &str, view: &
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    // The list moves before the view beside it has drawn.
+    // The list moves before the view beside it has drawn, and a view whose
+    // lookup hasn't answered says it is loading: its board is saved once
+    // it has, and a view still loading at the deadline fails the tour.
+    client.settle();
+    let deadline = Instant::now() + Duration::from_secs(10) * patience();
+    // The view's own row: a cell between the panes' rules holding the
+    // words alone, never a tab's name that ends with them.
+    let loading = |lines: &[String]| {
+        lines
+            .iter()
+            .any(|l| l.split('│').any(|cell| cell.trim() == "Loading…"))
+    };
+    while client.read(|s| loading(&s.lines())) {
+        if Instant::now() >= deadline || client.ended().is_some() {
+            let what = format!("{view} was still loading");
+            return Err(fail(client, dir, name, &what));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
     client.settle();
     Ok(())
 }

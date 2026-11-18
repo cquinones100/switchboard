@@ -134,6 +134,10 @@ pub struct SavedSession {
     pub sidebar_repo: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub sidebar_repo_open: bool,
+    /// The repositories its sidebar was filtered to, the latest first
+    /// (`Side::repo_recent`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sidebar_repo_recent: Vec<PathBuf>,
     /// The sidebar's groups folded with `z` or a click, by their stages'
     /// keys, and whether its notifications were.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -771,10 +775,22 @@ impl Persist {
                 rows: s.rows,
                 current: s.current,
                 last: s.last,
-                trail: Trail::default(),
+                // Of the trail, only the tabs left, the saved ones, for what
+                // ranks by them; the places back and forward start empty.
+                trail: Trail {
+                    left: s
+                        .trail
+                        .left
+                        .iter()
+                        .copied()
+                        .filter(|t| tabs.iter().any(|saved| saved.id == *t))
+                        .collect(),
+                    ..Trail::default()
+                },
                 tabs,
                 sidebar_repo: side.and_then(|x| x.repo.clone()),
                 sidebar_repo_open: side.is_some_and(|x| x.repo.is_some() && x.repo_open),
+                sidebar_repo_recent: side.map(|x| x.repo_recent.clone()).unwrap_or_default(),
                 sidebar_folded: folds_of(side).0,
                 sidebar_notices_folded: folds_of(side).1,
                 mission_width: s.mission_width.clone(),
@@ -1087,6 +1103,9 @@ fn renumber(server: &Server, saved: &mut Saved, fresh: bool) {
         }
         ss.current = moved.get(&ss.current).copied().unwrap_or(ss.current);
         ss.last = ss.last.map(|t| moved.get(&t).copied().unwrap_or(t));
+        for t in &mut ss.trail.left {
+            *t = moved.get(t).copied().unwrap_or(*t);
+        }
     }
 }
 
@@ -1152,10 +1171,27 @@ impl Persist {
                 && existing.is_some()
             {
                 session.tabs.extend(tabs.iter().copied());
+                // The recovered tabs by when each was last in front, behind
+                // the session's own, which are newer.
+                let recovered = std::iter::once(ss.current)
+                    .chain(ss.last)
+                    .chain(ss.trail.left.iter().copied())
+                    .filter(|t| tabs.contains(t));
+                for t in recovered {
+                    if !session.trail.left.contains(&t) {
+                        session.trail.left.push(t);
+                    }
+                }
                 for t in tabs {
                     server.relayout(t);
                     server.refresh_name(t);
                 }
+                // The session keeps its own filter and folds; the saved
+                // order of the repositories goes behind its own.
+                server
+                    .sidebar
+                    .side(&ss.name)
+                    .add_recent(ss.sidebar_repo, ss.sidebar_repo_recent);
                 continue;
             }
             let current = if tabs.contains(&ss.current) {
@@ -1167,14 +1203,33 @@ impl Persist {
             let sidebar = server.sidebar_columns(cols);
             let side = server.sidebar.side(&ss.name);
             restore_folds(side, &ss.sidebar_folded, ss.sidebar_notices_folded);
-            side.repo = ss.sidebar_repo;
-            side.repo_open = ss.sidebar_repo_open;
+            side.restore_repo(
+                ss.sidebar_repo,
+                ss.sidebar_repo_open,
+                ss.sidebar_repo_recent,
+            );
             server.sessions.push(Session {
                 name: ss.name,
                 tabs: tabs.clone(),
                 current,
                 last,
-                trail: Trail::default(),
+                // Of the trail only the tabs left are saved, the tab before
+                // the one in front leading them when they don't hold it, as
+                // in a layout from before they were saved.
+                trail: Trail {
+                    left: last
+                        .filter(|l| !ss.trail.left.contains(l))
+                        .into_iter()
+                        .chain(ss.trail.left.iter().copied())
+                        .filter(|t| tabs.contains(t) && *t != current)
+                        .fold(Vec::new(), |mut left, t| {
+                            if !left.contains(&t) {
+                                left.push(t);
+                            }
+                            left
+                        }),
+                    ..Trail::default()
+                },
                 cols,
                 rows,
                 sidebar,
@@ -1329,6 +1384,12 @@ pub fn layout_now(server: &Server) -> Saved {
                 .sides
                 .get(&s.name)
                 .is_some_and(|x| x.repo.is_some() && x.repo_open),
+            sidebar_repo_recent: server
+                .sidebar
+                .sides
+                .get(&s.name)
+                .map(|x| x.repo_recent.clone())
+                .unwrap_or_default(),
             sidebar_folded: folds_of(server.sidebar.sides.get(&s.name)).0,
             sidebar_notices_folded: folds_of(server.sidebar.sides.get(&s.name)).1,
             mission_width: s.mission_width.clone(),
@@ -1451,9 +1512,20 @@ pub fn adopt_layout(server: &mut Server, saved: Saved) {
         let sidebar = server.sidebar_columns(cols);
         let side = server.sidebar.side(&ss.name);
         restore_folds(side, &ss.sidebar_folded, ss.sidebar_notices_folded);
-        side.repo = ss.sidebar_repo;
-        side.repo_open = ss.sidebar_repo_open;
-        let trail = ss.trail.keeping(&tabs);
+        side.restore_repo(
+            ss.sidebar_repo,
+            ss.sidebar_repo_open,
+            ss.sidebar_repo_recent,
+        );
+        let mut trail = ss.trail.keeping(&tabs);
+        // A handover from a build that saved no tabs left can lack the tab
+        // before the one in front, which it keeps apart: it leads them, as
+        // in a cold restore.
+        if let Some(last) = last
+            && !trail.left.contains(&last)
+        {
+            trail.left.insert(0, last);
+        }
         server.sessions.push(Session {
             name: ss.name,
             tabs,
@@ -1533,6 +1605,7 @@ mod tests {
                 trail: Default::default(),
                 sidebar_repo: None,
                 sidebar_repo_open: false,
+                sidebar_repo_recent: Vec::new(),
                 sidebar_folded: Vec::new(),
                 sidebar_notices_folded: false,
                 mission_width: None,

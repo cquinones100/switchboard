@@ -98,6 +98,10 @@ pub struct Side {
     pub repo: Option<PathBuf>,
     /// Other repos unfolded, its tabs listed one by one.
     pub repo_open: bool,
+    /// The repositories it was filtered to, the latest first, at most
+    /// `REPOS_RECENT`, which the filter's list leads with; kept with the
+    /// layout, a clear of the filter leaving it as it is.
+    pub repo_recent: Vec<PathBuf>,
     /// The groups folded to one line, Other repos aside, which folds by
     /// `repo_open`.
     pub folded: std::collections::BTreeSet<Stage>,
@@ -106,6 +110,89 @@ pub struct Side {
     /// Select mode (`v`, a Shift-click): the tabs selected, to close at
     /// once from one menu; `None` out of it.
     pub select: Option<BTreeSet<TabId>>,
+}
+
+/// How many of the repositories filtered to a sidebar remembers.
+pub const REPOS_RECENT: usize = 20;
+/// The longest path kept in the history, macOS's and Linux's limit on a
+/// path, so a layout file can't fill it with text no directory has.
+const PATH_MAX: usize = 4096;
+
+/// Whether a path read from a layout can be one a sidebar was filtered to.
+fn keepable(repo: &std::path::Path) -> bool {
+    repo.to_str().is_some_and(|p| p.len() <= PATH_MAX)
+}
+
+impl Side {
+    /// The filter as a saved layout or a handover kept it. One written
+    /// before `repo_recent` was kept has a filter and no history, so the
+    /// repository filtered to is put at its front when it isn't in it.
+    pub fn restore_repo(&mut self, repo: Option<PathBuf>, open: bool, mut recent: Vec<PathBuf>) {
+        recent.retain(|r| keepable(r));
+        recent.truncate(REPOS_RECENT);
+        self.repo_recent = recent;
+        if let Some(repo) = &repo
+            && !self.repo_recent.contains(repo)
+        {
+            self.filtered_to(repo);
+        }
+        self.repo = repo;
+        self.repo_open = open;
+    }
+
+    /// A saved layout's tabs added to a session already open: the
+    /// repositories it was filtered to follow the session's own, which
+    /// are newer, those it already holds left where they are.
+    /// The layout's own filter leads them when they don't hold it, as in
+    /// one written before the history was kept. No more than
+    /// `REPOS_RECENT` are kept.
+    pub fn add_recent(&mut self, filter: Option<PathBuf>, saved: Vec<PathBuf>) {
+        let filter = filter.filter(|f| !saved.contains(f));
+        let read = filter.into_iter().chain(saved).take(REPOS_RECENT + 1);
+        for repo in read.filter(|r| keepable(r)) {
+            if self.repo_recent.len() >= REPOS_RECENT {
+                break;
+            }
+            if !self.repo_recent.contains(&repo) {
+                self.repo_recent.push(repo);
+            }
+        }
+    }
+
+    /// `repo` filtered to now: the first of `repo_recent`. A path that
+    /// isn't UTF-8 is left out, since the history outlives the filter and
+    /// neither the saved layout nor `list` can write one.
+    pub fn filtered_to(&mut self, repo: &std::path::Path) {
+        if !keepable(repo) {
+            return;
+        }
+        self.repo_recent.retain(|r| r != repo);
+        self.repo_recent.insert(0, repo.to_path_buf());
+        self.repo_recent.truncate(REPOS_RECENT);
+    }
+}
+
+/// The order the repository filter's list gives `repos` (each a main
+/// clone's directory): those filtered to before by their place in `recent`,
+/// the latest first, then the rest by the tab of theirs in front most
+/// recently (`fronted`, a repository's place among those the session's
+/// tabs were last in, none for one never in front), then by name.
+pub fn repos_newest_first<T>(
+    mut repos: Vec<(PathBuf, T)>,
+    recent: &[PathBuf],
+    fronted: &[PathBuf],
+) -> Vec<(PathBuf, T)> {
+    let place =
+        |list: &[PathBuf], dir: &PathBuf| list.iter().position(|r| r == dir).unwrap_or(usize::MAX);
+    repos.sort_by_cached_key(|(dir, _)| {
+        let name = dir
+            .file_name()
+            .unwrap_or(dir.as_os_str())
+            .to_string_lossy()
+            .to_lowercase();
+        (place(recent, dir), place(fronted, dir), name)
+    });
+    repos
 }
 
 /// Where a client's sidebar was last drawn, for the mouse and C-d.
@@ -191,5 +278,106 @@ impl Sidebar {
             .filter(|s| s.focused)
             .and_then(|s| s.cursor.as_ref())
             .and_then(Owner::tab)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dirs(names: &[&str]) -> Vec<PathBuf> {
+        names
+            .iter()
+            .map(|n| PathBuf::from(format!("/code/{n}")))
+            .collect()
+    }
+
+    fn names(repos: Vec<(PathBuf, usize)>) -> Vec<String> {
+        repos
+            .iter()
+            .map(|(d, _)| d.file_name().unwrap().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn the_repositories_filtered_to_lead_the_list_the_latest_first() {
+        let repos = |names: &[&str]| dirs(names).into_iter().map(|d| (d, 1)).collect();
+        // None filtered to: the one in front most recently, then by name.
+        assert_eq!(
+            names(repos_newest_first(
+                repos(&["delta", "Beta", "alpha", "gamma"]),
+                &[],
+                &dirs(&["gamma"]),
+            )),
+            ["gamma", "alpha", "Beta", "delta"]
+        );
+        // Those filtered to first, one with no tabs left naming no row.
+        assert_eq!(
+            names(repos_newest_first(
+                repos(&["alpha", "beta", "gamma", "delta"]),
+                &dirs(&["gamma", "gone", "beta"]),
+                &dirs(&["delta", "beta"]),
+            )),
+            ["gamma", "beta", "delta", "alpha"]
+        );
+    }
+
+    #[test]
+    fn a_filter_restored_with_no_history_starts_it() {
+        let zeta = dirs(&["zeta"]).remove(0);
+        let mut side = Side::default();
+        side.restore_repo(Some(zeta.clone()), true, Vec::new());
+        assert_eq!(side.repo_recent, std::slice::from_ref(&zeta));
+        assert!(side.repo_open);
+        // One kept with its history is left as it was.
+        let kept = dirs(&["alpha", "zeta"]);
+        side.restore_repo(Some(zeta), false, kept.clone());
+        assert_eq!(side.repo_recent, kept);
+        side.restore_repo(None, false, kept.clone());
+        assert_eq!((side.repo.clone(), side.repo_recent.clone()), (None, kept));
+        // A layout's history added to an open session's goes after it.
+        side.add_recent(None, dirs(&["zeta", "beta"]));
+        assert_eq!(side.repo_recent, dirs(&["alpha", "zeta", "beta"]));
+        // With the layout's own filter first, and never past the cap.
+        side.add_recent(Some(dirs(&["gamma"]).remove(0)), dirs(&["delta"]));
+        assert_eq!(
+            side.repo_recent,
+            dirs(&["alpha", "zeta", "beta", "gamma", "delta"])
+        );
+        // A filter the layout's history holds stays where it is in it.
+        let mut open = Side::default();
+        open.add_recent(Some(dirs(&["zeta"]).remove(0)), dirs(&["alpha", "zeta"]));
+        assert_eq!(open.repo_recent, dirs(&["alpha", "zeta"]));
+        // A path longer than any directory's is never read in.
+        let long = PathBuf::from(format!("/{}", "x".repeat(PATH_MAX)));
+        open.add_recent(None, vec![long.clone()]);
+        open.restore_repo(None, false, vec![long.clone()]);
+        assert!(!open.repo_recent.contains(&long));
+        let many: Vec<PathBuf> = (0..100)
+            .map(|n| PathBuf::from(format!("/code/r{n}")))
+            .collect();
+        side.add_recent(None, many.clone());
+        assert_eq!(side.repo_recent.len(), REPOS_RECENT);
+        side.restore_repo(None, false, many);
+        assert_eq!(side.repo_recent.len(), REPOS_RECENT);
+    }
+
+    #[test]
+    fn filtering_to_a_repository_again_moves_it_to_the_front_once() {
+        let mut side = Side::default();
+        for name in ["alpha", "beta", "alpha"] {
+            side.filtered_to(&dirs(&[name])[0]);
+        }
+        assert_eq!(side.repo_recent, dirs(&["alpha", "beta"]));
+        for n in 0..REPOS_RECENT + 5 {
+            side.filtered_to(&PathBuf::from(format!("/code/r{n}")));
+        }
+        assert_eq!(side.repo_recent.len(), REPOS_RECENT);
+        // A path that isn't UTF-8 is never kept.
+        use std::os::unix::ffi::OsStrExt;
+        let odd = PathBuf::from(std::ffi::OsStr::from_bytes(b"/code/\xff"));
+        side.filtered_to(&odd);
+        assert!(!side.repo_recent.contains(&odd));
+        assert_eq!(side.repo_recent[0], PathBuf::from("/code/r24"));
     }
 }

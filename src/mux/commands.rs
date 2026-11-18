@@ -660,6 +660,8 @@ impl Server {
                         // The repository it is filtered to, and Other repos unfolded.
                         "repo": self.sidebar_repo(&s.name),
                         "repo_open": self.sidebar.sides.get(&s.name).is_some_and(|x| x.repo_open),
+                        // The repositories it was filtered to, the latest first.
+                        "repo_recent": self.sidebar.sides.get(&s.name).map(|x| x.repo_recent.clone()).unwrap_or_default(),
                         // The groups folded, by their stages' keys, and the
                         // notifications.
                         "folded": self.sidebar.sides.get(&s.name).map(|x| x.folded.iter().map(|g| g.key()).collect::<Vec<_>>()).unwrap_or_default(),

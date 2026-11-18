@@ -2101,6 +2101,10 @@ impl Server {
             return;
         };
         let to = self.session_mut(&session).and_then(|s| {
+            // Several steps at once leave one place, the one in front: the
+            // places stepped over never came to the front.
+            let here = s.trail.here(s.current);
+            let left = s.trail.left.clone();
             let mut to = None;
             for _ in 0..steps {
                 let current = to.clone().unwrap_or_else(|| s.trail.here(s.current));
@@ -2113,6 +2117,10 @@ impl Server {
                     Some(p) => to = Some(p),
                     None => break,
                 }
+            }
+            if to.is_some() {
+                s.trail.left = left;
+                s.trail.leave(&here);
             }
             to
         });
