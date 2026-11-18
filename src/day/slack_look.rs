@@ -131,9 +131,10 @@ pub fn slowed_note(every: i64) -> String {
 pub enum Looked {
     /// It read Slack: its line for the log.
     Read(String),
-    /// Its token read failed while the connector's minute wasn't up: it
-    /// tried Slack, so it counts as a look, but read nothing.
-    Held,
+    /// Its token read failed (or the token couldn't be read) while the
+    /// connector's minute wasn't up, which it is at `until`: it counts as
+    /// a look, but read nothing.
+    Held { until: i64 },
     /// It read nothing, the connector's minute not up and no token to try,
     /// which it is at `until`.
     Skipped { until: i64 },
@@ -144,7 +145,7 @@ impl Looked {
     pub fn line(&self) -> String {
         match self {
             Looked::Read(line) => line.clone(),
-            Looked::Held => {
+            Looked::Held { .. } => {
                 "slack: the token's read failed, and the connector looked under a minute ago".into()
             }
             Looked::Skipped { .. } => "slack: the connector looked under a minute ago".into(),
@@ -515,12 +516,11 @@ pub async fn look_slack(
             if let Some(at) = state.get("connector_at").and_then(Value::as_i64)
                 && now - at < CONNECTOR_EVERY_MS
             {
+                let until = at + CONNECTOR_EVERY_MS;
                 return Ok(if tried_token {
-                    Looked::Held
+                    Looked::Held { until }
                 } else {
-                    Looked::Skipped {
-                        until: at + CONNECTOR_EVERY_MS,
-                    }
+                    Looked::Skipped { until }
                 });
             }
             state.insert("connector_at".into(), json!(now));

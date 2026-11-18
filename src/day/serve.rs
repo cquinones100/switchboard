@@ -278,7 +278,10 @@ impl Server {
         {
             self.read_feed();
         }
-        let held_back_due = self.day.slack_look_at.is_some_and(|at| ms >= at);
+        // Kept while you're away, as the looks pause then, and while a look
+        // still runs.
+        let held_back_due =
+            !away && !self.day.slack_busy && self.day.slack_look_at.is_some_and(|at| ms >= at);
         if held_back_due {
             self.day.slack_look_at = None;
         }
@@ -344,9 +347,15 @@ impl Server {
                 // up, with no token to try) leaves the schedule as it was,
                 // and looks again once the minute is up, so a refresh asked
                 // for (a reply, going to the view) isn't lost.
-                if let Ok(slack_look::Looked::Skipped { until }) = &result {
-                    (self.day.slack_asked, self.day.slack_pace) = before;
-                    self.day.slack_look_at = Some(*until);
+                match &result {
+                    Ok(slack_look::Looked::Skipped { until }) => {
+                        (self.day.slack_asked, self.day.slack_pace) = before;
+                        self.day.slack_look_at = Some(*until);
+                    }
+                    Ok(slack_look::Looked::Held { until }) => {
+                        self.day.slack_look_at = Some(*until);
+                    }
+                    _ => {}
                 }
                 if let Some(until) = slowed {
                     self.day.slack_pace.slow_down(until);
