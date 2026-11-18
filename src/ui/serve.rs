@@ -1507,8 +1507,12 @@ fn app_of(args: &[String], own_exe: &str, short: bool) -> Option<String> {
         ["pr-view", "--checks", ..] => ("the PR's failing checks", "PR checks"),
         ["pr-view", ..] => ("the PR view", "PR view"),
         ["ticket-view", ..] => ("the ticket view", "ticket view"),
-        // By its link, so two read side by side differ.
-        ["link-view", url, ..] if !short => return Some(format!("the link view: {url}")),
+        // By its link, so two read side by side differ, written
+        // without its scheme and cut from the left, where links differ.
+        ["link-view", url, ..] if !short => {
+            let url = url.split_once("://").map_or(*url, |(_, rest)| rest);
+            return Some(format!("the link view: {}", cut_left(url, 45)));
+        }
         ["link-view", ..] => ("the link view", "link view"),
         ["pr-image", "--ticket", ..] => ("the ticket's images", "ticket images"),
         ["pr-image", ..] => ("the PR's images", "PR images"),
@@ -1619,8 +1623,14 @@ mod tests {
         assert_eq!(line(&[&bin, "diff"]), "the diff");
         assert_eq!(
             line(&[&bin, "link-view", "https://a.dev/x"]),
-            "the link view: https://a.dev/x"
+            "the link view: a.dev/x"
         );
+        let pr = line(&[
+            &bin,
+            "link-view",
+            &format!("https://github.com/{}/pull/124", "o/".repeat(30)),
+        ]);
+        assert!(pr.ends_with("/pull/124") && draw::width(&pr) == 60);
         let brief = |args: &[&str]| {
             let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
             app_of(&args, "/opt/sb/switchboard-0.2.0", true)
