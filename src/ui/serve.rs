@@ -1341,10 +1341,35 @@ impl Server {
             .and_then(crate::mux::procinfo::args_of)
             .filter(|args| args.first().is_some_and(|a| !a.trim().is_empty()))
             .unwrap_or_else(|| vec![command]);
-        let own_exe = crate::util::exe()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let own_exe = self.own_exe(pane, &args);
         Some(program_line(&args, &own_exe))
+    }
+
+    /// The path of the Switchboard that started what a pane runs, for
+    /// `app_of`: the pane's own program when the server marked it as one
+    /// of its views or tools, whatever binary started it (one a restart
+    /// moved away from among them), else the binary the server runs.
+    fn own_exe(&self, pane: PaneId, args: &[String]) -> String {
+        // src/views/serve.rs's marks, the notes pane's and a tool in a
+        // pane's place.
+        const MARKS: [&str; 6] = [
+            "@pr_view",
+            "@ticket_view",
+            "@link_view",
+            "@checks_view",
+            "@notes_pane",
+            crate::diff::in_place::IN_PLACE,
+        ];
+        let marked = self
+            .panes
+            .get(&pane)
+            .is_some_and(|s| MARKS.iter().any(|m| s.opts.contains_key(*m)));
+        match args.first() {
+            Some(first) if marked => first.clone(),
+            _ => crate::util::exe()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        }
     }
 
     /// What a pane runs in front, by its program's name alone (`claude`
@@ -1362,9 +1387,7 @@ impl Server {
         // One of Switchboard's apps by what it is, as the close-pane
         // question names it, in a word or two, since every program of a
         // tab shares one line.
-        let own_exe = crate::util::exe()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let own_exe = self.own_exe(pane, &args);
         if let Some(app) = app_of(&args, &own_exe, true) {
             return Some(app);
         }
