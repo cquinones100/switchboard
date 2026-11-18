@@ -1476,9 +1476,10 @@ fn program_line(args: &[String], own_exe: &str) -> String {
 
 /// What one of Switchboard's own apps is, by its command line, as the
 /// close questions name it: whole for the close-pane question (`the diff
-/// of uncommitted changes`, `the pager: ~/x.log:12`), and in a word or
-/// two with `short` for the close-tabs one, where a tab's programs share
-/// a line (`uncommitted diff`, `pager`); `None` for any other program.
+/// of uncommitted changes`), and in a word or two with `short` for the
+/// close-tabs one, where a tab's programs share a line (`uncommitted
+/// diff`); `None` for any other program, the pager among them, which
+/// lists by its command and file.
 fn app_of(args: &[String], own_exe: &str, short: bool) -> Option<String> {
     let (first, rest) = args.split_first()?;
     // Switchboard's own command and its words: `switchboard`, or the
@@ -1506,62 +1507,10 @@ fn app_of(args: &[String], own_exe: &str, short: bool) -> Option<String> {
         ["diff", ..] => ("the diff", "diff"),
         ["pr-view", "--checks", ..] => ("the PR's failing checks", "PR checks"),
         ["pr-view", ..] => ("the PR view", "PR view"),
-        // By its ticket's ID when it was given one rather than a folder.
-        ["ticket-view", id, ..] if !short && crate::views::ticket::id_of(id).is_some() => {
-            return Some(format!("the ticket view: {id}"));
-        }
         ["ticket-view", ..] => ("the ticket view", "ticket view"),
-        // By its link, so two read side by side differ, written
-        // without its scheme and cut from the left, where links differ.
-        ["link-view", url, ..] if !short => {
-            // A ticket or a PR by what the link view reads it as.
-            use crate::views::page::{Kind, kind_of};
-            let url = url.trim();
-            if url.starts_with("https://") {
-                match kind_of(url, std::path::Path::new("")) {
-                    Ok(Kind::Ticket(id)) => return Some(format!("the link view: {id}")),
-                    Ok(Kind::Pr { repo, number }) => {
-                        // Its owner and number whole, the name cut between.
-                        let ends = format!("{}/#{number}", repo.owner);
-                        let room = 45usize.saturating_sub(draw::width(&ends)).max(4);
-                        let name = draw::cut(&repo.name, room);
-                        return Some(format!("the link view: {}/{name}#{number}", repo.owner));
-                    }
-                    _ => {}
-                }
-            }
-            let url = url.split_once("://").map_or(url, |(_, rest)| rest);
-            return Some(format!("the link view: {}", cut_left(url, 45)));
-        }
         ["link-view", ..] => ("the link view", "link view"),
         ["pr-image", "--ticket", ..] => ("the ticket's images", "ticket images"),
         ["pr-image", ..] => ("the PR's images", "PR images"),
-        // The pager (a CI log, a landing's output, a file), by its file's
-        // path cut from the left, so a long folder doesn't cut the name
-        // away. `view [--log] [+<line>] <file>`: the file is always last.
-        ["view", flags @ .., file]
-            if *file != "--log"
-                && !file
-                    .strip_prefix('+')
-                    .is_some_and(|n| n.parse::<usize>().is_ok()) =>
-        {
-            if short {
-                return Some("pager".into());
-            }
-            let path = if file.starts_with('/') {
-                crate::paths::tilde(file)
-            } else {
-                file.to_string()
-            };
-            // From its line, `file:<line>`, so two of one file differ.
-            let at = flags
-                .iter()
-                .find_map(|f| f.strip_prefix('+'))
-                .map(|n| format!(":{n}"))
-                .unwrap_or_default();
-            let room = 49usize.saturating_sub(draw::width(&at));
-            return Some(format!("the pager: {}{at}", cut_left(&path, room)));
-        }
         _ => return None,
     };
     Some(if short { brief } else { long }.to_string())
@@ -1573,25 +1522,6 @@ fn app_of(args: &[String], own_exe: &str, short: bool) -> Option<String> {
 /// included (`./Build Tools/bin/worker`), whose first word holds a `/`.
 fn title_of(first: &str) -> Option<(&str, &str)> {
     first.split_once(' ').filter(|(exe, _)| !exe.contains('/'))
-}
-
-/// Text cut to `cols` columns from its left, an `…` in front, so a path
-/// keeps its file's name.
-fn cut_left(text: &str, cols: usize) -> String {
-    if draw::width(text) <= cols {
-        return text.to_string();
-    }
-    let mut kept = Vec::new();
-    let mut used = 1;
-    for c in text.chars().rev() {
-        let w = draw::width(c.encode_utf8(&mut [0; 4]));
-        if used + w > cols {
-            break;
-        }
-        used += w;
-        kept.push(c);
-    }
-    std::iter::once('…').chain(kept.into_iter().rev()).collect()
 }
 
 /// Whether a program is a shell, by its name (a login shell's has a `-`
@@ -1640,42 +1570,41 @@ mod tests {
         );
         let bin = format!("{home}/.local/bin/switchboard");
         assert_eq!(line(&[&bin, "notes", "--tab"]), "Notes");
+        assert_eq!(
+            line(&[&bin, "notes", "away"]),
+            "the place Notes left in its tab"
+        );
         assert_eq!(line(&[&bin, "diff"]), "the diff");
         assert_eq!(
-            line(&[&bin, "ticket-view", "ENG-42"]),
-            "the ticket view: ENG-42"
+            line(&[&bin, "diff", "--working"]),
+            "the diff of uncommitted changes"
         );
-        assert_eq!(line(&[&bin, "ticket-view", "/x/y"]), "the ticket view");
-        assert_eq!(line(&[&bin, "ticket-view", "."]), "the ticket view");
+        assert_eq!(line(&[&bin, "diff", "--ahead"]), "switchboard diff --ahead");
+        assert_eq!(line(&[&bin, "pr-view", "/x"]), "the PR view");
+        assert_eq!(
+            line(&[&bin, "pr-view", "--checks", "/x"]),
+            "the PR's failing checks"
+        );
+        assert_eq!(line(&[&bin, "ticket-view", "X-1"]), "the ticket view");
         assert_eq!(
             line(&[&bin, "link-view", "https://a.dev/x"]),
-            "the link view: a.dev/x"
+            "the link view"
         );
-        let pr = line(&[
-            &bin,
-            "link-view",
-            &format!("https://github.com/{}/pull/124", "o/".repeat(30)),
-        ]);
-        assert!(pr.ends_with("/pull/124") && draw::width(&pr) == 60);
-        let pr = |owner: &str, name: &str, rest: &str| {
-            line(&[
-                &bin,
-                "link-view",
-                &format!(" https://github.com/{owner}/{name}/pull/{rest}"),
-            ])
-        };
-        let anchor = format!("124/files#diff-{}", "f".repeat(64));
-        assert_eq!(pr("o", "r", &anchor), "the link view: o/r#124");
-        let fork = pr("fork", &"n".repeat(60), "42");
-        assert!(fork.starts_with("the link view: fork/n") && fork.ends_with("…#42"));
         assert_eq!(
-            line(&[
-                &bin,
-                "link-view",
-                &format!("https://linear.app/w/issue/x-1/{}", "slug-".repeat(12)),
-            ]),
-            "the link view: X-1"
+            line(&[&bin, "pr-image", "--ticket", "X-1"]),
+            "the ticket's images"
         );
+        assert_eq!(
+            line(&[&bin, "view", "--log", &format!("{home}/job.log")]),
+            "switchboard view --log ~/job.log"
+        );
+        assert_eq!(line(&[&bin, "tabs"]), "switchboard tabs");
+        assert_eq!(line(&["/opt/sb/switchboard-0.2.0", "diff"]), "the diff");
+        assert_eq!(
+            line(&["switchboard-backup", "notes"]),
+            "switchboard-backup notes"
+        );
+        assert_eq!(line(&["/opt/x/pr-view", "--checks"]), "pr-view --checks");
         let brief = |args: &[&str]| {
             let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
             app_of(&args, "/opt/sb/switchboard-0.2.0", true)
@@ -1684,52 +1613,7 @@ mod tests {
             brief(&[&bin, "diff", "--working"]).as_deref(),
             Some("uncommitted diff")
         );
-        assert_eq!(
-            brief(&[&bin, "view", "+3", "/a/b.log"]).as_deref(),
-            Some("pager")
-        );
         assert_eq!(brief(&["vim"]), None);
-        assert_eq!(line(&[&bin, "diff", "--ahead"]), "switchboard diff --ahead");
-        assert_eq!(
-            line(&[&bin, "diff", "--working"]),
-            "the diff of uncommitted changes"
-        );
-        assert_eq!(line(&[&bin, "pr-view", "/x"]), "the PR view");
-        assert_eq!(
-            line(&[&bin, "pr-view", "--checks", "/x"]),
-            "the PR's failing checks"
-        );
-        assert_eq!(line(&[&bin, "tabs"]), "switchboard tabs");
-        assert_eq!(
-            line(&[&bin, "notes", "away"]),
-            "the place Notes left in its tab"
-        );
-        assert_eq!(line(&["/opt/sb/switchboard-0.2.0", "diff"]), "the diff");
-        assert_eq!(
-            line(&["switchboard-backup", "notes"]),
-            "switchboard-backup notes"
-        );
-        assert_eq!(
-            line(&[&bin, "view", "--log", "+12", &format!("{home}/a/b/job.log")]),
-            "the pager: ~/a/b/job.log:12"
-        );
-        assert_eq!(
-            line(&[&bin, "view", "--log", "logs/ci.log"]),
-            "the pager: logs/ci.log"
-        );
-        let deep = format!("{}/job.log", "d/".repeat(40));
-        let long = line(&[&bin, "view", &deep]);
-        assert!(long.starts_with("the pager: …") && long.ends_with("/job.log"));
-        assert_eq!(draw::width(&long), 60);
-        assert_eq!(
-            line(&[&bin, "view", "+42", "+page.svelte"]),
-            "the pager: +page.svelte:42"
-        );
-        assert_eq!(
-            line(&[&bin, "pr-image", "--ticket", "X-1"]),
-            "the ticket's images"
-        );
-        assert_eq!(line(&["/opt/x/pr-view", "--checks"]), "pr-view --checks");
         assert_eq!(line(&["/usr/bin/diff", "a", "b"]), "diff a b");
         let long = line(&["/bin/sleep", &"9".repeat(80)]);
         assert_eq!(draw::width(&long), 60);
