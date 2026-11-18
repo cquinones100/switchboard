@@ -725,8 +725,16 @@ impl App {
                         format!(" +{} −{}", e.additions, e.deletions)
                     };
                     // A file the open page shows a hunk of from another.
+                    // Left out where it would leave the name no room.
                     let counts = match self.also_of(&e.path, self.run_of(e)) {
-                        Some(n) => format!(" also {}{counts}", self.page_named(n)),
+                        Some(n) => {
+                            let also = format!(" also {}{counts}", self.page_named(n));
+                            if width(&also) + 12 <= w as usize {
+                                also
+                            } else {
+                                counts
+                            }
+                        }
                         None => counts,
                     };
                     let cw = width(&counts) as u16;
@@ -870,9 +878,10 @@ impl App {
         let also = self
             .also_of(&e.path, self.run_of(e))
             .map(|n| format!("also {} ", self.page_named(n)));
+        // Left out where it would leave the name no room.
         let counts = match also {
-            Some(also) => format!("{also}{counts}"),
-            None => counts,
+            Some(also) if width(&also) + width(&counts) + 13 <= cols => format!("{also}{counts}"),
+            _ => counts,
         };
         let (dir, name) = match e.path.rsplit_once('/') {
             Some((d, n)) => (format!("{d}/"), n.to_string()),

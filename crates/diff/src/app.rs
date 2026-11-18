@@ -763,6 +763,9 @@ pub struct App {
     /// before the map: on a chapter, or past the last on the chip of the
     /// files no page tells; `None` while the map has them.
     strip: Option<usize>,
+    /// Whether the last key was ] or [ alone on the map, so the c of a
+    /// ]c typed from habit adds nothing (it would open the commits).
+    after_bracket: bool,
     map_at: usize,
     read: HashSet<usize>,
     /// The open page's own map laid out, and the thing chosen on it
@@ -949,6 +952,7 @@ impl App {
             mode: Mode::Files,
             chapter: 0,
             strip: None,
+            after_bracket: false,
             map_at: 1,
             read: HashSet::new(),
             things: None,
@@ -2086,7 +2090,7 @@ impl App {
             && let Some(story) = &self.story
         {
             for home in self.also_any(&entry.path, self.run_of(entry)) {
-                head.push(self.also_line(story, home, None));
+                head.push(self.also_line(story, &entry.path, home, None));
             }
         }
         // In the one scroll a binary file says so in its place.
@@ -2167,6 +2171,7 @@ impl App {
                     };
                     notes.entry(key).or_default().push(self.also_line(
                         story,
+                        &entry.path,
                         hunk.page,
                         Some(hunk.id.clone()),
                     ));
@@ -2648,6 +2653,10 @@ impl App {
             return Act::Same;
         }
         let count = self.count.take().unwrap_or(1).max(1);
+        let after_bracket = std::mem::take(&mut self.after_bracket);
+        if after_bracket && self.on_map() && key.code == KeyCode::Char('c') && !ctrl {
+            return Act::Same;
+        }
         // The map has the keys while it is on the screen, and the open
         // page's own map while a thing of it is chosen.
         if self.on_map()
@@ -4922,8 +4931,8 @@ impl App {
                     match keys {
                         "]c" => self.chapter_step(1),
                         "[c" => self.chapter_step(-1),
-                        "]p" => self.map_alone(1),
-                        _ => {}
+                        "]p" => self.turn_alone(1),
+                        _ => self.turn_alone(-1),
                     }
                     return Act::Redraw;
                 }

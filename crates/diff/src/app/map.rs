@@ -1106,15 +1106,20 @@ impl App {
         // The list's groups in its order, each chapter with a file in it
         // and the files no chapter holds, past those a filter leaves
         // empty: the next group's first file, or the one before's.
+        // A run of rows of one group each, as the list shows them (a
+        // working tree's changes and its staged ones may each hold the
+        // same chapters).
         let mut groups: Vec<(Option<usize>, usize)> = Vec::new();
         for k in 0..self.order.len() {
             let group = chapter_at(self, k);
-            if !groups.iter().any(|(g, _)| *g == group) {
+            if groups.last().is_none_or(|(g, _)| *g != group) {
                 groups.push((group, k));
             }
         }
-        let here = (self.at < self.order.len()).then(|| chapter_at(self, self.at));
-        let Some(i) = here.and_then(|h| groups.iter().position(|(g, _)| *g == h)) else {
+        if self.at >= self.order.len() {
+            return;
+        }
+        let Some(i) = groups.iter().rposition(|(_, first)| *first <= self.at) else {
             return;
         };
         let Some(&(_, first)) = usize::try_from(i as i32 + step)
@@ -1308,10 +1313,12 @@ impl App {
             // The map has no file or change to jump to: ] and [ alone
             // show the next chapter and the one before.
             KeyCode::Char(']') if !ctrl => {
+                self.after_bracket = true;
                 self.chapter_step(1);
                 return Some(Act::Redraw);
             }
             KeyCode::Char('[') if !ctrl => {
+                self.after_bracket = true;
                 self.chapter_step(-1);
                 return Some(Act::Redraw);
             }
@@ -2281,19 +2288,28 @@ impl App {
 
     /// The line over a hunk a page shows from another, as board 123
     /// draws it: where its home is, and that Enter goes there.
-    pub(super) fn also_line(&self, story: &Story, home: usize, hunk: Option<String>) -> Line {
+    pub(super) fn also_line(
+        &self,
+        story: &Story,
+        path: &str,
+        home: usize,
+        hunk: Option<String>,
+    ) -> Line {
         let theme = self.theme();
         let title = story.pages.get(home - 1).map_or("", |c| c.title.as_str());
+        // Named from the page showing the hunk: the open one, else its
+        // file's own.
+        let from = self
+            .alone
+            .or_else(|| self.home(path))
+            .and_then(|p| story::chapter_of(story, p));
         Line::Also(
             home,
             hunk,
             vec![
                 Span::styled(" ↗ ", Tone::Accent.style(&theme)),
                 Span::styled(
-                    format!(
-                        "also {}: {title}",
-                        story::in_page(story, home, Some(self.chapter()))
-                    ),
+                    format!("also {}: {title}", story::in_page(story, home, from)),
                     Tone::Dim.style(&theme),
                 ),
                 Span::styled("   its home · ↵ goes there", Tone::Faint.style(&theme)),
