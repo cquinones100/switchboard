@@ -434,8 +434,37 @@
     "key": "slack_background",
     "category": "Mission control: Slack",
     "label": "Slack without a tab",
-    "description": "Mission control looks at Slack itself every minute, through your own Slack sign-in while \"Read Slack through your own token\" is on, else through cheap headless Haiku calls, instead of the Slack routine following the slack-updates skill",
+    "description": "Mission control looks at Slack itself, as often as \"Check Slack for new messages every\" says, through your own Slack sign-in while \"Read Slack through your own token\" is on, else through cheap headless Haiku calls, instead of the Slack routine following the slack-updates skill",
     "default": true
+  },
+  {
+    "key": "slack_look_every",
+    "category": "Mission control: Slack",
+    "label": "Check Slack for new messages every",
+    "description": "How often mission control looks at Slack for new messages while you're at the computer and \"Slack without a tab\" is on. A look through Claude's connector rather than your own token goes out at most once a minute, since each is a model call; when Slack answers that its rate limit is spent, the look waits as long as Slack asks and then looks half as often for its next ten looks",
+    "choices": [
+      {
+        "value": "15",
+        "label": "15 seconds"
+      },
+      {
+        "value": "30",
+        "label": "30 seconds"
+      },
+      {
+        "value": "60",
+        "label": "1 minute"
+      },
+      {
+        "value": "120",
+        "label": "2 minutes"
+      },
+      {
+        "value": "300",
+        "label": "5 minutes"
+      }
+    ],
+    "default": "30"
   },
   {
     "key": "slack_threads",

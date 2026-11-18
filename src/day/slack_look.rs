@@ -1,6 +1,7 @@
 //! The Slack view's look, run by the server in the background in place of a
-//! Slack routine running /slack-updates: every `SLACK_LOOK_MS` while you're at
-//! the computer, and when you go to the view. Ported from
+//! Slack routine running /slack-updates: as often as Settings'
+//! `slack_look_every` says while you're at the computer (`Pace`), and when
+//! you go to the view. Ported from
 //! lib/sidebar/slack-look.js. It reaches Slack through your own token
 //! (`slack_api`) while one is stored and Settings' `slack_token_reads` is on,
 //! and otherwise, or when that fails, through Claude's connector
@@ -32,11 +33,90 @@ use super::slack_user::{self, Client};
 use super::{Connector, Dirs, slack, slack_api};
 use crate::util;
 
-pub const SLACK_LOOK_MS: i64 = 60_000;
+/// How often the look runs when Settings' `slack_look_every` can't be
+/// read, as its default.
+const LOOK_EVERY_MS: i64 = 30_000;
+/// The least time between looks through the connector, each a model call.
+pub const CONNECTOR_EVERY_MS: i64 = 60_000;
+/// How many looks run at twice the time apart once Slack asks to slow down.
+pub const SLOW_LOOKS: u32 = 10;
 const SEARCH_PAGE: u32 = 20;
 const MAX_PAGES: usize = 10;
 const DAY_MS: i64 = 24 * 60 * 60_000;
 const SLACK: &str = "mcp__claude_ai_Slack__";
+
+/// How often the look runs: Settings' `slack_look_every` (`chosen`, a
+/// number of seconds), never under `CONNECTOR_EVERY_MS` while it reads
+/// through the connector rather than your own token (`by_token`).
+pub fn look_every(chosen: Option<&Value>, by_token: bool) -> i64 {
+    let seconds = chosen
+        .and_then(|v| match v {
+            Value::String(s) => s.parse::<i64>().ok(),
+            other => other.as_i64(),
+        })
+        .filter(|s| *s > 0);
+    let every = seconds.map_or(LOOK_EVERY_MS, |s| s.saturating_mul(1000));
+    if by_token {
+        every
+    } else {
+        every.max(CONNECTOR_EVERY_MS)
+    }
+}
+
+/// The look's pace once Slack refuses it for its rate limit: no look before
+/// the wait Slack asked for, then the next `SLOW_LOOKS` looks twice the
+/// time apart.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Pace {
+    wait_until: Option<i64>,
+    slow_left: u32,
+}
+
+impl Pace {
+    /// Slack asked to wait `wait_ms` from `now`.
+    pub fn slow_down(&mut self, wait_ms: i64, now: i64) {
+        self.wait_until = Some(now.saturating_add(wait_ms));
+        self.slow_left = SLOW_LOOKS;
+    }
+
+    /// A look started, one fewer of the slow ones left.
+    pub fn looked(&mut self) {
+        self.slow_left = self.slow_left.saturating_sub(1);
+    }
+
+    /// Whether Slack's wait has passed, so a look may go out at `now`.
+    pub fn may_look(&self, now: i64) -> bool {
+        self.wait_until.is_none_or(|at| now >= at)
+    }
+
+    /// The time between looks, `every` doubled while slowed down.
+    pub fn every(&self, every: i64) -> i64 {
+        if self.slowed() {
+            every.saturating_mul(2)
+        } else {
+            every
+        }
+    }
+
+    /// Whether the looks are slowed down, for the view to say so.
+    pub fn slowed(&self) -> bool {
+        self.slow_left > 0
+    }
+}
+
+/// What the view says while Slack has the look slowed down.
+pub fn slowed_note(every: i64) -> String {
+    let seconds = every / 1000;
+    let gap = if seconds % 60 == 0 {
+        match seconds / 60 {
+            1 => "minute".to_string(),
+            n => format!("{n} minutes"),
+        }
+    } else {
+        format!("{seconds} seconds")
+    };
+    format!("Slack asked Switchboard to slow down: looking every {gap} for a while")
+}
 
 /// A search result, as parsed from the connector's text.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -522,6 +602,40 @@ async fn search_by_connector(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_look_runs_as_often_as_settings_say_but_the_connector_no_more_than_a_minute() {
+        let thirty = json!("30");
+        assert_eq!(look_every(Some(&thirty), true), 30_000);
+        assert_eq!(look_every(Some(&thirty), false), 60_000);
+        assert_eq!(look_every(Some(&json!("300")), false), 300_000);
+        assert_eq!(look_every(Some(&json!("15")), true), 15_000);
+        assert_eq!(look_every(None, true), 30_000, "the default");
+        assert_eq!(look_every(Some(&json!("soon")), true), 30_000);
+    }
+
+    #[test]
+    fn slack_asking_to_slow_down_waits_then_doubles_the_next_ten_looks() {
+        let mut pace = Pace::default();
+        assert!(pace.may_look(0) && !pace.slowed());
+        pace.slow_down(45_000, 1_000);
+        assert!(!pace.may_look(45_999), "Slack's wait first");
+        assert!(pace.may_look(46_000));
+        for _ in 0..SLOW_LOOKS {
+            assert_eq!(pace.every(30_000), 60_000);
+            pace.looked();
+        }
+        assert!(!pace.slowed());
+        assert_eq!(pace.every(30_000), 30_000);
+        assert_eq!(
+            slowed_note(60_000),
+            "Slack asked Switchboard to slow down: looking every minute for a while"
+        );
+        assert_eq!(
+            slowed_note(30_000),
+            "Slack asked Switchboard to slow down: looking every 30 seconds for a while"
+        );
+    }
 
     #[test]
     fn the_searchs_results_are_read_block_by_block() {

@@ -43,7 +43,9 @@ use crate::{connector, settings, util};
 #[derive(Debug)]
 pub enum DayEvent {
     Feed(Fetched),
-    SlackLooked(Result<String, String>),
+    /// A look's line for the log, and how long Slack asked it to wait when
+    /// it refused the look for its rate limit.
+    SlackLooked(Result<String, String>, Option<i64>),
     /// The threads a look found something new in, read.
     SlackThreadsRead(Result<slack_thread::Read, String>),
     /// The chosen Slack message's thread read, by its key.
@@ -102,6 +104,8 @@ pub struct Day {
     feed_busy: bool,
     slack_asked: Option<i64>,
     slack_busy: bool,
+    /// Slack's asking the look to slow down.
+    slack_pace: slack_look::Pace,
     minute: Option<i64>,
     standup_tried: i64,
     busy: Vec<Job>,
@@ -197,6 +201,16 @@ const SLACK_MARK_AGAIN_MS: i64 = 60_000;
 /// mission control last made it ready.
 const SHOWN_FOR_MS: i64 = 10_000;
 
+// How often the look runs: Settings' `slack_look_every`, never under a
+// minute while it reads through the connector rather than your token. Two
+// small files say whether it does.
+fn slack_look_every(dirs: &Dirs) -> i64 {
+    let by_token = settings::is_on("slack_token_reads")
+        && slack_user::signed_in(&dirs.state).is_some()
+        && slack_api::look_works(&dirs.state);
+    slack_look::look_every(settings::cached("slack_look_every").as_ref(), by_token)
+}
+
 fn due(last: Option<i64>, every: i64, started: i64, first: i64, now: i64) -> bool {
     match last {
         Some(at) => now - at >= every,
@@ -257,9 +271,10 @@ impl Server {
         }
         if (!away || self.day.slack_asked.is_none())
             && settings::is_on("slack_background")
+            && self.day.slack_pace.may_look(ms)
             && due(
                 self.day.slack_asked,
-                slack_look::SLACK_LOOK_MS,
+                self.day.slack_pace.every(slack_look_every(&dirs)),
                 started,
                 SLACK_FIRST_MS,
                 ms,
@@ -306,8 +321,11 @@ impl Server {
                 }
                 self.day.feed.take(fetched, util::now_ms());
             }
-            DayEvent::SlackLooked(result) => {
+            DayEvent::SlackLooked(result, slowed) => {
                 self.day.slack_busy = false;
+                if let Some(wait) = slowed {
+                    self.day.slack_pace.slow_down(wait, util::now_ms());
+                }
                 let looked = result.is_ok();
                 match result {
                     Ok(line) => log(&dirs.state, &line),
@@ -551,7 +569,9 @@ impl Server {
             return;
         }
         if settings::is_on("slack_background") {
-            self.look_at_slack();
+            if self.day.slack_pace.may_look(ms) {
+                self.look_at_slack();
+            }
             return;
         }
         // The Slack routine, which keeps its own pause and setting; else a
@@ -1213,14 +1233,19 @@ impl Server {
             return;
         }
         self.day.slack_busy = true;
+        self.day.slack_pace.looked();
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let dirs = Dirs::here();
             let token = slack_api::client(&dirs.state).await;
+            let by_token = matches!(token, Some(Ok(_)));
             let result = slack_look::look_slack(&dirs, &Claude, token, util::now_ms())
                 .await
                 .map_err(|e| e.to_string());
-            let _ = tx.send(Event::Day(DayEvent::SlackLooked(result)));
+            let slowed = by_token
+                .then(|| slack_api::look_slowed(&dirs.state))
+                .flatten();
+            let _ = tx.send(Event::Day(DayEvent::SlackLooked(result, slowed)));
         });
     }
 
@@ -1355,7 +1380,13 @@ impl Server {
         // The connector being down says nothing while the look reads
         // through your token.
         let reads_by_token = by_token && slack_api::look_works(&dirs.state);
-        let note = token_note.or_else(|| needs_sign_in.then(|| slack_user::NO_SIGN_IN.to_string()));
+        // Slack asking the look to slow down, said over why it went to the
+        // connector, which is the same refusal.
+        let slowed = (background && self.day.slack_pace.slowed())
+            .then(|| slack_look::slowed_note(self.day.slack_pace.every(slack_look_every(dirs))));
+        let note = slowed
+            .or(token_note)
+            .or_else(|| needs_sign_in.then(|| slack_user::NO_SIGN_IN.to_string()));
         let slack = slack::slack_view(&slack::Look {
             state: &dirs.state,
             background,

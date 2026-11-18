@@ -185,7 +185,7 @@ pub fn one_says_rate_limit(state: &Path, key: &str) -> bool {
         .get(Part::Threads.key())
         .and_then(|each| each.get(key))
         .and_then(Value::as_str)
-        .is_some_and(|why| why.starts_with("Slack's rate limit"))
+        .is_some_and(|why| why.starts_with(slack_user::RATE_LIMIT))
 }
 
 /// A thread (by its key) or a file (by its ID) was read through the token.
@@ -233,6 +233,16 @@ fn change_note(state: &Path, change: impl FnOnce(&mut serde_json::Map<String, Va
 pub fn look_works(state: &Path) -> bool {
     let kept = util::read_json_object(note_file(state));
     !kept.contains_key(Part::Look.key()) && !kept.contains_key(Part::Token.key())
+}
+
+/// How long Slack asked the look to wait, while its last read through the
+/// token was refused for Slack's rate limit; `None` otherwise. A small
+/// file, read off the server's task as the look ends.
+pub fn look_slowed(state: &Path) -> Option<i64> {
+    util::read_json_object(note_file(state))
+        .get(Part::Look.key())
+        .and_then(Value::as_str)
+        .and_then(slack_user::retry_after_ms)
 }
 
 /// What the view says under its header while a read through the token

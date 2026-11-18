@@ -66,6 +66,23 @@ pub const SCOPES: [&str; 17] = [
     "files:read",
 ];
 /// How often the reminders are read while you're at the computer.
+/// How a read Slack refused for its rate limit starts, Slack's
+/// `Retry-After` after it when it gave one (`retry_after_ms`).
+pub const RATE_LIMIT: &str = "Slack's rate limit is spent for now";
+
+/// How long Slack asked a read refused for its rate limit (`why`, as
+/// `api` says it) to wait, a minute when it didn't say; `None` for any
+/// other failure.
+pub fn retry_after_ms(why: &str) -> Option<i64> {
+    let rest = why.strip_prefix(RATE_LIMIT)?;
+    let said = rest
+        .strip_prefix(": Slack asked to wait ")
+        .and_then(|r| r.strip_suffix(" seconds"))
+        .and_then(|n| n.parse::<i64>().ok())
+        .filter(|n| *n > 0);
+    Some(said.map_or(60_000, |s| s.saturating_mul(1000)))
+}
+
 pub const REMINDERS_MS: i64 = 2 * 60_000;
 /// What the view says with no sign-in.
 pub const NO_SIGN_IN: &str =
@@ -197,7 +214,10 @@ pub(super) async fn api(
     }
     .map_err(|e| e.to_string())?;
     if response.status == 429 {
-        return Err("Slack's rate limit is spent for now".into());
+        return Err(match response.header("Retry-After") {
+            Some(wait) => format!("{RATE_LIMIT}: Slack asked to wait {} seconds", wait.trim()),
+            None => RATE_LIMIT.to_string(),
+        });
     }
     if response.body.get("ok") == Some(&Value::Bool(true)) {
         return Ok(response.body);
@@ -686,5 +706,34 @@ mod tests {
                 "Slack refused your sign-in (invalid_auth): run switchboard setup slack-user again"
             );
         });
+    }
+
+    #[test]
+    fn a_rate_limit_says_how_long_slack_asked_to_wait() {
+        use crate::fake_http::{Fake, Reply, Service};
+        let fake = Fake::canned(
+            Service::Slack {
+                token: "xoxp-test".into(),
+            },
+            vec![
+                Reply::json(429, json!({ "ok": false, "error": "ratelimited" }))
+                    .header("Retry-After", "30"),
+            ],
+        );
+        let why = util::block_on(api(
+            &Client::new(format!("{}/api/", fake.url), "xoxp-test".into()),
+            true,
+            "search.messages",
+            &json!({}),
+            "test",
+        ))
+        .unwrap_err();
+        assert_eq!(
+            why,
+            "Slack's rate limit is spent for now: Slack asked to wait 30 seconds"
+        );
+        assert_eq!(retry_after_ms(&why), Some(30_000));
+        assert_eq!(retry_after_ms(RATE_LIMIT), Some(60_000));
+        assert_eq!(retry_after_ms("search.messages: invalid_cursor"), None);
     }
 }
