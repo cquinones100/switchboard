@@ -1095,10 +1095,10 @@ impl Pilot {
         if self.next.key != key {
             self.next = Next {
                 key,
-                failed: true,
                 ..Next::default()
             };
         }
+        self.next.failed = true;
         self.next.at = now_ms;
     }
 
@@ -1149,7 +1149,7 @@ impl Pilot {
             lands_alone: mode.land_without_asking,
             hands_free: mode.hands_free,
             target: mode.target.clone(),
-            drained: (self.empty.is_some() || read_empty) && self.counts.1 > 0,
+            drained: (self.empty.is_some() || read_empty) && !self.next.failed && self.counts.1 > 0,
             failing: String::new(),
         }
     }
