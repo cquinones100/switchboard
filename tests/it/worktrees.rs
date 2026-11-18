@@ -1249,6 +1249,12 @@ fn a_tickets_branch_starts_from_origins_fetched_main_or_its_branch_on_origin_and
         ),
         "{written}"
     );
+    assert!(
+        written.contains(
+            "if origin has a branch named eng-4-offline, the ticket was started elsewhere"
+        ),
+        "{written}"
+    );
 
     let cd = w.path("cd-cached");
     let offline_started = w.run(

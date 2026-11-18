@@ -365,7 +365,12 @@ pub fn main(args: Vec<String>) -> ExitCode {
     // A teammate's start on the ticket is their code: Claude loads its
     // CLAUDE.md, settings and hooks only once you say so (src/trust.rs).
     // Against the default branch as it is now; offline, as last fetched.
-    if !trusted && start.as_ref().is_none_or(|s| s.tracks) {
+    // Started offline, the base was just tried three times and failed.
+    if !trusted
+        && start
+            .as_ref()
+            .is_none_or(|s| s.tracks && s.offline.is_none())
+    {
         let _ = worktree::default_start(&root, "wt: fetch the base");
     }
     if !trusted && let Err(why) = crate::trust::branch_yours_or_listed(&crate::paths::home(), &path)
@@ -384,7 +389,11 @@ pub fn main(args: Vec<String>) -> ExitCode {
         let catch_up = if start.tracks {
             format!("bring it up to date with origin/{branch}")
         } else {
-            "rebase onto its default branch".to_string()
+            // Offline, wt couldn't ask whether someone pushed the ticket's
+            // branch since the clone last fetched.
+            format!(
+                "if origin has a branch named {branch}, the ticket was started elsewhere: build on its commits; otherwise rebase onto origin's default branch"
+            )
         };
         prompt.push_str(&format!(
             " This branch starts from {words}, since origin couldn't be reached: before your first commit, fetch origin and {catch_up}."
