@@ -3,6 +3,7 @@
 //! (`host::Alone`): the branch is compared with the default branch (or the branch it was
 //! cut from, when it tracks one), the
 //! story is told by `claude -p` directly, and its files are its own.
+//! `switchboard-diff update` installs its newest release.
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -21,6 +22,15 @@ fn main() -> ExitCode {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
     let host = Arc::new(switchboard_diff::host::Alone::new());
+    // The binary's file as this run starts, so an update can tell one put
+    // in its place since.
+    switchboard_diff::update::note_start();
+    // `switchboard-diff update`: the newest release put in this binary's
+    // place. Before its folders are made, so `--check` changes nothing.
+    if args.first().is_some_and(|a| a == "update") {
+        switchboard_diff::host::install(host);
+        return switchboard_diff::update::main(&args[1..]);
+    }
     // Its folders are its owner's alone before anything is kept in them,
     // one made open to other users tightened: a story holds what the
     // repository does, and the folders its modules make inside are reached

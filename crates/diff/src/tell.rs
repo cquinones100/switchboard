@@ -224,7 +224,7 @@ impl Teller {
     /// Ends the ask under way and takes its partial file away, as the
     /// program quits.
     pub fn stop(&self) {
-        self.stopped.store(true, Ordering::Relaxed);
+        self.stopped.store(true, Ordering::SeqCst);
         if let Some(mut child) = self.child.lock().unwrap_or_else(|e| e.into_inner()).take() {
             let _ = child.kill();
             let _ = child.wait();
@@ -240,7 +240,7 @@ impl Teller {
     }
 
     fn stopped(&self) -> bool {
-        self.stopped.load(Ordering::Relaxed)
+        self.stopped.load(Ordering::SeqCst)
     }
 
     /// Tells the story of `asked`, from the cache, from another program's
@@ -316,6 +316,11 @@ impl Teller {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
         headless(&mut cmd);
+        // Stopped before it starts (the story turned off meanwhile): no
+        // Claude is started and nothing is sent.
+        if self.stopped() {
+            return;
+        }
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => return heard(Heard::Untold(format!("claude couldn't start: {e}"))),
@@ -333,6 +338,16 @@ impl Teller {
         let stdout = child.stdout.take();
         let mut stderr = child.stderr.take();
         *self.child.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
+        // Stopped while it started: `stop` set the flag before it looked
+        // for the child, so either it ended the child or this sees the flag;
+        // either way the diff is never written to it.
+        if self.stopped() {
+            if let Some(mut child) = self.child.lock().unwrap_or_else(|e| e.into_inner()).take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            return;
+        }
         if let Some(mut stdin) = stdin {
             let input = asked.input.clone();
             std::thread::spawn(move || {

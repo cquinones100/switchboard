@@ -10,7 +10,7 @@ It is [Switchboard](../../README.md)'s diff (`M-d` there) as an app of its own. 
 curl -fsSL https://raw.githubusercontent.com/cquinones100/switchboard/main/install.sh | sh -s -- --diff
 ```
 
-It has releases of its own, apart from Switchboard's, tagged `diff-v<version>` in Switchboard's repository. The line downloads the newest one's `switchboard-diff-<version>-<target>.tar.gz` for this computer (x86_64 Linux, or an Intel or Apple silicon Mac) over HTTPS, refuses it unless it matches the SHA-256 published beside it and is signed with Switchboard's release key, and puts `switchboard-diff` in `~/.local/bin`. It installs nothing else and sets nothing up. Run it again for a newer release.
+It has releases of its own, apart from Switchboard's, tagged `diff-v<version>` in Switchboard's repository. The line downloads the newest one's `switchboard-diff-<version>-<target>.tar.gz` for this computer (x86_64 Linux, or an Intel or Apple silicon Mac) over HTTPS, refuses it unless it matches the SHA-256 published beside it and is signed with Switchboard's release key, and puts `switchboard-diff` in `~/.local/bin`. It installs nothing else and sets nothing up. `switchboard-diff update` installs a newer release ([Updates](#updates)).
 
 Or build it from a clone of Switchboard, with [rustup](https://rustup.rs) and a C compiler:
 
@@ -23,7 +23,7 @@ install -m 755 target/release/switchboard-diff ~/.local/bin/
 
 - git.
 - A terminal that draws 256 colors. One that reports the mouse lets you click, scroll and select text.
-- Claude Code (`claude` on your PATH, or in `~/.local/bin`), only for the story, the reading order of the files and questions about the change. Without it the files are listed by kind and nothing is sent anywhere.
+- Claude Code (`claude` on your PATH, or in `~/.local/bin`), only for the story, the reading order of the files and questions about the change. Without it the files are listed by kind and nothing of the change is sent to Claude; the once-a-day look for a newer release asks GitHub for its list of releases whatever is installed ([Updates](#updates)).
 
 ## Using it
 
@@ -35,13 +35,48 @@ switchboard-diff --working [dir]        # the changes not yet committed, staged 
 
 The keys are Vim's, and the same as in Switchboard: [Keys in the diff](../../docs/guide.md#keys-in-the-diff) lists them. The cursor stays in the file it is in, stopping at its first and last lines: `]f` and `[f` go to the next file and the one before. `q` closes it. A drag of the mouse selects text in the part of the screen it starts in and copies it when the button is let go, a side of the diff without its line numbers or the other side; a double click takes a word and a triple click a line. With the keys, `v` selects lines and `y` copies their text.
 
+The first line of the screen is its header: its name, the repository and what the branch is compared with, and its version. The last is a row of buttons, each pressing its keys in the file list, with Settings before Close. `m` in the file list, or a right click, opens a menu of the same.
+
+## Settings
+
+`M-m` (Alt-m), the Settings button, or "Settings" in the menu shows the diff's settings in its place: each option with its name, its key and whether it is on, the chosen one with its whole description and its default. `j` `k` or the arrows move, `Enter`, `Space` or a click on the chosen row turns it on or off, and `Esc`, `q` or `M-m` goes back to the diff.
+
+| Option | Key | Default |
+|---|---|---|
+| Files in reading order | `diff_order` | on |
+| Diff told as a story | `diff_story` | on |
+| Diff story progress | `diff_story_progress` | on |
+| Diff story a page at a time | `diff_story_pages` | on |
+| Diff story notes on changes | `diff_story_notes` | on |
+| Uncommitted changes in M-d | `diff_uncommitted` | on |
+| Diff file list wide | `diff_list_wide` | on |
+| Ask Claude about the diff | `diff_ask` | on |
+| Check for a newer switchboard-diff | `diff_update_check` | on |
+
+A change is kept in `~/.config/switchboard-diff/settings.json`, the diff's own file, apart from Switchboard's (`SWITCHBOARD_DIFF_SETTINGS` names another): only what differs from its default is written, the version before is kept as `settings.json.bak`, and a file that doesn't read as JSON is never written over. The diff follows a change at once. You can edit the file by hand too. In Switchboard the same options are rows of its own Settings, kept in its own file.
+
+## Updates
+
+Once a day (an hour after a run closed before GitHub answered), after it has drawn, `switchboard-diff` asks GitHub for the newest `diff-v` release and keeps the answer in `~/.cache/switchboard-diff/update.json`. The request is for the repository's list of releases; nothing of yours is sent. When a newer one is out, the header says so at its right end, `0.2.0 is out · switchboard-diff update`, and the settings view has a row that installs it. "Check for a newer switchboard-diff" turns the look off. Only a release looks: a binary built from a clone doesn't.
+
+```
+switchboard-diff update            # install the newest release
+switchboard-diff update --check    # say whether there is one, changing nothing
+switchboard-diff update --force    # install it in place of a build from a clone
+```
+
+`update` downloads the release's archive for this computer over HTTPS, refuses it unless it matches the SHA-256 published beside it and is signed with Switchboard's release key (compiled into the binary), runs the new binary once to see that it starts, and only then puts it in the old one's place. Whatever fails leaves the binary as it was.
+
 ## What it sends
 
-With Claude Code installed, the diff and the commits' messages go to Claude (Haiku, through `claude -p`) to order the files and tell the story, and a question you ask with `ga` goes with the diff. To keep the diff on your computer, turn those off in `~/.config/switchboard/settings.json`:
+With Claude Code installed, the diff and the commits' messages go to Claude (Haiku, through `claude -p`) to order the files and tell the story, and a question you ask with `ga` goes with the diff. To keep the diff on your computer, turn off "Files in reading order", "Diff told as a story" and "Ask Claude about the diff" in its [settings](#settings). The story is asked for as a change opens, so to send Claude nothing from the first run, write them to `~/.config/switchboard-diff/settings.json` before opening a repository, with `diff_update_check` to ask GitHub for no releases either (comparing with a base it hasn't kept yet still fetches it from `origin`; `--base <ref>` or `--working` fetch nothing):
 
 ```json
-{ "diff_order": false, "diff_story": false, "diff_ask": false }
+{ "diff_order": false, "diff_story": false, "diff_ask": false, "diff_update_check": false }
 ```
+
+A `switchboard-diff` built from a clone before it had settings of its own read them from Switchboard's `~/.config/switchboard/settings.json`; it reads only its own file now, so write any of these you had set there into `~/.config/switchboard-diff/settings.json` before running it again.
+ The look for a newer release sends GitHub a request for the list of releases and nothing else ([Updates](#updates)).
 
 ## Alone and in Switchboard
 
@@ -51,7 +86,9 @@ It is the same program in both. Alone, it answers for the workspace itself:
 |---|---|---|
 | Compared with | The branch it tracks when that is another branch than its own (one cut from a feature branch), else the repository's default branch on `origin`, fetched first (else `main` or `master`) | The base of the branch's pull request, then the same |
 | The story | Told by `claude -p` directly | The same, counted in the request audit, with the tab's plan note as context when you turn that on |
-| Settings | Its defaults, and what you set in `~/.config/switchboard/settings.json` when you have one | Mission control's Settings |
+| Settings | Its own settings view (`M-m`), kept in `~/.config/switchboard-diff/settings.json` | Mission control's Settings, under Diff; `M-m` is the workspace's |
+| The header and the Settings button | Its own | The workspace's tab header; no Settings button |
+| Updates | Its own look once a day, and `switchboard-diff update` | `switchboard update`, which covers the diff built into Switchboard |
 | Its files | `~/.cache/switchboard-diff` and `~/.local/state/switchboard-diff` | Switchboard's own cache and state |
 | Copying | Through the terminal (OSC 52) | The desktop's clipboard too |
 | The pane beside it, a file opened below, a message in a box | Not there | The workspace's |
@@ -61,4 +98,4 @@ That last row matters: to read a pull request from someone you don't know, open 
 
 ## How it is built
 
-Of Switchboard's crates it depends on two: `switchboard-plugin-api`, everything a plugin and the workspace say to each other, and `switchboard-ui`, what everything draws with. It never depends on `switchboard` itself, so the compiler keeps it out of the multiplexer. Everything it asks of the workspace is in [`src/host.rs`](src/host.rs). A program it runs (git, `claude`, your editor) is given its options as it starts, by flags or environment; it never edits that program's own config files.
+Of Switchboard's crates it depends on two: `switchboard-plugin-api`, everything a plugin and the workspace say to each other, and `switchboard-ui`, what everything draws with. It never depends on `switchboard` itself, so the compiler keeps it out of the multiplexer. Everything it asks of the workspace is in [`src/host.rs`](src/host.rs). Its settings are declared in its manifest ([`src/lib.rs`](src/lib.rs)) with their names and descriptions, which its own settings view shows; Switchboard's Settings shows them from its own list, and a test there keeps the two the same. Its update checks a release with the plugin API's `release`, the code `switchboard update` runs; reaching GitHub is its `net` feature, on by default, which Switchboard's own dependency on the diff leaves off. A program it runs (git, `claude`, your editor) is given its options as it starts, by flags or environment; it never edits that program's own config files.

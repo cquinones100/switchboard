@@ -1,6 +1,6 @@
 //! Drawing the diff's screen, split from app.rs for its length: the list
 //! with its chapters' headings, the two sides with their bars and notes,
-//! the cover while the story is told, easy mode's buttons, and the boxes
+//! the cover while the story is told, the row of buttons, and the boxes
 //! for a question and its answer, into a cell buffer, as
 //! nvim/lua/plugins/diffview.lua's highlights, winbars and floats drew them.
 
@@ -13,8 +13,8 @@ use ratatui::text::{Line as Spans, Span};
 
 use super::select::{Pane, Spot};
 use super::{
-    ACCENT, ADDED, App, BUTTONS, Button, COVER_BLANK, Cell, Focus, Line, ListRow, REMOVED,
-    SHORT_WHY, Telling, UNCOMMITTED, blend,
+    ACCENT, ADDED, App, Button, COVER_BLANK, Cell, Focus, Line, ListRow, REMOVED, SHORT_WHY,
+    Telling, UNCOMMITTED, blend, own,
 };
 use crate::git::{self, Entry, Section};
 use crate::sides::{self, Kind};
@@ -32,16 +32,63 @@ impl App {
     /// not read yet ends what is drawn of it.
     pub fn draw(&mut self, buf: &mut Buffer) -> Option<(u16, u16)> {
         self.drawing = true;
-        let cursor = self.draw_now(buf);
+        let area = buf.area;
+        let cursor = if self.has_header() && area.height > 1 {
+            // Alone, the diff is drawn under its header: into a buffer of
+            // its own a row shorter, put a row down.
+            let mut body = Buffer::empty(Rect::new(0, 0, area.width, area.height - 1));
+            let cursor = self.draw_now(&mut body);
+            for y in 0..body.area.height {
+                for x in 0..area.width {
+                    buf[(x, y + 1)] = body[(x, y)].clone();
+                }
+            }
+            self.draw_header(buf);
+            cursor.map(|(x, y)| (x, y + 1))
+        } else {
+            self.draw_now(buf)
+        };
         self.drawing = false;
         cursor
     }
 
+    /// The message in its box over the screen; whether there is one.
+    fn draw_message(&self, buf: &mut Buffer) -> bool {
+        let Some((text, _)) = &self.message else {
+            return false;
+        };
+        let lines: Vec<BoxLine> = text
+            .lines()
+            .map(|l| BoxLine::text(l.to_string(), Style::new().fg(Color::Indexed(252))))
+            .collect();
+        let mut spec = BoxSpec::new("", &lines);
+        spec.width = 10;
+        spec.place = Place::Center;
+        draw_box(buf, &spec, &switchboard_ui::Look::default());
+        true
+    }
+
     fn draw_now(&mut self, buf: &mut Buffer) -> Option<(u16, u16)> {
+        // The settings view, alone, in the place of the diff and of a
+        // commit of the history.
+        if self.settings.is_some() {
+            self.cols = buf.area.width.max(20);
+            self.rows = buf.area.height.max(5);
+            self.buttons.clear();
+            self.spots.clear();
+            self.draw_settings(buf);
+            self.draw_message(buf);
+            return None;
+        }
         // A commit of the history draws itself in this one's place.
         if let Some(h) = &mut self.history {
             let cursor = h.app.draw(buf);
             self.out.append(&mut h.app.out);
+            // What the branch's diff has to say (an update's result) shows
+            // over the commit.
+            if self.draw_message(buf) {
+                return None;
+            }
             return cursor;
         }
         let area = buf.area;
@@ -60,6 +107,10 @@ impl App {
                     ("Press any key to close.".into(), self.faint()),
                 ],
             );
+            if self.opts.alone {
+                self.draw_buttons(buf);
+            }
+            self.draw_message(buf);
             return None;
         }
         if let Some(text) = self.nothing.clone() {
@@ -70,15 +121,30 @@ impl App {
             lines.push((String::new(), Style::new()));
             lines.push(("Press any key to close.".into(), self.faint()));
             self.centred(buf, &lines);
+            // Alone, the row stays: a setting may be why nothing shows.
+            if self.opts.alone {
+                self.draw_buttons(buf);
+            }
+            self.draw_message(buf);
             return None;
         }
         if let Some(text) = self.loading.clone() {
             let line = format!("{} {text}", self.spinner());
             self.centred(buf, &[(line, Style::new().add_modifier(Modifier::BOLD))]);
+            if self.opts.alone {
+                self.draw_buttons(buf);
+            }
+            self.draw_message(buf);
             return None;
         }
         if self.cover.is_some() && self.telling == Telling::Waiting {
             self.draw_cover(buf);
+            // Alone, the row stays under the cover: its Settings button is
+            // how a click turns the story off.
+            if self.opts.alone {
+                self.draw_buttons(buf);
+            }
+            self.draw_message(buf);
             return None;
         }
         self.draw_list(buf);
@@ -91,7 +157,7 @@ impl App {
             let list = Rect::new(0, 0, file.x.saturating_sub(1), file.height);
             kit::unfocused(buf, list, &self.theme());
         }
-        if self.opts.easy {
+        if self.has_buttons() {
             self.draw_buttons(buf);
         }
         if self.has_footer() {
@@ -111,15 +177,11 @@ impl App {
             cursor = None;
         }
         self.read_spots(buf);
-        if let Some((text, _)) = self.message.clone() {
-            let lines: Vec<BoxLine> = text
-                .lines()
-                .map(|l| BoxLine::text(l.to_string(), Style::new().fg(Color::Indexed(252))))
-                .collect();
-            let mut spec = BoxSpec::new("", &lines);
-            spec.width = 10;
-            spec.place = Place::Center;
-            draw_box(buf, &spec, &switchboard_ui::Look::default());
+        if self.draw_message(buf) {
+            cursor = None;
+        }
+        if self.menu.is_some() {
+            self.draw_menu(buf);
             cursor = None;
         }
         if self.focus == Focus::List {
@@ -1389,59 +1451,65 @@ impl App {
         )
     }
 
-    /// A button, as ghostty.lua's SwitchboardButton drew it: a shade of the
-    /// background toward the text, lit in the terminal's blue under the
-    /// mouse.
-    fn button_style(&self, lit: bool) -> Style {
-        let ends = self.ends();
-        if lit {
-            Style::new()
-                .bg(Color::Indexed(4))
-                .fg(ends.map_or(Color::Indexed(0), |(bg, _)| solid(bg)))
-                .add_modifier(Modifier::BOLD)
-        } else if let Some((bg, fg)) = ends {
-            Style::new().bg(blend(fg, bg, 0.18)).fg(solid(fg))
-        } else {
-            Style::new()
-                .bg(Color::Indexed(if self.opts.light { 252 } else { 238 }))
-                .fg(Color::Indexed(if self.opts.light { 235 } else { 252 }))
-        }
-    }
-
-    /// Easy mode's row of buttons for the list's keys, then the keys named.
-    fn draw_buttons(&mut self, buf: &mut Buffer) {
+    /// The row of buttons at the bottom (easy mode's, and the diff alone's),
+    /// drawn as the kit draws Switchboard's own buttons (board 118): each
+    /// presses its keys in the list, the one under the mouse on the chosen
+    /// surface, and alone a Settings button before Close, lit while the
+    /// settings view is open. After them, the keys named.
+    pub(super) fn draw_buttons(&mut self, buf: &mut Buffer) {
+        let theme = self.theme();
         let y = self.rows.saturating_sub(1);
         let mut x = 1;
-        let shown: Vec<&(&str, &str)> = BUTTONS
+        // Alone, Settings and Close are always there: on a screen too
+        // narrow for the row, the buttons before them give way.
+        let bar = self.bar_buttons();
+        let kept = if self.opts.alone { 2.min(bar.len()) } else { 0 };
+        let tail: u16 = bar[bar.len() - kept..]
             .iter()
-            .filter(|(_, k)| self.opts.ask || *k != "ga")
-            .collect();
-        for (i, (label, _)) in shown.iter().enumerate() {
-            let text = format!(" {label} ");
-            let w = width(&text) as u16;
-            if x + w >= self.cols {
+            .map(|(_, label)| width(label) as u16 + 3)
+            .sum();
+        let mut full = false;
+        for (i, (button, label)) in bar.iter().copied().enumerate() {
+            let w = width(label) as u16 + 2;
+            let last = i + kept >= bar.len();
+            full |= !last && x + w + tail >= self.cols;
+            if !last && full {
+                continue;
+            }
+            if last && x + w > self.cols {
                 break;
             }
-            let lit = self.hover == Some(Button::Bar(i));
-            Self::put(buf, x, y, w, &text, self.button_style(lit));
-            self.buttons.push((Button::Bar(i), Rect::new(x, y, w, 1)));
+            let lit = button == Button::Settings && self.settings.is_some();
+            let spans = own::button(label, self.hover == Some(button), lit, self.round, &theme);
+            put_line(buf, x, y, w, &Spans::from(spans));
+            self.buttons.push((button, Rect::new(x, y, w, 1)));
             x += w + 1;
         }
-        if self.opts.key_help {
+        let help = if self.settings.is_some() {
+            "Esc back to the diff".to_string()
+        } else if self.opts.easy && self.opts.key_help {
             let mut help = "↑↓ choose a file · Enter open it · ]c [c chapters · ]p [p pages · E widen · yl copy a link · R refresh".to_string();
             if self.opts.ask {
                 help.push_str(" · ga ask Claude");
             }
+            if self.opts.alone {
+                help.push_str(" · M-m settings");
+            }
             help.push_str(" · q close");
-            Self::put(
-                buf,
-                x + 1,
-                y,
-                self.cols.saturating_sub(x + 1),
-                &help,
-                self.faint(),
-            );
-        }
+            help
+        } else if self.opts.alone {
+            "M-m settings".to_string()
+        } else {
+            return;
+        };
+        Self::put(
+            buf,
+            x + 1,
+            y,
+            self.cols.saturating_sub(x + 1),
+            &help,
+            self.faint(),
+        );
     }
 
     /// A box with a rounded edge in the accent colour, its title in the top
@@ -1488,11 +1556,12 @@ impl App {
     /// A row of buttons along a box's top line inside.
     fn box_buttons(&mut self, buf: &mut Buffer, inner: Rect, buttons: &[(Button, &str)]) {
         let mut x = inner.x + 1;
+        let theme = self.theme();
         for (button, label) in buttons {
-            let text = format!(" {label} ");
-            let w = width(&text) as u16;
-            let lit = self.hover == Some(*button);
-            Self::put(buf, x, inner.y, w, &text, self.button_style(lit));
+            let w = width(label) as u16 + 2;
+            let hover = self.hover == Some(*button);
+            let spans = own::button(label, hover, false, self.round, &theme);
+            put_line(buf, x, inner.y, w, &Spans::from(spans));
             self.buttons.push((*button, Rect::new(x, inner.y, w, 1)));
             x += w + 1;
         }
@@ -1660,11 +1729,6 @@ impl App {
             }
         }
     }
-}
-
-/// A colour given as `0xrrggbb`.
-fn solid(c: u32) -> Color {
-    Color::Rgb((c >> 16) as u8, (c >> 8) as u8, c as u8)
 }
 
 /// Text cut to `cols` columns from its start, an ellipsis in place of what

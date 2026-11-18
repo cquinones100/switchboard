@@ -45,19 +45,25 @@ impl Drop for Tmp {
 /// for, so no `claude` is ever started, whatever the computer has.
 fn env(home: &Path) -> Vec<(&'static str, String)> {
     let settings = home.join("diff-settings.json");
-    std::fs::write(
-        &settings,
-        r#"{"diff_order": false, "diff_story": false, "diff_ask": false}"#,
-    )
-    .unwrap();
+    // Written once: a test that changes them keeps what it wrote.
+    if !settings.exists() {
+        std::fs::write(
+            &settings,
+            r#"{"diff_order": false, "diff_story": false, "diff_ask": false}"#,
+        )
+        .unwrap();
+    }
     vec![
         ("HOME", home.to_string_lossy().into_owned()),
         ("PATH", "/usr/bin:/bin".into()),
         (
-            "SWITCHBOARD_SETTINGS",
+            "SWITCHBOARD_DIFF_SETTINGS",
             settings.to_string_lossy().into_owned(),
         ),
         ("TERM", "xterm-256color".into()),
+        // No look for a newer release, whatever the build: only a test
+        // with a stand-in for GitHub turns it on.
+        ("SWITCHBOARD_UPDATES", "off".into()),
         ("GIT_CONFIG_NOSYSTEM", "1".into()),
         ("GIT_AUTHOR_NAME", "Test".into()),
         ("GIT_AUTHOR_EMAIL", "test@example.com".into()),
@@ -237,5 +243,413 @@ fn of_the_workspace_s_crates_it_depends_on_the_api_and_the_drawing_alone() {
             .lines()
             .any(|line| line.starts_with("switchboard = ")),
         "the diff never depends on the multiplexer"
+    );
+}
+
+/// The diff running in a terminal of its own, and what it has drawn.
+struct Running {
+    child: Box<dyn portable_pty::Child + Send + Sync>,
+    writer: Box<dyn Write + Send>,
+    rx: mpsc::Receiver<Vec<u8>>,
+    drawn: String,
+    _master: Box<dyn portable_pty::MasterPty + Send>,
+}
+
+impl Running {
+    /// `switchboard-diff` on the repository, with `extra` in its environment.
+    fn start(repo: &Path, home: &Path, extra: &[(&str, String)]) -> Running {
+        let pty = native_pty_system()
+            .openpty(PtySize {
+                rows: 50,
+                cols: 160,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("a PTY");
+        let mut command = CommandBuilder::new(BINARY);
+        command.arg(repo);
+        command.cwd(repo);
+        command.env_clear();
+        for (key, value) in env(home) {
+            command.env(key, value);
+        }
+        for (key, value) in extra {
+            command.env(key, value);
+        }
+        let child = pty.slave.spawn_command(command).expect("it starts");
+        drop(pty.slave);
+        let mut reader = pty.master.try_clone_reader().unwrap();
+        let writer = pty.master.take_writer().unwrap();
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 8192];
+            while let Ok(n) = reader.read(&mut buf) {
+                if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        Running {
+            child,
+            writer,
+            rx,
+            drawn: String::new(),
+            _master: pty.master,
+        }
+    }
+
+    /// Waits until it has drawn `text` since the last wait.
+    fn wait_for(&mut self, text: &str) {
+        let deadline = Instant::now() + PATIENCE;
+        while !self.drawn.contains(text) {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match self.rx.recv_timeout(left.max(Duration::from_millis(1))) {
+                Ok(bytes) => self.drawn.push_str(&String::from_utf8_lossy(&bytes)),
+                Err(_) => panic!("it never drew {text:?}; it drew: {:?}", self.drawn),
+            }
+        }
+        self.drawn.clear();
+    }
+
+    fn send(&mut self, keys: &[u8]) {
+        self.writer.write_all(keys).unwrap();
+        self.writer.flush().unwrap();
+    }
+
+    /// q, and the program ended.
+    fn quit(mut self) {
+        self.send(b"q");
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            match self.child.try_wait().unwrap() {
+                Some(status) => {
+                    assert!(status.success(), "{status:?}");
+                    return;
+                }
+                None if Instant::now() >= deadline => {
+                    let _ = self.child.kill();
+                    panic!("q didn't end the diff");
+                }
+                None => std::thread::sleep(Duration::from_millis(20)),
+            }
+        }
+    }
+}
+
+fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+    let deadline = Instant::now() + PATIENCE;
+    while !done() {
+        assert!(Instant::now() < deadline, "{what}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn alone_m_m_opens_its_settings_and_a_change_is_kept_in_the_settings_file() {
+    let tmp = Tmp::new("settings");
+    let home = tmp.home();
+    let repo = repository(&tmp);
+    let mut diff = Running::start(&repo, &home, &[]);
+    // Its own header, and the row of buttons with Settings in it.
+    diff.wait_for("alpha.txt");
+    // M-m: the settings view, its options by their names.
+    diff.send(b"\x1bm");
+    diff.wait_for("Diff file list wide");
+    // The file list's width, turned off: written at once, beside what the
+    // file held, the version before kept.
+    let settings = home.join("diff-settings.json");
+    diff.send(b"jjjjjj\r");
+    let read = || -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(&settings).unwrap_or_default())
+            .unwrap_or_default()
+    };
+    wait_until("the setting was never written", || {
+        read()["diff_list_wide"] == false
+    });
+    assert_eq!(read()["diff_story"], false, "the file's other keys stay");
+    assert!(home.join("diff-settings.json.bak").exists());
+    diff.wait_for("changed");
+    // Enter again: back to its default, the key left out.
+    diff.send(b"\r");
+    wait_until("the setting was never put back", || {
+        read().get("diff_list_wide").is_none()
+    });
+    // Esc goes back to the diff, and q ends it.
+    diff.send(b"\x1b");
+    diff.wait_for("alpha.txt");
+    diff.quit();
+}
+
+#[cfg(feature = "net")]
+/// A stand-in for GitHub's releases on 127.0.0.1: the list, and each file
+/// of the one release of the diff it holds, which a test may change.
+struct Releases {
+    api: String,
+    lists: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    files: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>>,
+    archive: String,
+}
+
+#[cfg(feature = "net")]
+impl Releases {
+    fn start() -> Releases {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Mutex};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let target = switchboard_plugin_api::release::this_target().expect("a target");
+        let archive = format!("switchboard-diff-9.9.0-{target}.tar.gz");
+        let asset = |name: String| {
+            serde_json::json!({
+                "name": name,
+                "browser_download_url": format!("http://127.0.0.1:{port}/dl/{name}"),
+            })
+        };
+        let list = serde_json::json!([
+            // Switchboard's own release, which is none of the diff's.
+            {"tag_name": "v99.0.0", "assets": []},
+            {
+                "tag_name": "diff-v9.9.0",
+                "published_at": "2026-11-01T12:00:00Z",
+                "assets": [
+                    asset(archive.clone()),
+                    asset(format!("{archive}.sha256")),
+                    asset(format!("{archive}.sig")),
+                ],
+            },
+        ])
+        .to_string();
+        let lists = Arc::new(AtomicUsize::new(0));
+        let files = Arc::new(Mutex::new(
+            std::collections::HashMap::<String, Vec<u8>>::new(),
+        ));
+        let (counted, served) = (lists.clone(), files.clone());
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut asked = Vec::new();
+                let mut buf = [0u8; 1024];
+                while !asked.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match stream.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => asked.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let asked = String::from_utf8_lossy(&asked).to_string();
+                let path = asked.split_whitespace().nth(1).unwrap_or("").to_string();
+                let body = if path.starts_with("/repos/") {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    Some(list.clone().into_bytes())
+                } else {
+                    path.strip_prefix("/dl/")
+                        .and_then(|name| served.lock().unwrap().get(name).cloned())
+                };
+                let (status, body) = match body {
+                    Some(body) => ("200 OK", body),
+                    None => ("404 Not Found", Vec::new()),
+                };
+                let head = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(&body);
+            }
+        });
+        Releases {
+            api: format!("http://127.0.0.1:{port}"),
+            lists,
+            files,
+            archive,
+        }
+    }
+
+    fn listed(&self) -> usize {
+        self.lists.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn put(&self, name: &str, bytes: Vec<u8>) {
+        self.files.lock().unwrap().insert(name.to_string(), bytes);
+    }
+}
+
+// With the diff's HTTPS client, its `net` feature.
+#[cfg(feature = "net")]
+#[test]
+fn a_newer_release_is_said_in_the_header_and_asked_for_once_a_day() {
+    let tmp = Tmp::new("newer");
+    let home = tmp.home();
+    let repo = repository(&tmp);
+    let releases = Releases::start();
+    let looks = [
+        ("SWITCHBOARD_GITHUB_API", releases.api.clone()),
+        ("SWITCHBOARD_UPDATES", "on".to_string()),
+    ];
+
+    // The first run asks GitHub, after it has drawn, and says what is out.
+    let mut diff = Running::start(&repo, &home, &looks);
+    diff.wait_for("9.9.0 is out · switchboard-diff update");
+    // Its settings view has a row to update.
+    diff.send(b"\x1bm");
+    diff.wait_for("Update to 9.9.0");
+    diff.send(b"\x1b");
+    diff.wait_for("alpha.txt");
+    diff.quit();
+    assert_eq!(releases.listed(), 1);
+    let kept = home.join(".cache/switchboard-diff/update.json");
+    assert!(kept.exists(), "what the look found is kept in its cache");
+
+    // The same day, it says so again from what it kept, asking nothing.
+    let mut diff = Running::start(&repo, &home, &looks);
+    diff.wait_for("9.9.0 is out");
+    diff.quit();
+    assert_eq!(releases.listed(), 1);
+
+    // With the check off nothing is asked, whatever was kept.
+    std::fs::remove_file(&kept).unwrap();
+    std::fs::write(
+        home.join("diff-settings.json"),
+        r#"{"diff_order": false, "diff_story": false, "diff_ask": false, "diff_update_check": false}"#,
+    )
+    .unwrap();
+    let mut diff = Running::start(&repo, &home, &looks);
+    diff.wait_for("alpha.txt");
+    diff.quit();
+    assert_eq!(releases.listed(), 1);
+    assert!(!kept.exists());
+}
+
+// With the diff's HTTPS client, its `net` feature.
+#[cfg(feature = "net")]
+#[test]
+fn update_refuses_an_archive_not_signed_with_a_release_key_and_installs_one_that_is() {
+    use ssh_key::{HashAlg, LineEnding, PrivateKey, private::Ed25519Keypair};
+    use switchboard_plugin_api::release::{SIGNATURE_NAMESPACE, sha256_hex};
+
+    let tmp = Tmp::new("update");
+    let home = tmp.home();
+    let releases = Releases::start();
+    // The installed copy: this build, in a folder of its own.
+    let bin = tmp.0.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let installed = bin.join("switchboard-diff");
+    std::fs::copy(BINARY, &installed).unwrap();
+    let before = std::fs::read(&installed).unwrap();
+
+    // The release: an archive holding a switchboard-diff that says 9.9.0.
+    let archive = {
+        let script = b"#!/bin/sh\necho 'switchboard-diff 9.9.0'\n";
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        {
+            let mut tar = tar::Builder::new(&mut gz);
+            let mut header = tar::Header::new_gnu();
+            header.set_size(script.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            tar.append_data(
+                &mut header,
+                "switchboard-diff-9.9.0/switchboard-diff",
+                &script[..],
+            )
+            .unwrap();
+            tar.finish().unwrap();
+        }
+        gz.finish().unwrap()
+    };
+    let name = releases.archive.clone();
+    let key = PrivateKey::from(Ed25519Keypair::from_seed(&[3; 32]));
+    let other = PrivateKey::from(Ed25519Keypair::from_seed(&[4; 32]));
+    let signed_by = |key: &PrivateKey| {
+        key.sign(SIGNATURE_NAMESPACE, HashAlg::Sha512, &archive)
+            .unwrap()
+            .to_pem(LineEnding::LF)
+            .unwrap()
+            .into_bytes()
+    };
+    releases.put(&name, archive.clone());
+    releases.put(
+        &format!("{name}.sha256"),
+        format!("{}  {name}\n", sha256_hex(&archive)).into_bytes(),
+    );
+    releases.put(&format!("{name}.sig"), signed_by(&other));
+
+    let run = |args: &[&str]| {
+        Command::new(&installed)
+            .args(args)
+            .env_clear()
+            .envs(env(&home))
+            .env("SWITCHBOARD_GITHUB_API", &releases.api)
+            // A debug build takes a release key from here too, the tests'.
+            .env(
+                "SWITCHBOARD_RELEASE_KEY",
+                key.public_key().to_openssh().unwrap(),
+            )
+            .output()
+            .expect("it runs")
+    };
+    let said = |out: &std::process::Output| {
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    };
+
+    // Asked only whether one is out, it says so and changes nothing.
+    let check = run(&["update", "--check"]);
+    assert!(check.status.success(), "{}", said(&check));
+    assert!(said(&check).contains("switchboard-diff 9.9.0 is out"));
+    // A build from a clone isn't replaced unasked.
+    let unforced = run(&["update"]);
+    assert!(unforced.status.success(), "{}", said(&unforced));
+    assert!(
+        said(&unforced).contains("built from a clone"),
+        "{}",
+        said(&unforced)
+    );
+    assert_eq!(std::fs::read(&installed).unwrap(), before);
+
+    // Signed by another key than a release key: refused, nothing changed.
+    let refused = run(&["update", "--force"]);
+    assert!(!refused.status.success(), "{}", said(&refused));
+    assert!(
+        said(&refused).contains("isn't signed by"),
+        "{}",
+        said(&refused)
+    );
+    assert_eq!(std::fs::read(&installed).unwrap(), before);
+
+    // A checksum that isn't the archive's: refused too.
+    releases.put(&format!("{name}.sig"), signed_by(&key));
+    releases.put(
+        &format!("{name}.sha256"),
+        format!("{}  {name}\n", sha256_hex(b"another archive")).into_bytes(),
+    );
+    let refused = run(&["update", "--force"]);
+    assert!(!refused.status.success(), "{}", said(&refused));
+    assert!(
+        said(&refused).contains("isn't the file"),
+        "{}",
+        said(&refused)
+    );
+    assert_eq!(std::fs::read(&installed).unwrap(), before);
+
+    // Signed by the release key, with its checksum: put in the binary's
+    // place, which then says the new version.
+    releases.put(
+        &format!("{name}.sha256"),
+        format!("{}  {name}\n", sha256_hex(&archive)).into_bytes(),
+    );
+    let updated = run(&["update", "--force"]);
+    assert!(updated.status.success(), "{}", said(&updated));
+    assert!(
+        said(&updated).contains("to switchboard-diff 9.9.0"),
+        "{}",
+        said(&updated)
+    );
+    let version = Command::new(&installed).arg("--version").output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&version.stdout).trim(),
+        "switchboard-diff 9.9.0"
     );
 }

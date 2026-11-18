@@ -14,3 +14,20 @@ anyhow = "1"
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+# A release checked and put in place (src/release.rs), for the programs
+# that update themselves: Switchboard, and the diff alone.
+sha2 = { version = "0.11", optional = true }
+flate2 = { version = "1", optional = true }
+tar = { version = "0.4", default-features = false, optional = true }
+ssh-key = { version = "0.6", default-features = false, features = ["ed25519", "alloc"], optional = true }
+jiff = { version = "0.2", optional = true }
+url = { version = "2", optional = true }
+# GitHub reached by a program with no HTTPS client of its own (the diff
+# alone). Its TLS compiles C, so it is a feature of its own.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "blocking"], optional = true }
+
+[features]
+# What a release is, checking one and putting it in place.
+release = ["dep:sha2", "dep:flate2", "dep:tar", "dep:ssh-key", "dep:jiff", "dep:url"]
+# Reaching GitHub for one.
+net = ["release", "dep:reqwest"]

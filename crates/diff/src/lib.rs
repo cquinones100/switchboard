@@ -35,6 +35,8 @@
 //! - `ahead`: a commit's story told ahead of time, the event the workspace
 //!   hands it.
 //! - `clear`: what it keeps of a branch removed.
+//! - `update`: alone, its look for a newer release and `switchboard-diff
+//!   update`.
 //! - `host`: who answers for the workspace.
 
 use std::path::PathBuf;
@@ -42,7 +44,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use serde_json::json;
-use switchboard_plugin_api::{Event, Host, Manifest, PROTOCOL_VERSION, Plugin, Setting};
+use switchboard_plugin_api::{Event, Host, Manifest, PROTOCOL_VERSION, Plugin, Scope, Setting};
 
 pub mod ahead;
 pub mod app;
@@ -55,6 +57,7 @@ pub mod order;
 pub mod sides;
 pub mod story;
 pub mod tell;
+pub mod update;
 
 use host::{paths, requests, settings};
 
@@ -68,27 +71,92 @@ use switchboard_plugin_api::sdk as util;
 /// The diff as a plugin, which the workspace loads in its own process.
 pub struct Diff;
 
+/// The setting that has the diff alone look for a newer release of itself.
+pub const UPDATE_CHECK: &str = "diff_update_check";
+
 /// What the diff says of itself: every setting of its own it reads, with
-/// its default (the same as `switchboard`'s `assets/settings.json` lists
-/// it with, which a test there keeps so).
+/// its default, its name and what it does (the same as `switchboard`'s
+/// `assets/settings.json` lists it with, which a test there keeps so), so
+/// the workspace's Settings, drawn from that file, and the diff's own
+/// settings view, alone, drawn from this, say the same. One only the workspace has a use for (a tab's session,
+/// a pane beside) is left out of that view, and the one that is the diff
+/// alone's is in no list of the workspace's.
 pub fn manifest() -> Manifest {
     Manifest {
         protocol: PROTOCOL_VERSION,
         name: "diff".into(),
         version: env!("CARGO_PKG_VERSION").into(),
         settings: vec![
-            Setting::new("diff_order", true),
-            Setting::new("diff_story", true),
-            Setting::new("diff_story_pages", true),
-            Setting::new("diff_story_progress", true),
-            Setting::new("diff_story_notes", true),
-            Setting::new("diff_story_ahead", true),
-            Setting::new("diff_story_plan", false),
-            Setting::new("diff_list_wide", true),
-            Setting::new("diff_uncommitted", true),
-            Setting::new("diff_ask", true),
-            Setting::new("diff_ask_session", true),
-            Setting::new("diff_beside_share", json!("75")),
+            Setting::new("diff_order", true)
+                .said(
+                    "Files in reading order",
+                    "M-d lists the changed files flat, documentation first and tests last, with Haiku ordering the code from most abstract to most concrete; off, flat, A to Z",
+                ),
+            Setting::new("diff_story", true)
+                .said(
+                    "Diff told as a story",
+                    "M-d's file list grouped into a few chapters Haiku names from the whole diff and the commits' messages, each with a heading, two or three sentences that make the case for it to the colleagues reviewing it, and a line of what to watch for, read from the change's core to its edges ([c and ]c move between them, yS copies the story as Markdown); off, the files keep the reading order by kind. Sends the diff's text and the commit messages, not only the paths, to Claude",
+                ),
+            Setting::new("diff_story_progress", true)
+                .said(
+                    "Diff story progress",
+                    "While M-d's story is told, its cover shows what Haiku is reading, each chapter as Haiku names it and the time taken, t showing Haiku's answer itself as it comes; off, a spinner alone",
+                ),
+            Setting::new("diff_story_pages", true)
+                .said(
+                    "Diff story a page at a time",
+                    "]p and [p in M-d's diff open the story's chapters one at a time, each a diff of its own as if it were a commit, [p from the first going back to the whole diff; off, they do nothing",
+                ),
+            Setting::new("diff_story_notes", true)
+                .said(
+                    "Diff story notes on changes",
+                    "M-d's diff shows Haiku's note over each change worth one, why it is needed, and names the chapter of a change that belongs to another one than its file; off, only the list's chapters",
+                ),
+            Setting::new("diff_story_ahead", true)
+                .said(
+                    "Diff story told ahead",
+                    "When a tab's branch has a new commit, its M-d story is told in the background, so M-d opens on it at once rather than waiting under its cover; sends that branch's diff and commit messages to Claude (Haiku) for each new commit, a run taking up to five and a half minutes",
+                )
+                .only(Scope::Workspace),
+            Setting::new("diff_story_plan", false)
+                .said(
+                    "Diff story reads the tab's plan",
+                    "M-d's story, told ahead or on opening, is given the tab's plan note (an autopilot item's plan) as well as the commits, so its chapters can say what problem each solves and what was passed over; off, it reads the commits and the diff alone. Sends the plan note's words to Claude (Haiku)",
+                )
+                .only(Scope::Workspace),
+            Setting::new("diff_uncommitted", true)
+                .said(
+                    "Uncommitted changes in M-d",
+                    "M-d's diff runs from the PR's base to the working tree, marking files with changes not yet committed and listing them in a last chapter; off, it shows the branch's commits only",
+                ),
+            Setting::new("diff_list_wide", true)
+                .said(
+                    "Diff file list wide",
+                    "M-d's file list opens wide enough for its longest path (at most half the screen), E narrowing it; off, it opens narrow and E widens it",
+                ),
+            Setting::new("diff_ask", true)
+                .said(
+                    "Ask Claude about the diff",
+                    "ga in M-d's diff, and M-p's command while the diff is open, ask Haiku a question about the change: it reads the story, the diff and where the cursor is, and may read the repository's files to answer, its answer streamed into a window beside the diff. Sends the diff and the question to Claude",
+                ),
+            Setting::new("diff_ask_session", true)
+                .said(
+                    "Ask in the tab's session",
+                    "With Ask Claude about the diff on, ga asks a copy of the tab's own Claude session, which knows the conversation that made the change, on that session's model; the tab's conversation is left as it was, and Haiku answers in its place when the session can't be resumed. Off, it asks a fresh Haiku with the story and the diff alone, which costs less",
+                )
+                .only(Scope::Workspace),
+            Setting::new("diff_beside_share", json!("75"))
+                .said(
+                    "Diff's share beside a narrow pane",
+                    "How much of the width beside the sidebar M-d's diff takes when it opens beside a narrow lone pane: half, two thirds or three quarters, the pane narrowed to the rest while the diff is open and given its own width back when it closes, or the spare columns alone, the pane keeping its width. Where the spare columns already give the diff more, it takes them. Dragging the line between them resizes for that diff alone",
+                )
+                .only(Scope::Workspace),
+            Setting::new(UPDATE_CHECK, true)
+                .said(
+                    "Check for a newer switchboard-diff",
+                    "Once a day, switchboard-diff run alone asks GitHub for its newest release and says when one is out; nothing of yours is sent. Off, nothing is asked, as with Switchboard's own update check off",
+                )
+                .only(Scope::Alone),
         ],
     }
 }

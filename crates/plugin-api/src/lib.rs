@@ -17,6 +17,8 @@
 //!   own stand-in when it runs alone.
 //! - `Plugin`: a plugin loaded in the workspace's own process.
 //! - `Folders`: where a plugin keeps its state and its cache.
+//! - `release`: a release of Switchboard or of an app that ships apart
+//!   from it, checked and put in place (the `release` feature).
 //! - `sdk`: the few helpers a plugin and the workspace both need (the home,
 //!   a file written whole, a command's output).
 //!
@@ -31,6 +33,8 @@
 //! editor, a pager) gives it its settings as it starts it, by flags or
 //! environment, and never edits that app's own config files.
 
+#[cfg(feature = "release")]
+pub mod release;
 pub mod sdk;
 
 use std::path::{Path, PathBuf};
@@ -112,11 +116,35 @@ impl<T: Serialize + DeserializeOwned> Message<T> {
     }
 }
 
-/// A setting a plugin reads, with what it is while you haven't set it.
+/// Where a plugin's setting is one to change.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Scope {
+    /// In the workspace and in the plugin alone.
+    #[default]
+    Both,
+    /// Only in the workspace: it is about a tab, a pane or the server.
+    Workspace,
+    /// Only in the plugin alone, where the workspace has a setting of its
+    /// own for the same thing.
+    Alone,
+}
+
+/// A setting a plugin reads: what it is while you haven't set it, and how
+/// whoever shows the plugin's settings names it (the workspace's Settings,
+/// or the plugin's own view of them when it runs alone), so both say the
+/// same of it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Setting {
     pub key: String,
     pub default: Value,
+    /// Its name and what it does, on and off.
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub scope: Scope,
 }
 
 impl Setting {
@@ -124,7 +152,23 @@ impl Setting {
         Setting {
             key: key.to_string(),
             default: default.into(),
+            label: String::new(),
+            description: String::new(),
+            scope: Scope::Both,
         }
+    }
+
+    /// With its name and what it does.
+    pub fn said(mut self, label: &str, description: &str) -> Setting {
+        self.label = label.to_string();
+        self.description = description.to_string();
+        self
+    }
+
+    /// Shown only there.
+    pub fn only(mut self, scope: Scope) -> Setting {
+        self.scope = scope;
+        self
     }
 }
 

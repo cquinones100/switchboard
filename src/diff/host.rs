@@ -158,6 +158,15 @@ impl Host for Core {
                     None => Answer::None,
                 }
             }
+            // Whether a button's rounded ends are drawn, for the diff's row
+            // of buttons.
+            Action::Draws => Answer::Text {
+                text: if crate::mux::graphics::apps_round_ends() {
+                    "round".into()
+                } else {
+                    String::new()
+                },
+            },
             // What Notes alone asks is answered where it is loaded
             // (src/notes/host.rs), which hands the rest on to here.
             Action::Settings { .. }
@@ -166,7 +175,6 @@ impl Host for Core {
             | Action::Preview { .. }
             | Action::LinkWords { .. }
             | Action::OpenLink { .. }
-            | Action::Draws
             | Action::Picture { .. }
             | Action::PictureGone { .. }
             | Action::ItemClaim { .. }
@@ -179,24 +187,30 @@ impl Host for Core {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use switchboard_plugin_api::Manifest;
+    use switchboard_plugin_api::{Manifest, Scope};
 
     #[test]
     fn the_diff_is_loaded_at_this_build_s_protocol_and_its_settings_are_the_schema_s() {
         let manifest: Manifest = crate::diff::plugin().manifest();
         assert_eq!(manifest.check(), Ok(()));
         assert_eq!(manifest.name, "diff");
-        // Every setting it says it reads is listed, with that default, and
-        // every setting of the Diff category is one it says.
+        // Every setting it says it reads is listed, with that default, name
+        // and description, so Settings' rows and the diff's own settings
+        // view, alone, say the same; and every setting of the Diff category
+        // is one it says. The one that is the diff alone's is in no list of
+        // the workspace's.
         let schema = settings::schema();
         for declared in &manifest.settings {
             let listed = schema.iter().find(|o| o.key == declared.key);
-            assert_eq!(
-                listed.map(|o| &o.default),
-                Some(&declared.default),
-                "{}",
-                declared.key
-            );
+            if declared.scope == Scope::Alone {
+                assert!(listed.is_none(), "{} is the diff alone's", declared.key);
+                assert!(!declared.label.is_empty() && !declared.description.is_empty());
+                continue;
+            }
+            let listed = listed.unwrap_or_else(|| panic!("{} isn't listed", declared.key));
+            assert_eq!(listed.default, declared.default, "{}", declared.key);
+            assert_eq!(listed.label, declared.label, "{}", declared.key);
+            assert_eq!(listed.description, declared.description, "{}", declared.key);
         }
         for option in schema.iter().filter(|o| o.category == "Diff") {
             assert!(

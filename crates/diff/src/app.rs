@@ -52,6 +52,11 @@
 //! (`path:12-20`, `#L12-L20`), and `y` their text. A drag of the mouse
 //! selects any text on the screen and copies it (select.rs).
 //!
+//! Alone (`switchboard-diff`), it heads its screen with a line of its own,
+//! keeps the row of buttons at the bottom with a Settings button before
+//! Close, and has a settings view of its own on M-m (own.rs); `m` in
+//! the file list, or a right click, opens its menu either way.
+//!
 //! The screen is drawn into a cell buffer and only what changed is sent,
 //! through the renderer the multiplexer's is (`switchboard_ui::screen`), so the
 //! program is tested by drawing into a buffer and reading it back.
@@ -89,6 +94,7 @@ use crate::host::host;
 use crate::{settings, util};
 
 mod draw;
+mod own;
 mod select;
 
 /// The list's narrow width, and how wide a list must be to head a chapter
@@ -164,6 +170,9 @@ pub struct Options {
     /// A scroll bar at the list's right edge and the diff's while they run
     /// past the screen (scroll_bars), the diff's column kept for it.
     pub scroll_bars: bool,
+    /// The diff runs alone, as `switchboard-diff`: its own header, its
+    /// Settings button and its settings view on M-m.
+    pub alone: bool,
 }
 
 impl Options {
@@ -188,6 +197,7 @@ impl Options {
                 .is_some_and(|theme| switchboard_ui::theme::light_for(&theme)),
             pane_arrows: on("pane_arrows"),
             scroll_bars: on("scroll_bars"),
+            alone: crate::host::is_alone(),
             haiku: true,
             server: host().in_pane(),
             clipboard: true,
@@ -228,6 +238,13 @@ pub enum Msg {
     Asked(u64, Said),
     /// What a commit's diff of the history was told, by its number.
     History(u64, Box<Msg>),
+    /// What a reading of the change asked for by a setting said, by its
+    /// number, so one a later change of the setting outran is dropped.
+    Reloaded(u64, Box<Msg>),
+    /// What the look for a newer release found, alone.
+    Newer(Option<crate::update::Newer>),
+    /// What an update asked for from the settings view came to.
+    Updated(Result<crate::update::Outcome, String>),
 }
 
 /// What a commit's diff asks of the branch's diff it was opened from.
@@ -237,6 +254,8 @@ enum Wants {
     Step(i32),
     /// Back to the whole branch.
     Leave,
+    /// The settings view, which is the branch's diff's to show.
+    Settings,
 }
 
 /// The branch's commits one at a time: the commits, oldest first, which is
@@ -423,10 +442,15 @@ struct Answer {
     visual: Option<usize>,
 }
 
-/// A button of easy mode's row, or of a box's.
+/// A button of the row at the bottom, a row of the settings view, or a
+/// button of a box's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Button {
     Bar(usize),
+    /// The row's Settings button, alone.
+    Settings,
+    /// A row of the settings view.
+    Option(usize),
     AskSend,
     AskCancel,
     AnswerClose,
@@ -434,7 +458,8 @@ enum Button {
     AnswerCopy,
 }
 
-/// easy mode's buttons: each presses its keys in the list.
+/// The row's buttons (easy mode's, and the diff alone's): each presses its
+/// keys in the list.
 const BUTTONS: [(&str, &str); 9] = [
     ("◀ Chapter", "[c"),
     ("Chapter ▶", "]c"),
@@ -516,6 +541,11 @@ pub const KEYS: &[(&str, &[KeyRow])] = &[
             ),
             key_row("yS", "copy the story as Markdown"),
             ask_row("ga", "ask Claude about the diff"),
+            key_row(
+                "m",
+                "the diff's menu, in the file list: its settings, and what its buttons do",
+            ),
+            key_row("S-F10", "the diff's menu, from the list or the diff"),
             key_row("q esc", "close the diff (esc in the file list)"),
             key_row("^c", "close the diff and go back to the pane"),
         ],
@@ -730,6 +760,29 @@ pub struct App {
     term: switchboard_ui::terminal::Colors,
     /// Set while the screen is drawn, when no file is read.
     drawing: bool,
+    /// The settings view while it is open, and the menu while it is up.
+    settings: Option<own::View>,
+    menu: Option<own::Open>,
+    /// A release newer than this binary, as the day's look found, and
+    /// whether the view's update is under way.
+    newer: Option<crate::update::Newer>,
+    updating: bool,
+    /// An update was installed in this run, which offers no other.
+    installed: bool,
+    /// What the diff was opened on (the directory, the base named, whether
+    /// the working tree's changes), to read it anew when a setting changes
+    /// what is read.
+    opened: Option<(PathBuf, Option<String>, bool)>,
+    /// Whether the terminal draws a button's rounded ends.
+    round: bool,
+    /// The repository as the header names it (`~/...`), and the settings
+    /// file as the settings view does.
+    top_shown: String,
+    settings_shown: String,
+    settings_path: PathBuf,
+    /// How many times a setting has had the change read anew, for the
+    /// number of the latest.
+    reloads: u64,
 }
 
 /// Whether `path` is left by the path filter `filter`: every word in it,
@@ -838,6 +891,17 @@ impl App {
             title: None,
             term: Default::default(),
             drawing: false,
+            settings: None,
+            menu: None,
+            newer: None,
+            updating: false,
+            installed: false,
+            opened: None,
+            round: false,
+            top_shown: String::new(),
+            settings_shown: String::new(),
+            settings_path: PathBuf::new(),
+            reloads: 0,
         }
     }
 
@@ -874,6 +938,8 @@ impl App {
     }
 
     fn resize_now(&mut self, cols: u16, rows: u16) {
+        // The header's row, alone, is none of the diff's.
+        let rows = rows.saturating_sub(u16::from(self.has_header()));
         self.cols = cols.max(20);
         self.rows = rows.max(5);
         self.lines.clear();
@@ -929,6 +995,21 @@ impl App {
     }
 
     fn event_now(&mut self, msg: Msg) {
+        match msg {
+            // The latest reading a setting asked for, and no other.
+            Msg::Reloaded(id, msg) => {
+                if id == self.reloads {
+                    self.event_apply(*msg);
+                }
+            }
+            // The reading the diff opened with, once a setting has asked
+            // for another, is of the setting before: dropped.
+            Msg::Loading(_) | Msg::Loaded(_) | Msg::Nothing(_) if self.reloads > 0 => {}
+            msg => self.event_apply(msg),
+        }
+    }
+
+    fn event_apply(&mut self, msg: Msg) {
         // What lays the screen out again ends the mouse's selection, whose
         // rows would be other text.
         let same_rows = matches!(
@@ -937,6 +1018,7 @@ impl App {
                 | Msg::Asked(..)
                 | Msg::History(..)
                 | Msg::Heard(_, Heard::Progress(_))
+                | Msg::Newer(_)
         );
         if !same_rows {
             self.selection = None;
@@ -949,7 +1031,45 @@ impl App {
             }
             Msg::Loaded(Ok((change, said))) => {
                 self.loading = None;
+                // Read anew after a setting changed what is read: what the
+                // reading before said (nothing to show, or why it failed)
+                // no longer holds.
+                self.nothing = None;
+                self.failed = None;
+                if self.change.is_some() {
+                    self.files.clear();
+                    self.texts
+                        .retain(|(commit, _), _| commit != git::INDEX && commit != git::WORK_TREE);
+                    self.lines.clear();
+                    self.visual = None;
+                }
+                // A question being typed stays about its file where the
+                // change read anew still has it.
+                let asked_about = self.ask_box.as_ref().and(self.current()).map(Entry::key);
                 self.loaded(*change);
+                if self.ask_box.is_some() {
+                    let entries = self.entries();
+                    let found = asked_about
+                        .as_ref()
+                        .and_then(|key| self.order.iter().position(|&i| entries[i].key() == *key));
+                    match found {
+                        // Its file is still there: the question keeps the
+                        // place it was typed about, side and line.
+                        Some(at) => {
+                            self.moved = true;
+                            self.show_at(at);
+                        }
+                        None => {
+                            self.say(
+                                "The file the question was about is no longer in the diff: it asks about the one shown now.",
+                            );
+                            let at = self.ask_cursor();
+                            if let Some(b) = &mut self.ask_box {
+                                b.at = at;
+                            }
+                        }
+                    }
+                }
                 if let Some(said) = said {
                     self.say(said);
                 }
@@ -989,6 +1109,12 @@ impl App {
                 }
             }
             Msg::Asked(id, said) => self.asked(id, said),
+            Msg::Reloaded(..) => {}
+            // One found before the look was turned off is not said.
+            Msg::Newer(newer) => {
+                self.newer = newer.filter(|_| !self.installed && crate::update::turned_on());
+            }
+            Msg::Updated(outcome) => self.updated(outcome),
             Msg::History(id, msg) => {
                 if let Some(h) = self.history.as_mut().filter(|h| h.id == id) {
                     h.app.event(*msg);
@@ -1008,6 +1134,9 @@ impl App {
         self.loading = None;
         self.read_input(&change);
         self.totals = Totals::of(&change.entries);
+        // The header's words for the repository, worked out here rather
+        // than as it draws.
+        self.top_shown = util::tilde(&change.top);
         self.change = Some(change);
         self.order = (0..self.entries().len()).collect();
         self.show_story(None);
@@ -1052,6 +1181,8 @@ impl App {
     /// answer from the workspace, the diff's own screen says so.
     fn nothing_to_show(&mut self, text: String) {
         self.loading = None;
+        // A reading before that failed no longer holds.
+        self.failed = None;
         let said = self.opts.server
             && host()
                 .command(&["say", "--", &text])
@@ -1157,6 +1288,9 @@ impl App {
         self.read_input(&change);
         let (key, _) = story::key_of(change.told_part());
         self.totals = Totals::of(&change.entries);
+        // The header's words for the repository, worked out here rather
+        // than as it draws.
+        self.top_shown = util::tilde(&change.top);
         self.change = Some(change);
         self.order = (0..self.entries().len()).collect();
         if self.story_key.as_deref() == Some(key.as_str()) {
@@ -1596,7 +1730,7 @@ impl App {
     /// The diff area's columns, and each side's.
     fn diff_area(&self) -> Rect {
         let x = self.list_width.min(self.cols.saturating_sub(10)) + 1;
-        let bottom = u16::from(self.opts.easy || self.has_footer());
+        let bottom = u16::from(self.has_buttons() || self.has_footer());
         Rect::new(
             x,
             0,
@@ -1606,10 +1740,11 @@ impl App {
     }
 
     /// Whether the screen's last row is the footer of keys (UX 2.0, as
-    /// board 12 draws it): not in easy mode, whose row of buttons there
-    /// names the keys already, nor on a screen too short to spare it.
+    /// board 12 draws it): not under the row of buttons (easy mode's, and
+    /// the diff alone's), which is there instead, nor on a screen too short
+    /// to spare it.
     pub(super) fn has_footer(&self) -> bool {
-        self.opts.ux2 && !self.opts.easy && self.rows >= 5
+        self.opts.ux2 && !self.has_buttons() && self.rows >= 5
     }
 
     /// The columns of the old side and the new; one of them 0 for a file
@@ -2132,6 +2267,31 @@ impl App {
 
     fn key_on(&mut self, key: KeyEvent) -> Act {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        // M-m, alone: the settings view, opened or closed. In the workspace
+        // the key is the workspace's, and never taken here.
+        let alt_m = key.modifiers == KeyModifiers::ALT && key.code == KeyCode::Char('m');
+        // With nothing to show, or a change that couldn't be read, too;
+        // over a question being typed, whose draft waits under the view.
+        if alt_m && self.opts.alone && !self.in_history {
+            self.toggle_settings();
+            return Act::Redraw;
+        }
+        let reset = ctrl && matches!(key.code, KeyCode::Char('\\') | KeyCode::Char('4'));
+        if (self.menu.is_some() || self.settings.is_some()) && reset {
+            // C-\ C-n, which the palette's commands press first: the menu
+            // and the settings view close, so the keys after reach the diff.
+            self.menu = None;
+            self.settings = None;
+        } else if self.menu.is_some() || self.settings.is_some() {
+            if ctrl && key.code == KeyCode::Char('c') {
+                return Act::Quit;
+            }
+            return if self.menu.is_some() {
+                self.menu_key(key)
+            } else {
+                self.settings_key(key)
+            };
+        }
         // A commit of the history has the keys, but C-c, which closes the
         // whole diff.
         if let Some(h) = &mut self.history {
@@ -2175,6 +2335,14 @@ impl App {
             }
             return Act::Redraw;
         }
+        // With nothing to show, alone, the menu's keys open the settings,
+        // the one thing of its menu that works there: a setting may be why.
+        let menu_key = (key.code == KeyCode::Char('m') && key.modifiers.is_empty())
+            || (key.code == KeyCode::F(10) && key.modifiers == KeyModifiers::SHIFT);
+        if (self.nothing.is_some() || self.failed.is_some()) && self.opts.alone && menu_key {
+            self.toggle_settings();
+            return Act::Redraw;
+        }
         if self.failed.is_some() || self.nothing.is_some() {
             return Act::Quit;
         }
@@ -2206,6 +2374,13 @@ impl App {
             return self.answer_key(key);
         }
         if self.filtering {
+            // S-F10 opens the menu from the filter too, the filter kept,
+            // as a right click there does.
+            if key.code == KeyCode::F(10) && key.modifiers == KeyModifiers::SHIFT {
+                self.filtering = false;
+                self.open_menu(None);
+                return Act::Redraw;
+            }
             return self.filter_key(key);
         }
         let before = self.focus;
@@ -2250,6 +2425,9 @@ impl App {
                 return Act::Same;
             }
             KeyCode::Char('E') => self.widen(),
+            KeyCode::Char('m') if list && key.modifiers.is_empty() => self.open_menu(None),
+            // S-F10, anywhere: the menu a right click opens.
+            KeyCode::F(10) if key.modifiers == KeyModifiers::SHIFT => self.open_menu(None),
             KeyCode::Char('/') if list && !ctrl => {
                 self.filtering = true;
                 self.list_visual = None;
@@ -3370,6 +3548,10 @@ impl App {
                 self.leave_history();
                 Act::Redraw
             }
+            Some(Wants::Settings) => {
+                self.toggle_settings();
+                Act::Redraw
+            }
             None if act == Act::Quit => {
                 self.leave_history();
                 Act::Redraw
@@ -3509,7 +3691,9 @@ impl App {
     }
 
     fn open_ask(&mut self) {
-        if self.change.is_none() {
+        // Never with Ask Claude about the diff off, turned off since an
+        // answer opened included.
+        if self.change.is_none() || !self.opts.ask {
             return;
         }
         let at = self.ask_cursor();
@@ -3562,6 +3746,14 @@ impl App {
     /// Text pasted: into the question being typed, line breaks and all
     /// (the terminal's bracketed paste), and nowhere else.
     pub fn paste(&mut self, text: &str) -> Act {
+        // Pasted into the menu's search; nothing else is typed into under
+        // the menu or the settings view.
+        if self.menu.is_some() {
+            return self.menu_paste(text);
+        }
+        if self.settings.is_some() {
+            return Act::Same;
+        }
         if let Some(h) = &mut self.history {
             let act = h.app.paste(text);
             return self.after_history(act);
@@ -3587,6 +3779,10 @@ impl App {
         let Some(b) = self.ask_box.take() else {
             return;
         };
+        // Never with Ask turned off since the box opened.
+        if !self.opts.ask {
+            return;
+        }
         let question = b.text.trim().to_string();
         if question.is_empty() {
             return;
@@ -3919,23 +4115,59 @@ impl App {
 
     // ── The mouse ───────────────────────────────────────────────────────────
 
-    pub fn mouse(&mut self, m: MouseEvent) -> Act {
+    pub fn mouse(&mut self, mut m: MouseEvent) -> Act {
+        // The header's row, alone, takes no click; the rest is the diff's,
+        // counted from under it.
+        if self.has_header() {
+            // A drag or a release over the header goes on as one at the
+            // diff's first row, so a selection started under it ends.
+            let held = matches!(m.kind, MouseEventKind::Drag(_) | MouseEventKind::Up(_));
+            if m.row == 0 && !held {
+                return Act::Same;
+            }
+            m.row = m.row.saturating_sub(1);
+        }
         let act = self.mouse_now(m);
         self.read_view();
         act
     }
 
+    /// The button drawn at a cell.
+    fn hit(&self, x: u16, y: u16) -> Option<Button> {
+        self.buttons
+            .iter()
+            .find(|(_, r)| x >= r.x && x < r.right() && y >= r.y && y < r.bottom())
+            .map(|(b, _)| *b)
+    }
+
     fn mouse_now(&mut self, m: MouseEvent) -> Act {
+        if self.menu.is_some() {
+            return self.menu_mouse(m);
+        }
+        if self.settings.is_some() {
+            let hit = self.hit(m.column, m.row);
+            if matches!(m.kind, MouseEventKind::Moved | MouseEventKind::Drag(_)) {
+                if !self.opts.hover || hit == self.hover {
+                    return Act::Same;
+                }
+                self.hover = hit;
+                return Act::Redraw;
+            }
+            // A press closes a message; its release leaves the one the
+            // press may have said (why a setting couldn't be written).
+            let pressed = matches!(m.kind, MouseEventKind::Down(_));
+            let closed = pressed && self.message.take().is_some();
+            return match self.settings_mouse(m, hit) {
+                Act::Same if closed => Act::Redraw,
+                act => act,
+            };
+        }
         if let Some(h) = &mut self.history {
             let act = h.app.mouse(m);
             return self.after_history(act);
         }
         let (x, y) = (m.column, m.row);
-        let hit = self
-            .buttons
-            .iter()
-            .find(|(_, r)| x >= r.x && x < r.right() && y >= r.y && y < r.bottom())
-            .map(|(b, _)| *b);
+        let hit = self.hit(x, y);
         match m.kind {
             MouseEventKind::Drag(MouseButton::Left) if self.bar_drag.is_some() => {
                 let Some((bar, from, grab)) = self.bar_drag else {
@@ -3989,6 +4221,24 @@ impl App {
                 }
                 return Act::Redraw;
             }
+            // A right click opens the diff's menu beside it, as `m` does.
+            MouseEventKind::Down(MouseButton::Right) => {
+                let shown = self.failed.is_none()
+                    && self.nothing.is_none()
+                    && self.loading.is_none()
+                    && !(self.cover.is_some() && self.telling == Telling::Waiting)
+                    && self.ask_box.is_none()
+                    && self.answer.is_none();
+                // Only where a click takes a menu's option (menu_mouse), so
+                // none opens that the mouse couldn't close.
+                if !shown || !switchboard_ui::settings::is_on("menu_mouse") {
+                    return Act::Same;
+                }
+                self.message = None;
+                self.filtering = false;
+                self.open_menu(Some((x, y)));
+                return Act::Redraw;
+            }
             _ => return Act::Same,
         }
         // A click closes a message and goes on to do what it does; but on
@@ -4002,10 +4252,20 @@ impl App {
         // they would; one on that line types into it again.
         let pinned = self.list_pinned();
         self.filtering = false;
+        // The Settings button, wherever the row is drawn: with nothing to
+        // show, while the change is read and under the story's cover.
+        if hit == Some(Button::Settings) {
+            return self.press(Button::Settings);
+        }
         if self.failed.is_some() || self.nothing.is_some() {
             return Act::Quit;
         }
         if self.loading.is_some() || (self.cover.is_some() && self.telling == Telling::Waiting) {
+            // A button of the row drawn there presses its keys, which do
+            // there what they do from the keyboard: Close closes.
+            if let Some(button @ Button::Bar(_)) = hit {
+                return self.press(button);
+            }
             return if closed { Act::Redraw } else { Act::Same };
         }
         if let Some(button) = hit {
@@ -4146,6 +4406,15 @@ impl App {
     /// A button pressed, as its keys would be.
     fn press(&mut self, button: Button) -> Act {
         match button {
+            // While a question is typed, the row's buttons do nothing: its
+            // keys would be typed into the draft.
+            // While a question is typed, the row is Settings and Close
+            // alone (`bar_buttons`), Close closing the question, draft and
+            // all, as Esc does.
+            Button::Bar(_) if self.ask_box.is_some() && self.settings.is_none() => {
+                self.ask_box = None;
+                return Act::Redraw;
+            }
             Button::Bar(i) => {
                 let keys = BUTTONS
                     .iter()
@@ -4153,6 +4422,21 @@ impl App {
                     .nth(i)
                     .map(|(_, k)| *k)
                     .unwrap_or("");
+                // Over the settings view, a button goes back to the diff
+                // and does its work there; Close only closes the view, and
+                // so does any of them over a question's draft, which its
+                // keys would be typed into.
+                let over_view = self.settings.take().is_some();
+                if over_view && (keys == "q" || self.ask_box.is_some()) {
+                    return Act::Redraw;
+                }
+                // Over an answer, whose keys they aren't, the answer goes
+                // first, so the button does its work in the diff.
+                // Over an answer, whose keys they aren't, the answer goes
+                // first, so the button does its work in the diff.
+                if self.answer.is_some() {
+                    self.close_answer();
+                }
                 self.focus = Focus::List;
                 let mut act = Act::Same;
                 for c in keys.chars() {
@@ -4162,6 +4446,8 @@ impl App {
                     return Act::Quit;
                 }
             }
+            Button::Settings => self.toggle_settings(),
+            Button::Option(_) => {}
             Button::AskSend => self.send_question(),
             Button::AskCancel => self.ask_box = None,
             Button::AnswerClose => self.close_answer(),
@@ -4356,6 +4642,8 @@ pub fn run(
     let opts = Options::read();
     let mut app = App::new(opts, cols, rows, tx.clone());
     app.session = session.filter(|_| settings::is_on("diff_ask_session"));
+    app.opened = Some((dir.clone(), base.clone(), working));
+    app.round = host().draws("round");
     {
         let tx = tx.clone();
         let uncommitted = opts.uncommitted;
@@ -4369,7 +4657,9 @@ pub fn run(
             libc::signal(signal, on_signal as *const () as libc::sighandler_t);
         }
     }
-    let term = match Term::enter(opts.hover && (opts.easy || opts.ask)) {
+    // Every movement with the hover on: the menu (m, a right click) lights
+    // its option under the mouse, whatever else is on.
+    let term = match Term::enter(opts.hover) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("switchboard diff: can't take the terminal: {e}");
@@ -4388,6 +4678,12 @@ pub fn run(
     let mut screen = Screen::default();
     let mut dirty = true;
     let mut last_tick = Instant::now();
+    // Alone, the look for a newer release, once the diff has drawn.
+    let mut looks = crate::update::allowed();
+    // Looked again each hour while the diff stays open: the day's look
+    // asks GitHub once its answer is a day old, else reads what it kept.
+    let mut looked = Instant::now();
+    let looking = std::sync::Arc::new(AtomicBool::new(false));
     while !ENDED.load(Ordering::Relaxed) {
         while let Ok(msg) = rx.try_recv() {
             app.event(msg);
@@ -4413,6 +4709,36 @@ pub fn run(
             let _ = out.flush();
             dirty = false;
         }
+        // The first look once the diff has drawn, then hourly.
+        // The settings read anew each hour first, so one turned off since
+        // (in Switchboard, or by hand) is followed: no look, and nothing
+        // said of one found before.
+        let hour = opts.alone && looked.elapsed() >= Duration::from_secs(3600);
+        if hour && !looks {
+            // The next hour, whatever comes of this one.
+            looked = Instant::now();
+            crate::host::reread_settings();
+            // Every setting read anew is followed, not the look's alone.
+            let before = app.opts;
+            app.opts = app.opts.read_again();
+            app.settings_changed(before);
+            if app.opts != before {
+                dirty = true;
+            }
+            if !crate::update::turned_on() && app.newer.take().is_some() {
+                dirty = true;
+            }
+        }
+        let hour_up = hour && !looks && !app.installed && crate::update::allowed();
+        if ((looks && !dirty) || hour_up) && !looking.swap(true, Ordering::SeqCst) {
+            looks = false;
+            looked = Instant::now();
+            let (tx, looking) = (tx.clone(), looking.clone());
+            std::thread::spawn(move || {
+                let _ = tx.send(Msg::Newer(crate::update::look(util::now_secs())));
+                looking.store(false, Ordering::SeqCst);
+            });
+        }
         let act = match event::poll(Duration::from_millis(50)) {
             Ok(true) => match event::read() {
                 Ok(TermEvent::Key(key)) => app.key(key),
@@ -4437,6 +4763,41 @@ pub fn run(
     }
     app.stop();
     drop(term);
+    // An update started from the settings view is finished, not left half
+    // done: said on the terminal given back, with what came of it.
+    if app.updating {
+        // The terminal is given back, so C-c ends it here: the old binary
+        // stays whole until the new one is renamed over it in one step.
+        println!("Finishing the update of switchboard-diff… (Ctrl-C leaves it as it was)");
+        // The terminal closed (SIGHUP) ends it too, the worker with the
+        // process, before anything is put in the binary's place.
+        while !ENDED.load(Ordering::Relaxed) {
+            let Ok(msg) = rx.recv_timeout(Duration::from_millis(200)) else {
+                continue;
+            };
+            if let Msg::Updated(outcome) = msg {
+                match outcome {
+                    Ok(crate::update::Outcome::Installed(version)) => {
+                        println!("Updated to switchboard-diff {version}.");
+                    }
+                    Ok(crate::update::Outcome::UpToDate) => {
+                        println!("switchboard-diff is up to date.");
+                    }
+                    Ok(crate::update::Outcome::Withdrawn(version)) => {
+                        println!("switchboard-diff {version} is no longer offered.");
+                    }
+                    Ok(crate::update::Outcome::Replaced) => {
+                        println!(
+                            "switchboard-diff was replaced since this one started; nothing was changed."
+                        );
+                    }
+                    Ok(crate::update::Outcome::Out(text)) => println!("{text}"),
+                    Err(why) => eprintln!("switchboard-diff update: {why}"),
+                }
+                break;
+            }
+        }
+    }
     ExitCode::SUCCESS
 }
 
@@ -4444,6 +4805,7 @@ pub fn run(
 mod tests {
     use super::*;
     use ratatui::buffer::Buffer;
+    use switchboard_ui::kit::Surface;
 
     fn opts() -> Options {
         Options {
@@ -4465,6 +4827,7 @@ mod tests {
             server: false,
             clipboard: false,
             scroll_bars: false,
+            alone: false,
         }
     }
 
@@ -4525,7 +4888,9 @@ mod tests {
     }
 
     fn draw(app: &mut App) -> Buffer {
-        let mut buf = Buffer::empty(Rect::new(0, 0, app.cols, app.rows));
+        // The whole screen: the diff, under its header when it runs alone.
+        let rows = app.rows + u16::from(app.has_header());
+        let mut buf = Buffer::empty(Rect::new(0, 0, app.cols, rows));
         app.draw(&mut buf);
         buf
     }
@@ -4742,6 +5107,285 @@ mod tests {
             ..click
         };
         assert_eq!(app.mouse(click), Act::Quit);
+    }
+
+    /// The diff run alone, as `switchboard-diff`.
+    fn alone() -> App {
+        let mut app = app();
+        app.opts.alone = true;
+        app.resize(200, 60);
+        app
+    }
+
+    fn alt_m() -> KeyEvent {
+        KeyEvent::new(KeyCode::Char('m'), KeyModifiers::ALT)
+    }
+
+    fn click_on(app: &mut App, button: Button) -> Act {
+        let (_, at) = *app.buttons.iter().find(|(b, _)| *b == button).unwrap();
+        // Where it was drawn, on the screen: a row down under the header.
+        let down = u16::from(app.has_header());
+        app.mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: at.x + 1,
+            row: at.y + down,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    #[test]
+    fn alone_it_heads_its_screen_and_its_row_ends_with_settings_before_close() {
+        let mut app = alone();
+        let shown = screen(&mut app);
+        // Its own header: its name, what it compares, and its version.
+        assert!(shown[0].starts_with(" switchboard-diff   /repo · against origin/main"));
+        assert!(
+            shown[0].ends_with(env!("CARGO_PKG_VERSION")),
+            "{:?}",
+            shown[0]
+        );
+        // The diff under it, a row down.
+        assert!(shown[1].contains("Changes (3)"), "{:?}", shown[1]);
+        // The row of buttons, with no easy mode, Settings before Close.
+        let bar = shown.last().unwrap();
+        let (settings, close) = (bar.find("Settings").unwrap(), bar.find("Close").unwrap());
+        assert!(settings < close, "{bar:?}");
+        assert!(
+            bar.contains("Refresh") && bar.ends_with("M-m settings"),
+            "{bar:?}"
+        );
+
+        // Drawn as the kit draws a button: bold in the accent on the panel
+        // surface, on the chosen surface under the mouse.
+        let theme = app.theme();
+        let (_, at) = *app
+            .buttons
+            .iter()
+            .find(|(b, _)| *b == Button::Settings)
+            .unwrap();
+        let cell = |app: &mut App| draw(app)[(at.x + 1, at.y + 1)].clone();
+        let resting = cell(&mut app);
+        assert_eq!(resting.bg, Surface::Panel.color(&theme));
+        assert_eq!(resting.fg, Tone::Accent.fg(&theme));
+        assert!(resting.modifier.contains(ratatui::style::Modifier::BOLD));
+        app.mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: at.x + 1,
+            row: at.y + 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(cell(&mut app).bg, Surface::Chosen.color(&theme));
+
+        // In the workspace: no header, no row without easy mode, and with
+        // it no Settings button.
+        let mut embedded = super::tests::app();
+        embedded.resize(200, 30);
+        let shown = screen(&mut embedded);
+        assert!(!shown[0].contains("switchboard-diff"), "{:?}", shown[0]);
+        assert!(!shown.last().unwrap().contains("Close"));
+        embedded.opts.easy = true;
+        let bar = screen(&mut embedded).pop().unwrap();
+        assert!(
+            bar.contains("Close") && !bar.contains("Settings"),
+            "{bar:?}"
+        );
+    }
+
+    #[test]
+    fn alone_m_m_and_the_settings_button_open_its_settings_view() {
+        let mut app = alone();
+        assert_eq!(app.key(alt_m()), Act::Redraw);
+        assert!(app.in_settings());
+        let shown = screen(&mut app);
+        let text = shown.join("\n");
+        // The header stays, the view under it: the diff's own options as
+        // its manifest names them, the file they are kept in, and the look
+        // for a newer release.
+        assert!(shown[0].starts_with(" switchboard-diff"), "{:?}", shown[0]);
+        assert!(text.contains("  Settings"), "{text}");
+        assert!(text.contains("settings.json · none changed"), "{text}");
+        for (label, key) in [
+            ("Files in reading order", "diff_order"),
+            ("Diff told as a story", "diff_story"),
+            ("Ask Claude about the diff", "diff_ask"),
+            ("Check for a newer switchboard-diff", "diff_update_check"),
+        ] {
+            let row = shown.iter().find(|l| l.contains(label)).unwrap();
+            assert!(row.contains(key) && row.contains(" on"), "{row:?}");
+        }
+        assert!(
+            text.contains("OPTIONS") && text.contains("UPDATES"),
+            "{text}"
+        );
+        // What only the workspace has a use for is none of its rows.
+        assert!(!text.contains("diff_ask_session") && !text.contains("diff_beside_share"));
+        // The chosen row is opened to its default and what Enter does.
+        assert!(text.contains("default on  ·  Enter: on or off"), "{text}");
+        // The row of buttons stays, Settings lit, and says how to go back.
+        let bar = shown.last().unwrap();
+        assert!(bar.ends_with("Esc back to the diff"), "{bar:?}");
+        let (_, at) = *app
+            .buttons
+            .iter()
+            .find(|(b, _)| *b == Button::Settings)
+            .unwrap();
+        let lit = draw(&mut app)[(at.x + 1, at.y + 1)].clone();
+        assert_ne!(lit.bg, Surface::Panel.color(&app.theme()));
+
+        // Tab and Shift-Tab reach each row, coming round.
+        app.key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+        assert!(screen(&mut app).join("\n").contains("▌ Check for a newer"));
+        app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        // j and k move through the rows; Esc goes back to the diff.
+        press(&mut app, "j");
+        let shown = screen(&mut app).join("\n");
+        assert!(shown.contains("each with a heading"), "{shown}");
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.in_settings());
+        assert!(screen(&mut app).join("\n").contains("README.md"));
+
+        // A click on the Settings button opens it, and M-m closes it.
+        screen(&mut app);
+        assert_eq!(click_on(&mut app, Button::Settings), Act::Redraw);
+        assert!(app.in_settings());
+        app.key(alt_m());
+        assert!(!app.in_settings());
+
+        // A newer release shows at the header's right end and as a row.
+        app.event(Msg::Newer(Some(crate::update::Newer {
+            version: "9.9.0".into(),
+            published: None,
+        })));
+        let shown = screen(&mut app);
+        assert!(
+            shown[0].ends_with("9.9.0 is out · switchboard-diff update"),
+            "{:?}",
+            shown[0]
+        );
+        app.key(alt_m());
+        let text = screen(&mut app).join("\n");
+        assert!(text.contains("Update to 9.9.0"), "{text}");
+        assert!(text.contains("Runs switchboard-diff update"), "{text}");
+
+        // A button pressed over the view goes back to the diff: Close only
+        // closes the view, and the diff stays open.
+        let close = Button::Bar(BUTTONS.len() - 1);
+        assert_eq!(click_on(&mut app, close), Act::Redraw);
+        assert!(!app.in_settings());
+
+        // On a screen too narrow for the row, Settings and Close stay.
+        app.resize(80, 30);
+        let bar = screen(&mut app).pop().unwrap();
+        assert!(bar.contains("Settings") && bar.contains("Close"), "{bar:?}");
+        assert!(!bar.contains("Refresh") && !bar.contains("Ask"), "{bar:?}");
+
+        // With nothing to show, the view still opens, and a change read
+        // after takes the screen back.
+        app.nothing = Some("Nothing here".into());
+        app.key(alt_m());
+        assert!(app.in_settings());
+        app.key(alt_m());
+        let change = app.change.clone().unwrap();
+        // So does m, the menu's key.
+        press(&mut app, "m");
+        assert!(app.in_settings());
+        app.key(alt_m());
+        // The row stays on that screen, and its Settings button opens the
+        // view rather than closing the diff.
+        let bar = screen(&mut app).pop().unwrap();
+        assert!(bar.contains("Settings") && bar.contains("Close"), "{bar:?}");
+        assert!(!bar.contains("Chapter"), "only what works there: {bar:?}");
+        assert_eq!(click_on(&mut app, Button::Settings), Act::Redraw);
+        assert!(app.in_settings());
+        app.key(alt_m());
+        app.event(Msg::Loaded(Ok((Box::new(change), None))));
+        assert!(app.nothing.is_none());
+
+        // From a commit of the history, the Settings button opens the
+        // branch's diff's view, never one of the commit's own.
+        let mut inner = alone();
+        inner.in_history = true;
+        inner.toggle_settings();
+        assert!(!inner.in_settings());
+        assert_eq!(inner.wants, Some(Wants::Settings));
+    }
+
+    #[test]
+    fn in_the_workspace_m_m_is_not_taken_and_the_menu_points_at_switchboards_settings() {
+        let mut app = app();
+        app.resize(200, 30);
+        assert_eq!(app.key(alt_m()), Act::Same);
+        assert!(!app.in_settings());
+        // m in the file list opens the diff's menu, which says where the
+        // settings are.
+        press(&mut app, "m");
+        let text = screen(&mut app).join("\n");
+        assert!(
+            text.contains("Settings are in Switchboard's Settings (Diff)"),
+            "{text}"
+        );
+        assert!(text.contains("Refresh") && text.contains("Close"), "{text}");
+        // Chosen with no server to open them, it says where they are.
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(!app.in_settings());
+        let said = app.message.take().map(|(t, _)| t).unwrap_or_default();
+        assert!(
+            said.contains("Switchboard's Settings, under Diff"),
+            "{said:?}"
+        );
+        // The palette's reset closes it, so the keys it sends after reach
+        // the diff.
+        press(&mut app, "m");
+        app.key(KeyEvent::new(KeyCode::Char('\\'), KeyModifiers::CONTROL));
+        assert!(app.menu.is_none());
+        // Esc closes the menu and leaves the diff open.
+        press(&mut app, "m");
+        assert_eq!(
+            app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            Act::Redraw
+        );
+        assert!(app.menu.is_none());
+
+        // Alone, its first option is the settings view.
+        let mut app = alone();
+        press(&mut app, "m");
+        let text = screen(&mut app).join("\n");
+        assert!(!text.contains("Switchboard's Settings"), "{text}");
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.in_settings());
+    }
+
+    #[test]
+    fn a_story_turned_off_in_the_settings_stops_being_told_and_is_dropped() {
+        let mut app = app();
+        app.show_story(Some(commits_story()));
+        app.telling = Telling::Waiting;
+        app.cover = Some(Instant::now());
+        assert!(app.story.is_some());
+        let before = app.opts;
+        app.opts.story = false;
+        app.settings_changed(before);
+        assert!(app.story.is_none() && app.told.is_none());
+        assert_ne!(app.telling, Telling::Waiting);
+        assert!(app.cover.is_none());
+        // The list is the files alone again.
+        let listed = screen(&mut app).join("\n");
+        assert!(listed.contains("README.md"), "{listed}");
+
+        // A chapter open as a page, with pages turned off, goes back to the
+        // whole diff.
+        app.page = Some(1);
+        let before = app.opts;
+        app.opts.pages = false;
+        app.settings_changed(before);
+        assert_eq!(app.page, None);
+
+        // The file list follows its width's setting at once.
+        let before = app.opts;
+        app.opts.list_wide = !before.list_wide;
+        app.list_width = 0;
+        app.settings_changed(before);
+        assert_eq!(app.list_width, app.fit_width());
     }
 
     /// A change running to the working tree, its commits' part changing
@@ -6034,6 +6678,7 @@ mod tests {
             "esc" => vec![KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)],
             "↵" => vec![KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)],
             "⇧↵" => vec![KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT)],
+            "S-F10" => vec![KeyEvent::new(KeyCode::F(10), KeyModifiers::SHIFT)],
             t if t.starts_with('^') => t[1..]
                 .chars()
                 .map(|c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL))

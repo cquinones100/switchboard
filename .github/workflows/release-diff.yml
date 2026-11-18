@@ -23,6 +23,11 @@
 # which reads the version and looks for its release; with the release there,
 # nothing else runs.
 #
+# The binaries are built with SWITCHBOARD_RELEASE set, as Switchboard's are,
+# which lets `switchboard-diff` look for a newer release by itself and
+# `switchboard-diff update` replace it (crates/diff/src/update.rs); a binary
+# built from a clone does neither unasked.
+#
 # Signing, the tag and the runs are as release.yml's, for its reasons: the
 # signature is OpenSSH's (`ssh-keygen -Y sign`, namespace
 # switchboard-release), made in the publish job with the private key in the
@@ -150,6 +155,7 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
       TARGET: ${{ matrix.target }}
+      SWITCHBOARD_RELEASE: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:

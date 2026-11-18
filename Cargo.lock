@@ -823,6 +823,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1f9e3d69d39e4862ffed03ed071a76f9a13ba1d9109d355b0f0aa6b15e393c4"
 dependencies = [
  "futures-core",
+ "futures-sink",
 ]
 
 [[package]]
@@ -856,8 +857,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d50a92467f8ba5dd6e3ee5d4bd04d73ab2e4e1c44474a0674821dfce14b79bc"
 dependencies = [
  "futures-core",
+ "futures-io",
  "futures-sink",
  "futures-task",
+ "memchr",
  "pin-project-lite",
  "slab",
 ]
@@ -2289,7 +2292,9 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
+ "futures-util",
  "h2",
  "http",
  "http-body",
@@ -2932,6 +2937,7 @@ version = "0.1.0-dev"
 dependencies = [
  "anyhow",
  "crossterm",
+ "flate2",
  "libc",
  "portable-pty",
  "ratatui",
@@ -2940,9 +2946,11 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "similar",
+ "ssh-key",
  "switchboard-plugin-api",
  "switchboard-ui",
  "syntect",
+ "tar",
  "two-face",
  "unicode-segmentation",
  "unicode-width",
@@ -2978,9 +2986,16 @@ name = "switchboard-plugin-api"
 version = "0.9.1"
 dependencies = [
  "anyhow",
+ "flate2",
+ "jiff",
  "libc",
+ "reqwest",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
+ "ssh-key",
+ "tar",
+ "url",
 ]
 
 [[package]]

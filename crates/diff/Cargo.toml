@@ -21,7 +21,7 @@ path = "src/lib.rs"
 # with: never `switchboard`, so the compiler holds the boundary. Pure-Rust
 # crates only, as the workspace's root says.
 [dependencies]
-switchboard-plugin-api = { path = "../plugin-api" }
+switchboard-plugin-api = { path = "../plugin-api", features = ["release"] }
 switchboard-ui = { path = "../ui" }
 anyhow = "1"
 libc = "0.2"
@@ -40,6 +40,17 @@ similar = "3.2.1"
 # The cache keys of a story and an order: SHA-256 of the diff.
 sha2 = "0.11"
 
+# Alone, its look for a newer release and `switchboard-diff update` reach
+# GitHub over HTTPS, whose TLS is the only C the build compiles: the
+# workspace loads the diff without it, having its own client and update.
+[features]
+default = ["net"]
+net = ["switchboard-plugin-api/net"]
+
 [dev-dependencies]
+# A stand-in release signed for the test of `update`.
+ssh-key = { version = "0.6", default-features = false, features = ["ed25519", "alloc"] }
+flate2 = "1"
+tar = { version = "0.4", default-features = false }
 # The test of the binary alone runs it in a terminal of its own.
 portable-pty = "0.9"
