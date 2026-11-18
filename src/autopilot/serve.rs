@@ -2516,7 +2516,9 @@ impl Server {
             Ok(mode) => self.autopilot.mode = mode,
             Err(e) => eprintln!("autopilot: couldn't keep the tab that landed: {e}"),
         }
-        if let Some((issue, hash)) = issue.filter(|_| fresh) {
+        // Written only while autopilot may still reach GitHub for issues.
+        let writes = self.autopilot.mode.issues_on();
+        if let Some((issue, hash)) = issue.filter(|_| fresh && writes) {
             let short: String = hash.chars().take(7).collect();
             let comment = super::issues::landed_comment(&short);
             let question = format!("Comment on {issue} that it landed in {short}, and close it?");

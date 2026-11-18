@@ -1616,10 +1616,9 @@ pub(crate) fn failed_in_autopilot(why: &str) {
 /// push after your yes (`--asked`) at its PreToolUse hook while it is off
 /// (src/agent/hands_free.rs's `ask_push`).
 fn push_rule(path: &Path, root: &Path, start: &str, target: Option<&str>) -> Option<String> {
-    if !crate::settings::is_on("autopilot_push_rule") {
+    if !crate::settings::is_on("autopilot_push_rule") || !in_autopilot_tab() {
         return None;
     }
-    crate::mux::socket::tab_option(crate::autopilot::OPENED)?;
     // The default branch on origin, which the item's branch starts from; a
     // target, the remote branch it tracks. With no remote the landing moves
     // a local branch, which needs no rule.
