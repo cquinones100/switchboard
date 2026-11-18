@@ -24,8 +24,8 @@ use std::process::ExitCode;
 use crate::autopilot::issues::{self, Issue};
 use crate::autopilot::mode::Mode;
 use crate::cmd::worktree_from_note::{
-    THEN, after_claim, claim, duplicates_first, hand_over, in_hands_free_tab, make_worktree,
-    onto_words, refused_in_autopilot, slug_of, target_of,
+    after_claim, claim, duplicates_first, hand_over, in_hands_free_tab, make_worktree, onto_words,
+    refused_in_autopilot, slug_of, target_of,
 };
 use crate::integrations::github;
 use crate::paths;
@@ -190,6 +190,12 @@ pub fn prompt_of(
     )
 }
 
+/// What the note's `THEN` says for a plan note, said for an issue, whose
+/// body is its plan and stays as its author wrote it.
+const ISSUE_THEN: &str = "Where the issue gets a detail wrong (a wrong type, the wrong file, a function that turns out to be unused), \
+     build what the code actually needs rather than stopping to ask, and say in your reply what the issue got wrong, never editing the issue. \
+     Stop and wait for my answer only for a change of scope: doing it another way, widening the work to another file, deleting a caller, changing an API. ";
+
 /// What Claude checks before building on an issue: one already done on the
 /// branch it lands on, or no longer applying, ends with
 /// `autopilot-duplicate` rather than a landing, so autopilot leaves the issue
@@ -203,7 +209,7 @@ fn check_issue(in_autopilot: bool) -> String {
     };
     format!(
         "Before building, compare the issue with the code as it is now: is it still needed, already done, or worth doing another way? \
-         If it is already done on the branch it lands on, or no longer applies, stop without changing anything: {mark}tell me so with the evidence. {THEN}"
+         If it is already done on the branch it lands on, or no longer applies, stop without changing anything: {mark}tell me so with the evidence. {ISSUE_THEN}"
     )
 }
 
