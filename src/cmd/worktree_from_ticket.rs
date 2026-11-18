@@ -212,19 +212,18 @@ struct Start {
 /// fetch of the default branch that fails is tried twice more
 /// (`worktree::FETCH_RETRIES_S`), then the branch starts from origin's
 /// default branch as last fetched, since a failed fetch is most often a
-/// moment's network, or from the ticket's branch on origin as last fetched
-/// when the clone has it and its own fetch failed rather than found none
-/// (`worktree::Fetched`), so an outage never hides work already started,
-/// and only when its commits are all yours (or `--trusted`), checked before
-/// it is checked out;
-/// with neither fetched before, it stops.
-fn ticket_start(root: &Path, branch: &str, trusted: bool) -> Result<Start, String> {
+/// moment's network; with none fetched before, it stops. It stops too when
+/// the ticket's own fetch failed rather than found no branch
+/// (`worktree::Fetched`) and the clone has a copy of that branch, so an
+/// outage never hides work already started, nor checks out commits whose
+/// authors couldn't be checked against origin.
+fn ticket_start(root: &Path, branch: &str) -> Result<Start, String> {
     const SOURCE: &str = "wt: fetch the base";
     let has_origin = worktree::remotes(root).iter().any(|r| r == "origin");
-    let tracking = |offline| Start {
+    let tracking = || Start {
         commit: format!("refs/remotes/origin/{branch}"),
         tracks: true,
-        offline,
+        offline: None,
     };
     let mut ticket = if has_origin {
         worktree::fetch_branch_answer(root, "origin", branch, SOURCE)
@@ -232,7 +231,7 @@ fn ticket_start(root: &Path, branch: &str, trusted: bool) -> Result<Start, Strin
         Fetched::NoSuchBranch
     };
     if ticket == Fetched::Yes {
-        return Ok(tracking(None));
+        return Ok(tracking());
     }
     let name = worktree::origin_head(root).unwrap_or_else(|| "main".into());
     let fetched = worktree::with_retries(
@@ -241,32 +240,22 @@ fn ticket_start(root: &Path, branch: &str, trusted: bool) -> Result<Start, Strin
         || worktree::default_start(root, SOURCE),
     );
     // The ticket's fetch failed rather than finding no branch: ask again
-    // once origin answers, and else start from its copy here, so an outage
-    // never hides work already started.
+    // once origin answers.
     if ticket == Fetched::Failed && fetched.is_ok() {
         ticket = worktree::fetch_branch_answer(root, "origin", branch, SOURCE);
         if ticket == Fetched::Yes {
-            return Ok(tracking(None));
+            return Ok(tracking());
         }
     }
+    // Origin never answered for it, and the clone has a copy: the ticket was
+    // started, and what was pushed since, and by whom, can't be told.
     let cached = format!("refs/remotes/origin/{branch}");
     if ticket == Fetched::Failed
         && worktree::git_ok(root, &["show-ref", "--verify", "--quiet", &cached])
     {
-        // Checked before anything is checked out, since a checkout can run
-        // the branch's hooks; online, origin's tip is what wt checks.
-        if !trusted {
-            let others = crate::trust::others_on(root, &cached, None)?;
-            if !others.is_empty() {
-                return Err(format!(
-                    "couldn't reach origin, and the ticket's branch as last fetched has commits by {}: run wt again once origin is back, or with --trusted",
-                    others.join(", ")
-                ));
-            }
-        }
-        let words = format!("origin/{branch} as last fetched");
-        eprintln!("Starting from {words}: couldn't reach origin");
-        return Ok(tracking(Some(words)));
+        return Err(format!(
+            "couldn't reach origin for {branch}, which the ticket was started on: run wt again once origin is back"
+        ));
     }
     let (commit, offline) = match fetched {
         Ok(commit) => (commit, None),
@@ -357,7 +346,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
     // reused as it is, so only a new branch needs a start point.
     let is_new = !path.exists() && !worktree::branch_exists(&root, &branch);
     let start = if is_new {
-        match ticket_start(&root, &branch, trusted) {
+        match ticket_start(&root, &branch) {
             Ok(start) => Some(start),
             Err(e) => return worktree::fail(&e),
         }
@@ -378,12 +367,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
     // A teammate's start on the ticket is their code: Claude loads its
     // CLAUDE.md, settings and hooks only once you say so (src/trust.rs).
     // Against the default branch as it is now; offline, as last fetched.
-    // Started offline, the base was just tried three times and failed.
-    if !trusted
-        && start
-            .as_ref()
-            .is_none_or(|s| s.tracks && s.offline.is_none())
-    {
+    if !trusted && start.as_ref().is_none_or(|s| s.tracks) {
         let _ = worktree::default_start(&root, "wt: fetch the base");
     }
     if !trusted && let Err(why) = crate::trust::branch_yours_or_listed(&crate::paths::home(), &path)
@@ -394,23 +378,13 @@ pub fn main(args: Vec<String>) -> ExitCode {
         return worktree::fail(&e.to_string());
     }
     let mut prompt = prompt_for(&issue, &extra);
-    if let Some(start) = &start
-        && let Some(words) = &start.offline
-    {
-        // A started ticket's commits are published: catch up with them
-        // rather than rewrite them.
-        let catch_up = if start.tracks {
-            format!(
-                "bring it up to date with origin/{branch}, asking me first when that brings in commits someone else wrote"
-            )
-        } else {
-            // Offline, wt couldn't ask whether someone pushed the ticket's
-            // branch since the clone last fetched; whose code it holds is the
-            // trust check's to say, so Claude asks rather than takes it in.
-            format!(
-                "if origin has a branch named {branch}, the ticket was started elsewhere: ask me before building on it; otherwise rebase onto origin's default branch"
-            )
-        };
+    if let Some(words) = start.as_ref().and_then(|s| s.offline.as_ref()) {
+        // Offline, wt couldn't ask whether someone pushed the ticket's
+        // branch since the clone last fetched; whose code it holds is the
+        // trust check's to say, so Claude asks rather than takes it in.
+        let catch_up = format!(
+            "if origin has a branch named {branch}, the ticket was started elsewhere: ask me before building on it; otherwise rebase onto origin's default branch"
+        );
         prompt.push_str(&format!(
             " This branch starts from {words}, since origin couldn't be reached: before your first commit, fetch origin and {catch_up}."
         ));

@@ -1129,14 +1129,13 @@ fn started_answer(body: &Value) -> Value {
         3 => "eng-3-local",
         5 => "eng-5-offline",
         6 => "eng-6-cached",
-        8 => "eng-8-theirs",
         _ => "eng-4-offline",
     };
     json!({ "data": { "issues": { "nodes": [{ "identifier": format!("ENG-{number}"), "title": "Work", "branchName": branch, "state": { "name": "Todo", "type": "unstarted" } }] } } })
 }
 
 #[test]
-fn a_tickets_branch_starts_from_origins_fetched_main_or_its_branch_on_origin_and_offline_from_main_as_last_fetched_or_with_none_stops()
+fn a_tickets_branch_starts_from_origins_fetched_main_or_its_branch_on_origin_and_offline_from_main_as_last_fetched_unless_it_was_started()
  {
     let mut w = World::new("wt-origin");
     w.set("SWITCHBOARD_FETCH_RETRY_MS", "0");
@@ -1159,19 +1158,6 @@ fn a_tickets_branch_starts_from_origins_fetched_main_or_its_branch_on_origin_and
     w.git(&other, &["checkout", "-q", "-b", "eng-6-cached"]);
     w.git(&other, &["commit", "-q", "--allow-empty", "-m", "cached"]);
     w.git(&other, &["push", "-q", "origin", "eng-6-cached"]);
-    let cached = w.git(&other, &["rev-parse", "HEAD"]);
-    w.git(&other, &["checkout", "-q", "-b", "eng-8-theirs", "main"]);
-    commit_as_them(&w, &other);
-    w.git(&other, &["push", "-q", "origin", "eng-8-theirs"]);
-    w.git(
-        &clone,
-        &[
-            "fetch",
-            "-q",
-            "origin",
-            "+refs/heads/eng-8-theirs:refs/remotes/origin/eng-8-theirs",
-        ],
-    );
     w.git(
         &clone,
         &[
@@ -1269,51 +1255,17 @@ fn a_tickets_branch_starts_from_origins_fetched_main_or_its_branch_on_origin_and
         "{written}"
     );
 
-    let cd = w.path("cd-cached");
-    let offline_started = w.run(
-        &clone,
-        &[
-            "worktree-from-ticket",
-            "--no-claude",
-            "--cd-file",
-            cd.to_str().unwrap(),
-            "ENG-6",
-        ],
-    );
-    assert_eq!(
-        offline_started.status.code(),
-        Some(0),
+    let started_here = w.run(&clone, &["worktree-from-ticket", "--no-claude", "ENG-6"]);
+    assert_ne!(started_here.status.code(), Some(0));
+    assert!(
+        stderr(&started_here)
+            .contains("which the ticket was started on: run wt again once origin is back"),
         "{}",
-        stderr(&offline_started)
-    );
-    let worktree = PathBuf::from(read(&cd).lines().next().unwrap());
-    assert_eq!(
-        w.git(&worktree, &["rev-parse", "HEAD"]),
-        cached,
-        "offline, a ticket branch origin had is started from, not hidden"
-    );
-    assert_eq!(
-        w.git(&worktree, &["rev-parse", "--abbrev-ref", "@{upstream}"]),
-        "origin/eng-6-cached"
+        stderr(&started_here)
     );
     assert!(
-        read(&cd).contains(
-            "fetch origin and bring it up to date with origin/eng-6-cached, asking me first"
-        ),
-        "{}",
-        read(&cd)
-    );
-
-    let theirs = w.run(&clone, &["worktree-from-ticket", "--no-claude", "ENG-8"]);
-    assert_ne!(theirs.status.code(), Some(0));
-    assert!(
-        stderr(&theirs).contains("as last fetched has commits by them@e"),
-        "{}",
-        stderr(&theirs)
-    );
-    assert!(
-        !clone.join(".claude/worktrees/eng-8-theirs").exists(),
-        "nothing checked out before the trust check"
+        !clone.join(".claude/worktrees/eng-6-cached").exists(),
+        "offline, a ticket branch origin had is neither hidden nor checked out"
     );
 
     w.git(&clone, &["update-ref", "-d", "refs/remotes/origin/main"]);
