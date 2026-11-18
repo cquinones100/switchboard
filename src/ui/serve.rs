@@ -1546,6 +1546,10 @@ fn program_line(args: &[String], own_exe: &str) -> String {
 /// lists by its command and file.
 fn app_of(args: &[String], own_exe: &str, short: bool) -> Option<String> {
     let (first, rest) = args.split_first()?;
+    // A rewritten title (`npm exec @team/switchboard-notes`) is never one.
+    if title_of(first).is_some() {
+        return None;
+    }
     // Switchboard's own command and its words: `switchboard`, or the
     // binary the server runs by its path, which starts the views under
     // whatever name it has.
@@ -1808,6 +1812,7 @@ mod tests {
             Some("uncommitted diff")
         );
         assert_eq!(brief(&["vim"]), None);
+        assert_eq!(brief(&["npm exec @team/switchboard-notes"]), None);
         let notes = "/x/switchboard-notes".to_string();
         assert_eq!(
             app_of(std::slice::from_ref(&notes), &notes, false).as_deref(),
