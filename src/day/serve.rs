@@ -202,12 +202,13 @@ const SLACK_MARK_AGAIN_MS: i64 = 60_000;
 const SHOWN_FOR_MS: i64 = 10_000;
 
 // How often the look runs: Settings' `slack_look_every`, never under a
-// minute while it reads through the connector rather than your token. Two
-// small files say whether it does.
+// minute while it can only read through the connector, with no token to
+// try first (a small file says whether there is a sign-in). A look whose
+// token read fails keeps its connector fallback a minute apart itself
+// (`slack_look::look_slack`).
 fn slack_look_every(dirs: &Dirs) -> i64 {
-    let by_token = settings::is_on("slack_token_reads")
-        && slack_user::signed_in(&dirs.state).is_some()
-        && slack_api::look_works(&dirs.state);
+    let by_token =
+        settings::is_on("slack_token_reads") && slack_user::signed_in(&dirs.state).is_some();
     slack_look::look_every(settings::cached("slack_look_every").as_ref(), by_token)
 }
 
@@ -271,7 +272,6 @@ impl Server {
         }
         if (!away || self.day.slack_asked.is_none())
             && settings::is_on("slack_background")
-            && self.day.slack_pace.may_look(ms)
             && due(
                 self.day.slack_asked,
                 self.day.slack_pace.every(slack_look_every(&dirs)),
@@ -569,9 +569,7 @@ impl Server {
             return;
         }
         if settings::is_on("slack_background") {
-            if self.day.slack_pace.may_look(ms) {
-                self.look_at_slack();
-            }
+            self.look_at_slack();
             return;
         }
         // The Slack routine, which keeps its own pause and setting; else a
@@ -1227,8 +1225,14 @@ impl Server {
         });
     }
 
+    // Every look starts here, so none goes out inside the wait Slack asked
+    // for (`slack_look::Pace`).
     fn look_at_slack(&mut self) {
-        self.day.slack_asked = Some(util::now_ms());
+        let now = util::now_ms();
+        if !self.day.slack_pace.may_look(now) {
+            return;
+        }
+        self.day.slack_asked = Some(now);
         if self.day.slack_busy || tokio::runtime::Handle::try_current().is_err() {
             return;
         }

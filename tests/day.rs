@@ -760,6 +760,14 @@ fn with_your_own_token_the_look_and_its_threads_read_slack_without_the_connector
         ),
         "{note}"
     );
+    // The token tried again half a minute later: its fallback waits for
+    // the connector's minute, then goes out once it has passed.
+    let connector = Fake::new(|_: &str, _: &Value| json!({ "results": "" }).to_string());
+    for (at, asked) in [(90_000, 0), (120_000, 1)] {
+        let token = util::block_on(slack_api::client(&dirs.state));
+        util::block_on(slack_look::look_slack(dirs, &connector, token, now + at)).unwrap();
+        assert_eq!(connector.tools().len(), asked, "at {at}");
+    }
     // SAFETY: as above.
     unsafe {
         std::env::remove_var("SWITCHBOARD_SLACK_API");

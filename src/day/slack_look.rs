@@ -411,6 +411,7 @@ pub async fn look_slack(
     let day = jiff::Timestamp::from_second(from - 86_400)
         .map(|t| t.strftime("%Y-%m-%d").to_string())
         .unwrap_or_default();
+    let tried_token = token.is_some();
     let by_token = match token {
         Some(Ok(client)) => {
             slack_api::worked(&dirs.state, slack_api::Part::Token);
@@ -463,6 +464,20 @@ pub async fn look_slack(
     let (me, messages) = match by_token {
         Some(read) => read,
         None => {
+            // A token read that failed falls back to the connector, at most
+            // once a minute however often the token is tried.
+            let last = state.get("connector_at").and_then(Value::as_i64);
+            if tried_token && last.is_some_and(|at| now - at < CONNECTOR_EVERY_MS) {
+                return Ok(
+                    "slack: the token's read failed, and the connector looked under a minute ago"
+                        .into(),
+                );
+            }
+            state.insert("connector_at".into(), json!(now));
+            util::write_atomic(
+                &state_file,
+                util::json_compact(&Value::Object(state.clone())),
+            )?;
             let me = me_by_connector(call, &mut state).await?;
             let messages = search_by_connector(call, &day, from).await?;
             (me, messages)

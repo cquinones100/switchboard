@@ -709,6 +709,17 @@ mod tests {
     }
 
     #[test]
+    fn how_long_a_rate_limit_asks_to_wait_is_read_back_from_its_words() {
+        assert_eq!(
+            retry_after_ms("Slack's rate limit is spent for now: Slack asked to wait 30 seconds"),
+            Some(30_000)
+        );
+        assert_eq!(retry_after_ms(RATE_LIMIT), Some(60_000));
+        assert_eq!(retry_after_ms("search.messages: invalid_cursor"), None);
+    }
+
+    #[cfg(feature = "net")]
+    #[test]
     fn a_rate_limit_says_how_long_slack_asked_to_wait() {
         use crate::fake_http::{Fake, Reply, Service};
         let fake = Fake::canned(
@@ -733,7 +744,5 @@ mod tests {
             "Slack's rate limit is spent for now: Slack asked to wait 30 seconds"
         );
         assert_eq!(retry_after_ms(&why), Some(30_000));
-        assert_eq!(retry_after_ms(RATE_LIMIT), Some(60_000));
-        assert_eq!(retry_after_ms("search.messages: invalid_cursor"), None);
     }
 }
