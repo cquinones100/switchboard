@@ -376,12 +376,13 @@ fn the_slack_look_searches_once_and_sorts_what_it_finds_as_slack_updates_does() 
         }
     });
 
-    util::block_on(slack_look::look_slack(dirs, &slack, now)).unwrap();
+    util::block_on(slack_look::look_slack(dirs, &slack, None, now)).unwrap();
     // The server reads the threads with something new after the look, in a
     // task of their own.
     util::block_on(slack_thread::read_wanted(
         &dirs.state,
         &slack,
+        None,
         &Default::default(),
         now,
     ))
@@ -438,10 +439,11 @@ fn the_slack_look_searches_once_and_sorts_what_it_finds_as_slack_updates_does() 
         "but counts as having read that thread"
     );
 
-    util::block_on(slack_look::look_slack(dirs, &slack, now + 60_000)).unwrap();
+    util::block_on(slack_look::look_slack(dirs, &slack, None, now + 60_000)).unwrap();
     util::block_on(slack_thread::read_wanted(
         &dirs.state,
         &slack,
+        None,
         &Default::default(),
         now + 60_000,
     ))
@@ -615,4 +617,152 @@ fn a_reply_from_the_slack_view_goes_as_typed_to_its_thread_and_marks_it_read() {
     let item = view(now).items.remove(0);
     assert_eq!(item.data["answered"], json!(true), "read once you replied");
     assert!(item.title.ends_with("· seen"), "{}", item.title);
+}
+
+#[cfg(feature = "net")]
+#[test]
+fn with_your_own_token_the_look_and_its_threads_read_slack_without_the_connector_and_fall_back_when_slack_refuses()
+ {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use switchboard::day::{slack_api, slack_user};
+    use switchboard::demo::services::{Fake as Service, Reply, Service as Kind};
+
+    let home = Home::new("slack-token");
+    let dirs = &home.dirs;
+    let now = util::now_ms();
+    let secs = now / 1000;
+    let thread_ts = format!("{}.000100", secs - 40);
+    let reply_ts = format!("{}.000100", secs - 20);
+    let refuse = Arc::new(AtomicBool::new(false));
+    let (refusing, parent, reply) = (refuse.clone(), thread_ts.clone(), reply_ts.clone());
+    let slack = Service::start(
+        Kind::Slack {
+            token: "xoxp-mine".into(),
+        },
+        move |request| {
+            if refusing.load(Ordering::SeqCst) {
+                return Some(Reply::json(
+                    200,
+                    json!({ "ok": false, "error": "token_revoked" }),
+                ));
+            }
+            let body = match request.path().trim_start_matches("/api/") {
+                "users.info" => {
+                    json!({ "ok": true, "user": { "name": "lin", "real_name": "Lin" } })
+                }
+                "search.messages" => {
+                    json!({ "ok": true, "messages": { "paging": { "pages": 1 }, "matches": [
+                    { "channel": { "id": "CDEV", "name": "dev" }, "user": "ULIN", "ts": reply,
+                      "text": "an answer",
+                      "permalink": format!("https://x.slack.com/archives/CDEV/p1?thread_ts={parent}&cid=CDEV") },
+                    { "channel": { "id": "CDEV", "name": "dev" }, "user": "U0MEMEME1", "ts": parent,
+                      "text": "my question",
+                      "permalink": "https://x.slack.com/archives/CDEV/p2" },
+                ] } })
+                }
+                "conversations.replies" => json!({ "ok": true, "messages": [
+                    { "user": "U0MEMEME1", "ts": parent, "text": "my question", "reply_count": 1 },
+                    { "user": "ULIN", "ts": reply, "text": "an answer" },
+                ] }),
+                _ => return None,
+            };
+            Some(Reply::json(200, body))
+        },
+    );
+    // SAFETY: the test holds ENV, through `home`.
+    unsafe {
+        std::env::set_var("SWITCHBOARD_SLACK_API", format!("{}/api", slack.url));
+        std::env::set_var(slack_user::TOKEN_ENV, "xoxp-mine");
+    }
+    slack_user::save_sign_in(
+        &dirs.state,
+        &slack_user::SignIn {
+            team: "T1".into(),
+            url: "https://x.slack.com/".into(),
+            user: "U0MEMEME1".into(),
+        },
+    )
+    .unwrap();
+    let connector = Fake::new(|_: &str, _: &Value| panic!("the connector isn't asked"));
+    let token = util::block_on(slack_api::client(&dirs.state));
+    assert!(matches!(token, Some(Ok(_))), "read through your own token");
+    util::block_on(slack_look::look_slack(dirs, &connector, token, now)).unwrap();
+    let token = util::block_on(slack_api::client(&dirs.state));
+    util::block_on(slack_thread::read_wanted(
+        &dirs.state,
+        &connector,
+        token,
+        &Default::default(),
+        now,
+    ))
+    .unwrap();
+    assert!(connector.tools().is_empty());
+    let saved: Value = serde_json::from_str(&read(dirs.state.join("slack.json"))).unwrap();
+    let item = &saved["items"][0];
+    assert_eq!(
+        (
+            item["kind"].as_str(),
+            item["from"].as_str(),
+            item["where"].as_str()
+        ),
+        (Some("thread"), Some("Lin"), Some("#dev")),
+        "a reply in a thread you started, as the connector's look sorts it"
+    );
+    let threads: Value =
+        serde_json::from_str(&read(dirs.state.join("slack-threads.json"))).unwrap();
+    assert_eq!(threads[format!("CDEV:{thread_ts}")]["replies"], 1);
+    let audit = std::fs::read_dir(dirs.state.join("requests"))
+        .unwrap()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "tsv"))
+        .map(|e| read(e.path()))
+        .collect::<String>();
+    let counted = |source: &str| {
+        audit
+            .lines()
+            .filter(|l| l.contains("\tSlack\tREST\t") && l.ends_with(source))
+            .count()
+    };
+    assert_eq!(
+        counted("Slack view: look"),
+        4,
+        "two searches (everyone's hour, your own day) and two names: {audit}"
+    );
+    assert_eq!(counted("Slack view: a thread"), 1, "{audit}");
+    assert_eq!(slack_api::note(&dirs.state, true, true, true), None);
+
+    // Slack refuses the token: the connector reads instead, and the view
+    // says why.
+    refuse.store(true, Ordering::SeqCst);
+    let connector = Fake::new(|tool: &str, _: &Value| {
+        assert!(tool.ends_with("slack_search_public_and_private"), "{tool}");
+        json!({ "results": "" }).to_string()
+    });
+    std::fs::write(
+        dirs.state.join("slack-look.json"),
+        json!({ "me": "U0MEMEME1" }).to_string(),
+    )
+    .unwrap();
+    let token = util::block_on(slack_api::client(&dirs.state));
+    util::block_on(slack_look::look_slack(
+        dirs,
+        &connector,
+        token,
+        now + 60_000,
+    ))
+    .unwrap();
+    assert_eq!(connector.tools(), ["slack_search_public_and_private"]);
+    let note = slack_api::note(&dirs.state, true, true, true).unwrap();
+    assert!(
+        note.contains(
+            "Slack refused your sign-in (token_revoked): run switchboard setup slack-user again"
+        ),
+        "{note}"
+    );
+    // SAFETY: as above.
+    unsafe {
+        std::env::remove_var("SWITCHBOARD_SLACK_API");
+        std::env::remove_var(slack_user::TOKEN_ENV);
+    }
 }

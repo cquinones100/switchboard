@@ -19,9 +19,10 @@
 //! nowhere, each as a `file://` link the link view reads. Linear: its issue
 //! search, with the key `integrations::linear` finds. GitHub: issues and
 //! pull requests in the repositories the tabs are in, through its search
-//! API rather than `gh search issues`. Slack: Slack's own search through
-//! Claude's connector (`connector::call_connector`), taking about 15
-//! seconds. GitHub and Linear refuse while their settings are off; Slack is
+//! API rather than `gh search issues`. Slack: Slack's own search, through
+//! your own token (`day::slack_api`) while one is stored and Settings'
+//! `slack_token_reads` is on, else through Claude's connector
+//! (`connector::call_connector`), taking about 15 seconds. GitHub and Linear refuse while their settings are off; Slack is
 //! asked only with search_slack on.
 //!
 //! Which sources are asked is M-F's chips' (src/views/search_box.rs): a
@@ -809,9 +810,46 @@ pub fn github_results(answer: &Value, query: &str) -> Vec<Found> {
         .collect()
 }
 
-/// Slack's search through Claude's connector. A connector that isn't
-/// connected is a row saying so, so it isn't taken for no results.
+/// Slack's search: through your own token (`day::slack_api`) while there
+/// is one, else, or when that fails, through Claude's connector. A
+/// connector that isn't connected is a row saying so, so it isn't taken for
+/// no results.
 pub async fn slack(query: &str) -> Result<Vec<Found>, String> {
+    use crate::day::{slack_api, slack_user};
+    let state = crate::paths::state_dir();
+    let token = slack_api::client(&state).await;
+    if let Some(client) = slack_api::usable(&state, token) {
+        let me = slack_user::signed_in(&state)
+            .map(|s| s.user)
+            .unwrap_or_default();
+        match slack_api::search(
+            &client,
+            query,
+            &me,
+            slack_api::How {
+                count: LIMIT as u32,
+                pages: 1,
+                back_to: None,
+                context: true,
+            },
+            "search: Slack",
+        )
+        .await
+        {
+            Ok(found) => {
+                slack_api::worked(&state, slack_api::Part::Search);
+                // A hit with no permalink can't be opened, as the
+                // connector's reader leaves one out.
+                return Ok(found
+                    .iter()
+                    .filter(|m| m.link.is_some())
+                    .take(LIMIT)
+                    .map(|m| slack_row(m, query))
+                    .collect());
+            }
+            Err(why) => slack_api::failed(&state, slack_api::Part::Search, &why),
+        }
+    }
     let input = json!({ "query": query, "limit": LIMIT });
     match connector::call_connector(
         "mcp__claude_ai_Slack__slack_search_public_and_private",
@@ -896,11 +934,6 @@ pub fn slack_results(text: &str, query: &str) -> Vec<Found> {
                 }
                 out
             };
-            let readable = |text: &str| {
-                let text = MENTION.replace_all(text, "@$1");
-                let text = NAMED_LINK.replace_all(&text, "$2");
-                BARE_LINK.replace_all(&text, "$1").into_owned()
-            };
             let body = readable(&part("Text:").join("\n"));
             let before: Vec<String> = part("Context before:")
                 .iter()
@@ -933,6 +966,52 @@ pub fn slack_results(text: &str, query: &str) -> Vec<Found> {
             })
         })
         .collect()
+}
+
+/// A message read through your own token as a row, as `slack_results`
+/// makes one of the connector's.
+pub fn slack_row(m: &crate::day::slack_look::Found, query: &str) -> Found {
+    let body = readable(&m.text);
+    let body_lines: Vec<&str> = body.lines().collect();
+    let matched = first_holding(&body_lines, &terms(query)).unwrap_or(0);
+    let mut lines: Vec<String> = m.before.iter().map(|l| readable(l)).collect();
+    let before = lines.len();
+    lines.extend(body_lines.iter().map(|l| l.to_string()));
+    lines.extend(m.after.iter().map(|l| readable(l)));
+    let (lines, at) = pane_search::around(&lines, before + matched);
+    let time =
+        m.ts.split('.')
+            .next()
+            .and_then(|s| s.parse::<i64>().ok())
+            .and_then(|s| jiff::Timestamp::from_second(s).ok())
+            .map(|t| {
+                t.to_zoned(jiff::tz::TimeZone::system())
+                    .strftime("%Y-%m-%d %H:%M")
+                    .to_string()
+            })
+            .unwrap_or_default();
+    let (who, place) = (&m.from, &m.r#where);
+    Found {
+        source: Source::Slack,
+        text: clean(&body).chars().take(140).collect(),
+        detail: clean(&format!("{who} in {place}, {time}")),
+        link: m.link.clone().unwrap_or_default(),
+        context: Context {
+            place: clean(&format!("{place} › {who}")),
+            about: format!("Slack message, {time}"),
+            line: 0,
+            lines,
+            at,
+        },
+    }
+}
+
+/// A Slack message's text as read: `<@U1|ada>` as `@ada`, a link as its
+/// words, a bare link as its address.
+fn readable(text: &str) -> String {
+    let text = MENTION.replace_all(text, "@$1");
+    let text = NAMED_LINK.replace_all(&text, "$2");
+    crate::day::slack_look::unescape(&BARE_LINK.replace_all(&text, "$1"))
 }
 
 /// Whether search everything asks Slack (the search_slack setting).
@@ -1230,6 +1309,44 @@ mod tests {
         );
         assert_eq!(rows[0].detail, "Jo in #deploys, 2026-11-05 10:30");
         assert_eq!(rows[0].link, "https://acme.slack.com/archives/C1/p1");
+    }
+
+    #[test]
+    fn a_message_read_through_your_token_is_a_row_as_the_connectors_are() {
+        let m = crate::day::slack_look::Found {
+            channel: "C1".into(),
+            r#where: "#deploys".into(),
+            from: "Jo".into(),
+            ts: "1793282136.000100".into(),
+            link: Some("https://acme.slack.com/archives/C1/p1".into()),
+            text: "The <@U2|sam> freeze is <https://x.com/a|on>\nsee <https://x.com/b>".into(),
+            ..Default::default()
+        };
+        let row = slack_row(&m, "see");
+        assert_eq!(row.text, "The @sam freeze is on see https://x.com/b");
+        assert!(
+            row.detail.starts_with("Jo in #deploys, 2026-"),
+            "{}",
+            row.detail
+        );
+        assert_eq!(row.link, "https://acme.slack.com/archives/C1/p1");
+        assert_eq!(row.context.lines[row.context.at], "see https://x.com/b");
+        assert_eq!(row.context.place, "#deploys › Jo");
+        let m = crate::day::slack_look::Found {
+            before: vec!["earlier".into()],
+            after: vec!["later <@U3|cy>".into()],
+            ..m
+        };
+        let row = slack_row(&m, "see");
+        assert_eq!(
+            row.context.lines.first().map(String::as_str),
+            Some("earlier")
+        );
+        assert_eq!(
+            row.context.lines.last().map(String::as_str),
+            Some("later @cy")
+        );
+        assert_eq!(row.context.lines[row.context.at], "see https://x.com/b");
     }
 
     #[test]

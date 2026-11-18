@@ -287,7 +287,7 @@
     "key": "search_slack",
     "category": "Integrations",
     "label": "Slack in search everything",
-    "description": "M-S-f searches Slack too, through Claude's connector, a headless Haiku making that one call, its results arriving a few seconds after the others",
+    "description": "M-S-f searches Slack too, through your own Slack sign-in while \"Read Slack through your own token\" is on, else through Claude's connector, a headless Haiku making that one call, its results arriving a few seconds after the others",
     "default": true
   },
   {
@@ -434,14 +434,14 @@
     "key": "slack_background",
     "category": "Mission control: Slack",
     "label": "Slack without a tab",
-    "description": "Mission control looks at Slack itself every minute, through cheap headless Haiku calls, instead of the Slack routine following the slack-updates skill",
+    "description": "Mission control looks at Slack itself every minute, through your own Slack sign-in while \"Read Slack through your own token\" is on, else through cheap headless Haiku calls, instead of the Slack routine following the slack-updates skill",
     "default": true
   },
   {
     "key": "slack_threads",
     "category": "Mission control: Slack",
     "label": "Slack threads and pictures",
-    "description": "With UX 2.0, the Slack view shows the chosen message's whole thread beside it, with its pictures and videos, which each look reads through Claude's Slack connector (a few more headless Haiku calls a look) and keeps on this computer; off, the view lists the messages alone and reads no threads or files",
+    "description": "With UX 2.0, the Slack view shows the chosen message's whole thread beside it, with its pictures and videos, which each look reads through your own Slack sign-in while \"Read Slack through your own token\" is on, else through Claude's Slack connector (a few more headless Haiku calls a look), and keeps on this computer; off, the view lists the messages alone and reads no threads or files",
     "default": true
   },
   {
@@ -481,6 +481,13 @@
     "label": "Mark what you open read in Slack",
     "description": "With a Slack sign-in of your own (switchboard setup slack-user), a message whose thread you open in the Slack view (Enter on it, or its thread shown for two seconds) is marked read in Slack up to it, unless you have read further there. Off, as it is by default since it changes what Slack shows you as unread, opening a message marks it seen only here",
     "default": false
+  },
+  {
+    "key": "slack_token_reads",
+    "category": "Mission control: Slack",
+    "label": "Read Slack through your own token",
+    "description": "With a Slack sign-in of your own (switchboard setup slack-user), the Slack view's look, its threads and pictures, and search everything's Slack results read Slack's Web API with your token rather than a Claude connector call each, falling back to the connector when Slack refuses the token or a scope is missing, and saying why under the view's header. Off, every read goes through the connector",
+    "default": true
   },
   {
     "key": "view_reopen",

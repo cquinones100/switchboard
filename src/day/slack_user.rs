@@ -42,9 +42,11 @@ pub const TOKEN_SERVICE: &str = "slack-user-token";
 pub const TOKEN_ENV: &str = "SWITCHBOARD_SLACK_USER_TOKEN";
 /// How the token is set up, as the view and the errors say it.
 pub const SETUP: &str = "switchboard setup slack-user";
-/// The user scopes the token needs: reading and completing reminders, and
-/// reading how far a conversation is read and marking it.
-pub const SCOPES: [&str; 10] = [
+/// The user scopes the token needs: reading and completing reminders,
+/// reading how far a conversation is read and marking it, and the Slack
+/// view's reads (`slack_api`): its messages, threads, people, search and
+/// pictures.
+pub const SCOPES: [&str; 17] = [
     "reminders:read",
     "reminders:write",
     "channels:read",
@@ -55,6 +57,13 @@ pub const SCOPES: [&str; 10] = [
     "im:write",
     "mpim:read",
     "mpim:write",
+    "channels:history",
+    "groups:history",
+    "im:history",
+    "mpim:history",
+    "search:read",
+    "users:read",
+    "files:read",
 ];
 /// How often the reminders are read while you're at the computer.
 pub const REMINDERS_MS: i64 = 2 * 60_000;
@@ -86,7 +95,7 @@ impl SignIn {
     }
 }
 
-fn sign_in_file(state: &Path) -> PathBuf {
+pub(super) fn sign_in_file(state: &Path) -> PathBuf {
     state.join("slack-user.json")
 }
 
@@ -96,12 +105,16 @@ pub fn signed_in(state: &Path) -> Option<SignIn> {
 }
 
 /// Keeps who the stored token is for. The reminders kept are let go, since
-/// they may be another account's: the next look reads this one's.
+/// they may be another account's: the next look reads this one's; and so is
+/// what was said of reads that failed through the token before
+/// (`slack_api`'s `slack-token.json`), which may be fixed now.
 pub fn save_sign_in(state: &Path, who: &SignIn) -> std::io::Result<()> {
     std::fs::create_dir_all(state)?;
-    match std::fs::remove_file(reminders_file(state)) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
-        _ => {}
+    for file in [reminders_file(state), state.join("slack-token.json")] {
+        match std::fs::remove_file(file) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
     }
     util::write_atomic(
         sign_in_file(state),
@@ -120,6 +133,7 @@ pub fn token() -> Option<String> {
 }
 
 /// Slack's Web API at `base` (ending in `/`), as you.
+#[derive(Clone)]
 pub struct Client {
     base: String,
     token: String,
@@ -130,8 +144,18 @@ impl Client {
         Client { base, token }
     }
 
+    /// The Web API's address, ending in `/`.
+    pub(super) fn base(&self) -> &str {
+        &self.base
+    }
+
+    /// The token, for a file's download, which isn't a Web API call.
+    pub(super) fn token(&self) -> &str {
+        &self.token
+    }
+
     /// With the stored token, read off the task that asks.
-    async fn stored() -> Result<Client, String> {
+    pub(super) async fn stored() -> Result<Client, String> {
         let token = tokio::task::spawn_blocking(token)
             .await
             .ok()
@@ -145,7 +169,7 @@ impl Client {
 /// (`reminders.list` takes no JSON), else a POST of them as JSON. Slack's
 /// refusal (`ok: false`) is an error in words that say what to do about it
 /// where something can be done.
-async fn api(
+pub(super) async fn api(
     client: &Client,
     get: bool,
     method: &str,

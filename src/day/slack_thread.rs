@@ -4,7 +4,8 @@
 //! reply count and no files, so both come from reading the thread
 //! (`slack_read_thread`), which names each message's files: the server's
 //! look reads the threads its messages are in whose newest message is newer
-//! than what it keeps (`wanted`, at most `PER_LOOK` a look), the
+//! than what it keeps (`wanted`, at most `PER_LOOK` a look), through your
+//! own token (`slack_api`) while there is one, the connector otherwise, the
 //! /slack-updates skill passes the threads it reads to its save, and
 //! choosing a message whose thread isn't kept reads it at once.
 //!
@@ -30,6 +31,8 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::slack_api::{self, Part};
+use super::slack_user::Client;
 use super::{Connector, slack};
 use crate::{paths, util};
 
@@ -173,15 +176,21 @@ pub fn save(state: &Path, read_now: BTreeMap<String, Thread>) -> std::io::Result
     // one at a time, so neither writes over what the other just kept.
     static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
-    if read_now.is_empty() && !file(state).exists() {
-        return Ok(());
-    }
     let keys: HashSet<String> = slack::read(state)
         .map(|s| s.items.iter().map(slack::Message::thread_key).collect())
         .unwrap_or_default();
     let mut all = read(state);
     all.extend(read_now);
     all.retain(|k, _| keys.contains(k));
+    let files: HashSet<String> = all
+        .values()
+        .flat_map(|t| t.messages.iter().flat_map(|m| m.files.iter()))
+        .map(|f| f.id.clone())
+        .collect();
+    slack_api::forget_gone(state, &keys, &files);
+    if all.is_empty() && !file(state).exists() {
+        return Ok(());
+    }
     util::write_atomic(file(state), util::json_compact(&all))
 }
 
@@ -376,20 +385,51 @@ pub async fn read_thread(
     whole.ok_or_else(|| anyhow::anyhow!("no messages in the thread"))
 }
 
+/// Reads one thread through your own token (`slack_api`) when there is
+/// one, else, or when that fails, through the connector, saying why, by
+/// the thread's key, until that thread reads through the token.
+async fn read_either(
+    state: &Path,
+    call: &impl Connector,
+    token: Option<&Client>,
+    (channel, ts): (&str, &str),
+    now: i64,
+) -> anyhow::Result<Thread> {
+    let key = format!("{channel}:{ts}");
+    if let Some(client) = token {
+        match slack_api::thread(client, channel, ts, now, "Slack view: a thread").await {
+            Ok(thread) => {
+                slack_api::one_worked(state, Part::Threads, &key);
+                return Ok(thread);
+            }
+            Err(why) => slack_api::one_failed(state, Part::Threads, &key, &why),
+        }
+    }
+    read_thread(call, channel, ts, now).await
+}
+
 /// Reads each of `threads` (channel, thread ts) and keeps those read, one
 /// that fails leaving the others to be read and kept; fails only when what
-/// was read couldn't be kept.
+/// was read couldn't be kept. `token` is `slack_api::client`'s answer.
 pub async fn read_threads(
     state: &Path,
     call: &impl Connector,
+    token: Option<Result<Client, String>>,
     threads: &[(String, String)],
     now: i64,
 ) -> anyhow::Result<Read> {
+    let mut token = slack_api::usable(state, token);
     let mut got = BTreeMap::new();
     let mut failed = Vec::new();
     for (channel, ts) in threads {
         let key = format!("{channel}:{ts}");
-        match read_thread(call, channel, ts, now).await {
+        let read = read_either(state, call, token.as_ref(), (channel, ts), now).await;
+        // Once Slack's rate limit is spent, the rest of the batch goes
+        // through the connector rather than asking again.
+        if token.is_some() && slack_api::one_says_rate_limit(state, &key) {
+            token = None;
+        }
+        match read {
             Ok(thread) => {
                 got.insert(key, thread);
             }
@@ -417,6 +457,7 @@ pub struct Read {
 pub async fn read_wanted(
     state: &Path,
     call: &impl Connector,
+    token: Option<Result<Client, String>>,
     waiting: &HashSet<String>,
     now: i64,
 ) -> anyhow::Result<Read> {
@@ -428,7 +469,7 @@ pub async fn read_wanted(
         .filter(|(c, t)| !waiting.contains(&format!("{c}:{t}")))
         .take(PER_LOOK)
         .collect();
-    read_threads(state, call, &wanted, now).await
+    read_threads(state, call, token, &wanted, now).await
 }
 
 /// What /slack-updates passes its save: `[{ channel, thread, text }]`,
@@ -521,13 +562,54 @@ pub fn bytes_from(answer: &str) -> Option<Vec<u8>> {
     util::unbase64(longest.as_str().as_bytes())
 }
 
-/// Reads a file through the connector and keeps it, a video's first frame
-/// beside it; the files kept past `FILES_KEEP` are let go first.
-pub async fn fetch(call: &impl Connector, f: &SlackFile) -> anyhow::Result<PathBuf> {
+/// Reads a file through your own token (`slack_api`, with `files:read`)
+/// when there is one, else, or when that fails, through the connector, and
+/// keeps it, a video's first frame beside it; the files kept past
+/// `FILES_KEEP` are let go first. `token` is `slack_api::client`'s answer.
+pub async fn fetch(
+    state: &Path,
+    call: &impl Connector,
+    token: Option<Result<Client, String>>,
+    f: &SlackFile,
+) -> anyhow::Result<PathBuf> {
     let Some(name) = named(f) else {
         anyhow::bail!("not a file ID: {}", f.id);
     };
     prune(SystemTime::now());
+    let mut bytes = None;
+    if let Some(client) = slack_api::usable(state, token) {
+        match slack_api::file(&client, f, LARGEST_FILE, "Slack view: a file").await {
+            // Only bytes of the kind it says count, so a sign-in page in
+            // their place is read through the connector instead.
+            Ok(got) if sniffs_as(&got, f.kind().map_or("", |k| k.1)) => {
+                slack_api::one_worked(state, Part::Files, &f.id);
+                bytes = Some(got);
+            }
+            Ok(_) => slack_api::one_failed(
+                state,
+                Part::Files,
+                &f.id,
+                &format!("Slack didn't give {} as the file it is", f.name),
+            ),
+            Err(why) => slack_api::one_failed(state, Part::Files, &f.id, &why),
+        }
+    }
+    let by_connector = bytes.is_none();
+    let bytes = match bytes {
+        Some(bytes) => bytes,
+        None => fetch_by_connector(call, f).await?,
+    };
+    let kept = keep(f, &name, bytes)?;
+    // The picture is there either way: only a scope to add is still worth
+    // saying.
+    if by_connector && !slack_api::one_needs_scope(state, Part::Files, &f.id) {
+        slack_api::one_worked(state, Part::Files, &f.id);
+    }
+    Ok(kept)
+}
+
+/// A file's bytes through the connector.
+async fn fetch_by_connector(call: &impl Connector, f: &SlackFile) -> anyhow::Result<Vec<u8>> {
     let answer = call
         .call(
             &format!("{SLACK}slack_read_file"),
@@ -539,7 +621,12 @@ pub async fn fetch(call: &impl Connector, f: &SlackFile) -> anyhow::Result<PathB
     if answer.len() > LARGEST_FILE / 3 * 4 + 4096 {
         anyhow::bail!("{} is over 10 MB", f.name);
     }
-    let bytes = bytes_from(&answer).ok_or_else(|| anyhow::anyhow!("no data for {}", f.name))?;
+    bytes_from(&answer).ok_or_else(|| anyhow::anyhow!("no data for {}", f.name))
+}
+
+/// Keeps a file read, when its bytes are what it says, a video's first
+/// frame beside it.
+fn keep(f: &SlackFile, name: &str, bytes: Vec<u8>) -> anyhow::Result<PathBuf> {
     if bytes.len() > LARGEST_FILE {
         anyhow::bail!("{} is over 10 MB", f.name);
     }

@@ -1,7 +1,9 @@
 //! The Slack view's look, run by the server in the background in place of a
 //! Slack routine running /slack-updates: every `SLACK_LOOK_MS` while you're at
 //! the computer, and when you go to the view. Ported from
-//! lib/sidebar/slack-look.js. It reaches Slack through Claude's connector
+//! lib/sidebar/slack-look.js. It reaches Slack through your own token
+//! (`slack_api`) while one is stored and Settings' `slack_token_reads` is on,
+//! and otherwise, or when that fails, through Claude's connector
 //! (`crate::connector`), a headless Haiku allowed one tool at a time with no
 //! session kept, so a look costs a few cheap calls and nothing grows.
 //!
@@ -26,7 +28,8 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::{Value, json};
 
-use super::{Connector, Dirs, slack};
+use super::slack_user::{self, Client};
+use super::{Connector, Dirs, slack, slack_api};
 use crate::util;
 
 pub const SLACK_LOOK_MS: i64 = 60_000;
@@ -49,6 +52,10 @@ pub struct Found {
     pub thread: Option<String>,
     pub link: Option<String>,
     pub text: String,
+    /// The messages Slack gives before and after it, line by line, for
+    /// search everything's preview; only through your own token.
+    pub before: Vec<String>,
+    pub after: Vec<String>,
 }
 
 static HEADER: LazyLock<Regex> =
@@ -172,6 +179,7 @@ pub fn results_from(text: &str) -> Vec<Found> {
                 thread,
                 link,
                 text: body.trim().to_string(),
+                ..Default::default()
             }
         })
         .filter(|m| !m.channel.is_empty() && TS.is_match(&m.ts))
@@ -206,9 +214,17 @@ pub fn plain(text: &str) -> String {
     static MENTION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<@\w+\|([^>]+)>").unwrap());
     static LINKED: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"<(https?:[^|>]+)\|([^>]+)>").unwrap());
-    LINKED
-        .replace_all(&MENTION.replace_all(text, "@$1"), "$2")
-        .into_owned()
+    let named = MENTION.replace_all(text, "@$1");
+    let shown = LINKED.replace_all(&named, "$2");
+    unescape(&shown)
+}
+
+/// Slack's three escapes in a message's text (`&lt;`, `&gt;`, `&amp;`) as
+/// what they stand for, once its markup is read.
+pub fn unescape(text: &str) -> String {
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
 }
 
 /// Sorts what the search found, as the module's comment says: the items to
@@ -236,7 +252,10 @@ pub fn sort_look(
             }
             continue;
         }
-        let dm = DM_NAME.is_match(&m.r#where) || m.channel.starts_with(['D', 'G']);
+        // A channel is named `#name`; a legacy private channel's ID starts
+        // with G as a group DM's does.
+        let dm = DM_NAME.is_match(&m.r#where)
+            || (!m.r#where.starts_with('#') && m.channel.starts_with(['D', 'G']));
         let kind = if dm {
             "dm"
         } else if m.text.contains(&format!("<@{me}")) {
@@ -280,27 +299,16 @@ pub fn sort_look(
 }
 
 /// Looks at Slack once and saves what it found; gives a line for the log.
-pub async fn look_slack(dirs: &Dirs, call: &impl Connector, now: i64) -> anyhow::Result<String> {
+/// `token` is `slack_api::client`'s answer: with one, the search goes
+/// through your own token, and through the connector when that fails.
+pub async fn look_slack(
+    dirs: &Dirs,
+    call: &impl Connector,
+    token: Option<Result<Client, String>>,
+    now: i64,
+) -> anyhow::Result<String> {
     let state_file = dirs.state.join("slack-look.json");
     let mut state = util::read_json_object(&state_file);
-    let mut me = state.get("me").and_then(Value::as_str).map(str::to_string);
-    if me.is_none() {
-        static USER: LazyLock<Regex> =
-            LazyLock::new(|| Regex::new(r"User ID: (U[A-Z0-9]{6,})").unwrap());
-        let profile = call
-            .call(
-                &format!("{SLACK}slack_read_user_profile"),
-                json!({ "response_format": "detailed" }),
-                None,
-            )
-            .await?;
-        me = USER.captures(&profile).map(|c| c[1].to_string());
-        let Some(id) = &me else {
-            anyhow::bail!("couldn't tell your Slack member ID");
-        };
-        state.insert("me".into(), json!(id));
-    }
-    let me = me.expect("set above");
     // Where to look from: the last look less an overlap, and a day back for
     // your own messages until it keeps some.
     let (since, mine_since) = slack::since(&dirs.state, now);
@@ -323,6 +331,161 @@ pub async fn look_slack(dirs: &Dirs, call: &impl Connector, now: i64) -> anyhow:
     let day = jiff::Timestamp::from_second(from - 86_400)
         .map(|t| t.strftime("%Y-%m-%d").to_string())
         .unwrap_or_default();
+    let by_token = match token {
+        Some(Ok(client)) => {
+            slack_api::worked(&dirs.state, slack_api::Part::Token);
+            let me = slack_user::signed_in(&dirs.state)
+                .map(|s| s.user)
+                .filter(|u| slack::is_channel(u));
+            match me {
+                Some(me) => {
+                    let found = token_search(&client, &me, since, mine_since).await;
+                    match found {
+                        Ok(found) => {
+                            slack_api::worked(&dirs.state, slack_api::Part::Look);
+                            let after = from as f64;
+                            let at = |m: &Found| m.ts.parse::<f64>().unwrap_or(0.0);
+                            // Oldest first, so a thread you start is yours
+                            // before its replies are sorted.
+                            let mut found = found
+                                .into_iter()
+                                .filter(|m| at(m) >= after)
+                                .collect::<Vec<_>>();
+                            found.sort_by(|a, b| at(a).total_cmp(&at(b)));
+                            Some((me, found))
+                        }
+                        Err(why) => {
+                            slack_api::failed(&dirs.state, slack_api::Part::Look, &why);
+                            None
+                        }
+                    }
+                }
+                None => {
+                    slack_api::failed(
+                        &dirs.state,
+                        slack_api::Part::Look,
+                        &format!(
+                            "your sign-in doesn't say who you are: run {}",
+                            slack_user::SETUP
+                        ),
+                    );
+                    None
+                }
+            }
+        }
+        Some(Err(why)) => {
+            // The look's own, so another read getting the token can't clear it.
+            slack_api::failed(&dirs.state, slack_api::Part::Look, &why);
+            None
+        }
+        None => None,
+    };
+    let (me, messages) = match by_token {
+        Some(read) => read,
+        None => {
+            let me = me_by_connector(call, &mut state).await?;
+            let messages = search_by_connector(call, &day, from).await?;
+            (me, messages)
+        }
+    };
+    // Messages from before the last look were only searched for your own.
+    let wanted: Vec<Found> = messages
+        .into_iter()
+        .filter(|m| m.user == me || m.ts.parse::<f64>().unwrap_or(0.0) >= since as f64)
+        .collect();
+    let (items, replied) = sort_look(&wanted, &me, &mut mine, &channels);
+    let (n_items, n_replied) = (items.len(), replied.len());
+    slack::save(
+        &dirs.state,
+        &dirs.relay,
+        &json!({ "items": items, "replied": replied }),
+        now,
+    )?;
+    let skip = mine.len().saturating_sub(500);
+    state.insert("mine".into(), json!(mine[skip..]));
+    util::write_atomic(&state_file, util::json_compact(&Value::Object(state)))?;
+    Ok(format!(
+        "slack: looked, {n_items} new, {n_replied} of yours"
+    ))
+}
+
+/// The look's search through your own token, in two parts so a busy
+/// workspace's day can't crowd out the hour that matters: everyone's
+/// messages since `since`, and, while your own reach further back
+/// (`mine_since`, a day the first time), your own since then. Each is read
+/// until it reaches its start; together they are each message once.
+async fn token_search(
+    client: &Client,
+    me: &str,
+    since: i64,
+    mine_since: i64,
+) -> Result<Vec<Found>, String> {
+    let day_before = |at: i64| {
+        jiff::Timestamp::from_second(at - 86_400)
+            .map(|t| t.strftime("%Y-%m-%d").to_string())
+            .unwrap_or_default()
+    };
+    let search = |query: String, back_to: i64| async move {
+        slack_api::search(
+            client,
+            &query,
+            me,
+            slack_api::How {
+                count: slack_api::SEARCH_PAGE,
+                pages: MAX_PAGES,
+                back_to: Some(back_to as f64),
+                context: false,
+            },
+            "Slack view: look",
+        )
+        .await
+    };
+    let mut found = search(format!("after:{}", day_before(since)), since).await?;
+    if mine_since != 0 && mine_since < since {
+        let mine = search(
+            format!("from:<@{me}> after:{}", day_before(mine_since)),
+            mine_since,
+        )
+        .await?;
+        for m in mine {
+            if !found.iter().any(|f| f.channel == m.channel && f.ts == m.ts) {
+                found.push(m);
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// Your member ID, as the connector says it, kept in `slack-look.json`.
+async fn me_by_connector(
+    call: &impl Connector,
+    state: &mut serde_json::Map<String, Value>,
+) -> anyhow::Result<String> {
+    if let Some(me) = state.get("me").and_then(Value::as_str) {
+        return Ok(me.to_string());
+    }
+    static USER: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"User ID: (U[A-Z0-9]{6,})").unwrap());
+    let profile = call
+        .call(
+            &format!("{SLACK}slack_read_user_profile"),
+            json!({ "response_format": "detailed" }),
+            None,
+        )
+        .await?;
+    let Some(id) = USER.captures(&profile).map(|c| c[1].to_string()) else {
+        anyhow::bail!("couldn't tell your Slack member ID");
+    };
+    state.insert("me".into(), json!(id));
+    Ok(id)
+}
+
+/// Every message since `from` (seconds), through the connector's search.
+async fn search_by_connector(
+    call: &impl Connector,
+    day: &str,
+    from: i64,
+) -> anyhow::Result<Vec<Found>> {
     let mut messages = Vec::new();
     let mut cursor: Option<String> = None;
     for _ in 0..MAX_PAGES {
@@ -353,25 +516,7 @@ pub async fn look_slack(dirs: &Dirs, call: &impl Connector, now: i64) -> anyhow:
             None => break,
         }
     }
-    // Messages from before the last look were only searched for your own.
-    let wanted: Vec<Found> = messages
-        .into_iter()
-        .filter(|m| m.user == me || m.ts.parse::<f64>().unwrap_or(0.0) >= since as f64)
-        .collect();
-    let (items, replied) = sort_look(&wanted, &me, &mut mine, &channels);
-    let (n_items, n_replied) = (items.len(), replied.len());
-    slack::save(
-        &dirs.state,
-        &dirs.relay,
-        &json!({ "items": items, "replied": replied }),
-        now,
-    )?;
-    let skip = mine.len().saturating_sub(500);
-    state.insert("mine".into(), json!(mine[skip..]));
-    util::write_atomic(&state_file, util::json_compact(&Value::Object(state)))?;
-    Ok(format!(
-        "slack: looked, {n_items} new, {n_replied} of yours"
-    ))
+    Ok(messages)
 }
 
 #[cfg(test)]
@@ -427,6 +572,26 @@ mod tests {
             ("Eve", "hello")
         );
         assert!(!found.iter().any(|m| m.channel == "CATTACK"));
+    }
+
+    #[test]
+    fn a_legacy_private_channel_is_no_dm() {
+        let m = Found {
+            channel: "GOLD".into(),
+            r#where: "#old-private".into(),
+            user: "U2".into(),
+            ts: "1.0".into(),
+            text: "chatter".into(),
+            ..Default::default()
+        };
+        let (items, _) = sort_look(std::slice::from_ref(&m), "U1", &mut Vec::new(), &[]);
+        assert!(items.is_empty(), "{items:?}");
+        let dm = Found {
+            r#where: "Group DM".into(),
+            ..m
+        };
+        let (items, _) = sort_look(&[dm], "U1", &mut Vec::new(), &[]);
+        assert_eq!(items[0]["kind"], "dm");
     }
 
     #[test]

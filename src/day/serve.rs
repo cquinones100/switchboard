@@ -31,8 +31,8 @@ use serde_json::Value;
 
 use super::calendar::{self, CalEvent, Feed, Fetched, SavedDay};
 use super::{
-    Claude, ClaudeAsk, Dirs, changes, log, new_notes, slack, slack_look, slack_thread, slack_user,
-    standup,
+    Claude, ClaudeAsk, Dirs, changes, log, new_notes, slack, slack_api, slack_look, slack_thread,
+    slack_user, standup,
 };
 use crate::connector::Connection;
 use crate::items::{Item, ViewData};
@@ -949,20 +949,17 @@ impl Server {
             let (channel, ts, tx) = (channel.to_string(), ts.to_string(), self.tx.clone());
             tokio::spawn(async move {
                 let state = Dirs::here().state;
-                let result = match slack_thread::read_threads(
-                    &state,
-                    &Claude,
-                    &[(channel, ts)],
-                    now,
-                )
-                .await
-                {
-                    Ok(read) => match read.failed.into_iter().next() {
-                        Some((_, why)) => Err(why),
-                        None => Ok(()),
-                    },
-                    Err(e) => Err(e.to_string()),
-                };
+                let token = slack_api::client(&state).await;
+                let result =
+                    match slack_thread::read_threads(&state, &Claude, token, &[(channel, ts)], now)
+                        .await
+                    {
+                        Ok(read) => match read.failed.into_iter().next() {
+                            Some((_, why)) => Err(why),
+                            None => Ok(()),
+                        },
+                        Err(e) => Err(e.to_string()),
+                    };
                 let _ = tx.send(Event::Day(DayEvent::SlackThread(key, result)));
             });
         }
@@ -1015,7 +1012,9 @@ impl Server {
                 self.day.slack_fetching.insert(f.id.clone(), now);
                 let (f, tx) = (f.clone(), self.tx.clone());
                 tokio::spawn(async move {
-                    let result = slack_thread::fetch(&Claude, &f)
+                    let state = Dirs::here().state;
+                    let token = slack_api::client(&state).await;
+                    let result = slack_thread::fetch(&state, &Claude, token, &f)
                         .await
                         .map(|_| ())
                         .map_err(|e| e.to_string());
@@ -1108,7 +1107,9 @@ impl Server {
             .map(|(key, _)| key.clone())
             .collect();
         tokio::spawn(async move {
-            let result = slack_thread::read_wanted(&Dirs::here().state, &Claude, &waiting, now)
+            let state = Dirs::here().state;
+            let token = slack_api::client(&state).await;
+            let result = slack_thread::read_wanted(&state, &Claude, token, &waiting, now)
                 .await
                 .map_err(|e| e.to_string());
             let _ = tx.send(Event::Day(DayEvent::SlackThreadsRead(result)));
@@ -1214,7 +1215,9 @@ impl Server {
         self.day.slack_busy = true;
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = slack_look::look_slack(&Dirs::here(), &Claude, util::now_ms())
+            let dirs = Dirs::here();
+            let token = slack_api::client(&dirs.state).await;
+            let result = slack_look::look_slack(&dirs, &Claude, token, util::now_ms())
                 .await
                 .map_err(|e| e.to_string());
             let _ = tx.send(Event::Day(DayEvent::SlackLooked(result)));
@@ -1337,11 +1340,27 @@ impl Server {
         let later = signed_in.as_ref().and_then(slack_user::SignIn::later);
         let needs_sign_in =
             signed_in.is_none() && (reminders_on || settings::is_on("slack_mark_read"));
+        // Why a read through your own token went to the connector instead.
+        let by_token = signed_in.is_some() && settings::is_on("slack_token_reads");
+        let token_note = by_token
+            .then(|| {
+                slack_api::note(
+                    &dirs.state,
+                    settings::is_on("slack_threads"),
+                    background,
+                    settings::is_on("search_slack"),
+                )
+            })
+            .flatten();
+        // The connector being down says nothing while the look reads
+        // through your token.
+        let reads_by_token = by_token && slack_api::look_works(&dirs.state);
+        let note = token_note.or_else(|| needs_sign_in.then(|| slack_user::NO_SIGN_IN.to_string()));
         let slack = slack::slack_view(&slack::Look {
             state: &dirs.state,
             background,
             looping: self.day.slack_kept,
-            down: background
+            down: (background && !reads_by_token)
                 .then(|| connector::connector_down("Slack"))
                 .flatten(),
             now: ms,
@@ -1349,7 +1368,7 @@ impl Server {
             yours: slack::Yours {
                 reminders: reminders.as_ref(),
                 later: later.as_deref(),
-                note: needs_sign_in.then_some(slack_user::NO_SIGN_IN),
+                note: note.as_deref(),
                 mark_failed: Some(&self.day.slack_mark_failed),
             },
         });

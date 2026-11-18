@@ -20,10 +20,10 @@ use crate::day::slack_user::{self, SCOPES, TOKEN_SERVICE};
 use crate::{paths, platform, util};
 
 /// What `switchboard setup --help` says of it.
-pub const ABOUT: &str = "store a Slack user token of your own, for the Slack view's reminders and read marks (asks for the token; never part of the guided setup)";
+pub const ABOUT: &str = "store a Slack user token of your own, for the Slack view's reminders, read marks and reads (asks for the token; never part of the guided setup)";
 
 pub fn main() -> ExitCode {
-    println!("Your own Slack sign-in, for the Slack view's reminders and read marks.\n");
+    println!("Your own Slack sign-in, for the Slack view's reminders, read marks and reads.\n");
     println!("  1. Open https://api.slack.com/apps and choose an app of yours (the Slack");
     println!("     relay's works).");
     println!("  2. Under OAuth & Permissions, add these User Token Scopes:");
