@@ -324,9 +324,12 @@ impl Server {
     }
 
     /// Where a hands-free tab's decided lines go, from its options; none
-    /// for a tab with no item, whose Claude writes them.
+    /// for a tab with no item, or a GitHub issue's, whose Claude writes them.
     fn decided_place(&self, tab: TabId) -> Option<hands_free::Place> {
-        use crate::autopilot::{ITEM, NOTE};
+        use crate::autopilot::{ISSUE, ITEM, NOTE};
+        if self.tab_opt(tab, ISSUE).is_some() {
+            return None;
+        }
         Some(hands_free::Place {
             notes: crate::notes::store::notes_dir(),
             plan: self.tab_opt(tab, crate::notes::serve::PLAN_NOTE),

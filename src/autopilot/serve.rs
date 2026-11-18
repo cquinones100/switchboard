@@ -2530,59 +2530,37 @@ impl Server {
         };
         let named = issue.to_string();
         let close = landed.is_some();
-        let write = move |server: &mut Server| {
+        // Off the task, its failure written into what the mode says, which
+        // the next check shows in the notifications, whoever is attached by
+        // then.
+        let write = move |_: &mut Server| {
             let issue = named;
-            let Some(client) = server.latest_client() else {
-                // No client to answer in: the write runs on its own, and a
-                // failure is written into what the mode says, which the next
-                // check shows in the notifications.
-                if tokio::runtime::Handle::try_current().is_ok() {
-                    tokio::spawn(async move {
-                        if let Err(e) = super::issues::write_back(
-                            &repo,
-                            number,
-                            &comment,
-                            close,
-                            landed.as_deref(),
-                        )
-                        .await
-                        {
-                            eprintln!("autopilot: couldn't write on {repo}#{number}: {e}");
-                            let said = format!("Couldn't write on {issue}: {e}");
-                            let _ = tokio::task::spawn_blocking(move || {
-                                Mode::update(&paths::state_dir(), |m| {
-                                    m.said = if m.said.is_empty() {
-                                        said
-                                    } else {
-                                        format!("{}. {said}", m.said)
-                                    };
-                                })
-                            })
-                            .await;
-                        }
-                    });
-                }
+            if tokio::runtime::Handle::try_current().is_err() {
                 return;
-            };
-            server.off_task(
-                client,
-                move || {
-                    super::issues::wait_for(super::issues::write_back(
-                        &repo,
-                        number,
-                        &comment,
-                        close,
-                        landed.as_deref(),
-                    ))
-                    .map_err(|e| e.to_string())
-                },
-                move |server, _, done| {
-                    if let Err(e) = done {
-                        server.autopilot_say(&format!("Couldn't write on {issue}: {e}"));
+            }
+            tokio::spawn(async move {
+                let done =
+                    super::issues::write_back(&repo, number, &comment, close, landed.as_deref())
+                        .await;
+                let said = done
+                    .err()
+                    .map(|e| format!("Couldn't write on {issue}: {e}"));
+                let _ = tokio::task::spawn_blocking(move || {
+                    let state = paths::state_dir();
+                    super::issues::forget(&state);
+                    if let Some(said) = said {
+                        eprintln!("autopilot: {said}");
+                        let _ = Mode::update(&state, |m| {
+                            m.said = if m.said.is_empty() {
+                                said
+                            } else {
+                                format!("{}. {said}", m.said)
+                            };
+                        });
                     }
-                    super::issues::forget(&paths::state_dir());
-                },
-            );
+                })
+                .await;
+            });
         };
         if without_asking {
             write(self);

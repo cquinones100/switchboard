@@ -211,6 +211,7 @@ pub fn land_question() -> (String, Vec<String>) {
             "Asked after all: anything leak-check finds, an unclear conflict, a failure the branch didn't cause".into(),
             "Told after each landing, in the notifications and on Slack".into(),
             "Only for landings straight on a branch; tabs open now too".into(),
+            "With GitHub issues among its sources, a landed issue is commented on and closed without asking too".into(),
         ],
     )
 }
