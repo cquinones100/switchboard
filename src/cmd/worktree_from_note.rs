@@ -1667,7 +1667,7 @@ const DUPLICATES: &str = "Before starting, look for the same work started or don
 
 const CHECK_FIRST: &str = "Before building, compare the item and its plan with the code as it is now: is it still needed, already done, or worth doing another way? ";
 
-const THEN: &str = "Where the plan gets a detail wrong (a wrong type, the wrong file, a function that turns out to be unused), \
+pub(crate) const THEN: &str = "Where the plan gets a detail wrong (a wrong type, the wrong file, a function that turns out to be unused), \
      build what the code actually needs rather than stopping to ask, then correct the plan so it matches what you built. \
      Stop and wait for my answer only for a change of scope: doing it another way, widening the work to another file, deleting a caller, changing an API. ";
 

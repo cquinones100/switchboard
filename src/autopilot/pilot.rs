@@ -257,6 +257,15 @@ impl Job {
     /// The first item the queue gives, if any; `state` is the state
     /// directory, whose claims file says which items wtn started lately.
     pub fn first(&self, notes: &Path, state: &Path) -> Result<Option<Item>, String> {
+        // The note's items come first, so one ready there never waits on
+        // GitHub's answer.
+        if self.sources.note()
+            && self.sources.issues()
+            && let Ok((items, _)) = self.note_items(notes, state)
+            && let Some(item) = items.into_iter().find(|i| !self.retrying.contains(&i.text))
+        {
+            return Ok(Some(item));
+        }
         self.items(notes, state)
             .map(|items| items.into_iter().find(|i| !self.retrying.contains(&i.text)))
     }

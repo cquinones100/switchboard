@@ -24,7 +24,7 @@ use std::process::ExitCode;
 use crate::autopilot::issues::{self, Issue};
 use crate::autopilot::mode::Mode;
 use crate::cmd::worktree_from_note::{
-    after_claim, check_first, claim, duplicates_first, hand_over, in_hands_free_tab, make_worktree,
+    THEN, after_claim, claim, duplicates_first, hand_over, in_hands_free_tab, make_worktree,
     onto_words, refused_in_autopilot, slug_of, target_of,
 };
 use crate::integrations::github;
@@ -145,8 +145,20 @@ pub fn prompt_of(
         // Their own closing tag can't end the data early.
         title = worktree::one_line(&issue.title).replace("</issue>", "<\\/issue>"),
         body = issue.body.trim().replace("</issue>", "<\\/issue>"),
-        check = check_first(hands_free),
+        check = check_issue(),
         onto = onto_words(target),
+    )
+}
+
+/// What Claude checks before building on an issue: one already done on the
+/// branch it lands on, or no longer applying, ends with
+/// `autopilot-duplicate` rather than a landing, so autopilot leaves the issue
+/// out (a landing that pushes nothing would leave it to be taken again) and
+/// asks before telling GitHub.
+fn check_issue() -> String {
+    format!(
+        "Before building, compare the issue with the code as it is now: is it still needed, already done, or worth doing another way? \
+         If it is already done on the branch it lands on, or no longer applies, stop without changing anything: run `switchboard autopilot-duplicate '<the commit or code that already does it>'` and tell me so with the evidence. {THEN}"
     )
 }
 
