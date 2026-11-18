@@ -439,12 +439,12 @@ impl Mode {
         Ok(mode)
     }
 
-    /// Whether GitHub issues may be read now: the autopilot_github_issues
-    /// and github settings on. Off, issues alone take nothing, and with the
+    /// Whether GitHub issues may be read and written now: the autopilot,
+    /// autopilot_github_issues and github settings on. Off, issues alone take nothing, and with the
     /// note too, the note's items alone.
     pub fn issues_on(&self) -> bool {
         let on = crate::settings::is_on;
-        on("autopilot_github_issues") && on("github")
+        on("autopilot") && on("autopilot_github_issues") && on("github")
     }
 
     /// Whether it is set up to work a note.
