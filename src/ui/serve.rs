@@ -1605,7 +1605,12 @@ fn without_query(word: &str) -> String {
 /// for a word alone or a path, one with a space in a folder's name
 /// included (`./Build Tools/bin/worker`), whose first word holds a `/`.
 fn title_of(first: &str) -> Option<(&str, &str)> {
-    first.split_once(' ').filter(|(exe, _)| !exe.contains('/'))
+    // A path's title too when a link follows it, so the link's words are
+    // shown as a title's are, never as part of the program's name.
+    let has_link = |rest: &str| without_query(rest) != rest;
+    first
+        .split_once(' ')
+        .filter(|(exe, rest)| !exe.contains('/') || has_link(rest))
 }
 
 /// Whether a program is a shell, by its name (a login shell's has a `-`
@@ -1656,6 +1661,10 @@ mod tests {
         );
         link(
             &["worker https://a.dev/f?token=secret"],
+            "worker https://a.dev/…",
+        );
+        link(
+            &["/usr/bin/worker https://a.dev/f?token=secret"],
             "worker https://a.dev/…",
         );
         link(&["curl", "-4xhttp://u:pw@p.dev"], "curl -4xhttp://…");
