@@ -112,7 +112,7 @@ fn a_fixed_line_in_the_notes_reaches_the_prompt_with_its_rule() {
     let out = text(&run.stdout);
     assert!(out.contains(fixed), "{out}");
     assert!(
-        out.contains("A fixed finding's concern is settled while the failure no longer happens: do not raise it again unless you can show it happening in the code as it is now (the fix wrong, undone, or bypassed by another change), and then report how, naming the line."),
+        out.contains("A fixed finding's concern is settled while the failure no longer happens: do not raise it again unless you can show it happening in the change as it is now, in its code, a commit message or the PR description (the fix wrong, undone, or bypassed by another change), and then report how, naming where."),
         "{out}"
     );
     assert!(
