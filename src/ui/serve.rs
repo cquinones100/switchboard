@@ -1566,20 +1566,26 @@ fn app_of(args: &[String], own_exe: &str, short: bool) -> Option<String> {
 /// (`https://[^/]+/v?`), which doesn't parse as one, among them.
 fn without_query(word: &str) -> String {
     // The word, or what follows its `=` (`--url=…`, `http.proxy=…`).
+    // Only the scheme's few bytes are compared, never a copy of the word.
     let starts_as_link = |w: &str| {
-        let lower = w.to_ascii_lowercase();
-        lower.starts_with("http://") || lower.starts_with("https://")
+        ["http://", "https://"].iter().any(|scheme| {
+            w.get(..scheme.len())
+                .is_some_and(|p| p.eq_ignore_ascii_case(scheme))
+        })
     };
-    let start = if starts_as_link(word) {
-        0
-    } else {
-        // After whichever `=` a link follows, a nested one included
-        // (`--post-data=next=https://…`).
-        word.match_indices('=')
-            .map(|(at, _)| at + 1)
-            .find(|at| starts_as_link(&word[*at..]))
-            .unwrap_or(0)
-    };
+    // Where a link starts: the word itself, or after an `=` or an option's
+    // letters, wherever a word character doesn't lead into it
+    // (`--url=https://…`, `next=https://…`, `-xhttp://…`).
+    let start = word
+        .char_indices()
+        .find(|(at, _)| {
+            starts_as_link(&word[*at..])
+                && (*at == 0
+                    || word[..*at].ends_with('=')
+                    || word.starts_with('-')
+                        && !word[1..*at].contains(|c: char| !c.is_ascii_alphabetic() && c != '-'))
+        })
+        .map_or(0, |(at, _)| at);
     let link = &word[start..];
     // Written as a link (`http://`, `https://`, in any case), and with no
     // backslash before its query, a pattern's escape the parser would take
@@ -1667,6 +1673,10 @@ mod tests {
         assert_eq!(line(&["rg", "https://[^/]+/v?"]), "rg https://[^/]+/v?");
         assert_eq!(line(&["rg", "https://[a-z]?/v"]), "rg https://[a-z]?/v");
         assert_eq!(line(&["rg", "https:/a.dev/v1?"]), "rg https:/a.dev/v1?");
+        assert_eq!(
+            line(&["curl", "-xhttp://u:pw@p.dev"]),
+            "curl -xhttp://p.dev/…"
+        );
         assert_eq!(
             line(&["wget", "--post-data=next=https://a.dev/?sig=x"]),
             "wget --post-data=next=https://a.dev/…"
