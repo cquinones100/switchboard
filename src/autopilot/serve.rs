@@ -2963,7 +2963,10 @@ impl Server {
             }
         }
         self.dirty_tab(tab);
-        self.find_tab_plan(tab);
+        // An issue's plan is its body: no note's plan is looked for.
+        if super::issues::issue_of(&item).is_none() {
+            self.find_tab_plan(tab);
+        }
         self.autopilot
             .pilot
             .took(&mode.note_id, &item.text, util::now_ms());

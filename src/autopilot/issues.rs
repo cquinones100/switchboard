@@ -232,7 +232,7 @@ const QUERY: &str = "query($q: String!, $first: Int!, $after: String) {
       ... on Issue {
         number title body url
         author { login }
-        timelineItems(itemTypes: [LABELED_EVENT], last: 20) {
+        timelineItems(itemTypes: [LABELED_EVENT], last: 100) {
           nodes { ... on LabeledEvent { label { name } actor { login } } }
         }
       }
