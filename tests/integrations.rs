@@ -1016,6 +1016,7 @@ fn autopilot_takes_issues_opened_by_you_or_labeled_by_a_writer_and_writes_back()
         "Landed in abc1234",
         true,
         Some(("abc1234", 1_700_000_000)),
+        || true,
     ))
     .unwrap();
     let seen = fake.seen();

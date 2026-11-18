@@ -2579,6 +2579,10 @@ impl Server {
                     &comment,
                     close,
                     landed.as_ref().map(|(h, at)| (h.as_str(), *at)),
+                    || {
+                        let mode = Mode::read(&paths::state_dir());
+                        mode.sources.issues() && mode.issues_on()
+                    },
                 )
                 .await;
                 let said = done
@@ -3078,7 +3082,17 @@ impl Server {
         // A refusal not yet dismissed stays, what is said after it added, so
         // nothing said later hides why an item was skipped; empty, dismissed,
         // clears it too.
+        // A read of GitHub issues failing takes back that nothing was left,
+        // which it no longer knows.
+        let without_empty = |was: &str| {
+            if said.starts_with(ISSUES_UNREAD) {
+                super::pilot::unsay(was, "Nothing left to take")
+            } else {
+                was.to_string()
+            }
+        };
         let keep = |was: &str| {
+            let was = &without_empty(was);
             let kept = was.contains(REFUSED_SAID)
                 || was.contains(FAILED_SAID)
                 || was.contains(DUPLICATE_SAID);

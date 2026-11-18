@@ -478,6 +478,7 @@ pub async fn write_back(
     comment: &str,
     close: bool,
     landed: Option<(&str, i64)>,
+    still: impl Fn() -> bool,
 ) -> Result<()> {
     if let Some((hash, since)) = landed {
         if hash.is_empty() || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -527,7 +528,10 @@ pub async fn write_back(
         SOURCE,
     )
     .await?;
-    if now.get("state").and_then(Value::as_str) != Some("open") {
+    // Checked again just before each write, since asking GitHub takes a
+    // while: `still` false (the source turned off meanwhile) writes nothing
+    // more.
+    if now.get("state").and_then(Value::as_str) != Some("open") || !still() {
         return Ok(());
     }
     github::rest(
@@ -537,7 +541,7 @@ pub async fn write_back(
         SOURCE,
     )
     .await?;
-    if close {
+    if close && still() {
         github::rest(
             "PATCH",
             &format!("/repos/{repo}/issues/{number}"),
