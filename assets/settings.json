@@ -564,6 +564,13 @@
     "default": true
   },
   {
+    "key": "autopilot_github_issues",
+    "category": "Mission control: Autopilot",
+    "label": "Autopilot can take GitHub issues",
+    "description": "Lets autopilot's settings box offer GitHub issues as a source beside the note: the repository's open issues assigned to you and carrying its label, each opened by you or labeled by someone with write access, read in the background and worked after the note's items, with a comment on the issue when its tab lands or finds it a duplicate, and the issue closed on landing, each asked first unless its tabs land without asking. Nothing is read until you choose the source. Off, the box offers the note alone and autopilot reads no issues",
+    "default": true
+  },
+  {
     "key": "autopilot_landing_notices",
     "category": "Mission control: Autopilot",
     "label": "Notify when autopilot lands",

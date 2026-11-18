@@ -1764,6 +1764,34 @@ impl Server {
         Some(tab)
     }
 
+    /// A tab for one of the repository's GitHub issues, as `open_item_tab`
+    /// opens one for a note's item: named after the issue, cut short, its
+    /// whole first line (`<owner>/<repo>#<number>: <title>`) its full title,
+    /// running `wtn --issue <number>`, with `--target` as an item's.
+    pub fn open_issue_tab(
+        &mut self,
+        client: ClientId,
+        repo: &Path,
+        number: u64,
+        text: &str,
+        target: &str,
+        opened: Opened,
+    ) -> Option<TabId> {
+        let mut args = vec!["--issue".to_string(), number.to_string()];
+        if !target.is_empty() {
+            args.extend(["--target".to_string(), target.to_string()]);
+        }
+        let command = worktree::tab_running("worktree-from-note", "wtn", &args);
+        let tab = self.work_tab(client, repo, command, opened)?;
+        if let Some(t) = self.tabs.get_mut(&tab) {
+            t.opts
+                .insert("@tab_name".into(), crate::tabs::title::short_name(text));
+            t.opts.insert("@tab_title".into(), text.to_string());
+        }
+        self.dirty_tab(tab);
+        Some(tab)
+    }
+
     /// The palette's "Continue shaping Linear tickets": which tickets, the
     /// clipboard's when it holds only tickets, then which directory to shape
     /// them in, which must be in a repository so `shape` has code to read; a

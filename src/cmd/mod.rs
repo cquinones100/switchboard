@@ -53,6 +53,7 @@ pub mod work_recent;
 pub mod workspace;
 pub mod worktree_done;
 pub mod worktree_from_branch;
+pub mod worktree_from_issue;
 pub mod worktree_from_note;
 pub mod worktree_from_pr;
 pub mod worktree_from_ticket;

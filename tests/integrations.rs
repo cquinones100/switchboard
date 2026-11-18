@@ -20,6 +20,7 @@ use std::sync::{Mutex, MutexGuard};
 use common::http::{self, Reply, Service};
 use common::stand_in;
 use serde_json::{Value, json};
+use switchboard::autopilot::issues;
 use switchboard::integrations::{github, linear};
 use switchboard::net::{self, ErrorKind};
 use switchboard::{requests, settings, util};
@@ -941,4 +942,79 @@ fn an_attendee_s_photo_is_asked_of_linear_by_their_address() {
         None,
         "no one by that address"
     );
+}
+
+#[test]
+fn autopilot_takes_issues_opened_by_you_or_labeled_by_a_writer_and_writes_back() {
+    let env = Env::new("issues");
+    set("GH_TOKEN", "tok-9");
+    let fake = Fake::github(
+        "tok-9",
+        vec![
+            answer(
+                200,
+                json!({ "data": {
+                    "viewer": { "login": "me" },
+                    "search": { "nodes": [
+                        { "number": 1, "title": "Mine", "body": "Do it", "url": "u1",
+                          "author": { "login": "me" }, "timelineItems": { "nodes": [] } },
+                        { "number": 2, "title": "From a writer", "body": "", "url": "u2",
+                          "author": { "login": "outsider" }, "timelineItems": { "nodes": [
+                              { "label": { "name": "autopilot" }, "actor": { "login": "writer" } } ] } },
+                        { "number": 3, "title": "From outside", "body": "", "url": "u3",
+                          "author": { "login": "outsider" }, "timelineItems": { "nodes": [
+                              { "label": { "name": "autopilot" }, "actor": { "login": "outsider" } } ] } }
+                    ] }
+                } }),
+            ),
+            answer(200, json!({ "permission": "write" })),
+            answer(200, json!({ "permission": "read" })),
+            answer(201, json!({ "id": 7 })),
+            answer(200, json!({ "number": 2, "state": "closed" })),
+        ],
+    );
+    set("SWITCHBOARD_GITHUB_API", &fake.url);
+    set(
+        "SWITCHBOARD_GITHUB_GRAPHQL",
+        format!("{}/graphql", fake.url),
+    );
+    let repo = github::Repo {
+        owner: "acme".into(),
+        name: "widgets".into(),
+    };
+    let taken = util::block_on(issues::fetch(&repo, "autopilot")).unwrap();
+    let numbers: Vec<u64> = taken.iter().map(|i| i.number).collect();
+    assert_eq!(numbers, [1, 2]);
+    assert_eq!(taken[0].body, "Do it");
+    let seen = fake.seen();
+    assert_eq!(
+        seen[0].body["variables"]["q"],
+        "repo:acme/widgets is:issue is:open assignee:@me label:\"autopilot\" sort:created-asc"
+    );
+    assert_eq!(
+        seen[1].path,
+        "/repos/acme/widgets/collaborators/writer/permission"
+    );
+    assert_eq!(
+        seen[2].path,
+        "/repos/acme/widgets/collaborators/outsider/permission"
+    );
+
+    util::block_on(issues::write_back(&repo, 2, "Landed in abc1234", true)).unwrap();
+    let seen = fake.seen();
+    assert_eq!(seen[3].method, "POST");
+    assert_eq!(seen[3].path, "/repos/acme/widgets/issues/2/comments");
+    assert_eq!(seen[3].body["body"], "Landed in abc1234");
+    assert_eq!(seen[4].method, "PATCH");
+    assert_eq!(seen[4].path, "/repos/acme/widgets/issues/2");
+    assert_eq!(seen[4].body["state"], "closed");
+    assert_eq!(counted("GitHub", "GraphQL"), 1);
+    assert_eq!(counted("GitHub", "REST"), 4);
+
+    // GitHub turned off in Settings, none are read.
+    env.settings(json!({ "github": false }));
+    let err = util::block_on(issues::fetch(&repo, "autopilot")).unwrap_err();
+    assert_eq!(kind(&err), ErrorKind::Off);
+    assert_eq!(fake.seen().len(), 5);
+    env.settings(json!({}));
 }

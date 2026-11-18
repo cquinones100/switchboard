@@ -1,7 +1,8 @@
 //! The mode's state, what you chose, kept in `autopilot.json` in the state
 //! directory as lib/sidebar/autopilot.js kept it: `{ on, note, noteId, repo,
 //! slots, cap, paused, readyOnly, skipped, spendLimit, weeklyLimit,
-//! landWithoutAsking, handsFree, said, closed, landed, next }`.
+//! landWithoutAsking, handsFree, said, closed, landed, next, sources,
+//! issueLabel }`.
 //! `note` is the note's path within the notes directory and `noteId` its
 //! stable ID (crates/notes/src/id.rs), which the mode follows the note by when it
 //! has been renamed or moved, outside Notes too, writing its path back;
@@ -19,7 +20,10 @@
 //! note's ID, for the view's Landed, which lists them once their tabs are
 //! closed too; `next` the items put next in its queue, `[{ note, text }]`
 //! as `skipped`'s, the last put there first, taken before the rest of the
-//! settled ones until each lands (Notes' "Work on this item" box).
+//! settled ones until each lands (Notes' "Work on this item" box);
+//! `sources` where its work comes from, `"note"` (the note alone, as when
+//! it is missing), `"issues"` (the repository's GitHub issues, `issues.rs`)
+//! or `"both"`, and `issueLabel` the label an issue carries to be taken.
 //!
 //! The notes app writes the file too, when a note it works is renamed or
 //! moved (crates/notes/src/store.rs's `relink_mode`), so it is read again on every
@@ -83,6 +87,63 @@ pub struct Mode {
     pub closed: Vec<Closed>,
     /// Today's landings of its tabs, the last `LANDED_KEPT`, oldest first.
     pub landed: Vec<Landed>,
+    /// Where its work comes from.
+    pub sources: Sources,
+    /// The label an issue carries to be taken.
+    pub issue_label: String,
+}
+
+/// Where the mode's work comes from: the note's checklist, the
+/// repository's GitHub issues, or both, the note's items first.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Sources {
+    #[default]
+    Note,
+    Issues,
+    Both,
+}
+
+/// The label an issue carries for the mode to take it, by default.
+pub const ISSUE_LABEL: &str = "autopilot";
+
+impl Sources {
+    pub const ALL: [Sources; 3] = [Sources::Note, Sources::Issues, Sources::Both];
+
+    /// Its name in `autopilot.json`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Sources::Note => "note",
+            Sources::Issues => "issues",
+            Sources::Both => "both",
+        }
+    }
+
+    /// From its name; the note alone for anything else.
+    pub fn parse(name: &str) -> Sources {
+        Sources::ALL
+            .into_iter()
+            .find(|s| s.name() == name)
+            .unwrap_or_default()
+    }
+
+    /// As the settings box shows it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Sources::Note => "the note",
+            Sources::Issues => "GitHub issues",
+            Sources::Both => "the note, then GitHub issues",
+        }
+    }
+
+    /// Whether the note's items are taken.
+    pub fn note(self) -> bool {
+        self != Sources::Issues
+    }
+
+    /// Whether GitHub issues are taken.
+    pub fn issues(self) -> bool {
+        self != Sources::Note
+    }
 }
 
 /// An item skipped: its note's ID and its first line.
@@ -165,6 +226,8 @@ impl Default for Mode {
             said: String::new(),
             closed: Vec::new(),
             landed: Vec::new(),
+            sources: Sources::Note,
+            issue_label: ISSUE_LABEL.to_string(),
         }
     }
 }
@@ -274,6 +337,11 @@ impl Mode {
                     .collect(),
                 _ => Vec::new(),
             },
+            sources: Sources::parse(&text("sources").unwrap_or_default()),
+            issue_label: text("issueLabel")
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .unwrap_or_else(|| d.issue_label.clone()),
             note_id,
         }
     }
@@ -320,6 +388,8 @@ impl Mode {
         map.insert("landWithoutAsking".into(), self.land_without_asking.into());
         map.insert("handsFree".into(), self.hands_free.into());
         map.insert("target".into(), self.target.into());
+        map.insert("sources".into(), self.sources.name().into());
+        map.insert("issueLabel".into(), self.issue_label.into());
         map.insert("said".into(), self.said.into());
         map.insert(
             "closed".into(),
@@ -367,6 +437,16 @@ impl Mode {
         mode.clone().into_map(&mut map);
         util::write_atomic(&file, util::json_pretty(&Value::Object(map)))?;
         Ok(mode)
+    }
+
+    /// Where its work comes from now: the note alone while the
+    /// autopilot_github_issues setting is off, whatever was chosen.
+    pub fn taken_from(&self) -> Sources {
+        if crate::settings::is_on("autopilot_github_issues") {
+            self.sources
+        } else {
+            Sources::Note
+        }
     }
 
     /// Whether it is set up to work a note.
@@ -618,6 +698,23 @@ mod tests {
         let mode = Mode::read(&dir);
         assert_eq!(mode.next.len(), 2);
         assert_eq!(mode.next_here(), ["Here"]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_sources_and_issue_label_round_trip_and_default_to_the_note() {
+        let dir = temp("sources");
+        assert_eq!(Mode::read(&dir).sources, Sources::Note);
+        assert_eq!(Mode::read(&dir).issue_label, ISSUE_LABEL);
+        Mode::update(&dir, |m| {
+            m.sources = Sources::Both;
+            m.issue_label = "ready".into();
+        })
+        .unwrap();
+        let mode = Mode::read(&dir);
+        assert_eq!(mode.sources, Sources::Both);
+        assert_eq!(mode.issue_label, "ready");
+        assert_eq!(Sources::parse("odd"), Sources::Note);
         let _ = fs::remove_dir_all(&dir);
     }
 

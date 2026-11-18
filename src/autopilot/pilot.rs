@@ -59,7 +59,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use super::line::Summary;
-use super::mode::{Mode, note_title};
+use super::mode::{Mode, Sources, note_title};
 use super::place::{Kind, Mine, kind_of};
 use crate::cmd::worktree_from_note::{Item, PlanNote, plan_notes, queue_and_held};
 use crate::mux::TabId;
@@ -246,6 +246,11 @@ pub struct Job {
     pub key: String,
     /// When the note last changed (ms).
     pub mtime: i64,
+    /// Where the work comes from: the note alone while the
+    /// autopilot_github_issues setting is off (`Mode::taken_from`).
+    pub sources: Sources,
+    /// The label an issue carries to be taken.
+    pub label: String,
 }
 
 impl Job {
@@ -267,6 +272,38 @@ impl Job {
         notes: &Path,
         state: &Path,
     ) -> Result<(Vec<Item>, Vec<Item>), String> {
+        let (mut items, held) = if self.sources.note() {
+            self.note_items(notes, state)?
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        if self.sources.issues() {
+            match self.issue_items(state) {
+                Ok(issues) => items.extend(issues),
+                // With the note too, its items are still worked.
+                Err(e) if self.sources.note() => eprintln!("autopilot: GitHub issues: {e}"),
+                Err(e) => return Err(format!("GitHub issues: {e}")),
+            }
+        }
+        Ok((items, held))
+    }
+
+    /// The repository's GitHub issues it may take, oldest first, as items:
+    /// those no worktree has, wtn didn't start lately and weren't skipped.
+    fn issue_items(&self, state: &Path) -> Result<Vec<Item>, String> {
+        let issues = super::issues::issues(&self.repo, &self.label, state, util::now_ms())?;
+        let claims = std::fs::read_to_string(crate::cmd::worktree_from_note::claims_in(state))
+            .unwrap_or_default();
+        Ok(
+            super::issues::unclaimed(&self.repo, issues, &claims, &self.skip, util::now_secs())
+                .iter()
+                .map(super::issues::item_of)
+                .collect(),
+        )
+    }
+
+    /// The note's items, and those held, in the order it opens them.
+    fn note_items(&self, notes: &Path, state: &Path) -> Result<(Vec<Item>, Vec<Item>), String> {
         let (mut items, held) = queue_and_held(
             notes,
             &self.repo,
@@ -819,12 +856,14 @@ impl Pilot {
             weekly_limit: mode.weekly_limit,
             key,
             mtime,
+            sources: mode.taken_from(),
+            label: mode.issue_label.clone(),
         };
         // The item it will take next, read again for mission control.
         let mut skipped: Vec<&String> = skip.iter().collect();
         skipped.sort();
         let key = format!(
-            "{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             mode.note,
             mtime.unwrap_or(0),
             skipped
@@ -834,7 +873,9 @@ impl Pilot {
                 .join("\n"),
             mode.ready_only,
             mode.hands_free,
-            mode.next_here().join("\n")
+            mode.next_here().join("\n"),
+            mode.taken_from().name(),
+            mode.issue_label
         );
         if mtime.is_some()
             && !self.reading
@@ -1142,6 +1183,56 @@ mod tests {
     }
 
     #[test]
+    fn with_both_sources_the_notes_items_come_before_the_issues() {
+        let dir = std::env::temp_dir().join(format!("sb-pilot-issues-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Work.md"), "# Work\n\n- [ ] From the note\n").unwrap();
+        let issue = |n: u64| {
+            serde_json::json!({ "repo": "acme/widgets", "number": n, "title": format!("Issue {n}"),
+                "body": "", "url": "" })
+        };
+        // A fresh read kept, so no request is made.
+        std::fs::write(
+            dir.join(super::super::issues::FILE),
+            serde_json::json!({
+                "at": util::now_ms(), "dir": dir.to_string_lossy(), "label": "autopilot",
+                "issues": [issue(4), issue(9)],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut job = Job {
+            note: "Work.md".into(),
+            repo: dir.clone(),
+            ready_only: false,
+            with_choices: false,
+            skip: ["acme/widgets#9: Issue 9".to_string()].into(),
+            retrying: HashSet::new(),
+            next: Vec::new(),
+            spend_limit: 0.0,
+            weekly_limit: 0,
+            key: String::new(),
+            mtime: 0,
+            sources: Sources::Both,
+            label: "autopilot".into(),
+        };
+        let texts = |job: &Job| -> Vec<String> {
+            job.items(&dir, &dir)
+                .unwrap()
+                .into_iter()
+                .map(|i| i.text)
+                .collect()
+        };
+        assert_eq!(texts(&job), ["From the note", "acme/widgets#4: Issue 4"]);
+        job.sources = Sources::Issues;
+        assert_eq!(texts(&job), ["acme/widgets#4: Issue 4"]);
+        job.sources = Sources::Note;
+        assert_eq!(texts(&job), ["From the note"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn with_the_first_item_held_find_opens_the_second() {
         let dir = std::env::temp_dir().join(format!("sb-pilot-held-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1163,6 +1254,8 @@ mod tests {
             weekly_limit: 0,
             key: String::new(),
             mtime: 0,
+            sources: Sources::Note,
+            label: String::new(),
         };
         let found = job.find(&dir, &dir, 0);
         let _ = std::fs::remove_dir_all(&dir);
@@ -1228,6 +1321,8 @@ mod tests {
             weekly_limit: 80,
             key: String::new(),
             mtime: 0,
+            sources: Sources::Note,
+            label: String::new(),
         };
         let item = |found: Found| matches!(found, Found::Item(Some(ref i)) if i.text == "One");
 

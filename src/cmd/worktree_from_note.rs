@@ -11,6 +11,9 @@
 //! ".md" optional; `<line>` is the item's line number in it, an unticked
 //! `- [ ]` line of the note's top level. `init zsh` prints the `wtn`
 //! function, which works as `wt` does (worktree_from_ticket.rs).
+//! `--issue <number>` starts on a GitHub issue instead
+//! (worktree_from_issue.rs), sharing the start of the tab with an item's
+//! (`make_worktree`, `after_claim`, `hand_over`).
 //!
 //! What M-p's "Start work on a note's checklist items" listed, and what
 //! autopilot takes next (tmux/wtn-open.zsh's `items`,
@@ -75,7 +78,7 @@ const DAY_S: i64 = 24 * 60 * 60;
 /// Appends an item's claim, as M-p's popup starts several wtn at once and
 /// a line appended is written whole; the file is written again without the
 /// rows over a day old only when its first row is that old.
-fn claim(note: &str, item: &str) {
+pub(crate) fn claim(note: &str, item: &str) {
     let file = claims_file();
     let now = crate::util::now_secs();
     if let Some(dir) = file.parent() {
@@ -125,6 +128,7 @@ pub fn claimed_lately(text: &str, note_id: Option<&str>, note: &str, now: i64) -
 fn usage() -> ExitCode {
     eprintln!(
         "Usage: worktree-from-note [path] --note <note> --item <line> [--prompt <text>] [--target <branch>]\n       \
+         worktree-from-note [path] --issue <number> [--prompt <text>] [--target <branch>]\n       \
          worktree-from-note init <zsh|bash>\n\n\
          Examples:\n  \
          worktree-from-note --note \"Switchboard Notes\" --item 12\n\n\
@@ -135,7 +139,9 @@ fn usage() -> ExitCode {
          --target cuts the item's branch from that local branch rather than the default\n\
          branch, and records it as branch.<branch>.wtnTarget, which queue-and-clean\n\
          lands it on (autopilot's target, or one picked by hand). It is refused in a\n\
-         repository that lands through PRs, which go to the default branch.",
+         repository that lands through PRs, which go to the default branch.\n\
+         --issue starts on one of the repository's GitHub issues instead, one autopilot\n\
+         may take: open, assigned to you and carrying its label.",
         worktree::DEFAULT_WORKTREE_DIR
     );
     ExitCode::from(1)
@@ -1125,6 +1131,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
             "--item",
             "--target",
             "--settings-file",
+            "--issue",
         ],
     ) {
         Ok(g) => g,
@@ -1143,6 +1150,21 @@ pub fn main(args: Vec<String>) -> ExitCode {
     }
     if given.help {
         return usage();
+    }
+    if let Some(number) = given.last("--issue") {
+        if given.positional.len() > 1 {
+            return usage();
+        }
+        let mut made = false;
+        return match super::worktree_from_issue::run(&given, number, &mut made) {
+            Ok(code) => code,
+            Err(e) => {
+                if !made {
+                    failed_in_autopilot(&e);
+                }
+                worktree::fail(&e)
+            }
+        };
     }
     let (Some(note), Some(item)) = (given.last("--note"), given.last("--item")) else {
         return usage();
@@ -1342,69 +1364,22 @@ fn run(given: &Given, note: &str, item: &str, made: &mut bool) -> Result<ExitCod
         refused_in_autopilot(&format!("{branch} is for another item: {other}."));
         return Err(refusal);
     }
-    let target = match given.last("--target").filter(|t| !t.is_empty()) {
-        Some(target) if crate::repos::landing_for(&root, false)?.landing != "direct" => {
-            // Where PRs land, the default branch named is the default
-            // branch, cut from origin's as it is now with no target
-            // recorded, since that is where its PR goes; any other is
-            // refused.
-            let default = crate::repos::default_branch(&root);
-            if default.as_deref() != Some(target) {
-                return Err(format!(
-                    "{} lands through PRs, so an item cut from {target} would land on the default branch through a PR, carrying {target}'s commits. \
-                     Start it without --target, or set \"landing\": \"direct\" for the repository in ~/.config/switchboard/repos.json",
-                    paths::tilde(&root)
-                ));
-            }
-            None
-        }
-        target => target,
-    };
-    let start = start_point(&root, target)?;
-    let purpose = Purpose {
-        work: "item",
-        command: "wtn",
-        start: Some(&start),
-    };
-    worktree::ensure_worktree(&path, &branch, &purpose).map_err(|e| e.to_string())?;
+    let target = target_of(given, &root)?;
+    let start = make_worktree(&root, &path, &branch, "item", target)?;
     *made = true;
     // Without it the item looks unclaimed, and would be offered again.
     if !worktree::git_ok(&root, &["config", &key, &identity]) {
         return Err(format!("could not record the item in git config ({key})"));
     }
     claim(&note_id, &first);
-    // When the item started, for the time its Done line says it took
-    // (`switchboard landing`'s `took`): kept when a rerun reuses it.
-    let started_key = format!("branch.{branch}.wtnStarted");
-    if worktree::git_at(&root, &["config", "--get", &started_key])
-        .unwrap_or_default()
-        .is_empty()
-    {
-        worktree::git_ok(
-            &root,
-            &["config", &started_key, &crate::util::now_secs().to_string()],
-        );
-    }
-    // The branch it lands on, read by `switchboard landing` for
-    // queue-and-clean; none, the default branch.
-    let target_key = format!("branch.{branch}.wtnTarget");
-    let recorded_target = match target {
-        Some(t) => worktree::git_ok(&root, &["config", &target_key, t]),
-        None => {
-            worktree::git_ok(&root, &["config", "--unset", &target_key]);
-            true
-        }
-    };
-    if !recorded_target {
-        return Err(format!(
-            "could not record the target in git config ({target_key})"
-        ));
-    }
-    worktree::link_local_settings(&root, &path).map_err(|e| e.to_string())?;
+    after_claim(&root, &path, &branch, target)?;
 
-    let extra = worktree::one_line(&given.all("--prompt").join(" "));
     let hands_free = in_hands_free_tab();
     let plan_words = match (&plan, &plan_name) {
+            // Where PRs land, the default branch named is the default
+            // branch, cut from origin's as it is now with no target
+            // recorded, since that is where its PR goes; any other is
+            // refused.
         (Some(p), _) if hands_free => format!(
             "Its plan is {}: read it first. This tab is hands-free: where the plan or the item still marks a choice as needed, take the recommended option (else the plan's first), tick it in the plan with a `Decided hands-free: <choice>` line, then build it, as long as `switchboard show @autopilot_handsfree` still prints 1 when you decide (otherwise hands-free was turned off: ask me as usual). A choice that approves a design board (one naming a board, or waiting until it is reviewed) is never decided hands-free: ask it with `[always ask]` as the question's header. ",
             p.display()
@@ -1425,23 +1400,127 @@ fn run(given: &Given, note: &str, item: &str, made: &mut bool) -> Result<ExitCod
                 .to_string()
         }
     };
-    let onto = match target {
+    let onto = onto_words(target);
+    let prompt = format!(
+        "Work on this checklist item from my note \"{title}\" ({}), line {item} there, as written:\n\n<item>\n{block}\n</item>\n\n{plan_words}{}{}\
+         Commit the work on this worktree's branch, following the repository's CLAUDE.md, and don't push it or tick the item in the note. \
+         When the work is done, say so in a line, then land it as /queue-and-clean does, which only I can start, so read the file `switchboard skill-path queue-and-clean` prints and follow it: it asks me before pushing, lands it and ticks the item, as `switchboard landing` says for the repository: straight on {onto}, with the steps it gives, or else through a PR it offers to open.",
+        file.display(),
+        duplicates_first(),
+        check_first(hands_free),
+    );
+    hand_over(given, &root, &path, &start, target, prompt)
+}
+
+/// The branch an item's worktree is cut from and lands on, as `--target`
+/// names it: none for the default branch, and refused, but for the default
+/// branch named, in a repository that lands through PRs, whose PRs go to the
+/// default branch.
+pub(crate) fn target_of<'a>(given: &'a Given, root: &Path) -> Result<Option<&'a str>, String> {
+    Ok(match given.last("--target").filter(|t| !t.is_empty()) {
+        Some(target) if crate::repos::landing_for(root, false)?.landing != "direct" => {
+            // Where PRs land, the default branch named is the default
+            // branch, cut from origin's as it is now with no target
+            // recorded, since that is where its PR goes; any other is
+            // refused.
+            let default = crate::repos::default_branch(root);
+            if default.as_deref() != Some(target) {
+                return Err(format!(
+                    "{} lands through PRs, so an item cut from {target} would land on the default branch through a PR, carrying {target}'s commits. \
+                     Start it without --target, or set \"landing\": \"direct\" for the repository in ~/.config/switchboard/repos.json",
+                    paths::tilde(root)
+                ));
+            }
+            None
+        }
+        target => target,
+    })
+}
+
+/// The worktree at `path` on `branch`, cut from the target (else the
+/// default branch) as it is on its remote now; what it was cut from.
+/// `work` says what it is for (`item`, `issue`), for git's messages.
+pub(crate) fn make_worktree(
+    root: &Path,
+    path: &Path,
+    branch: &str,
+    work: &'static str,
+    target: Option<&str>,
+) -> Result<String, String> {
+    let start = start_point(root, target)?;
+    let purpose = Purpose {
+        work,
+        command: "wtn",
+        start: Some(&start),
+    };
+    worktree::ensure_worktree(path, branch, &purpose).map_err(|e| e.to_string())?;
+    Ok(start)
+}
+
+/// What a branch keeps once its work is claimed: when it started, for the
+/// time its Done line says it took (`switchboard landing`'s `took`, kept
+/// when a rerun reuses it), and the branch it lands on, read by
+/// `switchboard landing` for queue-and-clean (none, the default branch);
+/// then the main clone's local settings linked into the worktree.
+pub(crate) fn after_claim(
+    root: &Path,
+    path: &Path,
+    branch: &str,
+    target: Option<&str>,
+) -> Result<(), String> {
+    let started_key = format!("branch.{branch}.wtnStarted");
+    if worktree::git_at(root, &["config", "--get", &started_key])
+        .unwrap_or_default()
+        .is_empty()
+    {
+        worktree::git_ok(
+            root,
+            &["config", &started_key, &crate::util::now_secs().to_string()],
+        );
+    }
+    let target_key = format!("branch.{branch}.wtnTarget");
+    let recorded_target = match target {
+        Some(t) => worktree::git_ok(root, &["config", &target_key, t]),
+        None => {
+            worktree::git_ok(root, &["config", "--unset", &target_key]);
+            true
+        }
+    };
+    if !recorded_target {
+        return Err(format!(
+            "could not record the target in git config ({target_key})"
+        ));
+    }
+    worktree::link_local_settings(root, path).map_err(|e| e.to_string())
+}
+
+/// Where the work lands, in the prompt's words.
+pub(crate) fn onto_words(target: Option<&str>) -> String {
+    match target {
         Some(t) => format!(
             "{t}, the branch it was cut from (its target, which `switchboard landing` names)"
         ),
         None => "the default branch".to_string(),
-    };
-    let mut prompt = format!(
-        "Work on this checklist item from my note \"{title}\" ({}), line {item} there, as written:\n\n<item>\n{block}\n</item>\n\n{plan_words}{}\
-         Commit the work on this worktree's branch, following the repository's CLAUDE.md, and don't push it or tick the item in the note. \
-         When the work is done, say so in a line, then land it as /queue-and-clean does, which only I can start, so read the file `switchboard skill-path queue-and-clean` prints and follow it: it asks me before pushing, lands it and ticks the item, as `switchboard landing` says for the repository: straight on {onto}, with the steps it gives, or else through a PR it offers to open.",
-        file.display(),
-        check_first(hands_free),
-    );
+    }
+}
+
+/// The tab handed to Claude in the worktree, told `prompt` (with
+/// `--prompt`'s words after it), its session's push rule as `push_rule`
+/// says: through the cd-file and settings-file the `wtn` function reads,
+/// or by starting Claude here.
+pub(crate) fn hand_over(
+    given: &Given,
+    root: &Path,
+    path: &Path,
+    start: &str,
+    target: Option<&str>,
+    mut prompt: String,
+) -> Result<ExitCode, String> {
+    let extra = worktree::one_line(&given.all("--prompt").join(" "));
     if !extra.is_empty() {
         prompt.push_str(&format!(" Also, from me for this item: {extra}"));
     }
-    let settings = push_rule(&path, &root, &start, target);
+    let settings = push_rule(path, root, start, target);
     // Read by the `wtn` function: line 1 the worktree, the rest the prompt.
     if let Some(cd_file) = &given.cd_file {
         worktree::write_cd_file(cd_file, &format!("{}\n{prompt}\n", path.display()))
@@ -1459,7 +1538,7 @@ fn run(given: &Given, note: &str, item: &str, made: &mut bool) -> Result<ExitCod
         Some(settings) => vec!["--settings".to_string(), settings, prompt],
         None => vec![prompt],
     };
-    Ok(worktree::run_in("claude", &args, &path))
+    Ok(worktree::run_in("claude", &args, path))
 }
 
 /// A yes/no question on the terminal, Enter being yes; no terminal, or one
@@ -1480,14 +1559,14 @@ fn open_anyway(question: &str) -> bool {
 
 /// Whether the tab this runs in is one of autopilot's, hands-free
 /// (`@autopilot_handsfree`, which autopilot sets as it opens the tab).
-fn in_hands_free_tab() -> bool {
+pub(crate) fn in_hands_free_tab() -> bool {
     crate::mux::socket::tab_option(crate::autopilot::HANDS_FREE).as_deref() == Some("1")
 }
 
 /// In a tab autopilot opened (`@autopilot`), why wtn refused its item, set
 /// as the tab's `@autopilot_refused`, so autopilot skips the item with that
 /// reason and closes the tab rather than leave a slot waiting at a shell.
-fn refused_in_autopilot(why: &str) {
+pub(crate) fn refused_in_autopilot(why: &str) {
     if crate::mux::socket::tab_option(crate::autopilot::OPENED).is_some() {
         let _ = crate::mux::socket::ask(&["set", crate::autopilot::REFUSED, why]);
     }
@@ -1498,7 +1577,7 @@ fn refused_in_autopilot(why: &str) {
 /// autopilot closes the tab and opens the item again later rather than
 /// leave it holding the item at a shell; not over a refusal, which skips
 /// the item at once.
-fn failed_in_autopilot(why: &str) {
+pub(crate) fn failed_in_autopilot(why: &str) {
     use crate::mux::socket::{ask, tab_option};
     if tab_option(crate::autopilot::OPENED).is_none()
         || tab_option(crate::autopilot::REFUSED).is_some_and(|r| !r.is_empty())
@@ -1557,7 +1636,7 @@ fn push_settings() -> String {
 /// rather than building it; in a hands-free tab, one already done on the
 /// target is ticked (`switchboard item-done --already-on`) and its tab freed instead, since nothing is left to
 /// decide, and starting it there asked for its worktree's removal once done.
-fn check_first(hands_free: bool) -> String {
+pub(crate) fn check_first(hands_free: bool) -> String {
     let done = if hands_free {
         "If it is already done on the branch it lands on, and `switchboard show @autopilot_handsfree` still prints 1 when you find it so (otherwise hands-free was turned off: tell me with the evidence and stop, as usual), land it as below without asking me, which finds the work already there, ticks the item with `switchboard item-done --already-on <that branch> --hash <short hash of the commit that did it> --says '<what it does now>'` and cleans up; what you built beyond what that branch has (a test, a doc) lands as the item's change instead. \
          If it no longer applies, tell me so with the evidence (the code, or the commit that did it) and stop there, without building, landing or ticking it, so I decide. \
@@ -1568,6 +1647,22 @@ fn check_first(hands_free: bool) -> String {
     };
     format!("{CHECK_FIRST}{done}{THEN}")
 }
+
+/// What every tab autopilot opens is told first, from any source: look
+/// for the same work started or done elsewhere, and stop on finding it,
+/// marking the tab so autopilot skips the item with that reason
+/// (`@autopilot_refused`) and moves on. Empty in a tab autopilot didn't
+/// open, where you decide.
+pub(crate) fn duplicates_first() -> String {
+    if crate::mux::socket::tab_option(crate::autopilot::OPENED).is_none() {
+        return String::new();
+    }
+    DUPLICATES.to_string()
+}
+
+const DUPLICATES: &str = "Before starting, look for the same work started or done elsewhere: the note's ticked and open items, the repository's open and merged PRs and its GitHub issues, and the open tabs (`switchboard tabs`). \
+     When another item, issue, PR or tab already has it, stop without changing anything: run `switchboard set @autopilot_refused 'Duplicate of <which>'` and say which, so autopilot skips this one with that reason and moves on. \
+     Work already on the branch it lands on is not a duplicate: the check below covers it. ";
 
 const CHECK_FIRST: &str = "Before building, compare the item and its plan with the code as it is now: is it still needed, already done, or worth doing another way? ";
 

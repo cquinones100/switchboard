@@ -89,6 +89,10 @@ pub const YOURS: &str = "@autopilot_yours";
 /// exits: the item is skipped and the tab closed, so no slot waits at the
 /// shell wtn leaves.
 pub const REFUSED: &str = "@autopilot_refused";
+/// The GitHub issue the tab works, `<owner>/<repo>#<number>`, which wtn
+/// sets as it starts one (src/cmd/worktree_from_issue.rs): commented on and
+/// closed once the tab lands, and commented on when it is a duplicate.
+pub const ISSUE: &str = "@autopilot_issue";
 /// What its notification says of a refused item, after the item.
 const REFUSED_SAID: &str = "wtn refused it";
 /// Why wtn stopped before making the item's worktree in the tab (a fetch of origin
@@ -293,6 +297,7 @@ fn box_context(mode: &Mode, fields: &Fields, notes: &Path) -> Context {
         branches,
         needs_choice,
         offer_hands_free: settings::is_on("autopilot_handsfree"),
+        offer_issues: settings::is_on("autopilot_github_issues"),
         problem: String::new(),
     }
 }
@@ -379,6 +384,9 @@ fn fields_problem(fields: &Fields) -> Option<(String, Part)> {
     let target = fields.target.trim();
     if !target.is_empty() && mode::typed_branch(target).is_none() {
         return Some((format!("Not a branch name: {target}"), Part::Target));
+    }
+    if fields.sources().issues() && !super::issues::label_ok(&fields.issue_label) {
+        return Some(("Issue label: one label, with no quotes".into(), Part::Label));
     }
     None
 }
@@ -2452,10 +2460,19 @@ impl Server {
                 .filter(|s| *s != 0)
                 .map_or_else(util::now_ms, |s| s * 1000),
         };
+        let (hash, without_asking) = (landed.hash.clone(), self.autopilot_lands_alone(m.tab));
+        let issue = self
+            .tabs
+            .get(&m.tab)
+            .and_then(|t| t.opts.get(ISSUE))
+            .filter(|v| !v.is_empty())
+            .cloned();
+        let mut fresh = false;
         let written = Mode::update(&paths::state_dir(), |mode| {
             if mode.landed.iter().any(|l| l.id == landed.id) {
                 return;
             }
+            fresh = true;
             // An item put next is next no more once it lands.
             mode.next
                 .retain(|x| x.note != landed.note || x.text != landed.item);
@@ -2465,6 +2482,90 @@ impl Server {
             Ok(mode) => self.autopilot.mode = mode,
             Err(e) => eprintln!("autopilot: couldn't keep the tab that landed: {e}"),
         }
+        if let Some(issue) = issue.filter(|_| fresh) {
+            let comment = super::issues::landed_comment(&hash);
+            let question = format!("Comment on {issue} that it landed in {hash}, and close it?");
+            self.autopilot_write_back(&issue, comment, true, without_asking, question);
+        }
+    }
+
+    /// Whether `tab` lands without asking: marked so (`@autopilot_land`), or
+    /// landed so (`@autopilot_autoland`).
+    fn autopilot_lands_alone(&self, tab: TabId) -> bool {
+        self.tabs.get(&tab).is_some_and(|t| {
+            t.opts.get(LAND).is_some_and(|v| v == "1")
+                || t.opts.get(AUTOLAND).is_some_and(|v| !v.trim().is_empty())
+        })
+    }
+
+    /// A comment on the GitHub issue `issue` names (`<owner>/<repo>#<n>`),
+    /// closing it as done when `close`, off the task: at once for a tab that
+    /// lands without asking, else once `question` is answered yes in the
+    /// client used last (none attached, nothing is written, and it says
+    /// so). A failure is said in the notifications.
+    fn autopilot_write_back(
+        &mut self,
+        issue: &str,
+        comment: String,
+        close: bool,
+        without_asking: bool,
+        question: String,
+    ) {
+        let Some((repo, number)) = super::issues::parse_reference(issue) else {
+            return;
+        };
+        let named = issue.to_string();
+        let write = move |server: &mut Server| {
+            let issue = named;
+            let Some(client) = server.latest_client() else {
+                // No client to answer in: the write runs on its own, and a
+                // failure goes to the log.
+                if tokio::runtime::Handle::try_current().is_ok() {
+                    tokio::spawn(async move {
+                        if let Err(e) =
+                            super::issues::write_back(&repo, number, &comment, close).await
+                        {
+                            eprintln!("autopilot: couldn't write on {repo}#{number}: {e}");
+                        }
+                    });
+                }
+                return;
+            };
+            server.off_task(
+                client,
+                move || {
+                    super::issues::wait_for(super::issues::write_back(
+                        &repo, number, &comment, close,
+                    ))
+                    .map_err(|e| e.to_string())
+                },
+                move |server, _, done| {
+                    if let Err(e) = done {
+                        server.autopilot_say(&format!("Couldn't write on {issue}: {e}"));
+                    }
+                    super::issues::forget(&paths::state_dir());
+                },
+            );
+        };
+        if without_asking {
+            write(self);
+            return;
+        }
+        let Some(client) = self.latest_client() else {
+            self.autopilot_say(&format!(
+                "Left {issue} as it was: nobody was attached to ask before writing on it"
+            ));
+            return;
+        };
+        self.ask(
+            client,
+            crate::ui::Confirm::new(question),
+            move |server, _, yes| {
+                if yes {
+                    write(server);
+                }
+            },
+        );
     }
 
     /// A landed tab about to close unseen, kept in its file for the
@@ -2548,17 +2649,27 @@ impl Server {
     /// Each of its tabs whose wtn refused the item (`REFUSED`): the item
     /// skipped in its note, why said, and the tab closed.
     fn autopilot_refused(&mut self) {
-        let refused: Vec<(TabId, String, String, Option<String>)> = self
+        type Refused = (TabId, String, String, Option<String>, Option<String>, bool);
+        let refused: Vec<Refused> = self
             .tabs
             .iter()
             .filter(|(_, t)| t.opts.contains_key(OPENED) && !t.opts.contains_key(YOURS))
             .filter_map(|(id, t)| {
                 let why = t.opts.get(REFUSED).filter(|v| !v.is_empty())?;
                 let item = t.opts.get(ITEM).filter(|v| !v.is_empty())?;
-                Some((*id, item.clone(), why.clone(), t.opts.get(NOTE).cloned()))
+                let issue = t.opts.get(ISSUE).filter(|v| !v.is_empty()).cloned();
+                let land = t.opts.get(LAND).is_some_and(|v| v == "1");
+                Some((
+                    *id,
+                    item.clone(),
+                    why.clone(),
+                    t.opts.get(NOTE).cloned(),
+                    issue,
+                    land,
+                ))
             })
             .collect();
-        for (tab, item, why, note) in refused {
+        for (tab, item, why, note, issue, land) in refused {
             let written = Mode::update(&paths::state_dir(), |m| {
                 let skipped = mode::Skipped {
                     note: note
@@ -2579,8 +2690,18 @@ impl Server {
                 }
             }
             self.autopilot_close_tab(tab);
-            self.autopilot_say(&format!("Skipped {item}: {REFUSED_SAID}, {why}"));
+            let duplicate = why.starts_with("Duplicate of");
+            if duplicate {
+                self.autopilot_say(&format!("Skipped {item}: {why}"));
+            } else {
+                self.autopilot_say(&format!("Skipped {item}: {REFUSED_SAID}, {why}"));
+            }
             eprintln!("autopilot: closed {tab}, wtn refused its item");
+            if let Some(issue) = issue.filter(|_| duplicate) {
+                let comment = super::issues::duplicate_comment(&why);
+                let question = format!("Comment on {issue} that autopilot left it open: {why}?");
+                self.autopilot_write_back(&issue, comment, false, land, question);
+            }
         }
     }
 
@@ -2775,14 +2896,25 @@ impl Server {
         let Some(client) = self.latest_client() else {
             return;
         };
-        let Some(tab) = self.open_item_tab(
-            client,
-            &mode.repo,
-            &mode.note,
-            &item,
-            &mode.target,
-            crate::mux::server::Opened::Background,
-        ) else {
+        let opened = match super::issues::issue_of(&item) {
+            Some((_, number)) => self.open_issue_tab(
+                client,
+                &mode.repo,
+                number,
+                &item.text,
+                &mode.target,
+                crate::mux::server::Opened::Background,
+            ),
+            None => self.open_item_tab(
+                client,
+                &mode.repo,
+                &mode.note,
+                &item,
+                &mode.target,
+                crate::mux::server::Opened::Background,
+            ),
+        };
+        let Some(tab) = opened else {
             return;
         };
         if let Some(t) = self.tabs.get_mut(&tab) {

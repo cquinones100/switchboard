@@ -836,7 +836,7 @@ fn its_settings_box_saves_what_changed_at_once_and_asks_before_leaving_changes()
     let before = mode(&server);
 
     // + on Tabs at once, then M-↵: that count alone written.
-    open_box(&mut client, 3);
+    open_box(&mut client, 4);
     client.type_text("+");
     client.wait_text(" −  4  + ");
     client.type_text("\x1b\r");
@@ -856,7 +856,7 @@ fn its_settings_box_saves_what_changed_at_once_and_asks_before_leaving_changes()
     }
 
     // A change left with Esc is asked about, and not written.
-    open_box(&mut client, 3);
+    open_box(&mut client, 4);
     client.type_text("+");
     client.wait_text(" −  5  + ");
     client.type_text("\x1b");
@@ -872,7 +872,7 @@ fn its_settings_box_saves_what_changed_at_once_and_asks_before_leaving_changes()
     said["said"] = json!("Stopped opening tabs: today's Claude spend passed $5");
     said["skipped"] = json!([{ "note": said["noteId"], "text": "Second thing" }]);
     std::fs::write(server.state.join("autopilot.json"), said.to_string()).unwrap();
-    open_box(&mut client, 5);
+    open_box(&mut client, 6);
     client.type_text("20");
     client.wait_text("› 20");
     client.type_text("\x1b\r");
@@ -882,7 +882,7 @@ fn its_settings_box_saves_what_changed_at_once_and_asks_before_leaving_changes()
     assert_eq!(now["said"], "", "what it said of the limit passed goes");
 
     // The weekly limit's stepper: off, then 50 and up by fives.
-    open_box(&mut client, 6);
+    open_box(&mut client, 7);
     client.type_text("++");
     client.wait_text(" − 55  + ");
     client.type_text("\x1b\r");
@@ -905,7 +905,7 @@ fn its_settings_box_saves_what_changed_at_once_and_asks_before_leaving_changes()
     assert_eq!(mode(&server)["skipped"], json!([]));
 
     // Land without asking, after its question.
-    open_box(&mut client, 8);
+    open_box(&mut client, 9);
     client.type_text(" \x1b\r");
     let screen = client.wait_text("without asking to push?");
     assert!(
@@ -917,6 +917,15 @@ fn its_settings_box_saves_what_changed_at_once_and_asks_before_leaving_changes()
     client.type_text("\r");
     client.wait_text("Autopilot: land without asking on");
     assert_eq!(mode(&server)["landWithoutAsking"], true);
+
+    // Takes from: → steps the note to its GitHub issues, saved by name.
+    open_box(&mut client, 3);
+    client.type_text("\x1b[C");
+    client.wait_text("Issue label");
+    client.type_text("\x1b\r");
+    client.wait_text("Autopilot: takes from GitHub issues");
+    assert_eq!(mode(&server)["sources"], "issues");
+    assert_eq!(mode(&server)["issueLabel"], "autopilot");
 
     // p pauses at once.
     settings_box(&mut client);
@@ -1039,6 +1048,42 @@ fn an_item_wtn_refuses_in_its_tab_is_skipped_with_why_and_the_tab_closed() {
         said.starts_with(
             "Skipped Taken: wtn refused it, note/taken is for another item: \"Taken!\""
         ),
+        "{said}"
+    );
+}
+
+#[test]
+fn a_tab_that_finds_its_item_a_duplicate_has_it_skipped_with_that_reason() {
+    let notes = TempDir::new("sbn");
+    std::fs::write(notes.path().join("Work.md"), "# Work\n\n- [ ] Again\n").unwrap();
+    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
+    common::write_settings(
+        &server.home,
+        json!({"notifications": false, "tips": false, "github": false, "linear": false}),
+    );
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    server.ok(&["new-tab"]);
+    let tab = server.list()["sessions"][0]["tabs"][1].clone();
+    let id = tab["id"].as_str().unwrap().to_string();
+    // As its Claude marks it, told to by its first prompt.
+    for (option, value) in [
+        ("@autopilot", "1"),
+        ("@autopilot_item", "Again"),
+        ("@autopilot_note", "n-ffffffffffff"),
+        ("@autopilot_refused", "Duplicate of tab 3, \"Once\""),
+    ] {
+        server.ok(&["set", "-t", &id, option, value]);
+    }
+    wait("the tab closed", &server, || opened(&server).is_empty());
+    let mode = mode(&server);
+    assert_eq!(
+        mode["skipped"],
+        json!([{ "note": "n-ffffffffffff", "text": "Again" }])
+    );
+    let said = mode["said"].as_str().unwrap();
+    assert!(
+        said.starts_with("Skipped Again: Duplicate of tab 3, \"Once\""),
         "{said}"
     );
 }

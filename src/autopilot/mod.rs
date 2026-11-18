@@ -71,6 +71,8 @@
 //!   the note by its path and its ID, which a renamed or moved note is
 //!   followed by.
 //! - `place`: where each of its tabs is: busy, waiting on you, or landed.
+//! - `issues`: the repository's GitHub issues as its work, beside or
+//!   instead of the note's items (the mode's `sources`).
 //! - `pilot`: what it keeps between checks, and what each check decides.
 //! - `line`: its line in mission control and the menu Enter opens on it.
 //! - `settings_box`: its settings in one box with UX 2.0 on (board 35),
@@ -82,6 +84,7 @@
 //!   opening the tabs, the notifications.
 
 pub mod eta;
+pub mod issues;
 pub mod landed;
 pub mod line;
 pub mod mode;
@@ -95,7 +98,7 @@ pub use line::{Act, Summary};
 pub use mode::Mode;
 pub use pilot::Pilot;
 pub use serve::{
-    AUTOLAND, FAILED, HANDS_FREE, ITEM, LAND, LANDED_AT, LEFT, NOTE, NUDGED, OPENED, PUSHED,
+    AUTOLAND, FAILED, HANDS_FREE, ISSUE, ITEM, LAND, LANDED_AT, LEFT, NOTE, NUDGED, OPENED, PUSHED,
     REFUSED, START_LIMIT, landed_at, said_by, target_refused,
 };
 
