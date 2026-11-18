@@ -1398,6 +1398,14 @@ impl Server {
         if let Some(app) = app_of(&args, &own_exe, true) {
             return Some(app);
         }
+        // Another command of Switchboard's by its subcommand too
+        // (`switchboard update`), so it reads as more than Switchboard.
+        if let [first, sub, ..] = args.as_slice()
+            && program_name(first) == "switchboard"
+            && !sub.starts_with('-')
+        {
+            return Some(format!("switchboard {sub}"));
+        }
         let first = args
             .into_iter()
             .next()
@@ -1546,6 +1554,7 @@ fn app_of(args: &[String], own_exe: &str, short: bool) -> Option<String> {
         ["pr-image", ..] => ("the PR's images", "PR images"),
         ["aws-login", ..] => ("the AWS sign-in", "AWS sign-in"),
         ["setup", ..] => ("Switchboard's setup", "setup"),
+        ["update", rest @ ..] if rest.contains(&"--setup") => ("Switchboard's setup", "setup"),
         _ => return None,
     };
     Some(if short { brief } else { long }.to_string())
@@ -1711,6 +1720,10 @@ mod tests {
         assert_eq!(line(&[&bin, "tabs"]), "switchboard tabs");
         assert_eq!(line(&[&bin, "aws-login"]), "the AWS sign-in");
         assert_eq!(line(&[&bin, "setup", "--check"]), "Switchboard's setup");
+        assert_eq!(
+            line(&[&bin, "update", "--setup", "--hold"]),
+            "Switchboard's setup"
+        );
         assert_eq!(line(&["/opt/sb/switchboard-0.2.0", "diff"]), "the diff");
         assert_eq!(
             line(&["switchboard-backup", "notes"]),
