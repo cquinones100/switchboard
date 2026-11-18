@@ -96,6 +96,9 @@ pub const ISSUE: &str = "@autopilot_issue";
 /// How what it says while GitHub issues can't be read starts
 /// (`pilot::unread_said`), a good read taking it back.
 const ISSUES_UNREAD: &str = "Can't read GitHub issues";
+/// What a duplicate's reason starts with, kept in what it says until
+/// dismissed as a refusal's is.
+const DUPLICATE_SAID: &str = ": Duplicate of ";
 /// What its notification says of a refused item, after the item.
 const REFUSED_SAID: &str = "wtn refused it";
 /// Why wtn stopped before making the item's worktree in the tab (a fetch of origin
@@ -2828,7 +2831,7 @@ impl Server {
                 .map(|i| i.text)
                 .collect();
             let text = queue.first().cloned().unwrap_or_default();
-            let plans = job.plans(&notes);
+            let plans = job.plans(&notes, &state);
             let spent = if job.spend_limit > 0.0 {
                 crate::usage::sessions::spent_today(&state, util::now_ms())
             } else {
@@ -3061,7 +3064,10 @@ impl Server {
         // nothing said later hides why an item was skipped; empty, dismissed,
         // clears it too.
         let keep = |was: &str| {
-            if said.is_empty() || !(was.contains(REFUSED_SAID) || was.contains(FAILED_SAID)) {
+            let kept = was.contains(REFUSED_SAID)
+                || was.contains(FAILED_SAID)
+                || was.contains(DUPLICATE_SAID);
+            if said.is_empty() || !kept {
                 said.to_string()
             } else if was.contains(said) {
                 was.to_string()

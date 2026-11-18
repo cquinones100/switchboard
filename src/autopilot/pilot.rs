@@ -365,10 +365,33 @@ impl Job {
     }
 
     /// The plan each item of the note links, by the item's first line.
-    pub fn plans(&self, notes: &Path) -> HashMap<String, PlanNote> {
-        std::fs::read_to_string(notes.join(&self.note))
-            .map(|text| plan_notes(notes, &text))
-            .unwrap_or_default()
+    /// An issue's plan is its body, from the read the queue took (no
+    /// request of its own while that read is fresh).
+    pub fn plans(&self, notes: &Path, state: &Path) -> HashMap<String, PlanNote> {
+        let mut plans: HashMap<String, PlanNote> = if self.sources.note() {
+            std::fs::read_to_string(notes.join(&self.note))
+                .map(|text| plan_notes(notes, &text))
+                .unwrap_or_default()
+        } else {
+            HashMap::new()
+        };
+        if self.sources.issues()
+            && self.issues_on
+            && let Ok(issues) =
+                super::issues::issues(&self.repo, &self.label, state, util::now_ms())
+        {
+            for issue in issues {
+                plans.insert(
+                    issue.text(),
+                    PlanNote {
+                        name: issue.reference(),
+                        text: Some(issue.body.clone()),
+                        file: None,
+                    },
+                );
+            }
+        }
+        plans
     }
 
     /// The look for the next item to open: nothing once today's spend has

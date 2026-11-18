@@ -27,8 +27,10 @@ pub fn main(args: Vec<String>) -> ExitCode {
         eprint!("{USAGE}");
         return ExitCode::from(2);
     }
-    if socket::tab_option(crate::autopilot::OPENED).is_none() {
-        eprintln!("autopilot-duplicate: this tab isn't one autopilot opened");
+    if !crate::cmd::worktree_from_note::in_autopilot_tab() {
+        eprintln!(
+            "autopilot-duplicate: this tab isn't autopilot's (never opened by it, or made yours since)"
+        );
         return ExitCode::from(1);
     }
     let why = format!("Duplicate of {which}");
