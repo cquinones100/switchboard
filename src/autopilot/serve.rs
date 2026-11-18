@@ -2753,7 +2753,10 @@ impl Server {
             // An issue's start fails on GitHub's say (a lookup failing, the
             // issue not standing for a moment), which passes: it is tried
             // again, never skipped for it.
-            let skip = self.autopilot.pilot.start_failed(key, &why, util::now_ms()) && !issue;
+            let skip = self
+                .autopilot
+                .pilot
+                .start_failed(key, &why, util::now_ms(), !issue);
             self.autopilot_close_tab(tab);
             if !skip {
                 eprintln!("autopilot: closed {tab}, its start failed: {why}");

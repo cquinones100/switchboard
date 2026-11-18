@@ -167,7 +167,11 @@ impl Fields {
         mode.land_without_asking = self.land_without_asking || self.hands_free;
         mode.skipped
             .retain(|x| x.note != self.skipped_of || !self.taken_back.contains(&x.text));
-        mode.sources = self.sources();
+        // A client from before sources (an older Slack relay) sends none:
+        // the mode keeps what it takes from.
+        if !self.sources.is_empty() {
+            mode.sources = self.sources();
+        }
         let label = self.issue_label.trim();
         if super::issues::label_ok(label) {
             mode.issue_label = label.to_string();
