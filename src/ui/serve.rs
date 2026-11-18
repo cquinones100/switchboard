@@ -1559,11 +1559,16 @@ fn without_query(word: &str) -> String {
         _ => 0,
     };
     let link = &word[start..];
-    // A backslash is a pattern's escape, which the parser would take as
-    // a slash.
+    // Written as a link (`http://`, `https://`, in any case), and with no
+    // backslash before its query, a pattern's escape the parser would take
+    // as a slash.
+    let lower = link.to_ascii_lowercase();
+    let before_query = &link[..link.find(['?', '#']).unwrap_or(link.len())];
+    let looks_like_link = (lower.starts_with("http://") || lower.starts_with("https://"))
+        && !before_query.contains('\\');
     let parsed = url::Url::parse(link)
         .ok()
-        .filter(|_| !link.contains('\\'))
+        .filter(|_| looks_like_link)
         .filter(|u| matches!(u.scheme(), "http" | "https") && u.host().is_some());
     let Some(mut parsed) = parsed else {
         return word.to_string();
@@ -1636,6 +1641,11 @@ mod tests {
         assert_eq!(line(&["rg", "https?://a.dev"]), "rg https?://a.dev");
         assert_eq!(line(&["rg", "https://[^/]+/v?"]), "rg https://[^/]+/v?");
         assert_eq!(line(&["rg", "https://[a-z]?/v"]), "rg https://[a-z]?/v");
+        assert_eq!(line(&["rg", "https:/a.dev/v1?"]), "rg https:/a.dev/v1?");
+        assert_eq!(
+            line(&["curl", "https://a.dev/f?token=x&n=a\\b"]),
+            "curl https://a.dev/f…"
+        );
         assert_eq!(line(&["rg", "https://a\\.dev/v?"]), "rg https://a\\.dev/v?");
         assert_eq!(
             line(&["curl", "https://me:secret@a.dev/f"]),
