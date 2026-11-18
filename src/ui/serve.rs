@@ -1507,7 +1507,7 @@ fn app_of(args: &[String], own_exe: &str, short: bool) -> Option<String> {
         ["pr-view", "--checks", ..] => ("the PR's failing checks", "PR checks"),
         ["pr-view", ..] => ("the PR view", "PR view"),
         // By its ticket's ID when it was given one rather than a folder.
-        ["ticket-view", id, ..] if !short && !id.starts_with('/') => {
+        ["ticket-view", id, ..] if !short && crate::views::ticket::id_of(id).is_some() => {
             return Some(format!("the ticket view: {id}"));
         }
         ["ticket-view", ..] => ("the ticket view", "ticket view"),
@@ -1630,6 +1630,7 @@ mod tests {
             "the ticket view: ENG-42"
         );
         assert_eq!(line(&[&bin, "ticket-view", "/x/y"]), "the ticket view");
+        assert_eq!(line(&[&bin, "ticket-view", "."]), "the ticket view");
         assert_eq!(
             line(&[&bin, "link-view", "https://a.dev/x"]),
             "the link view: a.dev/x"
