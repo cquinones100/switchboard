@@ -2920,6 +2920,15 @@ impl Server {
         let Some(client) = self.latest_client() else {
             return;
         };
+        // An issue only while issues are still taken, and not skipped since
+        // the look began (its landing recorded meanwhile, say).
+        if let Some((repo, number)) = super::issues::issue_of(&item) {
+            let reference = format!("{repo}#{number}: ");
+            if !mode.taken_from().issues() || mode.skipped_here().any(|t| t.starts_with(&reference))
+            {
+                return;
+            }
+        }
         let opened = match super::issues::issue_of(&item) {
             Some((_, number)) => self.open_issue_tab(
                 client,

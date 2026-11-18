@@ -422,8 +422,8 @@ pub fn duplicate_comment() -> String {
 }
 
 /// Comments on an issue, and closes it as done when `close`; with
-/// `landed`, only once GitHub has that commit in the repository, so a
-/// landing that never reached it closes nothing.
+/// `landed`, only once that commit is on the repository's default branch
+/// on GitHub, so a landing that never reached it closes nothing.
 pub async fn write_back(
     repo: &Repo,
     number: u64,
@@ -435,14 +435,23 @@ pub async fn write_back(
         if hash.is_empty() || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(anyhow!("\"{hash}\" isn't a commit"));
         }
-        github::rest(
+        // On the default branch, not only somewhere on GitHub (a review
+        // branch), since that is where a landing that closes an issue goes.
+        let default = github::default_branch(repo, SOURCE).await?;
+        let compare = github::rest(
             "GET",
-            &format!("/repos/{repo}/commits/{hash}"),
+            &format!("/repos/{repo}/compare/{default}...{hash}"),
             None,
             SOURCE,
         )
         .await
         .map_err(|e| anyhow!("{repo} has no commit {hash} on GitHub: {e}"))?;
+        if !matches!(
+            compare.get("status").and_then(Value::as_str),
+            Some("identical" | "behind")
+        ) {
+            return Err(anyhow!("{hash} isn't on {repo}'s {default} yet"));
+        }
     }
     github::rest(
         "POST",
