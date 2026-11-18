@@ -1504,12 +1504,16 @@ fn program_line(args: &[String], own_exe: &str) -> String {
     // A local path: an argument of its own, or an option's value after `=`
     // (`--dir=/…`). Nothing after a `:`, which may name a path on another
     // host (`scp host:/…`).
-    let short = |arg: &String| match arg.split_once('=') {
-        Some((key, value)) if key.starts_with('-') && value.starts_with('/') => {
-            format!("{key}={}", crate::paths::tilde(value))
+    // A link's word first, so no path rule shows what follows its host.
+    let short = |arg: &String| {
+        let arg = without_query(arg);
+        match arg.split_once('=') {
+            Some((key, value)) if key.starts_with('-') && value.starts_with('/') => {
+                format!("{key}={}", crate::paths::tilde(value))
+            }
+            _ if arg.starts_with('/') => crate::paths::tilde(&arg),
+            _ => arg,
         }
-        _ if arg.starts_with('/') => crate::paths::tilde(arg),
-        _ => without_query(arg),
     };
     let words = std::iter::once(name.clone()).chain(rest.iter().map(short));
     draw::cut(&words.collect::<Vec<_>>().join(" "), 60)
@@ -1575,7 +1579,11 @@ fn without_query(word: &str) -> String {
     };
     let authority_at = start + scheme;
     let rest = &word[authority_at..];
-    let host_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    // The authority ends at the first character a host, a port or a user
+    // can't hold (a slash, a query, a quote in a JSON argument).
+    let host_end = rest
+        .find(|c: char| !(c.is_ascii_alphanumeric() || ".-_:%@[]".contains(c)))
+        .unwrap_or(rest.len());
     let authority = &rest[..host_end];
     let host = authority
         .rsplit_once('@')
@@ -1664,6 +1672,14 @@ mod tests {
             "curl --url=HTTPS://a.dev/…",
         );
         link(&["curl", "https://a.dev"], "curl https://a.dev");
+        link(
+            &["curl", "-d", "{\"url\":\"https://a.dev\",\"token\":\"x\"}"],
+            "curl -d {\"url\":\"https://a.dev/…",
+        );
+        link(
+            &["curl", "--request-target=/r?next=https://a.dev/?sig=x"],
+            "curl --request-target=/r?next=https://a.dev/…",
+        );
         link(&["rg", "https?://a.dev"], "rg https?://a.dev");
         link(&["rg", "https:/a.dev/v1?"], "rg https:/a.dev/v1?");
         assert_eq!(line(&["./Build Tools/bin/worker", "-v"]), "worker -v");
