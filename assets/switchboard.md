@@ -44,7 +44,7 @@ In a tab autopilot opened, when the work it was opened for is already started or
 
 When I name one of these, I mean what Switchboard shows me:
 
-- The diff (`M-d`, "the diff", "the diff view"): the tab's branch against its PR's base, side by side, in place of a pane, with its story ("the story"), Haiku's walk through the change in chapters, and its map ("the map") of which chapter builds on which. `switchboard diff-story` prints the story as Markdown (`--path` its file), from what the diff kept, never telling a new one.
+- The diff (`M-d`, "the diff", "the diff view"): the tab's branch against its PR's base, side by side, in place of a pane, with its story ("the story"), Haiku's walk through the change in chapters of pages, and its map ("the map") of which page builds on which, a chapter at a time. `switchboard diff-story` prints the story as Markdown (`--path` its file), from what the diff kept, never telling a new one.
 - Mission control (`M-Space`): views of my day and work (Tabs, Reopen, PRs, Tickets, Inbox, Slack, Calendar, Notifications, Usage, Settings), from what the workspace already holds.
 - The sidebar: every tab, grouped by what its Claude is doing, as `switchboard tabs` lists them.
 - The PR view (`M-v`) and the ticket view (`M-i`): the tab's PR description and its Linear ticket.

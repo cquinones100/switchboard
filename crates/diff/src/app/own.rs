@@ -390,7 +390,7 @@ impl App {
 
     /// Enter on a row: an option turned on or off, kept in the settings
     /// file and followed at once; the release, installed off the screen's
-    /// thread.
+    /// chapter.
     fn take_setting(&mut self, at: usize) {
         match self.settings_rows().get(at) {
             Some(Row::Option(setting)) => {
@@ -575,9 +575,9 @@ impl App {
                 self.close_answer();
             }
         }
-        // A chapter open as a page of its own, with pages turned off, would
+        // A page open as a page of its own, with pages turned off, would
         // have no key to leave it: back to the whole diff.
-        if !now.pages && self.page.take().is_some() {
+        if !now.pages_alone && self.alone.take().is_some() {
             self.whole_at = None;
             self.sort();
             self.pick_first();
@@ -605,7 +605,7 @@ impl App {
         self.story_key = None;
         self.smart.clear();
         self.asked_order = false;
-        self.page = None;
+        self.alone = None;
         self.whole_at = None;
         self.told = None;
         self.story = None;

@@ -8,7 +8,7 @@
 //! story told ahead do (`story::key_of`) and prints the story kept under it
 //! in the cache's `diff-story/`, as `yS` in the diff copies it
 //! (`story::markdown`), with the files changed only since the last commit
-//! in a last "Not committed yet" chapter, as M-d shows them while the
+//! in a last "Not committed yet" page, as M-d shows them while the
 //! diff_uncommitted setting is on (`story::with_uncommitted`). It only reads: the base is the one M-d kept for the
 //! branch's commit (`git::cached_base`), never fetched or asked of GitHub,
 //! and no story is ever asked of Claude, so with no base kept or no story
@@ -127,9 +127,9 @@ fn read(dir: &Path) -> Result<Found, String> {
     let (_, hunks) = story::split(&[change.diff.as_str()]);
     let told = util::read_text(&file)
         .and_then(|text| story::parse(&text, &paths, order::generated, &hunks).ok());
-    // The files changed only since the last commit in a last chapter, as
+    // The files changed only since the last commit in a last page, as
     // M-d shows them (`app::show_story`): after the story told, else after
-    // the commits' files in a "Committed" chapter.
+    // the commits' files in a "Committed" page.
     let (dirty, committed) = app::uncommitted_orders(&whole);
     let shown = if dirty.is_empty() {
         told

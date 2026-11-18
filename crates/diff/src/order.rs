@@ -14,7 +14,7 @@
 //! (`ask_order`), when no story is told; until it answers, and if it can't,
 //! they stay A to Z. Its answer is kept per repository, commits and paths in
 //! the cache (`diff-order/`), so the same diff opens in its order at once.
-//! With a story told, its chapters replace the kinds, generated files last.
+//! With a story told, its pages replace the kinds, generated files last.
 
 use std::cmp::Ordering;
 use std::collections::HashMap;

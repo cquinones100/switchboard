@@ -72,7 +72,7 @@ pub fn clear(dir: &Path) -> Result<Cleared, String> {
                     done.telling = true;
                 } else {
                     remove(&tell::story_dir().join(format!("{key}.txt")), &mut done);
-                    // The chapters read of it, kept beside it.
+                    // The pages read of it, kept beside it.
                     let _ = std::fs::remove_file(tell::story_dir().join(format!("{key}.read")));
                 }
             }

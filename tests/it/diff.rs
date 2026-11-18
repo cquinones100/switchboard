@@ -3,7 +3,7 @@
 //! is fetched without the network), M-d puts `switchboard diff` in the
 //! pane's place, its story told by a stand-in claude that streams a canned
 //! answer (test/diff-story.test.js's stand-in), the list headed by its
-//! chapters; q ends the diff and the pane is back, its shell as it was.
+//! pages; q ends the diff and the pane is back, its shell as it was.
 //! And `switchboard diff --ahead` tells the same story with nothing drawn,
 //! keeping it where M-d finds it, once per commit. lazygit (a stand-in)
 //! takes a pane's place the same way, from M-p's command and from mission
@@ -14,7 +14,7 @@
 //! "Clear this tab's diff cache" removes the story, order and PR base kept
 //! for the tab's branch after a yes, keeping a story being told. With the
 //! diff_uncommitted setting on, M-d runs to the working tree: what isn't
-//! committed is marked ● and listed in a last chapter after the commits'
+//! committed is marked ● and listed in a last page after the commits'
 //! story, edits made while the diff is open come in on R, and a branch with
 //! nothing to show gets a box saying so in place of the diff. On the default
 //! branch M-d shows its commits not yet pushed, and its heading names the
@@ -98,11 +98,11 @@ fn repository(root: &Path) -> std::path::PathBuf {
 
 /// A stand-in claude, as strict as Claude Code about how it is called:
 /// reads what it is given, notes that it was asked, and streams an answer
-/// a chapter at a time, then the whole of it, after the line naming its
+/// a page at a time, then the whole of it, after the line naming its
 /// session.
 fn stand_in_claude(home: &Path) {
     let pieces = [
-        r#"{"chapters": [{"title": "Change the core", "why": "a changes.", "watch": "Old callers of a.", "hunks": [{"id": "src/a.js#1", "note": "Check a."}]}"#,
+        r#"{"pages": [{"title": "Change the core", "why": "a changes.", "watch": "Old callers of a.", "hunks": [{"id": "src/a.js#1", "note": "Check a."}]}"#,
         r#", {"title": "Follow it", "why": "b follows.", "hunks": ["src/b.js#1"]}]}"#,
     ];
     // A session's first line names it and its model, as Claude Code's
@@ -183,7 +183,7 @@ fn m_d_puts_the_diff_in_the_panes_place_and_q_puts_the_pane_back() {
         .iter()
         .position(|l| l.contains("2/2 Follow it"))
         .unwrap();
-    assert!(row < later, "the chapters in order: {screen:?}");
+    assert!(row < later, "the pages in order: {screen:?}");
     client.wait_text("Check a.");
     client.wait_text("⚠ Old callers of a.");
     let seen = client.wait_text("export const a = 2;");
@@ -274,7 +274,7 @@ fn marked(screen: &[String], name: &str) -> bool {
 }
 
 #[test]
-fn m_d_lists_whats_not_committed_marked_in_a_last_chapter_and_r_reads_it_again() {
+fn m_d_lists_whats_not_committed_marked_in_a_last_page_and_r_reads_it_again() {
     let server = TestServer::start();
     settings(&server);
     stand_in_claude(&server.home);
@@ -296,7 +296,7 @@ fn m_d_lists_whats_not_committed_marked_in_a_last_chapter_and_r_reads_it_again()
         "{screen:?}"
     );
     // Edits made while the diff is open come in on R: b.js changed again
-    // and a file git doesn't know yet, in a last chapter, each marked.
+    // and a file git doesn't know yet, in a last page, each marked.
     std::fs::write(work.join("src/b.js"), "export const b = 3;\n").unwrap();
     std::fs::write(work.join("src/c.js"), "export const c = 1;\n").unwrap();
     client.type_text("R");
@@ -305,12 +305,12 @@ fn m_d_lists_whats_not_committed_marked_in_a_last_chapter_and_r_reads_it_again()
     assert!(
         at("1/3 Change the core") < at("2/3 Follow it")
             && at("2/3 Follow it") < at("3/3 Not committed yet"),
-        "the commits' chapters, then the last: {screen:?}"
+        "the commits' pages, then the last: {screen:?}"
     );
     assert!(at("3/3 Not committed yet") < at("c.js"), "{screen:?}");
     assert!(
         at("b.js") < at("3/3 Not committed yet"),
-        "a file in both keeps its committed chapter: {screen:?}"
+        "a file in both keeps its committed page: {screen:?}"
     );
     assert!(
         marked(&screen, "b.js") && marked(&screen, "c.js"),
@@ -365,7 +365,7 @@ fn m_d_says_when_there_is_nothing_to_show_and_shows_uncommitted_changes_alone() 
         !s.iter().any(|l| l.contains("Nothing to show"))
     });
 
-    // A file git doesn't know yet: the uncommitted chapter alone, with no
+    // A file git doesn't know yet: the uncommitted page alone, with no
     // story asked for.
     std::fs::write(work.join("notes.txt"), "a thought\n").unwrap();
     client.send(b"\x1bd");
@@ -590,7 +590,7 @@ fn diff_story_prints_the_story_kept_for_the_branch_and_says_when_there_is_none()
     );
     assert!(story.contains("### 2. Follow it"), "{story}");
 
-    // A file changed since the last commit: in a last chapter, as M-d shows it.
+    // A file changed since the last commit: in a last page, as M-d shows it.
     std::fs::write(work.join("src/c.js"), "export const c = 1;\n").unwrap();
     let with_new = text(&run(&["diff-story"]));
     assert!(

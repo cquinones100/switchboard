@@ -38,7 +38,7 @@ const DOUBLE_CLICK: Duration = Duration::from_millis(500);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Pane {
     List,
-    /// The chapter's heading and the bar over the diff, which don't scroll.
+    /// The page's heading and the bar over the diff, which don't scroll.
     Head,
     Old,
     New,
@@ -511,7 +511,7 @@ impl App {
     // ── The keys ────────────────────────────────────────────────────────────
 
     /// `y` on the lines `v` or `V` selected: their text copied, the list's
-    /// rows as they read (a file's path, a chapter's title) and a side's
+    /// rows as they read (a file's path, a page's title) and a side's
     /// lines whole. The selection stays for the key after it, since `yp`
     /// and `yl` copy its place instead.
     pub(super) fn copy_visual(&mut self) {
@@ -573,11 +573,16 @@ impl App {
                 .and_then(|&i| self.entry(i))
                 .map(|e| e.path.clone()),
             ListRow::Heading(text, _) => Some(text.trim().to_string()),
-            ListRow::Chapter(n) => self
+            ListRow::Page(n) => self
                 .story
                 .as_ref()
-                .and_then(|s| s.chapters.get(n - 1))
-                .map(|c| format!("{n}. {}", c.title)),
+                .and_then(|s| s.pages.get(n - 1))
+                .map(|c| format!("{}. {}", self.page_shown(*n), c.title)),
+            ListRow::Chapter(c) => self
+                .story
+                .as_ref()
+                .and_then(|s| s.chapters.get(*c))
+                .map(|t| format!("{}. {}", c + 1, t.title)),
             ListRow::Label(text, ..) => Some(text.clone()),
             ListRow::Header(section) => Some(section.heading().to_string()),
             ListRow::Loading | ListRow::Blank | ListRow::Totals | ListRow::Hint(_) => None,

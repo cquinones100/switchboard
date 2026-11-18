@@ -1,5 +1,5 @@
 //! Drawing the diff's screen, split from app.rs for its length: the list
-//! with its chapters' headings, the two sides with their bars and notes,
+//! with its pages' headings, the two sides with their bars and notes,
 //! the cover while the story is told, the row of buttons, and the boxes
 //! for a question and its answer, into a cell buffer, as
 //! nvim/lua/plugins/diffview.lua's highlights, winbars and floats drew them.
@@ -23,7 +23,7 @@ use crate::util;
 use switchboard_ui::draw::{BoxLine, BoxSpec, Place, cut, draw_box, put_line, width, wrap};
 use switchboard_ui::kit::{self, Surface, Tone};
 
-/// The most lines of a chapter's why UX 2.0 puts over the diff.
+/// The most lines of a page's why UX 2.0 puts over the diff.
 const WHY_LINES: usize = 3;
 
 impl App {
@@ -160,7 +160,7 @@ impl App {
             self.draw_list(buf);
             cursor = self.draw_diff(buf);
             self.things_hits();
-            // The list greyed while the file (or a chapter's own map) has the
+            // The list greyed while the file (or a page's own map) has the
             // keys. The file is never greyed: with the keys in the list it
             // shows the list's chosen file, which is what is being read.
             if self.focus != Focus::List || self.thing.is_some() {
@@ -208,11 +208,18 @@ impl App {
     pub(super) fn footer_keys(&self) -> Vec<(&'static str, &'static str)> {
         let mut keys = if self.filtering {
             vec![("↑↓", "move"), ("↵", "keep"), ("esc", "clear")]
+        } else if self.on_map() && self.strip.is_some() {
+            vec![("←→", "chapter"), ("↵", "open"), ("esc", "the map")]
         } else if self.on_map() {
-            vec![("↑↓←→", "move"), ("↵", "open"), ("esc", "close")]
+            let mut keys = vec![("↑↓←→", "move"), ("↵", "open")];
+            if self.story.as_ref().is_some_and(|s| s.chapters.len() > 1) {
+                keys.push(("]c [c", "chapter"));
+            }
+            keys.push(("esc", "close"));
+            keys
         } else if self.thing.is_some() {
             vec![("↑↓", "move"), ("↵", "its hunk"), ("esc", "list")]
-        } else if self.focus == Focus::List && self.in_chapter() {
+        } else if self.focus == Focus::List && self.in_page() {
             vec![("↑↓", "move"), ("↵", "read"), ("esc", "the map")]
         } else if self.focus == Focus::List {
             vec![("↑↓", "move"), ("↵", "read"), ("esc", "close")]
@@ -277,7 +284,7 @@ impl App {
     }
 
     /// The cover while the story is told: blank for its first moments,
-    /// then what is read and each chapter as Haiku names it, or Haiku's
+    /// then what is read and each page as Haiku names it, or Haiku's
     /// answer so far, centred as one block so its ticks line up.
     fn draw_cover(&self, buf: &mut Buffer) {
         let Some(up) = self.cover else {
@@ -314,7 +321,7 @@ impl App {
             let keep = (area.height as usize).saturating_sub(6).max(1);
             let from = wrapped.len().saturating_sub(keep);
             block.extend(wrapped[from..].iter().cloned());
-            (block, "Esc shows the diff now · t shows the chapters")
+            (block, "Esc shows the diff now · t shows the pages")
         } else {
             (
                 story::progress(
@@ -398,6 +405,7 @@ impl App {
                 && matches!(
                     rows[first - 1],
                     ListRow::Heading(..)
+                        | ListRow::Page(_)
                         | ListRow::Chapter(_)
                         | ListRow::Label(..)
                         | ListRow::Blank
@@ -474,16 +482,14 @@ impl App {
                             })
                         })
                         .count();
-                    let spans = match (&self.title, self.page, &self.story) {
+                    let spans = match (&self.title, self.alone, &self.story) {
                         (Some((title, _)), _, _) => vec![
                             Span::raw(" "),
                             Span::styled(title.clone(), Tone::Text.bold(&theme)),
                         ],
-                        // A chapter opened from the map: the way back to
-                        // its story's map.
-                        (None, Some(_), Some(_))
-                            if self.in_chapter() && Some(i) == first_header =>
-                        {
+                        // A page opened from the map: the way back to
+                        // its chapter's map.
+                        (None, Some(_), Some(_)) if self.in_page() && Some(i) == first_header => {
                             self.hits
                                 .push((super::map::Hit::Back, Rect::new(0, y, w, 1)));
                             let lit = self.lit == Some(super::map::Hit::Back);
@@ -500,8 +506,8 @@ impl App {
                             ]
                         }
                         // The page of what isn't committed yet is named, the
-                        // others counted among the chapters told.
-                        (None, Some(p), Some(_)) if self.uncommitted_chapter() == Some(p) => {
+                        // others counted among the pages told.
+                        (None, Some(p), Some(_)) if self.uncommitted_page() == Some(p) => {
                             kit::label(
                                 story::NOT_COMMITTED,
                                 Tone::Needs,
@@ -510,17 +516,15 @@ impl App {
                                 &theme,
                             )
                         }
-                        (None, Some(p), Some(_)) if self.generated_chapter() == Some(p) => {
-                            kit::label(
-                                super::GENERATED_LAST,
-                                Tone::Dim,
-                                Some(n),
-                                w as usize,
-                                &theme,
-                            )
-                        }
+                        (None, Some(p), Some(_)) if self.generated_page() == Some(p) => kit::label(
+                            super::GENERATED_LAST,
+                            Tone::Dim,
+                            Some(n),
+                            w as usize,
+                            &theme,
+                        ),
                         (None, Some(p), Some(_)) => kit::label(
-                            &format!("Page {p} of {}", self.told_chapters()),
+                            &self.page_heading(p),
                             Tone::Dim,
                             Some(n),
                             w as usize,
@@ -529,7 +533,7 @@ impl App {
                         (None, None, Some(_)) if *section == Section::Committed => kit::label(
                             "Story",
                             Tone::Dim,
-                            Some(self.told_chapters()),
+                            Some(self.told_pages()),
                             w as usize,
                             &theme,
                         ),
@@ -537,9 +541,8 @@ impl App {
                     };
                     put_line(buf, 0, y, w, &Spans::from(spans));
                 }
-                ListRow::Chapter(n) => {
-                    let Some(chapter) = self.story.as_ref().and_then(|s| s.chapters.get(n - 1))
-                    else {
+                ListRow::Page(n) => {
+                    let Some(page) = self.story.as_ref().and_then(|s| s.pages.get(n - 1)) else {
                         continue;
                     };
                     let here = self
@@ -548,9 +551,9 @@ impl App {
                         .is_some_and(|h| h == *n);
                     let spans = vec![
                         Span::raw(" "),
-                        Span::styled(n.to_string(), Tone::Accent.bold(&theme)),
+                        Span::styled(self.page_shown(*n).to_string(), Tone::Accent.bold(&theme)),
                         Span::styled(
-                            format!(" {}", chapter.title),
+                            format!(" {}", page.title),
                             if here {
                                 Tone::Text.bold(&theme)
                             } else {
@@ -565,6 +568,48 @@ impl App {
                         w,
                         &Spans::from(kit::fit(spans, w as usize, Style::new())),
                     );
+                }
+                ListRow::Chapter(c) => {
+                    let Some(told) = self.story.as_ref().and_then(|s| s.chapters.get(*c)) else {
+                        continue;
+                    };
+                    let here = self
+                        .current()
+                        .and_then(|e| self.home(&e.path))
+                        .is_some_and(|h| {
+                            self.story
+                                .as_ref()
+                                .is_some_and(|s| story::chapter_of(s, h) == Some(*c))
+                        });
+                    let (read, of) = self.read_of(*c);
+                    let tally = format!("{read} of {of} ");
+                    let room = (w as usize).saturating_sub(width(&tally) + 1);
+                    let mut spans = kit::fit(
+                        vec![
+                            Span::raw(" "),
+                            Span::styled((c + 1).to_string(), Tone::Accent.bold(&theme)),
+                            Span::styled(
+                                format!(" {}", told.title),
+                                if here {
+                                    Tone::Text.bold(&theme)
+                                } else {
+                                    Tone::Dim.style(&theme)
+                                },
+                            ),
+                        ],
+                        room,
+                        Style::new(),
+                    );
+                    spans.push(Span::raw(" "));
+                    spans.push(Span::styled(
+                        tally,
+                        if here && read > 0 {
+                            Tone::Done.style(&theme)
+                        } else {
+                            Tone::Faint.style(&theme)
+                        },
+                    ));
+                    put_line(buf, 0, y, w, &Spans::from(spans));
                 }
                 ListRow::Label(text, tone, count) => {
                     let spans = kit::label(text, *tone, *count, w as usize, &theme);
@@ -608,18 +653,16 @@ impl App {
                         .iter()
                         .filter(|&&i| entries.get(i).is_some_and(|e| e.section == *section))
                         .count();
-                    let text = match (&self.title, self.page, &self.story) {
+                    let text = match (&self.title, self.alone, &self.story) {
                         (Some((title, _)), _, _) => title.clone(),
-                        // A chapter opened from the map: the way back to it.
-                        (None, Some(_), Some(_))
-                            if self.in_chapter() && Some(i) == first_header =>
-                        {
+                        // A page opened from the map: the way back to it.
+                        (None, Some(_), Some(_)) if self.in_page() && Some(i) == first_header => {
                             self.hits
                                 .push((super::map::Hit::Back, Rect::new(0, y, w, 1)));
                             format!(" ‹ {}", self.shown_story_title())
                         }
-                        (None, Some(p), Some(s)) => {
-                            format!(" Page {p} of {} ({n})", s.chapters.len())
+                        (None, Some(p), Some(_)) => {
+                            format!(" {} ({n})", self.page_heading(p))
                         }
                         _ => format!(" {} ({n})", section.heading()),
                     };
@@ -681,7 +724,7 @@ impl App {
                     } else {
                         format!(" +{} −{}", e.additions, e.deletions)
                     };
-                    // A file the open chapter shows a hunk of from another.
+                    // A file the open page shows a hunk of from another.
                     let counts = match self.also_of(&e.path, self.run_of(e)) {
                         Some(n) => format!(" also {n}{counts}"),
                         None => counts,
@@ -823,10 +866,10 @@ impl App {
             format!("+{} −{}", e.additions, e.deletions)
         };
         let mark = if self.changed_since(e) { "●" } else { " " };
-        // In an open chapter, a file shown from another one says which.
+        // In an open page, a file shown from another one says which.
         let also = self
             .also_of(&e.path, self.run_of(e))
-            .map(|n| format!("also {n} "));
+            .map(|n| format!("also {} ", self.page_named(n)));
         let counts = match also {
             Some(also) => format!("{also}{counts}"),
             None => counts,
@@ -871,23 +914,23 @@ impl App {
         out
     }
 
-    /// UX 2.0's heading over the diff: the shown file's chapter, its
+    /// UX 2.0's heading over the diff: the shown file's page, its
     /// number and title (or "Not committed yet" in the needs tone) with
     /// what the diff compares with at the right, its why under them in at
     /// most `WHY_LINES` lines, its watch line (what a reviewer should check)
     /// on one, and a rule; nothing without a story or UX
     /// 2.0.
-    pub(super) fn chapter_head(&self, cols: usize) -> Vec<Vec<Span<'static>>> {
-        let mut out = self.chapter_title(cols);
+    pub(super) fn page_head(&self, cols: usize) -> Vec<Vec<Span<'static>>> {
+        let mut out = self.page_title(cols);
         out.extend(self.things_rows(cols));
         out
     }
 
-    /// The chapter's lines over the diff with UX 2.0: its number and title
-    /// with what the change is compared with at the right (in a chapter
-    /// opened from the map, how much of its story is read and the way
+    /// The page's lines over the diff with UX 2.0: its number and title
+    /// with what the change is compared with at the right (in a page
+    /// opened from the map, how much of its chapter is read and the way
     /// back), its why, its watch line, and a rule.
-    pub(super) fn chapter_title(&self, cols: usize) -> Vec<Vec<Span<'static>>> {
+    pub(super) fn page_title(&self, cols: usize) -> Vec<Vec<Span<'static>>> {
         if !self.opts.ux2 {
             return Vec::new();
         }
@@ -895,29 +938,26 @@ impl App {
         else {
             return Vec::new();
         };
-        let Some(chapter) = story.chapters.get(n - 1) else {
+        let Some(page) = story.pages.get(n - 1) else {
             return Vec::new();
         };
         let theme = self.theme();
         let mut title = vec![Span::raw(" ")];
-        if self.uncommitted_chapter() == Some(n) {
-            title.push(Span::styled(
-                chapter.title.clone(),
-                Tone::Needs.bold(&theme),
-            ));
-        } else if self.generated_chapter() == Some(n) {
+        if self.uncommitted_page() == Some(n) {
+            title.push(Span::styled(page.title.clone(), Tone::Needs.bold(&theme)));
+        } else if self.generated_page() == Some(n) {
             title.push(Span::styled(super::GENERATED_LAST, Tone::Dim.bold(&theme)));
         } else {
             title.push(Span::styled(
-                format!("Chapter {n} of {}", self.told_chapters()),
+                self.page_heading(n),
                 Tone::Accent.bold(&theme),
             ));
             title.push(Span::styled(
-                format!("  {}", chapter.title),
+                format!("  {}", page.title),
                 Tone::Text.bold(&theme),
             ));
         }
-        let right = if self.in_chapter() {
+        let right = if self.in_page() {
             let (read, of) = self.read_of_shown();
             format!("✓ {read} of {of} read · g m the map ")
         } else {
@@ -931,7 +971,7 @@ impl App {
         first.push(Span::raw(" "));
         first.push(Span::styled(right, Tone::Dim.style(&theme)));
         let mut out = vec![first];
-        let mut why = wrap(&chapter.why, cols.saturating_sub(2).max(10));
+        let mut why = wrap(&page.why, cols.saturating_sub(2).max(10));
         why.retain(|l| !l.is_empty());
         if why.len() > WHY_LINES {
             let rest = why[WHY_LINES - 1..].join(" ");
@@ -944,14 +984,14 @@ impl App {
                 Span::styled(line, Tone::Dim.style(&theme)),
             ]);
         }
-        if !chapter.watch.is_empty() {
+        if !page.watch.is_empty() {
             let mark = kit::mark(kit::Mark::Watch, 0, &theme);
             let room = cols.saturating_sub(width(&mark.content) + 2);
             out.push(vec![
                 Span::raw(" "),
                 mark,
                 Span::raw(" "),
-                Span::styled(cut(&chapter.watch, room), Tone::Dim.style(&theme)),
+                Span::styled(cut(&page.watch, room), Tone::Dim.style(&theme)),
             ]);
         }
         out.push(vec![kit::rule(cols, &theme)]);
@@ -1039,7 +1079,7 @@ impl App {
     }
 
     /// The bar over a side: the file's path from the repository's root,
-    /// its folders faint, its chapter before it; the old side's only for a
+    /// its folders faint, its page before it; the old side's only for a
     /// file renamed, which names where it was.
     fn bar(&self, entry: &Entry, new_side: bool, cols: u16) -> Vec<(String, Style)> {
         let mut out: Vec<(String, Style)> = vec![(" ".into(), Style::new())];
@@ -1051,17 +1091,24 @@ impl App {
         if !new_side && self.side_widths().1 > 0 && entry.old_path.is_none() {
             return out;
         }
-        let number = self.page.or_else(|| {
+        let number = self.alone.or_else(|| {
             self.story
                 .as_ref()
-                .and_then(|s| s.chapter.get(&entry.path).copied())
+                .and_then(|s| s.page.get(&entry.path).copied())
         });
         let mut used = 1;
         if let (Some(story), Some(n), true) =
             (&self.story, number, new_side || self.side_widths().1 == 0)
-            && let Some(chapter) = story.chapters.get(n - 1)
+            && let Some(page) = story.pages.get(n - 1)
         {
-            let text = format!("{n}/{} {} · ", story.chapters.len(), chapter.title);
+            let (k, m) = match self.told_map() {
+                Some(s) => {
+                    let (_, k, m) = story::page_number(s, n);
+                    (k, m)
+                }
+                None => (n, story.pages.len()),
+            };
+            let text = format!("{k}/{m} {} · ", page.title);
             used += width(&text);
             out.push((text, self.comment()));
         }
@@ -1079,18 +1126,18 @@ impl App {
             used += width(text);
             out.push((text.into(), Style::new().fg(UNCOMMITTED)));
         }
-        // A list too narrow for a whole why heads its chapter with the
+        // A list too narrow for a whole why heads its page with the
         // first sentence: the whole why goes here, cut to fit.
         if self.list_width < SHORT_WHY
             && let (Some(story), Some(n)) = (&self.story, number)
-            && let Some(chapter) = story.chapters.get(n - 1)
-            && !chapter.why.is_empty()
-            && story::first_sentence(&chapter.why) != chapter.why
+            && let Some(page) = story.pages.get(n - 1)
+            && !page.why.is_empty()
+            && story::first_sentence(&page.why) != page.why
         {
             let room = (cols as usize).saturating_sub(used + 3);
             if room > 10 {
                 out.push((
-                    format!("   {}", switchboard_ui::draw::cut(&chapter.why, room)),
+                    format!("   {}", switchboard_ui::draw::cut(&page.why, room)),
                     self.comment(),
                 ));
             }
@@ -1116,11 +1163,11 @@ impl App {
         let area = self.diff_area();
         let Some(entry) = self.current().cloned() else {
             if let Some(change) = &self.change {
-                let text = if self.page.is_some()
+                let text = if self.alone.is_some()
                     && self.order.is_empty()
                     && self.path_filter.trim().is_empty()
                 {
-                    "This chapter's files aren't in the diff as it is now: they changed back since its commits.".to_string()
+                    "This page's files aren't in the diff as it is now: they changed back since its commits.".to_string()
                 } else if !self.path_filter.trim().is_empty() {
                     format!(
                         "No file's path matches “{}”. Backspace or esc widens it.",
@@ -1139,7 +1186,7 @@ impl App {
             }
             return None;
         };
-        let head = self.chapter_head(area.width as usize);
+        let head = self.page_head(area.width as usize);
         for (i, spans) in head.iter().enumerate() {
             put_line(
                 buf,
@@ -1479,13 +1526,13 @@ impl App {
         ow + 1 + nw
     }
 
-    /// The lines of the hunks of another chapter than the page's, which a
+    /// The lines of the hunks of another page than the page's, which a
     /// page dims, since it can't leave part of a file out; none in a file
     /// changed since its commits, whose story's hunks are at the committed
     /// lines.
     fn dimmed(&self, entry: &Entry) -> HashSet<(bool, usize)> {
         let mut out = HashSet::new();
-        let (Some(page), Some(story)) = (self.page, &self.story) else {
+        let (Some(page), Some(story)) = (self.alone, &self.story) else {
             return out;
         };
         if self.changed_since(entry) {
@@ -1501,12 +1548,12 @@ impl App {
             .filter(|h| run.is_none_or(|r| h.run == r))
         {
             // The page's own hunks, and those it shows again from another
-            // chapter, at full strength.
+            // page, at full strength.
             let again = story
                 .repeats
                 .get(&hunk.id)
                 .is_some_and(|shown| shown.contains(&page));
-            if hunk.chapter == page || again {
+            if hunk.page == page || again {
                 continue;
             }
             for (new_side, first, span) in [

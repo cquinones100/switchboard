@@ -36,7 +36,7 @@ pub const TOOLS: &str = "Read,Grep,Glob";
 pub const TIMEOUT: Duration = Duration::from_secs(120);
 
 pub const PROMPT: &str = "You answer a reviewer's question about a code change they are reading in a diff viewer. \
-You are given the change's story (its chapters, each with why it is built so) inside <story>, \
+You are given the change's story (its pages, each with why it is built so) inside <story>, \
 its commit messages and every changed file's diff inside <diff>, where the reviewer's cursor is inside <cursor>, \
 and their question inside <question>. \
 Your working directory is the repository the change is in: when the diff alone can't answer \
@@ -236,8 +236,8 @@ impl Asking {
             let _ = child.kill();
             let _ = child.wait();
         }
-        // Here too, not only in the thread that asked: the diff closing
-        // mid-answer ends the process before that thread gets to it.
+        // Here too, not only in the chapter that asked: the diff closing
+        // mid-answer ends the process before that chapter gets to it.
         self.remove_copy();
     }
 
@@ -284,7 +284,7 @@ impl Session {
 pub const SESSION_PROMPT: &str = "You are now answering a reviewer's question about the change this conversation made, \
 asked from Switchboard's diff viewer in a copy of this session: the tab's own conversation is left as it was. \
 Change nothing: you may only Read, Grep and Glob. \
-You are given the change's story (its chapters, each with why it is built so) inside <story>, \
+You are given the change's story (its pages, each with why it is built so) inside <story>, \
 where the reviewer's cursor is inside <cursor> (its path relative to the repository named there), \
 its commit messages and every changed file's diff inside <diff>, and the question inside <question>. \
 Cite code as path:line. Say so plainly when you don't know rather than guessing. \
@@ -647,7 +647,7 @@ mod tests {
             ],
         );
         let story = Story {
-            chapters: vec![story::Chapter {
+            pages: vec![story::Page {
                 title: "Change a".into(),
                 why: "It changes a.".into(),
                 watch: String::new(),
@@ -656,7 +656,7 @@ mod tests {
                 ..Default::default()
             }],
             place: Default::default(),
-            chapter: Default::default(),
+            page: Default::default(),
             hunks: Default::default(),
             missed: None,
             ..Default::default()
@@ -674,7 +674,7 @@ mod tests {
                 &at,
                 "  Why this?  "
             ),
-            "<story>\n### 1. Change a\n\nIt changes a.\n\n- `src/a.js`\n</story>\n\n<diff>\nD\n</diff>\n\n<cursor>\nsrc/a.js:5 in hunk [src/a.js#1]\n</cursor>\n\n<question>\nWhy this?\n</question>"
+            "<story>\n# The diff's story\n\n### 1. Change a\n\nIt changes a.\n\n- `src/a.js`\n</story>\n\n<diff>\nD\n</diff>\n\n<cursor>\nsrc/a.js:5 in hunk [src/a.js#1]\n</cursor>\n\n<question>\nWhy this?\n</question>"
         );
         let file_only = Cursor {
             path: Some("src/a.js".into()),

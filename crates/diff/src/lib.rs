@@ -95,27 +95,27 @@ pub fn manifest() -> Manifest {
             Setting::new("diff_story", true)
                 .said(
                     "Diff told as a story",
-                    "M-d's file list grouped into a few chapters Haiku names from the whole diff and the commits' messages, each with a heading, two or three sentences that make the case for it to the colleagues reviewing it, and a line of what to watch for, read from the change's core to its edges ([c and ]c move between them, yS copies the story as Markdown); off, the files keep the reading order by kind. Sends the diff's text and the commit messages, not only the paths, to Claude",
+                    "M-d's file list grouped into a few pages Haiku names from the whole diff and the commits' messages, each with a heading, two or three sentences that make the case for it to the colleagues reviewing it, and a line of what to watch for, read from the change's core to its edges, and told as a map, in chapters (]c and [c move between them, yS copies the story as Markdown); off, the files keep the reading order by kind. Sends the diff's text and the commit messages, not only the paths, to Claude",
                 ),
             Setting::new("diff_story_progress", true)
                 .said(
                     "Diff story progress",
-                    "While M-d's story is told, its cover shows what Haiku is reading, each chapter as Haiku names it and the time taken, t showing Haiku's answer itself as it comes; off, a spinner alone",
+                    "While M-d's story is told, its cover shows what Haiku is reading, each page as Haiku names it and the time taken, t showing Haiku's answer itself as it comes; off, a spinner alone",
                 ),
             Setting::new("diff_story_pages", true)
                 .said(
                     "Diff story a page at a time",
-                    "]p and [p in M-d's diff open the story's chapters one at a time, each a diff of its own as if it were a commit, [p from the first going back to the whole diff; off, they do nothing",
+                    "]p and [p in M-d's diff open the story's pages one at a time, each a diff of its own as if it were a commit, [p from the first going back to the whole diff; off, they do nothing",
                 ),
             Setting::new("diff_story_notes", true)
                 .said(
                     "Diff story notes on changes",
-                    "M-d's diff shows Haiku's note over each change worth one, why it is needed, and names the chapter of a change that belongs to another one than its file; off, only the list's chapters",
+                    "M-d's diff shows Haiku's note over each change worth one, why it is needed, and names the page of a change that belongs to another one than its file; off, only the list's pages",
                 ),
             Setting::new("diff_story_map", true)
                 .said(
                     "Tell the diff's story as a map",
-                    "M-d tells the diff's story as a map: its chapters in stories (the main one, a thread for each part it can be read without, and the side work), each chapter with the chapters it builds on, as Haiku tells it, and a change shown in every chapter that can't be read without it. The diff gets a Map mode beside its files (g m and g f, or m), opening in the mode used last; off, the story is one list of chapters and there is no Map mode. A story already told is told again the first time either way",
+                    "M-d tells the diff's story as a map: one story in chapters of pages (the goal's chapter, one for each part it can be read without, and the side work), each page with the pages it builds on, as Haiku tells it, and a change shown on every page that can't be read without it. The diff gets a Map mode beside its files (g m and g f, or m), the chapters in a strip across its top, opening in the mode used last; off, the story is one list of pages and there is no Map mode. A story already told is told again the first time either way",
                 ),
             Setting::new("diff_story_ahead", true)
                 .said(
@@ -126,13 +126,13 @@ pub fn manifest() -> Manifest {
             Setting::new("diff_story_plan", false)
                 .said(
                     "Diff story reads the tab's plan",
-                    "M-d's story, told ahead or on opening, is given the tab's plan note (an autopilot item's plan) as well as the commits, so its chapters can say what problem each solves and what was passed over; off, it reads the commits and the diff alone. Sends the plan note's words to Claude (Haiku)",
+                    "M-d's story, told ahead or on opening, is given the tab's plan note (an autopilot item's plan) as well as the commits, so its pages can say what problem each solves and what was passed over; off, it reads the commits and the diff alone. Sends the plan note's words to Claude (Haiku)",
                 )
                 .only(Scope::Workspace),
             Setting::new("diff_uncommitted", true)
                 .said(
                     "Uncommitted changes in M-d",
-                    "M-d's diff runs from the PR's base to the working tree, marking files with changes not yet committed and listing them in a last chapter; off, it shows the branch's commits only",
+                    "M-d's diff runs from the PR's base to the working tree, marking files with changes not yet committed and listing them in a last page; off, it shows the branch's commits only",
                 ),
             Setting::new("diff_list_wide", true)
                 .said(

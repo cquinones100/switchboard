@@ -123,7 +123,7 @@ impl Command {
                 "The pane brought beside the tool is parked again, its program still running, and takes its whole place back when the tool closes. Listed only where a tool stands in for a pane."
             }
             Command::CopyStory => {
-                "It presses yS in the diff: each chapter's number, title and why, its files, and each change's note as path:line. Listed only while the diff is open; with no story told yet, it says so."
+                "It presses yS in the diff: each page's number, title and why, its files, and each change's note as path:line. Listed only while the diff is open; with no story told yet, it says so."
             }
             Command::Ask => {
                 "It presses ga in the diff. Haiku runs in the repository with tools to read and search only, keeps no session, and streams its answer beside the diff. Sends the diff and your question to Claude; diff_ask turns it off."
