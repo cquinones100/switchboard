@@ -37,7 +37,7 @@ use crate::util;
 /// read, as its default.
 const LOOK_EVERY_MS: i64 = 30_000;
 /// The least time between looks through the connector, each a model call.
-pub const CONNECTOR_EVERY_MS: i64 = 60_000;
+const CONNECTOR_EVERY_MS: i64 = 60_000;
 /// How many looks run at twice the time apart once Slack asks to slow down.
 pub const SLOW_LOOKS: u32 = 10;
 const SEARCH_PAGE: u32 = 20;
@@ -124,32 +124,6 @@ pub fn slowed_note(every: i64) -> String {
         format!("{seconds} seconds")
     };
     format!("Slack asked Switchboard to slow down: looking every {gap} for a while")
-}
-
-/// What a look came to.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Looked {
-    /// It read Slack: its line for the log.
-    Read(String),
-    /// Its token read failed while the connector's minute wasn't up: it
-    /// asked Slack, so it counts as a look, but read nothing.
-    Held,
-    /// It read nothing, the connector's minute not up and no token to try
-    /// (or none that could be read), which it is at `until`.
-    Skipped { until: i64 },
-}
-
-impl Looked {
-    /// Its line for the log.
-    pub fn line(&self) -> String {
-        match self {
-            Looked::Read(line) => line.clone(),
-            Looked::Held => {
-                "slack: the token's read failed, and the connector looked under a minute ago".into()
-            }
-            Looked::Skipped { .. } => "slack: the connector looked under a minute ago".into(),
-        }
-    }
 }
 
 /// A search result, as parsed from the connector's text.
@@ -420,7 +394,7 @@ pub async fn look_slack(
     call: &impl Connector,
     token: Option<Result<Client, String>>,
     now: i64,
-) -> anyhow::Result<Looked> {
+) -> anyhow::Result<String> {
     let state_file = dirs.state.join("slack-look.json");
     let mut state = util::read_json_object(&state_file);
     // Where to look from: the last look less an overlap, and a day back for
@@ -445,9 +419,6 @@ pub async fn look_slack(
     let day = jiff::Timestamp::from_second(from - 86_400)
         .map(|t| t.strftime("%Y-%m-%d").to_string())
         .unwrap_or_default();
-    // Only a token that was read sends Slack a request; one that couldn't
-    // be read reads nothing, as no token does.
-    let tried_token = matches!(token, Some(Ok(_)));
     let by_token = match token {
         Some(Ok(client)) => {
             slack_api::worked(&dirs.state, slack_api::Part::Token);
@@ -508,27 +479,6 @@ pub async fn look_slack(
     let (me, messages) = match by_token {
         Some(read) => read,
         None => {
-            // A look through the connector, each a model call, goes out at
-            // most once a minute, however often the token is tried and
-            // whatever asked for it (the tick, going to the view, a reply).
-            // Counted as it starts, saved at once, so one whose model call
-            // fails counts too; one held back after the connector comes back
-            // goes out once the minute is up (`Looked::Skipped`).
-            if let Some(at) = state.get("connector_at").and_then(Value::as_i64)
-                && now - at < CONNECTOR_EVERY_MS
-            {
-                let until = at + CONNECTOR_EVERY_MS;
-                return Ok(if tried_token {
-                    Looked::Held
-                } else {
-                    Looked::Skipped { until }
-                });
-            }
-            state.insert("connector_at".into(), json!(now));
-            util::write_atomic(
-                &state_file,
-                util::json_compact(&Value::Object(state.clone())),
-            )?;
             let me = me_by_connector(call, &mut state).await?;
             let messages = search_by_connector(call, &day, from).await?;
             (me, messages)
@@ -550,9 +500,9 @@ pub async fn look_slack(
     let skip = mine.len().saturating_sub(500);
     state.insert("mine".into(), json!(mine[skip..]));
     util::write_atomic(&state_file, util::json_compact(&Value::Object(state)))?;
-    Ok(Looked::Read(format!(
+    Ok(format!(
         "slack: looked, {n_items} new, {n_replied} of yours"
-    )))
+    ))
 }
 
 /// The look's search through your own token, in two parts so a busy

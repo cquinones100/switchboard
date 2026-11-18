@@ -43,15 +43,9 @@ use crate::{connector, settings, util};
 #[derive(Debug)]
 pub enum DayEvent {
     Feed(Fetched),
-    /// What a look came to; when Slack refused the look for its rate
-    /// limit, when Slack asked it to wait until; and the look's schedule
-    /// before it started, put back when it read nothing
-    /// (`slack_look::Looked::Skipped`).
-    SlackLooked {
-        result: Result<slack_look::Looked, String>,
-        slowed: Option<i64>,
-        before: (Option<i64>, slack_look::Pace),
-    },
+    /// A look's line for the log, and, when Slack refused the look for its
+    /// rate limit, when Slack asked it to wait until.
+    SlackLooked(Result<String, String>, Option<i64>),
     /// The threads a look found something new in, read.
     SlackThreadsRead(Result<slack_thread::Read, String>),
     /// The chosen Slack message's thread read, by its key.
@@ -112,8 +106,6 @@ pub struct Day {
     slack_busy: bool,
     /// Slack's asking the look to slow down.
     slack_pace: slack_look::Pace,
-    /// When a look held back by the connector's minute is due again.
-    slack_look_at: Option<i64>,
     minute: Option<i64>,
     standup_tried: i64,
     busy: Vec<Job>,
@@ -210,13 +202,12 @@ const SLACK_MARK_AGAIN_MS: i64 = 60_000;
 const SHOWN_FOR_MS: i64 = 10_000;
 
 // How often the look runs: Settings' `slack_look_every`, never under a
-// minute while it can only read through the connector, with no token to
-// try first (a small file says whether there is a sign-in). A look whose
-// token read fails keeps its connector fallback a minute apart itself
-// (`slack_look::look_slack`).
+// minute while it reads through the connector rather than your token, as it
+// does while the token's look fails. Two small files say whether it does.
 fn slack_look_every(dirs: &Dirs) -> i64 {
-    let by_token =
-        settings::is_on("slack_token_reads") && slack_user::signed_in(&dirs.state).is_some();
+    let by_token = settings::is_on("slack_token_reads")
+        && slack_user::signed_in(&dirs.state).is_some()
+        && slack_api::look_works(&dirs.state);
     slack_look::look_every(settings::cached("slack_look_every").as_ref(), by_token)
 }
 
@@ -278,20 +269,15 @@ impl Server {
         {
             self.read_feed();
         }
-        // Kept while you're away, as the looks pause then, and while a look
-        // still runs, until a look starts (`look_at_slack`).
-        let held_back_due =
-            !away && !self.day.slack_busy && self.day.slack_look_at.is_some_and(|at| ms >= at);
-        if (held_back_due || !away || self.day.slack_asked.is_none())
+        if (!away || self.day.slack_asked.is_none())
             && settings::is_on("slack_background")
-            && (held_back_due
-                || due(
-                    self.day.slack_asked,
-                    self.day.slack_pace.every(slack_look_every(&dirs)),
-                    started,
-                    SLACK_FIRST_MS,
-                    ms,
-                ))
+            && due(
+                self.day.slack_asked,
+                self.day.slack_pace.every(slack_look_every(&dirs)),
+                started,
+                SLACK_FIRST_MS,
+                ms,
+            )
         {
             self.look_at_slack();
         }
@@ -334,29 +320,17 @@ impl Server {
                 }
                 self.day.feed.take(fetched, util::now_ms());
             }
-            DayEvent::SlackLooked {
-                result,
-                slowed,
-                before,
-            } => {
+            DayEvent::SlackLooked(result, slowed) => {
                 self.day.slack_busy = false;
-                // A look that read nothing (the connector's minute not yet
-                // up, with no token to try) leaves the schedule as it was,
-                // and looks again once the minute is up, so a refresh asked
-                // for (a reply, going to the view) isn't lost.
-                if let Ok(slack_look::Looked::Skipped { until }) = &result {
-                    (self.day.slack_asked, self.day.slack_pace) = before;
-                    self.day.slack_look_at = Some(*until);
-                }
                 if let Some(until) = slowed {
                     self.day.slack_pace.slow_down(until);
                 }
-                match &result {
-                    Ok(looked) => log(&dirs.state, &looked.line()),
+                let looked = result.is_ok();
+                match result {
+                    Ok(line) => log(&dirs.state, &line),
                     Err(e) => log(&dirs.state, &format!("slack: {e}")),
                 }
-                // Only a look that read Slack has new threads to read.
-                if matches!(result, Ok(slack_look::Looked::Read(_))) {
+                if looked {
                     self.read_wanted_threads();
                 }
             }
@@ -822,13 +796,7 @@ impl Server {
         }
         self.day_views(&dirs, &util::local_now());
         if settings::is_on("slack_background") {
-            // A look still running may have read before the reply: look
-            // again once it ends.
-            if self.day.slack_busy {
-                self.day.slack_look_at = Some(util::now_ms());
-            } else {
-                self.look_at_slack();
-            }
+            self.look_at_slack();
         }
     }
 
@@ -1262,9 +1230,7 @@ impl Server {
     fn look_at_slack(&mut self) {
         let now = util::now_ms();
         let every = slack_look_every(&Dirs::here());
-        // Nor before a look held back by the connector's minute can read.
-        let held_back = self.day.slack_look_at.is_some_and(|at| now < at);
-        if held_back || !self.day.slack_pace.may_look(now, every) {
+        if !self.day.slack_pace.may_look(now, every) {
             return;
         }
         // Counted only once a look starts, so a tick that finds one still
@@ -1272,9 +1238,7 @@ impl Server {
         if self.day.slack_busy || tokio::runtime::Handle::try_current().is_err() {
             return;
         }
-        let before = (self.day.slack_asked, self.day.slack_pace.clone());
         self.day.slack_asked = Some(now);
-        self.day.slack_look_at = None;
         self.day.slack_busy = true;
         self.day.slack_pace.looked(now);
         let tx = self.tx.clone();
@@ -1282,19 +1246,13 @@ impl Server {
             let dirs = Dirs::here();
             let token = slack_api::client(&dirs.state).await;
             let by_token = matches!(token, Some(Ok(_)));
-            // The time it was asked, so looks the tick paces a minute apart
-            // through the connector stay a minute apart there.
-            let result = slack_look::look_slack(&dirs, &Claude, token, now)
+            let result = slack_look::look_slack(&dirs, &Claude, token, util::now_ms())
                 .await
                 .map_err(|e| e.to_string());
             let slowed = by_token
                 .then(|| slack_api::look_slowed(&dirs.state))
                 .flatten();
-            let _ = tx.send(Event::Day(DayEvent::SlackLooked {
-                result,
-                slowed,
-                before,
-            }));
+            let _ = tx.send(Event::Day(DayEvent::SlackLooked(result, slowed)));
         });
     }
 
