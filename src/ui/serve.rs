@@ -1153,7 +1153,13 @@ impl Server {
             // The programs by name, whole, and the tab's name cut to what
             // is left of the line, so no program is cut away.
             let programs = running.join(", ");
-            let room = width.saturating_sub(draw::width(&programs) + 3).max(8);
+            // The programs and their ` · ` only when there are any.
+            let taken = if running.is_empty() {
+                0
+            } else {
+                draw::width(&programs) + 3
+            };
+            let room = width.saturating_sub(taken).max(8);
             let mut line = draw::cut(&format!("{index} {}", self.tab_label(tab)), room);
             if !running.is_empty() {
                 line.push_str(" · ");
