@@ -212,7 +212,9 @@ struct Start {
 /// fetch of the default branch that fails is tried twice more
 /// (`worktree::FETCH_RETRIES_S`), then the branch starts from origin's
 /// default branch as last fetched, since a failed fetch is most often a
-/// moment's network; with none fetched before, it stops.
+/// moment's network, or from the ticket's branch on origin as last fetched
+/// when the clone has it, so an outage never hides work already started;
+/// with neither fetched before, it stops.
 fn ticket_start(root: &Path, branch: &str) -> Result<Start, String> {
     const SOURCE: &str = "wt: fetch the base";
     let has_origin = worktree::remotes(root).iter().any(|r| r == "origin");
@@ -232,6 +234,16 @@ fn ticket_start(root: &Path, branch: &str) -> Result<Start, String> {
     let (commit, offline) = match fetched {
         Ok(commit) => (commit, None),
         Err(e) => {
+            let cached = format!("refs/remotes/origin/{branch}");
+            if worktree::git_ok(root, &["rev-parse", "--verify", "--quiet", &cached]) {
+                let words = format!("origin/{branch} as last fetched");
+                eprintln!("Starting from {words}: couldn't reach origin");
+                return Ok(Start {
+                    commit: cached,
+                    tracks: true,
+                    offline: Some(words),
+                });
+            }
             let (commit, words) = worktree::last_fetched(root, None).ok_or(e)?;
             (commit, Some(words))
         }

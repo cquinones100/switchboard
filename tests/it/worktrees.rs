@@ -1128,6 +1128,7 @@ fn started_answer(body: &Value) -> Value {
         2 => "eng-2-started",
         3 => "eng-3-local",
         5 => "eng-5-offline",
+        6 => "eng-6-cached",
         _ => "eng-4-offline",
     };
     json!({ "data": { "issues": { "nodes": [{ "identifier": format!("ENG-{number}"), "title": "Work", "branchName": branch, "state": { "name": "Todo", "type": "unstarted" } }] } } })
@@ -1154,6 +1155,19 @@ fn a_tickets_branch_starts_from_origins_fetched_main_or_its_branch_on_origin_and
     w.git(&other, &["commit", "-q", "--allow-empty", "-m", "started"]);
     w.git(&other, &["push", "-q", "origin", "eng-2-started"]);
     let started = w.git(&other, &["rev-parse", "HEAD"]);
+    w.git(&other, &["checkout", "-q", "-b", "eng-6-cached"]);
+    w.git(&other, &["commit", "-q", "--allow-empty", "-m", "cached"]);
+    w.git(&other, &["push", "-q", "origin", "eng-6-cached"]);
+    let cached = w.git(&other, &["rev-parse", "HEAD"]);
+    w.git(
+        &clone,
+        &[
+            "fetch",
+            "-q",
+            "origin",
+            "+refs/heads/eng-6-cached:refs/remotes/origin/eng-6-cached",
+        ],
+    );
     w.git(
         &clone,
         &["commit", "-q", "--allow-empty", "-m", "not pushed"],
@@ -1234,6 +1248,34 @@ fn a_tickets_branch_starts_from_origins_fetched_main_or_its_branch_on_origin_and
             "This branch starts from origin/main, last updated just now, since origin couldn't be reached"
         ),
         "{written}"
+    );
+
+    let cd = w.path("cd-cached");
+    let offline_started = w.run(
+        &clone,
+        &[
+            "worktree-from-ticket",
+            "--no-claude",
+            "--cd-file",
+            cd.to_str().unwrap(),
+            "ENG-6",
+        ],
+    );
+    assert_eq!(
+        offline_started.status.code(),
+        Some(0),
+        "{}",
+        stderr(&offline_started)
+    );
+    let worktree = PathBuf::from(read(&cd).lines().next().unwrap());
+    assert_eq!(
+        w.git(&worktree, &["rev-parse", "HEAD"]),
+        cached,
+        "offline, a ticket branch origin had is started from, not hidden"
+    );
+    assert_eq!(
+        w.git(&worktree, &["rev-parse", "--abbrev-ref", "@{upstream}"]),
+        "origin/eng-6-cached"
     );
 
     w.git(&clone, &["update-ref", "-d", "refs/remotes/origin/main"]);
