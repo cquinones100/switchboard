@@ -1548,12 +1548,36 @@ fn app_of(args: &[String], own_exe: &str, short: bool) -> Option<String> {
     Some(if short { brief } else { long }.to_string())
 }
 
-/// A link (`http://`, `https://`) without its query or fragment, where a
-/// signed link keeps its token; any other word as it is.
+/// A link (`http://`, `https://`, in any case, alone or an option's
+/// value after `=`) without its query or fragment, where a signed link
+/// keeps its token; any other word as it is, a pattern whose host isn't
+/// one (`https://[^/]+/v?`) among them.
 fn without_query(word: &str) -> String {
-    let is_link = word.starts_with("http://") || word.starts_with("https://");
-    match word.find(['?', '#']).filter(|_| is_link) {
-        Some(at) => format!("{}…", &word[..at]),
+    let start = match word.split_once('=') {
+        Some((key, _)) if key.starts_with('-') => key.len() + 1,
+        _ => 0,
+    };
+    let link = &word[start..];
+    let lower = link.to_ascii_lowercase();
+    let Some(rest) = ["http://", "https://"]
+        .iter()
+        .find_map(|scheme| lower.strip_prefix(scheme))
+    else {
+        return word.to_string();
+    };
+    let host_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let host = &rest[..host_end];
+    // A name, an address or `[<IPv6>]`, with a user or port.
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|h| h.split_once(']'))
+        .map_or(host.to_string(), |(ip, port)| format!("{ip}{port}"));
+    let is_host = !bare.is_empty()
+        && bare
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || ".-:@_%".contains(c));
+    match link.find(['?', '#']).filter(|_| is_host) {
+        Some(at) => format!("{}…", &word[..start + at]),
         None => word.to_string(),
     }
 }
@@ -1614,6 +1638,11 @@ mod tests {
             "worker https://a.dev/f…"
         );
         assert_eq!(line(&["rg", "https?://a.dev"]), "rg https?://a.dev");
+        assert_eq!(line(&["rg", "https://[^/]+/v?"]), "rg https://[^/]+/v?");
+        assert_eq!(
+            line(&["curl", "--url=HTTPS://a.dev/f?token=secret"]),
+            "curl --url=HTTPS://a.dev/f…"
+        );
         assert_eq!(line(&["./Build Tools/bin/worker", "-v"]), "worker -v");
         assert_eq!(
             line(&["npm exec @angular/cli serve"]),
