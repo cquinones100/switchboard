@@ -629,7 +629,8 @@ fn review_loop_notes_carry_fixed_disputed_and_known_gap_lines() {
         .and_then(|rest| rest.split("\n## ").next())
         .expect("the section");
     for said in [
-        "`review-notes-<repository>-<branch>.md`",
+        "`review-notes-<key>.md`",
+        "so no two checkouts or branches share one",
         "take out any that no longer holds",
         "a `Fixed` line whose fix is no longer in the code",
         "three kinds of entries",
