@@ -1546,10 +1546,10 @@ fn program_line(args: &[String], own_exe: &str) -> String {
 /// lists by its command and file.
 fn app_of(args: &[String], own_exe: &str, short: bool) -> Option<String> {
     let (first, rest) = args.split_first()?;
-    // A rewritten title (`npm exec @team/switchboard-notes`, or one led by
-    // a path or a link) is never one, unless it is the very path of the
-    // binary the server runs (installed in a folder with a space).
-    if first != own_exe && (first.contains(' ') || has_link(first)) {
+    // A rewritten title (`npm exec @team/switchboard-notes`, or one holding
+    // a link) is never one, unless it is the very path of the binary the
+    // server runs.
+    if first != own_exe && (title_of(first).is_some() || has_link(first)) {
         return None;
     }
     // Switchboard's own command and its words: `switchboard`, or the
@@ -1762,7 +1762,7 @@ mod tests {
             line(&["npm exec @angular/cli serve"]),
             "npm exec @angular/cli serve"
         );
-        let bin = format!("{home}/.local/bin/switchboard");
+        let bin = "/usr/local/bin/switchboard".to_string();
         assert_eq!(line(&[&bin, "notes", "--tab"]), "Notes");
         assert_eq!(
             line(&[&bin, "notes", "away"]),
@@ -1815,10 +1815,17 @@ mod tests {
         );
         assert_eq!(brief(&["vim"]), None);
         assert_eq!(brief(&["npm exec @team/switchboard-notes"]), None);
-        assert_eq!(brief(&["/usr/bin/node /w/switchboard-notes"]), None);
         assert_eq!(brief(&["https://a.test/switchboard-notes"]), None);
         let spaced = "/opt/Sb Tools/switchboard".to_string();
         let diff = [spaced.clone(), "diff".to_string(), "--working".to_string()];
+        let spaced_diff = [
+            "/opt/Sb Tools/switchboard-diff".to_string(),
+            "--working".to_string(),
+        ];
+        assert_eq!(
+            app_of(&spaced_diff, "", true).as_deref(),
+            Some("uncommitted diff")
+        );
         assert_eq!(
             app_of(&diff, &spaced, true).as_deref(),
             Some("uncommitted diff")
