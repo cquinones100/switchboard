@@ -1496,8 +1496,20 @@ fn program_line(args: &[String], own_exe: &str) -> String {
     }
     let name = match title_of(first) {
         Some((exe, title)) => {
-            let title: Vec<String> = title.split(' ').map(without_query).collect();
-            format!("{} {}", program_name(exe), title.join(" "))
+            // Up to the first word holding a link, which may run on past a
+            // space the title lost its boundary at, so nothing after it.
+            let words: Vec<&str> = title.split(' ').collect();
+            let shown = match words.iter().position(|w| has_link(w)) {
+                Some(at) => {
+                    let mut kept: Vec<String> = words[..at].iter().map(|w| w.to_string()).collect();
+                    let link = without_query(words[at]);
+                    let cut = at + 1 < words.len() && !link.ends_with('…');
+                    kept.push(if cut { format!("{link}…") } else { link });
+                    kept.join(" ")
+                }
+                None => title.to_string(),
+            };
+            format!("{} {shown}", program_name(exe))
         }
         None => program_name(first),
     };
@@ -1564,6 +1576,12 @@ fn app_of(args: &[String], own_exe: &str, short: bool) -> Option<String> {
     Some(if short { brief } else { long }.to_string())
 }
 
+/// Whether a word holds a link (`http://` or `https://`, in any case).
+fn has_link(word: &str) -> bool {
+    let lower = word.to_ascii_lowercase();
+    lower.contains("http://") || lower.contains("https://")
+}
+
 /// A word holding a link (`http://`, `https://`, in any case, anywhere
 /// in it) up to the link's host, its user and password left out and an
 /// `…` for whatever follows the host, where a link keeps its credentials
@@ -1607,7 +1625,6 @@ fn without_query(word: &str) -> String {
 fn title_of(first: &str) -> Option<(&str, &str)> {
     // A path's title too when a link follows it, so the link's words are
     // shown as a title's are, never as part of the program's name.
-    let has_link = |rest: &str| without_query(rest) != rest;
     first
         .split_once(' ')
         .filter(|(exe, rest)| !exe.contains('/') || has_link(rest))
@@ -1661,6 +1678,11 @@ mod tests {
         );
         link(
             &["worker https://a.dev/f?token=secret"],
+            "worker https://a.dev/…",
+        );
+        link(&["/usr/bin/worker https://a.dev"], "worker https://a.dev");
+        link(
+            &["worker https://a.dev/?q=two words&token=secret"],
             "worker https://a.dev/…",
         );
         link(
