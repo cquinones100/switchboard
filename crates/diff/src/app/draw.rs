@@ -213,7 +213,7 @@ impl App {
         } else if self.on_map() {
             let mut keys = vec![("↑↓←→", "move"), ("↵", "open")];
             if self.story.as_ref().is_some_and(|s| s.chapters.len() > 1) {
-                keys.push(("]c [c", "chapter"));
+                keys.push(("] [", "chapter"));
             }
             keys.push(("esc", "close"));
             keys

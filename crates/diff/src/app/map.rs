@@ -1104,12 +1104,18 @@ impl App {
         let here = (self.at < self.order.len())
             .then(|| chapter_at(self, self.at))
             .flatten();
-        let want = match here {
-            Some(c) => c as i32 + step,
-            None if step > 0 => chapters,
-            None => chapters - 1,
+        // The nearest chapter that way with a file in the list, past
+        // those a filter leaves empty.
+        let here = here.map_or(if step > 0 { -1 } else { chapters }, |c| c as i32);
+        let shown: Vec<usize> = (0..self.order.len())
+            .filter_map(|k| chapter_at(self, k))
+            .collect();
+        let want = if step > 0 {
+            shown.iter().filter(|&&c| c as i32 > here).min()
+        } else {
+            shown.iter().filter(|&&c| (c as i32) < here).max()
         };
-        let Ok(want) = usize::try_from(want) else {
+        let Some(&want) = want else {
             return;
         };
         let first = (0..self.order.len()).find(|&k| chapter_at(self, k) == Some(want));
@@ -1163,7 +1169,8 @@ impl App {
         }
     }
 
-    /// ]c and [c in Map mode: the next chapter's map, or the one before.
+    /// ] and [ on the map, and ]c and [c from an open page's list: the
+    /// next chapter's map, or the one before.
     pub(super) fn chapter_step(&mut self, step: i32) {
         let n = self.story.as_ref().map_or(0, |s| s.chapters.len()) as i32;
         if !self.mapped() || n < 2 {
@@ -1182,6 +1189,11 @@ impl App {
         self.close_page();
         self.chapter = chapter;
         self.map_at = self.goal_of(chapter);
+        // The strip, with the keys on a chapter, follows the one shown.
+        let chapters = self.story.as_ref().map_or(0, |s| s.chapters.len());
+        if self.strip.is_some_and(|s| s < chapters) {
+            self.strip = Some(chapter);
+        }
     }
 
     // ── The map's keys ──────────────────────────────────────────────────────
@@ -1191,7 +1203,7 @@ impl App {
     pub(super) fn pair_on_map(first: char, second: char) -> bool {
         matches!(
             (first, second),
-            ('g', 'm' | 'f' | 'a') | (']' | '[', 'c' | 'p') | ('y', 'S') | ('w', _)
+            ('g', 'm' | 'f' | 'a') | ('y', 'S') | ('w', _)
         )
     }
 
@@ -1239,7 +1251,8 @@ impl App {
 
     /// A key on the map: the cursor moves box to box along the arrows (j
     /// and k down and up a level, h and l across one), Enter opens the
-    /// chosen page, Tab gives the keys to the chapters' strip. `None` for
+    /// chosen page, ] and [ show the next chapter and the one before, Tab
+    /// gives the keys to the chapters' strip. `None` for
     /// a key the diff takes anywhere.
     pub(super) fn map_key(&mut self, key: KeyEvent) -> Option<Act> {
         if let Some(act) = self.strip_key(key) {
@@ -1290,10 +1303,20 @@ impl App {
                 self.strip = Some(self.chapter());
                 return Some(Act::Redraw);
             }
+            // The map has no file or change to jump to: ] and [ alone
+            // show the next chapter and the one before.
+            KeyCode::Char(']') if !ctrl => {
+                self.chapter_step(1);
+                return Some(Act::Redraw);
+            }
+            KeyCode::Char('[') if !ctrl => {
+                self.chapter_step(-1);
+                return Some(Act::Redraw);
+            }
             KeyCode::Esc => return Some(Act::Quit),
             // What the diff takes anywhere: closing, the first key of a
             // pair, the menu, reading the change again, the commits.
-            KeyCode::Char('q' | 'y' | 'g' | ']' | '[' | 'm' | 'R' | 'c' | 'E') if !ctrl => {
+            KeyCode::Char('q' | 'y' | 'g' | 'm' | 'R' | 'c' | 'E') if !ctrl => {
                 return None;
             }
             KeyCode::Char('w') if ctrl => return None,
@@ -1655,58 +1678,125 @@ impl App {
         // The chapters share what is left, each name cut to its share.
         let room = (against_x.saturating_sub(x0) as usize).max(pane / 2);
         let count = story.chapters.len().max(1);
+        let entries: Vec<(usize, Vec<Span<'static>>)> = story
+            .chapters
+            .iter()
+            .enumerate()
+            .map(|(t, told)| {
+                let (read, of) = self.read_of(t);
+                let shown = t == chapter;
+                let keys = shown && strip_at.is_some_and(|s| s < story.chapters.len());
+                let lit = self.lit == Some(Hit::Chapter(t));
+                let tally = format!("  {read} of {of} read");
+                let share = (room / count).saturating_sub(width(&tally) + 6).max(6);
+                let fill = if keys {
+                    Tone::Accent.tint(theme)
+                } else {
+                    Surface::Chosen.color(theme)
+                };
+                let spans = vec![
+                    Span::styled(format!(" {} ", t + 1), Tone::Accent.bold(theme)),
+                    Span::styled(
+                        cut(&told.title, share),
+                        if shown || lit {
+                            Tone::Text.bold(theme)
+                        } else {
+                            Tone::Dim.style(theme)
+                        },
+                    ),
+                    Span::styled(
+                        tally,
+                        if shown && read > 0 {
+                            Tone::Done.style(theme)
+                        } else {
+                            Tone::Faint.style(theme)
+                        },
+                    ),
+                    Span::raw(" "),
+                ];
+                let spans = if shown {
+                    spans
+                        .into_iter()
+                        .map(|s| {
+                            let style = s.style.bg(fill);
+                            Span::styled(s.content, style)
+                        })
+                        .collect()
+                } else {
+                    spans
+                };
+                (t, spans)
+            })
+            .collect();
+        let widths: Vec<usize> = entries
+            .iter()
+            .map(|(_, s)| kit::spans_width(s) + 1)
+            .collect();
+        let total: usize = widths.iter().sum();
+        // What the change is compared with gives way first; then, when the
+        // chapters still don't fit, those in sight are the shown one and its
+        // neighbours, a ‹ and a › at the ends reaching the rest by a click.
+        let keep_against = total <= against_x.saturating_sub(x0) as usize;
+        let avail = if keep_against {
+            against_x.saturating_sub(x0) as usize
+        } else {
+            chip_x.saturating_sub(x0 + 1) as usize
+        };
+        let (mut from, mut to) = (0, entries.len());
+        if total > avail {
+            let room = avail.saturating_sub(4);
+            let (mut lo, mut hi) = (chapter, chapter + 1);
+            let mut used = widths.get(chapter).copied().unwrap_or(0);
+            loop {
+                let right = widths.get(hi).copied().filter(|w| used + w <= room);
+                if let Some(w) = right {
+                    used += w;
+                    hi += 1;
+                }
+                let left = lo
+                    .checked_sub(1)
+                    .and_then(|l| widths.get(l))
+                    .copied()
+                    .filter(|w| used + w <= room);
+                if let Some(w) = left {
+                    used += w;
+                    lo -= 1;
+                }
+                if right.is_none() && left.is_none() {
+                    break;
+                }
+            }
+            (from, to) = (lo, hi);
+        }
         let mut x = x0;
-        for (t, told) in story.chapters.iter().enumerate() {
-            let (read, of) = self.read_of(t);
-            let shown = t == chapter;
-            let keys = shown && strip_at.is_some_and(|s| s < story.chapters.len());
-            let lit = self.lit == Some(Hit::Chapter(t));
-            let tally = format!("  {read} of {of} read");
-            let share = (room / count).saturating_sub(width(&tally) + 6).max(6);
-            let name = cut(&told.title, share);
-            let fill = if keys {
-                Tone::Accent.tint(theme)
-            } else {
-                Surface::Chosen.color(theme)
-            };
-            let mut spans = vec![
-                Span::styled(format!(" {} ", t + 1), Tone::Accent.bold(theme)),
-                Span::styled(
-                    name,
-                    if shown || lit {
-                        Tone::Text.bold(theme)
-                    } else {
-                        Tone::Dim.style(theme)
-                    },
-                ),
-                Span::styled(
-                    tally,
-                    if shown && read > 0 {
-                        Tone::Done.style(theme)
-                    } else {
-                        Tone::Faint.style(theme)
-                    },
-                ),
-                Span::raw(" "),
-            ];
-            if shown {
-                spans = spans
-                    .into_iter()
-                    .map(|s| {
-                        let style = s.style.bg(fill);
-                        Span::styled(s.content, style)
-                    })
-                    .collect();
-            }
+        let arrow = |buf: &mut Buffer, x: u16, text: &str| {
+            put_line(
+                buf,
+                x,
+                0,
+                2,
+                &Spans::from(Span::styled(text.to_string(), Tone::Accent.bold(theme))),
+            );
+        };
+        if from > 0 {
+            arrow(buf, x, "‹ ");
+            self.hits
+                .push((Hit::Chapter(from - 1), Rect::new(x, 0, 1, 1)));
+            x += 2;
+        }
+        for (t, spans) in entries.into_iter().take(to).skip(from) {
             let w = kit::spans_width(&spans) as u16;
-            if x + w > against_x.max(x0 + room as u16) {
-                break;
-            }
             put_line(buf, x, 0, w, &Spans::from(spans));
             self.hits.push((Hit::Chapter(t), Rect::new(x, 0, w, 1)));
             x += w + 1;
         }
-        if against_x > x && !against.is_empty() {
+        if to < story.chapters.len() {
+            arrow(buf, x, " ›");
+            self.hits
+                .push((Hit::Chapter(to), Rect::new(x + 1, 0, 1, 1)));
+            x += 2;
+        }
+        if keep_against && against_x > x && !against.is_empty() {
             put_line(
                 buf,
                 against_x,
@@ -2251,6 +2341,22 @@ impl App {
                 .as_ref()
                 .and_then(|s| s.page.get(&self.entries()[i].path))
                 .is_some_and(|n| pages.contains(n))
+        });
+        let first = first.or_else(|| {
+            // A filter or a page kept with Files mode's place hides them:
+            // the whole list, as the chip asks for those files.
+            self.alone = None;
+            self.whole_at = None;
+            self.filtering = false;
+            self.path_filter.clear();
+            self.lines.clear();
+            self.sort();
+            self.order.iter().position(|&i| {
+                self.story
+                    .as_ref()
+                    .and_then(|s| s.page.get(&self.entries()[i].path))
+                    .is_some_and(|n| pages.contains(n))
+            })
         });
         if let Some(first) = first {
             self.focus = Focus::List;

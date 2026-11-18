@@ -599,7 +599,7 @@ pub const KEYS: &[(&str, &[KeyRow])] = &[
                 "down a level to what the page builds on, up to what needs it, across a level",
             ),
             key_row("↵", "open the chosen page, with its own map"),
-            key_row("]c [c", "the next chapter's map, the one before"),
+            key_row("] [", "the next chapter's map, the one before"),
             key_row(
                 "tab",
                 "the chapters' strip: h l between the chapters, ↵ on In the files only opens their files",
@@ -2327,7 +2327,11 @@ impl App {
             // the generated files' and what isn't committed by name alone.
             Some(page) if hunk.page <= self.told_pages() => vec![
                 Span::styled(
-                    format!("{}/{}", hunk.page, self.told_pages()),
+                    if story.chapters.is_empty() {
+                        format!("{}/{}", hunk.page, self.told_pages())
+                    } else {
+                        story::page_of(story, hunk.page, story::chapter_of(story, home))
+                    },
                     Tone::Accent.bold(&theme),
                 ),
                 Span::styled(format!(" {}", page.title), Tone::Text.bold(&theme)),
@@ -3508,6 +3512,28 @@ impl App {
                 && starts[k]
                 && let Some(&n) = story.page.get(path)
             {
+                // Each chapter's pages under the chapter, and the pages no
+                // chapter holds under In the files only, in either layout.
+                let chapter_row = self.told_map().and_then(|map| {
+                    let chapter = story::chapter_of(map, n);
+                    (listed_chapter != Some(chapter)).then_some((map, chapter))
+                });
+                if !self.opts.ux2
+                    && let Some((map, chapter)) = chapter_row
+                {
+                    listed_chapter = Some(chapter);
+                    if k > 0 {
+                        rows.push(ListRow::Blank);
+                    }
+                    rows.push(match chapter {
+                        Some(c) => ListRow::Chapter(c),
+                        None => ListRow::Label(
+                            FILES_ONLY.into(),
+                            Tone::Dim,
+                            Some(Self::files_only(map).1),
+                        ),
+                    });
+                }
                 if self.opts.ux2 {
                     // A page's number and title, the why going over the
                     // diff; what isn't committed yet under a label of its
@@ -3515,8 +3541,6 @@ impl App {
                     if k > 0 {
                         rows.push(ListRow::Blank);
                     }
-                    // Each chapter's pages under the chapter, and the pages
-                    // no chapter holds under In the files only.
                     if let Some(map) = self.told_map() {
                         let chapter = story::chapter_of(map, n);
                         if listed_chapter != Some(chapter) {
@@ -4891,6 +4915,18 @@ impl App {
                     self.close_answer();
                 }
                 self.focus = Focus::List;
+                // On the map, ] and [ alone switch chapters, so the
+                // chapter buttons press those, and the page buttons open
+                // the chosen page as ]p would.
+                if self.on_map() && matches!(keys, "]c" | "[c" | "]p" | "[p") {
+                    match keys {
+                        "]c" => self.chapter_step(1),
+                        "[c" => self.chapter_step(-1),
+                        "]p" => self.map_alone(1),
+                        _ => {}
+                    }
+                    return Act::Redraw;
+                }
                 let mut act = Act::Same;
                 for c in keys.chars() {
                     act = self.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
@@ -7963,13 +7999,65 @@ mod tests {
     }
 
     #[test]
+    fn a_narrow_strip_keeps_the_shown_chapter_in_sight_and_reaches_the_rest() {
+        let mut app = map_app();
+        let mut story = app.story.clone().unwrap();
+        for i in 0..4 {
+            story.chapters.push(story::Chapter {
+                title: format!("A chapter with a long name {i}"),
+                kind: story::Kind::Other,
+                pages: vec![5],
+                ..story::Chapter::default()
+            });
+        }
+        app.story = Some(story);
+        app.cols = 80;
+        press(&mut app, "]]]]]");
+        assert_eq!(app.chapter, 5);
+        let shown = screen(&mut app);
+        assert!(shown[0].contains("6 A cha"), "{:?}", shown[0]);
+        assert!(shown[0].trim_start().starts_with("‹"), "{:?}", shown[0]);
+        // Every chapter in sight has a hit box, and the ‹ one before them.
+        let hits: Vec<usize> = app
+            .hits
+            .iter()
+            .filter_map(|(h, _)| match h {
+                Hit::Chapter(t) => Some(*t),
+                _ => None,
+            })
+            .collect();
+        assert!(hits.contains(&5) && hits.iter().any(|&t| t < 5));
+    }
+
+    #[test]
+    fn a_hunk_of_another_chapter_is_named_by_its_chapter_and_page() {
+        let app = map_app();
+        let story = app.story.as_ref().unwrap();
+        let hunk = story::HunkNote {
+            id: "src/fmt.rs#1".into(),
+            run: 1,
+            old_start: 1,
+            old_count: 1,
+            new_start: 1,
+            new_count: 1,
+            page: 5,
+            note: String::new(),
+        };
+        let lines = story::note_lines(story, &hunk, 2, 80).unwrap();
+        assert!(
+            lines[0].contains("chapter 2, 1/1 Format the helpers"),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
     fn the_footer_names_the_chapter_keys_only_with_two_chapters() {
         let mut app = map_app();
-        assert!(app.footer_keys().contains(&("]c [c", "chapter")));
+        assert!(app.footer_keys().contains(&("] [", "chapter")));
         let mut story = app.story.clone().unwrap();
         story.chapters.truncate(1);
         app.story = Some(story);
-        assert!(!app.footer_keys().contains(&("]c [c", "chapter")));
+        assert!(!app.footer_keys().contains(&("] [", "chapter")));
     }
 
     #[test]
@@ -7992,8 +8080,8 @@ mod tests {
         assert_eq!(read, [4, 2, 1, 3, 3], "the wheel reads from the goal down");
         app.map_step(-1);
         assert_eq!(app.map_at, 1, "and back the way it came");
-        // ]c and [c move between the chapters, the strip lighting the one shown.
-        press(&mut app, "]c");
+        // ] and [ move between the chapters, the strip lighting the one shown.
+        press(&mut app, "]");
         assert_eq!((app.chapter, app.map_at), (1, 5));
         let shown = screen(&mut app);
         assert!(
@@ -8001,7 +8089,7 @@ mod tests {
                 .iter()
                 .any(|l| l.contains("Page 1 of 1  Format the helpers"))
         );
-        press(&mut app, "[c");
+        press(&mut app, "[");
         assert_eq!((app.chapter, app.map_at), (0, 4));
         // The strip is one stop of Tab: h and l move between the chapters.
         app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
@@ -8229,8 +8317,9 @@ mod tests {
     #[test]
     fn the_pages_keys_work_from_the_map_and_the_palettes_reset_closes_the_menu() {
         let mut app = map_app();
-        press(&mut app, "j]p");
-        assert_eq!(app.alone, Some(2), "]p opens the chosen page");
+        press(&mut app, "j");
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.alone, Some(2), "Enter opens the chosen page");
         press(&mut app, "]p");
         assert_eq!(app.alone, Some(1), "then the next read from the goal down");
         press(&mut app, "[p[p[p");

@@ -1487,6 +1487,19 @@ pub fn in_page(story: &Story, n: usize, from: Option<usize>) -> String {
     }
 }
 
+/// Page `n`'s number over its count, as a heading or a note shows it from
+/// a page of chapter `from`: "2/5" in the same chapter, "chapter 2, 1/3"
+/// in another; in a story with no chapters, among all its pages.
+pub fn page_of(story: &Story, n: usize, from: Option<usize>) -> String {
+    if story.chapters.is_empty() {
+        return format!("{n}/{}", story.pages.len());
+    }
+    match page_number(story, n) {
+        (Some(c), k, m) if Some(c) != from => format!("chapter {}, {k}/{m}", c + 1),
+        (_, k, m) => format!("{k}/{m}"),
+    }
+}
+
 /// Pages named in a line from a page of chapter `from`, each with
 /// whether its link is a guess: "page 2", "pages 2 and 5 (a guess)",
 /// "page 2 and chapter 2, page 1".
@@ -1880,7 +1893,7 @@ pub fn heading(story: &Story, i: usize, cols: usize, short: bool) -> Vec<(String
     if i > 1 {
         lines.push((String::new(), Look::Normal));
     }
-    let number = format!("{i}/{} ", story.pages.len());
+    let number = format!("{} ", page_of(story, i, chapter_of(story, i)));
     for text in wrap(&page.title, cols, &number, "    ") {
         lines.push((text, Look::Title));
     }
@@ -1908,7 +1921,8 @@ pub fn note_lines(story: &Story, hunk: &HunkNote, home: usize, cols: usize) -> O
     }
     let text = match other {
         Some(other) => {
-            let mut text = format!("{}/{} {}", hunk.page, story.pages.len(), other.title);
+            let from = chapter_of(story, home);
+            let mut text = format!("{} {}", page_of(story, hunk.page, from), other.title);
             if !hunk.note.is_empty() {
                 text.push_str(&format!(" · {}", hunk.note));
             }
