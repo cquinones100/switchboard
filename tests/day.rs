@@ -440,6 +440,14 @@ fn the_slack_look_searches_once_and_sorts_what_it_finds_as_slack_updates_does() 
     );
 
     util::block_on(slack_look::look_slack(dirs, &slack, None, now + 60_000)).unwrap();
+    // Asked again within the connector's minute, with no token to try: it
+    // reads nothing and says when the minute is up.
+    assert_eq!(
+        util::block_on(slack_look::look_slack(dirs, &slack, None, now + 90_000)).unwrap(),
+        slack_look::Looked::Skipped {
+            until: now + 120_000
+        }
+    );
     util::block_on(slack_thread::read_wanted(
         &dirs.state,
         &slack,

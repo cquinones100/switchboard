@@ -38,13 +38,6 @@ use crate::util;
 const LOOK_EVERY_MS: i64 = 30_000;
 /// The least time between looks through the connector, each a model call.
 pub const CONNECTOR_EVERY_MS: i64 = 60_000;
-/// What a look that read nothing says: the connector looked under a minute
-/// ago and there was no token to try.
-pub const SKIPPED: &str = "slack: the connector looked under a minute ago";
-/// What a look says whose token read failed while the connector's minute
-/// wasn't up: it tried Slack, so it counts as a look, but read nothing.
-pub const HELD: &str =
-    "slack: the token's read failed, and the connector looked under a minute ago";
 /// How many looks run at twice the time apart once Slack asks to slow down.
 pub const SLOW_LOOKS: u32 = 10;
 const SEARCH_PAGE: u32 = 20;
@@ -131,6 +124,32 @@ pub fn slowed_note(every: i64) -> String {
         format!("{seconds} seconds")
     };
     format!("Slack asked Switchboard to slow down: looking every {gap} for a while")
+}
+
+/// What a look came to.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Looked {
+    /// It read Slack: its line for the log.
+    Read(String),
+    /// Its token read failed while the connector's minute wasn't up: it
+    /// tried Slack, so it counts as a look, but read nothing.
+    Held,
+    /// It read nothing, the connector's minute not up and no token to try,
+    /// which it is at `until`.
+    Skipped { until: i64 },
+}
+
+impl Looked {
+    /// Its line for the log.
+    pub fn line(&self) -> String {
+        match self {
+            Looked::Read(line) => line.clone(),
+            Looked::Held => {
+                "slack: the token's read failed, and the connector looked under a minute ago".into()
+            }
+            Looked::Skipped { .. } => "slack: the connector looked under a minute ago".into(),
+        }
+    }
 }
 
 /// A search result, as parsed from the connector's text.
@@ -401,7 +420,7 @@ pub async fn look_slack(
     call: &impl Connector,
     token: Option<Result<Client, String>>,
     now: i64,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<Looked> {
     let state_file = dirs.state.join("slack-look.json");
     let mut state = util::read_json_object(&state_file);
     // Where to look from: the last look less an overlap, and a day back for
@@ -493,9 +512,16 @@ pub async fn look_slack(
             // Only a look that got through counts, saved with the rest
             // below, so one that failed (the connector down, which starts no
             // model call) doesn't hold back the look once it is back.
-            let last = state.get("connector_at").and_then(Value::as_i64);
-            if last.is_some_and(|at| now - at < CONNECTOR_EVERY_MS) {
-                return Ok(if tried_token { HELD } else { SKIPPED }.into());
+            if let Some(at) = state.get("connector_at").and_then(Value::as_i64)
+                && now - at < CONNECTOR_EVERY_MS
+            {
+                return Ok(if tried_token {
+                    Looked::Held
+                } else {
+                    Looked::Skipped {
+                        until: at + CONNECTOR_EVERY_MS,
+                    }
+                });
             }
             state.insert("connector_at".into(), json!(now));
             let me = me_by_connector(call, &mut state).await?;
@@ -519,9 +545,9 @@ pub async fn look_slack(
     let skip = mine.len().saturating_sub(500);
     state.insert("mine".into(), json!(mine[skip..]));
     util::write_atomic(&state_file, util::json_compact(&Value::Object(state)))?;
-    Ok(format!(
+    Ok(Looked::Read(format!(
         "slack: looked, {n_items} new, {n_replied} of yours"
-    ))
+    )))
 }
 
 /// The look's search through your own token, in two parts so a busy
