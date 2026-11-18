@@ -726,7 +726,7 @@ impl App {
                     };
                     // A file the open page shows a hunk of from another.
                     let counts = match self.also_of(&e.path, self.run_of(e)) {
-                        Some(n) => format!(" also {n}{counts}"),
+                        Some(n) => format!(" also {}{counts}", self.page_named(n)),
                         None => counts,
                     };
                     let cw = width(&counts) as u16;

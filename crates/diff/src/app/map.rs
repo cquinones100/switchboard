@@ -1100,29 +1100,31 @@ impl App {
                 .and_then(|s| s.page.get(path))
                 .and_then(|&n| story::chapter_of(app.story.as_ref()?, n))
         };
-        let chapters = story.chapters.len() as i32;
-        let here = (self.at < self.order.len())
-            .then(|| chapter_at(self, self.at))
-            .flatten();
-        // The nearest chapter that way with a file in the list, past
-        // those a filter leaves empty.
-        let here = here.map_or(if step > 0 { -1 } else { chapters }, |c| c as i32);
-        let shown: Vec<usize> = (0..self.order.len())
-            .filter_map(|k| chapter_at(self, k))
-            .collect();
-        let want = if step > 0 {
-            shown.iter().filter(|&&c| c as i32 > here).min()
-        } else {
-            shown.iter().filter(|&&c| (c as i32) < here).max()
-        };
-        let Some(&want) = want else {
+        if story.chapters.is_empty() {
+            return;
+        }
+        // The list's groups in its order, each chapter with a file in it
+        // and the files no chapter holds, past those a filter leaves
+        // empty: the next group's first file, or the one before's.
+        let mut groups: Vec<(Option<usize>, usize)> = Vec::new();
+        for k in 0..self.order.len() {
+            let group = chapter_at(self, k);
+            if !groups.iter().any(|(g, _)| *g == group) {
+                groups.push((group, k));
+            }
+        }
+        let here = (self.at < self.order.len()).then(|| chapter_at(self, self.at));
+        let Some(i) = here.and_then(|h| groups.iter().position(|(g, _)| *g == h)) else {
             return;
         };
-        let first = (0..self.order.len()).find(|&k| chapter_at(self, k) == Some(want));
-        if let Some(first) = first {
-            self.moved = true;
-            self.show_at(first);
-        }
+        let Some(&(_, first)) = usize::try_from(i as i32 + step)
+            .ok()
+            .and_then(|j| groups.get(j))
+        else {
+            return;
+        };
+        self.moved = true;
+        self.show_at(first);
     }
 
     /// ]p and [p in Map mode: from the map, ]p opens the chosen page;
@@ -2336,15 +2338,9 @@ impl App {
         let (pages, _) = Self::files_only(story);
         self.strip = None;
         self.show_files(true);
-        let first = self.order.iter().position(|&i| {
-            self.story
-                .as_ref()
-                .and_then(|s| s.page.get(&self.entries()[i].path))
-                .is_some_and(|n| pages.contains(n))
-        });
-        let first = first.or_else(|| {
-            // A filter or a page kept with Files mode's place hides them:
-            // the whole list, as the chip asks for those files.
+        // The whole list, a filter or a page kept with Files mode's place
+        // let go, so none of the chip's files is hidden.
+        let first = {
             self.alone = None;
             self.whole_at = None;
             self.filtering = false;
@@ -2357,7 +2353,7 @@ impl App {
                     .and_then(|s| s.page.get(&self.entries()[i].path))
                     .is_some_and(|n| pages.contains(n))
             })
-        });
+        };
         if let Some(first) = first {
             self.focus = Focus::List;
             self.moved = true;
