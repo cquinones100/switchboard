@@ -2729,7 +2729,8 @@ impl Server {
     /// the item is opened again on a later check, and the item skipped, why
     /// said, once it has failed `pilot::FAILS_SKIP` times in an hour.
     fn autopilot_failed(&mut self) {
-        let failed: Vec<(TabId, String, String, String)> = self
+        type Failed = (TabId, String, String, String, bool);
+        let failed: Vec<Failed> = self
             .tabs
             .iter()
             .filter(|(_, t)| t.opts.contains_key(OPENED) && !t.opts.contains_key(YOURS))
@@ -2743,12 +2744,16 @@ impl Server {
                     .filter(|n| !n.is_empty())
                     .cloned()
                     .unwrap_or_else(|| self.autopilot.mode.note_id.clone());
-                Some((*id, item.clone(), why.clone(), note))
+                let issue = t.opts.get(ISSUE).is_some_and(|v| !v.is_empty());
+                Some((*id, item.clone(), why.clone(), note, issue))
             })
             .collect();
-        for (tab, item, why, note) in failed {
+        for (tab, item, why, note, issue) in failed {
             let key = (note.clone(), item.clone());
-            let skip = self.autopilot.pilot.start_failed(key, &why, util::now_ms());
+            // An issue's start fails on GitHub's say (a lookup failing, the
+            // issue not standing for a moment), which passes: it is tried
+            // again, never skipped for it.
+            let skip = self.autopilot.pilot.start_failed(key, &why, util::now_ms()) && !issue;
             self.autopilot_close_tab(tab);
             if !skip {
                 eprintln!("autopilot: closed {tab}, its start failed: {why}");
