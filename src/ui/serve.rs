@@ -1353,13 +1353,14 @@ impl Server {
     fn own_exe(&self, pane: PaneId, args: &[String]) -> String {
         // src/views/serve.rs's marks, the notes pane's and a tool in a
         // pane's place.
-        const MARKS: [&str; 7] = [
+        const MARKS: [&str; 8] = [
             "@pr_view",
             "@ticket_view",
             "@link_view",
             "@checks_view",
             "@notes_pane",
             "@notes_placeholder",
+            "@aws_login",
             crate::diff::in_place::IN_PLACE,
         ];
         let marked = self
@@ -1543,6 +1544,8 @@ fn app_of(args: &[String], own_exe: &str, short: bool) -> Option<String> {
         ["link-view", ..] => ("the link view", "link view"),
         ["pr-image", "--ticket", ..] => ("the ticket's images", "ticket images"),
         ["pr-image", ..] => ("the PR's images", "PR images"),
+        ["aws-login", ..] => ("the AWS sign-in", "AWS sign-in"),
+        ["setup", ..] => ("Switchboard's setup", "setup"),
         _ => return None,
     };
     Some(if short { brief } else { long }.to_string())
@@ -1706,6 +1709,8 @@ mod tests {
             "switchboard view --log ~/job.log"
         );
         assert_eq!(line(&[&bin, "tabs"]), "switchboard tabs");
+        assert_eq!(line(&[&bin, "aws-login"]), "the AWS sign-in");
+        assert_eq!(line(&[&bin, "setup", "--check"]), "Switchboard's setup");
         assert_eq!(line(&["/opt/sb/switchboard-0.2.0", "diff"]), "the diff");
         assert_eq!(
             line(&["switchboard-backup", "notes"]),
