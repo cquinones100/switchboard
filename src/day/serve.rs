@@ -279,12 +279,9 @@ impl Server {
             self.read_feed();
         }
         // Kept while you're away, as the looks pause then, and while a look
-        // still runs.
+        // still runs, until a look starts (`look_at_slack`).
         let held_back_due =
             !away && !self.day.slack_busy && self.day.slack_look_at.is_some_and(|at| ms >= at);
-        if held_back_due {
-            self.day.slack_look_at = None;
-        }
         if (held_back_due || !away || self.day.slack_asked.is_none())
             && settings::is_on("slack_background")
             && (held_back_due
@@ -1265,7 +1262,9 @@ impl Server {
     fn look_at_slack(&mut self) {
         let now = util::now_ms();
         let every = slack_look_every(&Dirs::here());
-        if !self.day.slack_pace.may_look(now, every) {
+        // Nor before a look held back by the connector's minute can read.
+        let held_back = self.day.slack_look_at.is_some_and(|at| now < at);
+        if held_back || !self.day.slack_pace.may_look(now, every) {
             return;
         }
         // Counted only once a look starts, so a tick that finds one still
@@ -1275,6 +1274,7 @@ impl Server {
         }
         let before = (self.day.slack_asked, self.day.slack_pace.clone());
         self.day.slack_asked = Some(now);
+        self.day.slack_look_at = None;
         self.day.slack_busy = true;
         self.day.slack_pace.looked(now);
         let tx = self.tx.clone();
