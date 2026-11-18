@@ -1546,8 +1546,10 @@ fn program_line(args: &[String], own_exe: &str) -> String {
 /// lists by its command and file.
 fn app_of(args: &[String], own_exe: &str, short: bool) -> Option<String> {
     let (first, rest) = args.split_first()?;
-    // A rewritten title (`npm exec @team/switchboard-notes`) is never one.
-    if title_of(first).is_some() {
+    // A rewritten title (`npm exec @team/switchboard-notes`, or one led by
+    // a path or a link) is never one: Switchboard's binaries are started by
+    // a path with no space and no link.
+    if first.contains(' ') || has_link(first) {
         return None;
     }
     // Switchboard's own command and its words: `switchboard`, or the
@@ -1813,6 +1815,8 @@ mod tests {
         );
         assert_eq!(brief(&["vim"]), None);
         assert_eq!(brief(&["npm exec @team/switchboard-notes"]), None);
+        assert_eq!(brief(&["/usr/bin/node /w/switchboard-notes"]), None);
+        assert_eq!(brief(&["https://a.test/switchboard-notes"]), None);
         let notes = "/x/switchboard-notes".to_string();
         assert_eq!(
             app_of(std::slice::from_ref(&notes), &notes, false).as_deref(),
