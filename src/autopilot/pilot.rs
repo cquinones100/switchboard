@@ -1103,6 +1103,8 @@ impl Pilot {
     /// source or setting since leaves it unknown.
     pub fn read_failed(&mut self, key: String, now_ms: i64) {
         self.reading = false;
+        // Nothing left is said again once a read succeeds.
+        self.empty_said = false;
         if self.next.key != key {
             self.next = Next {
                 key,

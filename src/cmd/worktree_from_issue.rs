@@ -83,6 +83,12 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
     // one with none, and an open choice is taken only hands-free; it fails
     // the start, and the queue leaves it out once it reads it again.
     let mode = Mode::read(&paths::state_dir());
+    // Started by autopilot, only while it still takes issues: turned off
+    // while GitHub was being asked, nothing starts.
+    let by_autopilot = crate::mux::socket::tab_option(crate::autopilot::OPENED).is_some();
+    if by_autopilot && !(mode.sources.issues() && mode.issues_on()) {
+        return Err("autopilot no longer takes GitHub issues".into());
+    }
     if let Some(i) = &found {
         if mode.ready_only && i.body.trim().is_empty() {
             return Err(format!("{repo}#{number} has no body to plan from"));

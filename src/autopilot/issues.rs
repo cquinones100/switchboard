@@ -217,7 +217,10 @@ fn to_ask(found: &[Found], viewer: &str) -> Vec<String> {
         // A login as GitHub allows them, which keeps anything else out of
         // the path; a bot's (`name[bot]`) is never asked about, so never
         // taken.
-        if l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        // (an Enterprise Managed User's carries `_<shortcode>`)
+        if l.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
             out.push(l);
         }
     }
@@ -514,6 +517,18 @@ pub async fn write_back(
         if made.is_none_or(|m| m < since) {
             return Err(anyhow!("{hash} was there before its tab opened"));
         }
+    }
+    // One closed meanwhile (by a maintainer, as not planned, say) keeps
+    // what they decided: nothing is written on it.
+    let now = github::rest(
+        "GET",
+        &format!("/repos/{repo}/issues/{number}"),
+        None,
+        SOURCE,
+    )
+    .await?;
+    if now.get("state").and_then(Value::as_str) != Some("open") {
+        return Ok(());
     }
     github::rest(
         "POST",

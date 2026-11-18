@@ -978,6 +978,7 @@ fn autopilot_takes_issues_opened_by_you_or_labeled_by_a_writer_and_writes_back()
                 200,
                 json!({ "commit": { "committer": { "date": "2026-11-18T12:00:00Z" } } }),
             ),
+            answer(200, json!({ "number": 2, "state": "open" })),
             answer(201, json!({ "id": 7 })),
             answer(200, json!({ "number": 2, "state": "closed" })),
         ],
@@ -1020,19 +1021,20 @@ fn autopilot_takes_issues_opened_by_you_or_labeled_by_a_writer_and_writes_back()
     let seen = fake.seen();
     assert_eq!(seen[4].path, "/repos/acme/widgets/compare/main...abc1234");
     assert_eq!(seen[5].path, "/repos/acme/widgets/commits/abc1234");
-    assert_eq!(seen[6].method, "POST");
-    assert_eq!(seen[6].path, "/repos/acme/widgets/issues/2/comments");
-    assert_eq!(seen[6].body["body"], "Landed in abc1234");
-    assert_eq!(seen[7].method, "PATCH");
-    assert_eq!(seen[7].path, "/repos/acme/widgets/issues/2");
-    assert_eq!(seen[7].body["state"], "closed");
+    assert_eq!(seen[6].path, "/repos/acme/widgets/issues/2");
+    assert_eq!(seen[7].method, "POST");
+    assert_eq!(seen[7].path, "/repos/acme/widgets/issues/2/comments");
+    assert_eq!(seen[7].body["body"], "Landed in abc1234");
+    assert_eq!(seen[8].method, "PATCH");
+    assert_eq!(seen[8].path, "/repos/acme/widgets/issues/2");
+    assert_eq!(seen[8].body["state"], "closed");
     assert_eq!(counted("GitHub", "GraphQL"), 2);
-    assert_eq!(counted("GitHub", "REST"), 6);
+    assert_eq!(counted("GitHub", "REST"), 7);
 
     // GitHub turned off in Settings, none are read.
     env.settings(json!({ "github": false }));
     let err = util::block_on(issues::fetch(&repo, "autopilot")).unwrap_err();
     assert_eq!(kind(&err), ErrorKind::Off);
-    assert_eq!(fake.seen().len(), 8);
+    assert_eq!(fake.seen().len(), 9);
     env.settings(json!({}));
 }
