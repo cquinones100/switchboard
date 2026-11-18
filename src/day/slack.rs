@@ -471,7 +471,7 @@ pub fn slack_view(look: &Look) -> ViewData {
     items.extend(reminders);
     items.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
     let catching = if look.background {
-        "mission control looks every minute while you're here"
+        "mission control looks again while you're here"
     } else if look.looping {
         "the Slack routine looks every 15 minutes"
     } else {
@@ -909,9 +909,7 @@ mod tests {
         });
         assert_eq!(
             old.error.as_deref(),
-            Some(
-                "Out of date, last looked 1h ago: mission control looks every minute while you're here."
-            )
+            Some("Out of date, last looked 1h ago: mission control looks again while you're here.")
         );
         let _ = std::fs::remove_dir_all(state.parent().unwrap());
     }

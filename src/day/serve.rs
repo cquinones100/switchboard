@@ -342,7 +342,9 @@ impl Server {
                 if let Some(until) = slowed {
                     self.day.slack_pace.slow_down(until);
                 }
-                let looked = result.is_ok() && !skipped;
+                // A look that read nothing has no new threads to read.
+                let looked =
+                    result.is_ok() && !skipped && result.as_deref() != Ok(slack_look::HELD);
                 match result {
                     Ok(line) => log(&dirs.state, &line),
                     Err(e) => log(&dirs.state, &format!("slack: {e}")),
@@ -1418,12 +1420,13 @@ impl Server {
             .then(|| slack_look::slowed_note(self.day.slack_pace.every(slack_look_every(dirs))));
         let note = match (token_note, slowed) {
             (Some(said), Some(slowed)) => {
+                // Only the look's own refusal, the rate limit the slow-down
+                // speaks for; another read's stays beside it.
+                let look_refusal = slack_api::look_refusal(&dirs.state)
+                    .filter(|why| why.contains(slack_user::RATE_LIMIT));
                 let mut parts: Vec<String> = said
                     .split(" · ")
-                    .filter(|part| {
-                        !(part.starts_with("Slack read through the connector: ")
-                            && part.contains(slack_user::RATE_LIMIT))
-                    })
+                    .filter(|part| Some(*part) != look_refusal.as_deref())
                     .map(str::to_string)
                     .collect();
                 parts.push(slowed);

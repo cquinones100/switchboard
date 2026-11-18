@@ -263,6 +263,18 @@ pub fn look_slowed(state: &Path) -> Option<i64> {
         .filter(|_| refused)
 }
 
+/// Why the look's own last read through the token failed, as the view's
+/// note words it, while it did.
+pub fn look_refusal(state: &Path) -> Option<String> {
+    util::read_json_object(note_file(state))
+        .get(Part::Look.key())
+        .and_then(Value::as_str)
+        .map(|why| format!("{READ_BY_CONNECTOR}{why}"))
+}
+
+/// How the note's part for the reads (the look, threads, search) starts.
+const READ_BY_CONNECTOR: &str = "Slack read through the connector: ";
+
 /// What the view says under its header while a read through the token
 /// fails, from a small file; `None` while none does.
 /// `threads` is whether threads and pictures are read at all (Settings'
@@ -294,7 +306,7 @@ pub fn note(state: &Path, threads: bool, look: bool, search: bool) -> Option<Str
         .filter_map(|k| said(k))
         .collect();
     if let Some(why) = reads.iter().find(|why| needs_scope(why)).or(reads.first()) {
-        out.push(format!("Slack read through the connector: {why}"));
+        out.push(format!("{READ_BY_CONNECTOR}{why}"));
     }
     if let Some(why) = said("files").filter(|_| threads) {
         out.push(if needs_scope(&why) && why.contains("files:read") {

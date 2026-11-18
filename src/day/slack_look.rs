@@ -41,6 +41,10 @@ pub const CONNECTOR_EVERY_MS: i64 = 60_000;
 /// What a look that read nothing says: the connector looked under a minute
 /// ago and there was no token to try.
 pub const SKIPPED: &str = "slack: the connector looked under a minute ago";
+/// What a look says whose token read failed while the connector's minute
+/// wasn't up: it tried Slack, so it counts as a look, but read nothing.
+pub const HELD: &str =
+    "slack: the token's read failed, and the connector looked under a minute ago";
 /// How many looks run at twice the time apart once Slack asks to slow down.
 pub const SLOW_LOOKS: u32 = 10;
 const SEARCH_PAGE: u32 = 20;
@@ -488,12 +492,7 @@ pub async fn look_slack(
             // model call) doesn't hold back the look once it is back.
             let last = state.get("connector_at").and_then(Value::as_i64);
             if last.is_some_and(|at| now - at < CONNECTOR_EVERY_MS) {
-                return Ok(if tried_token {
-                    "slack: the token's read failed, and the connector looked under a minute ago"
-                        .into()
-                } else {
-                    SKIPPED.into()
-                });
+                return Ok(if tried_token { HELD } else { SKIPPED }.into());
             }
             state.insert("connector_at".into(), json!(now));
             let me = me_by_connector(call, &mut state).await?;
