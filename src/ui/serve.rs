@@ -1133,6 +1133,12 @@ impl Server {
         // behind the diff too, which closing it ends), and no more lines
         // than a box fits on a small screen, so Yes and No stay in sight.
         const SHOWN: usize = 8;
+        // What the question's box shows of a line on this client
+        // (`Confirm::draw`'s width less 12), 68 when its size isn't known.
+        let width = self
+            .clients
+            .get(&client)
+            .map_or(68, |c| usize::from(c.cols).saturating_sub(12));
         let mut list: Vec<String> = Vec::new();
         for &tab in &tabs {
             if !self.tabs.contains_key(&tab) {
@@ -1147,8 +1153,7 @@ impl Server {
             // The programs by name, whole, and the tab's name cut to what
             // is left of the line, so no program is cut away.
             let programs = running.join(", ");
-            // 68 columns, what the box shows of a line on an 80-column client.
-            let room = 68usize.saturating_sub(draw::width(&programs) + 3).max(8);
+            let room = width.saturating_sub(draw::width(&programs) + 3).max(8);
             let mut line = draw::cut(&format!("{index} {}", self.tab_label(tab)), room);
             if !running.is_empty() {
                 line.push_str(" · ");
