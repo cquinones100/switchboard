@@ -1661,13 +1661,16 @@ pub(crate) fn check_first(hands_free: bool) -> String {
 /// (`switchboard autopilot-duplicate`, which sets `@autopilot_refused`)
 /// and moves on. Empty in a tab autopilot didn't
 /// open, where you decide. `note` names the note the item is in, whose other
-/// items are looked at too; an issue's tab is pointed at no note, since
-/// nothing in a note goes to Claude unasked.
+/// items are looked at too while Settings' tab_note_context is on; an
+/// issue's tab is pointed at no note.
 pub(crate) fn duplicates_first(note: Option<&Path>) -> String {
     if crate::mux::socket::tab_option(crate::autopilot::OPENED).is_none() {
         return String::new();
     }
-    let places = match note {
+    // A note's other items only while Settings shares the tab's note with
+    // its Claude (`tab_note_context`): nothing in a note goes to Claude
+    // unasked.
+    let places = match note.filter(|_| crate::settings::is_on("tab_note_context")) {
         Some(file) => format!(
             "the other ticked and open items of my note ({}), ",
             file.display()

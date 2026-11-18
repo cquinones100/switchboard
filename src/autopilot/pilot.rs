@@ -900,7 +900,8 @@ impl Pilot {
         let mut skipped: Vec<&String> = skip.iter().collect();
         skipped.sort();
         let key = format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            mode.repo.display(),
             mode.note,
             mtime.unwrap_or(0),
             skipped
