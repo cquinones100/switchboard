@@ -1579,25 +1579,23 @@ fn without_query(word: &str) -> String {
     };
     let authority_at = start + scheme;
     let rest = &word[authority_at..];
-    // The authority runs to a slash, a query, a fragment, or a quote or
-    // space in a structured argument; its host follows any user and
-    // password (which may hold punctuation) after the last `@`, and is
-    // shown only when it holds nothing a host can't, else left out too.
-    let authority_end = rest
-        .find(['/', '?', '#', '"', '\'', ' ', ',', '}', ']'])
+    // Its host, to the first character a host or port can't hold; none
+    // when an `@` comes before the link's path, query or fragment, since
+    // whatever is before it is a user and password, which may hold any
+    // punctuation, so nothing of it is shown.
+    let path_at = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let host_end = rest
+        .find(|c: char| !(c.is_ascii_alphanumeric() || ".-_:%[]".contains(c)))
         .unwrap_or(rest.len());
-    let authority = &rest[..authority_end];
-    let host = authority
-        .rsplit_once('@')
-        .map_or(authority, |(_, host)| host);
-    let is_host = host
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || ".-_:%[]".contains(c));
-    let host = if is_host { host } else { "" };
-    let more = if authority_end < rest.len() || host.len() < authority.len() {
-        "/…"
-    } else {
+    let host = if rest[..path_at].contains('@') {
         ""
+    } else {
+        &rest[..host_end]
+    };
+    let more = match () {
+        _ if host.len() == rest.len() => "",
+        _ if host.is_empty() => "…",
+        _ => "/…",
     };
     format!("{}{host}{more}", &word[..authority_at])
 }
@@ -1660,7 +1658,7 @@ mod tests {
             &["worker https://a.dev/f?token=secret"],
             "worker https://a.dev/…",
         );
-        link(&["curl", "-4xhttp://u:pw@p.dev"], "curl -4xhttp://p.dev/…");
+        link(&["curl", "-4xhttp://u:pw@p.dev"], "curl -4xhttp://…");
         link(
             &["curl", "-d", "one=https://a.dev/&two=https://u:pw@b.dev/"],
             "curl -d one=https://a.dev/…",
@@ -1671,14 +1669,14 @@ mod tests {
         );
         link(
             &["git", "-c", "http.proxy=https://u:pw@p.dev", "fetch"],
-            "git -c http.proxy=https://p.dev/… fetch",
+            "git -c http.proxy=https://… fetch",
         );
         link(
             &["curl", "--url=HTTPS://me:pw@a.dev"],
-            "curl --url=HTTPS://a.dev/…",
+            "curl --url=HTTPS://…",
         );
         link(&["curl", "https://a.dev"], "curl https://a.dev");
-        link(&["curl", "https://w:s!@a.test/f"], "curl https://a.test/…");
+        link(&["curl", "https://w:s!@a.test/f"], "curl https://…");
         link(
             &["curl", "-d", "{\"url\":\"https://a.dev\",\"token\":\"x\"}"],
             "curl -d {\"url\":\"https://a.dev/…",
