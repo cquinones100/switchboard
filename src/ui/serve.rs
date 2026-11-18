@@ -1560,58 +1560,32 @@ fn app_of(args: &[String], own_exe: &str, short: bool) -> Option<String> {
     Some(if short { brief } else { long }.to_string())
 }
 
-/// A link (`http://`, `https://`, alone or a value after `=`) without its
-/// user, password, query or fragment, where a link keeps its credentials;
-/// any other word as it is, a pattern that only starts like a link
-/// (`https://[^/]+/v?`), which doesn't parse as one, among them.
+/// A word holding a link (`http://`, `https://`, in any case, anywhere
+/// in it) up to the link's host, its user and password left out and an
+/// `…` for whatever follows the host, where a link keeps its credentials
+/// (`--url=https://a.dev/…`); any other word as it is.
 fn without_query(word: &str) -> String {
-    // The word, or what follows its `=` (`--url=…`, `http.proxy=…`).
-    // Only the scheme's few bytes are compared, never a copy of the word.
-    let starts_as_link = |w: &str| {
-        ["http://", "https://"].iter().any(|scheme| {
-            w.get(..scheme.len())
-                .is_some_and(|p| p.eq_ignore_ascii_case(scheme))
-        })
-    };
-    // Where a link starts: the word itself, or after an `=` or an option's
-    // letters, wherever a word character doesn't lead into it
-    // (`--url=https://…`, `next=https://…`, `-xhttp://…`).
-    let start = word
-        .char_indices()
-        .find(|(at, _)| {
-            starts_as_link(&word[*at..])
-                && (*at == 0
-                    || word[..*at].ends_with('=')
-                    || word.starts_with('-')
-                        && !word[1..*at].contains(|c: char| !c.is_ascii_alphabetic() && c != '-'))
-        })
-        .map_or(0, |(at, _)| at);
-    let link = &word[start..];
-    // Written as a link (`http://`, `https://`, in any case), and with no
-    // backslash before its query, a pattern's escape the parser would take
-    // as a slash.
-    let before_query = &link[..link.find(['?', '#']).unwrap_or(link.len())];
-    let looks_like_link = starts_as_link(link) && !before_query.contains('\\');
-    let parsed = url::Url::parse(link)
-        .ok()
-        .filter(|_| looks_like_link)
-        .filter(|u| matches!(u.scheme(), "http" | "https") && u.host().is_some());
-    let Some(mut parsed) = parsed else {
+    let lower = word.to_ascii_lowercase();
+    let Some((start, scheme)) = ["https://", "http://"]
+        .iter()
+        .filter_map(|scheme| lower.find(scheme).map(|at| (at, scheme.len())))
+        .min()
+    else {
         return word.to_string();
     };
-    // Written from the parsed link with its user, password, query and
-    // fragment taken out (an API key can be the user), an `…` where any
-    // of them was.
-    let cut = parsed.query().is_some()
-        || parsed.fragment().is_some()
-        || !parsed.username().is_empty()
-        || parsed.password().is_some();
-    let _ = parsed.set_username("");
-    let _ = parsed.set_password(None);
-    parsed.set_query(None);
-    parsed.set_fragment(None);
-    let more = if cut { "…" } else { "" };
-    format!("{}{parsed}{more}", &word[..start])
+    let authority_at = start + scheme;
+    let rest = &word[authority_at..];
+    let host_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..host_end];
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let more = if host_end < rest.len() || host.len() < authority.len() {
+        "/…"
+    } else {
+        ""
+    };
+    format!("{}{host}{more}", &word[..authority_at])
 }
 
 /// A title a program wrote over its arguments (npm on Linux: `npm exec
@@ -1661,47 +1635,37 @@ mod tests {
         let remote = line(&["scp", &format!("host:{home}/f"), "."]);
         assert!(remote.starts_with("scp host:/") && !remote.contains('~'));
         assert_eq!(line(&["lazygit"]), "lazygit");
-        assert_eq!(
-            line(&["link-view", "https://a.dev/f?token=secret"]),
-            "link-view https://a.dev/f…"
+        // A word holding a link shows it up to its host, nothing of its
+        // user, password, path or query.
+        let link = |args: &[&str], shown: &str| assert_eq!(line(args), shown);
+        link(
+            &["link-view", "https://a.dev/f?token=secret"],
+            "link-view https://a.dev/…",
         );
-        assert_eq!(
-            line(&["worker https://a.dev/f?token=secret"]),
-            "worker https://a.dev/f…"
+        link(
+            &["worker https://a.dev/f?token=secret"],
+            "worker https://a.dev/…",
         );
-        assert_eq!(line(&["rg", "https?://a.dev"]), "rg https?://a.dev");
-        assert_eq!(line(&["rg", "https://[^/]+/v?"]), "rg https://[^/]+/v?");
-        assert_eq!(line(&["rg", "https://[a-z]?/v"]), "rg https://[a-z]?/v");
-        assert_eq!(line(&["rg", "https:/a.dev/v1?"]), "rg https:/a.dev/v1?");
-        assert_eq!(
-            line(&["curl", "-xhttp://u:pw@p.dev"]),
-            "curl -xhttp://p.dev/…"
+        link(&["curl", "-4xhttp://u:pw@p.dev"], "curl -4xhttp://p.dev/…");
+        link(
+            &["curl", "-d", "one=https://a.dev/&two=https://u:pw@b.dev/"],
+            "curl -d one=https://a.dev/…",
         );
-        assert_eq!(
-            line(&["wget", "--post-data=next=https://a.dev/?sig=x"]),
-            "wget --post-data=next=https://a.dev/…"
+        link(
+            &["wget", "--post-data=next=https://a.dev/?sig=x"],
+            "wget --post-data=next=https://a.dev/…",
         );
-        assert_eq!(
-            line(&["git", "-c", "http.proxy=https://u:pw@p.dev", "fetch"]),
-            "git -c http.proxy=https://p.dev/… fetch"
+        link(
+            &["git", "-c", "http.proxy=https://u:pw@p.dev", "fetch"],
+            "git -c http.proxy=https://p.dev/… fetch",
         );
-        assert_eq!(
-            line(&["curl", "https://a.dev/f?token=x&n=a\\b"]),
-            "curl https://a.dev/f…"
+        link(
+            &["curl", "--url=HTTPS://me:pw@a.dev"],
+            "curl --url=HTTPS://a.dev/…",
         );
-        assert_eq!(line(&["rg", "https://a\\.dev/v?"]), "rg https://a\\.dev/v?");
-        assert_eq!(
-            line(&["curl", "https://me:secret@a.dev/f"]),
-            "curl https://a.dev/f…"
-        );
-        assert_eq!(
-            line(&["curl", "https://build+ci@a.dev/f?token=secret"]),
-            "curl https://a.dev/f…"
-        );
-        assert_eq!(
-            line(&["curl", "--url=HTTPS://a.dev/f?token=secret"]),
-            "curl --url=https://a.dev/f…"
-        );
+        link(&["curl", "https://a.dev"], "curl https://a.dev");
+        link(&["rg", "https?://a.dev"], "rg https?://a.dev");
+        link(&["rg", "https:/a.dev/v1?"], "rg https:/a.dev/v1?");
         assert_eq!(line(&["./Build Tools/bin/worker", "-v"]), "worker -v");
         assert_eq!(
             line(&["npm exec @angular/cli serve"]),
