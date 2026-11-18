@@ -43,9 +43,15 @@ use crate::{connector, settings, util};
 #[derive(Debug)]
 pub enum DayEvent {
     Feed(Fetched),
-    /// A look's line for the log, and, when Slack refused the look for its
-    /// rate limit, when Slack asked it to wait until.
-    SlackLooked(Result<String, String>, Option<i64>),
+    /// A look's line for the log; when Slack refused the look for its rate
+    /// limit, when Slack asked it to wait until; and the look's schedule
+    /// before it started, put back when it read nothing
+    /// (`slack_look::SKIPPED`).
+    SlackLooked {
+        result: Result<String, String>,
+        slowed: Option<i64>,
+        before: (Option<i64>, slack_look::Pace),
+    },
     /// The threads a look found something new in, read.
     SlackThreadsRead(Result<slack_thread::Read, String>),
     /// The chosen Slack message's thread read, by its key.
@@ -321,12 +327,22 @@ impl Server {
                 }
                 self.day.feed.take(fetched, util::now_ms());
             }
-            DayEvent::SlackLooked(result, slowed) => {
+            DayEvent::SlackLooked {
+                result,
+                slowed,
+                before,
+            } => {
                 self.day.slack_busy = false;
+                // A look that read nothing (the connector's minute not yet
+                // up, with no token to try) leaves the schedule as it was.
+                let skipped = result.as_deref() == Ok(slack_look::SKIPPED);
+                if skipped {
+                    (self.day.slack_asked, self.day.slack_pace) = before;
+                }
                 if let Some(until) = slowed {
                     self.day.slack_pace.slow_down(until);
                 }
-                let looked = result.is_ok();
+                let looked = result.is_ok() && !skipped;
                 match result {
                     Ok(line) => log(&dirs.state, &line),
                     Err(e) => log(&dirs.state, &format!("slack: {e}")),
@@ -1239,6 +1255,7 @@ impl Server {
         if self.day.slack_busy || tokio::runtime::Handle::try_current().is_err() {
             return;
         }
+        let before = (self.day.slack_asked, self.day.slack_pace.clone());
         self.day.slack_asked = Some(now);
         self.day.slack_busy = true;
         self.day.slack_pace.looked(now);
@@ -1255,7 +1272,11 @@ impl Server {
             let slowed = by_token
                 .then(|| slack_api::look_slowed(&dirs.state))
                 .flatten();
-            let _ = tx.send(Event::Day(DayEvent::SlackLooked(result, slowed)));
+            let _ = tx.send(Event::Day(DayEvent::SlackLooked {
+                result,
+                slowed,
+                before,
+            }));
         });
     }
 
@@ -1390,16 +1411,24 @@ impl Server {
         // The connector being down says nothing while the look reads
         // through your token.
         let reads_by_token = by_token && slack_api::look_works(&dirs.state);
-        // Slack asking the look to slow down, said over the rate limit that
-        // sent a read to the connector, which is the same refusal, but never
-        // over another reason, which says what to do.
+        // Slack asking the look to slow down, said in place of the rate limit
+        // that sent a read to the connector, which is the same refusal, and
+        // after any other reason, which says what to do.
         let slowed = (background && self.day.slack_pace.slowed())
             .then(|| slack_look::slowed_note(self.day.slack_pace.every(slack_look_every(dirs))));
-        let token_note =
-            token_note.filter(|n| slowed.is_none() || !n.contains(slack_user::RATE_LIMIT));
-        let note = token_note
-            .or(slowed)
-            .or_else(|| needs_sign_in.then(|| slack_user::NO_SIGN_IN.to_string()));
+        let note = match (token_note, slowed) {
+            (Some(said), Some(slowed)) => {
+                let mut parts: Vec<String> = said
+                    .split(" · ")
+                    .filter(|part| !part.contains(slack_user::RATE_LIMIT))
+                    .map(str::to_string)
+                    .collect();
+                parts.push(slowed);
+                Some(parts.join(" · "))
+            }
+            (said, slowed) => said.or(slowed),
+        }
+        .or_else(|| needs_sign_in.then(|| slack_user::NO_SIGN_IN.to_string()));
         let slack = slack::slack_view(&slack::Look {
             state: &dirs.state,
             background,
