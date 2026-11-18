@@ -1411,9 +1411,11 @@ impl Server {
             .next()
             .filter(|a| !a.trim().is_empty())
             .or_else(|| slot.pane.foreground_command())?;
-        Some(program_name(
-            title_of(&first).map_or(first.as_str(), |(exe, _)| exe),
-        ))
+        Some(match title_of(&first) {
+            Some((exe, _)) => program_name(exe),
+            None if has_link(&first) => scheme_only(&first),
+            None => program_name(&first),
+        })
     }
 
     // ── Commands ─────────────────────────────────────────────────────────────
@@ -1502,15 +1504,16 @@ fn program_line(args: &[String], own_exe: &str) -> String {
             let shown = match words.iter().position(|w| has_link(w)) {
                 Some(at) => {
                     let mut kept: Vec<String> = words[..at].iter().map(|w| w.to_string()).collect();
-                    let link = without_query(words[at]);
-                    let cut = at + 1 < words.len() && !link.ends_with('…');
-                    kept.push(if cut { format!("{link}…") } else { link });
+                    // Only its scheme: where its user or host ends is lost
+                    // with the boundaries.
+                    kept.push(scheme_only(words[at]));
                     kept.join(" ")
                 }
                 None => title.to_string(),
             };
             format!("{} {shown}", program_name(exe))
         }
+        None if has_link(first) => scheme_only(first),
         None => program_name(first),
     };
     // A local path: an argument of its own, or an option's value after `=`
@@ -1580,6 +1583,18 @@ fn app_of(args: &[String], own_exe: &str, short: bool) -> Option<String> {
 fn has_link(word: &str) -> bool {
     let lower = word.to_ascii_lowercase();
     lower.contains("http://") || lower.contains("https://")
+}
+
+/// A word holding a link up to the link's scheme, then `…`
+/// (`next=https://…`), when nothing of the rest can be told apart safely.
+fn scheme_only(word: &str) -> String {
+    let lower = word.to_ascii_lowercase();
+    let end = ["https://", "http://"]
+        .iter()
+        .filter_map(|scheme| lower.find(scheme).map(|at| at + scheme.len()))
+        .min()
+        .unwrap_or(word.len());
+    format!("{}…", &word[..end])
 }
 
 /// A word holding a link (`http://`, `https://`, in any case, anywhere
@@ -1676,18 +1691,16 @@ mod tests {
             &["link-view", "https://a.dev/f?token=secret"],
             "link-view https://a.dev/…",
         );
-        link(
-            &["worker https://a.dev/f?token=secret"],
-            "worker https://a.dev/…",
-        );
-        link(&["/usr/bin/worker https://a.dev"], "worker https://a.dev");
+        link(&["worker https://a.dev/f?token=secret"], "worker https://…");
+        link(&["/usr/bin/worker https://a.dev"], "worker https://…");
+        link(&["https://a.dev/f?token=secret"], "https://…");
         link(
             &["worker https://a.dev/?q=two words&token=secret"],
-            "worker https://a.dev/…",
+            "worker https://…",
         );
         link(
             &["/usr/bin/worker https://a.dev/f?token=secret"],
-            "worker https://a.dev/…",
+            "worker https://…",
         );
         link(&["curl", "-4xhttp://u:pw@p.dev"], "curl -4xhttp://…");
         link(
