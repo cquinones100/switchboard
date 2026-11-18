@@ -740,6 +740,9 @@ pub fn board(
     let chosen = m.chosen_item();
     // Under PANE_AT the ticket shows in the list's place while `i` holds it.
     let ticket_alone = !wide && m.inbox_pane && chosen.is_some();
+    if ticket_alone {
+        hits.push(HitBox::in_place(top));
+    }
     let (pane_x, pane_w) = match (pane, ticket_alone) {
         (Some((x, w)), _) => (x, w.saturating_sub(1)),
         (None, true) => (1, cols.saturating_sub(2)),

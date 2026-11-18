@@ -278,6 +278,9 @@ pub fn board(
     let body = rows.saturating_sub(1 + top);
     let beside = cols >= BESIDE_AT;
     let alone = !beside && m.routines_pane;
+    if alone {
+        hits.push(HitBox::in_place(top));
+    }
     let pane_w = if beside {
         kit::beside(cols, PANE_SHARE * 160 / 124, PANE_LEAST, 60).min(cols / 2)
     } else if alone {

@@ -170,12 +170,14 @@ impl App {
         } else if self.focus == Focus::Note {
             cursor = note_cursor;
         }
-        // Every pane but the one with the keys, greyed.
+        // Every pane but the one with the keys, greyed, but the plan from
+        // the note while it is the plan of the item under the note's
+        // cursor, a preview of the chosen row.
         let theme = self.look.theme;
         let (note, plan) = (self.geo.note, self.geo.plan);
         if plan_focused {
             switchboard_ui::kit::unfocused(buf, note, &theme);
-        } else if plan.width > 0 {
+        } else if plan.width > 0 && !(self.focus == Focus::Note && self.beside_previews_cursor()) {
             switchboard_ui::kit::unfocused(buf, plan, &theme);
         }
         if list_w > 0 {

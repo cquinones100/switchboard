@@ -3235,7 +3235,7 @@ fn drawn(app: &mut App) -> (Vec<String>, Option<(u16, u16)>) {
 }
 
 #[test]
-fn the_note_is_greyed_while_the_plan_has_the_keys_and_the_plan_while_the_note_does() {
+fn the_plan_is_lit_from_the_note_and_greyed_from_the_list_and_the_note_from_the_plan() {
     let (_dir, mut app, _path, _plan) = with_plan("beside greyed", 160);
     app.rows = 14;
     keys(&mut app, "4G<CR>");
@@ -3252,11 +3252,25 @@ fn the_note_is_greyed_while_the_plan_has_the_keys_and_the_plan_while_the_note_do
     };
     let (note, plan) = feet(&mut app);
     assert_ne!(note, surface, "the note has the keys");
-    assert_eq!(plan, surface);
+    assert_ne!(plan, surface, "the plan previews the note's chosen item");
+    keys(&mut app, "3G");
+    let (_, plan) = feet(&mut app);
+    assert_ne!(plan, surface, "the item's first line is the item too");
+    keys(&mut app, "A, retitled<Esc>");
+    let (_, plan) = feet(&mut app);
+    assert_ne!(plan, surface, "a retitled item keeps its plan's light");
+    keys(&mut app, "5G");
+    let (_, plan) = feet(&mut app);
+    assert_eq!(plan, surface, "another item's line: no longer its preview");
+    keys(&mut app, "4G");
     keys(&mut app, "<C-w>l");
     let (note, plan) = feet(&mut app);
     assert_eq!(note, surface);
     assert_ne!(plan, surface, "the plan has the keys");
+    keys(&mut app, "<C-w>h");
+    app.focus = Focus::List;
+    let (_, plan) = feet(&mut app);
+    assert_eq!(plan, surface, "the list of notes has them");
 }
 
 #[test]

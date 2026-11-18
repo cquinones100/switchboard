@@ -560,6 +560,9 @@ pub fn board(view: &View, look: &Look) -> (Vec<Line>, Vec<HitBox>, Vec<Image>) {
         (Some((left, rest)), None)
     };
     let in_column = in_column && list_at.is_some();
+    if list_at.is_none() && pane_at.is_some() {
+        hits.push(HitBox::in_place(top_row));
+    }
 
     let chosen = look.cursor.and_then(|c| view.data.items.get(c));
     let section = front.map(|s| &secs[s]);

@@ -7077,7 +7077,7 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                     choose_day(m, day);
                     Then::Prepare
                 }
-                Spot::Side(_) => Then::Redraw,
+                Spot::Side(_) | Spot::InPlace => Then::Redraw,
                 Spot::SideEdge(width) => {
                     m.side_drag = Some(mouse.col + width as u16);
                     Then::Redraw
@@ -9862,6 +9862,71 @@ mod tests {
     }
 
     #[test]
+    fn a_pane_under_the_list_stays_lit_and_one_in_the_lists_place_is_greyed() {
+        use ratatui::layout::Rect;
+        let area = Rect::new(0, 0, 100, 10);
+        let side_rows = |m: &mut Mission, x0: u16| {
+            for y in 5..9 {
+                m.hits.push(HitBox {
+                    y,
+                    x0,
+                    x1: 98,
+                    spot: Spot::Side(10),
+                });
+            }
+        };
+        // A pane stacked under the list's rows, from the left edge: a
+        // preview.
+        let mut m = ci_mission();
+        m.hits.push(HitBox {
+            y: 2,
+            x0: 2,
+            x1: 60,
+            spot: Spot::Index(1),
+        });
+        side_rows(&mut m, 0);
+        assert_eq!(m.pane_now(), Pane::List);
+        assert_eq!(m.without_keys(area), vec![]);
+        // A pane its board drew in the list's place (a narrow Slack's
+        // thread): no preview.
+        let mut m = ci_mission();
+        m.hits.push(HitBox::in_place(5));
+        side_rows(&mut m, 1);
+        assert_eq!(m.pane_now(), Pane::List);
+        let greyed = m.without_keys(area);
+        assert_eq!(greyed.len(), 4, "{greyed:?}");
+        assert!(greyed.iter().all(|r| (r.x, r.right()) == (1, 99)));
+    }
+
+    #[test]
+    fn the_list_stays_lit_from_the_panel_over_it_and_the_panel_is_greyed_from_the_list() {
+        use ratatui::layout::Rect;
+        let key = |k: &str| Key::parse(k).unwrap();
+        let mut m = settings_mission();
+        let area = Rect::new(0, 0, 160, 10);
+        for y in 2..5 {
+            m.hits.push(HitBox {
+                y,
+                x0: 0,
+                x1: 19,
+                spot: Spot::Category(y as isize),
+            });
+        }
+        // The list has the keys: the panel's columns are greyed.
+        assert_eq!(m.pane_now(), Pane::List);
+        let greyed = m.without_keys(area);
+        assert!(!greyed.is_empty());
+        assert!(
+            greyed.iter().all(|r| (r.x, r.right()) == (0, 20)),
+            "{greyed:?}"
+        );
+        // The panel has them: the options under it stay lit.
+        window_key(&mut m, key("h"));
+        assert_eq!(m.pane_now(), Pane::Panel);
+        assert_eq!(m.without_keys(area), vec![]);
+    }
+
+    #[test]
     fn every_pane_without_the_keys_is_greyed_and_the_view_while_the_list_of_views_has_them() {
         use ratatui::layout::Rect;
         let key = |k: &str| Key::parse(k).unwrap();
@@ -9873,6 +9938,12 @@ mod tests {
             vec![nav],
             "a view of one pane: only the list of views"
         );
+        m.hits.push(HitBox {
+            y: 2,
+            x0: 2,
+            x1: 70,
+            spot: Spot::Index(1),
+        });
         for y in 2..9 {
             m.hits.push(HitBox {
                 y,
@@ -9881,17 +9952,9 @@ mod tests {
                 spot: Spot::Side(10),
             });
         }
-        // The list has the keys: the pane beside is greyed, row by row,
-        // down to the footer.
-        let greyed = m.without_keys(area);
-        assert_eq!((greyed[0], greyed.len()), (nav, 8));
-        assert!(
-            greyed[1..]
-                .iter()
-                .all(|r| (r.x, r.right(), r.height) == (21 + 80, 160, 1)),
-            "{greyed:?}"
-        );
-        assert_eq!((greyed[1].y, greyed[7].y), (2, 8));
+        // The list has the keys: the pane beside shows its chosen row, so
+        // only the list of views is greyed.
+        assert_eq!(m.without_keys(area), vec![nav]);
         // The pane beside has them: the list is, up to the rule between.
         window_key(&mut m, key("l"));
         assert_eq!(m.pane_now(), Pane::Beside);

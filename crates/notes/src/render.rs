@@ -1116,6 +1116,15 @@ pub fn plan_of<S: AsRef<str>>(lines: &[S], kinds: &[Kind], row: usize) -> Option
     plan_line_of(lines, kinds, row).map(|(_, title)| title)
 }
 
+/// The innermost item, ticked or not, whose lines (its own and what is
+/// indented under it) hold `row`, if any.
+pub fn item_under<S: AsRef<str>>(lines: &[S], kinds: &[Kind], row: usize) -> Option<usize> {
+    (0..=row).rev().find(|&r| match kinds.get(r) {
+        Some(Kind::Check { indent, .. }) => item_end(lines, r, *indent) > row,
+        _ => false,
+    })
+}
+
 /// The unticked item whose plan link (its `Plan: [[...]]` line, as
 /// `plan_of` finds it) is on `row`, if any.
 pub fn item_of_plan_line<S: AsRef<str>>(lines: &[S], kinds: &[Kind], row: usize) -> Option<usize> {

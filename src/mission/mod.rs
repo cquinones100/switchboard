@@ -187,6 +187,11 @@ pub enum Spot {
     /// A view shown at once with others but without the focus, by its
     /// place in the grid, which a click gives the focus.
     Cell(usize),
+    /// The pane beside drawn in the list's place (a narrow Slack's thread,
+    /// the Inbox's ticket, Reopen's or Routines' detail held by `i`), so it
+    /// previews nothing shown (`Mission::without_keys`). Its box is empty
+    /// (`HitBox::in_place`), so no click or hover lands on it.
+    InPlace,
 }
 
 /// Where a click on the screen lands: row `y`, columns `x0` to `x1`
@@ -197,6 +202,20 @@ pub struct HitBox {
     pub x0: u16,
     pub x1: u16,
     pub spot: Spot,
+}
+
+impl HitBox {
+    /// The mark that the pane beside is drawn in the list's place from row
+    /// `y`, at the view's first column so a grid's cell keeps it, and
+    /// empty (`x1` before `x0`) so nothing lands on it.
+    pub fn in_place(y: usize) -> HitBox {
+        HitBox {
+            y: y as u16,
+            x0: 1,
+            x1: 0,
+            spot: Spot::InPlace,
+        }
+    }
 }
 
 /// A view's name being typed after `v`, and the view it names.
@@ -1171,10 +1190,20 @@ impl Mission {
             .is_some_and(|at| now.saturating_sub(at) <= WINDOW_WAIT_MS)
     }
 
+    /// Whether `pane` shows what `now`, the pane with the keys, has chosen,
+    /// and so stays lit beside it: the pane beside shows the list's chosen
+    /// row, and the list the panel's chosen category or section.
+    fn previews(now: Pane, pane: Pane) -> bool {
+        matches!(
+            (now, pane),
+            (Pane::List, Pane::Beside) | (Pane::Panel, Pane::List)
+        )
+    }
+
     /// What of the screen doesn't have the keys, to grey (`kit::unfocused`)
     /// once it is drawn, with the view in `area`: the whole view while the
     /// focus is in the list of groups and views, else that list and every
-    /// pane of the view but `pane_now`; among several views at once, every
+    /// pane of the view but `pane_now` and what it `previews`; among several views at once, every
     /// view but the one with the focus too. Where the panes are comes from the
     /// hit boxes the view was just drawn with, so no board says it twice:
     /// the pane beside is its `Spot::Side` rows, the panel its categories'
@@ -1209,9 +1238,15 @@ impl Mission {
             return out;
         }
         let now = self.pane_now();
+        let lit = |pane: Pane| pane == now || Self::previews(now, pane);
         let sections = self
             .current()
             .is_some_and(|v| render::slack_board_shown(self, v));
+        // A pane drawn in the list's place previews nothing shown, so it
+        // is greyed while the list has the keys; its board marks it so.
+        let list_drawn = !self.hits.iter().any(|h| {
+            h.spot == Spot::InPlace && (first..end).contains(&h.y) && (left..=right).contains(&h.x1)
+        });
         let in_panel = |h: &HitBox| match h.spot {
             Spot::Category(_) => true,
             Spot::Choose(_) => sections && usize::from(h.x1 - h.x0) + 1 == slack_board::SECTIONS_W,
@@ -1251,17 +1286,18 @@ impl Mission {
                 .iter()
                 .find(|h| h.y == y && matches!(h.spot, Spot::Side(_)))
                 .map(|h| (h.x0, (h.x1 + 1).min(right)));
-            if let (Some((x0, x1)), true) = (beside, now != Pane::Beside) {
+            let from = panel.map_or(left, |(_, x1)| x1);
+            // The rule before the pane beside is left, which the pane with
+            // the keys lights (`render::light_divider`).
+            let to = beside.map_or(right, |(x0, _)| x0.saturating_sub(RULE_ROOM));
+            let beside_lit = now == Pane::Beside || (list_drawn && lit(Pane::Beside));
+            if let (Some((x0, x1)), false) = (beside, beside_lit) {
                 put(x0, x1, y);
             }
-            if let (Some((x0, x1)), true) = (panel, now != Pane::Panel) {
+            if let (Some((x0, x1)), true) = (panel, !lit(Pane::Panel)) {
                 put(x0, x1, y);
             }
-            if now != Pane::List {
-                let from = panel.map_or(left, |(_, x1)| x1);
-                // The rule before the pane beside is left, which the pane
-                // with the keys lights (`render::light_divider`).
-                let to = beside.map_or(right, |(x0, _)| x0.saturating_sub(RULE_ROOM));
+            if !lit(Pane::List) {
                 put(from, to, y);
             }
         }

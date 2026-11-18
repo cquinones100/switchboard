@@ -57,6 +57,8 @@ pub struct Beside {
     pub plan: Plan,
     /// The item it is the plan of, its first line.
     pub item: String,
+    /// The title the item's `Plan:` link names it by, as written.
+    pub link: String,
     /// The first of the plan's rows shown.
     pub scroll: usize,
     /// The plan's row the cursor is on while it has the keys, counted as
@@ -475,6 +477,7 @@ impl App {
             path,
             plan: Plan::parse(&text),
             item,
+            link: title,
             scroll: 0,
             line: 0,
             // Where the plan hides the note, the plan has the keys.
@@ -490,6 +493,27 @@ impl App {
     /// Whether the panel shows the plan of the item on the cursor's line.
     pub(super) fn beside_is_of_cursor(&mut self) -> bool {
         self.beside_is_of(self.editor.doc.row)
+    }
+
+    /// Whether the panel shows the plan of the item the cursor is in (its
+    /// first line or a line under it): the item's `Plan:` link names the
+    /// panel's plan by the title it was opened by, so drawing reads no other
+    /// note and an item being retitled keeps it.
+    pub(super) fn beside_previews_cursor(&self) -> bool {
+        let Some(b) = self.beside.as_ref() else {
+            return false;
+        };
+        let lines = self.editor.doc.text.lines();
+        let kinds = render::kinds(&lines);
+        // The cursor on a row in a closed fold is on the fold's heading, as
+        // the note draws it.
+        let row = match self.editor.folds.closed_at(&kinds, self.editor.doc.row) {
+            Some((heading, _)) => heading,
+            None => self.editor.doc.row,
+        };
+        render::item_under(&lines, &kinds, row)
+            .and_then(|r| render::plan_of(&lines, &kinds, r))
+            .is_some_and(|title| title.trim().to_lowercase() == b.link.trim().to_lowercase())
     }
 
     /// Whether the panel shows the plan of the item on `row`.
@@ -546,8 +570,14 @@ impl App {
             .find(|&r| render::item_text(&lines[r], kinds[r]) == b.item);
         let row = by_text.or_else(|| (0..lines.len()).find(links))?;
         let text = render::item_text(&lines[row], kinds[row]).to_string();
+        let link = render::plan_of(&lines, &kinds, row);
         if let Some(b) = self.beside.as_mut() {
             b.item = text;
+            // Its link rewritten to name the same plan another way, the
+            // panel follows it, as it does the item's first line.
+            if let Some(link) = link {
+                b.link = link;
+            }
         }
         Some(row)
     }

@@ -547,6 +547,7 @@ pub fn board(
         && m.reopen_pane
         && let Some((pane, picture)) = pane
     {
+        hits.push(HitBox::in_place(lines.len()));
         put_pane(pane, picture, cols, body, m, lines, hits, images);
         return;
     }
