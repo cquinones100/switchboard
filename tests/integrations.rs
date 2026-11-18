@@ -974,6 +974,10 @@ fn autopilot_takes_issues_opened_by_you_or_labeled_by_a_writer_and_writes_back()
                 json!({ "data": { "repository": { "defaultBranchRef": { "name": "main" } } } }),
             ),
             answer(200, json!({ "status": "behind" })),
+            answer(
+                200,
+                json!({ "commit": { "committer": { "date": "2026-11-18T12:00:00Z" } } }),
+            ),
             answer(201, json!({ "id": 7 })),
             answer(200, json!({ "number": 2, "state": "closed" })),
         ],
@@ -1010,24 +1014,25 @@ fn autopilot_takes_issues_opened_by_you_or_labeled_by_a_writer_and_writes_back()
         2,
         "Landed in abc1234",
         true,
-        Some("abc1234"),
+        Some(("abc1234", 1_700_000_000)),
     ))
     .unwrap();
     let seen = fake.seen();
     assert_eq!(seen[4].path, "/repos/acme/widgets/compare/main...abc1234");
-    assert_eq!(seen[5].method, "POST");
-    assert_eq!(seen[5].path, "/repos/acme/widgets/issues/2/comments");
-    assert_eq!(seen[5].body["body"], "Landed in abc1234");
-    assert_eq!(seen[6].method, "PATCH");
-    assert_eq!(seen[6].path, "/repos/acme/widgets/issues/2");
-    assert_eq!(seen[6].body["state"], "closed");
+    assert_eq!(seen[5].path, "/repos/acme/widgets/commits/abc1234");
+    assert_eq!(seen[6].method, "POST");
+    assert_eq!(seen[6].path, "/repos/acme/widgets/issues/2/comments");
+    assert_eq!(seen[6].body["body"], "Landed in abc1234");
+    assert_eq!(seen[7].method, "PATCH");
+    assert_eq!(seen[7].path, "/repos/acme/widgets/issues/2");
+    assert_eq!(seen[7].body["state"], "closed");
     assert_eq!(counted("GitHub", "GraphQL"), 2);
-    assert_eq!(counted("GitHub", "REST"), 5);
+    assert_eq!(counted("GitHub", "REST"), 6);
 
     // GitHub turned off in Settings, none are read.
     env.settings(json!({ "github": false }));
     let err = util::block_on(issues::fetch(&repo, "autopilot")).unwrap_err();
     assert_eq!(kind(&err), ErrorKind::Off);
-    assert_eq!(fake.seen().len(), 7);
+    assert_eq!(fake.seen().len(), 8);
     env.settings(json!({}));
 }

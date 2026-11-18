@@ -2479,6 +2479,9 @@ impl Server {
         // Whole, as the landing marked it, for GitHub's check; cut short only
         // where it is shown.
         let hash: Option<String> = set(AUTOLAND).or(set(PUSHED)).map(str::to_string);
+        let opened_at = set(OPENED)
+            .and_then(|v| v.parse::<f64>().ok())
+            .map_or(0, |v| v as i64);
         let issue = set(ISSUE).map(str::to_string).zip(hash);
         let mut fresh = false;
         let written = Mode::update(&paths::state_dir(), |mode| {
@@ -2511,7 +2514,13 @@ impl Server {
             let short: String = hash.chars().take(7).collect();
             let comment = super::issues::landed_comment(&short);
             let question = format!("Comment on {issue} that it landed in {short}, and close it?");
-            self.autopilot_write_back(&issue, comment, Some(hash), without_asking, question);
+            self.autopilot_write_back(
+                &issue,
+                comment,
+                Some((hash, opened_at)),
+                without_asking,
+                question,
+            );
         }
     }
 
@@ -2525,7 +2534,7 @@ impl Server {
         &mut self,
         issue: &str,
         comment: String,
-        landed: Option<String>,
+        landed: Option<(String, i64)>,
         without_asking: bool,
         question: String,
     ) {
@@ -2543,9 +2552,14 @@ impl Server {
                 return;
             }
             tokio::spawn(async move {
-                let done =
-                    super::issues::write_back(&repo, number, &comment, close, landed.as_deref())
-                        .await;
+                let done = super::issues::write_back(
+                    &repo,
+                    number,
+                    &comment,
+                    close,
+                    landed.as_ref().map(|(h, at)| (h.as_str(), *at)),
+                )
+                .await;
                 let said = done
                     .err()
                     .map(|e| format!("Couldn't write on {issue}: {e}"));

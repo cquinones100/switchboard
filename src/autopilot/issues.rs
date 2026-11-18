@@ -466,16 +466,17 @@ pub fn duplicate_comment() -> String {
 }
 
 /// Comments on an issue, and closes it as done when `close`; with
-/// `landed`, only once that commit is on the repository's default branch
-/// on GitHub, so a landing that never reached it closes nothing.
+/// `landed` (a commit and when its tab opened), only once that commit is on
+/// the repository's default branch on GitHub and was made since, so a
+/// landing that never reached it closes nothing.
 pub async fn write_back(
     repo: &Repo,
     number: u64,
     comment: &str,
     close: bool,
-    landed: Option<&str>,
+    landed: Option<(&str, i64)>,
 ) -> Result<()> {
-    if let Some(hash) = landed {
+    if let Some((hash, since)) = landed {
         if hash.is_empty() || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(anyhow!("\"{hash}\" isn't a commit"));
         }
@@ -495,6 +496,23 @@ pub async fn write_back(
             Some("identical" | "behind")
         ) {
             return Err(anyhow!("{hash} isn't on {repo}'s {default} yet"));
+        }
+        // Made since the tab opened (`since`, seconds), so a commit that was
+        // there before names no landing of its.
+        let commit = github::rest(
+            "GET",
+            &format!("/repos/{repo}/commits/{hash}"),
+            None,
+            SOURCE,
+        )
+        .await?;
+        let made = commit
+            .pointer("/commit/committer/date")
+            .and_then(Value::as_str)
+            .and_then(|d| d.parse::<jiff::Timestamp>().ok())
+            .map(|t| t.as_second());
+        if made.is_none_or(|m| m < since) {
+            return Err(anyhow!("{hash} was there before its tab opened"));
         }
     }
     github::rest(
