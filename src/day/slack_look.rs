@@ -131,12 +131,11 @@ pub fn slowed_note(every: i64) -> String {
 pub enum Looked {
     /// It read Slack: its line for the log.
     Read(String),
-    /// Its token read failed (or the token couldn't be read) while the
-    /// connector's minute wasn't up, which it is at `until`: it counts as
-    /// a look, but read nothing.
-    Held { until: i64 },
-    /// It read nothing, the connector's minute not up and no token to try,
-    /// which it is at `until`.
+    /// Its token read failed while the connector's minute wasn't up: it
+    /// asked Slack, so it counts as a look, but read nothing.
+    Held,
+    /// It read nothing, the connector's minute not up and no token to try
+    /// (or none that could be read), which it is at `until`.
     Skipped { until: i64 },
 }
 
@@ -145,7 +144,7 @@ impl Looked {
     pub fn line(&self) -> String {
         match self {
             Looked::Read(line) => line.clone(),
-            Looked::Held { .. } => {
+            Looked::Held => {
                 "slack: the token's read failed, and the connector looked under a minute ago".into()
             }
             Looked::Skipped { .. } => "slack: the connector looked under a minute ago".into(),
@@ -446,7 +445,9 @@ pub async fn look_slack(
     let day = jiff::Timestamp::from_second(from - 86_400)
         .map(|t| t.strftime("%Y-%m-%d").to_string())
         .unwrap_or_default();
-    let tried_token = token.is_some();
+    // Only a token that was read sends Slack a request; one that couldn't
+    // be read reads nothing, as no token does.
+    let tried_token = matches!(token, Some(Ok(_)));
     let by_token = match token {
         Some(Ok(client)) => {
             slack_api::worked(&dirs.state, slack_api::Part::Token);
@@ -518,7 +519,7 @@ pub async fn look_slack(
             {
                 let until = at + CONNECTOR_EVERY_MS;
                 return Ok(if tried_token {
-                    Looked::Held { until }
+                    Looked::Held
                 } else {
                     Looked::Skipped { until }
                 });

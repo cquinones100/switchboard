@@ -347,15 +347,9 @@ impl Server {
                 // up, with no token to try) leaves the schedule as it was,
                 // and looks again once the minute is up, so a refresh asked
                 // for (a reply, going to the view) isn't lost.
-                match &result {
-                    Ok(slack_look::Looked::Skipped { until }) => {
-                        (self.day.slack_asked, self.day.slack_pace) = before;
-                        self.day.slack_look_at = Some(*until);
-                    }
-                    Ok(slack_look::Looked::Held { until }) => {
-                        self.day.slack_look_at = Some(*until);
-                    }
-                    _ => {}
+                if let Ok(slack_look::Looked::Skipped { until }) = &result {
+                    (self.day.slack_asked, self.day.slack_pace) = before;
+                    self.day.slack_look_at = Some(*until);
                 }
                 if let Some(until) = slowed {
                     self.day.slack_pace.slow_down(until);
