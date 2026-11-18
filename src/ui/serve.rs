@@ -1347,17 +1347,19 @@ impl Server {
 
     /// The path of the Switchboard that started what a pane runs, for
     /// `app_of`: the pane's own program when the server marked it as one
-    /// of its views or tools, whatever binary started it (one a restart
-    /// moved away from among them), else the binary the server runs.
+    /// of its views or tools and it is named as Switchboard is, whatever
+    /// binary started it (one a restart moved away from among them), else
+    /// the binary the server runs.
     fn own_exe(&self, pane: PaneId, args: &[String]) -> String {
         // src/views/serve.rs's marks, the notes pane's and a tool in a
         // pane's place.
-        const MARKS: [&str; 6] = [
+        const MARKS: [&str; 7] = [
             "@pr_view",
             "@ticket_view",
             "@link_view",
             "@checks_view",
             "@notes_pane",
+            "@notes_placeholder",
             crate::diff::in_place::IN_PLACE,
         ];
         let marked = self
@@ -1365,7 +1367,11 @@ impl Server {
             .get(&pane)
             .is_some_and(|s| MARKS.iter().any(|m| s.opts.contains_key(*m)));
         match args.first() {
-            Some(first) if marked => first.clone(),
+            // Still a binary named as Switchboard's, so a mark alone (which
+            // a pane's program may set) names no other program a view.
+            Some(first) if marked && program_name(first).starts_with("switchboard") => {
+                first.clone()
+            }
             _ => crate::util::exe()
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default(),
