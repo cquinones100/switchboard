@@ -1359,12 +1359,12 @@ impl Server {
             .and_then(crate::mux::procinfo::args_of)
             .unwrap_or_default();
         // One of Switchboard's apps by what it is, as the close-pane
-        // question names it, a pager's path kept short, since every
-        // program of a tab shares one line.
+        // question names it, in a word or two, since every program of a
+        // tab shares one line.
         let own_exe = crate::util::exe()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default();
-        if let Some(app) = app_of(&args, &own_exe, 20) {
+        if let Some(app) = app_of(&args, &own_exe, true) {
             return Some(app);
         }
         let first = args
@@ -1452,7 +1452,7 @@ fn program_line(args: &[String], own_exe: &str) -> String {
     let Some((first, rest)) = args.split_first() else {
         return String::new();
     };
-    if let Some(app) = app_of(args, own_exe, 49) {
+    if let Some(app) = app_of(args, own_exe, false) {
         return draw::cut(&app, 60);
     }
     let name = match title_of(first) {
@@ -1473,70 +1473,71 @@ fn program_line(args: &[String], own_exe: &str) -> String {
     draw::cut(&words.collect::<Vec<_>>().join(" "), 60)
 }
 
-/// What one of Switchboard's own apps is, by its command line (Notes, the
-/// diff, the PR view, the pager and its file), as both close questions
-/// name it, a path in it cut from the left to `room` columns; `None` for
-/// any other program.
-fn app_of(args: &[String], own_exe: &str, room: usize) -> Option<String> {
+/// What one of Switchboard's own apps is, by its command line, as the
+/// close questions name it: whole for the close-pane question (`the diff
+/// of uncommitted changes`, `the pager: ~/x.log:12`), and in a word or
+/// two with `short` for the close-tabs one, where a tab's programs share
+/// a line (`uncommitted diff`, `pager`); `None` for any other program.
+fn app_of(args: &[String], own_exe: &str, short: bool) -> Option<String> {
     let (first, rest) = args.split_first()?;
     // Switchboard's own command and its words: `switchboard`, or the
     // binary the server runs by its path, which starts the views under
     // whatever name it has.
-    let own: Option<Vec<&str>> = match program_name(first).as_str() {
-        _ if first == own_exe => Some(vec![]),
-        "switchboard" => Some(vec![]),
-        "switchboard-notes" => Some(vec!["notes"]),
-        "switchboard-diff" => Some(vec!["diff"]),
-        _ => None,
+    let mut words: Vec<&str> = match program_name(first).as_str() {
+        _ if first == own_exe => vec![],
+        "switchboard" => vec![],
+        "switchboard-notes" => vec!["notes"],
+        "switchboard-diff" => vec!["diff"],
+        _ => return None,
     };
-    own.and_then(|mut words| {
-        words.extend(rest.iter().map(String::as_str));
-        match words.as_slice() {
-            ["notes", "away", ..] => Some("the place Notes left in its tab"),
-            ["notes", ..] => Some("Notes"),
-            // Not the story told in the background (`--ahead`, `--plan`),
-            // which draws nothing.
-            ["diff", rest @ ..] if rest.iter().any(|a| *a == "--ahead" || *a == "--plan") => None,
-            ["diff", rest @ ..] if rest.contains(&"--working") => {
-                Some("the diff of uncommitted changes")
-            }
-            ["diff", ..] => Some("the diff"),
-            ["pr-view", "--checks", ..] => Some("the PR's failing checks"),
-            ["pr-view", ..] => Some("the PR view"),
-            ["ticket-view", ..] => Some("the ticket view"),
-            ["link-view", ..] => Some("the link view"),
-            ["pr-image", "--ticket", ..] => Some("the ticket's images"),
-            ["pr-image", ..] => Some("the PR's images"),
-            _ => None,
+    words.extend(rest.iter().map(String::as_str));
+    let (long, brief) = match words.as_slice() {
+        ["notes", "away", ..] => ("the place Notes left in its tab", "Notes' place"),
+        ["notes", ..] => ("Notes", "Notes"),
+        // Not the story told in the background (`--ahead`, `--plan`),
+        // which draws nothing.
+        ["diff", rest @ ..] if rest.iter().any(|a| *a == "--ahead" || *a == "--plan") => {
+            return None;
         }
-        .map(str::to_string)
-        .or_else(|| match words.as_slice() {
-            // The pager (a CI log, a landing's output, a file), by the
-            // file's name, which a long folder would cut away.
-            // `view [--log] [+<line>] <file>`: the file is always last.
-            ["view", flags @ .., file]
-                if *file != "--log"
-                    && !file
-                        .strip_prefix('+')
-                        .is_some_and(|n| n.parse::<usize>().is_ok()) =>
-            {
-                let path = if file.starts_with('/') {
-                    crate::paths::tilde(file)
-                } else {
-                    file.to_string()
-                };
-                // From its line, `file:<line>`, so two of one file differ.
-                let at = flags
-                    .iter()
-                    .find_map(|f| f.strip_prefix('+'))
-                    .map(|n| format!(":{n}"))
-                    .unwrap_or_default();
-                let room = room.saturating_sub(draw::width(&at));
-                Some(format!("the pager: {}{at}", cut_left(&path, room)))
+        ["diff", rest @ ..] if rest.contains(&"--working") => {
+            ("the diff of uncommitted changes", "uncommitted diff")
+        }
+        ["diff", ..] => ("the diff", "diff"),
+        ["pr-view", "--checks", ..] => ("the PR's failing checks", "PR checks"),
+        ["pr-view", ..] => ("the PR view", "PR view"),
+        ["ticket-view", ..] => ("the ticket view", "ticket view"),
+        ["link-view", ..] => ("the link view", "link view"),
+        ["pr-image", "--ticket", ..] => ("the ticket's images", "ticket images"),
+        ["pr-image", ..] => ("the PR's images", "PR images"),
+        // The pager (a CI log, a landing's output, a file), by its file's
+        // path cut from the left, so a long folder doesn't cut the name
+        // away. `view [--log] [+<line>] <file>`: the file is always last.
+        ["view", flags @ .., file]
+            if *file != "--log"
+                && !file
+                    .strip_prefix('+')
+                    .is_some_and(|n| n.parse::<usize>().is_ok()) =>
+        {
+            if short {
+                return Some("pager".into());
             }
-            _ => None,
-        })
-    })
+            let path = if file.starts_with('/') {
+                crate::paths::tilde(file)
+            } else {
+                file.to_string()
+            };
+            // From its line, `file:<line>`, so two of one file differ.
+            let at = flags
+                .iter()
+                .find_map(|f| f.strip_prefix('+'))
+                .map(|n| format!(":{n}"))
+                .unwrap_or_default();
+            let room = 49usize.saturating_sub(draw::width(&at));
+            return Some(format!("the pager: {}{at}", cut_left(&path, room)));
+        }
+        _ => return None,
+    };
+    Some(if short { brief } else { long }.to_string())
 }
 
 /// A title a program wrote over its arguments (npm on Linux: `npm exec
@@ -1613,6 +1614,19 @@ mod tests {
         let bin = format!("{home}/.local/bin/switchboard");
         assert_eq!(line(&[&bin, "notes", "--tab"]), "Notes");
         assert_eq!(line(&[&bin, "diff"]), "the diff");
+        let brief = |args: &[&str]| {
+            let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            app_of(&args, "/opt/sb/switchboard-0.2.0", true)
+        };
+        assert_eq!(
+            brief(&[&bin, "diff", "--working"]).as_deref(),
+            Some("uncommitted diff")
+        );
+        assert_eq!(
+            brief(&[&bin, "view", "+3", "/a/b.log"]).as_deref(),
+            Some("pager")
+        );
+        assert_eq!(brief(&["vim"]), None);
         assert_eq!(line(&[&bin, "diff", "--ahead"]), "switchboard diff --ahead");
         assert_eq!(
             line(&[&bin, "diff", "--working"]),
