@@ -1548,24 +1548,26 @@ fn app_of(args: &[String], own_exe: &str, short: bool) -> Option<String> {
     Some(if short { brief } else { long }.to_string())
 }
 
-/// A link (`http://`, `https://`, alone or an option's value after `=`)
-/// without its password, query or fragment, where a signed link keeps its
-/// token;
+/// A link (`http://`, `https://`, alone or a value after `=`) without its
+/// user, password, query or fragment, where a link keeps its credentials;
 /// any other word as it is, a pattern that only starts like a link
 /// (`https://[^/]+/v?`), which doesn't parse as one, among them.
 fn without_query(word: &str) -> String {
+    // The word, or what follows its `=` (`--url=…`, `http.proxy=…`).
+    let starts_as_link = |w: &str| {
+        let lower = w.to_ascii_lowercase();
+        lower.starts_with("http://") || lower.starts_with("https://")
+    };
     let start = match word.split_once('=') {
-        Some((key, _)) if key.starts_with('-') => key.len() + 1,
+        Some((key, value)) if !starts_as_link(word) && starts_as_link(value) => key.len() + 1,
         _ => 0,
     };
     let link = &word[start..];
     // Written as a link (`http://`, `https://`, in any case), and with no
     // backslash before its query, a pattern's escape the parser would take
     // as a slash.
-    let lower = link.to_ascii_lowercase();
     let before_query = &link[..link.find(['?', '#']).unwrap_or(link.len())];
-    let looks_like_link = (lower.starts_with("http://") || lower.starts_with("https://"))
-        && !before_query.contains('\\');
+    let looks_like_link = starts_as_link(link) && !before_query.contains('\\');
     let parsed = url::Url::parse(link)
         .ok()
         .filter(|_| looks_like_link)
@@ -1573,9 +1575,14 @@ fn without_query(word: &str) -> String {
     let Some(mut parsed) = parsed else {
         return word.to_string();
     };
-    // Written from the parsed link with its password, query and fragment
-    // taken out, an `…` where either of the last two was.
-    let cut = parsed.query().is_some() || parsed.fragment().is_some();
+    // Written from the parsed link with its user, password, query and
+    // fragment taken out (an API key can be the user), an `…` where any
+    // of them was.
+    let cut = parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some();
+    let _ = parsed.set_username("");
     let _ = parsed.set_password(None);
     parsed.set_query(None);
     parsed.set_fragment(None);
@@ -1643,17 +1650,21 @@ mod tests {
         assert_eq!(line(&["rg", "https://[a-z]?/v"]), "rg https://[a-z]?/v");
         assert_eq!(line(&["rg", "https:/a.dev/v1?"]), "rg https:/a.dev/v1?");
         assert_eq!(
+            line(&["git", "-c", "http.proxy=https://u:pw@p.dev", "fetch"]),
+            "git -c http.proxy=https://p.dev/… fetch"
+        );
+        assert_eq!(
             line(&["curl", "https://a.dev/f?token=x&n=a\\b"]),
             "curl https://a.dev/f…"
         );
         assert_eq!(line(&["rg", "https://a\\.dev/v?"]), "rg https://a\\.dev/v?");
         assert_eq!(
             line(&["curl", "https://me:secret@a.dev/f"]),
-            "curl https://me@a.dev/f"
+            "curl https://a.dev/f…"
         );
         assert_eq!(
             line(&["curl", "https://build+ci@a.dev/f?token=secret"]),
-            "curl https://build+ci@a.dev/f…"
+            "curl https://a.dev/f…"
         );
         assert_eq!(
             line(&["curl", "--url=HTTPS://a.dev/f?token=secret"]),
