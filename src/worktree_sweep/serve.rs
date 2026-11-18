@@ -142,7 +142,7 @@ impl Server {
     /// where the program in front runs (a Claude whose Bash tool moved
     /// elsewhere still runs where it started), where the pane's own shell
     /// is under it, and its tab's `@tab_dir`.
-    fn sweep_open(&self) -> Vec<PathBuf> {
+    pub(crate) fn sweep_open(&self) -> Vec<PathBuf> {
         self.panes
             .iter()
             .flat_map(|(p, slot)| {

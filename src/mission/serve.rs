@@ -6637,6 +6637,28 @@ impl Server {
                 if !yes {
                     return;
                 }
+                // A tab that left Merged while the question was open (back at
+                // work, pinned, waiting on you) stays open.
+                let rules = crate::sidebar::model::Rules::now();
+                let still_merged: Vec<TabId> = server
+                    .sidebar_all_tabs()
+                    .iter()
+                    .filter(|t| {
+                        list.contains(&t.id)
+                            && crate::sidebar::model::own_stage(t, &rules)
+                                == crate::sidebar::model::Stage::Merged
+                    })
+                    .map(|t| t.id)
+                    .collect();
+                let list = still_merged;
+                if list.is_empty() {
+                    server.say(
+                        Some(client),
+                        "No merged tab is left to close: each left Merged.",
+                    );
+                    return;
+                }
+                let n = list.len();
                 let paths: Vec<PathBuf> = list
                     .iter()
                     .filter_map(|t| server.tab_path(*t).map(Path::to_path_buf))
@@ -6644,6 +6666,9 @@ impl Server {
                 for t in &list {
                     server.kill_tab(*t);
                 }
+                // What the tabs left open use (a second tab M-t opened in the
+                // same worktree, still at work), which stays.
+                let open = server.sweep_open();
                 server.mission_busy(
                     client,
                     "Working on it",
@@ -6655,6 +6680,9 @@ impl Server {
                                 let Some((main, path)) = merged_worktree(&path) else {
                                     continue;
                                 };
+                                if crate::worktree_sweep::is_open(&path, &open) {
+                                    continue;
+                                }
                                 let mut git = std::process::Command::new("git");
                                 git.arg("-C").arg(main).arg("worktree");
                                 if path.exists() {

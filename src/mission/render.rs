@@ -483,7 +483,16 @@ fn card(
         fg(theme.faint)
     };
     let index = tab.index.to_string();
-    let name = text::cut(&tab.name, inner.saturating_sub(8 + width(&index)));
+    // A merged tab at work again wears its work's badge, and Merged's
+    // after it.
+    let merged_too =
+        tab.merge == Some(model::MergeState::Merged) && model::badge_state(tab, r) != Badge::Merged;
+    let second = if merged_too {
+        spans_width(&[badge(Badge::Merged, frame, theme)]) + 1
+    } else {
+        0
+    };
+    let name = text::cut(&tab.name, inner.saturating_sub(8 + width(&index) + second));
     let name_style = if chosen {
         bold(theme.bright)
     } else {
@@ -494,11 +503,17 @@ fn card(
         Span::raw(" "),
         badge(model::badge_state(tab, r), frame, theme),
         Span::raw(" "),
+    ];
+    if merged_too {
+        top.push(badge(Badge::Merged, frame, theme));
+        top.push(Span::raw(" "));
+    }
+    top.extend([
         Span::styled(index, fg(theme.dim)),
         Span::raw(" "),
         Span::styled(name, name_style),
         Span::raw(" "),
-    ];
+    ]);
     let used = spans_width(&top);
     top.push(Span::styled("─".repeat(w.saturating_sub(used + 2)), edge));
     top.push(Span::styled("─╮", edge));
@@ -755,8 +770,18 @@ fn state_for(tab: &TabModel, r: &Rules) -> String {
 
 /// A tab's PR's checks as the board writes them, in their mark's tone: all
 /// passed, how many of them have run, or how many failed; "no PR" dim
-/// without one.
+/// without one. Merged, it says so with Merged's mark, since a merged tab
+/// at work again wears its work's mark in its title.
 fn checks_words(tab: &TabModel, theme: &Theme) -> Vec<Span<'static>> {
+    if tab.merge == Some(model::MergeState::Merged) {
+        let words = match (&tab.landed_on, tab.pr) {
+            (Some((hash, _)), _) => format!("landed {hash}"),
+            (None, Some(n)) => format!("#{n} merged"),
+            (None, None) => "merged".into(),
+        };
+        let (glyph, tone) = Mark::of_badge(Badge::Merged).look();
+        return vec![Span::styled(format!("{glyph} {words}"), tone.style(theme))];
+    }
     let Some(c) = tab.checks else {
         let words = match tab.pr {
             Some(n) => format!("#{n}"),
@@ -1455,6 +1480,16 @@ fn shelf_line(
         })
         .or_else(|| tab.landing.is_none().then(|| model::state_words(tab, r)))
         .unwrap_or_default();
+    // A merged tab at work again is on another group's shelf: its words
+    // say it merged before its turn's (state_words says it itself).
+    let what = if tab.merge == Some(model::MergeState::Merged)
+        && model::badge_state(tab, r) != Badge::Merged
+        && (turn_words(tab).is_some() || tab.claude.is_none())
+    {
+        format!("{} · {what}", model::merge_words(tab))
+    } else {
+        what
+    };
     let number = tab.index.to_string();
     let at = kit::columns(
         &[
@@ -6726,6 +6761,35 @@ mod tests {
             &Theme::DARK,
         ));
         assert!(long.ends_with("…  no PR") && width(&long) == 24, "{long}");
+    }
+
+    #[test]
+    fn a_merged_tab_at_work_on_a_default_card_wears_both_badges_inside_its_edge() {
+        let r = model::tests::rules();
+        let mut t = tab(1, &"a long name ".repeat(10));
+        t.state = TabState::Working;
+        t.merge = Some(model::MergeState::Merged);
+        let drawn = card(&t, 40, 6, false, false, 0, &r, &Theme::DARK);
+        let top: String = drawn[0].iter().map(|s| s.content.to_string()).collect();
+        assert_eq!(width(&top), 40, "{top}");
+        assert!(top.ends_with("─╮"), "{top}");
+    }
+
+    #[test]
+    fn a_merged_tabs_card_says_merged_at_its_foot_while_it_works_again() {
+        let words = |t: &TabModel| -> String {
+            card_foot(t, None, 50, 0, &Theme::DARK)
+                .iter()
+                .map(|s| s.content.to_string())
+                .collect()
+        };
+        let mut t = tab(1, "work");
+        t.state = TabState::Working;
+        t.pr = Some(12345);
+        t.merge = Some(model::MergeState::Merged);
+        assert!(words(&t).contains("#12345 merged"), "{}", words(&t));
+        t.landed_on = Some(("abc1234".into(), "main".into()));
+        assert!(words(&t).contains("landed abc1234"), "{}", words(&t));
     }
 
     #[test]

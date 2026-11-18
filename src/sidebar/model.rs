@@ -416,7 +416,8 @@ fn pinned_first(a: &TabModel, b: &TabModel, r: &Rules) -> Ordering {
 /// A merged PR's tab still at work on it: deploy-test waiting for the deploy
 /// or recording its test, or Claude working under /deploy-test or the
 /// /queue-and-clean that follows it after the merge. A direct landing has
-/// no deploy to test: its queue-and-clean cleaning up stays under Merged.
+/// no deploy to test: its queue-and-clean cleaning up is under its loop's
+/// stage, as any work is, until it stops, and then under Merged.
 pub fn testing_deploy(tab: &TabModel) -> bool {
     tab.merge == Some(MergeState::Merged)
         && tab.landed_on.is_none()
@@ -620,7 +621,9 @@ pub fn stage_of(tab: &TabModel, r: &Rules) -> Stage {
 
 /// The stage a tab is in by what it is doing: Needs you first, then its
 /// PR's place, then the loop it is running, then its state, so a
-/// queue-and-clean watching a queued PR shows the PR's place.
+/// queue-and-clean watching a queued PR shows the PR's place. A merged
+/// tab is Merged only while it does nothing: at work again, or watching
+/// something, it is filed as any tab doing that is.
 pub fn own_stage(tab: &TabModel, r: &Rules) -> Stage {
     if needs_tab(tab, r) {
         return Stage::Needs;
@@ -633,8 +636,8 @@ pub fn own_stage(tab: &TabModel, r: &Rules) -> Stage {
     }
     match tab.merge {
         Some(MergeState::Queued) => return Stage::Queued,
-        Some(MergeState::Merged) => return Stage::Merged,
-        None => {}
+        Some(MergeState::Merged) if !tab.state.busy() => return Stage::Merged,
+        _ => {}
     }
     // A reminder you set wins over what its checks say until it comes due.
     if !tab.state.busy() && reminder_later(tab, r) {
@@ -804,9 +807,9 @@ pub fn hold_under(frozen: &mut Frozen, tab: TabId, stage: Stage) {
 /// The badge a tab wears (render.js's `badgeState`): pinned, whatever else
 /// it is, since you pinned it yourself and its words still say what Claude
 /// is doing; a reminder come due; else Claude's waiting or done; else its
-/// landing, deploy test or merged PR (its work is over, and a tab can be
-/// left marked working by a hook that came after its turn ended); for an
-/// idle tab its PR's place; else a reminder still to come; else a failing
+/// landing, deploy test, or merged PR while it does nothing (at work
+/// again, it wears its work's badge, as its group says); for an idle tab
+/// its PR's place; else a reminder still to come; else a failing
 /// build; else its watch or loop; else its state.
 pub fn badge_state(tab: &TabModel, r: &Rules) -> Badge {
     let needs = matches!(tab.state, TabState::Waiting | TabState::Done);
@@ -825,7 +828,7 @@ pub fn badge_state(tab: &TabModel, r: &Rules) -> Badge {
         Badge::Landing
     } else if testing_deploy(tab) {
         Badge::Deploy
-    } else if tab.merge == Some(MergeState::Merged) {
+    } else if tab.merge == Some(MergeState::Merged) && !tab.state.busy() {
         Badge::Merged
     } else if tab.state == TabState::Idle && tab.merge == Some(MergeState::Queued) {
         Badge::Queued
@@ -953,7 +956,16 @@ pub fn state_only(tab: &TabModel, r: &Rules) -> String {
             merge_words(tab)
         },
     ]);
-    let and = |words: String| joined([words, merge.clone()]);
+    // A merged tab at work again says so first, where a narrow row
+    // can't cut it off: its badge is its work's.
+    let merged_first = tab.merge == Some(MergeState::Merged) && tab.state.busy();
+    let and = |words: String| {
+        if merged_first {
+            joined([merge.clone(), words])
+        } else {
+            joined([words, merge.clone()])
+        }
+    };
     let opt = |o: &Option<String>| o.clone().unwrap_or_default();
     match tab.state {
         TabState::Waiting => {
@@ -1158,12 +1170,19 @@ pub(crate) mod tests {
             "{}",
             state_words(&landed, &r)
         );
-        // Its queue-and-clean cleaning up has no deploy to test.
+        // Its queue-and-clean cleaning up has no deploy to test: it is
+        // Queue-and-clean's until it stops, then Merged.
         let mut cleaning = landed.clone();
         cleaning.state = TabState::Working;
         cleaning.loop_skill = Some("queue".into());
         assert!(!testing_deploy(&cleaning));
-        assert_eq!(stage_of(&cleaning, &r), Stage::Merged);
+        assert_eq!(stage_of(&cleaning, &r), Stage::Queue);
+        assert_eq!(badge_state(&cleaning, &r), Badge::of_loop("queue").unwrap());
+        let stopped = TabModel {
+            state: TabState::Idle,
+            ..cleaning.clone()
+        };
+        assert_eq!(stage_of(&stopped, &r), Stage::Merged);
         // Still landing, it is under Landing.
         cleaning.landing = Some(Landing {
             method: Method::Direct,
@@ -1974,11 +1993,45 @@ pub(crate) mod tests {
                 ("Merged", v(&["done with it"])),
             ]
         );
-        // Merged while marked working says merged; waiting still wins.
+        // Merged and at work again wears its work's badge; waiting still wins.
         let busy = merged(5, "b", TabState::Working);
-        assert_eq!(badge_state(&busy, &r), Badge::Merged);
+        assert_eq!(badge_state(&busy, &r), Badge::Working);
         let asking = merged(6, "a", TabState::Waiting);
         assert_eq!(badge_state(&asking, &r), Badge::Waiting);
+    }
+
+    #[test]
+    fn a_merged_tab_is_under_merged_only_while_it_does_nothing() {
+        let r = rules();
+        let merged = |state| {
+            let mut t = tab(1, "merged", state);
+            t.merge = Some(MergeState::Merged);
+            t
+        };
+        let working = merged(TabState::Working);
+        assert_eq!(stage_of(&working, &r), Stage::Working);
+        assert_eq!(badge_state(&working, &r), Badge::Working);
+        // Merged first, where a narrow row can't cut it off.
+        assert!(
+            state_words(&working, &r).starts_with("merged"),
+            "{}",
+            state_words(&working, &r)
+        );
+        let mut looping = merged(TabState::Background);
+        looping.tab_loop = Some(TabLoop::Run(LoopRun {
+            kind: "review",
+            round: 1,
+        }));
+        assert_eq!(stage_of(&looping, &r), Stage::Review);
+        assert_eq!(badge_state(&looping, &r), Badge::of_loop("review").unwrap());
+        let mut watching = merged(TabState::Background);
+        watching.background = 1;
+        watching.monitors = vec!["CI".into()];
+        assert_eq!(stage_of(&watching, &r), Stage::Monitoring);
+        assert_eq!(badge_state(&watching, &r), Badge::Monitor);
+        let idle = merged(TabState::Idle);
+        assert_eq!(stage_of(&idle, &r), Stage::Merged);
+        assert_eq!(badge_state(&idle, &r), Badge::Merged);
     }
 
     #[test]

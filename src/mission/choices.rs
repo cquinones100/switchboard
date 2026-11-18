@@ -738,11 +738,13 @@ pub fn tab_choices(
         }
     }
     out.push(choice('x', "Close the tab", Do::CloseTab(tab.id)));
+    let rules = crate::sidebar::model::Rules::now();
     let merged: Vec<TabId> = all
         .iter()
         .filter(|t| {
-            t.merge == Some(MergeState::Merged)
-                && !matches!(t.state, TabState::Waiting | TabState::Done)
+            // The tabs under Merged: one at work again, pinned or waiting on
+            // you is in another group.
+            crate::sidebar::model::own_stage(t, &rules) == crate::sidebar::model::Stage::Merged
         })
         .map(|t| t.id)
         .collect();
@@ -2306,7 +2308,13 @@ mod tests {
         merged.merge = Some(MergeState::Merged);
         let mut also = tab(6, "also merged");
         also.merge = Some(MergeState::Merged);
-        let all = vec![merged.clone(), also];
+        let mut at_work = tab(7, "merged and at work again");
+        at_work.merge = Some(MergeState::Merged);
+        at_work.state = TabState::Working;
+        let mut pinned = tab(8, "merged and pinned");
+        pinned.merge = Some(MergeState::Merged);
+        pinned.pinned = true;
+        let all = vec![merged.clone(), also, at_work, pinned];
         let choices = tab_choices(&merged, &all, None, true, true);
         let last = choices.last().unwrap();
         assert_eq!(last.label, "Close every Merged tab and its worktree (2)");
