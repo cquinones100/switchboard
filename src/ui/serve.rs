@@ -1399,10 +1399,11 @@ impl Server {
             return Some(app);
         }
         // Another command of Switchboard's by its subcommand too
-        // (`switchboard update`), so it reads as more than Switchboard.
+        // (`switchboard update`), so it reads as more than Switchboard; only
+        // one of its own commands, never another word an argument could be.
         if let [first, sub, ..] = args.as_slice()
             && (program_name(first) == "switchboard" || *first == own_exe)
-            && !sub.starts_with('-')
+            && crate::cmd::is_command(sub)
         {
             return Some(format!("switchboard {sub}"));
         }
