@@ -2516,9 +2516,7 @@ impl Server {
             Ok(mode) => self.autopilot.mode = mode,
             Err(e) => eprintln!("autopilot: couldn't keep the tab that landed: {e}"),
         }
-        // Written only while autopilot may still reach GitHub for issues.
-        let writes = self.autopilot.mode.issues_on();
-        if let Some((issue, hash)) = issue.filter(|_| fresh && writes) {
+        if let Some((issue, hash)) = issue.filter(|_| fresh) {
             let short: String = hash.chars().take(7).collect();
             let comment = super::issues::landed_comment(&short);
             let question = format!("Comment on {issue} that it landed in {short}, and close it?");
@@ -2532,12 +2530,19 @@ impl Server {
         }
     }
 
+    /// Whether autopilot takes GitHub issues now: chosen, with its settings
+    /// and GitHub's on.
+    fn autopilot_writes_issues(&self) -> bool {
+        let mode = Mode::read(&paths::state_dir());
+        mode.sources.issues() && mode.issues_on()
+    }
+
     /// A comment on the GitHub issue `issue` names (`<owner>/<repo>#<n>`),
     /// closing it as done once GitHub has the commit `landed` names, off the
-    /// task: at once for a tab that
-    /// lands without asking, else once `question` is answered yes in the
-    /// client used last (none attached, nothing is written, and it says
-    /// so). A failure is said in the notifications.
+    /// task, only while autopilot takes issues: at once for a tab that lands
+    /// without asking, else once `question` is answered yes in the client
+    /// used last (none attached, nothing is written, and it says so). A
+    /// failure is said in the notifications.
     fn autopilot_write_back(
         &mut self,
         issue: &str,
@@ -2549,13 +2554,21 @@ impl Server {
         let Some((repo, number)) = super::issues::parse_reference(issue) else {
             return;
         };
+        // Written only while autopilot takes GitHub issues, checked again
+        // once a question is answered.
+        if !self.autopilot_writes_issues() {
+            return;
+        }
         let named = issue.to_string();
         let close = landed.is_some();
         // Off the task, its failure written into what the mode says, which
         // the next check shows in the notifications, whoever is attached by
         // then.
-        let write = move |_: &mut Server| {
+        let write = move |server: &mut Server| {
             let issue = named;
+            if !server.autopilot_writes_issues() {
+                return;
+            }
             if tokio::runtime::Handle::try_current().is_err() {
                 return;
             }
