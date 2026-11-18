@@ -1420,7 +1420,10 @@ impl Server {
             (Some(said), Some(slowed)) => {
                 let mut parts: Vec<String> = said
                     .split(" · ")
-                    .filter(|part| !part.contains(slack_user::RATE_LIMIT))
+                    .filter(|part| {
+                        !(part.starts_with("Slack read through the connector: ")
+                            && part.contains(slack_user::RATE_LIMIT))
+                    })
                     .map(str::to_string)
                     .collect();
                 parts.push(slowed);
