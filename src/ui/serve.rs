@@ -1549,10 +1549,10 @@ fn app_of(args: &[String], own_exe: &str, short: bool) -> Option<String> {
     // binary the server runs by its path, which starts the views under
     // whatever name it has.
     let mut words: Vec<&str> = match program_name(first).as_str() {
-        _ if first == own_exe => vec![],
-        "switchboard" => vec![],
         "switchboard-notes" => vec!["notes"],
         "switchboard-diff" => vec!["diff"],
+        _ if first == own_exe => vec![],
+        "switchboard" => vec![],
         _ => return None,
     };
     words.extend(rest.iter().map(String::as_str));
@@ -1623,7 +1623,10 @@ fn without_query(word: &str) -> String {
     let host_end = rest
         .find(|c: char| !(c.is_ascii_alphanumeric() || ".-_:%[]".contains(c)))
         .unwrap_or(rest.len());
-    let host = if rest[..path_at].contains('@') {
+    // Shown only when it ends cleanly, at a path, a query, a fragment or
+    // the word's end, so an escaped `@` or a quote can't hide a user.
+    let ends_cleanly = host_end == path_at;
+    let host = if rest[..path_at].contains('@') || !ends_cleanly {
         ""
     } else {
         &rest[..host_end]
@@ -1724,10 +1727,18 @@ mod tests {
             "curl --url=HTTPS://…",
         );
         link(&["curl", "https://a.dev"], "curl https://a.dev");
+        link(
+            &["curl", "https://a.dev:8080/x"],
+            "curl https://a.dev:8080/…",
+        );
+        link(
+            &["curl", "-d", "{\"u\":\"https://al:s\\u0040a.dev/f\"}"],
+            "curl -d {\"u\":\"https://…",
+        );
         link(&["curl", "https://w:s!@a.test/f"], "curl https://…");
         link(
             &["curl", "-d", "{\"url\":\"https://a.dev\",\"token\":\"x\"}"],
-            "curl -d {\"url\":\"https://a.dev/…",
+            "curl -d {\"url\":\"https://…",
         );
         link(
             &["curl", "--request-target=/r?next=https://a.dev/?sig=x"],
@@ -1792,6 +1803,11 @@ mod tests {
             Some("uncommitted diff")
         );
         assert_eq!(brief(&["vim"]), None);
+        let notes = "/x/switchboard-notes".to_string();
+        assert_eq!(
+            app_of(&[notes.clone()], &notes, false).as_deref(),
+            Some("Notes")
+        );
         assert_eq!(line(&["/usr/bin/diff", "a", "b"]), "diff a b");
         let long = line(&["/bin/sleep", &"9".repeat(80)]);
         assert_eq!(draw::width(&long), 60);
