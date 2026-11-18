@@ -222,10 +222,12 @@ impl Fields {
         if self.hands_free != was.hands_free {
             out.push(format!("hands-free {}", on_off(self.hands_free)));
         }
-        if self.sources() != was.sources() {
+        // A client sending none (an older Slack relay) changes neither.
+        if !self.sources.is_empty() && self.sources() != was.sources() {
             out.push(format!("takes from {}", self.sources().label()));
         }
-        if self.issue_label.trim() != was.issue_label.trim() {
+        if !self.issue_label.trim().is_empty() && self.issue_label.trim() != was.issue_label.trim()
+        {
             out.push(format!("issue label {}", self.issue_label.trim()));
         }
         for gone in &self.taken_back {

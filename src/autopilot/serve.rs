@@ -93,7 +93,8 @@ pub const REFUSED: &str = "@autopilot_refused";
 /// sets as it starts one (src/cmd/worktree_from_issue.rs): commented on and
 /// closed once the tab lands, and commented on when it is a duplicate.
 pub const ISSUE: &str = "@autopilot_issue";
-/// What it says while GitHub issues can't be read, a good read taking it back.
+/// How what it says while GitHub issues can't be read starts
+/// (`pilot::unread_said`), a good read taking it back.
 const ISSUES_UNREAD: &str = "Can't read GitHub issues";
 /// What its notification says of a refused item, after the item.
 const REFUSED_SAID: &str = "wtn refused it";
@@ -2912,11 +2913,9 @@ impl Server {
                     }
                 }
                 if let Some(e) = failed {
-                    if !self.autopilot.mode.said.contains(&e) {
-                        self.autopilot_say(&format!(
-                            "{ISSUES_UNREAD}{}",
-                            e.trim_start_matches("GitHub issues")
-                        ));
+                    let said = super::pilot::unread_said(&e);
+                    if !self.autopilot.mode.said.contains(&said) {
+                        self.autopilot_say(&said);
                     }
                     // The queue as last read stands: a failed read isn't an
                     // empty one, and is read again on the next check.

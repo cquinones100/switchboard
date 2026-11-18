@@ -550,6 +550,13 @@ pub fn unsay(said: &str, what: &str) -> String {
         .to_string()
 }
 
+/// What it says while a read of GitHub issues fails (`e` starting
+/// "GitHub issues:"), as one sentence, so a good read takes it back whole
+/// (`unsay`).
+pub fn unread_said(e: &str) -> String {
+    format!("Can't read {}", e.replace(". ", "; ").trim_end_matches('.'))
+}
+
 /// What it says of the weekly limit reached: "… 85% reached, resets in 2h
 /// 10m".
 pub fn weekly_said(limit: u32, resets_at: i64) -> String {
@@ -1012,8 +1019,8 @@ impl Pilot {
                 }
             }
             Found::Failed(e) => {
-                if e.starts_with("GitHub issues:") && !mode.said.contains(&e) {
-                    out.said = Some(format!("Can't read {e}"));
+                if e.starts_with("GitHub issues:") && !mode.said.contains(&unread_said(&e)) {
+                    out.said = Some(unread_said(&e));
                     // Nothing left is said again once a read succeeds.
                     self.empty_said = false;
                 }
