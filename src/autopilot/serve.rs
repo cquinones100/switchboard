@@ -3056,7 +3056,7 @@ impl Server {
             "autopilot: opened line {} of {} in {tab}",
             item.line, mode.note
         );
-        if mode.said.starts_with("Nothing left") {
+        if mode.said.contains("Nothing left to take") {
             // Only that: a failed write said after it stays until dismissed.
             match Mode::update(&paths::state_dir(), |m| {
                 m.said = super::pilot::unsay(&m.said, "Nothing left to take")
