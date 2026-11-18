@@ -239,7 +239,7 @@ The relay's DM, threads and Home tab.
 - [135. A change told as one story: its threads the chapters in the strip, the goal's first, each with how many of its pages are read; the map the chosen chapter's pages, the goal on chapter 1's top page; \]c \[c moves between chapters](https://cquinones100.github.io/switchboard/design/135.html)
 - [136. Files mode in the same words: the list by chapter, then page, then file; In the files only under them; the diff headed by its chapter and page](https://cquinones100.github.io/switchboard/design/136.html)
 
-## Review: the story in chapters as built
+## The story in chapters as built
 
 - [137. As built (for review): Map mode, the chapters strip with the read tally, the chapter's pages as Mermaid's square boxes numbered within the chapter, the goal page last in number, the legend, then the chosen page with its links, why and a dashed link's note; keys only, no buttons](https://cquinones100.github.io/switchboard/design/137.html)
 - [138. As built: Tab on the strip, a chapter other than the goal's shown (Side work), its pages and why the chapter is apart; ←→ chapter, Esc back to the map](https://cquinones100.github.io/switchboard/design/138.html)
