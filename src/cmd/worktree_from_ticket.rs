@@ -362,9 +362,18 @@ pub fn main(args: Vec<String>) -> ExitCode {
         return worktree::fail(&e.to_string());
     }
     let mut prompt = prompt_for(&issue, &extra);
-    if let Some(words) = start.as_ref().and_then(|s| s.offline.as_ref()) {
+    if let Some(start) = &start
+        && let Some(words) = &start.offline
+    {
+        // A started ticket's commits are published: catch up with them
+        // rather than rewrite them.
+        let catch_up = if start.tracks {
+            format!("bring it up to date with origin/{branch}")
+        } else {
+            "rebase onto its default branch".to_string()
+        };
         prompt.push_str(&format!(
-            " This branch starts from {words}, since origin couldn't be reached: before your first commit, fetch origin and rebase onto its default branch."
+            " This branch starts from {words}, since origin couldn't be reached: before your first commit, fetch origin and {catch_up}."
         ));
     }
     // Read by the `wt` function: line 1 the worktree, line 2 the prompt, so

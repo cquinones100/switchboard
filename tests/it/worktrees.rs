@@ -1277,6 +1277,11 @@ fn a_tickets_branch_starts_from_origins_fetched_main_or_its_branch_on_origin_and
         w.git(&worktree, &["rev-parse", "--abbrev-ref", "@{upstream}"]),
         "origin/eng-6-cached"
     );
+    assert!(
+        read(&cd).contains("fetch origin and bring it up to date with origin/eng-6-cached."),
+        "{}",
+        read(&cd)
+    );
 
     w.git(&clone, &["update-ref", "-d", "refs/remotes/origin/main"]);
     let never_fetched = w.run(&clone, &["worktree-from-ticket", "--no-claude", "ENG-5"]);
