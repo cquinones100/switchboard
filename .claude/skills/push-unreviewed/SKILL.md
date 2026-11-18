@@ -14,7 +14,7 @@ Throughout: never run the push yourself, in any form; never change `.githooks/`,
 
 ## 1. The branch and its commits
 
-Run `git fetch origin`, then name the branch (`git branch --show-current`). When origin has the branch and `git merge-base --is-ancestor origin/<branch> HEAD` fails, it has moved past this one, and a push would be refused: bring the branch up to date first by reading the file `switchboard skill-path resolve-conflicts` prints and following it onto `origin/<branch>`, without its push, stopping to ask where it says to. Then name the commits it would push: `git log --oneline origin/<branch>..HEAD` when origin has the branch, else `git log --oneline origin/main..HEAD`. With none, say there is nothing to push and stop. That range is `<range>` below.
+The push goes to `main` on origin. Run `git fetch origin`. When `git merge-base --is-ancestor origin/main HEAD` fails, main has moved past this branch, and a push would be refused: bring the branch up to date first by reading the file `switchboard skill-path resolve-conflicts` prints and following it onto `origin/main`, without its push, stopping to ask where it says to. Then name the commits it would push: `git log --oneline origin/main..HEAD`. With none, say there is nothing to push and stop. That range is `<range>` below.
 
 ## 2. Leak check
 
@@ -26,6 +26,6 @@ Read the range's added lines and commit messages (`git log -p <range>`) for what
 
 ## 4. The command, on the clipboard
 
-Write the command into a file in your scratchpad with the Write tool, one line with no newline at its end: `! git push` with git's flag that skips the hooks (`--no-verify`), then `origin` and the branch. Then run `pbcopy < <that file>`, and tell the user, in a line, that the push command is on their clipboard to paste into the prompt (the `!` runs it in their own shell) and which commits it pushes. Put it on the clipboard by the file, never by a Bash command that spells the flag out, which the repository's hook refuses.
+Write the command into a file in your scratchpad with the Write tool, exactly this one line with no newline at its end: `! git push --no-verify origin HEAD:main`. Then run `pbcopy < <that file>`, and tell the user, in a line, that the push command is on their clipboard to paste into the prompt (the `!` runs it in their own shell) and which commits it pushes. Put it on the clipboard by the file, never by a Bash command that spells the flag out, which the repository's hook refuses.
 
 Never run the push yourself, and don't wait on it or check for it: the user runs it when they choose. When the remote refuses it because the branch moved meanwhile, the user runs `/push-unreviewed` again, which brings the branch up to date and checks it once more.
