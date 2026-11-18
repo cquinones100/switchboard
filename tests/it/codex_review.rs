@@ -112,11 +112,11 @@ fn a_fixed_line_in_the_notes_reaches_the_prompt_with_its_rule() {
     let out = text(&run.stdout);
     assert!(out.contains(fixed), "{out}");
     assert!(
-        out.contains("A fixed finding's concern is settled: do not raise it again unless the fix itself is wrong, and then report what is wrong with the fix, naming the line."),
+        out.contains("A fixed finding's concern is settled while the fix is still in the code: do not raise it again unless the fix itself is wrong, and then report what is wrong with the fix, naming the line. A fix the branch has since undone leaves the concern open."),
         "{out}"
     );
     assert!(
-        out.contains("A finding that restates a fixed or disputed one, or a variant of it, in other words or at a nearby line, is not a finding."),
+        out.contains("A finding that restates a fixed or disputed one, the same failure in other words or at a nearby line, is not a finding; a different failure at a nearby line is."),
         "{out}"
     );
 }

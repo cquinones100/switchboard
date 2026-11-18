@@ -631,6 +631,7 @@ fn review_loop_notes_carry_fixed_disputed_and_known_gap_lines() {
     for said in [
         "`review-notes-<branch>.md`",
         "keep it and go on adding to it",
+        "taking out each `Fixed` line whose fix is no longer in the code",
         "three kinds of entries",
         "`- Fixed: <title> (<file>:<line>): <what was changed, in a sentence>, in <short hash>`",
         "`- Disputed: <title> (<file>:<line>): <why the finding is wrong>`",
