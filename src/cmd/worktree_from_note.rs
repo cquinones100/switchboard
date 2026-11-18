@@ -955,50 +955,10 @@ pub fn notes_newest_first(notes: &Path) -> Vec<String> {
 
 // ── The command ─────────────────────────────────────────────────────────────
 
-/// How long wtn waits before each further try at fetching the base, in
-/// seconds, since a failed fetch is most often a moment's network.
-/// `SWITCHBOARD_FETCH_RETRY_MS` sets every wait, for the tests.
-const FETCH_RETRIES_S: [u64; 2] = [5, 15];
-
-fn fetch_waits() -> Vec<std::time::Duration> {
-    let given = std::env::var("SWITCHBOARD_FETCH_RETRY_MS")
-        .ok()
-        .and_then(|v| v.parse().ok());
-    FETCH_RETRIES_S
-        .iter()
-        .map(|s| match given {
-            Some(ms) => std::time::Duration::from_millis(ms),
-            None => std::time::Duration::from_secs(*s),
-        })
-        .collect()
-}
-
-/// `attempt` until it succeeds, waiting `waits` between tries (one more try
-/// than waits), `again` called before each further one; the last error.
-fn with_retries<T>(
-    waits: &[std::time::Duration],
-    again: impl Fn(),
-    mut attempt: impl FnMut() -> Result<T, String>,
-) -> Result<T, String> {
-    let mut waits = waits.iter();
-    loop {
-        match attempt() {
-            Ok(done) => return Ok(done),
-            Err(e) => match waits.next() {
-                Some(wait) => {
-                    std::thread::sleep(*wait);
-                    again();
-                }
-                None => return Err(e),
-            },
-        }
-    }
-}
-
 /// The commit a new item's branch starts from: origin's default branch as it
 /// is now, fetched first (else the main clone's HEAD, with no remote), never
 /// the worktree /wtn was run in, whose own commits would then land with this
-/// item's. A fetch that fails is tried twice more (`FETCH_RETRIES_S`), then
+/// item's. A fetch that fails is tried twice more (`worktree::FETCH_RETRIES_S`), then
 /// the branch is cut from origin's default branch as last fetched, said with
 /// its age, since the landing rebases onto the newest one anyway; with none
 /// fetched before it stops, since the main clone's unpushed commits would
@@ -1009,12 +969,12 @@ fn start_point(root: &Path, target: Option<&str>) -> Result<String, String> {
     }
     let default = crate::repos::default_branch(root);
     let name = default.clone().unwrap_or_else(|| {
-        origin_head(root)
+        worktree::origin_head(root)
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| "main".into())
     });
-    let fetched = with_retries(
-        &fetch_waits(),
+    let fetched = worktree::with_retries(
+        &worktree::fetch_waits(),
         || eprintln!("Fetching origin's {name} again"),
         || {
             if let Some(default) = &default {
@@ -1023,70 +983,11 @@ fn start_point(root: &Path, target: Option<&str>) -> Result<String, String> {
             worktree::default_start(root, "wtn: fetch the base")
         },
     );
-    fetched.or_else(|e| last_fetched(root, default.as_deref()).ok_or(e))
-}
-
-/// The branch origin's `HEAD` names in the clone, without `origin/`.
-fn origin_head(root: &Path) -> Option<String> {
-    let head = worktree::git_at(
-        root,
-        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-    )
-    .ok()?;
-    Some(head.strip_prefix("origin/").unwrap_or(&head).to_string())
-}
-
-/// Origin's default branch as last fetched (the landing's `default` alone
-/// when it names one, else the branch origin's `HEAD` names, else main or
-/// master), said with how long ago it was fetched; none when the clone has
-/// none of them.
-fn last_fetched(root: &Path, default: Option<&str>) -> Option<String> {
-    // A default the landing names is the only branch to start from: another
-    // cached one would bring that branch's commits into the item.
-    let names: Vec<String> = match default {
-        Some(d) => vec![d.to_string()],
-        None => origin_head(root)
-            .into_iter()
-            .chain(["main".to_string(), "master".to_string()])
-            .collect(),
-    };
-    let (name, fetched) = names
-        .into_iter()
-        .map(|n| {
-            let r = format!("refs/remotes/origin/{n}");
-            (n, r)
-        })
-        .find(|(_, r)| worktree::git_ok(root, &["rev-parse", "--verify", "--quiet", r]))?;
-    // The ref's reflog says when it was last moved, which a fetch does.
-    let at = worktree::git_at(
-        root,
-        &["log", "-g", "-1", "--date=unix", "--format=%gd", &fetched],
-    )
-    .ok()
-    .and_then(|d| {
-        d.rsplit_once("@{")?
-            .1
-            .strip_suffix('}')?
-            .parse::<i64>()
-            .ok()
-    });
-    let when = match at {
-        Some(at) => format!("as of {}", ago_words(crate::util::now_secs() - at)),
-        None => "as last fetched".to_string(),
-    };
-    eprintln!("Starting from origin/{name} {when}: couldn't reach origin");
-    Some(fetched)
-}
-
-/// "12 minutes ago", "3 hours ago", "just now".
-fn ago_words(secs: i64) -> String {
-    let (n, unit) = match secs.max(0) {
-        s if s < 60 => return "just now".into(),
-        s if s < 3600 => (s / 60, "minute"),
-        s if s < 86_400 => (s / 3600, "hour"),
-        s => (s / 86_400, "day"),
-    };
-    format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
+    fetched.or_else(|e| {
+        worktree::last_fetched(root, default.as_deref())
+            .map(|(r, _)| r)
+            .ok_or(e)
+    })
 }
 
 /// Points origin's `HEAD` in the clone at `default`, the default branch
@@ -1117,10 +1018,10 @@ fn point_origin_head_at(root: &Path, default: &str) -> Result<(), String> {
 }
 
 /// A target's branch fetched from `remote`, tried twice more as the base's
-/// fetch is (`FETCH_RETRIES_S`): whether it was.
+/// fetch is (`worktree::FETCH_RETRIES_S`): whether it was.
 fn fetch_target(root: &Path, remote: &str, branch: &str) -> bool {
-    with_retries(
-        &fetch_waits(),
+    worktree::with_retries(
+        &worktree::fetch_waits(),
         || eprintln!("Fetching {remote}/{branch} again"),
         || {
             worktree::fetch_branch(root, remote, branch, "wtn: fetch the target")
@@ -1692,7 +1593,7 @@ mod tests {
         let waits = [std::time::Duration::ZERO; 2];
         let said = std::cell::Cell::new(0);
         let mut tries = 0;
-        let got = with_retries(
+        let got = worktree::with_retries(
             &waits,
             || said.set(said.get() + 1),
             || {
@@ -1708,7 +1609,7 @@ mod tests {
         assert_eq!(said.get(), 2, "\"again\" said before each further try");
 
         let mut tries = 0;
-        let got: Result<(), String> = with_retries(
+        let got: Result<(), String> = worktree::with_retries(
             &waits,
             || {},
             || {
@@ -1721,11 +1622,11 @@ mod tests {
 
     #[test]
     fn how_long_ago_reads() {
-        assert_eq!(ago_words(5), "just now");
-        assert_eq!(ago_words(60), "1 minute ago");
-        assert_eq!(ago_words(12 * 60 + 5), "12 minutes ago");
-        assert_eq!(ago_words(3 * 3600), "3 hours ago");
-        assert_eq!(ago_words(2 * 86_400), "2 days ago");
+        assert_eq!(worktree::ago_words(5), "just now");
+        assert_eq!(worktree::ago_words(60), "1 minute ago");
+        assert_eq!(worktree::ago_words(12 * 60 + 5), "12 minutes ago");
+        assert_eq!(worktree::ago_words(3 * 3600), "3 hours ago");
+        assert_eq!(worktree::ago_words(2 * 86_400), "2 days ago");
     }
 
     #[test]

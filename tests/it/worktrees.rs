@@ -1127,15 +1127,17 @@ fn started_answer(body: &Value) -> Value {
         1 => "eng-1-new",
         2 => "eng-2-started",
         3 => "eng-3-local",
+        5 => "eng-5-offline",
         _ => "eng-4-offline",
     };
     json!({ "data": { "issues": { "nodes": [{ "identifier": format!("ENG-{number}"), "title": "Work", "branchName": branch, "state": { "name": "Todo", "type": "unstarted" } }] } } })
 }
 
 #[test]
-fn a_tickets_branch_starts_from_origins_fetched_main_or_its_branch_on_origin_and_an_origin_that_cant_be_fetched_stops_it()
+fn a_tickets_branch_starts_from_origins_fetched_main_or_its_branch_on_origin_and_offline_from_main_as_last_fetched_or_with_none_stops()
  {
     let mut w = World::new("wt-origin");
+    w.set("SWITCHBOARD_FETCH_RETRY_MS", "0");
     let fake = Fake::linear(started_answer);
     w.set("SWITCHBOARD_LINEAR_API", &fake.graphql());
     w.set("LINEAR_API_KEY", "lin_test");
@@ -1197,14 +1199,52 @@ fn a_tickets_branch_starts_from_origins_fetched_main_or_its_branch_on_origin_and
     );
 
     std::fs::remove_dir_all(&origin).unwrap();
-    let offline = w.run(&clone, &["worktree-from-ticket", "--no-claude", "ENG-4"]);
-    assert_ne!(offline.status.code(), Some(0));
-    assert!(
-        stderr(&offline).contains("couldn't fetch origin's"),
-        "{}",
-        stderr(&offline)
+    let cd = w.path("cd-offline");
+    let offline = w.run(
+        &clone,
+        &[
+            "worktree-from-ticket",
+            "--no-claude",
+            "--cd-file",
+            cd.to_str().unwrap(),
+            "ENG-4",
+        ],
     );
-    assert!(!clone.join(".claude/worktrees/eng-4-offline").exists());
+    let said = stderr(&offline);
+    assert_eq!(offline.status.code(), Some(0), "{said}");
+    assert_eq!(
+        said.matches("Fetching origin's main again").count(),
+        2,
+        "tried twice more: {said}"
+    );
+    assert!(
+        said.contains("Starting from origin/main as of just now: couldn't reach origin"),
+        "{said}"
+    );
+    let written = read(&cd);
+    let mut lines = written.lines();
+    let worktree = PathBuf::from(lines.next().unwrap());
+    assert_eq!(
+        w.git(&worktree, &["rev-parse", "HEAD"]),
+        origin_main,
+        "from origin's main as last fetched, still not the clone's own"
+    );
+    assert!(
+        lines.next().unwrap().contains(
+            "This branch starts from origin/main as of just now, since origin couldn't be reached"
+        ),
+        "{written}"
+    );
+
+    w.git(&clone, &["update-ref", "-d", "refs/remotes/origin/main"]);
+    let never_fetched = w.run(&clone, &["worktree-from-ticket", "--no-claude", "ENG-5"]);
+    assert_ne!(never_fetched.status.code(), Some(0));
+    assert!(
+        stderr(&never_fetched).contains("couldn't fetch origin's"),
+        "{}",
+        stderr(&never_fetched)
+    );
+    assert!(!clone.join(".claude/worktrees/eng-5-offline").exists());
 }
 
 #[test]

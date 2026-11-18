@@ -196,16 +196,23 @@ pub fn prompt_for(issue: &Issue, extra: &str) -> String {
     prompt
 }
 
-/// Where a new ticket branch starts, and whether it tracks origin's.
+/// Where a new ticket branch starts, whether it tracks origin's, and, when
+/// origin couldn't be reached, which copy of its default branch it is
+/// ("origin/main as of 2 hours ago").
 struct Start {
     commit: String,
     tracks: bool,
+    offline: Option<String>,
 }
 
 /// The ticket's branch on origin, fetched, when someone started it before
 /// (a teammate, or another computer), tracking it; else origin's default
 /// branch as it is now (`worktree::default_start`), never the main clone's
-/// checked-out HEAD, whose unpushed commits would land with the ticket's.
+/// checked-out HEAD, whose unpushed commits would land with the ticket's. A
+/// fetch of the default branch that fails is tried twice more
+/// (`worktree::FETCH_RETRIES_S`), then the branch starts from origin's
+/// default branch as last fetched, since a failed fetch is most often a
+/// moment's network; with none fetched before, it stops.
 fn ticket_start(root: &Path, branch: &str) -> Result<Start, String> {
     const SOURCE: &str = "wt: fetch the base";
     let has_origin = worktree::remotes(root).iter().any(|r| r == "origin");
@@ -213,11 +220,26 @@ fn ticket_start(root: &Path, branch: &str) -> Result<Start, String> {
         return Ok(Start {
             commit: format!("refs/remotes/origin/{branch}"),
             tracks: true,
+            offline: None,
         });
     }
+    let name = worktree::origin_head(root).unwrap_or_else(|| "main".into());
+    let fetched = worktree::with_retries(
+        &worktree::fetch_waits(),
+        || eprintln!("Fetching origin's {name} again"),
+        || worktree::default_start(root, SOURCE),
+    );
+    let (commit, offline) = match fetched {
+        Ok(commit) => (commit, None),
+        Err(e) => {
+            let (commit, words) = worktree::last_fetched(root, None).ok_or(e)?;
+            (commit, Some(words))
+        }
+    };
     Ok(Start {
-        commit: worktree::default_start(root, SOURCE)?,
+        commit,
         tracks: false,
+        offline,
     })
 }
 
@@ -327,7 +349,12 @@ pub fn main(args: Vec<String>) -> ExitCode {
     if let Err(e) = worktree::link_local_settings(&root, &path) {
         return worktree::fail(&e.to_string());
     }
-    let prompt = prompt_for(&issue, &extra);
+    let mut prompt = prompt_for(&issue, &extra);
+    if let Some(words) = start.as_ref().and_then(|s| s.offline.as_ref()) {
+        prompt.push_str(&format!(
+            " This branch starts from {words}, since origin couldn't be reached: before your first commit, fetch origin and rebase onto its default branch."
+        ));
+    }
     // Read by the `wt` function: line 1 the worktree, line 2 the prompt, so
     // the function and the standalone path can't drift apart.
     if let Some(cd_file) = &given.cd_file

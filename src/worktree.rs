@@ -538,6 +538,111 @@ pub fn default_start(root: &Path, source: &str) -> Result<String, String> {
     }
 }
 
+/// How long a worktree command waits before each further try at fetching
+/// the branch it starts from, in seconds, since a failed fetch is most often a moment's network.
+/// `SWITCHBOARD_FETCH_RETRY_MS` sets every wait, for the tests.
+pub const FETCH_RETRIES_S: [u64; 2] = [5, 15];
+
+pub fn fetch_waits() -> Vec<std::time::Duration> {
+    let given = std::env::var("SWITCHBOARD_FETCH_RETRY_MS")
+        .ok()
+        .and_then(|v| v.parse().ok());
+    FETCH_RETRIES_S
+        .iter()
+        .map(|s| match given {
+            Some(ms) => std::time::Duration::from_millis(ms),
+            None => std::time::Duration::from_secs(*s),
+        })
+        .collect()
+}
+
+/// `attempt` until it succeeds, waiting `waits` between tries (one more try
+/// than waits), `again` called before each further one; the last error.
+pub fn with_retries<T>(
+    waits: &[std::time::Duration],
+    again: impl Fn(),
+    mut attempt: impl FnMut() -> Result<T, String>,
+) -> Result<T, String> {
+    let mut waits = waits.iter();
+    loop {
+        match attempt() {
+            Ok(done) => return Ok(done),
+            Err(e) => match waits.next() {
+                Some(wait) => {
+                    std::thread::sleep(*wait);
+                    again();
+                }
+                None => return Err(e),
+            },
+        }
+    }
+}
+
+/// The branch origin's `HEAD` names in the clone, without `origin/`.
+pub fn origin_head(root: &Path) -> Option<String> {
+    let head = git_at(
+        root,
+        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    )
+    .ok()?;
+    Some(head.strip_prefix("origin/").unwrap_or(&head).to_string())
+}
+
+/// Origin's default branch as last fetched (the landing's `default` alone
+/// when it names one, else the branch origin's `HEAD` names, else main or
+/// master), said on stderr with how long ago it was fetched: the ref and
+/// those words ("origin/main as of 2 hours ago"); none when the clone has
+/// none of them.
+pub fn last_fetched(root: &Path, default: Option<&str>) -> Option<(String, String)> {
+    // A default the landing names is the only branch to start from: another
+    // cached one would bring that branch's commits into the item.
+    let names: Vec<String> = match default {
+        Some(d) => vec![d.to_string()],
+        None => origin_head(root)
+            .into_iter()
+            .chain(["main".to_string(), "master".to_string()])
+            .collect(),
+    };
+    let (name, fetched) = names
+        .into_iter()
+        .map(|n| {
+            let r = format!("refs/remotes/origin/{n}");
+            (n, r)
+        })
+        .find(|(_, r)| git_ok(root, &["rev-parse", "--verify", "--quiet", r]))?;
+    // The ref's reflog says when it was last moved, which a fetch does.
+    let at = git_at(
+        root,
+        &["log", "-g", "-1", "--date=unix", "--format=%gd", &fetched],
+    )
+    .ok()
+    .and_then(|d| {
+        d.rsplit_once("@{")?
+            .1
+            .strip_suffix('}')?
+            .parse::<i64>()
+            .ok()
+    });
+    let when = match at {
+        Some(at) => format!("as of {}", ago_words(util::now_secs() - at)),
+        None => "as last fetched".to_string(),
+    };
+    let words = format!("origin/{name} {when}");
+    eprintln!("Starting from {words}: couldn't reach origin");
+    Some((fetched, words))
+}
+
+/// "12 minutes ago", "3 hours ago", "just now".
+pub fn ago_words(secs: i64) -> String {
+    let (n, unit) = match secs.max(0) {
+        s if s < 60 => return "just now".into(),
+        s if s < 3600 => (s / 60, "minute"),
+        s if s < 86_400 => (s / 3600, "hour"),
+        s => (s / 86_400, "day"),
+    };
+    format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
+}
+
 /// The upstream written by hand rather than with `worktree add --track`:
 /// `--track` insists the start point be covered by the remote's fetch
 /// refspec, which a single-branch or partial clone's is not.
