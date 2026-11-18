@@ -969,6 +969,7 @@ fn autopilot_takes_issues_opened_by_you_or_labeled_by_a_writer_and_writes_back()
             ),
             answer(200, json!({ "permission": "write" })),
             answer(200, json!({ "permission": "read" })),
+            answer(200, json!({ "sha": "abc1234" })),
             answer(201, json!({ "id": 7 })),
             answer(200, json!({ "number": 2, "state": "closed" })),
         ],
@@ -1000,21 +1001,29 @@ fn autopilot_takes_issues_opened_by_you_or_labeled_by_a_writer_and_writes_back()
         "/repos/acme/widgets/collaborators/outsider/permission"
     );
 
-    util::block_on(issues::write_back(&repo, 2, "Landed in abc1234", true)).unwrap();
+    util::block_on(issues::write_back(
+        &repo,
+        2,
+        "Landed in abc1234",
+        true,
+        Some("abc1234"),
+    ))
+    .unwrap();
     let seen = fake.seen();
-    assert_eq!(seen[3].method, "POST");
-    assert_eq!(seen[3].path, "/repos/acme/widgets/issues/2/comments");
-    assert_eq!(seen[3].body["body"], "Landed in abc1234");
-    assert_eq!(seen[4].method, "PATCH");
-    assert_eq!(seen[4].path, "/repos/acme/widgets/issues/2");
-    assert_eq!(seen[4].body["state"], "closed");
+    assert_eq!(seen[3].path, "/repos/acme/widgets/commits/abc1234");
+    assert_eq!(seen[4].method, "POST");
+    assert_eq!(seen[4].path, "/repos/acme/widgets/issues/2/comments");
+    assert_eq!(seen[4].body["body"], "Landed in abc1234");
+    assert_eq!(seen[5].method, "PATCH");
+    assert_eq!(seen[5].path, "/repos/acme/widgets/issues/2");
+    assert_eq!(seen[5].body["state"], "closed");
     assert_eq!(counted("GitHub", "GraphQL"), 1);
-    assert_eq!(counted("GitHub", "REST"), 4);
+    assert_eq!(counted("GitHub", "REST"), 5);
 
     // GitHub turned off in Settings, none are read.
     env.settings(json!({ "github": false }));
     let err = util::block_on(issues::fetch(&repo, "autopilot")).unwrap_err();
     assert_eq!(kind(&err), ErrorKind::Off);
-    assert_eq!(fake.seen().len(), 5);
+    assert_eq!(fake.seen().len(), 6);
     env.settings(json!({}));
 }

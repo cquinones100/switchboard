@@ -4,7 +4,7 @@
 //! prompt tells it to (worktree_from_note.rs's `duplicates_first`). It marks
 //! its own tab `@autopilot_refused` with "Duplicate of <which>", which
 //! autopilot reads to skip the item with that reason, close the tab and, for
-//! an issue, comment naming the duplicate (src/autopilot/serve.rs). That
+//! an issue, comment that it is one (src/autopilot/serve.rs). That
 //! option is one of Switchboard's own marks, which `switchboard set` typed in
 //! a pane may not set, so this is the one narrow way a tab's Claude sets it:
 //! only on its own tab, only in one autopilot opened. No tmux-version file is

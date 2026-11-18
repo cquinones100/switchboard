@@ -24,7 +24,8 @@
 //! checks every few seconds ask GitHub at most every two minutes; a failed
 //! read is kept as long, with why. Once a tab on an issue lands, the server
 //! comments on it with the commit and closes it, and once one finds its
-//! issue a duplicate, comments naming the duplicate and leaves it open,
+//! issue a duplicate, comments that it is one (never what the tab named,
+//! which may be a note's words) and leaves it open,
 //! each asked first unless the tab lands without asking (src/autopilot/serve.rs).
 
 use std::collections::HashSet;
@@ -265,13 +266,19 @@ pub async fn fetch(repo: &Repo, label: &str) -> Result<Vec<Issue>> {
     let mut writers = HashSet::new();
     for login in to_ask(&found, &viewer) {
         let path = format!("/repos/{repo}/collaborators/{login}/permission");
-        // One that can't be asked (not a collaborator, say) has no access.
-        if let Ok(answer) = github::rest("GET", &path, None, SOURCE).await
-            && matches!(
-                answer.get("permission").and_then(Value::as_str),
-                Some("admin" | "maintain" | "write")
-            )
-        {
+        // One GitHub doesn't know as a collaborator has no access; any other
+        // failure says nothing of it, so the read fails and is tried again.
+        let answer = match github::rest("GET", &path, None, SOURCE).await {
+            Ok(answer) => answer,
+            Err(e) if crate::net::kind_of(&e) == Some(&crate::net::ErrorKind::NotFound) => {
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
+        if matches!(
+            answer.get("permission").and_then(Value::as_str),
+            Some("admin" | "maintain" | "write")
+        ) {
             writers.insert(login);
         }
     }
@@ -389,9 +396,11 @@ pub fn unclaimed(
                 &claim_note(&i.repo),
                 now,
             );
+            // Skipped by its reference, whatever its title says now.
+            let skipped_as = format!("{}: ", i.reference());
             !worked.contains(&i.reference().to_lowercase())
                 && !lately.contains(&format!("#{}", i.number))
-                && !skip.contains(&i.text())
+                && !skip.iter().any(|t| t.starts_with(&skipped_as))
         })
         .collect()
 }
@@ -405,13 +414,36 @@ pub fn landed_comment(hash: &str) -> String {
     }
 }
 
-/// The comment left on an issue its tab found a duplicate.
-pub fn duplicate_comment(why: &str) -> String {
-    format!("Switchboard's autopilot left this issue open: {why}.")
+/// The comment left on an issue its tab found a duplicate: never what the
+/// tab named, which may be a note's words, and nothing in a note leaves the
+/// computer.
+pub fn duplicate_comment() -> String {
+    "Switchboard's autopilot left this issue open: it found the same work already started or done elsewhere.".to_string()
 }
 
-/// Comments on an issue, and closes it as done when `close`.
-pub async fn write_back(repo: &Repo, number: u64, comment: &str, close: bool) -> Result<()> {
+/// Comments on an issue, and closes it as done when `close`; with
+/// `landed`, only once GitHub has that commit in the repository, so a
+/// landing that never reached it closes nothing.
+pub async fn write_back(
+    repo: &Repo,
+    number: u64,
+    comment: &str,
+    close: bool,
+    landed: Option<&str>,
+) -> Result<()> {
+    if let Some(hash) = landed {
+        if hash.is_empty() || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(anyhow!("\"{hash}\" isn't a commit"));
+        }
+        github::rest(
+            "GET",
+            &format!("/repos/{repo}/commits/{hash}"),
+            None,
+            SOURCE,
+        )
+        .await
+        .map_err(|e| anyhow!("{repo} has no commit {hash} on GitHub: {e}"))?;
+    }
     github::rest(
         "POST",
         &format!("/repos/{repo}/issues/{number}/comments"),

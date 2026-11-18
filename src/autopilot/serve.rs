@@ -2492,12 +2492,13 @@ impl Server {
         if let Some((issue, hash)) = issue.filter(|_| fresh) {
             let comment = super::issues::landed_comment(&hash);
             let question = format!("Comment on {issue} that it landed in {hash}, and close it?");
-            self.autopilot_write_back(&issue, comment, true, without_asking, question);
+            self.autopilot_write_back(&issue, comment, Some(hash), without_asking, question);
         }
     }
 
     /// A comment on the GitHub issue `issue` names (`<owner>/<repo>#<n>`),
-    /// closing it as done when `close`, off the task: at once for a tab that
+    /// closing it as done once GitHub has the commit `landed` names, off the
+    /// task: at once for a tab that
     /// lands without asking, else once `question` is answered yes in the
     /// client used last (none attached, nothing is written, and it says
     /// so). A failure is said in the notifications.
@@ -2505,7 +2506,7 @@ impl Server {
         &mut self,
         issue: &str,
         comment: String,
-        close: bool,
+        landed: Option<String>,
         without_asking: bool,
         question: String,
     ) {
@@ -2513,6 +2514,7 @@ impl Server {
             return;
         };
         let named = issue.to_string();
+        let close = landed.is_some();
         let write = move |server: &mut Server| {
             let issue = named;
             let Some(client) = server.latest_client() else {
@@ -2520,8 +2522,14 @@ impl Server {
                 // failure goes to the log.
                 if tokio::runtime::Handle::try_current().is_ok() {
                     tokio::spawn(async move {
-                        if let Err(e) =
-                            super::issues::write_back(&repo, number, &comment, close).await
+                        if let Err(e) = super::issues::write_back(
+                            &repo,
+                            number,
+                            &comment,
+                            close,
+                            landed.as_deref(),
+                        )
+                        .await
                         {
                             eprintln!("autopilot: couldn't write on {repo}#{number}: {e}");
                         }
@@ -2533,7 +2541,11 @@ impl Server {
                 client,
                 move || {
                     super::issues::wait_for(super::issues::write_back(
-                        &repo, number, &comment, close,
+                        &repo,
+                        number,
+                        &comment,
+                        close,
+                        landed.as_deref(),
                     ))
                     .map_err(|e| e.to_string())
                 },
@@ -2696,9 +2708,9 @@ impl Server {
             }
             eprintln!("autopilot: closed {tab}, wtn refused its item");
             if let Some(issue) = issue.filter(|_| duplicate) {
-                let comment = super::issues::duplicate_comment(&why);
+                let comment = super::issues::duplicate_comment();
                 let question = format!("Comment on {issue} that autopilot left it open: {why}?");
-                self.autopilot_write_back(&issue, comment, false, land, question);
+                self.autopilot_write_back(&issue, comment, None, land, question);
             }
         }
     }
