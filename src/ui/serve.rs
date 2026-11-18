@@ -1558,12 +1558,24 @@ fn without_query(word: &str) -> String {
         _ => 0,
     };
     let link = &word[start..];
-    let is_link = url::Url::parse(link)
-        .is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.host().is_some());
-    match link.find(['?', '#']).filter(|_| is_link) {
-        Some(at) => format!("{}…", &word[..start + at]),
-        None => word.to_string(),
+    // A backslash is a pattern's escape, which the parser would take as
+    // a slash.
+    let parsed = url::Url::parse(link)
+        .ok()
+        .filter(|_| !link.contains('\\'))
+        .filter(|u| matches!(u.scheme(), "http" | "https") && u.host().is_some());
+    let Some(parsed) = parsed else {
+        return word.to_string();
+    };
+    let mut shown = match link.find(['?', '#']) {
+        Some(at) => format!("{}…", &link[..at]),
+        None => link.to_string(),
+    };
+    // Its password too, `user:…@host`.
+    if let Some(password) = parsed.password() {
+        shown = shown.replacen(&format!(":{password}@"), ":…@", 1);
     }
+    format!("{}{shown}", &word[..start])
 }
 
 /// A title a program wrote over its arguments (npm on Linux: `npm exec
@@ -1624,6 +1636,11 @@ mod tests {
         assert_eq!(line(&["rg", "https?://a.dev"]), "rg https?://a.dev");
         assert_eq!(line(&["rg", "https://[^/]+/v?"]), "rg https://[^/]+/v?");
         assert_eq!(line(&["rg", "https://[a-z]?/v"]), "rg https://[a-z]?/v");
+        assert_eq!(line(&["rg", "https://a\\.dev/v?"]), "rg https://a\\.dev/v?");
+        assert_eq!(
+            line(&["curl", "https://me:secret@a.dev/f"]),
+            "curl https://me:…@a.dev/f"
+        );
         assert_eq!(
             line(&["curl", "https://build+ci@a.dev/f?token=secret"]),
             "curl https://build+ci@a.dev/f…"
