@@ -1159,7 +1159,10 @@ impl Server {
             } else {
                 draw::width(&programs) + 3
             };
-            let room = width.saturating_sub(taken).max(8);
+            // At least the tab's number and an `…` for its name.
+            let room = width
+                .saturating_sub(taken)
+                .max(draw::width(&index.to_string()) + 2);
             let mut line = draw::cut(&format!("{index} {}", self.tab_label(tab)), room);
             if !running.is_empty() {
                 line.push_str(" · ");
