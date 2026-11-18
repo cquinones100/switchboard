@@ -51,8 +51,10 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
         // The search's index can lag a label taken off or an issue closed,
         // so the issue found is asked about itself.
         let found = match found.into_iter().find(|i| i.number == number) {
-            Some(i) if issues::still_stands(&repo, number, &label).await? => Some(i),
-            _ => None,
+            Some(i) => issues::still_stands(&repo, number, &label)
+                .await?
+                .map(|body| Issue { body, ..i }),
+            None => None,
         };
         anyhow::Ok((repo, found))
     })
@@ -64,6 +66,18 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
         .and_then(|i| crate::cmd::worktree_from_note::review_hold(&i.body))
     {
         return Err(format!("{repo}#{number} waits on {what}"));
+    }
+    // The queue's rules for its body as it is now: Planned only leaves out
+    // one with none, and an open choice is taken only hands-free; it fails
+    // the start, and the queue leaves it out once it reads it again.
+    let mode = Mode::read(&paths::state_dir());
+    if let Some(i) = &found {
+        if mode.ready_only && i.body.trim().is_empty() {
+            return Err(format!("{repo}#{number} has no body to plan from"));
+        }
+        if crate::cmd::worktree_from_note::open_choice(&i.body) && !in_hands_free_tab() {
+            return Err(format!("{repo}#{number} leaves a choice open"));
+        }
     }
     let Some(issue) = found else {
         let why = format!(

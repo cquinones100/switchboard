@@ -352,10 +352,11 @@ pub fn issues(dir: &Path, label: &str, state: &Path, now_ms: i64) -> Result<Vec<
     read
 }
 
-/// Whether issue `number` of `repo` still stands as the search found it:
-/// open, assigned to whoever asks, and carrying `label`, asked of the issue
-/// itself, since the search's index can lag a label taken off.
-pub async fn still_stands(repo: &Repo, number: u64, label: &str) -> Result<bool> {
+/// Issue `number` of `repo` as it stands now, asked of the issue itself,
+/// since the search's index can lag a label taken off or a body edited: its
+/// body while it is open, assigned to whoever asks and carrying `label`,
+/// else none.
+pub async fn still_stands(repo: &Repo, number: u64, label: &str) -> Result<Option<String>> {
     let me = github::rest("GET", "/user", None, SOURCE).await?;
     let login = me.get("login").and_then(Value::as_str).unwrap_or_default();
     let issue = github::rest(
@@ -378,10 +379,17 @@ pub async fn still_stands(repo: &Repo, number: u64, label: &str) -> Result<bool>
             })
             .unwrap_or_default()
     };
-    Ok(open
+    let stands = open
         && !login.is_empty()
         && names("assignees", "login").contains(&login.to_lowercase())
-        && names("labels", "name").contains(&label.to_lowercase()))
+        && names("labels", "name").contains(&label.to_lowercase());
+    Ok(stands.then(|| {
+        issue
+            .get("body")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    }))
 }
 
 /// The read kept forgotten, so the next look asks GitHub again: once an

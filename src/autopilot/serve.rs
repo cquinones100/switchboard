@@ -168,7 +168,9 @@ fn autopilot_left(
             worktree_from_note::Plan::Review(_)
         )
     };
-    let (after, reviews): (Vec<&Item>, Vec<&Item>) = held.iter().partition(|i| !on_review(i));
+    // An issue is held only by a design review (line 0, no note item).
+    let (after, reviews): (Vec<&Item>, Vec<&Item>) =
+        held.iter().partition(|i| i.line != 0 && !on_review(i));
     let choices = if job.with_choices {
         0
     } else {
