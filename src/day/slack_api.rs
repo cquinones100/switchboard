@@ -263,18 +263,6 @@ pub fn look_slowed(state: &Path) -> Option<i64> {
         .filter(|_| refused)
 }
 
-/// Why the look's own last read through the token failed, as the view's
-/// note words it, while it did.
-pub fn look_refusal(state: &Path) -> Option<String> {
-    util::read_json_object(note_file(state))
-        .get(Part::Look.key())
-        .and_then(Value::as_str)
-        .map(|why| format!("{READ_BY_CONNECTOR}{why}"))
-}
-
-/// How the note's part for the reads (the look, threads, search) starts.
-const READ_BY_CONNECTOR: &str = "Slack read through the connector: ";
-
 /// What the view says under its header while a read through the token
 /// fails, from a small file; `None` while none does.
 /// `threads` is whether threads and pictures are read at all (Settings'
@@ -282,8 +270,23 @@ const READ_BY_CONNECTOR: &str = "Slack read through the connector: ";
 /// (`slack_background`) and `search` whether search everything asks Slack
 /// (`search_slack`): off, nothing is said of theirs.
 pub fn note(state: &Path, threads: bool, look: bool, search: bool) -> Option<String> {
+    note_of(state, threads, look, search, false)
+}
+
+/// `note`, leaving out the look's own rate limit, which the view says as
+/// Slack asking the look to slow down, so another read's reason still shows.
+pub fn note_while_slowed(state: &Path, threads: bool, look: bool, search: bool) -> Option<String> {
+    note_of(state, threads, look, search, true)
+}
+
+fn note_of(state: &Path, threads: bool, look: bool, search: bool, slowed: bool) -> Option<String> {
     let kept = util::read_json_object(note_file(state));
     let said = |k: &str| match kept.get(k) {
+        Some(Value::String(why))
+            if slowed && k == Part::Look.key() && why.starts_with(slack_user::RATE_LIMIT) =>
+        {
+            None
+        }
         Some(Value::String(why)) => Some(why.clone()),
         // Each thread's or file's: a missing scope first, as what it needs
         // is said in a word, else any one of them.
@@ -306,7 +309,7 @@ pub fn note(state: &Path, threads: bool, look: bool, search: bool) -> Option<Str
         .filter_map(|k| said(k))
         .collect();
     if let Some(why) = reads.iter().find(|why| needs_scope(why)).or(reads.first()) {
-        out.push(format!("{READ_BY_CONNECTOR}{why}"));
+        out.push(format!("Slack read through the connector: {why}"));
     }
     if let Some(why) = said("files").filter(|_| threads) {
         out.push(if needs_scope(&why) && why.contains("files:read") {
@@ -729,6 +732,36 @@ pub async fn file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn while_slowed_the_looks_rate_limit_leaves_room_for_another_reason() {
+        let state = std::env::temp_dir().join(format!(
+            "sb-slack-api-slowed-{}-{}",
+            std::process::id(),
+            util::now_ms()
+        ));
+        failed(&state, Part::Look, slack_user::RATE_LIMIT);
+        look_waits_until(&state, 5_000);
+        assert_eq!(look_slowed(&state), Some(5_000));
+        assert_eq!(note_while_slowed(&state, true, true, true), None);
+        one_failed(
+            &state,
+            Part::Threads,
+            "C1:1.0",
+            "Slack refused your sign-in",
+        );
+        assert_eq!(
+            note_while_slowed(&state, true, true, true).as_deref(),
+            Some("Slack read through the connector: Slack refused your sign-in")
+        );
+        worked(&state, Part::Look);
+        assert_eq!(
+            look_slowed(&state),
+            None,
+            "a look that read lets the wait go"
+        );
+        let _ = std::fs::remove_dir_all(&state);
+    }
 
     #[test]
     fn what_failed_is_said_until_a_read_works_again() {

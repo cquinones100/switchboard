@@ -1400,9 +1400,15 @@ impl Server {
             signed_in.is_none() && (reminders_on || settings::is_on("slack_mark_read"));
         // Why a read through your own token went to the connector instead.
         let by_token = signed_in.is_some() && settings::is_on("slack_token_reads");
+        let slowed_down = background && self.day.slack_pace.slowed();
         let token_note = by_token
             .then(|| {
-                slack_api::note(
+                let note = if slowed_down {
+                    slack_api::note_while_slowed
+                } else {
+                    slack_api::note
+                };
+                note(
                     &dirs.state,
                     settings::is_on("slack_threads"),
                     background,
@@ -1413,25 +1419,13 @@ impl Server {
         // The connector being down says nothing while the look reads
         // through your token.
         let reads_by_token = by_token && slack_api::look_works(&dirs.state);
-        // Slack asking the look to slow down, said in place of the rate limit
-        // that sent a read to the connector, which is the same refusal, and
-        // after any other reason, which says what to do.
-        let slowed = (background && self.day.slack_pace.slowed())
+        // Slack asking the look to slow down, said in place of the look's
+        // rate limit (left out of the note above), after any other reason,
+        // which says what to do.
+        let slowed = slowed_down
             .then(|| slack_look::slowed_note(self.day.slack_pace.every(slack_look_every(dirs))));
         let note = match (token_note, slowed) {
-            (Some(said), Some(slowed)) => {
-                // Only the look's own refusal, the rate limit the slow-down
-                // speaks for; another read's stays beside it.
-                let look_refusal = slack_api::look_refusal(&dirs.state)
-                    .filter(|why| why.contains(slack_user::RATE_LIMIT));
-                let mut parts: Vec<String> = said
-                    .split(" · ")
-                    .filter(|part| Some(*part) != look_refusal.as_deref())
-                    .map(str::to_string)
-                    .collect();
-                parts.push(slowed);
-                Some(parts.join(" · "))
-            }
+            (Some(said), Some(slowed)) => Some(format!("{said} · {slowed}")),
             (said, slowed) => said.or(slowed),
         }
         .or_else(|| needs_sign_in.then(|| slack_user::NO_SIGN_IN.to_string()));

@@ -72,7 +72,7 @@ pub const RATE_LIMIT: &str = "Slack's rate limit is spent for now";
 
 /// How long Slack asked a read refused for its rate limit (`why`, as
 /// `api` says it) to wait, a minute when it didn't say; `None` for any
-/// other failure.
+/// other failure. A wait over an hour is taken as an hour.
 pub fn retry_after_ms(why: &str) -> Option<i64> {
     let rest = why.strip_prefix(RATE_LIMIT)?;
     let said = rest
@@ -80,7 +80,7 @@ pub fn retry_after_ms(why: &str) -> Option<i64> {
         .and_then(|r| r.strip_suffix(" seconds"))
         .and_then(|n| n.parse::<i64>().ok())
         .filter(|n| *n > 0);
-    Some(said.map_or(60_000, |s| s.saturating_mul(1000)))
+    Some(said.map_or(60_000, |s| s.min(3_600) * 1000))
 }
 
 pub const REMINDERS_MS: i64 = 2 * 60_000;
@@ -716,6 +716,13 @@ mod tests {
         );
         assert_eq!(retry_after_ms(RATE_LIMIT), Some(60_000));
         assert_eq!(retry_after_ms("search.messages: invalid_cursor"), None);
+        assert_eq!(
+            retry_after_ms(&format!(
+                "{RATE_LIMIT}: Slack asked to wait {} seconds",
+                i64::MAX
+            )),
+            Some(3_600_000)
+        );
     }
 
     #[cfg(feature = "net")]

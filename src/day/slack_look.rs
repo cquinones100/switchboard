@@ -455,7 +455,10 @@ pub async fn look_slack(
                             // Slack's wait counts from its answer, before the
                             // connector reads in its place.
                             if let Some(wait) = slack_user::retry_after_ms(&why) {
-                                slack_api::look_waits_until(&dirs.state, util::now_ms() + wait);
+                                slack_api::look_waits_until(
+                                    &dirs.state,
+                                    util::now_ms().saturating_add(wait),
+                                );
                             }
                             None
                         }
