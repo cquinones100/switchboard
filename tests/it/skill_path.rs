@@ -671,6 +671,7 @@ fn review_loop_reviews_someone_elses_pr_from_outside_its_worktree_and_only_repor
         "`switchboard try --sealed`",
         "Nothing is fixed, committed, pushed, or edited on GitHub",
         "Write no `review-loop-clean` record.",
+        "The notes file is started afresh for each loop",
         "**For the author**",
     ] {
         assert!(section.contains(said), "{said}");
