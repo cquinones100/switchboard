@@ -316,6 +316,10 @@ struct Kept {
 /// last read while it is fresh, else asked of GitHub and kept; off the
 /// server's task only, since it may ask GitHub.
 pub fn issues(dir: &Path, label: &str, state: &Path, now_ms: i64) -> Result<Vec<Issue>, String> {
+    // One read at a time, so the board's look and the opening look, which
+    // can start together, share a read rather than each asking GitHub.
+    static READING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _reading = READING.lock().unwrap_or_else(|e| e.into_inner());
     let file = state.join(FILE);
     let dir_text = dir.to_string_lossy().into_owned();
     let kept: Option<Kept> = std::fs::read_to_string(&file)
@@ -346,6 +350,38 @@ pub fn issues(dir: &Path, label: &str, state: &Path, now_ms: i64) -> Result<Vec<
         let _ = util::write_atomic(&file, text);
     }
     read
+}
+
+/// Whether issue `number` of `repo` still stands as the search found it:
+/// open, assigned to whoever asks, and carrying `label`, asked of the issue
+/// itself, since the search's index can lag a label taken off.
+pub async fn still_stands(repo: &Repo, number: u64, label: &str) -> Result<bool> {
+    let me = github::rest("GET", "/user", None, SOURCE).await?;
+    let login = me.get("login").and_then(Value::as_str).unwrap_or_default();
+    let issue = github::rest(
+        "GET",
+        &format!("/repos/{repo}/issues/{number}"),
+        None,
+        SOURCE,
+    )
+    .await?;
+    let open = issue.get("state").and_then(Value::as_str) == Some("open");
+    let names = |key: &str, field: &str| -> Vec<String> {
+        issue
+            .get(key)
+            .and_then(Value::as_array)
+            .map(|list| {
+                list.iter()
+                    .filter_map(|v| v.get(field).and_then(Value::as_str))
+                    .map(str::to_lowercase)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    Ok(open
+        && !login.is_empty()
+        && names("assignees", "login").contains(&login.to_lowercase())
+        && names("labels", "name").contains(&label.to_lowercase()))
 }
 
 /// The read kept forgotten, so the next look asks GitHub again: once an

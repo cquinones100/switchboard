@@ -26,9 +26,9 @@
 //!    moved under the unticked items as Notes moves one
 //!    (`format::toggle_check`), under the note's ID lock, so the app takes it
 //!    in as any change made from outside; a branch `wtn` didn't start has
-//!    no item, nor one `wtn --issue` started from a GitHub issue, which
-//!    autopilot closes itself once the tab lands, and one already ticked is
-//!    left as it is;
+//!    no item, nor one `wtn --issue` started from a GitHub issue (closed by
+//!    autopilot once its tab lands, or by you when started by hand), and one
+//!    already ticked is left as it is;
 //! 3. removes the worktree from the main clone, deletes the branch (`-D`,
 //!    since a squash leaves it looking unmerged).
 //!
@@ -233,7 +233,7 @@ fn run(given: &Given, notes: &Path) -> Result<Vec<String>, String> {
         None => out.push(
             match crate::cmd::worktree_from_issue::issue_of_branch(&main, &branch) {
                 Some(issue) => format!(
-                    "no item: {branch} was started from {issue}, which autopilot comments on and closes once its tab lands"
+                    "no item: {branch} was started from {issue}, a GitHub issue rather than a note's item"
                 ),
                 None => format!("no item: {branch} wasn't started from a note's item"),
             },

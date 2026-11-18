@@ -440,9 +440,11 @@ impl Mode {
     }
 
     /// Where its work comes from now: the note alone while the
-    /// autopilot_github_issues setting is off, whatever was chosen.
+    /// autopilot_github_issues setting is off, or GitHub's, whatever was
+    /// chosen.
     pub fn taken_from(&self) -> Sources {
-        if crate::settings::is_on("autopilot_github_issues") {
+        let on = crate::settings::is_on;
+        if on("autopilot_github_issues") && on("github") {
             self.sources
         } else {
             Sources::Note
