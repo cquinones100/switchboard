@@ -1579,16 +1579,22 @@ fn without_query(word: &str) -> String {
     };
     let authority_at = start + scheme;
     let rest = &word[authority_at..];
-    // The authority ends at the first character a host, a port or a user
-    // can't hold (a slash, a query, a quote in a JSON argument).
-    let host_end = rest
-        .find(|c: char| !(c.is_ascii_alphanumeric() || ".-_:%@[]".contains(c)))
+    // The authority runs to a slash, a query, a fragment, or a quote or
+    // space in a structured argument; its host follows any user and
+    // password (which may hold punctuation) after the last `@`, and is
+    // shown only when it holds nothing a host can't, else left out too.
+    let authority_end = rest
+        .find(['/', '?', '#', '"', '\'', ' ', ',', '}', ']'])
         .unwrap_or(rest.len());
-    let authority = &rest[..host_end];
+    let authority = &rest[..authority_end];
     let host = authority
         .rsplit_once('@')
         .map_or(authority, |(_, host)| host);
-    let more = if host_end < rest.len() || host.len() < authority.len() {
+    let is_host = host
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || ".-_:%[]".contains(c));
+    let host = if is_host { host } else { "" };
+    let more = if authority_end < rest.len() || host.len() < authority.len() {
         "/…"
     } else {
         ""
@@ -1672,6 +1678,7 @@ mod tests {
             "curl --url=HTTPS://a.dev/…",
         );
         link(&["curl", "https://a.dev"], "curl https://a.dev");
+        link(&["curl", "https://w:s!@a.test/f"], "curl https://a.test/…");
         link(
             &["curl", "-d", "{\"url\":\"https://a.dev\",\"token\":\"x\"}"],
             "curl -d {\"url\":\"https://a.dev/…",
