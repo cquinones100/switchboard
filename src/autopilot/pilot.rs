@@ -1059,6 +1059,14 @@ impl Pilot {
         };
     }
 
+    /// A read of the queue that failed (GitHub issues unreadable): the queue
+    /// as last read stands, read again after `QUEUE_MS` as a good read is.
+    pub fn read_failed(&mut self, key: String, now_ms: i64) {
+        self.reading = false;
+        self.next.key = key;
+        self.next.at = now_ms;
+    }
+
     /// A look that couldn't start, let go.
     pub fn cancel(&mut self) {
         self.opening = false;

@@ -2534,7 +2534,8 @@ impl Server {
             let issue = named;
             let Some(client) = server.latest_client() else {
                 // No client to answer in: the write runs on its own, and a
-                // failure goes to the log.
+                // failure is written into what the mode says, which the next
+                // check shows in the notifications.
                 if tokio::runtime::Handle::try_current().is_ok() {
                     tokio::spawn(async move {
                         if let Err(e) = super::issues::write_back(
@@ -2547,6 +2548,17 @@ impl Server {
                         .await
                         {
                             eprintln!("autopilot: couldn't write on {repo}#{number}: {e}");
+                            let said = format!("Couldn't write on {issue}: {e}");
+                            let _ = tokio::task::spawn_blocking(move || {
+                                Mode::update(&paths::state_dir(), |m| {
+                                    m.said = if m.said.is_empty() {
+                                        said
+                                    } else {
+                                        format!("{}. {said}", m.said)
+                                    };
+                                })
+                            })
+                            .await;
                         }
                     });
                 }
@@ -2881,10 +2893,14 @@ impl Server {
                 left,
                 failed,
             } => {
-                if let Some(e) = failed
-                    && !self.autopilot.mode.said.contains(&e)
-                {
-                    self.autopilot_say(&format!("Can't read {e}"));
+                if let Some(e) = failed {
+                    if !self.autopilot.mode.said.contains(&e) {
+                        self.autopilot_say(&format!("Can't read {e}"));
+                    }
+                    // The queue as last read stands: a failed read isn't an
+                    // empty one, and is read again on the next check.
+                    self.autopilot.pilot.read_failed(key, util::now_ms());
+                    return;
                 }
                 let changed = self.autopilot.pilot.next.text != text
                     || self.autopilot.pilot.next.left != left
@@ -2975,6 +2991,10 @@ impl Server {
             }
             if !mode.note_id.is_empty() {
                 t.opts.insert(NOTE.into(), mode.note_id.clone());
+            }
+            // Marked as an issue's at once, so nothing takes it for a note's.
+            if let Some((repo, number)) = super::issues::issue_of(&item) {
+                t.opts.insert(ISSUE.into(), format!("{repo}#{number}"));
             }
         }
         self.dirty_tab(tab);
@@ -3134,7 +3154,8 @@ impl Server {
     /// directory), for the "Work on this item" box's row putting an item
     /// next.
     pub fn autopilot_works(&self, note: &str) -> bool {
-        settings::is_on("autopilot") && self.autopilot.mode.on && self.autopilot.mode.note == note
+        let mode = &self.autopilot.mode;
+        settings::is_on("autopilot") && mode.on && mode.sources.note() && mode.note == note
     }
 
     /// `autopilot-next <note> <line>`: the unticked item on that line of

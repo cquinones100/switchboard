@@ -287,8 +287,7 @@ pub fn by_precedence(
 ) -> Option<(String, Why)> {
     // An issue's tab works no note of autopilot's.
     let autopilot_tab = opt(crate::autopilot::OPENED).is_some_and(|v| v != "0")
-        && !opt(crate::autopilot::ITEM)
-            .is_some_and(|i| crate::autopilot::issues::is_issue_text(&i));
+        && opt(crate::autopilot::ISSUE).is_none_or(|i| i.is_empty());
     let mut order: Vec<(Option<String>, Why)> = Vec::new();
     if precedence {
         order.push((opt(BY_YOU), Why::Linked));
@@ -961,7 +960,7 @@ impl Server {
             return;
         };
         // An issue's tab has no note, its plan being its body.
-        if crate::autopilot::issues::is_issue_text(&item) {
+        if self.tab_opt(tab, crate::autopilot::ISSUE).is_some() {
             return;
         }
         let note = self
