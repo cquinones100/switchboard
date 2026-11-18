@@ -79,12 +79,14 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
             return Err(format!("{repo}#{number} leaves a choice open"));
         }
     }
+    // Not standing now may be for a moment (a label taken off and put
+    // back), so it fails the start, tried again later, rather than skip it,
+    // and the queue's read is forgotten so it is read afresh.
     let Some(issue) = found else {
-        let why = format!(
+        issues::forget(&paths::state_dir());
+        return Err(format!(
             "{repo}#{number} isn't an open issue assigned to you and labeled \"{label}\" by you or someone with write access"
-        );
-        refused_in_autopilot(&why);
-        return Err(why);
+        ));
     };
     let slug = slug_of(&issue.title);
     let name = if slug.is_empty() {
@@ -177,7 +179,7 @@ pub fn prompt_of(
          <issue>\n# {title}\n\n{body}\n</issue>\n\n\
          {decide}{duplicates}{check}\
          Commit the work on this worktree's branch, following the repository's CLAUDE.md, and don't push it, comment on the issue or close it: {after}. \
-         When the work is done, say so in a line, then land it as /queue-and-clean does, which only I can start, so read the file `switchboard skill-path queue-and-clean` prints and follow it: it asks me before pushing and lands it, as `switchboard landing` says for the repository: straight on {onto}, with the steps it gives, or else through a PR it offers to open.",
+         It comes from no note, so where landing it asks which note holds its item, take No note without asking. When the work is done, say so in a line, then land it as /queue-and-clean does, which only I can start, so read the file `switchboard skill-path queue-and-clean` prints and follow it: it asks me before pushing and lands it, as `switchboard landing` says for the repository: straight on {onto}, with the steps it gives, or else through a PR it offers to open.",
         reference = issue.reference(),
         url = issue.url,
         // Their own closing tag can't end the data early.

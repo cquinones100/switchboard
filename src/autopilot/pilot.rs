@@ -192,6 +192,9 @@ pub struct Next {
     pub weekly: Option<(f64, i64)>,
     /// What is left of the note, whole, for the view's estimate.
     pub left: super::eta::Left,
+    /// The read for `key` failed (GitHub issues unreadable): the queue
+    /// is unknown, never drained, until a read succeeds.
+    pub failed: bool,
 }
 
 /// The most items of the queue its view lists.
@@ -1078,6 +1081,7 @@ impl Pilot {
             spent: 0.0,
             weekly: None,
             left: super::eta::Left::default(),
+            failed: false,
         };
     }
 
@@ -1088,11 +1092,14 @@ impl Pilot {
     /// source or setting since leaves it unknown.
     pub fn read_failed(&mut self, key: String, now_ms: i64) {
         self.reading = false;
-        if self.next.key == key {
-            self.next.at = now_ms;
-        } else {
-            self.next = Next::default();
+        if self.next.key != key {
+            self.next = Next {
+                key,
+                failed: true,
+                ..Next::default()
+            };
         }
+        self.next.at = now_ms;
     }
 
     /// A look that couldn't start, let go.
@@ -1122,7 +1129,8 @@ impl Pilot {
     pub fn summary(&self, mode: &Mode, away: bool) -> Summary {
         // The queue read finds nothing even while its tabs fill every slot,
         // when no look to open one runs.
-        let read_empty = !self.next.key.is_empty() && self.next.text.is_empty();
+        let read_empty =
+            !self.next.key.is_empty() && self.next.text.is_empty() && !self.next.failed;
         Summary {
             note: note_title(&mode.note),
             busy: self.counts.0,
