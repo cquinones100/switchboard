@@ -2927,7 +2927,10 @@ impl Server {
                 // A good read takes back what a failed one said.
                 if failed.is_none() && self.autopilot.mode.said.contains(ISSUES_UNREAD) {
                     match Mode::update(&paths::state_dir(), |m| {
-                        m.said = super::pilot::unsay(&m.said, ISSUES_UNREAD)
+                        // Every read error said, whatever else is kept.
+                        while m.said.contains(ISSUES_UNREAD) {
+                            m.said = super::pilot::unsay(&m.said, ISSUES_UNREAD);
+                        }
                     }) {
                         Ok(mode) => {
                             self.autopilot_notices(&mode);
@@ -3054,7 +3057,16 @@ impl Server {
             item.line, mode.note
         );
         if mode.said.starts_with("Nothing left") {
-            self.autopilot_say("");
+            // Only that: a failed write said after it stays until dismissed.
+            match Mode::update(&paths::state_dir(), |m| {
+                m.said = super::pilot::unsay(&m.said, "Nothing left to take")
+            }) {
+                Ok(mode) => {
+                    self.autopilot_notices(&mode);
+                    self.autopilot.mode = mode;
+                }
+                Err(e) => eprintln!("autopilot: couldn't save what it said: {e}"),
+            }
         } else if mode.said.contains(super::pilot::WEEKLY) {
             // A tab opened, the weekly limit no longer holds it; a refusal
             // said before it stays.
