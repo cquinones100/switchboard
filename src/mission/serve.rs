@@ -2147,6 +2147,30 @@ impl Server {
                     c.dirty = true;
                 }
             }
+            // On mission control's footer while its launch is still the one
+            // shown last and the footer is empty or still says what the
+            // choice said it was doing (`over`), never over a newer attempt's
+            // words or what something since has said there; and in a box,
+            // drawn over mission control and wrapped, so it holds the whole
+            // of it. With the boxes off the footer alone, since the status
+            // bar's line is under mission control.
+            MissionEvent::SlackUnshown {
+                client,
+                launch,
+                over,
+                text,
+            } => {
+                let open = self.mission_open(client);
+                let footer_is_its_own = self.mission_mut(client).is_some_and(|m| {
+                    m.slack_launch == launch && m.note.as_deref().is_none_or(|said| said == over)
+                });
+                if footer_is_its_own {
+                    self.mission_note(client, text.clone());
+                }
+                if !open || settings::is_on("message_boxes") {
+                    self.say(Some(client), &text);
+                }
+            }
             MissionEvent::Done {
                 client,
                 note,
@@ -2936,14 +2960,13 @@ impl Server {
         }
         .unwrap_or(0);
         let (id, name, file, video) = files[at].clone();
-        m.slack_shown = Some((item.id.clone(), id));
-        // Quick Look alone, never `open`: the file is whatever a message's
-        // sender uploaded.
-        tokio::task::spawn_blocking(move || {
-            let _ = crate::platform::preview(&file);
-        });
+        m.slack_shown = Some((item.id.clone(), id.clone()));
+        // Quick Look alone, never the app its type names: the file is
+        // whatever a message's sender uploaded. One it couldn't show is
+        // said (`MissionEvent::SlackUnshown`) and logged, since the choice was already
+        // told it would show.
         let doing = if video { "Playing" } else { "Showing" };
-        m.note = Some(if files.len() > 1 {
+        let note = if files.len() > 1 {
             format!(
                 "{doing} {name} ({} of {}): its menu again for the next.",
                 at + 1,
@@ -2951,7 +2974,30 @@ impl Server {
             )
         } else {
             format!("{doing} {name}.")
+        };
+        // The name is its sender's: in the failure and the log without
+        // control characters and cut short, so it stays on its line and a
+        // box wraps it.
+        let shown: String = name.chars().filter(|c| !c.is_control()).collect();
+        let shown = crate::ui::draw::cut(&shown, 60);
+        let (tx, row, over) = (self.tx.clone(), item.id.clone(), note.clone());
+        self.mission.slack_launches += 1;
+        let launch = self.mission.slack_launches;
+        m.slack_launch = launch;
+        tokio::task::spawn_blocking(move || {
+            if let Err(why) = crate::platform::preview(&file) {
+                eprintln!(
+                    "switchboard server: Slack file {id} chosen from {row}: showing {shown}: {why:#}"
+                );
+                let _ = tx.send(Event::Mission(MissionEvent::SlackUnshown {
+                    client,
+                    launch,
+                    over,
+                    text: format!("Couldn't show {shown}: {why:#}"),
+                }));
+            }
         });
+        m.note = Some(note);
     }
 
     /// Runs `slack_play` once mission control is back in its overlay (a

@@ -504,6 +504,10 @@ pub struct Mission {
     /// The Slack file `p` last showed, by the message's item ID and the
     /// file's ID, for the next `p` to step past.
     pub slack_shown: Option<(String, String)>,
+    /// The launch of the Slack file shown last, counted across the server
+    /// (`MissionState::slack_launches`), so a failure says itself on the footer only for
+    /// the attempt in front, never over a newer one's.
+    pub slack_launch: u64,
     /// The Reminders view's chosen day, the keys moving it and the month
     /// following; `None` is today.
     pub reminders_day: Option<jiff::civil::Date>,
@@ -638,6 +642,7 @@ impl Mission {
             slack_thread_open: false,
             slack_clicked: None,
             slack_shown: None,
+            slack_launch: 0,
             reminders_day: None,
             reminders_lists: false,
             routines_pane: false,
@@ -1737,6 +1742,18 @@ pub enum MissionEvent {
     /// What the busy box says, once the work knows more: where a link
     /// opens.
     Relabel { client: ClientId, text: String },
+    /// A Slack file that couldn't be shown, after its choice said it was
+    /// showing: `text` in a box, and on mission control's footer while it
+    /// is open, `launch` is still the attempt shown last
+    /// (`Mission::slack_launch`) and the footer is empty or still says
+    /// `over`, what the choice said there; the footer alone with Settings' `message_boxes` off, where
+    /// the status bar's line would be under it.
+    SlackUnshown {
+        client: ClientId,
+        launch: u64,
+        over: String,
+        text: String,
+    },
     /// The rest of what an answer or a typed command presses in a pane,
     /// once what came before has landed.
     Press {
@@ -1844,6 +1861,9 @@ pub struct MissionState {
     /// from the Notifications window, with no mission control to keep it
     /// (`Mission::slack_shown`), so playing again plays the next.
     pub(crate) slack_shown: HashMap<crate::mux::server::ClientId, (String, String)>,
+    /// Slack files shown so far, each launch numbered from it
+    /// (`Mission::slack_launch`).
+    pub(crate) slack_launches: u64,
     /// Each tab's last turn in a sentence, as Haiku wrote it
     /// (`summary`).
     pub(crate) summaries: summary::Summaries,

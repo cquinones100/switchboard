@@ -12,6 +12,8 @@
 
 use crate::common;
 
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use common::stand_in::Claude;
@@ -4255,4 +4257,176 @@ fn without_a_slack_sign_in_the_slack_view_says_how_to_make_one_and_asks_nothing(
     client.wait_text("Dismiss it, until its thread gets a reply");
     std::thread::sleep(Duration::from_millis(500) * common::patience());
     assert_eq!(slack_calls(&slack), Vec::<String>::new());
+}
+
+/// A server whose Slack look holds one thread, its first message with a
+/// video and a picture kept on this computer, and the Slack view on; a
+/// `qlmanage` that does nothing, so no thumbnail is asked of the real one.
+fn slack_thread_with_media() -> (TestServer, Vec<PathBuf>) {
+    let server = TestServer::start();
+    let bin = server.home.join("bin");
+    std::fs::write(bin.join("qlmanage"), "#!/bin/sh\nexit 1\n").unwrap();
+    std::fs::set_permissions(bin.join("qlmanage"), PermissionsExt::from_mode(0o755)).unwrap();
+    std::fs::create_dir_all(&server.state).unwrap();
+    let secs = switchboard::util::now_ms() / 1000;
+    let root = format!("{}.000100", secs - 900);
+    let reply = format!("{}.000100", secs - 100);
+    std::fs::write(
+        server.state.join("slack.json"),
+        json!({ "checked": secs * 1000, "items": [
+            { "kind": "channel", "channel": "C1", "where": "#dev", "from": "Ben", "user": "UBen",
+              "text": "see the recording", "ts": reply, "thread": root,
+              "link": "https://slack.example/m" },
+        ] })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        server.state.join("slack-threads.json"),
+        json!({ format!("C1:{root}"): {
+            "messages": [
+                { "user": "UAna", "from": "Ana", "text": "the question", "ts": root, "files": [
+                    { "id": "F1VIDEO", "name": "clip.mp4", "mimetype": "video/mp4" },
+                    { "id": "F2SHOT", "name": "shot.png", "mimetype": "image/png" },
+                ] },
+                { "user": "UBen", "from": "Ben", "text": "see the recording", "ts": reply },
+            ],
+            "replies": 1,
+            "read": secs * 1000,
+        } })
+        .to_string(),
+    )
+    .unwrap();
+    let files = server.home.join(".cache/switchboard/slack-files");
+    std::fs::create_dir_all(&files).unwrap();
+    let kept = vec![files.join("F1VIDEO.mp4"), files.join("F2SHOT.png")];
+    std::fs::write(&kept[0], b"\0\0\0\x18ftypmp42").unwrap();
+    std::fs::write(&kept[1], b"\x89PNG\r\n\x1a\n").unwrap();
+    settings(
+        &server,
+        json!({ "view_slack": true, "ux2": true, "slack_threads": true,
+            "slack_background": false, "photos": false }),
+    );
+    (server, kept)
+}
+
+/// The kept Slack files the desktop was asked to show, in order: by Quick
+/// Look started through `open` on macOS, by the desktop's opener on Linux.
+fn shown_files(server: &TestServer) -> Vec<String> {
+    std::fs::read_to_string(server.home.join("desktop-log"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.contains("slack-files"))
+        .map(str::to_string)
+        .collect()
+}
+
+fn wait_shown(server: &TestServer, count: usize) -> Vec<String> {
+    let until = common::deadline(Duration::from_secs(10));
+    loop {
+        let shown = shown_files(server);
+        if shown.len() >= count {
+            return shown;
+        }
+        assert!(Instant::now() < until, "{count} files shown: {shown:?}");
+        std::thread::sleep(Duration::from_millis(50) * common::patience());
+    }
+}
+
+/// Whether `line` asks the desktop to show `file` and nothing else: on
+/// macOS Quick Look, brought to the front by `open` (a `qlmanage -p` the
+/// server starts itself never puts its window on the screen).
+fn shows(line: &str, file: &Path) -> bool {
+    let file = file.display();
+    if cfg!(target_os = "macos") {
+        let quick_look =
+            "/System/Library/Frameworks/QuickLook.framework/Versions/A/Resources/qlmanage.app";
+        line == format!("open -n -a {quick_look} --args -p {file}")
+    } else {
+        line.ends_with(&format!(" {file}"))
+    }
+}
+
+// A Slack message's "Play its video or show its picture" plays the video
+// of its thread, and picked again shows the picture after it, each said in
+// mission control's footer.
+#[test]
+fn a_slack_messages_menu_plays_its_video_then_shows_its_picture() {
+    let (server, kept) = slack_thread_with_media();
+    let mut client = server.attach(204, 40);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("vslack\r");
+    client.wait_text("the question");
+    client.type_text("\r");
+    pick(&mut client, "Play its video or show its picture");
+    client.wait_text("Playing clip.mp4 (1 of 2)");
+    let shown = wait_shown(&server, 1);
+    assert!(shows(&shown[0], &kept[0]), "{shown:?}");
+    client.type_text("\r");
+    pick(&mut client, "Play its video or show its picture");
+    client.wait_text("Showing shot.png (2 of 2)");
+    let shown = wait_shown(&server, 2);
+    assert!(shows(&shown[1], &kept[1]), "{shown:?}");
+}
+
+// The same choice in the message's notification's menu plays it too.
+#[test]
+fn a_slack_notifications_menu_plays_its_video() {
+    let (server, kept) = slack_thread_with_media();
+    let mut client = server.attach(204, 40);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("vnotifications\r");
+    client.wait_for("the Notifications view in front", |s| {
+        header(s).trim_start().starts_with("Notifications") && s.iter().any(|l| l.contains("Ben"))
+    });
+    // The notification may be listed before its thread is read, and a menu
+    // keeps the choices it opened with, so it is opened again until the
+    // thread's files are in it.
+    let until = common::deadline(Duration::from_secs(10));
+    loop {
+        client.type_text("\r");
+        let screen = client.wait_text("Dismiss it");
+        if screen.iter().any(|l| l.contains("Play its video")) {
+            break;
+        }
+        assert!(Instant::now() < until, "{}", screen.join("\n"));
+        client.type_text("\x1b");
+        client.wait_for("the menu closed", |s| {
+            !s.iter().any(|l| l.contains("Dismiss it"))
+        });
+        std::thread::sleep(Duration::from_millis(100) * common::patience());
+    }
+    pick(&mut client, "Play its video or show its picture");
+    client.wait_text("Playing clip.mp4 (1 of 2)");
+    let shown = wait_shown(&server, 1);
+    assert!(shows(&shown[0], &kept[0]), "{shown:?}");
+}
+
+// A file the desktop couldn't show says so in a box, and in the server's
+// log with the file's ID, so the choice never does nothing.
+#[test]
+fn a_slack_file_that_cant_be_shown_says_why() {
+    let (server, _kept) = slack_thread_with_media();
+    let bin = server.home.join("bin");
+    // Under WSL a path Windows can't be given is never handed to Explorer,
+    // whose exit says nothing.
+    for tool in ["open", "xdg-open", "gio", "wslview", "wslpath"] {
+        std::fs::write(bin.join(tool), "#!/bin/sh\necho 'no-display' >&2\nexit 1\n").unwrap();
+        std::fs::set_permissions(bin.join(tool), PermissionsExt::from_mode(0o755)).unwrap();
+    }
+    let mut client = server.attach(204, 40);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("vslack\r");
+    client.wait_text("the question");
+    client.type_text("\r");
+    pick(&mut client, "Play its video or show its picture");
+    client.wait_text("Couldn't show clip.mp4");
+    let log = server.log();
+    assert!(
+        log.contains("Slack file F1VIDEO") && log.contains("showing clip.mp4"),
+        "{log}"
+    );
 }

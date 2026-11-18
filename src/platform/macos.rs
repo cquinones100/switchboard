@@ -233,17 +233,54 @@ pub fn video_frame(video: &std::path::Path, out: &std::path::Path, size: u32) ->
     moved
 }
 
-/// Quick Look, without leaving the terminal for an app.
+/// Quick Look's own app, which `qlmanage` on the PATH runs.
+const QUICK_LOOK: &str =
+    "/System/Library/Frameworks/QuickLook.framework/Versions/A/Resources/qlmanage.app";
+
+/// How long `preview` waits for `open` to say whether Quick Look started.
+const OPEN_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Quick Look, without leaving the terminal for an app. It is started
+/// through `open`, which brings it to the front: `qlmanage -p` started by a
+/// program that isn't the app in front (the server) makes its window and
+/// never puts it on the screen (seen on macOS 26), so nothing showed.
+/// `open` is given Quick Look as the app and the file only as its argument,
+/// so the file is never opened by whatever app its type names. `open`
+/// answers in a fraction of a second; one that hasn't within `OPEN_WAIT` is
+/// left to finish by itself and taken as started, so no caller (Notes asks
+/// from the loop that reads its keys) waits on one that stalls.
 pub fn preview(file: &std::path::Path) -> Result<()> {
-    Command::new("qlmanage")
-        .arg("-p")
+    let mut open = Command::new("open")
+        .args(["-n", "-a", QUICK_LOOK, "--args", "-p"])
         .arg(file)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map(|_| ())
-        .map_err(|e| anyhow!("Couldn't show it: {e}"))
+        .map_err(|e| anyhow!("Couldn't start Quick Look: {e}"))?;
+    let until = std::time::Instant::now() + OPEN_WAIT;
+    let status = loop {
+        match open.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() < until => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Ok(None) => {
+                std::thread::spawn(move || {
+                    let _ = open.wait();
+                });
+                return Ok(());
+            }
+            Err(e) => return Err(anyhow!("Couldn't start Quick Look: {e}")),
+        }
+    };
+    // How it ended is all that is kept: what `open` says is never read, so
+    // nothing waits on whoever else holds its stderr.
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow!("Quick Look didn't start: open ended with {status}"))
+    }
 }
 
 // ── Option as Alt ───────────────────────────────────────────────────────────
