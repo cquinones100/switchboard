@@ -1651,7 +1651,8 @@ pub(crate) fn check_first(hands_free: bool) -> String {
 /// What every tab autopilot opens is told first, from any source: look
 /// for the same work started or done elsewhere, and stop on finding it,
 /// marking the tab so autopilot skips the item with that reason
-/// (`@autopilot_refused`) and moves on. Empty in a tab autopilot didn't
+/// (`switchboard autopilot-duplicate`, which sets `@autopilot_refused`)
+/// and moves on. Empty in a tab autopilot didn't
 /// open, where you decide.
 pub(crate) fn duplicates_first() -> String {
     if crate::mux::socket::tab_option(crate::autopilot::OPENED).is_none() {
@@ -1661,7 +1662,7 @@ pub(crate) fn duplicates_first() -> String {
 }
 
 const DUPLICATES: &str = "Before starting, look for the same work started or done elsewhere: the note's ticked and open items, the repository's open and merged PRs and its GitHub issues, and the open tabs (`switchboard tabs`). \
-     When another item, issue, PR or tab already has it, stop without changing anything: run `switchboard set @autopilot_refused 'Duplicate of <which>'` and say which, so autopilot skips this one with that reason and moves on. \
+     When another item, issue, PR or tab already has it, stop without changing anything: run `switchboard autopilot-duplicate '<which>'` and say which, so autopilot skips this one with that reason and moves on. \
      Work already on the branch it lands on is not a duplicate: the check below covers it. ";
 
 const CHECK_FIRST: &str = "Before building, compare the item and its plan with the code as it is now: is it still needed, already done, or worth doing another way? ";

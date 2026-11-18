@@ -46,8 +46,11 @@ pub const SOURCE: &str = "autopilot: GitHub issues";
 /// How long a read of the issues is kept before GitHub is asked again.
 pub const FRESH_MS: i64 = 2 * 60 * 1000;
 
-/// The most issues one read takes.
-const MOST: usize = 50;
+/// The issues a page of the search holds, and the most pages one read
+/// takes, so the issues past the first page (some left out as claimed,
+/// skipped or not yours) are reached too.
+const PAGE: usize = 100;
+const PAGES: usize = 5;
 
 /// The file the last read is kept in, in the state directory.
 pub const FILE: &str = "autopilot-issues.json";
@@ -220,9 +223,10 @@ fn to_ask(found: &[Found], viewer: &str) -> Vec<String> {
     out
 }
 
-const QUERY: &str = "query($q: String!, $first: Int!) {
+const QUERY: &str = "query($q: String!, $first: Int!, $after: String) {
   viewer { login }
-  search(query: $q, type: ISSUE, first: $first) {
+  search(query: $q, type: ISSUE, first: $first, after: $after) {
+    pageInfo { hasNextPage endCursor }
     nodes {
       ... on Issue {
         number title body url
@@ -252,12 +256,11 @@ pub async fn fetch(repo: &Repo, label: &str) -> Result<Vec<Issue>> {
     if !label_ok(label) {
         return Err(anyhow!("the issue label \"{label}\" can't be searched for"));
     }
-    let data = github::graphql(
-        QUERY,
-        json!({ "q": search_of(repo, label), "first": MOST }),
-        SOURCE,
-    )
-    .await?;
+    let variables = json!({ "q": search_of(repo, label), "first": PAGE });
+    let mut data = github::graphql(QUERY, variables.clone(), SOURCE).await?;
+    let first = data.pointer("/search").cloned().unwrap_or(Value::Null);
+    let paged = github::rest_of(QUERY, &variables, "/search", &first, PAGES, SOURCE).await?;
+    data["search"] = json!({ "nodes": paged.nodes });
     let (viewer, found) = read_answer(repo, &data, label);
     let mut writers = HashSet::new();
     for login in to_ask(&found, &viewer) {

@@ -2460,13 +2460,20 @@ impl Server {
                 .filter(|s| *s != 0)
                 .map_or_else(util::now_ms, |s| s * 1000),
         };
-        let (hash, without_asking) = (landed.hash.clone(), self.autopilot_lands_alone(m.tab));
-        let issue = self
+        // Only a landing that pushed counts for its issue (a tab merely
+        // back in a main clone may have landed nothing), by the commit it
+        // pushed; asked about unless it landed without asking.
+        let opts = self
             .tabs
             .get(&m.tab)
-            .and_then(|t| t.opts.get(ISSUE))
-            .filter(|v| !v.is_empty())
-            .cloned();
+            .map(|t| t.opts.clone())
+            .unwrap_or_default();
+        let set = |k: &str| opts.get(k).map(|v| v.trim()).filter(|v| !v.is_empty());
+        let without_asking = set(AUTOLAND).is_some();
+        let hash: Option<String> = set(AUTOLAND)
+            .or(set(PUSHED))
+            .map(|h| h.chars().take(7).collect());
+        let issue = set(ISSUE).map(str::to_string).zip(hash);
         let mut fresh = false;
         let written = Mode::update(&paths::state_dir(), |mode| {
             if mode.landed.iter().any(|l| l.id == landed.id) {
@@ -2482,20 +2489,11 @@ impl Server {
             Ok(mode) => self.autopilot.mode = mode,
             Err(e) => eprintln!("autopilot: couldn't keep the tab that landed: {e}"),
         }
-        if let Some(issue) = issue.filter(|_| fresh) {
+        if let Some((issue, hash)) = issue.filter(|_| fresh) {
             let comment = super::issues::landed_comment(&hash);
             let question = format!("Comment on {issue} that it landed in {hash}, and close it?");
             self.autopilot_write_back(&issue, comment, true, without_asking, question);
         }
-    }
-
-    /// Whether `tab` lands without asking: marked so (`@autopilot_land`), or
-    /// landed so (`@autopilot_autoland`).
-    fn autopilot_lands_alone(&self, tab: TabId) -> bool {
-        self.tabs.get(&tab).is_some_and(|t| {
-            t.opts.get(LAND).is_some_and(|v| v == "1")
-                || t.opts.get(AUTOLAND).is_some_and(|v| !v.trim().is_empty())
-        })
     }
 
     /// A comment on the GitHub issue `issue` names (`<owner>/<repo>#<n>`),

@@ -1066,15 +1066,34 @@ fn a_tab_that_finds_its_item_a_duplicate_has_it_skipped_with_that_reason() {
     server.ok(&["new-tab"]);
     let tab = server.list()["sessions"][0]["tabs"][1].clone();
     let id = tab["id"].as_str().unwrap().to_string();
-    // As its Claude marks it, told to by its first prompt.
+    let pane = tab["panes"][0]["id"].as_str().unwrap().to_string();
     for (option, value) in [
         ("@autopilot", "1"),
         ("@autopilot_item", "Again"),
         ("@autopilot_note", "n-ffffffffffff"),
-        ("@autopilot_refused", "Duplicate of tab 3, \"Once\""),
     ] {
         server.ok(&["set", "-t", &id, option, value]);
     }
+    // As its Claude runs it from its pane, told to by its first prompt;
+    // `switchboard set` typed there may not set the mark.
+    let run = |args: &[&str]| {
+        Command::new(common::BIN)
+            .args(args)
+            .env("HOME", &server.home)
+            .env("SWITCHBOARD", server.socket())
+            .env("SWITCHBOARD_PANE", &pane)
+            .env("SWITCHBOARD_STATE_DIR", &server.state)
+            .output()
+            .unwrap()
+    };
+    let set = run(&["set", "@autopilot_refused", "Duplicate of x"]);
+    assert!(!set.status.success(), "set typed in a pane is refused");
+    let out = run(&["autopilot-duplicate", "tab 3, \"Once\""]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     wait("the tab closed", &server, || opened(&server).is_empty());
     let mode = mode(&server);
     assert_eq!(

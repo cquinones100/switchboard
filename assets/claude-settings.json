@@ -25,6 +25,7 @@
       "Bash(switchboard landing)",
       "Bash(switchboard landing *)",
       "Bash(switchboard item-done *)",
+      "Bash(switchboard autopilot-duplicate *)",
       "Bash(switchboard respawn *)",
       "Bash(switchboard land-lock take)",
       "Bash(switchboard land-lock wait)",

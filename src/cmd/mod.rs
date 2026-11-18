@@ -9,6 +9,7 @@
 use std::process::ExitCode;
 
 pub mod apply_actions;
+pub mod autopilot_duplicate;
 pub mod aws_login;
 pub mod claude_context;
 pub mod claude_here;
@@ -271,6 +272,11 @@ pub const COMMANDS: &[Command] = &[
         about: "Run a command holding one of a kind's slots in the queue for heavy work (build, tests, js), waiting in line for one",
     },
     Command {
+        name: "autopilot-duplicate",
+        run: autopilot_duplicate::main,
+        about: "In a tab autopilot opened, mark its item a duplicate of other work, so autopilot skips it with that reason",
+    },
+    Command {
         name: "item-done",
         run: item_done::main,
         about: "Tick the item a landed worktree was started for, with its Done line, then remove the worktree and its branch",
@@ -395,6 +401,7 @@ const OWN_HELP: &[&str] = &[
     "slack-relay",
     "update-main",
     "item-done",
+    "autopilot-duplicate",
     "worktree-done",
     "worktree-from-branch",
     "worktree-from-note",
