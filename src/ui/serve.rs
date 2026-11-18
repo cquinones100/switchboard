@@ -1497,6 +1497,12 @@ fn program_line(args: &[String], own_exe: &str) -> String {
             format!("{key}={}", crate::paths::tilde(value))
         }
         _ if arg.starts_with('/') => crate::paths::tilde(arg),
+        // A link without its query or fragment, where a signed link keeps
+        // its token.
+        _ if arg.contains("://") => match arg.find(['?', '#']) {
+            Some(at) => format!("{}…", &arg[..at]),
+            None => arg.clone(),
+        },
         _ => arg.clone(),
     };
     let words = std::iter::once(name.clone()).chain(rest.iter().map(short));
@@ -1592,6 +1598,10 @@ mod tests {
         let remote = line(&["scp", &format!("host:{home}/f"), "."]);
         assert!(remote.starts_with("scp host:/") && !remote.contains('~'));
         assert_eq!(line(&["lazygit"]), "lazygit");
+        assert_eq!(
+            line(&["link-view", "https://a.dev/f?token=secret"]),
+            "link-view https://a.dev/f…"
+        );
         assert_eq!(line(&["./Build Tools/bin/worker", "-v"]), "worker -v");
         assert_eq!(
             line(&["npm exec @angular/cli serve"]),
