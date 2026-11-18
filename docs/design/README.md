@@ -233,3 +233,8 @@ The relay's DM, threads and Home tab.
 ## The map across the whole width
 
 - [134. Map mode with no chapter list: the map, the stories' strip and the chosen chapter's text across the whole width; the strip names how many of the story's chapters are read, and In the files only as a chip at its right opening Files mode on those files](https://cquinones100.github.io/switchboard/design/134.html)
+
+## Proposal: one story, its threads as chapters
+
+- [135. A change told as one story: its threads the chapters in the strip, the goal's first, each with how many of its pages are read; the map the chosen chapter's pages, the goal on chapter 1's top page; \]c \[c moves between chapters](https://cquinones100.github.io/switchboard/design/135.html)
+- [136. Files mode in the same words: the list by chapter, then page, then file; In the files only under them; the diff headed by its chapter and page](https://cquinones100.github.io/switchboard/design/136.html)
