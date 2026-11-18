@@ -1284,7 +1284,9 @@ fn a_tickets_branch_starts_from_origins_fetched_main_or_its_branch_on_origin_and
         "origin/eng-6-cached"
     );
     assert!(
-        read(&cd).contains("fetch origin and bring it up to date with origin/eng-6-cached."),
+        read(&cd).contains(
+            "fetch origin and bring it up to date with origin/eng-6-cached, asking me first"
+        ),
         "{}",
         read(&cd)
     );

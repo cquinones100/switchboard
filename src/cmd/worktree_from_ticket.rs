@@ -387,12 +387,15 @@ pub fn main(args: Vec<String>) -> ExitCode {
         // A started ticket's commits are published: catch up with them
         // rather than rewrite them.
         let catch_up = if start.tracks {
-            format!("bring it up to date with origin/{branch}")
+            format!(
+                "bring it up to date with origin/{branch}, asking me first when that brings in commits someone else wrote"
+            )
         } else {
             // Offline, wt couldn't ask whether someone pushed the ticket's
-            // branch since the clone last fetched.
+            // branch since the clone last fetched; whose code it holds is the
+            // trust check's to say, so Claude asks rather than takes it in.
             format!(
-                "if origin has a branch named {branch}, the ticket was started elsewhere: build on its commits; otherwise rebase onto origin's default branch"
+                "if origin has a branch named {branch}, the ticket was started elsewhere: ask me before building on it; otherwise rebase onto origin's default branch"
             )
         };
         prompt.push_str(&format!(
