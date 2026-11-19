@@ -826,18 +826,47 @@ pub struct Yours {
     created: String,
 }
 
-const YOUR_TICKETS: &str = "query { viewer { assignedIssues(first: 50, orderBy: createdAt) { \
-    nodes { identifier title createdAt state { name } } } } }";
-const YOUR_PROJECTS: &str = "query { projects(first: 50, orderBy: createdAt, \
+const YOUR_TICKETS: &str = "query($after: String) { viewer { \
+    assignedIssues(first: 50, after: $after, orderBy: createdAt) { \
+    nodes { identifier title createdAt state { name } } pageInfo { hasNextPage endCursor } } } }";
+const YOUR_PROJECTS: &str = "query($after: String) { projects(first: 50, after: $after, orderBy: createdAt, \
     filter: { members: { some: { isMe: { eq: true } } } }) { \
-    nodes { id name createdAt status { name } } } }";
+    nodes { id name createdAt status { name } } pageInfo { hasNextPage endCursor } } }";
+
+/// Every page of a list `query` asks for, its connection at `at`, as one
+/// answer of the first page's shape: up to twenty pages.
+async fn every_page(query: &str, at: &str, source: &str) -> anyhow::Result<Value> {
+    let mut whole = linear::graphql(query, json!({}), source).await?;
+    let mut all: Vec<Value> = nodes(&whole, &format!("{at}/nodes"))
+        .into_iter()
+        .cloned()
+        .collect();
+    let mut info = whole.pointer(&format!("{at}/pageInfo")).cloned();
+    for _ in 1..20 {
+        let more = info.as_ref().and_then(|i| {
+            (i.get("hasNextPage") == Some(&json!(true)))
+                .then(|| i.get("endCursor").cloned())
+                .flatten()
+        });
+        let Some(after) = more else {
+            break;
+        };
+        let page = linear::graphql(query, json!({ "after": after }), source).await?;
+        all.extend(nodes(&page, &format!("{at}/nodes")).into_iter().cloned());
+        info = page.pointer(&format!("{at}/pageInfo")).cloned();
+    }
+    if let Some(list) = whole.pointer_mut(&format!("{at}/nodes")) {
+        *list = Value::Array(all);
+    }
+    Ok(whole)
+}
 
 /// The tickets assigned to you and the projects you're a member of, most
 /// recently created first; projects left out when Linear can't list them.
 pub async fn yours() -> Result<Vec<Yours>, String> {
     const SOURCE: &str = "choose a tab's ticket";
-    let tickets = linear::graphql(YOUR_TICKETS, json!({}), SOURCE).await;
-    let projects = linear::graphql(YOUR_PROJECTS, json!({}), SOURCE).await;
+    let tickets = every_page(YOUR_TICKETS, "/viewer/assignedIssues", SOURCE).await;
+    let projects = every_page(YOUR_PROJECTS, "/projects", SOURCE).await;
     let found = yours_in(
         tickets.as_ref().unwrap_or(&Value::Null),
         projects.as_ref().unwrap_or(&Value::Null),

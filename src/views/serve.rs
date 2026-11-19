@@ -272,6 +272,37 @@ impl Server {
         self.close_only_pane(view, true);
     }
 
+    /// A ticket view read again in its own place, on `ticket`, or a shell
+    /// with none, keeping what the tab is about (its directory, a sealed
+    /// review), which a respawn lets go.
+    fn read_view_again(&mut self, tab: TabId, view: PaneId, ticket: Option<Ticket>) {
+        let kept: Vec<(String, String)> = self
+            .tabs
+            .get(&tab)
+            .map(|t| {
+                t.opts
+                    .iter()
+                    .filter(|(k, _)| crate::mux::respawn::HANDED_OVER.contains(&k.as_str()))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let arg = ticket.as_ref().map(Ticket::arg);
+        let command = arg
+            .clone()
+            .map(|arg| vec![exe(), "ticket-view".into(), arg]);
+        if self.respawn_pane(view, None, command, true).is_ok()
+            && let Some(arg) = arg
+            && let Some(slot) = self.panes.get_mut(&view)
+        {
+            slot.opts.insert(TICKET_ID.into(), arg);
+            slot.opts.insert(TICKET_VIEW.into(), "1".into());
+        }
+        if let Some(t) = self.tabs.get_mut(&tab) {
+            t.opts.extend(kept);
+        }
+    }
+
     /// The pane in a tab marked with `mark`.
     pub fn marked_in(&self, tab: TabId, mark: &str) -> Option<PaneId> {
         self.tabs.get(&tab)?.layout.panes().into_iter().find(|p| {
@@ -424,11 +455,14 @@ impl Server {
                 .and_then(|n| ticket::in_name(n))
                 .or_else(|| ticket::in_name(&t.name)),
         );
-        // The label shown names the branch's ticket too, which a repository
-        // whose tickets are GitHub's never takes.
-        if provider != Some("github") {
-            found.extend(ticket::in_name(&self.tab_label(tab)));
-        }
+        // The label shown names the branch's Linear ticket too, which a
+        // repository whose tickets are GitHub's never takes; any other it
+        // names counts.
+        let branch_ticket = ticket::id_for_dir(dir);
+        found.extend(ticket::in_name(&self.tab_label(tab)).filter(|t| {
+            provider != Some("github")
+                || !matches!(t, Ticket::Linear(id) if Some(id) == branch_ticket.as_ref())
+        }));
         ticket::first_on(found)
     }
 
@@ -617,39 +651,21 @@ impl Server {
                         // A view showing the ticket before closes, so none shows
                         // one M-l no longer opens; the tab's last pane is read
                         // again in place rather than closing the tab.
+                        // A view parked under another tool counts too, so
+                        // none comes back showing the old ticket.
                         let was_open = server.marked_in(tab, TICKET_VIEW);
+                        let parked = server
+                            .panes
+                            .iter()
+                            .find(|(p, s)| {
+                                s.tab == tab
+                                    && Some(**p) != was_open
+                                    && s.opts.get(TICKET_VIEW).is_some_and(|v| v == "1")
+                            })
+                            .map(|(p, _)| *p);
                         if let Some(view) = was_open {
                             match &chosen {
-                                // A new choice is read in the view's own place,
-                                // so no pane closes, and what the tab is about
-                                // (its directory, a sealed review) stays.
-                                Some(c) => {
-                                    let arg = c.arg();
-                                    let command = vec![exe(), "ticket-view".into(), arg.clone()];
-                                    let kept: Vec<(String, String)> = server
-                                        .tabs
-                                        .get(&tab)
-                                        .map(|t| {
-                                            t.opts
-                                                .iter()
-                                                .filter(|(k, _)| {
-                                                    crate::mux::respawn::HANDED_OVER
-                                                        .contains(&k.as_str())
-                                                })
-                                                .map(|(k, v)| (k.clone(), v.clone()))
-                                                .collect()
-                                        })
-                                        .unwrap_or_default();
-                                    if server.respawn_pane(view, None, Some(command), true).is_ok()
-                                        && let Some(slot) = server.panes.get_mut(&view)
-                                    {
-                                        slot.opts.insert(TICKET_ID.into(), arg);
-                                        slot.opts.insert(TICKET_VIEW.into(), "1".into());
-                                    }
-                                    if let Some(t) = server.tabs.get_mut(&tab) {
-                                        t.opts.extend(kept);
-                                    }
-                                }
+                                Some(c) => server.read_view_again(tab, view, Some(c.clone())),
                                 // Let go, the view closes as M-w closes a pane,
                                 // a shell in its place when it is the tab's last.
                                 None => {
@@ -659,6 +675,15 @@ impl Server {
                                     }
                                 }
                             }
+                        }
+                        if let Some(view) = parked {
+                            let again = chosen.clone().or_else(|| {
+                                let dir = server.tab_path(tab)?.to_path_buf();
+                                let t = server.tabs.get_mut(&tab)?;
+                                t.opts.remove(TAB_TICKET);
+                                server.tab_ticket_at(tab, &dir)
+                            });
+                            server.read_view_again(tab, view, again);
                         }
                         if automatic {
                             if let Some(t) = server.tabs.get_mut(&tab) {
