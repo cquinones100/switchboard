@@ -294,6 +294,72 @@ fn a_branch_that_exists_nowhere_is_made_off_the_remotes_main_as_it_is_now_with_n
     );
 }
 
+#[test]
+fn a_task_with_no_branch_gets_a_new_branch_named_after_it_and_is_claudes_prompt() {
+    let w = World::new("wtb-task");
+    let (origin, clone) = w.origin_and_clone();
+    let cd = w.path("cd");
+    let task = |text: &str| {
+        w.ok(
+            &clone,
+            &[
+                "worktree-from-branch",
+                "--no-claude",
+                "--cd-file",
+                cd.to_str().unwrap(),
+                "--prompt",
+                text,
+            ],
+        );
+        let written = read(&cd);
+        let mut lines = written.lines();
+        (
+            PathBuf::from(lines.next().unwrap()),
+            lines.next().unwrap_or_default().to_string(),
+        )
+    };
+
+    let (worktree, prompt) = task("Fix the  login\nredirect!");
+    assert_eq!(
+        worktree,
+        clone.join(".claude/worktrees/fix-the-login-redirect")
+    );
+    assert_eq!(
+        w.git(&worktree, &["branch", "--show-current"]),
+        "fix-the-login-redirect"
+    );
+    assert_eq!(
+        prompt, "Fix the login redirect!",
+        "one line, for the wtb function"
+    );
+
+    let (again, _) = task("fix the login redirect");
+    assert_eq!(
+        w.git(&again, &["branch", "--show-current"]),
+        "fix-the-login-redirect-2",
+        "a new branch each time, never the work already there"
+    );
+
+    w.git(&origin, &["branch", "fix-the-signup-form", "main"]);
+    let (unfetched, _) = task("fix the signup form");
+    assert_eq!(
+        w.git(&unfetched, &["branch", "--show-current"]),
+        "fix-the-signup-form-2",
+        "a branch on the remote not fetched yet is taken too"
+    );
+
+    let none = w.run(
+        &clone,
+        &["worktree-from-branch", "--no-claude", "--prompt", "!!!"],
+    );
+    assert_eq!(none.status.code(), Some(1));
+    assert!(
+        stderr(&none).contains("no branch name"),
+        "{}",
+        stderr(&none)
+    );
+}
+
 /// With the setting on, a worktree starts with the main clone's `target/`
 /// cloned in the background; with the setting off, or in a worktree marked as someone
 /// else's, `clone-build` leaves it with none.

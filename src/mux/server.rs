@@ -3410,6 +3410,7 @@ impl Server {
             Action::NewClaudeTab
             | Action::WorkOnTickets
             | Action::WorkOnBranch
+            | Action::WorkOnTask
             | Action::WorkOnPr
             | Action::WorkOnNote
             | Action::ContinueShaping => self.work_action(id, action, pane),

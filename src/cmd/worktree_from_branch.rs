@@ -15,6 +15,12 @@
 //! (`trust::branch_yours_or_listed`), unless `--trusted` opens it as your
 //! own: the worktree is made, but nothing is linked into it, no shell moved
 //! into it and no Claude started.
+//!
+//! `--prompt <text>` is what Claude starts with, as `wt`'s is added to its
+//! ticket's: work with no ticket or note behind it, which M-p's "Start work
+//! on a task" types in. With no branch given, the branch is named after it
+//! (`task_branch`), a new one each time, so a task never lands on work that
+//! is already there.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -25,24 +31,28 @@ const SOURCE: &str = "wtb: fetch the branch";
 
 fn usage() -> ExitCode {
     eprintln!(
-        "Usage: worktree-from-branch [--trusted] [path] <branch>\n       \
+        "Usage: worktree-from-branch [--trusted] [path] <branch> [--prompt <text>]\n       \
+         worktree-from-branch [--trusted] --prompt <text>\n       \
          worktree-from-branch init <zsh|bash>\n\n\
          Examples:\n  \
          worktree-from-branch fix-login-redirect\n  \
          worktree-from-branch .worktrees fix-login-redirect\n  \
-         worktree-from-branch --trusted their-branch   a branch with someone else's commits, as your own\n\n\
-         Path defaults to {} under the repo root.",
+         worktree-from-branch --trusted their-branch   a branch with someone else's commits, as your own\n  \
+         worktree-from-branch --prompt \"fix the login redirect\"   a new branch named after the task\n\n\
+         Path defaults to {} under the repo root. --prompt is what Claude starts with;\n\
+         with no branch, a new branch is named after it.",
         worktree::DEFAULT_WORKTREE_DIR
     );
     ExitCode::from(1)
 }
 
 /// The `wtb` function: runs the command with `--no-claude`, cd's into the
-/// worktree and starts Claude there, as `wt` and `wtpr` do.
+/// worktree and starts Claude there, as `wt` and `wtpr` do, with the
+/// cd-file's second line, `--prompt`'s text, as its prompt when there is one.
 pub fn shell_function() -> String {
     format!(
         r#"wtb() {{
-  local cdfile rc dir
+  local cdfile rc dir prompt
   cdfile=$(mktemp) || return 1
   {} --no-claude --cd-file "$cdfile" "$@"
   rc=$?
@@ -51,13 +61,18 @@ pub fn shell_function() -> String {
     return $rc
   fi
   dir=$(sed -n 1p "$cdfile")
+  prompt=$(sed -n 2p "$cdfile")
   rm -f "$cdfile"
   if [ ! -d "$dir" ]; then
     echo "wtb: expected a worktree directory, got: $dir" >&2
     return 1
   fi
   cd "$dir" || return 1
-  claude
+  if [ -n "$prompt" ]; then
+    claude -- "$prompt"
+  else
+    claude
+  fi
 }}"#,
         worktree::self_command("worktree-from-branch")
     )
@@ -132,9 +147,52 @@ fn create_worktree(path: &Path, branch: &str, root: &Path) -> Result<(), String>
     add_worktree(root, &["--no-track", "-b", branch, &at, &start])
 }
 
+/// The branch a task with none given is worked on: its words made a slug,
+/// as a note's item's is, with `-2`, `-3` and on after it when a branch or
+/// worktree by that name is already here or on the remote (asked, not read
+/// from tracking refs that may be stale, unless the remote can't be
+/// reached), so it is always a new one.
+fn task_branch(root: &Path, task: &str) -> Result<String, String> {
+    let slug = crate::cmd::worktree_from_note::slug_of(task);
+    if slug.is_empty() {
+        return Err(format!("no branch name in the task: {task}"));
+    }
+    let remote = worktree::default_remote(root);
+    let taken = |name: &str| {
+        worktree::branch_exists(root, name)
+            || remote.as_deref().is_some_and(|r| {
+                match worktree::fetch_branch_answer(root, r, name, SOURCE) {
+                    worktree::Fetched::Yes => true,
+                    worktree::Fetched::NoSuchBranch => false,
+                    worktree::Fetched::Failed => worktree::git_ok(
+                        root,
+                        &[
+                            "show-ref",
+                            "--verify",
+                            "--quiet",
+                            &format!("refs/remotes/{r}/{name}"),
+                        ],
+                    ),
+                }
+            })
+            || root
+                .join(worktree::DEFAULT_WORKTREE_DIR)
+                .join(name)
+                .exists()
+    };
+    Ok((1..)
+        .map(|n| match n {
+            1 => slug.clone(),
+            n => format!("{slug}-{n}"),
+        })
+        .find(|name| !taken(name))
+        .expect("an unbounded range finds a free name"))
+}
+
 pub fn main(args: Vec<String>) -> ExitCode {
-    let given = match Given::parse(&args, &[]) {
+    let given = match Given::parse(&args, &["--prompt"]) {
         Ok(g) => g,
+        Err(flag) if flag == "--prompt" => return worktree::fail("--prompt requires text"),
         Err(_) => return worktree::fail("--cd-file requires a path"),
     };
     match worktree::init_shell(&given.positional) {
@@ -156,18 +214,34 @@ pub fn main(args: Vec<String>) -> ExitCode {
         .iter()
         .filter(|a| *a != "--trusted")
         .collect();
+    let prompt = worktree::one_line(&given.all("--prompt").join(" "));
     let (target, branch) = match positional.as_slice() {
-        [branch] => (worktree::DEFAULT_WORKTREE_DIR, branch.as_str()),
-        [path, branch, ..] => (path.as_str(), branch.as_str()),
+        [branch] => (worktree::DEFAULT_WORKTREE_DIR, branch.to_string()),
+        [path, branch, ..] => (path.as_str(), branch.to_string()),
+        [] if !prompt.is_empty() => {
+            let named = worktree::repo_root()
+                .map_err(|e| e.to_string())
+                .and_then(|root| task_branch(&root, &prompt));
+            match named {
+                Ok(branch) => (worktree::DEFAULT_WORKTREE_DIR, branch),
+                Err(e) => return worktree::fail(&e),
+            }
+        }
         [] => return usage(),
     };
-    match run(&given, trusted, target, branch) {
+    match run(&given, trusted, target, &branch, &prompt) {
         Ok(code) => code,
         Err(e) => worktree::fail(&e),
     }
 }
 
-fn run(given: &Given, trusted: bool, target: &str, branch: &str) -> Result<ExitCode, String> {
+fn run(
+    given: &Given,
+    trusted: bool,
+    target: &str,
+    branch: &str,
+    prompt: &str,
+) -> Result<ExitCode, String> {
     let here = std::env::current_dir().map_err(|e| e.to_string())?;
     if !worktree::git_ok(&here, &["check-ref-format", "--branch", branch]) {
         return Err(format!("not a valid branch name: {branch}"));
@@ -220,11 +294,18 @@ fn run(given: &Given, trusted: bool, target: &str, branch: &str) -> Result<ExitC
     crate::cmd::clone_build::start(&finished);
     worktree::link_local_settings(&root, &finished).map_err(|e| e.to_string())?;
     if let Some(cd_file) = &given.cd_file {
-        worktree::write_cd_file(cd_file, &format!("{}\n", finished.display()))
+        worktree::write_cd_file(cd_file, &format!("{}\n{prompt}\n", finished.display()))
             .map_err(|e| e.to_string())?;
     }
     if given.no_claude {
         return Ok(ExitCode::SUCCESS);
     }
-    Ok(worktree::run_in("claude", &[], &finished))
+    // After `--`, so a task typed with a leading dash is the prompt, never
+    // one of Claude's flags.
+    let args: Vec<String> = if prompt.is_empty() {
+        Vec::new()
+    } else {
+        vec!["--".to_string(), prompt.to_string()]
+    };
+    Ok(worktree::run_in("claude", &args, &finished))
 }

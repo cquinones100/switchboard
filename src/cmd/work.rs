@@ -443,6 +443,13 @@ impl Server {
                     Wanted::Repo,
                     |s, c, dir, _| s.ask_branch(c, dir),
                 ),
+                Action::WorkOnTask => server.ask_dir(
+                    client,
+                    "Work on a task: the repository",
+                    found,
+                    Wanted::Repo,
+                    |s, c, dir, _| s.ask_task(c, dir),
+                ),
                 Action::WorkOnPr => server.ask_pr(client, found),
                 Action::WorkOnNote => server.ask_dir(
                     client,
@@ -668,6 +675,41 @@ impl Server {
                 .collect();
             server.front(client, &tabs);
         });
+    }
+
+    /// "Start work on a task", once the repository is picked: what to do,
+    /// typed in, which `wtb --prompt` names a new branch after and gives the
+    /// tab's Claude as its first prompt.
+    fn ask_task(&mut self, client: ClientId, repo: PathBuf) {
+        let ask = crate::mission::ask::Ask::new(
+            "Work on a task",
+            "What should Claude do? The branch is named after it.",
+        );
+        self.open(
+            client,
+            Box::new(ask),
+            Some(Box::new(move |server: &mut Server, client, outcome| {
+                let Outcome::Picked(picked) = outcome else {
+                    return;
+                };
+                let task = worktree::one_line(&picked.value);
+                if worktree_from_note::slug_of(&task).is_empty() {
+                    server.say(
+                        Some(client),
+                        "Type what to do in words a branch can be named after.",
+                    );
+                    return;
+                }
+                let command = worktree::tab_running(
+                    "worktree-from-branch",
+                    "wtb",
+                    &["--prompt".to_string(), task],
+                );
+                if let Some(tab) = server.work_tab(client, &repo, command, Opened::Front) {
+                    server.front(client, &[tab]);
+                }
+            })),
+        );
     }
 
     /// M-B, once the repository is picked: its branches, the most recently

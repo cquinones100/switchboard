@@ -103,6 +103,9 @@ pub enum Action {
     WorkOnTickets,
     /// Work on a branch, new or existing, in a new tab running `wtb` (M-B).
     WorkOnBranch,
+    /// Work on a task typed in, in a new tab running `wtb --prompt`, on a
+    /// branch named after it.
+    WorkOnTask,
     /// Work on a pull request in a new tab running `wtpr`.
     WorkOnPr,
     /// Review a contributor's open PR in a new tab in the main clone running
@@ -275,6 +278,7 @@ impl Action {
             "new-claude-tab" => Action::NewClaudeTab,
             "work-on-tickets" => Action::WorkOnTickets,
             "work-on-branch" => Action::WorkOnBranch,
+            "work-on-task" => Action::WorkOnTask,
             "work-on-pr" => Action::WorkOnPr,
             "review-pr" => Action::ReviewPr,
             "work-on-note" => Action::WorkOnNote,
@@ -354,6 +358,7 @@ impl Action {
             Action::NewClaudeTab => "new-claude-tab".into(),
             Action::WorkOnTickets => "work-on-tickets".into(),
             Action::WorkOnBranch => "work-on-branch".into(),
+            Action::WorkOnTask => "work-on-task".into(),
             Action::WorkOnPr => "work-on-pr".into(),
             Action::ReviewPr => "review-pr".into(),
             Action::WorkOnNote => "work-on-note".into(),
@@ -447,6 +452,10 @@ impl Action {
             Action::WorkOnTickets => "Start work on tickets in new tabs (wt)".into(),
             Action::WorkOnBranch => {
                 "Start work on a branch, new or existing, in a new tab (wtb)".into()
+            }
+            Action::WorkOnTask => {
+                "Start work on a task you type, in a new tab on a branch named after it (wtb --prompt)"
+                    .into()
             }
             Action::WorkOnPr => "Start work on a PR in a new tab (wtpr)".into(),
             Action::ReviewPr => "Review a contributor's PR in a new tab (/review-pr)".into(),
@@ -595,6 +604,9 @@ impl Action {
             Action::WorkOnBranch => {
                 "Lists the repository's branches, the most recently committed first; a name no branch matches makes a new one. The tab runs Claude in a worktree on it.".into()
             }
+            Action::WorkOnTask => {
+                "Asks for the repository, then what to do. A new branch named after it is made off the default branch, and the tab runs Claude in a worktree on it, starting with what you typed.".into()
+            }
             Action::WorkOnPr => {
                 "Asks for the PR's number or link. Claude reads the PR and says where it stands, changing nothing until you say; a fork's PR opens untrusted, running none of its code.".into()
             }
@@ -709,6 +721,7 @@ impl Action {
             Action::NewClaudeTab => &["tabs", "claude", "new"],
             Action::WorkOnTickets => &["linear", "ticket", "worktree", "new"],
             Action::WorkOnBranch => &["git", "branch", "worktree", "new"],
+            Action::WorkOnTask => &["git", "branch", "worktree", "new"],
             Action::WorkOnPr => &["github", "pr", "worktree", "new"],
             Action::ReviewPr => &["github", "pr", "review"],
             Action::WorkOnNote => &["notes", "worktree", "new"],
@@ -843,6 +856,7 @@ impl Action {
             Action::ResetTips,
             Action::ToggleTheme,
             Action::ToggleSidebar,
+            Action::WorkOnTask,
             Action::WorkOnPr,
             Action::ReviewPr,
             Action::ContinueShaping,
