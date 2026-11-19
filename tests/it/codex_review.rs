@@ -797,3 +797,35 @@ fn a_confirmation_round_with_only_lows_is_clean_unless_lows_were_asked_for() {
     assert_eq!(asked["findings"][0]["action"], "ask");
     assert!(!recorded(), "and take the record back");
 }
+
+// Lows on a range the clean round before didn't review confirm nothing:
+// they go to triage, as any finding of a new range does.
+#[test]
+fn lows_after_the_reviewed_range_changed_are_triaged() {
+    let tmp = TempDir::new("cr-lows-moved");
+    let home = tmp.path();
+    let work = clone(home);
+    fs::write(work.join("a.txt"), "a\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "Pushed already"]);
+    git(home, &work, &["push", "-q", "origin", "main"]);
+    fs::write(work.join("b.txt"), "b\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "A change"]);
+    let answer = home.join("answer.json");
+    let clean = r#"{"structured_output":{"summary":"ok","findings":[]}}"#;
+    let lows = r#"{"structured_output":{"summary":"lows","findings":[{"title":"t","severity":"low","file":"b.txt","line":1,"body":"b"}]}}"#;
+    let round = |said: &str, args: &[&str]| -> serde_json::Value {
+        fs::write(&answer, said).unwrap();
+        let out = review_answering(home, &work, &answer, args);
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+
+    assert_eq!(round(clean, &["--round", "start"])["next"], "confirm");
+    fs::write(work.join("b.txt"), "b2\n").unwrap();
+    git(home, &work, &["commit", "-q", "-am", "Another change"]);
+    let moved = round(lows, &["--round", "next"]);
+    assert_eq!(moved["next"], "triage");
+    assert_eq!(moved["findings"][0]["action"], "ask");
+}

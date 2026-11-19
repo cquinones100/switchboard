@@ -1803,14 +1803,15 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
     // exactly this change counts as reviewed on whatever base it lands.
     set(&mut review, "patchId", json!(patch));
     set(&mut review, "warnings", json!(warnings));
-    // Kept only for the checkout you are in (-C naming it too), never one
-    // reviewed from outside with -C, whose git directory is someone else's
-    // worktree.
+    let reviewed = format!("{head} {merge_base} {patch}");
     // A confirmation round the loop added the lows to that finds nothing
-    // above low is clean: its lows are left, never a reason for two more
+    // above low, on the commit, base and patch the clean round before it
+    // reviewed, is clean: its lows are left, never a reason for two more
     // rounds whose confirmation sweeps up new ones. With `--include-low`
     // given (review-loop's `all`) the lows were asked for, so they count.
-    let confirming = looping.as_ref().is_some_and(|l| l.clean_before > 0) && !opts.include_low;
+    let confirming = looping.as_ref().is_some_and(|l| l.clean_before > 0)
+        && !opts.include_low
+        && streak_is(&reviewed)?;
     let found = review["findings"].as_array().cloned().unwrap_or_default();
     let lows_left = confirming
         && !found.is_empty()
@@ -1818,8 +1819,10 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
             .iter()
             .all(|f| f.get("severity").and_then(Value::as_str) == Some("low"));
     let clean = found.is_empty() || lows_left;
-    let recorded_clean =
-        own_checkout && keep_record(clean, include_low, &format!("{head} {merge_base} {patch}"))?;
+    // Kept only for the checkout you are in (-C naming it too), never one
+    // reviewed from outside with -C, whose git directory is someone else's
+    // worktree.
+    let recorded_clean = own_checkout && keep_record(clean, include_low, &reviewed)?;
     if let Some(at) = &looping {
         let lands_alone = socket::tab_option(crate::autopilot::LAND).as_deref() == Some("1");
         let cap = if socket::tab_option(crate::autopilot::HANDS_FREE).as_deref() == Some("1") {
@@ -1894,6 +1897,13 @@ fn record_path(name: &str) -> Reviewed<PathBuf> {
 fn write_record(path: &Path, line: &str) -> Reviewed<()> {
     util::write_atomic(path, format!("{line}\n"))
         .map_err(|e| ReviewError(format!("could not write {}: {e}", path.display())))
+}
+
+/// Whether the last clean round reviewed `reviewed`, `<commit> <base>
+/// <patchId>`, so this round can confirm it.
+fn streak_is(reviewed: &str) -> Reviewed<bool> {
+    let previous = fs::read_to_string(record_path("review-loop-streak")?).unwrap_or_default();
+    Ok(previous.trim() == reviewed)
 }
 
 /// The streak of clean rounds and, after a confirming one, the record the
