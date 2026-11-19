@@ -279,6 +279,9 @@ pub enum Msg {
         new_side: bool,
         lines: Vec<Vec<Hl>>,
     },
+    /// The Story column's hunks colored, by the hash of each hunk's
+    /// path and lines (`reading::hunk_key`).
+    HunksColored(Vec<(u64, Option<reading::HunkColors>)>),
     /// What a question's answer says, by the question's number.
     Asked(u64, Said),
     /// What a commit's diff of the history was told, by its number.
@@ -1238,6 +1241,7 @@ impl App {
         let same_rows = matches!(
             msg,
             Msg::Coloured { .. }
+                | Msg::HunksColored(_)
                 | Msg::Asked(..)
                 | Msg::History(..)
                 | Msg::Heard(_, Heard::Progress(_))
@@ -1339,6 +1343,7 @@ impl App {
                     }
                 }
             }
+            Msg::HunksColored(colored) => self.hunks_colored(colored),
             Msg::Asked(id, said) => self.asked(id, said),
             Msg::Reloaded(..) => {}
             // One found before the look was turned off is not said.
@@ -9098,6 +9103,53 @@ mod tests {
         assert!(shown[row].contains("1 - fn  spaced"), "{}", shown[row]);
         assert!(shown[row + 1].contains("1 + fn spaced"));
         assert!(shown[row + 1].contains("fn spaced() {}"));
+    }
+
+    #[test]
+    fn the_story_column_s_changes_are_in_their_syntax_s_colors() {
+        let (tx, rx) = channel();
+        let mut app = map_app();
+        app.tx = tx;
+        app.relay();
+        app.go_to_section(5);
+        // The color of the first cell of `text` on the row holding `row`.
+        let color_at = |app: &mut App, row: &str, text: &str| {
+            let shown = screen(app);
+            let y = line_with(&shown, row);
+            let x = shown[y].find(text).unwrap();
+            let x = shown[y][..x].chars().count() as u16;
+            draw(app)[(x, y as u16)].fg
+        };
+        for cols in [170, 120] {
+            app.cols = cols;
+            app.relay();
+            // Uncolored until the colors come, off the screen's thread,
+            // and kept for the next width.
+            if cols == 170 {
+                let before = color_at(&mut app, "fn  spaced", "fn  spaced");
+                assert_ne!(before, Color::Indexed(5));
+                let msg = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+                assert!(matches!(msg, Msg::HunksColored(_)));
+                app.event(msg);
+            }
+            // The keyword in the keywords' color, the name in the functions',
+            // on each side.
+            assert_eq!(
+                color_at(&mut app, "fn  spaced", "fn  spaced"),
+                Color::Indexed(5),
+                "{cols}"
+            );
+            assert_eq!(
+                color_at(&mut app, "fn  spaced", "spaced"),
+                Color::Indexed(4),
+                "{cols}"
+            );
+            assert_eq!(
+                color_at(&mut app, "fn spaced()", "fn spaced()"),
+                Color::Indexed(5),
+                "{cols}"
+            );
+        }
     }
 
     #[test]

@@ -24,7 +24,8 @@
 //! views, and `m` asks which; the view used last is kept in the state
 //! folder, and the pages read beside the story in the cache, by its key.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -34,8 +35,9 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line as Spans, Span};
 
 use super::select::Pane;
-use super::{Act, App, Button, Cell, Focus, Line};
+use super::{Act, App, Button, Cell, Focus, Line, Msg};
 use crate::git::Entry;
+use crate::highlight::{self, Hl};
 use crate::story::{self, Story};
 use crate::{order, paths, tell, util};
 use switchboard_ui::Theme;
@@ -188,6 +190,9 @@ pub(super) struct Reader {
     /// The last key was ] or [ alone, so a p or c after it adds nothing.
     pub(super) after_bracket: bool,
     laid: Option<(u16, Vec<Row>)>,
+    /// Each hunk's colors by `hunk_key`, `None` while they are asked
+    /// for or where no grammar knows the file.
+    colors: HashMap<u64, Option<HunkColors>>,
     /// The column to lay out again on its next draw, the rows before kept
     /// to find the cursor's section in.
     stale: bool,
@@ -226,15 +231,114 @@ fn mode_file() -> PathBuf {
     paths::state_dir().join("diff-mode")
 }
 
+/// A hunk's line as `hunk_lines` gives it.
+type HunkLine = (char, String, Option<usize>, Option<usize>);
+
+/// Each line of a hunk's colored runs, on the old side and the new
+/// (`None` on the side it isn't on).
+pub type HunkColors = Vec<(Option<Vec<Hl>>, Option<Vec<Hl>>)>;
+
+/// What a hunk's colors are kept by: its path and its lines.
+fn hunk_key(path: &str, lines: &[HunkLine]) -> u64 {
+    let mut h = DefaultHasher::new();
+    path.hash(&mut h);
+    for (mark, text, _, _) in lines {
+        (mark, text).hash(&mut h);
+    }
+    h.finish()
+}
+
+/// A hunk's lines colored as Files mode colors a file: each side's
+/// lines (the context with the lines taken out, and with the lines put
+/// in) colored as a text of their own, the old under the file's old path,
+/// each line given its side's runs. `None` where no grammar knows either
+/// side, so a side known only by its first line (a script with no
+/// extension, added or deleted) is colored though the other is empty.
+fn hunk_colors(old_path: &str, path: &str, lines: &[HunkLine]) -> Option<HunkColors> {
+    let side = |marks: [char; 2]| -> Vec<String> {
+        lines
+            .iter()
+            .filter(|(m, ..)| marks.contains(m))
+            .map(|(_, t, ..)| t.clone())
+            .collect()
+    };
+    let old = highlight::highlight(old_path, &side([' ', '-']));
+    let new = highlight::highlight(path, &side([' ', '+']));
+    if old.is_none() && new.is_none() {
+        return None;
+    }
+    let (mut o, mut n) = (0, 0);
+    let mut out = Vec::with_capacity(lines.len());
+    for (mark, ..) in lines {
+        let on_old = matches!(mark, ' ' | '-');
+        let on_new = matches!(mark, ' ' | '+');
+        out.push((
+            on_old.then(|| old.as_ref()?.get(o).cloned()).flatten(),
+            on_new.then(|| new.as_ref()?.get(n).cloned()).flatten(),
+        ));
+        o += usize::from(on_old);
+        n += usize::from(on_new);
+    }
+    Some(out)
+}
+
+/// A line of code with its tabs as four spaces, and the color of each of
+/// that text's bytes from `runs`, which are of the line as it came.
+fn with_colors(text: &str, runs: Option<&Vec<Hl>>) -> (String, Vec<Option<ratatui::style::Color>>) {
+    let mut out = String::with_capacity(text.len());
+    let mut colors = Vec::with_capacity(text.len());
+    for (at, c) in text.char_indices() {
+        if c == '\t' {
+            out.push_str("    ");
+            colors.extend([None; 4]);
+            continue;
+        }
+        let color = runs
+            .and_then(|r| r.iter().find(|h| h.range.contains(&at)))
+            .map(|h| h.color);
+        out.push(c);
+        colors.extend(std::iter::repeat_n(color, c.len_utf8()));
+    }
+    (out, colors)
+}
+
+/// `text` in spans of `base`, each run in its color from `colors` (by
+/// byte, `from` the first of `text`'s), the rest in `base`'s own.
+fn colored_spans(
+    text: &str,
+    colors: &[Option<ratatui::style::Color>],
+    from: usize,
+    base: Style,
+) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut run = String::new();
+    let mut color = None;
+    for (at, c) in text.char_indices() {
+        let here = colors.get(from + at).copied().flatten();
+        if here != color && !run.is_empty() {
+            let style = color.map_or(base, |c| base.fg(c));
+            spans.push(Span::styled(std::mem::take(&mut run), style));
+        }
+        color = here;
+        run.push(c);
+    }
+    if !run.is_empty() {
+        spans.push(Span::styled(run, color.map_or(base, |c| base.fg(c))));
+    }
+    spans
+}
+
 /// A hunk's lines side by side, as Files mode shows a change: the old
 /// side at the left and the new at the right, each line beside the one it
 /// became (`sides::align`), the words that changed in the stronger shade,
 /// a line only one side has facing a gap, a long line going on in rows
-/// under it. Each row with the new and the old line it is at; a missing
-/// newline at the end said under its line, across both.
+/// under it, the code in its `colors` where they are known. Each row with
+/// the new and the old line it is at; a missing newline at the end said
+/// under its line, across both.
 #[allow(clippy::type_complexity)]
 fn side_by_side(
-    lines: &[(char, String, Option<usize>, Option<usize>)],
+    lines: &[HunkLine],
+    colors: Option<&HunkColors>,
     cols: usize,
     (old_bg, old_word, new_bg, new_word): (
         ratatui::style::Color,
@@ -245,46 +349,53 @@ fn side_by_side(
     theme: &Theme,
 ) -> Vec<(Vec<Span<'static>>, Option<usize>, Option<usize>)> {
     use crate::sides::{Kind, align};
-    let mut old: Vec<(usize, String)> = Vec::new();
-    let mut new: Vec<(usize, String)> = Vec::new();
+    type Colors = Vec<Option<ratatui::style::Color>>;
+    let mut old: Vec<(usize, String, Colors)> = Vec::new();
+    let mut new: Vec<(usize, String, Colors)> = Vec::new();
     let mut no_newline = false;
-    for (mark, text, o, n) in lines {
-        let text = text.replace('\t', "    ");
+    for (i, (mark, text, o, n)) in lines.iter().enumerate() {
+        let runs = colors.and_then(|c| c.get(i));
+        let (old_text, old_colors) = with_colors(text, runs.and_then(|r| r.0.as_ref()));
+        let (new_text, new_colors) = with_colors(text, runs.and_then(|r| r.1.as_ref()));
         match mark {
-            '-' => old.push((o.unwrap_or(0), text)),
-            '+' => new.push((n.unwrap_or(0), text)),
+            '-' => old.push((o.unwrap_or(0), old_text, old_colors)),
+            '+' => new.push((n.unwrap_or(0), new_text, new_colors)),
             ' ' => {
-                old.push((o.unwrap_or(0), text.clone()));
-                new.push((n.unwrap_or(0), text));
+                old.push((o.unwrap_or(0), old_text, old_colors));
+                new.push((n.unwrap_or(0), new_text, new_colors));
             }
             _ => no_newline = true,
         }
     }
-    let texts = |side: &[(usize, String)]| side.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>();
+    let texts = |side: &[(usize, String, Colors)]| {
+        side.iter().map(|(_, t, _)| t.clone()).collect::<Vec<_>>()
+    };
     let half = cols.saturating_sub(1) / 2;
     let room = half.saturating_sub(6).max(1);
     let sunken = Surface::Sunken.color(theme);
     let faint = Tone::Faint.style(theme);
     let text_style = Tone::Text.style(theme);
     // One side of a row: its rows of spans, each `half` wide.
-    let side = |line: Option<(usize, &str, &[std::ops::Range<usize>])>, bg, strong| {
-        let Some((number, text, words)) = line else {
+    #[allow(clippy::type_complexity)]
+    let side = |line: Option<(usize, &str, &[std::ops::Range<usize>], &Colors)>, bg, strong| {
+        let Some((number, text, words, colors)) = line else {
             return vec![vec![Span::styled(
                 " ".repeat(half),
                 Style::new().bg(sunken),
             )]];
         };
         let mut out: Vec<Vec<Span<'static>>> = Vec::new();
-        let mut piece: Vec<(char, bool)> = Vec::new();
+        let mut piece: Vec<(char, bool, Option<ratatui::style::Color>)> = Vec::new();
         let mut used = 0;
-        let mut pieces: Vec<Vec<(char, bool)>> = Vec::new();
+        let mut pieces: Vec<Vec<(char, bool, Option<ratatui::style::Color>)>> = Vec::new();
         for (at, c) in text.char_indices() {
             let w = crate::sides::char_width(c);
             if used + w > room && used > 0 {
                 pieces.push(std::mem::take(&mut piece));
                 used = 0;
             }
-            piece.push((c, words.iter().any(|r| r.contains(&at))));
+            let color = colors.get(at).copied().flatten();
+            piece.push((c, words.iter().any(|r| r.contains(&at)), color));
             used += w;
         }
         pieces.push(piece);
@@ -296,20 +407,22 @@ fn side_by_side(
             };
             let mut spans = vec![Span::styled(format!("{num:>5} "), faint.bg(bg))];
             let mut run = String::new();
-            let mut lit = false;
+            let (mut lit, mut color) = (false, None);
             let mut width = 0;
-            for (c, w) in chars {
-                if w != lit && !run.is_empty() {
-                    let b = if lit { strong } else { bg };
-                    spans.push(Span::styled(std::mem::take(&mut run), text_style.bg(b)));
+            let style = |lit: bool, color: Option<ratatui::style::Color>| {
+                let s = text_style.bg(if lit { strong } else { bg });
+                color.map_or(s, |c| s.fg(c))
+            };
+            for (c, w, here) in chars {
+                if (w, here) != (lit, color) && !run.is_empty() {
+                    spans.push(Span::styled(std::mem::take(&mut run), style(lit, color)));
                 }
-                lit = w;
+                (lit, color) = (w, here);
                 width += crate::sides::char_width(c);
                 run.push(c);
             }
             if !run.is_empty() {
-                let b = if lit { strong } else { bg };
-                spans.push(Span::styled(run, text_style.bg(b)));
+                spans.push(Span::styled(run, style(lit, color)));
             }
             spans.push(Span::styled(
                 " ".repeat(room.saturating_sub(width)),
@@ -327,12 +440,14 @@ fn side_by_side(
             Kind::Removed => (old_bg, sunken),
             Kind::Added => (sunken, new_bg),
         };
-        let left_line = row
-            .old
-            .map(|i| (old[i].0, old[i].1.as_str(), row.old_words.as_slice()));
-        let right_line = row
-            .new
-            .map(|i| (new[i].0, new[i].1.as_str(), row.new_words.as_slice()));
+        let left_line = row.old.map(|i| {
+            let (number, text, colors) = &old[i];
+            (*number, text.as_str(), row.old_words.as_slice(), colors)
+        });
+        let right_line = row.new.map(|i| {
+            let (number, text, colors) = &new[i];
+            (*number, text.as_str(), row.new_words.as_slice(), colors)
+        });
         let left = side(left_line, left_bg, old_word);
         let right = side(right_line, right_bg, new_word);
         let blank = |bg| vec![Span::styled(" ".repeat(half), Style::new().bg(bg))];
@@ -376,10 +491,7 @@ fn pieces(text: &str, cols: usize) -> Vec<String> {
 /// Each line of a hunk, from its header's next line to the next header:
 /// its text without its mark, its kind (' ', '+' or '-'), and its line on
 /// the old side and the new.
-fn hunk_lines(
-    lines: &[String],
-    hunk: &story::Hunk,
-) -> Vec<(char, String, Option<usize>, Option<usize>)> {
+fn hunk_lines(lines: &[String], hunk: &story::Hunk) -> Vec<HunkLine> {
     let (mut old, mut new) = (hunk.old_start, hunk.new_start);
     // Only the lines the header counts: what follows the last hunk of a
     // patch (its closing empty line) is no line of it.
@@ -1577,6 +1689,7 @@ impl App {
             };
             (place(self.reader.cur), place(self.reader.top))
         });
+        self.ask_hunk_colors();
         let rows = self.lay_column(cols);
         if let Some((cur, top)) = before {
             let back = |(section, into): (usize, usize)| {
@@ -1589,6 +1702,56 @@ impl App {
         }
         self.reader.laid = Some((cols as u16, rows));
         self.reader.stale = false;
+    }
+
+    /// Asks for the colors of the story's hunks not colored yet, in one
+    /// thread off the screen's, as Files mode colors a file: the column
+    /// shows them uncolored until then.
+    fn ask_hunk_colors(&mut self) {
+        let Some(change) = &self.change else {
+            return;
+        };
+        let told = change.told_part();
+        let (files, hunks) = story::split(&told.runs());
+        let mut asked = Vec::new();
+        for (path, list) in &hunks {
+            let text = files.get(path).map(Vec::as_slice).unwrap_or(&[]);
+            let old_path = told
+                .entries
+                .iter()
+                .find(|e| e.path == *path)
+                .map_or(path.as_str(), |e| e.old())
+                .to_string();
+            for hunk in list {
+                let lines = hunk_lines(text, hunk);
+                let key = hunk_key(path, &lines);
+                if let std::collections::hash_map::Entry::Vacant(e) = self.reader.colors.entry(key)
+                {
+                    e.insert(None);
+                    asked.push((key, old_path.clone(), path.clone(), lines));
+                }
+            }
+        }
+        if asked.is_empty() {
+            return;
+        }
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let colored = asked
+                .into_iter()
+                .map(|(key, old_path, path, lines)| (key, hunk_colors(&old_path, &path, &lines)))
+                .collect();
+            let _ = tx.send(Msg::HunksColored(colored));
+        });
+    }
+
+    /// The story's hunks colored: the column laid out again with them.
+    pub(super) fn hunks_colored(&mut self, colored: Vec<(u64, Option<HunkColors>)>) {
+        let any = colored.iter().any(|(_, c)| c.is_some());
+        self.reader.colors.extend(colored);
+        if any {
+            self.reader.stale = true;
+        }
     }
 
     /// The whole column, for a page of its own (page.rs): every file of
@@ -2055,6 +2218,11 @@ impl App {
                     )));
                 }
                 let lines = hunk_lines(text, hunk);
+                let colors = self
+                    .reader
+                    .colors
+                    .get(&hunk_key(path, &lines))
+                    .and_then(Option::as_ref);
                 // Side by side where the column has room, as Files mode
                 // shows a change; one column, removed over added, where not.
                 if cols >= SIDE_BY_SIDE {
@@ -2064,14 +2232,18 @@ impl App {
                         new,
                         old,
                     };
-                    for (spans, new, old) in side_by_side(&lines, cols, self.palette(), theme) {
+                    for (spans, new, old) in
+                        side_by_side(&lines, colors, cols, self.palette(), theme)
+                    {
                         rows.push(Row {
                             does: target(new, old),
                             ..plain(spans)
                         });
                     }
                 }
-                for (mark, line, old, new) in lines.into_iter().filter(|_| cols < SIDE_BY_SIDE) {
+                let narrow = lines.iter().enumerate().filter(|_| cols < SIDE_BY_SIDE);
+                for (i, (mark, line, old, new)) in narrow {
+                    let (mark, old, new) = (*mark, *old, *new);
                     if mark == '\\' {
                         rows.push(plain(vec![Span::styled(
                             format!("      ⏎ {line}"),
@@ -2089,14 +2261,27 @@ impl App {
                         '-' => Some(removed),
                         _ => Some(Surface::Sunken.color(theme)),
                     };
-                    let text = line.replace('\t', "    ");
+                    let runs = colors
+                        .and_then(|c| c.get(i))
+                        .and_then(|(old_runs, new_runs)| {
+                            if mark == '-' {
+                                old_runs.as_ref()
+                            } else {
+                                new_runs.as_ref()
+                            }
+                        });
+                    let (text, text_colors) = with_colors(line, runs);
                     // A long line goes on in rows of its own under it, so
                     // a change near its end is read here too.
+                    let mut from = 0;
                     for (k, piece) in pieces(&text, cols.saturating_sub(8))
                         .into_iter()
                         .enumerate()
                     {
                         let number = if k == 0 { number.as_str() } else { "" };
+                        let code =
+                            colored_spans(&piece, &text_colors, from, Tone::Text.style(theme));
+                        from += piece.len();
                         rows.push(Row {
                             bg,
                             does: Does::Change {
@@ -2105,19 +2290,23 @@ impl App {
                                 new,
                                 old,
                             },
-                            ..plain(vec![
-                                Span::styled(format!("{number:>5} "), Tone::Faint.style(theme)),
-                                // One column marks each line, as board 145.
-                                Span::styled(
-                                    format!("{} ", if k == 0 { mark } else { ' ' }),
-                                    match mark {
-                                        '+' => Tone::Done.style(theme),
-                                        '-' => Tone::Failed.style(theme),
-                                        _ => Tone::Faint.style(theme),
-                                    },
-                                ),
-                                Span::styled(piece, Tone::Text.style(theme)),
-                            ])
+                            ..plain(
+                                [
+                                    Span::styled(format!("{number:>5} "), Tone::Faint.style(theme)),
+                                    // One column marks each line, as board 145.
+                                    Span::styled(
+                                        format!("{} ", if k == 0 { mark } else { ' ' }),
+                                        match mark {
+                                            '+' => Tone::Done.style(theme),
+                                            '-' => Tone::Failed.style(theme),
+                                            _ => Tone::Faint.style(theme),
+                                        },
+                                    ),
+                                ]
+                                .into_iter()
+                                .chain(code)
+                                .collect(),
+                            )
                         });
                     }
                 }
@@ -3016,6 +3205,57 @@ mod tests {
         assert_eq!(pieces("abcdefg", 3), ["abc", "def", "g"]);
         assert_eq!(pieces("", 3), [""]);
         assert_eq!(pieces("a  b", 10), ["a  b"]);
+    }
+
+    #[test]
+    fn a_hunk_is_colored_on_each_side_as_a_text_of_its_own() {
+        let lines: Vec<HunkLine> = vec![
+            (' ', "fn a() {".into(), Some(1), Some(1)),
+            ('-', "    let s = 1;".into(), Some(2), None),
+            ('+', "    let s = \"x\";".into(), None, Some(2)),
+            (' ', "}".into(), Some(3), Some(3)),
+        ];
+        let colors = hunk_colors("src/a.rs", "src/a.rs", &lines).expect("Rust is known");
+        // The context has both sides' runs, a line taken out the old's
+        // alone and one put in the new's alone.
+        let sides: Vec<(bool, bool)> = colors
+            .iter()
+            .map(|(o, n)| (o.is_some(), n.is_some()))
+            .collect();
+        assert_eq!(
+            sides,
+            [(true, true), (true, false), (false, true), (true, true)]
+        );
+        let new = colors[2].1.as_ref().unwrap();
+        let at = lines[2].1.find('"').unwrap();
+        let string = new.iter().find(|h| h.range.contains(&at)).unwrap();
+        assert_eq!(string.color, ratatui::style::Color::Indexed(2));
+        assert!(hunk_colors("notes.unknownext", "notes.unknownext", &lines).is_none());
+        // A script known by its first line alone, added: the new side
+        // colored though the old has no line to know it by.
+        let added: Vec<HunkLine> = vec![
+            ('+', "#!/bin/bash".into(), None, Some(1)),
+            ('+', "echo \"hi\"".into(), None, Some(2)),
+        ];
+        let colors = hunk_colors("bin/deploy", "bin/deploy", &added).expect("known by its shebang");
+        assert!(colors.iter().all(|(o, n)| o.is_none() && n.is_some()));
+        assert!(colors[1].1.as_ref().is_some_and(|runs| !runs.is_empty()));
+    }
+
+    #[test]
+    fn a_tab_keeps_each_byte_s_color_where_it_now_is() {
+        let runs = vec![Hl {
+            range: 1..3,
+            color: ratatui::style::Color::Indexed(5),
+        }];
+        let (text, colors) = with_colors("\tfn x", Some(&runs));
+        assert_eq!(text, "    fn x");
+        assert_eq!(colors[3], None);
+        assert_eq!(colors[4], Some(ratatui::style::Color::Indexed(5)));
+        assert_eq!(colors[6], None);
+        let spans = colored_spans(&text, &colors, 0, Style::new());
+        let texts: Vec<&str> = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(texts, ["    ", "fn", " x"]);
     }
 
     #[test]
