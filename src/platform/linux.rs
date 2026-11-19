@@ -513,6 +513,48 @@ pub fn sealed_build() -> (Vec<PathBuf>, Vec<(String, String)>) {
     (Vec::new(), Vec::new())
 }
 
+pub fn clone_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    // Made here first, so a failure removes only what this call made.
+    std::fs::create_dir(to)?;
+    let cloned = clone_each(from, to);
+    if cloned.is_err() {
+        let _ = std::fs::remove_dir_all(to);
+    }
+    cloned
+}
+
+/// `from`'s folders made again, its links copied and each file cloned with
+/// `FICLONE`, stopping at the first that can't be.
+fn clone_each(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::PermissionsExt;
+    if !to.exists() {
+        std::fs::create_dir(to)?;
+    }
+    std::fs::set_permissions(to, std::fs::metadata(from)?.permissions())?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let (src, dst) = (entry.path(), to.join(entry.file_name()));
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            clone_each(&src, &dst)?;
+        } else if kind.is_symlink() {
+            std::os::unix::fs::symlink(std::fs::read_link(&src)?, &dst)?;
+        } else if kind.is_file() {
+            let input = std::fs::File::open(&src)?;
+            let mode = input.metadata()?.permissions().mode();
+            let output = std::fs::File::create_new(&dst)?;
+            // SAFETY: both descriptors are open files that live through the call.
+            if unsafe { libc::ioctl(output.as_raw_fd(), libc::FICLONE, input.as_raw_fd()) } != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            output.set_permissions(std::fs::Permissions::from_mode(mode))?;
+            output.set_modified(input.metadata()?.modified()?)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

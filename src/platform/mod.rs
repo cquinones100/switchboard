@@ -278,3 +278,12 @@ pub fn sealed_build() -> (Vec<PathBuf>, Vec<(String, String)>) {
 pub fn set_option_as_alt(app: TerminalApp) -> Result<()> {
     os::set_option_as_alt(app)
 }
+
+/// Clones the folder `from` as `to`, which must not exist, copy-on-write, so
+/// the copy takes no space until one side changes a file: APFS's
+/// `clonefile` on macOS, `FICLONE` file by file on Linux (Btrfs, XFS). Where
+/// the filesystem can't, or the two are on different volumes, it fails,
+/// leaving nothing at `to`; it never falls back to a plain copy.
+pub fn clone_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    os::clone_tree(from, to)
+}

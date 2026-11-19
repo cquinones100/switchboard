@@ -1374,6 +1374,7 @@ fn run(given: &Given, note: &str, item: &str, made: &mut bool) -> Result<ExitCod
     let target = target_of(given, &root)?;
     let start = make_worktree(&root, &path, &branch, "item", target)?;
     *made = true;
+    crate::cmd::clone_build::start(&path);
     // Without it the item looks unclaimed, and would be offered again.
     if !worktree::git_ok(&root, &["config", &key, &identity]) {
         return Err(format!("could not record the item in git config ({key})"));

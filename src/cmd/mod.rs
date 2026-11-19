@@ -15,6 +15,7 @@ pub mod claude_context;
 pub mod claude_here;
 pub mod claude_plugin_dirs;
 pub mod claude_reply;
+pub mod clone_build;
 pub mod codex_review;
 pub mod demo;
 pub mod diff_story;
@@ -215,6 +216,11 @@ pub const COMMANDS: &[Command] = &[
         name: "update-target",
         run: update_target::main,
         about: "Merge the default branch into a target branch under its landing lock, test it and push it",
+    },
+    Command {
+        name: "clone-build",
+        run: clone_build::main,
+        about: "Start a new worktree's target/ as a copy-on-write clone of its main clone's (run by the worktree commands)",
     },
     Command {
         name: "worktree-done",

@@ -374,6 +374,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
     {
         return worktree::fail(&why);
     }
+    crate::cmd::clone_build::start(&path);
     if let Err(e) = worktree::link_local_settings(&root, &path) {
         return worktree::fail(&e.to_string());
     }

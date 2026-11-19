@@ -40,6 +40,10 @@ impl World {
                 home.join("state").display().to_string(),
             ),
             ("NOTES_DIR", home.join("Notes").display().to_string()),
+            // Cargo's config read from the test's home, never yours.
+            ("CARGO_HOME", home.join(".cargo").display().to_string()),
+            // The assets compiled into the build, never another checkout's.
+            ("SWITCHBOARD_CHECKOUT", String::new()),
             // A stand-in gh first, so no real one is asked for a token: it
             // says the GH_TOKEN a test sets, as gh does.
             ("PATH", stand_in::path_with_gh(&home.join("stand-ins"))),
@@ -70,6 +74,20 @@ impl World {
             "LINEAR_API_KEY",
             "WT_PROMPT",
             "WTN_NOTE",
+            // Any set, cargo builds elsewhere, and a
+            // worktree gets no clone of the main clone's.
+            "CARGO_TARGET_DIR",
+            "CARGO_BUILD_TARGET_DIR",
+            "CARGO_BUILD_BUILD_DIR",
+            // Settings from the test's home, never yours.
+            "SWITCHBOARD_SETTINGS",
+            // Git finds the test's repositories, never one the caller named.
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_COMMON_DIR",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
         ] {
             cmd.env_remove(var);
         }
@@ -274,6 +292,66 @@ fn a_branch_that_exists_nowhere_is_made_off_the_remotes_main_as_it_is_now_with_n
         w.git_fails(&worktree, &["rev-parse", "--abbrev-ref", "@{upstream}"]),
         "with no upstream until its first push"
     );
+}
+
+/// With the setting on, a worktree starts with the main clone's `target/`
+/// cloned in the background; with the setting off, or in a worktree marked as someone
+/// else's, `clone-build` leaves it with none.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_new_worktree_gets_a_clone_of_the_main_clones_target_unless_turned_off_or_untrusted() {
+    let w = World::new("wtb-target");
+    let (_, clone) = w.origin_and_clone();
+    // Only into a worktree whose target/ git ignores.
+    std::fs::write(clone.join(".gitignore"), "target/\n").unwrap();
+    // A cargo workspace, as only one is given a clone.
+    std::fs::write(clone.join("Cargo.toml"), "[package]\nname = \"t\"\n").unwrap();
+    w.git(&clone, &["add", ".gitignore", "Cargo.toml"]);
+    w.git(&clone, &["commit", "-q", "-m", "ignore target"]);
+    w.git(&clone, &["push", "-q", "origin", "main"]);
+    std::fs::create_dir_all(clone.join("target/debug/deps")).unwrap();
+    std::fs::create_dir_all(clone.join("target/debug/.fingerprint")).unwrap();
+    std::fs::write(
+        clone.join("target/CACHEDIR.TAG"),
+        "Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by cargo.\n",
+    )
+    .unwrap();
+    std::fs::write(clone.join("target/debug/deps/built"), "dep").unwrap();
+
+    let settings = w.path(".config/switchboard/settings.json");
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    std::fs::write(&settings, r#"{"worktree_clone_build": true}"#).unwrap();
+    w.ok(&clone, &["worktree-from-branch", "--no-claude", "cloned"]);
+    let cloned = clone.join(".claude/worktrees/cloned/target/debug/deps/built");
+    let until = common::deadline(std::time::Duration::from_secs(10));
+    while !cloned.exists() && std::time::Instant::now() < until {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(read(&cloned), "dep", "cloned in the background");
+
+    let bare = |name: &str| {
+        let wt = clone.join(".claude/worktrees").join(name);
+        w.git(
+            &clone,
+            &["worktree", "add", "-q", "-b", name, wt.to_str().unwrap()],
+        );
+        wt
+    };
+    let untrusted = bare("theirs");
+    w.git(&clone, &["config", "extensions.worktreeConfig", "true"]);
+    w.git(
+        &untrusted,
+        &["config", "--worktree", "switchboard.untrusted", "true"],
+    );
+    let refused = w.run(&clone, &["clone-build", untrusted.to_str().unwrap()]);
+    assert!(!refused.status.success());
+    assert!(!untrusted.join("target").exists(), "someone else's code");
+
+    let off = bare("off");
+    std::fs::write(&settings, r#"{"worktree_clone_build": false}"#).unwrap();
+    let refused = w.run(&clone, &["clone-build", off.to_str().unwrap()]);
+    assert!(!refused.status.success());
+    assert!(!off.join("target").exists(), "the setting off");
 }
 
 #[test]

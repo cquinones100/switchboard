@@ -217,6 +217,7 @@ fn run(given: &Given, trusted: bool, target: &str, branch: &str) -> Result<ExitC
         }
         crate::trust::branch_yours_or_listed(&crate::paths::home(), &finished)?;
     }
+    crate::cmd::clone_build::start(&finished);
     worktree::link_local_settings(&root, &finished).map_err(|e| e.to_string())?;
     if let Some(cd_file) = &given.cd_file {
         worktree::write_cd_file(cd_file, &format!("{}\n", finished.display()))

@@ -620,6 +620,7 @@ fn run(given: &Given, asked: Asked, target: &str, input: &str) -> Result<ExitCod
             ));
         }
     }
+    crate::cmd::clone_build::start(&finished);
     worktree::link_local_settings(&root, &finished).map_err(|e| e.to_string())?;
 
     let prompt = if wanted {

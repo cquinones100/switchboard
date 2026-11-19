@@ -469,6 +469,24 @@ pub fn set_option_as_alt(app: super::TerminalApp) -> Result<()> {
     prefs.import()
 }
 
+pub fn clone_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let c =
+        |p: &std::path::Path| CString::new(p.as_os_str().as_bytes()).map_err(std::io::Error::other);
+    // sys/clonefile.h: a link at `from` is cloned as the link, and each
+    // file keeps its own access list rather than taking its new folder's.
+    const CLONE_NOFOLLOW: u32 = 0x0001;
+    const CLONE_ACL: u32 = 0x0004;
+    let (src, dst) = (c(from)?, c(to)?);
+    // SAFETY: both are NUL-terminated paths that live through the call.
+    if unsafe { libc::clonefile(src.as_ptr(), dst.as_ptr(), CLONE_NOFOLLOW | CLONE_ACL) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
