@@ -136,12 +136,26 @@ impl Server {
             // another's place gives that place, and the focus, back.
             // Set as the tab's own pane in front, never by focus_pane, which
             // would bring a tab in the background to the front.
-            let active = self.tabs.get(&tab).map(|t| t.active);
+            // Its zoom and its last pane stay too, the view's place in them
+            // taken by the pane it stood in for.
+            let before = self
+                .tabs
+                .get(&tab)
+                .map(|t| (t.active, t.last_pane, t.zoomed));
+            let restored = self.parked_of(view);
             self.kill_pane(view);
-            if let Some(active) = active.filter(|a| *a != view && self.panes.contains_key(a))
+            if let Some((active, last, zoomed)) = before
+                && active != view
+                && self.panes.contains_key(&active)
                 && let Some(t) = self.tabs.get_mut(&tab)
             {
                 t.active = active;
+                t.last_pane = last.and_then(|l| if l == view { restored } else { Some(l) });
+                let rezoom = t.zoomed != zoomed;
+                t.zoomed = zoomed;
+                if rezoom {
+                    self.relayout(tab);
+                }
             }
         }
         self.agents.restarted(pane);

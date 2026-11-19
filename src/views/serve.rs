@@ -680,8 +680,12 @@ impl Server {
                                     .tab_ticket_at(tab, &dir)
                                     .filter(|t| settings::is_on(t.service()))
                             });
-                            for view in parked {
-                                server.read_view_again(view, again.clone());
+                            // With nothing to show, a parked view is left to
+                            // its tool, never a shell standing in its marks.
+                            if again.is_some() {
+                                for view in parked {
+                                    server.read_view_again(view, again.clone());
+                                }
                             }
                         }
                         if automatic {
