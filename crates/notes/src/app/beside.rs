@@ -47,6 +47,9 @@ pub const NARROW: u16 = 105;
 const PLAN_MIN: usize = 34;
 /// The note's least width beside the plan.
 const NOTE_MIN: usize = 24;
+/// A card's least width side by side: its frame, "recommended", and room
+/// for its letter and the start of its words.
+const CARD_LEAST: usize = 24;
 /// The header's name at most.
 const NAME_CAP: usize = 40;
 
@@ -79,6 +82,11 @@ pub struct Beside {
     /// drawn: drawn at another, the plan rewraps, and both move to the rows
     /// of what they were on.
     pub laid: Option<(u16, Room)>,
+    /// What the cursor and the first row shown were on as the plan last
+    /// rewrapped, and the rows that put them on: while the reader hasn't
+    /// moved them since, the next rewrap starts from these, so a drag
+    /// through many widths never drifts off the word it started on.
+    pub held: Option<(Option<Spot>, Option<Spot>, usize, usize)>,
 }
 
 /// A text row of the panel: the piece of text it shows (a line of the
@@ -383,7 +391,7 @@ pub fn lines(
             let n = choice.options.len().max(1);
             // Side by side only where every card gets its least width, the
             // plan's own width narrower than the app's share.
-            let fits = n * 12 + (n - 1) * 2 <= inner;
+            let fits = n * CARD_LEAST + (n - 1) * 2 <= inner;
             let side_by_side = room > Room::Stacked && n > 1 && fits;
             let mocks = room > Room::NoMocks;
             let places: Vec<(usize, usize)> = if side_by_side {
@@ -604,6 +612,7 @@ impl App {
             show_note: false,
             follow: false,
             laid: None,
+            held: None,
         });
         true
     }
@@ -721,6 +730,7 @@ impl App {
             if plan != b.plan {
                 b.plan = plan;
                 b.stop = None;
+                b.held = None;
             }
         }
     }
@@ -764,6 +774,7 @@ impl App {
             if let Some(b) = self.beside.as_mut() {
                 b.plan = now;
                 b.stop = None;
+                b.held = None;
             }
             self.say("notes: the plan changed; look again and choose");
             return;
@@ -783,6 +794,7 @@ impl App {
         if let Some(b) = self.beside.as_mut() {
             b.plan = plan;
             b.stop = None;
+            b.held = None;
         }
         if still_open {
             self.say(format!(
@@ -1002,22 +1014,26 @@ impl App {
         // keys, the view follows the cursor rather than the cursor the
         // view; without them it stays where it was scrolled.
         let moved = b.laid.filter(|was| *was != now).map(|was| {
-            let before = draw(b, was);
-            let to = |row: usize, lit: Option<Stop>| {
-                before
-                    .spot(row + 1, lit)
-                    .and_then(|s| laid.row_of(s))
-                    .map(|r| r.saturating_sub(1))
+            let spots = match b.held {
+                Some((line, scroll, at, top)) if (at, top) == (b.line, b.scroll) => (line, scroll),
+                _ => {
+                    let before = draw(b, was);
+                    (
+                        before.spot(b.line + 1, b.stop),
+                        before.spot(b.scroll + 1, None),
+                    )
+                }
             };
-            (to(b.line, b.stop), to(b.scroll, None))
+            let to = |s: Option<Spot>| s.and_then(|s| laid.row_of(s)).map(|r| r.saturating_sub(1));
+            (spots, to(spots.0), to(spots.1))
         });
         let b = self.beside.as_mut()?;
         b.laid = Some(now);
-        if let Some((line, scroll)) = moved {
+        let rewrapped = moved.map(|(spots, line, scroll)| {
             b.line = line.unwrap_or(b.line);
             b.scroll = scroll.unwrap_or(b.scroll);
-            b.follow |= b.focused;
-        }
+            spots
+        });
         let b = self.beside.as_ref()?;
         let Laid { mut rows, hits, .. } = laid;
         // The header stays; the rest scrolls, never past its end.
@@ -1036,9 +1052,10 @@ impl App {
                 scroll = end.saturating_sub(body).min(first);
             }
         }
-        // The cursor kept in sight as it moves; the wheel scrolling past it
-        // takes it along, as Vim's does.
-        if b.follow {
+        // The cursor kept in sight as it moves, or as the plan with the
+        // keys rewraps; the wheel scrolling past it takes it along, as
+        // Vim's does.
+        if b.follow || (rewrapped.is_some() && b.focused) {
             if line < scroll {
                 scroll = line;
             } else if body > 0 && line >= scroll + body {
@@ -1055,6 +1072,9 @@ impl App {
         b.scroll = scroll;
         b.line = line;
         b.follow = false;
+        if let Some((at, top)) = rewrapped {
+            b.held = Some((at, top, line, scroll));
+        }
         // The card lit follows where the cursor ended up (the wheel, or the
         // keys coming back from the note), so Enter acts on what is lit.
         if focused && b.stop != Some(Stop::Close) {
