@@ -134,30 +134,25 @@ impl Server {
         {
             // The pane in front stays in front, though closing a view in
             // another's place gives that place, and the focus, back.
+            // Set as the tab's own pane in front, never by focus_pane, which
+            // would bring a tab in the background to the front.
             let active = self.tabs.get(&tab).map(|t| t.active);
+            // Closing a view in another pane's place gives it the focus,
+            // which brings its tab to the front: the tab in front stays.
+            let in_front = self
+                .session_of_tab(tab)
+                .map(|s| (s.name.clone(), s.current));
             self.kill_pane(view);
-            if let Some(active) = active.filter(|a| *a != view && self.panes.contains_key(a)) {
-                self.focus_pane(active);
+            if let Some((name, current)) = in_front.filter(|(_, c)| *c != tab)
+                && self.session_of_tab(tab).is_some_and(|s| s.current == tab)
+            {
+                self.select_tab(&name, current);
             }
-        }
-        // And one parked under another tool, which would come back with it:
-        // a shell in its place.
-        let parked: Vec<PaneId> = self
-            .panes
-            .iter()
-            .filter(|(p, s)| {
-                handed_over
-                    && **p != pane
-                    && s.tab == tab
-                    && s.opts.contains_key(crate::views::TICKET_ID)
-                    && s.opts
-                        .get(crate::views::TICKET_VIEW)
-                        .is_some_and(|v| v == "1")
-            })
-            .map(|(p, _)| *p)
-            .collect();
-        for view in parked {
-            let _ = self.replace_program(view, None);
+            if let Some(active) = active.filter(|a| *a != view && self.panes.contains_key(a))
+                && let Some(t) = self.tabs.get_mut(&tab)
+            {
+                t.active = active;
+            }
         }
         self.agents.restarted(pane);
         self.sidebar.panes.remove(&pane);
