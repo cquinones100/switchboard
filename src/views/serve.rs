@@ -278,7 +278,7 @@ impl Server {
         let arg = ticket.as_ref().map(Ticket::arg);
         let command = arg
             .clone()
-            .map(|arg| vec![exe(), "ticket-view".into(), arg]);
+            .map(|arg| vec![exe(), "ticket-view".into(), "--ticket".into(), arg]);
         if self.replace_program(view, command).is_ok()
             && let Some(arg) = arg
             && let Some(slot) = self.panes.get_mut(&view)
@@ -549,7 +549,7 @@ impl Server {
         if let Some(view) = self.open_beside(
             pane,
             TICKET_VIEW,
-            vec!["ticket-view".into(), arg.clone()],
+            vec!["ticket-view".into(), "--ticket".into(), arg.clone()],
             VIEW_PERCENT,
         ) && let Some(slot) = self.panes.get_mut(&view)
         {

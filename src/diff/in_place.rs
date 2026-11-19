@@ -252,7 +252,8 @@ impl Server {
             return false;
         }
         tab.layout.replace(pane, parked);
-        if tab.active == pane {
+        let was_in_front = tab.active == pane;
+        if was_in_front {
             tab.active = parked;
         }
         if tab.last_pane == Some(pane) {
@@ -262,11 +263,13 @@ impl Server {
             slot.pane.kill();
         }
         self.relayout(tab_id);
-        // The focus goes to the pane only in a tab in front: one closed in
-        // the background (a handover there) leaves the tab where it is.
-        if self
-            .session_of_tab(tab_id)
-            .is_some_and(|s| s.current == tab_id)
+        // The focus goes to the pane only when the tool had it, in a tab in
+        // front: one closed in the background (a handover there) leaves the
+        // focus and the tab where they are.
+        if was_in_front
+            && self
+                .session_of_tab(tab_id)
+                .is_some_and(|s| s.current == tab_id)
         {
             self.focus_pane(parked);
         }

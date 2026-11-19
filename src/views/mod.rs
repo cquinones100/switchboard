@@ -520,10 +520,23 @@ pub fn pr_view_main(args: Vec<String>) -> ExitCode {
     pr::main(dir_arg(args.first()))
 }
 
-/// `switchboard ticket-view [dir|ID|project:<id>|owner/repo#n]`: a Linear
+/// `switchboard ticket-view [dir|ID|project:<id>|owner/repo#n]`, or
+/// `--ticket <ID|project:<id>|owner/repo#n>`: a Linear
 /// ticket, a Linear project or a GitHub issue; a directory's ticket as its
 /// branch and repos.json's `tickets` give it.
 pub fn ticket_view_main(args: Vec<String>) -> ExitCode {
+    // `--ticket <arg>` (what the server passes): that ticket, never a
+    // directory of the same name.
+    if let [flag, arg] = args.as_slice()
+        && flag == "--ticket"
+    {
+        return match ticket::Ticket::parse(arg) {
+            Some(ticket::Ticket::Issue { repo, number }) => issue::main(repo, number),
+            Some(ticket::Ticket::Project(id)) => project::main(id),
+            Some(ticket::Ticket::Linear(id)) => ticket::main(Some(id)),
+            None => ticket::main(None),
+        };
+    }
     let arg = args.first().cloned().unwrap_or_default();
     let given = ticket::Ticket::parse(&arg).filter(|_| !std::path::Path::new(&arg).is_dir());
     let found = given.or_else(|| {
