@@ -1695,6 +1695,8 @@ pub enum After {
         ts: Option<String>,
         /// The thread the item was in, as `Reply::shown`.
         shown: Option<String>,
+        /// Why your own token, stored, wasn't used, said in a box.
+        token_refused: Option<String>,
     },
     /// A Slack reply that wasn't sent: its box again, the text kept, so
     /// it can be sent once the connector answers.
@@ -1710,6 +1712,8 @@ pub enum After {
         reply: Box<crate::day::slack_reply::Reply>,
         link: Option<String>,
         opening: Option<String>,
+        /// Why your own token, stored, wasn't used.
+        token_refused: Option<String>,
     },
     /// A draft Slack didn't make: a box says why, then the reply's box
     /// again with the text kept.

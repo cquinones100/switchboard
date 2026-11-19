@@ -5285,7 +5285,10 @@ impl Server {
     }
 
     /// The Slack view's reply box (board 108), `text` typed to start with.
-    /// Send leaves the text, as typed, as Settings' `slack_send_as` says,
+    /// With your own Slack sign-in stored, Send asks first, naming who can
+    /// read it, and a yes sends it as you through that token (else, when
+    /// it can't be used, as below). Without one, Send leaves the text, as
+    /// typed, as Settings' `slack_send_as` says,
     /// for the conversation and thread the item named: as a draft in Slack
     /// (board 109), with nothing asked since nothing is sent, or at once,
     /// which asks first, naming who can read it, a no coming back to the
@@ -5308,9 +5311,10 @@ impl Server {
         failed: Option<String>,
     ) {
         use crate::day::slack_reply::Way;
+        let signed_in = || crate::day::slack_reply::sends_as_you(&crate::day::Dirs::here().state);
         let boxed = super::reply_box::ReplyBox::new(reply.clone(), text)
             .failed(failed)
-            .as_draft(Way::now() == Way::Draft);
+            .as_draft(Way::now() == Way::Draft && !signed_in());
         self.open(
             client,
             Box::new(boxed),
@@ -5319,8 +5323,9 @@ impl Server {
                     return;
                 };
                 let text = p.query;
-                // As the setting says now, were it changed under the box.
-                if Way::now() == Way::Draft {
+                // As the setting and the sign-in say now, were either
+                // changed under the box.
+                if Way::now() == Way::Draft && !signed_in() {
                     server.slack_reply_deliver(client, reply, text, Way::Draft);
                     return;
                 }
@@ -5332,14 +5337,15 @@ impl Server {
                         server.slack_reply_box(client, reply, &text);
                         return;
                     }
-                    server.slack_reply_deliver(client, reply, text, Way::Now);
+                    server.slack_reply_deliver(client, reply, text, Way::now());
                 });
             })),
         );
     }
 
-    /// Leaves `text` for where `reply` says, as `way` says, through
-    /// `slack_reply::deliver`, the one way a message leaves as you. A draft
+    /// Leaves `text` for where `reply` says, through your own token when
+    /// one is stored, else as `way` says, through `slack_reply::deliver`,
+    /// the one way a message leaves as you. A draft
     /// made: its conversation opened in Slack, the thread for a thread's
     /// reply, so the draft is in front of you, and the box left behind
     /// saying where it is. Sent: said, and what came before it read. Not
@@ -5351,14 +5357,25 @@ impl Server {
         text: String,
         way: crate::day::slack_reply::Way,
     ) {
-        use crate::day::slack_reply::{Delivered, Way, deliver};
+        use crate::day::slack_reply::{Delivered, Delivery, Way, deliver, token_unused};
         let tx = self.tx.clone();
+        let state = crate::day::Dirs::here().state;
+        let signed_in = crate::day::slack_reply::sends_as_you(&state);
         let label = match way {
-            Way::Draft => "Making the draft",
-            Way::Now => "Sending it",
+            Way::Draft if !signed_in => "Making the draft",
+            _ => "Sending it",
         };
         self.mission_busy_with(client, label, async move {
-            match deliver(&crate::day::ClaudeNow, &reply, &text, way).await {
+            let token = crate::day::slack_reply::token(&state).await;
+            let tried = token.is_some();
+            let Delivery {
+                result,
+                token_refused,
+            } = deliver(&crate::day::ClaudeNow, token, &reply, &text, way).await;
+            // Through the connector: no token, or one that couldn't be used.
+            let connector = !tried || token_refused.is_some();
+            let unused = token_refused.as_deref().map(token_unused);
+            match result {
                 Ok(Delivered::Drafted(link)) => {
                     let opening = match link.clone() {
                         Some(link) => open_under_busy(tx, client, link).await,
@@ -5368,35 +5385,43 @@ impl Server {
                         reply: Box::new(reply),
                         link,
                         opening,
+                        token_refused: unused,
                     };
                     (None, Some(drafted))
                 }
                 Ok(Delivered::Sent(ts)) => (
-                    Some(format!("Sent to {}.", reply.place)),
+                    // On one footer row, the reason first, so its words
+                    // are what a narrow footer keeps.
+                    Some(match &token_refused {
+                        Some(why) => format!("Sent through Claude's connector: {why}"),
+                        None => format!("Sent to {}.", reply.place),
+                    }),
                     Some(After::SlackReplied {
                         channel: reply.channel.clone(),
                         thread: reply.thread.clone(),
                         ts,
                         shown: reply.shown.clone(),
+                        token_refused: unused.map(|u| format!("Sent to {}. {u}", reply.place)),
                     }),
                 ),
-                Err(none) if way == Way::Draft => (
-                    None,
-                    Some(After::SlackNoDraft {
-                        reply: Box::new(reply),
-                        text,
-                        why: none.why,
-                        draft_there: none.draft_there,
-                    }),
-                ),
-                Err(none) => (
-                    None,
-                    Some(After::SlackReplyAgain {
-                        reply: Box::new(reply),
-                        text,
-                        why: none.why,
-                    }),
-                ),
+                Err(none) => {
+                    let why = match unused {
+                        Some(unused) => format!("{unused}\n{}", none.why),
+                        None => none.why,
+                    };
+                    let reply = Box::new(reply);
+                    let after = if connector && way == Way::Draft {
+                        After::SlackNoDraft {
+                            reply,
+                            text,
+                            why,
+                            draft_there: none.draft_there,
+                        }
+                    } else {
+                        After::SlackReplyAgain { reply, text, why }
+                    };
+                    (None, Some(after))
+                }
             }
         });
     }
@@ -5409,8 +5434,12 @@ impl Server {
         reply: crate::day::slack_reply::Reply,
         link: Option<String>,
         opening: Option<String>,
+        token_refused: Option<String>,
     ) {
         let mut body = reply.drafted();
+        if let Some(unused) = token_refused {
+            body.push_str(&format!("\n{unused}"));
+        }
         if let Some(said) = opening {
             body.push_str(&format!("\n{said}"));
         }
@@ -5469,7 +5498,21 @@ impl Server {
                 thread,
                 ts,
                 shown,
-            } => self.slack_replied(&channel, thread.as_deref(), ts.as_deref(), shown.as_deref()),
+                token_refused,
+            } => {
+                self.slack_replied(&channel, thread.as_deref(), ts.as_deref(), shown.as_deref());
+                // The footer says it all (`Done`'s note, or a box with
+                // mission control closed), which a long reason may not fit,
+                // so with mission control open a box says it whole too, as
+                // `SlackUnshown` does; with the boxes off the footer alone,
+                // since the status bar's line is under mission control.
+                if let Some(said) = token_refused
+                    && self.mission_open(client)
+                    && settings::is_on("message_boxes")
+                {
+                    self.say(Some(client), &said);
+                }
+            }
             After::SlackReplyAgain { reply, text, why } => {
                 self.slack_reply_box_with(client, *reply, &text, Some(why))
             }
@@ -5477,7 +5520,8 @@ impl Server {
                 reply,
                 link,
                 opening,
-            } => self.slack_drafted(client, *reply, link, opening),
+                token_refused,
+            } => self.slack_drafted(client, *reply, link, opening, token_refused),
             After::SlackNoDraft {
                 reply,
                 text,

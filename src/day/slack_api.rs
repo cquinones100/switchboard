@@ -17,6 +17,10 @@
 //! a file's part apart, since a picture needs the `files:read` scope the
 //! rest doesn't.
 //!
+//! A reply from the view is sent through the same token with
+//! `chat.postMessage` (`post`), whatever `slack_token_reads` says, since
+//! that setting is about reads.
+//!
 //! People's names come from `users.info`, kept for the server's life, as
 //! the connector answers with them.
 
@@ -29,7 +33,7 @@ use serde_json::{Value, json};
 
 use super::slack_look::{Found, plain};
 use super::slack_thread::{Said, SlackFile, Thread};
-use super::slack_user::{self, Client, api};
+use super::slack_user::{self, Client, api, api_answer};
 use crate::net::{self, Audit};
 use crate::{settings, util};
 
@@ -672,6 +676,122 @@ pub async fn thread(
         replies,
         read: now,
     })
+}
+
+/// `chat.postMessage`'s errors that say Slack refused the message, so it
+/// wasn't posted (its documented errors but the ones that may follow a
+/// post); any other answer (`internal_error`, which may follow a
+/// post, or a gateway's) may have been.
+const REFUSED: [&str; 41] = [
+    "action_prohibited",
+    "invalid_arguments",
+    "too_many_attachments",
+    "not_allowed_token_type",
+    "channel_not_found",
+    "not_in_channel",
+    "is_archived",
+    "msg_too_long",
+    "no_text",
+    "restricted_action",
+    "restricted_action_read_only_channel",
+    "restricted_action_thread_only_channel",
+    "restricted_action_non_threadable_channel",
+    "cannot_reply_to_message",
+    "ekm_access_denied",
+    "team_access_not_granted",
+    "access_denied",
+    "no_permission",
+    "invalid_blocks",
+    "invalid_blocks_format",
+    "invalid_metadata_format",
+    "invalid_metadata_schema",
+    "metadata_too_large",
+    "slack_connect_file_link_sharing_blocked",
+    "duplicate_channel_not_found",
+    "duplicate_message_not_found",
+    "messages_tab_disabled",
+    "as_user_not_supported",
+    "invalid_arg_name",
+    "invalid_array_arg",
+    "invalid_charset",
+    "invalid_form_data",
+    "invalid_post_type",
+    "missing_post_type",
+    "method_deprecated",
+    "deprecated_endpoint",
+    "two_factor_setup_required",
+    "enterprise_is_restricted",
+    "org_login_required",
+    "user_is_bot",
+    "team_added_to_org",
+];
+
+/// Whether `api`'s words for a call's failure say Slack refused it: a scope
+/// missing, the sign-in refused, or one of `REFUSED`. A 429 isn't among
+/// them, since one from something in front of Slack can follow a post.
+fn refused(why: &str) -> bool {
+    why.starts_with("your Slack sign-in lacks the ")
+        || why.starts_with("Slack refused your sign-in (")
+        || why
+            .strip_prefix("chat.postMessage: ")
+            .is_some_and(|code| REFUSED.contains(&code))
+}
+
+/// Why `post` sent nothing.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Unposted {
+    /// Slack refused it (a scope missing, the token revoked), so it wasn't sent, and can go another way.
+    Refused(String),
+    /// No answer from Slack, so it may have been sent: said, never sent
+    /// again another way.
+    Unknown(String),
+}
+
+/// Posts `text` as you where `reply` says (`chat.postMessage`, its
+/// conversation and, for a thread, its first message's ts), and gives the
+/// ts Slack gave it. Needs the `chat:write` scope.
+pub async fn post(
+    client: &Client,
+    reply: &super::slack_reply::Reply,
+    text: &str,
+) -> Result<Option<String>, Unposted> {
+    if text.trim().is_empty() {
+        return Err(Unposted::Unknown(
+            "Couldn't send it: there is nothing to send.".into(),
+        ));
+    }
+    // Only a user token posts as you; a bot token set by hand in its place
+    // would post as the bot.
+    if !client.token().starts_with("xoxp-") {
+        return Err(Unposted::Refused(format!(
+            "the token isn't a user token, which starts with xoxp-: run {} again",
+            slack_user::SETUP
+        )));
+    }
+    let mut params = json!({ "channel": reply.channel, "text": text });
+    if let Some(thread) = &reply.thread {
+        params["thread_ts"] = json!(thread);
+    }
+    match api_answer(
+        client,
+        false,
+        "chat.postMessage",
+        &params,
+        "slack: reply",
+        true,
+    )
+    .await
+    {
+        Ok(Ok(said)) => Ok(said
+            .get("ts")
+            .and_then(Value::as_str)
+            .filter(|ts| super::slack::is_ts(ts))
+            .map(str::to_string)),
+        Ok(Err(why)) if refused(&why) => Err(Unposted::Refused(why)),
+        Ok(Err(why)) | Err(why) => Err(Unposted::Unknown(format!(
+            "It may not have been sent ({why}): look in Slack before sending it again."
+        ))),
+    }
 }
 
 /// Whether a file's address is one of Slack's over HTTPS (or, in a test,

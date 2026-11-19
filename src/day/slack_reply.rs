@@ -4,7 +4,17 @@
 //! channel; a direct message: the DM), and the reply box takes what you
 //! type. Nothing is written for you: the text goes as typed.
 //!
-//! How it leaves is Settings' `slack_send_as`, for every message
+//! With a Slack sign-in of your own stored (`switchboard setup slack-user`,
+//! `slack_user`), Send asks first, naming who can read it, and a yes sends
+//! it with `chat.postMessage` through that token (`slack_api::post`), as
+//! you, with no "Sent using Claude" line; the relay's app and token never
+//! send one. When the token can't be read or Slack refuses it (a scope
+//! missing, the token revoked), it leaves through the
+//! connector as below, the box saying once why the token wasn't used; a
+//! post that never got Slack's answer may have been sent, so it isn't sent
+//! again another way.
+//!
+//! Without one, how it leaves is Settings' `slack_send_as`, for every message
 //! Switchboard sends as you, through `deliver` alone. As a draft, the
 //! default: Send makes a draft in that conversation with the connector's
 //! `slack_send_message_draft`, which you send from Slack, since a message
@@ -31,6 +41,7 @@ use regex::Regex;
 use serde_json::{Value, json};
 
 use super::Connector;
+use super::slack_user::{self, Client};
 use crate::items::Item;
 
 /// The connector's tool that sends.
@@ -72,6 +83,35 @@ pub enum Delivered {
     /// A draft in Slack, with the link to where it is when the result
     /// gave one.
     Drafted(Option<String>),
+}
+
+/// What `deliver` did, and why your own token wasn't used when it was
+/// stored and the reply left through the connector instead.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Delivery {
+    pub result: Result<Delivered, Undelivered>,
+    pub token_refused: Option<String>,
+}
+
+/// Your own Slack token, when a sign-in is stored (`Some(Err)` saying why
+/// it couldn't be read). Asks the Keychain, so never on the server's task.
+pub async fn token(state: &std::path::Path) -> Option<Result<Client, String>> {
+    sends_as_you(state).then_some(())?;
+    Some(Client::stored().await)
+}
+
+/// Whether a reply is sent through your own token: a sign-in is stored,
+/// and the build can reach Slack itself (else it goes through the
+/// connector, as without one). Reads a small file, so fine on the
+/// server's task.
+pub fn sends_as_you(state: &std::path::Path) -> bool {
+    cfg!(feature = "net") && slack_user::signed_in(state).is_some()
+}
+
+/// What the box says when your own token was stored but the reply went
+/// through the connector instead.
+pub fn token_unused(why: &str) -> String {
+    format!("Your Slack sign-in wasn't used ({why}), so Claude's connector was tried instead.")
 }
 
 /// Why `deliver` delivered nothing, in words for you.
@@ -451,9 +491,47 @@ async fn draft(
     }
 }
 
-/// The one way a message Switchboard sends as you leaves: as a draft in
-/// Slack or sent at once, as `way` (Settings' `slack_send_as`) says.
+/// The one way a message Switchboard sends as you leaves: through your own
+/// token when one is stored (`token`, asked about first), else, or when it
+/// can't be used, as a draft in Slack or sent at once through the
+/// connector, as `way` (Settings' `slack_send_as`) says.
 pub async fn deliver(
+    connector: &impl Connector,
+    token: Option<Result<Client, String>>,
+    reply: &Reply,
+    text: &str,
+    way: Way,
+) -> Delivery {
+    let token_refused = match token {
+        None => None,
+        Some(Err(why)) => Some(why),
+        Some(Ok(client)) => match super::slack_api::post(&client, reply, text).await {
+            Ok(ts) => {
+                return Delivery {
+                    result: Ok(Delivered::Sent(ts)),
+                    token_refused: None,
+                };
+            }
+            Err(super::slack_api::Unposted::Refused(why)) => Some(why),
+            Err(super::slack_api::Unposted::Unknown(why)) => {
+                return Delivery {
+                    result: Err(Undelivered {
+                        why,
+                        draft_there: false,
+                    }),
+                    token_refused: None,
+                };
+            }
+        },
+    };
+    Delivery {
+        result: through_connector(connector, reply, text, way).await,
+        token_refused,
+    }
+}
+
+/// `deliver` through the connector, as `way` says.
+async fn through_connector(
     connector: &impl Connector,
     reply: &Reply,
     text: &str,
@@ -474,6 +552,18 @@ pub async fn deliver(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `deliver` with no token of your own stored.
+    async fn through(
+        connector: &impl Connector,
+        reply: &Reply,
+        text: &str,
+        way: Way,
+    ) -> Result<Delivered, Undelivered> {
+        let delivery = deliver(connector, None, reply, text, way).await;
+        assert_eq!(delivery.token_refused, None);
+        delivery.result
+    }
 
     fn item(kind: &str, thread: Option<&str>, root: bool) -> Item {
         let mut data = json!({
@@ -603,7 +693,7 @@ mod tests {
         let slack = Answering::new(Ok(
             r#"{"channel_link":"https://acme.slack.com/archives/C1","draft_id":"Dr1"}"#,
         ));
-        let made = crate::util::block_on(deliver(&slack, &replies[0], "On it", Way::Draft));
+        let made = crate::util::block_on(through(&slack, &replies[0], "On it", Way::Draft));
         assert_eq!(
             made,
             Ok(Delivered::Drafted(Some(
@@ -634,7 +724,7 @@ mod tests {
         );
         // Sent at once goes through the send tool, as before.
         let slack = Answering::new(Ok("ts 1700000300.000400"));
-        let sent = crate::util::block_on(deliver(&slack, &dm, "hi", Way::Now));
+        let sent = crate::util::block_on(through(&slack, &dm, "hi", Way::Now));
         assert_eq!(sent, Ok(Delivered::Sent(Some("1700000300.000400".into()))));
         assert_eq!(slack.1.lock().unwrap()[0].0, TOOL);
     }
@@ -673,7 +763,7 @@ mod tests {
     fn a_draft_slack_refused_says_why_in_plain_words() {
         let r = replies_of(&item("mention", None, false)).remove(0);
         let why = |said: &str| {
-            crate::util::block_on(deliver(&Answering::new(Err(said)), &r, "hi", Way::Draft))
+            crate::util::block_on(through(&Answering::new(Err(said)), &r, "hi", Way::Draft))
                 .unwrap_err()
         };
         let there = why("Error: attached_draft_exists");
@@ -700,14 +790,14 @@ mod tests {
         // A result that names the error, with no draft made.
         let said = Answering::new(Ok(r#"{"ok":false,"error":"attached_draft_exists"}"#));
         assert!(
-            crate::util::block_on(deliver(&said, &r, "hi", Way::Draft))
+            crate::util::block_on(through(&said, &r, "hi", Way::Draft))
                 .unwrap_err()
                 .draft_there
         );
         // A refusal it has no words for, or a result that says nothing of a
         // draft, is no draft either, so the text is kept.
         let other = Answering::new(Ok(r#"{"ok":false,"error":"missing_scope"}"#));
-        let none = crate::util::block_on(deliver(&other, &r, "hi", Way::Draft)).unwrap_err();
+        let none = crate::util::block_on(through(&other, &r, "hi", Way::Draft)).unwrap_err();
         assert!(none.why.contains("missing_scope"), "{}", none.why);
         assert!(none.why.starts_with("Slack didn't say the draft was made"));
         // A refusal that carries a draft's field or the conversation's link
@@ -726,7 +816,7 @@ mod tests {
         ] {
             let slack = Answering::new(Ok(said));
             assert!(
-                crate::util::block_on(deliver(&slack, &r, "hi", Way::Draft)).is_err(),
+                crate::util::block_on(through(&slack, &r, "hi", Way::Draft)).is_err(),
                 "{said}"
             );
         }
@@ -738,7 +828,7 @@ mod tests {
         ] {
             let slack = Answering::new(Ok(said));
             assert_eq!(
-                crate::util::block_on(deliver(&slack, &r, "hi", Way::Draft)),
+                crate::util::block_on(through(&slack, &r, "hi", Way::Draft)),
                 Ok(Delivered::Drafted(None)),
                 "{said}"
             );
@@ -777,5 +867,186 @@ mod tests {
             unsure.contains("look in Slack before sending it again"),
             "{unsure}"
         );
+    }
+
+    #[cfg(feature = "net")]
+    #[test]
+    fn with_your_token_a_reply_is_posted_as_you_and_a_refusal_goes_through_the_connector() {
+        use crate::fake_http::{Fake, Reply as Answer, Service};
+        let posted = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+        let refusal = std::sync::Arc::new(std::sync::Mutex::new(None::<Value>));
+        let fake = {
+            let (posted, refusal) = (posted.clone(), refusal.clone());
+            Fake::start(
+                Service::Slack {
+                    token: "xoxp-test".into(),
+                },
+                move |request| {
+                    if request.path() == "/api/elsewhere" {
+                        posted.lock().unwrap().push(json!("followed"));
+                        return Some(Answer::json(200, json!({ "ok": true })));
+                    }
+                    if request.path() != "/api/chat.postMessage" {
+                        return None;
+                    }
+                    if request.text().contains("redirect") {
+                        let mut moved = Answer::json(307, json!({}));
+                        moved
+                            .headers
+                            .push(("Location".into(), "/api/elsewhere".into()));
+                        return Some(moved);
+                    }
+                    if request.text().contains("gateway") {
+                        return Some(Answer::bytes(502, "text/html", "<html>Bad gateway</html>"));
+                    }
+                    posted.lock().unwrap().push(request.json());
+                    let body = refusal.lock().unwrap().clone().unwrap_or_else(
+                        || json!({ "ok": true, "channel": "C1", "ts": "1700000500.000600" }),
+                    );
+                    Some(Answer::json(200, body))
+                },
+            )
+        };
+        let client = || {
+            Some(Ok(Client::new(
+                format!("{}/api/", fake.url),
+                "xoxp-test".into(),
+            )))
+        };
+        let replies = replies_of(&item("mention", Some("1700000000.000100"), true));
+        let draft = r#"{"channel_link":"https://acme.slack.com/archives/C1","draft_id":"Dr1"}"#;
+
+        // Posted to the thread as typed, the connector not asked, whatever
+        // the setting says.
+        let slack = Answering::new(Ok(draft));
+        let sent =
+            crate::util::block_on(deliver(&slack, client(), &replies[0], "On it", Way::Draft));
+        assert_eq!(
+            sent,
+            Delivery {
+                result: Ok(Delivered::Sent(Some("1700000500.000600".into()))),
+                token_refused: None,
+            }
+        );
+        assert!(
+            slack.1.lock().unwrap().is_empty(),
+            "the connector isn't asked"
+        );
+        assert_eq!(
+            posted.lock().unwrap().clone(),
+            [json!({ "channel": "C1", "text": "On it", "thread_ts": "1700000000.000100" })]
+        );
+
+        // Slack refusing the token: the setting's draft through the
+        // connector, saying why.
+        for (refused, says) in [
+            (
+                json!({ "ok": false, "error": "missing_scope", "needed": "chat:write" }),
+                "lacks the chat:write scope",
+            ),
+            (
+                json!({ "ok": false, "error": "not_allowed_token_type" }),
+                "chat.postMessage: not_allowed_token_type",
+            ),
+        ] {
+            *refusal.lock().unwrap() = Some(refused);
+            let slack = Answering::new(Ok(draft));
+            let fell =
+                crate::util::block_on(deliver(&slack, client(), &replies[1], "On it", Way::Draft));
+            assert!(matches!(fell.result, Ok(Delivered::Drafted(_))), "{fell:?}");
+            let why = fell.token_refused.unwrap();
+            assert!(why.contains(says), "{why}");
+            assert!(token_unused(&why).starts_with("Your Slack sign-in wasn't used ("));
+            let asked = slack.1.lock().unwrap().clone();
+            assert_eq!(asked.len(), 1);
+            assert_eq!(
+                (asked[0].0.as_str(), &asked[0].1),
+                (
+                    DRAFT_TOOL,
+                    &json!({ "channel_id": "C1", "message": "On it" })
+                )
+            );
+        }
+
+        // A token that couldn't be read: the same, with nothing posted.
+        let before = posted.lock().unwrap().len();
+        let slack = Answering::new(Ok(
+            "Message sent: https://x.slack.com/archives/C1/p1700000300000400",
+        ));
+        let fell = crate::util::block_on(deliver(
+            &slack,
+            Some(Err("your Slack sign-in isn't stored any more".into())),
+            &replies[1],
+            "On it",
+            Way::Now,
+        ));
+        assert_eq!(
+            fell.result,
+            Ok(Delivered::Sent(Some("1700000300.000400".into())))
+        );
+        assert!(fell.token_refused.is_some());
+        assert_eq!(posted.lock().unwrap().len(), before);
+        assert_eq!(slack.1.lock().unwrap()[0].0, TOOL);
+
+        // An error after which Slack may have posted it: nothing else tried.
+        *refusal.lock().unwrap() = Some(json!({ "ok": false }));
+        let slack = Answering::new(Ok(draft));
+        let unsure =
+            crate::util::block_on(deliver(&slack, client(), &replies[1], "On it", Way::Now));
+        assert_eq!(unsure.token_refused, None);
+        assert!(unsure.result.unwrap_err().why.contains("look in Slack"));
+        assert!(slack.1.lock().unwrap().is_empty());
+        let before = posted.lock().unwrap().len();
+
+        // A bot token in the user token's place: never posted with.
+        let bot = Some(Ok(Client::new(
+            format!("{}/api/", fake.url),
+            "xoxb-bot".into(),
+        )));
+        let slack = Answering::new(Ok(draft));
+        let fell = crate::util::block_on(deliver(&slack, bot, &replies[1], "On it", Way::Draft));
+        assert!(fell.token_refused.unwrap().contains("isn't a user token"));
+        assert!(matches!(fell.result, Ok(Delivered::Drafted(_))));
+        assert_eq!(posted.lock().unwrap().len(), before);
+
+        // An answer that isn't Slack's (a gateway's page): it may have gone,
+        // so nothing else is tried.
+        let slack = Answering::new(Ok(draft));
+        let unsure =
+            crate::util::block_on(deliver(&slack, client(), &replies[1], "gateway", Way::Now));
+        assert_eq!(unsure.token_refused, None);
+        assert!(unsure.result.unwrap_err().why.contains("look in Slack"));
+        assert!(slack.1.lock().unwrap().is_empty());
+
+        // A redirect: not followed, and nothing else tried.
+        let before = posted.lock().unwrap().len();
+        let slack = Answering::new(Ok(draft));
+        let moved =
+            crate::util::block_on(deliver(&slack, client(), &replies[1], "redirect", Way::Now));
+        assert!(moved.result.unwrap_err().why.contains("look in Slack"));
+        assert_eq!(
+            posted.lock().unwrap().len(),
+            before,
+            "the redirect isn't followed"
+        );
+        assert!(slack.1.lock().unwrap().is_empty());
+
+        // No answer from Slack: it may have gone, so nothing else is tried.
+        let gone = || {
+            Some(Ok(Client::new(
+                "http://127.0.0.1:9/api/".into(),
+                "xoxp-test".into(),
+            )))
+        };
+        let slack = Answering::new(Ok(draft));
+        let unsure =
+            crate::util::block_on(deliver(&slack, gone(), &replies[1], "On it", Way::Draft));
+        assert_eq!(unsure.token_refused, None);
+        let why = unsure.result.unwrap_err().why;
+        assert!(
+            why.contains("look in Slack before sending it again"),
+            "{why}"
+        );
+        assert!(slack.1.lock().unwrap().is_empty());
     }
 }

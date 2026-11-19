@@ -164,6 +164,38 @@ pub async fn post_json(
     request_json("POST", url, headers, Some(body), audit).await
 }
 
+/// `post_json` that follows no redirect, for a body that must reach the
+/// address named and no other (a message sent as you): a redirect is the
+/// answer, its status for the caller to read. A client of its own each
+/// time, as `get_file_following` builds one, since such a post is rare.
+#[cfg(feature = "net")]
+pub async fn post_json_here(
+    url: &str,
+    headers: &[(&str, &str)],
+    body: &Value,
+    audit: Audit<'_>,
+) -> Result<Response> {
+    let client = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| anyhow::anyhow!("couldn't set up HTTPS: {e}"))?;
+    request_json_with(client, "POST", url, headers, Some(body), audit).await
+}
+
+/// Without the `net` feature: the same function, which never reaches out.
+#[cfg(not(feature = "net"))]
+pub async fn post_json_here(
+    url: &str,
+    headers: &[(&str, &str)],
+    body: &Value,
+    audit: Audit<'_>,
+) -> Result<Response> {
+    request_json("POST", url, headers, Some(body), audit).await
+}
+
 /// A request with any method, with `body` sent as JSON when there is one.
 /// Counted in the request audit as it is sent. Fails only when no answer
 /// comes (the network, a timeout, a method that isn't one); an answer with an
@@ -171,6 +203,19 @@ pub async fn post_json(
 /// what went wrong in its own way.
 #[cfg(feature = "net")]
 pub async fn request_json(
+    method: &str,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: Option<&Value>,
+    audit: Audit<'_>,
+) -> Result<Response> {
+    request_json_with(client()?, method, url, headers, body, audit).await
+}
+
+/// `request_json` with `client`.
+#[cfg(feature = "net")]
+async fn request_json_with(
+    client: reqwest::Client,
     method: &str,
     url: &str,
     headers: &[(&str, &str)],
@@ -185,7 +230,7 @@ pub async fn request_json(
                 format!("{method} isn't an HTTP method"),
             )
         })?;
-    let mut request = client()?.request(method, url);
+    let mut request = client.request(method, url);
     // JSON is asked for unless the caller names a kind of its own (GitHub's
     // `application/vnd.github+json`); headers add rather than replace, so
     // both would be sent.

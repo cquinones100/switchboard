@@ -45,8 +45,8 @@ pub const SETUP: &str = "switchboard setup slack-user";
 /// The user scopes the token needs: reading and completing reminders,
 /// reading how far a conversation is read and marking it, and the Slack
 /// view's reads (`slack_api`): its messages, threads, people, search and
-/// pictures.
-pub const SCOPES: [&str; 17] = [
+/// pictures, and sending its replies as you (`chat:write`).
+pub const SCOPES: [&str; 18] = [
     "reminders:read",
     "reminders:write",
     "channels:read",
@@ -64,6 +64,7 @@ pub const SCOPES: [&str; 17] = [
     "search:read",
     "users:read",
     "files:read",
+    "chat:write",
 ];
 /// How often the reminders are read while you're at the computer.
 /// How a read Slack refused for its rate limit starts, Slack's
@@ -193,6 +194,23 @@ pub(super) async fn api(
     params: &Value,
     source: &str,
 ) -> Result<Value, String> {
+    api_answer(client, get, method, params, source, false).await?
+}
+
+/// `api`, telling a call that never got Slack's answer (the outer error:
+/// out of reach, or an answer that wasn't Slack's JSON), after which what
+/// it asked may or may not have been done, from Slack's refusal (the
+/// inner one), after which it wasn't. `here` posts following no redirect
+/// (`net::post_json_here`), so the body reaches Slack's address alone, a
+/// redirect being an answer that isn't Slack's.
+pub(super) async fn api_answer(
+    client: &Client,
+    get: bool,
+    method: &str,
+    params: &Value,
+    source: &str,
+    here: bool,
+) -> Result<Result<Value, String>, String> {
     let base = &client.base;
     let bearer = format!("Bearer {}", client.token);
     let headers = [("Authorization", bearer.as_str())];
@@ -209,25 +227,32 @@ pub(super) async fn api(
             format!("{base}{method}?{query}")
         };
         net::get_json(&url, &headers, audit).await
+    } else if here {
+        net::post_json_here(&format!("{base}{method}"), &headers, params, audit).await
     } else {
         net::post_json(&format!("{base}{method}"), &headers, params, audit).await
     }
     .map_err(|e| e.to_string())?;
     if response.status == 429 {
-        return Err(match response.header("Retry-After") {
+        return Ok(Err(match response.header("Retry-After") {
             Some(wait) => format!("{RATE_LIMIT}: Slack asked to wait {} seconds", wait.trim()),
             None => RATE_LIMIT.to_string(),
-        });
+        }));
     }
-    if response.body.get("ok") == Some(&Value::Bool(true)) {
-        return Ok(response.body);
+    match response.body.get("ok") {
+        // Slack answers 200 whether it did what was asked or refused it.
+        Some(Value::Bool(true)) if response.status == 200 => return Ok(Ok(response.body)),
+        Some(Value::Bool(false)) if response.status == 200 => {}
+        // Not Slack's answer (a gateway's page or error, an empty body):
+        // whatever was asked may have been done.
+        _ => return Err(format!("{method}: Slack answered {}", response.status)),
     }
     let error = response
         .body
         .get("error")
         .and_then(Value::as_str)
         .unwrap_or("");
-    Err(match error {
+    Ok(Err(match error {
         "missing_scope" => {
             let needed = response
                 .body
@@ -241,7 +266,7 @@ pub(super) async fn api(
         }
         "" => format!("{method}: Slack answered {}", response.status),
         other => format!("{method}: {other}"),
-    })
+    }))
 }
 
 /// Who `token` is for, which also says whether Slack takes it.

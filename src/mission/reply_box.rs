@@ -8,7 +8,8 @@
 //! sent from here alone:
 //! Send closes it with what was typed (`Outcome::Picked`, its query the
 //! text, as typed), and the server makes a draft of it in Slack (board
-//! 109) or, with Settings' `slack_send_as` at once, asks before sending,
+//! 109) or, with your own Slack sign-in stored or Settings' `slack_send_as`
+//! at once, asks before sending,
 //! coming back here with the text kept on a no, and on a draft or a send
 //! that failed, saying why in the box for a send. Its last row says which
 //! of the two Send does. New with UX 2.0, with no
