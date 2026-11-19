@@ -91,8 +91,14 @@ pub const YOURS: &str = "@autopilot_yours";
 pub const REFUSED: &str = "@autopilot_refused";
 /// The GitHub issue the tab works, `<owner>/<repo>#<number>`, which wtn
 /// sets as it starts one (src/cmd/worktree_from_issue.rs): commented on and
-/// closed once the tab lands, and commented on when it is a duplicate.
+/// closed once the tab lands, and commented on when it is a duplicate; its
+/// claim on GitHub released once it lands or closes before landing.
 pub const ISSUE: &str = "@autopilot_issue";
+/// Set by wtn once it has claimed its issue on GitHub: a start that fails
+/// after it failed here, not on GitHub's say, so it counts toward
+/// `pilot::FAILS_SKIP` as a note item's does rather than claiming and
+/// releasing again on every retry.
+pub const CLAIMED: &str = "@autopilot_claimed";
 /// How what it says while GitHub issues can't be read starts
 /// (`pilot::unread_said`), a good read taking it back.
 const ISSUES_UNREAD: &str = "Can't read GitHub issues";
@@ -2520,7 +2526,13 @@ impl Server {
         }
         if let Some((issue, hash)) = issue.filter(|_| fresh) {
             let short: String = hash.chars().take(7).collect();
-            let comment = super::issues::landed_comment(&short);
+            // The landing's comment names the claim it releases, so the
+            // release itself says nothing more.
+            let id = super::issues::own_claim_id()
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            let comment = super::issues::landed_comment(&short, &id);
             let question = format!("Comment on {issue} that it landed in {short}, and close it?");
             self.autopilot_write_back(
                 &issue,
@@ -2587,6 +2599,18 @@ impl Server {
                     },
                 )
                 .await;
+                // Closed as landed, the claim's label comes off; the
+                // landing's comment named it. Left open, the claim holds.
+                let done = match done {
+                    Ok(true) if close => match super::issues::own_claim_id() {
+                        Ok(Some(id)) => super::issues::release(&repo, number, &id, None)
+                            .await
+                            .map(|_| ()),
+                        Ok(None) => Ok(()),
+                        Err(e) => Err(e),
+                    },
+                    done => done.map(|_| ()),
+                };
                 let said = done.err().map(|e| format!("{WRITE_FAILED}{issue}: {e}"));
                 let _ = tokio::task::spawn_blocking(move || {
                     let state = paths::state_dir();
@@ -2626,6 +2650,82 @@ impl Server {
                 }
             },
         );
+    }
+
+    /// This computer's claim on the GitHub issue `issue` names released, off
+    /// the task, `why` said in a comment. The tab's own claim, so it is
+    /// released whatever autopilot's sources are now, while Settings allow
+    /// autopilot's issue writes (autopilot, its GitHub issues and GitHub). A
+    /// failure is said in the notifications.
+    fn autopilot_release(&mut self, issue: &str, why: &'static str) {
+        let Some((repo, number)) = super::issues::parse_reference(issue) else {
+            return;
+        };
+        // The settings that allow issue writes at all, not the sources chosen.
+        let allowed = ["autopilot", "autopilot_github_issues", "github"]
+            .iter()
+            .all(|k| settings::is_on(k));
+        if !allowed || tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        let named = issue.to_string();
+        tokio::spawn(async move {
+            let released = async {
+                let Some(id) = super::issues::own_claim_id()? else {
+                    return anyhow::Ok(false);
+                };
+                super::issues::release(&repo, number, &id, Some(why)).await
+            }
+            .await;
+            let _ = tokio::task::spawn_blocking(move || {
+                let state = paths::state_dir();
+                match released {
+                    Ok(true) => super::issues::forget(&state),
+                    Ok(false) => {}
+                    Err(e) => {
+                        let said = format!("{WRITE_FAILED}{named}: {e}");
+                        eprintln!("autopilot: {said}");
+                        let _ = Mode::update(&state, |m| {
+                            m.said = if m.said.is_empty() {
+                                said
+                            } else {
+                                format!("{}. {said}", m.said)
+                            };
+                        });
+                    }
+                }
+            })
+            .await;
+        });
+    }
+
+    /// A tab about to close: one of autopilot's on a GitHub issue releases
+    /// its claim there, saying so, unless autopilot's own landing pushed it,
+    /// which keeps the claim until autopilot closes the issue, so the landed
+    /// work isn't taken again elsewhere while the issue stays open.
+    pub fn autopilot_tab_closing(&mut self, tab: TabId) {
+        let Some(t) = self.tabs.get(&tab) else {
+            return;
+        };
+        let set = |k: &str| t.opts.get(k).is_some_and(|v| !v.trim().is_empty());
+        if !set(OPENED) {
+            return;
+        }
+        let Some(issue) = t.opts.get(ISSUE).filter(|v| !v.trim().is_empty()).cloned() else {
+            return;
+        };
+        // Pushed by autopilot's landing: kept until autopilot closes the
+        // issue. Back in its main clone without such a push (a PR's merge),
+        // there is nothing autopilot writes back, so it lets go.
+        if set(PUSHED) || set(AUTOLAND) {
+            return;
+        }
+        let why = if set(LEFT) {
+            "its tab closed"
+        } else {
+            "its tab closed before it landed"
+        };
+        self.autopilot_release(&issue, why);
     }
 
     /// A landed tab about to close unseen, kept in its file for the
@@ -2785,7 +2885,10 @@ impl Server {
                     .filter(|n| !n.is_empty())
                     .cloned()
                     .unwrap_or_else(|| self.autopilot.mode.note_id.clone());
-                let issue = t.opts.get(ISSUE).is_some_and(|v| !v.is_empty());
+                // An issue's failure counts toward its skip once wtn has
+                // claimed it, a failure of this computer's own after that.
+                let issue = t.opts.get(ISSUE).is_some_and(|v| !v.is_empty())
+                    && t.opts.get(CLAIMED).is_none_or(|v| v.is_empty());
                 Some((*id, item.clone(), why.clone(), note, issue))
             })
             .collect();

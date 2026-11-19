@@ -317,10 +317,21 @@ impl Job {
         let issues = super::issues::issues(&self.repo, &self.label, state, util::now_ms())?;
         let claims = std::fs::read_to_string(crate::cmd::worktree_from_note::claims_in(state))
             .unwrap_or_default();
+        // An ID that can't be read claims nothing as this computer's, so
+        // every claim on GitHub is another's.
+        let own = super::issues::own_claim_id()
+            .ok()
+            .flatten()
+            .unwrap_or_default();
         let (mut ready, mut held) = (Vec::new(), Vec::new());
-        for issue in
-            super::issues::unclaimed(&self.repo, issues, &claims, &self.skip, util::now_secs())
-        {
+        for issue in super::issues::unclaimed(
+            &self.repo,
+            issues,
+            &claims,
+            &self.skip,
+            &own,
+            util::now_secs(),
+        ) {
             let item = super::issues::item_of(&issue);
             if let Some(what) = crate::cmd::worktree_from_note::review_hold(&issue.body) {
                 held.push(Item {

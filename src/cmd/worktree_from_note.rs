@@ -976,7 +976,7 @@ pub fn notes_newest_first(notes: &Path) -> Vec<String> {
 /// its age, since the landing rebases onto the newest one anyway; with none
 /// fetched before it stops, since the main clone's unpushed commits would
 /// otherwise land with the item.
-fn start_point(root: &Path, target: Option<&str>) -> Result<String, String> {
+pub(crate) fn start_point(root: &Path, target: Option<&str>) -> Result<String, String> {
     if let Some(target) = target {
         return target_start(root, target);
     }
@@ -1456,6 +1456,17 @@ pub(crate) fn make_worktree(
     target: Option<&str>,
 ) -> Result<String, String> {
     let start = start_point(root, target)?;
+    make_worktree_at(path, branch, work, start)
+}
+
+/// `make_worktree` from a start point already resolved (`start_point`), so
+/// a start can check its target before writing anything elsewhere.
+pub(crate) fn make_worktree_at(
+    path: &Path,
+    branch: &str,
+    work: &'static str,
+    start: String,
+) -> Result<String, String> {
     let purpose = Purpose {
         work,
         command: "wtn",

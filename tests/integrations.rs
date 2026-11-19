@@ -1010,7 +1010,7 @@ fn autopilot_takes_issues_opened_by_you_or_labeled_by_a_writer_and_writes_back()
         "/repos/acme/widgets/collaborators/outsider/permission"
     );
 
-    util::block_on(issues::write_back(
+    let closed = util::block_on(issues::write_back(
         &repo,
         2,
         "Landed in abc1234",
@@ -1019,6 +1019,7 @@ fn autopilot_takes_issues_opened_by_you_or_labeled_by_a_writer_and_writes_back()
         || true,
     ))
     .unwrap();
+    assert!(closed, "closed as it landed");
     let seen = fake.seen();
     assert_eq!(seen[4].path, "/repos/acme/widgets/compare/main...abc1234");
     assert_eq!(seen[5].path, "/repos/acme/widgets/commits/abc1234");
@@ -1038,4 +1039,194 @@ fn autopilot_takes_issues_opened_by_you_or_labeled_by_a_writer_and_writes_back()
     assert_eq!(kind(&err), ErrorKind::Off);
     assert_eq!(fake.seen().len(), 9);
     env.settings(json!({}));
+}
+
+/// An issue's claim as GitHub's GraphQL answers it: labeled `autopilot:
+/// working` when `claims` has any, its comments those claims, each
+/// `(id, branch, when)`, written by you.
+fn claimed_answer(claims: &[(&str, &str, &str)]) -> Reply {
+    let labels = if claims.is_empty() {
+        json!([{ "name": "autopilot" }])
+    } else {
+        json!([{ "name": "autopilot" }, { "name": issues::WORKING }])
+    };
+    let comments: Vec<Value> = claims
+        .iter()
+        .map(|(id, branch, at)| {
+            json!({ "body": issues::claim_comment(id, branch), "createdAt": at, "author": { "login": "me" } })
+        })
+        .collect();
+    answer(
+        200,
+        json!({ "data": {
+            "viewer": { "login": "me" },
+            "repository": { "issue": {
+                "labels": { "nodes": labels },
+                "comments": { "nodes": comments }
+            } }
+        } }),
+    )
+}
+
+#[test]
+fn autopilot_claims_an_issue_for_this_computer_and_releases_it() {
+    let _env = Env::new("claims");
+    set("GH_TOKEN", "tok-9");
+    let repo = github::Repo {
+        owner: "acme".into(),
+        name: "widgets".into(),
+    };
+    let now: i64 = "2026-11-18T20:00:00Z"
+        .parse::<jiff::Timestamp>()
+        .unwrap()
+        .as_second();
+    let start = |answers: Vec<Reply>| {
+        let fake = Fake::github("tok-9", answers);
+        set("SWITCHBOARD_GITHUB_API", &fake.url);
+        set(
+            "SWITCHBOARD_GITHUB_GRAPHQL",
+            format!("{}/graphql", fake.url),
+        );
+        fake
+    };
+    let id = issues::claim_id().unwrap();
+    assert_eq!(id.len(), 6);
+    assert_eq!(issues::claim_id().unwrap(), id, "made once and kept");
+    let branch = "issue/12-slug";
+
+    // Unclaimed: labeled and commented with this computer's ID, then asked
+    // again.
+    let fake = start(vec![
+        claimed_answer(&[]),
+        answer(200, json!({ "name": issues::WORKING })),
+        answer(200, json!([{ "name": issues::WORKING }])),
+        answer(201, json!({ "id": 1 })),
+        claimed_answer(&[(&id, branch, "2026-11-18T19:59:59Z")]),
+    ]);
+    util::block_on(issues::claim(&repo, 12, &id, branch, now)).unwrap();
+    let seen = fake.seen();
+    assert_eq!(seen.len(), 5);
+    assert_eq!(
+        seen[1].path,
+        "/repos/acme/widgets/labels/autopilot%3A%20working"
+    );
+    assert_eq!(seen[2].method, "POST");
+    assert_eq!(seen[2].path, "/repos/acme/widgets/issues/12/labels");
+    assert_eq!(seen[2].body["labels"], json!(["autopilot: working"]));
+    assert_eq!(seen[3].path, "/repos/acme/widgets/issues/12/comments");
+    // Exactly the ID and the branch: nothing about the computer.
+    let comment = seen[3].body["body"].as_str().unwrap().to_string();
+    assert_eq!(
+        comment,
+        format!("Autopilot is working on this (claim {id}, branch {branch}).")
+    );
+
+    // This computer's own claim is made again, so its six hours start with
+    // the new tab.
+    let fake = start(vec![
+        claimed_answer(&[(&id, branch, "2026-11-18T14:01:00Z")]),
+        answer(200, json!({ "name": issues::WORKING })),
+        answer(200, json!([{ "name": issues::WORKING }])),
+        answer(201, json!({ "id": 5 })),
+        claimed_answer(&[
+            (&id, branch, "2026-11-18T14:01:00Z"),
+            (&id, branch, "2026-11-18T19:59:59Z"),
+        ]),
+    ]);
+    util::block_on(issues::claim(&repo, 12, &id, branch, now)).unwrap();
+    let seen = fake.seen();
+    assert_eq!(seen.len(), 5);
+    assert_eq!(seen[3].body["body"], issues::claim_comment(&id, branch));
+
+    // Another computer's claim holds: refused, nothing written.
+    let other = if id == "aaaaaa" { "bbbbbb" } else { "aaaaaa" };
+    let fake = start(vec![claimed_answer(&[(
+        other,
+        "issue/12-x",
+        "2026-11-18T19:00:00Z",
+    )])]);
+    let err = util::block_on(issues::claim(&repo, 12, &id, branch, now)).unwrap_err();
+    assert!(
+        err.to_string().contains(&format!(
+            "claimed by another computer's autopilot (claim {other})"
+        )),
+        "{err}"
+    );
+    assert_eq!(fake.seen().len(), 1);
+
+    // Another's 6 hours old with nothing pushed on its branch: released in a
+    // comment, then claimed.
+    let fake = start(vec![
+        claimed_answer(&[(other, "issue/12-x", "2026-11-18T13:59:00Z")]),
+        answer(404, json!({ "message": "Branch not found" })),
+        answer(201, json!({ "id": 2 })),
+        answer(200, json!({ "name": issues::WORKING })),
+        answer(200, json!([{ "name": issues::WORKING }])),
+        answer(201, json!({ "id": 3 })),
+        claimed_answer(&[
+            (other, "issue/12-x", "2026-11-18T13:59:00Z"),
+            (&id, branch, "2026-11-18T19:59:59Z"),
+        ]),
+    ]);
+    util::block_on(issues::claim(&repo, 12, &id, branch, now)).unwrap();
+    let seen = fake.seen();
+    assert_eq!(seen[1].path, "/repos/acme/widgets/branches/issue/12-x");
+    assert_eq!(
+        seen[2].body["body"],
+        format!(
+            "Autopilot stopped working on this (claim {other}): older than 6 hours with nothing pushed on issue/12-x."
+        )
+    );
+    assert_eq!(seen[4].path, "/repos/acme/widgets/issues/12/labels");
+    assert_eq!(seen.len(), 7);
+
+    // A repository without the label yet has it made first.
+    let fake = start(vec![
+        claimed_answer(&[]),
+        answer(404, json!({ "message": "Not Found" })),
+        answer(201, json!({ "name": issues::WORKING })),
+        answer(200, json!([{ "name": issues::WORKING }])),
+        answer(201, json!({ "id": 6 })),
+        claimed_answer(&[(&id, branch, "2026-11-18T19:59:59Z")]),
+    ]);
+    util::block_on(issues::claim(&repo, 12, &id, branch, now)).unwrap();
+    let seen = fake.seen();
+    assert_eq!(seen[2].method, "POST");
+    assert_eq!(seen[2].path, "/repos/acme/widgets/labels");
+    assert_eq!(seen[2].body["name"], "autopilot: working");
+    assert_eq!(seen.len(), 6);
+
+    // Released: the label taken off and said, with the same ID.
+    let fake = start(vec![
+        claimed_answer(&[(&id, branch, "2026-11-18T19:00:00Z")]),
+        answer(200, json!([])),
+        answer(201, json!({ "id": 4 })),
+    ]);
+    let released = util::block_on(issues::release(
+        &repo,
+        12,
+        &id,
+        Some("its tab closed before it landed"),
+    ))
+    .unwrap();
+    assert!(released);
+    let seen = fake.seen();
+    assert_eq!(seen[1].method, "DELETE");
+    assert_eq!(
+        seen[1].path,
+        "/repos/acme/widgets/issues/12/labels/autopilot%3A%20working"
+    );
+    assert_eq!(
+        seen[2].body["body"],
+        format!("Autopilot stopped working on this (claim {id}): its tab closed before it landed.")
+    );
+
+    // Another computer's claim is never released from here.
+    let fake = start(vec![claimed_answer(&[(
+        other,
+        "issue/12-x",
+        "2026-11-18T19:00:00Z",
+    )])]);
+    assert!(!util::block_on(issues::release(&repo, 12, &id, None)).unwrap());
+    assert_eq!(fake.seen().len(), 1);
 }

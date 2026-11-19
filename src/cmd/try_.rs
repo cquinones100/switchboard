@@ -911,6 +911,9 @@ impl Try {
             }
         }
         let _ = fs::remove_file(staged.join("files.json"));
+        // A try is another workspace, so it claims GitHub issues with an ID
+        // of its own rather than this computer's.
+        let _ = fs::remove_file(staged.join(crate::autopilot::issues::CLAIM_FILE));
         let file = staged.join("settings.json");
         let mut settings = match fs::read_to_string(&file) {
             Ok(text) if !text.trim().is_empty() => match serde_json::from_str(&text) {

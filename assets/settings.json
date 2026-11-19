@@ -610,7 +610,7 @@
     "key": "autopilot_github_issues",
     "category": "Mission control: Autopilot",
     "label": "Autopilot can take GitHub issues",
-    "description": "Lets autopilot's settings box offer GitHub issues as a source beside the note: the repository's open issues assigned to you and carrying its label, each opened by you or labeled by someone with write access, read in the background and worked after the note's items, with a comment on the issue when its tab lands or finds it a duplicate, and the issue closed on landing, each asked first unless the tab landed without asking. Nothing is read until you choose the source. Off, the box offers the note alone and autopilot reads no issues",
+    "description": "Lets autopilot's settings box offer GitHub issues as a source beside the note: the repository's open issues assigned to you and carrying its label, each opened by you or labeled by someone with write access, read in the background and worked after the note's items, with a comment on the issue when its tab lands or finds it a duplicate, and the issue closed on landing, each asked first unless the tab landed without asking. As each tab starts, the issue is claimed for this computer without asking (the autopilot: working label and a comment naming its claim ID and branch), so a second computer leaves it alone, and the label comes off with a comment when the tab closes before landing. Nothing is read until you choose the source. Off, the box offers the note alone and autopilot reads no issues",
     "default": true
   },
   {
@@ -1616,7 +1616,7 @@
     "key": "files_from_repo",
     "category": "Updates",
     "label": "Your files from a git repository",
-    "description": "Your own files (settings.json, keys.json, sidebar.json and the rest of ~/.config/switchboard) are read from and written to a clone of the git repository files.json names (Settings' Your files' repository), in ~/.local/share/switchboard/files: pulled as Switchboard starts and every ten minutes, and each change committed and pushed at once, after leak-check has read it and asked about anything it found. files.json, trusted-dirs, repos.json, sidebar-plugins, slack-relay.json, linear.json, oncall.json, oncall-rules.md, slack-updates.json, secrets.json and leak-check.txt stay on this computer, as this setting does. Off, files.json is ignored and your files are the ones in ~/.config/switchboard",
+    "description": "Your own files (settings.json, keys.json, sidebar.json and the rest of ~/.config/switchboard) are read from and written to a clone of the git repository files.json names (Settings' Your files' repository), in ~/.local/share/switchboard/files: pulled as Switchboard starts and every ten minutes, and each change committed and pushed at once, after leak-check has read it and asked about anything it found. files.json, trusted-dirs, repos.json, sidebar-plugins, slack-relay.json, linear.json, oncall.json, oncall-rules.md, slack-updates.json, autopilot-claim.json, secrets.json and leak-check.txt stay on this computer, as this setting does. Off, files.json is ignored and your files are the ones in ~/.config/switchboard",
     "default": false
   },
   {

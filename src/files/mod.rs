@@ -22,7 +22,8 @@
 //! your Linear key) and `leak-check.txt`, which hold what must not be
 //! published; the files Claude's skills read by their path in
 //! `~/.config/switchboard` (`oncall.json`, `oncall-rules.md`,
-//! `slack-updates.json`); and the `.bak` copies. What a pull does
+//! `slack-updates.json`); `autopilot-claim.json`, the ID autopilot claims
+//! GitHub issues with, which is each computer's own; and the `.bak` copies. What a pull does
 //! bring is your settings and where your rules come from (`claude.json`), so
 //! the repository named is one you trust with those.
 //!
@@ -88,6 +89,7 @@ pub const LOCAL: &[&str] = &[
     "oncall.json",
     "oncall-rules.md",
     "slack-updates.json",
+    "autopilot-claim.json",
 ];
 
 /// git's setting for the clone that checks a link the repository holds out
@@ -964,6 +966,7 @@ mod tests {
             "oncall.json",
             "oncall-rules.md",
             "slack-updates.json",
+            "autopilot-claim.json",
             "settings.json.bak",
         ] {
             assert!(is_local(name), "{name}");

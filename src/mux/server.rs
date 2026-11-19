@@ -2051,6 +2051,7 @@ impl Server {
 
     fn take_tab_out(&mut self, tab: TabId) {
         self.tab_closing(tab);
+        self.autopilot_tab_closing(tab);
         self.tabs.remove(&tab);
         // A tab closed drops out of the sidebar's select mode.
         for side in self.sidebar.sides.values_mut() {

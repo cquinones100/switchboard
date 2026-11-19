@@ -290,6 +290,16 @@ pub const OWN_FILES: &[OwnFile] = &[
         )],
     },
     OwnFile {
+        file: "autopilot-claim.json",
+        category: "Your files",
+        rows: &[row(
+            "id",
+            "Autopilot's claim ID",
+            Kind::Text,
+            "This computer's six hex digits, which autopilot names in the comment that claims a GitHub issue as its tab starts, so another computer signed in as you leaves the issue alone. Made the first time autopilot claims one; nothing about the computer is in it",
+        )],
+    },
+    OwnFile {
         file: "trusted-dirs",
         category: "Your files",
         rows: &[whole(
@@ -305,7 +315,7 @@ pub const OWN_FILES: &[OwnFile] = &[
                 "repo",
                 "Repository",
                 Kind::Text,
-                "The git repository your files are kept in, its URL as git clone takes it, read while Settings' \"Your files from a git repository\" is on: cloned into ~/.local/share/switchboard/files, pulled every ten minutes and pushed as your files change. This file, trusted-dirs, repos.json, sidebar-plugins, slack-relay.json, linear.json, oncall.json, oncall-rules.md, slack-updates.json, secrets.json and leak-check.txt stay on this computer",
+                "The git repository your files are kept in, its URL as git clone takes it, read while Settings' \"Your files from a git repository\" is on: cloned into ~/.local/share/switchboard/files, pulled every ten minutes and pushed as your files change. This file, trusted-dirs, repos.json, sidebar-plugins, slack-relay.json, linear.json, oncall.json, oncall-rules.md, slack-updates.json, autopilot-claim.json, secrets.json and leak-check.txt stay on this computer",
             ),
             row(
                 "dir",

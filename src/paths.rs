@@ -18,7 +18,7 @@ pub fn config_dir() -> PathBuf {
 /// `~/.config/switchboard` whatever `config_dir` is: where the files that
 /// never leave this computer are (`files::LOCAL`: files.json, trusted-dirs,
 /// repos.json, sidebar-plugins, slack-relay.json, linear.json, oncall.json,
-/// oncall-rules.md, slack-updates.json, secrets.json,
+/// oncall-rules.md, slack-updates.json, autopilot-claim.json, secrets.json,
 /// leak-check.txt, the `.bak` copies).
 pub fn local_config_dir() -> PathBuf {
     home_join(".config/switchboard")
