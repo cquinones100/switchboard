@@ -242,11 +242,11 @@ pub fn files() -> Vec<(String, Vec<u8>)> {
         format!("hooks/{}", super::permissions::MODULE),
         super::permissions::module().into_bytes(),
     ));
+    files.push((format!("hooks/{ENTRY_MODULE}"), entry_module().into_bytes()));
     files.push((
         "hooks/hooks.json".into(),
         format!("{}\n", util::json_pretty(&hooks())).into_bytes(),
     ));
-    files.push((format!("hooks/{ENTRY_MODULE}"), entry_module().into_bytes()));
     files.push((
         ".claude-plugin/plugin.json".into(),
         format!("{}\n", util::json_pretty(&manifest())).into_bytes(),
@@ -405,8 +405,17 @@ pub fn write_to(dir: &Path, r: &mut Report) -> Result<()> {
     let files = files();
     let mut failed = Vec::new();
     let mut written = 0;
+    // The hooks' files are in the order each relies on the ones before
+    // (`files`), so once one fails the rest of them stay as they were.
+    let mut hooks_failed = false;
     for (rel, bytes) in &files {
         let file = dir.join(rel);
+        if hooks_failed && rel.starts_with("hooks/") {
+            failed.push(format!(
+                "{rel} (left as it was, an earlier hook file failing)"
+            ));
+            continue;
+        }
         if fs::read(&file).is_ok_and(|now| now == *bytes) {
             continue;
         }
@@ -414,6 +423,7 @@ pub fn write_to(dir: &Path, r: &mut Report) -> Result<()> {
             && let Err(e) = util::write_atomic(&file, bytes)
         {
             failed.push(format!("{rel} ({e})"));
+            hooks_failed |= rel.starts_with("hooks/");
             continue;
         }
         written += 1;
