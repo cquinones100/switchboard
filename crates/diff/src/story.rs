@@ -77,16 +77,19 @@ pub fn mapped() -> bool {
 /// The model that tells the story of a change of `files` files and
 /// `lines` changed lines, by its alias: the diff_story_model setting's
 /// choice, and with "size" (its default) Sonnet for a change of more
-/// than `SONNET_FILES` files or `SONNET_LINES` lines, else Haiku.
-pub fn model(files: usize, lines: usize) -> &'static str {
+/// than `SONNET_FILES` files or `SONNET_LINES` lines, else Haiku. A story
+/// that reads the tab's plan (`plan`) is told by Haiku unless Sonnet is
+/// chosen by name: diff_story_plan's opt-in sends the plan to Haiku.
+pub fn model(files: usize, lines: usize, plan: bool) -> &'static str {
     let chosen = crate::settings::value("diff_story_model");
-    model_by(chosen.as_ref().and_then(Value::as_str), files, lines)
+    model_by(chosen.as_ref().and_then(Value::as_str), files, lines, plan)
 }
 
-pub fn model_by(chosen: Option<&str>, files: usize, lines: usize) -> &'static str {
+pub fn model_by(chosen: Option<&str>, files: usize, lines: usize, plan: bool) -> &'static str {
     match chosen {
         Some("haiku") => "haiku",
         Some("sonnet") => "sonnet",
+        _ if plan => "haiku",
         _ if files > SONNET_FILES || lines > SONNET_LINES => "sonnet",
         _ => "haiku",
     }
@@ -2930,12 +2933,19 @@ mod tests {
 
     #[test]
     fn the_model_is_sonnet_past_twenty_files_or_1500_lines_by_size_or_as_chosen() {
-        assert_eq!(model_by(Some("size"), 21, 10), "sonnet");
-        assert_eq!(model_by(Some("size"), 5, 1501), "sonnet");
-        assert_eq!(model_by(Some("size"), 5, 200), "haiku");
-        assert_eq!(model_by(None, 20, 1500), "haiku", "the default is by size");
-        assert_eq!(model_by(Some("haiku"), 40, 9000), "haiku");
-        assert_eq!(model_by(Some("sonnet"), 1, 2), "sonnet");
+        assert_eq!(model_by(Some("size"), 21, 10, false), "sonnet");
+        assert_eq!(model_by(Some("size"), 5, 1501, false), "sonnet");
+        assert_eq!(model_by(Some("size"), 5, 200, false), "haiku");
+        assert_eq!(
+            model_by(None, 20, 1500, false),
+            "haiku",
+            "the default is by size"
+        );
+        assert_eq!(model_by(Some("haiku"), 40, 9000, false), "haiku");
+        assert_eq!(model_by(Some("sonnet"), 1, 2, false), "sonnet");
+        // The plan stays with Haiku unless Sonnet is chosen by name.
+        assert_eq!(model_by(Some("size"), 40, 9000, true), "haiku");
+        assert_eq!(model_by(Some("sonnet"), 40, 9000, true), "sonnet");
         assert_eq!(model_name("sonnet"), "Sonnet");
     }
 

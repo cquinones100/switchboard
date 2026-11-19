@@ -1689,16 +1689,32 @@ impl App {
         }
         paths.sort_by_key(|p| order::kind(p) == order::Kind::Tests);
         let (removed, _, added, _) = self.palette();
+        // A path listed twice (staged, and changed since) is a file of
+        // each diff, its header from that diff's own entry.
+        let mut files_shown: Vec<(&String, usize)> = Vec::new();
         for path in paths {
+            let mut runs: Vec<usize> = Vec::new();
+            for h in story.hunks.get(path).map(Vec::as_slice).unwrap_or(&[]) {
+                let here = h.page == n || story.repeats.get(&h.id).is_some_and(|c| c.contains(&n));
+                if here && !runs.contains(&h.run) {
+                    runs.push(h.run);
+                }
+            }
+            if runs.is_empty() {
+                runs.push(1);
+            }
+            files_shown.extend(runs.into_iter().map(|r| (path, r)));
+        }
+        for (path, run) in files_shown {
             let notes: Vec<&story::HunkNote> = story
                 .hunks
                 .get(path)
                 .map(Vec::as_slice)
                 .unwrap_or(&[])
                 .iter()
+                .filter(|h| h.run == run)
                 .filter(|h| h.page == n || story.repeats.get(&h.id).is_some_and(|c| c.contains(&n)))
                 .collect();
-            let run = notes.first().map_or(1, |h| h.run);
             // The told part's entry, whose diff the column shows, of the
             // hunks' own diff where a path is listed twice.
             let entry = self.change.as_ref().and_then(|c| {

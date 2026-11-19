@@ -123,7 +123,7 @@ pub fn manifest() -> Manifest {
             Setting::new("diff_story_model", "size")
                 .said(
                     "Model that tells the diff's story",
-                    "Which model tells M-d's story: by size, Sonnet for a change of more than 20 files or 1,500 changed lines and Haiku for any other; or always Haiku, or always Sonnet. A story keeps the model that told it until the menu's Tell it again",
+                    "Which model tells M-d's story: by size, Sonnet for a change of more than 20 files or 1,500 changed lines and Haiku for any other; or always Haiku, or always Sonnet. A story that reads the tab's plan (diff_story_plan) stays with Haiku by size, the plan going to Sonnet only when it is picked. A story keeps the model that told it until the menu's Tell it again",
                 )
                 .only(Scope::Workspace),
             Setting::new("diff_story_ahead", true)
@@ -135,7 +135,7 @@ pub fn manifest() -> Manifest {
             Setting::new("diff_story_plan", false)
                 .said(
                     "Diff story reads the tab's plan",
-                    "M-d's story, told ahead or on opening, is given the tab's plan note (an autopilot item's plan) as well as the commits, so its pages can say what problem each solves and what was passed over; off, it reads the commits and the diff alone. Sends the plan note's words to Claude (Haiku, or Sonnet for a large change, as \"Model that tells the diff's story\" picks)",
+                    "M-d's story, told ahead or on opening, is given the tab's plan note (an autopilot item's plan) as well as the commits, so its pages can say what problem each solves and what was passed over; off, it reads the commits and the diff alone. Sends the plan note's words to Claude (Haiku, or Sonnet when \"Model that tells the diff's story\" is Sonnet)",
                 )
                 .only(Scope::Workspace),
             Setting::new("diff_uncommitted", true)

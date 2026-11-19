@@ -97,8 +97,8 @@ pub fn tell_ahead(top: &Path, base: &str, plan: &str) -> Result<Option<String>, 
         .collect();
     let commits = story::commits(&change.raw_commits);
     let lines = entries.iter().map(|e| e.additions + e.deletions).sum();
-    let model = story::model(entries.len(), lines).to_string();
     let context = story::plan_context(Some(plan));
+    let model = story::model(entries.len(), lines, !context.is_empty()).to_string();
     let asked = Asked {
         key,
         input: story::input(&entries, &diffs, &hunks, &commits, &context),

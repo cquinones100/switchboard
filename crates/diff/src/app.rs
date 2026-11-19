@@ -1261,7 +1261,7 @@ impl App {
                 // The model that tells it, where another program asked
                 // first and this one follows its telling.
                 if !p.model.is_empty() {
-                    self.reading.model = story::model_by(Some(&p.model), 0, 0);
+                    self.reading.model = story::model_by(Some(&p.model), 0, 0, false);
                 }
                 self.progress = Some(p);
             }
@@ -1731,7 +1731,7 @@ impl App {
             entries.iter().map(|e| e.additions).sum::<usize>(),
             entries.iter().map(|e| e.deletions).sum::<usize>(),
         );
-        let model = story::model(entries.len(), additions + deletions);
+        let model = story::model(entries.len(), additions + deletions, !context.is_empty());
         self.reading = Reading {
             files: entries.len(),
             additions,
