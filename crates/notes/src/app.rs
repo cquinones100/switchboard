@@ -4756,7 +4756,9 @@ impl App {
                 } else if self.edge_moved {
                     self.edge_pressed_at = None;
                     let (kept, shown) = self.edge_start;
-                    if self.plan_cols() == shown {
+                    // Let go where it started keeps what was kept, unless it
+                    // ended on board 8's share, which clears it.
+                    if self.plan_cols() == shown && self.plan_width.is_some() {
                         self.plan_width = kept;
                     }
                     self.keep_plan_width();

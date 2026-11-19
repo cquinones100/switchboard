@@ -5573,10 +5573,13 @@ fn a_cursor_on_a_long_word_split_across_rows_stays_on_it() {
     app.rows = 40;
     app.plan_width = Some(34);
     let shown = drawn(&mut app).0;
-    let (_, y) = find(&shown, "- https://");
-    // The cursor on the URL's second row.
+    // The URL starts a row of its own, the bullet's left above it; the
+    // cursor on its second row.
+    let (_, y) = find(&shown, "https://");
     app.beside.as_mut().unwrap().line = y as usize;
-    let _ = drawn(&mut app);
+    let (shown, cursor) = drawn(&mut app);
+    let row = plan_row(&app, &shown, cursor.unwrap().1);
+    assert!(row.starts_with("aa"), "{row}");
     app.plan_width = Some(90);
     let (shown, cursor) = drawn(&mut app);
     let row = plan_row(&app, &shown, cursor.unwrap().1);
@@ -5593,4 +5596,36 @@ fn a_narrowed_plan_drops_its_folder_before_easy_mode_s_close() {
     let head = plan_row(&app, &shown, 0);
     assert!(head.ends_with('×'), "{head}");
     assert!(!head.contains("Switchboard Plans"), "{head}");
+}
+
+#[test]
+fn a_plan_scrolled_without_the_keys_keeps_its_view_as_narrowing_hides_the_note() {
+    let (_dir, mut app, _path, _plan) = with_plan("plan-narrow-scroll", 160);
+    app.rows = 10;
+    keys(&mut app, "4G<CR>");
+    let _ = screen(&mut app);
+    app.beside.as_mut().unwrap().scroll = 8;
+    let _ = screen(&mut app);
+    app.cols = 90;
+    let _ = screen(&mut app);
+    let b = app.beside.as_ref().unwrap();
+    assert!(b.focused);
+    assert!(b.scroll > 0, "not back at the top");
+}
+
+#[test]
+fn a_drag_let_go_on_board_8_s_share_clears_a_width_kept() {
+    let (_dir, mut app, _path, _plan) = with_plan("plan-drag-share", 160);
+    keys(&mut app, "4G<CR>");
+    let _ = screen(&mut app);
+    let share = app.geo.plan.width;
+    app.plan_width = Some(share);
+    app.keep_plan_width();
+    let edge = app.geo.plan.x - 1;
+    mouse(&mut app, MouseKind::Press, edge, 5);
+    mouse(&mut app, MouseKind::Drag, edge - 10, 5);
+    mouse(&mut app, MouseKind::Drag, edge, 5);
+    mouse(&mut app, MouseKind::Release, edge, 5);
+    assert_eq!(app.plan_width, None);
+    assert_eq!(app.kept_plan_width(), None);
 }
