@@ -664,6 +664,12 @@ impl Server {
                         if chosen.is_none() && !automatic {
                             return;
                         }
+                        // Its service turned off while the picker was open
+                        // takes nothing from it.
+                        if let Some(c) = chosen.as_ref().filter(|c| !settings::is_on(c.service())) {
+                            server.service_off(client, c.service());
+                            return;
+                        }
                         // A view showing the ticket before closes, so none shows
                         // one M-l no longer opens; the tab's last pane is read
                         // again in place rather than closing the tab.
