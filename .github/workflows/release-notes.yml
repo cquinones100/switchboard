@@ -4,7 +4,8 @@
 # version is. The three targets are built in release mode, each packed as
 # switchboard-notes-<version>-<target>.tar.gz (a folder of that name holding
 # the binary) with its SHA-256 beside it in <archive>.sha256 and its
-# signature in <archive>.sig, and all nine published as a GitHub release
+# signature in <archive>.sig, and all nine, with the install.sh of the commit released beside
+# them (its .sha256 and .sig too), published as a GitHub release
 # tagged `notes-v<version>`, which lists the commits to crates/notes since
 # the tag of Notes before. `install.sh --notes` takes the newest such release's
 # archive for its computer and refuses it unless its checksum matches and
@@ -187,6 +188,8 @@ jobs:
           name="switchboard-notes-$VERSION-$TARGET"
           mkdir -p "dist/$name"
           cp "target/$TARGET/release/switchboard-notes" "dist/$name/"
+          # The MIT license goes with every copy of the binary.
+          cp LICENSE "dist/$name/"
           cd dist
           tar -czf "$name.tar.gz" "$name"
           # The same `<hash>  <name>` line from either: the container has
@@ -266,7 +269,15 @@ jobs:
           [ "$(ls switchboard-notes-*.tar.gz | wc -l)" -eq 3 ] || { echo "::error::Expected three archives"; exit 1; }
           [ "$(ls *.tar.gz | wc -l)" -eq 3 ] || { echo "::error::Expected only the archives of Notes"; exit 1; }
           sha256sum --check *.sha256
-      - name: Sign every archive with the release key
+      - name: Add the installer, with its checksum
+        run: |
+          # The install.sh of the commit released, so an install from this
+          # release runs the installer it was made with, never main's; it
+          # is signed below with the archives.
+          cp install.sh dist/install.sh
+          cd dist
+          sha256sum install.sh > install.sh.sha256
+      - name: Sign every archive and the installer with the release key
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
         run: |
@@ -277,17 +288,24 @@ jobs:
           key="$RUNNER_TEMP/release-signing-key"
           (umask 077 && printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key")
           signed=0
-          ssh-keygen -Y sign -q -f "$key" -n switchboard-release dist/*.tar.gz && signed=1
+          # The installer in a namespace of its own, so no signature made for
+          # anything else (an archive, a test's text) passes for a script
+          # a shell runs.
+          ssh-keygen -Y sign -q -f "$key" -n switchboard-release dist/*.tar.gz \
+            && ssh-keygen -Y sign -q -f "$key" -n switchboard-installer dist/install.sh \
+            && signed=1
           rm -f "$key"
           [ "$signed" = 1 ] || { echo "::error::Couldn't sign the archives."; exit 1; }
           # Checked against the keys install.sh carries, so a secret that
           # isn't one of them fails here rather than in every install.
-          awk 'NF >= 2 && $1 !~ /^#/ { printf "switchboard-release namespaces=\"switchboard-release\" %s %s\n", $1, $2 }' \
+          awk 'NF >= 2 && $1 !~ /^#/ { printf "switchboard-release namespaces=\"switchboard-release,switchboard-installer\" %s %s\n", $1, $2 }' \
             src/update/release-signing-keys.pub > "$RUNNER_TEMP/allowed_signers"
           for archive in dist/*.tar.gz; do
             ssh-keygen -Y verify -f "$RUNNER_TEMP/allowed_signers" -I switchboard-release \
               -n switchboard-release -s "$archive.sig" < "$archive"
           done
+          ssh-keygen -Y verify -f "$RUNNER_TEMP/allowed_signers" -I switchboard-release \
+            -n switchboard-installer -s dist/install.sh.sig < dist/install.sh
       - name: Write the release notes from the commits to Notes since its tag before
         run: |
           previous=$(git describe --tags --abbrev=0 --match 'notes-v*' "$COMMIT^" 2>/dev/null || true)
@@ -315,11 +333,9 @@ jobs:
               echo "- …and $(( $(wc -l < commits.md) - $(wc -l < kept.md) )) earlier commits: https://github.com/$GITHUB_REPOSITORY/commits/notes-v$VERSION/crates/notes"
             fi
             echo
-            echo "Install it with:"
-            echo
-            echo '```'
-            echo "curl -fsSL https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/install.sh | sh -s -- --notes"
-            echo '```'
+            # Only a link here: the release's notes can be edited, so the key
+            # the installer is checked with is read from the repository.
+            echo "Install it as [its README](https://github.com/$GITHUB_REPOSITORY/blob/main/crates/notes/README.md#install) says, for one release: with \`releases/download/notes-v$VERSION\` in place of \`releases/latest/download\`, this release's own installer is checked with the release key there before it runs, and \`SWITCHBOARD_VERSION=notes-v$VERSION\` on its last line (before its closing parenthesis) installs this release."
           } > notes.md
           cat notes.md
       - name: Publish

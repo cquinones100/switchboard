@@ -7,6 +7,7 @@ version = "0.1.0-dev"
 edition = "2024"
 rust-version = "1.99"
 description = "A branch's changes as GitHub's \"Files changed\" shows them, side by side in a terminal, told as a story: Switchboard's diff, alone in any terminal or in a pane of the workspace as its first plugin"
+license = "MIT"
 publish = false
 
 # Alone in a terminal, in any repository, with no server.

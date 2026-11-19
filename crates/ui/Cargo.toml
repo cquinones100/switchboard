@@ -1,6 +1,7 @@
 [package]
 name = "switchboard-ui"
 version.workspace = true
+license.workspace = true
 edition = "2024"
 rust-version = "1.99"
 description = "What Switchboard and the apps that run in its panes draw with: text measured in columns, the box, UX 2.0's atoms, the themes, Markdown, and the keys a terminal sends"

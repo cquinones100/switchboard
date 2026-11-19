@@ -4,10 +4,12 @@
 # diff (crates/diff) has a version and releases of its own.
 [workspace.package]
 version = "0.9.1"
+license = "MIT"
 
 [package]
 name = "switchboard"
 version.workspace = true
+license.workspace = true
 edition = "2024"
 rust-version = "1.99"
 description = "A terminal workspace for working with coding agents: its own multiplexer, with the sidebar, mission control, the diff, notes and the Slack relay built in, as one binary"

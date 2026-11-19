@@ -1,8 +1,9 @@
 # A release, from a version bump on main: the three targets built in release
 # mode, each packed as switchboard-<version>-<target>.tar.gz
 # (a folder of that name holding the binary) with its SHA-256 beside it in
-# <archive>.sha256 and its signature in <archive>.sig, and all nine
-# published as a GitHub release whose notes are the commits since the tag
+# <archive>.sha256 and its signature in <archive>.sig, and all nine,
+# with the install.sh of the commit released beside them (its .sha256 and
+# .sig too), published as a GitHub release whose notes are the commits since the tag
 # before (the newest of them and a link to the rest, past what GitHub
 # takes). `switchboard update` and install.sh take the newest release's
 # archive for their computer and refuse it unless its checksum matches and
@@ -205,6 +206,8 @@ jobs:
           name="switchboard-$VERSION-$TARGET"
           mkdir -p "dist/$name"
           cp "target/$TARGET/release/switchboard" "dist/$name/"
+          # The MIT license goes with every copy of the binary.
+          cp LICENSE "dist/$name/"
           cd dist
           tar -czf "$name.tar.gz" "$name"
           # The same `<hash>  <name>` line from either: the container has
@@ -284,7 +287,15 @@ jobs:
           ls -l
           [ "$(ls *.tar.gz | wc -l)" -eq 3 ] || { echo "::error::Expected three archives"; exit 1; }
           sha256sum --check *.sha256
-      - name: Sign every archive with the release key
+      - name: Add the installer, with its checksum
+        run: |
+          # The install.sh of the commit released, so an install from this
+          # release runs the installer it was made with, never main's; it
+          # is signed below with the archives.
+          cp install.sh dist/install.sh
+          cd dist
+          sha256sum install.sh > install.sh.sha256
+      - name: Sign every archive and the installer with the release key
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
         run: |
@@ -295,18 +306,25 @@ jobs:
           key="$RUNNER_TEMP/release-signing-key"
           (umask 077 && printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key")
           signed=0
-          ssh-keygen -Y sign -q -f "$key" -n switchboard-release dist/*.tar.gz && signed=1
+          # The installer in a namespace of its own, so no signature made for
+          # anything else (an archive, a test's text) passes for a script
+          # a shell runs.
+          ssh-keygen -Y sign -q -f "$key" -n switchboard-release dist/*.tar.gz \
+            && ssh-keygen -Y sign -q -f "$key" -n switchboard-installer dist/install.sh \
+            && signed=1
           rm -f "$key"
           [ "$signed" = 1 ] || { echo "::error::Couldn't sign the archives."; exit 1; }
           # Checked against the keys the binary and install.sh carry, so a
           # secret that isn't one of them fails here rather than in every
           # update.
-          awk 'NF >= 2 && $1 !~ /^#/ { printf "switchboard-release namespaces=\"switchboard-release\" %s %s\n", $1, $2 }' \
+          awk 'NF >= 2 && $1 !~ /^#/ { printf "switchboard-release namespaces=\"switchboard-release,switchboard-installer\" %s %s\n", $1, $2 }' \
             src/update/release-signing-keys.pub > "$RUNNER_TEMP/allowed_signers"
           for archive in dist/*.tar.gz; do
             ssh-keygen -Y verify -f "$RUNNER_TEMP/allowed_signers" -I switchboard-release \
               -n switchboard-release -s "$archive.sig" < "$archive"
           done
+          ssh-keygen -Y verify -f "$RUNNER_TEMP/allowed_signers" -I switchboard-release \
+            -n switchboard-installer -s dist/install.sh.sig < dist/install.sh
       - name: Write the notes from the commits since the tag before
         run: |
           tag="v$VERSION"

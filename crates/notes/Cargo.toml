@@ -7,6 +7,7 @@ version = "0.1.0-dev"
 edition = "2024"
 rust-version = "1.99"
 description = "Notes as the macOS Notes app keeps them, in a terminal, edited with Vim's keys: Switchboard's notes app, alone in any terminal or in a pane of the workspace as a plugin"
+license = "MIT"
 publish = false
 
 # Alone in a terminal, on `$NOTES_DIR` or `~/Notes`, with no server.

@@ -7,8 +7,16 @@ It is [Switchboard](../../README.md)'s diff (`M-d` there) as an app of its own. 
 ## Install
 
 ```
-curl -fsSL https://raw.githubusercontent.com/cquinones100/switchboard/main/install.sh | sh -s -- --diff
+(dir=$(mktemp -d) && cd "$dir" &&
+curl -fsSLO https://github.com/cquinones100/switchboard/releases/latest/download/install.sh &&
+curl -fsSLO https://github.com/cquinones100/switchboard/releases/latest/download/install.sh.sig &&
+echo 'switchboard-release namespaces="switchboard-installer" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHk/NIR8Ueq68RDwrJ3vWpLvcNX85BrMHDf0UBVnk05B' > allowed_signers &&
+ssh-keygen -Y verify -f allowed_signers -I switchboard-release -n switchboard-installer -s install.sh.sig < install.sh &&
+{ less install.sh || cat install.sh; } &&
+sh install.sh --diff)
 ```
+
+The installer is the newest Switchboard release's, signed with the release key ([Switchboard's README](../../README.md#install) says more); each line runs only when the one before it succeeded, in a new temporary folder and a subshell, in bash or zsh (in fish, run `bash` first). For one release, `diff-v<version>`, put `releases/download/diff-v<version>` in place of `releases/latest/download` in both `curl` lines, and `SWITCHBOARD_VERSION=diff-v<version> sh install.sh --diff)` as the last line: that release carries its own signed installer.
 
 It has releases of its own, apart from Switchboard's, tagged `diff-v<version>` in Switchboard's repository. The line downloads the newest one's `switchboard-diff-<version>-<target>.tar.gz` for this computer (x86_64 Linux, or an Intel or Apple silicon Mac) over HTTPS, refuses it unless it matches the SHA-256 published beside it and is signed with Switchboard's release key, and puts `switchboard-diff` in `~/.local/bin`. It installs nothing else and sets nothing up. `switchboard-diff update` installs a newer release ([Updates](#updates)).
 

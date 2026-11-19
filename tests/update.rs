@@ -841,6 +841,17 @@ fn run_install(fake: &Fake, dir: &Path, stubs: &Path) -> std::process::Output {
 
 /// install.sh piped in with `args`, as `curl … | sh -s -- <args>` runs it.
 fn run_install_with(fake: &Fake, dir: &Path, stubs: &Path, args: &[&str]) -> std::process::Output {
+    run_install_in(fake, dir, stubs, args, &[])
+}
+
+/// install.sh piped in with `args` and `envs` set besides.
+fn run_install_in(
+    fake: &Fake,
+    dir: &Path,
+    stubs: &Path,
+    args: &[&str],
+    envs: &[(&str, &str)],
+) -> std::process::Output {
     let script = std::fs::read(INSTALL_SH).unwrap();
     // Piped in, as `curl … | sh` runs it.
     let mut command = Command::new("sh");
@@ -854,6 +865,7 @@ fn run_install_with(fake: &Fake, dir: &Path, stubs: &Path, args: &[&str]) -> std
         .env("SWITCHBOARD_GITHUB_API", &fake.url)
         .env("SWITCHBOARD_RELEASE_KEY", trusted_key())
         .env("SB_MARK", dir.join("mark"))
+        .envs(envs.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1032,7 +1044,7 @@ fn install_sh_installs_notes_alone_from_its_own_release_with_no_setup() {
 }
 
 #[test]
-fn install_sh_installs_a_checked_release_and_runs_its_setup() {
+fn install_sh_installs_a_checked_release_and_leaves_its_setup_as_a_step_of_its_own() {
     if !(has("curl") || has("wget")) || !(has("sha256sum") || has("shasum")) || !has("ssh-keygen") {
         eprintln!("skipped: no curl or wget, no sha256sum or shasum, or no ssh-keygen");
         return;
@@ -1086,11 +1098,31 @@ fn install_sh_installs_a_checked_release_and_runs_its_setup() {
     // ~/.local/bin isn't on the stubbed PATH, so it says how to add it.
     assert!(said.contains("isn't on your PATH"), "{said}");
     assert!(said.contains("~/.zshrc"), "{said}");
+    // The setup is the next step, said rather than run.
+    // By its path, since ~/.local/bin isn't on the PATH yet.
+    assert!(
+        said.contains(&format!(
+            "Next, set it up: {}/.local/bin/switchboard setup",
+            dir.path().display()
+        )),
+        "{said}"
+    );
+    assert!(!dir.path().join("mark").exists());
+
+    // SWITCHBOARD_SETUP=1 runs it once installed, as scripts once had it.
+    let out = run_install_in(
+        &fake,
+        dir.path(),
+        &stubs,
+        &[],
+        &[("SWITCHBOARD_SETUP", "1")],
+    );
+    assert!(out.status.success(), "{out:?}");
     assert_eq!(
         std::fs::read_to_string(dir.path().join("mark")).unwrap(),
         "setup setup\n"
     );
-    assert_eq!(fake.asked(&format!("{}/latest", Fake::list_path())), 3);
+    assert_eq!(fake.asked(&format!("{}/latest", Fake::list_path())), 4);
     stand_in::assert_none_refused(&stubs);
     stand_in::assert_none_refused(&dir.path().join(".local/bin"));
 }

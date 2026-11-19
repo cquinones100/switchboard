@@ -1,7 +1,35 @@
 #!/bin/sh
-# Switchboard's one-line install, for someone new:
+# MIT License
 #
-#   curl -fsSL https://raw.githubusercontent.com/cquinones100/switchboard/main/install.sh | sh
+# Copyright (c) 2026 Carlos Quinones
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+#
+# SPDX-License-Identifier: MIT
+#
+# Switchboard's install, for someone new. Each release carries the
+# install.sh of the commit it was made from, signed with the release key
+# beside its archives, so the installer run is the one a release was made
+# with, never whatever main holds. The README's Install section downloads
+# it with its signature (install.sh.sig), checks that against the release
+# key below, and only then runs it; then `switchboard setup`, as the last
+# line this prints says.
 #
 # It finds the newest release for this computer (x86_64 Linux, or an Intel
 # or Apple silicon Mac), downloads its archive over HTTPS with the SHA-256
@@ -10,8 +38,8 @@
 # public half is below, so a release changed after it was signed is refused
 # even with its checksum changed to match), and puts `switchboard` in
 # ~/.local/bin, saying how to add that to your PATH when it isn't there.
-# Then it runs `switchboard setup`, the guided setup, which asks before it
-# changes anything. With `--diff` it installs `switchboard-diff` instead,
+# It then says to run `switchboard setup`, the guided setup, as a step of
+# its own (SWITCHBOARD_SETUP=1 runs it here instead). With `--diff` it installs `switchboard-diff` instead,
 # the diff alone, and with `--notes` `switchboard-notes`, Notes alone: each
 # has releases of its own in the same repository, tagged `diff-v<version>`
 # and `notes-v<version>`, signed with the same key. Run again, it installs
@@ -28,7 +56,7 @@
 #                            of the newest
 #   SWITCHBOARD_BIN_DIR      where the binary goes, in place of ~/.local/bin
 #   SWITCHBOARD_GITHUB_API   GitHub's API, in place of https://api.github.com
-#   SWITCHBOARD_NO_SETUP     set, the setup isn't run
+#   SWITCHBOARD_SETUP        1, it runs `switchboard setup` once installed
 #   SWITCHBOARD_RELEASE_KEY  a public key trusted beside the release keys, for
 #                            the tests' own releases
 #
@@ -37,8 +65,7 @@
 #   sh install.sh --diff     installs `switchboard-diff` instead, the diff as
 #                            an app of its own (crates/diff/README.md), from
 #                            its own newest release (tagged `diff-v<version>`),
-#                            checked the same way, with no setup to run;
-#                            piped, `curl … | sh -s -- --diff`
+#                            checked the same way, with no setup to run
 #   sh install.sh --notes    installs `switchboard-notes` instead, Notes as
 #                            an app of its own (crates/notes/README.md), from
 #                            its own newest release (tagged
@@ -291,8 +318,19 @@ main() {
     say "Run it on the notes in ~/Notes: switchboard-notes"
     return 0
   fi
-  [ -z "${SWITCHBOARD_NO_SETUP:-}" ] || return 0
   say ""
+  if [ "${SWITCHBOARD_SETUP:-}" != 1 ]; then
+    # By the path just installed, so neither another switchboard first on
+    # the PATH nor a folder off it runs; quoted when the shell would split
+    # it.
+    setup="$bin_dir/switchboard"
+    case $setup in
+      *[!A-Za-z0-9/._~+-]*) setup="'$(printf '%s' "$setup" | sed "s/'/'\\\\''/g")'" ;;
+    esac
+    setup="$setup setup"
+    say "Next, set it up: $setup"
+    return 0
+  fi
   # The setup's questions are read from the terminal: this script's own
   # input is the pipe it came through. With no terminal, its input is
   # closed, which answers every question no.

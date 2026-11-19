@@ -100,6 +100,111 @@ mod tests {
         }
     }
 
+    /// Every install block the docs show checks the installer before it
+    /// runs, with every release key: each is one of these blocks exactly,
+    /// the key lines made from the list, so a rotation's new key reaches
+    /// them.
+    #[test]
+    fn the_documented_installer_checks_trust_every_release_key() {
+        let keys: Vec<String> = RELEASE_KEYS
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+            .enumerate()
+            .map(|(i, key)| {
+                let mut words = key.split_whitespace();
+                let (kind, body) = (words.next().unwrap(), words.next().unwrap());
+                let redirect = if i == 0 { ">" } else { ">>" };
+                format!(
+                    "echo 'switchboard-release namespaces=\"switchboard-installer\" {kind} {body}' {redirect} allowed_signers &&\n"
+                )
+            })
+            .collect();
+        // The whole block, for Switchboard, the diff or Notes.
+        let latest = "https://github.com/cquinones100/switchboard/releases/latest/download";
+        let block_for = |flag: &str| {
+            format!(
+                "(dir=$(mktemp -d) && cd \"$dir\" &&\ncurl -fsSLO {latest}/install.sh &&\ncurl -fsSLO {latest}/install.sh.sig &&\n{}ssh-keygen -Y verify -f allowed_signers -I switchboard-release -n switchboard-installer -s install.sh.sig < install.sh &&\n{{ less install.sh || cat install.sh; }} &&\nsh install.sh{flag})",
+                keys.concat()
+            )
+        };
+        // Each document shows each of its installs as one of these blocks,
+        // and no block that runs install.sh is anything else.
+        for (name, doc, flags) in [
+            (
+                "README.md",
+                include_str!("../../README.md"),
+                &["", " --diff", " --notes"][..],
+            ),
+            (
+                "crates/diff/README.md",
+                include_str!("../../crates/diff/README.md"),
+                &[" --diff"][..],
+            ),
+            (
+                "crates/notes/README.md",
+                include_str!("../../crates/notes/README.md"),
+                &[" --notes"][..],
+            ),
+        ] {
+            // Every other piece is inside a fence.
+            let blocks: Vec<&str> = doc.split("```").skip(1).step_by(2).map(str::trim).collect();
+            let wanted: Vec<String> = flags.iter().map(|flag| block_for(flag)).collect();
+            for want in &wanted {
+                assert!(
+                    blocks.contains(&want.as_str()),
+                    "{name} lacks the install block\n{want}"
+                );
+            }
+            for block in blocks.iter().filter(|b| b.contains("install.sh")) {
+                assert!(
+                    wanted.iter().any(|w| block == w),
+                    "{name} runs install.sh in a block of its own:\n{block}"
+                );
+            }
+        }
+    }
+
+    /// The README installs from a release's own install.sh, so every
+    /// release workflow puts it there, with its checksum, signs it and
+    /// publishes it.
+    #[test]
+    fn every_release_carries_its_installer_signed() {
+        for (name, workflow) in [
+            (
+                "release.yml",
+                include_str!("../../.github/workflows/release.yml"),
+            ),
+            (
+                "release-diff.yml",
+                include_str!("../../.github/workflows/release-diff.yml"),
+            ),
+            (
+                "release-notes.yml",
+                include_str!("../../.github/workflows/release-notes.yml"),
+            ),
+        ] {
+            for line in [
+                "cp install.sh dist/install.sh",
+                "sha256sum install.sh > install.sh.sha256",
+                "-n switchboard-installer dist/install.sh",
+                "-n switchboard-installer -s dist/install.sh.sig < dist/install.sh",
+            ] {
+                assert!(workflow.contains(line), "{name} lacks `{line}`");
+            }
+            // And every file in dist/ is published, the installer's three
+            // among them, and the license is in every archive.
+            let publish = workflow
+                .lines()
+                .find(|l| l.trim_start().starts_with("gh release create"))
+                .unwrap_or_else(|| panic!("{name} publishes nothing"));
+            assert!(publish.contains(" dist/* "), "{name} publishes {publish}");
+            assert!(
+                workflow.contains("cp LICENSE \"dist/$name/\""),
+                "{name} packs no LICENSE"
+            );
+        }
+    }
+
     fn temp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("sb-install-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);

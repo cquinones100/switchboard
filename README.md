@@ -28,13 +28,23 @@ Nothing else has to be installed. GitHub, Linear, the calendar, Slack and Codex 
 
 ## Install
 
+Each release carries its own installer, `install.sh`, signed with Switchboard's release key beside its archives. These lines download the newest release's into a new temporary folder with its signature, check the signature against the release key, `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHk/NIR8Ueq68RDwrJ3vWpLvcNX85BrMHDf0UBVnk05B` (the one in [`src/update/release-signing-keys.pub`](src/update/release-signing-keys.pub)), show you the installer, and run it, each only when the one before it succeeded, in a subshell, so your shell stays in its folder. They are for bash or zsh (in fish, run `bash` first):
+
 ```
-curl -fsSL https://raw.githubusercontent.com/cquinones100/switchboard/main/install.sh | sh
+(dir=$(mktemp -d) && cd "$dir" &&
+curl -fsSLO https://github.com/cquinones100/switchboard/releases/latest/download/install.sh &&
+curl -fsSLO https://github.com/cquinones100/switchboard/releases/latest/download/install.sh.sig &&
+echo 'switchboard-release namespaces="switchboard-installer" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHk/NIR8Ueq68RDwrJ3vWpLvcNX85BrMHDf0UBVnk05B' > allowed_signers &&
+ssh-keygen -Y verify -f allowed_signers -I switchboard-release -n switchboard-installer -s install.sh.sig < install.sh &&
+{ less install.sh || cat install.sh; } &&
+sh install.sh)
 ```
 
-It downloads the newest release for this computer over HTTPS, refuses it unless it matches the SHA-256 published beside it and is signed with Switchboard's release key (checked with OpenSSH's `ssh-keygen`, 8.1 or later, which macOS and Linux distributions ship), puts `switchboard` in `~/.local/bin` (saying how to add that to your PATH when it isn't there), and runs `switchboard setup`, which asks before it changes anything.
+`install.sh` finds the newest release when it runs, downloads its archive for this computer over HTTPS, refuses it unless it matches the SHA-256 published beside it and is signed with the release key (checked with OpenSSH's `ssh-keygen`, 8.1 or later, which macOS and Linux distributions ship), and puts `switchboard` in `~/.local/bin`, saying how to add that to your PATH when it isn't there; `SWITCHBOARD_VERSION=v<version>` installs that release instead.
 
-Or download a release yourself: each one on the repository's Releases page has `switchboard-<version>-<target>.tar.gz` for `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin` and `x86_64-apple-darwin`, with its `.sha256` and its signature, `.sig`. To check the signature, put the key from [`src/update/release-signing-keys.pub`](src/update/release-signing-keys.pub) in a file as `switchboard-release namespaces="switchboard-release" ssh-ed25519 <key>` and run `ssh-keygen -Y verify -f <that file> -I switchboard-release -n switchboard-release -s <archive>.sig < <archive>`. Unpack it, put `switchboard` on your PATH, and run `switchboard setup`.
+Then set Switchboard up, as a step of its own, with the line the installer ends on (`~/.local/bin/switchboard setup`, or the folder `SWITCHBOARD_BIN_DIR` named). With `SWITCHBOARD_SETUP=1` set, `install.sh` runs it once installed.
+
+Or download a release yourself: each one on the repository's Releases page has `switchboard-<version>-<target>.tar.gz` for `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin` and `x86_64-apple-darwin`, with its `.sha256` and its signature, `.sig`, beside the release's `install.sh`. To check the signature, put the key from [`src/update/release-signing-keys.pub`](src/update/release-signing-keys.pub) in a file as `switchboard-release namespaces="switchboard-release" ssh-ed25519 <key>` and run `ssh-keygen -Y verify -f <that file> -I switchboard-release -n switchboard-release -s <archive>.sig < <archive>`. Unpack it, put `switchboard` on your PATH, and run `switchboard setup`.
 
 Or build it from a clone, with [rustup](https://rustup.rs) and a C compiler (the Rust it needs is pinned in `rust-toolchain.toml`, which rustup installs):
 
@@ -55,13 +65,25 @@ switchboard
 The diff is also an app of its own, `switchboard-diff`, for any terminal with no Switchboard running ([its README](crates/diff/README.md)):
 
 ```
-curl -fsSL https://raw.githubusercontent.com/cquinones100/switchboard/main/install.sh | sh -s -- --diff
+(dir=$(mktemp -d) && cd "$dir" &&
+curl -fsSLO https://github.com/cquinones100/switchboard/releases/latest/download/install.sh &&
+curl -fsSLO https://github.com/cquinones100/switchboard/releases/latest/download/install.sh.sig &&
+echo 'switchboard-release namespaces="switchboard-installer" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHk/NIR8Ueq68RDwrJ3vWpLvcNX85BrMHDf0UBVnk05B' > allowed_signers &&
+ssh-keygen -Y verify -f allowed_signers -I switchboard-release -n switchboard-installer -s install.sh.sig < install.sh &&
+{ less install.sh || cat install.sh; } &&
+sh install.sh --diff)
 ```
 
 So is the notes app, `switchboard-notes` ([its README](crates/notes/README.md)):
 
 ```
-curl -fsSL https://raw.githubusercontent.com/cquinones100/switchboard/main/install.sh | sh -s -- --notes
+(dir=$(mktemp -d) && cd "$dir" &&
+curl -fsSLO https://github.com/cquinones100/switchboard/releases/latest/download/install.sh &&
+curl -fsSLO https://github.com/cquinones100/switchboard/releases/latest/download/install.sh.sig &&
+echo 'switchboard-release namespaces="switchboard-installer" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHk/NIR8Ueq68RDwrJ3vWpLvcNX85BrMHDf0UBVnk05B' > allowed_signers &&
+ssh-keygen -Y verify -f allowed_signers -I switchboard-release -n switchboard-installer -s install.sh.sig < install.sh &&
+{ less install.sh || cat install.sh; } &&
+sh install.sh --notes)
 ```
 
 `switchboard setup` puts in place what Claude Code needs for the workspace. It asks before it changes anything, and run again changes only what isn't in place (`switchboard setup --check` only says what would change):
@@ -117,3 +139,7 @@ Settings, in mission control's System group (`M-Space`, or `M-p` then Settings),
 ## Contributing
 
 Pull requests are welcome. One from a fork is reviewed before any of its code runs on a maintainer's computer: it is checked out where no git hook, Claude session or setup of its own runs, what in it runs without being asked (git's hooks, setup, Claude's settings and skills, build scripts, crates) is read first, it is reviewed from outside its worktree, and it is tried in a sealed `switchboard try` that can't reach the maintainer's files, credentials or network. See `wtpr --untrusted`, `switchboard pr-risk` and `switchboard try --sealed` in [the guide](docs/guide.md#someone-elses-pr).
+
+## License
+
+Switchboard is released under the [MIT license](LICENSE).

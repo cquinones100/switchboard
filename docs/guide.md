@@ -1200,10 +1200,9 @@ With `--ahead` it compares with the base `M-d` would (`--plan` naming the tab's 
 
 ### The diff alone
 
-The diff is also an app of its own, `switchboard-diff`, for a terminal with no Switchboard running: the same program and the same keys, in any git repository.
+The diff is also an app of its own, `switchboard-diff`, for a terminal with no Switchboard running: the same program and the same keys, in any git repository. [Its README](https://github.com/cquinones100/switchboard/blob/main/crates/diff/README.md#install) says how to install it, from Switchboard's newest release's signed installer.
 
 ```
-curl -fsSL https://raw.githubusercontent.com/cquinones100/switchboard/main/install.sh | sh -s -- --diff
 switchboard-diff [dir]                  # the branch in dir (else here) against the default branch, or the branch it was cut from
 switchboard-diff --base origin/develop  # against another branch or commit
 switchboard-diff --working [dir]        # the changes not yet committed
@@ -1379,10 +1378,9 @@ switchboard notes shown             the note shown, as its path
 
 ### Notes alone
 
-The notes app is also an app of its own, `switchboard-notes`, for a terminal with no Switchboard running: the same program and the same keys, on the same notes (`$NOTES_DIR`, else `~/Notes`).
+The notes app is also an app of its own, `switchboard-notes`, for a terminal with no Switchboard running: the same program and the same keys, on the same notes (`$NOTES_DIR`, else `~/Notes`). [Its README](https://github.com/cquinones100/switchboard/blob/main/crates/notes/README.md#install) says how to install it, from Switchboard's newest release's signed installer.
 
 ```
-curl -fsSL https://raw.githubusercontent.com/cquinones100/switchboard/main/install.sh | sh -s -- --notes
 switchboard-notes                  # the app, on the note open last
 switchboard-notes open <note>      # show a note in the running app
 switchboard-notes sidebar on|off   # show or put away the running app's list
@@ -1395,7 +1393,7 @@ It has a version and releases of its own, apart from Switchboard's (tagged `note
 
 ## Setting Claude Code up
 
-Switchboard learns what each Claude Code session is doing from Claude Code's own hooks, and gives it a statusline, its own instructions (how to read the tabs, the notes app) and a set of skills. `switchboard setup` puts them in place. The install script runs it once the binary is in place, `switchboard update` runs it after installing a release, and `M-p`'s "Run Switchboard's setup" runs it in a tab of its own, to put in place what isn't or to answer a question you said no to.
+Switchboard learns what each Claude Code session is doing from Claude Code's own hooks, and gives it a statusline, its own instructions (how to read the tabs, the notes app) and a set of skills. `switchboard setup` puts them in place. The install script says to run it once the binary is in place, as a step of its own, ending on the line to run (it runs it itself only with `SWITCHBOARD_SETUP=1`), `switchboard update` runs it after installing a release, and `M-p`'s "Run Switchboard's setup" runs it in a tab of its own, to put in place what isn't or to answer a question you said no to.
 
 ```
 switchboard setup                  the guided setup
@@ -2089,6 +2087,8 @@ Anyone in the workspace can open a DM with an app, so the relay acts only on mes
 Without the owner or the tokens, the relay doesn't start, and its log says what to set up. Everything else is ignored and logged, with no reply, so the app doesn't even say it is listening: other members, other conversations, other workspaces, bots (the relay's own posts included), edits and deletions. A message has to have been typed, too: other apps can post as you (anything holding your Slack user token, the Slack connector your Claude sessions use included), so a message counts only if it carries the `client_msg_id` Slack's own apps give what you type, which the Web API doesn't let an app set, and no `app_id`. Otherwise a Claude session that read something malicious could post as you in a tab's thread and drive that tab. For the same reason reactions control nothing: Slack can't say whether you added one or an app did as you. Buttons are trusted the same way: a press counts only if it is yours, on a message in that DM, or on the Home tab or a tab's screen, which take only their own buttons, and Slack only reports a press a person made, so no app can press one as you. A form (Message, Skill, Rename, New tab, Autopilot) counts only if you sent it from one of the relay's own screens. The owner comes from the file, never from a message. Everything the relay writes is refused before it leaves the computer unless it is for the app's DM with you, or its Home tab as you see it, whatever asked for it. The app subscribes to no channel events and has no scopes to read channels, so adding it to one shows it nothing.
 
 ## Staying up to date
+
+Installing is [the README's](https://github.com/cquinones100/switchboard#install): each release carries its own `install.sh`, from the commit it was made from, with its `.sha256` and its signature by the release key beside its archives, so the installer run is the one that release was made with, never whatever `main` holds, and `releases/latest/download/install.sh` names the newest Switchboard release's. It installs the binary and says to run `switchboard setup` next, which it runs itself only with `SWITCHBOARD_SETUP=1` set; `--diff` and `--notes` install the diff and Notes alone from their own newest releases, with no setup.
 
 `switchboard update` downloads the newest release of Switchboard for your computer, checks it against the SHA-256 published beside it and against its signature, which only Switchboard's release key makes (its public half is in the binary, so a release whose files were changed after it was published is refused even with its checksum changed to match), runs it once to see that it starts, and only then puts it in place of the binary you ran (a link to the binary stays a link). Anything that fails before that leaves your binary as it was. Then it runs the guided `switchboard setup`, for what the new version brings. `switchboard update --check` says whether there is a newer release, and what it brings, and changes nothing.
 
