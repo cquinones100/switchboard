@@ -443,11 +443,15 @@ impl Server {
         // The label shown names the branch's Linear ticket too, which a
         // repository whose tickets are GitHub's never takes; any other it
         // names counts.
-        let branch_ticket = ticket::id_for_dir(dir);
-        found.extend(ticket::in_name(&self.tab_label(tab)).filter(|t| {
-            provider != Some("github")
-                || !matches!(t, Ticket::Linear(id) if Some(id) == branch_ticket.as_ref())
-        }));
+        let from_branch: Vec<Ticket> = ticket::id_for_dir(dir)
+            .map(Ticket::Linear)
+            .into_iter()
+            .chain(crate::tabs::git::locate(dir).and_then(|p| ticket::linear_in_branch(&p.branch)))
+            .collect();
+        found.extend(
+            ticket::in_name(&self.tab_label(tab))
+                .filter(|t| provider != Some("github") || !from_branch.contains(t)),
+        );
         ticket::first_on(found)
     }
 
@@ -644,15 +648,16 @@ impl Server {
                         // A view parked under another tool counts too, so
                         // none comes back showing the old ticket.
                         let was_open = server.marked_in(tab, TICKET_VIEW);
-                        let parked = server
+                        let parked: Vec<PaneId> = server
                             .panes
                             .iter()
-                            .find(|(p, s)| {
+                            .filter(|(p, s)| {
                                 s.tab == tab
                                     && Some(**p) != was_open
                                     && s.opts.get(TICKET_VIEW).is_some_and(|v| v == "1")
                             })
-                            .map(|(p, _)| *p);
+                            .map(|(p, _)| *p)
+                            .collect();
                         if let Some(view) = was_open {
                             match &chosen {
                                 Some(c) => server.read_view_again(view, Some(c.clone())),
@@ -666,7 +671,7 @@ impl Server {
                                 }
                             }
                         }
-                        if let Some(view) = parked {
+                        if !parked.is_empty() {
                             let again = chosen.clone().or_else(|| {
                                 let dir = server.tab_path(tab)?.to_path_buf();
                                 let t = server.tabs.get_mut(&tab)?;
@@ -675,7 +680,9 @@ impl Server {
                                     .tab_ticket_at(tab, &dir)
                                     .filter(|t| settings::is_on(t.service()))
                             });
-                            server.read_view_again(view, again);
+                            for view in parked {
+                                server.read_view_again(view, again.clone());
+                            }
                         }
                         if automatic {
                             if let Some(t) = server.tabs.get_mut(&tab) {
