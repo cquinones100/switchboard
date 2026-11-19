@@ -32,6 +32,7 @@ pub mod serve;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use crate::util;
@@ -288,15 +289,47 @@ fn names_a_merge_driver(tree: &Path, upstream: &str) -> bool {
         return false;
     }
     ["HEAD", upstream].iter().any(|source| {
-        let mut args = vec!["check-attr", "--source", source, "merge", "--"];
-        args.extend(&files);
-        git(tree, &args).is_none_or(|out| {
+        merge_attributes_at(tree, source, &files).is_none_or(|out| {
             out.lines().any(|l| {
                 let value = l.rsplit(": ").next().unwrap_or("");
                 !matches!(value, "unspecified" | "set" | "unset")
             })
         })
     })
+}
+
+/// What `git check-attr merge` says of `files` with the attributes of
+/// the commit `source`, read from a temporary index of that commit
+/// (`check-attr --cached`), since `check-attr --source` only came in
+/// git 2.40 and macOS ships 2.39. `None` when a git command fails.
+fn merge_attributes_at(tree: &Path, source: &str, files: &[&str]) -> Option<String> {
+    static MADE: AtomicU64 = AtomicU64::new(0);
+    let index = std::env::temp_dir().join(format!(
+        "sb-sweep-index-{}-{}",
+        std::process::id(),
+        MADE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let with_index = |args: &[&str]| {
+        let out = util::output_of(
+            Command::new("git")
+                .arg("-C")
+                .arg(tree)
+                .args(args)
+                .env("GIT_INDEX_FILE", &index)
+                .env("GIT_OPTIONAL_LOCKS", "0"),
+        )
+        .ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    let answer = with_index(&["read-tree", source]).and_then(|_| {
+        let mut args = vec!["check-attr", "--cached", "merge", "--"];
+        args.extend(files);
+        with_index(&args)
+    });
+    let _ = std::fs::remove_file(&index);
+    answer
 }
 
 /// When git was last used in the worktree at `tree`: its index, `HEAD`
