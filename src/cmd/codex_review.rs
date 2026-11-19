@@ -1813,14 +1813,24 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
         && !opts.include_low
         && streak_is(&reviewed)?;
     let found = review["findings"].as_array().cloned().unwrap_or_default();
-    // A finding warned of as naming something outside the repository waits
-    // for the loop to look at it, so it never counts as left.
+    // A finding that names something outside the repository (warned of, or
+    // a path climbing out of it) waits for the loop to look at it, so it
+    // never counts as left.
+    let inside = |f: &Value| {
+        f.get("file").and_then(Value::as_str).is_some_and(|file| {
+            let path = Path::new(file);
+            !path.is_absolute()
+                && !path
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+        })
+    };
     let lows_left = confirming
         && warnings.is_empty()
         && !found.is_empty()
         && found
             .iter()
-            .all(|f| f.get("severity").and_then(Value::as_str) == Some("low"));
+            .all(|f| f.get("severity").and_then(Value::as_str) == Some("low") && inside(f));
     let clean = found.is_empty() || lows_left;
     // Kept only for the checkout you are in (-C naming it too), never one
     // reviewed from outside with -C, whose git directory is someone else's
