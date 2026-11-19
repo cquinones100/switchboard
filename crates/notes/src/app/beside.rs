@@ -82,8 +82,9 @@ pub struct Beside {
 }
 
 /// A text row of the panel: the piece of text it shows (a line of the
-/// plan, a heading, a blank, counted from the top past the cards) and its
-/// row within it, the same at any width, unlike its row number.
+/// plan, a heading, a blank, counted from the top past the cards) and the
+/// words of that line before the row, the same at any width, unlike its
+/// row number.
 pub type Piece = (usize, usize);
 
 /// What a row of the panel shows, which the cursor stays on as the plan
@@ -118,8 +119,9 @@ impl Laid {
         self.pieces.get(row).copied().flatten().map(Spot::Text)
     }
 
-    /// The row showing `spot`: the same row of its card, or of its piece of
-    /// text, else that piece's last; none once it isn't in the plan.
+    /// The row showing `spot`: the same row of its card, or the row of its
+    /// piece of text holding the word it started at; none once it isn't in
+    /// the plan.
     pub fn row_of(&self, spot: Spot) -> Option<usize> {
         match spot {
             Spot::Card(l, sub) => self
@@ -274,9 +276,9 @@ pub fn lines(
 ) -> Laid {
     let mut out: Vec<Vec<Span<'static>>> = Vec::new();
     let mut hits = Vec::new();
-    // The rows that go on with a line of text wrapped; every other row
-    // starts a piece of its own.
-    let mut more: Vec<usize> = Vec::new();
+    // The rows that go on with a line of text wrapped, each with the words
+    // of its line before it; every other row starts a piece of its own.
+    let mut more: Vec<(usize, usize)> = Vec::new();
     let inner = cols.saturating_sub(2);
     // What Tab lit shows only while the plan has the keys, and comes back
     // with them.
@@ -322,23 +324,26 @@ pub fn lines(
     // Only the first open decision is drawn as cards, the one a letter or
     // a click chooses in; one after it waits its turn, drawn as text.
     let mut carded = false;
-    let text = |out: &mut Vec<Vec<Span<'static>>>, more: &mut Vec<usize>, lines: &[String]| {
-        for line in lines {
-            if line.trim().is_empty() {
-                out.push(Vec::new());
-                continue;
-            }
-            for (i, row) in wrapped(line, inner).into_iter().enumerate() {
-                if i > 0 {
-                    more.push(out.len());
+    let text =
+        |out: &mut Vec<Vec<Span<'static>>>, more: &mut Vec<(usize, usize)>, lines: &[String]| {
+            for line in lines {
+                if line.trim().is_empty() {
+                    out.push(Vec::new());
+                    continue;
                 }
-                out.push(vec![
-                    Span::raw(" "),
-                    Span::styled(row, Tone::Text.style(theme)),
-                ]);
+                let mut before = 0;
+                for (i, row) in wrapped(line, inner).into_iter().enumerate() {
+                    if i > 0 {
+                        more.push((out.len(), before));
+                    }
+                    before += row.split_whitespace().count();
+                    out.push(vec![
+                        Span::raw(" "),
+                        Span::styled(row, Tone::Text.style(theme)),
+                    ]);
+                }
             }
-        }
-    };
+        };
     for section in &beside.plan.sections {
         // The words before the first section, but for the Item: line that
         // repeats the item, as text with no label.
@@ -376,7 +381,10 @@ pub fn lines(
             carded = true;
             out.push(Vec::new());
             let n = choice.options.len().max(1);
-            let side_by_side = room > Room::Stacked && n > 1;
+            // Side by side only where every card gets its least width, the
+            // plan's own width narrower than the app's share.
+            let fits = n * 12 + (n - 1) * 2 <= inner;
+            let side_by_side = room > Room::Stacked && n > 1 && fits;
             let mocks = room > Room::NoMocks;
             let places: Vec<(usize, usize)> = if side_by_side {
                 let col = Col::Stretch {
@@ -500,8 +508,8 @@ pub fn lines(
             pieces.push(None);
             continue;
         }
-        if more.contains(&r) {
-            sub += 1;
+        if let Some(&(_, words)) = more.iter().find(|m| m.0 == r) {
+            sub = words;
         } else {
             n += 1;
             sub = 0;
@@ -989,8 +997,9 @@ impl App {
         let laid = draw(b, now);
         // Rewrapped (its edge moved, Notes resized): the cursor and the
         // first row shown go to the rows of what they were on, so no card
-        // coming up to the cursor's row number is lit by it, and the view
-        // follows the cursor rather than the cursor the view.
+        // coming up to the cursor's row number is lit by it, and, with the
+        // keys, the view follows the cursor rather than the cursor the
+        // view; without them it stays where it was scrolled.
         let moved = b.laid.filter(|was| *was != now).map(|was| {
             let before = draw(b, was);
             let to = |row: usize, lit: Option<Stop>| {
@@ -1006,7 +1015,7 @@ impl App {
         if let Some((line, scroll)) = moved {
             b.line = line.unwrap_or(b.line);
             b.scroll = scroll.unwrap_or(b.scroll);
-            b.follow = true;
+            b.follow |= b.focused;
         }
         let b = self.beside.as_ref()?;
         let Laid { mut rows, hits, .. } = laid;
@@ -1252,8 +1261,15 @@ impl App {
     /// click on its edge: the plan back to board 8's share, nothing kept.
     pub(super) fn default_plan_width(&mut self) {
         self.plan_width = None;
-        self.keys_moved = None;
-        self.keep_width();
+        if self.keys_plan {
+            self.keys_moved = None;
+        }
+        self.keep_plan_width();
+    }
+
+    /// The plan's width written to the state folder, as the list's is.
+    pub(super) fn keep_plan_width(&mut self) {
+        super::keep_in(&self.store.state.join(super::PLAN_WIDTH), self.plan_width);
     }
 
     /// The plan's width as the state folder keeps it.

@@ -5002,9 +5002,7 @@ fn list_edge(app: &mut App) -> u16 {
 
 /// The width the resize keys set kept, as it is once they stop.
 fn settle(app: &mut App) {
-    if app.keys_moved.take().is_some() {
-        app.keep_width();
-    }
+    app.keep_keyed();
 }
 
 fn kept(app: &App) -> Option<u64> {
@@ -5437,4 +5435,53 @@ fn with_notes_resize_off_the_plan_keeps_board_8_s_share() {
     let _ = screen(&mut app);
     assert_eq!(app.geo.plan.width, share);
     assert_eq!(app.kept_plan_width(), Some(share + 5), "and stays kept");
+}
+
+#[test]
+fn a_plan_narrowed_past_its_cards_stacks_them() {
+    let (_dir, mut app, _path, plan) = with_plan("plan-narrow-cards", 160);
+    write(
+        &plan,
+        &PLAN_A_B.replace(
+            "- [ ] B: stays condensed",
+            "- [ ] B: stays condensed\n- [ ] C: a third way",
+        ),
+    );
+    keys(&mut app, "4G<CR>");
+    app.plan_width = Some(34);
+    let shown = screen(&mut app);
+    let (_, a_y) = find(&shown, "A · focus");
+    let (_, c_y) = find(&shown, "C · a third");
+    assert!(c_y > a_y, "stacked:\n{}", shown.join("\n"));
+}
+
+#[test]
+fn resizing_the_plan_leaves_a_list_width_another_tab_kept() {
+    let (_dir, mut app, _path, _plan) = with_plan("plan-other-tab", 160);
+    keys(&mut app, "4G<CR><C-w>l");
+    let _ = screen(&mut app);
+    // Another tab's Notes keeps a list width after this one read none.
+    util::write_atomic(&app.store.state.join(LIST_WIDTH), "41").unwrap();
+    app.key(resize('h'));
+    settle(&mut app);
+    assert!(app.kept_plan_width().is_some());
+    assert_eq!(app.kept_width(), Some(41));
+}
+
+#[test]
+fn a_scrolled_plan_without_the_keys_stays_where_it_was_as_it_is_resized() {
+    let (_dir, mut app, _path, _plan) = with_plan("plan-unfocused-scroll", 160);
+    app.rows = 10;
+    keys(&mut app, "4G<CR>");
+    let _ = screen(&mut app);
+    app.beside.as_mut().unwrap().scroll = 8;
+    let shown = screen(&mut app);
+    let top = plan_row(&app, &shown, 1);
+    assert!(!app.beside.as_ref().unwrap().focused);
+    app.plan_width = Some(60);
+    let _ = screen(&mut app);
+    assert!(
+        app.beside.as_ref().unwrap().scroll > 0,
+        "not back at the top ({top})"
+    );
 }
