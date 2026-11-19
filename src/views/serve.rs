@@ -522,11 +522,12 @@ impl Server {
         }
         // One of a service turned off counts as none when Linear can offer
         // a choice.
+        let picks = settings::is_on("linear") && settings::is_on("ticket_picker");
         let found = self
             .tab_ticket_at(tab, &dir)
-            .filter(|f| settings::is_on(f.service()) || !settings::is_on("linear"));
+            .filter(|f| settings::is_on(f.service()) || !picks);
         let Some(found) = found else {
-            if settings::is_on("linear") {
+            if settings::is_on("linear") && settings::is_on("ticket_picker") {
                 self.choose_ticket(client, tab, true);
             } else {
                 self.say(Some(client), "No ticket or GitHub issue for this tab");
@@ -565,6 +566,22 @@ impl Server {
         if !self.tabs.contains_key(&tab) {
             return;
         }
+        // The work the tab is on as it is asked: a tab handed to other work
+        // meanwhile (its directory changed) takes no ticket chosen for the old.
+        let work = self.tab_path(tab).map(std::path::Path::to_path_buf);
+        let moved_on = move |server: &mut Server, client: ClientId| {
+            let now = server.tab_path(tab).map(std::path::Path::to_path_buf);
+            let moved = now != work;
+            if moved {
+                let n = server.tab_number(tab);
+                server.say(
+                    Some(client),
+                    &format!("Tab {n} moved on to other work, so no ticket was chosen for it"),
+                );
+            }
+            moved
+        };
+        let moved_on_again = moved_on.clone();
         // With Linear off, Linear isn't asked: only a choice made before
         // can be let go.
         let ask_linear = settings::is_on("linear");
@@ -585,6 +602,9 @@ impl Server {
             },
             move |server, client, found| {
                 server.unsay(client);
+                if moved_on(server, client) {
+                    return;
+                }
                 // One chosen before can be let go, the branch and the names
                 // deciding again, whatever Linear answered.
                 let chosen_before = server
@@ -636,6 +656,9 @@ impl Server {
                         let Some(picked) = picked else {
                             return;
                         };
+                        if moved_on_again(server, client) {
+                            return;
+                        }
                         let chosen = Ticket::parse(&picked.value);
                         let automatic = picked.value == AUTOMATIC;
                         if chosen.is_none() && !automatic {

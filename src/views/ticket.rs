@@ -834,9 +834,9 @@ const YOUR_PROJECTS: &str = "query($after: String) { projects(first: 50, after: 
     nodes { id name createdAt status { name } } pageInfo { hasNextPage endCursor } } }";
 
 /// Every page of a list `query` asks for, its connection at `at`, as one
-/// answer of the first page's shape: up to two hundred pages (ten
-/// thousand), which no one's own list reaches. A page after the first that
-/// fails ends the list there, and says so.
+/// answer of the first page's shape: up to twenty pages (a thousand), the
+/// picker filtering them on the server's task. A page after the first
+/// that fails, or one past the twentieth, ends the list there, and says so.
 async fn every_page(
     query: &str,
     at: &str,
@@ -849,7 +849,7 @@ async fn every_page(
         .collect();
     let mut info = whole.pointer(&format!("{at}/pageInfo")).cloned();
     let mut stopped = None;
-    for _ in 1..200 {
+    for _ in 1..20 {
         let more = info.as_ref().and_then(|i| {
             (i.get("hasNextPage") == Some(&json!(true)))
                 .then(|| i.get("endCursor").cloned())
@@ -868,6 +868,12 @@ async fn every_page(
                 break;
             }
         }
+    }
+    let more = info
+        .as_ref()
+        .is_some_and(|i| i.get("hasNextPage") == Some(&json!(true)));
+    if stopped.is_none() && more {
+        stopped = Some(format!("the first {} are listed", all.len()));
     }
     if let Some(list) = whole.pointer_mut(&format!("{at}/nodes")) {
         *list = Value::Array(all);
