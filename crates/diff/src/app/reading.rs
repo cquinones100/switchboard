@@ -240,7 +240,11 @@ fn hunk_lines(
     let (mut olds, mut news) = (hunk.old_count, hunk.new_count);
     let mut out = Vec::new();
     for line in lines.iter().skip(hunk.line) {
-        if line.starts_with("@@") || line.starts_with("diff --git") || olds + news == 0 {
+        // git's "\ No newline at end of file" goes with the line before
+        // it, even the hunk's last.
+        let marker = line.starts_with('\\');
+        if line.starts_with("@@") || line.starts_with("diff --git") || (olds + news == 0 && !marker)
+        {
             break;
         }
         let mut chars = line.chars();
@@ -264,7 +268,8 @@ fn hunk_lines(
                 olds = olds.saturating_sub(1);
                 news = news.saturating_sub(1);
             }
-            // "\ No newline at end of file", and anything else git says.
+            // The line before has no newline at its end: said under it.
+            '\\' => out.push(('\\', "no newline at end of file".into(), None, None)),
             _ => {}
         }
     }
@@ -831,6 +836,17 @@ impl App {
     /// the old for a line only taken out, whatever context is around it.
     /// Whether a row of the hunk was found to stand on.
     fn at_hunk(&mut self, new_line: (usize, usize), old_line: (usize, usize)) -> bool {
+        self.at_hunk_changed(new_line, old_line, false)
+    }
+
+    /// As `at_hunk`, a row with no change refused with `changed`: a line
+    /// added or taken out is found only where it is still a change.
+    fn at_hunk_changed(
+        &mut self,
+        new_line: (usize, usize),
+        old_line: (usize, usize),
+        changed_only: bool,
+    ) -> bool {
         let Some((changed, rows)) =
             self.current()
                 .and_then(|e| self.files.get(&e.key()))
@@ -869,6 +885,9 @@ impl App {
         let changed_row =
             |l: &Line| matches!(l, Line::Pair { row, .. } if changed.get(*row) == Some(&true));
         let found = lines.iter().position(|l| inside(l) && changed_row(l));
+        if changed_only && found.is_none() {
+            return false;
+        }
         let Some(i) = found.or_else(|| lines.iter().position(inside)) else {
             return false;
         };
@@ -1827,6 +1846,13 @@ impl App {
                     )));
                 }
                 for (mark, line, old, new) in hunk_lines(text, hunk) {
+                    if mark == '\\' {
+                        rows.push(plain(vec![Span::styled(
+                            format!("      ⏎ {line}"),
+                            Tone::Faint.style(theme),
+                        )]));
+                        continue;
+                    }
                     let number = match mark {
                         '-' => old,
                         _ => new,
@@ -1967,10 +1993,12 @@ impl App {
         // The side the row shows its number from: the new one, but for a
         // line only the old side has.
         let line = |l: Option<usize>| l.map_or((0, 0), |l| (l, 1));
+        // A line added or taken out is found only where it is still one.
+        let changed = !(new.is_some() && old.is_some());
         let found = if new.is_some() {
-            self.at_hunk(line(new), (0, 0))
+            self.at_hunk_changed(line(new), (0, 0), changed)
         } else {
-            self.at_hunk((0, 0), line(old))
+            self.at_hunk_changed((0, 0), line(old), changed)
         };
         if !found {
             return self.say(
@@ -2727,6 +2755,18 @@ mod tests {
         assert_eq!(pieces("abcdefg", 3), ["abc", "def", "g"]);
         assert_eq!(pieces("", 3), [""]);
         assert_eq!(pieces("a  b", 10), ["a  b"]);
+    }
+
+    #[test]
+    fn a_missing_newline_at_the_end_is_said_under_its_line() {
+        let (files, hunks) = story::split(&[
+            "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-one\n\\ No newline at end of file\n+one\n",
+        ]);
+        let marks: Vec<char> = hunk_lines(&files["a.rs"], &hunks["a.rs"][0])
+            .iter()
+            .map(|l| l.0)
+            .collect();
+        assert_eq!(marks, ['-', '\\', '+']);
     }
 
     #[test]
