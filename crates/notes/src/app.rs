@@ -4724,6 +4724,8 @@ impl App {
             (MouseKind::Press, MouseButton::WheelDown | MouseButton::WheelUp) => {
                 let down = m.button == MouseButton::WheelDown;
                 if let Some(b) = self.beside.as_mut().filter(|_| inside(self.geo.plan)) {
+                    // The reader moved: the next rewrap starts from here.
+                    b.held = None;
                     b.scroll = if down {
                         b.scroll + 3
                     } else {

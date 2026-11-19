@@ -5513,3 +5513,32 @@ fn a_drag_from_the_default_back_to_it_leaves_another_tab_s_width() {
     assert_eq!(app.plan_width, None);
     assert_eq!(app.kept_plan_width(), Some(80));
 }
+
+#[test]
+fn a_cursor_moved_away_and_back_starts_the_next_rewrap_from_where_it_is() {
+    let (_dir, mut app, _path, plan) = with_plan("plan-moved-back", 160);
+    let long = "word ".repeat(12);
+    write(
+        &plan,
+        &PLAN_A_B.replace(
+            "- The sidebar is 34 columns wide, each tab on two lines.",
+            &format!("- {}", long.trim_end()),
+        ),
+    );
+    keys(&mut app, "4G<CR><C-w>l");
+    app.rows = 40;
+    app.plan_width = Some(34);
+    let shown = drawn(&mut app).0;
+    let (_, y) = find(&shown, "- word");
+    // On the paragraph's second row, then widened until it is one row.
+    app.beside.as_mut().unwrap().line = y as usize;
+    let _ = drawn(&mut app);
+    app.plan_width = Some(99);
+    let _ = drawn(&mut app);
+    keys(&mut app, "jk");
+    let _ = drawn(&mut app);
+    app.plan_width = Some(34);
+    let (shown, cursor) = drawn(&mut app);
+    let row = plan_row(&app, &shown, cursor.unwrap().1);
+    assert!(row.starts_with("- word"), "{row}");
+}
