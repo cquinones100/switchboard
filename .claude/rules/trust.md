@@ -3,6 +3,7 @@ paths:
   - "src/**"
   - "crates/**"
   - ".claude/skills/review-pr/**"
+  - "assets/skills/**"
 ---
 
 # Trusted directories and someone else's PR

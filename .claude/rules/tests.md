@@ -2,6 +2,8 @@
 paths:
   - "tests/**"
   - "crates/*/tests/**"
+  - "src/**"
+  - "crates/**"
 ---
 
 # Tests
