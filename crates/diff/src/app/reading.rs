@@ -1128,9 +1128,14 @@ impl App {
     /// The section the column's cursor is in: 0 for what changes, else
     /// a page's number.
     pub(super) fn section(&mut self) -> usize {
-        let cols = self.column_cols();
-        let rows = self.column(cols);
-        rows.get(self.reader.cur).map_or(0, |r| r.section)
+        let (cols, cur) = (self.column_cols(), self.reader.cur);
+        self.column(cols).get(cur).map_or(0, |r| r.section)
+    }
+
+    /// The column's row under the cursor.
+    pub(super) fn row_at_cur(&mut self) -> Option<Row> {
+        let (cols, cur) = (self.column_cols(), self.reader.cur);
+        self.column(cols).get(cur).cloned()
     }
 
     /// The outline's entry for where the column is, the section read.
@@ -1231,9 +1236,9 @@ impl App {
     /// ]p and [p in the Story view: the next page's heading at the top of
     /// the column, or the one before's, from what changes on to page 1.
     pub(super) fn page_step(&mut self, step: i32) {
+        let here = self.reader.cur;
         let cols = self.column_cols();
         let rows = self.column(cols);
-        let here = self.reader.cur;
         let found = if step > 0 {
             rows.iter()
                 .enumerate()
@@ -1322,13 +1327,22 @@ impl App {
 
     /// The column laid out for `cols`, again only when its width or what
     /// is unfolded has changed.
-    pub(super) fn column(&mut self, cols: usize) -> Vec<Row> {
-        if let Some((w, rows)) = &self.reader.laid
-            && *w as usize == cols
-            && !self.reader.stale
-        {
-            return rows.clone();
+    pub(super) fn column(&mut self, cols: usize) -> &[Row] {
+        let fresh = self
+            .reader
+            .laid
+            .as_ref()
+            .is_some_and(|(w, _)| *w as usize == cols && !self.reader.stale);
+        if !fresh {
+            self.lay_out(cols);
         }
+        self.reader
+            .laid
+            .as_ref()
+            .map_or(&[], |(_, rows)| rows.as_slice())
+    }
+
+    fn lay_out(&mut self, cols: usize) {
         // Laid out again at another width (the outline widened): the
         // cursor and the view kept on their section, as far into it.
         let before = self.reader.laid.take().map(|(_, rows)| {
@@ -1349,9 +1363,8 @@ impl App {
             self.reader.cur = back(cur);
             self.reader.top = back(top);
         }
-        self.reader.laid = Some((cols as u16, rows.clone()));
+        self.reader.laid = Some((cols as u16, rows));
         self.reader.stale = false;
-        rows
     }
 
     /// The column laid out again on its next draw.
@@ -1677,11 +1690,6 @@ impl App {
         paths.sort_by_key(|p| order::kind(p) == order::Kind::Tests);
         let (removed, _, added, _) = self.palette();
         for path in paths {
-            // The told part's entry, whose diff the column shows.
-            let entry = self
-                .change
-                .as_ref()
-                .and_then(|c| c.told_part().entries.iter().find(|e| e.path == *path));
             let notes: Vec<&story::HunkNote> = story
                 .hunks
                 .get(path)
@@ -1691,6 +1699,14 @@ impl App {
                 .filter(|h| h.page == n || story.repeats.get(&h.id).is_some_and(|c| c.contains(&n)))
                 .collect();
             let run = notes.first().map_or(1, |h| h.run);
+            // The told part's entry, whose diff the column shows, of the
+            // hunks' own diff where a path is listed twice.
+            let entry = self.change.as_ref().and_then(|c| {
+                c.told_part()
+                    .entries
+                    .iter()
+                    .find(|e| e.path == *path && self.run_of(e).is_none_or(|r| r == run))
+            });
             let status = match entry.map(|e| e.status) {
                 Some('A') => "new",
                 Some('D') => "deleted",
@@ -1833,8 +1849,7 @@ impl App {
     /// Enter on the column's cursor line, or a click on it: a change's
     /// menu, a file of tests unfolded, What runs shown.
     fn act_on_line(&mut self, near: Option<(u16, u16)>) {
-        let cols = self.column_cols();
-        let Some(row) = self.column(cols).get(self.reader.cur).cloned() else {
+        let Some(row) = self.row_at_cur() else {
             return;
         };
         match row.does {
@@ -1958,8 +1973,7 @@ impl App {
     /// Where the column's cursor is, for a question: the change under it,
     /// while the column has the keys.
     pub(super) fn reading_cursor(&mut self) -> crate::ask::Cursor {
-        let cols = self.column_cols();
-        let row = self.column(cols).get(self.reader.cur).cloned();
+        let row = self.row_at_cur();
         match row.map(|r| r.does) {
             Some(Does::Change { path, new, old, .. }) if self.focus != Focus::List => {
                 crate::ask::Cursor {
@@ -2050,8 +2064,7 @@ impl App {
                 "A link to a line is the files' to copy: Enter on the change, Show it in the files, then yl.",
             ),
             ('y', 'p') => {
-                let cols = self.column_cols();
-                let row = self.column(cols).get(self.reader.cur).cloned();
+                let row = self.row_at_cur();
                 match row.map(|r| r.does) {
                     Some(target @ (Does::File { .. } | Does::Change { .. }))
                         if self.focus != Focus::List =>
@@ -2364,12 +2377,16 @@ impl App {
     fn draw_column(&mut self, buf: &mut Buffer, theme: &Theme) {
         let rect = self.column_rect();
         let cols = self.column_cols();
-        let rows = self.column(cols);
         self.keep_reading();
         let (top, cur) = (self.reader.top, self.reader.cur);
         let x0 = rect.x + 1;
         let h = rect.height as usize;
-        for (i, row) in rows.iter().enumerate().skip(top).take(h) {
+        // Only the rows in sight are taken from the layout kept.
+        let all = self.column(cols);
+        let total = all.len();
+        let shown: Vec<Row> = all.iter().skip(top).take(h).cloned().collect();
+        for (k, row) in shown.iter().enumerate() {
+            let i = top + k;
             let y = rect.y + (i - top) as u16;
             let line = Rect::new(x0, y, cols as u16, 1);
             if let Some(bg) = row.bg {
@@ -2386,11 +2403,11 @@ impl App {
             }
             self.spot(Pane::Wide, line, x0, i as i64, false);
         }
-        if kit::scroll_bars() && kit::has_scrollbar(rows.len(), h) {
+        if kit::scroll_bars() && kit::has_scrollbar(total, h) {
             kit::draw_scrollbar(
                 buf,
                 (rect.right().saturating_sub(1), rect.y, rect.height),
-                (rows.len(), top, h),
+                (total, top, h),
                 theme,
             );
         }

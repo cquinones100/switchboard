@@ -8879,8 +8879,7 @@ mod tests {
         );
         // The cursor down to the folded file, Enter unfolds it.
         while !app
-            .column(app.column_cols())
-            .get(app.reader.cur)
+            .row_at_cur()
             .is_some_and(|r| matches!(r.does, reading::Does::Folded { .. }))
         {
             press(&mut app, "j");
@@ -8900,8 +8899,7 @@ mod tests {
         app.go_to_section(1);
         app.focus = Focus::New;
         while !app
-            .column(app.column_cols())
-            .get(app.reader.cur)
+            .row_at_cur()
             .is_some_and(|r| matches!(r.does, reading::Does::Change { .. }))
         {
             press(&mut app, "j");
