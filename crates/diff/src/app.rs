@@ -8794,7 +8794,7 @@ mod tests {
         // Then its file, its changes inline with their numbers.
         assert!(shown[row("src/store.rs   +3 -0")].contains("new"));
         assert!(shown[row("The store.")].contains("‣"));
-        line_with(&shown, "1 pub fn store_outline(zip: &str) {");
+        line_with(&shown, "1 + pub fn store_outline(zip: &str) {");
         // The outline follows: the page chosen and read, the meter counting it.
         let outline = list(&shown);
         assert!(outline[line_with(&outline, "1 Store each outline")].contains("✓"));
@@ -8894,17 +8894,22 @@ mod tests {
     #[test]
     fn a_change_is_side_by_side_where_the_column_has_room() {
         let mut app = map_app();
+        app.cols = 170;
+        app.relay();
         app.go_to_section(5);
         let shown = screen(&mut app);
-        // The old line at the left, the new beside it.
+        // The old line at the left, the new beside it, each side 60
+        // columns or more.
         let row = line_with(&shown, "fn  spaced() {}");
         assert!(shown[row].contains("│") && shown[row].contains("fn spaced() {}"));
         // A narrow column shows it removed over added.
-        app.cols = 90;
+        app.cols = 120;
         app.relay();
         let shown = screen(&mut app);
         let row = line_with(&shown, "fn  spaced() {}");
         assert!(!shown[row].contains("fn spaced() {}"));
+        assert!(shown[row].contains("1 - fn  spaced"), "{}", shown[row]);
+        assert!(shown[row + 1].contains("1 + fn spaced"));
         assert!(shown[row + 1].contains("fn spaced() {}"));
     }
 

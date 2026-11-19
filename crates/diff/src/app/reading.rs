@@ -186,8 +186,12 @@ pub(super) struct Reader {
 /// A row of the outline, and the entry it is, where it is one.
 type OutlineRow = (Vec<Span<'static>>, Option<usize>);
 
-/// The column's width from which a change is shown side by side.
-const SIDE_BY_SIDE: usize = 80;
+/// The column's width from which a change is shown side by side: each
+/// side at least 60 columns, as boards 144 and 145 say.
+const SIDE_BY_SIDE: usize = 121;
+/// The widest a page's prose is laid out, its changes under it taking the
+/// column's whole width.
+const PROSE: usize = 88;
 
 /// How many rows What runs takes over the column: its label, a box's
 /// four rows, and a rule.
@@ -1783,7 +1787,10 @@ impl App {
             Some(c) if story.chapters.len() > 1 => format!("page {k} of {m} · chapter {}", c + 1),
             _ => format!("page {k} of {m}"),
         };
-        let room = cols.saturating_sub(width(&right) + 1);
+        // The prose keeps to `PROSE` columns, as board 144 lays it out;
+        // the changes under it take the column's whole width.
+        let prose = cols.min(PROSE);
+        let room = prose.saturating_sub(width(&right) + 1);
         let mut head = kit::fit(
             vec![
                 Span::styled(format!("{k}  "), Tone::Accent.bold(theme)),
@@ -1804,7 +1811,7 @@ impl App {
         } else {
             page.claim.clone()
         };
-        for line in wrap(&claim, cols) {
+        for line in wrap(&claim, prose) {
             rows.push(plain(vec![Span::styled(line, Tone::Text.style(theme))]));
         }
         let block: Vec<(&str, &String, Tone)> = [
@@ -1829,7 +1836,7 @@ impl App {
                 } else {
                     Tone::Text
                 };
-                for (i, line) in wrap(text, cols.saturating_sub(10).max(10))
+                for (i, line) in wrap(text, prose.saturating_sub(10).max(10))
                     .into_iter()
                     .enumerate()
                 {
@@ -1899,7 +1906,7 @@ impl App {
                     .find(|e| e.path == *path && self.run_of(e).is_none_or(|r| r == run))
             });
             let status = match entry.map(|e| e.status) {
-                Some('A') => "new",
+                Some('A') => "new file",
                 Some('D') => "deleted",
                 Some('R') => "renamed",
                 _ => "",
@@ -2015,7 +2022,7 @@ impl App {
                     let text = line.replace('\t', "    ");
                     // A long line goes on in rows of its own under it, so
                     // a change near its end is read here too.
-                    for (k, piece) in pieces(&text, cols.saturating_sub(6))
+                    for (k, piece) in pieces(&text, cols.saturating_sub(8))
                         .into_iter()
                         .enumerate()
                     {
@@ -2030,6 +2037,15 @@ impl App {
                             },
                             ..plain(vec![
                                 Span::styled(format!("{number:>5} "), Tone::Faint.style(theme)),
+                                // One column marks each line, as board 145.
+                                Span::styled(
+                                    format!("{} ", if k == 0 { mark } else { ' ' }),
+                                    match mark {
+                                        '+' => Tone::Done.style(theme),
+                                        '-' => Tone::Failed.style(theme),
+                                        _ => Tone::Faint.style(theme),
+                                    },
+                                ),
                                 Span::styled(piece, Tone::Text.style(theme)),
                             ])
                         });
