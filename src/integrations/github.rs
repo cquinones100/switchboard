@@ -1215,9 +1215,84 @@ pub async fn open_fork_prs(repo: &Repo, source: &str) -> Result<Vec<ForkPr>> {
         .collect())
 }
 
+/// One of a repository's open issues, as M-p's "Start work on a GitHub
+/// issue" lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenIssue {
+    pub number: u64,
+    pub title: String,
+    /// Assigned to whoever GitHub's token is.
+    pub yours: bool,
+}
+
+/// The repository's open issues (the newest hundred), the ones assigned to
+/// you first, each group the newest first.
+pub async fn open_issues(repo: &Repo, source: &str) -> Result<Vec<OpenIssue>> {
+    let data = graphql(
+        "query($owner: String!, $name: String!) { viewer { login } \
+         repository(owner: $owner, name: $name) { \
+         issues(states: OPEN, first: 100, orderBy: {field: CREATED_AT, direction: DESC}) { \
+         nodes { number title assignees(first: 20) { nodes { login } } } } } }",
+        json!({ "owner": repo.owner, "name": repo.name }),
+        source,
+    )
+    .await?;
+    Ok(open_issues_of(&data))
+}
+
+/// `open_issues` from GitHub's answer.
+pub fn open_issues_of(data: &Value) -> Vec<OpenIssue> {
+    let viewer = data
+        .pointer("/viewer/login")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_lowercase();
+    let mut issues: Vec<OpenIssue> = data
+        .pointer("/repository/issues/nodes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|n| {
+            let yours = !viewer.is_empty()
+                && n.pointer("/assignees/nodes")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|a| a.get("login").and_then(Value::as_str))
+                    .any(|login| login.to_lowercase() == viewer);
+            Some(OpenIssue {
+                number: n.get("number")?.as_u64()?,
+                title: n.get("title")?.as_str()?.to_string(),
+                yours,
+            })
+        })
+        .collect();
+    // Stable, so each group keeps GitHub's newest-first order.
+    issues.sort_by_key(|i| !i.yours);
+    issues
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn open_issues_list_yours_first_each_group_newest_first() {
+        let data = json!({
+            "viewer": { "login": "Me" },
+            "repository": { "issues": { "nodes": [
+                { "number": 9, "title": "Newest", "assignees": { "nodes": [] } },
+                { "number": 8, "title": "Mine", "assignees": { "nodes": [{ "login": "me" }] } },
+                { "number": 7, "title": "Theirs", "assignees": { "nodes": [{ "login": "else" }] } },
+                { "number": 6, "title": "Mine too", "assignees": { "nodes": [{ "login": "else" }, { "login": "me" }] } }
+            ] } }
+        });
+        let numbers: Vec<(u64, bool)> = open_issues_of(&data)
+            .iter()
+            .map(|i| (i.number, i.yours))
+            .collect();
+        assert_eq!(numbers, vec![(8, true), (6, true), (9, false), (7, false)]);
+    }
 
     #[test]
     fn an_answer_s_headers_give_its_limit_by_resource() {

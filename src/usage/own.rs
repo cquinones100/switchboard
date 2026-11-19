@@ -705,7 +705,22 @@ pub fn landing_rows(
             detail,
             json!(set.unwrap_or("automatic")),
         ));
-        if method != Some("direct") || broken.is_some() {
+        if broken.is_some() {
+            continue;
+        }
+        let tickets = crate::repos::tickets_of(&crate::repos::entry_of(&data, repo));
+        items.push(row(
+            "tickets",
+            "  Tickets".into(),
+            tickets.clone().unwrap_or_else(|| "not set".into()),
+            match tickets.as_deref() {
+                Some("github") => "Its work is kept in its GitHub issues: wtn <number> starts one".to_string(),
+                Some(_) => "Its work is kept in Linear: wtn <ticket> starts one".to_string(),
+                None => "Where its work is kept, GitHub issues or Linear, which wtn <number> starts it from; not set, wtn takes only a note's item or --issue".to_string(),
+            },
+            json!(tickets.as_deref().unwrap_or("unset")),
+        ));
+        if method != Some("direct") {
             continue;
         }
         let steps = crate::repos::steps_of(&entry);
@@ -906,8 +921,7 @@ mod tests {
 
     #[test]
     fn each_repository_s_landing_is_a_row_and_landing_straight_its_steps() {
-        let data =
-            json!({ "acme/direct": { "landing": "direct", "test": "npm test", "squash": false } });
+        let data = json!({ "acme/direct": { "landing": "direct", "test": "npm test", "squash": false, "tickets": "github" } });
         let worked = |repo: &str| {
             (repo == "acme/auto").then(|| crate::repos::Cached {
                 landing: "pr".into(),
@@ -930,7 +944,9 @@ mod tests {
             shown,
             vec![
                 ("acme/auto", "auto: pr"),
+                ("  Tickets", "not set"),
                 ("acme/direct", "straight to the branch"),
+                ("  Tickets", "github"),
                 ("  Tests", "npm test"),
                 ("  Tests run", "here"),
                 ("  Squash", "off"),
@@ -938,19 +954,23 @@ mod tests {
                 ("  Before push", "none"),
                 ("  After a clean rebase", "the tests"),
                 ("acme/new", "auto: ?"),
+                ("  Tickets", "not set"),
             ],
-            "each repository once, its steps only when it lands straight"
+            "each repository once with its tickets, its steps only when it lands straight"
         );
         assert_eq!(
             rows[0].detail,
             "Worked out: through a PR, since main has a merge queue"
         );
         assert_eq!(rows[0].data["repo_setting"]["value"], "automatic");
-        assert_eq!(rows[3].data["repo_setting"]["field"], "testIn");
-        assert_eq!(rows[4].data["repo_setting"]["field"], "squash");
+        assert_eq!(rows[1].data["repo_setting"]["value"], "unset");
+        assert_eq!(rows[3].data["repo_setting"]["field"], "tickets");
+        assert_eq!(rows[5].data["repo_setting"]["field"], "testIn");
+        assert_eq!(rows[6].data["repo_setting"]["field"], "squash");
         assert!(rows.iter().all(|r| r.group.as_deref() == Some(LANDING)));
         let broken = landing_rows(&repos[..1], Err("bad".into()), &worked);
         assert_eq!(broken[0].data["value"], "unreadable");
+        assert_eq!(broken.len(), 1);
     }
 
     fn temp(name: &str) -> PathBuf {

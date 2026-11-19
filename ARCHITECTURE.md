@@ -69,7 +69,7 @@ Shared by every part:
 | `worktree` | What the worktree commands share; with Settings' `worktree_clone_build` on (off by default), a new worktree's `target/` starts as a copy-on-write clone of the main clone's, made in the background by `cmd::clone_build` through `platform::clone_tree` |
 | `trust` | Whose code a directory holds, the one place that decides: the directories listed in `trusted-dirs`, a worktree whose code is your own (what `switchboard try` builds), a branch whose commits are your own (what `wt`, `wtb` and `wtpr` start Claude on), and someone else's PR checked out untrusted, which nothing starts Claude in, lists to reopen or builds |
 | `facts`, `items` | What GitHub and the landing queue say of each tab; the one shape every view's items take |
-| `repos` | Your settings for each repository, `repos.json`, by its origin's `owner/name`: how its work lands (through a PR or straight on its default branch, worked out from GitHub's rules and its CLAUDE.md when not set) and what a landed change needs |
+| `repos` | Your settings for each repository, `repos.json`, by its origin's `owner/name`: where its work is kept (`tickets`, which `wtn <number>` starts it from), how its work lands (through a PR or straight on its default branch, worked out from GitHub's rules and its CLAUDE.md when not set) and what a landed change needs |
 
 The workspace:
 

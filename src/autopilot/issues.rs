@@ -780,6 +780,36 @@ pub async fn still_stands(repo: &Repo, number: u64, label: &str) -> Result<Optio
     }))
 }
 
+/// Issue `number` of `repo` while it is open, whoever it is assigned to
+/// and however it is labeled, for an issue started by hand; `None` for one
+/// closed, a pull request, or none of that number.
+pub async fn open_issue(repo: &Repo, number: u64) -> Result<Option<Issue>> {
+    let path = format!("/repos/{repo}/issues/{number}");
+    let issue = match github::rest("GET", &path, None, "wtn: the issue").await {
+        Ok(issue) => issue,
+        Err(e) if crate::net::kind_of(&e) == Some(&crate::net::ErrorKind::NotFound) => {
+            return Ok(None);
+        }
+        Err(e) => return Err(e),
+    };
+    let text = |key: &str| {
+        issue
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    let open = text("state") == "open" && issue.get("pull_request").is_none();
+    Ok(open.then(|| Issue {
+        repo: repo.to_string(),
+        number,
+        title: text("title"),
+        body: text("body"),
+        url: text("html_url"),
+        claim: None,
+    }))
+}
+
 /// The read kept forgotten, so the next look asks GitHub again: once an
 /// issue's tab lands or is skipped.
 pub fn forget(state: &Path) {

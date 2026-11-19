@@ -4,7 +4,7 @@
 //! ```json
 //! { "owner/name": { "landing": "direct", "test": "npm test", "squash": true,
 //!                   "testIn": "here", "review": "review-loop", "beforePush": "",
-//!                   "afterRebase": "cargo clippy --all-targets",
+//!                   "afterRebase": "cargo clippy --all-targets", "tickets": "github",
 //!                   "apply": [{ "paths": ["db/**"], "label": "Reload the dev server", "command": "make reload" }] } }
 //! ```
 //!
@@ -19,7 +19,9 @@
 //! run after the last rebase in place of the tests, when that rebase had no
 //! conflict and the default branch's CI isn't failing (empty or not set, the
 //! tests run again), since a clean rebase changes nothing the tests haven't
-//! seen pass on each side. `apply` is what a change
+//! seen pass on each side. `tickets` is where the repository's work is
+//! kept, `github` (its issues) or `linear`, unset by default, which `wtn
+//! <number>` starts its work from (`tickets_at`). `apply` is what a change
 //! landed there needs to take effect, which `switchboard apply-actions`
 //! lists in place of what it would work out by itself. The file is yours
 //! and never in this repository; Settings changes it (`set_repo`), never
@@ -141,6 +143,8 @@ pub const REVIEWS: [&str; 2] = ["review-loop", "none"];
 /// Where a direct landing's tests can run: in the worktree, or in the
 /// repository's CI.
 pub const TEST_IN: [&str; 2] = ["here", "ci"];
+/// Where a repository's work can be kept, its `tickets`.
+pub const TICKETS: [&str; 2] = ["github", "linear"];
 /// An answer worked out is kept this long, in ms.
 pub const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
@@ -223,9 +227,9 @@ pub fn steps_of(entry: &Map<String, Value>) -> Steps {
     }
 }
 
-/// Sets one landing key of a repository's entry, keeping the rest of it;
-/// `landing` `automatic` takes the key out, so the default decides, and an
-/// entry left empty goes. Never over a file that can't be read as a JSON
+/// Sets one landing key, or `tickets`, of a repository's entry, keeping the
+/// rest of it; `landing` `automatic` and `tickets` `unset` take the key
+/// out, so the default decides, and an entry left empty goes. Never over a file that can't be read as a JSON
 /// object, the version before kept as `repos.json.bak`.
 pub fn set_repo(repo: &str, key: &str, value: Value) -> Result<(), String> {
     set_repo_in(&file(), repo, key, value)
@@ -233,10 +237,13 @@ pub fn set_repo(repo: &str, key: &str, value: Value) -> Result<(), String> {
 
 /// `set_repo` on the file at `path`.
 pub fn set_repo_in(path: &Path, repo: &str, key: &str, value: Value) -> Result<(), String> {
-    let automatic = key == "landing" && value.as_str() == Some("automatic");
-    if !automatic && !valid(key, &value) {
+    let automatic = (key == "landing" && value.as_str() == Some("automatic"))
+        || (key == "tickets" && value.as_str() == Some("unset"));
+    let tickets_ok = key == "tickets" && value.as_str().is_some_and(|v| TICKETS.contains(&v));
+    if !automatic && !tickets_ok && !valid(key, &value) {
         return Err(
             if [
+                "tickets",
                 "landing",
                 "test",
                 "testIn",
@@ -411,6 +418,38 @@ pub fn steps_at(dir: &Path) -> Result<Steps, String> {
         entry = landing_entry(&data, &configured);
     }
     Ok(steps_of(&entry))
+}
+
+/// Where the work of the repository at `dir` is kept, its `tickets` (one
+/// of `TICKETS`), by the key `landing_with` reads its entry under, else by
+/// origin's URL as its config writes it; `None` when it isn't set, and an
+/// error when repos.json can't be read. Runs git, so off the server's task.
+pub fn tickets_at(dir: &Path) -> Result<Option<String>, String> {
+    let (_, _, key) =
+        repository_at(dir).ok_or_else(|| format!("{} isn't in a git repository", dir.display()))?;
+    let data = read()
+        .map_err(|e| format!("{} can't be read ({e}); fix it first", paths::tilde(file())))?;
+    Ok([Some(key), configured_at(dir)]
+        .into_iter()
+        .flatten()
+        .find_map(|k| tickets_of(&entry_of(&data, &k))))
+}
+
+/// `owner/name` of origin's URL as the config of the repository at `dir`
+/// writes it, which an `insteadOf` may point elsewhere. Runs git.
+pub fn configured_at(dir: &Path) -> Option<String> {
+    worktree::git_at(dir, &["config", "--get", "remote.origin.url"])
+        .ok()
+        .and_then(|url| repo_of_url(&url))
+}
+
+/// An entry's `tickets`, when it holds one it can.
+pub fn tickets_of(entry: &Map<String, Value>) -> Option<String> {
+    entry
+        .get("tickets")
+        .and_then(Value::as_str)
+        .filter(|v| TICKETS.contains(v))
+        .map(str::to_string)
 }
 
 /// How the repository at `dir` lands as far as is known without asking
@@ -1081,6 +1120,23 @@ mod tests {
         let steps = steps_of(&landing_entry(&written, "acme/direct"));
         assert_eq!(steps.after_rebase, "make lint");
         assert_eq!(steps.json()["afterRebase"], "make lint");
+        set_repo_in(&path, "acme/direct", "tickets", json!("github")).unwrap();
+        let written = read_file(&path).unwrap();
+        assert_eq!(
+            tickets_of(&entry_of(&written, "ACME/direct")).as_deref(),
+            Some("github")
+        );
+        assert!(
+            set_repo_in(&path, "acme/direct", "tickets", json!("jira"))
+                .unwrap_err()
+                .contains("not a value for tickets")
+        );
+        set_repo_in(&path, "acme/direct", "tickets", json!("unset")).unwrap();
+        assert!(
+            read_file(&path).unwrap()["acme/direct"]
+                .get("tickets")
+                .is_none()
+        );
         std::fs::write(&path, "{ not json").unwrap();
         assert!(
             set_repo_in(&path, "acme/direct", "landing", json!("pr"))

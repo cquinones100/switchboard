@@ -6384,8 +6384,8 @@ impl Server {
     }
 
     /// Enter on a repository's landing row in Settings: how its work lands
-    /// from a menu (automatic leaves it to the default), its review and
-    /// where its tests run from a menu each, squash on or off, and a command typed in, written to
+    /// from a menu (automatic leaves it to the default), where its work is
+    /// kept, its review and where its tests run from a menu each, squash on or off, and a command typed in, written to
     /// ~/.config/switchboard/repos.json (`repos::set_repo`), as the daemon's
     /// `changeRepo` did.
     fn change_repo(&mut self, client: ClientId, m: &mut Mission, item: &Item) {
@@ -6406,13 +6406,18 @@ impl Server {
         };
         let name = r["repo"].as_str().unwrap_or("").to_string();
         match r["field"].as_str().unwrap_or("") {
-            field @ ("landing" | "review" | "testIn") => {
+            field @ ("landing" | "tickets" | "review" | "testIn") => {
                 let landing = field == "landing";
                 let options: Vec<(&str, &str)> = match field {
                     "landing" => vec![
                         ("automatic", "Automatic: GitHub's rules, else its CLAUDE.md"),
                         ("pr", "Through a PR"),
                         ("direct", "Straight on the default branch"),
+                    ],
+                    "tickets" => vec![
+                        ("unset", "Not set: wtn takes a note's item or --issue"),
+                        ("github", "GitHub issues"),
+                        ("linear", "Linear"),
                     ],
                     "testIn" => vec![
                         ("here", "Here, in the worktree"),
@@ -6427,6 +6432,8 @@ impl Server {
                 let values: Vec<String> = options.iter().map(|(v, _)| v.to_string()).collect();
                 let title = if landing {
                     format!("{name}: how its work lands")
+                } else if field == "tickets" {
+                    format!("{name}: where its work is kept")
                 } else if field == "testIn" {
                     format!("{name}: where the tests run")
                 } else {

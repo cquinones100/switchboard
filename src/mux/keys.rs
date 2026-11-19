@@ -114,6 +114,9 @@ pub enum Action {
     ReviewPr,
     /// Work on a note's checklist items, each in a new tab running `wtn` (M-I).
     WorkOnNote,
+    /// Work on one of a repository's open GitHub issues in a new tab running
+    /// `wtn --issue` (src/cmd/work.rs).
+    WorkOnIssue,
     /// Carry on shaping Linear tickets, each in a new tab running `shape`.
     ContinueShaping,
     /// Shape a note's checklist items as Linear tickets, each in a new tab
@@ -282,6 +285,7 @@ impl Action {
             "work-on-pr" => Action::WorkOnPr,
             "review-pr" => Action::ReviewPr,
             "work-on-note" => Action::WorkOnNote,
+            "work-on-issue" => Action::WorkOnIssue,
             "continue-shaping" => Action::ContinueShaping,
             "shape-note" => Action::ShapeNote,
             "shape-new-ticket" => Action::ShapeNewTicket,
@@ -362,6 +366,7 @@ impl Action {
             Action::WorkOnPr => "work-on-pr".into(),
             Action::ReviewPr => "review-pr".into(),
             Action::WorkOnNote => "work-on-note".into(),
+            Action::WorkOnIssue => "work-on-issue".into(),
             Action::ContinueShaping => "continue-shaping".into(),
             Action::ShapeNote => "shape-note".into(),
             Action::ShapeNewTicket => "shape-new-ticket".into(),
@@ -460,6 +465,7 @@ impl Action {
             Action::WorkOnPr => "Start work on a PR in a new tab (wtpr)".into(),
             Action::ReviewPr => "Review a contributor's PR in a new tab (/review-pr)".into(),
             Action::WorkOnNote => "Start work on a note's checklist items in new tabs (wtn)".into(),
+            Action::WorkOnIssue => "Start work on a GitHub issue in a new tab (wtn --issue)".into(),
             Action::ContinueShaping => "Continue shaping Linear tickets, each in a new tab".into(),
             Action::ShapeNote => "Shape a note's checklist items as Linear tickets".into(),
             Action::ShapeNewTicket => {
@@ -616,6 +622,9 @@ impl Action {
             Action::WorkOnNote => {
                 "Asks for the repository, the note and its unticked items, then where to land; parked sections and items already under way are left out.".into()
             }
+            Action::WorkOnIssue => {
+                "Asks for the repository, then lists its open issues, the ones assigned to you first, the newest first; a number typed is taken too. The tab runs Claude in a worktree on the issue's branch.".into()
+            }
             Action::ContinueShaping => {
                 "Asks for the tickets, then a directory in a repository, and runs shape --continue in a tab for each.".into()
             }
@@ -725,6 +734,7 @@ impl Action {
             Action::WorkOnPr => &["github", "pr", "worktree", "new"],
             Action::ReviewPr => &["github", "pr", "review"],
             Action::WorkOnNote => &["notes", "worktree", "new"],
+            Action::WorkOnIssue => &["github", "issue", "worktree", "new"],
             Action::ContinueShaping => &["linear", "ticket", "shape"],
             Action::ShapeNote => &["notes", "linear", "shape"],
             Action::ShapeNewTicket => &["linear", "ticket", "shape"],
@@ -859,6 +869,7 @@ impl Action {
             Action::WorkOnTask,
             Action::WorkOnPr,
             Action::ReviewPr,
+            Action::WorkOnIssue,
             Action::ContinueShaping,
             Action::ShapeNote,
             Action::ShapeNewTicket,

@@ -129,6 +129,7 @@ fn usage() -> ExitCode {
     eprintln!(
         "Usage: worktree-from-note [path] --note <note> --item <line> [--prompt <text>] [--target <branch>]\n       \
          worktree-from-note [path] --issue <number> [--prompt <text>] [--target <branch>]\n       \
+         worktree-from-note [path] <number | #number | issue or ticket link | ABC-12> [--prompt <text>]\n       \
          worktree-from-note init <zsh|bash>\n\n\
          Examples:\n  \
          worktree-from-note --note \"Switchboard Notes\" --item 12\n\n\
@@ -140,8 +141,11 @@ fn usage() -> ExitCode {
          branch, and records it as branch.<branch>.wtnTarget, which queue-and-clean\n\
          lands it on (autopilot's target, or one picked by hand). It is refused in a\n\
          repository that lands through PRs, which go to the default branch.\n\
-         --issue starts on one of the repository's GitHub issues instead, one autopilot\n\
-         may take: open, assigned to you and carrying its label.",
+         --issue starts on one of the repository's open GitHub issues instead; in a tab\n\
+         autopilot opened, only one assigned to you and carrying its label.\n\
+         A number alone (or #number, or a link) starts the repository's work from where\n\
+         repos.json's tickets keeps it: github, the issue as --issue does; linear, the\n\
+         ticket as wt does, a bare number in linear.json's linearTeam.",
         worktree::DEFAULT_WORKTREE_DIR
     );
     ExitCode::from(1)
@@ -1173,6 +1177,26 @@ pub fn main(args: Vec<String>) -> ExitCode {
             }
         };
     }
+    let asked = given
+        .positional
+        .last()
+        .filter(|_| given.last("--note").is_none() && given.last("--item").is_none())
+        .and_then(|p| Asked::parse(p));
+    if let Some(asked) = asked {
+        if given.positional.len() > 2 {
+            return usage();
+        }
+        let mut made = false;
+        return match by_provider(&given, asked, &mut made) {
+            Ok(code) => code,
+            Err(e) => {
+                if !made {
+                    failed_in_autopilot(&e);
+                }
+                worktree::fail(&e)
+            }
+        };
+    }
     let (Some(note), Some(item)) = (given.last("--note"), given.last("--item")) else {
         return usage();
     };
@@ -1196,6 +1220,105 @@ pub fn main(args: Vec<String>) -> ExitCode {
             worktree::fail(&e)
         }
     }
+}
+
+/// The work `wtn` is given by its number alone, or a link, rather than a
+/// note's item.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Asked {
+    /// `12` or `#12`, whose provider is the repository's `tickets`.
+    Number(u64),
+    /// A GitHub issue's link: `<owner>/<repo>#<number>`.
+    Issue(String),
+    /// A Linear ticket's ID or link, as written.
+    Ticket(String),
+}
+
+static ISSUE_LINK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^https?://github\.com/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)/issues/(\d+)/?(?:[?#].*)?$",
+    )
+    .unwrap()
+});
+
+impl Asked {
+    fn parse(text: &str) -> Option<Asked> {
+        let text = text.trim();
+        let digits = text.strip_prefix('#').unwrap_or(text);
+        if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+            return digits.parse().ok().map(Asked::Number);
+        }
+        if let Some(m) = ISSUE_LINK.captures(text) {
+            return Some(Asked::Issue(format!("{}/{}#{}", &m[1], &m[2], &m[3])));
+        }
+        worktree::looks_like_ticket(text).then(|| Asked::Ticket(text.to_string()))
+    }
+}
+
+/// `wtn <number>` (or `#<number>`, or a link): the repository's work from
+/// where its `tickets` in repos.json keeps it, a GitHub issue as `--issue`
+/// starts one, a Linear ticket as `wt` does (a bare number in
+/// linear.json's `linearTeam`); refused where `tickets` isn't set, and for
+/// a link to the other provider.
+fn by_provider(given: &Given, asked: Asked, made: &mut bool) -> Result<ExitCode, String> {
+    let root = worktree::repo_root().map_err(|e| e.to_string())?;
+    let tickets = crate::repos::tickets_at(&root)?;
+    let name = crate::repos::repo_at(&root)
+        .or_else(|| crate::repos::configured_at(&root))
+        .unwrap_or_else(|| "This repository".into());
+    let mut rest = given.clone();
+    rest.positional.pop();
+    match (tickets.as_deref(), asked) {
+        (None, _) => Err(format!(
+            "{name} has no ticket provider: set its Tickets in Settings (\"tickets\": \"github\" or \"linear\" in {}), or start a GitHub issue with switchboard worktree-from-note --issue <number>",
+            crate::files::shown("repos.json")
+        )),
+        (Some("github"), Asked::Ticket(t)) => Err(format!(
+            "{t} is a Linear ticket, and {name} keeps its work in GitHub issues: start it with switchboard worktree-from-ticket {t}"
+        )),
+        (Some("github"), Asked::Number(n)) => {
+            super::worktree_from_issue::run(&rest, &n.to_string(), made)
+        }
+        (Some("github"), Asked::Issue(reference)) => {
+            super::worktree_from_issue::run(&rest, &reference, made)
+        }
+        (Some(_), Asked::Issue(reference)) => Err(format!(
+            "{reference} is a GitHub issue, and {name} keeps its work in Linear: start it with switchboard worktree-from-note --issue {reference}"
+        )),
+        (Some(_), Asked::Number(n)) => {
+            let team = crate::util::read_json(crate::files::file("linear.json"))
+                .and_then(|v| Some(v.get("linearTeam")?.as_str()?.trim().to_string()))
+                .filter(|t| !t.is_empty())
+                .ok_or_else(|| {
+                    format!(
+                        "{name} keeps its work in Linear, and a number alone needs its team: set linearTeam in {}, or give the ticket's ID (ABC-{n})",
+                        crate::files::shown("linear.json")
+                    )
+                })?;
+            linear_ticket(given, &rest, format!("{team}-{n}"))
+        }
+        (Some(_), Asked::Ticket(t)) => linear_ticket(given, &rest, t),
+    }
+}
+
+/// A Linear ticket started as `wt` starts it, with what `wtn` was given
+/// (`rest`, its path) passed on.
+fn linear_ticket(given: &Given, rest: &Given, ticket: String) -> Result<ExitCode, String> {
+    if given.last("--target").is_some() {
+        return Err("--target takes a note's item or a GitHub issue, not a Linear ticket".into());
+    }
+    let mut args: Vec<String> = rest.positional.clone();
+    args.push(ticket);
+    for p in given.all("--prompt") {
+        args.extend(["--prompt".to_string(), p.to_string()]);
+    }
+    if let Some(cd) = &given.cd_file {
+        args.extend(["--cd-file".to_string(), cd.clone()]);
+    }
+    if given.no_claude {
+        args.push("--no-claude".into());
+    }
+    Ok(super::worktree_from_ticket::main(args))
 }
 
 /// `made` is set once the item's worktree is made, which claims it.
@@ -1729,6 +1852,23 @@ pub fn skip_from(text: &str) -> HashSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn work_asked_by_its_number_a_github_link_or_a_linear_ticket() {
+        assert_eq!(Asked::parse("12"), Some(Asked::Number(12)));
+        assert_eq!(Asked::parse("#12"), Some(Asked::Number(12)));
+        assert_eq!(
+            Asked::parse("https://github.com/acme/widgets/issues/12"),
+            Some(Asked::Issue("acme/widgets#12".into()))
+        );
+        assert_eq!(Asked::parse("ABC-12"), Some(Asked::Ticket("ABC-12".into())));
+        assert_eq!(Asked::parse(".worktrees"), None, "a path stays a path");
+        assert_eq!(Asked::parse("#"), None);
+        assert_eq!(
+            Asked::parse("https://github.com/acme/widgets/pull/12"),
+            None
+        );
+    }
 
     #[test]
     fn a_fetch_that_fails_twice_then_works_starts_from_the_fresh_branch() {

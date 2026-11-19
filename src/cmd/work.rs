@@ -10,6 +10,8 @@
 //! The palette's "Review a contributor's PR", listed only where the main
 //! clone has a review-pr project skill, lists a repository's open PRs from
 //! forks and starts `/review-pr <number>` in a tab in the main clone.
+//! Its "Start work on a GitHub issue" lists a repository's open issues, the
+//! ones assigned to you first, and starts `wtn --issue <number>` in a tab.
 //!
 //! The directory list is pick-dir.zsh's: the one you are in first, then
 //! every open tab's, then every one a Claude session ran in, most recent
@@ -457,6 +459,13 @@ impl Server {
                     found,
                     Wanted::Repo,
                     |s, c, dir, _| s.ask_note(c, dir),
+                ),
+                Action::WorkOnIssue => server.ask_dir(
+                    client,
+                    "Work on a GitHub issue: the repository",
+                    found,
+                    Wanted::Repo,
+                    |s, c, dir, _| s.ask_issue(c, dir),
                 ),
                 Action::ContinueShaping => server.ask_shaping(client, found),
                 _ => {}
@@ -932,6 +941,90 @@ impl Server {
                                 },
                             );
                         }
+                    }
+                });
+            },
+        );
+    }
+
+    /// The palette's "Start work on a GitHub issue", once the repository is
+    /// picked: its open issues, the ones assigned to you first, each group
+    /// the newest first (a number typed taken too), then a tab running
+    /// `wtn --issue <owner>/<repo>#<number>`, which asks GitHub about the
+    /// issue again as it starts.
+    fn ask_issue(&mut self, client: ClientId, repo: PathBuf) {
+        let at = repo.clone();
+        self.off_task(
+            client,
+            move || {
+                tokio::runtime::Handle::current().block_on(async {
+                    let found = github::repo_of(&at).await?;
+                    let issues = github::open_issues(&found, "M-p work on an issue").await?;
+                    anyhow::Ok((found, issues))
+                })
+            },
+            move |server, client, found| {
+                let (name, issues) = match found {
+                    Ok(found) => found,
+                    Err(e) => {
+                        server.say(Some(client), &format!("Couldn't list the open issues: {e}"));
+                        return;
+                    }
+                };
+                // Someone else wrote the title, which may hold what a
+                // terminal acts on: shown without control characters.
+                let titles: Vec<(u64, String)> = issues
+                    .iter()
+                    .map(|i| {
+                        (
+                            i.number,
+                            i.title.chars().filter(|c| !c.is_control()).collect(),
+                        )
+                    })
+                    .collect();
+                let items = issues
+                    .iter()
+                    .zip(&titles)
+                    .map(|(i, (number, title))| PickItem {
+                        text: format!("#{number} {title}"),
+                        tags: if i.yours {
+                            "yours".into()
+                        } else {
+                            String::new()
+                        },
+                        value: number.to_string(),
+                        ..PickItem::default()
+                    })
+                    .collect();
+                let title = if issues.is_empty() {
+                    "No open issues: an issue number to work on"
+                } else {
+                    "Work on a GitHub issue"
+                };
+                let picker = Picker::new(title, items)
+                    .named("work-on-issue")
+                    .prompt("Issue: ")
+                    .free();
+                server.pick(client, picker, move |server, client, picked| {
+                    let Some(picked) = picked else {
+                        return;
+                    };
+                    let typed = picked.value.trim();
+                    let Some(number) = typed.strip_prefix('#').unwrap_or(typed).parse::<u64>().ok()
+                    else {
+                        server.say(Some(client), &format!("Not an issue number: {typed}"));
+                        return;
+                    };
+                    let reference = format!("{name}#{number}");
+                    let text = titles
+                        .into_iter()
+                        .find(|(n, _)| *n == number)
+                        .map(|(_, title)| format!("{reference}: {}", worktree::one_line(&title)))
+                        .unwrap_or_else(|| reference.clone());
+                    if let Some(tab) =
+                        server.open_issue_tab(client, &repo, &reference, &text, "", Opened::Front)
+                    {
+                        server.front(client, &[tab]);
                     }
                 });
             },
