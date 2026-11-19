@@ -1963,8 +1963,14 @@ impl App {
         self.focus = self.main_side();
         // A line only the old side has is at the commits' own lines, which
         // edits since never move; a new side's line may have moved.
+        // The side the row shows its number from: the new one, but for a
+        // line only the old side has.
         let line = |l: Option<usize>| l.map_or((0, 0), |l| (l, 1));
-        self.at_hunk(line(new), line(old));
+        if new.is_some() {
+            self.at_hunk(line(new), (0, 0));
+        } else {
+            self.at_hunk((0, 0), line(old));
+        }
         // Edits since the commits may have moved a new side's line: shown
         // at its number, which edits below it keep, and said.
         if new.is_some() && self.current().is_some_and(|e| self.changed_since(e)) {

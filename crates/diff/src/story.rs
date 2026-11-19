@@ -78,8 +78,8 @@ pub fn mapped() -> bool {
 /// `lines` changed lines, by its alias: the diff_story_model setting's
 /// choice, and with "size" (its default) Sonnet for a change of more
 /// than `SONNET_FILES` files or `SONNET_LINES` lines, else Haiku. A story
-/// that reads the tab's plan (`plan`) is told by Haiku unless Sonnet is
-/// chosen by name: diff_story_plan's opt-in sends the plan to Haiku.
+/// that reads the tab's plan (`plan`) is always told by Haiku:
+/// diff_story_plan's opt-in sends the plan to Haiku alone.
 pub fn model(files: usize, lines: usize, plan: bool) -> &'static str {
     let chosen = crate::settings::value("diff_story_model");
     model_by(chosen.as_ref().and_then(Value::as_str), files, lines, plan)
@@ -87,9 +87,9 @@ pub fn model(files: usize, lines: usize, plan: bool) -> &'static str {
 
 pub fn model_by(chosen: Option<&str>, files: usize, lines: usize, plan: bool) -> &'static str {
     match chosen {
+        _ if plan => "haiku",
         Some("haiku") => "haiku",
         Some("sonnet") => "sonnet",
-        _ if plan => "haiku",
         _ if files > SONNET_FILES || lines > SONNET_LINES => "sonnet",
         _ => "haiku",
     }
@@ -2943,9 +2943,9 @@ mod tests {
         );
         assert_eq!(model_by(Some("haiku"), 40, 9000, false), "haiku");
         assert_eq!(model_by(Some("sonnet"), 1, 2, false), "sonnet");
-        // The plan stays with Haiku unless Sonnet is chosen by name.
+        // The plan goes to Haiku alone, whatever is chosen.
         assert_eq!(model_by(Some("size"), 40, 9000, true), "haiku");
-        assert_eq!(model_by(Some("sonnet"), 40, 9000, true), "sonnet");
+        assert_eq!(model_by(Some("sonnet"), 40, 9000, true), "haiku");
         assert_eq!(model_name("sonnet"), "Sonnet");
     }
 

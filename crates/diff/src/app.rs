@@ -5200,6 +5200,8 @@ impl App {
             if self.focus != Focus::List && y >= column.y && y < column.bottom() {
                 self.click_reading_row((y - column.y) as usize);
             }
+            // The outline taking the keys ends the column's selection.
+            self.read_if_reading();
             self.selection = None;
             self.pressed = Some((x, y));
             return Act::Redraw;
