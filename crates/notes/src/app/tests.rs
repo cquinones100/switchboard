@@ -5845,3 +5845,24 @@ fn a_shorter_plan_keeps_its_cursor_in_sight_and_lights_no_card() {
     assert_eq!(b.stop, None);
     assert_eq!(b.line, below + 1);
 }
+
+#[test]
+fn a_plan_made_shorter_without_the_keys_lights_no_card_as_they_come_back() {
+    let (_dir, mut app, _path, _plan) = with_plan("plan-shorter-unfocused", 160);
+    app.rows = 40;
+    keys(&mut app, "4G<CR><C-w>l");
+    let _ = drawn(&mut app);
+    let below = app.plan_layout().1.iter().map(|h| h.0 + h.3).max().unwrap();
+    {
+        let b = app.beside.as_mut().unwrap();
+        (b.line, b.stop, b.follow) = (below + 1, None, true);
+    }
+    let _ = drawn(&mut app);
+    keys(&mut app, "<C-w>h");
+    let _ = drawn(&mut app);
+    app.rows = 12;
+    let _ = drawn(&mut app);
+    keys(&mut app, "<C-w>l");
+    let _ = drawn(&mut app);
+    assert_eq!(app.beside.as_ref().unwrap().stop, None);
+}
