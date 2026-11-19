@@ -607,7 +607,7 @@ impl App {
     /// story of a change read again still being told, as the screen is
     /// drawn.
     fn plain(&self) -> bool {
-        !(self.mode == Mode::Story && !self.mapped() && self.telling == Telling::Waiting)
+        !(self.mode != Mode::Files && !self.mapped() && self.telling == Telling::Waiting)
             && self.loading.is_none()
             && self.failed.is_none()
             && self.nothing.is_none()

@@ -151,10 +151,13 @@ impl App {
             return None;
         }
         let mut cursor = None;
-        if self.on_story() {
+        if self.on_map() {
+            // The story's map, one pane with the keys.
+            self.draw_map(buf);
+        } else if self.on_story() {
             // The outline and the column, one of them with the keys.
             self.draw_story(buf);
-        } else if self.mode == super::Mode::Story && self.telling == Telling::Waiting {
+        } else if self.mode != super::Mode::Files && self.telling == Telling::Waiting {
             // The story of the change read again, still being told.
             let line = format!("{} {}", self.spinner(), story::telling(Some(&self.reading)));
             self.centred(buf, &[(line, Style::new().add_modifier(Modifier::BOLD))]);
@@ -211,6 +214,15 @@ impl App {
     pub(super) fn footer_keys(&self) -> Vec<(&'static str, &'static str)> {
         let mut keys = if self.filtering {
             vec![("↑↓", "move"), ("↵", "keep"), ("esc", "clear")]
+        } else if self.on_map() && self.mapper.strip.is_some() {
+            vec![("←→", "chapter"), ("↵", "open"), ("esc", "the map")]
+        } else if self.on_map() {
+            let mut keys = vec![("↑↓←→", "move"), ("↵", "read")];
+            if self.story.as_ref().is_some_and(|s| s.chapters.len() > 1) {
+                keys.push(("] [", "chapter"));
+            }
+            keys.push(("esc", "close"));
+            keys
         } else if self.on_story() && self.focus == Focus::List {
             vec![
                 ("↑↓", "outline"),
@@ -1601,7 +1613,8 @@ impl App {
         // button still fits after it; else m and a right click switch.
         let buttons: u16 = bar.iter().map(|(_, label)| width(label) as u16 + 3).sum();
         let switch = {
-            let (spans, _) = kit::choice_switch(&["Map", "Files"], None, None, &[], false, &theme);
+            let (spans, _) =
+                kit::choice_switch(&["Story", "Map", "Files"], None, None, &[], false, &theme);
             kit::spans_width(&spans) as u16 + 1
         };
         let mut x = if self.settings.is_none() && 1 + switch + buttons < self.cols {

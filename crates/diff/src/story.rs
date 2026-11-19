@@ -1629,6 +1629,105 @@ pub fn needed_by(story: &Story, n: usize) -> Vec<(usize, bool)> {
         .collect()
 }
 
+/// A chapter's pages read from the goal down: the goal, then the first
+/// page it builds on and what that builds on, then back up to the next
+/// branch, so each page is reached from one that needs it; the pages
+/// nothing ties to the goal after it, in the order told.
+pub fn goal_down(story: &Story, chapter: usize) -> Vec<usize> {
+    let Some(t) = story.chapters.get(chapter) else {
+        return Vec::new();
+    };
+    let mut order: Vec<usize> = Vec::new();
+    let mut starts: Vec<usize> = t.goal.into_iter().collect();
+    starts.extend(
+        t.pages
+            .iter()
+            .filter(|&&n| !needed_by(story, n).iter().any(|(m, _)| t.pages.contains(m))),
+    );
+    starts.extend(&t.pages);
+    for start in starts {
+        let mut next = vec![start];
+        while let Some(n) = next.pop() {
+            if order.contains(&n) {
+                continue;
+            }
+            order.push(n);
+            next.extend(builds_on(story, n).into_iter().rev().map(|(m, _)| m));
+        }
+    }
+    order
+}
+
+/// A chapter's pages by their level on the map: the goal and whatever
+/// else no page of the story builds on at the top, each other page a
+/// level under the lowest page that builds on it, each level in the
+/// order the story is read from the goal down.
+pub fn levels(story: &Story, chapter: usize) -> Vec<Vec<usize>> {
+    let order = goal_down(story, chapter);
+    let mut level: HashMap<usize, usize> = HashMap::new();
+    // Each page is under every page that builds on it: settled in as
+    // many passes as there are pages, the links being no circle.
+    for _ in 0..order.len() {
+        for &n in &order {
+            let under = needed_by(story, n)
+                .iter()
+                .filter(|(m, _)| order.contains(m))
+                .map(|(m, _)| level.get(m).copied().unwrap_or(0) + 1)
+                .max()
+                .unwrap_or(0);
+            level.insert(n, under);
+        }
+    }
+    let deepest = level.values().copied().max().unwrap_or(0);
+    (0..=deepest)
+        .map(|l| order.iter().copied().filter(|n| level[n] == l).collect())
+        .filter(|row: &Vec<usize>| !row.is_empty())
+        .collect()
+}
+
+/// Text as a Mermaid label takes it: without the characters that end a
+/// label or start a link.
+pub fn label_text(text: &str) -> String {
+    // Each run of hyphens as one, and nothing else taken twice, so the
+    // text read again is the same text: a box is found by it.
+    let mut out = String::new();
+    for c in text.chars() {
+        let c = match c {
+            '"' | '`' => '\'',
+            '<' | '>' | '|' | ';' | '&' | '#' | '[' | ']' | '{' | '}' => ' ',
+            '*' => ' ',
+            c => c,
+        };
+        if c == '-' && out.ends_with('-') {
+            continue;
+        }
+        out.push(c);
+    }
+    out
+        // A diagram breaks a label's line at \n as at <br>.
+        .replace("\\n", " ")
+        // %% starts a comment in a diagram's source, quoted or not.
+        .replace('%', " ")
+}
+
+/// A chapter's map as a Mermaid flowchart, top down: a box a page with
+/// the lines `label` gives it, the goal first, an arrow from each page
+/// to each it builds on, dotted for a guess.
+pub fn mermaid(story: &Story, chapter: usize, label: &dyn Fn(usize) -> Vec<String>) -> String {
+    let order = goal_down(story, chapter);
+    let mut out = vec!["flowchart TD".to_string()];
+    for &n in &order {
+        let lines: Vec<String> = label(n).iter().map(|l| label_text(l)).collect();
+        out.push(format!("  c{n}[\"{}\"]", lines.join("<br>")));
+    }
+    for &n in &order {
+        for (m, guess) in builds_on(story, n) {
+            let arrow = if guess { "-.->" } else { "-->" };
+            out.push(format!("  c{n} {arrow} c{m}"));
+        }
+    }
+    out.join("\n")
+}
 /// What a story's `missed` says, once for each diff a view shows: in a box,
 /// and on stderr in the story told ahead, which its log keeps.
 pub fn missed_text(story: &Story) -> Option<String> {

@@ -104,6 +104,7 @@ use crate::host::host;
 use crate::{settings, util};
 
 mod draw;
+mod map;
 mod own;
 mod reading;
 mod select;
@@ -601,12 +602,12 @@ pub const KEYS: &[(&str, &[KeyRow])] = &[
             ),
             key_row("yS", "copy the story as Markdown"),
             key_row(
-                "gm gf",
-                "the story view, and the page being read in the file view",
+                "gs gm gf",
+                "the story view, the story's map, and the page being read in the file view",
             ),
             key_row(
                 "m",
-                "the view's menu: the story or the files, What runs, Tell it again",
+                "the view's menu: the story, the map or the files, What runs, Tell it again",
             ),
             ask_row("ga", "ask Claude about the diff"),
             key_row(
@@ -635,6 +636,21 @@ pub const KEYS: &[(&str, &[KeyRow])] = &[
                 "select lines of the column: y then copies their text",
             ),
             key_row("gf", "the page being read in the file view"),
+        ],
+    ),
+    (
+        "M-d: the story's map",
+        &[
+            key_row(
+                "j k h l",
+                "down a level to what the page builds on, up to what needs it, across a level",
+            ),
+            key_row("↵", "read the chosen page in the story view"),
+            key_row("] [", "the next chapter's map, the one before"),
+            key_row(
+                "tab",
+                "the chapters' strip: h l between the chapters, ↵ on In the files only opens their files",
+            ),
         ],
     ),
     (
@@ -803,6 +819,8 @@ pub struct App {
     /// (0 what changes, else a page).
     mode: Mode,
     reader: Reader,
+    /// The map's own state (map.rs).
+    mapper: map::Mapper,
     read: HashSet<usize>,
     /// The story asked next is Tell it again's, asked anew.
     retelling: bool,
@@ -1011,6 +1029,7 @@ impl App {
             whole_at: None,
             mode: Mode::Files,
             reader: Reader::default(),
+            mapper: map::Mapper::default(),
             read: HashSet::new(),
             retelling: false,
             hits: Vec::new(),
@@ -1427,7 +1446,7 @@ impl App {
     /// before the Story view took their place. One still being told keeps
     /// the view.
     fn settle_mode(&mut self) -> bool {
-        let falls = !self.mapped() && self.mode == Mode::Story && self.telling != Telling::Waiting;
+        let falls = !self.mapped() && self.mode != Mode::Files && self.telling != Telling::Waiting;
         if falls {
             self.files_again();
         }
@@ -1519,7 +1538,7 @@ impl App {
             }
             // The story to come is another one, whose pages aren't
             // this one's by number: the Story view starts again on it.
-            if self.mode == Mode::Story {
+            if self.mode != Mode::Files {
                 self.alone = None;
                 self.whole_at = None;
                 self.reader = Reader::default();
@@ -2045,8 +2064,13 @@ impl App {
 
     /// The diff area's columns, and each side's.
     fn diff_area(&self) -> Rect {
-        // The Story view's outline is where the list is.
-        let x = self.list_cols() + 1;
+        // The Story view's outline is where the list is; the map takes
+        // the whole width.
+        let x = if self.on_map() {
+            0
+        } else {
+            self.list_cols() + 1
+        };
         let bottom = u16::from(self.has_buttons() || self.has_footer());
         Rect::new(
             x,
@@ -2705,7 +2729,7 @@ impl App {
         // A refreshed story still being told moves no focus among files out
         // of sight.
         if alt_arrow(&key).is_some()
-            && self.mode == Mode::Story
+            && self.mode != Mode::Files
             && !self.mapped()
             && self.telling == Telling::Waiting
         {
@@ -2755,7 +2779,7 @@ impl App {
                     self.cover = None;
                     // Told again from the Story view: the files now, as the
                     // cover says, while the story is told.
-                    if self.mode == Mode::Story && !self.mapped() {
+                    if self.mode != Mode::Files && !self.mapped() {
                         self.files_again();
                     }
                     Act::Redraw
@@ -2795,7 +2819,7 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         // While a refreshed story is told, its place takes only closing and
         // g f, back to the files: nothing acts on files out of sight.
-        if self.mode == Mode::Story && !self.mapped() && self.telling == Telling::Waiting {
+        if self.mode != Mode::Files && !self.mapped() && self.telling == Telling::Waiting {
             return match (self.pending.take(), key.code) {
                 (Some('g'), KeyCode::Char('f')) => {
                     self.show_files(false);
@@ -2821,6 +2845,12 @@ impl App {
             return Act::Same;
         }
         let count = self.count.take().unwrap_or(1).max(1);
+        // The map has the keys while it is on the screen.
+        if self.on_map()
+            && let Some(act) = self.map_key(key)
+        {
+            return act;
+        }
         // The Story view has the keys while it is on the screen.
         if self.on_story()
             && let Some(act) = self.story_key(key, count)
@@ -2945,6 +2975,19 @@ impl App {
             return Act::Redraw;
         };
         let count = self.count.take().unwrap_or(1);
+        // The map has no file or line under a cursor: its pairs are the
+        // views', the story's copy and a question.
+        if self.on_map() {
+            match (first, c) {
+                ('g', 'f') => self.show_files(false),
+                ('g', 's') => self.open_story_view(),
+                ('y', 'S') => self.copy_story(),
+                ('g', 'a') if self.opts.ask => self.open_ask(),
+                ('w', dir @ ('h' | 'j' | 'k' | 'l')) => self.beside(dir),
+                _ => {}
+            }
+            return Act::Redraw;
+        }
         // The Story view has pairs of its own, and no file under a cursor.
         if self.on_story() {
             self.story_pair(first, c);
@@ -2952,7 +2995,8 @@ impl App {
             return Act::Redraw;
         }
         match (first, c) {
-            ('g', 'm') => self.open_story_view(),
+            ('g', 'm') => self.open_map_view(),
+            ('g', 's') => self.open_story_view(),
             ('g', 'f') => self.show_files(false),
             ('y', 'p') => self.copy_path(),
             ('y', 'l') => self.copy_link(),
@@ -4584,7 +4628,7 @@ impl App {
         // Only for a file the diff has: one outside it opens beside, the
         // Story view left as it is.
         let changed = self.entries().iter().any(|e| e.path == path);
-        if changed && self.mapped() && self.mode == Mode::Story {
+        if changed && self.mapped() && self.mode != Mode::Files {
             self.whole_files();
         }
         let found = self
@@ -4864,7 +4908,7 @@ impl App {
         // read and under the story's cover too; while a refreshed story is
         // told, whose place takes only closing, Close alone of its keys.
         let map_told =
-            self.mode == Mode::Story && !self.mapped() && self.telling == Telling::Waiting;
+            self.mode != Mode::Files && !self.mapped() && self.telling == Telling::Waiting;
         if let Some(button) = self.hit(x, y) {
             let inert = map_told && matches!(button, Button::Bar(i) if self.bar_keys(i) != "q");
             return if inert { Pointer::Arrow } else { Pointer::Hand };
@@ -5063,7 +5107,7 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) => {}
             // The place of a refreshed story still being told takes no wheel.
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
-                if self.mode == Mode::Story
+                if self.mode != Mode::Files
                     && !self.mapped()
                     && self.telling == Telling::Waiting =>
             {
@@ -5071,6 +5115,11 @@ impl App {
             }
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
                 let down = m.kind == MouseEventKind::ScrollDown;
+                // Over the map, the wheel reads on from the goal down.
+                if self.on_map() && self.answer.is_none() && self.ask_box.is_none() {
+                    self.map_step(if down { 1 } else { -1 });
+                    return Act::Redraw;
+                }
                 // Over the Story view, the outline moves and the column scrolls.
                 if self.on_story() && self.answer.is_none() && self.ask_box.is_none() {
                     self.story_wheel(x, down);
@@ -5146,7 +5195,7 @@ impl App {
         // The cover, and the place of a refreshed story still being told,
         // take no click but the row's buttons: nothing out of sight is chosen.
         let map_told =
-            self.mode == Mode::Story && !self.mapped() && self.telling == Telling::Waiting;
+            self.mode != Mode::Files && !self.mapped() && self.telling == Telling::Waiting;
         if self.loading.is_some()
             || (self.cover.is_some() && self.telling == Telling::Waiting)
             || map_told
@@ -8182,6 +8231,10 @@ mod tests {
             let mut app = app();
             match title {
                 "M-d's diff" => {}
+                "M-d: the story's map" => {
+                    app = map_app();
+                    press(&mut app, "gm");
+                }
                 "M-d: the story view" => {
                     app = map_app();
                     app.toggle_runs();
@@ -8222,8 +8275,8 @@ mod tests {
             .flat_map(|(_, rows)| rows.into_iter().map(|(k, _)| k))
             .collect();
         assert!(!without.contains(&"ga".to_string()));
-        assert_eq!(key_groups(false).len(), 3);
-        assert_eq!(key_groups(true).len(), 5);
+        assert_eq!(key_groups(false).len(), 4);
+        assert_eq!(key_groups(true).len(), 6);
     }
 
     #[test]
@@ -8901,6 +8954,33 @@ mod tests {
     }
 
     #[test]
+    fn the_map_shows_what_builds_on_what_and_enter_reads_a_page() {
+        let mut app = map_app();
+        press(&mut app, "gm");
+        assert!(app.on_map());
+        let shown = screen(&mut app);
+        let row = |text: &str| line_with(&shown, text);
+        // The goal first, each page under what builds on it.
+        assert!(row("THE GOAL") < row("4 Wire the page"));
+        assert!(row("4 Wire the page") < row("2 Count the signups"));
+        assert!(row("2 Count the signups") < row("1 Store each outline"));
+        assert!(shown[0].contains("1 Signups map"));
+        // j down to what the goal builds on, Enter reads it in the column.
+        assert_eq!(app.mapper.at, 4);
+        press(&mut app, "j");
+        assert_eq!(app.mapper.at, 2);
+        enter(&mut app);
+        assert!(app.on_story());
+        assert_eq!((app.section(), app.focus), (2, Focus::New));
+        // Back on the map, on the page being read; ] shows the next chapter.
+        press(&mut app, "gm");
+        assert_eq!(app.mapper.at, 2);
+        press(&mut app, "]c");
+        assert_eq!(app.mapper.chapter, 1);
+        assert!(app.history.is_none(), "the c after ] adds nothing");
+    }
+
+    #[test]
     fn a_change_is_side_by_side_where_the_column_has_room() {
         let mut app = map_app();
         app.cols = 170;
@@ -8970,8 +9050,8 @@ mod tests {
         assert_eq!(app.mode, Mode::Files);
         assert_eq!(app.current().map(|e| e.path.as_str()), Some("src/store.rs"));
         assert_eq!(app.focus, Focus::New);
-        // g m comes back to the Story view where it was left.
-        press(&mut app, "gm");
+        // g s comes back to the Story view where it was left.
+        press(&mut app, "gs");
         assert!(app.on_story());
         assert_eq!(app.section(), 1);
     }
@@ -9147,18 +9227,21 @@ mod tests {
         let left = app.current().map(|e| e.path.clone());
         press(&mut app, "m");
         assert!(screen(&mut app).iter().any(|l| l.contains("› Files")));
-        press(&mut app, "k");
+        press(&mut app, "kk");
         enter(&mut app);
         assert!(app.on_story());
         assert_eq!(app.section(), 2, "the column where it was left");
-        press(&mut app, "mj");
+        press(&mut app, "mjj");
         enter(&mut app);
         assert_eq!(app.mode, Mode::Files);
         assert_eq!(app.current().map(|e| e.path.clone()), left);
-        // g m comes back from anywhere, the diff's side included.
+        // g s comes back from anywhere, the diff's side included, and g m
+        // shows the map.
         app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-        press(&mut app, "gm");
+        press(&mut app, "gs");
         assert!(app.on_story());
+        press(&mut app, "gm");
+        assert!(app.on_map());
     }
 
     #[test]
@@ -9187,7 +9270,7 @@ mod tests {
         assert_eq!(app.mode, Mode::Files);
         // A click on an entry of the outline chooses it, and a second
         // reads from it as the mouse is let go.
-        press(&mut app, "gm");
+        press(&mut app, "gs");
         screen(&mut app);
         let (_, at) = app
             .hits
@@ -9267,6 +9350,8 @@ mod tests {
         press(&mut app, "gf");
         assert_eq!(map_app_with(kept).mode, Mode::Files);
         press(&mut app, "gm");
+        assert_eq!(map_app_with(kept).mode, Mode::Map);
+        press(&mut app, "gs");
         assert_eq!(map_app_with(kept).mode, Mode::Story);
         let _ = std::fs::remove_file(crate::paths::state_dir().join("diff-mode"));
     }

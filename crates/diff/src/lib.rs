@@ -115,7 +115,7 @@ pub fn manifest() -> Manifest {
             Setting::new("diff_story_map", true)
                 .said(
                     "Open the diff on what changes",
-                    "M-d tells the diff's story in chapters of pages (the goal's chapter, one for each part it can be read without, and the side work) and opens on what changes: before and after in plain words and one line for each page, an outline of the chapters and pages beside it. Enter reads down one column, each page's claim, what it decided and instead of what, and its changes, tests folded last; What runs shows the steps in the order they happen. The files stay a view of their own (g m and g f, or m), opening in the view used last; off, the story is one list of pages over the files. A story already told is told again the first time either way",
+                    "M-d tells the diff's story in chapters of pages (the goal's chapter, one for each part it can be read without, and the side work) and opens on what changes: before and after in plain words and one line for each page, an outline of the chapters and pages beside it. Enter reads down one column, each page's claim, what it decided and instead of what, and its changes, tests folded last; What runs shows the steps in the order they happen. The story's map, a box a page and an arrow to what each builds on, is a third view, and the files stay a view of their own (g s, g m and g f, or m), opening in the view used last; off, the story is one list of pages over the files. A story already told is told again the first time either way",
                 ),
             // A choice of three, which the diff's own settings view, of
             // on/off rows, can't take: set in the workspace's Settings,

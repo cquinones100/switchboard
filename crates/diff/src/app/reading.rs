@@ -51,6 +51,8 @@ pub enum Mode {
     Files,
     /// What changes, the outline and the column read down.
     Story,
+    /// The story's map of what builds on what (map.rs).
+    Map,
 }
 
 impl Mode {
@@ -58,12 +60,17 @@ impl Mode {
         match self {
             Mode::Files => "files",
             Mode::Story => "story",
+            Mode::Map => "map",
         }
     }
 }
 
 /// The options of `m`'s menu that switch views, in its order.
-pub(super) const MENU: [(&str, Mode); 2] = [("Story", Mode::Story), ("Files", Mode::Files)];
+pub(super) const MENU: [(&str, Mode); 3] = [
+    ("Story", Mode::Story),
+    ("Map", Mode::Map),
+    ("Files", Mode::Files),
+];
 
 /// Something of the Story view a click lands on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,6 +81,12 @@ pub(super) enum Hit {
     Line(usize),
     /// A step of What runs, by its place.
     Run(usize),
+    /// A page of the map, by its number: its box.
+    Page(usize),
+    /// A chapter of the map's strip, by its place.
+    Chapter(usize),
+    /// The strip's chip of the files no page tells.
+    FilesOnly,
 }
 
 /// Where Files mode was when the Story view took its place: the page, the
@@ -176,7 +189,7 @@ pub(super) struct Reader {
     /// Where a selection of the column's lines started (`v`).
     pub(super) visual: Option<usize>,
     /// The last key was ] or [ alone, so a p or c after it adds nothing.
-    after_bracket: bool,
+    pub(super) after_bracket: bool,
     laid: Option<(u16, Vec<Row>)>,
     /// The column to lay out again on its next draw, the rows before kept
     /// to find the cursor's section in.
@@ -507,14 +520,15 @@ impl App {
     pub(super) fn enter_story(&mut self) {
         // Where Files mode was left is kept while the Story view stays
         // shown across a story told again: its file is found again by its key.
-        if self.mode != Mode::Story {
+        if self.mode == Mode::Files {
             self.files_place = None;
         }
         self.read.clear();
         self.reader = Reader::default();
+        self.mapper = super::map::Mapper::default();
         if !self.mapped() {
             // A story told as a list: the files where they were left.
-            if self.mode == Mode::Story {
+            if self.mode != Mode::Files {
                 self.files_again();
             }
             self.mode = Mode::Files;
@@ -524,14 +538,14 @@ impl App {
         // A story told again while the Story view was shown (the change
         // read again) stays there; the first to come stays on the files
         // where someone is already reading them.
-        self.mode = if self.mode == Mode::Story {
-            Mode::Story
+        self.mode = if self.mode != Mode::Files {
+            self.mode
         } else if self.moved || self.alone.is_some() || self.focus != Focus::List {
             Mode::Files
         } else {
             self.kept_mode()
         };
-        if self.mode == Mode::Story {
+        if self.mode != Mode::Files {
             // The outline has the keys: typing the file list's filter ends.
             self.filtering = false;
             self.focus = Focus::List;
@@ -547,11 +561,12 @@ impl App {
             .flatten();
         match kept.as_deref().map(str::trim) {
             Some("files") => Mode::Files,
+            Some("map") => Mode::Map,
             _ => Mode::Story,
         }
     }
 
-    fn keep_mode(&self) {
+    pub(super) fn keep_mode(&self) {
         if self.opts.keep {
             let _ = util::write_atomic(mode_file(), format!("{}\n", self.mode.word()));
         }
@@ -591,7 +606,7 @@ impl App {
     }
 
     /// Why this diff has no Story view, said when one is asked for.
-    fn no_map(&mut self) {
+    pub(super) fn no_map(&mut self) {
         let text = if self.in_history {
             "A commit of the history has no story view.\nc goes back to the whole branch's."
         } else if !self.opts.map {
@@ -636,7 +651,7 @@ impl App {
 
     // ── Files mode, and the way between ─────────────────────────────────────
 
-    fn place(&mut self) -> Place_ {
+    pub(super) fn place(&mut self) -> Place_ {
         let anchors = self.anchors();
         let list_place = self.list_row();
         let key = |k: usize| {
@@ -737,7 +752,7 @@ impl App {
     /// was left. `g f`: Files mode on the chosen page's first file.
     pub(super) fn show_files(&mut self, restore: bool) {
         // While a map is still being told, the files where they were left.
-        if !self.mapped() && self.mode == Mode::Story {
+        if !self.mapped() && self.mode != Mode::Files {
             self.files_again();
             return self.keep_mode();
         }
@@ -748,7 +763,11 @@ impl App {
         if self.mode == Mode::Files {
             return self.keep_mode();
         }
-        let chosen = self.section().max(1);
+        let chosen = if self.mode == Mode::Map {
+            self.mapper.at.max(1)
+        } else {
+            self.section().max(1)
+        };
         self.mode = Mode::Files;
         self.keep_mode();
         self.visual = None;
@@ -1107,6 +1126,8 @@ impl App {
             // The view already shown stays as it is.
             Mode::Story if self.mode == Mode::Story => self.keep_mode(),
             Mode::Story => self.open_story_view(),
+            Mode::Map if self.mode == Mode::Map => self.keep_mode(),
+            Mode::Map => self.open_map_view(),
             Mode::Files => self.show_files(true),
         }
     }
@@ -2122,7 +2143,7 @@ impl App {
             } => (path, run, new, old),
             _ => return,
         };
-        if self.mode == Mode::Story {
+        if self.mode != Mode::Files {
             self.files_place = Some(self.place());
         }
         self.whole_files();
@@ -2366,7 +2387,7 @@ impl App {
     /// The second key of a pair in the Story view.
     pub(super) fn story_pair(&mut self, first: char, c: char) {
         match (first, c) {
-            ('g', 'm') => {}
+            ('g', 'm') => self.open_map_view(),
             ('g', 'f') => self.show_files(false),
             ('g', 'g') if self.focus == Focus::List => self.choose_item(0),
             ('g', 'g') => self.move_reading(isize::MIN / 2),
@@ -2469,6 +2490,7 @@ impl App {
                 }
             }
             Hit::Run(i) => self.go_to_run(i),
+            Hit::Page(_) | Hit::Chapter(_) | Hit::FilesOnly => return self.map_click(hit),
         }
         self.read_if_reading();
         Act::Redraw
@@ -2488,7 +2510,8 @@ impl App {
         match hit {
             Hit::Item(_) => self.read_from_here(),
             Hit::Line(_) => self.act_on_line(Some(at)),
-            Hit::Run(_) => {}
+            Hit::Run(_) | Hit::Chapter(_) | Hit::FilesOnly => {}
+            Hit::Page(n) => self.read_page(n),
         }
     }
 
