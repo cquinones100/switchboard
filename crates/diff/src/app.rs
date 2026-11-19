@@ -6910,7 +6910,7 @@ mod tests {
     }
 
     #[test]
-    fn the_file_is_never_greyed_and_the_list_is_while_the_file_has_the_keys() {
+    fn neither_the_file_nor_the_list_is_greyed_wherever_the_keys_are() {
         let mut app = added_files(&["src/one.js", "src/two.js"], 3);
         let file = app.diff_area();
         // The colors of the text in the list and in the file, and whether
@@ -6941,7 +6941,8 @@ mod tests {
         let (list, file_from_list) = texts(&mut app);
         app.focus = app.main_side();
         let (greyed_list, shown) = texts(&mut app);
-        assert!(changed(&list, &greyed_list), "the list had the keys");
+        assert_eq!(list, greyed_list, "the list is never greyed");
+        assert!(!changed(&list, &greyed_list), "the list stays lit");
         assert_eq!(shown, file_from_list, "the file is lit from the list");
         // And nothing of the screen is greyed while the list has them.
         app.focus = Focus::List;

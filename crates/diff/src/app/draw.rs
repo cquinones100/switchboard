@@ -157,14 +157,8 @@ impl App {
         } else {
             self.draw_list(buf);
             cursor = self.draw_diff(buf);
-            // The list greyed while the file has the keys. The file is
-            // never greyed: with the keys in the list it shows the list's
-            // chosen file, which is what is being read.
-            if self.focus != Focus::List {
-                let file = self.diff_area();
-                let list = Rect::new(0, 0, file.x.saturating_sub(1), file.height);
-                kit::unfocused(buf, list, &self.theme());
-            }
+            // Neither the list nor the file is greyed: the list beside the
+            // file stays as readable while the file has the keys.
             self.draw_edge(buf);
         }
         if self.has_footer() {

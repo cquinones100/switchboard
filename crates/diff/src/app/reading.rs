@@ -2540,11 +2540,8 @@ impl App {
             self.draw_runs(buf, &theme);
         }
         self.draw_column(buf, &theme);
-        // The column shows what the outline has chosen, a list's preview,
-        // so only the outline is greyed, while the column has the keys.
-        if self.focus != Focus::List {
-            kit::unfocused(buf, list, &theme);
-        }
+        // Neither the outline nor the column is greyed, the outline staying
+        // as readable while the column has the keys.
     }
 
     /// The outline, as boards 140 to 142 draw it: the first chapter's
