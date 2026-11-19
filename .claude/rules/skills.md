@@ -9,6 +9,8 @@ paths:
   - "src/autopilot/issues.rs"
   - "src/cmd/work.rs"
   - "src/cmd/skill_path.rs"
+  - "build.rs"
+  - "src/skill_files.rs"
 ---
 
 # Skills

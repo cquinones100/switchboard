@@ -138,9 +138,7 @@ pub fn dir() -> PathBuf {
 pub fn hooks() -> Value {
     let mut hooks = super::claude_settings::ours()["hooks"].clone();
     if let Some(events) = hooks.as_object_mut() {
-        for event in crate::agent::http::EVENTS {
-            events.shift_remove(event);
-        }
+        drop_sent(events);
         let start = events
             .entry("SessionStart")
             .or_insert_with(|| Value::Array(Vec::new()));
@@ -149,6 +147,27 @@ pub fn hooks() -> Value {
         }
     }
     json!({ "hooks": hooks, "modules": [format!("./{ENTRY_MODULE}")] })
+}
+
+/// The tool call's events without Switchboard's own command for each,
+/// which the hooks module sends instead; anything else the asset hooks on
+/// them stays.
+fn drop_sent(events: &mut serde_json::Map<String, Value>) {
+    for event in crate::agent::http::EVENTS {
+        let ours = format!("switchboard hook {event}");
+        let Some(Value::Array(groups)) = events.get_mut(event) else {
+            continue;
+        };
+        for group in groups.iter_mut() {
+            if let Some(Value::Array(actions)) = group.get_mut("hooks") {
+                actions.retain(|a| a["command"].as_str() != Some(ours.as_str()));
+            }
+        }
+        groups.retain(|g| g["hooks"].as_array().is_some_and(|a| !a.is_empty()));
+        if groups.is_empty() {
+            events.shift_remove(event);
+        }
+    }
 }
 
 /// `.claude-plugin/plugin.json`.
@@ -607,6 +626,29 @@ mod tests {
         let mut r = Report::new(check);
         r.silent = true;
         r
+    }
+
+    #[test]
+    fn a_tool_call_hook_of_the_asset_s_own_besides_switchboard_s_stays() {
+        let mut events = json!({
+            "PreToolUse": [
+                {"hooks": [{"type": "command", "command": "switchboard hook PreToolUse"}]},
+                {"matcher": "Bash", "hooks": [
+                    {"type": "command", "command": "switchboard hook PreToolUse"},
+                    {"type": "command", "command": "other"}
+                ]}
+            ],
+            "PostToolUse": [{"hooks": [{"type": "command", "command": "switchboard hook PostToolUse"}]}],
+            "Stop": [{"hooks": [{"type": "command", "command": "switchboard hook Stop"}]}]
+        });
+        drop_sent(events.as_object_mut().unwrap());
+        assert_eq!(
+            events,
+            json!({
+                "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "other"}]}],
+                "Stop": [{"hooks": [{"type": "command", "command": "switchboard hook Stop"}]}]
+            })
+        );
     }
 
     #[test]

@@ -22,11 +22,17 @@ const WAIT_MS = 2000;
 const asks = new Map();
 
 async function env($) {
-  const [socket, pane, helper] = await Promise.all([
+  const [named, state, home, pane, helper] = await Promise.all([
     $.env.get('SWITCHBOARD'),
+    $.env.get('SWITCHBOARD_STATE_DIR'),
+    $.env.get('HOME'),
     $.env.get('SWITCHBOARD_PANE'),
     $.env.get('SLACK_RELAY_HELPER'),
   ]);
+  // The socket `switchboard hook` would reach (src/mux/socket.rs's
+  // socket_path): a pane's, else the state directory's.
+  const dir = state || (home ? `${home}/.local/state/switchboard` : '');
+  const socket = named || (dir ? `${dir}/sock` : '');
   return { socket, pane, quiet: !!helper };
 }
 
