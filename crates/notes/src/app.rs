@@ -4743,6 +4743,9 @@ impl App {
                 self.edge_pressed_at = (!self.edge_double).then(Instant::now);
             }
             (MouseKind::Drag, MouseButton::Left) if self.edge_drag && self.edge_plan => {
+                // The mouse is where the drag is, so no card under the
+                // column it left is lit.
+                self.mouse_at = Some((x, y));
                 self.edge_double = false;
                 if self.edge_moved || x != self.edge_from {
                     let was = (self.plan_cols(), self.plan_width);

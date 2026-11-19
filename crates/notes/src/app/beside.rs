@@ -1043,7 +1043,7 @@ impl App {
                     let before = draw(b, was);
                     (
                         before.spot(b.line + 1, b.stop),
-                        before.spot(b.scroll + 1, None),
+                        before.spot(b.scroll + 1, b.stop),
                     )
                 }
             };
@@ -1135,7 +1135,38 @@ impl App {
         if focused && b.stop != Some(Stop::Close) {
             follow_card(b, &hits);
         }
-        if b.stop != stop {
+        // Where each card is on the screen, for the mouse.
+        for &(top, x, w, h, stop) in &hits {
+            let (y, h) = if top == 0 {
+                (area.y, 1)
+            } else {
+                let first = top as isize - 1 - scroll as isize;
+                let last = first + h as isize;
+                let first = first.max(0);
+                let last = last.min(body as isize);
+                if last <= first {
+                    continue;
+                }
+                (area.y + 1 + first as u16, (last - first) as u16)
+            };
+            self.geo
+                .plan_hits
+                .push((Rect::new(area.x + x as u16, y, w as u16, h), stop));
+        }
+        // The card under a mouse that stayed put while the plan rewrapped
+        // (the keys resizing it) is the one lit, found before anything is
+        // painted, so a click there chooses what is lit.
+        let hover_was = b.hover;
+        if let Some((mx, my)) = self.mouse_at.filter(|_| self.opts.hover) {
+            let inside = |r: &Rect| mx >= r.x && mx < r.right() && my >= r.y && my < r.bottom();
+            b.hover = self
+                .geo
+                .plan_hits
+                .iter()
+                .find(|(r, _)| inside(r))
+                .map(|(_, s)| *s);
+        }
+        if b.stop != stop || b.hover != hover_was {
             rows = draw(b, now).rows;
         }
         // On a card, the cursor sits on its edge, the one lit when they
@@ -1156,33 +1187,6 @@ impl App {
         for (i, row) in rows.iter().skip(1 + scroll).take(body).enumerate() {
             let y = area.y + 1 + i as u16;
             put_line(buf, area.x, y, area.width, &Line::from(row.clone()));
-        }
-        for (top, x, w, h, stop) in hits {
-            let (y, h) = if top == 0 {
-                (area.y, 1)
-            } else {
-                let first = top as isize - 1 - scroll as isize;
-                let last = first + h as isize;
-                let first = first.max(0);
-                let last = last.min(body as isize);
-                if last <= first {
-                    continue;
-                }
-                (area.y + 1 + first as u16, (last - first) as u16)
-            };
-            self.geo
-                .plan_hits
-                .push((Rect::new(area.x + x as u16, y, w as u16, h), stop));
-        }
-        // The card under a mouse that stayed put while the plan rewrapped
-        // (the keys resizing it) is the one lit, drawn again once if it
-        // changed, so a click there chooses what is lit.
-        if let Some((x, y)) = self.mouse_at.filter(|_| self.opts.hover) {
-            let was = self.beside.as_ref().and_then(|b| b.hover);
-            self.plan_hover(x, y);
-            if self.beside.as_ref().and_then(|b| b.hover) != was {
-                return self.draw_plan(buf, area, rule);
-            }
         }
         cursor
     }
