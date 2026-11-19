@@ -4759,7 +4759,8 @@ impl App {
                     // Let go where it started keeps what was kept, writing
                     // nothing over what another tab may have kept since,
                     // unless it ended on board 8's share, which clears it.
-                    if self.plan_cols() == shown && self.plan_width.is_some() {
+                    let back = self.plan_cols() == shown;
+                    if back && (self.plan_width.is_some() || kept.is_none()) {
                         self.plan_width = kept;
                     } else {
                         self.keep_plan_width();
