@@ -482,6 +482,8 @@ impl App {
         // Nor is a selection of the file list's rows the story's to copy.
         self.list_visual = None;
         self.visual = None;
+        // Nor one made in the column before it was left.
+        self.reader.visual = None;
         self.focus = Focus::List;
         if self.alone.take().is_some() {
             self.whole_at = None;
@@ -821,13 +823,14 @@ impl App {
         if let Some((new_line, old_line)) = target
             && self.current().is_some_and(|e| !self.changed_since(e))
         {
-            self.at_hunk(new_line, old_line);
+            let _ = self.at_hunk(new_line, old_line);
         }
     }
 
     /// The cursor on a hunk's first changed line, on the side that has it:
     /// the old for a line only taken out, whatever context is around it.
-    fn at_hunk(&mut self, new_line: (usize, usize), old_line: (usize, usize)) {
+    /// Whether a row of the hunk was found to stand on.
+    fn at_hunk(&mut self, new_line: (usize, usize), old_line: (usize, usize)) -> bool {
         let Some((changed, rows)) =
             self.current()
                 .and_then(|e| self.files.get(&e.key()))
@@ -838,7 +841,7 @@ impl App {
                     )
                 })
         else {
-            return;
+            return false;
         };
         // A hunk inside a fold (its lines show no difference): the fold
         // opened first, so its lines are there to stand on.
@@ -867,7 +870,7 @@ impl App {
             |l: &Line| matches!(l, Line::Pair { row, .. } if changed.get(*row) == Some(&true));
         let found = lines.iter().position(|l| inside(l) && changed_row(l));
         let Some(i) = found.or_else(|| lines.iter().position(inside)) else {
-            return;
+            return false;
         };
         if found.is_none() {
             self.say("Its change shows no difference here (only spacing): shown at its lines.");
@@ -883,6 +886,7 @@ impl App {
         self.cur = i;
         self.col = 0;
         self.top = i.saturating_sub(self.body_height() / 3);
+        true
     }
 
     /// ]c and [c in Files mode's list, in a story told as a map: the
@@ -1580,15 +1584,12 @@ impl App {
         } else {
             format!("Told by {}. ", story::model_name(&story.model))
         };
-        if !from.is_empty() || !model.is_empty() {
-            rows.push(plain(kit::fit(
-                vec![Span::styled(
-                    format!("{from}{model}"),
-                    Tone::Faint.style(theme),
-                )],
-                cols,
-                Style::new(),
-            )));
+        // Wrapped, so a narrow column cuts neither what it was told from
+        // nor which model told it.
+        for line in wrap(format!("{from}{model}").trim_end(), cols) {
+            if !line.is_empty() {
+                rows.push(plain(vec![Span::styled(line, Tone::Faint.style(theme))]));
+            }
         }
         // A row of its own, so a narrow column never cuts it.
         rows.push(Row {
@@ -1966,10 +1967,15 @@ impl App {
         // The side the row shows its number from: the new one, but for a
         // line only the old side has.
         let line = |l: Option<usize>| l.map_or((0, 0), |l| (l, 1));
-        if new.is_some() {
-            self.at_hunk(line(new), (0, 0));
+        let found = if new.is_some() {
+            self.at_hunk(line(new), (0, 0))
         } else {
-            self.at_hunk((0, 0), line(old));
+            self.at_hunk((0, 0), line(old))
+        };
+        if !found {
+            return self.say(
+                "That line isn't among the file's changes as it is now: shown at its first change.",
+            );
         }
         // Edits since the commits may have moved a new side's line: shown
         // at its number, which edits below it keep, and said.
