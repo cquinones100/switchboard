@@ -80,8 +80,15 @@ function parse(text) {
 // PreToolUse's JSON, as Claude Code gives a command hook.
 async function preToolUse($, e) {
   const { tool, tool_use_id, agentId, requestMeta, consent, ...input } = e;
-  const [session_id, cwd] = await Promise.all([$.session.id(), $.session.cwd()]);
-  const payload = { session_id, cwd, hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input };
+  const [session_id, cwd, info] = await Promise.all([$.session.id(), $.session.cwd(), $.session.info()]);
+  const payload = {
+    session_id,
+    transcript_path: info.transcriptPath,
+    cwd,
+    hook_event_name: 'PreToolUse',
+    tool_name: tool,
+    tool_input: input,
+  };
   if (tool_use_id) payload.tool_use_id = tool_use_id;
   if (agentId) payload.agent_id = agentId;
   return payload;

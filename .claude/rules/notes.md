@@ -11,6 +11,8 @@ paths:
   - "assets/skills/note-tickets/**"
   - "assets/skills/note-watch/**"
   - "src/diff/host.rs"
+  - "assets/routines/**"
+  - "src/routines/**"
 ---
 
 # Notes
