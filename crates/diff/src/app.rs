@@ -8728,8 +8728,7 @@ mod tests {
         assert!(shown[row("Also in this change: Side work")].contains("format the helpers"));
         assert!(shown[row("What runs ▸")].contains("3 steps in the order they happen"));
         assert!(
-            shown[row("From the plan note and the commits. Told by Sonnet.")]
-                .contains("Enter reads from 1.")
+            row("From the plan note and the commits. Told by Sonnet.") < row("Enter reads from 1.")
         );
         // The outline where the file list is: the chapters, What changes
         // and the pages under them, then the Read meter.

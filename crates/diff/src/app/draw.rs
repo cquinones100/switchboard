@@ -198,7 +198,8 @@ impl App {
             self.draw_menu(buf);
             cursor = None;
         }
-        if self.focus == Focus::List || self.on_story() {
+        // The question's draft keeps its caret over the Story view.
+        if (self.focus == Focus::List || self.on_story()) && self.ask_box.is_none() {
             cursor = None;
         }
         cursor

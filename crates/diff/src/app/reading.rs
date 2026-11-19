@@ -1574,17 +1574,23 @@ impl App {
         } else {
             format!("Told by {}. ", story::model_name(&story.model))
         };
-        rows.push(Row {
-            does: Does::FirstPage,
-            ..plain(kit::fit(
-                vec![
-                    Span::styled(format!("{from}{model}"), Tone::Faint.style(theme)),
-                    Span::styled("Enter", Tone::Accent.style(theme)),
-                    Span::styled(" reads from 1.", Tone::Faint.style(theme)),
-                ],
+        if !from.is_empty() || !model.is_empty() {
+            rows.push(plain(kit::fit(
+                vec![Span::styled(
+                    format!("{from}{model}"),
+                    Tone::Faint.style(theme),
+                )],
                 cols,
                 Style::new(),
-            ))
+            )));
+        }
+        // A row of its own, so a narrow column never cuts it.
+        rows.push(Row {
+            does: Does::FirstPage,
+            ..plain(vec![
+                Span::styled("Enter", Tone::Accent.style(theme)),
+                Span::styled(" reads from 1.", Tone::Faint.style(theme)),
+            ])
         });
         rows.push(plain(Vec::new()));
         rows
@@ -2213,9 +2219,9 @@ impl App {
             self.draw_runs(buf, &theme);
         }
         self.draw_column(buf, &theme);
-        if self.focus == Focus::List {
-            kit::unfocused(buf, self.column_rect(), &theme);
-        } else {
+        // The column shows what the outline has chosen, a list's preview,
+        // so only the outline is greyed, while the column has the keys.
+        if self.focus != Focus::List {
             kit::unfocused(buf, list, &theme);
         }
     }
