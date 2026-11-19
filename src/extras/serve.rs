@@ -1056,6 +1056,11 @@ impl Server {
     ) {
         // Empty is the branch's Linear ticket, this command being Linear's.
         if typed.trim().is_empty() {
+            // Linear turned off while the box was open opens nothing.
+            if !settings::is_on("linear") {
+                self.service_off(client, "linear");
+                return;
+            }
             match branch_ticket {
                 Some(id) => self.open_ticket_id(client, id),
                 None => self.say(Some(client), "No Linear ticket in this branch or tab name"),

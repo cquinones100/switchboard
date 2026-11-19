@@ -121,8 +121,9 @@ impl Server {
             }
         }
         // So does a ticket view beside it, showing the old work's ticket.
-        if let Some(view) = self
-            .marked_in(tab, crate::views::TICKET_VIEW)
+        let views: Vec<PaneId> = self
+            .ticket_views_shown(tab)
+            .into_iter()
             .filter(|_| handed_over)
             .filter(|v| *v != pane)
             // A live view, not a shell a restart brought back in its place.
@@ -131,7 +132,8 @@ impl Server {
                     .get(v)
                     .is_some_and(|s| s.opts.contains_key(crate::views::TICKET_ID))
             })
-        {
+            .collect();
+        for view in views {
             // The pane in front stays in front, though closing a view in
             // another's place gives that place, and the focus, back.
             // Set as the tab's own pane in front, never by focus_pane, which

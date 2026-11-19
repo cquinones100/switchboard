@@ -288,6 +288,22 @@ impl Server {
         }
     }
 
+    /// Every ticket view in a tab's layout, on screen.
+    pub(crate) fn ticket_views_shown(&self, tab: TabId) -> Vec<PaneId> {
+        let Some(t) = self.tabs.get(&tab) else {
+            return Vec::new();
+        };
+        t.layout
+            .panes()
+            .into_iter()
+            .filter(|p| {
+                self.panes
+                    .get(p)
+                    .is_some_and(|s| s.opts.get(TICKET_VIEW).is_some_and(|v| v == "1"))
+            })
+            .collect()
+    }
+
     /// The pane in a tab marked with `mark`.
     pub fn marked_in(&self, tab: TabId, mark: &str) -> Option<PaneId> {
         self.tabs.get(&tab)?.layout.panes().into_iter().find(|p| {
@@ -675,18 +691,19 @@ impl Server {
                         // again in place rather than closing the tab.
                         // A view parked under another tool counts too, so
                         // none comes back showing the old ticket.
-                        let was_open = server.marked_in(tab, TICKET_VIEW);
+                        let shown = server.ticket_views_shown(tab);
+                        let was_open = shown.first().copied();
                         let parked: Vec<PaneId> = server
                             .panes
                             .iter()
                             .filter(|(p, s)| {
                                 s.tab == tab
-                                    && Some(**p) != was_open
+                                    && !shown.contains(p)
                                     && s.opts.get(TICKET_VIEW).is_some_and(|v| v == "1")
                             })
                             .map(|(p, _)| *p)
                             .collect();
-                        if let Some(view) = was_open {
+                        for view in shown {
                             match &chosen {
                                 Some(c) => server.read_view_again(view, Some(c.clone())),
                                 // Let go, the view closes as M-w closes a pane,
