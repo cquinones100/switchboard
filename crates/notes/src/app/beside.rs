@@ -874,6 +874,11 @@ impl App {
 
     /// A key while the plan has the focus.
     pub(super) fn plan_key(&mut self, key: Key) {
+        // Any key in the plan may move its cursor: the next rewrap starts
+        // from where it is then, never from a place held before.
+        if let Some(b) = self.beside.as_mut() {
+            b.held = None;
+        }
         let ctrl = key.mods.ctrl && !key.mods.alt;
         if ctrl && key.code == KeyCode::Char('w') {
             self.list_pending = Some('w');
@@ -1213,6 +1218,7 @@ impl App {
         let top = self.geo.plan.y;
         if let Some(b) = self.beside.as_mut() {
             b.focused = true;
+            b.held = None;
             // The cursor on the row clicked, the header's click leaving it.
             if y > top {
                 b.line = b.scroll + (y - top - 1) as usize;
