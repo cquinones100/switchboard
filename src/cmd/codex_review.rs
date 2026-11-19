@@ -1820,6 +1820,7 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
         f.get("file").and_then(Value::as_str).is_some_and(|file| {
             let path = Path::new(file);
             !path.is_absolute()
+                && !file.starts_with('~')
                 && !path
                     .components()
                     .any(|c| matches!(c, std::path::Component::ParentDir))
