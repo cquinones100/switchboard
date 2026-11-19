@@ -69,6 +69,9 @@ pub(super) enum Choice {
     /// The story forgotten and told again, by the model the setting
     /// names now.
     TellAgain,
+    /// The story and the diff published as a private artifact, by the
+    /// tab's Claude (`publish`).
+    Publish,
     /// The change a menu was opened on in the column, shown in the files.
     InFiles,
     /// Its place copied as path:line.
@@ -209,11 +212,89 @@ impl App {
                 _ => true,
             });
         }
+        // Publish, with a story told, before Close.
+        let told = self.told.is_some() && self.telling != Telling::Waiting;
+        let publishable = told && self.history.is_none() && !self.in_history;
+        if publishable && !(no_change || covered || typing) {
+            let before_close = bar.len().saturating_sub(1);
+            bar.insert(before_close, (Button::Publish, "Publish"));
+        }
         if self.opts.alone {
             let before_close = bar.len().saturating_sub(1);
             bar.insert(before_close, (Button::Settings, "Settings"));
         }
         bar
+    }
+
+    /// Publish, in the row and the menu: the tab's Claude asked to run the
+    /// diff-artifact skill, which draws the Story view as a page, checks
+    /// it for what shouldn't leave the computer and publishes it as a
+    /// private artifact after a yes; the diff closes so its questions show.
+    /// Alone, with no tab's Claude, it does the same itself
+    /// (`publish_alone`).
+    pub(super) fn publish(&mut self) -> Act {
+        const SKILL: &str = "/switchboard:diff-artifact";
+        if !self.opts.server {
+            return self.publish_alone();
+        }
+        match host::host().command(&["claude-prompt", SKILL]) {
+            Some((0, ..)) => Act::Quit,
+            Some((_, _, err)) => {
+                self.say(format!("Couldn't ask the tab's Claude: {}", err.trim()));
+                Act::Redraw
+            }
+            None => {
+                self.say("Couldn't reach the workspace to ask the tab's Claude.");
+                Act::Redraw
+            }
+        }
+    }
+
+    /// Publish alone: the Story view drawn as a page (page.rs) and kept in
+    /// the cache, then the terminal handed to an interactive Claude Code,
+    /// asked to check the page for what shouldn't leave the computer, wait
+    /// for a yes, and publish it as a private artifact; the diff comes back
+    /// when it ends. Interactive, since headless Claude (`claude -p`) has
+    /// no Artifact tool and nobody to say yes.
+    fn publish_alone(&mut self) -> Act {
+        let Some(claude) = crate::tell::claude_command() else {
+            self.say("Publishing asks Claude Code, which isn't installed.");
+            return Act::Redraw;
+        };
+        let (Some(change), Some(story)) = (self.change.clone(), self.story.clone()) else {
+            self.say("No story to publish yet: it is told first.");
+            return Act::Redraw;
+        };
+        let title = story
+            .chapters
+            .first()
+            .map_or_else(|| "The diff's story".to_string(), |c| c.title.clone());
+        let (top, base) = (change.top.clone(), change.base.clone());
+        let Some(page) = super::story_page(self.opts, 170, change, story, &title) else {
+            self.say("A story told as a list has no Story view to publish: Settings' \"Open the diff on what changes\" tells it in chapters.");
+            return Act::Redraw;
+        };
+        let name = self.story_key.clone().unwrap_or_else(|| "story".into());
+        let file = crate::paths::cache_dir()
+            .join("diff-pages")
+            .join(format!("{name}.html"));
+        if let Some(dir) = file.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Err(e) = util::write_atomic(&file, page) {
+            self.say(format!("Couldn't keep the page: {e}"));
+            return Act::Redraw;
+        }
+        let prompt = format!(
+            "Publish {file} as a private artifact with your Artifact tool, titled \"{title}\". It is the story switchboard-diff tells of the change in this repository against {base}, its Story view drawn as one HTML page; every hunk in it is the change's own, from `git diff --no-ext-diff --no-textconv {base}...HEAD`. Before publishing, read the change's hunks and the page's words for what shouldn't leave this computer: secrets and tokens, private keys, connection strings, names of people or companies, ticket IDs, internal hosts, email addresses and home paths. Show me what you found, numbered, one line each, or say that nothing was, and wait for my yes; publish only after it, take out what I ask first, and give me the link. Change nothing in the repository.",
+            file = file.display(),
+        );
+        crate::requests::count("Anthropic", "claude", "diff publish");
+        self.hand_over = Some(super::HandOver {
+            dir: top,
+            args: vec![claude.to_string_lossy().into_owned(), prompt],
+        });
+        Act::Redraw
     }
 
     /// The header, alone: the app's name, the repository and what the
@@ -849,6 +930,8 @@ impl App {
         if self.told.is_some() && !self.in_history && self.telling != super::Telling::Waiting {
             choices.push(Choice::TellAgain);
             options.push(MenuOption::new("Tell it again"));
+            choices.push(Choice::Publish);
+            options.push(MenuOption::new("Publish the story as an artifact"));
         }
         choices.push(if self.opts.alone {
             Choice::Settings
@@ -983,6 +1066,7 @@ impl App {
             Some(Choice::Mode(mode)) => self.choose_mode(mode),
             Some(Choice::DefaultWidth) => self.default_width(),
             Some(Choice::TellAgain) => self.tell_again(),
+            Some(Choice::Publish) => return self.publish(),
             Some(Choice::InFiles) => self.show_target(),
             Some(Choice::CopyPlace) => self.copy_target(),
             Some(Choice::WorkspaceSettings) => {

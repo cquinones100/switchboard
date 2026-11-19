@@ -25,6 +25,9 @@
 //!                                        with -p, text pasted (bracketed
 //!                                        when the pane asks), as tmux's
 //!                                        paste-buffer -p
+//! claude-prompt [-t tab] text...         the text pasted into the tab's
+//!                                        Claude and sent with Enter, as the
+//!                                        diff's Publish asks it to run a skill
 //! capture-pane [-t pane] [-S lines] [-D] the screen (and that much history),
 //!                                        with -D what is dimmed left blank
 //! select-pane [-t pane] [-L|-R|-U|-D]   that pane; with a side, the pane
@@ -87,6 +90,7 @@ pub const NAMES: &[&str] = &[
     "split",
     "respawn-pane",
     "send-keys",
+    "claude-prompt",
     "capture-pane",
     "select-pane",
     "select-tab",
@@ -140,6 +144,10 @@ pub const USAGE: &[(&str, &str)] = &[
     (
         "send-keys",
         "send-keys [-t pane] [-l|-p] key...: keys by name (Enter, C-c, M-x), or with -l, text typed as it is, or with -p, text pasted",
+    ),
+    (
+        "claude-prompt",
+        "claude-prompt [-t tab] text...: the text pasted into the tab's Claude and sent with Enter",
     ),
     (
         "capture-pane",
@@ -383,6 +391,7 @@ impl Server {
             "respawn-pane" => self.cmd_respawn(rest, cwd, caller),
             "respawn-program" => self.cmd_respawn_program(rest, cwd, caller),
             "send-keys" => self.cmd_send_keys(rest, caller),
+            "claude-prompt" => self.cmd_claude_prompt(rest, caller),
             "capture-pane" => self.cmd_capture(rest, caller),
             "select-pane" => self.cmd_select_pane(rest, caller),
             "select-tab" => self.target_tab(rest, caller).map(|t| {
@@ -983,6 +992,34 @@ impl Server {
                     None => bytes.extend_from_slice(word.as_bytes()),
                 }
             }
+        }
+        slot.pane.copy_end();
+        slot.copy = None;
+        slot.pane.write(&bytes).map_err(|e| format!("{e:#}"))?;
+        Ok(Reply::ok(""))
+    }
+
+    /// `claude-prompt`: the text pasted into the tab's Claude (the caller's
+    /// tab unless -t names one), as its sidebar row takes it, then Enter,
+    /// so it runs as if typed there. The diff's Publish uses it to ask the
+    /// tab's Claude for the diff-artifact skill.
+    fn cmd_claude_prompt(
+        &mut self,
+        rest: &[String],
+        caller: Option<PaneId>,
+    ) -> Result<Reply, String> {
+        let a = Args::parse(rest, "t")?;
+        let tab = self.tab_from(&a, caller)?;
+        let text = a.rest.join(" ");
+        if text.trim().is_empty() {
+            return Err("claude-prompt: what to send?".into());
+        }
+        let pane = self.tab_claude_pane(tab).ok_or("this tab runs no Claude")?;
+        let slot = self.panes.get_mut(&pane).ok_or("the pane is gone")?;
+        let modes = slot.pane.modes();
+        let mut bytes = super::input::encode_paste(&text, &modes);
+        if let Some(enter) = Key::parse("Enter") {
+            bytes.extend(super::input::encode_key(&enter, &modes));
         }
         slot.pane.copy_end();
         slot.copy = None;

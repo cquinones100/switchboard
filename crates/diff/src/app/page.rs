@@ -7,6 +7,7 @@
 //! second way. It is drawn in the dark theme and the light, the page
 //! showing the one the reader's browser asks for.
 
+use std::collections::HashMap;
 use std::sync::mpsc::channel;
 
 use ratatui::buffer::Buffer;
@@ -34,8 +35,18 @@ pub fn story_page(
     story: Story,
     title: &str,
 ) -> Option<String> {
-    let dark = draw(&opts, false, cols, change.clone(), story.clone())?;
-    let light = draw(&opts, true, cols, change, story)?;
+    // Each look a class of its own, shared by both drawings, so the page
+    // stays small enough to read before it is published.
+    let mut looks = Looks::default();
+    let dark = draw(
+        &opts,
+        false,
+        cols,
+        change.clone(),
+        story.clone(),
+        &mut looks,
+    )?;
+    let light = draw(&opts, true, cols, change, story, &mut looks)?;
     Some(format!(
         "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
@@ -43,7 +54,7 @@ pub fn story_page(
          <main>\n<pre class=\"dark\">{dark}</pre>\n<pre class=\"light\">{light}</pre>\n</main>\n\
          </body>\n</html>\n",
         escape(title),
-        style(),
+        style() + &looks.rules(),
     ))
 }
 
@@ -70,7 +81,14 @@ fn style() -> String {
 }
 
 /// The view drawn in one theme, as the cells' HTML.
-fn draw(opts: &Options, light: bool, cols: u16, change: Change, story: Story) -> Option<String> {
+fn draw(
+    opts: &Options,
+    light: bool,
+    cols: u16,
+    change: Change,
+    story: Story,
+    looks: &mut Looks,
+) -> Option<String> {
     let opts = Options {
         light,
         map: true,
@@ -104,12 +122,38 @@ fn draw(opts: &Options, light: bool, cols: u16, change: Change, story: Story) ->
     // then the view.
     let header = u16::from(app.has_header());
     let shown: Vec<u16> = (0..header).chain(lead..lead + rows).collect();
-    Some(cells(&buf, &shown, if light { LIGHT } else { DARK }))
+    Some(cells(&buf, &shown, if light { LIGHT } else { DARK }, looks))
 }
 
 /// The buffer's `rows` as HTML, a span for each run of cells
 /// drawn alike.
-fn cells(buf: &Buffer, rows: &[u16], (bg, fg): ([u8; 3], [u8; 3])) -> String {
+/// The looks the cells are drawn in, a class each.
+#[derive(Default)]
+struct Looks {
+    names: HashMap<String, usize>,
+}
+
+impl Looks {
+    /// The class of a look, empty for the terminal's own colors.
+    fn class(&mut self, style: &str) -> Option<usize> {
+        if style.is_empty() {
+            return None;
+        }
+        let next = self.names.len();
+        Some(*self.names.entry(style.to_string()).or_insert(next))
+    }
+
+    fn rules(&self) -> String {
+        let mut rules: Vec<(&usize, &String)> = self.names.iter().map(|(s, n)| (n, s)).collect();
+        rules.sort();
+        rules
+            .iter()
+            .map(|(n, style)| format!("\n.s{n}{{{style}}}"))
+            .collect()
+    }
+}
+
+fn cells(buf: &Buffer, rows: &[u16], (bg, fg): ([u8; 3], [u8; 3]), looks: &mut Looks) -> String {
     let mut out = String::new();
     for &y in rows {
         let mut x = 0;
@@ -122,27 +166,27 @@ fn cells(buf: &Buffer, rows: &[u16], (bg, fg): ([u8; 3], [u8; 3])) -> String {
             let wide = width(symbol).max(1) as u16;
             let this = css(cell.fg, cell.bg, cell.modifier, bg, fg);
             if look.as_ref() != Some(&this) {
-                flush(&mut line, &look, &run);
+                flush(&mut line, &look, &run, looks);
                 run.clear();
                 look = Some(this);
             }
             run.push_str(&escape(if symbol.is_empty() { " " } else { symbol }));
             x += wide;
         }
-        flush(&mut line, &look, &run);
+        flush(&mut line, &look, &run, looks);
         out.push_str(line.trim_end_matches(' '));
         out.push('\n');
     }
     out
 }
 
-fn flush(line: &mut String, look: &Option<String>, run: &str) {
+fn flush(line: &mut String, look: &Option<String>, run: &str, looks: &mut Looks) {
     if run.is_empty() {
         return;
     }
-    match look.as_deref() {
-        Some("") | None => line.push_str(run),
-        Some(style) => line.push_str(&format!("<span style=\"{style}\">{run}</span>")),
+    match look.as_deref().and_then(|style| looks.class(style)) {
+        None => line.push_str(run),
+        Some(n) => line.push_str(&format!("<span class=s{n}>{run}</span>")),
     }
 }
 

@@ -1084,6 +1084,8 @@ The diff then has two views. The Story view has the outline where the file list 
 
 In the outline `j` and `k` move, the column following to where the chosen entry is, `J` and `K` scroll the column from the outline or the column, What runs shown or not, as they scroll the file from the file list, and `Enter` (or a second click) reads from there, the column taking the keys; on In the files only it opens Files mode on those files. In the column `j` and `k` move its cursor, `Ctrl-d` `Ctrl-u` and `PageDown` `PageUp` by more, and `Enter` (or a second click) on a change or a file opens its menu: Show it in the files, or Copy its place as `path:line`; on a folded file of tests it unfolds it. `]` and `[` go to the next page's section and the one before (from the first page, back to what changes), the Chapter buttons to the next chapter's first page and the one before's, `v` or `V` in the column selects lines, `y` copying their text as a drag of the mouse does, and `Tab`, `Ctrl-w h` and `l` or a click move between the outline and the column, neither of them greyed whichever has the keys; the outline follows where the column is, and a page is read once the column has been on it. The pages read are kept with the story.
 
+Publish, in the row of buttons and as "Publish the story as an artifact" in the menu, with a story told, publishes it as a private Claude artifact: in the workspace it types `/switchboard:diff-artifact` into the tab's Claude and closes the diff, so its check and its question show; alone, the diff draws the page itself, keeps it in its cache's `diff-pages/`, and hands the terminal to an interactive Claude Code asked to check it for what shouldn't leave the computer, wait for your yes and publish it, coming back when Claude ends (headless `claude -p` has no Artifact tool, nor anyone to say yes).
+
 `H` goes back to where you were before a jump and `L` forward again, as a browser does, in the Story view, the map and Files mode alike: a jump is a view switched, a page read from the outline or the map, `]` and `[`, a change shown in the files or a click that lands elsewhere, while moving down a list or a column, scrolling and `Tab` are not, so they leave nothing to go back through.
 
 What runs (board 142) is always over the column, in a story that names steps that run: the steps in the order they happen, a box for each, naming its page, the step of the page being read lit. `h` and `l` in the column move along it, showing each step's page, and a click on a box goes to its page.
@@ -1172,7 +1174,7 @@ These work wherever the cursor is:
 | `Ctrl-w w` | The next window of the diff |
 | `]p` `[p` | The next or previous page of the story, or commit of the branch's |
 | `g s` `g m` `g f` | The story view, the story's map, and the page being read in Files mode |
-| `m` | The view's menu: the story, the map or the files, Tell it again |
+| `m` | The view's menu: the story, the map or the files, Tell it again, Publish the story as an artifact |
 | `]` `[`, `]c` `[c` | In the story view, `]` and `[` alone the next page and the one before; in Files mode's list, `]c` and `[c` the next chapter's first file and the one before's, past chapters the filter leaves empty |
 | `c` | The branch's commits one at a time, and back to the whole branch |
 | `R` | Read the change again, edits made since it opened included |
@@ -2612,6 +2614,10 @@ switchboard send-keys [-t pane] [-l|-p] key...
                                          keys by name (Enter, C-c, M-x), a word
                                          that isn't one typed as text; -l types
                                          them all as text, -p pastes them
+switchboard claude-prompt [-t tab] text...
+                                         the text pasted into the tab's Claude
+                                         and sent with Enter, as M-d's Publish
+                                         asks it for /diff-artifact
 switchboard capture-pane [-t pane] [-S lines] [-D]
                                          the pane's screen, with that many lines
                                          of history above it; -D leaves what is
