@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
 use super::{App, Focus};
@@ -75,6 +75,67 @@ pub struct Beside {
     /// Tab moved to another card, or the cursor moved: the next drawing
     /// scrolls it into view.
     pub follow: bool,
+    /// The width and room `line` and `scroll` were counted at, as last
+    /// drawn: drawn at another, the plan rewraps, and both move to the rows
+    /// of what they were on.
+    pub laid: Option<(u16, Room)>,
+}
+
+/// A text row of the panel: the piece of text it shows (a line of the
+/// plan, a heading, a blank, counted from the top past the cards) and its
+/// row within it, the same at any width, unlike its row number.
+pub type Piece = (usize, usize);
+
+/// What a row of the panel shows, which the cursor stays on as the plan
+/// rewraps: a row of a piece of text, or a row of an option's card.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Spot {
+    Text(Piece),
+    Card(char, usize),
+}
+
+/// The panel laid out: its rows, where each card is, and, for each row,
+/// the piece of text it shows (none on a card's).
+pub struct Laid {
+    pub rows: Vec<Vec<Span<'static>>>,
+    pub hits: Vec<Hit>,
+    pub pieces: Vec<Option<Piece>>,
+}
+
+impl Laid {
+    /// What row `row` shows, a row of cards side by side named by the card
+    /// `lit` when it is one of them.
+    pub fn spot(&self, row: usize, lit: Option<Stop>) -> Option<Spot> {
+        let on: Vec<&Hit> = self
+            .hits
+            .iter()
+            .filter(|h| matches!(h.4, Stop::Card(_)) && h.0 > 0 && (h.0..h.0 + h.3).contains(&row))
+            .collect();
+        let card = on.iter().find(|h| Some(h.4) == lit).or(on.first());
+        if let Some(&&(top, _, _, _, Stop::Card(l))) = card {
+            return Some(Spot::Card(l, row - top));
+        }
+        self.pieces.get(row).copied().flatten().map(Spot::Text)
+    }
+
+    /// The row showing `spot`: the same row of its card, or of its piece of
+    /// text, else that piece's last; none once it isn't in the plan.
+    pub fn row_of(&self, spot: Spot) -> Option<usize> {
+        match spot {
+            Spot::Card(l, sub) => self
+                .hits
+                .iter()
+                .find(|h| h.0 > 0 && h.4 == Stop::Card(l))
+                .map(|h| h.0 + sub.min(h.3.saturating_sub(1))),
+            Spot::Text((n, sub)) => self
+                .pieces
+                .iter()
+                .enumerate()
+                .filter_map(|(r, p)| p.filter(|p| p.0 == n && p.1 <= sub).map(|p| (p.1, r)))
+                .max()
+                .map(|(_, r)| r),
+        }
+    }
 }
 
 /// What a click in the panel presses.
@@ -107,11 +168,17 @@ pub type Hit = (usize, usize, usize, usize, Stop);
 
 /// Where the note and the plan go across an app `width` wide: each one's x
 /// and width, `None` for the one hidden; the rule between them is the
-/// column after the note.
-pub fn split(width: u16, show_note: bool) -> (Option<Cols>, Option<Cols>) {
+/// column after the note. `own` is the plan's own width (a drag of its
+/// edge, the pane resize keys), else it takes board 8's share.
+pub fn split(width: u16, show_note: bool, own: Option<u16>) -> (Option<Cols>, Option<Cols>) {
     if width < NARROW {
         let all = Some((0, width));
         return if show_note { (all, None) } else { (None, all) };
+    }
+    if let Some(own) = own {
+        let plan = plan_clamp(own, width);
+        let note = width - plan - 1;
+        return (Some((0, note)), Some((note + 1, plan)));
     }
     let cols = kit::columns(
         &[
@@ -137,6 +204,15 @@ pub fn split(width: u16, show_note: bool) -> (Option<Cols>, Option<Cols>) {
     );
     let at = |c: Option<(usize, usize)>| c.map(|(x, w)| (x as u16, w as u16));
     (at(cols[0]), at(cols[2]))
+}
+
+/// A width asked for the plan, held to what an app `width` wide lets it
+/// be: its least, and the note's least left beside it.
+fn plan_clamp(asked: u16, width: u16) -> u16 {
+    let most = width
+        .saturating_sub(NOTE_MIN as u16 + 1)
+        .max(PLAN_MIN as u16);
+    asked.clamp(PLAN_MIN as u16, most)
 }
 
 /// How much of the panel shows at an app `width` wide.
@@ -195,9 +271,12 @@ pub fn lines(
     easy: bool,
     caps: bool,
     theme: &Theme,
-) -> (Vec<Vec<Span<'static>>>, Vec<Hit>) {
+) -> Laid {
     let mut out: Vec<Vec<Span<'static>>> = Vec::new();
     let mut hits = Vec::new();
+    // The rows that go on with a line of text wrapped; every other row
+    // starts a piece of its own.
+    let mut more: Vec<usize> = Vec::new();
     let inner = cols.saturating_sub(2);
     // What Tab lit shows only while the plan has the keys, and comes back
     // with them.
@@ -243,13 +322,16 @@ pub fn lines(
     // Only the first open decision is drawn as cards, the one a letter or
     // a click chooses in; one after it waits its turn, drawn as text.
     let mut carded = false;
-    let text = |out: &mut Vec<Vec<Span<'static>>>, lines: &[String]| {
+    let text = |out: &mut Vec<Vec<Span<'static>>>, more: &mut Vec<usize>, lines: &[String]| {
         for line in lines {
             if line.trim().is_empty() {
                 out.push(Vec::new());
                 continue;
             }
-            for row in wrapped(line, inner) {
+            for (i, row) in wrapped(line, inner).into_iter().enumerate() {
+                if i > 0 {
+                    more.push(out.len());
+                }
                 out.push(vec![
                     Span::raw(" "),
                     Span::styled(row, Tone::Text.style(theme)),
@@ -268,7 +350,7 @@ pub fn lines(
                 .cloned()
                 .collect();
             if words.iter().any(|l| !l.trim().is_empty()) {
-                text(&mut out, &words);
+                text(&mut out, &mut more, &words);
                 out.push(Vec::new());
             }
             continue;
@@ -287,7 +369,7 @@ pub fn lines(
                     if o.recommended { " (recommended)" } else { "" },
                     o.words
                 );
-                text(&mut out, &[line]);
+                text(&mut out, &mut more, &[line]);
             }
             out.push(Vec::new());
         } else if let Some(choice) = &section.choice {
@@ -404,10 +486,33 @@ pub fn lines(
                 out.push(Vec::new());
             }
         }
-        text(&mut out, &section.lines);
+        text(&mut out, &mut more, &section.lines);
         out.push(Vec::new());
     }
-    (out, hits)
+    let card_row = |r: usize| {
+        hits.iter()
+            .any(|h: &Hit| matches!(h.4, Stop::Card(_)) && h.0 > 0 && (h.0..h.0 + h.3).contains(&r))
+    };
+    let mut pieces = Vec::with_capacity(out.len());
+    let (mut n, mut sub) = (0, 0);
+    for r in 0..out.len() {
+        if card_row(r) {
+            pieces.push(None);
+            continue;
+        }
+        if more.contains(&r) {
+            sub += 1;
+        } else {
+            n += 1;
+            sub = 0;
+        }
+        pieces.push(Some((n, sub)));
+    }
+    Laid {
+        rows: out,
+        hits,
+        pieces,
+    }
 }
 
 /// The cursor moved in the plan: the card it is on lit, as Tab lights one,
@@ -425,15 +530,18 @@ fn follow_card(b: &mut Beside, hits: &[Hit]) {
 impl App {
     /// The plan's rows below its header, and where its cards are, at the
     /// width it was last drawn (else the width it will be).
-    fn plan_layout(&self) -> (usize, Vec<Hit>) {
+    pub(super) fn plan_layout(&self) -> (usize, Vec<Hit>) {
         let Some(b) = &self.beside else {
             return (0, Vec::new());
         };
         let width = match self.geo.plan.width {
-            0 => split(self.cols, b.show_note).1.map_or(0, |(_, w)| w),
+            0 => self
+                .plan_split(self.cols, b.show_note)
+                .1
+                .map_or(0, |(_, w)| w),
             w => w,
         };
-        let (rows, hits) = lines(
+        let laid = lines(
             b,
             &self.plan_folder(&b.path),
             width as usize,
@@ -442,7 +550,7 @@ impl App {
             self.opts.caps,
             &self.look.theme,
         );
-        (rows.len().saturating_sub(1), hits)
+        (laid.rows.len().saturating_sub(1), laid.hits)
     }
 
     /// The plan of the unticked item on the cursor's line, opened beside
@@ -486,6 +594,7 @@ impl App {
             hover: None,
             show_note: false,
             follow: false,
+            laid: None,
         });
         true
     }
@@ -538,6 +647,7 @@ impl App {
     pub(super) fn close_beside(&mut self) {
         self.beside = None;
         self.geo.plan = Rect::default();
+        self.geo.plan_edge = None;
         self.geo.plan_hits.clear();
         if self.focus == Focus::List && !self.list_shown {
             self.focus = Focus::Note;
@@ -855,8 +965,14 @@ impl App {
         rule: bool,
     ) -> Option<(u16, u16)> {
         let theme = self.look.theme;
+        // The rule a drag moves (notes_resize), lit under the mouse and
+        // while it is held, as the list's edge is.
+        self.geo.plan_edge = (self.opts.resize && rule && area.x > 0)
+            .then(|| Rect::new(area.x - 1, area.y, 1, area.height));
         if rule && area.x > 0 {
-            let edge = Style::new().fg(kit::border(&theme));
+            let edge = self
+                .plan_edge_lit()
+                .unwrap_or_else(|| Style::new().fg(kit::border(&theme)));
             for y in area.y..area.bottom() {
                 buf[(area.x - 1, y)].set_symbol("│").set_style(edge);
             }
@@ -866,8 +982,34 @@ impl App {
         let b = self.beside.as_ref()?;
         let folder = self.plan_folder(&b.path);
         let (fits, easy, caps) = (room(self.cols), self.opts.easy, self.opts.caps);
-        let draw = |b: &Beside| lines(b, &folder, area.width as usize, fits, easy, caps, &theme);
-        let (mut rows, hits) = draw(b);
+        let draw = |b: &Beside, (width, fits): (u16, Room)| {
+            lines(b, &folder, width as usize, fits, easy, caps, &theme)
+        };
+        let now = (area.width, fits);
+        let laid = draw(b, now);
+        // Rewrapped (its edge moved, Notes resized): the cursor and the
+        // first row shown go to the rows of what they were on, so no card
+        // coming up to the cursor's row number is lit by it, and the view
+        // follows the cursor rather than the cursor the view.
+        let moved = b.laid.filter(|was| *was != now).map(|was| {
+            let before = draw(b, was);
+            let to = |row: usize, lit: Option<Stop>| {
+                before
+                    .spot(row + 1, lit)
+                    .and_then(|s| laid.row_of(s))
+                    .map(|r| r.saturating_sub(1))
+            };
+            (to(b.line, b.stop), to(b.scroll, None))
+        });
+        let b = self.beside.as_mut()?;
+        b.laid = Some(now);
+        if let Some((line, scroll)) = moved {
+            b.line = line.unwrap_or(b.line);
+            b.scroll = scroll.unwrap_or(b.scroll);
+            b.follow = true;
+        }
+        let b = self.beside.as_ref()?;
+        let Laid { mut rows, hits, .. } = laid;
         // The header stays; the rest scrolls, never past its end.
         let body = area.height.saturating_sub(1) as usize;
         let last = rows.len().saturating_sub(1).saturating_sub(body);
@@ -909,7 +1051,7 @@ impl App {
             follow_card(b, &hits);
         }
         if b.stop != stop {
-            rows = draw(b).0;
+            rows = draw(b, now).rows;
         }
         // On a card, the cursor sits on its edge, the one lit when they
         // stand side by side.
@@ -1017,5 +1159,106 @@ impl App {
         if let Some(b) = self.beside.as_mut() {
             b.hover = hit;
         }
+    }
+
+    // ── The plan's width ──────────────────────────────────────────────────
+
+    /// Where the note and the plan go across an app `cols` wide, the plan
+    /// at its own width while Settings' notes_resize is on.
+    pub(super) fn plan_split(&self, cols: u16, show_note: bool) -> (Option<Cols>, Option<Cols>) {
+        split(
+            cols,
+            show_note,
+            self.plan_width.filter(|_| self.opts.resize),
+        )
+    }
+
+    /// The plan's width as it shows beside its note, 0 with none there.
+    pub(super) fn plan_cols(&self) -> u16 {
+        self.beside
+            .as_ref()
+            .and_then(|b| self.plan_split(self.cols, b.show_note).1)
+            .map_or(0, |(_, w)| w)
+    }
+
+    /// Board 8's share of the width for the plan, its width with none of
+    /// its own.
+    fn plan_default(&self) -> u16 {
+        split(self.cols, false, None).1.map_or(0, |(_, w)| w)
+    }
+
+    /// Whether screen cell (`x`, `y`) is on the plan's edge, while it
+    /// takes a drag.
+    pub(super) fn on_plan_edge(&self, x: u16, y: u16) -> bool {
+        self.opts.resize
+            && self
+                .geo
+                .plan_edge
+                .is_some_and(|r| x == r.x && y >= r.y && y < r.bottom())
+    }
+
+    /// How the plan's edge is drawn while it is dragged, or under the mouse
+    /// with Settings' hover_highlight on; none to draw it as the rule it is.
+    fn plan_edge_lit(&self) -> Option<Style> {
+        let under = self.opts.hover && self.mouse_at.is_some_and(|(x, y)| self.on_plan_edge(x, y));
+        ((self.edge_drag && self.edge_plan) || under).then(|| Style::new().fg(Color::Indexed(81)))
+    }
+
+    /// The plan given a width of its own, held to what fits; board 8's
+    /// share is no width of its own, so reaching it the plan follows the
+    /// screen again.
+    fn set_plan_width(&mut self, width: u16) {
+        let width = plan_clamp(width, self.cols);
+        self.plan_width = (width != self.plan_default()).then_some(width);
+    }
+
+    /// The plan's edge dragged to column `x`: the plan takes the columns
+    /// right of it.
+    pub(super) fn drag_plan_edge(&mut self, x: u16) {
+        self.set_plan_width(self.cols.saturating_sub(x.saturating_add(1)));
+    }
+
+    /// A pane resize key (`by` columns, right positive) while the plan
+    /// beside its note has the keys: its edge moved that way, stopping on
+    /// board 8's share on the way past. Whether it moved; a plan without
+    /// the keys, without the note beside it, or at its limit that way hands
+    /// the key back.
+    pub(super) fn plan_resize_key(&mut self, by: i32) -> bool {
+        let Some(b) = self.beside.as_ref() else {
+            return false;
+        };
+        let beside_note = self.plan_split(self.cols, b.show_note).0.is_some();
+        if !b.focused || !beside_note {
+            return false;
+        }
+        // The edge is at the plan's left: moving it left widens the plan.
+        let now = i32::from(self.plan_cols());
+        let asked = (now - by).clamp(0, i32::from(u16::MAX));
+        let share = i32::from(self.plan_default());
+        let passes = share != now && now.min(asked) <= share && share <= now.max(asked);
+        let to = if passes {
+            share
+        } else {
+            i32::from(plan_clamp(asked as u16, self.cols))
+        };
+        if (to - now).signum() != (-by).signum() {
+            return false;
+        }
+        self.set_plan_width(to as u16);
+        true
+    }
+
+    /// "Use the default width" with a plan beside the note, and a double
+    /// click on its edge: the plan back to board 8's share, nothing kept.
+    pub(super) fn default_plan_width(&mut self) {
+        self.plan_width = None;
+        self.keys_moved = None;
+        self.keep_width();
+    }
+
+    /// The plan's width as the state folder keeps it.
+    pub(super) fn kept_plan_width(&self) -> Option<u16> {
+        util::read_text(self.store.state.join(super::PLAN_WIDTH))
+            .and_then(|text| text.trim().parse().ok())
     }
 }

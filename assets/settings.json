@@ -1008,8 +1008,8 @@
   {
     "key": "notes_resize",
     "category": "Notes",
-    "label": "Resize Notes' list by dragging or the pane resize keys",
-    "description": "A drag of the line right of Notes' list of notes, or the pane resize keys (C-M-S-h and C-M-S-l) while the list has the keys, gives the list a width of its own, from 30 columns to half of Notes, kept through restarts; \"Use the default width\" in Notes' palette, or a double click on the edge, goes back to the width the screen gives it. Off, the list keeps the width the screen gives it, its edge takes no drag and the pane resize keys move the pane's divider as they did before",
+    "label": "Resize Notes' list and plan by dragging or the pane resize keys",
+    "description": "A drag of the line right of Notes' list of notes, or the pane resize keys (C-M-S-h and C-M-S-l) while the list has the keys, gives the list a width of its own, from 30 columns to half of Notes, kept through restarts; \"Use the default width\" in Notes' palette, or a double click on the edge, goes back to the width the screen gives it. The plan beside a note resizes the same way by the line at its left, while the plan has the keys, keeping the note at least 24 columns. Off, the list and the plan keep the widths the screen gives them, their edges take no drag and the pane resize keys move the pane's divider as they did before",
     "default": true
   },
   {
