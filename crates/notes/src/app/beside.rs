@@ -1174,6 +1174,16 @@ impl App {
                 .plan_hits
                 .push((Rect::new(area.x + x as u16, y, w as u16, h), stop));
         }
+        // The card under a mouse that stayed put while the plan rewrapped
+        // (the keys resizing it) is the one lit, drawn again once if it
+        // changed, so a click there chooses what is lit.
+        if let Some((x, y)) = self.mouse_at.filter(|_| self.opts.hover) {
+            let was = self.beside.as_ref().and_then(|b| b.hover);
+            self.plan_hover(x, y);
+            if self.beside.as_ref().and_then(|b| b.hover) != was {
+                return self.draw_plan(buf, area, rule);
+            }
+        }
         cursor
     }
 

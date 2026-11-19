@@ -3826,9 +3826,9 @@ impl App {
         }
         // Offered while a width is kept here, or in the state folder by another
         // tab's Notes since this one started, read as the palette opens.
-        // With a plan beside the note it is the plan's width, the list put
-        // away.
-        let kept = if self.beside.is_some() {
+        // With a plan showing it is the plan's width; a plan hidden behind
+        // its note leaves it the list's.
+        let kept = if self.plan_cols() > 0 {
             self.plan_width.is_some() || self.kept_plan_width().is_some()
         } else {
             self.list_width.is_some() || self.kept_width().is_some()
@@ -3960,7 +3960,7 @@ impl App {
         match act {
             PaletteAct::ToggleList => self.toggle_list(),
             // A palette open as notes_resize was turned off keeps the widths.
-            PaletteAct::DefaultWidth if self.opts.resize && self.beside.is_some() => {
+            PaletteAct::DefaultWidth if self.opts.resize && self.plan_cols() > 0 => {
                 self.default_plan_width()
             }
             PaletteAct::DefaultWidth if self.opts.resize => self.default_width(),
