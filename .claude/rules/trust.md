@@ -13,6 +13,7 @@ paths:
   - "src/cmd/worktree_from_branch.rs"
   - "src/cmd/wt_revive.rs"
   - "src/relay/**"
+  - "src/cmd/apply_actions.rs"
 ---
 
 # Trusted directories and someone else's PR

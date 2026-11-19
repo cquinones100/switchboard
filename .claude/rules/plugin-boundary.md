@@ -4,6 +4,7 @@ paths:
   - "src/diff/**"
   - "src/notes/host.rs"
   - "Cargo.toml"
+  - "assets/settings.json"
 ---
 
 # The crates and the plugin boundary

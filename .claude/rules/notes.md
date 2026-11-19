@@ -8,6 +8,9 @@ paths:
   - "src/cmd/worktree_from_note.rs"
   - "assets/skills/plan-item/**"
   - "src/cmd/claude_context.rs"
+  - "assets/skills/note-tickets/**"
+  - "assets/skills/note-watch/**"
+  - "src/diff/host.rs"
 ---
 
 # Notes

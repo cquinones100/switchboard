@@ -4,6 +4,11 @@ paths:
   - ".claude/skills/**"
   - "src/assets.rs"
   - "tests/it/skill_path.rs"
+  - "assets/claude-settings.json"
+  - "src/cmd/worktree_from_note.rs"
+  - "src/autopilot/issues.rs"
+  - "src/cmd/work.rs"
+  - "src/cmd/skill_path.rs"
 ---
 
 # Skills
