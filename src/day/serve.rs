@@ -135,8 +135,10 @@ pub struct Day {
     slack_reading: HashMap<String, i64>,
     slack_fetching: HashMap<String, i64>,
     slack_thread_busy: bool,
-    /// The threads a look found something new in being read.
+    /// The threads a look found something new in being read, and whether
+    /// they were asked for again meanwhile.
     slack_wanted_busy: bool,
+    slack_wanted_again: bool,
     slack_file_busy: bool,
     /// The pictures decoded for drawing, by file ID, the oldest let go
     /// past `SLACK_PICTURES`; and those being decoded.
@@ -421,6 +423,9 @@ impl Server {
                         }
                     }
                     Err(e) => log(&dirs.state, &format!("slack: threads not kept ({e})")),
+                }
+                if std::mem::take(&mut self.day.slack_wanted_again) {
+                    self.read_wanted_threads();
                 }
             }
             DayEvent::SlackThread(key, result) => {
@@ -1196,10 +1201,15 @@ impl Server {
     /// a time; only while UX 2.0 draws the board, and not while you're
     /// away (the next look on your return reads them).
     fn read_wanted_threads(&mut self) {
+        // Asked for while a read runs: read again once it ends, since it
+        // chose its threads before.
+        if self.day.slack_wanted_busy {
+            self.day.slack_wanted_again = true;
+            return;
+        }
         if !settings::is_on("slack_threads")
             || !settings::is_on("ux2")
             || self.away()
-            || self.day.slack_wanted_busy
             || tokio::runtime::Handle::try_current().is_err()
         {
             return;
