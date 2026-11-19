@@ -260,7 +260,7 @@ The relay's DM, threads and Home tab.
 - [144. Board 141's reading column with a page's hunks side by side, as Files mode lays them out, old left and new right with their lines paired; the 30-column outline beside it, the prose still 88 columns wide, the hunks across the column's whole width](https://cquinones100.github.io/switchboard/design/144.html)
 - [145. The same page narrower: each side would be under 60 columns, so the hunks fall back to one column, the old lines then the new, marked − and +](https://cquinones100.github.io/switchboard/design/145.html)
 
-## Review: the diff for understanding as built
+## The diff for understanding as built
 
 - [146. As built (for review): the Story view, its row of buttons at the top with ← → (H L) for back and forward, the Story / Map / Files switch, What runs always over the column, side-by-side hunks; the outline not greyed while the column has the keys](https://cquinones100.github.io/switchboard/design/146.html)
 - [147. As built: the Map back as a third view, switched to from the Story view on the same chapter and page](https://cquinones100.github.io/switchboard/design/147.html)
