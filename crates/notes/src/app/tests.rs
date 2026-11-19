@@ -3969,7 +3969,7 @@ fn the_plans_cursor_stays_on_what_it_was_on_as_the_plan_rewraps() {
             app.cols = from;
             {
                 let b = app.beside.as_mut().unwrap();
-                (b.line, b.stop, b.follow, b.laid) = (r, None, true, None);
+                (b.line, b.stop, b.follow, b.laid, b.held) = (r, None, true, None, None);
             }
             let (shown, cursor) = drawn(&mut app);
             let (_, y) = cursor.unwrap();
@@ -5484,4 +5484,47 @@ fn a_scrolled_plan_without_the_keys_stays_where_it_was_as_it_is_resized() {
         app.beside.as_ref().unwrap().scroll > 0,
         "not back at the top ({top})"
     );
+}
+
+#[test]
+fn a_plan_resized_away_and_back_puts_the_cursor_back_on_its_word() {
+    let (_dir, mut app, _path, plan) = with_plan("plan-drift", 160);
+    let long = "word ".repeat(40);
+    write(
+        &plan,
+        &PLAN_A_B.replace(
+            "- The sidebar is 34 columns wide, each tab on two lines.",
+            &format!("- {}", long.trim_end()),
+        ),
+    );
+    keys(&mut app, "4G<CR><C-w>l");
+    app.rows = 40;
+    app.plan_width = Some(34);
+    let _ = drawn(&mut app);
+    // The cursor on the long line's third row.
+    let shown = drawn(&mut app).0;
+    let (_, y) = find(&shown, "- word word");
+    app.beside.as_mut().unwrap().line = y as usize + 1;
+    let _ = drawn(&mut app);
+    let start = app.beside.as_ref().unwrap().line;
+    for w in 35..60 {
+        app.plan_width = Some(w);
+        let _ = drawn(&mut app);
+    }
+    for w in (34..60).rev() {
+        app.plan_width = Some(w);
+        let _ = drawn(&mut app);
+    }
+    assert_eq!(app.beside.as_ref().unwrap().line, start);
+}
+
+#[test]
+fn two_cards_too_narrow_for_their_titles_stack() {
+    let (_dir, mut app, _path, _plan) = with_plan("plan-two-cards", 160);
+    keys(&mut app, "4G<CR>");
+    app.plan_width = Some(34);
+    let shown = screen(&mut app);
+    let (_, a_y) = find(&shown, "A · ");
+    let (_, b_y) = find(&shown, "B · ");
+    assert!(b_y > a_y, "stacked:\n{}", shown.join("\n"));
 }
