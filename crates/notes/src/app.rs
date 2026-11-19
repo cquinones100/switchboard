@@ -4723,10 +4723,14 @@ impl App {
             }
             (MouseKind::Press, MouseButton::WheelDown | MouseButton::WheelUp) => {
                 let down = m.button == MouseButton::WheelDown;
+                // Never past the plan's end, as its drawing holds it, so a
+                // turn at the bottom moves nothing.
+                let body = self.geo.plan.height.saturating_sub(1) as usize;
+                let end = self.plan_layout().0.saturating_sub(body);
                 if let Some(b) = self.beside.as_mut().filter(|_| inside(self.geo.plan)) {
                     let was = b.scroll;
                     b.scroll = if down {
-                        b.scroll + 3
+                        (b.scroll + 3).min(end.max(was))
                     } else {
                         b.scroll.saturating_sub(3)
                     };
