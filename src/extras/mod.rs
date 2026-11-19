@@ -84,6 +84,9 @@ pub enum Command {
     /// "Use the default width": the tab's lone pane takes Settings'
     /// `lone_pane_width` again, its own width from a drag cleared.
     DefaultWidth,
+    /// "Use the sidebar's default width": the session's sidebar takes
+    /// sidebar.json's width again, its own from a drag cleared.
+    SidebarDefaultWidth,
 }
 
 impl Command {
@@ -111,6 +114,7 @@ impl Command {
                 Command::TabTrail,
                 Command::MissionViews,
                 Command::DefaultWidth,
+                Command::SidebarDefaultWidth,
             ])
             .collect()
     }
@@ -140,6 +144,7 @@ impl Command {
             Command::TabTrail => "tab-trail".into(),
             Command::MissionViews => "mission-views".into(),
             Command::DefaultWidth => "default-width".into(),
+            Command::SidebarDefaultWidth => "sidebar-default-width".into(),
         }
     }
 
@@ -197,6 +202,7 @@ impl Command {
             Command::DefaultWidth => {
                 "Use the default width for this tab's lone pane and mission control"
             }
+            Command::SidebarDefaultWidth => "Use the sidebar's default width",
         };
         words.to_string()
     }
@@ -262,6 +268,9 @@ impl Command {
             Command::DefaultWidth => {
                 "A drag of a lone pane's right edge, or the pane resize keys in a tab with one pane, gives that tab a width of its own, kept through restarts; and the keys in mission control give it one; this clears both, the pane and mission control taking Settings' \"Widest a lone pane gets\" (lone_pane_width) again."
             }
+            Command::SidebarDefaultWidth => {
+                "A drag of the sidebar's edge, or the pane resize keys while it has them, gives the sidebar a width of its own, kept through restarts, which mission control's list of views in its place shares; this clears it, the sidebar taking sidebar.json's width again, as its own menu's \"Use the default width\" does. Settings' \"Resize the sidebar by dragging or the pane resize keys\" (sidebar_resize)."
+            }
             Command::Keys => {
                 "Mission control's Keys view: the workspace's keys by their first tag, then the sidebar's, mission control's, the boxes', the diff's and Notes', then those only through M-p; Enter presses a workspace key and ? finds one by pressing it. With UX 2.0, a board with a heatmap of the Alt keys pressed this week. Settings' \"Keys\" (view_keys) off hands M-/ to the pane."
             }
@@ -292,6 +301,7 @@ impl Command {
             Command::TabTrail => &["tabs", "navigate", "history"],
             Command::MissionViews => &["mission", "views"],
             Command::DefaultWidth => &["tabs", "panes", "width"],
+            Command::SidebarDefaultWidth => &["sidebar", "width"],
         }
     }
 

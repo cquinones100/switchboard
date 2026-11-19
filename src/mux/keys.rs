@@ -812,6 +812,8 @@ impl Action {
                     | Action::Extra(Extra::Mission(_))
                     | Action::Extra(Extra::MissionViews)
                     | Action::Extra(Extra::TabTrail)
+                    // The sidebar's width, which mission control's list shares.
+                    | Action::Extra(Extra::SidebarDefaultWidth)
                     | Action::Autopilot(_)
                     | Action::ContextMenu
             ),

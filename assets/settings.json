@@ -94,6 +94,13 @@
     "default": true
   },
   {
+    "key": "sidebar_resize",
+    "category": "Sidebar",
+    "label": "Resize the sidebar by dragging or the pane resize keys",
+    "description": "A drag of the sidebar's right edge, or the pane resize keys (C-M-S-h and C-M-S-l) while it has the keys, gives it a width of its own, from 24 columns to half the window, kept through restarts; mission control's list of views in its place takes the same width and the same edge. \"Use the default width\" in the sidebar's own menu, and M-p's \"Use the sidebar's default width\", go back to sidebar.json's width. Off, the sidebar keeps its fixed width, its edge takes no drag and the pane resize keys move the pane's divider as they did before, a width kept left for when it is on again",
+    "default": true
+  },
+  {
     "key": "sidebar_reminders",
     "category": "Sidebar",
     "label": "Reminders in the sidebar",

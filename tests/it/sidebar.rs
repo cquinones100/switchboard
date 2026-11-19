@@ -3034,3 +3034,170 @@ fn without_the_window_m_o_moves_the_sidebar_cursor_onto_the_first_notification()
             .any(|l| l.contains("▌") && l.contains("New note: Plan"))
     });
 }
+
+/// The first session's sidebar's columns, its line beside the panes
+/// included.
+fn side_columns(server: &TestServer) -> u64 {
+    server.list()["sessions"][0]["sidebar"]["columns"]
+        .as_u64()
+        .unwrap_or(0)
+}
+
+/// The first tab's first pane's columns.
+fn pane_columns(server: &TestServer) -> u64 {
+    tabs(&server.list())[0]["panes"][0]["cols"]
+        .as_u64()
+        .unwrap_or(0)
+}
+
+/// A press on column `from` of row 10 (both from 0), a drag to column `to`
+/// and the release there.
+fn drag_edge(client: &mut TestClient, from: u64, to: u64) {
+    let (from, to) = (from + 1, to + 1);
+    client.send(format!("\x1b[<0;{from};11M\x1b[<32;{to};11M\x1b[<0;{to};11m").as_bytes());
+}
+
+#[test]
+fn the_sidebars_edge_drags_and_the_resize_keys_move_it_kept_through_a_restart() {
+    let mut server = TestServer::start_with_settings(
+        r#"{"notifications": false, "tips": false, "ux2": true, "auto_restore": true}"#,
+    );
+    let mut client = server.attach(200, 40);
+    client.wait_text("$");
+    wait_list(&server, "the sidebar at its default width", |_| {
+        side_columns(&server) == 35
+    });
+    assert_eq!(pane_columns(&server), 165);
+    // Its edge is the column after its 34: dragged to column 50, the
+    // sidebar is 50 columns and the pane beside it starts after its line.
+    drag_edge(&mut client, 34, 50);
+    wait_list(&server, "the sidebar dragged to 50 columns", |_| {
+        side_columns(&server) == 51
+    });
+    assert_eq!(pane_columns(&server), 149, "the pane laid out beside it");
+    // With the keys in the sidebar, C-M-S-h narrows it by 5 and C-M-S-l
+    // widens it; in the pane they leave it alone.
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the focus in the sidebar", focused);
+    client.send(b"\x1b[104;8u");
+    wait_list(&server, "the sidebar 5 columns narrower", |_| {
+        side_columns(&server) == 46
+    });
+    client.send(b"\x1b[108;8u\x1b[108;8u");
+    wait_list(&server, "the sidebar 10 columns wider", |_| {
+        side_columns(&server) == 56
+    });
+    assert!(focused(&server.list()), "the sidebar keeps the keys");
+    // No narrower than 24 columns, no wider than half the window.
+    drag_edge(&mut client, 55, 3);
+    wait_list(&server, "the sidebar at its least", |_| {
+        side_columns(&server) == 25
+    });
+    drag_edge(&mut client, 24, 180);
+    wait_list(&server, "the sidebar at half the window", |_| {
+        side_columns(&server) == 101
+    });
+    drag_edge(&mut client, 100, 50);
+    wait_list(&server, "the sidebar back at 50 columns", |_| {
+        side_columns(&server) == 51
+    });
+    // Mission control's list of views is drawn in the sidebar's place at
+    // that width, and its edge drags the same.
+    client.send(b"\x1b");
+    client.type_text(&format!("{ALT} "));
+    client.wait_text("MISSION CONTROL");
+    drag_edge(&mut client, 50, 44);
+    client.wait_for("the edge dragged in mission control", |_| {
+        side_columns(&server) == 45
+    });
+    client.type_text(&format!("{ALT} "));
+    client.wait_for("mission control closed", |s| {
+        !s.iter().any(|l| l.contains("MISSION CONTROL"))
+    });
+    assert_eq!(pane_columns(&server), 155, "the tab laid out beside it");
+    // Saved with the layout, so a server started again has it.
+    server.ok(&["save"]);
+    drop(client);
+    server.restart();
+    let mut client = server.attach(200, 40);
+    client.wait_text("$");
+    wait_list(&server, "the width kept through a restart", |_| {
+        side_columns(&server) == 45
+    });
+    // "Use the sidebar's default width", on a key of its own, gives it
+    // sidebar.json's again.
+    switchboard::util::write_atomic(
+        server.home.join(".config/switchboard/keys.json"),
+        r#"{"root": {"M-z": "sidebar-default-width"}}"#,
+    )
+    .unwrap();
+    let deadline = common::deadline(Duration::from_secs(10));
+    while !server.ok(&["list-keys"]).contains("M-z") {
+        assert!(Instant::now() < deadline, "keys.json not read");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    client.type_text(&format!("{ALT}z"));
+    wait_list(&server, "the sidebar back at its default width", |_| {
+        side_columns(&server) == 35
+    });
+}
+
+#[test]
+fn the_sidebars_own_menu_goes_back_to_the_default_width() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(200, 40);
+    client.wait_text("$");
+    wait_list(&server, "the sidebar at its default width", |_| {
+        side_columns(&server) == 35
+    });
+    drag_edge(&mut client, 34, 50);
+    wait_list(&server, "the sidebar dragged to 50 columns", |_| {
+        side_columns(&server) == 51
+    });
+    // A right click on a blank row of the sidebar opens its own menu.
+    client.send(b"\x1b[<2;6;31M\x1b[<2;6;31m");
+    let screen = client.wait_text("Use the default width");
+    let (y, x) = screen
+        .iter()
+        .enumerate()
+        .find_map(|(y, l)| {
+            l.find("Use the default width")
+                .map(|i| (y, l[..i].chars().count()))
+        })
+        .unwrap();
+    client.send(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 2, y + 1, x + 2, y + 1).as_bytes());
+    wait_list(&server, "the sidebar back at its default width", |_| {
+        side_columns(&server) == 35
+    });
+}
+
+#[test]
+fn with_resizing_off_the_sidebars_edge_takes_no_drag_and_a_kept_width_is_left_alone() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(200, 40);
+    client.wait_text("$");
+    drag_edge(&mut client, 34, 50);
+    wait_list(&server, "the sidebar dragged to 50 columns", |_| {
+        side_columns(&server) == 51
+    });
+    // Off, the sidebar is at sidebar.json's width again and neither a drag
+    // nor the keys move it.
+    settings(&server, json!({"sidebar_resize": false}));
+    wait_list(&server, "the sidebar at its fixed width", |_| {
+        side_columns(&server) == 35
+    });
+
+    drag_edge(&mut client, 34, 60);
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the focus in the sidebar", focused);
+    client.send(b"\x1b[108;8u");
+    std::thread::sleep(Duration::from_millis(300) * common::patience());
+    assert_eq!(side_columns(&server), 35);
+    // On again, the width it was given is back.
+    settings(&server, json!({}));
+    wait_list(&server, "the kept width back", |_| {
+        side_columns(&server) == 51
+    });
+}

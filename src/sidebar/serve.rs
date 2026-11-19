@@ -131,12 +131,123 @@ impl Server {
 
     /// The columns the sidebar takes in a session `cols` wide, its line
     /// beside the panes included: none with the sidebar setting off or a
-    /// window narrower than sidebar.json's `minWindowWidth`.
-    pub fn sidebar_columns(&self, cols: u16) -> u16 {
+    /// window narrower than sidebar.json's `minWindowWidth`. `kept` is the
+    /// session's own width for it (`Session::sidebar_width`), which counts
+    /// only while Settings' `sidebar_resize` is on.
+    pub fn sidebar_columns(&self, cols: u16, kept: Option<u16>) -> u16 {
         if settings::is_on("sidebar") {
-            self.sidebar.config.columns_in(cols)
+            let kept = kept.filter(|_| settings::is_on("sidebar_resize"));
+            self.sidebar.config.columns_at(cols, kept)
         } else {
             0
+        }
+    }
+
+    /// The sidebar's edge, the line between it and the panes, when
+    /// (`col`, `row`) is on it and it can be dragged: its session shows a
+    /// sidebar (or mission control drawn from that edge, its list of views
+    /// in the sidebar's place) and Settings' `sidebar_resize` is on.
+    pub fn sidebar_edge_at(&self, client: ClientId, col: u16, row: u16) -> bool {
+        if !settings::is_on("sidebar_resize") {
+            return false;
+        }
+        let Some(c) = self.clients.get(&client) else {
+            return false;
+        };
+        let below = c.rows.saturating_sub(crate::status::lines());
+        self.session(&c.session).is_some_and(|s| {
+            // With UX 2.0 mission control is drawn from the sidebar's edge,
+            // its list of views in the sidebar's place, whose edge drags as
+            // the keys move it there; as a column of its own beside the tabs
+            // sidebar, which has no keys in mission control, the edge waits
+            // for mission control to close, so the mouse does no more than
+            // the keys. Without UX 2.0 it covers the whole screen.
+            let shown = match c.overlays.find::<crate::mission::Mission>() {
+                Some(m) => settings::is_on("ux2") && !m.own_column,
+                None => self.sidebar_shown(&s.name),
+            };
+            shown && s.sidebar > 0 && col == s.sidebar - 1 && row < below
+        })
+    }
+
+    /// The session's sidebar's own width, in columns without its line, as
+    /// it is drawn now.
+    pub fn sidebar_width(&self, session: &str) -> Option<u16> {
+        self.session(session)
+            .filter(|s| s.sidebar > 0)
+            .map(|s| s.sidebar - 1)
+    }
+
+    /// Gives a session's sidebar a width of its own (held between
+    /// `config::LEAST` and half the window), or with none sidebar.json's
+    /// again, and lays its tabs out beside it. Gives whether it changed.
+    pub fn sidebar_set_width(&mut self, session: &str, width: Option<i32>) -> bool {
+        let Some(s) = self.session_mut(session) else {
+            return false;
+        };
+        let kept = width.map(|w| config::resized(w, s.cols));
+        if s.sidebar_width == kept {
+            return false;
+        }
+        s.sidebar_width = kept;
+        self.fit_sidebars();
+        self.mission_changed();
+        true
+    }
+
+    /// A key bound without the prefix to a pane resize left or right,
+    /// pressed while the sidebar shows and has the keys: it moves the
+    /// sidebar's edge. The prefix's own resize keys, the palette's command
+    /// and `switchboard press` stay the pane's, as does every one with
+    /// sidebar_resize off. Gives whether it took the key.
+    pub fn sidebar_resize_pressed(&mut self, client: ClientId, action: &Action) -> bool {
+        let Action::Resize(
+            dir @ (crate::mux::Direction::Left | crate::mux::Direction::Right),
+            cells,
+        ) = *action
+        else {
+            return false;
+        };
+        let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
+            return false;
+        };
+        if !settings::is_on("sidebar_resize")
+            || !self.sidebar.focused(&session)
+            || !self.sidebar_shown(&session)
+            || self.mission_open(client)
+        {
+            return false;
+        }
+        self.sidebar_resize_key(&session, dir, cells);
+        true
+    }
+
+    /// A pane resize key left or right while the sidebar has the keys moves
+    /// its edge, as it moves a lone pane's.
+    fn sidebar_resize_key(&mut self, session: &str, dir: crate::mux::Direction, cells: u16) {
+        let by = i32::from(cells)
+            * if dir == crate::mux::Direction::Right {
+                1
+            } else {
+                -1
+            };
+        self.sidebar_resize_by(session, by);
+    }
+
+    /// The sidebar's edge moved `by` columns (right positive), as a pane
+    /// resize key moves it, for it and for mission control's list of views
+    /// in its place.
+    pub fn sidebar_resize_by(&mut self, session: &str, by: i32) {
+        let Some(now) = self.sidebar_width(session) else {
+            return;
+        };
+        // Only the way the key asks: at its least or most, or where the
+        // window's limits would take the edge the other way (sidebar.json's
+        // width past half the window), the width kept stays as it is.
+        let cols = self.session(session).map_or(0, |s| s.cols);
+        let to = i32::from(config::resized(i32::from(now) + by, cols));
+        if by != 0 && (to - i32::from(now)).signum() == by.signum() {
+            self.sidebar_set_width(session, Some(to));
         }
     }
 
@@ -154,7 +265,12 @@ impl Server {
         let wanted: Vec<(String, u16)> = self
             .sessions
             .iter()
-            .map(|s| (s.name.clone(), self.sidebar_columns(s.cols)))
+            .map(|s| {
+                (
+                    s.name.clone(),
+                    self.sidebar_columns(s.cols, s.sidebar_width),
+                )
+            })
             .collect();
         for (name, columns) in wanted {
             let Some(s) = self.session_mut(&name) else {
@@ -1438,8 +1554,13 @@ impl Server {
             | Action::TogglePin
             | Action::CopyReply
             // C-w's next key moves from the sidebar, and M-0's tab keeps
-            // the cursor in a sidebar, as M-1 to M-9 do (src/extras).
-            | Action::Extra(crate::extras::Command::PaneNav | crate::extras::Command::GoToTab) => {
+            // the cursor in a sidebar, as M-1 to M-9 do (src/extras); the
+            // sidebar's own width reset leaves its filter and selection.
+            | Action::Extra(
+                crate::extras::Command::PaneNav
+                | crate::extras::Command::GoToTab
+                | crate::extras::Command::SidebarDefaultWidth,
+            ) => {
                 (false, true)
             }
             _ => {

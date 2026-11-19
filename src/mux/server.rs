@@ -228,6 +228,11 @@ pub struct Session {
     /// resize keys there, kept as a tab's `@lone_width` is (columns, or
     /// `full`); none to take Settings' `lone_pane_width`.
     pub mission_width: Option<String>,
+    /// The sidebar's own width in columns, its line beside the panes apart,
+    /// from a drag of its edge or the pane resize keys while it has the
+    /// keys; none to take sidebar.json's. Mission control's list of views
+    /// drawn in the sidebar's place takes it too.
+    pub sidebar_width: Option<u16>,
 }
 
 impl Session {
@@ -392,6 +397,17 @@ enum Drag {
         left: u16,
         spread: u16,
         from: Option<Option<u16>>,
+    },
+    /// The sidebar's edge, the line between it and the panes, moved with
+    /// the mouse: the press that took it, and whether the mouse has left
+    /// its column since. The line is the list's scroll bar too, so a press
+    /// let go where it landed is given to the sidebar as the click it was.
+    /// Whether the mouse has left the press's column since, the edge moved
+    /// or not.
+    Sidebar {
+        press: Mouse,
+        moved: bool,
+        wandered: bool,
     },
 }
 
@@ -1743,8 +1759,9 @@ impl Server {
             trail: Trail::default(),
             cols,
             rows,
-            sidebar: self.sidebar_columns(cols),
+            sidebar: self.sidebar_columns(cols, None),
             mission_width: None,
+            sidebar_width: None,
         };
         let area = super::layout::capped(session.main_area(), super::layout::lone_width());
         // In the directory asked from, while it is still there, else home
@@ -2614,7 +2631,8 @@ impl Server {
             return;
         };
         let (name, cols, rows) = (c.session.clone(), c.cols, c.rows);
-        let sidebar = self.sidebar_columns(cols);
+        let kept = self.session(&name).and_then(|s| s.sidebar_width);
+        let sidebar = self.sidebar_columns(cols, kept);
         let Some(s) = self.session_mut(&name) else {
             return;
         };
@@ -2944,6 +2962,11 @@ impl Server {
         if matches!(c.drag, Some(Drag::Edge { .. })) {
             return Pointer::border(true);
         }
+        if matches!(c.drag, Some(Drag::Sidebar { .. }))
+            || (self.sidebar_edge_free(id) && self.sidebar_edge_at(id, col, row))
+        {
+            return Pointer::border(true);
+        }
         let look = *c.overlays.look();
         let over = c
             .overlays
@@ -3027,6 +3050,13 @@ impl Server {
                 return;
             }
         }
+        // The sidebar's edge takes a press and the drag after it, before
+        // mission control, whose list of views shares that edge.
+        if let Input::Mouse(m) = &parsed.input
+            && self.sidebar_edge_mouse(id, *m)
+        {
+            return;
+        }
         // Mission control takes them while it is the box on top
         // (src/mission), and says itself what changed; any other overlay
         // up takes them (src/ui), and whatever they do may change what it
@@ -3063,6 +3093,14 @@ impl Server {
                 }
             }
             Input::FocusIn | Input::FocusOut => {
+                // A drag of the sidebar's edge ends with the focus: a
+                // terminal may never send its release.
+                if parsed.input == Input::FocusOut
+                    && let Some(c) = self.clients.get_mut(&id)
+                    && matches!(c.drag, Some(Drag::Sidebar { .. }))
+                {
+                    c.drag = None;
+                }
                 if let Some(pane) = self.current_pane(id) {
                     self.send_focus(pane, parsed.input == Input::FocusIn);
                 }
@@ -3111,6 +3149,14 @@ impl Server {
                     .get(&id)
                     .is_some_and(|c| s.sidebar.focused(&c.session))
         };
+        // A resize key pressed with the sidebar's keys moves its edge.
+        if fate == crate::extras::KeyFate::Bindings
+            && let Some(action) = self.bindings.root.get(&key).cloned()
+            && self.sidebar_resize_pressed(id, &action)
+        {
+            self.count_key(&key.notation());
+            return;
+        }
         if fate == crate::extras::KeyFate::Bindings
             && let Some(action) = self.bindings.root.get(&key).cloned()
             && !menu_key_for_a_pane(self, &action)
@@ -3941,6 +3987,137 @@ impl Server {
                 && col + 1 == s.pane.size().0
                 && crate::ui::kit::scroll_bars()
         })
+    }
+
+    /// Whether nothing is over a client's sidebar's edge: no box is up, or
+    /// mission control alone, whose list of views is drawn up to it, or the
+    /// pictures beside a narrow pane, drawn right of it and passing on what
+    /// isn't on them.
+    fn sidebar_edge_free(&self, id: ClientId) -> bool {
+        self.clients
+            .get(&id)
+            .is_some_and(|c| matches!(c.overlays.top(), None | Some("mission" | "pictures")))
+    }
+
+    /// A mouse event for the sidebar's edge: a left press on it begins a
+    /// drag, which sets the sidebar's width as it moves, the tabs laid out
+    /// beside it again; a press let go without moving off its column is
+    /// the sidebar's click (its scroll bar's). Nothing is said of the new
+    /// width, since a box would take the next press on the edge. Gives
+    /// whether the edge took it.
+    fn sidebar_edge_mouse(&mut self, id: ClientId, m: Mouse) -> bool {
+        let Some(c) = self.clients.get(&id) else {
+            return false;
+        };
+        let session = c.session.clone();
+        // A press while a drag still looks held is a new gesture: the old
+        // one's release never came.
+        if m.kind == MouseKind::Press
+            && !m.button.is_wheel()
+            && matches!(c.drag, Some(Drag::Sidebar { .. }))
+            && let Some(c) = self.clients.get_mut(&id)
+        {
+            c.drag = None;
+        }
+        let Some(c) = self.clients.get(&id) else {
+            return false;
+        };
+        match (m.kind, c.drag) {
+            // Another button's moves and release leave the left one's drag.
+            (MouseKind::Drag | MouseKind::Release, Some(Drag::Sidebar { .. }))
+                if m.button != MouseButton::Left =>
+            {
+                true
+            }
+            (MouseKind::Drag, Some(Drag::Sidebar { press, moved, .. })) => {
+                if m.col != press.col
+                    && let Some(Some(Drag::Sidebar { wandered, .. })) =
+                        self.clients.get_mut(&id).map(|c| c.drag.as_mut())
+                {
+                    *wandered = true;
+                }
+                if moved || m.col != press.col {
+                    // The edge is the column after the sidebar's last, and
+                    // goes only the way the mouse does: a sidebar wider than
+                    // half the window (sidebar.json's) isn't pulled back to
+                    // the limit by a drag outward.
+                    let now = self.sidebar_width(&session).map_or(0, i32::from);
+                    let cols = self.session(&session).map_or(0, |s| s.cols);
+                    let to = i32::from(crate::sidebar::config::resized(i32::from(m.col), cols));
+                    // Nor is anything set while it stays where it is.
+                    // Moved once the edge itself has: a press dragged off its
+                    // column and back with the edge left put is still the
+                    // scroll bar's click.
+                    if to != now
+                        && (to - now).signum() == (i32::from(m.col) - now).signum()
+                        && self.sidebar_set_width(&session, Some(to))
+                        && let Some(c) = self.clients.get_mut(&id)
+                    {
+                        c.drag = Some(Drag::Sidebar {
+                            press,
+                            moved: true,
+                            wandered: true,
+                        });
+                    }
+                }
+                true
+            }
+            (MouseKind::Release, Some(Drag::Sidebar { press, moved, .. })) => {
+                // The release's own column counts as the drag's last, where
+                // a terminal sends no move to it first, back on the press's
+                // column too once the edge has moved.
+                if moved || m.col != press.col {
+                    self.sidebar_edge_mouse(
+                        id,
+                        Mouse {
+                            kind: MouseKind::Drag,
+                            ..m
+                        },
+                    );
+                }
+                let (moved, wandered) = match self.clients.get(&id).and_then(|c| c.drag) {
+                    Some(Drag::Sidebar {
+                        moved, wandered, ..
+                    }) => (moved, wandered),
+                    _ => (false, false),
+                };
+                if let Some(c) = self.clients.get_mut(&id) {
+                    c.drag = None;
+                }
+                // A click is a press let go on the column it landed on with
+                // the edge left put (moved up or down the line, as before);
+                // a drag held against the limit is neither a width nor a
+                // click.
+                // In mission control a click that never left the press's
+                // column closes it, as a press beside its list does; a drag
+                // that went off and came back is no click.
+                if !moved && m.col == press.col {
+                    if !self.mission_open(id) {
+                        self.sidebar_mouse(id, press);
+                    } else if !wandered {
+                        self.mission_mouse(id, press);
+                    }
+                }
+                true
+            }
+            // A left press on the edge starts a drag of it, any other
+            // drag still held from a release that never reached it let go.
+            (MouseKind::Press, _)
+                if m.button == MouseButton::Left
+                    && self.sidebar_edge_free(id)
+                    && self.sidebar_edge_at(id, m.col, m.row) =>
+            {
+                if let Some(c) = self.clients.get_mut(&id) {
+                    c.drag = Some(Drag::Sidebar {
+                        press: m,
+                        moved: false,
+                        wandered: false,
+                    });
+                }
+                true
+            }
+            _ => false,
+        }
     }
 
     /// The rule at the right edge of the current tab's capped lone pane,

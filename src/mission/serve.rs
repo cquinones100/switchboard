@@ -120,7 +120,7 @@ pub(super) const KEYS: &[(&str, &str)] = &[
     ),
     (
         "C-M-S-h C-M-S-l",
-        "widen, narrow the pane beside the PR, ticket or Autopilot board (the pane resize keys, as keys.json binds them without the prefix, which the footer names); a drag of its edge too; each board keeps its width",
+        "with the list of views in the sidebar's place and the keys on it, move the sidebar's edge; else widen, narrow the pane beside the PR, ticket or Autopilot board (the pane resize keys, as keys.json binds them without the prefix, which the footer names); a drag of its edge too; each board keeps its width",
     ),
     (
         "↵",
@@ -2595,6 +2595,21 @@ impl Server {
             jump_key(m, k);
             return;
         }
+        // With its list of views in the sidebar's place and the keys there,
+        // a filter being typed or not,
+        // the pane resize keys move the sidebar's edge, which the list
+        // shares.
+        if let Some(by) =
+            nav_resize_key(&self.bindings, m, k).or_else(|| nav_resize_key(&self.bindings, m, key))
+        {
+            // It is a C-w's second key, which ends the C-w.
+            m.window_key = None;
+            let session = self.clients.get(&client).map(|c| c.session.clone());
+            if let Some(session) = session {
+                self.sidebar_resize_by(&session, by);
+            }
+            return;
+        }
         // The list of views' filter being typed takes the keys, as the
         // view's own does.
         if m.nav_filter.as_ref().is_some_and(|f| f.typing) && nav_key(m, k) {
@@ -3281,7 +3296,7 @@ impl Server {
     /// card or row, a click on a view's name switches to it, a click on a
     /// card or row chooses it and a second click on the chosen one does
     /// what Enter does; the mouse moving lights what a click would press.
-    fn mission_mouse(&mut self, client: ClientId, mouse: Mouse) {
+    pub(crate) fn mission_mouse(&mut self, client: ClientId, mouse: Mouse) {
         let look = self
             .clients
             .get(&client)
@@ -6899,6 +6914,38 @@ fn resize_key(bindings: &crate::mux::keys::Bindings, m: &mut Mission, key: Key) 
         _ => false,
     };
     true
+}
+
+/// The columns a pane resize key left or right moves the sidebar's edge by
+/// while mission control's list of views is drawn in the sidebar's place
+/// and has the keys; none when `key` is no such key, the list is a column
+/// of its own or the keys are in the view, or Settings' `sidebar_resize`
+/// is off.
+fn nav_resize_key(bindings: &crate::mux::keys::Bindings, m: &Mission, key: Key) -> Option<i32> {
+    use crate::mux::Direction;
+    let Some(crate::mux::keys::Action::Resize(dir @ (Direction::Left | Direction::Right), cells)) =
+        bindings.root.get(&key)
+    else {
+        return None;
+    };
+    // A row of it chosen, or its filter being typed, as either has the keys.
+    // Only a chord with Alt, as the default resize keys are, or a function
+    // key: the list's own keys (j, k, C-u, the arrows, a character typed in
+    // its filter, a C-w's direction) have neither, and stay the list's
+    // whatever keys.json binds to them.
+    // Up and Down are the list's whatever their mods (M-Up moves through
+    // it); Left and Right with Alt it has no use for.
+    let alt_letter =
+        key.mods.alt && matches!(key.code, KeyCode::Char(_) | KeyCode::Left | KeyCode::Right);
+    if !alt_letter && !matches!(key.code, KeyCode::F(_)) {
+        return None;
+    }
+    let typing = m.nav_filter.as_ref().is_some_and(|f| f.typing);
+    let list_has_the_keys = typing || matches!(m.focus, Some(Focus::View(_) | Focus::Group(_)));
+    if !m.nav_in_sidebar() || !list_has_the_keys || !settings::is_on("sidebar_resize") {
+        return None;
+    }
+    Some(i32::from(*cells) * if *dir == Direction::Right { 1 } else { -1 })
 }
 
 /// The widest width a pane resize key left or right gives a lone view

@@ -269,6 +269,19 @@ impl Server {
                 };
                 self.say(Some(client), words);
             }
+            Command::SidebarDefaultWidth => {
+                // A width kept with sidebar_resize off stays for when it is
+                // on again.
+                let session = self.clients.get(&client).map(|c| c.session.clone());
+                let words = if !settings::is_on("sidebar_resize") {
+                    "Resizing the sidebars is off in Settings (sidebar_resize)."
+                } else if session.is_some_and(|name| self.sidebar_set_width(&name, None)) {
+                    "The sidebar takes the default width again."
+                } else {
+                    "The sidebar already takes the default width."
+                };
+                self.say(Some(client), words);
+            }
             Command::SidebarAll => {
                 if let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) {
                     self.sidebar_set_repo(&session, None);

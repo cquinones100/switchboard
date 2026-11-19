@@ -214,7 +214,7 @@ pub const USAGE: &[(&str, &str)] = &[
     ),
     (
         "press",
-        "press <action> [arg]: an action run as its key would be, by its name in keys.json",
+        "press <action> [arg]: an action run as its key would be, by its name in keys.json (a resize moves the pane's divider, as its key does outside the sidebar)",
     ),
     (
         "sidebar-repo",

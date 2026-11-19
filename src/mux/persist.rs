@@ -147,6 +147,10 @@ pub struct SavedSession {
     /// Mission control's own width for one view (`Session::mission_width`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mission_width: Option<String>,
+    /// The sidebar's own width, from a drag of its edge or the pane resize
+    /// keys (`Session::sidebar_width`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidebar_width: Option<u16>,
 }
 
 /// A session's sidebar folds as they are kept (`SavedSession`).
@@ -802,6 +806,7 @@ impl Persist {
                 sidebar_folded: folds_of(side).0,
                 sidebar_notices_folded: folds_of(side).1,
                 mission_width: s.mission_width.clone(),
+                sidebar_width: s.sidebar_width,
             });
         }
         Saved {
@@ -1190,6 +1195,12 @@ impl Persist {
                         session.trail.left.push(t);
                     }
                 }
+                // The sidebar's width as it was saved, unless this session
+                // has been given one since; every tab laid out beside it.
+                if session.sidebar_width.is_none() {
+                    session.sidebar_width = ss.sidebar_width;
+                }
+                server.fit_sidebars();
                 for t in tabs {
                     server.relayout(t);
                     server.refresh_name(t);
@@ -1208,7 +1219,7 @@ impl Persist {
                 tabs[0]
             };
             let last = ss.last.filter(|t| tabs.contains(t) && *t != current);
-            let sidebar = server.sidebar_columns(cols);
+            let sidebar = server.sidebar_columns(cols, ss.sidebar_width);
             let side = server.sidebar.side(&ss.name);
             restore_folds(side, &ss.sidebar_folded, ss.sidebar_notices_folded);
             side.restore_repo(
@@ -1242,6 +1253,7 @@ impl Persist {
                 rows,
                 sidebar,
                 mission_width: ss.mission_width,
+                sidebar_width: ss.sidebar_width,
             });
             for t in tabs {
                 server.relayout(t);
@@ -1401,6 +1413,7 @@ pub fn layout_now(server: &Server) -> Saved {
             sidebar_folded: folds_of(server.sidebar.sides.get(&s.name)).0,
             sidebar_notices_folded: folds_of(server.sidebar.sides.get(&s.name)).1,
             mission_width: s.mission_width.clone(),
+            sidebar_width: s.sidebar_width,
             tabs: s
                 .tabs
                 .iter()
@@ -1517,7 +1530,7 @@ pub fn adopt_layout(server: &mut Server, saved: Saved) {
             tabs[0]
         };
         let last = ss.last.filter(|t| tabs.contains(t) && *t != current);
-        let sidebar = server.sidebar_columns(cols);
+        let sidebar = server.sidebar_columns(cols, ss.sidebar_width);
         let side = server.sidebar.side(&ss.name);
         restore_folds(side, &ss.sidebar_folded, ss.sidebar_notices_folded);
         side.restore_repo(
@@ -1544,6 +1557,7 @@ pub fn adopt_layout(server: &mut Server, saved: Saved) {
             rows,
             sidebar,
             mission_width: ss.mission_width,
+            sidebar_width: ss.sidebar_width,
         });
     }
     // Panes whose tab couldn't be built, each in a tab of its own.
@@ -1564,8 +1578,9 @@ pub fn adopt_layout(server: &mut Server, saved: Saved) {
                 trail: Trail::default(),
                 cols: 80,
                 rows: 24,
-                sidebar: server.sidebar_columns(80),
+                sidebar: server.sidebar_columns(80, None),
                 mission_width: None,
+                sidebar_width: None,
             });
         }
         let tab = TabId(server.next_tab);
@@ -1617,6 +1632,7 @@ mod tests {
                 sidebar_folded: Vec::new(),
                 sidebar_notices_folded: false,
                 mission_width: None,
+                sidebar_width: None,
                 tabs: vec![
                     SavedTab {
                         id: TabId(1),

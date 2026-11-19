@@ -24,6 +24,16 @@ pub struct Config {
 /// The sidebar's width when sidebar.json names none.
 pub const WIDTH: u16 = 34;
 
+/// The narrowest a sidebar is dragged or resized to.
+pub const LEAST: u16 = 24;
+
+/// A width asked of a sidebar in a window `cols` wide, as it is given: no
+/// narrower than `LEAST`, no wider than half the window.
+pub fn resized(width: i32, cols: u16) -> u16 {
+    let most = i32::from((cols / 2).max(LEAST));
+    u16::try_from(width.clamp(i32::from(LEAST), most)).unwrap_or(LEAST)
+}
+
 impl Default for Config {
     fn default() -> Config {
         Config {
@@ -75,10 +85,18 @@ impl Config {
     /// The columns a sidebar takes in a window `cols` wide, its line beside
     /// the panes included, or 0 when the window is too narrow for one.
     pub fn columns_in(&self, cols: u16) -> u16 {
-        if cols < self.min_window_width || cols <= self.width + 1 {
+        self.columns_at(cols, None)
+    }
+
+    /// The same for a sidebar given a width of its own (`kept`, from a drag
+    /// of its edge or the pane resize keys), held between `LEAST` and half
+    /// the window; with none, this file's.
+    pub fn columns_at(&self, cols: u16, kept: Option<u16>) -> u16 {
+        let width = kept.map_or(self.width, |w| resized(i32::from(w), cols));
+        if cols < self.min_window_width || cols <= width + 1 {
             0
         } else {
-            self.width + 1
+            width + 1
         }
     }
 }
@@ -97,5 +115,17 @@ mod tests {
         assert_eq!(Config::from_json(&json!({"width": "wide"})).width, 34);
         assert_eq!(Config::default().columns_in(100), 35);
         assert_eq!(Config::default().columns_in(89), 0);
+    }
+
+    #[test]
+    fn a_width_of_its_own_is_held_between_the_least_and_half_the_window() {
+        let c = Config::default();
+        assert_eq!(c.columns_at(200, None), 35, "the file's with none");
+        assert_eq!(c.columns_at(200, Some(50)), 51);
+        assert_eq!(c.columns_at(200, Some(5)), LEAST + 1);
+        assert_eq!(c.columns_at(120, Some(90)), 61, "half the window");
+        assert_eq!(c.columns_at(89, Some(50)), 0, "too narrow for a sidebar");
+        assert_eq!(resized(-3, 200), LEAST);
+        assert_eq!(resized(150, 200), 100);
     }
 }

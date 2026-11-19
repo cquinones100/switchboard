@@ -231,7 +231,12 @@ pub fn lines(
         ];
         hits.push(hit(0, 1, 6, Spot::Close));
         let needs = needing(m);
-        if needs > 0 {
+        // The count gives way to the filter button (not to a filter being
+        // typed, which keys reach) when a narrowed list has no room for
+        // both, so the button keeps its click.
+        let count_fits = m.nav_filter.is_some()
+            || kit::spans_width(&top) + 5 + format!("{needs} need you").len() + 2 + filter_w < cols;
+        if needs > 0 && count_fits {
             top.push(Span::styled("  ·  ", Tone::Faint.style(theme)));
             top.push(Span::styled(
                 format!("{needs} need you"),

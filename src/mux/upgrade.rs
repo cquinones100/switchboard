@@ -1204,6 +1204,7 @@ mod tests {
                     sidebar_folded: Vec::new(),
                     sidebar_notices_folded: false,
                     mission_width: None,
+                    sidebar_width: None,
                     tabs: vec![SavedTab {
                         id: TabId(1),
                         name: String::new(),

@@ -10,7 +10,9 @@
 //! the context-menu key (S-F10) open the same menu for the cursor's row,
 //! beside it, whatever that setting says, since a key is no click. On ←
 //! or →, the whole trail of tabs visited (board 58), any step one choice
-//! away; on ⊞, mission control's views by group (board 60).
+//! away; on ⊞, mission control's views by group (board 60). The sidebar's own
+//! menu has "Use the default width" once its edge was dragged or the pane
+//! resize keys gave it a width of its own.
 
 use super::super::model::{self, Rules, Stage};
 use super::super::render::{self, Owner};
@@ -29,6 +31,8 @@ enum Act {
     FoldNotices(bool),
     Run(Action),
     DismissAll,
+    /// The sidebar's own width cleared, sidebar.json's again.
+    DefaultWidth,
 }
 
 impl Server {
@@ -316,6 +320,14 @@ impl Server {
             ));
             list.push(("Dismiss every notification shown".into(), Act::DismissAll));
         }
+        // A sidebar given a width of its own (a drag of its edge, the
+        // resize keys) can take sidebar.json's again.
+        let has_own_width = self
+            .session(session)
+            .is_some_and(|s| s.sidebar_width.is_some());
+        if has_own_width && settings::is_on("sidebar_resize") {
+            list.push(("Use the default width".into(), Act::DefaultWidth));
+        }
         let labels: Vec<&str> = list.iter().map(|(l, _)| l.as_str()).collect();
         let menu = crate::ui::Menu::of("Sidebar", &labels);
         let session = session.to_string();
@@ -332,6 +344,16 @@ impl Server {
                 }
                 Act::FoldNotices(fold) => server.sidebar_fold_notices(&session, fold),
                 Act::Run(action) => server.act(client, action),
+                // A width kept with sidebar_resize turned off since the menu
+                // opened stays for when it is on again.
+                Act::DefaultWidth if !settings::is_on("sidebar_resize") => server.say(
+                    Some(client),
+                    "Resizing the sidebars is off in Settings (sidebar_resize).",
+                ),
+                Act::DefaultWidth => {
+                    server.sidebar_set_width(&session, None);
+                    server.say(Some(client), "The sidebar takes the default width again.");
+                }
                 Act::DismissAll => {
                     match crate::mission::choices::dismiss_all(&server.sidebar_notice_items()) {
                         Some(all) => server.mission_do(client, all, ""),
