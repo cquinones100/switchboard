@@ -502,18 +502,19 @@ pub fn lines(
             .any(|h: &Hit| matches!(h.4, Stop::Card(_)) && h.0 > 0 && (h.0..h.0 + h.3).contains(&r))
     };
     let mut pieces = Vec::with_capacity(out.len());
-    let (mut n, mut sub) = (0, 0);
+    let mut n = 0;
     for r in 0..out.len() {
         if card_row(r) {
             pieces.push(None);
             continue;
         }
-        if let Some(&(_, words)) = more.iter().find(|m| m.0 == r) {
-            sub = words;
-        } else {
-            n += 1;
-            sub = 0;
-        }
+        let sub = match more.iter().find(|m| m.0 == r) {
+            Some(&(_, words)) => words,
+            None => {
+                n += 1;
+                0
+            }
+        };
         pieces.push(Some((n, sub)));
     }
     Laid {
