@@ -596,6 +596,18 @@
     "StoryOneColumn.dc.html": {
       "title": "145. The same page narrower: each side would be under 60 columns, so the hunks fall back to one column, the old lines then the new, marked − and +",
       "page": "design"
+    },
+    "BuiltDiffStory.dc.html": {
+      "title": "146. As built (for review): the Story view, its row of buttons at the top with ← → (H L) for back and forward, the Story / Map / Files switch, What runs always over the column, side-by-side hunks; the outline not greyed while the column has the keys",
+      "page": "design"
+    },
+    "BuiltDiffMap.dc.html": {
+      "title": "147. As built: the Map back as a third view, switched to from the Story view on the same chapter and page",
+      "page": "design"
+    },
+    "BuiltDiffFiles.dc.html": {
+      "title": "148. As built: the Files view, its list at full strength while the diff has the keys",
+      "page": "design"
     }
   }
 }
