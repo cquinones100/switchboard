@@ -5777,3 +5777,26 @@ fn a_card_chosen_before_narrowing_hides_the_note_stays_chosen() {
     assert!(b.focused);
     assert_eq!(b.stop, Some(beside::Stop::Card('A')));
 }
+
+#[test]
+fn a_plan_given_the_keys_back_after_a_rewrap_lights_no_card() {
+    let (_dir, mut app, _path, _plan) = with_plan("plan-refocus", 160);
+    app.rows = 14;
+    keys(&mut app, "4G<CR><C-w>l");
+    app.plan_width = Some(99);
+    let _ = drawn(&mut app);
+    // The cursor on the first text below the cards, at the view's bottom.
+    let laid_rows = app.plan_layout();
+    let below = laid_rows.1.iter().map(|h| h.0 + h.3).max().unwrap();
+    {
+        let b = app.beside.as_mut().unwrap();
+        (b.line, b.stop, b.follow) = (below, None, true);
+    }
+    let _ = drawn(&mut app);
+    keys(&mut app, "<C-w>h");
+    app.plan_width = Some(34);
+    let _ = drawn(&mut app);
+    keys(&mut app, "<C-w>l");
+    let _ = drawn(&mut app);
+    assert_eq!(app.beside.as_ref().unwrap().stop, None);
+}
