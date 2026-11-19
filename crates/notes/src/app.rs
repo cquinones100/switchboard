@@ -103,6 +103,10 @@ const JUMPS: &str = "jumps";
 /// would have every open Notes read the notes again for a width.
 const LIST_WIDTH: &str = "notes-list-width";
 
+/// The file in the state folder holding the plan's own width beside its
+/// note, as the list's is kept.
+const PLAN_WIDTH: &str = "notes-plan-width";
+
 /// The least width the list is given by hand, which keeps "⌘ Commands" and
 /// "/ search" on its top line; the most is half the app's.
 const LIST_LEAST: u16 = 30;
@@ -488,6 +492,9 @@ struct Geo {
     /// The line right of the list, where it was drawn, while a drag moves
     /// it (notes_resize).
     list_edge: Option<Rect>,
+    /// The rule left of the plan beside its note, while a drag moves it
+    /// (notes_resize).
+    plan_edge: Option<Rect>,
 }
 
 /// The note's scroll bar as it was drawn, for the mouse.
@@ -812,8 +819,15 @@ pub struct App {
     edge_pressed_at: Option<Instant>,
     /// Whether the press held is a double click's second.
     edge_double: bool,
-    /// The list's own width as the press found it, and the width shown.
+    /// The edge's own width as the press found it, and the width shown.
     edge_start: (Option<u16>, u16),
+    /// The plan's own width beside its note, from a drag of its edge or the
+    /// pane resize keys while it has the keys; none for board 8's share.
+    /// Kept in the state folder (`notes-plan-width`), followed only while
+    /// Settings' notes_resize is on.
+    plan_width: Option<u16>,
+    /// The edge pressed last is the plan's, else the list's.
+    edge_plan: bool,
     parser: Parser,
     last_input: Instant,
 }
@@ -932,6 +946,8 @@ impl App {
             edge_pressed_at: None,
             edge_double: false,
             edge_start: (None, 0),
+            plan_width: None,
+            edge_plan: false,
             parser: Parser::new(),
             last_input: Instant::now(),
             opts,
@@ -1011,6 +1027,7 @@ impl App {
             return;
         }
         self.list_width = self.kept_width();
+        self.plan_width = self.kept_plan_width();
         let mut meta = self.store.meta();
         let saved = meta.remove(JUMPS).unwrap_or_default();
         self.jumps = Jumps::from_saved(&saved, |rel| self.store.absolute(rel), Path::is_file);
@@ -3809,7 +3826,13 @@ impl App {
         }
         // Offered while a width is kept here, or in the state folder by another
         // tab's Notes since this one started, read as the palette opens.
-        let kept = self.list_width.is_some() || self.kept_width().is_some();
+        // With a plan beside the note it is the plan's width, the list put
+        // away.
+        let kept = if self.beside.is_some() {
+            self.plan_width.is_some() || self.kept_plan_width().is_some()
+        } else {
+            self.list_width.is_some() || self.kept_width().is_some()
+        };
         if self.opts.resize && kept {
             commands.push(palette::default_width());
         }
@@ -3937,6 +3960,9 @@ impl App {
         match act {
             PaletteAct::ToggleList => self.toggle_list(),
             // A palette open as notes_resize was turned off keeps the widths.
+            PaletteAct::DefaultWidth if self.opts.resize && self.beside.is_some() => {
+                self.default_plan_width()
+            }
             PaletteAct::DefaultWidth if self.opts.resize => self.default_width(),
             PaletteAct::DefaultWidth => {}
             PaletteAct::Find => self.finder(),
@@ -4713,13 +4739,54 @@ impl App {
                     self.scroll(3, down);
                 }
             }
+            // The plan's edge, as the list's below: a drag sets its width,
+            // kept once let go, and a double click puts it back.
+            (MouseKind::Press, MouseButton::Left) if self.on_plan_edge(x, y) => {
+                self.edge_double = self.edge_plan
+                    && self
+                        .edge_pressed_at
+                        .is_some_and(|at| at.elapsed() < DOUBLE_CLICK);
+                self.edge_plan = true;
+                self.edge_drag = true;
+                self.edge_moved = false;
+                self.edge_from = x;
+                if self.keys_moved.take().is_some() {
+                    self.keep_width();
+                }
+                self.edge_start = (self.plan_width, self.plan_cols());
+                self.edge_pressed_at = (!self.edge_double).then(Instant::now);
+            }
+            (MouseKind::Drag, MouseButton::Left) if self.edge_drag && self.edge_plan => {
+                self.edge_double = false;
+                if self.edge_moved || x != self.edge_from {
+                    let was = (self.plan_cols(), self.plan_width);
+                    self.drag_plan_edge(x);
+                    self.edge_moved |= was != (self.plan_cols(), self.plan_width);
+                }
+            }
+            (MouseKind::Release, _) if self.edge_drag && self.edge_plan => {
+                self.edge_drag = false;
+                self.mouse_at = Some((x, y));
+                if std::mem::take(&mut self.edge_double) {
+                    self.default_plan_width();
+                } else if self.edge_moved {
+                    self.edge_pressed_at = None;
+                    let (kept, shown) = self.edge_start;
+                    if self.plan_cols() == shown {
+                        self.plan_width = kept;
+                    }
+                    self.keep_width();
+                }
+            }
             (MouseKind::Press, MouseButton::Left) if self.on_edge(x, y) => {
+                self.edge_double = !self.edge_plan
+                    && self
+                        .edge_pressed_at
+                        .is_some_and(|at| at.elapsed() < DOUBLE_CLICK);
+                self.edge_plan = false;
                 // A second press within a moment is a double click: "Use
                 // the default width", which the palette offers too, on its
                 // release, so that release lands on nothing else.
-                self.edge_double = self
-                    .edge_pressed_at
-                    .is_some_and(|at| at.elapsed() < DOUBLE_CLICK);
                 self.edge_drag = true;
                 self.edge_moved = false;
                 self.edge_from = x;
@@ -4994,6 +5061,11 @@ impl App {
         if self.edge_drag {
             return;
         }
+        // The plan with the keys beside its note moves its own edge.
+        if !elsewhere && self.opts.resize && self.plan_resize_key(by) {
+            self.keys_moved = Some(Instant::now());
+            return;
+        }
         // A list that can't move the way the key asks (a Notes under twice
         // its least width, or the list at its limit that way) hands the key
         // back, so the pane's divider still moves.
@@ -5060,18 +5132,21 @@ impl App {
         self.keep_width();
     }
 
-    /// The list's width written to the state folder, so Notes started
-    /// again has it: after a drag is let go and after a key, never as the
-    /// mouse moves.
+    /// The list's and the plan's widths written to the state folder, so
+    /// Notes started again has them: after a drag is let go and after a
+    /// key, never as the mouse moves; each only when it changed.
     fn keep_width(&mut self) {
-        let file = self.store.state.join(LIST_WIDTH);
-        if self.kept_width() == self.list_width {
-            return;
+        for (name, width) in [(LIST_WIDTH, self.list_width), (PLAN_WIDTH, self.plan_width)] {
+            let file = self.store.state.join(name);
+            let kept = util::read_text(&file).and_then(|text| text.trim().parse::<u16>().ok());
+            if kept == width {
+                continue;
+            }
+            let _ = match width {
+                Some(width) => util::write_atomic(&file, width.to_string()),
+                None => std::fs::remove_file(&file),
+            };
         }
-        let _ = match self.list_width {
-            Some(width) => util::write_atomic(&file, width.to_string()),
-            None => std::fs::remove_file(&file),
-        };
     }
 
     /// The list's width as the state folder keeps it, another tab's Notes

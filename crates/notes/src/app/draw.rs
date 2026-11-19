@@ -105,7 +105,7 @@ impl App {
         let split = self
             .beside
             .as_ref()
-            .map(|b| super::beside::split(area.width, b.show_note));
+            .map(|b| self.plan_split(area.width, b.show_note));
         let list_w = if self.list_shown && split.is_none() {
             self.list_cols(area.width)
                 .min(area.width.saturating_sub(10))
@@ -139,6 +139,7 @@ impl App {
             }
             _ => {
                 self.geo.plan = Rect::default();
+                self.geo.plan_edge = None;
                 self.geo.plan_hits.clear();
                 None
             }

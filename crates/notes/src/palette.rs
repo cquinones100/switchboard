@@ -266,7 +266,7 @@ pub fn note_or_plan() -> Command {
     command("Show the note beside its plan", "", "view", Act::NoteOrPlan)
 }
 
-/// The command while the list has a width of its own (a drag
+/// The command while the list, or the plan beside a note, has a width of its own (a drag
 /// of its edge, the pane resize keys), which has no key.
 pub fn default_width() -> Command {
     command("Use the default width", "", "view", Act::DefaultWidth)

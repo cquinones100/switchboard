@@ -3780,6 +3780,61 @@ fn the_plan_fills_the_width_in_its_share_and_drops_its_extras_when_narrow() {
     assert_eq!(app.geo.plan.width, 90);
 }
 
+/// The words the plan shows on screen row `y`, from the plan's left.
+fn plan_row(app: &App, shown: &[String], y: u16) -> String {
+    let x = app.geo.plan.x as usize;
+    shown[y as usize]
+        .chars()
+        .skip(x)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+#[test]
+fn the_plans_cursor_stays_on_what_it_was_on_as_the_plan_rewraps() {
+    // Every row of the plan, at each width and the next: a row of text
+    // stays on its text with no card lit, a card's row on that card.
+    for (from, to) in [(108, 160), (160, 108), (125, 115), (115, 240)] {
+        let (_dir, mut app, _path, _plan) = with_plan("beside rewrap", from);
+        app.rows = 80;
+        keys(&mut app, "4G<CR><C-w>l");
+        let count = app.plan_layout().0;
+        for r in 0..count {
+            app.cols = from;
+            {
+                let b = app.beside.as_mut().unwrap();
+                (b.line, b.stop, b.follow, b.laid) = (r, None, true, None);
+            }
+            let (shown, cursor) = drawn(&mut app);
+            let (_, y) = cursor.unwrap();
+            let lit = app.beside.as_ref().unwrap().stop;
+            let words: Vec<String> = plan_row(&app, &shown, y)
+                .split_whitespace()
+                .take(2)
+                .map(String::from)
+                .collect();
+            app.cols = to;
+            let (shown, cursor) = drawn(&mut app);
+            let (_, y) = cursor.unwrap();
+            assert_eq!(
+                app.beside.as_ref().unwrap().stop,
+                lit,
+                "row {r}, {from} to {to} columns:\n{}",
+                shown.join("\n")
+            );
+            if lit.is_none() && !words.is_empty() {
+                let now = plan_row(&app, &shown, y);
+                assert!(
+                    now.contains(&words.join(" "))
+                        || words.iter().all(|w| now.contains(w.as_str())),
+                    "row {r}, {from} to {to} columns: {words:?} became {now:?}"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn enter_on_the_item_whose_plan_shows_starts_work_on_it() {
     let (_dir, mut app, _path, _plan) = with_plan("beside start", 160);
@@ -5079,4 +5134,137 @@ fn in_a_notes_with_no_room_a_narrowing_key_clears_a_kept_width() {
     app.cols = 58;
     app.key(resize('h'));
     assert_eq!(kept(&app), None);
+}
+
+// The plan's width beside its note, set by hand (notes_resize).
+
+#[test]
+fn a_drag_of_the_plan_s_edge_sets_its_width_kept_once_it_is_let_go() {
+    let (_dir, mut app, _path, _plan) = with_plan("plan-width", 160);
+    keys(&mut app, "4G<CR>");
+    let _ = screen(&mut app);
+    let share = app.geo.plan.width;
+    let edge = app.geo.plan.x - 1;
+    mouse(&mut app, MouseKind::Press, edge, 5);
+    mouse(&mut app, MouseKind::Drag, 60, 6);
+    let _ = screen(&mut app);
+    assert_eq!(app.geo.plan.x, 61, "the edge follows the mouse");
+    assert_eq!(app.geo.plan.width, 99);
+    assert_eq!(app.kept_plan_width(), None, "nothing kept as it moves");
+    // Never narrower than 34 columns, nor leaving the note under 24.
+    mouse(&mut app, MouseKind::Drag, 159, 6);
+    let _ = screen(&mut app);
+    assert_eq!(app.geo.plan.width, 34);
+    mouse(&mut app, MouseKind::Drag, 2, 6);
+    let _ = screen(&mut app);
+    assert_eq!(app.geo.note.width, 24);
+    mouse(&mut app, MouseKind::Drag, 80, 6);
+    mouse(&mut app, MouseKind::Release, 80, 6);
+    let _ = screen(&mut app);
+    assert_eq!(app.geo.plan.width, 79);
+    assert_eq!(app.kept_plan_width(), Some(79));
+    assert_ne!(share, 79);
+    assert_eq!(app.kept_width(), None, "the list's width untouched");
+
+    // Notes started again has it.
+    let (mut again, _) = app_in(app.store.clone(), options());
+    app.store.unlock();
+    again.start();
+    assert_eq!(again.plan_width, Some(79));
+
+    // A double click on the edge gives it back board 8's share.
+    let edge = app.geo.plan.x - 1;
+    for kind in [
+        MouseKind::Press,
+        MouseKind::Release,
+        MouseKind::Press,
+        MouseKind::Release,
+    ] {
+        mouse(&mut app, kind, edge, 5);
+    }
+    let _ = screen(&mut app);
+    assert_eq!(app.geo.plan.width, share);
+    assert_eq!(app.kept_plan_width(), None);
+}
+
+#[test]
+fn the_plan_s_edge_lights_under_the_mouse() {
+    let (_dir, mut app, _path, _plan) = with_plan("plan-edge-lit", 160);
+    keys(&mut app, "4G<CR>");
+    let _ = screen(&mut app);
+    let edge = app.geo.plan.x - 1;
+    let color = |app: &mut App| {
+        let mut buf = Buffer::empty(Rect::new(0, 0, app.cols, app.rows));
+        app.draw(&mut buf);
+        buf[(edge, 5)].fg
+    };
+    let plain = color(&mut app);
+    mouse(&mut app, MouseKind::Move, edge, 5);
+    assert_eq!(color(&mut app), Color::Indexed(81));
+    mouse(&mut app, MouseKind::Move, edge - 3, 5);
+    assert_eq!(color(&mut app), plain);
+}
+
+#[test]
+fn the_pane_resize_keys_move_the_plan_s_edge_while_the_plan_has_the_keys() {
+    let (_dir, mut app, _path, _plan) = with_plan("plan-keys", 160);
+    keys(&mut app, "4G<CR>");
+    let _ = screen(&mut app);
+    let share = app.geo.plan.width;
+    // In the note they are the workspace's.
+    app.key(resize('h'));
+    let _ = screen(&mut app);
+    assert_eq!(app.geo.plan.width, share);
+    keys(&mut app, "<C-w>l");
+    app.key(resize('h'));
+    let _ = screen(&mut app);
+    assert_eq!(app.geo.plan.width, share + 5, "its edge moves left");
+    assert_eq!(app.kept_plan_width(), None, "kept once the keys stop");
+    settle(&mut app);
+    assert_eq!(app.kept_plan_width(), Some(share + 5));
+    // Back to the share, it follows the screen again; from 3 past it,
+    // the keys stop on it on their way.
+    app.plan_width = Some(share + 3);
+    app.key(resize('l'));
+    let _ = screen(&mut app);
+    assert_eq!(app.geo.plan.width, share);
+    settle(&mut app);
+    assert_eq!(app.kept_plan_width(), None);
+    for _ in 0..30 {
+        app.key(resize('l'));
+    }
+    let _ = screen(&mut app);
+    assert_eq!(app.geo.plan.width, 34, "never under 34 columns");
+    assert!(app.beside.as_ref().unwrap().focused);
+
+    // "Use the default width" with the plan showing puts the plan back.
+    assert!(
+        app.palette_commands(false)
+            .iter()
+            .any(|c| c.name == "Use the default width")
+    );
+    assert_eq!(app.run_request("Use the default width"), "ok");
+    let _ = screen(&mut app);
+    assert_eq!(app.geo.plan.width, share);
+    assert_eq!(app.kept_plan_width(), None);
+}
+
+#[test]
+fn with_notes_resize_off_the_plan_keeps_board_8_s_share() {
+    let (_dir, mut app, _path, _plan) = with_plan("plan-off", 160);
+    keys(&mut app, "4G<CR><C-w>l");
+    let _ = screen(&mut app);
+    let share = app.geo.plan.width;
+    app.key(resize('h'));
+    settle(&mut app);
+    app.opts.resize = false;
+    let _ = screen(&mut app);
+    assert_eq!(app.geo.plan.width, share, "the width kept isn't followed");
+    let edge = app.geo.plan.x - 1;
+    mouse(&mut app, MouseKind::Press, edge, 5);
+    mouse(&mut app, MouseKind::Drag, 60, 5);
+    mouse(&mut app, MouseKind::Release, 60, 5);
+    let _ = screen(&mut app);
+    assert_eq!(app.geo.plan.width, share);
+    assert_eq!(app.kept_plan_width(), Some(share + 5), "and stays kept");
 }
