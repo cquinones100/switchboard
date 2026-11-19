@@ -1175,3 +1175,59 @@ fn m_d_opens_beside_a_narrow_lone_pane_and_in_its_place_without_the_room() {
     assert_eq!(shown.len(), 2, "in the pane's place: {shown:?}");
     assert!(shown.iter().all(|p| p["id"] != first.as_str()));
 }
+
+#[test]
+fn the_pane_resize_keys_move_the_lists_edge_and_go_back_to_the_pane_from_the_diff() {
+    let server = TestServer::start();
+    settings(&server);
+    stand_in_claude(&server.home);
+    let work = repository(server.dir.path());
+
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    client.type_text(&format!("cd {}\r", work.display()));
+    wait_until("the shell to cd", || {
+        panes(&server)[0]["cwd"]
+            .as_str()
+            .is_some_and(|d| d.ends_with("work"))
+    });
+    client.send(b"\x1bd");
+    client.wait_text("1/2 Change the core");
+    client.wait_text("export const a = 2;");
+
+    // The list has the keys as the diff opens: C-M-S-l reaches the diff,
+    // which widens its list and keeps the width.
+    let kept = server.state.join("diff-list-width");
+    let width = || {
+        std::fs::read_to_string(&kept)
+            .ok()
+            .and_then(|t| t.trim().parse::<u16>().ok())
+    };
+    assert_eq!(width(), None, "no width kept before a key");
+    let tab = server.list()["sessions"][0]["tabs"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    client.send(b"\x1b[108;8u");
+    wait_until("the list's width kept", || width().is_some());
+    let first = width().unwrap();
+    client.send(b"\x1b[104;8u");
+    wait_until("the list 5 columns narrower", || width() == Some(first - 5));
+    assert_eq!(
+        server.ok(&["show", "-t", &tab, "@lone_width"]).trim(),
+        "",
+        "the pane's own edge left alone"
+    );
+
+    // With the keys in the diff's side, the diff hands the key back and
+    // the pane's own edge moves, as it does with no diff open.
+    client.send(b"\t");
+    client.send(b"\x1b[104;8u");
+    wait_until("the pane's own edge moved", || {
+        !server
+            .ok(&["show", "-t", &tab, "@lone_width"])
+            .trim()
+            .is_empty()
+    });
+    assert_eq!(width(), Some(first - 5), "the list's width as it was");
+}

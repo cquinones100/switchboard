@@ -719,6 +719,13 @@
     "default": true
   },
   {
+    "key": "diff_list_resize",
+    "category": "Diff",
+    "label": "Resize the diff's file list",
+    "description": "A drag of M-d's file list's right edge, lit under the mouse, or the pane resize keys (C-M-S-h and C-M-S-l) while the list has the keys, gives the list a width of its own, from 24 columns to half the diff's width, which every diff opens at after, E going between it and the longest path; the diff's menu (m, or a right click) has \"Use the file list's default width\". Off, the list takes the width it had before (30 columns, or its longest path with diff_list_wide and E), its edge takes no drag and the pane resize keys move the pane's divider",
+    "default": true
+  },
+  {
     "key": "diff_story_pages",
     "category": "Diff",
     "label": "Diff story a page at a time",

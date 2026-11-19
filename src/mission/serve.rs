@@ -4628,7 +4628,10 @@ impl Server {
                     let exe = crate::util::exe()
                         .map(|e| e.to_string_lossy().into_owned())
                         .unwrap_or_else(|_| "switchboard".into());
-                    vec![exe, "diff".into(), dir.to_string_lossy().into_owned()]
+                    let mut command = vec![exe, "diff".into()];
+                    command.extend(self.diff_resize_flags());
+                    command.push(dir.to_string_lossy().into_owned());
+                    command
                 };
                 self.mission_close(client);
                 self.mission_new_tab(client, &dir, Some(command), None);

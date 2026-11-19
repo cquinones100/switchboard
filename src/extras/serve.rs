@@ -112,6 +112,31 @@ impl Server {
         {
             return KeyFate::ToPane;
         }
+        // The pane resize keys left and right reach a diff that marked its
+        // pane with them (`@resize_keys`), which moves its file list's edge
+        // while the list has the keys and otherwise hands the key back
+        // (`press resize-left-5`), the divider moving as before; known by
+        // its mark and the diff still running there, whatever its program
+        // is named. Not while the sidebar has the keys. Never easy
+        // mode's Cmd chords, which reach only a pane that takes them.
+        if matches!(
+            self.bindings.root.get(&key),
+            Some(Action::Resize(Direction::Left | Direction::Right, _))
+        ) && !crate::mux::passthrough::is_cmd_key(&key)
+            && !self
+                .clients
+                .get(&client)
+                .is_some_and(|c| self.sidebar.focused(&c.session))
+            && self.takes_resize_key(
+                self.current_pane(client),
+                &key,
+                self.bindings.root.get(&key),
+            )
+        {
+            // Counted as the bound key it is, as the bindings count one.
+            self.count_key(&key.notation());
+            return KeyFate::ToPane;
+        }
         // M-T showing the title (reopen_tab_key off) with the tab_title
         // setting off too reaches the pane as it is.
         let shows_title = self
@@ -381,6 +406,66 @@ impl Server {
         }
         let args = slot.pane.foreground_args().unwrap_or_default();
         super::takes_pane_keys(&args)
+    }
+
+    /// Whether a pane's diff takes this pane resize key: one it listed as
+    /// it started (`@resize_keys`, `keys:` and each key with its columns,
+    /// `C-M-S-h=-5`), still bound to those columns (`bound`), so a key
+    /// rebound in keys.json since does what it is bound to now; which a diff
+    /// from a build before it took them (still running after an upgrade)
+    /// never did. Never a pane scrolled back in copy mode, which takes its
+    /// keys in the program's place, nor a Ctrl chord with Shift on a
+    /// character sent to a pane that didn't ask for keys whole (the CSI u
+    /// form), which arrives without its Shift, so the diff couldn't tell it
+    /// from a key of its own.
+    fn takes_resize_key(&self, pane: Option<PaneId>, key: &Key, bound: Option<&Action>) -> bool {
+        let columns = match bound {
+            Some(Action::Resize(Direction::Left, n)) => -i32::from(*n),
+            Some(Action::Resize(Direction::Right, n)) => i32::from(*n),
+            _ => return false,
+        };
+        let Some(slot) = pane.and_then(|p| self.panes.get(&p)) else {
+            return false;
+        };
+        if slot.copy.is_some() {
+            return false;
+        }
+        let normal = key.normalized();
+        let listed = slot
+            .opts
+            .get("@resize_keys")
+            .and_then(|listed| listed.strip_prefix("keys:"))
+            .is_some_and(|listed| {
+                listed.split(' ').any(|entry| {
+                    entry.rsplit_once('=').is_some_and(|(notation, by)| {
+                        by.parse::<i32>() == Ok(columns)
+                            && Key::parse(notation).is_some_and(|k| k.normalized() == normal)
+                    })
+                })
+            });
+        if !listed {
+            return false;
+        }
+        let loses_shift_the_old_way =
+            normal.mods.ctrl && normal.mods.shift && matches!(normal.code, KeyCode::Char(_));
+        let sent_whole = input::encode_key(key, &slot.pane.modes()).ends_with(b"u");
+        if loses_shift_the_old_way && !sent_whole {
+            return false;
+        }
+        // The diff still running there (this server's own program, as M-d
+        // starts it, or one named switchboard, a versioned build's name
+        // included, with `diff` its second word, never `git diff`), so a
+        // mark left by a diff that ended without taking it back passes
+        // nothing to what replaced it; asked last, only of a pane marked,
+        // as the M-arrows ask it.
+        slot.pane.foreground_args().is_some_and(|args| {
+            let ours = args.first().is_some_and(|program| {
+                let name = program.rsplit('/').next().unwrap_or(program);
+                name.starts_with("switchboard")
+                    || crate::util::exe().is_ok_and(|exe| exe.as_os_str() == program.as_str())
+            });
+            ours && args.get(1).is_some_and(|a| a == "diff")
+        })
     }
 
     /// C-w: the next key moves between panes, unless Vim, the diff or Notes

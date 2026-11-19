@@ -61,6 +61,10 @@
 //! Close, and has a settings view of its own on M-m (own.rs); `m` in
 //! the file list, or a right click, opens its menu either way.
 //!
+//! The list's width is yours to set (width.rs): a drag of its right edge or
+//! the pane resize keys while it has the keys, kept for the next diff, the
+//! menu's "Use the file list's default width" going back to the default.
+//!
 //! The screen is drawn into a cell buffer and only what changed is sent,
 //! through the renderer the multiplexer's is (`switchboard_ui::screen`), so the
 //! program is tested by drawing into a buffer and reading it back.
@@ -102,9 +106,11 @@ mod draw;
 mod map;
 mod own;
 mod select;
+mod width;
 
 pub use map::Mode;
 use map::{Hit, Laid, Place_};
+pub use width::ResizeKey;
 
 /// The list's narrow width, and how wide a list must be to head a page
 /// with its whole why (narrower, its first sentence, the rest in the bar).
@@ -195,6 +201,10 @@ pub struct Options {
     /// kitty), the diff sets the pointer itself (with hover_highlight); in
     /// a pane the workspace does, told the shape; off in the tests.
     pub pointer: bool,
+    /// The list's width is yours: a drag of its edge and the pane resize
+    /// keys set it, and the width kept is the one it opens at
+    /// (diff_list_resize); off, it is `LIST_WIDTH`.
+    pub resize: bool,
 }
 
 impl Options {
@@ -223,6 +233,7 @@ impl Options {
             map: story && on("diff_story_map"),
             keep: true,
             menu_mouse: on("menu_mouse"),
+            resize: on("diff_list_resize"),
             haiku: true,
             server: host().in_pane(),
             clipboard: true,
@@ -561,6 +572,10 @@ pub const KEYS: &[(&str, &[KeyRow])] = &[
             key_row("J K", "scroll the chosen file down, up from the file list"),
             key_row("E", "widen the file list, or narrow it again"),
             key_row(
+                "C-M-S-h C-M-S-l",
+                "narrow, widen the file list, kept for the next diff (a drag of its edge too)",
+            ),
+            key_row(
                 "/",
                 "filter the file list by path (!word leaves it out); ↵ keeps it, esc clears it",
             ),
@@ -704,6 +719,22 @@ pub struct App {
     /// The list's first row on the screen, and its width.
     list_top: usize,
     list_width: u16,
+    /// The width you gave the list (width.rs), which it opens at and `E`
+    /// narrows it to; none for `LIST_WIDTH`. Whether `E` (or
+    /// diff_list_wide) has the list as wide as its longest path, which it
+    /// stays as the screen changes size; whether a drag, a key or the
+    /// menu has set the width here, which a commit's diff gives back to
+    /// the branch's; the file it is kept in; the column a press on the
+    /// list's edge landed on and whether the drag after it has moved the
+    /// edge; whether the mouse is over the edge; and the keys that move a
+    /// pane's divider left or right.
+    set_width: Option<u16>,
+    list_widened: bool,
+    width_touched: bool,
+    width_file: Option<PathBuf>,
+    edge_drag: Option<(u16, bool)>,
+    edge_hover: bool,
+    resize_keys: Vec<ResizeKey>,
     /// The list's row the cursor was on when the list last followed it:
     /// the list scrolls to the cursor only when the cursor has moved, so
     /// the wheel scrolls it past the cursor.
@@ -951,6 +982,13 @@ impl App {
             filtering: false,
             list_top: 0,
             list_width: LIST_WIDTH,
+            set_width: None,
+            list_widened: false,
+            width_touched: false,
+            width_file: None,
+            edge_drag: None,
+            edge_hover: false,
+            resize_keys: width::default_keys(),
             list_followed: None,
             adrift: false,
             said_end: false,
@@ -1094,9 +1132,7 @@ impl App {
     fn resize_now(&mut self, cols: u16, rows: u16) {
         // The header's row, alone, is none of the diff's.
         let rows = rows.saturating_sub(u16::from(self.has_header()));
-        self.cols = cols.max(20);
-        self.rows = rows.max(5);
-        self.lines.clear();
+        self.screen_now(cols, rows);
         self.selection = None;
         if let Some(h) = &mut self.history {
             h.app.resize(cols, rows);
@@ -1296,8 +1332,17 @@ impl App {
         self.order = (0..self.entries().len()).collect();
         self.show_story(None);
         self.sort();
-        if self.opts.list_wide {
+        // A width of your own is the one it opens at, whatever
+        // diff_list_wide says; E still widens it.
+        // A commit's diff the branch's widened list opened is fitted to
+        // its own paths too.
+        if (self.opts.list_wide && self.kept_width().is_none())
+            || (self.opts.resize && self.in_history && self.list_widened)
+        {
             self.list_width = self.fit_width();
+            // Wide whatever the screen leaves it now, so a wider screen
+            // fits it to its longest path.
+            self.list_widened = true;
         }
         self.pick_first();
         self.ask_story(true);
@@ -1665,7 +1710,7 @@ impl App {
             .map(|e| width(&e.path))
             .max()
             .unwrap_or(0) as u16;
-        LIST_WIDTH.max((longest + 14).min(self.cols / 2))
+        self.narrow_width().max((longest + 14).min(self.cols / 2))
     }
 
     /// The story asked for, under the cover (with `cover`), unless there is
@@ -2509,8 +2554,10 @@ impl App {
             self.list_visual = None;
         }
         // What the mouse selected: Esc clears it, y copies it again (and
-        // goes on, so yp and yl still copy the place), any other key ends it.
-        if self.selection.is_some() {
+        // goes on, so yp and yl still copy the place), any other key ends it,
+        // but a pane resize key, which lets it go itself when the list's
+        // width changes.
+        if self.selection.is_some() && self.resize_step(&key).is_none() {
             match key.code {
                 KeyCode::Esc => {
                     // With the y that copied it, were it the key before.
@@ -2552,6 +2599,22 @@ impl App {
         if alt_m && self.opts.alone && !self.in_history {
             self.toggle_settings();
             return Act::Redraw;
+        }
+        // A pane resize key, whatever else is open: the list's width, or
+        // handed back to the workspace (width.rs); a commit's diff takes it
+        // for its own list.
+        // Not over a change that couldn't be read or shows nothing, where
+        // any key closes the diff.
+        let closes = self.failed.is_some() || self.nothing.is_some();
+        if let Some(by) = self.resize_step(&key).filter(|_| !closes) {
+            if let Some(h) = &mut self.history
+                && self.menu.is_none()
+                && self.settings.is_none()
+            {
+                let act = h.app.key(key);
+                return self.after_history(act);
+            }
+            return self.resize_key(by);
         }
         let reset = ctrl && matches!(key.code, KeyCode::Char('\\') | KeyCode::Char('4'));
         if (self.menu.is_some() || self.settings.is_some()) && reset {
@@ -3447,14 +3510,32 @@ impl App {
         self.keep_cursor();
     }
 
-    /// E: the list widened to fit its longest path, or narrowed again.
+    /// E: the list widened to fit its longest path, or narrowed again, to
+    /// the width you gave it when you gave it one; the cursor kept on what
+    /// it was on as the lines wrap anew.
     fn widen(&mut self) {
-        self.list_width = if self.list_width != LIST_WIDTH {
-            LIST_WIDTH
+        // A wide list whose paths changed since (R listing a longer one)
+        // fits them first.
+        let refit = self.fit_width();
+        if self.opts.resize && self.list_widened && self.list_width != refit {
+            self.relay_out(refit);
+            return;
+        }
+        // By the mode rather than the width shown, which the screen's
+        // half may cap at the narrow width too; with diff_list_resize off,
+        // whose list keeps its width as the screen changes, by the width
+        // shown, as before.
+        self.list_widened = if self.opts.resize {
+            !self.list_widened
         } else {
-            self.fit_width()
+            self.list_width == LIST_WIDTH
         };
-        self.lines.clear();
+        let to = if self.list_widened {
+            self.fit_width()
+        } else {
+            self.narrow_width()
+        };
+        self.relay_out(to);
     }
 
     // ── The path filter ─────────────────────────────────────────────────────
@@ -3975,6 +4056,10 @@ impl App {
         app.term = self.term;
         app.in_history = true;
         app.list_width = self.list_width;
+        app.list_widened = self.list_widened;
+        app.set_width = self.set_width;
+        app.width_file = self.width_file.clone();
+        app.resize_keys = self.resize_keys.clone();
         let short: String = hash.chars().take(7).collect();
         app.title = Some((
             format!(" Commit {} of {} · {short}", at + 1, commits.len()),
@@ -4001,6 +4086,28 @@ impl App {
     /// next commit or the one before, or back to the whole branch, as it
     /// is too when it would have closed.
     fn after_history(&mut self, act: Act) -> Act {
+        // A width the list was given in a commit's diff is the branch's
+        // too; one the commit's diff only opened at, or E widened it to,
+        // leaves the branch's list as it was.
+        let given = self.history.as_mut().and_then(|h| {
+            std::mem::take(&mut h.app.width_touched).then_some((
+                h.app.set_width,
+                h.app.list_widened,
+                h.app.list_width,
+            ))
+        });
+        // The default width asked for there is the branch's own default,
+        // from its own paths.
+        match given {
+            // Its file already taken away there.
+            Some((None, ..)) => self.default_width_here(),
+            Some((set_width, widened, width)) => {
+                self.set_width = set_width;
+                self.list_widened = widened;
+                self.relay_out(width);
+            }
+            None => {}
+        }
         let Some(h) = &mut self.history else {
             return act;
         };
@@ -4905,6 +5012,12 @@ impl App {
                 self.bar_drag = None;
                 return Act::Same;
             }
+            MouseEventKind::Drag(MouseButton::Left) if self.edge_drag.is_some() => {
+                return self.drag_edge(x);
+            }
+            MouseEventKind::Up(MouseButton::Left) if self.edge_drag.is_some() => {
+                return self.release_edge(Some((x, y)));
+            }
             MouseEventKind::Drag(MouseButton::Left) if self.pressed.is_some() => {
                 return self.drag_select(x, y);
             }
@@ -4926,11 +5039,15 @@ impl App {
             }
             MouseEventKind::Moved | MouseEventKind::Drag(_) => {
                 let lit = self.hit_at(x, y);
-                if !self.opts.hover || (hit == self.hover && lit == self.lit) {
+                let edge = hit.is_none() && self.on_edge(x, y);
+                if !self.opts.hover
+                    || (hit == self.hover && lit == self.lit && edge == self.edge_hover)
+                {
                     return Act::Same;
                 }
                 self.hover = hit;
                 self.lit = lit;
+                self.edge_hover = edge;
                 return Act::Redraw;
             }
             MouseEventKind::Down(MouseButton::Left) => {}
@@ -5050,6 +5167,11 @@ impl App {
             self.visual = None;
             self.list_visual = None;
             return self.press(button);
+        }
+        // A press on the list's edge takes it: the drag after it sets the
+        // list's width (width.rs).
+        if self.on_edge(x, y) {
+            return self.press_edge(x);
         }
         // A press on something of the map does what it does, and a drag
         // from it still selects the map's text.
@@ -5566,6 +5688,7 @@ pub fn run(
     base: Option<String>,
     working: bool,
     session: Option<ask::Session>,
+    resize_keys: Vec<ResizeKey>,
 ) -> ExitCode {
     let (cols, rows) = terminal::size().unwrap_or((80, 24));
     let (tx, rx): (Sender<Msg>, Receiver<Msg>) = channel();
@@ -5574,6 +5697,13 @@ pub fn run(
     app.session = session.filter(|_| settings::is_on("diff_ask_session"));
     app.opened = Some((dir.clone(), base.clone(), working));
     app.round = host().draws("round");
+    app.keep_width_in(width::kept_file());
+    // In a pane, only the keys the workspace named (none when keys.json
+    // binds none, or for a diff typed there by hand, whose keys the
+    // workspace keeps); alone, its defaults.
+    if opts.server || !resize_keys.is_empty() {
+        app.resize_keys = resize_keys;
+    }
     {
         let tx = tx.clone();
         let uncommitted = opts.uncommitted;
@@ -5597,6 +5727,18 @@ pub fn run(
             return ExitCode::FAILURE;
         }
     };
+    // The workspace passes the pane resize keys on only to a pane marked
+    // with the keys it takes (width.rs), which a diff from an older build
+    // never is, nor one with diff_list_resize off, whose keys stay the
+    // workspace's.
+    // A mark an earlier program left on the pane (one restored with the
+    // layout) is taken away when this one takes none.
+    if opts.server && opts.resize {
+        let keys = format!("keys:{}", width::notations(&app.resize_keys));
+        let _ = host().command(&["set", "@resize_keys", &keys]);
+    } else if opts.server {
+        let _ = host().command(&["set", "-u", "@resize_keys"]);
+    }
     // The terminal's colours: its background for the tints and for the
     // `system` theme, which Neovim followed through Ghostty's, its text's
     // for the faint words and the buttons.
@@ -5709,6 +5851,9 @@ pub fn run(
     app.stop();
     // The terminal's beam is put back only when the diff changed it.
     term.pointer = app.opts.pointer && app.pointer.is_some();
+    if opts.server {
+        let _ = host().command(&["set", "-u", "@resize_keys"]);
+    }
     drop(term);
     // An update started from the settings view is finished, not left half
     // done: said on the terminal given back, with what came of it.
@@ -5779,6 +5924,7 @@ mod tests {
             keep: false,
             menu_mouse: true,
             pointer: false,
+            resize: true,
         }
     }
 
@@ -7771,6 +7917,13 @@ mod tests {
             "↵" => vec![KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)],
             "⇧↵" => vec![KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT)],
             "S-F10" => vec![KeyEvent::new(KeyCode::F(10), KeyModifiers::SHIFT)],
+            t if t.starts_with("C-M-S-") => t[6..]
+                .chars()
+                .map(|c| {
+                    let mods = KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT;
+                    KeyEvent::new(KeyCode::Char(c), mods)
+                })
+                .collect(),
             t if t.starts_with('^') => t[1..]
                 .chars()
                 .map(|c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL))
@@ -8967,5 +9120,336 @@ mod tests {
         assert!(!shown.iter().any(|l| l.contains("   Map ")), "{shown:#?}");
         app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(app.mode, Mode::Files);
+    }
+
+    /// A file of a test's own for the list's width, in a folder made new
+    /// for the test, so nothing already in the temporary directory is
+    /// written through.
+    fn width_file(test: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let dir = std::env::temp_dir().join(format!(
+            "switchboard-diff-{test}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&dir).expect("a folder of the test's own");
+        dir.join("diff-list-width")
+    }
+
+    fn remove_width_file(file: &Path) {
+        if let Some(dir) = file.parent() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    /// The diff opened with the list's width kept in `file`.
+    fn app_keeping(file: &Path) -> App {
+        let mut app = app();
+        app.keep_width_in(file.to_path_buf());
+        app
+    }
+
+    const RESIZE: KeyModifiers = KeyModifiers::CONTROL
+        .union(KeyModifiers::ALT)
+        .union(KeyModifiers::SHIFT);
+
+    #[test]
+    fn a_drag_of_the_list_s_edge_sets_its_width_which_the_next_diff_opens_at() {
+        let file = width_file("drag");
+        let mut app = app_keeping(&file);
+        assert_eq!(app.list_width, LIST_WIDTH, "no file is the default");
+        // The edge is the column after the list's last, lit under the mouse.
+        assert_eq!(mouse(&mut app, MouseEventKind::Moved, 30, 3), Act::Redraw);
+        assert_eq!(draw(&mut app)[(30, 3)].symbol(), "│");
+        assert_eq!(mouse(&mut app, MouseEventKind::Moved, 40, 3), Act::Redraw);
+        assert_ne!(draw(&mut app)[(30, 3)].symbol(), "│");
+        mouse(&mut app, DOWN, 30, 3);
+        assert_eq!(mouse(&mut app, DRAG, 42, 5), Act::Redraw);
+        assert_eq!(app.list_width, 42);
+        assert_eq!(app.diff_area().x, 43);
+        assert_eq!(draw(&mut app)[(42, 3)].symbol(), "│", "lit while dragged");
+        assert!(!file.exists(), "nothing is kept as the mouse moves");
+        // No wider than half the screen, no narrower than 24 columns.
+        mouse(&mut app, DRAG, 90, 5);
+        assert_eq!(app.list_width, 50);
+        mouse(&mut app, DRAG, 3, 5);
+        assert_eq!(app.list_width, 24);
+        mouse(&mut app, DRAG, 42, 5);
+        mouse(&mut app, UP, 42, 5);
+        assert_eq!(std::fs::read_to_string(&file).unwrap().trim(), "42");
+        assert!(app.selection.is_none(), "the drag selected nothing");
+        // The next diff opens at it, diff_list_wide or not.
+        assert_eq!(app_keeping(&file).list_width, 42);
+        let (tx, _rx) = channel();
+        let wide = Options {
+            list_wide: true,
+            ..opts()
+        };
+        let mut next = App::new(wide, 100, 16, tx);
+        next.keep_width_in(file.clone());
+        next.loaded(Change {
+            top: PathBuf::from("/repo"),
+            base: "origin/main".into(),
+            why: git::Why::default(),
+            left: "L".into(),
+            right: "R".into(),
+            entries: vec![entry("src/a.js", 'M', 1, 1)],
+            diff: String::new(),
+            staged: None,
+            raw_commits: String::new(),
+            uncommitted: None,
+        });
+        assert_eq!(next.list_width, 42);
+        remove_width_file(&file);
+    }
+
+    #[test]
+    fn the_pane_resize_keys_set_the_list_s_width_while_the_list_has_the_keys() {
+        let file = width_file("keys");
+        let mut app = app_keeping(&file);
+        assert_eq!(app.focus, Focus::List);
+        assert_eq!(
+            app.key(KeyEvent::new(KeyCode::Char('l'), RESIZE)),
+            Act::Redraw
+        );
+        assert_eq!(app.list_width, 35);
+        assert_eq!(std::fs::read_to_string(&file).unwrap().trim(), "35");
+        // The chord without its Shift is no resize; with the letter in
+        // its upper case it is the same key.
+        let unshifted = KeyModifiers::CONTROL | KeyModifiers::ALT;
+        app.key(KeyEvent::new(KeyCode::Char('h'), unshifted));
+        assert_eq!(app.list_width, 35);
+        app.key(KeyEvent::new(KeyCode::Char('H'), RESIZE));
+        assert_eq!(app.list_width, 30);
+        app.key(KeyEvent::new(KeyCode::Char('h'), RESIZE));
+        app.key(KeyEvent::new(KeyCode::Char('h'), RESIZE));
+        assert_eq!(app.list_width, 24, "no narrower than 24 columns");
+        assert_eq!(std::fs::read_to_string(&file).unwrap().trim(), "24");
+        // In a side of the diff the keys are the workspace's.
+        app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(
+            app.key(KeyEvent::new(KeyCode::Char('l'), RESIZE)),
+            Act::Same
+        );
+        assert_eq!(app.list_width, 24);
+        // So they are with the menu open, which keeps the keys it had.
+        app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        press(&mut app, "m");
+        assert!(app.menu.is_some());
+        app.key(KeyEvent::new(KeyCode::Char('l'), RESIZE));
+        assert_eq!(app.list_width, 24);
+        assert!(app.menu.is_some());
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        // The keys the workspace names are the ones taken.
+        app.resize_keys = vec![ResizeKey::parse("M-Right", "3").unwrap()];
+        app.opts.pane_arrows = false;
+        app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::ALT));
+        assert_eq!(app.list_width, 27);
+        app.key(KeyEvent::new(KeyCode::Char('l'), RESIZE));
+        assert_eq!(app.list_width, 27);
+        assert_eq!(ResizeKey::parse("C-M-S-h", "0"), None);
+        assert_eq!(ResizeKey::parse("not a key", "5"), None);
+        // A key that keeps its own meaning in the diff is no resize key.
+        assert_eq!(ResizeKey::parse("Escape", "5"), None);
+        assert_eq!(ResizeKey::parse("Enter", "-5"), None);
+        remove_width_file(&file);
+    }
+
+    #[test]
+    fn e_goes_between_the_width_set_and_the_longest_path() {
+        let file = width_file("widen");
+        let mut app = app_keeping(&file);
+        // A path of 26 columns, which with its status and counts (14 more)
+        // fits in 40.
+        if let Some(change) = app.change.as_mut() {
+            change.entries[0].path = "a/longer/path/to/a/file.rs".into();
+        }
+        mouse(&mut app, DOWN, 30, 3);
+        mouse(&mut app, DRAG, 26, 3);
+        mouse(&mut app, UP, 26, 3);
+        assert_eq!(app.list_width, 26);
+        press(&mut app, "E");
+        assert_eq!(app.list_width, 40);
+        // A screen of another width keeps the width E gave it.
+        app.resize(90, 16);
+        assert_eq!(app.list_width, 40);
+        press(&mut app, "E");
+        assert_eq!(app.list_width, 26);
+        // One at the width set takes it as a narrow screen lets.
+        app.resize(50, 16);
+        assert_eq!(app.list_width, 25);
+        app.resize(100, 16);
+        assert_eq!(app.list_width, 26);
+        remove_width_file(&file);
+    }
+
+    #[test]
+    fn use_the_file_list_s_default_width_in_the_menu_forgets_the_width_kept() {
+        let file = width_file("default");
+        let mut app = app_keeping(&file);
+        // Its last option, past the menu's first screen: up from the first.
+        let offered = |app: &mut App| {
+            app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+            screen(app)
+                .iter()
+                .any(|l| l.contains("Use the file list's default width"))
+        };
+        // With no width of its own the menu doesn't offer it.
+        press(&mut app, "m");
+        assert!(!offered(&mut app));
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        app.key(KeyEvent::new(KeyCode::Char('l'), RESIZE));
+        assert_eq!(app.list_width, 35);
+        // A right click on the list opens the menu, which offers it last.
+        let right = MouseEventKind::Down(MouseButton::Right);
+        assert_eq!(mouse(&mut app, right, 4, 3), Act::Redraw);
+        assert!(offered(&mut app));
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.menu.is_none());
+        assert_eq!(app.list_width, LIST_WIDTH);
+        assert_eq!(app.set_width, None);
+        assert!(!file.exists(), "no file is the default");
+        assert_eq!(app_keeping(&file).list_width, LIST_WIDTH);
+        remove_width_file(&file);
+    }
+
+    #[test]
+    fn with_diff_list_resize_off_the_list_keeps_its_fixed_width() {
+        let file = width_file("off");
+        std::fs::write(&file, "42\n").unwrap();
+        let mut app = app();
+        app.opts.resize = false;
+        app.keep_width_in(file.clone());
+        assert_eq!(app.list_width, LIST_WIDTH, "the width kept is passed over");
+        // Its edge takes no drag and doesn't light.
+        assert_eq!(mouse(&mut app, MouseEventKind::Moved, 30, 3), Act::Same);
+        mouse(&mut app, DOWN, 30, 3);
+        mouse(&mut app, DRAG, 42, 3);
+        mouse(&mut app, UP, 42, 3);
+        assert_eq!(app.list_width, LIST_WIDTH);
+        // The resize keys aren't the list's there.
+        assert_eq!(
+            app.key(KeyEvent::new(KeyCode::Char('l'), RESIZE)),
+            Act::Same
+        );
+        assert_eq!(app.list_width, LIST_WIDTH);
+        press(&mut app, "m");
+        assert!(
+            !screen(&mut app)
+                .iter()
+                .any(|l| l.contains("Use the file list's default width"))
+        );
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap().trim(),
+            "42",
+            "kept for when the setting is on again"
+        );
+        remove_width_file(&file);
+    }
+
+    /// The diff with one file whose first lines are long enough to wrap,
+    /// and a short last line.
+    fn app_wrapping() -> App {
+        let (tx, _rx) = channel();
+        let mut app = App::new(opts(), 100, 16, tx);
+        let long = |w: &str| format!("{} {w}", "word ".repeat(40).trim_end());
+        let old: String = (0..6)
+            .map(|i| format!("{}\n", long(&format!("old{i}"))))
+            .collect();
+        let new: String = (0..6)
+            .map(|i| format!("{}\n", long(&format!("new{i}"))))
+            .collect();
+        let old = format!("{old}last\n");
+        let new = format!("{new}last\n");
+        let mut diff =
+            "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,7 +1,7 @@\n".to_string();
+        for i in 0..6 {
+            diff.push_str(&format!("-{}\n", long(&format!("old{i}"))));
+        }
+        for i in 0..6 {
+            diff.push_str(&format!("+{}\n", long(&format!("new{i}"))));
+        }
+        diff.push_str(" last\n");
+        app.give_text("L", "f.txt", Some(old));
+        app.give_text("R", "f.txt", Some(new));
+        app.loaded(Change {
+            top: PathBuf::from("/repo"),
+            base: "origin/main".into(),
+            why: git::Why::default(),
+            left: "L".into(),
+            right: "R".into(),
+            entries: vec![entry("f.txt", 'M', 6, 6)],
+            diff,
+            staged: None,
+            raw_commits: String::new(),
+            uncommitted: None,
+        });
+        app
+    }
+
+    /// The row of the diff the cursor's screen line is part of.
+    fn cursor_row(app: &mut App) -> Option<usize> {
+        let cur = app.cur;
+        match app.screen_lines().get(cur) {
+            Some(Line::Pair { row, .. }) => Some(*row),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn the_cursor_stays_on_its_row_as_every_change_of_width_wraps_the_lines_anew() {
+        let file = width_file("anchor");
+        let mut app = app_wrapping();
+        app.keep_width_in(file.clone());
+        app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        // The cursor on the last line of the file, past the wrapped ones.
+        press(&mut app, "G");
+        let row = cursor_row(&mut app);
+        assert!(row.is_some());
+        let before = app.screen_lines().len();
+        // A wider list: the sides narrower, the long lines on more rows.
+        while app.focus != Focus::List {
+            app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        }
+        for _ in 0..4 {
+            app.key(KeyEvent::new(KeyCode::Char('l'), RESIZE));
+        }
+        assert_eq!(app.list_width, 50);
+        assert!(app.screen_lines().len() > before, "the lines wrapped anew");
+        assert_eq!(cursor_row(&mut app), row, "a key");
+        // A drag back, E, and the pane resized each keep it there too.
+        mouse(&mut app, DOWN, 50, 3);
+        mouse(&mut app, DRAG, 26, 3);
+        mouse(&mut app, UP, 26, 3);
+        assert_eq!(cursor_row(&mut app), row, "a drag");
+        press(&mut app, "E");
+        assert_eq!(cursor_row(&mut app), row, "E");
+        app.resize(70, 16);
+        assert_eq!(cursor_row(&mut app), row, "the pane resized");
+        // In sight in the view.
+        assert!(app.cur >= app.top && app.cur < app.top + app.body_height());
+        remove_width_file(&file);
+    }
+
+    #[test]
+    fn a_selection_by_v_keeps_its_rows_through_a_new_width() {
+        let file = width_file("visual");
+        let mut app = app_wrapping();
+        app.keep_width_in(file.clone());
+        app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        press(&mut app, "G");
+        press(&mut app, "V");
+        let start = app.visual.unwrap();
+        let start_row = match app.screen_lines().get(start) {
+            Some(Line::Pair { row, .. }) => *row,
+            _ => panic!("v started on a row"),
+        };
+        app.resize(70, 16);
+        let now = app.visual.unwrap();
+        assert!(
+            matches!(app.screen_lines().get(now), Some(Line::Pair { row, .. }) if *row == start_row)
+        );
+        remove_width_file(&file);
     }
 }

@@ -169,7 +169,7 @@ pub fn plugin() -> &'static dyn Plugin {
 }
 
 /// `switchboard diff [--base <ref> | --working] [--session <id>
-/// --session-dir <dir>] [dir]`: the diff run on this terminal, loaded as a
+/// --session-dir <dir>] [--resize-key <key> <columns>]... [dir]`: the diff run on this terminal, loaded as a
 /// plugin (a build can't load one built for a newer protocol) with this
 /// program answering for the workspace (`host`). `switchboard diff --ahead
 /// [--plan <note>] [dir]` hands it a tab's new commit instead (`ahead`):
@@ -209,7 +209,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "Usage: switchboard diff [--base <ref> | --working] [--ahead [--plan <note>]] [--session <id> --session-dir <dir>] [dir]"
+        "Usage: switchboard diff [--base <ref> | --working] [--ahead [--plan <note>]] [--session <id> --session-dir <dir>] [--resize-key <key> <columns>]... [dir]"
     );
     ExitCode::from(2)
 }

@@ -105,6 +105,12 @@ pub(super) struct Place_ {
     /// the cursor to.
     list_top: usize,
     list_followed: Option<usize>,
+    /// The cursor and the view's first line by what they are on, so the
+    /// place comes back to the same lines after the list's width changed
+    /// in the other mode (width.rs).
+    anchors: Option<super::width::Anchors>,
+    /// The list's place by its rows, for the same reason.
+    list_place: super::width::ListPlace,
 }
 
 /// How a box of a map is drawn.
@@ -572,7 +578,9 @@ impl App {
         }
     }
 
-    fn place(&self) -> Place_ {
+    fn place(&mut self) -> Place_ {
+        let anchors = self.anchors();
+        let list_place = self.list_row();
         let key = |k: usize| {
             self.order
                 .get(k)
@@ -593,6 +601,8 @@ impl App {
             thing: self.thing,
             list_top: self.list_top,
             list_followed: self.list_followed,
+            anchors,
+            list_place,
         }
     }
 
@@ -647,6 +657,10 @@ impl App {
         self.adrift = place.adrift;
         self.list_top = place.list_top;
         self.list_followed = place.list_followed;
+        self.list_rewrapped(place.list_place.clone());
+        if let Some(anchors) = place.anchors {
+            self.anchor_back(anchors);
+        }
         self.keep_side();
         self.fit_view();
         // The cursor kept within its file as it is now; the view's line
@@ -785,6 +799,10 @@ impl App {
                     self.adrift = place.adrift;
                     self.list_top = place.list_top;
                     self.list_followed = place.list_followed;
+                    self.list_rewrapped(place.list_place.clone());
+                    if let Some(anchors) = place.anchors {
+                        self.anchor_back(anchors);
+                    }
                     self.keep_side();
                     self.fit_view();
                 }

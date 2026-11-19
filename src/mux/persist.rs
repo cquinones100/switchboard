@@ -1281,12 +1281,14 @@ impl Persist {
 }
 
 /// What makes a pane a tool standing in for another, or one waiting behind
-/// a tool (src/diff/in_place.rs): a restored pane is a shell, and its ids may
-/// be given to others (`renumber`), so none of them comes back.
+/// a tool (src/diff/in_place.rs), and the resize keys a diff took
+/// (`@resize_keys`): a restored pane is a shell, and its ids may be given
+/// to others (`renumber`), so none of them comes back.
 const TOOL_MARKS: &[&str] = &[
     crate::diff::in_place::PARKED_PANE,
     crate::diff::in_place::IN_PLACE,
     crate::diff::in_place::PANE_PARKED,
+    "@resize_keys",
 ];
 
 /// Brings back one tab, giving its panes as saved; `None` when none of its

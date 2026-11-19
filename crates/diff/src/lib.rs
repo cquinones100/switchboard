@@ -139,6 +139,11 @@ pub fn manifest() -> Manifest {
                     "Diff file list wide",
                     "M-d's file list opens wide enough for its longest path (at most half the screen), E narrowing it; off, it opens narrow and E widens it",
                 ),
+            Setting::new("diff_list_resize", true)
+                .said(
+                    "Resize the diff's file list",
+                    "A drag of M-d's file list's right edge, lit under the mouse, or the pane resize keys (C-M-S-h and C-M-S-l) while the list has the keys, gives the list a width of its own, from 24 columns to half the diff's width, which every diff opens at after, E going between it and the longest path; the diff's menu (m, or a right click) has \"Use the file list's default width\". Off, the list takes the width it had before (30 columns, or its longest path with diff_list_wide and E), its edge takes no drag and the pane resize keys move the pane's divider",
+                ),
             Setting::new("diff_ask", true)
                 .said(
                     "Ask Claude about the diff",
@@ -172,19 +177,22 @@ impl Plugin for Diff {
     }
 
     /// `<program> [--base <ref> | --working] [--session <id> --session-dir
-    /// <dir>] [dir]`: the change in `dir` (where it runs, else) against
+    /// <dir>] [--resize-key <key> <columns>]... [dir]`: the change in `dir` (where it runs, else) against
     /// `<ref>`, or, without one, its PR's base as the workspace says it
     /// (alone, the default branch, or the branch it was cut from when it tracks one), to the working tree with the
     /// diff_uncommitted setting on; with `--working`, the working tree's
     /// changes, staged and not; with `--session`, `ga` asks a copy of that
     /// Claude session (the tab's, which M-d passes), resumed from the
-    /// directory `--session-dir` names.
+    /// directory `--session-dir` names; each `--resize-key` names a key
+    /// bound to moving a pane's divider and the columns it moves it by (to
+    /// the left when negative), which set the file list's width while the
+    /// list has the keys (the workspace's default keys with none named).
     fn run(&self, program: &str, args: Vec<String>, host: Arc<dyn Host>) -> ExitCode {
         host::install(host);
         host::share_with_ui();
         let usage = || {
             eprintln!(
-                "Usage: {program} [--base <ref> | --working] [--session <id> --session-dir <dir>] [dir]"
+                "Usage: {program} [--base <ref> | --working] [--session <id> --session-dir <dir>] [--resize-key <key> <columns>]... [dir]"
             );
             ExitCode::from(2)
         };
@@ -192,6 +200,7 @@ impl Plugin for Diff {
         let mut working = false;
         let mut dir = None;
         let (mut session, mut session_dir) = (None, None);
+        let mut resize_keys = Vec::new();
         let mut rest = args.into_iter();
         while let Some(arg) = rest.next() {
             match arg.as_str() {
@@ -206,6 +215,14 @@ impl Plugin for Diff {
                 "--session-dir" => match rest.next() {
                     Some(d) => session_dir = Some(d),
                     None => return usage(),
+                },
+                // A key the diff can't take as a resize (Escape bound to
+                // one) is passed over, the workspace keeping its binding.
+                "--resize-key" => match (rest.next(), rest.next()) {
+                    (Some(key), Some(columns)) => {
+                        resize_keys.extend(app::ResizeKey::parse(&key, &columns));
+                    }
+                    _ => return usage(),
                 },
                 "--working" => working = true,
                 "-h" | "--help" => {
@@ -230,7 +247,7 @@ impl Plugin for Diff {
             },
             _ => return usage(),
         };
-        app::run(dir, base, working, session)
+        app::run(dir, base, working, session, resize_keys)
     }
 
     /// A tab's new commit: its story told and kept, with nothing drawn, so

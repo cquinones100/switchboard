@@ -256,10 +256,36 @@ impl Server {
                 session.cwd,
             ]);
         }
+        // The keys bound to moving a pane's divider left or right, which
+        // set its file list's width while the list has the keys.
+        command.extend(self.diff_resize_flags());
         command.push(dir.to_string_lossy().into_owned());
         if let Err(e) = self.open_in_place(pane, TOOL, command, Some(client)) {
             self.say(Some(client), &format!("Couldn't open the diff: {e}"));
         }
+    }
+
+    /// `--resize-key <key> <columns>` for each key bound, without the
+    /// prefix, to moving a pane's divider left or right (left negative), in
+    /// the keys' order, for every way the server starts a diff.
+    pub(crate) fn diff_resize_flags(&self) -> Vec<String> {
+        use crate::mux::Direction;
+        let mut keys: Vec<(String, i32)> = self
+            .bindings
+            .root
+            .iter()
+            .filter_map(|(key, action)| match action {
+                // One bound to no columns moves nothing.
+                Action::Resize(_, 0) => None,
+                Action::Resize(Direction::Left, n) => Some((key.notation(), -i32::from(*n))),
+                Action::Resize(Direction::Right, n) => Some((key.notation(), i32::from(*n))),
+                _ => None,
+            })
+            .collect();
+        keys.sort();
+        keys.into_iter()
+            .flat_map(|(key, columns)| ["--resize-key".to_string(), key, columns.to_string()])
+            .collect()
     }
 
     /// On the server's tick: the story of a tab's new commit told ahead,

@@ -621,6 +621,8 @@ mod tests {
                     .find(|(k, _)| k.starts_with("C-M-S-h"))
                     .unwrap()
                     .1,
+                "M-d's diff",
+                "narrow, widen the file list, kept for the next diff (a drag of its edge too)",
             ]
         );
         let by_tag = views::shown(&view, "#split", None, &views::Folds::default());

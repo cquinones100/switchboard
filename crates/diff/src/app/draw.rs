@@ -72,8 +72,7 @@ impl App {
         // The settings view, alone, in the place of the diff and of a
         // commit of the history.
         if self.settings.is_some() {
-            self.cols = buf.area.width.max(20);
-            self.rows = buf.area.height.max(5);
+            self.screen_now(buf.area.width, buf.area.height);
             self.buttons.clear();
             self.spots.clear();
             self.draw_settings(buf);
@@ -92,8 +91,8 @@ impl App {
             return cursor;
         }
         let area = buf.area;
-        self.cols = area.width.max(20);
-        self.rows = area.height.max(5);
+        // A size seen here before its resize event is taken the same way.
+        self.screen_now(area.width, area.height);
         self.buttons.clear();
         self.spots.clear();
         self.hits.clear();
@@ -171,6 +170,7 @@ impl App {
                 let list = Rect::new(0, 0, file.x.saturating_sub(1), file.height);
                 kit::unfocused(buf, list, &self.theme());
             }
+            self.draw_edge(buf);
         }
         if self.has_buttons() {
             self.draw_buttons(buf);

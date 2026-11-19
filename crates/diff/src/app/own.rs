@@ -64,6 +64,8 @@ pub(super) enum Choice {
     Keys(usize),
     /// The story's map or the files, with a story told as a map.
     Mode(super::Mode),
+    /// The file list's width you gave it forgotten (width.rs).
+    DefaultWidth,
 }
 
 /// The diff's menu, and what each of its options does.
@@ -510,12 +512,14 @@ impl App {
         // to the whole branch, which follows the new ones.
         self.leave_history();
         self.lines.clear();
-        if now.list_wide != before.list_wide {
-            self.list_width = if now.list_wide {
+        if now.list_wide != before.list_wide || now.resize != before.resize {
+            let to = if now.list_wide && self.kept_width().is_none() {
                 self.fit_width()
             } else {
-                super::LIST_WIDTH
+                self.narrow_width()
             };
+            self.list_widened = now.list_wide && self.kept_width().is_none();
+            self.relay_out(to);
         }
         // Ask turned off, whatever else changed with it: a question being
         // typed and an answer go first, so nothing of them asks again.
@@ -852,6 +856,10 @@ impl App {
             choices.push(Choice::Keys(i));
             options.push(MenuOption::new(*label));
         }
+        if self.offers_default_width() {
+            choices.push(Choice::DefaultWidth);
+            options.push(MenuOption::new("Use the file list's default width"));
+        }
         let shown = choices
             .iter()
             .position(|c| *c == Choice::Mode(self.mode))
@@ -931,6 +939,7 @@ impl App {
         match choice {
             Some(Choice::Settings) => self.toggle_settings(),
             Some(Choice::Mode(mode)) => self.choose_mode(mode),
+            Some(Choice::DefaultWidth) => self.default_width(),
             Some(Choice::WorkspaceSettings) => {
                 // Mission control's Settings, where the Diff category holds
                 // them; with no server to ask, where they are is said.
