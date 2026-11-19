@@ -255,7 +255,7 @@ The relay's DM, threads and Home tab.
 
 - [143. The chosen card plain to see in the Tabs view: every card's edge the plain rule, its group's tone left to its mark and state words; the chosen card's edge in the accent, its top edge a solid accent bar with its mark, number, name and state dark on it](https://cquinones100.github.io/switchboard/design/143.html)
 
-## Proposal: the story view side by side
+## The story view side by side
 
 - [144. Board 141's reading column with a page's hunks side by side, as Files mode lays them out, old left and new right with their lines paired; the 30-column outline beside it, the prose still 88 columns wide, the hunks across the column's whole width](https://cquinones100.github.io/switchboard/design/144.html)
 - [145. The same page narrower: each side would be under 60 columns, so the hunks fall back to one column, the old lines then the new, marked − and +](https://cquinones100.github.io/switchboard/design/145.html)
