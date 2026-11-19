@@ -86,8 +86,15 @@ pub struct Beside {
     /// rewrapped, and the rows that put them on: while the reader hasn't
     /// moved them since, the next rewrap starts from these, so a drag
     /// through many widths never drifts off the word it started on.
-    pub held: Option<(Option<Spot>, Option<Spot>, usize, usize, Option<Stop>)>,
+    pub held: Option<Held>,
+    /// The plan was given the keys as the note was hidden (Notes narrowed
+    /// under the plan), so this drawing keeps the view where it was.
+    pub took_keys: bool,
 }
+
+/// What the cursor and the first row shown were on as the plan last
+/// rewrapped, the rows that put them on, and the card lit then.
+pub type Held = (Option<Spot>, Option<Spot>, usize, usize, Option<Stop>);
 
 /// A text row of the panel: the piece of text it shows (a line of the
 /// plan, a heading, a blank, counted from the top past the cards) and the
@@ -619,6 +626,7 @@ impl App {
             follow: false,
             laid: None,
             held: None,
+            took_keys: false,
         });
         true
     }
@@ -1065,7 +1073,7 @@ impl App {
         // The cursor kept in sight as it moves, or as the plan with the
         // keys rewraps; the wheel scrolling past it takes it along, as
         // Vim's does.
-        if b.follow || (rewrapped.is_some() && b.focused) {
+        if b.follow || (rewrapped.is_some() && b.focused && !b.took_keys) {
             if line < scroll {
                 scroll = line;
             } else if body > 0 && line >= scroll + body {
@@ -1082,6 +1090,7 @@ impl App {
         b.scroll = scroll;
         b.line = line;
         b.follow = false;
+        b.took_keys = false;
         if let Some((at, top)) = rewrapped {
             b.held = Some((at, top, line, scroll, b.stop));
         }

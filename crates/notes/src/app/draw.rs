@@ -127,7 +127,10 @@ impl App {
         };
         // The note hidden (Notes narrowed under the plan), the plan takes
         // the keys, so nothing typed reaches what can't be seen.
+        // A plan scrolled without the keys keeps its view as it takes them,
+        // the cursor brought into it rather than it to the cursor.
         if let (Some((None, _)), Some(b)) = (split, self.beside.as_mut()) {
+            b.took_keys |= !b.focused;
             b.focused = true;
         }
         // The edge a drag moves (notes_resize): the line right of the list.
