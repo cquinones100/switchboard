@@ -1706,6 +1706,17 @@ impl App {
                     runs.push(h.run);
                 }
             }
+            // A file with no hunk (a binary one) is each diff's that lists it.
+            if runs.is_empty()
+                && let Some(c) = &self.change
+            {
+                for e in c.told_part().entries.iter().filter(|e| e.path == *path) {
+                    let r = self.run_of(e).unwrap_or(1);
+                    if !runs.contains(&r) {
+                        runs.push(r);
+                    }
+                }
+            }
             if runs.is_empty() {
                 runs.push(1);
             }
@@ -1977,11 +1988,16 @@ impl App {
                 (None, Some(line)) => {
                     // The entry of the line's own diff, where a file is
                     // listed twice (staged, and changed since).
-                    let old_path = self
-                        .entries()
-                        .iter()
-                        .find(|e| e.path == path && self.run_of(e).is_none_or(|r| r == run))
-                        .map_or(path.clone(), |e| e.old().to_string());
+                    // From the told part, whose diff the column shows.
+                    let old_path =
+                        self.change
+                            .as_ref()
+                            .and_then(|c| {
+                                c.told_part().entries.iter().find(|e| {
+                                    e.path == path && self.run_of(e).is_none_or(|r| r == run)
+                                })
+                            })
+                            .map_or(path.clone(), |e| e.old().to_string());
                     format!("{old_path}:{line}")
                 }
                 (None, None) => path,
