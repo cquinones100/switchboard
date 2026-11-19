@@ -862,3 +862,21 @@ fn skills_keep_outside_text_out_of_the_shell_and_read_logs_as_data() {
         "git pull is denied"
     );
 }
+
+#[test]
+fn diff_artifact_tells_no_story_of_its_own_and_publishes_only_after_a_yes() {
+    let all = skills();
+    let text = &all
+        .iter()
+        .find(|(name, _)| name == "diff-artifact")
+        .unwrap()
+        .1;
+    assert!(text.contains("`switchboard diff-story`"));
+    assert!(text.contains("No story told for this change yet"));
+    assert!(text.contains("never tell a story of your own"));
+    assert!(text.contains("`switchboard show @tab_plan_note`"));
+    assert!(text.contains("`switchboard leak-check"));
+    assert!(text.contains("Publish only after their yes"));
+    assert!(text.contains("never share it further"));
+    assert!(text.contains("Never a link to GitHub or the PR in place of a hunk"));
+}
