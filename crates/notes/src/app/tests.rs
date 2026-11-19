@@ -5498,3 +5498,18 @@ fn a_drag_let_go_where_it_started_writes_nothing() {
     assert_eq!(app.plan_width, Some(60));
     assert_eq!(app.kept_plan_width(), Some(80));
 }
+
+#[test]
+fn a_drag_from_the_default_back_to_it_leaves_another_tab_s_width() {
+    let (_dir, mut app, _path, _plan) = with_plan("plan-default-back", 160);
+    keys(&mut app, "4G<CR>");
+    let _ = screen(&mut app);
+    util::write_atomic(app.store.state.join(PLAN_WIDTH), "80").unwrap();
+    let edge = app.geo.plan.x - 1;
+    mouse(&mut app, MouseKind::Press, edge, 5);
+    mouse(&mut app, MouseKind::Drag, edge - 10, 5);
+    mouse(&mut app, MouseKind::Drag, edge, 5);
+    mouse(&mut app, MouseKind::Release, edge, 5);
+    assert_eq!(app.plan_width, None);
+    assert_eq!(app.kept_plan_width(), Some(80));
+}

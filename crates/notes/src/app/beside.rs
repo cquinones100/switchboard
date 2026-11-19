@@ -1094,10 +1094,14 @@ impl App {
         // go to, which Enter would choose.
         let on_text = |l: &usize| pieces.get(l + 1).is_some_and(Option::is_some);
         if b.took_keys && focused && body > 0 && !on_text(&line) {
-            let near = (scroll..scroll + body)
-                .find(on_text)
-                .or_else(|| (line..rows.len().saturating_sub(1)).find(on_text))
-                .or_else(|| (0..line).rev().find(on_text));
+            let below = (line..rows.len().saturating_sub(1)).find(on_text);
+            let above = (0..line).rev().find(on_text);
+            let nearest = match (above, below) {
+                (Some(a), Some(b)) if line - a <= b - line => Some(a),
+                (_, Some(b)) => Some(b),
+                (a, None) => a,
+            };
+            let near = (scroll..scroll + body).find(on_text).or(nearest);
             if let Some(l) = near {
                 line = l;
                 if l < scroll {
@@ -1112,9 +1116,14 @@ impl App {
         b.scroll = scroll;
         b.line = line;
         b.follow = false;
-        b.took_keys = false;
+        let took = std::mem::take(&mut b.took_keys);
         if let Some((at, top)) = rewrapped {
             b.held = Some((at, top, line, scroll, b.stop));
+        }
+        // Brought into the view as it took the keys, the cursor's place is
+        // taken again from where it is now at the next rewrap.
+        if took {
+            b.held = None;
         }
         // The card lit follows where the cursor ended up (the wheel, or the
         // keys coming back from the note), so Enter acts on what is lit.
