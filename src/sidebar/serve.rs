@@ -953,7 +953,44 @@ impl Server {
             .map(|(source, items)| (source.as_str(), items.as_slice()))
             .collect();
         lists.sort_by_key(|(source, _)| notices::rank(source));
+        // By source, the sources in the order of their newest notification,
+        // each one's kinds together.
+        if settings::is_on("notices_grouped") {
+            let mut newest: std::collections::HashMap<&str, i64> = Default::default();
+            for (source, items) in &lists {
+                let at = items
+                    .iter()
+                    .filter_map(|i| self.notice_time(source, i))
+                    .max()
+                    .unwrap_or(0);
+                let known = newest.entry(notices::group_name(source)).or_insert(at);
+                *known = (*known).max(at);
+            }
+            lists.sort_by_key(|(source, _)| {
+                let group = notices::group_name(source);
+                (std::cmp::Reverse(newest[group]), group)
+            });
+        }
         lists
+    }
+
+    /// When a notification came: its own time, else when the history says
+    /// it came, while the history is on.
+    pub(crate) fn notice_time(&self, source: &str, item: &crate::items::Item) -> Option<i64> {
+        item.time.or_else(|| {
+            // When its words last changed here, else when the history says
+            // it came, else when this server first saw it.
+            let seen = self
+                .notice_changed
+                .get(&(source.to_string(), item.id.clone()));
+            let kept = self
+                .notice_came
+                .get(&(source.to_string(), item.id.clone()))
+                .copied();
+            seen.and_then(|(_, _, changed)| *changed)
+                .max(kept)
+                .or_else(|| seen.map(|(_, first, _)| *first))
+        })
     }
 
     /// A notification as the Notifications view and window draw it: with a
@@ -965,9 +1002,16 @@ impl Server {
         item: &crate::items::Item,
     ) -> crate::items::Item {
         let mut item = item.clone();
-        if item.time.is_none() && Self::notice_history_on() {
-            item.time = self.sidebar.history.came(source, &item.id);
-        }
+        // By kind, as it was: its own time, else the history's.
+        item.time = if settings::is_on("notices_grouped") {
+            self.notice_time(source, &item)
+        } else {
+            item.time.or_else(|| {
+                Self::notice_history_on()
+                    .then(|| self.sidebar.history.came(source, &item.id))
+                    .flatten()
+            })
+        };
         item
     }
 
@@ -975,7 +1019,10 @@ impl Server {
     /// how many there are (`notices::summary`), named by its first, so the
     /// tabs keep the room however many come in; the Notifications window
     /// lists each.
-    fn sidebar_notices(&self) -> Vec<Notice> {
+    pub(crate) fn sidebar_notices(&self) -> Vec<Notice> {
+        if settings::is_on("notices_grouped") {
+            return self.sidebar_notice_groups();
+        }
         self.notice_lists()
             .into_iter()
             .map(|(source, items)| {
@@ -993,9 +1040,130 @@ impl Server {
                         .then(|| items.iter().filter_map(|i| i.time).max())
                         .flatten()
                         .map(|ms| ms.div_euclid(1000)),
+                    count: None,
                 }
             })
             .collect()
+    }
+
+    /// The notification a source's line names now, for a cursor resting on
+    /// that line since an older one of its source's was its newest: the
+    /// line shows the newest, which is what Enter and its menu act on. With
+    /// the Notifications window on the cursor is the one chosen there, and
+    /// by kind a line's own rules say which it names.
+    pub(crate) fn notice_line_now(&self, owner: &Owner) -> Owner {
+        if !matches!(owner, Owner::Notice { .. }) || !settings::is_on("notices_grouped") {
+            return owner.clone();
+        }
+        notice_line_in(owner, &self.notice_line_owners())
+    }
+
+    /// What `notice_line_now` reads a cursor against: the window's
+    /// notifications in its order, else the sidebar's lines.
+    fn notice_line_owners(&self) -> Vec<Owner> {
+        if settings::is_on("notice_list") {
+            self.notice_entries().into_iter().map(|(o, _)| o).collect()
+        } else {
+            self.sidebar_notices()
+                .into_iter()
+                .map(|n| n.owner)
+                .collect()
+        }
+    }
+
+    /// By source, the notification each window has chosen and each
+    /// sidebar's cursor rests on, kept as `notice_line_now` reads them once
+    /// the notifications change: one dismissed gives way for good to what
+    /// takes its place, so its source coming back later doesn't take the
+    /// choice back from it.
+    pub(crate) fn notice_cursors_settle(&mut self) {
+        let any_on_a_notice = !self.sidebar.windows.at.is_empty()
+            || self
+                .sidebar
+                .sides
+                .values()
+                .any(|s| matches!(s.cursor, Some(Owner::Notice { .. })));
+        if !settings::is_on("notices_grouped") || !any_on_a_notice {
+            return;
+        }
+        // The notifications listed, read once for every cursor.
+        let owners = self.notice_line_owners();
+        let chosen: Vec<(String, Owner)> = self
+            .sidebar
+            .windows
+            .at
+            .iter()
+            .map(|(s, o)| (s.clone(), o.clone()))
+            .collect();
+        for (session, owner) in chosen {
+            let now = notice_line_in(&owner, &owners);
+            if now != owner {
+                self.sidebar.windows.at.insert(session, now);
+            }
+        }
+        let cursors: Vec<(String, Owner)> = self
+            .sidebar
+            .sides
+            .iter()
+            .filter_map(|(s, side)| match &side.cursor {
+                Some(o @ Owner::Notice { .. }) => Some((s.clone(), o.clone())),
+                _ => None,
+            })
+            .collect();
+        for (session, owner) in cursors {
+            let now = notice_line_in(&owner, &owners);
+            if now != owner
+                && let Some(side) = self.sidebar.sides.get_mut(&session)
+            {
+                side.cursor = Some(now);
+            }
+        }
+    }
+
+    /// The notifications as a line for each source (`notices::group_of`,
+    /// board 117): its name, how many it has, and its newest one's words,
+    /// which is the one the line names; the sources in the order of their
+    /// newest, as `notice_lists` has them.
+    fn sidebar_notice_groups(&self) -> Vec<Notice> {
+        let mut out: Vec<(Notice, i64)> = Vec::new();
+        for (source, items) in self.notice_lists() {
+            let group = notices::group_name(source);
+            let newest = items
+                .iter()
+                .map(|i| (self.notice_time(source, i).unwrap_or(0), i))
+                .rev()
+                .max_by_key(|(at, _)| *at);
+            let Some((at, item)) = newest else { continue };
+            let named = |n: &mut Notice| {
+                n.owner = Owner::Notice {
+                    source: source.to_string(),
+                    id: item.id.clone(),
+                };
+                n.detail = notices::words(source, item);
+                n.time = (at > 0 && source != "meeting").then(|| at.div_euclid(1000));
+            };
+            match out.last_mut().filter(|(n, _)| n.title == group) {
+                Some((line, line_at)) => {
+                    line.count = Some(line.count.unwrap_or(0) + items.len());
+                    if at > *line_at {
+                        named(line);
+                        *line_at = at;
+                    }
+                }
+                None => {
+                    let mut line = Notice {
+                        owner: Owner::Notices,
+                        title: group.to_string(),
+                        detail: String::new(),
+                        time: None,
+                        count: Some(items.len()),
+                    };
+                    named(&mut line);
+                    out.push((line, at));
+                }
+            }
+        }
+        out.into_iter().map(|(line, _)| line).collect()
     }
 
     /// A session's tabs as its sidebar lists them: all, or those whose name
@@ -1821,6 +1989,7 @@ impl Server {
         }
         let side = self.sidebar.side(session).clone();
         let cursor = side.cursor.clone().unwrap_or(Owner::Tab(here));
+        let cursor = self.notice_line_now(&cursor);
         // A kind's row holds the cursor while it is on any of its
         // notifications, as the Notifications window goes through them.
         let on_notice = notices.iter().position(|o| o.same_row(&cursor));
@@ -2932,13 +3101,51 @@ impl Server {
     /// A notification chosen with the Notifications window off: mission
     /// control's Notifications view, on it, doing nothing else; its menu,
     /// dismissing and every other choice are the view's and the window's.
-    fn sidebar_open_notice(&mut self, client: ClientId, owner: &Owner) {
+    pub(crate) fn sidebar_open_notice(&mut self, client: ClientId, owner: &Owner) {
+        self.sidebar_open_notice_as(client, owner, false);
+    }
+
+    /// As `sidebar_open_notice`, with `menu` a right click's: by source, a
+    /// line of several opens its heading's menu too.
+    pub(crate) fn sidebar_open_notice_as(&mut self, client: ClientId, owner: &Owner, menu: bool) {
+        let owner = &self.notice_line_now(owner);
         let Owner::Notice { source, id } = owner else {
             return;
         };
         let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
             return;
         };
+        // A source's line leads to the view on its heading, where its
+        // notifications are listed; its only one, to that one with its menu
+        // open, as a kind's line does.
+        if settings::is_on("notices_grouped") {
+            let group = notices::group_name(source);
+            let held: usize = self
+                .notice_lists()
+                .iter()
+                .filter(|(s, _)| notices::group_name(s) == group)
+                .map(|(_, items)| items.len())
+                .sum();
+            // A line gone since it was chosen (its last notification went)
+            // leads nowhere.
+            if held == 0 {
+                return;
+            }
+            self.sidebar_leave(&session);
+            // A source the view doesn't list (its notifications older
+            // than the history keeps) is led to by its newest's menu.
+            let listed = if held == 1 {
+                false
+            } else if menu {
+                self.mission_notice_group_menu(client, group)
+            } else {
+                self.mission_on_notice_group(client, group)
+            };
+            if !listed {
+                self.mission_on_notice(client, source, id);
+            }
+            return;
+        }
         // The landings made without asking and the landed tabs closed unseen
         // show the newest on their line (`notices::summary`), which is the
         // one it leads to.
@@ -3003,7 +3210,18 @@ impl Server {
                 Owner::Notice { source, .. } => source.as_str(),
                 _ => "",
             };
-            if let Some(view) = Self::notice_view(source) {
+            // By source the first is the newest's, whatever its kind: the
+            // first kind in the kinds' order, as before.
+            let view = if settings::is_on("notices_grouped") {
+                self.notice_lists()
+                    .into_iter()
+                    .map(|(s, _)| s)
+                    .min_by_key(|s| notices::rank(s))
+                    .and_then(Self::notice_view)
+            } else {
+                Self::notice_view(source)
+            };
+            if let Some(view) = view {
                 self.open_mission(client, view);
                 return;
             }
@@ -3165,6 +3383,32 @@ impl Server {
             }
         }
     }
+}
+
+/// A notification cursor read against what is listed (`owners`): with the
+/// window, one no longer listed (dismissed) gives way to the first still on
+/// its line, else the window's first, as the window shows it chosen
+/// (`notice_cursor`); without it, the line it is on names its newest, and
+/// a line gone gives way to the first.
+fn notice_line_in(owner: &Owner, owners: &[Owner]) -> Owner {
+    if !matches!(owner, Owner::Notice { .. }) {
+        return owner.clone();
+    }
+    if !settings::is_on("notice_list") {
+        return owners
+            .iter()
+            .find(|o| o.same_row(owner))
+            .or(owners.first())
+            .map_or_else(|| owner.clone(), Clone::clone);
+    }
+    if owners.contains(owner) {
+        return owner.clone();
+    }
+    owners
+        .iter()
+        .find(|o| o.same_row(owner))
+        .or(owners.first())
+        .map_or_else(|| owner.clone(), Clone::clone)
 }
 
 #[cfg(test)]

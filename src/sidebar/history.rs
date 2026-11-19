@@ -162,12 +162,16 @@ impl History {
     /// When a source's notification came, as its latest occurrence was
     /// kept: its own time, else when it was first seen.
     pub fn came(&self, source: &str, id: &str) -> Option<i64> {
-        self.days
-            .values()
-            .flatten()
-            .filter(|e| e.source == source && e.id == id && !e.replaced)
-            .map(|e| e.at)
-            .max()
+        // From the newest day back, stopping at the first that has it: an
+        // entry is kept under the day it came, so that day holds its
+        // newest, and a notification still shown is almost always today's.
+        // The sidebar asks this for each untimed one on every draw.
+        self.days.values().rev().find_map(|day| {
+            day.iter()
+                .filter(|e| e.source == source && e.id == id && !e.replaced)
+                .map(|e| e.at)
+                .max()
+        })
     }
 
     /// A source's list as it is now: a notification new to it (by its id)

@@ -1184,7 +1184,8 @@ fn a_click_on_a_slack_notification_shows_it_in_the_slack_view() {
     let col = line[..line.find(row_text).unwrap()].chars().count() + 2;
     let click = format!("\x1b[<0;{col};{}M\x1b[<0;{col};{}m", row + 1, row + 1);
     // A click chooses the row, and one on the chosen row opens its menu.
-    let chosen = |s: &[String]| s.iter().any(|l| l.contains("▌") && l.contains(row_text));
+    // (The row's own bar, not the one on the view's name beside it.)
+    let chosen = |s: &[String]| s.iter().any(|l| l.contains("│▌") && l.contains(row_text));
     if !chosen(&screen) {
         client.send(click.as_bytes());
         client.wait_for("the row chosen", |s| chosen(s));
@@ -2017,7 +2018,7 @@ fn a_notification_no_view_lists_is_whole_above_its_choices() {
 #[test]
 fn the_notifications_history_folds_old_days_and_its_menu_narrows_it_to_a_kind() {
     let mut server = TestServer::start();
-    settings(&server, json!({}));
+    settings(&server, json!({"notices_grouped": false}));
     let now = switchboard::util::now_ms();
     let entry = |source: &str, id: &str, title: &str, at: i64| {
         json!({ "source": source, "id": id, "at": at, "sidebar": "older",
@@ -2068,6 +2069,143 @@ fn the_notifications_history_folds_old_days_and_its_menu_narrows_it_to_a_kind() 
         "{}",
         screen.join("\n")
     );
+}
+
+// By default the notifications are listed by where they come from (board
+// 115): the sidebar a line a source, the view a heading a source, whose
+// menu folds it and dismisses every one of its notifications after a yes;
+// with Settings' "Group notifications by source" off, by day as before.
+#[test]
+fn notifications_are_grouped_by_source_a_heading_folding_and_dismissing_its_own() {
+    let notes = common::TempDir::new("sbng");
+    switchboard::util::write_atomic(notes.path().join("Plan.md"), "# Plan\n").unwrap();
+    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
+    std::fs::create_dir_all(&server.state).unwrap();
+    // A minute before the messages, so Slack stands first until a newer
+    // note comes.
+    let base = switchboard::util::now_ms();
+    let note_at = base - 60_000;
+    switchboard::util::write_atomic(
+        server.state.join("new-notes.json"),
+        json!([{ "path": "Plan.md", "title": "Plan", "source": "Fathom", "at": note_at }])
+            .to_string(),
+    )
+    .unwrap();
+    // The messages at the same moment the notes are dated from.
+    let now = base / 1000;
+    let message = |from: &str, ts: String| {
+        json!({
+            "kind": "dm", "channel": "D1", "from": from, "where": from,
+            "text": "hello", "ts": ts, "link": "https://slack.example/m",
+        })
+    };
+    switchboard::util::write_atomic(
+        server.state.join("slack.json"),
+        json!({ "checked": switchboard::util::now_ms(), "items": [
+            message("Ada", format!("{now}.000100")),
+            message("Grace", format!("{now}.000200")),
+        ] })
+        .to_string(),
+    )
+    .unwrap();
+    let on = json!({ "view_slack": true, "new_notes": true, "sidebar": true, "ux2": true });
+    settings(&server, on.clone());
+    let mut client = server.attach(200, 40);
+    client.wait_text("$");
+    // The sidebar: a line a source, with its count.
+    client.wait_text("Slack 2");
+    client.wait_text("Notes 1");
+    open(&mut client);
+    client.type_text("vnotifications\r");
+    client.wait_text("▾ SLACK 2");
+    let screen = client.wait_text("▾ NOTES 1");
+    assert!(
+        !screen.join("\n").contains("TODAY"),
+        "{}",
+        screen.join("\n")
+    );
+    // A click chooses the heading, where the cursor rests, and one on the
+    // chosen heading opens its menu, as Enter does.
+    let heading = |s: &[String]| {
+        s.iter()
+            .position(|l| l.contains("SLACK 2"))
+            .map(|row| (row, s[row].clone()))
+    };
+    let (row, line) = heading(&screen).unwrap();
+    let col = line[..line.find("SLACK").unwrap()].chars().count() + 2;
+    let click = format!("\x1b[<0;{col};{}M\x1b[<0;{col};{}m", row + 1, row + 1);
+    client.send(click.as_bytes());
+    client.wait_for("the heading chosen", |s| {
+        heading(s).is_some_and(|(_, l)| l.contains("│▌"))
+    });
+    // A newer note puts Notes first: the cursor stays on Slack's heading.
+    switchboard::util::write_atomic(notes.path().join("Later.md"), "# Later\n").unwrap();
+    // Whole, so the server never reads it half written.
+    switchboard::util::write_atomic(
+        server.state.join("new-notes.json"),
+        json!([
+            { "path": "Plan.md", "title": "Plan", "source": "Fathom", "at": note_at },
+            { "path": "Later.md", "title": "Later", "source": "Fathom", "at": note_at + 180_000 },
+        ])
+        .to_string(),
+    )
+    .unwrap();
+    client.wait_for("Notes first, Slack's heading still chosen", |s| {
+        let row = |words: &str| s.iter().position(|l| l.contains(words));
+        match (row("▾ NOTES 2"), heading(s)) {
+            (Some(notes), Some((slack, line))) => notes < slack && line.contains("│▌"),
+            _ => false,
+        }
+    });
+    client.type_text("\r");
+    let menu = client.wait_text("Dismiss every notification in Slack");
+    assert!(
+        menu.iter()
+            .any(|l| l.contains('›') && l.contains("Fold Slack")),
+        "folding first: {}",
+        menu.join("\n")
+    );
+    client.type_text("\r");
+    let folded = client.wait_text("▸ SLACK 2   folded");
+    assert!(
+        !folded.join("\n").contains("Grace"),
+        "{}",
+        folded.join("\n")
+    );
+    assert!(folded.join("\n").contains("Plan"), "{}", folded.join("\n"));
+    // Enter twice more unfolds it again.
+    client.type_text("\r");
+    pick(&mut client, "Unfold Slack");
+    client.wait_for("Slack unfolded", |s| {
+        s.iter().any(|l| l.contains("▾ SLACK 2")) && s.iter().any(|l| l.contains("Grace"))
+    });
+    // Dismissing every one of them asks first.
+    client.type_text("\r");
+    pick(&mut client, "Dismiss every notification in Slack");
+    client.wait_text("Dismiss 2 notifications in Slack?");
+    client.type_text("\r");
+    client.wait_text("Dismissed 2 notifications.");
+    // Kept in the history as dismissed, with nothing left to dismiss.
+    client.wait_for("both dismissed", |s| {
+        s.iter().filter(|l| l.contains("dismissed")).count() >= 2
+    });
+    client.type_text("\r");
+    let menu = client.wait_text("Fold Slack");
+    assert!(
+        !menu
+            .join("\n")
+            .contains("Dismiss every notification in Slack"),
+        "{}",
+        menu.join("\n")
+    );
+    client.type_text("\x1b");
+    // Off: by day, with a keycap for each kind.
+    let mut off = on;
+    off["notices_grouped"] = json!(false);
+    settings(&server, off);
+    let screen = client.wait_text("TODAY");
+    let all = screen.join("\n");
+    assert!(all.contains("Slack 2") && !all.contains("▾"), "{all}");
 }
 
 #[test]

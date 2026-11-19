@@ -762,7 +762,7 @@ fn the_cursor_onto_a_notification_brings_the_notifications_window_to_the_front()
     let notes = common::TempDir::new("sbnw");
     std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
     let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
-    settings(&server, json!({}));
+    settings(&server, json!({"notices_grouped": false}));
     std::fs::create_dir_all(&server.state).unwrap();
     std::fs::write(
         server.state.join("new-notes.json"),
@@ -856,7 +856,7 @@ fn two_kinds_of_notification(settings: &str) -> (TestServer, common::TempDir) {
         settings,
     );
     std::fs::create_dir_all(&server.state).unwrap();
-    std::fs::write(
+    switchboard::util::write_atomic(
         server.state.join("new-notes.json"),
         json!([{ "path": "Plan.md", "title": "Plan", "source": "Fathom", "at": 1 }]).to_string(),
     )
@@ -868,7 +868,7 @@ fn two_kinds_of_notification(settings: &str) -> (TestServer, common::TempDir) {
             "text": text, "ts": ts, "link": "https://slack.example/m",
         })
     };
-    std::fs::write(
+    switchboard::util::write_atomic(
         server.state.join("slack.json"),
         json!({ "checked": switchboard::util::now_ms(), "items": [
             message("Ada", "first-message", format!("{now}.000100")),
@@ -890,7 +890,9 @@ fn wait_chosen(client: &mut TestClient, chosen: &str) {
 
 #[test]
 fn j_and_k_in_the_sidebar_step_over_the_notifications_a_kind_at_a_time() {
-    let (server, _notes) = two_kinds_of_notification(r#"{"notifications": false, "tips": false}"#);
+    let (server, _notes) = two_kinds_of_notification(
+        r#"{"notices_grouped": false, "notifications": false, "tips": false}"#,
+    );
     let mut client = server.attach(140, 36);
     client.wait_text("2 new on Slack");
     client.wait_text("New note: Plan");
@@ -926,7 +928,9 @@ fn j_and_k_in_the_sidebar_step_over_the_notifications_a_kind_at_a_time() {
 
 #[test]
 fn the_wheel_past_the_last_tab_steps_over_the_notifications_as_j_does() {
-    let (server, _notes) = two_kinds_of_notification(r#"{"notifications": false, "tips": false}"#);
+    let (server, _notes) = two_kinds_of_notification(
+        r#"{"notices_grouped": false, "notifications": false, "tips": false}"#,
+    );
     let mut client = server.attach(140, 36);
     client.wait_text("2 new on Slack");
     client.wait_text("New note: Plan");
@@ -948,8 +952,9 @@ fn the_wheel_past_the_last_tab_steps_over_the_notifications_as_j_does() {
 
 #[test]
 fn with_ux2_j_from_the_last_kind_of_notification_goes_onto_the_first_tab() {
-    let (server, _notes) =
-        two_kinds_of_notification(r#"{"notifications": false, "tips": false, "ux2": true}"#);
+    let (server, _notes) = two_kinds_of_notification(
+        r#"{"notices_grouped": false, "notifications": false, "tips": false, "ux2": true}"#,
+    );
     let mut client = server.attach(140, 36);
     client.wait_text("2 new on Slack");
     client.wait_text("New note: Plan");
@@ -975,6 +980,99 @@ fn with_ux2_j_from_the_last_kind_of_notification_goes_onto_the_first_tab() {
     });
 }
 
+// By source (board 117), as they are by default: a line a source with its
+// count and its newest one's words, which leads to mission control's
+// Notifications view on that source's heading.
+#[test]
+fn with_ux2_the_notifications_are_a_line_a_source_which_leads_to_its_heading() {
+    let (server, _notes) = two_kinds_of_notification(
+        r#"{"notifications": false, "tips": false, "ux2": true, "sidebar_wrap": false, "notice_list": false}"#,
+    );
+    // The note written now, so the history's two weeks keep it listed.
+    switchboard::util::write_atomic(
+        server.state.join("new-notes.json"),
+        json!([{ "path": "Plan.md", "title": "Plan", "source": "Fathom",
+            "at": switchboard::util::now_ms() }])
+        .to_string(),
+    )
+    .unwrap();
+    let mut client = server.attach(140, 36);
+    let screen = client.wait_for("a line a source", |s| {
+        s.iter().any(|l| l.contains("Slack 2")) && s.iter().any(|l| l.contains("Notes 1"))
+    });
+    let all = screen.join("\n");
+    assert!(
+        !all.contains("2 new on Slack") && !all.contains("New note: Plan"),
+        "{all}"
+    );
+    assert!(
+        screen
+            .iter()
+            .any(|l| l.contains("Notes 1") && l.contains("Plan")),
+        "its newest one's words: {all}"
+    );
+    // k from the only tab goes up past its group's heading onto the
+    // sources' lines. Enter on Slack's, which has two, opens the view on its
+    // heading.
+    let onto = |client: &mut TestClient, words: &str| {
+        for _ in 0..6 {
+            let before = client.screen();
+            if before
+                .iter()
+                .any(|l| l.starts_with('▌') && l.contains(words))
+            {
+                return;
+            }
+            client.type_text("k");
+            client.wait_for("the cursor to move", |s| s != before.as_slice());
+        }
+        panic!("the cursor never reached {words}");
+    };
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    onto(&mut client, "Slack 2");
+    client.type_text("\r");
+    let screen = client.wait_for("the view on Slack's heading", |s| {
+        s.iter().any(|l| l.contains("│▌ ▾ SLACK 2"))
+    });
+    assert!(
+        screen.iter().any(|l| l.contains("▾ NOTES 1")),
+        "{}",
+        screen.join("\n")
+    );
+    // A source's only notification is led to itself, its menu open.
+    client.type_text("\x1b");
+    client.wait_text("Notes 1");
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused again", focused);
+    onto(&mut client, "Notes 1");
+    client.type_text("\r");
+    client.wait_text("Open it in Notes");
+    // Folded, its source is unfolded again for it.
+    client.type_text("\x1b");
+    client.wait_for("the menu closed", |s| {
+        !s.iter().any(|l| l.contains("Open it in Notes"))
+    });
+    client.type_text("k");
+    client.wait_for("Notes' heading chosen", |s| {
+        s.iter().any(|l| l.contains("│▌ ▾ NOTES 1"))
+    });
+    client.type_text("\r");
+    client.wait_text("Fold Notes");
+    client.type_text("\r");
+    client.wait_text("▸ NOTES 1   folded");
+    client.type_text("\x1b");
+    client.wait_text("Notes 1");
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused once more", focused);
+    onto(&mut client, "Notes 1");
+    client.type_text("\r");
+    client.wait_for("Notes unfolded, its note's menu open", |s| {
+        s.iter().any(|l| l.contains("Open it in Notes"))
+            && s.iter().any(|l| l.contains("▾ NOTES 1"))
+    });
+}
+
 #[test]
 fn with_ux2_k_from_the_first_tab_goes_up_onto_the_notifications() {
     let notes = common::TempDir::new("sbnu");
@@ -983,7 +1081,7 @@ fn with_ux2_k_from_the_first_tab_goes_up_onto_the_notifications() {
     // a later setting would be the classic sidebar's, below the tab.
     let server = TestServer::start_with_env_and_settings(
         &[("NOTES_DIR", notes.path().to_str().unwrap())],
-        r#"{"notifications": false, "tips": false, "ux2": true, "sidebar_wrap": false}"#,
+        r#"{"notices_grouped": false, "notifications": false, "tips": false, "ux2": true, "sidebar_wrap": false}"#,
     );
     std::fs::create_dir_all(&server.state).unwrap();
     std::fs::write(
@@ -1096,7 +1194,9 @@ fn the_wheel_stops_at_the_last_tab_while_the_keys_wrap() {
 
 #[test]
 fn j_from_the_last_kind_of_notification_goes_round_to_the_first_tab() {
-    let (server, _notes) = two_kinds_of_notification(r#"{"notifications": false, "tips": false}"#);
+    let (server, _notes) = two_kinds_of_notification(
+        r#"{"notices_grouped": false, "notifications": false, "tips": false}"#,
+    );
     let mut client = server.attach(140, 36);
     client.wait_text("2 new on Slack");
     client.wait_text("New note: Plan");
@@ -1131,8 +1231,9 @@ fn j_from_the_last_kind_of_notification_goes_round_to_the_first_tab() {
 // heading onto the notifications above it, a flick at a time.
 #[test]
 fn with_ux2_the_wheel_goes_up_past_the_first_heading_onto_the_notifications() {
-    let (server, _notes) =
-        two_kinds_of_notification(r#"{"notifications": false, "tips": false, "ux2": true}"#);
+    let (server, _notes) = two_kinds_of_notification(
+        r#"{"notices_grouped": false, "notifications": false, "tips": false, "ux2": true}"#,
+    );
     let mut client = server.attach(140, 36);
     client.wait_text("2 new on Slack");
     client.wait_text("New note: Plan");
@@ -1155,8 +1256,9 @@ fn with_ux2_the_wheel_goes_up_past_the_first_heading_onto_the_notifications() {
 
 #[test]
 fn with_ux2_j_from_the_last_tab_goes_round_to_the_first_kind_of_notification() {
-    let (server, _notes) =
-        two_kinds_of_notification(r#"{"notifications": false, "tips": false, "ux2": true}"#);
+    let (server, _notes) = two_kinds_of_notification(
+        r#"{"notices_grouped": false, "notifications": false, "tips": false, "ux2": true}"#,
+    );
     let mut client = server.attach(140, 36);
     client.wait_text("2 new on Slack");
     client.wait_text("New note: Plan");
@@ -1297,7 +1399,7 @@ fn a_tab_whose_work_landed_straight_on_a_branch_is_under_merged_while_in_its_mai
 #[test]
 fn a_slack_message_s_menu_in_the_notifications_window_is_the_slack_view_s() {
     let server = TestServer::start();
-    settings(&server, json!({}));
+    settings(&server, json!({"notices_grouped": false}));
     std::fs::create_dir_all(&server.state).unwrap();
     // Sent now: a dismissal is kept two days past its message.
     let ts = format!("{}.000100", switchboard::util::now_ms() / 1000);
@@ -1876,7 +1978,7 @@ fn a_right_press_in_the_notifications_window_opens_a_menu_and_on_a_tab_peeks() {
     let notes = common::TempDir::new("sbrw");
     std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
     let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
-    settings(&server, json!({}));
+    settings(&server, json!({"notices_grouped": false}));
     std::fs::create_dir_all(&server.state).unwrap();
     std::fs::write(
         server.state.join("new-notes.json"),
@@ -2136,7 +2238,7 @@ fn m_and_shift_f10_in_the_sidebar_open_the_chosen_rows_menu() {
     let notes = common::TempDir::new("sbmk");
     std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
     let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
-    settings(&server, json!({}));
+    settings(&server, json!({"notices_grouped": false}));
     std::fs::create_dir_all(&server.state).unwrap();
     std::fs::write(
         server.state.join("new-notes.json"),
@@ -2202,7 +2304,7 @@ fn a_right_press_in_the_sidebar_opens_a_menu_by_it() {
     let notes = common::TempDir::new("sbrm");
     std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
     let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
-    settings(&server, json!({}));
+    settings(&server, json!({"notices_grouped": false}));
     std::fs::create_dir_all(&server.state).unwrap();
     std::fs::write(
         server.state.join("new-notes.json"),
@@ -2653,7 +2755,10 @@ fn with_ux2_the_notifications_window_on_the_trail_is_named_by_the_buttons_and_th
     let notes = common::TempDir::new("sbtw");
     std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
     let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
-    settings(&server, json!({"ux2": true, "sidebar": true}));
+    settings(
+        &server,
+        json!({"ux2": true, "sidebar": true, "notices_grouped": false}),
+    );
     std::fs::create_dir_all(&server.state).unwrap();
     std::fs::write(
         server.state.join("new-notes.json"),
@@ -2973,7 +3078,7 @@ fn m_o_goes_to_the_notifications() {
     )
     .unwrap();
     let mut client = server.attach(140, 36);
-    client.wait_text("● New note: Plan");
+    client.wait_text("● Notes 1  from Fathom · Plan");
 
     client.type_text(&format!("{ALT}O"));
     wait_list(&server, "the Notifications window in front", |l| {
@@ -3024,14 +3129,13 @@ fn without_the_window_m_o_moves_the_sidebar_cursor_onto_the_first_notification()
     )
     .unwrap();
     let mut client = server.attach(140, 36);
-    client.wait_text("● New note: Plan");
+    client.wait_text("● Notes 1  from Fathom · Plan");
 
     client.type_text(&format!("{ALT}O"));
     let list = wait_list(&server, "the sidebar focused", focused);
     assert_eq!(notices_tab(&list), None, "no window opened");
     client.wait_for("the cursor on the notification", |s| {
-        s.iter()
-            .any(|l| l.contains("▌") && l.contains("New note: Plan"))
+        s.iter().any(|l| l.contains("▌") && l.contains("Notes 1"))
     });
 }
 

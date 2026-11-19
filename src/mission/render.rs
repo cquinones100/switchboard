@@ -3078,15 +3078,25 @@ fn when(item: &Item, now_secs: i64) -> String {
 }
 
 /// When a notification came, for its row's end: the clock time alone
-/// under a day's heading (the history), else the date and the time; a
+/// under a day's heading (the history), with its day under a source's
+/// heading (`history::grouped`), else the date and the time; a
 /// meeting still to come says when it starts.
-fn notice_when(item: &Item, now: &jiff::Zoned) -> String {
+fn notice_when(item: &Item, now: &jiff::Zoned, dated: bool) -> String {
     let Some(ms) = item.time else {
         return String::new();
     };
     let to_come = ms.div_euclid(1000) > now.timestamp().as_second();
-    if super::history::notice_of(item).is_some() && !to_come {
-        crate::ui::when::clock(ms, now)
+    // A kept row, or a live one under a source's heading.
+    if (super::history::notice_of(item).is_some() || item.group.is_some()) && !to_come {
+        // Under its source's heading, which names no day, its day too:
+        // with its time where the list has room, else alone.
+        if item.group.is_some() && dated {
+            crate::ui::when::short(ms, now)
+        } else if item.group.is_some() {
+            crate::ui::when::compact(ms, now)
+        } else {
+            crate::ui::when::clock(ms, now)
+        }
     } else {
         crate::ui::when::notice(ms, now)
     }
@@ -3342,7 +3352,7 @@ fn list(
     let when_w = if view.id == ViewId::Notifications {
         shown
             .iter()
-            .map(|(_, i)| width(&notice_when(i, &now)))
+            .map(|(_, i)| width(&notice_when(i, &now, cols >= DATED_FROM)))
             .max()
             .unwrap_or(0)
             .max(5)
@@ -3378,6 +3388,33 @@ fn list(
             spot: Spot::Index(index as isize),
         });
         let mut row = Row::default();
+        // A source's heading in the Notifications view, open or folded,
+        // and a sub-heading under one.
+        if view.id == ViewId::Notifications
+            && (super::history::group_heading(item).is_some() || super::history::is_part(item))
+        {
+            let count = item
+                .data
+                .get("count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            if super::history::is_part(item) {
+                row.put(format!("   {}", item.title), fg(theme.dim));
+            } else {
+                let folded = super::history::folded(item);
+                row.put(if folded { " ▸ " } else { " ▾ " }, fg(theme.dim))
+                    .put(item.title.to_uppercase(), bold(theme.dim));
+            }
+            // Under a filter its rows are the matches, not its count.
+            if !super::history::under_filter(item) {
+                row.put(format!(" {count}"), fg(theme.faint));
+            }
+            if super::history::folded(item) {
+                row.put("   folded", fg(theme.faint));
+            }
+            lines.push(row.line(cols, fill));
+            continue;
+        }
         if views::is_header(item) {
             let count = item
                 .data
@@ -3485,7 +3522,7 @@ fn list(
             .put("  ", Style::new())
             .put(detail, fg(theme.dim));
         let at = if view.id == ViewId::Notifications {
-            notice_when(item, &now)
+            notice_when(item, &now, cols >= DATED_FROM)
         } else {
             when(item, snap.now_secs)
         };
@@ -5759,6 +5796,14 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool, resizes: bool) -> Vec<(
 /// a dashed rule; then each day's label and its notifications, a row each:
 /// its time, its kind's mark, its title (bright while the sidebar shows
 /// it), what it led to, and whether the sidebar still shows it.
+///
+/// By where they come from (`notices_grouped`, board 115) the headings take
+/// the keycaps' and the days' place: each source's, ▾ open or ▸ folded with
+/// its count, which the cursor rests on; a sub-heading dim under it where it
+/// is split; and each row's time with its day once it isn't today's.
+/// The narrowest the grouped board says a row's day with its time.
+const DATED_FROM: usize = 72;
+
 #[allow(clippy::too_many_arguments)]
 fn notice_board(
     view: &View,
@@ -5773,10 +5818,11 @@ fn notice_board(
     use crate::sidebar::history::Kind;
     let theme = &m.snap.theme;
     let caps = m.snap.caps;
+    let grouped = m.snap.notices_grouped;
     // A chip for each kind, which a click shows alone (as `m`'s menu does).
     let mut spans = vec![Span::raw(" ")];
     let mut x = 1;
-    for key in 1..=7 {
+    for key in (1..=7).filter(|_| !grouped) {
         let name = Kind::of_key(key).map_or("All", Kind::name);
         let lit = m.notice_kind == key;
         let under = m.hover == Some(Spot::Kind(key)) || m.focus == Some(Focus::Kind(key));
@@ -5820,7 +5866,9 @@ fn notice_board(
         spans: kit::fit(spans, cols, Style::new()),
         fill: None,
     });
-    lines.push(Row::default().line(cols, None));
+    if !grouped {
+        lines.push(Row::default().line(cols, None));
+    }
     // The rows a column narrower while the scroll bar is beside them: the
     // heads and their rule take the two lines before them.
     let items = &view.data.items;
@@ -5832,9 +5880,17 @@ fn notice_board(
         cols
     };
     // The column heads.
-    const WHEN: usize = 9;
+    // Wider where a row's time names its day too ("Nov 13 12:05 PM").
+    // In a narrow cell (several views at once) the clock time alone, so
+    // the title keeps its room.
+    let dated = grouped && cols >= DATED_FROM;
+    let when: usize = if dated {
+        crate::ui::when::SHORT_WIDTH + 1
+    } else {
+        9
+    };
     const SIDEBAR: usize = 10;
-    let rest = cols.saturating_sub(1 + WHEN + 3 + SIDEBAR);
+    let rest = cols.saturating_sub(1 + when + 3 + SIDEBAR);
     let led_w = (rest * 2 / 5).min(36);
     let what_w = rest.saturating_sub(led_w + 2);
     let head = |text: &str| Span::styled(text.to_uppercase(), Tone::Dim.bold(theme));
@@ -5843,7 +5899,7 @@ fn notice_board(
         spans: kit::fit(
             vec![
                 pad(2),
-                head(&format!("{:>w$}", "When", w = WHEN - 2)),
+                head(&format!("{:>w$}", "When", w = when - 2)),
                 pad(3),
                 head(&text::pad("What", what_w)),
                 pad(2),
@@ -5886,12 +5942,45 @@ fn notice_board(
             x1: cols.saturating_sub(1) as u16,
             spot: Spot::Index(index as isize),
         });
-        let spans: Vec<Span<'static>> = if views::is_header(item) {
-            let count = item
-                .data
+        let count_of = |item: &Item| {
+            item.data
                 .get("count")
                 .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0) as usize;
+                .unwrap_or(0)
+        };
+        let spans: Vec<Span<'static>> = if let Some(name) = super::history::group_heading(item) {
+            let folded = super::history::folded(item);
+            let mut spans = vec![
+                Span::styled(if folded { " ▸ " } else { " ▾ " }, Tone::Dim.style(theme)),
+                Span::styled(
+                    name.to_uppercase(),
+                    if chosen {
+                        Tone::Text.bold(theme)
+                    } else {
+                        Tone::Dim.bold(theme)
+                    },
+                ),
+                // Under a filter its rows are the matches, not its count.
+                Span::styled(
+                    if super::history::under_filter(item) {
+                        String::new()
+                    } else {
+                        format!(" {}", count_of(item))
+                    },
+                    Tone::Dim.style(theme),
+                ),
+            ];
+            if folded {
+                spans.push(Span::styled("   folded", Tone::Faint.style(theme)));
+            }
+            spans
+        } else if super::history::is_part(item) {
+            vec![
+                Span::styled(format!("   {}", item.title), Tone::Dim.style(theme)),
+                Span::styled(format!("  {}", count_of(item)), Tone::Faint.style(theme)),
+            ]
+        } else if views::is_header(item) {
+            let count = count_of(item) as usize;
             kit::label(
                 &item.title,
                 Tone::Dim,
@@ -5913,11 +6002,20 @@ fn notice_board(
             let now = jiff::Timestamp::from_second(m.snap.now_secs)
                 .unwrap_or_default()
                 .to_zoned(m.snap.tz.clone());
-            // The clock time alone, a meeting to come's start too, so it
-            // fits the column.
+            // Its day and time by source, its day alone in a narrow cell,
+            // the clock time alone under its day's heading; a meeting to
+            // come's start too, so it fits the column.
             let at = item
                 .time
-                .map(|t| crate::ui::when::clock(t, &now))
+                .map(|t| {
+                    if dated {
+                        crate::ui::when::short(t, &now)
+                    } else if grouped {
+                        crate::ui::when::compact(t, &now)
+                    } else {
+                        crate::ui::when::clock(t, &now)
+                    }
+                })
                 .unwrap_or_default();
             let (source, _) = super::choices::notice_of(item);
             let mark = match crate::sidebar::history::kind_of(&source) {
@@ -5937,7 +6035,7 @@ fn notice_board(
             };
             let state = if shown { Tone::Accent } else { Tone::Faint };
             vec![
-                Span::styled(format!("{at:>w$} ", w = WHEN - 1), Tone::Faint.style(theme)),
+                Span::styled(format!("{at:>w$} ", w = when - 1), Tone::Faint.style(theme)),
                 kit::mark(mark, m.snap.frame, theme),
                 Span::raw(" "),
                 Span::styled(text::pad(&text::cut(&item.title, what_w), what_w), title),
@@ -6355,11 +6453,29 @@ pub(super) fn bar(m: &Mission, cols: usize, hits: &mut Vec<HitBox>) -> Vec<Line>
         header(m, bar, cols, &mut lines, hits);
     } else {
         let mut names: Vec<(String, usize)> = vec![("Tabs".into(), snap.tabs.len())];
-        names.extend(
-            snap.views
-                .iter()
-                .map(|v| (v.title.clone(), v.data.items.len())),
-        );
+        names.extend(snap.views.iter().map(|v| {
+            // Notifications by source: its notifications, not its
+            // headings or what a fold hides.
+            let n = match v.id {
+                ViewId::Notifications => {
+                    let items = &v.data.items;
+                    let by_source = items
+                        .iter()
+                        .any(|i| super::history::group_heading(i).is_some());
+                    super::history::held(items).unwrap_or(if by_source {
+                        // Under a filter, the rows it matched.
+                        items
+                            .iter()
+                            .filter(|i| !views::is_header(i) && !super::history::is_part(i))
+                            .count()
+                    } else {
+                        items.len()
+                    })
+                }
+                _ => v.data.items.len(),
+            };
+            (v.title.clone(), n)
+        }));
         // A bar too wide for the screen with every count in it keeps only the
         // chosen view's count.
         let prefix = " MISSION CONTROL  ";
@@ -6835,6 +6951,7 @@ mod tests {
             cell: None,
             diagrams: Default::default(),
             notice_counts: None,
+            notices_grouped: false,
             photos: Default::default(),
             calendar_next: None,
             calendar_notes: Vec::new(),
@@ -10573,6 +10690,127 @@ mod tests {
         let text = texts(&screen(&m, 140, 30).0).join("\n");
         assert!(text.contains("PR 12345 merged"), "{text}");
         assert!(!text.contains("DM Ada"), "{text}");
+    }
+
+    // Board 115: a heading per source in place of the keycaps and the days.
+    #[test]
+    fn with_ux2_notifications_grouped_are_under_their_sources_headings() {
+        use crate::sidebar::history::{Entry, Sidebar};
+        const DAY: i64 = 86_400_000;
+        let now = rules().now_ms;
+        let entry = |source: &str, id: &str, title: &str, at: i64, place: &str| Entry {
+            source: source.into(),
+            id: id.into(),
+            at,
+            item: Item::new(id, title).data(serde_json::json!({ "where": place })),
+            sidebar: Sidebar::Shown,
+            led_to: None,
+            replaced: false,
+        };
+        let mut all: Vec<Entry> = (0..4)
+            .map(|i| {
+                entry(
+                    "slack",
+                    &format!("g{i}"),
+                    "In general",
+                    now - DAY - i,
+                    "#general",
+                )
+            })
+            .collect();
+        all.push(entry("slack", "d1", "DM Ada", now - 2 * DAY, "Ada"));
+        all.push(entry("slack", "d2", "DM Ada again", now - 9 * DAY, "Ada"));
+        all.push(entry("autolanded", "l", "Landed abc1234", now, ""));
+        all.push(entry(
+            "inbox",
+            "i",
+            "A ticket assigned to you",
+            now - 3 * DAY,
+            "",
+        ));
+        let refs: Vec<&Entry> = all.iter().collect();
+        let tz = jiff::tz::TimeZone::UTC;
+        let today = crate::util::local_at_ms(now)
+            .with_time_zone(tz.clone())
+            .date();
+        let rows = |folded: &[&str]| {
+            crate::mission::history::grouped(
+                all.iter().map(crate::mission::history::row_of).collect(),
+                &folded.iter().map(|f| f.to_string()).collect(),
+                false,
+            )
+        };
+        let mut m = mission(
+            Vec::new(),
+            vec![list_view(
+                ViewId::Notifications,
+                "Notifications",
+                rows(&["Inbox"]),
+            )],
+        );
+        m.snap.rules.ux2 = true;
+        m.snap.notices_grouped = true;
+        m.snap.notice_counts = Some(crate::mission::history::counts(&refs, today, &tz));
+        m.view = 1;
+        let (lines, hits) = screen(&m, 140, 30);
+        let text = texts(&lines);
+        let all_text = text.join("\n");
+        let at = |want: &str| {
+            text.iter()
+                .position(|l| l.contains(want))
+                .unwrap_or_else(|| panic!("{want}: {all_text}"))
+        };
+        // The sources by their newest, Slack split by channel and DM.
+        let order = [
+            "▾ AUTOPILOT 1",
+            "Landed abc1234",
+            "▾ SLACK 6",
+            "#general  4",
+            "In general",
+            "Ada  2",
+            "DM Ada",
+            "▸ INBOX 1   folded",
+        ];
+        let places: Vec<usize> = order.iter().map(|w| at(w)).collect();
+        assert!(places.windows(2).all(|w| w[0] < w[1]), "{all_text}");
+        assert!(!all_text.contains("A ticket assigned to you"), "{all_text}");
+        // No keycaps and no days; the week's count stays.
+        assert!(!hits.iter().any(|h| matches!(h.spot, Spot::Kind(_))));
+        for gone in ["All 8", "TODAY", "YESTERDAY"] {
+            assert!(!all_text.contains(gone), "{gone}: {all_text}");
+        }
+        assert!(all_text.contains("in the sidebar"), "{all_text}");
+        // A row says its day once it isn't today's.
+        assert!(text[at("In general")].contains("Yest "), "{all_text}");
+        assert!(text[at("DM Ada again")].contains("Jan 6 "), "{all_text}");
+        // A narrow cell keeps the title its room: the day alone.
+        let narrow = texts(&screen(&m, 60, 30).0);
+        let general = narrow
+            .iter()
+            .find(|l| l.contains("In general"))
+            .cloned()
+            .unwrap_or_default();
+        assert!(general.contains("Yest "), "{narrow:?}");
+        assert!(
+            !general.contains(" AM") && !general.contains(" PM"),
+            "{narrow:?}"
+        );
+        // Without UX 2.0 the plain list says the day the same way.
+        m.snap.rules.ux2 = false;
+        let plain = texts(&screen(&m, 140, 30).0);
+        let row = |title: &str| {
+            plain
+                .iter()
+                .find(|l| l.contains(title))
+                .cloned()
+                .unwrap_or_default()
+        };
+        assert!(row("In general").contains("Yest "), "{plain:?}");
+        assert!(row("DM Ada again").contains("Jan 6 "), "{plain:?}");
+        assert!(plain.iter().any(|l| l.contains("▾ SLACK 6")), "{plain:?}");
+        for l in &lines {
+            assert_eq!(width(&l.text()), 140, "{:?}", l.text());
+        }
     }
 
     #[test]

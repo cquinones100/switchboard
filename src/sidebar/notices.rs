@@ -94,6 +94,176 @@ pub const NO_VIEW: [&str; 7] = [
     "behind",
 ];
 
+/// Where a kind of notification comes from, the heading it is listed under
+/// with Settings' "Group notifications by source" on (`notices_grouped`,
+/// board 115): its view's name where a view lists it (`view_of`), else its
+/// app's: Calendar for what changed on the calendar, Notes for a note
+/// written for you, Autopilot for what it said and the landings it tells of,
+/// Switchboard for a suggestion and main ahead of the running build. A new
+/// kind names its group here, which a test holds every kind of `ORDER` to.
+pub fn group_of(source: &str) -> Option<&'static str> {
+    match source {
+        "slack" => Some("Slack"),
+        "inbox" => Some("Inbox"),
+        "ci" => Some("CI"),
+        "prs" => Some("PRs"),
+        "routines" => Some("Routines"),
+        "meeting" | "calendar" => Some("Calendar"),
+        "new-notes" => Some("Notes"),
+        "autopilot" | "autolanded" | "landed" => Some("Autopilot"),
+        "habits" | "behind" => Some("Switchboard"),
+        _ => None,
+    }
+}
+
+/// The group a notification is listed under: its kind's, and Switchboard
+/// for a kind that names none.
+pub fn group_name(source: &str) -> &'static str {
+    group_of(source).unwrap_or("Switchboard")
+}
+
+/// What a group of more than `SPLIT_OVER` is split by, where a notification
+/// has it: a Slack message's channel or DM, a PR's and a failing default
+/// branch's repository (by its owner too, so a fork and its upstream stay
+/// apart), a routine's name.
+pub fn part_of(source: &str, item: &Item) -> Option<String> {
+    let text = |pointer: &str| {
+        item.data
+            .pointer(pointer)
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.is_empty())
+    };
+    match source {
+        // By the conversation, whose name a group DM's rows may each say
+        // their own way.
+        // A reminder is in no conversation.
+        "slack" if text("/kind") == Some("reminder") => None,
+        "slack" => text("/message/channel")
+            .or_else(|| text("/where"))
+            .map(str::to_string),
+        "prs" => text("/pr/repo").map(str::to_string),
+        "ci" => text("/mainCi/repo").map(str::to_string),
+        "routines" => item.title.strip_prefix("Routine ").map(str::to_string),
+        _ => None,
+    }
+}
+
+/// What a notification calls its part: a Slack message's place by name,
+/// else the part itself.
+pub fn part_name(source: &str, item: &Item) -> Option<String> {
+    match source {
+        "slack" => item
+            .data
+            .pointer("/where")
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .or_else(|| part_of(source, item)),
+        _ => part_of(source, item),
+    }
+}
+
+/// A part's name as its sub-heading says it: a repository's without its
+/// owner, unless another part of the group has the same name without it.
+pub fn part_label(source: &str, part: &str, others: &[&str]) -> String {
+    let short = |full: &str| full.rsplit('/').next().unwrap_or(full).to_string();
+    if !matches!(source, "prs" | "ci") {
+        return part.to_string();
+    }
+    let name = short(part);
+    if others.iter().any(|o| *o != part && short(o) == name) {
+        part.to_string()
+    } else {
+        name
+    }
+}
+
+/// How many notifications a group holds before it is split by `part_of`.
+pub const SPLIT_OVER: usize = 5;
+
+/// A notification's words on its group's line in the sidebar: its title, a
+/// Slack message's without its mark.
+pub fn words(source: &str, item: &Item) -> String {
+    match source {
+        // A Slack reminder's own words, which its title doesn't hold.
+        "slack"
+            if item.data.get("kind").and_then(serde_json::Value::as_str) == Some("reminder")
+                && !item.detail.is_empty() =>
+        {
+            format!("Reminder · {}", item.detail)
+        }
+        // Who wrote where, then what they wrote, so two messages from the
+        // same person in one conversation read apart.
+        "slack" => {
+            let who = item
+                .title
+                .split_once(char::is_whitespace)
+                .map_or(item.title.clone(), |(_, rest)| {
+                    rest.trim_start().to_string()
+                });
+            if item.detail.is_empty() {
+                who
+            } else {
+                format!("{who} · {}", item.detail)
+            }
+        }
+        // A failing default branch's repository and why first, its title
+        // after, so a narrow line keeps them; a routine's why after its
+        // name.
+        "ci" if !item.detail.is_empty() => format!("{} · {}", item.detail, item.title),
+        // A meeting about to start and the tickets it names, without the
+        // hint that Enter joins it, which a source's line doesn't do.
+        "meeting" if !item.detail.is_empty() => {
+            format!("{} · {}", without_join_hint(&item.title), item.detail)
+        }
+        "meeting" => without_join_hint(&item.title),
+        // A note written for you and what wrote it, a landing made without
+        // asking, as their kinds' lines said them, first so a narrow line
+        // keeps them.
+        "new-notes" => {
+            let from = item
+                .data
+                .get("source")
+                .and_then(serde_json::Value::as_str)
+                .filter(|s| !s.is_empty());
+            match from {
+                Some(from) => format!("from {from} · {}", item.title),
+                None => item.title.clone(),
+            }
+        }
+        // Its hash and item first, as board 117 draws it, the qualifier
+        // after them where the line has room.
+        "autolanded" => format!("{} · without asking", item.title),
+        // A PR's news and its title, as its kind's line had them.
+        "prs" if !item.detail.is_empty() => format!("{} · {}", item.title, item.detail),
+        // Who did what first, as its kind's line had it, then the ticket.
+        "inbox" if !item.detail.is_empty() => {
+            let what = item.detail.split(": ").next().unwrap_or("");
+            format!("{what} · {}", item.title)
+        }
+        "routines" if !item.detail.is_empty() => {
+            format!("{} · {}", item.title, item.detail)
+        }
+        _ => item.title.clone(),
+    }
+}
+
+/// A meeting's title without the hint its kind's line gives that Enter
+/// joins its call.
+pub fn without_join_hint(title: &str) -> String {
+    title.trim_end_matches(" · ↵ joins").to_string()
+}
+
+/// The row of the sidebar a kind of notification is on: its group's with
+/// `notices_grouped` on, else its own.
+pub fn row_of(source: &str) -> &str {
+    if crate::settings::is_on("notices_grouped") {
+        group_name(source)
+    } else {
+        source
+    }
+}
+
 /// The id a notification's item has in its view, from the notification's
 /// own: the meeting about to start by its event's (`calendar::meeting_notice`),
 /// a PR's news by its PR's on the board (`prnotices::notice`), the rest
@@ -607,6 +777,12 @@ mod tests {
             ("New note: Plan".into(), "from Fathom".into())
         );
         assert_eq!(summary("new-notes", &[note.clone(), note]).0, "2 new notes");
+        let note = Item::new("n", "Plan").data(serde_json::json!({ "source": "Fathom" }));
+        assert_eq!(words("new-notes", &note), "from Fathom · Plan");
+        assert_eq!(
+            words("autolanded", &Item::new("a", "Landed abc1234")),
+            "Landed abc1234 · without asking"
+        );
         let inbox = Item::new("i", "AB-1 Fix it").detail("Ada commented: looks good");
         assert_eq!(
             summary("inbox", &[inbox]),
@@ -629,6 +805,17 @@ mod tests {
                 "{source} names its view in view_of, or is in NO_VIEW"
             );
         }
+        // And where it comes from: its view's name, else its app's.
+        for source in ORDER {
+            assert!(group_of(source).is_some(), "{source} names its group");
+            if let Some(view) = view_of(source) {
+                assert_eq!(group_of(source), Some(view.title()));
+            }
+        }
+        assert_eq!(group_of("meeting"), group_of("calendar"));
+        assert_eq!(group_of("landed"), Some("Autopilot"));
+        assert_eq!(group_of("new-notes"), Some("Notes"));
+        assert_eq!(group_name("a kind to come"), "Switchboard");
         let mut sources = vec!["habits", "slack", "inbox", "meeting", "autopilot"];
         sources.sort_by_key(|s| rank(s));
         assert_eq!(
@@ -647,6 +834,58 @@ mod tests {
         );
         assert_eq!(id_in_its_view("slack", "D1:1.5"), "D1:1.5");
         assert_eq!(id_in_its_view("routines", "routine:r1"), "routine:r1");
+    }
+
+    #[test]
+    fn a_group_is_split_by_channel_repository_or_routine() {
+        let slack =
+            Item::new("s", "◆ Ada · #general").data(serde_json::json!({ "where": "#general" }));
+        assert_eq!(part_of("slack", &slack).as_deref(), Some("#general"));
+        // A conversation is one part however its rows name it.
+        let dm = |place: &str| {
+            Item::new("d", "◆ Ada")
+                .data(serde_json::json!({ "where": place, "message": { "channel": "G1" } }))
+        };
+        assert_eq!(
+            part_of("slack", &dm("Ada, Bo")),
+            part_of("slack", &dm("Bo, Ada"))
+        );
+        assert_eq!(
+            part_name("slack", &dm("Ada, Bo")).as_deref(),
+            Some("Ada, Bo")
+        );
+        assert_eq!(words("slack", &slack), "Ada · #general");
+        assert_eq!(
+            words("slack", &slack.clone().detail("ship it")),
+            "Ada · #general · ship it"
+        );
+        let pr = Item::new("p", "PR 3 merged, web-app")
+            .data(serde_json::json!({ "pr": { "number": 3, "repo": "o/web-app" } }));
+        assert_eq!(part_of("prs", &pr).as_deref(), Some("o/web-app"));
+        assert_eq!(
+            part_label("prs", "o/web-app", &["o/web-app", "o/tools"]),
+            "web-app"
+        );
+        // A fork and its upstream keep their owners.
+        assert_eq!(
+            part_label("prs", "o/web-app", &["o/web-app", "me/web-app"]),
+            "o/web-app"
+        );
+        assert_eq!(part_label("slack", "#a/b", &["#a/b", "x/b"]), "#a/b");
+        assert_eq!(words("prs", &pr), "PR 3 merged, web-app");
+        let inbox = Item::new("i", "AB-1 Fix it").detail("Ada commented: looks good");
+        assert_eq!(words("inbox", &inbox), "Ada commented · AB-1 Fix it");
+        let failing = Item::new("c", "main failing at abc1234").detail("o/tools · clippy");
+        assert_eq!(
+            words("ci", &failing),
+            "o/tools · clippy · main failing at abc1234"
+        );
+        let ci = Item::new("c", "Build failing")
+            .data(serde_json::json!({ "mainCi": { "repo": "o/tools" } }));
+        assert_eq!(part_of("ci", &ci).as_deref(), Some("o/tools"));
+        let routine = Item::new("routine:r1", "Routine Standup");
+        assert_eq!(part_of("routines", &routine).as_deref(), Some("Standup"));
+        assert_eq!(part_of("calendar", &Item::new("e", "Standup moved")), None);
     }
 
     #[test]

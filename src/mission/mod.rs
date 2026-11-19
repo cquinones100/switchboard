@@ -273,6 +273,9 @@ pub struct Snapshot {
     /// The Notifications view's counts, while it shows the history; `None`
     /// when it shows the sidebar's notifications as they are.
     pub notice_counts: Option<history::Counts>,
+    /// Whether the Notifications view lists them by where they come from
+    /// (`notices_grouped`), with no keycaps of kinds.
+    pub notices_grouped: bool,
     /// The photos of the people the view in front draws, those loaded
     /// (`render::people`).
     pub photos: HashMap<crate::photos::Who, Arc<image::RgbaImage>>,
@@ -332,6 +335,7 @@ impl Default for Snapshot {
             cell: None,
             diagrams: HashMap::new(),
             notice_counts: None,
+            notices_grouped: false,
             photos: HashMap::new(),
             calendar_next: None,
             calendar_notes: Vec::new(),
@@ -488,6 +492,10 @@ pub struct Mission {
     pub notice_kind: usize,
     /// The Notifications view's days unfolded, by their date.
     pub unfolded: HashSet<String>,
+    /// The view in front was just brought there, its cursor not moved
+    /// since: the Notifications view by source then puts it on its newest
+    /// notification, under the first heading, as its rows come.
+    pub at_top: bool,
     /// What the Resources view sorts its tabs by (`s`).
     pub resources_sort: resources_board::Sort,
     /// The day the Calendar view shows (YYYY-MM-DD), `h` and `l` moving
@@ -636,6 +644,7 @@ impl Mission {
             ci_check: None,
             notice_kind: 1,
             unfolded: HashSet::new(),
+            at_top: false,
             resources_sort: resources_board::Sort::default(),
             calendar_day: None,
             inbox_pane: false,
@@ -1874,6 +1883,9 @@ pub struct MissionState {
     /// The Reopen view's chosen row's last screen as last read, by its
     /// file's name.
     pub(crate) reopen_shot: Option<(String, Arc<crate::usage::shots::Shot>)>,
+    /// The sources folded in the Notifications view, by their heading's
+    /// name, for every client while the server runs.
+    pub(crate) notice_folded: std::collections::HashSet<String>,
 }
 
 /// See `MissionState::after_key`.

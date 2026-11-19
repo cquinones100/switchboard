@@ -78,10 +78,14 @@ impl Owner {
     }
 
     /// Whether two stops share a row of the sidebar: the same tab, or
-    /// notifications of one kind, which the sidebar shows as one row.
+    /// notifications of one kind, which the sidebar shows as one row, or,
+    /// grouped by source (`notices::row_of`), of one source.
     pub fn same_row(&self, other: &Owner) -> bool {
+        use super::notices::row_of;
         match (self, other) {
-            (Owner::Notice { source: a, .. }, Owner::Notice { source: b, .. }) => a == b,
+            (Owner::Notice { source: a, .. }, Owner::Notice { source: b, .. }) => {
+                row_of(a) == row_of(b)
+            }
             _ => self == other,
         }
     }
@@ -96,6 +100,11 @@ pub struct Notice {
     /// When the newest of its kind came, in seconds since the epoch, shown
     /// as how long ago with UX 2.0 on; none for a kind that keeps no time.
     pub time: Option<i64>,
+    /// How many notifications its line stands for, where the line is a
+    /// source's (`notices_grouped`, board 117): its title is then the
+    /// source's name and its detail the newest one's words, drawn on one
+    /// line.
+    pub count: Option<usize>,
 }
 
 /// A plugin's short list under the tabs (its `sidebar` count of items, from
@@ -1136,17 +1145,22 @@ pub fn sidebar_lines(
     // Their heading folds or unfolds them on a click, so it lights under
     // the mouse; folded, they are one line of their kinds.
     let notices_lit = view.hover == Some(&Owner::Notices);
+    // A source's line with how many it has, as a kind's title says its own.
     let kinds = notices
         .iter()
-        .map(|n| n.title.as_str())
+        .map(|n| match n.count {
+            Some(count) => format!("{} {count}", n.title),
+            None => n.title.clone(),
+        })
         .collect::<Vec<_>>()
         .join(" · ");
     if r.ux2 && !notices.is_empty() {
         let heading = Line {
+            // How many notifications, a source's line standing for its own.
             spans: kit::label(
                 "Notifications",
                 Tone::Accent,
-                Some(notices.len()),
+                Some(notices.iter().map(|n| n.count.unwrap_or(1)).sum()),
                 cols,
                 theme,
             ),
@@ -1213,14 +1227,27 @@ pub fn sidebar_lines(
             if let Some(col) = at[0] {
                 kit::place(&mut spans, vec![kit::mark(mark, 0, theme)], col);
             }
-            if let Some(col) = at[1] {
+            // A source's line: its name, how many it has and its newest
+            // one's words, which take the time's room too (board 117).
+            if let (Some(count), Some((x, w))) = (n.count, at[1]) {
+                let w = at[2].map_or(w, |(tx, tw)| tx + tw - x);
+                kit::place(
+                    &mut spans,
+                    vec![
+                        Span::styled(n.title.clone(), bold(theme.text)),
+                        Span::styled(format!(" {count}"), Tone::Accent.style(theme)),
+                        Span::styled(format!("  {}", n.detail), fg(theme.dim)),
+                    ],
+                    (x, w),
+                );
+            } else if let Some(col) = at[1] {
                 kit::place(
                     &mut spans,
                     vec![Span::styled(n.title.clone(), fg(theme.text))],
                     col,
                 );
             }
-            if let Some((x, w)) = at[2].filter(|_| !when.is_empty()) {
+            if let Some((x, w)) = at[2].filter(|_| !when.is_empty() && n.count.is_none()) {
                 // Flush right in its column.
                 let pad = w.saturating_sub(width(&when));
                 kit::place(
@@ -1277,9 +1304,17 @@ pub fn sidebar_lines(
                 .put("●", fg(YELLOW))
                 .put(" ", Style::new())
                 .put(n.title.clone(), bold(theme.bright));
+            // A source's line: its count and its newest one's words on
+            // the same line (board 117).
+            if let Some(count) = n.count {
+                row.put(format!(" {count}"), fg(theme.dim));
+                if !n.detail.is_empty() {
+                    row.put(format!("  {}", n.detail), fg(theme.dim));
+                }
+            }
             notice_lines.push(row.fit(cols, fill));
             notice_owners.push(Some(n.owner.clone()));
-            if !n.detail.is_empty() {
+            if !n.detail.is_empty() && n.count.is_none() {
                 let mut row = Row::default();
                 row.put("    ", Style::new())
                     .put(n.detail.clone(), fg(theme.dim));
@@ -1859,6 +1894,7 @@ mod tests {
             title: title.into(),
             detail: String::new(),
             time: None,
+            count: None,
         };
         let notices = [
             notice("meeting", "m", "Design review → 3:00"),
@@ -1895,6 +1931,56 @@ mod tests {
             text.iter()
                 .any(|l| l.ends_with("    ✕ 2 failing · waiting on you")),
             "{text:?}"
+        );
+    }
+
+    // Board 117: a source's line is its mark, its name, how many it has and
+    // its newest one's words, one line with UX 2.0 and without.
+    #[test]
+    fn a_sources_notifications_are_one_line_with_its_count_and_newest_words() {
+        let line = Notice {
+            owner: Owner::Notice {
+                source: "slack".into(),
+                id: "D1:1.5".into(),
+            },
+            title: "Slack".into(),
+            detail: "Ada · #general".into(),
+            time: Some(rules().now_secs() - 60),
+            count: Some(3),
+        };
+        let one = tab(1, "full titles", TabState::Idle);
+        let draw = |ux2: bool| {
+            let r = Rules { ux2, ..rules() };
+            texts(&sidebar_lines(
+                std::slice::from_ref(&one),
+                None,
+                std::slice::from_ref(&line),
+                &[],
+                "s",
+                34,
+                20,
+                &view(1),
+                &r,
+                &Theme::DARK,
+            ))
+        };
+        let text = draw(true);
+        assert_eq!(text[3], " @ Slack 3  Ada · #general");
+        assert!(
+            text[2].ends_with(" 3"),
+            "the heading counts them: {:?}",
+            text[2]
+        );
+        let text = draw(false);
+        let at = text
+            .iter()
+            .position(|l| l.contains("Slack 3"))
+            .unwrap_or_else(|| panic!("{text:?}"));
+        assert_eq!(text[at], "  ● Slack 3  Ada · #general");
+        assert_eq!(
+            text.iter().filter(|l| l.contains("Ada")).count(),
+            1,
+            "one line: {text:?}"
         );
     }
 
@@ -2006,6 +2092,7 @@ mod tests {
             title: "3 new on Slack".into(),
             detail: "Ada · #general".into(),
             time: Some(rules().now_secs() - 720),
+            count: None,
         };
         let r = Rules {
             ux2: true,
@@ -2044,6 +2131,7 @@ mod tests {
         let long = |time| Notice {
             title: "Landed the stable note IDs and the claims by them".into(),
             time,
+            count: None,
             ..notice.clone()
         };
         let at = |n: &Notice| {
@@ -2151,6 +2239,7 @@ mod tests {
             title: "3 new on Slack".into(),
             detail: "Ada · #general".into(),
             time: None,
+            count: None,
         };
         let out = sidebar_lines(
             std::slice::from_ref(&t),
@@ -2664,6 +2753,7 @@ mod tests {
             title: title.into(),
             detail: "detail".into(),
             time: None,
+            count: None,
         };
         let notices = [
             notice("slack", "3 new on Slack"),

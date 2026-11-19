@@ -41,7 +41,36 @@ impl Server {
         for source in sources {
             self.notice_history_record(&source);
         }
+        let shown: Vec<String> = self.notices.keys().cloned().collect();
+        for source in shown {
+            self.notice_came_refresh(&source);
+        }
         self.mission_changed();
+    }
+
+    /// When the history says each of a source's untimed notifications came,
+    /// kept for `notice_time`, which the sidebar asks on every draw.
+    pub(crate) fn notice_came_refresh(&mut self, source: &str) {
+        self.notice_came.retain(|(s, _), _| s != source);
+        if !Self::notice_history_on() {
+            return;
+        }
+        let ids: Vec<String> = self
+            .notices
+            .get(source)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|i| i.time.is_none())
+                    .map(|i| i.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for id in ids {
+            if let Some(at) = self.sidebar.history.came(source, &id) {
+                self.notice_came.insert((source.to_string(), id), at);
+            }
+        }
     }
 
     /// A source's notifications as they are now, recorded.

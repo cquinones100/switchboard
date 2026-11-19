@@ -399,7 +399,14 @@
     "key": "notification_history",
     "category": "Mission control: Notifications",
     "label": "Notifications' history",
-    "description": "Mission control's Notifications view keeps every notification of the last two weeks by day, with what each led to and whether the sidebar still shows it, in ~/.local/state/switchboard/notifications on this computer; off, the view shows only the sidebar's notifications, as they are now, and nothing is kept",
+    "description": "Mission control's Notifications view keeps every notification of the last two weeks, with what each led to and whether the sidebar still shows it, in ~/.local/state/switchboard/notifications on this computer; off, the view shows only the sidebar's notifications, as they are now, and nothing is kept",
+    "default": true
+  },
+  {
+    "key": "notices_grouped",
+    "category": "Mission control: Notifications",
+    "label": "Group notifications by source",
+    "description": "Mission control's Notifications view lists the notifications under a heading for where each comes from, its view's name (Slack, Inbox, Calendar, PRs, CI, Routines) or else its app's (Notes, Autopilot, Switchboard), with its count, the sources in the order of their newest notification; a source of more than five whose notifications name two or more channels, repositories or routines is split by them, and Enter on a heading folds it or dismisses every one of its notifications the sidebar still shows. The sidebar's notifications are one line a source, with its count and its newest one's words, which, with the Notifications window off, leads to that heading, or to its only notification, and with it on brings the window to the front on it. Off, the view lists them by day with a keycap for each kind (with its history on), and the sidebar one row a kind",
     "default": true
   },
   {

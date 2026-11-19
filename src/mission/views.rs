@@ -297,7 +297,7 @@ impl ViewId {
     pub fn detail(&self) -> &'static str {
         match self {
             ViewId::Notifications => {
-                "Newest first, Enter opening one's actions; with Settings' \"Notifications' history\" (notification_history) on, every one of the last two weeks by day, with what it led to. Settings' \"Notifications\" (sidebar_notifications)."
+                "With Settings' \"Group notifications by source\" (notices_grouped) on, under a heading for where each comes from, the newest source first, Enter opening one's actions or a heading's (fold it, dismiss it); off, by day, or one by one without the history. With \"Notifications' history\" (notification_history) on, every one of the last two weeks, with what it led to. Settings' \"Notifications\" (sidebar_notifications)."
             }
             ViewId::WorkMap => {
                 "M-j's picker: a row for each open tab, with its ticket and where its PR stands. Enter goes to it."
@@ -475,13 +475,22 @@ pub fn is_header(item: &Item) -> bool {
     item.data.get("header").and_then(Value::as_bool) == Some(true)
 }
 
-/// Whether the cursor passes over an item: a heading, a row of the Usage
+/// Whether the cursor passes over an item: a heading (but one that says
+/// the cursor rests on it, a source's in the Notifications view), a
+/// sub-heading there, a row of the Usage
 /// view that is neither a tab nor a service, or, while today's board is
 /// drawn (`hide_week_only`, `Mission::week_only_hidden`), a service with no
 /// requests today, which it leaves out.
 pub fn passed_over(item: &Item, hide_week_only: bool) -> bool {
     use crate::usage::charts::{is_still, is_week_only};
-    is_header(item) || is_still(item) || (hide_week_only && is_week_only(item))
+    // Under a filter its heading is passed over as any is, so the cursor
+    // starts on what the filter found.
+    let rests = item.data.get("rests").and_then(Value::as_bool) == Some(true)
+        && !super::history::under_filter(item);
+    (is_header(item) && !rests)
+        || super::history::is_part(item)
+        || is_still(item)
+        || (hide_week_only && is_week_only(item))
 }
 
 /// Whether an item is a view's summary (the Autopilot view's heading).
@@ -1513,6 +1522,10 @@ pub fn count_words(view: Option<&View>, tabs: usize) -> String {
                 .count();
             format!("{left} left")
         }
+        // By source, its notifications whatever is folded or split.
+        ViewId::Notifications => super::history::held(items)
+            .unwrap_or_else(|| items.iter().filter(|i| !is_header(i)).count())
+            .to_string(),
         _ => items.iter().filter(|i| !is_header(i)).count().to_string(),
     }
 }

@@ -526,6 +526,16 @@ pub struct Server {
     /// ("calendar", "new-notes", "habits", "autopilot"): each source sets
     /// its whole list, which the sidebar shows under the tabs.
     pub notices: BTreeMap<String, Vec<crate::items::Item>>,
+    /// Each notification with no time of its own, by its source and id:
+    /// its words, when this server first saw it, and when they last
+    /// changed after that, what orders it among the sources
+    /// (`notice_time`), since one updated in place (autopilot's said
+    /// line) is new again.
+    pub notice_changed: HashMap<(String, String), (String, i64, Option<i64>)>,
+    /// When the history says each notification with no time of its own
+    /// came, by its source and id, looked up as its source's list or the
+    /// history changes rather than on every draw.
+    pub notice_came: HashMap<(String, String), i64>,
     /// What each tab is called and the color it wears (src/tabs).
     pub tab_names: crate::tabs::TabNames,
     /// What GitHub and Linear say for the views, and the lookups behind
@@ -1208,6 +1218,8 @@ impl Server {
             slots: crate::slots::Board::default(),
             facts: crate::facts::Facts::default(),
             notices: BTreeMap::new(),
+            notice_changed: HashMap::new(),
+            notice_came: HashMap::new(),
             tab_names: Default::default(),
             sources: Default::default(),
             next_tab: 1,
@@ -1443,6 +1455,15 @@ impl Server {
         for tab in tabs {
             self.relayout(tab);
         }
+        // Mission control's views are taken again, which some settings lay
+        // out (the Notifications view by source or by day).
+        self.mission_changed();
+        // The history's arrival times looked up again, which its setting
+        // turns on or off.
+        let sources: Vec<String> = self.notices.keys().cloned().collect();
+        for source in sources {
+            self.notice_came_refresh(&source);
+        }
         if !first {
             for c in self.clients.values_mut() {
                 c.dirty = true;
@@ -1455,13 +1476,53 @@ impl Server {
     pub fn set_notices(&mut self, source: &str, items: Vec<crate::items::Item>) {
         let changed =
             self.notices.get(source).map(Vec::as_slice).unwrap_or(&[]) != items.as_slice();
+        // An untimed one first seen now, or whose words changed now; an
+        // unchanged list, given again on every tick, has nothing new.
+        let now = crate::util::now_ms();
+        if changed {
+            self.notice_changed
+                .retain(|(s, id), _| s != source || items.iter().any(|i| i.id == *id));
+        }
+        for item in items.iter().filter(|i| changed && i.time.is_none()) {
+            let words = format!("{}\n{}", item.title, item.detail);
+            let key = (source.to_string(), item.id.clone());
+            match self.notice_changed.get_mut(&key) {
+                None => {
+                    self.notice_changed.insert(key, (words, now, None));
+                }
+                Some((was, _, changed)) if *was != words => {
+                    *was = words;
+                    *changed = Some(now);
+                }
+                Some(_) => {}
+            }
+        }
         if items.is_empty() {
             self.notices.remove(source);
         } else {
             self.notices.insert(source.to_string(), items);
         }
         self.notice_history_record(source);
+        // An unchanged list, which sources give again on every tick, keeps
+        // what was looked up, unless one of its untimed notifications has
+        // none yet (the history just took it in).
+        let unlooked = Self::notice_history_on()
+            && self.notices.get(source).is_some_and(|items| {
+                items.iter().any(|i| {
+                    i.time.is_none()
+                        && !self
+                            .notice_came
+                            .contains_key(&(source.to_string(), i.id.clone()))
+                })
+            });
+        if changed || unlooked {
+            self.notice_came_refresh(source);
+        }
         if changed {
+            self.notice_cursors_settle();
+            // Mission control's Notifications view lists them too, with
+            // the history off as well.
+            self.mission_changed();
             for c in self.clients.values_mut() {
                 c.dirty = true;
             }
