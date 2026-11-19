@@ -4710,14 +4710,18 @@ impl App {
             (MouseKind::Press, MouseButton::WheelDown | MouseButton::WheelUp) => {
                 let down = m.button == MouseButton::WheelDown;
                 if let Some(b) = self.beside.as_mut().filter(|_| inside(self.geo.plan)) {
-                    // The reader moved: the next rewrap starts from here.
-                    b.held = None;
-                    b.rewrapped_unseen = false;
+                    let was = b.scroll;
                     b.scroll = if down {
                         b.scroll + 3
                     } else {
                         b.scroll.saturating_sub(3)
                     };
+                    // The reader moved the view: the next rewrap starts from
+                    // here, and what the view shows is the reader's doing.
+                    if b.scroll != was {
+                        b.held = None;
+                        b.rewrapped_unseen = false;
+                    }
                 } else if inside(self.geo.list) {
                     self.list_top = if down {
                         (self.list_top + 3).min(self.list_rows.len().saturating_sub(1))
