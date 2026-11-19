@@ -94,7 +94,9 @@
 //! (medium, and low in a round that reports lows), `gap` (any low in a tab
 //! landing without asking), `report` (a low no one asked for) or `left`. A
 //! confirmation round whose findings are all low counts as clean unless
-//! `--include-low` was given (review-loop's `all`): it ends the loop `done`
+//! `--include-low` was given (review-loop's `all`), when it reviewed the
+//! clean round's commit, base and patch, raised no warning, and each low
+//! names a file in the repository (followed through its links) or none: it ends the loop `done`
 //! and writes the record as an empty one would, its lows marked `left`, so
 //! the long tail its sweep turns up never sends the loop round again.
 //! Whether a finding is real, and how to fix it, stays the
