@@ -1,16 +1,8 @@
 ---
 paths:
-  - "crates/ui/**"
-  - "src/ui/**"
-  - "src/mission/**"
-  - "src/sidebar/**"
-  - "src/views/**"
-  - "src/tabs/**"
-  - "src/mux/keys.rs"
+  - "src/**"
+  - "crates/**"
   - "docs/design/**"
-  - "crates/diff/src/app/**"
-  - "crates/diff/src/app.rs"
-  - "crates/notes/src/**"
 ---
 
 # What the workspace draws and how it is driven

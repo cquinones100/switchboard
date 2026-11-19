@@ -37,6 +37,9 @@ pub const EVENTS: [&str; 3] = ["PreToolUse", "PostToolUse", "PostToolUseFailure"
 /// without end.
 const MAX_HEAD: usize = 64 * 1024;
 
+/// How long a request has to arrive whole.
+const READ_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// A request read: the event, the pane and the body.
 #[derive(Debug, PartialEq)]
 struct Request {
@@ -51,7 +54,13 @@ pub async fn serve(
     w: &mut (impl AsyncWrite + Unpin),
     tx: mpsc::UnboundedSender<Event>,
 ) {
-    let answer = match read_request(r).await {
+    // A request not read whole in time is dropped, so a peer that stops
+    // sending holds nothing.
+    let read = tokio::time::timeout(READ_WAIT, read_request(r))
+        .await
+        .ok()
+        .flatten();
+    let answer = match read {
         Some(request) if EVENTS.contains(&request.event.as_str()) => {
             Some(answer(request, tx).await.unwrap_or_default())
         }
@@ -144,10 +153,14 @@ async fn read_request(r: &mut (impl AsyncRead + Unpin)) -> Option<Request> {
         .filter(|p| !p.is_empty())
         .map(str::to_string);
     let mut body = buf.split_off(head_len);
+    // Grown as the bytes come, as a frame is, never reserved from the
+    // length the peer declares.
     if body.len() < length {
-        let mut rest = vec![0u8; length - body.len()];
-        r.read_exact(&mut rest).await.ok()?;
-        body.extend_from_slice(&rest);
+        let rest = (length - body.len()) as u64;
+        r.take(rest).read_to_end(&mut body).await.ok()?;
+    }
+    if body.len() < length {
+        return None;
     }
     body.truncate(length);
     Some(Request { event, pane, body })
