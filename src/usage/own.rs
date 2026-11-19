@@ -278,7 +278,7 @@ pub const OWN_FILES: &[OwnFile] = &[
         category: "Your files",
         rows: &[whole(
             "Repositories",
-            "Each repository's own settings by its origin's owner/name, such as the apply list of what a landed change needs to take effect",
+            "Each repository's own settings by its origin's owner/name, such as where its tickets are kept (tickets) and the apply list of what a landed change needs to take effect",
         )],
     },
     OwnFile {
@@ -705,6 +705,16 @@ pub fn landing_rows(
             detail,
             json!(set.unwrap_or("automatic")),
         ));
+        if broken.is_none() {
+            let tickets = crate::repos::tickets_of(&data, repo);
+            items.push(row(
+                "tickets",
+                "  Tickets".into(),
+                tickets.clone().unwrap_or_else(|| "automatic".into()),
+                "Where its work's tickets are kept, which M-i opens: github, the GitHub issue a branch was started for; linear, its Linear ticket; automatic, the issue when a branch has one, else the Linear ticket".into(),
+                json!(tickets.as_deref().unwrap_or("automatic")),
+            ));
+        }
         if method != Some("direct") || broken.is_some() {
             continue;
         }
@@ -930,7 +940,9 @@ mod tests {
             shown,
             vec![
                 ("acme/auto", "auto: pr"),
+                ("  Tickets", "automatic"),
                 ("acme/direct", "straight to the branch"),
+                ("  Tickets", "automatic"),
                 ("  Tests", "npm test"),
                 ("  Tests run", "here"),
                 ("  Squash", "off"),
@@ -938,6 +950,7 @@ mod tests {
                 ("  Before push", "none"),
                 ("  After a clean rebase", "the tests"),
                 ("acme/new", "auto: ?"),
+                ("  Tickets", "automatic"),
             ],
             "each repository once, its steps only when it lands straight"
         );
@@ -946,8 +959,9 @@ mod tests {
             "Worked out: through a PR, since main has a merge queue"
         );
         assert_eq!(rows[0].data["repo_setting"]["value"], "automatic");
-        assert_eq!(rows[3].data["repo_setting"]["field"], "testIn");
-        assert_eq!(rows[4].data["repo_setting"]["field"], "squash");
+        assert_eq!(rows[1].data["repo_setting"]["field"], "tickets");
+        assert_eq!(rows[5].data["repo_setting"]["field"], "testIn");
+        assert_eq!(rows[6].data["repo_setting"]["field"], "squash");
         assert!(rows.iter().all(|r| r.group.as_deref() == Some(LANDING)));
         let broken = landing_rows(&repos[..1], Err("bad".into()), &worked);
         assert_eq!(broken[0].data["value"], "unreadable");

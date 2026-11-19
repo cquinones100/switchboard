@@ -4637,6 +4637,7 @@ impl Server {
                 self.mission_new_tab(client, &dir, Some(command), None);
             }
             Do::Rename(tab) => self.rename_tab(client, tab),
+            Do::ChooseTicket(tab) => self.choose_ticket(client, tab, false),
             Do::Pin(tab) => self.toggle_pin(tab),
             Do::Remind(tab) => self.remind_tab(client, tab),
             Do::Palette(tab) => {
@@ -6384,8 +6385,8 @@ impl Server {
     }
 
     /// Enter on a repository's landing row in Settings: how its work lands
-    /// from a menu (automatic leaves it to the default), its review and
-    /// where its tests run from a menu each, squash on or off, and a command typed in, written to
+    /// from a menu (automatic leaves it to the default), where its tickets
+    /// are kept, its review and where its tests run from a menu each, squash on or off, and a command typed in, written to
     /// ~/.config/switchboard/repos.json (`repos::set_repo`), as the daemon's
     /// `changeRepo` did.
     fn change_repo(&mut self, client: ClientId, m: &mut Mission, item: &Item) {
@@ -6406,7 +6407,7 @@ impl Server {
         };
         let name = r["repo"].as_str().unwrap_or("").to_string();
         match r["field"].as_str().unwrap_or("") {
-            field @ ("landing" | "review" | "testIn") => {
+            field @ ("landing" | "review" | "testIn" | "tickets") => {
                 let landing = field == "landing";
                 let options: Vec<(&str, &str)> = match field {
                     "landing" => vec![
@@ -6417,6 +6418,14 @@ impl Server {
                     "testIn" => vec![
                         ("here", "Here, in the worktree"),
                         ("ci", "In CI, on a ci/ branch of the landing's own"),
+                    ],
+                    "tickets" => vec![
+                        (
+                            "automatic",
+                            "Automatic: a branch's GitHub issue, else its Linear ticket",
+                        ),
+                        ("github", "GitHub issues"),
+                        ("linear", "Linear"),
                     ],
                     _ => crate::repos::REVIEWS.iter().map(|r| (*r, *r)).collect(),
                 };
@@ -6429,6 +6438,8 @@ impl Server {
                     format!("{name}: how its work lands")
                 } else if field == "testIn" {
                     format!("{name}: where the tests run")
+                } else if field == "tickets" {
+                    format!("{name}: where its tickets are kept")
                 } else {
                     format!("{name}: the review before the push")
                 };

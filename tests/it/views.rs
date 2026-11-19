@@ -1621,3 +1621,182 @@ fn the_tab_commands_go_to_or_copy_the_open_tabs_a_pane_names() {
     server.ok(&["press", "go-to-mentioned-tab"]);
     client.wait_text("No tabs named in this pane");
 }
+
+/// M-i opens a tab's ticket from where its work's tickets are kept: the
+/// GitHub issue its branch was started for, a project a name you gave it
+/// names, or, with none, one of yours you choose, kept on the tab.
+#[cfg(feature = "net")]
+mod tickets {
+    use super::*;
+    use crate::common::http::{Fake, Reply};
+
+    /// The first tab's id and its directory set to `dir` by a `cd`.
+    fn cd(server: &TestServer, client: &mut common::TestClient, dir: &Path) -> String {
+        client.type_text(&format!("cd {}\r", dir.display()));
+        let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+        let deadline = common::deadline(Duration::from_secs(10));
+        while !panes(server)[0]["cwd"]
+            .as_str()
+            .is_some_and(|d| d.ends_with(&name))
+        {
+            assert!(Instant::now() < deadline, "the shell didn't cd");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        server.list()["sessions"][0]["tabs"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn m_i_on_an_issue_branch_opens_the_issue_with_its_body_and_comments() {
+        let github = Fake::github("test-token", |request| {
+            let path = request.path();
+            if path.starts_with("/repos/acme/widgets/issues/12/comments") {
+                Some(Reply::json(
+                    200,
+                    json!([{ "body": "Which widget?", "created_at": "2026-10-02T00:00:00Z",
+                        "user": { "login": "jo" } }]),
+                ))
+            } else if path.starts_with("/repos/acme/widgets/issues/12") {
+                Some(Reply::json(
+                    200,
+                    json!({ "number": 12, "title": "Make the widget blue", "state": "open",
+                        "body": "It is red.", "user": { "login": "sam" },
+                        "created_at": "2026-10-01T09:00:00Z", "updated_at": "2026-10-01T09:00:00Z",
+                        "assignees": [], "labels": [] }),
+                ))
+            } else {
+                None
+            }
+        });
+        let server = TestServer::start_with_env(&[
+            ("GH_TOKEN", "test-token"),
+            ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
+            ("SWITCHBOARD_GITHUB_API", &github.url),
+        ]);
+        settings(&server, json!({"linear": false, "ux2": false}));
+        let work = server.dir.path().join("widgets");
+        std::fs::create_dir_all(&work).unwrap();
+        git(&work, &["init", "-q"]);
+        git(
+            &work,
+            &["symbolic-ref", "HEAD", "refs/heads/issue/12-make-it-blue"],
+        );
+        git(&work, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        git(
+            &work,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/widgets.git",
+            ],
+        );
+        let mut client = server.attach(140, 36);
+        client.wait_text("$");
+        cd(&server, &mut client, &work);
+
+        // Linear is off, and the issue still opens: it is GitHub's.
+        client.send(b"\x1bi");
+        client.wait_text("#12  Make the widget blue");
+        client.wait_text("It is red.");
+        client.wait_text("Which widget?");
+        let shown = wait_panes(&server, 2);
+        assert_eq!(
+            shown[1]["options"]["@ticket_view_id"], "acme/widgets#12",
+            "{shown:?}"
+        );
+    }
+
+    /// Linear, answering your tickets and projects, a ticket and a project.
+    fn fake_linear() -> Fake {
+        Fake::linear("test-key", |request| {
+            let query = request.query();
+            let answer = if query.contains("assignedIssues(first: 50") {
+                json!({ "data": { "viewer": { "assignedIssues": { "nodes": [
+                    { "identifier": "AB-1", "title": "Old work", "createdAt": "2026-01-01T00:00:00Z", "state": { "name": "Todo" } },
+                    { "identifier": "AB-2", "title": "New work", "createdAt": "2026-03-01T00:00:00Z", "state": { "name": "Todo" } }
+                ] } } } })
+            } else if query.contains("projects(first: 50") {
+                json!({ "data": { "projects": { "nodes": [] } } })
+            } else if query.contains("project(id") {
+                json!({ "data": { "project": { "name": "Review cost", "description": "Cut what a round costs.",
+                    "status": { "name": "Backlog", "type": "backlog" }, "issues": { "nodes": [] } } } })
+            } else if query.contains("issue(id") {
+                json!({ "data": { "issue": { "identifier": "AB-2", "title": "New work",
+                    "description": "The newest.", "labels": { "nodes": [] } } } })
+            } else {
+                json!({ "data": {} })
+            };
+            Some(Reply::json(200, answer))
+        })
+    }
+
+    fn linear_server(linear: &Fake) -> TestServer {
+        TestServer::start_with_env_and_settings(
+            &[
+                ("LINEAR_API_KEY", "test-key"),
+                ("SWITCHBOARD_LINEAR_API", &linear.graphql_url()),
+            ],
+            &json!({"notifications": false, "tips": false, "github": false, "ux2": false,
+                "sidebar": false, "photos": false})
+            .to_string(),
+        )
+    }
+
+    #[test]
+    fn m_i_with_no_ticket_asks_for_one_of_yours_newest_first_and_keeps_it() {
+        let linear = fake_linear();
+        let server = linear_server(&linear);
+        let mut client = server.attach(140, 36);
+        client.wait_text("$");
+        let tab = server.list()["sessions"][0]["tabs"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        client.send(b"\x1bi");
+        let screen = client.wait_text("'s ticket or project");
+        let at = |id: &str| screen.iter().position(|l| l.contains(id));
+        let (new, old) = (at("AB-2  New work"), at("AB-1  Old work"));
+        assert!(new.is_some() && new < old, "newest first: {screen:?}");
+        client.type_text("\r");
+        client.wait_text("The newest.");
+        let tabs = server.list()["sessions"][0]["tabs"].clone();
+        assert_eq!(tabs[0]["options"]["@tab_ticket"], "AB-2", "{tabs}");
+
+        // Kept: M-i again, after closing it, opens it without asking.
+        client.send(b"\x1bi");
+        wait_panes(&server, 1);
+        client.send(b"\x1bi");
+        client.wait_text("The newest.");
+        assert_eq!(server.list()["sessions"][0]["tabs"][0]["id"], tab.as_str());
+    }
+
+    #[test]
+    fn m_i_in_a_tab_named_for_a_project_opens_the_project_not_a_ticket() {
+        let linear = fake_linear();
+        let server = linear_server(&linear);
+        let mut client = server.attach(140, 36);
+        client.wait_text("$");
+        let tab = server.list()["sessions"][0]["tabs"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        server.ok(&[
+            "set",
+            "-t",
+            &tab,
+            "@tab_name",
+            "Shaping P-AB-4: review cost",
+        ]);
+        client.send(b"\x1bi");
+        client.wait_text("Review cost");
+        client.wait_text("Cut what a round costs.");
+        assert!(
+            !linear.seen().iter().any(|r| r.query().contains("issue(id")),
+            "no ticket AB-4 asked for"
+        );
+    }
+}

@@ -35,7 +35,9 @@ use super::server::Server;
 /// (`@notes_open`), a program allowed to pass
 /// kitty's graphics commands to the terminal (`@allow_passthrough`), and the
 /// mouse pointer's shape an app names over its pane (`@pointer`,
-/// crates/ui/src/pointer.rs). They go
+/// crates/ui/src/pointer.rs), and a ticket view's mark and the ticket it
+/// reads (`@ticket_view`, `@ticket_view_id`, which M-l opens), and a link
+/// view's mark and link (`@link_view`, `@link_url`). They go
 /// when the program does: at a respawn, and when a restart brings the pane
 /// back as a shell.
 pub const PROGRAM_MARKS: &[&str] = &[
@@ -45,12 +47,18 @@ pub const PROGRAM_MARKS: &[&str] = &[
     "@notes_open",
     "@allow_passthrough",
     crate::ui::pointer::PANE_OPTION,
+    crate::views::TICKET_ID,
+    crate::views::TICKET_VIEW,
+    crate::views::LINK_VIEW,
+    crate::views::LINK_URL,
 ];
 
 /// The tab options about the work a tab was doing, which go when it is
-/// handed to other work: its directory and a sealed review's try.
+/// handed to other work: its directory, a sealed review's try, and the
+/// ticket chosen for it.
 pub const HANDED_OVER: &[&str] = &[
     super::server::TAB_DIR,
+    crate::views::TAB_TICKET,
     crate::usage::serve::SEALED_REVIEW,
     crate::usage::serve::SEALED_REVIEW_FETCH,
 ];
@@ -93,6 +101,19 @@ impl Server {
             for name in HANDED_OVER {
                 t.opts.remove(*name);
             }
+        }
+        // So does a ticket view beside it, showing the old work's ticket.
+        if let Some(view) = self
+            .marked_in(tab, crate::views::TICKET_VIEW)
+            .filter(|v| *v != pane)
+            // A live view, not a shell a restart brought back in its place.
+            .filter(|v| {
+                self.panes
+                    .get(v)
+                    .is_some_and(|s| s.opts.contains_key(crate::views::TICKET_ID))
+            })
+        {
+            self.kill_pane(view);
         }
         self.agents.restarted(pane);
         self.sidebar.panes.remove(&pane);

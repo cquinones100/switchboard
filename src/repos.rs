@@ -4,7 +4,7 @@
 //! ```json
 //! { "owner/name": { "landing": "direct", "test": "npm test", "squash": true,
 //!                   "testIn": "here", "review": "review-loop", "beforePush": "",
-//!                   "afterRebase": "cargo clippy --all-targets",
+//!                   "afterRebase": "cargo clippy --all-targets", "tickets": "github",
 //!                   "apply": [{ "paths": ["db/**"], "label": "Reload the dev server", "command": "make reload" }] } }
 //! ```
 //!
@@ -19,7 +19,10 @@
 //! run after the last rebase in place of the tests, when that rebase had no
 //! conflict and the default branch's CI isn't failing (empty or not set, the
 //! tests run again), since a clean rebase changes nothing the tests haven't
-//! seen pass on each side. `apply` is what a change
+//! seen pass on each side. `tickets` is where its work's tickets are kept,
+//! `github` (its GitHub issues) or `linear`, which decides what a tab's
+//! ticket is (`views::ticket::of_dir`); not set, a branch started for an
+//! issue has the issue, else its Linear ticket. `apply` is what a change
 //! landed there needs to take effect, which `switchboard apply-actions`
 //! lists in place of what it would work out by itself. The file is yours
 //! and never in this repository; Settings changes it (`set_repo`), never
@@ -141,6 +144,8 @@ pub const REVIEWS: [&str; 2] = ["review-loop", "none"];
 /// Where a direct landing's tests can run: in the worktree, or in the
 /// repository's CI.
 pub const TEST_IN: [&str; 2] = ["here", "ci"];
+/// Where a repository's tickets can be kept.
+pub const TICKETS: [&str; 2] = ["github", "linear"];
 /// An answer worked out is kept this long, in ms.
 pub const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
@@ -192,17 +197,19 @@ fn valid(key: &str, value: &Value) -> bool {
         "landing" => value.as_str().is_some_and(|v| METHODS.contains(&v)),
         "review" => value.as_str().is_some_and(|v| REVIEWS.contains(&v)),
         "testIn" => value.as_str().is_some_and(|v| TEST_IN.contains(&v)),
+        "tickets" => value.as_str().is_some_and(|v| TICKETS.contains(&v)),
         "test" | "beforePush" | "afterRebase" => value.is_string(),
         "squash" => value.is_boolean(),
         _ => false,
     }
 }
 
-/// A repository's landing keys, only those holding a value they can.
+/// A repository's landing keys, only those holding a value they can;
+/// `tickets` isn't one, so an entry holding only it has no landing set.
 pub fn landing_entry(data: &Map<String, Value>, repo: &str) -> Map<String, Value> {
     entry_of(data, repo)
         .into_iter()
-        .filter(|(k, v)| valid(k, v))
+        .filter(|(k, v)| k != "tickets" && valid(k, v))
         .collect()
 }
 
@@ -233,7 +240,7 @@ pub fn set_repo(repo: &str, key: &str, value: Value) -> Result<(), String> {
 
 /// `set_repo` on the file at `path`.
 pub fn set_repo_in(path: &Path, repo: &str, key: &str, value: Value) -> Result<(), String> {
-    let automatic = key == "landing" && value.as_str() == Some("automatic");
+    let automatic = (key == "landing" || key == "tickets") && value.as_str() == Some("automatic");
     if !automatic && !valid(key, &value) {
         return Err(
             if [
@@ -244,6 +251,7 @@ pub fn set_repo_in(path: &Path, repo: &str, key: &str, value: Value) -> Result<(
                 "review",
                 "beforePush",
                 "afterRebase",
+                "tickets",
             ]
             .contains(&key)
             {
@@ -293,6 +301,23 @@ pub fn set_repo_in(path: &Path, repo: &str, key: &str, value: Value) -> Result<(
         format!("{}\n", util::json_pretty(&Value::Object(data))),
     )
     .map_err(|e| e.to_string())
+}
+
+/// Where the tickets of a repository's work are kept, from its entry's
+/// `tickets`: `github` or `linear`, or `None` when not set.
+pub fn tickets_of(data: &Map<String, Value>, repo: &str) -> Option<String> {
+    entry_of(data, repo)
+        .get("tickets")
+        .filter(|v| valid("tickets", v))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+/// `tickets_of` for the repository at `dir`, its origin read from git's
+/// config file, so no process starts.
+pub fn tickets_at(dir: &Path) -> Option<String> {
+    let repo = crate::sources::repo::origin_of(dir)?;
+    tickets_of(&read_safely(), &repo.to_string())
 }
 
 /// `repos-landing.json` in the state directory: each repository's landing as

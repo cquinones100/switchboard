@@ -1007,7 +1007,7 @@ impl Server {
 
     /// "Open a Linear ticket in the browser by ID, number or URL"
     /// (ticket-open.zsh): typed, the clipboard's when it holds one; empty is
-    /// the tab's own ticket, as M-l opens it, and a bare number takes the
+    /// the Linear ticket the branch names, else the tab's (`ticket_here`), and a bare number takes the
     /// team key of the ticket the branch names. Then the browser, or a new
     /// tab working on it (`wt`) in the pane's repository.
     fn open_ticket_id_typed(&mut self, client: ClientId, pane: Option<PaneId>) {
@@ -1029,7 +1029,7 @@ impl Server {
             move |server, client, prefill| {
                 let ask = Ask::new(
                     "Open a ticket",
-                    "A ticket ID, number or Linear URL; empty for this tab's ticket, as M-l opens it.",
+                    "A ticket ID, number or Linear URL; empty for the Linear ticket the branch names, else the tab's.",
                 )
                 .text(prefill)
                 .empty_ok();
@@ -1054,8 +1054,12 @@ impl Server {
         dir: PathBuf,
         branch_ticket: Option<String>,
     ) {
+        // Empty is the branch's Linear ticket, this command being Linear's.
         if typed.trim().is_empty() {
-            self.view_command(client, crate::views::Command::OpenTicket);
+            match branch_ticket {
+                Some(id) => self.open_ticket_id(client, id),
+                None => self.say(Some(client), "No Linear ticket in this branch or tab name"),
+            }
             return;
         }
         let (id, url) = match super::ticket_typed(typed, branch_ticket.as_deref()) {

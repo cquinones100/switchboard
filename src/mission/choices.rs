@@ -54,6 +54,8 @@ pub enum Do {
     },
     /// Its name typed in.
     Rename(TabId),
+    /// Its ticket or project chosen from yours (`@tab_ticket`).
+    ChooseTicket(TabId),
     /// Its lone pane's width of its own cleared, taking Settings'
     /// `lone_pane_width` again.
     DefaultWidth(TabId),
@@ -698,6 +700,13 @@ pub fn tab_choices(
     out.push(choice('L', "lazygit", Do::Lazygit(tab.id)));
     out.push(choice('p', "Actions (M-p) in the tab", Do::Palette(tab.id)));
     out.push(choice('r', "Rename it", Do::Rename(tab.id)));
+    if crate::settings::is_on("linear") || crate::settings::is_on("github") {
+        out.push(choice(
+            'k',
+            "Choose its ticket or project…",
+            Do::ChooseTicket(tab.id),
+        ));
+    }
     out.push(choice(
         'f',
         if tab.pinned {
@@ -2263,7 +2272,7 @@ mod tests {
     fn a_tabs_menu_goes_there_first_then_answers_peeks_renames_pins_and_reminds() {
         let mut t = tab(3, "fix");
         let choices = tab_choices(&t, std::slice::from_ref(&t), None, true, true);
-        assert_eq!(keys(&choices), "gavidLprfex");
+        assert_eq!(keys(&choices), "gavidLprkfex");
         assert_eq!(choices[3].label, "Show its full title");
         assert_eq!(choices[3].act, Do::TabTitle(TabId(3)));
         assert_eq!(choices[0].label, "Go to tab 3");
@@ -2274,13 +2283,13 @@ mod tests {
         let choices = tab_choices(&t, std::slice::from_ref(&t), None, false, false);
         assert_eq!(
             keys(&choices),
-            "gvdLprfx",
+            "gvdLprkfx",
             "no answer without a Claude, no reminder or full title when off"
         );
         assert_eq!(choices[1].label, "Peek at its screen");
         assert_eq!(choices[2].act, Do::Diff(TabId(3)));
         assert_eq!(choices[3].act, Do::Lazygit(TabId(3)));
-        assert_eq!(choices[6].label, "Unpin it");
+        assert_eq!(choices[7].label, "Unpin it");
     }
 
     #[test]
