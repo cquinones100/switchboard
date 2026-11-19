@@ -5629,3 +5629,42 @@ fn a_drag_let_go_on_board_8_s_share_clears_a_width_kept() {
     assert_eq!(app.plan_width, None);
     assert_eq!(app.kept_plan_width(), None);
 }
+
+#[test]
+fn a_plan_taking_the_keys_with_a_card_at_its_top_lights_no_card() {
+    let (_dir, mut app, _path, _plan) = with_plan("plan-took-keys-card", 160);
+    app.rows = 12;
+    keys(&mut app, "4G<CR>");
+    let _ = screen(&mut app);
+    // Scrolled without the keys so a card's row is at the top.
+    let (_, hits) = app.plan_layout();
+    let top = hits
+        .iter()
+        .find(|h| matches!(h.4, beside::Stop::Card(_)) && h.0 > 0)
+        .unwrap()
+        .0;
+    app.beside.as_mut().unwrap().scroll = top;
+    let _ = screen(&mut app);
+    app.cols = 90;
+    let _ = drawn(&mut app);
+    let b = app.beside.as_ref().unwrap();
+    assert!(b.focused);
+    assert_eq!(b.stop, None, "no card lit by taking the keys");
+}
+
+#[test]
+fn a_drag_let_go_where_it_started_writes_nothing() {
+    let (_dir, mut app, _path, _plan) = with_plan("plan-drag-back", 160);
+    keys(&mut app, "4G<CR>");
+    app.plan_width = Some(60);
+    let _ = screen(&mut app);
+    // Another tab keeps 80 meanwhile.
+    util::write_atomic(app.store.state.join(PLAN_WIDTH), "80").unwrap();
+    let edge = app.geo.plan.x - 1;
+    mouse(&mut app, MouseKind::Press, edge, 5);
+    mouse(&mut app, MouseKind::Drag, edge - 10, 5);
+    mouse(&mut app, MouseKind::Drag, edge, 5);
+    mouse(&mut app, MouseKind::Release, edge, 5);
+    assert_eq!(app.plan_width, Some(60));
+    assert_eq!(app.kept_plan_width(), Some(80));
+}

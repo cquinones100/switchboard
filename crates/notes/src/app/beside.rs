@@ -1053,7 +1053,11 @@ impl App {
             spots
         });
         let b = self.beside.as_ref()?;
-        let Laid { mut rows, hits, .. } = laid;
+        let Laid {
+            mut rows,
+            hits,
+            pieces,
+        } = laid;
         // The header stays; the rest scrolls, never past its end.
         let body = area.height.saturating_sub(1) as usize;
         let last = rows.len().saturating_sub(1).saturating_sub(body);
@@ -1080,10 +1084,28 @@ impl App {
                 scroll = line + 1 - body;
             }
         }
-        let scroll = scroll.min(last);
+        let mut scroll = scroll.min(last);
         let focused = b.focused;
         if focused && body > 0 {
             line = line.clamp(scroll, scroll + body - 1);
+        }
+        // A plan given the keys as the note hid puts its cursor on text, the
+        // first in view, else the nearest, never on a card the reader didn't
+        // go to, which Enter would choose.
+        let on_text = |l: &usize| pieces.get(l + 1).is_some_and(Option::is_some);
+        if b.took_keys && focused && body > 0 && !on_text(&line) {
+            let near = (scroll..scroll + body)
+                .find(on_text)
+                .or_else(|| (line..rows.len().saturating_sub(1)).find(on_text))
+                .or_else(|| (0..line).rev().find(on_text));
+            if let Some(l) = near {
+                line = l;
+                if l < scroll {
+                    scroll = l;
+                } else if l >= scroll + body {
+                    scroll = l + 1 - body;
+                }
+            }
         }
         let stop = b.stop;
         let b = self.beside.as_mut()?;
