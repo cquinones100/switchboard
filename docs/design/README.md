@@ -251,6 +251,6 @@ The relay's DM, threads and Home tab.
 - [141. Reading down the column: each page a section, its claim in a sentence, what was decided and instead of what, what to watch, then its hunks inline, tests folded last](https://cquinones100.github.io/switchboard/design/141.html)
 - [142. What runs, in the order it happens, over the column: each step a box naming its page, the page being read lit; h/l along it](https://cquinones100.github.io/switchboard/design/142.html)
 
-## Proposal: the chosen card, plain to see
+## The chosen card, plain to see
 
 - [143. The chosen card plain to see in the Tabs view: every card's edge the plain rule, its group's tone left to its mark and state words; the chosen card's edge in the accent, its top edge a solid accent bar with its mark, number, name and state dark on it](https://cquinones100.github.io/switchboard/design/143.html)
