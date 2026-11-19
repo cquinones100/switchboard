@@ -10,10 +10,10 @@
 //! Enter on the outline reads from there, down one column: what changes
 //! first, then each page a section with its claim, a block of what it
 //! Decided, Instead of what and what to Watch, then its changes inline,
-//! a file of tests folded last, which Enter unfolds. `]p` and `[p` move
+//! a file of tests folded last, which Enter unfolds. `]` and `[` move
 //! page to page, Tab between the outline and the column, the outline
 //! following where the column is; a page is read once the column has been
-//! on it. What runs (the overview's line, or the menu) lays the steps
+//! on it. What runs, always over the column, lays the steps
 //! that run in the order they happen over the column, a box each naming
 //! its page, the page being read lit; `h` and `l` move along it.
 //!
@@ -151,8 +151,6 @@ pub(super) enum Does {
         page: usize,
         path: String,
     },
-    /// The overview's line that lays What runs over the column.
-    Runs,
     /// The overview's last line, which reads on from page 1.
     FirstPage,
 }
@@ -171,8 +169,8 @@ pub(super) struct Row {
 }
 
 /// The Story view's own state: the outline's chosen entry, the column's
-/// cursor line and first line, What runs (whether it is laid over the
-/// column, and its chosen step), the files of tests unfolded, the line a
+/// cursor line and first line, What runs (its chosen step), the
+/// files of tests unfolded, the line a
 /// change's menu was opened on, and the column as last laid out with the
 /// width and the unfolded it was laid out for.
 #[derive(Clone, Debug, Default)]
@@ -180,7 +178,6 @@ pub(super) struct Reader {
     pub(super) item: usize,
     pub(super) cur: usize,
     pub(super) top: usize,
-    pub(super) runs: bool,
     pub(super) run: Option<usize>,
     /// The outline's first row on the screen, past what a long one hides.
     outline_top: usize,
@@ -1467,20 +1464,10 @@ impl App {
         }
     }
 
-    /// What runs laid over the column, or taken away.
-    pub(super) fn toggle_runs(&mut self) {
-        let has = self.told_map().is_some_and(|s| !s.runs.is_empty());
-        if !has && !self.reader.runs {
-            return self.say(
-                "This story names nothing that runs: told before What runs was asked for, or a change where nothing runs.",
-            );
-        }
-        self.reader.runs = !self.reader.runs;
-        // Its step lit for where the column is, nothing more read.
-        if self.reader.runs {
-            self.follow_marking(false);
-        }
-        self.keep_reading();
+    /// Whether What runs is over the column: always, in a story that
+    /// names steps that run.
+    pub(super) fn runs_shown(&self) -> bool {
+        self.told_map().is_some_and(|s| !s.runs.is_empty())
     }
 
     /// What runs' step `i` chosen, its page shown.
@@ -1502,7 +1489,7 @@ impl App {
     /// The column's rows on the screen, under What runs when it is shown.
     pub(super) fn column_rect(&self) -> Rect {
         let area = self.diff_area();
-        let over = if self.reader.runs { RUNS_ROWS } else { 0 };
+        let over = if self.runs_shown() { RUNS_ROWS } else { 0 };
         Rect::new(
             area.x,
             area.y + over,
@@ -1731,22 +1718,6 @@ impl App {
                 cols,
                 Style::new(),
             )));
-        }
-        if !story.runs.is_empty() {
-            rows.push(plain(Vec::new()));
-            rows.push(Row {
-                does: Does::Runs,
-                ..plain(vec![
-                    Span::styled("What runs ▸ ", Tone::Accent.bold(theme)),
-                    Span::styled(
-                        format!(
-                            "{} in the order they happen",
-                            counted(story.runs.len(), "step")
-                        ),
-                        Tone::Dim.style(theme),
-                    ),
-                ])
-            });
         }
         rows.push(plain(Vec::new()));
         // What it was told from, as kept with it; unsaid for one kept before.
@@ -2106,7 +2077,6 @@ impl App {
         };
         match row.does {
             Does::Nothing => {}
-            Does::Runs => self.toggle_runs(),
             Does::FirstPage => {
                 let first = self
                     .told_map()
@@ -2331,14 +2301,15 @@ impl App {
             KeyCode::Char('w') if ctrl => return None,
             KeyCode::F(10) if key.modifiers == KeyModifiers::SHIFT => return None,
             KeyCode::Char('m') if key.modifiers.is_empty() => self.open_menu(None),
-            KeyCode::Esc if self.reader.runs => self.toggle_runs(),
             KeyCode::Esc if outline => return Some(Act::Quit),
             KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab if !outline => self.focus = Focus::List,
             KeyCode::Tab | KeyCode::BackTab => self.focus = Focus::New,
-            KeyCode::Char('h') | KeyCode::Left if self.reader.runs && !ctrl => {
+            // h and l go along What runs while the column has the keys;
+            // Tab, Esc and C-w h go back to the outline.
+            KeyCode::Char('h') | KeyCode::Left if self.runs_shown() && !outline && !ctrl => {
                 self.go_to_run(self.reader.run.map_or(0, |r| r.saturating_sub(1)));
             }
-            KeyCode::Char('l') | KeyCode::Right if self.reader.runs && !ctrl => {
+            KeyCode::Char('l') | KeyCode::Right if self.runs_shown() && !outline && !ctrl => {
                 let last = self
                     .told_map()
                     .map_or(0, |s| s.runs.len().saturating_sub(1));
@@ -2529,7 +2500,7 @@ impl App {
         for y in area.y..area.bottom() {
             put_line(buf, list.right(), y, 1, &Spans::from(kit::rule_v(&theme)));
         }
-        if self.reader.runs {
+        if self.runs_shown() {
             self.draw_runs(buf, &theme);
         }
         self.draw_column(buf, &theme);

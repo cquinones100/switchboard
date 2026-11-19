@@ -66,8 +66,6 @@ pub(super) enum Choice {
     Mode(super::Mode),
     /// The file list's width you gave it forgotten (width.rs).
     DefaultWidth,
-    /// What runs laid over the column, or taken away.
-    Runs,
     /// The story forgotten and told again, by the model the setting
     /// names now.
     TellAgain,
@@ -841,19 +839,11 @@ impl App {
         let mut choices = Vec::new();
         let mut options = Vec::new();
         // With a story told in chapters, its two views first, the one
-        // shown chosen as the menu opens, then What runs over the column.
+        // shown chosen as the menu opens.
         if self.mapped() {
             for (label, mode) in super::reading::MENU {
                 choices.push(Choice::Mode(mode));
                 options.push(MenuOption::new(label));
-            }
-            if self.on_story() && self.story.as_ref().is_some_and(|s| !s.runs.is_empty()) {
-                choices.push(Choice::Runs);
-                options.push(MenuOption::new(if self.reader.runs {
-                    "Hide what runs"
-                } else {
-                    "What runs"
-                }));
             }
         }
         // Only a story told, never the page of what isn't committed yet
@@ -994,7 +984,6 @@ impl App {
             Some(Choice::Settings) => self.toggle_settings(),
             Some(Choice::Mode(mode)) => self.choose_mode(mode),
             Some(Choice::DefaultWidth) => self.default_width(),
-            Some(Choice::Runs) => self.toggle_runs(),
             Some(Choice::TellAgain) => self.tell_again(),
             Some(Choice::InFiles) => self.show_target(),
             Some(Choice::CopyPlace) => self.copy_target(),

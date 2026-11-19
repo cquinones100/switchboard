@@ -607,7 +607,7 @@ pub const KEYS: &[(&str, &[KeyRow])] = &[
             ),
             key_row(
                 "m",
-                "the view's menu: the story, the map or the files, What runs, Tell it again",
+                "the view's menu: the story, the map or the files, Tell it again",
             ),
             ask_row("ga", "ask Claude about the diff"),
             key_row(
@@ -633,7 +633,7 @@ pub const KEYS: &[(&str, &[KeyRow])] = &[
             ),
             key_row("] [", "the next page's section, the one before"),
             key_row("tab", "between the outline and the column"),
-            key_row("h l", "along What runs, while it is shown"),
+            key_row("h l", "along What runs, from the column"),
             key_row(
                 "v V",
                 "select lines of the column: y then copies their text",
@@ -8238,10 +8238,7 @@ mod tests {
                     app = map_app();
                     press(&mut app, "gm");
                 }
-                "M-d: the story view" => {
-                    app = map_app();
-                    app.toggle_runs();
-                }
+                "M-d: the story view" => app = map_app(),
                 "M-d: the cover while the story is told" => {
                     app.telling = Telling::Waiting;
                     app.cover = Some(Instant::now());
@@ -8260,8 +8257,10 @@ mod tests {
             for row in *rows {
                 for token in row.keys.split(' ') {
                     let mut app = place(title);
-                    // Selecting is in a side of the diff.
-                    if token == "v" || token == "V" {
+                    // Selecting is in a side of the diff, and h goes along
+                    // What runs from the Story view's column.
+                    let in_column = *title == "M-d: the story view" && token == "h";
+                    if token == "v" || token == "V" || in_column {
                         app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
                     }
                     let mut act = Act::Same;
@@ -8785,9 +8784,11 @@ mod tests {
         app.relay();
         let shown = screen(&mut app);
         let row = |text: &str| line_with(&shown, text);
+        // What runs over it all, the column under it.
+        assert!(shown[0].contains("WHAT RUNS"));
         // Over the column, the story's name and size and what it compares with.
-        assert!(shown[0].contains("Signups map  a story in 2 chapters, 5 pages · +"));
-        assert!(shown[0].contains("against origin/main"), "{:?}", shown[0]);
+        assert!(shown[6].contains("Signups map  a story in 2 chapters, 5 pages · +"));
+        assert!(shown[6].contains("against origin/main"), "{:?}", shown[6]);
         // Before and After side by side, After's arrow between them.
         let sides = row("╭─ Before");
         assert!(shown[sides].contains("╭─ After"));
@@ -8801,7 +8802,6 @@ mod tests {
         assert!(row("The map needs outlines kept.") == row("1  Store each outline") + 1);
         assert!(!shown.iter().any(|l| l.contains("Each is simplified")));
         assert!(shown[row("Also in this change: Side work")].contains("format the helpers"));
-        assert!(shown[row("What runs ▸")].contains("3 steps in the order they happen"));
         assert!(
             row("From the plan note and the commits. Told by Sonnet.") < row("Enter reads from 1.")
         );
@@ -8838,13 +8838,13 @@ mod tests {
         assert_eq!(app.section(), 1);
         let shown = screen(&mut app);
         // The page's heading at the top of the column, where it is at the right.
-        assert!(shown[0].contains("1  Store each outline"));
+        assert!(shown[6].contains("1  Store each outline"));
         assert!(
-            shown[0].contains("page 1 of 4 · chapter 1"),
+            shown[6].contains("page 1 of 4 · chapter 1"),
             "{:?}",
-            shown[0]
+            shown[6]
         );
-        assert!(shown[1].contains("Outlines are stored once, not fetched on each view."));
+        assert!(shown[7].contains("Outlines are stored once, not fetched on each view."));
         let row = |text: &str| line_with(&shown, text);
         assert!(row("Decided  Store each outline once.") < row("Instead  of fetching it"));
         assert!(row("Instead  of fetching it") < row("Watch    An outline of no points."));
@@ -9063,12 +9063,7 @@ mod tests {
     fn what_runs_lists_its_steps_in_order_with_the_page_being_read_lit() {
         let mut app = map_app();
         app.go_to_section(2);
-        // The menu lays What runs over the column.
-        press(&mut app, "m");
-        let shown = screen(&mut app);
-        assert!(shown.iter().any(|l| l.contains("What runs")));
-        app.toggle_runs();
-        app.menu = None;
+        // What runs is always over the column.
         let shown = screen(&mut app);
         let row = |text: &str| line_with(&shown, text);
         assert!(shown[0].contains("WHAT RUNS"));
@@ -9127,9 +9122,10 @@ mod tests {
         assert!(app.reader.top > top);
         press(&mut app, "K");
         assert_eq!(app.reader.top, top);
-        // Esc takes it away.
-        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        assert!(!app.reader.runs);
+        // From the outline, l gives the column the keys.
+        app.focus = Focus::List;
+        press(&mut app, "l");
+        assert_eq!(app.focus, Focus::New);
     }
 
     #[test]
@@ -9158,14 +9154,11 @@ mod tests {
                 .iter()
                 .any(|l| l.contains("told before the diff said what changes"))
         );
-        assert!(!shown.iter().any(|l| l.contains("What runs ▸")));
+        assert!(!shown.iter().any(|l| l.contains("WHAT RUNS")));
         // A page with no claim reads its why in its place.
         app.go_to_section(1);
         let shown = screen(&mut app);
         assert!(shown[1].contains("The map needs outlines kept."));
-        // Asked for, What runs says there is none.
-        app.toggle_runs();
-        assert!(!app.reader.runs);
     }
 
     #[test]

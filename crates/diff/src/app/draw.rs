@@ -232,7 +232,7 @@ impl App {
             ]
         } else if self.on_story() {
             let mut keys = vec![("↑↓", "scroll"), ("] [", "page")];
-            if self.reader.runs {
+            if self.runs_shown() {
                 keys.push(("←→", "what runs"));
             }
             keys.extend([
