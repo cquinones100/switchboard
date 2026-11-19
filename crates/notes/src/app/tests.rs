@@ -5712,3 +5712,49 @@ fn a_cursor_moved_away_and_back_starts_the_next_rewrap_from_where_it_is() {
     let row = plan_row(&app, &shown, cursor.unwrap().1);
     assert!(row.starts_with("- word"), "{row}");
 }
+
+#[test]
+fn use_the_default_width_with_the_plan_hidden_behind_its_note_is_the_list_s() {
+    let (_dir, mut app, _path, _plan) = with_plan("plan-hidden-default", 90);
+    keys(&mut app, "4G<CR>");
+    app.plan_width = Some(50);
+    app.list_width = Some(41);
+    assert_eq!(
+        app.request(socket::Request::Run("Show the note beside its plan".into())),
+        "ok"
+    );
+    let _ = screen(&mut app);
+    assert_eq!(app.run_request("Use the default width"), "ok");
+    assert_eq!(app.list_width, None);
+    assert_eq!(app.plan_width, Some(50));
+}
+
+#[test]
+fn the_card_lit_under_a_still_mouse_follows_a_rewrap() {
+    let (_dir, mut app, _path, _plan) = with_plan("plan-hover-rewrap", 160);
+    app.rows = 60;
+    app.opts.hover = true;
+    keys(&mut app, "4G<CR>");
+    app.plan_width = Some(99);
+    let _ = screen(&mut app);
+    let (rect, stop) = *app
+        .geo
+        .plan_hits
+        .iter()
+        .find(|(_, s)| *s == beside::Stop::Card('B'))
+        .unwrap();
+    assert_eq!(stop, beside::Stop::Card('B'));
+    mouse(&mut app, MouseKind::Move, rect.x + 2, rect.y + 1);
+    let _ = screen(&mut app);
+    assert_eq!(app.beside.as_ref().unwrap().hover, Some(stop));
+    app.plan_width = Some(34);
+    let _ = screen(&mut app);
+    let (x, y) = (rect.x + 2, rect.y + 1);
+    let under = app
+        .geo
+        .plan_hits
+        .iter()
+        .find(|(r, _)| x >= r.x && x < r.right() && y >= r.y && y < r.bottom())
+        .map(|(_, s)| *s);
+    assert_eq!(app.beside.as_ref().unwrap().hover, under);
+}
