@@ -105,7 +105,7 @@ The round cap is 20 rounds in a tab of autopilot's hands-free mode (`@autopilot_
 
 ## Final report
 
-Say which of these ended the loop: two consecutive clean rounds, the round cap (naming which, from the JSON's `cap`: "the round cap, 20 hands-free" or "the round cap, 5"), or a blocker, and which reviewer ran (the JSON's `reviewer`). Then give:
+Say which of these ended the loop: two consecutive clean rounds, the round cap (naming which, from the JSON's `cap`: "the round cap, 20 hands-free" or "the round cap, 5"), or a blocker, and which reviewer ran (the JSON's `reviewer`). When the cap or a blocker ended it, give the last round's findings right after, as a numbered list, one line each, never as a paragraph and never the rounds before it: `#<n> <severity> <file>:<line> <title>: <what triage did with it>`, numbered with `#` so mission control never reads the list as a question's choices, the last part `fixed in <short hash>`, `fixed in the PR description`, `disputed`, `known gap`, `reported` (a low left for the report, or a finding for someone else's PR) or `waits on you`. Then give:
 
 - **Rounds run** and the commits added, from `git log <start>..HEAD --oneline`.
 - **Fixed**: each finding acted on, one line each.
@@ -116,7 +116,7 @@ Say which of these ended the loop: two consecutive clean rounds, the round cap (
 - **Outside this repository**: each finding in a file of another repository, with the file and that repository, left for the user.
 - **PR description**: whether it changed and how.
 
-Then ask whether to push. Never run `git push` without the user's explicit approval, even in auto mode. The one approval given ahead is queue-and-clean's landing without asking (its step 7), which runs this loop with its push question left out. If the cap ended the loop with findings still open, list them and let the user decide whether to keep going; in a hands-free tab, ask it with `AskUserQuestion` headed `[always ask]`, the open findings in the question, so hands-free mode still asks it rather than deciding for the user.
+Then ask whether to push. Never run `git push` without the user's explicit approval, even in auto mode. The one approval given ahead is queue-and-clean's landing without asking (its step 7), which runs this loop with its push question left out. If the cap ended the loop with findings still open, let the user decide whether to keep going; in a hands-free tab, ask it with `AskUserQuestion` headed `[always ask]`, so hands-free mode still asks it rather than deciding for the user. The question is one sentence naming the findings still open by number and severity ("#2 high and #4 medium are still open"), with no titles, so mission control, which keeps only the few lines above a question's choices, shows it whole; their titles are in the list above it.
 
 ## Squashing the loop's commits
 

@@ -609,6 +609,14 @@ fn review_loop_runs_twenty_rounds_hands_free_and_five_otherwise() {
         .and_then(|rest| rest.split("\n## ").next())
         .expect("the report");
     assert!(report.contains("\"the round cap, 20 hands-free\""));
+    for said in [
+        "give the last round's findings right after, as a numbered list, one line each, never as a paragraph and never the rounds before it",
+        "`#<n> <severity> <file>:<line> <title>: <what triage did with it>`",
+        "The question is one sentence naming the findings still open by number and severity",
+        "`reported` (a low left for the report, or a finding for someone else's PR)",
+    ] {
+        assert!(report.contains(said), "{said}");
+    }
     assert!(
         regex::Regex::new(r"cap ended the loop with findings still open.*hands-free tab, ask it with `AskUserQuestion` headed `\[always ask\]`")
             .unwrap()
