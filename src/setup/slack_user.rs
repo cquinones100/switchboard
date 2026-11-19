@@ -7,8 +7,12 @@
 //! Keychain, or Linux's keyring, and where that can't take it, the
 //! `secrets.json` only you can read), in no file of its own, and keeps who
 //! it is for in the state directory, letting go of the reminders kept for
-//! a sign-in before it, which is how the server knows there is a sign-in. New with the Rust version, with no
-//! tmux-version file behind it.
+//! a sign-in before it, which is how the server knows there is a sign-in.
+//! It then asks for the same app's app-level token (`xapp-…`), for the
+//! Slack view to take messages as they're posted (`day::slack_live`), which
+//! may be skipped: checked with `apps.connections.open` and stored as a
+//! secret of its own, the sign-in marked as having one. New with the Rust
+//! version, with no tmux-version file behind it.
 //!
 //! It is no part of the guided setup: it asks for a token, so it runs only
 //! when named.
@@ -16,16 +20,17 @@
 use std::io::{BufRead, IsTerminal, Write};
 use std::process::ExitCode;
 
+use crate::day::slack_live::APP_TOKEN_SERVICE;
 use crate::day::slack_user::{self, SCOPES, TOKEN_SERVICE};
 use crate::{paths, platform, util};
 
 /// What `switchboard setup --help` says of it.
-pub const ABOUT: &str = "store a Slack user token of your own, for the Slack view's reminders, read marks and reads (asks for the token; never part of the guided setup)";
+pub const ABOUT: &str = "store a Slack user token of your own, for the Slack view's reminders, read marks and reads, and its app-level token for messages as they're posted (asks for the tokens; never part of the guided setup)";
 
 pub fn main() -> ExitCode {
     println!("Your own Slack sign-in, for the Slack view's reminders, read marks and reads.\n");
     println!("  1. Open https://api.slack.com/apps and choose an app of yours (the Slack");
-    println!("     relay's works).");
+    println!("     relay's works, but not for messages as they're posted, below).");
     println!("  2. Under OAuth & Permissions, add these User Token Scopes:");
     for pair in SCOPES.chunks(2) {
         println!("       {}", pair.join(", "));
@@ -59,7 +64,11 @@ pub fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    // Both tokens are asked for and checked before either is stored, so
+    // the sign-in and its tokens change together.
+    let app = app_token();
     let user = std::env::var("USER").unwrap_or_default();
+    let before = slack_user::signed_in(&paths::state_dir());
     let stored = match platform::set_secret(TOKEN_SERVICE, &user, token) {
         Ok(place) => place,
         Err(e) => {
@@ -67,6 +76,24 @@ pub fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    let app_stored =
+        app.is_some_and(
+            |app| match platform::set_secret(APP_TOKEN_SERVICE, &user, &app) {
+                Ok(place) => {
+                    println!("Stored the app-level token in {place}.");
+                    true
+                }
+                Err(e) => {
+                    eprintln!("Couldn't store the app-level token: {e:#}");
+                    false
+                }
+            },
+        );
+    let mut who = who;
+    // Skipped or not taken, one stored before for the same member still
+    // counts.
+    who.live =
+        app_stored || before.is_some_and(|b| b.live && b.team == who.team && b.user == who.user);
     if let Err(e) = slack_user::save_sign_in(&paths::state_dir(), &who) {
         eprintln!("Stored the token, but couldn't keep who it is for: {e}");
         return ExitCode::from(1);
@@ -80,7 +107,48 @@ pub fn main() -> ExitCode {
     println!("Your reminders that are due show in mission control's Slack view within two");
     println!("minutes (Settings' \"Slack reminders in the Slack view\"). To mark what you open");
     println!("there read in Slack, turn on Settings' \"Mark what you open read in Slack\".");
+    if who.live {
+        println!("New messages reach the view as they're posted (Settings' \"Take Slack");
+        println!("messages as they're posted\").");
+    }
     ExitCode::SUCCESS
+}
+
+/// Asks for the app's app-level token, for messages as they're posted,
+/// and checks it with Slack: the token, or `None` when skipped or not
+/// taken, having said why.
+fn app_token() -> Option<String> {
+    println!("\nTo have the Slack view take messages as they're posted, in an app of yours");
+    println!("that isn't the Slack relay's:");
+    println!("  1. Under Socket Mode, turn it on and generate an app-level token with the");
+    println!("     connections:write scope (it starts with xapp-).");
+    println!("  2. Under Event Subscriptions, turn them on and, under events on behalf of");
+    println!("     users, add message.channels, message.groups, message.im and message.mpim.");
+    println!("  3. Reinstall the app to your workspace.\n");
+    print!("Paste the app-level token, or press Enter to skip (it isn't shown): ");
+    let _ = std::io::stdout().flush();
+    let token = read_token().ok()?;
+    let token = token.trim();
+    if token.is_empty() {
+        return None;
+    }
+    if !token.starts_with("xapp-") {
+        eprintln!("That isn't an app-level token, which starts with xapp-; it wasn't stored.");
+        return None;
+    }
+    if crate::relay::slack::token(crate::relay::slack::APP_TOKEN_SERVICE).as_deref() == Some(token)
+    {
+        eprintln!(
+            "That is the Slack relay's app-level token, whose events it would take; use an app of your own. It wasn't stored."
+        );
+        return None;
+    }
+    #[cfg(feature = "net")]
+    if let Err(e) = util::block_on(crate::relay::http::open_socket(token, "setup: slack-user")) {
+        eprintln!("Slack didn't take it: {e}. It wasn't stored.");
+        return None;
+    }
+    Some(token.to_string())
 }
 
 /// The token typed or pasted at a terminal, unshown, up to Enter; else the

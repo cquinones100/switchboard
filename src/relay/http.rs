@@ -221,14 +221,34 @@ impl Transport for Https {
 
 // ── Socket Mode ─────────────────────────────────────────────────────────────
 
-/// Socket Mode: Slack sends each event down the socket in an envelope,
-/// acknowledged before anything else (see `slack::envelope`). Slack also
-/// asks the app to reconnect now and then (a "disconnect"), and a dropped
-/// connection is opened again, waiting longer after each failure in a row.
-/// Every (re)connection catches up on what was sent while the socket was
-/// down. Runs until the relay stops.
+/// What a Socket Mode connection tells whoever holds it: each envelope
+/// Slack sent (already acknowledged), or that the connection failed or
+/// dropped, with why and how long until it is opened again.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Socket {
+    Envelope(super::slack::Envelope),
+    Dropped { why: String, retry_in_ms: u64 },
+}
+
+/// Socket Mode for an app's app-level token (`xapp-`): Slack sends each
+/// event down the socket in an envelope, acknowledged before anything else
+/// (see `slack::envelope`) and then handed to `on`. Slack also asks the app
+/// to reconnect now and then (a "disconnect"), and a dropped connection is
+/// opened again, waiting longer after each failure in a row. Runs until
+/// `stopping` says so, or until `refuse` says an envelope isn't this
+/// connection's to take, which closes it before that envelope is
+/// acknowledged, so Slack sends it again to another connection; it then
+/// gives `true`. `source` names who holds it in the request audit.
+/// Shared by the relay (`socket_mode`) and the Slack view's live messages
+/// (`day::slack_live`), each with its own app and token.
 #[cfg(feature = "net")]
-pub async fn socket_mode(cx: super::Cx, app_token: String) {
+pub async fn socket_loop(
+    app_token: &str,
+    source: &str,
+    stopping: impl Fn() -> bool,
+    refuse: impl Fn(&super::slack::Envelope) -> bool,
+    mut on: impl FnMut(Socket),
+) -> bool {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message as Ws;
 
@@ -236,19 +256,19 @@ pub async fn socket_mode(cx: super::Cx, app_token: String) {
 
     let mut failures = 0usize;
     loop {
-        if cx.life.borrow().stopping {
-            return;
+        if stopping() {
+            return false;
         }
-        let why = match open_socket(&app_token).await {
+        let why = match open_socket(app_token, source).await {
             Err(e) => e.to_string(),
             Ok(url) => match tokio_tungstenite::connect_async(url.as_str()).await {
                 Err(e) => format!("couldn't connect: {e}"),
                 Ok((mut socket, _)) => {
-                    crate::requests::count("Slack", "WebSocket", "relay: Socket Mode");
+                    crate::requests::count("Slack", "WebSocket", &format!("{source}: Socket Mode"));
                     while let Some(message) = socket.next().await {
-                        if cx.life.borrow().stopping {
+                        if stopping() {
                             let _ = socket.close(None).await;
-                            return;
+                            return false;
                         }
                         let text = match message {
                             Ok(Ws::Text(t)) => t.to_string(),
@@ -258,46 +278,79 @@ pub async fn socket_mode(cx: super::Cx, app_token: String) {
                         let Some((ack, what)) = envelope(&text) else {
                             continue;
                         };
+                        if refuse(&what) {
+                            let _ = socket.close(None).await;
+                            return true;
+                        }
                         if let Some(ack) = ack
                             && socket.send(Ws::text(ack)).await.is_err()
                         {
                             break;
                         }
-                        match what {
-                            Envelope::Hello => {
-                                failures = 0;
-                                cx.log("Slack: connected");
-                                super::run::on_connect(&cx);
-                            }
-                            Envelope::Disconnect => break,
-                            Envelope::Event { event, team, app } => {
-                                super::run::on_event(&cx, event, team, app)
-                            }
-                            Envelope::Interactive(payload) => {
-                                super::run::on_interactive(&cx, payload)
-                            }
-                            Envelope::Other => {}
+                        let disconnect = what == Envelope::Disconnect;
+                        if what == Envelope::Hello {
+                            failures = 0;
+                        }
+                        on(Socket::Envelope(what));
+                        if disconnect {
+                            break;
                         }
                     }
                     "connection closed".to_string()
                 }
             },
         };
-        if cx.life.borrow().stopping {
-            return;
+        if stopping() {
+            return false;
         }
         let delay = RECONNECT_DELAYS_MS[failures.min(RECONNECT_DELAYS_MS.len() - 1)];
         failures += 1;
-        cx.log(&format!("Slack: {why}; reconnecting in {}s", delay / 1000));
+        on(Socket::Dropped {
+            why,
+            retry_in_ms: delay,
+        });
         tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
     }
+}
+
+/// The relay's Socket Mode: every (re)connection catches up on what was
+/// sent while the socket was down. Runs until the relay stops.
+#[cfg(feature = "net")]
+pub async fn socket_mode(cx: super::Cx, app_token: String) {
+    use super::slack::Envelope;
+
+    let stopping = || cx.life.borrow().stopping;
+    socket_loop(
+        &app_token,
+        "relay",
+        stopping,
+        |_| false,
+        |news| match news {
+            Socket::Envelope(Envelope::Hello) => {
+                cx.log("Slack: connected");
+                super::run::on_connect(&cx);
+            }
+            Socket::Envelope(Envelope::Event {
+                event, team, app, ..
+            }) => super::run::on_event(&cx, event, team, app),
+            Socket::Envelope(Envelope::Interactive(payload)) => {
+                super::run::on_interactive(&cx, payload)
+            }
+            Socket::Envelope(Envelope::Disconnect | Envelope::Other) => {}
+            Socket::Dropped { why, retry_in_ms } => cx.log(&format!(
+                "Slack: {why}; reconnecting in {}s",
+                retry_in_ms / 1000
+            )),
+        },
+    )
+    .await;
 }
 
 /// The socket's address, from `apps.connections.open` with the app-level
 /// token.
 #[cfg(feature = "net")]
-async fn open_socket(app_token: &str) -> Result<String> {
-    crate::requests::count("Slack", "REST", "relay: apps.connections.open");
+pub async fn open_socket(app_token: &str, source: &str) -> Result<String> {
+    crate::requests::count("Slack", "REST", &format!("{source}: apps.connections.open"));
     let client = reqwest::Client::builder()
         .user_agent(crate::net::USER_AGENT)
         .timeout(std::time::Duration::from_secs(API_TIMEOUT_SECS))
@@ -330,6 +383,21 @@ async fn open_socket(app_token: &str) -> Result<String> {
 #[cfg(not(feature = "net"))]
 pub async fn socket_mode(cx: super::Cx, _app_token: String) {
     cx.log(&format!("Slack: {NO_NET}"));
+}
+
+#[cfg(not(feature = "net"))]
+pub async fn socket_loop(
+    _app_token: &str,
+    _source: &str,
+    _stopping: impl Fn() -> bool,
+    _refuse: impl Fn(&super::slack::Envelope) -> bool,
+    mut on: impl FnMut(Socket),
+) -> bool {
+    on(Socket::Dropped {
+        why: NO_NET.to_string(),
+        retry_in_ms: u64::MAX,
+    });
+    std::future::pending::<bool>().await
 }
 
 #[cfg(test)]

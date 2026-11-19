@@ -533,6 +533,13 @@
     "default": true
   },
   {
+    "key": "slack_live",
+    "category": "Mission control: Slack",
+    "label": "Take Slack messages as they're posted",
+    "description": "With an app-level token stored beside your Slack sign-in (switchboard setup slack-user) and \"Read Slack through your own token\" on, the Slack view holds a Socket Mode connection for your app and takes each message as it is posted, looking at Slack on its schedule only every 10 minutes to catch up while the connection is up, and on \"Check Slack for new messages every\" while it is down, which the view says. The messages only fill the view. Off, the view only checks on its schedule",
+    "default": true
+  },
+  {
     "key": "view_reopen",
     "category": "Mission control: Reopen",
     "label": "Reopen",

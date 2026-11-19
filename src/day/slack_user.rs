@@ -98,6 +98,11 @@ pub struct SignIn {
     pub url: String,
     #[serde(default)]
     pub user: String,
+    /// Whether an app-level token for the same app is stored beside the
+    /// user token (`slack_live::APP_TOKEN_SERVICE`), for the Slack view to
+    /// take messages as they're posted.
+    #[serde(default)]
+    pub live: bool,
 }
 
 impl SignIn {
@@ -258,6 +263,7 @@ pub async fn auth_test(token: &str) -> Result<SignIn, String> {
         team: get("team_id"),
         url: get("url"),
         user: get("user_id"),
+        live: false,
     })
 }
 
@@ -555,6 +561,7 @@ mod tests {
             team: "T1".into(),
             url: "https://x.slack.com/".into(),
             user: "U1".into(),
+            live: false,
         };
         save_sign_in(&state, &who).unwrap();
         assert_eq!(signed_in(&state), Some(who.clone()));

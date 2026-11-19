@@ -25,6 +25,8 @@
 //! - `slack_thread`: the chosen message's thread and its pictures.
 //! - `slack_user`: Slack with your own token, for your reminders and for
 //!   marking what you open read in Slack.
+//! - `slack_live`: the Slack view's messages as they're posted, over
+//!   Socket Mode with an app-level token of your own.
 //! - `slack_api`: the Slack view's reads (the look, threads, files, the
 //!   search) through that token, the connector when it fails.
 //! - `standup`: the note written for you. Today's todo note and the
@@ -41,6 +43,7 @@ pub mod rrule;
 mod serve;
 pub mod slack;
 pub mod slack_api;
+pub mod slack_live;
 pub mod slack_look;
 pub mod slack_reply;
 pub mod slack_thread;

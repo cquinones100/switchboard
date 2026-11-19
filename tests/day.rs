@@ -681,6 +681,7 @@ fn with_your_own_token_the_look_and_its_threads_read_slack_without_the_connector
             team: "T1".into(),
             url: "https://x.slack.com/".into(),
             user: "U0MEMEME1".into(),
+            live: false,
         },
     )
     .unwrap();
@@ -764,5 +765,178 @@ fn with_your_own_token_the_look_and_its_threads_read_slack_without_the_connector
     unsafe {
         std::env::remove_var("SWITCHBOARD_SLACK_API");
         std::env::remove_var(slack_user::TOKEN_ENV);
+    }
+}
+
+#[cfg(feature = "net")]
+#[test]
+fn messages_come_as_theyre_posted_over_socket_mode_acknowledged_and_taken_again_after_a_drop() {
+    use futures_util::{SinkExt, StreamExt};
+    use switchboard::day::{slack_live, slack_user};
+    use switchboard::demo::services::{Fake as Service, Reply, Service as Kind};
+    use tokio_tungstenite::tungstenite::Message as Ws;
+
+    let home = Home::new("slack-live");
+    let dirs = home.dirs.clone();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let listener = runtime
+        .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+        .unwrap();
+    let socket_url = format!("ws://{}/", listener.local_addr().unwrap());
+    // Slack's Web API: the socket's address for the app-level token, and
+    // names for the user token, each refusing the other's.
+    let slack = Service::start(Kind::Web, move |request| {
+        let bearer = request.header("authorization").unwrap_or("");
+        let (token, body) = match request.path().trim_start_matches("/api/") {
+            "apps.connections.open" => ("xapp-mine", json!({ "ok": true, "url": socket_url })),
+            "users.info" => (
+                "xoxp-mine",
+                json!({ "ok": true, "user": { "name": "lin", "real_name": "Lin" } }),
+            ),
+            "conversations.info" => (
+                "xoxp-mine",
+                json!({ "ok": true, "channel": { "id": "CDEV", "name": "dev" } }),
+            ),
+            _ => return None,
+        };
+        let body = if bearer == format!("Bearer {token}") {
+            body
+        } else {
+            json!({ "ok": false, "error": "invalid_auth" })
+        };
+        Some(Reply::json(200, body))
+    });
+    // SAFETY: the test holds ENV, through `home`.
+    unsafe {
+        std::env::set_var("SWITCHBOARD_SLACK_API", format!("{}/api", slack.url));
+        std::env::set_var(slack_user::TOKEN_ENV, "xoxp-mine");
+        std::env::set_var(slack_live::APP_TOKEN_ENV, "xapp-mine");
+        std::env::set_var(slack_live::RELAY_TOKEN_ENV, "xapp-relay");
+    }
+    let mut who = slack_user::SignIn {
+        team: "T1".into(),
+        url: "https://x.slack.com/".into(),
+        user: "U0MEMEME1".into(),
+        live: false,
+    };
+    slack_user::save_sign_in(&dirs.state, &who).unwrap();
+    assert!(
+        !slack_live::wanted(&dirs.state),
+        "no connection without an app-level token"
+    );
+    who.live = true;
+    slack_user::save_sign_in(&dirs.state, &who).unwrap();
+    assert!(slack_live::wanted(&dirs.state));
+
+    let secs = util::now_ms() / 1000;
+    let message = |id: &str, event: Value| {
+        json!({ "type": "events_api", "envelope_id": id,
+                "payload": { "team_id": "T1", "api_app_id": "AMINE", "event": event,
+                             "authorizations": [{ "team_id": "T1", "user_id": "U0MEMEME1", "is_bot": false }] } })
+        .to_string()
+    };
+    let dm_ts = format!("{}.000100", secs - 5);
+    let mention_ts = format!("{}.000200", secs - 2);
+    let dm = message(
+        "E1",
+        json!({ "type": "message", "channel": "D0LIN", "channel_type": "im",
+                "user": "ULIN", "text": "are you around?", "ts": dm_ts }),
+    );
+    let mention = message(
+        "E2",
+        json!({ "type": "message", "channel": "CDEV", "channel_type": "channel",
+                "user": "ULIN", "text": "<@U0MEMEME1> the deploy is out", "ts": mention_ts }),
+    );
+    let (acks_tx, acks) = std::sync::mpsc::channel::<String>();
+    // The first connection sends the DM and drops; the second, opened again
+    // by itself, sends the mention.
+    runtime.spawn(async move {
+        for envelope in [dm, mention] {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            socket
+                .send(Ws::text(json!({ "type": "hello" }).to_string()))
+                .await
+                .unwrap();
+            socket.send(Ws::text(envelope)).await.unwrap();
+            if let Some(Ok(Ws::Text(ack))) = socket.next().await {
+                acks_tx.send(ack.to_string()).unwrap();
+            }
+            drop(socket);
+        }
+        std::future::pending::<()>().await
+    });
+    let (said_tx, said) = std::sync::mpsc::channel::<String>();
+    let said_tx = std::sync::Mutex::new(said_tx);
+    let live = runtime.spawn(slack_live::run(dirs.clone(), move |live| {
+        let _ = said_tx.lock().unwrap().send(format!("{live:?}"));
+    }));
+    let wait = Duration::from_secs(30);
+    let mut heard = Vec::new();
+    while heard.len() < 5 {
+        heard.push(
+            said.recv_timeout(wait)
+                .expect("the connection says what happens"),
+        );
+    }
+    assert_eq!(heard[..2], ["Up", "Took(Ok(1))"], "{heard:?}");
+    assert!(
+        heard[2].starts_with("Down(\"connection closed; trying again in 1s"),
+        "{heard:?}"
+    );
+    assert_eq!(heard[3..], ["Up", "Took(Ok(1))"], "{heard:?}");
+    let acks: Vec<String> = (0..2).map(|_| acks.recv_timeout(wait).unwrap()).collect();
+    assert_eq!(acks, [r#"{"envelope_id":"E1"}"#, r#"{"envelope_id":"E2"}"#]);
+
+    let saved: Value = serde_json::from_str(&read(dirs.state.join("slack.json"))).unwrap();
+    let items: Vec<(&str, &str, &str, &str)> = saved["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| {
+            (
+                i["kind"].as_str().unwrap(),
+                i["from"].as_str().unwrap(),
+                i["where"].as_str().unwrap(),
+                i["link"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    let link = |channel: &str, ts: &str| {
+        format!(
+            "https://x.slack.com/archives/{channel}/p{}",
+            ts.replace('.', "")
+        )
+    };
+    assert_eq!(
+        items,
+        [
+            ("mention", "Lin", "#dev", link("CDEV", &mention_ts).as_str()),
+            ("dm", "Lin", "Lin", link("D0LIN", &dm_ts).as_str()),
+        ],
+        "each sorted as the look sorts it, newest first"
+    );
+    assert_eq!(
+        saved["checked"], 0,
+        "no look is marked, so the next one reads from where the last did"
+    );
+    live.abort();
+
+    // Off in Settings, no connection is wanted.
+    std::fs::write(
+        home.root.join("settings.json"),
+        json!({ "slack_live": false }).to_string(),
+    )
+    .unwrap();
+    switchboard::settings::reload_settings();
+    assert!(!slack_live::wanted(&dirs.state));
+    std::fs::remove_file(home.root.join("settings.json")).unwrap();
+    switchboard::settings::reload_settings();
+    // SAFETY: as above.
+    unsafe {
+        std::env::remove_var("SWITCHBOARD_SLACK_API");
+        std::env::remove_var(slack_user::TOKEN_ENV);
+        std::env::remove_var(slack_live::APP_TOKEN_ENV);
+        std::env::remove_var(slack_live::RELAY_TOKEN_ENV);
     }
 }

@@ -42,6 +42,10 @@ const CONNECTOR_EVERY_MS: i64 = 60_000;
 pub const SLOW_LOOKS: u32 = 10;
 const SEARCH_PAGE: u32 = 20;
 const MAX_PAGES: usize = 10;
+/// Pages of the search through your token, a hundred results each, enough
+/// for the 20 minutes a catch-up look reads while messages come as they're
+/// posted; read only as far as the window reaches.
+const TOKEN_PAGES: usize = 20;
 const DAY_MS: i64 = 24 * 60 * 60_000;
 const SLACK: &str = "mcp__claude_ai_Slack__";
 
@@ -78,8 +82,14 @@ pub struct Pace {
 impl Pace {
     /// Slack asked to wait until `until`.
     pub fn slow_down(&mut self, until: i64) {
-        self.wait_until = Some(until);
+        self.hold_until(until);
         self.slow_left = SLOW_LOOKS;
+    }
+
+    /// Something else Slack refused for its rate limit asked to wait until
+    /// `until`: no look before then, without slowing the looks after.
+    pub fn hold_until(&mut self, until: i64) {
+        self.wait_until = Some(self.wait_until.map_or(until, |at| at.max(until)));
     }
 
     /// A look started at `now`, one fewer of the slow ones left.
@@ -402,20 +412,8 @@ pub async fn look_slack(
     let (since, mine_since) = slack::since(&dirs.state, now);
     let (since, mine_since) = (since.div_euclid(1000), mine_since.div_euclid(1000));
     let from = since.min(if mine_since != 0 { mine_since } else { since });
-    let channels: Vec<String> = util::read_json(dirs.config.join("slack-updates.json"))
-        .and_then(|v| v.get("channels").cloned())
-        .and_then(|v| serde_json::from_value(v).ok())
-        .unwrap_or_default();
-    let mut mine: Vec<String> = state
-        .get("mine")
-        .and_then(Value::as_array)
-        .map(|list| {
-            list.iter()
-                .map(util::js_string)
-                .filter(|ts| now - (ts.parse::<f64>().unwrap_or(0.0) * 1000.0) as i64 <= DAY_MS)
-                .collect()
-        })
-        .unwrap_or_default();
+    let channels = chosen_channels(dirs);
+    let mut mine = kept_mine(&state, now);
     let day = jiff::Timestamp::from_second(from - 86_400)
         .map(|t| t.strftime("%Y-%m-%d").to_string())
         .unwrap_or_default();
@@ -491,18 +489,117 @@ pub async fn look_slack(
         .collect();
     let (items, replied) = sort_look(&wanted, &me, &mut mine, &channels);
     let (n_items, n_replied) = (items.len(), replied.len());
-    slack::save(
+    {
+        let _saving = slack::saving();
+        slack::save(
+            &dirs.state,
+            &dirs.relay,
+            &json!({ "items": items, "replied": replied }),
+            now,
+        )?;
+        // A thread you started that a live message brought in while the
+        // look read is kept too.
+        let since_read = kept_mine(&util::read_json_object(&state_file), now);
+        for ts in since_read {
+            if !mine.contains(&ts) {
+                mine.push(ts);
+            }
+        }
+        keep_mine(&state_file, state, &mine)?;
+    }
+    Ok(format!(
+        "slack: looked, {n_items} new, {n_replied} of yours"
+    ))
+}
+
+/// The channels `~/.config/switchboard/slack-updates.json` lists.
+fn chosen_channels(dirs: &Dirs) -> Vec<String> {
+    util::read_json(dirs.config.join("slack-updates.json"))
+        .and_then(|v| v.get("channels").cloned())
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default()
+}
+
+/// The threads you started in the last day, as `slack-look.json` keeps
+/// them.
+fn kept_mine(state: &serde_json::Map<String, Value>, now: i64) -> Vec<String> {
+    state
+        .get("mine")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .map(util::js_string)
+                .filter(|ts| now - (ts.parse::<f64>().unwrap_or(0.0) * 1000.0) as i64 <= DAY_MS)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Writes `slack-look.json` back with `mine`, the newest 500.
+fn keep_mine(
+    file: &std::path::Path,
+    mut state: serde_json::Map<String, Value>,
+    mine: &[String],
+) -> std::io::Result<()> {
+    let skip = mine.len().saturating_sub(500);
+    state.insert("mine".into(), json!(mine[skip..]));
+    util::write_atomic(file, util::json_compact(&Value::Object(state)))
+}
+
+/// Whether a `message` event taken as it was posted (`slack_live`) could
+/// be kept by `sort_look`, from its IDs alone, before anything is asked of
+/// Slack about it: one of yours, a DM or group DM, one mentioning you, a
+/// reply in a thread you started, or one in a channel you chose; never the
+/// relay's DM or bot.
+pub fn would_show(dirs: &Dirs, me: &str, event: &Value, now: i64) -> bool {
+    let text = |k: &str| event.get(k).and_then(Value::as_str).unwrap_or("");
+    let (ts, thread) = (text("ts"), text("thread_ts"));
+    // The relay's DM and bot, which the view leaves out (`slack::save`).
+    let (relay_channel, relay_bot) = slack::relay_dm(&dirs.relay);
+    if relay_channel.as_deref() == Some(text("channel"))
+        || relay_bot.as_deref() == Some(text("user"))
+    {
+        return false;
+    }
+    text("user") == me
+        || matches!(text("channel_type"), "im" | "mpim")
+        || text("text").contains(&format!("<@{me}"))
+        || (!thread.is_empty()
+            && thread != ts
+            && kept_mine(
+                &util::read_json_object(dirs.state.join("slack-look.json")),
+                now,
+            )
+            .iter()
+            .any(|t| t == thread))
+        || chosen_channels(dirs).iter().any(|c| c == text("channel"))
+}
+
+/// A message taken as it was posted (`slack_live`), sorted and added to
+/// the view as a look's would be, without marking a look. `me` is your
+/// member ID. Gives how many items and replies of yours it added: none for
+/// a message the view doesn't show.
+pub fn take_live(dirs: &Dirs, me: &str, found: Found, now: i64) -> std::io::Result<usize> {
+    let _saving = slack::saving();
+    let file = dirs.state.join("slack-look.json");
+    let state = util::read_json_object(&file);
+    let mut mine = kept_mine(&state, now);
+    let before = mine.len();
+    let (items, replied) = sort_look(&[found], me, &mut mine, &chosen_channels(dirs));
+    if items.is_empty() && replied.is_empty() {
+        return Ok(0);
+    }
+    let added = items.len() + replied.len();
+    slack::add(
         &dirs.state,
         &dirs.relay,
         &json!({ "items": items, "replied": replied }),
         now,
     )?;
-    let skip = mine.len().saturating_sub(500);
-    state.insert("mine".into(), json!(mine[skip..]));
-    util::write_atomic(&state_file, util::json_compact(&Value::Object(state)))?;
-    Ok(format!(
-        "slack: looked, {n_items} new, {n_replied} of yours"
-    ))
+    if mine.len() != before {
+        keep_mine(&file, state, &mine)?;
+    }
+    Ok(added)
 }
 
 /// The look's search through your own token, in two parts so a busy
@@ -528,7 +625,7 @@ async fn token_search(
             me,
             slack_api::How {
                 count: slack_api::SEARCH_PAGE,
-                pages: MAX_PAGES,
+                pages: TOKEN_PAGES,
                 back_to: Some(back_to as f64),
                 context: false,
             },

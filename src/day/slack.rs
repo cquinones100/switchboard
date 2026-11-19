@@ -143,11 +143,32 @@ fn seen_through(state: &Path) -> i64 {
         .unwrap_or(0.0) as i64
 }
 
-/// Leaving the view: what its look brought is seen.
+/// Leaving the view: what its look brought is seen, and each message taken
+/// as it was posted since (`add`), newer than the look, by itself, so one
+/// the look hasn't brought yet stays new.
 pub fn mark_seen(state: &Path) {
     let Some(data) = read(state) else {
         return;
     };
+    let live: Vec<&Message> = data
+        .items
+        .iter()
+        .filter(|m| (m.ts() * 1000.0) as i64 > data.checked)
+        .collect();
+    if !live.is_empty() {
+        let now = util::now_ms();
+        let mut kept: Map<String, Value> = util::read_json_object(seen_items_file(state))
+            .into_iter()
+            .filter(|(_, at)| now - at.as_f64().unwrap_or(0.0) as i64 <= DISMISS_KEEP_MS)
+            .collect();
+        for m in live {
+            kept.insert(format!("{}:{}", m.channel, m.ts), json!(now));
+        }
+        let _ = util::write_atomic(
+            seen_items_file(state),
+            util::json_compact(&Value::Object(kept)),
+        );
+    }
     if data.checked == 0 || data.checked <= seen_through(state) {
         return;
     }
@@ -669,12 +690,38 @@ pub fn mark_replied(state: &Path, channel: &str, thread: Option<&str>, ts: &str)
     let _ = util::write_atomic(file(state), util::json_compact(&all));
 }
 
+/// Held while `slack.json` and `slack-look.json` are read and written
+/// again, since the look and the live messages (`slack_live`) each add to
+/// them from a task of their own.
+pub fn saving() -> std::sync::MutexGuard<'static, ()> {
+    static SAVING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    SAVING.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Adds what a look found (`{ items, replied }`, as /slack-updates writes
 /// it) to `slack.json` and marks the look: the relay's DM and bot left out,
 /// anything over a day old let go, at most `MAX_ITEMS` kept, newest first.
 /// Gives what to tell the skill.
 pub fn save(state: &Path, relay: &Path, found: &Value, now: i64) -> std::io::Result<String> {
+    save_as(state, relay, found, now, true)
+}
+
+/// Adds messages taken as they were posted (`slack_live`) as `save`
+/// does, without marking a look, so the next look still reads from where
+/// the last one did.
+pub fn add(state: &Path, relay: &Path, found: &Value, now: i64) -> std::io::Result<String> {
+    save_as(state, relay, found, now, false)
+}
+
+fn save_as(
+    state: &Path,
+    relay: &Path,
+    found: &Value,
+    now: i64,
+    looked: bool,
+) -> std::io::Result<String> {
     let saved = read(state).unwrap_or_default();
+    let checked = if looked { now } else { saved.checked };
     let (relay_channel, relay_bot) = relay_dm(relay);
     let empty = Vec::new();
     let items: Vec<Message> = found
@@ -737,7 +784,12 @@ pub fn save(state: &Path, relay: &Path, found: &Value, now: i64) -> std::io::Res
     kept.sort_by(|a, b| b.ts().total_cmp(&a.ts()));
     kept.truncate(MAX_ITEMS);
     let total = kept.len();
-    let out = json!({ "checked": now, "items": kept, "replied": replied });
+    let mut out = json!({ "checked": checked, "items": kept, "replied": replied });
+    // Before a look has kept your replies, `since` reads them a day back;
+    // a message taken as posted mustn't cut that short.
+    if !looked && !saved.has_replied {
+        out.as_object_mut().map(|o| o.remove("replied"));
+    }
     util::write_atomic(file(state), util::json_compact(&out))?;
     Ok(format!("Saved {new} new, {total} in the last day."))
 }

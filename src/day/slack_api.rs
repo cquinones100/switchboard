@@ -394,6 +394,140 @@ async fn labeled(client: &Client, text: &str, source: &str) -> Result<String, St
     Ok(out)
 }
 
+/// A group DM's people but you, by handle, from its name
+/// (`mpdm-ada--bo--cy-1`: the handles of everyone in it).
+fn group_people(name: &str, my_handle: &str) -> Vec<(String, String)> {
+    let handles = name
+        .strip_prefix("mpdm-")
+        .and_then(|n| n.rsplit_once('-'))
+        .map_or(name, |(n, _)| n);
+    handles
+        .split("--")
+        .filter(|h| !h.is_empty() && *h != my_handle)
+        .map(|h| (h.to_string(), String::new()))
+        .collect()
+}
+
+/// A channel's name (a group DM's `mpdm-…` one), as `conversations.info`
+/// said, for the server's life; one Slack doesn't show is named by its ID.
+async fn conversation(client: &Client, channel: &str, source: &str) -> Result<String, String> {
+    static KNOWN: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(Mutex::default);
+    let key = format!("{}:{channel}", client.base());
+    if let Some(known) = KNOWN.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        return Ok(known.clone());
+    }
+    let said = match api(
+        client,
+        true,
+        "conversations.info",
+        &json!({ "channel": channel }),
+        source,
+    )
+    .await
+    {
+        Ok(said) => said,
+        Err(why) if why == "conversations.info: channel_not_found" => {
+            return Ok(channel.to_string());
+        }
+        Err(why) => return Err(why),
+    };
+    let name = said
+        .pointer("/channel/name")
+        .and_then(Value::as_str)
+        .filter(|n| !n.is_empty())
+        .unwrap_or(channel)
+        .to_string();
+    KNOWN
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(key, name.clone());
+    Ok(name)
+}
+
+/// A message's link in the workspace at `url` (`https://<name>.slack.com/`),
+/// as Slack writes a permalink: a reply's names its thread.
+fn permalink(url: &str, channel: &str, ts: &str, thread: Option<&str>) -> Option<String> {
+    if !url.starts_with("https://") {
+        return None;
+    }
+    let base = url.trim_end_matches('/');
+    let mut link = format!("{base}/archives/{channel}/p{}", ts.replace('.', ""));
+    if let Some(t) = thread.filter(|t| *t != ts) {
+        link.push_str(&format!("?thread_ts={t}&cid={channel}"));
+    }
+    Some(link)
+}
+
+/// A `message` event taken over Socket Mode (`slack_live`), as a search
+/// result reads (`found_of`), for `who`, the sign-in it came for: `None`
+/// for one the view has no use for (an edit, a deletion, a channel joined).
+pub async fn found_of_event(
+    client: &Client,
+    event: &Value,
+    who: &slack_user::SignIn,
+    source: &str,
+) -> Result<Option<Found>, String> {
+    let text = |k: &str| event.get(k).and_then(Value::as_str).unwrap_or("");
+    let posted = matches!(
+        text("subtype"),
+        "" | "thread_broadcast" | "file_share" | "bot_message" | "me_message"
+    );
+    let (channel, ts, user) = (text("channel"), text("ts"), text("user"));
+    if text("type") != "message"
+        || !posted
+        || !super::slack::is_channel(channel)
+        || !super::slack::is_ts(ts)
+        || !super::slack::is_channel(&who.user)
+    {
+        return Ok(None);
+    }
+    let thread = Some(text("thread_ts"))
+        .filter(|t| super::slack::is_ts(t))
+        .map(str::to_string);
+    // Yours: the look keeps only where it was, so no names are asked for.
+    if user == who.user {
+        return Ok(Some(Found {
+            channel: channel.to_string(),
+            user: user.to_string(),
+            ts: ts.to_string(),
+            thread,
+            ..Found::default()
+        }));
+    }
+    let bot = !text("bot_id").is_empty() || text("subtype") == "bot_message";
+    let from = if user.is_empty() {
+        text("username").to_string()
+    } else {
+        person(client, user, source).await?.0
+    };
+    let (r#where, participants) = match text("channel_type") {
+        "im" if user.is_empty() => ("DM".to_string(), Vec::new()),
+        "im" => ("DM".to_string(), vec![(from.clone(), user.to_string())]),
+        "mpim" => {
+            let name = conversation(client, channel, source).await?;
+            let my_handle = person(client, &who.user, source).await?.1;
+            ("Group DM".to_string(), group_people(&name, &my_handle))
+        }
+        _ => (
+            format!("#{}", conversation(client, channel, source).await?),
+            Vec::new(),
+        ),
+    };
+    Ok(Some(Found {
+        channel: channel.to_string(),
+        r#where,
+        user: user.to_string(),
+        from,
+        bot,
+        participants,
+        ts: ts.to_string(),
+        link: permalink(&who.url, channel, ts, thread.as_deref()),
+        thread,
+        text: labeled(client, text("text").trim(), source).await?,
+        ..Found::default()
+    }))
+}
+
 /// A message's thread, from its permalink's `thread_ts`.
 fn thread_of(link: &str) -> Option<String> {
     let query = link.split_once('?')?.1;
@@ -519,17 +653,7 @@ async fn found_of(
         let other = person(client, name, source).await?.0;
         ("DM".to_string(), vec![(other, name.to_string())])
     } else if flag("/channel/is_mpim") {
-        // `mpdm-ada--bo--cy-1`: the handles of everyone in it.
-        let handles = name
-            .strip_prefix("mpdm-")
-            .and_then(|n| n.rsplit_once('-'))
-            .map_or(name, |(n, _)| n);
-        let people = handles
-            .split("--")
-            .filter(|h| !h.is_empty() && *h != my_handle)
-            .map(|h| (h.to_string(), String::new()))
-            .collect();
-        ("Group DM".to_string(), people)
+        ("Group DM".to_string(), group_people(name, my_handle))
     } else {
         (format!("#{name}"), Vec::new())
     };

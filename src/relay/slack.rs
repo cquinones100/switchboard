@@ -612,11 +612,13 @@ pub enum Envelope {
     Hello,
     /// Slack asks the app to reconnect.
     Disconnect,
-    /// An event, with its workspace and app.
+    /// An event, with its workspace and app, and the workspace and member
+    /// Slack delivered it for (its authorization that isn't a bot's).
     Event {
         event: Value,
         team: Option<String>,
         app: Option<String>,
+        authorized: Option<(String, String)>,
     },
     /// A button pressed or a form sent.
     Interactive(Value),
@@ -645,6 +647,17 @@ pub fn envelope(text: &str) -> Option<(Option<String>, Envelope)> {
                     .pointer("/payload/api_app_id")
                     .and_then(Value::as_str)
                     .map(str::to_string),
+                authorized: v
+                    .pointer("/payload/authorizations")
+                    .and_then(Value::as_array)
+                    .and_then(|list| {
+                        list.iter()
+                            .find(|a| a.get("is_bot") != Some(&Value::Bool(true)))
+                    })
+                    .and_then(|a| {
+                        let id = |k: &str| a.get(k).and_then(Value::as_str).map(str::to_string);
+                        Some((id("team_id")?, id("user_id")?))
+                    }),
             },
             _ => Envelope::Other,
         },

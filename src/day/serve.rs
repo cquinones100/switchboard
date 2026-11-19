@@ -31,8 +31,8 @@ use serde_json::Value;
 
 use super::calendar::{self, CalEvent, Feed, Fetched, SavedDay};
 use super::{
-    Claude, ClaudeAsk, Dirs, changes, log, new_notes, slack, slack_api, slack_look, slack_thread,
-    slack_user, standup,
+    Claude, ClaudeAsk, Dirs, changes, log, new_notes, slack, slack_api, slack_live, slack_look,
+    slack_thread, slack_user, standup,
 };
 use crate::connector::Connection;
 use crate::items::{Item, ViewData};
@@ -59,6 +59,8 @@ pub enum DayEvent {
     ),
     /// A kept Slack picture decoded, by its file's ID.
     SlackPicture(String, Option<image::RgbaImage>),
+    /// What the connection for Slack messages as they're posted said.
+    SlackLive(slack_live::Live),
     /// Your Slack reminders read, with a line for the log.
     SlackReminders(Result<String, String>),
     /// A message marked read in Slack, or why it couldn't be: whether the
@@ -106,6 +108,18 @@ pub struct Day {
     slack_busy: bool,
     /// Slack's asking the look to slow down.
     slack_pace: slack_look::Pace,
+    /// The connection taking Slack messages as they're posted, while
+    /// `slack_live::wanted`; whether it is up, and why it last went down.
+    slack_live: Option<tokio::task::JoinHandle<()>>,
+    slack_live_started: i64,
+    /// The sign-in file's modified time as the connection started, so a
+    /// token stored anew starts it again.
+    slack_live_signed: Option<std::time::SystemTime>,
+    slack_live_up: bool,
+    /// A look the connection asked for (connected again, or a message it
+    /// couldn't read), kept until one starts.
+    slack_catch_up: bool,
+    slack_live_down: Option<String>,
     minute: Option<i64>,
     standup_tried: i64,
     busy: Vec<Job>,
@@ -204,11 +218,18 @@ const SHOWN_FOR_MS: i64 = 10_000;
 // How often the look runs: Settings' `slack_look_every`, never under a
 // minute while it reads through the connector rather than your token, as it
 // does while the token's look fails. Two small files say whether it does.
-fn slack_look_every(dirs: &Dirs) -> i64 {
+// While messages come as they're posted (`live`), only every
+// `slack_live::CATCH_UP_MS`, as a catch-up.
+fn slack_look_every(dirs: &Dirs, live: bool) -> i64 {
     let by_token = settings::is_on("slack_token_reads")
         && slack_user::signed_in(&dirs.state).is_some()
         && slack_api::look_works(&dirs.state);
-    slack_look::look_every(settings::cached("slack_look_every").as_ref(), by_token)
+    let every = slack_look::look_every(settings::cached("slack_look_every").as_ref(), by_token);
+    if live {
+        every.max(slack_live::CATCH_UP_MS)
+    } else {
+        every
+    }
 }
 
 fn due(last: Option<i64>, every: i64, started: i64, first: i64, now: i64) -> bool {
@@ -273,11 +294,24 @@ impl Server {
             && settings::is_on("slack_background")
             && due(
                 self.day.slack_asked,
-                self.day.slack_pace.every(slack_look_every(&dirs)),
+                self.day
+                    .slack_pace
+                    .every(slack_look_every(&dirs, self.day.slack_live_up)),
                 started,
                 SLACK_FIRST_MS,
                 ms,
             )
+        {
+            self.look_at_slack();
+        }
+        self.slack_live_tick(&dirs);
+        // A catch-up the connection asked for, once a look can start, and
+        // never sooner than a minute after the last, however many messages
+        // it couldn't read.
+        if self.day.slack_catch_up
+            && !away
+            && settings::is_on("slack_background")
+            && self.day.slack_asked.is_none_or(|at| ms - at >= MINUTE_MS)
         {
             self.look_at_slack();
         }
@@ -334,6 +368,42 @@ impl Server {
                     self.read_wanted_threads();
                 }
             }
+            // Said by a connection already ended, once it no longer counts.
+            DayEvent::SlackLive(slack_live::Live::Up | slack_live::Live::Down(_))
+                if self.day.slack_live.is_none() => {}
+            DayEvent::SlackLive(live) => match live {
+                // Connected; the looks slow down only once a message for you
+                // has come through it, so an app that delivers none of yours
+                // leaves them on their schedule.
+                slack_live::Live::Up => {
+                    log(&dirs.state, "slack: taking messages as they're posted");
+                    self.day.slack_live_down = None;
+                    // What was posted while it was down, once a look can
+                    // start while you're here.
+                    self.day.slack_catch_up = true;
+                }
+                slack_live::Live::Down(why) => {
+                    log(&dirs.state, &format!("slack: live messages down: {why}"));
+                    self.day.slack_live_up = false;
+                    // Refused for good: nothing of it to catch up on.
+                    if why == slack_live::RELAY_APP {
+                        self.day.slack_catch_up = false;
+                    }
+                    self.day.slack_live_down = Some(why);
+                }
+                slack_live::Live::Wait(until) => self.day.slack_pace.hold_until(until),
+                slack_live::Live::Took(Ok(0)) => self.day.slack_live_up = true,
+                slack_live::Live::Took(Ok(n)) => {
+                    self.day.slack_live_up = true;
+                    log(&dirs.state, &format!("slack: {n} taken as posted"));
+                    self.read_wanted_threads();
+                }
+                slack_live::Live::Took(Err(e)) => {
+                    log(&dirs.state, &format!("slack: a message as posted: {e}"));
+                    // The message is lost to the connection: a look finds it.
+                    self.day.slack_catch_up = true;
+                }
+            },
             DayEvent::SlackThreadsRead(result) => {
                 self.day.slack_wanted_busy = false;
                 match result {
@@ -575,11 +645,15 @@ impl Server {
         {
             self.read_reminders();
         }
-        if slack::read(&dirs.state).is_some_and(|d| ms - d.checked < SLACK_NOW_MS)
-            || self
-                .day
-                .slack_asked
-                .is_some_and(|at| ms - at < SLACK_NOW_MS)
+        // While messages come as they're posted, going to the view looks no
+        // more often than the catch-up does.
+        let fresh = if self.day.slack_live_up {
+            slack_live::CATCH_UP_MS
+        } else {
+            SLACK_NOW_MS
+        };
+        if slack::read(&dirs.state).is_some_and(|d| ms - d.checked < fresh)
+            || self.day.slack_asked.is_some_and(|at| ms - at < fresh)
         {
             return;
         }
@@ -1240,12 +1314,63 @@ impl Server {
         });
     }
 
+    // Opens the connection for Slack messages as they're posted while
+    // `slack_live::wanted` says so, and ends it once it doesn't.
+    fn slack_live_tick(&mut self, dirs: &Dirs) {
+        // Closed while you're away, as the lookups pause; coming back opens
+        // it and catches up.
+        let wanted = slack_live::wanted(&dirs.state) && !self.away();
+        let now = util::now_ms();
+        // One that ended (no app-level token could be read, or it is the
+        // relay's app's) starts again a minute on, so a token stored since
+        // is taken up.
+        let ended = self
+            .day
+            .slack_live
+            .as_ref()
+            .is_some_and(|t| t.is_finished())
+            && now - self.day.slack_live_started >= MINUTE_MS;
+        let signed = std::fs::metadata(slack_user::sign_in_file(&dirs.state))
+            .and_then(|m| m.modified())
+            .ok();
+        let signed_again = self.day.slack_live.is_some() && signed != self.day.slack_live_signed;
+        if wanted
+            && signed_again
+            && let Some(task) = self.day.slack_live.take()
+        {
+            task.abort();
+            self.day.slack_live_up = false;
+            self.day.slack_live_down = None;
+        }
+        let open = self.day.slack_live.is_some() && !ended;
+        match (open, wanted) {
+            (false, true) => {
+                self.day.slack_live_started = now;
+                self.day.slack_live_signed = signed;
+                let tx = self.tx.clone();
+                self.day.slack_live =
+                    Some(tokio::spawn(slack_live::run(dirs.clone(), move |live| {
+                        let _ = tx.send(Event::Day(DayEvent::SlackLive(live)));
+                    })));
+            }
+            (_, false) if self.day.slack_live.is_some() => {
+                if let Some(task) = self.day.slack_live.take() {
+                    task.abort();
+                }
+                self.day.slack_live_up = false;
+                self.day.slack_live_down = None;
+                self.day.slack_catch_up = false;
+            }
+            _ => {}
+        }
+    }
+
     // Every look starts here, so none goes out inside the wait Slack asked
     // for, nor sooner than its slowed looks' time apart (`slack_look::Pace`),
     // whatever asked for it.
     fn look_at_slack(&mut self) {
         let now = util::now_ms();
-        let every = slack_look_every(&Dirs::here());
+        let every = slack_look_every(&Dirs::here(), self.day.slack_live_up);
         if !self.day.slack_pace.may_look(now, every) {
             return;
         }
@@ -1256,6 +1381,7 @@ impl Server {
         }
         self.day.slack_asked = Some(now);
         self.day.slack_busy = true;
+        self.day.slack_catch_up = false;
         self.day.slack_pace.looked(now);
         let tx = self.tx.clone();
         tokio::spawn(async move {
@@ -1412,13 +1538,25 @@ impl Server {
         // Slack asking the look to slow down, said in place of the look's
         // rate limit (left out of the note above), after any other reason,
         // which says what to do.
-        let slowed = slowed_down
-            .then(|| slack_look::slowed_note(self.day.slack_pace.every(slack_look_every(dirs))));
-        let note = match (token_note, slowed) {
-            (Some(said), Some(slowed)) => Some(format!("{said} · {slowed}")),
-            (said, slowed) => said.or(slowed),
-        }
-        .or_else(|| needs_sign_in.then(|| slack_user::NO_SIGN_IN.to_string()));
+        let slowed = slowed_down.then(|| {
+            slack_look::slowed_note(
+                self.day
+                    .slack_pace
+                    .every(slack_look_every(dirs, self.day.slack_live_up)),
+            )
+        });
+        // Why messages aren't coming as they're posted, while they should.
+        let live_down = self
+            .day
+            .slack_live_down
+            .as_ref()
+            .filter(|_| self.day.slack_live.is_some())
+            .map(|why| format!("Slack messages aren't coming as they're posted ({why}): checking on the schedule"));
+        let note = [token_note, slowed, live_down]
+            .into_iter()
+            .flatten()
+            .reduce(|said, more| format!("{said} · {more}"))
+            .or_else(|| needs_sign_in.then(|| slack_user::NO_SIGN_IN.to_string()));
         let slack = slack::slack_view(&slack::Look {
             state: &dirs.state,
             background,
