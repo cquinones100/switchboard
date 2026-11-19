@@ -946,9 +946,10 @@ impl Server {
         // zoomed tab shows its pane in front alone.
         let zoomed = self.tabs.get(&tab).is_some_and(|t| t.zoomed);
         let shown = shown_in(pane).or_else(|| {
-            self.marked_in(tab, TICKET_VIEW)
+            self.ticket_views_shown(tab)
+                .into_iter()
                 .filter(|_| !zoomed)
-                .and_then(shown_in)
+                .find_map(shown_in)
         });
         let Some(found) = shown.or_else(|| self.tab_ticket_at(tab, &dir)) else {
             self.say(Some(client), "No ticket or GitHub issue for this tab");
