@@ -84,13 +84,30 @@ fn pr_of(dir: &Path) -> Option<Pr> {
     })
 }
 
+/// The settings the diff reads as it tells a story, which it asks again
+/// each time rather than once as it opens: Tell it again reads the
+/// story's shape among them.
+const READ_FRESH: [&str; 4] = [
+    "diff_story_model",
+    "diff_story",
+    "diff_order",
+    "diff_story_map",
+];
+
 impl Host for Core {
     fn ask(&self, action: Action) -> Answer {
         match action {
-            Action::Setting { key } => match settings::cached(&key) {
-                Some(value) => Answer::Value { value },
-                None => Answer::None,
-            },
+            Action::Setting { key } => {
+                // Asked as a story is told: read fresh, so one changed
+                // while the diff is open counts.
+                if READ_FRESH.contains(&key.as_str()) {
+                    settings::reload_settings();
+                }
+                match settings::cached(&key) {
+                    Some(value) => Answer::Value { value },
+                    None => Answer::None,
+                }
+            }
             Action::Folders => Answer::Folders {
                 folders: Folders {
                     state: paths::state_dir(),
@@ -146,6 +163,9 @@ impl Host for Core {
                 Answer::Env { env: changes.0 }
             }
             Action::Plan { plan } => {
+                // Read fresh, so a plan turned off since the diff opened
+                // is never sent.
+                settings::reload_settings();
                 // With none named, the note of the tab the diff runs in,
                 // asked of the server only while the setting is on.
                 let plan = plan.or_else(|| {

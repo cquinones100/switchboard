@@ -196,26 +196,77 @@ pub enum Heard {
     Untold(String),
 }
 
-/// A story to tell: its key, what Haiku reads, and what its answer is read
-/// against (the diff's paths and hunks).
+/// A story to tell: its key, what the model reads, what its answer is read
+/// against (the diff's paths and hunks), and the model asked, by its
+/// alias (story.rs's `model`).
 #[derive(Clone, Debug)]
 pub struct Asked {
     pub key: String,
     pub input: String,
     pub paths: Vec<String>,
     pub hunks: Hunks,
+    pub model: String,
+    /// Whether what the model reads holds the tab's plan note.
+    pub plan: bool,
+    /// Asked anew (Tell it again): never taken from another program's
+    /// telling under way, which was asked with the settings before.
+    pub fresh: bool,
+    /// Told in chapters, else as a list: one shape for its key, prompt
+    /// and parse, read once as it is asked.
+    pub map: bool,
 }
 
 impl Asked {
     /// An answer read as this diff's story.
     pub fn parse(&self, text: &str) -> Result<Story, Option<String>> {
-        story::parse(text, &self.paths, super::order::generated, &self.hunks)
+        story::parse_as(
+            text,
+            &self.paths,
+            super::order::generated,
+            &self.hunks,
+            self.map,
+        )
     }
 }
 
 /// Where stories are kept: the cache's `diff-story/`.
 pub fn story_dir() -> PathBuf {
     paths::cache_dir().join("diff-story")
+}
+
+/// Where the model that told the story kept in `file` is kept: beside it.
+pub fn model_file(file: &Path) -> PathBuf {
+    file.with_extension("model")
+}
+
+/// The model that told the story kept in `file`, by its alias ("" for one
+/// kept before the model was), and whether it read the tab's plan (`None`
+/// for one kept before that was): the file's two lines.
+pub fn kept_with(file: &Path) -> (String, Option<bool>) {
+    let text = util::read_text(model_file(file)).unwrap_or_default();
+    let mut lines = text.lines().map(str::trim);
+    let model = lines.next().unwrap_or("").to_string();
+    let plan = match lines.next() {
+        Some("plan") => Some(true),
+        Some("commits") => Some(false),
+        _ => None,
+    };
+    (model, plan)
+}
+
+/// What `kept_with` reads: the model, and what it was told from.
+fn kept_text(asked: &Asked) -> String {
+    let from = if asked.plan { "plan" } else { "commits" };
+    format!("{}\n{from}\n", asked.model)
+}
+
+/// The story kept by `key` forgotten, so it is told again: the menu's
+/// "Tell it again".
+pub fn forget(key: &str) {
+    let dir = story_dir();
+    for ext in ["txt", "model", "read"] {
+        let _ = std::fs::remove_file(dir.join(format!("{key}.{ext}")));
+    }
 }
 
 /// Whatever a teller has going that must end with the program: the
@@ -257,11 +308,17 @@ impl Teller {
         let dir = story_dir();
         let file = dir.join(format!("{}.txt", asked.key));
         let partial = dir.join(format!("{}.partial", asked.key));
-        let kept = || -> Option<Story> { asked.parse(&util::read_text(&file)?).ok() };
+        // The model kept beside the story, so a setting changed since
+        // doesn't tell it again.
+        let kept = || -> Option<Story> {
+            let mut story = asked.parse(&util::read_text(&file)?).ok()?;
+            (story.model, story.from_plan) = kept_with(&file);
+            Some(story)
+        };
         if let Some(story) = kept() {
             return heard(Heard::Told(Box::new(story)));
         }
-        if age(&partial).is_some_and(|a| a < FOLLOW_FRESH) {
+        if !asked.fresh && age(&partial).is_some_and(|a| a < FOLLOW_FRESH) {
             // Another program telling this story now: its progress shown
             // here, its story taken from the cache once kept; asked here
             // only if it stops with no story kept.
@@ -302,7 +359,7 @@ impl Teller {
         cmd.args([
             "-p",
             "--model",
-            "haiku",
+            asked.model.as_str(),
             "--no-session-persistence",
             "--restricted",
             "--tools",
@@ -310,7 +367,7 @@ impl Teller {
             "--strict-mcp-config",
             "--disable-slash-commands",
             "--system-prompt",
-            story::prompt(),
+            story::prompt_for(asked.map),
             "--output-format",
             "stream-json",
             "--include-partial-messages",
@@ -334,6 +391,7 @@ impl Teller {
         let progress = Arc::new(Mutex::new(Progress {
             text: String::new(),
             started: util::now_secs(),
+            model: asked.model.clone(),
         }));
         self.owned
             .lock()
@@ -453,7 +511,8 @@ impl Teller {
         let told = text.as_deref().map(|t| asked.parse(t));
         let why = if code == 124 {
             Some(format!(
-                "Haiku took longer than {} seconds",
+                "{} took longer than {} seconds",
+                story::model_name(&asked.model),
                 STORY_TIMEOUT.as_secs()
             ))
         } else if code != 0 {
@@ -472,12 +531,17 @@ impl Teller {
             match &told {
                 Some(Ok(_)) => None,
                 Some(Err(Some(unfit))) => Some(unfit.clone()),
-                _ => Some("Haiku's answer didn't parse as a story".into()),
+                _ => Some(format!(
+                    "{}'s answer didn't parse as a story",
+                    story::model_name(&asked.model)
+                )),
             }
         };
         // The story kept before its progress goes, so a program following
         // finds one or the other.
+        // Its model first, so a story found is never without it.
         if let (Some(Ok(_)), Some(t)) = (&told, &text) {
+            let _ = util::write_atomic(model_file(file), kept_text(asked));
             let _ = util::write_atomic(file, t);
         }
         let _ = std::fs::remove_file(partial);
@@ -486,11 +550,16 @@ impl Teller {
             .unwrap_or_else(|e| e.into_inner())
             .retain(|p| p != partial);
         match (told, why) {
-            (Some(Ok(story)), _) => heard(Heard::Told(Box::new(story))),
+            (Some(Ok(mut story)), _) => {
+                story.model = asked.model.clone();
+                story.from_plan = Some(asked.plan);
+                heard(Heard::Told(Box::new(story)))
+            }
             (_, Some(why)) => heard(Heard::Untold(why)),
-            _ => heard(Heard::Untold(
-                "Haiku's answer didn't parse as a story".into(),
-            )),
+            _ => heard(Heard::Untold(format!(
+                "{}'s answer didn't parse as a story",
+                story::model_name(&asked.model)
+            ))),
         }
     }
 }
@@ -515,6 +584,32 @@ fn age(file: &Path) -> Option<Duration> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_story_kept_has_the_model_that_told_it_and_tell_it_again_forgets_both() {
+        let key = format!("model-test-{}", std::process::id());
+        let file = story_dir().join(format!("{key}.txt"));
+        let _ = std::fs::create_dir_all(story_dir());
+        assert_eq!(kept_with(&file), (String::new(), None), "none kept before");
+        util::write_atomic(model_file(&file), "sonnet").unwrap();
+        util::write_atomic(&file, "{}").unwrap();
+        assert_eq!(model_file(&file), story_dir().join(format!("{key}.model")));
+        assert_eq!(kept_with(&file), ("sonnet".into(), None));
+        let asked = Asked {
+            key: key.clone(),
+            input: String::new(),
+            paths: Vec::new(),
+            hunks: Hunks::new(),
+            model: "haiku".into(),
+            plan: true,
+            fresh: false,
+            map: true,
+        };
+        util::write_atomic(model_file(&file), kept_text(&asked)).unwrap();
+        assert_eq!(kept_with(&file), ("haiku".into(), Some(true)));
+        forget(&key);
+        assert!(!file.exists() && !model_file(&file).exists());
+    }
 
     #[test]
     fn the_stream_gives_text_the_turns_end_tools_and_the_result() {

@@ -4,7 +4,8 @@
 //! order of its files (`order::order_file`), both of its commits and of the
 //! diff from the same merge base to the working tree as it is now, which
 //! M-d opens with the diff_uncommitted setting on, its story's answer
-//! (`diff-story/<key>.txt`, by `story::key_of`) and the PR base kept for
+//! (`diff-story/<key>.txt`, by `story::key_of`, with the pages read and the
+//! model that told it beside it) and the PR base kept for
 //! the worktree (`git::forget_base`), each found from the same change M-d
 //! would read, by the same functions M-d's diff and the story told ahead use,
 //! so the clear always finds what they kept. Nothing is told again until
@@ -66,14 +67,18 @@ pub fn clear(dir: &Path) -> Result<Cleared, String> {
                     remove(&file, &mut done);
                 }
             }
-            // The story told as a map and as a list, each under its key.
+            // The story told in chapters and as a list, each under its key.
             for key in story::keys_of(change) {
                 if tell::being_told(&key) {
                     done.telling = true;
                 } else {
                     remove(&tell::story_dir().join(format!("{key}.txt")), &mut done);
-                    // The pages read of it, kept beside it.
-                    let _ = std::fs::remove_file(tell::story_dir().join(format!("{key}.read")));
+                    // The pages read of it and the model that told it,
+                    // kept beside it.
+                    for ext in ["read", "model"] {
+                        let _ =
+                            std::fs::remove_file(tell::story_dir().join(format!("{key}.{ext}")));
+                    }
                 }
             }
         }

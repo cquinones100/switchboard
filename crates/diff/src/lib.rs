@@ -95,7 +95,7 @@ pub fn manifest() -> Manifest {
             Setting::new("diff_story", true)
                 .said(
                     "Diff told as a story",
-                    "M-d's file list grouped into a few pages Haiku names from the whole diff and the commits' messages, each with a heading, two or three sentences that make the case for it to the colleagues reviewing it, and a line of what to watch for, read from the change's core to its edges, and told as a map, in chapters (]c and [c move between them, yS copies the story as Markdown); off, the files keep the reading order by kind. Sends the diff's text and the commit messages, not only the paths, to Claude",
+                    "M-d's file list grouped into a few pages Haiku names from the whole diff and the commits' messages, each with a heading, two or three sentences that make the case for it to the colleagues reviewing it, and a line of what to watch for, read from the change's core to its edges, and told in chapters (]c and [c move between them, yS copies the story as Markdown); off, the files keep the reading order by kind. Sends the diff's text and the commit messages, not only the paths, to Claude",
                 ),
             Setting::new("diff_story_progress", true)
                 .said(
@@ -114,19 +114,28 @@ pub fn manifest() -> Manifest {
                 ),
             Setting::new("diff_story_map", true)
                 .said(
-                    "Tell the diff's story as a map",
-                    "M-d tells the diff's story as a map: one story in chapters of pages (the goal's chapter, one for each part it can be read without, and the side work), each page with the pages it builds on, as Haiku tells it, and a change shown on every page that can't be read without it. The diff gets a Map mode beside its files (g m and g f, or m), the chapters in a strip across its top, opening in the mode used last; off, the story is one list of pages and there is no Map mode. A story already told is told again the first time either way",
+                    "Open the diff on what changes",
+                    "M-d tells the diff's story in chapters of pages (the goal's chapter, one for each part it can be read without, and the side work) and opens on what changes: before and after in plain words and one line for each page, an outline of the chapters and pages beside it. Enter reads down one column, each page's claim, what it decided and instead of what, and its changes, tests folded last; What runs shows the steps in the order they happen. The files stay a view of their own (g m and g f, or m), opening in the view used last; off, the story is one list of pages over the files. A story already told is told again the first time either way",
                 ),
+            // A choice of three, which the diff's own settings view, of
+            // on/off rows, can't take: set in the workspace's Settings,
+            // or by hand in the diff's own settings file alone.
+            Setting::new("diff_story_model", "size")
+                .said(
+                    "Model that tells the diff's story",
+                    "Which model tells M-d's story: by size, Sonnet for a change of more than 20 files or 1,500 changed lines and Haiku for any other; or always Haiku, or always Sonnet. A story keeps the model that told it until the menu's Tell it again",
+                )
+                .only(Scope::Workspace),
             Setting::new("diff_story_ahead", true)
                 .said(
                     "Diff story told ahead",
-                    "When a tab's branch has a new commit, its M-d story is told in the background, so M-d opens on it at once rather than waiting under its cover; sends that branch's diff and commit messages to Claude (Haiku) for each new commit, a run taking up to five and a half minutes",
+                    "When a tab's branch has a new commit, its M-d story is told in the background, so M-d opens on it at once rather than waiting under its cover; sends that branch's diff and commit messages to Claude (Haiku, or Sonnet for a large change, as \"Model that tells the diff's story\" picks) for each new commit, a run taking up to five and a half minutes",
                 )
                 .only(Scope::Workspace),
             Setting::new("diff_story_plan", false)
                 .said(
                     "Diff story reads the tab's plan",
-                    "M-d's story, told ahead or on opening, is given the tab's plan note (an autopilot item's plan) as well as the commits, so its pages can say what problem each solves and what was passed over; off, it reads the commits and the diff alone. Sends the plan note's words to Claude (Haiku)",
+                    "M-d's story, told ahead or on opening, is given the tab's plan note (an autopilot item's plan) as well as the commits, so its pages can say what problem each solves and what was passed over; off, it reads the commits and the diff alone. Sends the plan note's words to Claude (Haiku, or Sonnet for a large change, as \"Model that tells the diff's story\" picks)",
                 )
                 .only(Scope::Workspace),
             Setting::new("diff_uncommitted", true)

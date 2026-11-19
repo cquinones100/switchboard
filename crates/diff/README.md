@@ -43,7 +43,7 @@ switchboard-diff --working [dir]        # the changes not yet committed, staged 
 
 The keys are Vim's, and the same as in Switchboard: [Keys in the diff](../../docs/guide.md#keys-in-the-diff) lists them. The cursor stays in the file it is in, stopping at its first and last lines: `]f` and `[f` go to the next file and the one before. `q` closes it. A drag of the mouse selects text in the part of the screen it starts in and copies it when the button is let go, a side of the diff without its line numbers or the other side; a double click takes a word and a triple click a line. With the keys, `v` selects lines and `y` copies their text.
 
-A story told as a map opens on the map, across the whole width: the chapters in a strip across the top (the goal's first, then each part it can be read without, and the side work), each with how many of its pages are read, and under it the chosen chapter's map, a box for each page, the goal at the top, an arrow from each to the pages it builds on, as Haiku tells it. `j`, `k`, `h` and `l` move box to box, `Enter` opens a page with its own map of the things it adds or changes, `]` and `[` show the next chapter and the one before, and `Tab` gives the strip the keys. A change shown on a second page that can't be read without it sits under an "also in page" line. `g m` shows the map, `g f` the chosen page's file in the file view, which lists the change by chapter, then page, then file, and `m` a menu of the two. `"diff_story_map": false` in the settings tells the story as one list instead.
+A story told in chapters opens on what changes: Before and After in plain words and a line of why for each page, an outline of the chapters (the goal's first, then each part it can be read without, and the side work) and their pages at the left, a ✓ on each read. `Enter` in the outline reads from there down one column: each page with its claim, what it decided and instead of what, what to watch, and its changes inline, tests folded last. `]p` and `[p` move page to page, `Tab` between the outline and the column, and `Enter` on a change opens its menu (shown in the files, or its place copied). What runs, from the overview or `m`, lays the steps in the order they happen over the column, `h` and `l` moving along them. `g m` shows the story view, `g f` the page being read in the file view, which lists the change by chapter, then page, then file, and `m` a menu of the two with What runs and Tell it again. A change of more than 20 files or 1,500 changed lines is told by Sonnet, any other by Haiku (`"diff_story_model": "haiku"` or `"sonnet"` in the settings picks one). `"diff_story_map": false` in the settings tells the story as one list instead.
 
 The first line of the screen is its header: its name, the repository and what the branch is compared with, and its version. The last is a row of buttons, each pressing its keys in the file list, with Settings before Close. `m` in the file list, or a right click, opens a menu of the same.
 
@@ -58,7 +58,7 @@ The first line of the screen is its header: its name, the repository and what th
 | Diff story progress | `diff_story_progress` | on |
 | Diff story a page at a time | `diff_story_pages` | on |
 | Diff story notes on changes | `diff_story_notes` | on |
-| Tell the diff's story as a map | `diff_story_map` | on |
+| Open the diff on what changes | `diff_story_map` | on |
 | Uncommitted changes in M-d | `diff_uncommitted` | on |
 | Diff file list wide | `diff_list_wide` | on |
 | Ask Claude about the diff | `diff_ask` | on |

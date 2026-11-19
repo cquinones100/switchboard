@@ -62,10 +62,19 @@ pub(super) enum Choice {
     WorkspaceSettings,
     /// One of the row's buttons, by its place in `BUTTONS`.
     Keys(usize),
-    /// The story's map or the files, with a story told as a map.
+    /// The Story view or the files, with a story told in chapters.
     Mode(super::Mode),
     /// The file list's width you gave it forgotten (width.rs).
     DefaultWidth,
+    /// What runs laid over the column, or taken away.
+    Runs,
+    /// The story forgotten and told again, by the model the setting
+    /// names now.
+    TellAgain,
+    /// The change a menu was opened on in the column, shown in the files.
+    InFiles,
+    /// Its place copied as path:line.
+    CopyPlace,
 }
 
 /// The diff's menu, and what each of its options does.
@@ -829,13 +838,27 @@ impl App {
         self.count = None;
         let mut choices = Vec::new();
         let mut options = Vec::new();
-        // With a story told as a map, its two modes first, the one shown
-        // chosen as the menu opens.
+        // With a story told in chapters, its two views first, the one
+        // shown chosen as the menu opens, then What runs over the column.
         if self.mapped() {
-            for (label, mode) in super::map::MENU {
+            for (label, mode) in super::reading::MENU {
                 choices.push(Choice::Mode(mode));
                 options.push(MenuOption::new(label));
             }
+            if self.on_story() && self.story.as_ref().is_some_and(|s| !s.runs.is_empty()) {
+                choices.push(Choice::Runs);
+                options.push(MenuOption::new(if self.reader.runs {
+                    "Hide what runs"
+                } else {
+                    "What runs"
+                }));
+            }
+        }
+        // Only a story told, never the page of what isn't committed yet
+        // drawn without asking.
+        if self.told.is_some() && !self.in_history && self.telling != super::Telling::Waiting {
+            choices.push(Choice::TellAgain);
+            options.push(MenuOption::new("Tell it again"));
         }
         choices.push(if self.opts.alone {
             Choice::Settings
@@ -866,6 +889,35 @@ impl App {
             .unwrap_or(0);
         let mut menu = Menu::new("Diff", options).at(shown);
         // Beside the click, unless boxes go in the middle (boxes_near_click).
+        if let Some(at) = near.filter(|_| switchboard_ui::settings::is_on("boxes_near_click")) {
+            menu.open_near(at);
+        }
+        let mut look = switchboard_ui::Look::read();
+        look.theme = self.theme();
+        self.menu = Some(Open {
+            menu,
+            choices,
+            look,
+        });
+    }
+
+    /// The menu of a change in the Story view's column, beside a click
+    /// or in the middle: shown in the files, or its place copied.
+    pub(super) fn open_line_menu(&mut self, near: Option<(u16, u16)>) {
+        self.pending = None;
+        self.selection = None;
+        let title = match &self.reader.target {
+            Some(
+                super::reading::Does::File { path, .. } | super::reading::Does::Change { path, .. },
+            ) => path.clone(),
+            _ => return,
+        };
+        let choices = vec![Choice::InFiles, Choice::CopyPlace];
+        let options = vec![
+            MenuOption::new("Show it in the files"),
+            MenuOption::new("Copy its place (path:line)"),
+        ];
+        let mut menu = Menu::new(&title, options);
         if let Some(at) = near.filter(|_| switchboard_ui::settings::is_on("boxes_near_click")) {
             menu.open_near(at);
         }
@@ -940,6 +992,10 @@ impl App {
             Some(Choice::Settings) => self.toggle_settings(),
             Some(Choice::Mode(mode)) => self.choose_mode(mode),
             Some(Choice::DefaultWidth) => self.default_width(),
+            Some(Choice::Runs) => self.toggle_runs(),
+            Some(Choice::TellAgain) => self.tell_again(),
+            Some(Choice::InFiles) => self.show_target(),
+            Some(Choice::CopyPlace) => self.copy_target(),
             Some(Choice::WorkspaceSettings) => {
                 // Mission control's Settings, where the Diff category holds
                 // them; with no server to ask, where they are is said.

@@ -602,12 +602,12 @@ impl App {
             && (self.set_width.is_some() || self.width_file.as_ref().is_some_and(|f| f.exists()))
     }
 
-    /// Whether the list and the diff are what is on the screen, with no
-    /// box over them: not the story's map, nor the map of a change read
-    /// again still being told, as the screen is drawn.
+    /// Whether the list (or the Story view's outline, in its place) and
+    /// what is beside it are on the screen, with no box over them: not the
+    /// story of a change read again still being told, as the screen is
+    /// drawn.
     fn plain(&self) -> bool {
-        !self.on_map()
-            && !(self.mode == Mode::Map && self.telling == Telling::Waiting)
+        !(self.mode == Mode::Story && !self.mapped() && self.telling == Telling::Waiting)
             && self.loading.is_none()
             && self.failed.is_none()
             && self.nothing.is_none()
@@ -639,7 +639,7 @@ impl App {
         let Some((from, set)) = self.edge_drag else {
             return Act::Same;
         };
-        // The list gone from under the drag (the story's map came up):
+        // The list gone from under the drag (a box came up over it):
         // the drag ends, keeping what it had set.
         if !self.plain() {
             return self.release_edge(None);
@@ -686,10 +686,8 @@ impl App {
     /// A pane resize key: the list's width while the list has the keys,
     /// kept at once; else the workspace's own, handed back to it.
     pub(super) fn resize_key(&mut self, by: i32) -> Act {
-        // Not while the path filter is typed, nor while a chapter's own map
-        // has the keys.
-        let lists =
-            self.focus == Focus::List && self.plain() && !self.filtering && self.thing.is_none();
+        // Not while the path filter is typed.
+        let lists = self.focus == Focus::List && self.plain() && !self.filtering;
         if !(self.opts.resize && lists) {
             self.hand_back(by);
             return Act::Same;

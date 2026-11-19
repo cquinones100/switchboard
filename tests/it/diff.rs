@@ -602,8 +602,17 @@ fn the_story_is_told_ahead_once_per_commit_where_m_d_finds_it() {
         String::from_utf8_lossy(&out.stderr)
     );
     let kept = home.join(".cache/switchboard/diff-story");
-    let stories: Vec<_> = std::fs::read_dir(&kept).unwrap().flatten().collect();
-    assert_eq!(stories.len(), 1, "one story kept, no progress left behind");
+    let mut stories: Vec<String> = std::fs::read_dir(&kept)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path().extension().unwrap().to_string_lossy().into_owned())
+        .collect();
+    stories.sort();
+    assert_eq!(
+        stories,
+        ["model", "txt"],
+        "one story kept with its model, no progress left behind"
+    );
     let asked = std::fs::read_to_string(home.join("claude-asked")).unwrap();
     assert_eq!(asked.lines().count(), 1);
     assert!(ahead().status.success());

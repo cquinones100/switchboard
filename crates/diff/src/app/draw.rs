@@ -151,21 +151,20 @@ impl App {
             return None;
         }
         let mut cursor = None;
-        if self.on_map() {
-            // The story's map, one pane with the keys.
-            self.draw_map(buf);
-        } else if self.mode == super::Mode::Map && self.telling == Telling::Waiting {
-            // The map of the change read again, still being told.
-            let line = format!("{} Telling the story as a map", self.spinner());
+        if self.on_story() {
+            // The outline and the column, one of them with the keys.
+            self.draw_story(buf);
+        } else if self.mode == super::Mode::Story && self.telling == Telling::Waiting {
+            // The story of the change read again, still being told.
+            let line = format!("{} {}", self.spinner(), story::telling(Some(&self.reading)));
             self.centred(buf, &[(line, Style::new().add_modifier(Modifier::BOLD))]);
         } else {
             self.draw_list(buf);
             cursor = self.draw_diff(buf);
-            self.things_hits();
-            // The list greyed while the file (or a page's own map) has the
-            // keys. The file is never greyed: with the keys in the list it
-            // shows the list's chosen file, which is what is being read.
-            if self.focus != Focus::List || self.thing.is_some() {
+            // The list greyed while the file has the keys. The file is
+            // never greyed: with the keys in the list it shows the list's
+            // chosen file, which is what is being read.
+            if self.focus != Focus::List {
                 let file = self.diff_area();
                 let list = Rect::new(0, 0, file.x.saturating_sub(1), file.height);
                 kit::unfocused(buf, list, &self.theme());
@@ -199,7 +198,7 @@ impl App {
             self.draw_menu(buf);
             cursor = None;
         }
-        if self.focus == Focus::List || self.thing.is_some() {
+        if self.focus == Focus::List || self.on_story() {
             cursor = None;
         }
         cursor
@@ -211,19 +210,24 @@ impl App {
     pub(super) fn footer_keys(&self) -> Vec<(&'static str, &'static str)> {
         let mut keys = if self.filtering {
             vec![("↑↓", "move"), ("↵", "keep"), ("esc", "clear")]
-        } else if self.on_map() && self.strip.is_some() {
-            vec![("←→", "chapter"), ("↵", "open"), ("esc", "the map")]
-        } else if self.on_map() {
-            let mut keys = vec![("↑↓←→", "move"), ("↵", "open")];
-            if self.story.as_ref().is_some_and(|s| s.chapters.len() > 1) {
-                keys.push(("] [", "chapter"));
+        } else if self.on_story() && self.focus == Focus::List {
+            vec![
+                ("↑↓", "outline"),
+                ("↵", "read from here"),
+                ("]p [p", "page"),
+                ("m", "view actions"),
+            ]
+        } else if self.on_story() {
+            let mut keys = vec![("↑↓", "scroll"), ("]p [p", "page")];
+            if self.reader.runs {
+                keys.push(("←→", "what runs"));
             }
-            keys.push(("esc", "close"));
+            keys.extend([
+                ("↵", "a change's menu"),
+                ("m", "view actions"),
+                ("tab", "outline"),
+            ]);
             keys
-        } else if self.thing.is_some() {
-            vec![("↑↓", "move"), ("↵", "its hunk"), ("esc", "list")]
-        } else if self.focus == Focus::List && self.in_page() {
-            vec![("↑↓", "move"), ("↵", "read"), ("esc", "the map")]
         } else if self.focus == Focus::List {
             vec![("↑↓", "move"), ("↵", "read"), ("esc", "close")]
         } else {
@@ -300,11 +304,12 @@ impl App {
         let spin = self.spinner();
         let (block, keys): (Vec<String>, &str) = if !self.opts.progress {
             (
-                vec![format!("{spin} Telling the change as a story")],
+                vec![format!("{spin} {}", story::telling(Some(&self.reading)))],
                 "Esc shows the diff now",
             )
         } else if self.raw {
-            let mut block = vec![format!("{spin} Haiku's answer so far")];
+            let model = story::model_name(self.reading.model);
+            let mut block = vec![format!("{spin} {model}'s answer so far")];
             let room = area.width.saturating_sub(8).max(20) as usize;
             let mut wrapped: Vec<String> = Vec::new();
             for line in self
@@ -333,7 +338,7 @@ impl App {
                     spin,
                     util::now_secs(),
                 ),
-                "Esc shows the diff now · t shows Haiku's answer as it comes",
+                "Esc shows the diff now · t shows the answer as it comes",
             )
         };
         let wide = block.iter().map(|l| width(l)).max().unwrap_or(0) as u16;
@@ -470,9 +475,6 @@ impl App {
                 let (a, b) = (place(from)?, place(self.at)?);
                 Some(a.min(b)..=a.max(b))
             });
-        // The way back heads only the list's first section; a later one
-        // (staged after not staged) keeps its own label.
-        let first_header = rows.iter().position(|r| matches!(r, ListRow::Header(_)));
         for (i, row) in rows.iter().enumerate().skip(self.list_top).take(h) {
             let y = (i - self.list_top) as u16 + pinned;
             self.spot(Pane::List, Rect::new(0, y, w, 1), 0, i as i64, false);
@@ -498,24 +500,6 @@ impl App {
                             Span::raw(" "),
                             Span::styled(title.clone(), Tone::Text.bold(&theme)),
                         ],
-                        // A page opened from the map: the way back to
-                        // its chapter's map.
-                        (None, Some(_), Some(_)) if self.in_page() && Some(i) == first_header => {
-                            self.hits
-                                .push((super::map::Hit::Back, Rect::new(0, y, w, 1)));
-                            let lit = self.lit == Some(super::map::Hit::Back);
-                            vec![
-                                Span::styled(" ‹ ", Tone::Accent.bold(&theme)),
-                                Span::styled(
-                                    self.shown_story_title(),
-                                    if lit {
-                                        Tone::Text.bold(&theme)
-                                    } else {
-                                        Tone::Dim.bold(&theme)
-                                    },
-                                ),
-                            ]
-                        }
                         // The page of what isn't committed yet is named, the
                         // others counted among the pages told.
                         (None, Some(p), Some(_)) if self.uncommitted_page() == Some(p) => {
@@ -666,12 +650,6 @@ impl App {
                         .count();
                     let text = match (&self.title, self.alone, &self.story) {
                         (Some((title, _)), _, _) => title.clone(),
-                        // A page opened from the map: the way back to it.
-                        (None, Some(_), Some(_)) if self.in_page() && Some(i) == first_header => {
-                            self.hits
-                                .push((super::map::Hit::Back, Rect::new(0, y, w, 1)));
-                            format!(" ‹ {}", self.shown_story_title())
-                        }
                         (None, Some(p), Some(_)) => {
                             format!(" {} ({n})", self.page_heading(p))
                         }
@@ -941,9 +919,7 @@ impl App {
     /// on one, and a rule; nothing without a story or UX
     /// 2.0.
     pub(super) fn page_head(&self, cols: usize) -> Vec<Vec<Span<'static>>> {
-        let mut out = self.page_title(cols);
-        out.extend(self.things_rows(cols));
-        out
+        self.page_title(cols)
     }
 
     /// The page's lines over the diff with UX 2.0: its number and title
@@ -977,15 +953,11 @@ impl App {
                 Tone::Text.bold(&theme),
             ));
         }
-        let right = if self.in_page() {
-            let (read, of) = self.read_of_shown();
-            format!("✓ {read} of {of} read · g m the map ")
-        } else {
-            self.change
-                .as_ref()
-                .map(|c| format!("{} ", c.against()))
-                .unwrap_or_default()
-        };
+        let right = self
+            .change
+            .as_ref()
+            .map(|c| format!("{} ", c.against()))
+            .unwrap_or_default();
         let room = cols.saturating_sub(width(&right) + 1);
         let mut first = kit::fit(title, room, Style::new());
         first.push(Span::raw(" "));

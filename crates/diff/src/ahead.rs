@@ -79,7 +79,8 @@ pub fn commit(dir: &Path, plan: &str) -> Result<Option<String>, String> {
 /// told with, or why it couldn't be told.
 pub fn tell_ahead(top: &Path, base: &str, plan: &str) -> Result<Option<String>, String> {
     let change = git::read_change(top, base).map_err(|e| e.to_string())?;
-    let (key, paths) = story::key_of(&change);
+    let map = story::mapped();
+    let (key, paths) = story::key_of_shaped(&change, map);
     // Nothing to tell: told, as far as the next commit is concerned.
     if paths.len() < 2 || paths.iter().all(|p| order::generated(p)) {
         return Ok(None);
@@ -95,17 +96,18 @@ pub fn tell_ahead(top: &Path, base: &str, plan: &str) -> Result<Option<String>, 
         })
         .collect();
     let commits = story::commits(&change.raw_commits);
+    let lines = entries.iter().map(|e| e.additions + e.deletions).sum();
+    let model = story::model(entries.len(), lines).to_string();
+    let context = story::plan_context(Some(plan));
     let asked = Asked {
         key,
-        input: story::input(
-            &entries,
-            &diffs,
-            &hunks,
-            &commits,
-            &story::plan_context(Some(plan)),
-        ),
+        input: story::input(&entries, &diffs, &hunks, &commits, &context),
         paths,
         hunks,
+        model,
+        plan: !context.is_empty(),
+        fresh: false,
+        map,
     };
     let teller = Teller::default();
     let (tx, rx) = std::sync::mpsc::channel::<Heard>();
