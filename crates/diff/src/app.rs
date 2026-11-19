@@ -626,8 +626,7 @@ pub const KEYS: &[(&str, &[KeyRow])] = &[
                 "↵",
                 "in the outline, read from there (In the files only: their files); in the column, a change's menu, or a file of tests unfolded",
             ),
-            key_row("]p [p", "the next page's section, the one before"),
-            key_row("]c [c", "the next chapter's first page, the one before's"),
+            key_row("] [", "the next page's section, the one before"),
             key_row("tab", "between the outline and the column"),
             key_row("h l", "along What runs, while it is shown"),
             key_row(
@@ -5477,6 +5476,19 @@ impl App {
                     self.close_answer();
                 }
                 self.focus = Focus::List;
+                // In the Story view ] and [ alone turn the pages: the page
+                // and chapter buttons do what their keys mean there.
+                if self.on_story() && matches!(keys, "]c" | "[c" | "]p" | "[p") {
+                    match keys {
+                        "]c" => self.chapter_step(1),
+                        "[c" => self.chapter_step(-1),
+                        "]p" if self.opts.pages_alone => self.page_step(1),
+                        "[p" if self.opts.pages_alone => self.page_step(-1),
+                        _ => {}
+                    }
+                    self.read_if_reading();
+                    return Act::Redraw;
+                }
                 let mut act = Act::Same;
                 for c in keys.chars() {
                     act = self.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
@@ -8793,14 +8805,14 @@ mod tests {
         );
         assert_eq!(app.reader.item, 1);
         // ]p on to the next page and [p back; from the first, what changes.
-        press(&mut app, "]p");
+        press(&mut app, "]");
         assert_eq!(app.section(), 2);
         // [p from below a page's heading goes to the page before, not its own.
         press(&mut app, "jjj");
         assert_eq!(app.section(), 2);
-        press(&mut app, "[p");
+        press(&mut app, "[");
         assert_eq!(app.section(), 1);
-        press(&mut app, "[p");
+        press(&mut app, "[");
         assert_eq!(app.section(), 0);
         // A wider outline lays the column out again on the same page.
         press(&mut app, "jjj");
@@ -8808,7 +8820,7 @@ mod tests {
         app.list_width += 20;
         screen(&mut app);
         assert_eq!(app.section(), before);
-        press(&mut app, "[p");
+        press(&mut app, "[");
         // v selects lines of the column, y copies their text.
         press(&mut app, "vjy");
         assert!(
@@ -8816,9 +8828,13 @@ mod tests {
                 .as_ref()
                 .is_some_and(|(t, _)| t.contains("Copied 2 lines"))
         );
-        // ]c reaches the next chapter's first page.
-        press(&mut app, "]c");
+        // The Chapter ▶ button reaches the next chapter's first page; a c
+        // typed after ] from the habit of ]c adds nothing.
+        app.chapter_step(1);
         assert_eq!(app.section(), 5);
+        press(&mut app, "[c");
+        assert_eq!(app.section(), 4);
+        assert!(app.history.is_none());
         // yl copies no path for a link: the files have the link.
         press(&mut app, "yl");
         assert!(
@@ -8830,7 +8846,7 @@ mod tests {
         app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         assert_eq!(app.focus, Focus::List);
         press(&mut app, "k");
-        assert_eq!(app.section(), 4);
+        assert_eq!(app.section(), 3);
         assert_eq!(
             app.footer_keys()[..2],
             [("↑↓", "outline"), ("↵", "read from here")]
@@ -8844,7 +8860,7 @@ mod tests {
             pages_alone: false,
             ..opts()
         });
-        press(&mut app, "]p");
+        press(&mut app, "]");
         assert_eq!(app.section(), 0);
     }
 

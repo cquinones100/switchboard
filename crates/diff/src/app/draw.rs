@@ -215,11 +215,11 @@ impl App {
             vec![
                 ("↑↓", "outline"),
                 ("↵", "read from here"),
-                ("]p [p", "page"),
+                ("] [", "page"),
                 ("m", "view actions"),
             ]
         } else if self.on_story() {
-            let mut keys = vec![("↑↓", "scroll"), ("]p [p", "page")];
+            let mut keys = vec![("↑↓", "scroll"), ("] [", "page")];
             if self.reader.runs {
                 keys.push(("←→", "what runs"));
             }

@@ -175,6 +175,8 @@ pub(super) struct Reader {
     pub(super) target: Option<Does>,
     /// Where a selection of the column's lines started (`v`).
     pub(super) visual: Option<usize>,
+    /// The last key was ] or [ alone, so a p or c after it adds nothing.
+    after_bracket: bool,
     laid: Option<(u16, Vec<Row>)>,
     /// The column to lay out again on its next draw, the rows before kept
     /// to find the cursor's section in.
@@ -2110,7 +2112,25 @@ impl App {
         let outline = self.focus == Focus::List;
         let page = self.column_rect().height.max(1) as isize;
         let count = count as isize;
+        // ] and [ alone turn the pages: a p or c typed after one from the
+        // habit of ]p and ]c adds nothing (c would open the commits).
+        let after_bracket = std::mem::take(&mut self.reader.after_bracket);
+        if after_bracket && matches!(key.code, KeyCode::Char('p' | 'c')) && !ctrl {
+            return Some(Act::Same);
+        }
         match key.code {
+            KeyCode::Char(']') if !ctrl => {
+                self.reader.after_bracket = true;
+                if self.opts.pages_alone {
+                    self.page_step(1);
+                }
+            }
+            KeyCode::Char('[') if !ctrl => {
+                self.reader.after_bracket = true;
+                if self.opts.pages_alone {
+                    self.page_step(-1);
+                }
+            }
             // v and V select the column's lines, y copies their text, as
             // a drag of the mouse does.
             KeyCode::Char('v' | 'V') if !outline && !ctrl => {
@@ -2123,7 +2143,7 @@ impl App {
                 self.copy_reading();
             }
             KeyCode::Esc if !outline && self.reader.visual.is_some() => self.reader.visual = None,
-            KeyCode::Char('q' | 'y' | 'g' | ']' | '[' | 'R' | 'c' | 'E') if !ctrl => return None,
+            KeyCode::Char('q' | 'y' | 'g' | 'R' | 'c' | 'E') if !ctrl => return None,
             KeyCode::Char('w') if ctrl => return None,
             KeyCode::F(10) if key.modifiers == KeyModifiers::SHIFT => return None,
             KeyCode::Char('m') if key.modifiers.is_empty() => self.open_menu(None),
@@ -2198,12 +2218,6 @@ impl App {
                     ),
                 }
             }
-            // Off (diff_story_pages), ]p and [p do nothing here too.
-            (']' | '[', 'p') if !self.opts.pages_alone => {}
-            (']', 'p') => self.page_step(1),
-            ('[', 'p') => self.page_step(-1),
-            (']', 'c') => self.chapter_step(1),
-            ('[', 'c') => self.chapter_step(-1),
             ('w', 'w') => {
                 self.focus = if self.focus == Focus::List {
                     Focus::New
