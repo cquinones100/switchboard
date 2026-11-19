@@ -4770,12 +4770,14 @@ impl App {
                 } else if self.edge_moved {
                     self.edge_pressed_at = None;
                     let (kept, shown) = self.edge_start;
-                    // Let go where it started keeps what was kept, unless it
-                    // ended on board 8's share, which clears it.
+                    // Let go where it started keeps what was kept, writing
+                    // nothing over what another tab may have kept since,
+                    // unless it ended on board 8's share, which clears it.
                     if self.plan_cols() == shown && self.plan_width.is_some() {
                         self.plan_width = kept;
+                    } else {
+                        self.keep_plan_width();
                     }
-                    self.keep_plan_width();
                 }
             }
             (MouseKind::Press, MouseButton::Left) if self.on_edge(x, y) => {
