@@ -572,6 +572,18 @@
     "BuiltStoryFiles.dc.html": {
       "title": "139. As built: Files mode, the list by chapter, page and file under the story's totals, In the files only under them, the diff headed by its chapter and page",
       "page": "design"
+    },
+    "UnderstandOpen.dc.html": {
+      "title": "140. The diff opens on what changes: Before and After in plain words, then how it gets there, a line on why each step; an outline in reading order down the side in place of the graph",
+      "page": "design"
+    },
+    "UnderstandRead.dc.html": {
+      "title": "141. Reading down the column: each page a section, its claim in a sentence, what was decided and instead of what, what to watch, then its hunks inline, tests folded last",
+      "page": "design"
+    },
+    "UnderstandFlow.dc.html": {
+      "title": "142. What runs, in the order it happens, over the column: each step a box naming its page, the page being read lit; h/l along it",
+      "page": "design"
     }
   }
 }

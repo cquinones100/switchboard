@@ -1,6 +1,6 @@
 # The design of UX 2.0
 
-The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from the kit's first board, every page beside a sidebar of them all. Drawn from the boards' sources in [`src/`](https://github.com/cquinones100/switchboard/tree/main/docs/design/src) on 2026-11-18 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again: a board is changed in its source, never in its page.
+The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from the kit's first board, every page beside a sidebar of them all. Drawn from the boards' sources in [`src/`](https://github.com/cquinones100/switchboard/tree/main/docs/design/src) on 2026-11-19 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again: a board is changed in its source, never in its page.
 
 ## The kit and the index
 
@@ -244,3 +244,9 @@ The relay's DM, threads and Home tab.
 - [137. As built (for review): Map mode, the chapters strip with the read tally, the chapter's pages as Mermaid's square boxes numbered within the chapter, the goal page last in number, the legend, then the chosen page with its links, why and a dashed link's note; keys only, no buttons](https://cquinones100.github.io/switchboard/design/137.html)
 - [138. As built: Tab on the strip, a chapter other than the goal's shown (Side work), its pages and why the chapter is apart; ←→ chapter, Esc back to the map](https://cquinones100.github.io/switchboard/design/138.html)
 - [139. As built: Files mode, the list by chapter, page and file under the story's totals, In the files only under them, the diff headed by its chapter and page](https://cquinones100.github.io/switchboard/design/139.html)
+
+## Proposal: a diff built for understanding
+
+- [140. The diff opens on what changes: Before and After in plain words, then how it gets there, a line on why each step; an outline in reading order down the side in place of the graph](https://cquinones100.github.io/switchboard/design/140.html)
+- [141. Reading down the column: each page a section, its claim in a sentence, what was decided and instead of what, what to watch, then its hunks inline, tests folded last](https://cquinones100.github.io/switchboard/design/141.html)
+- [142. What runs, in the order it happens, over the column: each step a box naming its page, the page being read lit; h/l along it](https://cquinones100.github.io/switchboard/design/142.html)
