@@ -2325,6 +2325,14 @@ impl App {
             }
             KeyCode::Char('h') | KeyCode::Left if !outline && !ctrl => self.focus = Focus::List,
             KeyCode::Char('l') | KeyCode::Right if outline && !ctrl => self.focus = Focus::New,
+            // J and K from the outline scroll the column beside it, as they
+            // scroll the file from the file list.
+            KeyCode::Char('J') if outline => {
+                self.scroll_column(super::SCROLL * count as usize, true, false)
+            }
+            KeyCode::Char('K') if outline => {
+                self.scroll_column(super::SCROLL * count as usize, false, false)
+            }
             KeyCode::Char('j') | KeyCode::Down if outline && !ctrl => {
                 let last = self.items().len().saturating_sub(1);
                 self.choose_item((self.reader.item + count as usize).min(last));
@@ -2405,19 +2413,25 @@ impl App {
             };
             return self.choose_item(to);
         }
+        self.scroll_column(3, down, true);
+    }
+
+    /// The column scrolled `by` lines, its cursor kept in sight; the page
+    /// it lands on read with `read`, never while the outline has the keys.
+    fn scroll_column(&mut self, by: usize, down: bool, read: bool) {
         let cols = self.column_cols();
         let n = self.column(cols).len();
         let h = self.column_rect().height as usize;
         let r = &mut self.reader;
         r.top = if down {
-            (r.top + 3).min(n.saturating_sub(1))
+            (r.top + by).min(n.saturating_sub(1))
         } else {
-            r.top.saturating_sub(3)
+            r.top.saturating_sub(by)
         };
         r.cur = r
             .cur
             .clamp(r.top, (r.top + h.max(1) - 1).min(n.saturating_sub(1)));
-        self.follow();
+        self.follow_marking(read);
     }
 
     // ── Clicks ──────────────────────────────────────────────────────────────
