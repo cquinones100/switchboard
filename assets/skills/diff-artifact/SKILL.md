@@ -15,45 +15,28 @@ allowed-tools:
 
 This is Switchboard's own copy, for repositories that have none. Before anything else, run `switchboard skill-path diff-artifact`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
 
-Make one page of the tab's change: the story `M-d` tells of it, page by page, with every hunk under the page it belongs to, and publish it with Claude Code's Artifact tool as a private artifact. The story is the diff's own, never one told here, and nothing leaves the computer before the user says yes to what the check in step 4 finds.
+Make one page of the tab's change: the story `M-d` tells of it, page by page, with every hunk under the page it belongs to, and publish it with Claude Code's Artifact tool as a private artifact. The story is the diff's own, never one told here, and nothing leaves the computer before the user says yes to what the check in step 3 finds.
 
 ## 1. Read the story
 
-Run `switchboard diff-story` in the tab (no directory: it reads the pane's, as `M-d` does). It prints the story as Markdown, from what the diff kept. When it prints "No story told for this change yet" or that `M-d` tells no story, say so in a line, tell the user to open `M-d` (and, for the second, turn the settings it names on) and come back, and stop: never tell a story of your own, and never write a page from the diff alone.
+Run `switchboard diff-story` in the tab (no directory: it reads the pane's, as `M-d` does). It prints the story as Markdown, from what the diff kept, which step 3 reads for what shouldn't leave the computer. When it prints "No story told for this change yet" or that `M-d` tells no story, say so in a line, tell the user to open `M-d` (and, for the second, turn the settings it names on) and come back, and stop: never tell a story of your own, and never write a page from the diff alone.
 
-The Markdown holds what the diff's Story view shows: the story under `#`; `## What changes` with its Before and After; `## What runs`, the steps in the order they happen, each naming its page; each chapter under `## Chapter N: <title>`, each page under `###` with its number in its chapter, title, claim, why, `Decided:` and `Instead`, a `> ⚠ Watch:` line and its files, each change's note under its file as `path:line`; and `## In the files only` for what no chapter holds. Whatever sections it prints, the page shows them all, in its order and under its names: follow what it prints rather than a fixed list here.
+## 2. Draw the page
 
-## 2. Read the hunks
+The page is the diff's Story view as `switchboard-diff` draws it alone, drawn by the diff's own code, never written by hand: its header line, What runs over the column, the outline at the left, the overview at the head of the column, then each page with its claim, its Decided, Instead and Watch block and every hunk inline as the view shows it (side by side, the words that changed in the stronger shade), files of tests unfolded, in the dark theme and the light, the page showing the one the reader's browser asks for. Never a link to GitHub or the PR in place of a hunk: every hunk is in the page.
 
-The hunks are the branch's commits against the base the diff takes: its PR's base when it has one (`gh pr view --json baseRefName,baseRefOid`), else the default branch (`git rev-parse --abbrev-ref origin/HEAD`), compared from their merge base. Read them with `git diff --no-ext-diff --no-textconv <merge-base>...HEAD`, and, when the story ends in a "Not committed yet" page, the uncommitted changes too (`git diff --no-ext-diff --no-textconv HEAD`). Leave out files git marks binary; name them under their page instead.
+Run `switchboard diff-story --html > <scratchpad>/diff-artifact-<branch>.html` in the tab (the session's scratchpad, never the repository; the branch from `git branch --show-current`). `--cols <n>` draws it `<n>` columns wide (170 unless said, wide enough for the hunks side by side). When it prints nothing, the story is told as a list, which has no Story view: say so and that Settings' "Open the diff on what changes" (`diff_story_map`) tells it in chapters, and stop. What the Story view leaves to the files (In the files only) isn't in the page; say so when the outline lists any.
 
-Put each file's hunks under the page that lists the file. A change the story's notes give to another page (`path:line` under that page) goes there, with its note over it. A file no page lists goes in a last "Not in the story" section, so no hunk is left out.
+## 3. Check it before it leaves the computer
 
-## 3. Build the page
-
-Load the `artifact-design` skill first, as the Artifact tool asks. Write one HTML file in the session's scratchpad (`<scratchpad>/diff-artifact-<branch>.html`, the branch from `git branch --show-current`), never in the repository:
-
-The page follows the diff's Story view (boards 140 to 142, 144 and 145), so reading it is reading `M-d`:
-
-- A `<title>` of two to four words naming the change.
-- **What runs** across the top, as the view lays it over the column: a box a step in the order it happens, an arrow between, each naming its page and linking to it, the row scrolling sideways when it is wider than the page.
-- **The outline** at the left (over the column on a narrow screen): each chapter with What changes first under chapter 1 and its pages indented under it, each a link to its section, then In the files only.
-- **The overview** at the head of the column: the story's title, its size (chapters, pages, files, lines added and removed) and what it is compared with; Before and After side by side with an arrow between (one over the other on a narrow screen); How it gets there, the first chapter's pages each with the first sentence of its why; the other chapters named; and what it was told from and by which model, when the story says.
-- **The column**: each page a section in the story's order, headed with its number, title and place ("page 1 of 4 · chapter 1"), its claim, a block of Decided, Instead and Watch set apart on a surface of its own, then each file it changes with its hunks under it, the prose kept to about 88 characters wide, and a file of tests last, folded in a `<details>`.
-- Every hunk in the page itself, as code: its `@@` header, then its lines side by side where the page is wide enough, the old at the left and the new beside it, the words that changed in a stronger shade, and one over the other on a narrow screen (a CSS media query, no script), removed marked `-` on a red ground over added marked `+` on a green one; context plain, line numbers on each side, in a monospace font, wide lines scrolling inside their block rather than the page. Escape every line's `<`, `>` and `&`. Never a link to GitHub or the PR in place of a hunk.
-- Colors as tokens on `:root`, redefined for dark mode, so it reads in light and dark.
-- No script, font or style from outside but what the Artifact tool allows.
-
-## 4. Check it before it leaves the computer
-
-Read the whole page before publishing it, for:
+Read everything the page holds before publishing it: its words are the story's Markdown from step 1 and the branch's hunks (`git diff --no-ext-diff --no-textconv <merge-base>...HEAD`, and `git diff --no-ext-diff --no-textconv HEAD` when anything isn't committed yet), drawn cell by cell, and its header names the repository's directory from `~`. Read them for:
 
 1. **The plan note's words.** Run `switchboard show @tab_plan_note`, and `switchboard show @tab_note` for the tab's note. When either names a note, read it (in `~/Notes/`, or `$NOTES_DIR`) and find the page's sentences that carry its words (the story may have been told from the plan, with Settings' `diff_story_plan` on). A note is the user's: quote each such sentence.
 2. **Secrets and tokens in the hunks**: keys, tokens, passwords, connection strings, private keys, `.env` values.
-3. **What `switchboard leak-check` would flag**: run `switchboard leak-check <merge-base>..HEAD` from step 2, and read the page itself for the same kinds the check finds (the words in `~/.config/switchboard/leak-check.txt`, ticket IDs, PR numbers, home paths like `/Users/<name>`, email addresses, token shapes).
+3. **What `switchboard leak-check` would flag**: run `switchboard leak-check <merge-base>..HEAD` of the branch against its base (`git merge-base HEAD <base>`, the base its PR has, else the default branch), and read the page itself for the same kinds the check finds (the words in `~/.config/switchboard/leak-check.txt`, ticket IDs, PR numbers, home paths like `/Users/<name>`, email addresses, token shapes).
 
 Show the user what was found, numbered, one line each with where it is in the page, or say that nothing was, and wait for their word. Publish only after their yes; take out or change what they ask first. A question unanswered is a no.
 
-## 5. Publish
+## 4. Publish
 
 Publish the file with the Artifact tool, with a one-sentence `description` of the change, and give the user its link. It is private, as every artifact starts: never share it further, or with anyone, unless the user asks. Asked to change it later, edit the same file and publish it again to the same link.

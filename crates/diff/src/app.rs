@@ -106,9 +106,12 @@ use crate::{settings, util};
 mod draw;
 mod map;
 mod own;
+mod page;
 mod reading;
 mod select;
 mod width;
+
+pub use page::story_page;
 
 pub use reading::Mode;
 use reading::{Hit, Place_, Reader};
@@ -9057,6 +9060,26 @@ mod tests {
         press(&mut app, "gs");
         assert!(app.on_story());
         assert_eq!(app.section(), 1);
+    }
+
+    #[test]
+    fn the_story_view_as_a_page_holds_the_whole_column_in_both_themes() {
+        let app = map_app();
+        let (change, told) = (app.change.clone().unwrap(), app.story.clone().unwrap());
+        let page = story_page(opts(), 170, change, told, "Signups <map>").unwrap();
+        assert!(page.contains("<title>Signups &lt;map&gt;</title>"));
+        // Drawn dark and light, each shown as the browser asks.
+        assert_eq!(page.matches("<pre class=").count(), 2);
+        assert!(page.contains("prefers-color-scheme: dark"));
+        // What runs, the overview and every page's hunks, the file of
+        // tests unfolded.
+        assert!(page.contains("WHAT RUNS"));
+        assert!(page.contains("Format the helpers"));
+        assert!(page.contains("assert_eq!(count_signups(), 0);"));
+        assert!(page.contains("fold_small"));
+        // Code is escaped, and the row of buttons left out.
+        assert!(!page.contains("<str"));
+        assert!(!page.contains("Settings ["));
     }
 
     #[test]

@@ -1540,6 +1540,33 @@ impl App {
         self.reader.stale = false;
     }
 
+    /// The whole column, for a page of its own (page.rs): every file of
+    /// tests unfolded and the view at its top; how many rows it and What
+    /// runs over it take.
+    pub(super) fn column_whole(&mut self) -> usize {
+        loop {
+            let cols = self.column_cols();
+            let folded: Vec<(usize, String)> = self
+                .column(cols)
+                .iter()
+                .filter_map(|r| match &r.does {
+                    Does::Folded { page, path } => Some((*page, path.clone())),
+                    _ => None,
+                })
+                .collect();
+            if folded.is_empty() {
+                break;
+            }
+            self.reader.unfolded.extend(folded);
+            self.relay();
+        }
+        self.reader.cur = 0;
+        self.reader.top = 0;
+        let cols = self.column_cols();
+        let over = if self.runs_shown() { RUNS_ROWS } else { 0 };
+        self.column(cols).len() + over as usize
+    }
+
     /// The column laid out again on its next draw.
     pub(super) fn relay(&mut self) {
         self.reader.stale = true;

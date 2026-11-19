@@ -25,6 +25,41 @@ use crate::diff::{app, git, order, story, tell};
 use crate::mux::socket;
 use crate::{settings, util};
 
+/// How wide --html draws the Story view: room for the outline and a
+/// column wide enough for its changes side by side.
+const PAGE_COLS: u16 = 170;
+
+/// The diff's options as M-d reads them from the settings, for --html.
+fn page_options() -> app::Options {
+    let on = settings::is_on;
+    app::Options {
+        order: true,
+        story: true,
+        pages_alone: on("diff_story_pages"),
+        progress: false,
+        notes: on("diff_story_notes"),
+        list_wide: on("diff_list_wide"),
+        uncommitted: on("diff_uncommitted"),
+        ask: false,
+        easy: false,
+        key_help: false,
+        ux2: settings::is_on("ux2"),
+        hover: false,
+        light: false,
+        pane_arrows: false,
+        haiku: false,
+        server: false,
+        clipboard: false,
+        scroll_bars: false,
+        alone: true,
+        map: true,
+        keep: false,
+        menu_mouse: false,
+        pointer: false,
+        resize: false,
+    }
+}
+
 /// What is said when the change has no story kept.
 pub const UNTOLD: &str = "No story told for this change yet: open M-d and press its story key.";
 /// What is said while M-d tells no story (Settings' diff_story or
@@ -34,14 +69,22 @@ pub const STORY_OFF: &str = "M-d tells no story while Settings' \"Diff told as a
 /// `switchboard diff-story [--path] [dir]`.
 pub fn main(args: Vec<String>) -> ExitCode {
     let mut path_only = false;
+    let mut html = None;
     let mut dir = None;
-    for arg in args {
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
         match arg.as_str() {
             "--path" => path_only = true,
+            "--html" => html = Some(PAGE_COLS),
+            "--cols" => match args.next().and_then(|n| n.parse::<u16>().ok()) {
+                Some(n) if n >= 80 => html = Some(n),
+                _ => return usage(),
+            },
             "-h" | "--help" => {
                 println!(
-                    "Usage: switchboard diff-story [--path] [dir]\n\
-                     Prints the story M-d tells of the branch's change, as Markdown; --path prints its file."
+                    "Usage: switchboard diff-story [--path | --html [--cols <n>]] [dir]\n\
+                     Prints the story M-d tells of the branch's change, as Markdown; --path prints its file;\n\
+                     --html prints M-d's Story view as one HTML page, <n> columns wide (170 unless said)."
                 );
                 return ExitCode::SUCCESS;
             }
@@ -55,7 +98,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
         println!("{STORY_OFF}");
         return ExitCode::SUCCESS;
     }
-    match read(&dir) {
+    match read(&dir, html) {
         Err(why) => {
             eprintln!("switchboard diff-story: {why}");
             ExitCode::from(1)
@@ -85,7 +128,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
 }
 
 fn usage() -> ExitCode {
-    eprintln!("Usage: switchboard diff-story [--path] [dir]");
+    eprintln!("Usage: switchboard diff-story [--path | --html [--cols <n>]] [dir]");
     ExitCode::from(2)
 }
 
@@ -110,7 +153,7 @@ enum Found {
     },
 }
 
-fn read(dir: &Path) -> Result<Found, String> {
+fn read(dir: &Path, html: Option<u16>) -> Result<Found, String> {
     let facts = git::facts(dir).map_err(|_| "not in a git repository".to_string())?;
     let Some(base) = git::cached_base(dir) else {
         return Ok(Found::NoBase);
@@ -136,8 +179,17 @@ fn read(dir: &Path) -> Result<Found, String> {
     } else {
         Some(story::with_uncommitted(told.as_ref(), &dirty, &committed))
     };
-    Ok(Found::Change {
-        file,
-        story: shown.map(|s| story::markdown(&s)),
-    })
+    let text = match html {
+        // The Story view as a page, drawn by the diff's own code; a story
+        // told as a list has none.
+        Some(cols) => match shown {
+            Some(told) if !told.chapters.is_empty() => {
+                let title = told.chapters[0].title.clone();
+                app::story_page(page_options(), cols, whole, told, &title)
+            }
+            _ => None,
+        },
+        None => shown.map(|s| story::markdown(&s)),
+    };
+    Ok(Found::Change { file, story: text })
 }
