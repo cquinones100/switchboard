@@ -1827,9 +1827,7 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
                 && !path
                     .components()
                     .any(|c| matches!(c, std::path::Component::ParentDir));
-            lexically_inside
-                && fs::canonicalize(root_path.join(path))
-                    .map_or(true, |real| real.starts_with(&real_root))
+            lexically_inside && resolves_inside(&root_path, &real_root, path)
         })
     };
     let lows_left = confirming
@@ -1917,6 +1915,25 @@ fn record_path(name: &str) -> Reviewed<PathBuf> {
 fn write_record(path: &Path, line: &str) -> Reviewed<()> {
     util::write_atomic(path, format!("{line}\n"))
         .map_err(|e| ReviewError(format!("could not write {}: {e}", path.display())))
+}
+
+/// Whether `path`, relative to the repository's `root`, is in it once its
+/// links are followed: a file that is there by where it resolves, and one
+/// that isn't (a deleted file) only when no link leads to where it would be.
+fn resolves_inside(root: &Path, real_root: &Path, path: &Path) -> bool {
+    if let Ok(real) = fs::canonicalize(root.join(path)) {
+        return real.starts_with(real_root);
+    }
+    let mut at = root.to_path_buf();
+    for part in path.components() {
+        at.push(part);
+        match fs::symlink_metadata(&at) {
+            Ok(meta) if meta.file_type().is_symlink() => return false,
+            Ok(_) => {}
+            Err(_) => return true,
+        }
+    }
+    true
 }
 
 /// Whether the last clean round reviewed `reviewed`, `<commit> <base>

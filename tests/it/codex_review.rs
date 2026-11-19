@@ -859,4 +859,9 @@ fn a_low_on_a_file_linked_from_outside_is_triaged() {
 
     assert_eq!(round(clean, &["--round", "start"])["next"], "confirm");
     assert_eq!(round(linked, &["--round", "next"])["next"], "triage");
+
+    // Nor when the link leads nowhere any more.
+    fs::remove_file(home.join("outside.json")).unwrap();
+    assert_eq!(round(clean, &["--round", "start"])["next"], "confirm");
+    assert_eq!(round(linked, &["--round", "next"])["next"], "triage");
 }
