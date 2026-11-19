@@ -266,10 +266,14 @@ impl Server {
         // The focus goes to the pane only when the tool had it, in a tab in
         // front: one closed in the background (a handover there) leaves the
         // focus and the tab where they are.
+        // Nor while the sidebar has it.
+        let session = self
+            .session_of_tab(tab_id)
+            .map(|s| (s.name.clone(), s.current));
         if was_in_front
-            && self
-                .session_of_tab(tab_id)
-                .is_some_and(|s| s.current == tab_id)
+            && let Some((name, current)) = session
+            && current == tab_id
+            && !self.sidebar.focused(&name)
         {
             self.focus_pane(parked);
         }

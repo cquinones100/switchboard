@@ -403,15 +403,14 @@ impl Server {
     /// git's and repos.json's files, so never on the drawing path.
     pub(crate) fn tab_ticket_at(&self, tab: TabId, dir: &std::path::Path) -> Option<Ticket> {
         // One chosen of a service turned off since stands aside, so it never
-        // keeps the branch's issue from opening.
-        if let Some(chosen) = self
-            .chosen_ticket(tab)
-            .filter(|c| settings::is_on(c.service()))
-        {
-            return Some(chosen);
+        // keeps the branch's issue from opening, and comes last, so the keys
+        // say its service is off rather than that there is none.
+        let chosen = self.chosen_ticket(tab);
+        if let Some(on) = chosen.clone().filter(|c| settings::is_on(c.service())) {
+            return Some(on);
         }
         let provider = crate::repos::tickets_at(dir);
-        self.tab_ticket_by(tab, dir, provider.as_deref())
+        self.tab_ticket_by(tab, dir, provider.as_deref()).or(chosen)
     }
 
     /// The ticket or project chosen for a tab, kept as `@tab_ticket`.
