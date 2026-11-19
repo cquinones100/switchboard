@@ -221,6 +221,11 @@ impl Transport for Https {
 
 // ── Socket Mode ─────────────────────────────────────────────────────────────
 
+/// How often a quiet Socket Mode connection is pinged; one that answers
+/// nothing for twice this long is opened again.
+#[cfg(feature = "net")]
+const PING_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// What a Socket Mode connection tells whoever holds it: each envelope
 /// Slack sent (already acknowledged), or that the connection failed or
 /// dropped, with why and how long until it is opened again.
@@ -265,7 +270,29 @@ pub async fn socket_loop(
                 Err(e) => format!("couldn't connect: {e}"),
                 Ok((mut socket, _)) => {
                     crate::requests::count("Slack", "WebSocket", &format!("{source}: Socket Mode"));
-                    while let Some(message) = socket.next().await {
+                    // A connection that goes quiet without closing (the
+                    // network gone under it) is pinged, and counts as dropped
+                    // once nothing at all, a pong included, comes back.
+                    let mut ping = tokio::time::interval(PING_EVERY);
+                    ping.tick().await;
+                    let mut heard = tokio::time::Instant::now();
+                    loop {
+                        let message = tokio::select! {
+                            message = socket.next() => message,
+                            _ = ping.tick() => {
+                                if heard.elapsed() > PING_EVERY * 2 {
+                                    break;
+                                }
+                                if socket.send(Ws::Ping(Default::default())).await.is_err() {
+                                    break;
+                                }
+                                continue;
+                            }
+                        };
+                        let Some(message) = message else {
+                            break;
+                        };
+                        heard = tokio::time::Instant::now();
                         if stopping() {
                             let _ = socket.close(None).await;
                             return false;
