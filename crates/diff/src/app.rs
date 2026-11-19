@@ -8892,6 +8892,23 @@ mod tests {
     }
 
     #[test]
+    fn a_change_is_side_by_side_where_the_column_has_room() {
+        let mut app = map_app();
+        app.go_to_section(5);
+        let shown = screen(&mut app);
+        // The old line at the left, the new beside it.
+        let row = line_with(&shown, "fn  spaced() {}");
+        assert!(shown[row].contains("│") && shown[row].contains("fn spaced() {}"));
+        // A narrow column shows it removed over added.
+        app.cols = 90;
+        app.relay();
+        let shown = screen(&mut app);
+        let row = line_with(&shown, "fn  spaced() {}");
+        assert!(!shown[row].contains("fn spaced() {}"));
+        assert!(shown[row + 1].contains("fn spaced() {}"));
+    }
+
+    #[test]
     fn a_file_of_tests_is_folded_last_and_enter_unfolds_it() {
         let mut app = map_app();
         app.go_to_section(2);

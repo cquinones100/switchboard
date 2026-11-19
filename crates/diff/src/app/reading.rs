@@ -186,6 +186,9 @@ pub(super) struct Reader {
 /// A row of the outline, and the entry it is, where it is one.
 type OutlineRow = (Vec<Span<'static>>, Option<usize>);
 
+/// The column's width from which a change is shown side by side.
+const SIDE_BY_SIDE: usize = 80;
+
 /// How many rows What runs takes over the column: its label, a box's
 /// four rows, and a rule.
 const RUNS_ROWS: u16 = 6;
@@ -207,6 +210,133 @@ fn first_sentence(text: &str) -> String {
 /// Where the view used last is kept.
 fn mode_file() -> PathBuf {
     paths::state_dir().join("diff-mode")
+}
+
+/// A hunk's lines side by side, as Files mode shows a change: the old
+/// side at the left and the new at the right, each line beside the one it
+/// became (`sides::align`), the words that changed in the stronger shade,
+/// a line only one side has facing a gap, a long line going on in rows
+/// under it. Each row with the new and the old line it is at; a missing
+/// newline at the end said under its line, across both.
+#[allow(clippy::type_complexity)]
+fn side_by_side(
+    lines: &[(char, String, Option<usize>, Option<usize>)],
+    cols: usize,
+    (old_bg, old_word, new_bg, new_word): (
+        ratatui::style::Color,
+        ratatui::style::Color,
+        ratatui::style::Color,
+        ratatui::style::Color,
+    ),
+    theme: &Theme,
+) -> Vec<(Vec<Span<'static>>, Option<usize>, Option<usize>)> {
+    use crate::sides::{Kind, align};
+    let mut old: Vec<(usize, String)> = Vec::new();
+    let mut new: Vec<(usize, String)> = Vec::new();
+    let mut no_newline = false;
+    for (mark, text, o, n) in lines {
+        let text = text.replace('\t', "    ");
+        match mark {
+            '-' => old.push((o.unwrap_or(0), text)),
+            '+' => new.push((n.unwrap_or(0), text)),
+            ' ' => {
+                old.push((o.unwrap_or(0), text.clone()));
+                new.push((n.unwrap_or(0), text));
+            }
+            _ => no_newline = true,
+        }
+    }
+    let texts = |side: &[(usize, String)]| side.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>();
+    let half = cols.saturating_sub(1) / 2;
+    let room = half.saturating_sub(6).max(1);
+    let sunken = Surface::Sunken.color(theme);
+    let faint = Tone::Faint.style(theme);
+    let text_style = Tone::Text.style(theme);
+    // One side of a row: its rows of spans, each `half` wide.
+    let side = |line: Option<(usize, &str, &[std::ops::Range<usize>])>, bg, strong| {
+        let Some((number, text, words)) = line else {
+            return vec![vec![Span::styled(
+                " ".repeat(half),
+                Style::new().bg(sunken),
+            )]];
+        };
+        let mut out: Vec<Vec<Span<'static>>> = Vec::new();
+        let mut piece: Vec<(char, bool)> = Vec::new();
+        let mut used = 0;
+        let mut pieces: Vec<Vec<(char, bool)>> = Vec::new();
+        for (at, c) in text.char_indices() {
+            let w = crate::sides::char_width(c);
+            if used + w > room && used > 0 {
+                pieces.push(std::mem::take(&mut piece));
+                used = 0;
+            }
+            piece.push((c, words.iter().any(|r| r.contains(&at))));
+            used += w;
+        }
+        pieces.push(piece);
+        for (k, chars) in pieces.into_iter().enumerate() {
+            let num = if k == 0 {
+                number.to_string()
+            } else {
+                String::new()
+            };
+            let mut spans = vec![Span::styled(format!("{num:>5} "), faint.bg(bg))];
+            let mut run = String::new();
+            let mut lit = false;
+            let mut width = 0;
+            for (c, w) in chars {
+                if w != lit && !run.is_empty() {
+                    let b = if lit { strong } else { bg };
+                    spans.push(Span::styled(std::mem::take(&mut run), text_style.bg(b)));
+                }
+                lit = w;
+                width += crate::sides::char_width(c);
+                run.push(c);
+            }
+            if !run.is_empty() {
+                let b = if lit { strong } else { bg };
+                spans.push(Span::styled(run, text_style.bg(b)));
+            }
+            spans.push(Span::styled(
+                " ".repeat(room.saturating_sub(width)),
+                Style::new().bg(bg),
+            ));
+            out.push(spans);
+        }
+        out
+    };
+    let mut rows = Vec::new();
+    for row in align(&texts(&old), &texts(&new)) {
+        let (left_bg, right_bg) = match row.kind {
+            Kind::Same => (sunken, sunken),
+            Kind::Changed => (old_bg, new_bg),
+            Kind::Removed => (old_bg, sunken),
+            Kind::Added => (sunken, new_bg),
+        };
+        let left_line = row
+            .old
+            .map(|i| (old[i].0, old[i].1.as_str(), row.old_words.as_slice()));
+        let right_line = row
+            .new
+            .map(|i| (new[i].0, new[i].1.as_str(), row.new_words.as_slice()));
+        let left = side(left_line, left_bg, old_word);
+        let right = side(right_line, right_bg, new_word);
+        let blank = |bg| vec![Span::styled(" ".repeat(half), Style::new().bg(bg))];
+        for k in 0..left.len().max(right.len()) {
+            let mut spans = left.get(k).cloned().unwrap_or_else(|| blank(left_bg));
+            spans.push(Span::styled("│", faint));
+            spans.extend(right.get(k).cloned().unwrap_or_else(|| blank(right_bg)));
+            rows.push((spans, row.new.map(|i| new[i].0), row.old.map(|i| old[i].0)));
+        }
+    }
+    if no_newline {
+        rows.push((
+            vec![Span::styled("      ⏎ no newline at end of file", faint)],
+            None,
+            None,
+        ));
+    }
+    rows
 }
 
 /// A line of code in pieces of at most `cols` columns, each piece whole
@@ -1847,7 +1977,24 @@ impl App {
                         Style::new(),
                     )));
                 }
-                for (mark, line, old, new) in hunk_lines(text, hunk) {
+                let lines = hunk_lines(text, hunk);
+                // Side by side where the column has room, as Files mode
+                // shows a change; one column, removed over added, where not.
+                if cols >= SIDE_BY_SIDE {
+                    let target = |new: Option<usize>, old: Option<usize>| Does::Change {
+                        path: path.clone(),
+                        run: hunk.run,
+                        new,
+                        old,
+                    };
+                    for (spans, new, old) in side_by_side(&lines, cols, self.palette(), theme) {
+                        rows.push(Row {
+                            does: target(new, old),
+                            ..plain(spans)
+                        });
+                    }
+                }
+                for (mark, line, old, new) in lines.into_iter().filter(|_| cols < SIDE_BY_SIDE) {
                     if mark == '\\' {
                         rows.push(plain(vec![Span::styled(
                             format!("      ⏎ {line}"),
