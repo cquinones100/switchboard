@@ -4757,3 +4757,326 @@ fn with_no_workspace_a_held_note_says_who_has_it_and_offers_nothing_of_a_tab_s()
     );
     assert_eq!(lines(&app), ["# Plan", "", "- [ ] one"]);
 }
+
+// The list's width, set by hand (notes_resize).
+
+fn mouse(app: &mut App, kind: MouseKind, x: u16, y: u16) {
+    app.mouse(Mouse {
+        kind,
+        button: MouseButton::Left,
+        col: x,
+        row: y,
+        mods: Mods::NONE,
+    });
+}
+
+/// A pane resize key: `C-M-S-h` or `C-M-S-l`.
+fn resize(c: char) -> Key {
+    Key::new(
+        KeyCode::Char(c),
+        Mods {
+            ctrl: true,
+            shift: true,
+            alt: true,
+        },
+    )
+}
+
+/// The column of the line right of the list, as the screen shows it.
+fn list_edge(app: &mut App) -> u16 {
+    let shown = screen(app);
+    shown[5].chars().position(|c| c == '│').unwrap() as u16
+}
+
+/// The width the resize keys set kept, as it is once they stop.
+fn settle(app: &mut App) {
+    if app.keys_moved.take().is_some() {
+        app.keep_width();
+    }
+}
+
+fn kept(app: &App) -> Option<u64> {
+    app.kept_width().map(u64::from)
+}
+
+#[test]
+fn a_drag_of_the_list_s_edge_sets_its_width_kept_once_it_is_let_go() {
+    let (_dir, mut app) = started("list-width");
+    let edge = list_edge(&mut app);
+    assert_eq!(edge, list_width(120), "the screen's width at first");
+    mouse(&mut app, MouseKind::Press, edge, 5);
+    mouse(&mut app, MouseKind::Drag, 45, 6);
+    assert_eq!(list_edge(&mut app), 45, "the edge follows the mouse");
+    assert_eq!(kept(&app), None, "nothing kept as it moves");
+    // Never wider than half the app, nor narrower than 24 columns.
+    mouse(&mut app, MouseKind::Drag, 100, 6);
+    assert_eq!(list_edge(&mut app), 60);
+    mouse(&mut app, MouseKind::Drag, 3, 6);
+    assert_eq!(list_edge(&mut app), 30);
+    mouse(&mut app, MouseKind::Drag, 41, 6);
+    mouse(&mut app, MouseKind::Release, 41, 6);
+    assert_eq!(list_edge(&mut app), 41);
+    assert_eq!(kept(&app), Some(41));
+    assert_eq!(app.focus, Focus::Note, "the press moved no focus");
+
+    // Notes started again has it.
+    let (mut again, _) = app_in(app.store.clone(), options());
+    app.store.unlock();
+    again.start();
+    assert_eq!(list_edge(&mut again), 41);
+    // In a narrower app it stays within half of it.
+    again.cols = 70;
+    assert_eq!(list_edge(&mut again), 35);
+}
+
+#[test]
+fn the_list_s_edge_lights_under_the_mouse_and_while_it_is_dragged() {
+    let (_dir, mut app) = started("list-edge-lit");
+    let edge = list_edge(&mut app);
+    let color = |app: &mut App| {
+        let mut buf = Buffer::empty(Rect::new(0, 0, app.cols, app.rows));
+        app.draw(&mut buf);
+        buf[(edge, 5)].fg
+    };
+    let plain = color(&mut app);
+    mouse(&mut app, MouseKind::Move, edge, 5);
+    assert_eq!(color(&mut app), Color::Indexed(81));
+    mouse(&mut app, MouseKind::Move, edge + 5, 5);
+    assert_eq!(color(&mut app), plain);
+    mouse(&mut app, MouseKind::Press, edge, 5);
+    assert_eq!(color(&mut app), Color::Indexed(81), "while it is held");
+    mouse(&mut app, MouseKind::Release, edge, 5);
+    assert_eq!(kept(&app), None, "a click on it sets no width");
+}
+
+#[test]
+fn the_pane_resize_keys_move_the_list_s_edge_while_the_list_has_the_keys() {
+    let (_dir, mut app) = started("list-keys");
+    let edge = list_edge(&mut app);
+    // In the note they are the workspace's, and move nothing here.
+    app.key(resize('l'));
+    assert_eq!(list_edge(&mut app), edge);
+    app.focus = Focus::List;
+    app.key(resize('l'));
+    assert_eq!(list_edge(&mut app), edge + 5);
+    assert_eq!(kept(&app), None, "kept once the keys stop");
+    settle(&mut app);
+    assert_eq!(kept(&app), Some(u64::from(edge) + 5));
+    app.key(resize('h'));
+    app.key(resize('h'));
+    assert_eq!(list_edge(&mut app), 30, "the least, past the default");
+    settle(&mut app);
+    assert_eq!(kept(&app), Some(30));
+    assert_eq!(app.focus, Focus::List);
+    for _ in 0..10 {
+        app.key(resize('h'));
+    }
+    assert_eq!(list_edge(&mut app), 30, "never under 30 columns");
+}
+
+#[test]
+fn use_the_default_width_puts_the_list_back_and_keeps_nothing() {
+    let (_dir, mut app) = started("list-default");
+    let names = |app: &mut App| -> Vec<String> {
+        app.palette_commands(false)
+            .into_iter()
+            .map(|c| c.name)
+            .collect()
+    };
+    let default = "Use the default width".to_string();
+    assert!(!names(&mut app).contains(&default), "nothing to put back");
+    let edge = list_edge(&mut app);
+    app.focus = Focus::List;
+    app.key(resize('l'));
+    assert!(names(&mut app).contains(&default));
+    assert_eq!(app.run_request("Use the default width"), "ok");
+    assert_eq!(list_edge(&mut app), edge);
+    assert_eq!(kept(&app), None);
+    assert!(!names(&mut app).contains(&default));
+}
+
+#[test]
+fn with_notes_resize_off_the_list_keeps_its_width_and_its_edge_takes_no_drag() {
+    let (_dir, mut app) = started("list-off");
+    let edge = list_edge(&mut app);
+    app.focus = Focus::List;
+    app.key(resize('l'));
+    assert_eq!(list_edge(&mut app), edge + 5);
+    settle(&mut app);
+    app.opts.resize = false;
+    app.rebuild();
+    assert_eq!(list_edge(&mut app), edge, "the width kept isn't followed");
+    mouse(&mut app, MouseKind::Press, edge, 5);
+    mouse(&mut app, MouseKind::Drag, 50, 5);
+    mouse(&mut app, MouseKind::Release, 50, 5);
+    assert_eq!(list_edge(&mut app), edge);
+    app.focus = Focus::List;
+    app.key(resize('l'));
+    assert_eq!(list_edge(&mut app), edge);
+    assert!(
+        !app.palette_commands(true)
+            .iter()
+            .any(|c| c.name == "Use the default width")
+    );
+    assert_eq!(
+        kept(&app),
+        Some(u64::from(edge) + 5),
+        "and stays kept for when it is on again"
+    );
+}
+
+#[test]
+fn a_resize_key_ends_the_list_s_half_typed_command_and_leaves_the_note_s_alone() {
+    let (_dir, mut app) = started("resize-pending");
+    // In the list, d then a resize key then d is no dd.
+    app.focus = Focus::List;
+    keys(&mut app, "d");
+    app.key(resize('l'));
+    assert_eq!(app.list_pending, None, "the list's d let go");
+    // And a drag of its edge the same.
+    keys(&mut app, "d");
+    let edge = list_edge(&mut app);
+    mouse(&mut app, MouseKind::Press, edge, 5);
+    mouse(&mut app, MouseKind::Drag, edge + 4, 5);
+    mouse(&mut app, MouseKind::Release, edge + 4, 5);
+    assert_eq!(app.list_pending, None, "the list's d let go by a drag");
+    // In the note the key is the workspace's, and what is half typed
+    // there stays, as it did before the key reached Notes.
+    app.focus = Focus::Note;
+    keys(&mut app, "d");
+    app.key(resize('l'));
+    assert!(app.editor.pending(), "the note's d kept");
+    keys(&mut app, "<Esc><Space>");
+    app.key(resize('l'));
+    assert!(app.leader, "the leader kept");
+    keys(&mut app, "<Esc>A<C-o>");
+    app.key(resize('l'));
+    assert!(app.editor.one_command(), "Ctrl-O kept");
+}
+
+#[test]
+fn a_list_with_no_room_to_move_leaves_the_resize_keys_to_the_workspace() {
+    let (_dir, mut app) = started("list-narrow");
+    app.cols = 48;
+    app.focus = Focus::List;
+    app.key(resize('l'));
+    app.key(resize('h'));
+    assert_eq!(app.list_width, None, "nothing set");
+    assert!(app.keys_moved.is_none(), "the keys handed back");
+    // Its edge takes no drag, and a width kept waits for a wider Notes.
+    let edge = list_edge(&mut app);
+    mouse(&mut app, MouseKind::Press, edge, 5);
+    mouse(&mut app, MouseKind::Drag, edge + 3, 5);
+    mouse(&mut app, MouseKind::Release, edge + 3, 5);
+    assert_eq!(list_edge(&mut app), edge);
+    app.list_width = Some(40);
+    assert_eq!(list_edge(&mut app), edge);
+    app.cols = 120;
+    assert_eq!(list_edge(&mut app), 40);
+}
+
+#[test]
+fn a_double_click_on_the_list_s_edge_uses_the_default_width() {
+    let (_dir, mut app) = started("list-double-click");
+    let edge = list_edge(&mut app);
+    mouse(&mut app, MouseKind::Press, edge, 5);
+    mouse(&mut app, MouseKind::Drag, edge + 6, 5);
+    mouse(&mut app, MouseKind::Release, edge + 6, 5);
+    assert_eq!(kept(&app), Some(u64::from(edge) + 6));
+    // A drag is no first click: one press after it starts a drag.
+    let moved = list_edge(&mut app);
+    mouse(&mut app, MouseKind::Press, moved, 5);
+    mouse(&mut app, MouseKind::Release, moved, 5);
+    assert_eq!(list_edge(&mut app), moved);
+    mouse(&mut app, MouseKind::Press, moved, 5);
+    mouse(&mut app, MouseKind::Release, moved, 5);
+    assert_eq!(list_edge(&mut app), edge, "the screen's width again");
+    assert_eq!(kept(&app), None);
+}
+
+#[test]
+fn a_change_of_width_lays_the_list_out_from_what_was_read() {
+    let (_dir, app) = started("list-lay-out");
+    let read = app.list.read(&app.store);
+    let built = app.list.build(&app.store, None, 40);
+    assert_eq!(app.list.lay_out(&read, None, 40), built);
+}
+
+#[test]
+fn the_resize_keys_stop_on_the_screen_s_width_and_the_list_follows_the_screen_again() {
+    let (_dir, mut app) = started("list-snap");
+    let edge = list_edge(&mut app);
+    app.focus = Focus::List;
+    app.key(resize('l'));
+    settle(&mut app);
+    assert_eq!(kept(&app), Some(u64::from(edge) + 5));
+    app.key(resize('h'));
+    settle(&mut app);
+    assert_eq!(list_edge(&mut app), edge);
+    assert_eq!(kept(&app), None, "no width of its own");
+}
+
+#[test]
+fn under_the_least_width_the_keys_and_a_drag_reach_the_screen_s_width() {
+    let (_dir, mut app) = started("list-snap-narrow");
+    app.cols = 80;
+    let edge = list_edge(&mut app);
+    assert_eq!(edge, list_width(80));
+    app.focus = Focus::List;
+    app.key(resize('l'));
+    settle(&mut app);
+    assert_eq!(kept(&app), Some(30));
+    app.key(resize('h'));
+    settle(&mut app);
+    assert_eq!((list_edge(&mut app), kept(&app)), (edge, None));
+    app.key(resize('l'));
+    settle(&mut app);
+    assert_eq!(list_edge(&mut app), 30);
+    mouse(&mut app, MouseKind::Press, 30, 5);
+    mouse(&mut app, MouseKind::Drag, 3, 5);
+    mouse(&mut app, MouseKind::Release, 3, 5);
+    assert_eq!((list_edge(&mut app), kept(&app)), (edge, None));
+}
+
+#[test]
+fn a_drag_past_the_screen_s_width_at_the_least_follows_the_screen_again() {
+    let (_dir, mut app) = started("list-snap-least");
+    app.cols = 90;
+    let screen = list_width(90);
+    app.focus = Focus::List;
+    app.key(resize('l'));
+    settle(&mut app);
+    let edge = list_edge(&mut app);
+    assert!(edge > screen);
+    mouse(&mut app, MouseKind::Press, edge, 5);
+    mouse(&mut app, MouseKind::Drag, 2, 5);
+    mouse(&mut app, MouseKind::Release, 2, 5);
+    assert_eq!((list_edge(&mut app), kept(&app)), (screen, None));
+}
+
+#[test]
+fn in_a_notes_with_no_room_a_double_click_on_the_edge_still_clears_a_kept_width() {
+    let (_dir, mut app) = started("list-narrow-reset");
+    app.focus = Focus::List;
+    app.key(resize('l'));
+    settle(&mut app);
+    assert!(kept(&app).is_some());
+    app.cols = 58;
+    let edge = list_edge(&mut app);
+    mouse(&mut app, MouseKind::Press, edge, 5);
+    mouse(&mut app, MouseKind::Release, edge, 5);
+    mouse(&mut app, MouseKind::Press, edge, 5);
+    mouse(&mut app, MouseKind::Release, edge, 5);
+    assert_eq!(kept(&app), None);
+}
+
+#[test]
+fn in_a_notes_with_no_room_a_narrowing_key_clears_a_kept_width() {
+    let (_dir, mut app) = started("list-narrow-key-reset");
+    app.focus = Focus::List;
+    app.key(resize('l'));
+    settle(&mut app);
+    app.cols = 58;
+    app.key(resize('h'));
+    assert_eq!(kept(&app), None);
+}

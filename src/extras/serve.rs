@@ -112,8 +112,8 @@ impl Server {
         {
             return KeyFate::ToPane;
         }
-        // The pane resize keys left and right reach a diff that marked its
-        // pane with them (`@resize_keys`), which moves its file list's edge
+        // The pane resize keys left and right reach a diff or Notes that marked its
+        // pane with them (`@resize_keys`), which moves its list's edge
         // while the list has the keys and otherwise hands the key back
         // (`press resize-left-5`), the divider moving as before; known by
         // its mark and the diff still running there, whatever its program
@@ -408,7 +408,7 @@ impl Server {
         super::takes_pane_keys(&args)
     }
 
-    /// Whether a pane's diff takes this pane resize key: one it listed as
+    /// Whether a pane's diff or Notes takes this pane resize key: one it listed as
     /// it started (`@resize_keys`, `keys:` and each key with its columns,
     /// `C-M-S-h=-5`), still bound to those columns (`bound`), so a key
     /// rebound in keys.json since does what it is bound to now; which a diff
@@ -464,7 +464,15 @@ impl Server {
                 name.starts_with("switchboard")
                     || crate::util::exe().is_ok_and(|exe| exe.as_os_str() == program.as_str())
             });
-            ours && args.get(1).is_some_and(|a| a == "diff")
+            // The diff, or Notes while Settings' notes_resize is on, with
+            // which off Notes takes the keys as no resize of its own.
+            // Notes started by its link (`notes`, src/main.rs) counts too.
+            let app = args.get(1).map(String::as_str);
+            let notes_link = args
+                .first()
+                .is_some_and(|p| p.rsplit('/').next() == Some("notes"));
+            let notes = (ours && app == Some("notes")) || notes_link;
+            (ours && app == Some("diff")) || (notes && !is_off("notes_resize"))
         })
     }
 

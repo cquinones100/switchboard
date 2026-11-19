@@ -149,6 +149,7 @@ pub fn manifest() -> Manifest {
             Setting::new("key_help_line", true),
             Setting::new("palette_button", true),
             Setting::new("pane_arrows", true),
+            Setting::new("notes_resize", true),
         ],
     }
 }

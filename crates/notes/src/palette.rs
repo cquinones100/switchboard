@@ -19,6 +19,8 @@ pub const RECENT_MAX: usize = 8;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Act {
     ToggleList,
+    /// The list back to the width the screen gives it.
+    DefaultWidth,
     Find,
     Recent,
     Search,
@@ -262,6 +264,12 @@ pub fn commands(from_list: bool, in_note: bool, ux2: bool) -> Vec<Command> {
 /// has no key of its own.
 pub fn note_or_plan() -> Command {
     command("Show the note beside its plan", "", "view", Act::NoteOrPlan)
+}
+
+/// The command while the list has a width of its own (a drag
+/// of its edge, the pane resize keys), which has no key.
+pub fn default_width() -> Command {
+    command("Use the default width", "", "view", Act::DefaultWidth)
 }
 
 /// The commands picked last, newest first.

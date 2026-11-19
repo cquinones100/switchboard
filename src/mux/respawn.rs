@@ -32,7 +32,8 @@ use super::server::Server;
 /// program or by whoever started it: the notes app (`@notes_pane`), the pane
 /// standing in for it in its tab (`@notes_placeholder`), Notes in easy mode
 /// taking the Cmd keys (`@notes_cmd_keys`), the note Notes shows
-/// (`@notes_open`), a program allowed to pass
+/// (`@notes_open`), the diff or Notes handing the pane resize keys back
+/// (`@resize_keys`, src/extras), a program allowed to pass
 /// kitty's graphics commands to the terminal (`@allow_passthrough`), and the
 /// mouse pointer's shape an app names over its pane (`@pointer`,
 /// crates/ui/src/pointer.rs). They go
@@ -45,6 +46,7 @@ pub const PROGRAM_MARKS: &[&str] = &[
     "@notes_open",
     "@allow_passthrough",
     crate::ui::pointer::PANE_OPTION,
+    "@resize_keys",
 ];
 
 /// The tab options about the work a tab was doing, which go when it is

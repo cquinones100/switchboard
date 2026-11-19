@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 
 use jiff::civil::Weekday;
 
-use super::store::{self, NoteEntry, Store, TRASH};
+use super::store::{self, Folder, NoteEntry, Store, TRASH};
 use crate::util;
 use switchboard_ui::draw::{cut, width};
 
@@ -80,6 +80,17 @@ impl Row {
             _ => None,
         }
     }
+}
+
+/// What the list shows, as read from the store: its rows are laid out from
+/// this at any width, so a change of width alone reads no note again.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Read {
+    recent: Vec<NoteEntry>,
+    top: usize,
+    folders: Vec<Folder>,
+    trash: usize,
+    notes: Vec<NoteEntry>,
 }
 
 /// How many of the notes opened lately the list shows under Recent.
@@ -202,6 +213,40 @@ impl State {
     /// The list's rows for a list `cols` wide, the note open (`current`)
     /// marked.
     pub fn build(&self, store: &Store, current: Option<&Path>, cols: u16) -> Vec<Row> {
+        self.lay_out(&self.read(store), current, cols)
+    }
+
+    /// What the list shows, read from the store, each note's body left
+    /// out, which no row shows.
+    pub fn read(&self, store: &Store) -> Read {
+        let rows_only = |notes: Vec<NoteEntry>| -> Vec<NoteEntry> {
+            notes
+                .into_iter()
+                .map(|note| NoteEntry {
+                    text: String::new(),
+                    ..note
+                })
+                .collect()
+        };
+        Read {
+            recent: rows_only(if self.recent {
+                store.recent()
+            } else {
+                Vec::new()
+            }),
+            top: store
+                .notes(None)
+                .iter()
+                .filter(|n| n.folder.is_empty())
+                .count(),
+            folders: store.folders(),
+            trash: store.notes(Some(TRASH)).len(),
+            notes: rows_only(self.notes(store)),
+        }
+    }
+
+    /// The list's rows from what was read, for a list `cols` wide.
+    pub fn lay_out(&self, read: &Read, current: Option<&Path>, cols: u16) -> Vec<Row> {
         let w = cols.saturating_sub(2) as usize;
         let mut rows = Vec::new();
         let add = |rows: &mut Vec<Row>, text: String, look: Look, item: Option<Item>| {
@@ -212,14 +257,9 @@ impl State {
                 dim_at: None,
             });
         };
-        let all = store.notes(None);
         let plain = self.tag.is_none() && self.query.is_none();
         let current_if = |on: bool| if on { Look::Current } else { Look::Plain };
-        let recent = if self.recent {
-            store.recent()
-        } else {
-            Vec::new()
-        };
+        let recent = &read.recent;
         if !recent.is_empty() {
             let all = format!("all {} ›", recent.len());
             add(
@@ -249,14 +289,13 @@ impl State {
             add(&mut rows, String::new(), Look::Plain, None);
         }
         add(&mut rows, "Folders".into(), Look::Header, None);
-        let top = all.iter().filter(|n| n.folder.is_empty()).count();
         add(
             &mut rows,
-            counted("  Notes", top, w),
+            counted("  Notes", read.top, w),
             current_if(plain && self.folder.is_empty()),
             Some(Item::Folder(String::new())),
         );
-        for folder in store.folders() {
+        for folder in &read.folders {
             let on = plain && self.folder == folder.rel;
             add(
                 &mut rows,
@@ -266,18 +305,18 @@ impl State {
                     w,
                 ),
                 current_if(on),
-                Some(Item::Folder(folder.rel)),
+                Some(Item::Folder(folder.rel.clone())),
             );
         }
         add(
             &mut rows,
-            counted("  Recently Deleted", store.notes(Some(TRASH)).len(), w),
+            counted("  Recently Deleted", read.trash, w),
             current_if(plain && self.folder == TRASH),
             Some(Item::Folder(TRASH.into())),
         );
         add(&mut rows, String::new(), Look::Plain, None);
         add(&mut rows, "─".repeat(w), Look::Rule, None);
-        let notes = self.notes(store);
+        let notes = &read.notes;
         let count = format!(
             "{} {}",
             notes.len(),
@@ -308,7 +347,7 @@ impl State {
         }
         let now = jiff::Zoned::now();
         let mut section: Option<&str> = None;
-        for note in &notes {
+        for note in notes {
             let this = if note.pinned { "Pinned" } else { "Notes" };
             if section != Some(this) && (note.pinned || section == Some("Pinned")) {
                 add(&mut rows, String::new(), Look::Plain, None);

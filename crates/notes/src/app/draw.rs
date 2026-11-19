@@ -13,7 +13,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use super::{App, Focus, NoteBar, Shown, list_width};
+use super::{App, Focus, NoteBar, Shown};
 use crate::editor::Mode;
 use crate::images::Picture;
 use crate::render::{self, Cell, Hl, Kind};
@@ -107,7 +107,8 @@ impl App {
             .as_ref()
             .map(|b| super::beside::split(area.width, b.show_note));
         let list_w = if self.list_shown && split.is_none() {
-            list_width(area.width).min(area.width.saturating_sub(10))
+            self.list_cols(area.width)
+                .min(area.width.saturating_sub(10))
         } else {
             0
         };
@@ -129,6 +130,9 @@ impl App {
         if let (Some((None, _)), Some(b)) = (split, self.beside.as_mut()) {
             b.focused = true;
         }
+        // The edge a drag moves (notes_resize): the line right of the list.
+        self.geo.list_edge =
+            (self.opts.resize && list_w > 0).then(|| Rect::new(list_w, 0, 1, body_h));
         let plan_cursor = match split {
             Some((note, Some((x, w)))) => {
                 self.draw_plan(buf, Rect::new(x, 0, w, body_h), note.is_some())
@@ -148,7 +152,11 @@ impl App {
         }
         if list_w > 0 {
             self.draw_list(buf);
-            let edge = Style::new().fg(Color::Indexed(if self.opts.light { 250 } else { 238 }));
+            // Lit under the mouse and while it is dragged.
+            let edge = match self.edge_lit() {
+                Some(lit) => lit,
+                None => Style::new().fg(Color::Indexed(if self.opts.light { 250 } else { 238 })),
+            };
             for y in 0..body_h {
                 buf[(list_w, y)].set_symbol("│").set_style(edge);
             }

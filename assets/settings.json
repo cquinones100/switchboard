@@ -957,6 +957,13 @@
     "default": true
   },
   {
+    "key": "notes_resize",
+    "category": "Notes",
+    "label": "Resize Notes' list by dragging or the pane resize keys",
+    "description": "A drag of the line right of Notes' list of notes, or the pane resize keys (C-M-S-h and C-M-S-l) while the list has the keys, gives the list a width of its own, from 30 columns to half of Notes, kept through restarts; \"Use the default width\" in Notes' palette, or a double click on the edge, goes back to the width the screen gives it. Off, the list keeps the width the screen gives it, its edge takes no drag and the pane resize keys move the pane's divider as they did before",
+    "default": true
+  },
+  {
     "key": "notes_per_tab",
     "category": "Notes",
     "label": "A Notes app in each tab",

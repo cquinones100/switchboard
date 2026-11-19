@@ -66,6 +66,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
+use ratatui::style::{Color, Style};
 
 use super::editor::{self, Editor, Effect, Mode};
 use super::format::{self, Selection};
@@ -95,6 +96,20 @@ mod draw;
 
 /// The jump list's key in `.notes.json`.
 const JUMPS: &str = "jumps";
+
+/// The file in the state folder holding the list's own width, in columns:
+/// what a drag of its edge or the pane resize keys set. Missing, it takes
+/// its width from the screen. Kept outside the notes folder, whose watcher
+/// would have every open Notes read the notes again for a width.
+const LIST_WIDTH: &str = "notes-list-width";
+
+/// The least width the list is given by hand, which keeps "⌘ Commands" and
+/// "/ search" on its top line; the most is half the app's.
+const LIST_LEAST: u16 = 30;
+
+/// How far a press of a pane resize key moves an edge, as the workspace's
+/// own keys move a divider.
+const RESIZE_BY: i32 = 5;
 
 /// What the app's work off its own thread reports.
 pub enum Msg {
@@ -184,6 +199,9 @@ pub struct Options {
     /// An app in each tab (notes_per_tab): a lock a note rather than one
     /// on the whole directory, and a socket of its pane's own.
     pub per_note: bool,
+    /// The list's edge takes a drag and the pane resize keys, and the
+    /// width kept is followed (notes_resize).
+    pub resize: bool,
 }
 
 impl Default for Options {
@@ -215,6 +233,7 @@ impl Default for Options {
             scroll_bars: true,
             recent: true,
             per_note: false,
+            resize: true,
         }
     }
 }
@@ -239,6 +258,7 @@ impl Options {
             "notes_recent",
             "notes_relative_numbers",
             "notes_per_tab",
+            "notes_resize",
         ]);
         let on = |key: &str| all.on(key);
         Options {
@@ -264,14 +284,15 @@ impl Options {
             recent: on("notes_recent"),
             relative_numbers: all.set_on("notes_relative_numbers"),
             per_note: on("notes_per_tab"),
+            resize: on("notes_resize"),
             caps: crate::host::graphics::apps_round_ends(),
             ..Options::default()
         }
     }
 }
 
-/// How often the palette_button setting is read again, which Settings
-/// changes while the app runs on.
+/// How often the palette_button and notes_resize settings are read
+/// again, which Settings changes while the app runs on.
 const SETTINGS_EVERY: Duration = Duration::from_secs(2);
 
 /// The open note's lock held by another app (`Store::lock_note`): the
@@ -464,6 +485,9 @@ struct Geo {
     /// The mermaid blocks drawn as their diagrams, their fences' rows, for
     /// the wheel.
     diagrams: Vec<(usize, usize)>,
+    /// The line right of the list, where it was drawn, while a drag moves
+    /// it (notes_resize).
+    list_edge: Option<Rect>,
 }
 
 /// The note's scroll bar as it was drawn, for the mouse.
@@ -762,6 +786,34 @@ pub struct App {
     /// kept for the drag so the thumb keeps its length as the lines it
     /// passes wrap to other heights.
     bar_drag: Option<(BarDrag, switchboard_ui::kit::Grab, usize)>,
+    /// The list's own width, from a drag of its edge or the pane resize
+    /// keys while it has the keys; none to take the screen's
+    /// (`list_width`). Kept in the state folder (`notes-list-width`), followed only while
+    /// Settings' notes_resize is on.
+    list_width: Option<u16>,
+    /// Whether the mouse has moved since the press that began a drag of
+    /// an edge, off the column it landed on (`edge_from`), so a press let
+    /// go with the edge where it was keeps nothing.
+    edge_moved: bool,
+    edge_from: u16,
+    /// What the list shows as last read from the store (`rebuild`), and
+    /// the width its rows were last laid out for.
+    list_read: super::sidebar::Read,
+    list_built_for: u16,
+    /// The list's width as a tick last found it and since when, so a width
+    /// still changing (the pane being resized) isn't built for.
+    list_width_seen: (u16, Option<Instant>),
+    /// When the resize keys last moved the list's edge, its width kept
+    /// once they stop.
+    keys_moved: Option<Instant>,
+    /// Whether the list's edge is being dragged, and when it was last
+    /// pressed, for a double click.
+    edge_drag: bool,
+    edge_pressed_at: Option<Instant>,
+    /// Whether the press held is a double click's second.
+    edge_double: bool,
+    /// The list's own width as the press found it, and the width shown.
+    edge_start: (Option<u16>, u16),
     parser: Parser,
     last_input: Instant,
 }
@@ -774,6 +826,12 @@ fn grab_clipboard(file: &Path) -> bool {
 /// room beside it, else narrower, never under its minimum.
 pub fn list_width(cols: u16) -> u16 {
     sidebar::MIN_WIDTH.max(sidebar::WIDTH.min(cols.saturating_sub(60)))
+}
+
+/// A width asked for the list, held to what an app `cols` wide lets it
+/// be: 30 columns at the least (`LIST_LEAST`), half the app's at the most.
+fn list_clamp(width: u16, cols: u16) -> u16 {
+    width.clamp(LIST_LEAST, (cols / 2).max(LIST_LEAST))
 }
 
 impl App {
@@ -863,6 +921,17 @@ impl App {
             mouse_at: None,
             press: None,
             bar_drag: None,
+            list_width: None,
+            edge_moved: false,
+            edge_from: 0,
+            list_read: Default::default(),
+            list_built_for: 0,
+            list_width_seen: (0, None),
+            keys_moved: None,
+            edge_drag: false,
+            edge_pressed_at: None,
+            edge_double: false,
+            edge_start: (None, 0),
             parser: Parser::new(),
             last_input: Instant::now(),
             opts,
@@ -941,7 +1010,9 @@ impl App {
             self.locked_by = Some(pid);
             return;
         }
-        let saved = self.store.meta().remove(JUMPS).unwrap_or_default();
+        self.list_width = self.kept_width();
+        let mut meta = self.store.meta();
+        let saved = meta.remove(JUMPS).unwrap_or_default();
         self.jumps = Jumps::from_saved(&saved, |rel| self.store.absolute(rel), Path::is_file);
         self.jumps_kept = self.jumps.clone();
         let mut notes = self.store.notes(None);
@@ -977,6 +1048,9 @@ impl App {
     pub fn stop(&mut self) {
         if self.locked_by.is_some() {
             return;
+        }
+        if self.keys_moved.take().is_some() {
+            self.keep_width();
         }
         self.put_title_back();
         self.save();
@@ -2116,15 +2190,26 @@ impl App {
 
     /// The list built again from the notes on disk.
     pub fn rebuild(&mut self) {
-        let width = list_width(self.cols);
-        let current = self.open.as_ref().map(|o| o.path.clone());
-        self.list_rows = self.list.build(&self.store, current.as_deref(), width);
+        self.list_read = self.list.read(&self.store);
+        self.lay_out_list();
         self.titles = self
             .store
             .titles()
             .into_iter()
             .map(|t| t.to_lowercase())
             .collect();
+        self.list_at = self.list_at.min(self.list_rows.len().saturating_sub(1));
+    }
+
+    /// The list's rows laid out again for its width from what was last
+    /// read, reading no note: what a change of width alone needs.
+    fn lay_out_list(&mut self) {
+        let width = self.list_cols(self.cols);
+        self.list_built_for = width;
+        let current = self.open.as_ref().map(|o| o.path.clone());
+        self.list_rows = self
+            .list
+            .lay_out(&self.list_read, current.as_deref(), width);
         self.list_at = self.list_at.min(self.list_rows.len().saturating_sub(1));
     }
 
@@ -3307,10 +3392,61 @@ impl App {
         if self.check_held() {
             changed = true;
         }
+        // The list's rows are cut to its width: laid out again here once
+        // its width has settled (a drag let go, a key, the pane's size held a
+        // moment), never as it is drawn or dragged.
+        // A width the resize keys set, kept once they stop, so a key held
+        // writes its file once.
+        // Never while a drag is held: its release keeps what it ends on.
+        if !self.edge_drag
+            && self
+                .keys_moved
+                .is_some_and(|at| now.duration_since(at) >= LIST_SETTLES)
+        {
+            self.keys_moved = None;
+            self.keep_width();
+        }
+        let width = self.list_cols(self.cols);
+        // With notes_resize off the list is as on main: nothing done for a
+        // width alone.
+        if self.list_width_seen.0 != width && self.opts.resize {
+            self.list_width_seen = (width, Some(now));
+            // A change of the list's width ends its d of dd, as any resize
+            // of it does.
+            if self.list_pending != Some('w') {
+                self.list_pending = None;
+            }
+        }
+        let settled = self
+            .list_width_seen
+            .1
+            .is_none_or(|since| now.duration_since(since) >= LIST_SETTLES);
+        let list_moved =
+            // Drawn only with no plan beside the note, as draw lays it out.
+            self.list_shown
+                && self.beside.is_none()
+                && self.locked_by.is_none()
+                && self.list_built_for != width
+                && self.opts.resize
+                && settled;
+        // Laid out again from what was read, no note read for a width.
+        if list_moved && !self.edge_drag {
+            self.lay_out_list();
+            changed = true;
+        }
         if now.duration_since(self.settings_seen) >= SETTINGS_EVERY {
-            let was = self.opts.commands;
+            let was = (self.opts.commands, self.opts.resize);
             self.opts.commands = settings::is_on("palette_button");
-            changed |= was != self.opts.commands;
+            self.opts.resize = settings::is_on("notes_resize");
+            if was.1 != self.opts.resize {
+                // The list's rows laid out for its width as it now is.
+                self.edge_drag = false;
+                if self.list_pending != Some('w') {
+                    self.list_pending = None;
+                }
+                self.lay_out_list();
+            }
+            changed |= was != (self.opts.commands, self.opts.resize);
             self.settings_seen = now;
         }
         if self.save_due.is_some_and(|due| now >= due) {
@@ -3407,6 +3543,21 @@ impl App {
     }
 
     fn key_inner(&mut self, key: Key) {
+        // A pane resize key, which the workspace passes on to Notes: its
+        // own while the list has the keys, and handed back
+        // from anywhere else, a box or a prompt included.
+        // With notes_resize off the workspace keeps the key, so one that
+        // reaches Notes is an ordinary key of its own.
+        if let Some(by) = resize_key(&key).filter(|_| self.opts.resize) {
+            // What is half typed elsewhere (the note's d of dd, the plan's
+            // Ctrl-W) it leaves alone, as the workspace's key did before it
+            // reached Notes; a resize of the list ends the list's own.
+            let elsewhere = self.locked_by.is_some()
+                || !self.layers.is_empty()
+                || self.prompt.is_some()
+                || self.adding.is_some();
+            return self.resize_by_key(by, elsewhere);
+        }
         if self.locked_by.is_some() {
             if matches!(key.code, KeyCode::Char('q' | 'Q') | KeyCode::Esc) {
                 self.quit = true;
@@ -3656,6 +3807,12 @@ impl App {
         if self.beside.is_some() {
             commands.push(palette::note_or_plan());
         }
+        // Offered while a width is kept here, or in the state folder by another
+        // tab's Notes since this one started, read as the palette opens.
+        let kept = self.list_width.is_some() || self.kept_width().is_some();
+        if self.opts.resize && kept {
+            commands.push(palette::default_width());
+        }
         // With no workspace to ask, what only it does is left out.
         if !self.opts.server {
             commands.retain(|c| !c.act.needs_workspace());
@@ -3779,6 +3936,9 @@ impl App {
         };
         match act {
             PaletteAct::ToggleList => self.toggle_list(),
+            // A palette open as notes_resize was turned off keeps the widths.
+            PaletteAct::DefaultWidth if self.opts.resize => self.default_width(),
+            PaletteAct::DefaultWidth => {}
             PaletteAct::Find => self.finder(),
             PaletteAct::Recent => self.recent_finder(),
             PaletteAct::Search => {
@@ -4553,6 +4713,61 @@ impl App {
                     self.scroll(3, down);
                 }
             }
+            (MouseKind::Press, MouseButton::Left) if self.on_edge(x, y) => {
+                // A second press within a moment is a double click: "Use
+                // the default width", which the palette offers too, on its
+                // release, so that release lands on nothing else.
+                self.edge_double = self
+                    .edge_pressed_at
+                    .is_some_and(|at| at.elapsed() < DOUBLE_CLICK);
+                self.edge_drag = true;
+                self.edge_moved = false;
+                self.edge_from = x;
+                // A width the keys set and not yet kept is kept first, so the
+                // drag starts from it and the tick never keeps a drag's.
+                if self.keys_moved.take().is_some() {
+                    self.keep_width();
+                }
+                self.edge_start = (self.list_width, self.list_cols(self.cols));
+                self.edge_pressed_at = (!self.edge_double).then(Instant::now);
+            }
+            (MouseKind::Drag, MouseButton::Left) if self.edge_drag => {
+                // Nothing is set until the mouse leaves the column the
+                // press landed on, and nothing is kept unless the edge
+                // itself moved, pulled against its limit or not; in a Notes
+                // with no room for a width of its own, it takes only the
+                // double click.
+                self.edge_double = false;
+                let room = self.cols / 2 > LIST_LEAST;
+                if room && (self.edge_moved || x != self.edge_from) {
+                    let was = (self.list_cols(self.cols), self.list_width);
+                    self.drag_edge(x);
+                    self.edge_moved |= was != (self.list_cols(self.cols), self.list_width);
+                }
+            }
+            (MouseKind::Release, _) if self.edge_drag => {
+                // Kept once the drag is over, never as the mouse moves; the
+                // edge stays lit where the mouse let it go.
+                self.edge_drag = false;
+                self.mouse_at = Some((x, y));
+                if std::mem::take(&mut self.edge_double) {
+                    self.default_width();
+                } else if self.edge_moved {
+                    // A drag is no first click of a double click, and one
+                    // let go where it started keeps nothing, the width of
+                    // its own as it was.
+                    self.edge_pressed_at = None;
+                    let (kept, shown) = self.edge_start;
+                    if self.list_cols(self.cols) == shown {
+                        self.list_width = kept;
+                        if self.keys_moved.take().is_some() {
+                            self.keep_width();
+                        }
+                    } else {
+                        self.keep_width();
+                    }
+                }
+            }
             (MouseKind::Press, MouseButton::Left) if self.on_scroll_bar(x, y).is_some() => {
                 if let Some(bar) = self.on_scroll_bar(x, y) {
                     // The press focuses the side its bar is on, as a press
@@ -4685,6 +4900,186 @@ impl App {
         }
     }
 
+    // ── The widths ────────────────────────────────────────────────────────
+
+    /// The list's width in an app `cols` wide: its own (a drag of its edge,
+    /// the pane resize keys) between 30 columns and half the app's, else
+    /// the screen's. With Settings' notes_resize off, its own is left
+    /// where it is kept and not followed.
+    pub(crate) fn list_cols(&self, cols: u16) -> u16 {
+        // A Notes with no room for a width of its own (under twice the
+        // least) keeps the screen's, a width kept waiting for a wider one.
+        match self.own_width(cols) {
+            Some(w) => list_clamp(w, cols),
+            None => list_width(cols),
+        }
+    }
+
+    /// The list's own width while it is followed: Settings' notes_resize
+    /// on and room for one in an app `cols` wide.
+    fn own_width(&self, cols: u16) -> Option<u16> {
+        self.list_width
+            .filter(|_| self.opts.resize && cols / 2 > LIST_LEAST)
+    }
+
+    /// Whether screen cell (`x`, `y`) is on the list's edge, while it
+    /// takes a drag.
+    fn on_edge(&self, x: u16, y: u16) -> bool {
+        self.opts.resize
+            && self
+                .geo
+                .list_edge
+                .is_some_and(|r| x == r.x && y >= r.y && y < r.bottom())
+    }
+
+    /// How the list's edge is drawn while it is dragged, or under the
+    /// mouse with Settings' hover_highlight on; none to draw it as the line
+    /// it is.
+    pub(crate) fn edge_lit(&self) -> Option<Style> {
+        let under = self.opts.hover && self.mouse_at.is_some_and(|(x, y)| self.on_edge(x, y));
+        (self.edge_drag || under).then(|| Style::new().fg(Color::Indexed(81)))
+    }
+
+    /// The list's edge dragged to column `x`: the list ends there.
+    fn drag_edge(&mut self, x: u16) {
+        // A width of its own only once the edge would move, and only the
+        // way the mouse goes, so a list past half a narrow pane isn't
+        // pulled back to the limit by a drag outward. From the width as it
+        // is now, not as it was last drawn: several of the mouse's reports
+        // may come before a draw.
+        let shown = self.list_cols(self.cols).min(self.cols.saturating_sub(10));
+        let now = i32::from(shown);
+        // Under the least width of its own, the screen's narrower width is
+        // where a drag past it stops, the list following the screen again.
+        let screen = list_width(self.cols);
+        let x = if x <= screen && screen < LIST_LEAST {
+            screen
+        } else {
+            x
+        };
+        let to = i32::from(if x == screen {
+            screen
+        } else {
+            list_clamp(x, self.cols)
+        });
+        let toward_mouse = (to - now).signum() == (i32::from(x) - now).signum();
+        let on_screen_s = to == i32::from(screen) && self.list_width.is_some();
+        if (to != now && toward_mouse) || on_screen_s {
+            self.set_list_width(to as u16);
+        }
+    }
+
+    /// The list given a width of its own; its rows are cut to it again
+    /// by the next tick once it has settled. It ends the list's command
+    /// half typed (the d of dd), so a note is never deleted across a
+    /// resize of the list.
+    fn set_list_width(&mut self, width: u16) {
+        // The screen's own width is no width of its own: reached by a drag
+        // or the keys, the list follows the screen again.
+        let screen = list_width(self.cols);
+        self.list_width = (width != screen).then(|| list_clamp(width, self.cols));
+        if self.list_pending != Some('w') {
+            self.list_pending = None;
+        }
+    }
+
+    /// A pane resize key (`by` columns, right positive): the list's edge
+    /// moved while the list has the keys, its width kept once they stop
+    /// (the next tick after `LIST_SETTLES`, or as Notes ends). Anywhere
+    /// else (`elsewhere` a box or a prompt up, the note or a plan with the
+    /// keys, a list that can't move that way) the key is the workspace's,
+    /// which moves its pane's divider with it; alone, it does nothing.
+    fn resize_by_key(&mut self, by: i32, elsewhere: bool) {
+        // While the mouse holds the list's edge, the drag alone moves it.
+        if self.edge_drag {
+            return;
+        }
+        // A list that can't move the way the key asks (a Notes under twice
+        // its least width, or the list at its limit that way) hands the key
+        // back, so the pane's divider still moves.
+        let list = self.beside.is_none()
+            && self.focus == Focus::List
+            && self.list_shown
+            && self.cols / 2 > LIST_LEAST;
+        let now = self.list_cols(self.cols);
+        let asked = (i32::from(now) + by).clamp(0, i32::from(u16::MAX)) as u16;
+        // Reaching or passing the screen's width, the keys stop on it, even
+        // under the least width of its own, so they always reach it, and
+        // with it the list follows the screen again.
+        let screen = list_width(self.cols);
+        let passes = screen >= LIST_LEAST && now.min(asked) <= screen && screen <= now.max(asked);
+        // From the least width of its own, the next narrowing press goes to
+        // the screen's narrower width.
+        let below_least = by < 0 && now <= LIST_LEAST && screen < LIST_LEAST;
+        let to = if screen != now && (passes || below_least) {
+            screen
+        } else {
+            list_clamp(asked, self.cols)
+        };
+        let moves = (i32::from(to) - i32::from(now)).signum() == by.signum();
+        // In a Notes too narrow to follow it, a width kept is cleared by a
+        // narrowing key with the list's keys, as the double click does.
+        let kept_unshown = !elsewhere
+            && self.opts.resize
+            && by < 0
+            && self.beside.is_none()
+            && self.focus == Focus::List
+            && self.list_shown
+            && self.cols / 2 <= LIST_LEAST
+            && (self.list_width.is_some() || self.kept_width().is_some());
+        if kept_unshown {
+            return self.default_width();
+        }
+        // With notes_resize off the key is the workspace's everywhere.
+        if !elsewhere && self.opts.resize && list && moves {
+            self.set_list_width(to);
+            self.keys_moved = Some(Instant::now());
+        } else if self.opts.server {
+            let action = if by < 0 {
+                format!("resize-left-{}", -by)
+            } else {
+                format!("resize-right-{by}")
+            };
+            std::thread::spawn(move || {
+                let _ = crate::host::socket::ask(&["press", &action]);
+            });
+        }
+    }
+
+    /// "Use the default width": the list back to the width the screen
+    /// gives it, and nothing kept.
+    fn default_width(&mut self) {
+        self.list_width = None;
+        self.keys_moved = None;
+        self.lay_out_list();
+        // The list's own half-typed command (the d of dd), shown or not,
+        // never a Ctrl-W waiting for its direction.
+        if self.list_pending != Some('w') {
+            self.list_pending = None;
+        }
+        self.keep_width();
+    }
+
+    /// The list's width written to the state folder, so Notes started
+    /// again has it: after a drag is let go and after a key, never as the
+    /// mouse moves.
+    fn keep_width(&mut self) {
+        let file = self.store.state.join(LIST_WIDTH);
+        if self.kept_width() == self.list_width {
+            return;
+        }
+        let _ = match self.list_width {
+            Some(width) => util::write_atomic(&file, width.to_string()),
+            None => std::fs::remove_file(&file),
+        };
+    }
+
+    /// The list's width as the state folder keeps it, another tab's Notes
+    /// having written it since this one started included.
+    fn kept_width(&self) -> Option<u16> {
+        util::read_text(self.store.state.join(LIST_WIDTH)).and_then(|text| text.trim().parse().ok())
+    }
+
     /// Whether the list's rows run past it, so it has a scroll bar.
     fn list_overflows(&self) -> bool {
         self.opts.scroll_bars && self.list_rows.len() > self.geo.list.height as usize
@@ -4808,6 +5203,30 @@ fn rekey<V>(map: &mut HashMap<PathBuf, V>, follow: &dyn Fn(&Path) -> Option<Path
         if let (Some(v), Some(to)) = (map.remove(&from), follow(&from)) {
             map.insert(to, v);
         }
+    }
+}
+
+/// How soon a second press on the list's edge makes a double click.
+const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+
+/// How long the list's width holds before its rows are built for it, so a
+/// pane being resized (the workspace's sidebar dragged) reads the notes once
+/// it stops rather than at each column.
+const LIST_SETTLES: Duration = Duration::from_millis(250);
+
+/// The columns a pane resize key moves an edge by, right positive: the
+/// workspace's own keys for a divider, `C-M-S-h` and `C-M-S-l`.
+fn resize_key(key: &Key) -> Option<i32> {
+    let key = key.normalized();
+    // With Shift, as bound: the workspace passes the chord on only to a
+    // pane it reaches whole, so Ctrl-Alt h or l without it is no resize.
+    if !(key.mods.ctrl && key.mods.alt && key.mods.shift) {
+        return None;
+    }
+    match key.code {
+        KeyCode::Char('h') => Some(-RESIZE_BY),
+        KeyCode::Char('l') => Some(RESIZE_BY),
+        _ => None,
     }
 }
 
@@ -5051,13 +5470,14 @@ pub fn run(program: &str, store: Store) -> ExitCode {
             libc::signal(signal, on_signal as *const () as libc::sighandler_t);
         }
     }
-    let term = match Term::enter(opts.hover && (opts.toolbar || opts.easy || opts.ux2)) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("{program}: can't take the terminal: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let term =
+        match Term::enter(opts.hover && (opts.toolbar || opts.easy || opts.ux2 || opts.resize)) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("{program}: can't take the terminal: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
     // The terminal's background, for the `system` theme, which Neovim
     // followed through Ghostty's; a key typed meanwhile is read as typed.
     let (colors, typed) = switchboard_ui::terminal::ask(Duration::from_millis(200));
@@ -5091,6 +5511,21 @@ pub fn run(program: &str, store: Store) -> ExitCode {
     // an app started by hand by, so each marks its own pane as Notes'.
     if opts.per_note && opts.server {
         mark_pane("@notes_pane", true);
+    }
+    // The workspace passes the pane resize keys on only to a pane marked
+    // as handing them back, which a Notes from an older build never is.
+    // Listed as the diff lists its own (`keys:` and each key with its
+    // columns): the default chords, which are the ones Notes knows.
+    if opts.server
+        && let Some(pane) = crate::host::pane()
+    {
+        let _ = crate::host::socket::ask(&[
+            "set",
+            "-t",
+            &pane,
+            "@resize_keys",
+            "keys:C-M-S-h=-5 C-M-S-l=5",
+        ]);
     }
     if app.locked_by.is_none() && opts.server {
         mark_pane("@allow_passthrough", true);
@@ -5174,6 +5609,9 @@ pub fn run(program: &str, store: Store) -> ExitCode {
     drop(out);
     if listener.is_some() {
         let _ = std::fs::remove_file(&socket_path);
+    }
+    if opts.server {
+        mark_pane("@resize_keys", false);
     }
     if app.locked_by.is_none() && opts.server {
         mark_pane("@allow_passthrough", false);
