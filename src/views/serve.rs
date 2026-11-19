@@ -897,7 +897,14 @@ impl Server {
             self.open_link(client, url);
             return;
         }
-        let shown = shown_in(pane).or_else(|| self.marked_in(tab, TICKET_VIEW).and_then(shown_in));
+        // The tab's ticket view counts only while it is on screen: a
+        // zoomed tab shows its pane in front alone.
+        let zoomed = self.tabs.get(&tab).is_some_and(|t| t.zoomed);
+        let shown = shown_in(pane).or_else(|| {
+            self.marked_in(tab, TICKET_VIEW)
+                .filter(|_| !zoomed)
+                .and_then(shown_in)
+        });
         let Some(found) = shown.or_else(|| self.tab_ticket_at(tab, &dir)) else {
             self.say(Some(client), "No ticket or GitHub issue for this tab");
             return;

@@ -145,11 +145,12 @@ impl Server {
             let restored = self.parked_of(view);
             self.kill_pane(view);
             if let Some((active, last, zoomed)) = before
-                && active != view
-                && self.panes.contains_key(&active)
                 && let Some(t) = self.tabs.get_mut(&tab)
             {
-                t.active = active;
+                // The view in front gives the front to whichever pane took it.
+                if active != view && self.panes.contains_key(&active) {
+                    t.active = active;
+                }
                 t.last_pane = last.and_then(|l| if l == view { restored } else { Some(l) });
                 let rezoom = t.zoomed != zoomed;
                 t.zoomed = zoomed;
