@@ -525,13 +525,15 @@ pub fn lines(
     };
     let mut pieces = Vec::with_capacity(out.len());
     let mut n = 0;
+    // `more` is in the rows' order, so it is read once as they go by.
+    let mut more = more.into_iter().peekable();
     for r in 0..out.len() {
         if card_row(r) {
             pieces.push(None);
             continue;
         }
-        let sub = match more.iter().find(|m| m.0 == r) {
-            Some(&(_, words)) => words,
+        let sub = match more.next_if(|m| m.0 == r) {
+            Some((_, words)) => words,
             None => {
                 n += 1;
                 0
@@ -1099,7 +1101,12 @@ impl App {
         // first in view, else the nearest, never on a card the reader didn't
         // go to, which Enter would choose.
         let on_text = |l: &usize| pieces.get(l + 1).is_some_and(Option::is_some);
-        if b.took_keys && focused && body > 0 && !on_text(&line) {
+        // A card the reader chose (Tab, the cursor) and still under the
+        // cursor stays chosen.
+        let on_chosen = hits
+            .iter()
+            .any(|h| h.0 > 0 && Some(h.4) == b.stop && (h.0..h.0 + h.3).contains(&(line + 1)));
+        if b.took_keys && focused && body > 0 && !on_text(&line) && !on_chosen {
             let below = (line..rows.len().saturating_sub(1)).find(on_text);
             let above = (0..line).rev().find(on_text);
             let nearest = match (above, below) {
