@@ -5528,3 +5528,69 @@ fn two_cards_too_narrow_for_their_titles_stack() {
     let (_, b_y) = find(&shown, "B · ");
     assert!(b_y > a_y, "stacked:\n{}", shown.join("\n"));
 }
+
+#[test]
+fn a_card_chosen_by_tab_between_resizes_stays_chosen() {
+    let (_dir, mut app, _path, _plan) = with_plan("plan-tab-between", 160);
+    app.rows = 60;
+    keys(&mut app, "4G<CR><C-w>l");
+    app.plan_width = Some(34);
+    let _ = drawn(&mut app);
+    keys(&mut app, "<Tab>");
+    let _ = drawn(&mut app);
+    assert_eq!(
+        app.beside.as_ref().unwrap().stop,
+        Some(beside::Stop::Card('A'))
+    );
+    app.plan_width = Some(99);
+    let _ = drawn(&mut app);
+    keys(&mut app, "<Tab>");
+    let _ = drawn(&mut app);
+    assert_eq!(
+        app.beside.as_ref().unwrap().stop,
+        Some(beside::Stop::Card('B'))
+    );
+    app.plan_width = Some(34);
+    let _ = drawn(&mut app);
+    assert_eq!(
+        app.beside.as_ref().unwrap().stop,
+        Some(beside::Stop::Card('B'))
+    );
+}
+
+#[test]
+fn a_cursor_on_a_long_word_split_across_rows_stays_on_it() {
+    let (_dir, mut app, _path, plan) = with_plan("plan-url", 160);
+    let url = format!("https://example.com/{}", "a".repeat(52));
+    write(
+        &plan,
+        &PLAN_A_B.replace(
+            "- The sidebar is 34 columns wide, each tab on two lines.",
+            &format!("- {url} then some words after it"),
+        ),
+    );
+    keys(&mut app, "4G<CR><C-w>l");
+    app.rows = 40;
+    app.plan_width = Some(34);
+    let shown = drawn(&mut app).0;
+    let (_, y) = find(&shown, "- https://");
+    // The cursor on the URL's second row.
+    app.beside.as_mut().unwrap().line = y as usize;
+    let _ = drawn(&mut app);
+    app.plan_width = Some(90);
+    let (shown, cursor) = drawn(&mut app);
+    let row = plan_row(&app, &shown, cursor.unwrap().1);
+    assert!(row.contains("https://"), "{row}");
+}
+
+#[test]
+fn a_narrowed_plan_drops_its_folder_before_easy_mode_s_close() {
+    let (_dir, mut app, _path, _plan) = with_plan("plan-close", 160);
+    app.opts.easy = true;
+    keys(&mut app, "4G<CR>");
+    app.plan_width = Some(34);
+    let shown = screen(&mut app);
+    let head = plan_row(&app, &shown, 0);
+    assert!(head.ends_with('×'), "{head}");
+    assert!(!head.contains("Switchboard Plans"), "{head}");
+}
