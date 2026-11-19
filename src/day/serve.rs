@@ -561,7 +561,12 @@ impl Server {
                             // again, rather than after their wait.
                             self.day.slack_thread_failed.clear();
                             self.day.slack_reading.clear();
-                            if settings::is_on("slack_background") && !self.away() {
+                            // While messages come as they're posted, the
+                            // catch-up keeps its own time.
+                            if settings::is_on("slack_background")
+                                && !self.away()
+                                && !self.day.slack_live_up
+                            {
                                 self.look_at_slack();
                             }
                         }
