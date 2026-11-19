@@ -97,6 +97,8 @@ pub struct Beside {
     /// The rows the plan's body had when last drawn: a change of height
     /// keeps the cursor in sight, as a rewrap does.
     pub body: usize,
+    /// The furthest the view scrolled as last drawn, which the wheel stops at.
+    pub end: usize,
 }
 
 /// What the cursor and the first row shown were on as the plan last
@@ -410,11 +412,21 @@ pub fn lines(
             carded = true;
             out.push(Vec::new());
             let n = choice.options.len().max(1);
-            // Side by side only where every card gets its least width, the
-            // plan's own width narrower than the app's share.
-            let fits = n * CARD_LEAST + (n - 1) * 2 <= inner;
-            let side_by_side = room > Room::Stacked && n > 1 && fits;
+            // Side by side only where every card gets its least width and,
+            // with the mocks shown, its widest mock line whole, the plan's own
+            // width narrower than the app's share.
             let mocks = room > Room::NoMocks;
+            let widest_mock = choice
+                .options
+                .iter()
+                .flat_map(|o| &o.mock)
+                .map(|m| switchboard_ui::draw::width(m) + 4)
+                .max()
+                .filter(|_| mocks)
+                .unwrap_or(0);
+            let need = CARD_LEAST.max(widest_mock);
+            let fits = n * need + (n - 1) * 2 <= inner;
+            let side_by_side = room > Room::Stacked && n > 1 && fits;
             let places: Vec<(usize, usize)> = if side_by_side {
                 let col = Col::Stretch {
                     weight: 1,
@@ -639,6 +651,7 @@ impl App {
             took_keys: false,
             rewrapped_unseen: false,
             body: 0,
+            end: 0,
         });
         true
     }
@@ -1149,6 +1162,7 @@ impl App {
         b.follow = false;
         let took = std::mem::take(&mut b.took_keys);
         b.body = body;
+        b.end = last;
         if focused {
             b.rewrapped_unseen = false;
         } else if resized {
