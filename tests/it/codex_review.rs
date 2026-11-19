@@ -267,7 +267,12 @@ fn the_reviewer_gets_the_repository_s_rules_as_the_base_has_them_and_your_own() 
     .unwrap();
     fs::write(work.join("shared.md"), "Shared rule as the base has it.\n").unwrap();
     // A rule for one part of the code, which the branch rewrites too.
-    fs::create_dir_all(work.join(".claude/rules")).unwrap();
+    fs::create_dir_all(work.join(".claude/rules/deeper")).unwrap();
+    fs::write(
+        work.join(".claude/rules/deeper/trust.md"),
+        "Nested rule at the base.\n",
+    )
+    .unwrap();
     fs::write(
         work.join(".claude/rules/ui.md"),
         "---\npaths:\n  - \"src/**\"\n---\n\nPart rule at the base.\n",
@@ -367,6 +372,7 @@ fn the_reviewer_gets_the_repository_s_rules_as_the_base_has_them_and_your_own() 
     assert!(
         out.contains("<rules source=\"the repository's .claude/rules/ui.md\">")
             && out.contains("Part rule at the base.")
+            && out.contains("Nested rule at the base.")
             && !out.contains("Part rule from the branch"),
         "a rule for one part, as the base has it:\n{out}"
     );

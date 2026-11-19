@@ -5,7 +5,9 @@
 // every process made slow. So this sends them from Claude Code's own
 // process to the server's socket, over HTTP (src/agent/http.rs), with the
 // JSON `switchboard hook` would read and the pane it would name, waiting
-// at most a second and saying nothing when the server doesn't answer. A
+// at most two seconds: the second `switchboard hook` waited on the server,
+// and the moment it took to read the sessions' files first, which the
+// server now reads and saying nothing when the server doesn't answer. A
 // server too old to answer gets `switchboard hook` run as before.
 //
 // PreToolUse rides `tool.call` here, without the hook's own fields, so they
@@ -14,7 +16,7 @@
 // Claude Code's verdict: a deny refuses the call, and an ask is given as
 // the call's `tool.check` verdict, which comes after.
 
-const WAIT_MS = 1000;
+const WAIT_MS = 2000;
 
 // The asks the server answered, by the call they are for, until its check.
 const asks = new Map();

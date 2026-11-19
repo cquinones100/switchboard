@@ -1156,7 +1156,14 @@ fn review_rules(root: &Path, merge_base: &str) -> String {
     // review being of every file the change touches.
     let parts = try_run(
         "git",
-        &["ls-tree", "--name-only", merge_base, "--", ".claude/rules/"],
+        &[
+            "ls-tree",
+            "-r",
+            "--name-only",
+            merge_base,
+            "--",
+            ".claude/rules/",
+        ],
     )
     .unwrap_or_default();
     let mut names = vec!["CLAUDE.md".to_string(), "AGENTS.md".to_string()];

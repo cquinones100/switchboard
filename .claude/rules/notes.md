@@ -7,6 +7,7 @@ paths:
   - "src/cmd/item_done.rs"
   - "src/cmd/worktree_from_note.rs"
   - "assets/skills/plan-item/**"
+  - "src/cmd/claude_context.rs"
 ---
 
 # Notes

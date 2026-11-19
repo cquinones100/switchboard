@@ -8,6 +8,11 @@ paths:
   - "src/cmd/worktree_from_pr.rs"
   - "src/cmd/work.rs"
   - ".claude/skills/review-pr/**"
+  - "src/cmd/claude_here.rs"
+  - "src/cmd/worktree_resume.rs"
+  - "src/cmd/worktree_from_branch.rs"
+  - "src/cmd/wt_revive.rs"
+  - "src/relay/**"
 ---
 
 # Trusted directories and someone else's PR
