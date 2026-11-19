@@ -630,6 +630,7 @@ pub const KEYS: &[(&str, &[KeyRow])] = &[
             key_row("]c [c", "the next chapter's first page, the one before's"),
             key_row("tab", "between the outline and the column"),
             key_row("h l", "along What runs, while it is shown"),
+            key_row("v V", "select lines of the column: y then copies their text"),
             key_row("gf", "the page being read in the file view"),
         ],
     ),
@@ -8803,6 +8804,13 @@ mod tests {
         screen(&mut app);
         assert_eq!(app.section(), before);
         press(&mut app, "[p");
+        // v selects lines of the column, y copies their text.
+        press(&mut app, "vjy");
+        assert!(
+            app.message
+                .as_ref()
+                .is_some_and(|(t, _)| t.contains("Copied 2 lines"))
+        );
         // ]c reaches the next chapter's first page.
         press(&mut app, "]c");
         assert_eq!(app.section(), 5);

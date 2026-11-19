@@ -173,6 +173,8 @@ pub(super) struct Reader {
     outline_top: usize,
     unfolded: HashSet<(usize, String)>,
     pub(super) target: Option<Does>,
+    /// Where a selection of the column's lines started (`v`).
+    pub(super) visual: Option<usize>,
     laid: Option<(u16, Vec<Row>)>,
     /// The column to lay out again on its next draw, the rows before kept
     /// to find the cursor's section in.
@@ -1970,6 +1972,31 @@ impl App {
         }
     }
 
+    /// The column's lines selected with `v`, their text copied.
+    fn copy_reading(&mut self) {
+        let Some(from) = self.reader.visual.take() else {
+            return;
+        };
+        let cur = self.reader.cur;
+        let cols = self.column_cols();
+        let text: Vec<String> = self
+            .column(cols)
+            .iter()
+            .skip(from.min(cur))
+            .take(from.abs_diff(cur) + 1)
+            .map(|r| {
+                r.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .map(|l| l.trim_end().to_string())
+            .collect();
+        let n = text.len();
+        self.clip(&text.join("\n"));
+        self.say(format!("Copied {}", counted(n, "line")));
+    }
+
     /// The change a menu was opened on, its place copied as path:line.
     pub(super) fn copy_target(&mut self) {
         let Some(target) = self.reader.target.take() else {
@@ -2040,6 +2067,16 @@ impl App {
         let page = self.column_rect().height.max(1) as isize;
         let count = count as isize;
         match key.code {
+            // v and V select the column's lines, y copies their text, as
+            // a drag of the mouse does.
+            KeyCode::Char('v' | 'V') if !outline && !ctrl => {
+                self.reader.visual = match self.reader.visual {
+                    Some(_) => None,
+                    None => Some(self.reader.cur),
+                };
+            }
+            KeyCode::Char('y') if !ctrl && self.reader.visual.is_some() => self.copy_reading(),
+            KeyCode::Esc if self.reader.visual.is_some() => self.reader.visual = None,
             KeyCode::Char('q' | 'y' | 'g' | ']' | '[' | 'R' | 'c' | 'E') if !ctrl => return None,
             KeyCode::Char('w') if ctrl => return None,
             KeyCode::F(10) if key.modifiers == KeyModifiers::SHIFT => return None,
@@ -2430,7 +2467,11 @@ impl App {
             if let Some(bg) = row.bg {
                 buf.set_style(line, Style::new().bg(bg));
             }
-            if i == cur {
+            let selected = self
+                .reader
+                .visual
+                .is_some_and(|v| (v.min(cur)..=v.max(cur)).contains(&i));
+            if i == cur || selected {
                 buf.set_style(line, Style::new().bg(Surface::Chosen.color(theme)));
             } else if self.lit == Some(Hit::Line(i)) {
                 buf.set_style(line, Style::new().bg(Surface::Raised.color(theme)));
