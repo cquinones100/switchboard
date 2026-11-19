@@ -21,7 +21,7 @@ Make one page of the tab's change: the story `M-d` tells of it, page by page, wi
 
 Run `switchboard diff-story` in the tab (no directory: it reads the pane's, as `M-d` does). It prints the story as Markdown, from what the diff kept. When it prints "No story told for this change yet" or that `M-d` tells no story, say so in a line, tell the user to open `M-d` (and, for the second, turn the settings it names on) and come back, and stop: never tell a story of your own, and never write a page from the diff alone.
 
-The Markdown is the diff's layout as it is now: the story under `#`, each chapter under `##` (with its map as a Mermaid block when the story is told as a map), each page under `###` with its number, title and why (its claim), a `> ⚠ Watch:` line, its "Builds on" line, and its files, each change's note under its file as `path:line`. Whatever sections it prints (an overview's Before / After and How it gets there, a page's Decided / Instead / Watch, What runs), the page shows them all, in its order and under its names: follow what it prints rather than a fixed list here.
+The Markdown holds what the diff's Story view shows: the story under `#`; `## What changes` with its Before and After; `## What runs`, the steps in the order they happen, each naming its page; each chapter under `## Chapter N: <title>`, each page under `###` with its number in its chapter, title, claim, why, `Decided:` and `Instead`, a `> ⚠ Watch:` line and its files, each change's note under its file as `path:line`; and `## In the files only` for what no chapter holds. Whatever sections it prints, the page shows them all, in its order and under its names: follow what it prints rather than a fixed list here.
 
 ## 2. Read the hunks
 
@@ -33,9 +33,14 @@ Put each file's hunks under the page that lists the file. A change the story's n
 
 Load the `artifact-design` skill first, as the Artifact tool asks. Write one HTML file in the session's scratchpad (`<scratchpad>/diff-artifact-<branch>.html`, the branch from `git branch --show-current`), never in the repository:
 
-- A `<title>` of two to four words naming the change, and the story's title as its heading.
-- Each chapter and page in the story's order, with every section the story printed for it (step 1), the Watch line set apart.
-- Every hunk in the page itself, as code: its `@@` header, the lines with their old and new numbers, added lines on a green ground with `+`, removed on a red one with `-`, context plain, in a monospace font, wide lines scrolling inside their block rather than the page. Escape every line's `<`, `>` and `&`. Never a link to GitHub or the PR in place of a hunk.
+The page follows the diff's Story view (boards 140 to 142, 144 and 145), so reading it is reading `M-d`:
+
+- A `<title>` of two to four words naming the change.
+- **What runs** across the top, as the view lays it over the column: a box a step in the order it happens, an arrow between, each naming its page and linking to it, the row scrolling sideways when it is wider than the page.
+- **The outline** at the left (over the column on a narrow screen): each chapter with What changes first under chapter 1 and its pages indented under it, each a link to its section, then In the files only.
+- **The overview** at the head of the column: the story's title, its size (chapters, pages, files, lines added and removed) and what it is compared with; Before and After side by side with an arrow between (one over the other on a narrow screen); How it gets there, the first chapter's pages each with the first sentence of its why; the other chapters named; and what it was told from and by which model, when the story says.
+- **The column**: each page a section in the story's order, headed with its number, title and place ("page 1 of 4 · chapter 1"), its claim, a block of Decided, Instead and Watch set apart on a surface of its own, then each file it changes with its hunks under it, the prose kept to about 88 characters wide, and a file of tests last, folded in a `<details>`.
+- Every hunk in the page itself, as code: its `@@` header, then its lines side by side where the page is wide enough, the old at the left and the new beside it, the words that changed in a stronger shade, and one over the other on a narrow screen (a CSS media query, no script), removed marked `-` on a red ground over added marked `+` on a green one; context plain, line numbers on each side, in a monospace font, wide lines scrolling inside their block rather than the page. Escape every line's `<`, `>` and `&`. Never a link to GitHub or the PR in place of a hunk.
 - Colors as tokens on `:root`, redefined for dark mode, so it reads in light and dark.
 - No script, font or style from outside but what the Artifact tool allows.
 
