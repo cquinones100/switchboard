@@ -1012,10 +1012,15 @@ impl Server {
     /// tab working on it (`wt`) in the pane's repository.
     fn open_ticket_id_typed(&mut self, client: ClientId, pane: Option<PaneId>) {
         let dir = self.dir_or_home(pane);
+        // The tab's ticket from the directory its work is in (a review
+        // tab's checkout, `@tab_dir`), the pane's own kept for starting work.
+        let work_dir = pane
+            .and_then(|p| self.pane_dir(p))
+            .unwrap_or_else(|| dir.clone());
         let branch_ticket = pane
             .and_then(|p| self.panes.get(&p))
             .map(|s| s.tab)
-            .and_then(|tab| self.ticket_here(tab, &dir));
+            .and_then(|tab| self.ticket_here(tab, &work_dir));
         let known = branch_ticket.clone();
         self.off_task(
             client,
