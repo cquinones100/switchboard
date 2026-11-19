@@ -67,7 +67,8 @@
 //! review was clean that wasn't: a round with no findings notes its commit,
 //! base and patch in the clone's `review-loop-streak`, a round with findings
 //! takes that away, and a round run with `--include-low` (review-loop's
-//! confirmation round) that finds nothing on the same commit, base and patch
+//! confirmation round) that finds nothing (with `--round`, nothing above low,
+//! as below) on the same commit, base and patch
 //! as the clean round before it writes `<commit> <base> <patchId>` to
 //! `review-loop-clean`, both at `git rev-parse --git-path`. A review of
 //! another repository (`-C`) keeps neither. `codex-review --recorded` prints
@@ -91,7 +92,12 @@
 //! carries an `action` from its severity: `fix` (critical and high, and
 //! medium in a tab landing without asking, `@autopilot_land`), `ask`
 //! (medium, and low in a round that reports lows), `gap` (any low in a tab
-//! landing without asking) or `report` (a low no one asked for). Whether a finding is real, and how to fix it, stays the
+//! landing without asking), `report` (a low no one asked for) or `left`. A
+//! confirmation round whose findings are all low counts as clean unless
+//! `--include-low` was given (review-loop's `all`): it ends the loop `done`
+//! and writes the record as an empty one would, its lows marked `left`, so
+//! the long tail its sweep turns up never sends the loop round again.
+//! Whether a finding is real, and how to fix it, stays the
 //! caller's. Each round also keeps the Landing view's record
 //! (`land-lock record review` and `output review`). A review of another
 //! repository (`-C`) takes no `--round`.
@@ -1800,7 +1806,18 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
     // Kept only for the checkout you are in (-C naming it too), never one
     // reviewed from outside with -C, whose git directory is someone else's
     // worktree.
-    let clean = review["findings"].as_array().is_some_and(Vec::is_empty);
+    // A confirmation round the loop added the lows to that finds nothing
+    // above low is clean: its lows are left, never a reason for two more
+    // rounds whose confirmation sweeps up new ones. With `--include-low`
+    // given (review-loop's `all`) the lows were asked for, so they count.
+    let confirming = looping.as_ref().is_some_and(|l| l.clean_before > 0) && !opts.include_low;
+    let found = review["findings"].as_array().cloned().unwrap_or_default();
+    let lows_left = confirming
+        && !found.is_empty()
+        && found
+            .iter()
+            .all(|f| f.get("severity").and_then(Value::as_str) == Some("low"));
+    let clean = found.is_empty() || lows_left;
     let recorded_clean =
         own_checkout && keep_record(clean, include_low, &format!("{head} {merge_base} {patch}"))?;
     if let Some(at) = &looping {
@@ -1826,7 +1843,11 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
                     .get("severity")
                     .and_then(Value::as_str)
                     .unwrap_or("");
-                let action = action_of(severity, include_low, lands_alone);
+                let action = if lows_left {
+                    "left"
+                } else {
+                    action_of(severity, include_low, lands_alone)
+                };
                 finding.insert("action".into(), json!(action));
             }
         }

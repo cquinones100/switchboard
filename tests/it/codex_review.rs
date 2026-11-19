@@ -745,3 +745,55 @@ fn rounds_count_to_two_clean_ones_or_the_cap() {
     assert_eq!(landing["review"]["findings"], 2);
     assert_eq!(landing["output"]["of"], "review");
 }
+
+// A confirmation round whose findings are all low ends the loop: its lows
+// are left, not a reason for two more rounds. Asked for with
+// --include-low (review-loop's `all`), they count as they always did.
+#[test]
+fn a_confirmation_round_with_only_lows_is_clean_unless_lows_were_asked_for() {
+    let tmp = TempDir::new("cr-lows");
+    let home = tmp.path();
+    let work = clone(home);
+    fs::write(work.join("a.txt"), "a\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "Pushed already"]);
+    git(home, &work, &["push", "-q", "origin", "main"]);
+    fs::write(work.join("b.txt"), "b\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "A change"]);
+    let answer = home.join("answer.json");
+    let clean = r#"{"structured_output":{"summary":"ok","findings":[]}}"#;
+    let lows = r#"{"structured_output":{"summary":"lows","findings":[{"title":"t","severity":"low","file":"b.txt","line":1,"body":"b"},{"title":"u","severity":"low","file":"b.txt","line":1,"body":"b"}]}}"#;
+    let round = |said: &str, args: &[&str]| -> serde_json::Value {
+        fs::write(&answer, said).unwrap();
+        let out = review_answering(home, &work, &answer, args);
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    let recorded = || review(home, &work, &["--recorded"]).status.success();
+
+    assert_eq!(round(clean, &["--round", "start"])["next"], "confirm");
+    let confirmed = round(lows, &["--round", "next"]);
+    assert_eq!(
+        (
+            confirmed["next"].as_str(),
+            confirmed["cleanRounds"].as_u64()
+        ),
+        (Some("done"), Some(2))
+    );
+    let actions: Vec<&str> = confirmed["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["action"].as_str().unwrap())
+        .collect();
+    assert_eq!(actions, ["left", "left"], "the lows come back, left");
+    assert!(recorded(), "the record is written as for an empty round");
+
+    let all = ["--round", "start", "--include-low"];
+    assert_eq!(round(clean, &all)["next"], "confirm");
+    let asked = round(lows, &["--round", "next", "--include-low"]);
+    assert_eq!(asked["next"], "triage", "lows asked for reset the streak");
+    assert_eq!(asked["findings"][0]["action"], "ask");
+    assert!(!recorded(), "and take the record back");
+}
