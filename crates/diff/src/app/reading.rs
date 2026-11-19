@@ -623,6 +623,12 @@ impl App {
         if !self.mapped() {
             return self.no_map();
         }
+        // From another view, the chapter it was on comes along.
+        let was = if self.mode == Mode::Story {
+            None
+        } else {
+            self.chapter_now()
+        };
         if self.mode == Mode::Files {
             self.files_place = Some(self.place());
         }
@@ -644,6 +650,35 @@ impl App {
             self.sort();
             self.show_at(0);
         }
+        if let Some((chapter, page)) = was
+            && self.chapter_now().map(|(c, _)| c) != Some(chapter)
+        {
+            self.go_to_section(page);
+        }
+    }
+
+    /// The chapter and page the reader is on in the view shown, in a story
+    /// told in chapters: the page read, the map's chosen box, or the page
+    /// of the file shown.
+    pub(super) fn chapter_now(&mut self) -> Option<(usize, usize)> {
+        let page = match self.mode {
+            Mode::Story => self.section(),
+            Mode::Map => self.mapper.at,
+            Mode::Files => {
+                let path = self.current()?.path.clone();
+                self.home(&path)?
+            }
+        };
+        let story = self.told_map()?;
+        story::chapter_of(story, page).map(|c| (c, page))
+    }
+
+    /// The chapter of the file a place of Files mode was on, by its key.
+    fn chapter_of_key(&self, key: &Option<String>) -> Option<usize> {
+        let key = key.as_ref()?;
+        let entry = self.entries().iter().find(|e| e.key() == *key)?;
+        let page = self.home(&entry.path)?;
+        story::chapter_of(self.told_map()?, page)
     }
 
     // ── Files mode, and the way between ─────────────────────────────────────
@@ -774,6 +809,9 @@ impl App {
         } else {
             self.section().max(1)
         };
+        // Where Files mode was left, unless on another chapter than the
+        // one the reader is on, which the chosen page's first file is.
+        let was = self.chapter_now().map(|(c, _)| c);
         self.mode = Mode::Files;
         self.keep_mode();
         self.visual = None;
@@ -784,6 +822,10 @@ impl App {
         } else {
             None
         };
+        let place = place.filter(|p| match (was, self.chapter_of_key(&p.file)) {
+            (Some(now), Some(then)) => now == then,
+            _ => true,
+        });
         // A page the story no longer has (told again since) is let go.
         let pages = self.story.as_ref().map_or(0, |s| s.pages.len());
         self.alone = place.as_ref().and_then(|p| p.alone).filter(|p| *p <= pages);

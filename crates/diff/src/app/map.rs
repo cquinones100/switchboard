@@ -255,7 +255,11 @@ impl App {
         if self.mode == Mode::Files {
             self.files_place = Some(self.place());
         }
-        let section = self.section();
+        // The chapter the view shown is on: the page read, or the page of
+        // the file shown.
+        let section = self
+            .chapter_now()
+            .map_or_else(|| self.section(), |(_, page)| page);
         if let Some(story) = self.told_map()
             && let Some(c) = story::chapter_of(story, section)
         {

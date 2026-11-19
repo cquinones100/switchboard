@@ -9241,6 +9241,38 @@ mod tests {
     }
 
     #[test]
+    fn switching_views_keeps_the_chapter_and_back_finds_each_view_as_it_was() {
+        let mut app = map_app();
+        let chapter = |app: &mut App| app.chapter_now().map(|(c, _)| c);
+        // A view chosen in the menu or the switch, as Enter there does.
+        let switch = |app: &mut App, mode: Mode| {
+            let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+            let before = app.before_key(&enter);
+            app.choose_mode(mode);
+            app.after(before);
+        };
+        // Story on chapter 1, the files left on it.
+        app.go_to_section(1);
+        press(&mut app, "gf");
+        assert_eq!(chapter(&mut app), Some(0));
+        // The map moved on to chapter 2: the Story view and the files
+        // follow it there, rather than staying where they were left.
+        press(&mut app, "gm]");
+        assert_eq!(chapter(&mut app), Some(1));
+        switch(&mut app, Mode::Story);
+        assert_eq!((app.mode, chapter(&mut app)), (Mode::Story, Some(1)));
+        switch(&mut app, Mode::Files);
+        assert_eq!((app.mode, chapter(&mut app)), (Mode::Files, Some(1)));
+        // And back goes through each view on the chapter it was on.
+        press(&mut app, "H");
+        assert_eq!((app.mode, chapter(&mut app)), (Mode::Story, Some(1)));
+        press(&mut app, "H");
+        assert_eq!((app.mode, chapter(&mut app)), (Mode::Map, Some(1)));
+        press(&mut app, "H");
+        assert_eq!((app.mode, chapter(&mut app)), (Mode::Map, Some(0)));
+    }
+
+    #[test]
     fn h_and_l_go_back_and_forward_through_the_jumps_not_the_steps() {
         let mut app = map_app();
         assert_eq!(app.section(), 0);
