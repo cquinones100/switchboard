@@ -835,14 +835,20 @@ const YOUR_PROJECTS: &str = "query($after: String) { projects(first: 50, after: 
 
 /// Every page of a list `query` asks for, its connection at `at`, as one
 /// answer of the first page's shape: up to two hundred pages (ten
-/// thousand), which no one's own list reaches.
-async fn every_page(query: &str, at: &str, source: &str) -> anyhow::Result<Value> {
+/// thousand), which no one's own list reaches. A page after the first that
+/// fails ends the list there, and says so.
+async fn every_page(
+    query: &str,
+    at: &str,
+    source: &str,
+) -> anyhow::Result<(Value, Option<String>)> {
     let mut whole = linear::graphql(query, json!({}), source).await?;
     let mut all: Vec<Value> = nodes(&whole, &format!("{at}/nodes"))
         .into_iter()
         .cloned()
         .collect();
     let mut info = whole.pointer(&format!("{at}/pageInfo")).cloned();
+    let mut stopped = None;
     for _ in 1..200 {
         let more = info.as_ref().and_then(|i| {
             (i.get("hasNextPage") == Some(&json!(true)))
@@ -852,40 +858,54 @@ async fn every_page(query: &str, at: &str, source: &str) -> anyhow::Result<Value
         let Some(after) = more else {
             break;
         };
-        let page = linear::graphql(query, json!({ "after": after }), source).await?;
-        all.extend(nodes(&page, &format!("{at}/nodes")).into_iter().cloned());
-        info = page.pointer(&format!("{at}/pageInfo")).cloned();
+        match linear::graphql(query, json!({ "after": after }), source).await {
+            Ok(page) => {
+                all.extend(nodes(&page, &format!("{at}/nodes")).into_iter().cloned());
+                info = page.pointer(&format!("{at}/pageInfo")).cloned();
+            }
+            Err(e) => {
+                stopped = Some(e.to_string());
+                break;
+            }
+        }
     }
     if let Some(list) = whole.pointer_mut(&format!("{at}/nodes")) {
         *list = Value::Array(all);
     }
-    Ok(whole)
+    Ok((whole, stopped))
+}
+
+/// What the picker lists, and what of it Linear couldn't give.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Lists {
+    pub found: Vec<Yours>,
+    /// A line for each list not read, or read only in part.
+    pub missing: Vec<String>,
 }
 
 /// The tickets assigned to you and the projects you're a member of, most
-/// recently created first; projects left out when Linear can't list them.
-pub async fn yours() -> Result<Vec<Yours>, String> {
+/// recently created first, with what couldn't be read; an error when
+/// nothing could.
+pub async fn yours() -> Result<Lists, String> {
     const SOURCE: &str = "choose a tab's ticket";
     let tickets = every_page(YOUR_TICKETS, "/viewer/assignedIssues", SOURCE).await;
     let projects = every_page(YOUR_PROJECTS, "/projects", SOURCE).await;
     let found = yours_in(
-        tickets.as_ref().unwrap_or(&Value::Null),
-        projects.as_ref().unwrap_or(&Value::Null),
+        tickets.as_ref().map(|(v, _)| v).unwrap_or(&Value::Null),
+        projects.as_ref().map(|(v, _)| v).unwrap_or(&Value::Null),
     );
-    // Either list read is kept; nothing found with one not read says why,
-    // never "none".
-    let failed: Vec<String> = [("tickets", &tickets), ("projects", &projects)]
+    let missing: Vec<String> = [("tickets", &tickets), ("projects", &projects)]
         .into_iter()
-        .filter_map(|(what, read)| {
-            read.as_ref()
-                .err()
-                .map(|e| format!("Couldn't list your {what}: {e}"))
+        .filter_map(|(what, read)| match read {
+            Err(e) => Some(format!("Couldn't list your {what}: {e}")),
+            Ok((_, Some(e))) => Some(format!("Only some of your {what} are listed: {e}")),
+            Ok((_, None)) => None,
         })
         .collect();
-    if found.is_empty() && !failed.is_empty() {
-        return Err(failed.join("\n"));
+    if found.is_empty() && !missing.is_empty() {
+        return Err(missing.join("\n"));
     }
-    Ok(found)
+    Ok(Lists { found, missing })
 }
 
 /// `yours` from Linear's answers.

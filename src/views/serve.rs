@@ -273,33 +273,18 @@ impl Server {
     }
 
     /// A ticket view read again in its own place, on `ticket`, or a shell
-    /// with none, keeping what the tab is about (its directory, a sealed
-    /// review), which a respawn lets go.
-    fn read_view_again(&mut self, tab: TabId, view: PaneId, ticket: Option<Ticket>) {
-        let kept: Vec<(String, String)> = self
-            .tabs
-            .get(&tab)
-            .map(|t| {
-                t.opts
-                    .iter()
-                    .filter(|(k, _)| crate::mux::respawn::HANDED_OVER.contains(&k.as_str()))
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect()
-            })
-            .unwrap_or_default();
+    /// with none: its program replaced, the tab not handed to other work.
+    fn read_view_again(&mut self, view: PaneId, ticket: Option<Ticket>) {
         let arg = ticket.as_ref().map(Ticket::arg);
         let command = arg
             .clone()
             .map(|arg| vec![exe(), "ticket-view".into(), arg]);
-        if self.respawn_pane(view, None, command, true).is_ok()
+        if self.replace_program(view, command).is_ok()
             && let Some(arg) = arg
             && let Some(slot) = self.panes.get_mut(&view)
         {
             slot.opts.insert(TICKET_ID.into(), arg);
             slot.opts.insert(TICKET_VIEW.into(), "1".into());
-        }
-        if let Some(t) = self.tabs.get_mut(&tab) {
-            t.opts.extend(kept);
         }
     }
 
@@ -592,7 +577,7 @@ impl Server {
                 if ask_linear {
                     util::block_on(ticket::yours())
                 } else {
-                    Ok(Vec::new())
+                    Ok(ticket::Lists::default())
                 }
             },
             move |server, client, found| {
@@ -605,7 +590,12 @@ impl Server {
                     .is_some_and(|t| t.opts.contains_key(TAB_TICKET));
                 let mut why_empty = None;
                 let rows = match found {
-                    Ok(rows) if !rows.is_empty() || chosen_before => rows,
+                    Ok(lists) if !lists.found.is_empty() || chosen_before => {
+                        if !lists.missing.is_empty() {
+                            why_empty = Some(lists.missing.join(" "));
+                        }
+                        lists.found
+                    }
                     Ok(_) => {
                         server.say(Some(client), "Linear has no tickets or projects of yours.");
                         return;
@@ -665,7 +655,7 @@ impl Server {
                             .map(|(p, _)| *p);
                         if let Some(view) = was_open {
                             match &chosen {
-                                Some(c) => server.read_view_again(tab, view, Some(c.clone())),
+                                Some(c) => server.read_view_again(view, Some(c.clone())),
                                 // Let go, the view closes as M-w closes a pane,
                                 // a shell in its place when it is the tab's last.
                                 None => {
@@ -681,9 +671,11 @@ impl Server {
                                 let dir = server.tab_path(tab)?.to_path_buf();
                                 let t = server.tabs.get_mut(&tab)?;
                                 t.opts.remove(TAB_TICKET);
-                                server.tab_ticket_at(tab, &dir)
+                                server
+                                    .tab_ticket_at(tab, &dir)
+                                    .filter(|t| settings::is_on(t.service()))
                             });
-                            server.read_view_again(tab, view, again);
+                            server.read_view_again(view, again);
                         }
                         if automatic {
                             if let Some(t) = server.tabs.get_mut(&tab) {
