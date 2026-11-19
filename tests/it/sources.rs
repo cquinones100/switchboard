@@ -637,7 +637,8 @@ fn a_failing_default_branch_landing_in_ci_is_in_the_ci_view_and_said_once_until_
         items[0]["detail"],
         "acme/widgets ✗ Tests · FAIL views::links"
     );
-    client.wait_text("main failing at abc1234");
+    // Its source's line leads with its repository and why.
+    client.wait_text("acme/widgets ✗ Tests");
 
     // The CI view's `m` runs its failed jobs again only once asked: a no
     // asks GitHub nothing, a yes asks it for the failing run.
@@ -694,7 +695,7 @@ fn a_failing_default_branch_landing_in_ci_is_in_the_ci_view_and_said_once_until_
         |i| i.as_array().is_some_and(Vec::is_empty),
     );
     let deadline = common::deadline(Duration::from_secs(10));
-    while client.screen().join("\n").contains("main failing") {
+    while client.screen().join("\n").contains("acme/widgets ✗") {
         assert!(Instant::now() < deadline, "the notification stays");
         std::thread::sleep(Duration::from_millis(200));
     }

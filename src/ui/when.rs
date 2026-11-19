@@ -58,6 +58,48 @@ pub fn clock(ms: i64, now: &Zoned) -> String {
         .unwrap_or_default()
 }
 
+/// `ms` for a row under its source's heading, in a narrow column: today's
+/// clock time alone, then "Yest 6:05 PM", the weekday within the week
+/// ("Mon 2:10 PM"), and the date before it ("Nov 3 2:10 PM", with its year
+/// from another year), at most
+/// `SHORT_WIDTH` columns.
+pub fn short(ms: i64, now: &Zoned) -> String {
+    let Ok(at) = jiff::Timestamp::from_millisecond(ms) else {
+        return String::new();
+    };
+    let at = at.to_zoned(now.time_zone().clone());
+    let clock = at.strftime(CLOCK);
+    match (now.date() - at.date()).get_days() {
+        0 => clock.to_string(),
+        1 => format!("Yest {clock}"),
+        2..=6 => format!("{} {clock}", at.strftime("%a")),
+        _ if at.year() == now.year() => format!("{} {clock}", at.strftime("%b %-d")),
+        // Another year's: the year in its date, the time after it.
+        _ => format!("{} {clock}", at.strftime("%b %-d %Y")),
+    }
+}
+
+/// `ms` for a row under its source's heading in a column too narrow for
+/// `short`: today's clock time alone, else its day alone ("Yest", "Mon",
+/// "Nov 3"), so a row from another day never reads as today's; at most 8
+/// columns. Its date has no year, which the two weeks a notification is
+/// kept never leave in doubt.
+pub fn compact(ms: i64, now: &Zoned) -> String {
+    let Ok(at) = jiff::Timestamp::from_millisecond(ms) else {
+        return String::new();
+    };
+    let at = at.to_zoned(now.time_zone().clone());
+    match (now.date() - at.date()).get_days() {
+        0 => at.strftime(CLOCK).to_string(),
+        1 => "Yest".into(),
+        2..=6 => at.strftime("%a").to_string(),
+        _ => at.strftime("%b %-d").to_string(),
+    }
+}
+
+/// The widest `short` writes: "Dec 30 2026 12:10 PM".
+pub const SHORT_WIDTH: usize = 20;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -77,6 +119,15 @@ mod tests {
             .unwrap()
             .timestamp()
             .as_millisecond()
+    }
+
+    #[test]
+    fn a_narrow_rows_time_keeps_its_day() {
+        assert_eq!(compact(ms(11, 11, 9, 1, 2026), &now()), "9:01 AM");
+        assert_eq!(compact(ms(11, 10, 9, 42, 2026), &now()), "Yest");
+        assert_eq!(compact(ms(11, 9, 9, 42, 2026), &now()), "Mon");
+        assert_eq!(compact(ms(11, 3, 9, 42, 2026), &now()), "Nov 3");
+        assert_eq!(compact(ms(12, 30, 9, 42, 2025), &now()), "Dec 30");
     }
 
     #[test]
@@ -117,6 +168,14 @@ mod tests {
         assert_eq!(stamp(ms(10, 3, 14, 10, 2026), &n), "Oct 3, 2:10 PM");
         assert_eq!(stamp(ms(11, 3, 14, 10, 2025), &n), "Nov 3 2025");
         assert_eq!(stamp(ms(11, 12, 15, 0, 2026), &n), "Tomorrow 3:00 PM");
+        assert_eq!(short(ms(11, 11, 9, 42, 2026), &n), "9:42 AM");
+        assert_eq!(short(ms(11, 10, 18, 5, 2026), &n), "Yest 6:05 PM");
+        assert_eq!(short(ms(11, 8, 14, 10, 2026), &n), "Sun 2:10 PM");
+        assert_eq!(short(ms(10, 3, 14, 10, 2026), &n), "Oct 3 2:10 PM");
+        let widest = short(ms(10, 13, 12, 10, 2026), &n);
+        assert_eq!(widest, "Oct 13 12:10 PM");
+        assert_eq!(short(ms(11, 3, 14, 10, 2025), &n), "Nov 3 2025 2:10 PM");
+        assert_eq!(short(ms(12, 30, 12, 10, 2025), &n).len(), SHORT_WIDTH);
     }
 
     #[test]

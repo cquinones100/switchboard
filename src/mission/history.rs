@@ -5,6 +5,13 @@
 //! yesterday past the first screenful fold into one row each ("▸ WEDNESDAY
 //! 7 more, folded") until "Show them" in its Enter menu unfolds one.
 //!
+//! With Settings' "Group notifications by source" on (`notices_grouped`,
+//! board 115) it lists them by where they come from instead (`grouped`):
+//! a heading for each source (`sidebar::notices::group_of`) the cursor rests
+//! on, the sources ordered by their newest notification and each one's
+//! newest first, one of more than five split by its channel, repository or
+//! routine under a dim sub-heading, and a folded one its heading alone.
+//!
 //! Its items keep the shape the view's menus read: a notification's id is
 //! `<source>\t<id>` and its data its source's, with the history's own
 //! under `notice` (`sidebar`, `led_to`, `kind`).
@@ -33,6 +40,163 @@ pub const FOLD: &str = "fold:";
 /// The folded day a row is, by its date.
 pub fn fold_of(item: &Item) -> Option<&str> {
     item.id.strip_prefix(FOLD)
+}
+
+/// The part of the notifications naming none, apart from any named Other.
+const OTHER: &str = "\u{0}other";
+
+/// The prefix of a source's heading's id, and of a sub-heading's.
+pub const GROUP: &str = "group:";
+const PART: &str = "part:";
+
+/// The source a row is the heading of, with grouping on.
+pub fn group_heading(item: &Item) -> Option<&str> {
+    // By its mark too, since a plugin's row may have any id.
+    let rests = item.data.get("rests").and_then(Value::as_bool) == Some(true);
+    item.id.strip_prefix(GROUP).filter(|_| rests)
+}
+
+/// How many notifications a list by source holds, a folded source's and
+/// no sub-heading counted: the sum of its headings' counts; `None` for a
+/// list with no source's heading, and for one under a filter, whose rows
+/// are the ones it matched (none folded or split there).
+pub fn held(items: &[Item]) -> Option<usize> {
+    if items.iter().any(under_filter) {
+        return None;
+    }
+    let counts: Vec<usize> = items
+        .iter()
+        .filter(|i| group_heading(i).is_some())
+        .map(|i| i.data.get("count").and_then(Value::as_u64).unwrap_or(0) as usize)
+        .collect();
+    (!counts.is_empty()).then(|| counts.iter().fold(0usize, |a, c| a.saturating_add(*c)))
+}
+
+/// Whether a source's heading is folded.
+pub fn folded(item: &Item) -> bool {
+    item.data.get("folded").and_then(Value::as_bool) == Some(true)
+}
+
+/// Whether a source's heading is listed under a filter, which folds none.
+pub fn under_filter(item: &Item) -> bool {
+    item.data.get("whole").and_then(Value::as_bool) == Some(true)
+}
+
+/// Whether a row is a sub-heading within a source (a channel, a
+/// repository), which the cursor passes over.
+pub fn is_part(item: &Item) -> bool {
+    item.id.starts_with(PART) && item.data.get("part").and_then(Value::as_bool) == Some(true)
+}
+
+/// The source a notification's row is listed under.
+pub fn group_of_row(item: &Item) -> &'static str {
+    let source = item.id.split_once('\t').map_or("", |(source, _)| source);
+    crate::sidebar::notices::group_name(source)
+}
+
+/// Notifications (each id `<source>\t<id>`, as the view has them) by where
+/// they come from: a heading per source with its count, the sources in the
+/// order of their newest notification, each one's rows newest first. A
+/// source in `folded` keeps its heading alone, and one of more than
+/// `SPLIT_OVER` whose rows name two parts or more (`notices::part_of`) lists
+/// them under a sub-heading each, those with none under Other. `whole` (a
+/// filter's text is on) folds and splits nothing, so the filter finds every
+/// row and leaves out the headings with none.
+pub fn grouped(mut rows: Vec<Item>, folded: &HashSet<String>, whole: bool) -> Vec<Item> {
+    use crate::sidebar::notices::{SPLIT_OVER, part_label, part_name, part_of};
+    rows.sort_by_key(|r| std::cmp::Reverse(r.time.unwrap_or(0)));
+    let mut groups: Vec<(&'static str, Vec<Item>)> = Vec::new();
+    for row in rows {
+        let name = group_of_row(&row);
+        match groups.iter_mut().find(|(g, _)| *g == name) {
+            Some((_, list)) => list.push(row),
+            None => groups.push((name, vec![row])),
+        }
+    }
+    let mut out = Vec::new();
+    for (name, mut list) in groups {
+        let is_folded = !whole && folded.contains(name);
+        let mut heading = views::header(name, name, list.len());
+        heading.id = format!("{GROUP}{name}");
+        heading.group = Some(name.to_string());
+        heading.data["rests"] = json!(true);
+        heading.data["folded"] = json!(is_folded);
+        // A filter looks through every source, so none folds under one.
+        heading.data["whole"] = json!(whole);
+        // When its newest came, folded or not, for its menu.
+        heading.data["newest"] = json!(list.first().and_then(|r| r.time));
+        out.push(heading);
+        if is_folded {
+            continue;
+        }
+        for row in &mut list {
+            row.group = Some(name.to_string());
+        }
+        let part = |row: &Item| {
+            let source = row.id.split_once('\t').map_or("", |(source, _)| source);
+            part_of(source, row)
+        };
+        // Split only where two or more parts are named (those naming none
+        // under Other, last); else the rows stay newest first as they are.
+        let mut parts: Vec<(String, Vec<Item>)> = Vec::new();
+        let named: Vec<String> = {
+            let mut seen: Vec<String> = Vec::new();
+            for p in list.iter().filter_map(part) {
+                if !seen.contains(&p) {
+                    seen.push(p);
+                }
+            }
+            seen
+        };
+        if !whole && list.len() > SPLIT_OVER && named.len() >= 2 {
+            let mut other: Vec<Item> = Vec::new();
+            for row in list.drain(..) {
+                match part(&row) {
+                    Some(name) => match parts.iter_mut().find(|(p, _)| *p == name) {
+                        Some((_, held)) => held.push(row),
+                        None => parts.push((name, vec![row])),
+                    },
+                    None => other.push(row),
+                }
+            }
+            if !other.is_empty() {
+                parts.push((OTHER.to_string(), other));
+            }
+        }
+        // Each part named as its newest row names it.
+        let source_of = |row: &Item| {
+            row.id
+                .split_once('\t')
+                .map_or("", |(source, _)| source)
+                .to_string()
+        };
+        let names: Vec<String> = parts
+            .iter()
+            .map(|(key, held)| {
+                if key == OTHER {
+                    return "Other".to_string();
+                }
+                held.first()
+                    .and_then(|r| part_name(&source_of(r), r))
+                    .unwrap_or_else(|| key.clone())
+            })
+            .collect();
+        let all: Vec<&str> = names.iter().map(String::as_str).collect();
+        for ((part, held), called) in parts.into_iter().zip(&names) {
+            let source = match held.first() {
+                Some(row) => source_of(row),
+                None => String::new(),
+            };
+            let label = part_label(&source, called, &all);
+            let mut sub = Item::new(format!("{PART}{name}:{part}"), label);
+            sub.group = Some(name.to_string());
+            sub.data = json!({ "part": true, "count": held.len() });
+            out.push(sub);
+            out.extend(held);
+        }
+        out.extend(list);
+    }
+    out
 }
 
 /// A row's history: whether the sidebar shows it, what it led to, and its
@@ -95,8 +259,17 @@ pub fn day_name(day: jiff::civil::Date, today: jiff::civil::Date) -> String {
     }
 }
 
+/// A notification as a folded source's heading counts it, by its id and
+/// time alone: its words and data are never drawn there, so they aren't
+/// copied.
+pub fn folded_row_of(e: &Entry) -> Item {
+    let mut item = Item::new(format!("{}\t{}", e.source, e.id), "");
+    item.time = Some(e.at);
+    item
+}
+
 /// A notification as the view's row.
-fn row_of(e: &Entry) -> Item {
+pub fn row_of(e: &Entry) -> Item {
     let mut item = e.item.clone();
     item.id = format!("{}\t{}", e.source, e.id);
     item.time = Some(e.at);
@@ -201,6 +374,143 @@ mod tests {
             notice_of(&rows[3]),
             Some(("dismissed", "you went to tab 5"))
         );
+    }
+
+    fn titles(rows: &[Item]) -> Vec<&str> {
+        rows.iter().map(|r| r.title.as_str()).collect()
+    }
+
+    #[test]
+    fn sources_are_headings_ordered_by_their_newest() {
+        let old_slack = entry("slack", "a", NOW - 3 * DAY, Sidebar::Older);
+        let landed = entry("autolanded", "b", NOW - DAY, Sidebar::Shown);
+        let said = entry("autopilot", "c", NOW - 2 * DAY, Sidebar::Older);
+        let meeting = entry("meeting", "d", NOW, Sidebar::Shown);
+        let change = entry("calendar", "e", NOW - 4 * DAY, Sidebar::Older);
+        let rows: Vec<Item> = [&old_slack, &landed, &said, &meeting, &change]
+            .into_iter()
+            .map(row_of)
+            .collect();
+        let out = grouped(rows.clone(), &HashSet::new(), false);
+        assert_eq!(
+            titles(&out),
+            [
+                "Calendar",
+                "meeting d",
+                "calendar e",
+                "Autopilot",
+                "autolanded b",
+                "autopilot c",
+                "Slack",
+                "slack a",
+            ]
+        );
+        assert_eq!(group_heading(&out[0]), Some("Calendar"));
+        assert_eq!(out[0].data["count"], 2);
+        assert!(views::is_header(&out[0]) && !views::passed_over(&out[0], false));
+        assert_eq!(out[1].group.as_deref(), Some("Calendar"));
+        assert_eq!(out[1].id, "meeting\td", "a row keeps the id its menu reads");
+        // A folded source is its heading alone, until a filter looks through it.
+        let folds: HashSet<String> = ["Autopilot".to_string()].into();
+        let out = grouped(rows.clone(), &folds, false);
+        assert_eq!(
+            titles(&out),
+            [
+                "Calendar",
+                "meeting d",
+                "calendar e",
+                "Autopilot",
+                "Slack",
+                "slack a"
+            ]
+        );
+        assert!(folded(&out[3]) && !folded(&out[0]));
+        assert_eq!(out[3].data["count"], 2);
+        assert_eq!(grouped(rows, &folds, true).len(), 8);
+    }
+
+    #[test]
+    fn a_source_of_more_than_five_is_split_by_channel() {
+        let message = |id: &str, place: &str, back: i64| {
+            let mut e = entry("slack", id, NOW - back, Sidebar::Shown);
+            e.item.data = json!({ "where": place });
+            row_of(&e)
+        };
+        let five: Vec<Item> = (0..5)
+            .map(|i| message(&format!("m{i}"), "#general", i))
+            .collect();
+        let out = grouped(five.clone(), &HashSet::new(), false);
+        assert_eq!(out.len(), 6, "five are listed as they are");
+        let mut six = five;
+        six.push(message("dm", "Ada", 2));
+        let out = grouped(six.clone(), &HashSet::new(), false);
+        assert_eq!(
+            titles(&out),
+            [
+                "Slack", "#general", "slack m0", "slack m1", "slack m2", "slack m3", "slack m4",
+                "Ada", "slack dm",
+            ]
+        );
+        assert!(is_part(&out[1]) && views::passed_over(&out[1], false));
+        assert_eq!(out[1].data["count"], 5);
+        assert_eq!(out[7].data["count"], 1);
+        // The view's count is its notifications', folded or not.
+        assert_eq!(held(&out), Some(6));
+        let folds: HashSet<String> = ["Slack".to_string()].into();
+        assert_eq!(held(&grouped(six.clone(), &folds, false)), Some(6));
+        assert_eq!(held(&[Item::new("part:release", "a plugin's row")]), None);
+        assert_eq!(held(&grouped(six.clone(), &folds, true)), None);
+        assert!(!is_part(&Item::new("part:release", "a plugin's row")));
+        // One channel alone needs no sub-heading, nor does a filter's list.
+        let one: Vec<Item> = (0..6)
+            .map(|i| message(&format!("m{i}"), "#general", i))
+            .collect();
+        assert_eq!(grouped(one, &HashSet::new(), false).len(), 7);
+        assert_eq!(grouped(six, &HashSet::new(), true).len(), 7);
+        // A message naming none after the newest keeps the order newest
+        // first, unsplit.
+        let mut mixed: Vec<Item> = vec![message("a0", "#general", 0), message("x", "", 1)];
+        mixed.extend((2..6).map(|i| message(&format!("a{i}"), "#general", i)));
+        let out = grouped(mixed, &HashSet::new(), false);
+        assert_eq!(out[2].title, "slack x", "{:?}", titles(&out));
+        // One channel and a message naming none: no split either.
+        let mut one: Vec<Item> = (0..5)
+            .map(|i| message(&format!("m{i}"), "#general", i))
+            .collect();
+        one.push(message("x", "", 9));
+        assert_eq!(grouped(one, &HashSet::new(), false).len(), 7);
+    }
+
+    #[test]
+    fn a_fork_and_its_upstream_are_split_apart() {
+        let pr = |id: &str, repo: &str, back: i64| {
+            let mut e = entry("prs", id, NOW - back, Sidebar::Shown);
+            e.item.data = json!({ "pr": { "number": 1, "repo": repo } });
+            row_of(&e)
+        };
+        let mut rows: Vec<Item> = (0..3)
+            .map(|i| pr(&format!("u{i}"), "team/app", i))
+            .collect();
+        rows.extend((0..3).map(|i| pr(&format!("f{i}"), "me/app", 10 + i)));
+        let out = grouped(rows, &HashSet::new(), false);
+        let parts: Vec<&str> = out
+            .iter()
+            .filter(|r| is_part(r))
+            .map(|r| r.title.as_str())
+            .collect();
+        assert_eq!(parts, ["team/app", "me/app"]);
+        // Alone of its name, a repository is named without its owner.
+        let mut rows: Vec<Item> = (0..3)
+            .map(|i| pr(&format!("u{i}"), "team/app", i))
+            .collect();
+        rows.extend((0..3).map(|i| pr(&format!("t{i}"), "team/tools", 10 + i)));
+        let out = grouped(rows, &HashSet::new(), false);
+        let parts: Vec<&str> = out
+            .iter()
+            .filter(|r| is_part(r))
+            .map(|r| r.title.as_str())
+            .collect();
+        assert_eq!(parts, ["app", "tools"]);
     }
 
     #[test]

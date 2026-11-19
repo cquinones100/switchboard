@@ -51,7 +51,7 @@ impl Server {
             }
             return;
         }
-        self.sidebar_menu(client, session, owner, TabMenuFrom::SidebarPeek);
+        self.sidebar_menu(client, session, owner, TabMenuFrom::SidebarPeek, false);
     }
 
     /// `m`, the context-menu key, Space or Enter with the focus in the
@@ -97,22 +97,26 @@ impl Server {
             return;
         };
         let before = std::mem::replace(pressed, row);
-        self.sidebar_menu(client, session, owner, from);
+        self.sidebar_menu(client, session, owner, from, true);
         if let Some(c) = self.clients.get_mut(&client) {
             c.pressed_at = before;
         }
     }
 
+    /// `by_key`: opened for the cursor's row rather than by a click.
     fn sidebar_menu(
         &mut self,
         client: ClientId,
         session: &str,
         owner: Option<Owner>,
         from: TabMenuFrom,
+        by_key: bool,
     ) {
         match owner {
             Some(Owner::Tab(t)) => self.sidebar_tab_menu(client, t, from),
-            Some(notice @ Owner::Notice { .. }) => self.sidebar_notice_menu(client, &notice),
+            Some(notice @ Owner::Notice { .. }) => {
+                self.sidebar_notice_menu(client, &notice, by_key);
+            }
             Some(Owner::Back | Owner::Forward) => self.sidebar_trail_menu(client, session),
             Some(Owner::Mission) => self.sidebar_views_menu(client),
             other => self.sidebar_own_menu(client, session, other),
@@ -130,11 +134,41 @@ impl Server {
     /// control's view open for it; a row standing for several of a kind
     /// (the landings) opens the newest's, which its line shows
     /// (`notices::summary`), as `sidebar_open_notice` leads to it.
-    fn sidebar_notice_menu(&mut self, client: ClientId, owner: &Owner) {
+    fn sidebar_notice_menu(&mut self, client: ClientId, owner: &Owner, by_key: bool) {
+        // By source with the Notifications window off, a line's menu is
+        // what Enter on it opens: its source's heading's, or its only
+        // notification's.
+        if settings::is_on("notices_grouped") && !settings::is_on("notice_list") {
+            self.sidebar_open_notice_as(client, owner, true);
+            return;
+        }
+        // By source, a key's menu, and a click's on the cursor's own line
+        // while the sidebar has the focus and so shows it chosen,
+        // is for the notification chosen in the window, as Enter opens it;
+        // a click's on another line for the notification that line shows.
+        let cursor = self
+            .clients
+            .get(&client)
+            .and_then(|c| self.sidebar.sides.get(&c.session))
+            .filter(|s| s.focused && settings::is_on("notices_grouped"))
+            .and_then(|s| s.cursor.clone())
+            .filter(|c| c.same_row(owner));
+        let on_the_cursor = cursor.is_some();
+        let owner = &self.notice_line_now(cursor.as_ref().unwrap_or(owner));
+        let owner = &if settings::is_on("notices_grouped") && !by_key && !on_the_cursor {
+            self.sidebar_notices()
+                .into_iter()
+                .find(|n| n.owner.same_row(owner))
+                .map_or(owner.clone(), |n| n.owner)
+        } else {
+            owner.clone()
+        };
         let Owner::Notice { source, .. } = owner else {
             return;
         };
-        let shows_the_newest = matches!(source.as_str(), "autolanded" | "landed");
+        // A source's line names its newest itself.
+        let shows_the_newest = matches!(source.as_str(), "autolanded" | "landed")
+            && !settings::is_on("notices_grouped");
         let entries = self.notice_entries();
         let found = if shows_the_newest {
             entries.iter().rfind(|(o, _)| o.same_row(owner))
