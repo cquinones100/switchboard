@@ -58,7 +58,7 @@ static TICKET_IN_BRANCH: LazyLock<Regex> =
 static PROJECT_ID: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(?i)P-[A-Z][A-Z0-9]*-[0-9]+$").unwrap());
 static PROJECT_IN_NAME: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?:^|[^A-Za-z0-9])(P-[A-Z][A-Z0-9]*-[0-9]+)(?:$|[^A-Za-z0-9])").unwrap()
+    Regex::new(r"(?:^|[^A-Za-z0-9])([Pp]-[A-Z][A-Z0-9]*-[0-9]+)(?:$|[^A-Za-z0-9])").unwrap()
 });
 static ISSUE_BRANCH: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^issue/([0-9]+)(?:-|$)").unwrap());
@@ -123,6 +123,7 @@ fn ticket_word(name: &str) -> Option<(usize, String)> {
             let before = &name[..m.start()];
             let project_end = before
                 .strip_suffix("P-")
+                .or_else(|| before.strip_suffix("p-"))
                 .is_some_and(|b| !alnum(b.chars().last()));
             !alnum(before.chars().last()) && !alnum(name[m.end()..].chars().next()) && !project_end
         })
@@ -1129,6 +1130,10 @@ mod tests {
         assert_eq!(id_in_name("ABC-42-fix-login"), Some("ABC-42".into()));
         assert_eq!(id_in_name("feat-ABC-42-fix-login"), Some("ABC-42".into()));
         assert_eq!(id_in_name("plan-P-ABC-4-review"), None);
+        assert_eq!(
+            in_name("Shaping p-ENG-4"),
+            Some(Ticket::Project("P-ENG-4".into()))
+        );
         assert_eq!(
             in_name("plan-P-ABC-4-review"),
             Some(Ticket::Project("P-ABC-4".into()))
