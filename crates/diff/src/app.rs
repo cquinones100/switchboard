@@ -623,7 +623,10 @@ pub const KEYS: &[(&str, &[KeyRow])] = &[
         "M-d: the story view",
         &[
             key_row("j k", "move in the outline, or down and up the column"),
-            key_row("J K", "scroll the column down, up from the outline"),
+            key_row(
+                "J K",
+                "scroll the column down, up, from the outline or the column",
+            ),
             key_row(
                 "↵",
                 "in the outline, read from there (In the files only: their files); in the column, a change's menu, or a file of tests unfolded",
@@ -9117,6 +9120,13 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         assert!(app.reader.run.is_some_and(|r| r > 0));
+        // J and K scroll the column with What runs shown, from the column.
+        app.focus = Focus::New;
+        let top = app.reader.top;
+        press(&mut app, "J");
+        assert!(app.reader.top > top);
+        press(&mut app, "K");
+        assert_eq!(app.reader.top, top);
         // Esc takes it away.
         app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(!app.reader.runs);

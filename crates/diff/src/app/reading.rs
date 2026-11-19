@@ -2346,13 +2346,14 @@ impl App {
             }
             KeyCode::Char('h') | KeyCode::Left if !outline && !ctrl => self.focus = Focus::List,
             KeyCode::Char('l') | KeyCode::Right if outline && !ctrl => self.focus = Focus::New,
-            // J and K from the outline scroll the column beside it, as they
-            // scroll the file from the file list.
-            KeyCode::Char('J') if outline => {
-                self.scroll_column(super::SCROLL * count as usize, true, false)
+            // J and K scroll the column from anywhere in the Story view,
+            // What runs shown or not, as they scroll the file from the file
+            // list; from the outline nothing is read on the way.
+            KeyCode::Char('J') => {
+                self.scroll_column(super::SCROLL * count as usize, true, !outline)
             }
-            KeyCode::Char('K') if outline => {
-                self.scroll_column(super::SCROLL * count as usize, false, false)
+            KeyCode::Char('K') => {
+                self.scroll_column(super::SCROLL * count as usize, false, !outline)
             }
             KeyCode::Char('j') | KeyCode::Down if outline && !ctrl => {
                 let last = self.items().len().saturating_sub(1);
