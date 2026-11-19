@@ -829,3 +829,34 @@ fn lows_after_the_reviewed_range_changed_are_triaged() {
     assert_eq!(moved["next"], "triage");
     assert_eq!(moved["findings"][0]["action"], "ask");
 }
+
+// A low on a file linked in from outside the repository, as a worktree links
+// the main clone's own settings, is never left: the loop looks at it first.
+#[test]
+fn a_low_on_a_file_linked_from_outside_is_triaged() {
+    let tmp = TempDir::new("cr-lows-link");
+    let home = tmp.path();
+    let work = clone(home);
+    fs::write(work.join("a.txt"), "a\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "Pushed already"]);
+    git(home, &work, &["push", "-q", "origin", "main"]);
+    fs::write(work.join(".git/info/exclude"), "linked.json\n").unwrap();
+    fs::write(home.join("outside.json"), "{}\n").unwrap();
+    std::os::unix::fs::symlink(home.join("outside.json"), work.join("linked.json")).unwrap();
+    fs::write(work.join("b.txt"), "b\n").unwrap();
+    git(home, &work, &["add", "b.txt"]);
+    git(home, &work, &["commit", "-q", "-m", "A change"]);
+    let answer = home.join("answer.json");
+    let clean = r#"{"structured_output":{"summary":"ok","findings":[]}}"#;
+    let linked = r#"{"structured_output":{"summary":"lows","findings":[{"title":"t","severity":"low","file":"linked.json","line":1,"body":"b"}]}}"#;
+    let round = |said: &str, args: &[&str]| -> serde_json::Value {
+        fs::write(&answer, said).unwrap();
+        let out = review_answering(home, &work, &answer, args);
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+
+    assert_eq!(round(clean, &["--round", "start"])["next"], "confirm");
+    assert_eq!(round(linked, &["--round", "next"])["next"], "triage");
+}

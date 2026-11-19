@@ -1816,14 +1816,20 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
     // A finding that names something outside the repository (warned of, or
     // a path climbing out of it) waits for the loop to look at it, so it
     // never counts as left.
+    // A file that exists is followed through its links (a worktree links
+    // some of the main clone's files in) to where it really is.
+    let real_root = fs::canonicalize(&root_path).unwrap_or_else(|_| root_path.clone());
     let inside = |f: &Value| {
         f.get("file").and_then(Value::as_str).is_some_and(|file| {
             let path = Path::new(file);
-            !path.is_absolute()
+            let lexically_inside = !path.is_absolute()
                 && !file.starts_with('~')
                 && !path
                     .components()
-                    .any(|c| matches!(c, std::path::Component::ParentDir))
+                    .any(|c| matches!(c, std::path::Component::ParentDir));
+            lexically_inside
+                && fs::canonicalize(root_path.join(path))
+                    .map_or(true, |real| real.starts_with(&real_root))
         })
     };
     let lows_left = confirming
