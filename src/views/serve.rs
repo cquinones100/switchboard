@@ -223,7 +223,7 @@ impl Server {
     /// The directory a tab's work is in, for its ticket: `dir`, the
     /// focused pane's, unless that pane is Notes beside the work, which runs
     /// in your home; then another pane's of the tab.
-    fn work_dir(&self, tab: TabId, pane: PaneId, dir: PathBuf) -> PathBuf {
+    pub(crate) fn work_dir(&self, tab: TabId, pane: PaneId, dir: PathBuf) -> PathBuf {
         let notes = |p: &PaneId| {
             self.panes
                 .get(p)

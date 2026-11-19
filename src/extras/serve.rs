@@ -1014,13 +1014,13 @@ impl Server {
         let dir = self.dir_or_home(pane);
         // The tab's ticket from the directory its work is in (a review
         // tab's checkout, `@tab_dir`), the pane's own kept for starting work.
-        let work_dir = pane
-            .and_then(|p| self.pane_dir(p))
-            .unwrap_or_else(|| dir.clone());
-        let branch_ticket = pane
-            .and_then(|p| self.panes.get(&p))
-            .map(|s| s.tab)
-            .and_then(|tab| self.ticket_here(tab, &work_dir));
+        let branch_ticket = pane.and_then(|p| {
+            let tab = self.panes.get(&p)?.tab;
+            let here = self.pane_dir(p).unwrap_or_else(|| dir.clone());
+            // Notes beside the work reads the work's, as M-i does.
+            let work_dir = self.work_dir(tab, p, here);
+            self.ticket_here(tab, &work_dir)
+        });
         let known = branch_ticket.clone();
         self.off_task(
             client,
