@@ -80,7 +80,7 @@ switchboard-diff update --force    # install it in place of a build from a clone
 
 ## What it sends
 
-With Claude Code installed, the diff and the commits' messages go to Claude (Haiku, through `claude -p`) to order the files and tell the story, and a question you ask with `ga` goes with the diff. To keep the diff on your computer, turn off "Files in reading order", "Diff told as a story" and "Ask Claude about the diff" in its [settings](#settings). The story is asked for as a change opens, so to send Claude nothing from the first run, write them to `~/.config/switchboard-diff/settings.json` before opening a repository, with `diff_update_check` to ask GitHub for no releases either (comparing with a base it hasn't kept yet still fetches it from `origin`; `--base <ref>` or `--working` fetch nothing):
+With Claude Code installed, the diff and the commits' messages go to Claude (Haiku, or Sonnet for a large change, through `claude -p`) to order the files and tell the story, and a question you ask with `ga` goes with the diff. To keep the diff on your computer, turn off "Files in reading order", "Diff told as a story" and "Ask Claude about the diff" in its [settings](#settings). The story is asked for as a change opens, so to send Claude nothing from the first run, write them to `~/.config/switchboard-diff/settings.json` before opening a repository, with `diff_update_check` to ask GitHub for no releases either (comparing with a base it hasn't kept yet still fetches it from `origin`; `--base <ref>` or `--working` fetch nothing):
 
 ```json
 { "diff_order": false, "diff_story": false, "diff_ask": false, "diff_update_check": false }

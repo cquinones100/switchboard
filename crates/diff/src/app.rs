@@ -6480,7 +6480,7 @@ mod tests {
         // j and k move through the rows; Esc goes back to the diff.
         press(&mut app, "j");
         let shown = screen(&mut app).join("\n");
-        assert!(shown.contains("each with a heading"), "{shown}");
+        assert!(shown.contains("pages Claude names"), "{shown}");
         app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(!app.in_settings());
         assert!(screen(&mut app).join("\n").contains("README.md"));

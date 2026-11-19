@@ -95,12 +95,12 @@ pub fn manifest() -> Manifest {
             Setting::new("diff_story", true)
                 .said(
                     "Diff told as a story",
-                    "M-d's file list grouped into a few pages Haiku names from the whole diff and the commits' messages, each with a heading, two or three sentences that make the case for it to the colleagues reviewing it, and a line of what to watch for, read from the change's core to its edges, and told in chapters (]c and [c move between them, yS copies the story as Markdown); off, the files keep the reading order by kind. Sends the diff's text and the commit messages, not only the paths, to Claude",
+                    "M-d's file list grouped into a few pages Claude names from the whole diff (Haiku, or Sonnet for a large change, as \"Model that tells the diff's story\" picks) and the commits' messages, each with a heading, two or three sentences that make the case for it to the colleagues reviewing it, and a line of what to watch for, read from the change's core to its edges, and told in chapters (]c and [c move between them, yS copies the story as Markdown); off, the files keep the reading order by kind. Sends the diff's text and the commit messages, not only the paths, to Claude",
                 ),
             Setting::new("diff_story_progress", true)
                 .said(
                     "Diff story progress",
-                    "While M-d's story is told, its cover shows what Haiku is reading, each page as Haiku names it and the time taken, t showing Haiku's answer itself as it comes; off, a spinner alone",
+                    "While M-d's story is told, its cover shows which model is telling it and what it is reading, each page as it names it and the time taken, t showing its answer itself as it comes; off, a spinner alone",
                 ),
             Setting::new("diff_story_pages", true)
                 .said(
@@ -110,7 +110,7 @@ pub fn manifest() -> Manifest {
             Setting::new("diff_story_notes", true)
                 .said(
                     "Diff story notes on changes",
-                    "M-d's diff shows Haiku's note over each change worth one, why it is needed, and names the page of a change that belongs to another one than its file; off, only the list's pages",
+                    "M-d's diff shows the story's note over each change worth one, why it is needed, and names the page of a change that belongs to another one than its file; off, only the list's pages",
                 ),
             Setting::new("diff_story_map", true)
                 .said(
