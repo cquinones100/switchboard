@@ -94,6 +94,9 @@ pub struct Beside {
     /// it, so a cursor the view moves as the keys come back was put there
     /// by a resize, not by the reader.
     pub rewrapped_unseen: bool,
+    /// The rows the plan's body had when last drawn: a change of height
+    /// keeps the cursor in sight, as a rewrap does.
+    pub body: usize,
 }
 
 /// What the cursor and the first row shown were on as the plan last
@@ -635,6 +638,7 @@ impl App {
             held: None,
             took_keys: false,
             rewrapped_unseen: false,
+            body: 0,
         });
         true
     }
@@ -1090,7 +1094,8 @@ impl App {
         // The cursor kept in sight as it moves, or as the plan with the
         // keys rewraps; the wheel scrolling past it takes it along, as
         // Vim's does.
-        if b.follow || (rewrapped.is_some() && b.focused && !b.took_keys) {
+        let resized = rewrapped.is_some() || (b.body != 0 && b.body != body);
+        if b.follow || (resized && b.focused && !b.took_keys) {
             if line < scroll {
                 scroll = line;
             } else if body > 0 && line >= scroll + body {
@@ -1143,6 +1148,7 @@ impl App {
         b.line = line;
         b.follow = false;
         let took = std::mem::take(&mut b.took_keys);
+        b.body = body;
         if focused {
             b.rewrapped_unseen = false;
         } else if rewrapped.is_some() {
