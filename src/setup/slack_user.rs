@@ -65,8 +65,15 @@ pub fn main() -> ExitCode {
         }
     };
     // Both tokens are asked for and checked before either is stored, so
-    // the sign-in and its tokens change together.
-    let app = app_token();
+    // the sign-in and its tokens change together; a canceled or refused
+    // app-level token changes nothing.
+    let app = match app_token() {
+        Ok(app) => app,
+        Err(why) => {
+            eprintln!("{why} Nothing changed.");
+            return ExitCode::from(1);
+        }
+    };
     let user = std::env::var("USER").unwrap_or_default();
     let before = slack_user::signed_in(&paths::state_dir());
     let stored = match platform::set_secret(TOKEN_SERVICE, &user, token) {
@@ -115,9 +122,9 @@ pub fn main() -> ExitCode {
 }
 
 /// Asks for the app's app-level token, for messages as they're posted,
-/// and checks it with Slack: the token, or `None` when skipped or not
-/// taken, having said why.
-fn app_token() -> Option<String> {
+/// and checks it with Slack: the token, `None` when skipped (Enter alone),
+/// or why it wasn't taken.
+fn app_token() -> Result<Option<String>, String> {
     println!("\nTo have the Slack view take messages as they're posted, in an app of yours");
     println!("that isn't the Slack relay's:");
     println!("  1. Under Socket Mode, turn it on and generate an app-level token with the");
@@ -127,28 +134,25 @@ fn app_token() -> Option<String> {
     println!("  3. Reinstall the app to your workspace.\n");
     print!("Paste the app-level token, or press Enter to skip (it isn't shown): ");
     let _ = std::io::stdout().flush();
-    let token = read_token().ok()?;
+    let token = read_token().map_err(|e| format!("Couldn't read the app-level token: {e}."))?;
     let token = token.trim();
     if token.is_empty() {
-        return None;
+        return Ok(None);
     }
     if !token.starts_with("xapp-") {
-        eprintln!("That isn't an app-level token, which starts with xapp-; it wasn't stored.");
-        return None;
+        return Err("That isn't an app-level token, which starts with xapp-.".to_string());
     }
     if crate::relay::slack::token(crate::relay::slack::APP_TOKEN_SERVICE).as_deref() == Some(token)
     {
-        eprintln!(
-            "That is the Slack relay's app-level token, whose events it would take; use an app of your own. It wasn't stored."
+        return Err(
+            "That is the Slack relay's app-level token, whose events it would take; use an app of your own.".to_string(),
         );
-        return None;
     }
     #[cfg(feature = "net")]
     if let Err(e) = util::block_on(crate::relay::http::open_socket(token, "setup: slack-user")) {
-        eprintln!("Slack didn't take it: {e}. It wasn't stored.");
-        return None;
+        return Err(format!("Slack didn't take the app-level token: {e}."));
     }
-    Some(token.to_string())
+    Ok(Some(token.to_string()))
 }
 
 /// The token typed or pasted at a terminal, unshown, up to Enter; else the
@@ -168,8 +172,10 @@ fn read_token() -> std::io::Result<String> {
             Ok(Event::Key(key)) if key.kind != KeyEventKind::Release => match key.code {
                 KeyCode::Enter => break Ok(()),
                 KeyCode::Char('c' | 'd') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    token.clear();
-                    break Ok(());
+                    break Err(std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        "canceled",
+                    ));
                 }
                 KeyCode::Char(c) => token.push(c),
                 KeyCode::Backspace => {

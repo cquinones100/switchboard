@@ -224,7 +224,8 @@ async fn take(
     if !slack_look::would_show(dirs, &who.user, event, now) {
         return None;
     }
-    if now < WAIT_UNTIL.load(Ordering::SeqCst) {
+    let look_waits = slack_api::look_slowed(&dirs.state).unwrap_or(0);
+    if now < WAIT_UNTIL.load(Ordering::SeqCst).max(look_waits) {
         return Some(Err("Slack asked to wait".to_string()));
     }
     let Some(client) = slack_api::usable(&dirs.state, slack_api::client(&dirs.state).await) else {

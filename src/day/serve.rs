@@ -885,7 +885,9 @@ impl Server {
             slack::mark_thread_read(&dirs.state, key, at);
         }
         self.day_views(&dirs, &util::local_now());
-        if settings::is_on("slack_background") {
+        // While messages come as they're posted, the reply comes that way
+        // too, and reads its thread again.
+        if settings::is_on("slack_background") && !self.day.slack_live_up {
             self.look_at_slack();
         }
     }
