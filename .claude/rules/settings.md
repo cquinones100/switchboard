@@ -6,6 +6,7 @@ paths:
   - "src/files/**"
   - "src/paths.rs"
   - "assets/switchboard.md"
+  - "src/links.rs"
 ---
 
 # Settings and the files of your own

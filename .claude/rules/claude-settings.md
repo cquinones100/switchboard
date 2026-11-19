@@ -6,6 +6,7 @@ paths:
   - "src/agent/**"
   - "src/cmd/claude_context.rs"
   - ".claude/settings.json"
+  - "src/mux/server.rs"
 ---
 
 # Claude's state and Claude Code's settings
