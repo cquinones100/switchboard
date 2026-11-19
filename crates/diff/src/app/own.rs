@@ -170,7 +170,8 @@ impl App {
     /// and always alone, where its Settings button is how a click reaches
     /// the settings view.
     pub(super) fn has_buttons(&self) -> bool {
-        self.opts.easy || self.opts.alone
+        // A commit of the history is drawn under the branch's own row.
+        (self.opts.easy || self.opts.alone) && !self.in_history
     }
 
     /// The row's buttons in its order: each of `BUTTONS` (Ask only with
@@ -793,7 +794,7 @@ impl App {
             return;
         };
         let cols = self.cols as usize;
-        let height = self.rows.saturating_sub(u16::from(self.has_buttons())) as usize;
+        let height = self.rows as usize;
         let rows = self.settings_rows().len();
         view.at = view.at.min(rows.saturating_sub(1));
         let lines = self.settings_lines(cols, view.at);
@@ -816,9 +817,6 @@ impl App {
                 self.buttons
                     .push((Button::Option(*i), Rect::new(0, y as u16, self.cols, 1)));
             }
-        }
-        if self.has_buttons() {
-            self.draw_buttons(buf);
         }
     }
 

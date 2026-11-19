@@ -109,6 +109,7 @@ mod own;
 mod page;
 mod reading;
 mod select;
+mod trail;
 mod width;
 
 pub use page::story_page;
@@ -498,6 +499,10 @@ struct Answer {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Button {
     Bar(usize),
+    /// Back where the reader was before the last jump, and forward again
+    /// (trail.rs).
+    Back,
+    Forward,
     /// The row's Settings button, alone.
     Settings,
     /// A row of the settings view.
@@ -618,6 +623,10 @@ pub const KEYS: &[(&str, &[KeyRow])] = &[
                 "the diff's menu, in the file list: its settings, and what its buttons do",
             ),
             key_row("S-F10", "the diff's menu, from the list or the diff"),
+            key_row(
+                "H L",
+                "back to where you were before a jump, and forward again",
+            ),
             key_row("q esc", "close the diff (esc in the file list)"),
             key_row("^c", "close the diff and go back to the pane"),
         ],
@@ -887,6 +896,13 @@ pub struct App {
     pointer: Option<Pointer>,
     /// Where each button was last drawn.
     buttons: Vec<(Button, Rect)>,
+    /// The row of buttons over the diff, where each was drawn on the
+    /// screen (header and all).
+    bar: Vec<(Button, Rect)>,
+    /// Where the reader was before each jump, and where back left
+    /// (trail.rs).
+    back: Vec<trail::Spot>,
+    ahead: Vec<trail::Spot>,
     /// Where the boxes were last drawn, for clicks outside them.
     ask_rect: Option<Rect>,
     answer_rect: Option<Rect>,
@@ -1067,6 +1083,9 @@ impl App {
             mouse_at: None,
             pointer: None,
             buttons: Vec::new(),
+            bar: Vec::new(),
+            back: Vec::new(),
+            ahead: Vec::new(),
             ask_rect: None,
             answer_rect: None,
             list_drawn: (0, None),
@@ -1145,7 +1164,7 @@ impl App {
 
     fn resize_now(&mut self, cols: u16, rows: u16) {
         // The header's row, alone, is none of the diff's.
-        let rows = rows.saturating_sub(u16::from(self.has_header()));
+        let rows = rows.saturating_sub(self.lead());
         self.screen_now(cols, rows);
         self.selection = None;
         if let Some(h) = &mut self.history {
@@ -2077,7 +2096,7 @@ impl App {
         } else {
             self.list_cols() + 1
         };
-        let bottom = u16::from(self.has_buttons() || self.has_footer());
+        let bottom = u16::from(self.has_footer());
         Rect::new(
             x,
             0,
@@ -2611,7 +2630,17 @@ impl App {
     /// A key pressed, the files the view then reaches read (`read_view`),
     /// as are those after the mouse, an event or a resize.
     pub fn key(&mut self, key: KeyEvent) -> Act {
+        if key.kind != KeyEventKind::Release
+            && let Some(forward) = self.trail_key(&key)
+        {
+            self.message = None;
+            self.go_along(forward);
+            self.read_view();
+            return Act::Redraw;
+        }
+        let before = self.before_key(&key);
         let act = self.key_now(key);
+        self.after(before);
         self.read_view();
         act
     }
@@ -4772,20 +4801,69 @@ impl App {
         // Where the mouse is on the screen, header and all, for the
         // pointer's shape (`shape_at`).
         self.mouse_at = Some((m.column, m.row));
-        // The header's row, alone, takes no click; the rest is the diff's,
-        // counted from under it.
-        if self.has_header() {
-            // A drag or a release over the header goes on as one at the
-            // diff's first row, so a selection started under it ends.
+        // The header's row, alone, takes no click, and the row of buttons
+        // under it its own; the rest is the diff's, counted from under
+        // them.
+        let lead = self.lead();
+        if lead > 0 {
+            // A drag or a release over them goes on as one at the diff's
+            // first row, so a selection started under them ends.
             let held = matches!(m.kind, MouseEventKind::Drag(_) | MouseEventKind::Up(_));
-            if m.row == 0 && !held {
+            if m.row < lead && !held {
+                if self.has_buttons() && m.row == u16::from(self.has_header()) {
+                    let act = self.bar_mouse(m);
+                    self.read_view();
+                    return act;
+                }
                 return Act::Same;
             }
-            m.row = m.row.saturating_sub(1);
+            m.row = m.row.saturating_sub(lead);
         }
+        let before = self.before_click(&m);
         let act = self.mouse_now(m);
+        self.after(before);
         self.read_view();
         act
+    }
+
+    /// The rows over the diff: the header, alone, and the row of buttons.
+    pub(super) fn lead(&self) -> u16 {
+        u16::from(self.has_header()) + u16::from(self.has_buttons())
+    }
+
+    /// The mouse on the row of buttons: the one under it lit, and pressed
+    /// by a click.
+    fn bar_mouse(&mut self, m: MouseEvent) -> Act {
+        let hit = self
+            .bar
+            .iter()
+            .find(|(_, r)| m.column >= r.x && m.column < r.right())
+            .map(|(b, _)| *b);
+        match m.kind {
+            MouseEventKind::Moved => {
+                if !self.opts.hover || hit == self.hover {
+                    return Act::Same;
+                }
+                self.hover = hit;
+                Act::Redraw
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                // A click ends typing the filter, the filter kept, as one
+                // anywhere does.
+                self.menu = None;
+                self.filtering = false;
+                let Some(button) = hit else {
+                    return Act::Redraw;
+                };
+                let before = self.before_click(&m);
+                let act = self.press(button);
+                if !matches!(button, Button::Back | Button::Forward) {
+                    self.after(before);
+                }
+                act
+            }
+            _ => Act::Same,
+        }
     }
 
     /// The button drawn at a cell.
@@ -4868,14 +4946,19 @@ impl App {
     /// types (the filter's line, the question's box); the arrow over the
     /// rest, a scroll bar included, as the workspace's own have it.
     fn shape_at(&mut self, x: u16, mut y: u16) -> Pointer {
-        // The header's row takes no click; the rest is counted from under
-        // it, as the mouse is (`mouse`).
-        if self.has_header() {
-            if y == 0 {
-                return Pointer::Arrow;
-            }
-            y -= 1;
+        // The header's row takes no click, the row of buttons its own; the
+        // rest is counted from under them, as the mouse is (`mouse`).
+        let lead = self.lead();
+        if y < lead {
+            let on_bar = self.has_buttons() && y == u16::from(self.has_header());
+            let button = self.bar.iter().any(|(_, r)| x >= r.x && x < r.right());
+            return if on_bar && button {
+                Pointer::Hand
+            } else {
+                Pointer::Arrow
+            };
         }
+        y -= lead;
         // Nothing is read for it, as nothing is while the screen is drawn:
         // a file not read yet is no row of text, in a commit's diff of the
         // history too.
@@ -5495,6 +5578,11 @@ impl App {
         self.count = None;
         self.yanked = false;
         match button {
+            Button::Back | Button::Forward => {
+                self.settings = None;
+                self.go_along(button == Button::Forward);
+                return Act::Redraw;
+            }
             // While a question is typed, the row's buttons do nothing: its
             // keys would be typed into the draft.
             // While a question is typed, the row is Settings and Close
@@ -6049,7 +6137,7 @@ mod tests {
 
     fn draw(app: &mut App) -> Buffer {
         // The whole screen: the diff, under its header when it runs alone.
-        let rows = app.rows + u16::from(app.has_header());
+        let rows = app.rows + app.lead();
         let mut buf = Buffer::empty(Rect::new(0, 0, app.cols, rows));
         app.draw(&mut buf);
         buf
@@ -6217,7 +6305,8 @@ mod tests {
         app.opts.easy = true;
         app.resize(220, 16);
         screen(&mut app);
-        let over = |app: &mut App, x: u16, y: u16| {
+        // On the screen, the row of buttons at its top, the diff under it.
+        let on_screen = |app: &mut App, x: u16, y: u16| {
             app.mouse(MouseEvent {
                 kind: MouseEventKind::Moved,
                 column: x,
@@ -6227,19 +6316,19 @@ mod tests {
             screen(app);
             app.point_now()
         };
+        let over = |app: &mut App, x: u16, y: u16| {
+            let lead = app.lead();
+            on_screen(app, x, y + lead)
+        };
         assert_eq!(
             app.point_now(),
             None,
             "nothing until the mouse is somewhere"
         );
         // A button, said once however far the mouse moves on it.
-        let (_, at) = *app
-            .buttons
-            .iter()
-            .find(|(b, _)| *b == Button::Bar(1))
-            .unwrap();
-        assert_eq!(over(&mut app, at.x + 1, at.y), Some(Pointer::Hand));
-        assert_eq!(over(&mut app, at.x + 2, at.y), None);
+        let (_, at) = *app.bar.iter().find(|(b, _)| *b == Button::Bar(1)).unwrap();
+        assert_eq!(on_screen(&mut app, at.x + 1, at.y), Some(Pointer::Hand));
+        assert_eq!(on_screen(&mut app, at.x + 2, at.y), None);
         // The diff's text, and the bar over it.
         let area = app.diff_area();
         let body = area.y + app.head_height() as u16;
@@ -6287,11 +6376,11 @@ mod tests {
         // While a question is typed the row is Close alone, which closes
         // it: a hand.
         let (_, close) = *app
-            .buttons
+            .bar
             .iter()
             .find(|(b, _)| matches!(b, Button::Bar(_)))
             .unwrap();
-        assert_eq!(over(&mut app, close.x, close.y), Some(Pointer::Hand));
+        assert_eq!(on_screen(&mut app, close.x, close.y), Some(Pointer::Hand));
         app.mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: close.x,
@@ -6360,13 +6449,14 @@ mod tests {
     }
 
     #[test]
-    fn easy_mode_puts_a_button_for_each_key_at_the_bottom_and_a_click_presses_it() {
+    fn easy_mode_puts_a_button_for_each_key_over_the_diff_and_a_click_presses_it() {
         let mut app = app();
         app.opts.easy = true;
         // Wide enough for every button and the keys named after them.
         app.resize(220, 16);
         let shown = screen(&mut app);
-        let bar = shown.last().unwrap();
+        // Over the diff.
+        let bar = &shown[0];
         for label in [
             "◀ Page",
             "Page ▶",
@@ -6386,13 +6476,9 @@ mod tests {
             "the keys named after them: {bar:?}"
         );
         app.opts.key_help = false;
-        assert!(!screen(&mut app).last().unwrap().contains("choose a file"));
+        assert!(!screen(&mut app)[0].contains("choose a file"));
         // A click on Page ▶ presses ]c, which says why there is no story.
-        let (_, at) = *app
-            .buttons
-            .iter()
-            .find(|(b, _)| *b == Button::Bar(1))
-            .unwrap();
+        let (_, at) = *app.bar.iter().find(|(b, _)| *b == Button::Bar(1)).unwrap();
         let click = MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: at.x + 1,
@@ -6405,11 +6491,7 @@ mod tests {
             said.starts_with("No story for this diff: Haiku isn't asked here."),
             "{said:?}"
         );
-        let (_, close) = *app
-            .buttons
-            .iter()
-            .find(|(b, _)| *b == Button::Bar(8))
-            .unwrap();
+        let (_, close) = *app.bar.iter().find(|(b, _)| *b == Button::Bar(8)).unwrap();
         let click = MouseEvent {
             column: close.x + 1,
             row: close.y,
@@ -6431,9 +6513,16 @@ mod tests {
     }
 
     fn click_on(app: &mut App, button: Button) -> Act {
-        let (_, at) = *app.buttons.iter().find(|(b, _)| *b == button).unwrap();
-        // Where it was drawn, on the screen: a row down under the header.
-        let down = u16::from(app.has_header());
+        // The row of buttons is drawn where it is on the screen; anything
+        // else under the header and the row.
+        let on_bar = app.bar.iter().find(|(b, _)| *b == button).copied();
+        let (down, (_, at)) = match on_bar {
+            Some(found) => (0, found),
+            None => (
+                app.lead(),
+                *app.buttons.iter().find(|(b, _)| *b == button).unwrap(),
+            ),
+        };
         app.mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: at.x + 1,
@@ -6453,10 +6542,12 @@ mod tests {
             "{:?}",
             shown[0]
         );
-        // The diff under it, a row down.
-        assert!(shown[1].contains("Changes (3)"), "{:?}", shown[1]);
-        // The row of buttons, with no easy mode, Settings before Close.
-        let bar = shown.last().unwrap();
+        // The row of buttons under it, with no easy mode, back and forward
+        // first and Settings before Close.
+        let bar = &shown[1];
+        assert!(bar.starts_with("  ←   →"), "{bar:?}");
+        // The diff under them.
+        assert!(shown[2].contains("Changes (3)"), "{:?}", shown[2]);
         let (settings, close) = (bar.find("Settings").unwrap(), bar.find("Close").unwrap());
         assert!(settings < close, "{bar:?}");
         assert!(
@@ -6468,11 +6559,11 @@ mod tests {
         // surface, on the chosen surface under the mouse.
         let theme = app.theme();
         let (_, at) = *app
-            .buttons
+            .bar
             .iter()
             .find(|(b, _)| *b == Button::Settings)
             .unwrap();
-        let cell = |app: &mut App| draw(app)[(at.x + 1, at.y + 1)].clone();
+        let cell = |app: &mut App| draw(app)[(at.x + 1, at.y)].clone();
         let resting = cell(&mut app);
         assert_eq!(resting.bg, Surface::Panel.color(&theme));
         assert_eq!(resting.fg, Tone::Accent.fg(&theme));
@@ -6480,7 +6571,7 @@ mod tests {
         app.mouse(MouseEvent {
             kind: MouseEventKind::Moved,
             column: at.x + 1,
-            row: at.y + 1,
+            row: at.y,
             modifiers: KeyModifiers::NONE,
         });
         assert_eq!(cell(&mut app).bg, Surface::Chosen.color(&theme));
@@ -6493,7 +6584,7 @@ mod tests {
         assert!(!shown[0].contains("switchboard-diff"), "{:?}", shown[0]);
         assert!(!shown.last().unwrap().contains("Close"));
         embedded.opts.easy = true;
-        let bar = screen(&mut embedded).pop().unwrap();
+        let bar = screen(&mut embedded).remove(0);
         assert!(
             bar.contains("Close") && !bar.contains("Settings"),
             "{bar:?}"
@@ -6531,14 +6622,14 @@ mod tests {
         // The chosen row is opened to its default and what Enter does.
         assert!(text.contains("default on  ·  Enter: on or off"), "{text}");
         // The row of buttons stays, Settings lit, and says how to go back.
-        let bar = shown.last().unwrap();
+        let bar = &shown[1];
         assert!(bar.ends_with("Esc back to the diff"), "{bar:?}");
         let (_, at) = *app
-            .buttons
+            .bar
             .iter()
             .find(|(b, _)| *b == Button::Settings)
             .unwrap();
-        let lit = draw(&mut app)[(at.x + 1, at.y + 1)].clone();
+        let lit = draw(&mut app)[(at.x + 1, at.y)].clone();
         assert_ne!(lit.bg, Surface::Panel.color(&app.theme()));
 
         // Tab and Shift-Tab reach each row, coming round.
@@ -6584,7 +6675,7 @@ mod tests {
 
         // On a screen too narrow for the row, Settings and Close stay.
         app.resize(80, 30);
-        let bar = screen(&mut app).pop().unwrap();
+        let bar = screen(&mut app).remove(1);
         assert!(bar.contains("Settings") && bar.contains("Close"), "{bar:?}");
         assert!(!bar.contains("Refresh") && !bar.contains("Ask"), "{bar:?}");
 
@@ -6601,7 +6692,7 @@ mod tests {
         app.key(alt_m());
         // The row stays on that screen, and its Settings button opens the
         // view rather than closing the diff.
-        let bar = screen(&mut app).pop().unwrap();
+        let bar = screen(&mut app).remove(1);
         assert!(bar.contains("Settings") && bar.contains("Close"), "{bar:?}");
         assert!(!bar.contains("Page"), "only what works there: {bar:?}");
         assert_eq!(click_on(&mut app, Button::Settings), Act::Redraw);
@@ -8120,7 +8211,7 @@ mod tests {
         screen(&mut app);
         let close = BUTTONS.iter().position(|(_, k)| *k == "q").unwrap();
         let (_, at) = *app
-            .buttons
+            .bar
             .iter()
             .find(|(b, _)| *b == Button::Bar(close))
             .unwrap();
@@ -9083,6 +9174,53 @@ mod tests {
     }
 
     #[test]
+    fn h_and_l_go_back_and_forward_through_the_jumps_not_the_steps() {
+        let mut app = map_app();
+        assert_eq!(app.section(), 0);
+        // Stepping down the outline is no jump; Enter reading from page 1 is.
+        press(&mut app, "j");
+        enter(&mut app);
+        assert_eq!((app.section(), app.focus), (1, Focus::New));
+        press(&mut app, "]");
+        assert_eq!(app.section(), 2);
+        // A view switched is a jump too.
+        press(&mut app, "gf");
+        assert_eq!(app.mode, Mode::Files);
+        press(&mut app, "H");
+        assert_eq!((app.mode, app.section()), (Mode::Story, 2));
+        press(&mut app, "H");
+        assert_eq!(app.section(), 1);
+        press(&mut app, "H");
+        assert_eq!((app.section(), app.focus), (1, Focus::List));
+        // Forward again, to the files.
+        press(&mut app, "LLL");
+        assert_eq!(app.mode, Mode::Files);
+        press(&mut app, "L");
+        assert!(
+            app.message
+                .take()
+                .is_some_and(|(t, _)| t.contains("Nothing to go forward"))
+        );
+        // The row of buttons leads with back and forward, which a click
+        // presses.
+        app.opts.easy = true;
+        let shown = screen(&mut app);
+        assert!(shown[0].starts_with("  ←   →"), "{:?}", shown[0]);
+        let (_, back) = *app.bar.iter().find(|(b, _)| *b == Button::Back).unwrap();
+        app.mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: back.x + 1,
+            row: back.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!((app.mode, app.section()), (Mode::Story, 2));
+        // A jump after going back leaves nothing forward.
+        press(&mut app, "[");
+        press(&mut app, "L");
+        assert!(app.message.take().is_some());
+    }
+
+    #[test]
     fn what_runs_lists_its_steps_in_order_with_the_page_being_read_lit() {
         let mut app = map_app();
         app.go_to_section(2);
@@ -9278,11 +9416,11 @@ mod tests {
             ..opts()
         });
         let shown = screen(&mut app);
-        let last = shown.last().unwrap();
+        let last = &shown[0];
         assert!(last.find("Story").unwrap() < last.find("Files").unwrap());
         assert!(last.find("Files").unwrap() < last.find("◀ Page").unwrap());
         let (_, files) = app
-            .buttons
+            .bar
             .iter()
             .find(|(b, _)| *b == Button::Mode(Mode::Files))
             .copied()
@@ -9304,11 +9442,13 @@ mod tests {
             .find(|(hit, _)| *hit == Hit::Item(2))
             .copied()
             .unwrap();
-        assert_eq!(app.shape_at(at.x + 1, at.y), Pointer::Hand);
+        // On the screen, under the row of buttons.
+        let y = at.y + app.lead();
+        assert_eq!(app.shape_at(at.x + 1, y), Pointer::Hand);
         let click = MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: at.x + 1,
-            row: at.y,
+            row: y,
             modifiers: KeyModifiers::NONE,
         };
         let up = MouseEvent {

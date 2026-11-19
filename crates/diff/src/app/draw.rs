@@ -33,18 +33,26 @@ impl App {
     pub fn draw(&mut self, buf: &mut Buffer) -> Option<(u16, u16)> {
         self.drawing = true;
         let area = buf.area;
-        let cursor = if self.has_header() && area.height > 1 {
-            // Alone, the diff is drawn under its header: into a buffer of
-            // its own a row shorter, put a row down.
-            let mut body = Buffer::empty(Rect::new(0, 0, area.width, area.height - 1));
+        let lead = self.lead();
+        self.bar.clear();
+        let cursor = if lead > 0 && area.height > lead {
+            // Alone, the diff is drawn under its header, and alone and in
+            // easy mode under its row of buttons: into a buffer of its own
+            // that much shorter, put that much down.
+            let mut body = Buffer::empty(Rect::new(0, 0, area.width, area.height - lead));
             let cursor = self.draw_now(&mut body);
             for y in 0..body.area.height {
                 for x in 0..area.width {
-                    buf[(x, y + 1)] = body[(x, y)].clone();
+                    buf[(x, y + lead)] = body[(x, y)].clone();
                 }
             }
-            self.draw_header(buf);
-            cursor.map(|(x, y)| (x, y + 1))
+            if self.has_header() {
+                self.draw_header(buf);
+            }
+            if self.has_buttons() {
+                self.draw_buttons(buf, u16::from(self.has_header()));
+            }
+            cursor.map(|(x, y)| (x, y + lead))
         } else {
             self.draw_now(buf)
         };
@@ -110,9 +118,6 @@ impl App {
                     ("Press any key to close.".into(), self.faint()),
                 ],
             );
-            if self.opts.alone {
-                self.draw_buttons(buf);
-            }
             self.draw_message(buf);
             return None;
         }
@@ -124,29 +129,17 @@ impl App {
             lines.push((String::new(), Style::new()));
             lines.push(("Press any key to close.".into(), self.faint()));
             self.centred(buf, &lines);
-            // Alone, the row stays: a setting may be why nothing shows.
-            if self.opts.alone {
-                self.draw_buttons(buf);
-            }
             self.draw_message(buf);
             return None;
         }
         if let Some(text) = self.loading.clone() {
             let line = format!("{} {text}", self.spinner());
             self.centred(buf, &[(line, Style::new().add_modifier(Modifier::BOLD))]);
-            if self.opts.alone {
-                self.draw_buttons(buf);
-            }
             self.draw_message(buf);
             return None;
         }
         if self.cover.is_some() && self.telling == Telling::Waiting {
             self.draw_cover(buf);
-            // Alone, the row stays under the cover: its Settings button is
-            // how a click turns the story off.
-            if self.opts.alone {
-                self.draw_buttons(buf);
-            }
             self.draw_message(buf);
             return None;
         }
@@ -173,9 +166,6 @@ impl App {
                 kit::unfocused(buf, list, &self.theme());
             }
             self.draw_edge(buf);
-        }
-        if self.has_buttons() {
-            self.draw_buttons(buf);
         }
         if self.has_footer() {
             let y = self.rows - 1;
@@ -1593,14 +1583,28 @@ impl App {
         )
     }
 
-    /// The row of buttons at the bottom (easy mode's, and the diff alone's),
-    /// drawn as the kit draws Switchboard's own buttons (board 118): each
-    /// presses its keys in the list, the one under the mouse on the chosen
-    /// surface, and alone a Settings button before Close, lit while the
-    /// settings view is open. After them, the keys named.
-    pub(super) fn draw_buttons(&mut self, buf: &mut Buffer) {
+    /// The row of buttons over the diff, at row `y` (easy mode's, and the
+    /// diff alone's), drawn as the kit draws Switchboard's own buttons
+    /// (board 118): back and forward first, then each pressing its keys in
+    /// the list, the one under the mouse on the chosen surface, and alone a
+    /// Settings button before Close, lit while the settings view is open.
+    /// After them, the keys named.
+    pub(super) fn draw_buttons(&mut self, buf: &mut Buffer, y: u16) {
         let theme = self.theme();
-        let y = self.rows.saturating_sub(1);
+        // Back and forward lead the row, faint with nowhere to go.
+        let mut lead_x = 1;
+        for (button, label, forward) in [(Button::Back, "←", false), (Button::Forward, "→", true)]
+        {
+            let w = width(label) as u16 + 2;
+            let spans = if self.can_go(forward) {
+                own::button(label, self.hover == Some(button), false, self.round, &theme)
+            } else {
+                vec![Span::styled(format!(" {label} "), self.faint())]
+            };
+            put_line(buf, lead_x, y, w, &Spans::from(spans));
+            self.bar.push((button, Rect::new(lead_x, y, w, 1)));
+            lead_x += w + 1;
+        }
         // Alone, Settings and Close are always there: on a screen too
         // narrow for the row, the buttons before them give way.
         let bar = self.bar_buttons();
@@ -1617,10 +1621,10 @@ impl App {
                 kit::choice_switch(&["Story", "Map", "Files"], None, None, &[], false, &theme);
             kit::spans_width(&spans) as u16 + 1
         };
-        let mut x = if self.settings.is_none() && 1 + switch + buttons < self.cols {
-            self.draw_switch(buf, 1, y)
+        let mut x = if self.settings.is_none() && lead_x + switch + buttons < self.cols {
+            self.draw_switch(buf, lead_x, y)
         } else {
-            1
+            lead_x
         };
         let mut full = false;
         for (i, (button, label)) in bar.iter().copied().enumerate() {
@@ -1636,7 +1640,7 @@ impl App {
             let lit = button == Button::Settings && self.settings.is_some();
             let spans = own::button(label, self.hover == Some(button), lit, self.round, &theme);
             put_line(buf, x, y, w, &Spans::from(spans));
-            self.buttons.push((button, Rect::new(x, y, w, 1)));
+            self.bar.push((button, Rect::new(x, y, w, 1)));
             x += w + 1;
         }
         let help = if self.settings.is_some() {

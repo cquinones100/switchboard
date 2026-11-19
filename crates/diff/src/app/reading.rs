@@ -696,6 +696,15 @@ impl App {
         self.restore_place(place);
     }
 
+    /// Files mode put back where a place was, its page open again (back
+    /// and forward, trail.rs).
+    pub(super) fn files_back(&mut self, place: Place_) {
+        let pages = self.story.as_ref().map_or(0, |s| s.pages.len());
+        self.alone = place.alone.filter(|p| *p <= pages);
+        self.whole_at = place.whole_at.clone();
+        self.restore_place(place);
+    }
+
     /// A place put back on the list as it is now, its page already open:
     /// its filter, file, cursor, scroll and focus.
     pub(super) fn restore_place(&mut self, place: Place_) {
@@ -1239,7 +1248,7 @@ impl App {
         }
         put_line(buf, x, y, w, &Spans::from(spans));
         for ((_, mode), (at, pw)) in MENU.iter().zip(places) {
-            self.buttons.push((
+            self.bar.push((
                 Button::Mode(*mode),
                 Rect::new(x + at as u16, y, pw as u16, 1),
             ));

@@ -94,21 +94,24 @@ fn draw(opts: &Options, light: bool, cols: u16, change: Change, story: Story) ->
     }
     let outline = app.items().len() + 4;
     let rows = app.column_whole().max(outline) as u16;
-    // The row of buttons under the view is the screen's alone.
-    let bottom = u16::from(app.has_buttons() || app.has_footer());
+    let bottom = u16::from(app.has_footer());
     app.rows = rows + bottom;
     app.message = None;
-    let header = u16::from(app.has_header());
-    let mut buf = Buffer::empty(Rect::new(0, 0, cols, app.rows + header));
+    let lead = app.lead();
+    let mut buf = Buffer::empty(Rect::new(0, 0, cols, app.rows + lead));
     app.draw(&mut buf);
-    Some(cells(&buf, rows + header, if light { LIGHT } else { DARK }))
+    // The row of buttons over the view is the screen's alone: the header,
+    // then the view.
+    let header = u16::from(app.has_header());
+    let shown: Vec<u16> = (0..header).chain(lead..lead + rows).collect();
+    Some(cells(&buf, &shown, if light { LIGHT } else { DARK }))
 }
 
-/// The buffer's first `rows` rows as HTML, a span for each run of cells
+/// The buffer's `rows` as HTML, a span for each run of cells
 /// drawn alike.
-fn cells(buf: &Buffer, rows: u16, (bg, fg): ([u8; 3], [u8; 3])) -> String {
+fn cells(buf: &Buffer, rows: &[u16], (bg, fg): ([u8; 3], [u8; 3])) -> String {
     let mut out = String::new();
-    for y in 0..rows {
+    for &y in rows {
         let mut x = 0;
         let mut run = String::new();
         let mut look: Option<String> = None;
