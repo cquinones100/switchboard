@@ -1,18 +1,9 @@
 ---
 paths:
-  - "src/notes/**"
-  - "crates/notes/**"
-  - "src/autopilot/**"
-  - "src/agent/hands_free.rs"
-  - "src/cmd/item_done.rs"
-  - "src/cmd/worktree_from_note.rs"
-  - "assets/skills/plan-item/**"
-  - "src/cmd/claude_context.rs"
-  - "assets/skills/note-tickets/**"
-  - "assets/skills/note-watch/**"
-  - "src/diff/host.rs"
+  - "src/**"
+  - "crates/**"
+  - "assets/skills/**"
   - "assets/routines/**"
-  - "src/routines/**"
 ---
 
 # Notes

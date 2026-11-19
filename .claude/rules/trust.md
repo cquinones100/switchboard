@@ -1,22 +1,8 @@
 ---
 paths:
-  - "src/trust.rs"
-  - "src/cmd/try_.rs"
-  - "src/cmd/try_sealed.rs"
-  - "src/platform/sandbox.rs"
-  - "src/cmd/pr_risk.rs"
-  - "src/cmd/worktree_from_pr.rs"
-  - "src/cmd/work.rs"
+  - "src/**"
+  - "crates/**"
   - ".claude/skills/review-pr/**"
-  - "src/cmd/claude_here.rs"
-  - "src/cmd/worktree_resume.rs"
-  - "src/cmd/worktree_from_branch.rs"
-  - "src/cmd/wt_revive.rs"
-  - "src/relay/**"
-  - "src/cmd/apply_actions.rs"
-  - "src/cmd/worktree_*.rs"
-  - "src/mission/serve.rs"
-  - "src/diff/serve.rs"
 ---
 
 # Trusted directories and someone else's PR
