@@ -1323,7 +1323,26 @@ impl App {
         {
             return rows.clone();
         }
+        // Laid out again at another width (the outline widened): the
+        // cursor and the view kept on their section, as far into it.
+        let before = self.reader.laid.take().map(|(_, rows)| {
+            let place = |at: usize| {
+                let section = rows.get(at).map_or(0, |r| r.section);
+                let start = rows.iter().position(|r| r.section == section).unwrap_or(0);
+                (section, at.saturating_sub(start))
+            };
+            (place(self.reader.cur), place(self.reader.top))
+        });
         let rows = self.lay_column(cols);
+        if let Some((cur, top)) = before {
+            let back = |(section, into): (usize, usize)| {
+                let start = rows.iter().position(|r| r.section == section).unwrap_or(0);
+                let len = rows.iter().filter(|r| r.section == section).count();
+                start + into.min(len.saturating_sub(1))
+            };
+            self.reader.cur = back(cur);
+            self.reader.top = back(top);
+        }
         self.reader.laid = Some((cols as u16, rows.clone()));
         rows
     }
@@ -1770,6 +1789,22 @@ impl App {
                             ])
                         });
                     }
+                }
+                // A new file the diff gives only the start of (one not
+                // yet tracked, cut for what is sent): the rest is the
+                // files' to show, said rather than left out.
+                let more = a.saturating_sub(hunk.new_count);
+                if entry.is_some_and(|e| e.status == 'A') && hunk.old_count == 0 && more > 0 {
+                    rows.push(Row {
+                        does: Does::File {
+                            path: path.clone(),
+                            run: hunk.run,
+                        },
+                        ..plain(vec![Span::styled(
+                            format!("      … {} more, shown in the files", counted(more, "line")),
+                            Tone::Faint.style(theme),
+                        )])
+                    });
                 }
             }
             rows.push(plain(Vec::new()));

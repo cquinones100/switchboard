@@ -521,6 +521,8 @@ impl App {
         // to the whole branch, which follows the new ones.
         self.leave_history();
         self.lines.clear();
+        // The Story view's column too, which draws the notes.
+        self.relay();
         if now.list_wide != before.list_wide || now.resize != before.resize {
             let to = if now.list_wide && self.kept_width().is_none() {
                 self.fit_width()

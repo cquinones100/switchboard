@@ -8797,6 +8797,13 @@ mod tests {
         assert_eq!(app.section(), 1);
         press(&mut app, "[p");
         assert_eq!(app.section(), 0);
+        // A wider outline lays the column out again on the same page.
+        press(&mut app, "jjj");
+        let before = app.section();
+        app.list_width += 20;
+        screen(&mut app);
+        assert_eq!(app.section(), before);
+        press(&mut app, "[p");
         // ]c reaches the next chapter's first page.
         press(&mut app, "]c");
         assert_eq!(app.section(), 5);
