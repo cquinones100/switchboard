@@ -503,8 +503,6 @@ enum Button {
     /// (trail.rs).
     Back,
     Forward,
-    /// The story published as an artifact (own.rs's `publish`).
-    Publish,
     /// The row's Settings button, alone.
     Settings,
     /// A row of the settings view.
@@ -617,7 +615,7 @@ pub const KEYS: &[(&str, &[KeyRow])] = &[
             ),
             key_row(
                 "m",
-                "the view's menu: the story, the map or the files, Tell it again, Publish",
+                "the view's menu: the story, the map or the files, Tell it again",
             ),
             ask_row("ga", "ask Claude about the diff"),
             key_row(
@@ -724,14 +722,6 @@ pub enum Act {
     Same,
     Redraw,
     Quit,
-}
-
-/// A program the diff alone hands the terminal to and takes it back from
-/// when it ends: Publish's interactive Claude, asked to publish the story's
-/// page (own.rs's `publish`).
-pub struct HandOver {
-    pub dir: PathBuf,
-    pub args: Vec<String>,
 }
 
 pub struct App {
@@ -913,8 +903,6 @@ pub struct App {
     /// (trail.rs).
     back: Vec<trail::Spot>,
     ahead: Vec<trail::Spot>,
-    /// A program to hand the terminal to, alone (`HandOver`).
-    pub hand_over: Option<HandOver>,
     /// Where the boxes were last drawn, for clicks outside them.
     ask_rect: Option<Rect>,
     answer_rect: Option<Rect>,
@@ -1098,7 +1086,6 @@ impl App {
             bar: Vec::new(),
             back: Vec::new(),
             ahead: Vec::new(),
-            hand_over: None,
             ask_rect: None,
             answer_rect: None,
             list_drawn: (0, None),
@@ -5655,10 +5642,6 @@ impl App {
                 }
             }
             Button::Settings => self.toggle_settings(),
-            Button::Publish => {
-                self.settings = None;
-                return self.publish();
-            }
             Button::Option(_) => {}
             Button::Mode(mode) => self.choose_mode(mode),
             Button::AskSend => self.send_question(),
@@ -5812,30 +5795,23 @@ struct Term {
     /// Whether the diff set the mouse pointer's shape, so the terminal's
     /// text beam is put back, as the workspace's client puts it back.
     pointer: bool,
-    /// Every movement of the mouse asked for (hover_highlight).
-    motion: bool,
 }
 
 impl Term {
     fn enter(motion: bool, pointer: bool) -> io::Result<Term> {
-        let term = Term { pointer, motion };
-        term.take()?;
-        Ok(term)
-    }
-
-    fn take(&self) -> io::Result<()> {
         terminal::enable_raw_mode()?;
         let mut out = io::stdout();
         out.write_all(b"\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?2004h\x1b[>1u")?;
-        if self.motion {
+        if motion {
             out.write_all(b"\x1b[?1003h")?;
         }
-        out.flush()
+        out.flush()?;
+        Ok(Term { pointer })
     }
+}
 
-    /// The terminal as it was before the diff took it, for a program
-    /// handed it (`HandOver`), or as the diff ends.
-    fn give(&self) {
+impl Drop for Term {
+    fn drop(&mut self) {
         let mut out = io::stdout();
         if self.pointer {
             let _ = out.write_all(&Pointer::Text.osc());
@@ -5845,12 +5821,6 @@ impl Term {
         );
         let _ = out.flush();
         let _ = terminal::disable_raw_mode();
-    }
-}
-
-impl Drop for Term {
-    fn drop(&mut self) {
-        self.give();
     }
 }
 
@@ -6027,23 +5997,6 @@ pub fn run(
             Act::Quit => break,
             Act::Redraw => dirty = true,
             Act::Same => {}
-        }
-        // A program handed the terminal (Publish, alone): the diff gives it
-        // back as it was, waits for the program, and takes it again.
-        if let Some(job) = app.hand_over.take() {
-            term.give();
-            let ran = std::process::Command::new(&job.args[0])
-                .args(&job.args[1..])
-                .current_dir(&job.dir)
-                .status();
-            if term.take().is_err() {
-                break;
-            }
-            if let Err(e) = ran {
-                app.say(format!("Couldn't start {}: {e}", job.args[0]));
-            }
-            screen.invalidate();
-            dirty = true;
         }
     }
     app.stop();
@@ -9222,25 +9175,6 @@ mod tests {
     }
 
     #[test]
-    fn publish_is_offered_only_with_a_story_told() {
-        let mut app = map_app();
-        press(&mut app, "m");
-        let shown = screen(&mut app).join("\n");
-        assert!(
-            shown.contains("Publish the story as an artifact"),
-            "{shown}"
-        );
-        app.menu = None;
-        // With no story told, neither the option nor the button.
-        let mut bare = super::tests::app();
-        bare.opts.easy = true;
-        bare.resize(220, 16);
-        assert!(!screen(&mut bare)[0].contains("Publish"));
-        press(&mut bare, "m");
-        assert!(!screen(&mut bare).join("\n").contains("Publish"));
-    }
-
-    #[test]
     fn switching_views_keeps_the_chapter_and_back_finds_each_view_as_it_was() {
         let mut app = map_app();
         let chapter = |app: &mut App| app.chapter_now().map(|(c, _)| c);
@@ -9514,13 +9448,9 @@ mod tests {
             easy: true,
             ..opts()
         });
-        // Wide enough for the switch and every button.
-        app.resize(160, 40);
         let shown = screen(&mut app);
         let last = &shown[0];
         assert!(last.find("Story").unwrap() < last.find("Files").unwrap());
-        // Publish, with the story told, before Close.
-        assert!(last.find("Publish").unwrap() < last.find("Close").unwrap());
         assert!(last.find("Files").unwrap() < last.find("◀ Page").unwrap());
         let (_, files) = app
             .bar
