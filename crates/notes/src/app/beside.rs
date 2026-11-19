@@ -90,9 +90,9 @@ pub struct Beside {
     /// The plan was given the keys as the note was hidden (Notes narrowed
     /// under the plan), so this drawing keeps the view where it was.
     pub took_keys: bool,
-    /// The plan rewrapped without the keys since the reader last moved in
-    /// it, so a cursor the view moves as the keys come back was put there
-    /// by a resize, not by the reader.
+    /// The plan was resized (rewrapped, or its height changed) without the
+    /// keys since the reader last moved in it, so a cursor the view moves
+    /// as the keys come back was put there by a resize, not by the reader.
     pub rewrapped_unseen: bool,
     /// The rows the plan's body had when last drawn: a change of height
     /// keeps the cursor in sight, as a rewrap does.
@@ -1151,7 +1151,7 @@ impl App {
         b.body = body;
         if focused {
             b.rewrapped_unseen = false;
-        } else if rewrapped.is_some() {
+        } else if resized {
             b.rewrapped_unseen = true;
         }
         if let Some((at, top)) = rewrapped {
