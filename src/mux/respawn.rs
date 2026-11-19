@@ -132,7 +132,13 @@ impl Server {
                     .is_some_and(|s| s.opts.contains_key(crate::views::TICKET_ID))
             })
         {
+            // The pane in front stays in front, though closing a view in
+            // another's place gives that place, and the focus, back.
+            let active = self.tabs.get(&tab).map(|t| t.active);
             self.kill_pane(view);
+            if let Some(active) = active.filter(|a| *a != view && self.panes.contains_key(a)) {
+                self.focus_pane(active);
+            }
         }
         // And one parked under another tool, which would come back with it:
         // a shell in its place.
