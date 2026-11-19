@@ -1481,3 +1481,91 @@ fn a_session_ending_hands_the_tab_back_to_its_program_s_directory() {
         cwd_of(l) == before
     });
 }
+
+/// A tool call's hook sent as the plugin's hooks module sends it
+/// (src/setup/agent.js): HTTP on the server's own socket, with no process
+/// started. Gives the status and the body of the answer.
+fn hook_over_http(server: &TestServer, pane: &str, event: &str, input: Value) -> (u16, String) {
+    use std::io::Read;
+    let body = input.to_string();
+    let mut stream = UnixStream::connect(server.socket()).expect("the server's socket");
+    let wait = common::deadline(Duration::from_secs(5)) - Instant::now();
+    stream.set_read_timeout(Some(wait)).unwrap();
+    write!(
+        stream,
+        "POST /hook/{event} HTTP/1.1\r\nHost: switchboard\r\nX-Switchboard-Pane: {pane}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    let mut answer = String::new();
+    stream.read_to_string(&mut answer).expect("an answer");
+    let (head, body) = answer.split_once("\r\n\r\n").expect("a whole response");
+    let status = head
+        .split(' ')
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .expect("a status");
+    (status, body.to_string())
+}
+
+#[test]
+fn a_tool_calls_hooks_reach_the_server_over_http_without_a_process() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    session_file(&server.home, pid, json!({"sessionId": "s-1"}));
+    let tab = tabs(&server.list())[0]["id"].as_str().unwrap().to_string();
+    hook(
+        &server,
+        &pane,
+        "UserPromptSubmit",
+        json!({"session_id": "s-1", "prompt": "go"}),
+    );
+
+    let bash = json!({"session_id": "s-1", "tool_name": "Bash", "tool_use_id": "b1",
+        "tool_input": {"command": "cargo test", "description": "Run the tests"}});
+    assert_eq!(
+        hook_over_http(&server, &pane, "PreToolUse", bash),
+        (200, String::new())
+    );
+    assert_eq!(
+        pane_of(&server.list(), &pane)["agent"]["activity"],
+        "Run the tests"
+    );
+    assert_eq!(
+        hook_over_http(
+            &server,
+            &pane,
+            "PostToolUse",
+            json!({"session_id": "s-1", "tool_name": "Bash", "tool_use_id": "b1"})
+        ),
+        (200, String::new())
+    );
+    assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "working");
+
+    // Hands-free's deny comes back as the hook's JSON.
+    server.ok(&["set", "-t", &tab, "@autopilot_handsfree", "1"]);
+    hook(
+        &server,
+        &pane,
+        "UserPromptSubmit",
+        json!({"session_id": "s-1", "prompt": "go"}),
+    );
+    let ask = json!({"session_id": "s-1", "tool_name": "AskUserQuestion", "tool_use_id": "q1",
+        "tool_input": {"questions": [{"header": "Way", "question": "Which way?",
+            "options": [{"label": "A (Recommended)"}, {"label": "B"}]}]}});
+    let (status, body) = hook_over_http(&server, &pane, "PreToolUse", ask);
+    assert_eq!(status, 200);
+    let denied: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(denied["hookSpecificOutput"]["permissionDecision"], "deny");
+
+    // The other events keep their command hook.
+    assert_eq!(
+        hook_over_http(&server, &pane, "Stop", json!({"session_id": "s-1"})).0,
+        404
+    );
+    // The socket still serves its own protocol after an HTTP request.
+    assert!(server.list()["sessions"].is_array());
+}

@@ -63,6 +63,9 @@ jiff = "0.2"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "process", "net", "time", "io-util", "fs", "sync", "signal"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "http2", "charset"], optional = true }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"], optional = true }
+# Reading the hooks module's requests on the server's socket
+# (src/agent/http.rs).
+httparse = "1"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 # The multiplexer: each pane's PTY and terminal emulator, and the screens
 # drawn into a cell buffer that is sent to each client as what changed.

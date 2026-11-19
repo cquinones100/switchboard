@@ -25,6 +25,7 @@
 
 pub mod hands_free;
 pub mod hook;
+pub mod http;
 mod serve;
 pub mod sessions;
 mod state;

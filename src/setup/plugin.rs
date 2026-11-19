@@ -15,14 +15,14 @@
 //!   by build.rs), as the skills part wrote them, named `/switchboard:<name>`
 //!   by Claude Code, and `/<name>` too while no skill of a project's or of
 //!   yours has that name;
-//! - `hooks/hooks.json`: `assets/claude-settings.json`'s hooks as they are
-//!   (`switchboard hook <Event>`, how a tab knows its Claude's state), made
+//! - `hooks/hooks.json`: `assets/claude-settings.json`'s hooks but the tool
+//!   call's (`switchboard hook <Event>`, how a tab knows its Claude's state), made
 //!   from the asset here rather than kept twice, and a SessionStart hook
 //!   running `switchboard claude-context`, which gives the session
 //!   Switchboard's part of its instructions (src/cmd/claude_context.rs);
 //!   and, under `modules`, the plugin's hooks module, `hooks/switchboard.js`
 //!   (what Claude Code calls a mod, which it runs inside itself), which
-//!   registers the hooks of the two files below. Claude Code runs one hooks
+//!   registers the hooks of the three files below. Claude Code runs one hooks
 //!   module a plugin and refuses a second in the list, so this one imports
 //!   the others, each kept in a file of its own;
 //! - `hooks/statusline.js`: the statusline, whose `settings.read` hook puts
@@ -36,7 +36,13 @@
 //!   whose `tool.check` hook allows the few of the asset's `switchboard`
 //!   commands Switchboard's instructions run on any turn and refuses what
 //!   its deny rules name; the skills carry the rest of its rules in their
-//!   `allowed-tools`.
+//!   `allowed-tools`;
+//! - `hooks/agent.js`: the tool call's hooks (PreToolUse, PostToolUse,
+//!   PostToolUseFailure), sent from Claude Code's process to the server's
+//!   socket over HTTP (src/agent/http.rs) rather than a `switchboard hook`
+//!   process each call, with hands-free's deny and the landing push's ask
+//!   given back as Claude Code's verdict, and `switchboard hook` run as
+//!   before only when the server doesn't answer HTTP.
 //!
 //! A plugin's own settings can't hold a statusline or permission rules
 //! (Claude Code takes only `agent` from them), hence the modules; and the
@@ -86,8 +92,16 @@ const ENTRY_MODULE: &str = "switchboard.js";
 /// The statusline's file, beside the module that imports it.
 const STATUSLINE_MODULE: &str = "statusline.js";
 
+/// The tool call's hooks, sent from Claude Code's process rather than a
+/// command each (src/agent/http.rs), beside the module that imports it.
+const AGENT_MODULE: &str = "agent.js";
+
+/// `hooks/agent.js`, as it is.
+const AGENT_SOURCE: &str = include_str!("agent.js");
+
 /// `hooks/switchboard.js`: the plugin's hooks module, which registers the
-/// statusline's hooks and the permissions', each imported from its file.
+/// statusline's hooks, the permissions' and the tool call's, each imported
+/// from its file.
 pub fn entry_module() -> String {
     format!(
         "// Switchboard's hooks module, written by `switchboard setup`
@@ -95,10 +109,12 @@ pub fn entry_module() -> String {
 // this one registers each of Switchboard's, kept in files of their own.
 import {{ register as statusline }} from './{STATUSLINE_MODULE}';
 import {{ register as permissions }} from './{}';
+import {{ register as agent }} from './{AGENT_MODULE}';
 
 export function register(on) {{
   statusline(on);
   permissions(on);
+  agent(on);
 }}
 ",
         super::permissions::MODULE
@@ -116,11 +132,15 @@ pub fn dir() -> PathBuf {
     paths::plugin_dir()
 }
 
-/// `hooks/hooks.json`: the asset's hooks, the instructions as a session
-/// starts, and the plugin's hooks module.
+/// `hooks/hooks.json`: the asset's hooks but the tool call's, which the
+/// plugin's hooks module sends (`AGENT_MODULE`), the instructions as a
+/// session starts, and the module.
 pub fn hooks() -> Value {
     let mut hooks = super::claude_settings::ours()["hooks"].clone();
     if let Some(events) = hooks.as_object_mut() {
+        for event in crate::agent::http::EVENTS {
+            events.shift_remove(event);
+        }
         let start = events
             .entry("SessionStart")
             .or_insert_with(|| Value::Array(Vec::new()));
@@ -196,6 +216,10 @@ pub fn files() -> Vec<(String, Vec<u8>)> {
     files.push((
         format!("hooks/{STATUSLINE_MODULE}"),
         statusline_module().into_bytes(),
+    ));
+    files.push((
+        format!("hooks/{AGENT_MODULE}"),
+        AGENT_SOURCE.as_bytes().to_vec(),
     ));
     files.push((
         format!("hooks/{}", super::permissions::MODULE),
@@ -590,7 +614,20 @@ mod tests {
         let asset = super::super::claude_settings::ours();
         let ours = hooks();
         let events = ours["hooks"].as_object().unwrap();
+        // A tool call's hooks start no process: the module sends them.
+        let sent = crate::agent::http::EVENTS;
+        for event in sent {
+            assert!(
+                asset["hooks"].get(event).is_some(),
+                "{event} is the asset's"
+            );
+            assert!(!events.contains_key(event), "{event} has no command");
+        }
+        assert!(entry_module().contains(&format!("from './{AGENT_MODULE}'")));
         for (event, groups) in asset["hooks"].as_object().unwrap() {
+            if sent.contains(&event.as_str()) {
+                continue;
+            }
             let mine = events[event].as_array().unwrap();
             for group in groups.as_array().unwrap() {
                 assert!(
@@ -605,6 +642,7 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .keys()
+                .filter(|e| !sent.contains(&e.as_str()))
                 .collect::<Vec<_>>(),
             "no event of its own"
         );

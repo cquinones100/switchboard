@@ -64,49 +64,16 @@ fn run(args: &[String]) {
     if event == "SessionStart" {
         crate::cmd::claude_context::stand_ins_first();
     }
-    let session = text(&payload, "session_id").unwrap_or_default();
-    // A headless Claude (a review loop's `claude -p`) inherits the tab's
-    // SWITCHBOARD_PANE and runs these hooks too; its turns are not the tab's,
-    // so they mark nothing and tell the relay nothing.
-    let files = if session.is_empty() {
-        Vec::new()
-    } else {
-        sessions::read_all(&sessions::sessions_dir())
-    };
-    if sessions::is_headless(&files, &session) {
-        return;
-    }
     let pane = std::env::var("SWITCHBOARD_PANE")
         .ok()
         .filter(|p| !p.is_empty());
-    // A conversation moved into the background is answered PreToolUse too,
-    // for the landing's push after a yes (`ask_push`), which the server asks
-    // wherever the conversation runs; the hands-free answers stay a pane's.
-    let answers = event == "PreToolUse" || (pane.is_some() && event == "Stop");
-    // A Stop the server may block is told to the relay only once it stands,
-    // so a hands-free turn sent back to carry on isn't reported done.
-    let stop_waits = answers && event == "Stop";
-    if !stop_waits {
-        tell_relay(&event, &payload);
-    }
-    let mut command = vec!["hook".to_string(), event.clone()];
-    if pane.is_none() {
-        // A conversation moved into the background runs in a job with no
-        // pane of its own, while the tab it came from keeps a parked Claude
-        // whose session names the job. Its hooks are marked on that tab, so
-        // the tab shows what the conversation is doing rather than idle.
-        let pids = sessions::parked_chain(&files, &session);
-        if pids.is_empty() {
-            return;
-        }
-        let list: Vec<String> = pids.iter().map(u32::to_string).collect();
-        command.push("--parked".into());
-        command.push(list.join(","));
-    }
-    let answer = socket::ask_quiet(command, pane, Some(input))
-        .filter(|_| answers)
+    let Some(routed) = route(&event, &payload, pane.as_deref()) else {
+        return;
+    };
+    let answer = socket::ask_quiet(routed.command, pane, Some(input))
+        .filter(|_| routed.answers)
         .and_then(|(code, out, _)| (code == 0).then(|| answer_json(&out)).flatten());
-    if stop_waits && answer.is_none() {
+    if routed.stop_waits && answer.is_none() {
         tell_relay(&event, &payload);
     }
     if let Some(json) = answer {
@@ -116,9 +83,67 @@ fn run(args: &[String]) {
     }
 }
 
+/// Where a hook's event goes: the server command that marks it, and
+/// whether the server's answer is one for Claude Code to read.
+pub struct Routed {
+    pub command: Vec<String>,
+    pub answers: bool,
+    /// A Stop the server may block, told to the relay only once it stands.
+    pub stop_waits: bool,
+}
+
+/// What `switchboard hook` does with an event before it asks the server,
+/// shared with the hooks module's requests (src/agent/http.rs): nothing for
+/// a headless session or a conversation in the background with no tab,
+/// the relay told, and the command to send. It reads the sessions' files,
+/// so the server runs it off its task.
+pub fn route(event: &str, payload: &Value, pane: Option<&str>) -> Option<Routed> {
+    let session = text(payload, "session_id").unwrap_or_default();
+    // A headless Claude (a review loop's `claude -p`) inherits the tab's
+    // SWITCHBOARD_PANE and runs these hooks too; its turns are not the tab's,
+    // so they mark nothing and tell the relay nothing.
+    let files = if session.is_empty() {
+        Vec::new()
+    } else {
+        sessions::read_all(&sessions::sessions_dir())
+    };
+    if sessions::is_headless(&files, &session) {
+        return None;
+    }
+    // A conversation moved into the background is answered PreToolUse too,
+    // for the landing's push after a yes (`ask_push`), which the server asks
+    // wherever the conversation runs; the hands-free answers stay a pane's.
+    let answers = event == "PreToolUse" || (pane.is_some() && event == "Stop");
+    // A Stop the server may block is told to the relay only once it stands,
+    // so a hands-free turn sent back to carry on isn't reported done.
+    let stop_waits = answers && event == "Stop";
+    if !stop_waits {
+        tell_relay(event, payload);
+    }
+    let mut command = vec!["hook".to_string(), event.to_string()];
+    if pane.is_none() {
+        // A conversation moved into the background runs in a job with no
+        // pane of its own, while the tab it came from keeps a parked Claude
+        // whose session names the job. Its hooks are marked on that tab, so
+        // the tab shows what the conversation is doing rather than idle.
+        let pids = sessions::parked_chain(&files, &session);
+        if pids.is_empty() {
+            return None;
+        }
+        let list: Vec<String> = pids.iter().map(u32::to_string).collect();
+        command.push("--parked".into());
+        command.push(list.join(","));
+    }
+    Some(Routed {
+        command,
+        answers,
+        stop_waits,
+    })
+}
+
 /// The server's answer to a hook, when it is a JSON object, the only kind
 /// Claude Code reads from a hook; anything else is no answer.
-fn answer_json(out: &[u8]) -> Option<String> {
+pub fn answer_json(out: &[u8]) -> Option<String> {
     let text = std::str::from_utf8(out).ok()?.trim();
     serde_json::from_str::<Value>(text)
         .ok()

@@ -2895,6 +2895,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "htmd",
+ "httparse",
  "image",
  "indexmap",
  "jiff",

@@ -894,7 +894,25 @@ async fn accept(
 
 async fn connection(stream: tokio::net::UnixStream, tx: mpsc::UnboundedSender<Event>, busy: Busy) {
     let (mut r, mut w) = stream.into_split();
-    let Ok(Some(first)) = proto::read_client_async(&mut r).await else {
+    // A hooks module's request is HTTP (src/agent/http.rs), told from a
+    // frame by its first byte, a frame's tag.
+    let mut lead = [0u8; 1];
+    if tokio::io::AsyncReadExt::read_exact(&mut r, &mut lead)
+        .await
+        .is_err()
+    {
+        return;
+    }
+    if lead[0] == crate::agent::http::FIRST {
+        crate::agent::http::serve(&mut r, &mut w, tx).await;
+        drop(busy);
+        return;
+    }
+    let first = {
+        let mut whole = tokio::io::AsyncReadExt::chain(&lead[..], &mut r);
+        proto::read_client_async(&mut whole).await
+    };
+    let Ok(Some(first)) = first else {
         return;
     };
     match first {

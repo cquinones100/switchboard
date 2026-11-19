@@ -934,8 +934,8 @@ struct Found {
 }
 
 /// The rules the person running the review works under, so a change that
-/// breaks one is found: the repository's CLAUDE.md and AGENTS.md as the base
-/// has them (the merge base), never as the branch has them, since the branch
+/// breaks one is found: the repository's CLAUDE.md, AGENTS.md and the
+/// rules files of `.claude/rules/` as the base has them (the merge base), never as the branch has them, since the branch
 /// is the contributor's; and their own `~/.claude/CLAUDE.md`, with what it
 /// imports (a line that is only `@<path>`) followed a few levels deep, a
 /// file inside the repository read at the merge base too. Their own come
@@ -1151,8 +1151,23 @@ fn review_rules(root: &Path, merge_base: &str) -> String {
         seen: HashSet::new(),
     };
     // The repository's own, with what they import, read as the base has it.
+    // The rules for one part of the code (`.claude/rules/*.md`, which
+    // Claude Code loads by the files a session works on) count too, the
+    // review being of every file the change touches.
+    let parts = try_run(
+        "git",
+        &["ls-tree", "--name-only", merge_base, "--", ".claude/rules/"],
+    )
+    .unwrap_or_default();
+    let mut names = vec!["CLAUDE.md".to_string(), "AGENTS.md".to_string()];
+    names.extend(
+        parts
+            .lines()
+            .filter(|f| f.ends_with(".md"))
+            .map(str::to_string),
+    );
     let mut repo = Vec::new();
-    for name in ["CLAUDE.md", "AGENTS.md"] {
+    for name in &names {
         let found = rules.at_base(Path::new(name), 0);
         if let Some(text) = rules.expand_found(found, 0)
             && !text.trim().is_empty()
