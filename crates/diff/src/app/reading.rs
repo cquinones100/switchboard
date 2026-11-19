@@ -1170,6 +1170,10 @@ impl App {
     /// The section under the column's cursor read, while the column has
     /// the keys: giving it them (Tab, l, a click) reads what it shows.
     pub(super) fn read_if_reading(&mut self) {
+        // A selection of the column's lines is the column's alone.
+        if self.focus == Focus::List {
+            self.reader.visual = None;
+        }
         if self.on_story() && self.focus != Focus::List {
             let section = self.section();
             self.mark_read(section);
@@ -1959,13 +1963,13 @@ impl App {
         self.focus = self.main_side();
         // A line only the old side has is at the commits' own lines, which
         // edits since never move; a new side's line may have moved.
-        if new.is_some() && self.current().is_some_and(|e| self.changed_since(e)) {
-            return self.say(
-                "This file has changed since its commits, so its change may have moved:\nshown at its first change.",
-            );
-        }
         let line = |l: Option<usize>| l.map_or((0, 0), |l| (l, 1));
         self.at_hunk(line(new), line(old));
+        // Edits since the commits may have moved a new side's line: shown
+        // at its number, which edits below it keep, and said.
+        if new.is_some() && self.current().is_some_and(|e| self.changed_since(e)) {
+            self.say("This file has changed since its commits: the line is shown at its number, which edits above it may have moved.");
+        }
         // A line taken out is the old side's, whatever faces it.
         if new.is_none() && old.is_some() && self.side_widths().0 > 0 {
             self.focus = Focus::Old;
@@ -2075,8 +2079,10 @@ impl App {
                     None => Some(self.reader.cur),
                 };
             }
-            KeyCode::Char('y') if !ctrl && self.reader.visual.is_some() => self.copy_reading(),
-            KeyCode::Esc if self.reader.visual.is_some() => self.reader.visual = None,
+            KeyCode::Char('y') if !ctrl && !outline && self.reader.visual.is_some() => {
+                self.copy_reading();
+            }
+            KeyCode::Esc if !outline && self.reader.visual.is_some() => self.reader.visual = None,
             KeyCode::Char('q' | 'y' | 'g' | ']' | '[' | 'R' | 'c' | 'E') if !ctrl => return None,
             KeyCode::Char('w') if ctrl => return None,
             KeyCode::F(10) if key.modifiers == KeyModifiers::SHIFT => return None,

@@ -630,7 +630,10 @@ pub const KEYS: &[(&str, &[KeyRow])] = &[
             key_row("]c [c", "the next chapter's first page, the one before's"),
             key_row("tab", "between the outline and the column"),
             key_row("h l", "along What runs, while it is shown"),
-            key_row("v V", "select lines of the column: y then copies their text"),
+            key_row(
+                "v V",
+                "select lines of the column: y then copies their text",
+            ),
             key_row("gf", "the page being read in the file view"),
         ],
     ),
