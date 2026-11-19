@@ -5656,3 +5656,22 @@ fn the_wheel_scrolls_a_focused_plan_through_its_cards() {
     }
     assert!(last > 10, "got through the cards: {last}");
 }
+
+#[test]
+fn a_shorter_plan_keeps_its_cursor_in_sight_and_lights_no_card() {
+    let (_dir, mut app, _path, _plan) = with_plan("plan-shorter", 160);
+    app.rows = 40;
+    keys(&mut app, "4G<CR><C-w>l");
+    let _ = drawn(&mut app);
+    let below = app.plan_layout().1.iter().map(|h| h.0 + h.3).max().unwrap();
+    {
+        let b = app.beside.as_mut().unwrap();
+        (b.line, b.stop, b.follow) = (below + 1, None, true);
+    }
+    let _ = drawn(&mut app);
+    app.rows = 12;
+    let _ = drawn(&mut app);
+    let b = app.beside.as_ref().unwrap();
+    assert_eq!(b.stop, None);
+    assert_eq!(b.line, below + 1);
+}
