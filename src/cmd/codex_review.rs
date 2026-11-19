@@ -1813,7 +1813,10 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
         && !opts.include_low
         && streak_is(&reviewed)?;
     let found = review["findings"].as_array().cloned().unwrap_or_default();
+    // A finding warned of as naming something outside the repository waits
+    // for the loop to look at it, so it never counts as left.
     let lows_left = confirming
+        && warnings.is_empty()
         && !found.is_empty()
         && found
             .iter()
