@@ -227,11 +227,9 @@ pub fn files() -> Vec<(String, Vec<u8>)> {
         .into_iter()
         .map(|(path, bytes)| (format!("skills/{path}"), bytes))
         .collect();
-    files.push((
-        "hooks/hooks.json".into(),
-        format!("{}\n", util::json_pretty(&hooks())).into_bytes(),
-    ));
-    files.push((format!("hooks/{ENTRY_MODULE}"), entry_module().into_bytes()));
+    // The modules first, then the entry that imports them and the hooks.json
+    // that drops the commands they replace, so a write that fails midway
+    // never leaves an entry naming a module that isn't there.
     files.push((
         format!("hooks/{STATUSLINE_MODULE}"),
         statusline_module().into_bytes(),
@@ -244,6 +242,11 @@ pub fn files() -> Vec<(String, Vec<u8>)> {
         format!("hooks/{}", super::permissions::MODULE),
         super::permissions::module().into_bytes(),
     ));
+    files.push((
+        "hooks/hooks.json".into(),
+        format!("{}\n", util::json_pretty(&hooks())).into_bytes(),
+    ));
+    files.push((format!("hooks/{ENTRY_MODULE}"), entry_module().into_bytes()));
     files.push((
         ".claude-plugin/plugin.json".into(),
         format!("{}\n", util::json_pretty(&manifest())).into_bytes(),
