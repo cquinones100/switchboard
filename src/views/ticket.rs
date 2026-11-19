@@ -834,7 +834,8 @@ const YOUR_PROJECTS: &str = "query($after: String) { projects(first: 50, after: 
     nodes { id name createdAt status { name } } pageInfo { hasNextPage endCursor } } }";
 
 /// Every page of a list `query` asks for, its connection at `at`, as one
-/// answer of the first page's shape: up to twenty pages.
+/// answer of the first page's shape: up to two hundred pages (ten
+/// thousand), which no one's own list reaches.
 async fn every_page(query: &str, at: &str, source: &str) -> anyhow::Result<Value> {
     let mut whole = linear::graphql(query, json!({}), source).await?;
     let mut all: Vec<Value> = nodes(&whole, &format!("{at}/nodes"))
@@ -842,7 +843,7 @@ async fn every_page(query: &str, at: &str, source: &str) -> anyhow::Result<Value
         .cloned()
         .collect();
     let mut info = whole.pointer(&format!("{at}/pageInfo")).cloned();
-    for _ in 1..20 {
+    for _ in 1..200 {
         let more = info.as_ref().and_then(|i| {
             (i.get("hasNextPage") == Some(&json!(true)))
                 .then(|| i.get("endCursor").cloned())

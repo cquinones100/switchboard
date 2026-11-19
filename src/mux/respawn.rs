@@ -115,6 +115,24 @@ impl Server {
         {
             self.kill_pane(view);
         }
+        // And one parked under another tool, which would come back with it:
+        // a shell in its place.
+        let parked: Vec<PaneId> = self
+            .panes
+            .iter()
+            .filter(|(p, s)| {
+                **p != pane
+                    && s.tab == tab
+                    && s.opts.contains_key(crate::views::TICKET_ID)
+                    && s.opts
+                        .get(crate::views::TICKET_VIEW)
+                        .is_some_and(|v| v == "1")
+            })
+            .map(|(p, _)| *p)
+            .collect();
+        for view in parked {
+            let _ = self.respawn_pane(view, None, None, true);
+        }
         self.agents.restarted(pane);
         self.sidebar.panes.remove(&pane);
         self.sidebar.stale = true;
