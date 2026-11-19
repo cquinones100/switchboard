@@ -5291,7 +5291,7 @@ fn resizing_the_plan_leaves_a_list_width_another_tab_kept() {
     keys(&mut app, "4G<CR><C-w>l");
     let _ = screen(&mut app);
     // Another tab's Notes keeps a list width after this one read none.
-    util::write_atomic(&app.store.state.join(LIST_WIDTH), "41").unwrap();
+    util::write_atomic(app.store.state.join(LIST_WIDTH), "41").unwrap();
     app.key(resize('h'));
     settle(&mut app);
     assert!(app.kept_plan_width().is_some());
