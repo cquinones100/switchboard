@@ -5758,3 +5758,22 @@ fn the_card_lit_under_a_still_mouse_follows_a_rewrap() {
         .map(|(_, s)| *s);
     assert_eq!(app.beside.as_ref().unwrap().hover, under);
 }
+
+#[test]
+fn a_card_chosen_before_narrowing_hides_the_note_stays_chosen() {
+    let (_dir, mut app, _path, _plan) = with_plan("plan-chosen-narrow", 110);
+    app.rows = 40;
+    keys(&mut app, "4G<CR><C-w>l<Tab>");
+    let _ = drawn(&mut app);
+    assert_eq!(
+        app.beside.as_ref().unwrap().stop,
+        Some(beside::Stop::Card('A'))
+    );
+    keys(&mut app, "<C-w>h");
+    let _ = drawn(&mut app);
+    app.cols = 100;
+    let _ = drawn(&mut app);
+    let b = app.beside.as_ref().unwrap();
+    assert!(b.focused);
+    assert_eq!(b.stop, Some(beside::Stop::Card('A')));
+}
