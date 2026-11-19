@@ -86,13 +86,13 @@ pub struct Beside {
     /// rewrapped, and the rows that put them on: while the reader hasn't
     /// moved them since, the next rewrap starts from these, so a drag
     /// through many widths never drifts off the word it started on.
-    pub held: Option<(Option<Spot>, Option<Spot>, usize, usize)>,
+    pub held: Option<(Option<Spot>, Option<Spot>, usize, usize, Option<Stop>)>,
 }
 
 /// A text row of the panel: the piece of text it shows (a line of the
 /// plan, a heading, a blank, counted from the top past the cards) and the
-/// words of that line before the row, the same at any width, unlike its
-/// row number.
+/// letters of that line before the row, spaces left out, the same at any
+/// width, unlike its row number.
 pub type Piece = (usize, usize);
 
 /// What a row of the panel shows, which the cursor stays on as the plan
@@ -128,8 +128,8 @@ impl Laid {
     }
 
     /// The row showing `spot`: the same row of its card, or the row of its
-    /// piece of text holding the word it started at; none once it isn't in
-    /// the plan.
+    /// piece of text holding the letter it started at; none once it isn't
+    /// in the plan.
     pub fn row_of(&self, spot: Spot) -> Option<usize> {
         match spot {
             Spot::Card(l, sub) => self
@@ -284,8 +284,10 @@ pub fn lines(
 ) -> Laid {
     let mut out: Vec<Vec<Span<'static>>> = Vec::new();
     let mut hits = Vec::new();
-    // The rows that go on with a line of text wrapped, each with the words
-    // of its line before it; every other row starts a piece of its own.
+    // The rows that go on with a line of text wrapped, each with the
+    // letters of its line before it (all but spaces, the same at any width,
+    // a word split across rows included); every other row starts a piece
+    // of its own.
     let mut more: Vec<(usize, usize)> = Vec::new();
     let inner = cols.saturating_sub(2);
     // What Tab lit shows only while the plan has the keys, and comes back
@@ -300,7 +302,11 @@ pub fn lines(
         Span::styled(name, Tone::Accent.bold(theme)),
     ];
     let mut right = Vec::new();
-    if room == Room::All && !folder.is_empty() {
+    // The folder only where the name, it and easy mode's × all fit in the
+    // plan's own width, so the × is never cut off.
+    let head_w = kit::spans_width(&head);
+    let folder_fits = head_w + 1 + switchboard_ui::draw::width(folder) + 3 <= cols;
+    if room == Room::All && !folder.is_empty() && folder_fits {
         right.push(Span::styled(folder.to_string(), Tone::Dim.style(theme)));
     }
     if easy {
@@ -344,7 +350,7 @@ pub fn lines(
                     if i > 0 {
                         more.push((out.len(), before));
                     }
-                    before += row.split_whitespace().count();
+                    before += row.chars().filter(|c| !c.is_whitespace()).count();
                     out.push(vec![
                         Span::raw(" "),
                         Span::styled(row, Tone::Text.style(theme)),
@@ -1015,7 +1021,11 @@ impl App {
         // view; without them it stays where it was scrolled.
         let moved = b.laid.filter(|was| *was != now).map(|was| {
             let spots = match b.held {
-                Some((line, scroll, at, top)) if (at, top) == (b.line, b.scroll) => (line, scroll),
+                Some((line, scroll, at, top, lit))
+                    if (at, top, lit) == (b.line, b.scroll, b.stop) =>
+                {
+                    (line, scroll)
+                }
                 _ => {
                     let before = draw(b, was);
                     (
@@ -1073,7 +1083,7 @@ impl App {
         b.line = line;
         b.follow = false;
         if let Some((at, top)) = rewrapped {
-            b.held = Some((at, top, line, scroll));
+            b.held = Some((at, top, line, scroll, b.stop));
         }
         // The card lit follows where the cursor ended up (the wheel, or the
         // keys coming back from the note), so Enter acts on what is lit.
