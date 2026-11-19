@@ -5800,3 +5800,29 @@ fn a_plan_given_the_keys_back_after_a_rewrap_lights_no_card() {
     let _ = drawn(&mut app);
     assert_eq!(app.beside.as_ref().unwrap().stop, None);
 }
+
+#[test]
+fn the_wheel_scrolls_a_focused_plan_through_its_cards() {
+    let (_dir, mut app, _path, _plan) = with_plan("plan-wheel-cards", 160);
+    app.rows = 8;
+    keys(&mut app, "4G<CR><C-w>l");
+    app.plan_width = Some(34);
+    let _ = drawn(&mut app);
+    let _ = drawn(&mut app);
+    let x = app.geo.plan.x + 2;
+    let mut last = app.beside.as_ref().unwrap().scroll;
+    for _ in 0..6 {
+        app.mouse(Mouse {
+            kind: MouseKind::Press,
+            button: MouseButton::WheelDown,
+            col: x,
+            row: 3,
+            mods: Mods::NONE,
+        });
+        let _ = drawn(&mut app);
+        let now = app.beside.as_ref().unwrap().scroll;
+        assert!(now >= last, "scrolled back from {last} to {now}");
+        last = now;
+    }
+    assert!(last > 10, "got through the cards: {last}");
+}

@@ -90,6 +90,10 @@ pub struct Beside {
     /// The plan was given the keys as the note was hidden (Notes narrowed
     /// under the plan), so this drawing keeps the view where it was.
     pub took_keys: bool,
+    /// The plan rewrapped without the keys since the reader last moved in
+    /// it, so a cursor the view moves as the keys come back was put there
+    /// by a resize, not by the reader.
+    pub rewrapped_unseen: bool,
 }
 
 /// What the cursor and the first row shown were on as the plan last
@@ -630,6 +634,7 @@ impl App {
             laid: None,
             held: None,
             took_keys: false,
+            rewrapped_unseen: false,
         });
         true
     }
@@ -1102,16 +1107,19 @@ impl App {
             line = line.clamp(scroll, scroll + body - 1);
             clamped = line != was;
         }
-        // A cursor the view moved, or a plan given the keys as the note hid,
-        // goes onto text, the first in view, else the nearest, never onto a
-        // card the reader didn't go to, which Enter would choose.
+        // A plan given the keys as the note hid, or back with a cursor a
+        // resize left out of its view, puts the cursor on text, the first
+        // in view, else the nearest, never on a card the reader didn't go
+        // to, which Enter would choose. The wheel moving it onto a card
+        // lights that card, as it always has.
         let on_text = |l: &usize| pieces.get(l + 1).is_some_and(Option::is_some);
         // A card the reader chose (Tab, the cursor) and still under the
         // cursor stays chosen.
         let on_chosen = hits
             .iter()
             .any(|h| h.0 > 0 && Some(h.4) == b.stop && (h.0..h.0 + h.3).contains(&(line + 1)));
-        if (b.took_keys || clamped) && focused && body > 0 && !on_text(&line) && !on_chosen {
+        let by_resize = b.took_keys || (clamped && b.rewrapped_unseen);
+        if by_resize && focused && body > 0 && !on_text(&line) && !on_chosen {
             let below = (line..rows.len().saturating_sub(1)).find(on_text);
             let above = (0..line).rev().find(on_text);
             let nearest = match (above, below) {
@@ -1135,6 +1143,11 @@ impl App {
         b.line = line;
         b.follow = false;
         let took = std::mem::take(&mut b.took_keys);
+        if focused {
+            b.rewrapped_unseen = false;
+        } else if rewrapped.is_some() {
+            b.rewrapped_unseen = true;
+        }
         if let Some((at, top)) = rewrapped {
             b.held = Some((at, top, line, scroll, b.stop));
         }
