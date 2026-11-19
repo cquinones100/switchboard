@@ -245,7 +245,7 @@ The relay's DM, threads and Home tab.
 - [138. As built: Tab on the strip, a chapter other than the goal's shown (Side work), its pages and why the chapter is apart; ←→ chapter, Esc back to the map](https://cquinones100.github.io/switchboard/design/138.html)
 - [139. As built: Files mode, the list by chapter, page and file under the story's totals, In the files only under them, the diff headed by its chapter and page](https://cquinones100.github.io/switchboard/design/139.html)
 
-## Proposal: a diff built for understanding
+## A diff built for understanding
 
 - [140. The diff opens on what changes: Before and After in plain words, then how it gets there, a line on why each step; an outline in reading order down the side in place of the graph](https://cquinones100.github.io/switchboard/design/140.html)
 - [141. Reading down the column: each page a section, its claim in a sentence, what was decided and instead of what, what to watch, then its hunks inline, tests folded last](https://cquinones100.github.io/switchboard/design/141.html)
