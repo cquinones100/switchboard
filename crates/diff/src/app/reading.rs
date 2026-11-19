@@ -140,6 +140,8 @@ pub(super) enum Does {
     },
     /// The overview's line that lays What runs over the column.
     Runs,
+    /// The overview's last line, which reads on from page 1.
+    FirstPage,
 }
 
 /// A line of the column: what it shows, the section it is in (0 for what
@@ -172,6 +174,9 @@ pub(super) struct Reader {
     unfolded: HashSet<(usize, String)>,
     pub(super) target: Option<Does>,
     laid: Option<(u16, Vec<Row>)>,
+    /// The column to lay out again on its next draw, the rows before kept
+    /// to find the cursor's section in.
+    stale: bool,
 }
 
 /// A row of the outline, and the entry it is, where it is one.
@@ -1320,6 +1325,7 @@ impl App {
     pub(super) fn column(&mut self, cols: usize) -> Vec<Row> {
         if let Some((w, rows)) = &self.reader.laid
             && *w as usize == cols
+            && !self.reader.stale
         {
             return rows.clone();
         }
@@ -1344,12 +1350,13 @@ impl App {
             self.reader.top = back(top);
         }
         self.reader.laid = Some((cols as u16, rows.clone()));
+        self.reader.stale = false;
         rows
     }
 
     /// The column laid out again on its next draw.
     pub(super) fn relay(&mut self) {
-        self.reader.laid = None;
+        self.reader.stale = true;
     }
 
     /// The cursor kept on a line and in sight.
@@ -1554,15 +1561,18 @@ impl App {
         } else {
             format!("Told by {}. ", story::model_name(&story.model))
         };
-        rows.push(plain(kit::fit(
-            vec![
-                Span::styled(format!("{from}{model}"), Tone::Faint.style(theme)),
-                Span::styled("Enter", Tone::Accent.style(theme)),
-                Span::styled(" reads from 1.", Tone::Faint.style(theme)),
-            ],
-            cols,
-            Style::new(),
-        )));
+        rows.push(Row {
+            does: Does::FirstPage,
+            ..plain(kit::fit(
+                vec![
+                    Span::styled(format!("{from}{model}"), Tone::Faint.style(theme)),
+                    Span::styled("Enter", Tone::Accent.style(theme)),
+                    Span::styled(" reads from 1.", Tone::Faint.style(theme)),
+                ],
+                cols,
+                Style::new(),
+            ))
+        });
         rows.push(plain(Vec::new()));
         rows
     }
@@ -1667,7 +1677,11 @@ impl App {
         paths.sort_by_key(|p| order::kind(p) == order::Kind::Tests);
         let (removed, _, added, _) = self.palette();
         for path in paths {
-            let entry = self.entries().iter().find(|e| e.path == *path);
+            // The told part's entry, whose diff the column shows.
+            let entry = self
+                .change
+                .as_ref()
+                .and_then(|c| c.told_part().entries.iter().find(|e| e.path == *path));
             let notes: Vec<&story::HunkNote> = story
                 .hunks
                 .get(path)
@@ -1826,6 +1840,15 @@ impl App {
         match row.does {
             Does::Nothing => {}
             Does::Runs => self.toggle_runs(),
+            Does::FirstPage => {
+                let first = self
+                    .told_map()
+                    .and_then(|s| s.chapters.first())
+                    .and_then(|c| c.pages.first().copied());
+                if let Some(n) = first {
+                    self.go_to_section(n);
+                }
+            }
             Does::Folded { page, path } => {
                 self.reader.unfolded.insert((page, path));
                 self.relay();
