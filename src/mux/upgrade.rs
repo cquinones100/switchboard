@@ -642,7 +642,9 @@ impl Server {
                 };
                 let lines = std::mem::take(&mut self.upgrade.failed);
                 match result {
-                    Ok(super::latest::Brought { on: Some(on), note }) => {
+                    Ok(super::latest::Brought {
+                        on: Some(on), note, ..
+                    }) => {
                         self.upgrade_asked(None, Some(client), Some(on));
                         if let Some(pending) = self.upgrade.pending.as_mut() {
                             pending.note = note;
@@ -653,10 +655,17 @@ impl Server {
                             });
                         }
                     }
-                    Ok(super::latest::Brought { on: None, note }) => self.say(
-                        Some(client),
-                        format!("Already on the latest build. {note}").trim_end(),
-                    ),
+                    Ok(super::latest::Brought {
+                        on: None,
+                        note,
+                        behind,
+                    }) => {
+                        let text = match behind {
+                            true => note,
+                            false => format!("Already on the latest build. {note}"),
+                        };
+                        self.say(Some(client), text.trim_end())
+                    }
                     Err(why) => match build.filter(|_| self.build_row_clicks(client)) {
                         // The row says it failed until it is clicked, and
                         // its steps say why.

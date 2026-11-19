@@ -280,6 +280,7 @@ fn wait_restarted(server: &TestServer, client: &mut common::TestClient) {
 /// the checkout holds `broken`.
 const CARGO: &str = r#"#!/bin/sh
 echo "$*" > "$CARGO_TARGET_DIR/args"
+if [ -e during ]; then sh during 2>during.err || { touch during.failed; exit 1; }; fi
 if [ -e broken ]; then
   echo "   Compiling switchboard v0.0.0" >&2
   echo "error: could not compile \`switchboard\` (bin \"switchboard\") due to 1 previous error" >&2
@@ -619,6 +620,9 @@ fn m_p_restarts_a_target_directory_server_on_a_build_installed_since_as_it_is() 
 fn git(dir: &std::path::Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
         .args(["-c", "user.name=t", "-c", "user.email=t@t", "-C"])
+        // None of the config of the person running the tests (signing, hooks).
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .arg(dir)
         .args(args)
         .output()
@@ -684,8 +688,11 @@ fn m_p_brings_the_main_clone_up_to_date_and_builds_it() {
             main.to_str().unwrap(),
         ],
     );
-    let (server, bin) =
-        TestServer::start_from_copy_with_env(&[("SWITCHBOARD_MAIN_CLONE", main.to_str().unwrap())]);
+    let (server, bin) = TestServer::start_from_copy_with_env(&[
+        ("SWITCHBOARD_MAIN_CLONE", main.to_str().unwrap()),
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+        ("GIT_CONFIG_NOSYSTEM", "1"),
+    ]);
     let trusted = server.home.join(".config/switchboard/trusted-dirs");
     std::fs::create_dir_all(trusted.parent().unwrap()).unwrap();
     std::fs::write(&trusted, format!("{}\n", main.display())).unwrap();
@@ -796,6 +803,100 @@ fn m_p_brings_the_main_clone_up_to_date_and_builds_it() {
     assert_eq!(
         std::fs::read(&installed).unwrap(),
         std::fs::read(dir.path().join("second")).unwrap()
+    );
+}
+
+#[test]
+fn m_p_says_when_main_moved_on_while_it_built() {
+    let dir = common::TempDir::new("sbo");
+    let origin = dir.path().join("origin.git");
+    let main = dir.path().join("main");
+    let other = dir.path().join("other");
+    let landing = dir.path().join("landing");
+    let path = |p: &std::path::Path| p.to_str().unwrap().to_string();
+    git(
+        dir.path(),
+        &["init", "-q", "--bare", "-b", "main", &path(&origin)],
+    );
+    git(dir.path(), &["clone", "-q", &path(&origin), &path(&other)]);
+    std::fs::write(other.join("Cargo.toml"), "").unwrap();
+    std::fs::write(other.join(".gitignore"), "target\nnew\nduring*\n").unwrap();
+    git(&other, &["add", "."]);
+    git(&other, &["commit", "-q", "-m", "one"]);
+    git(&other, &["push", "-q", "origin", "HEAD:main"]);
+    git(dir.path(), &["clone", "-q", &path(&origin), &path(&main)]);
+    let (server, _bin) = TestServer::start_from_copy_with_env(&[
+        ("SWITCHBOARD_MAIN_CLONE", main.to_str().unwrap()),
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+        ("GIT_CONFIG_NOSYSTEM", "1"),
+    ]);
+    let trusted = server.home.join(".config/switchboard/trusted-dirs");
+    std::fs::create_dir_all(trusted.parent().unwrap()).unwrap();
+    std::fs::write(&trusted, format!("{}\n", main.display())).unwrap();
+    let target = main.join("target");
+    std::fs::create_dir_all(&target).unwrap();
+    common::stand_in::install(
+        &server.home.join("bin/cargo"),
+        &CARGO.replace("$CARGO_TARGET_DIR", target.to_str().unwrap()),
+    );
+    let mut client = server.attach(160, 40);
+    client.wait_text("$");
+    let wait_says = |client: &mut common::TestClient, text: &str| {
+        let deadline = common::deadline(Duration::from_secs(30));
+        while !says(client, text) {
+            // The stand-in landing failing fails the build: said at once.
+            assert!(
+                !main.join("during.failed").exists(),
+                "the stand-in landing failed: {}",
+                std::fs::read_to_string(main.join("during.err")).unwrap_or_default()
+            );
+            assert!(
+                Instant::now() < deadline,
+                "{:?}\n{}",
+                client.screen(),
+                server.log()
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+
+    // Main lands "three" after the clone last fetched, and a tab lands
+    // "four" while the clone, brought up to "three", builds: restarted on
+    // the build, which says main moved on rather than passing for main.
+    git(&other, &["commit", "-q", "--allow-empty", "-m", "three"]);
+    git(&other, &["push", "-q", "origin", "HEAD:main"]);
+    git(
+        &main,
+        &["worktree", "add", "-q", "--detach", &path(&landing)],
+    );
+    std::fs::write(
+        main.join("during"),
+        format!(
+            "cd {landing} && git checkout -q --detach origin/main && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m four && git push -q origin HEAD:main\n",
+            landing = path(&landing)
+        ),
+    )
+    .unwrap();
+    let build = dir.path().join("build");
+    common::stand_in::install(&build, &format!("#!/bin/sh\nexec {} \"$@\"\n", common::BIN));
+    std::fs::write(main.join("new"), build.to_str().unwrap()).unwrap();
+    server.ok(&["press", "upgrade"]);
+    wait_says(
+        &mut client,
+        "It was built for this restart. Main moved on while it built: restart again for 1 newer commit.",
+    );
+    wait_restarted(&server, &mut client);
+    assert_eq!(git(&main, &["log", "-1", "--format=%s"]), "three");
+    let log = server.log();
+    assert!(
+        log.contains("origin/main was ") && log.contains("after the fetch"),
+        "{log}"
+    );
+    assert!(log.contains("building "), "{log}");
+    assert!(log.contains("says it was made from"), "{log}");
+    assert!(
+        log.contains("main moved on by 1 commit while it built"),
+        "{log}"
     );
 }
 
