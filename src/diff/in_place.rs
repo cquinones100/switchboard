@@ -262,7 +262,14 @@ impl Server {
             slot.pane.kill();
         }
         self.relayout(tab_id);
-        self.focus_pane(parked);
+        // The focus goes to the pane only in a tab in front: one closed in
+        // the background (a handover there) leaves the tab where it is.
+        if self
+            .session_of_tab(tab_id)
+            .is_some_and(|s| s.current == tab_id)
+        {
+            self.focus_pane(parked);
+        }
         self.dirty_tab(tab_id);
         true
     }

@@ -137,17 +137,7 @@ impl Server {
             // Set as the tab's own pane in front, never by focus_pane, which
             // would bring a tab in the background to the front.
             let active = self.tabs.get(&tab).map(|t| t.active);
-            // Closing a view in another pane's place gives it the focus,
-            // which brings its tab to the front: the tab in front stays.
-            let in_front = self
-                .session_of_tab(tab)
-                .map(|s| (s.name.clone(), s.current));
             self.kill_pane(view);
-            if let Some((name, current)) = in_front.filter(|(_, c)| *c != tab)
-                && self.session_of_tab(tab).is_some_and(|s| s.current == tab)
-            {
-                self.select_tab(&name, current);
-            }
             if let Some(active) = active.filter(|a| *a != view && self.panes.contains_key(a))
                 && let Some(t) = self.tabs.get_mut(&tab)
             {
