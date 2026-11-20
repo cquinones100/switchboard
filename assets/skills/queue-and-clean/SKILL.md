@@ -52,6 +52,8 @@ allowed-tools:
   - Bash(gh pr diff*)
   - Bash(gh run view *)
   - Bash(gh run list*)
+  - Bash(gh issue view *)
+  - mcp__claude_ai_Linear__get_issue
 ---
 
 # Queue and clean
