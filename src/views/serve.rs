@@ -32,6 +32,7 @@ use super::ready::{self, Choice, ReadyBox};
 use super::search::{self, Found, Source};
 use super::search_box::SearchBox;
 use super::shown::{self, Shown};
+use super::ticket::Ticket;
 use super::{Command, ViewsEvent, page, seen, ticket};
 use crate::integrations::{github, linear};
 use crate::mux::server::{ClientId, Event, Server};
@@ -47,6 +48,11 @@ pub const TICKET_VIEW: &str = "@ticket_view";
 /// Linear link), for telling it when the lookups see the ticket change
 /// (`Server::views_follow`).
 pub const TICKET_ID: &str = "@ticket_view_id";
+/// The tab option holding the ticket or project chosen for it
+/// (`Ticket::arg`), which comes before any found from its branch or name.
+pub const TAB_TICKET: &str = "@tab_ticket";
+/// The picker's row that lets a chosen ticket go.
+const AUTOMATIC: &str = "automatic";
 pub const LINK_VIEW: &str = "@link_view";
 pub const LINK_URL: &str = "@link_url";
 pub const CHECKS_VIEW: &str = "@checks_view";
@@ -109,11 +115,9 @@ fn rows(found: &[Shown]) -> Vec<PickItem> {
 impl Server {
     /// A view's command, from its key or the palette.
     pub fn view_command(&mut self, client: ClientId, command: Command) {
-        for (tag, service) in [("github", "github"), ("linear", "linear")] {
-            if command.tags().contains(&tag) && !settings::is_on(service) {
-                self.service_off(client, service);
-                return;
-            }
+        if let Some(service) = crate::integrations::tagged_off(command.tags()) {
+            self.service_off(client, service);
+            return;
         }
         match command {
             Command::PrView => self.toggle_pr_view(client),
@@ -121,6 +125,11 @@ impl Server {
             Command::OpenPr => self.open_on_github(client, false),
             Command::OpenRepo => self.open_on_github(client, true),
             Command::OpenTicket => self.open_ticket(client),
+            Command::ChooseTicket => {
+                if let Some(tab) = self.here(client).map(|(_, tab, _)| tab) {
+                    self.choose_ticket(client, tab, false);
+                }
+            }
             Command::PrReady => self.pr_ready(client),
             Command::Search => self.search_everything(client, ""),
             Command::SearchTabs => self.search_everything(client, Source::Tabs.prefix()),
@@ -209,6 +218,90 @@ impl Server {
         let slot = self.panes.get(&pane)?;
         let dir = self.pane_dir(pane).unwrap_or_else(paths::home);
         Some((pane, slot.tab, dir))
+    }
+
+    /// The directory a tab's work is in, for its ticket: `dir`, the
+    /// focused pane's, unless that pane is Notes beside the work, which runs
+    /// in your home; then another pane's of the tab.
+    pub(crate) fn work_dir(&self, tab: TabId, pane: PaneId, dir: PathBuf) -> PathBuf {
+        let notes = |p: &PaneId| {
+            self.panes
+                .get(p)
+                .is_some_and(|s| s.opts.contains_key("@notes_pane"))
+        };
+        if !notes(&pane) {
+            return dir;
+        }
+        // The directory the tab is named from, its work pane's.
+        if let Some(path) = self.tab_path(tab) {
+            return path.to_path_buf();
+        }
+        self.panes
+            .iter()
+            .filter(|(p, s)| s.tab == tab && !notes(p))
+            .find_map(|(p, _)| self.pane_dir(*p))
+            .unwrap_or(dir)
+    }
+
+    /// The pane a view about the tab's work opens beside: `pane`, unless
+    /// it is Notes beside the work, then the tab's first other pane.
+    fn work_pane(&self, tab: TabId, pane: PaneId) -> PaneId {
+        let notes = |p: &PaneId| {
+            self.panes
+                .get(p)
+                .is_some_and(|s| s.opts.contains_key("@notes_pane"))
+        };
+        if !notes(&pane) {
+            return pane;
+        }
+        self.tabs
+            .get(&tab)
+            .and_then(|t| t.layout.panes().into_iter().find(|p| !notes(p)))
+            .unwrap_or(pane)
+    }
+
+    /// Closes a ticket view as M-w closes a pane: a shell in its place when
+    /// it is the tab's last, and, in place of a pane no longer there,
+    /// standing in for nothing, a shell rather than no tab.
+    fn close_ticket_view(&mut self, view: PaneId) {
+        if self.parked_of(view).is_none()
+            && let Some(slot) = self.panes.get_mut(&view)
+        {
+            slot.opts.remove(crate::diff::in_place::IN_PLACE);
+        }
+        self.close_only_pane(view, true);
+    }
+
+    /// A ticket view read again in its own place, on `ticket`, or a shell
+    /// with none: its program replaced, the tab not handed to other work.
+    fn read_view_again(&mut self, view: PaneId, ticket: Option<Ticket>) {
+        let arg = ticket.as_ref().map(Ticket::arg);
+        let command = arg
+            .clone()
+            .map(|arg| vec![exe(), "ticket-view".into(), "--ticket".into(), arg]);
+        if self.replace_program(view, command).is_ok()
+            && let Some(arg) = arg
+            && let Some(slot) = self.panes.get_mut(&view)
+        {
+            slot.opts.insert(TICKET_ID.into(), arg);
+            slot.opts.insert(TICKET_VIEW.into(), "1".into());
+        }
+    }
+
+    /// Every ticket view in a tab's layout, on screen.
+    pub(crate) fn ticket_views_shown(&self, tab: TabId) -> Vec<PaneId> {
+        let Some(t) = self.tabs.get(&tab) else {
+            return Vec::new();
+        };
+        t.layout
+            .panes()
+            .into_iter()
+            .filter(|p| {
+                self.panes
+                    .get(p)
+                    .is_some_and(|s| s.opts.get(TICKET_VIEW).is_some_and(|v| v == "1"))
+            })
+            .collect()
     }
 
     /// The pane in a tab marked with `mark`.
@@ -319,60 +412,371 @@ impl Server {
         self.views_follow(None);
     }
 
-    /// The ticket a tab's work is on: its branch's, else its name's.
+    /// The ticket a tab's work is on: one chosen for it (`@tab_ticket`),
+    /// else its branch's (the GitHub issue it was started for or its
+    /// Linear ticket, as repos.json's `tickets` says), else a ticket or
+    /// project in a name you gave it, else in the label it shows. Reads
+    /// git's and repos.json's files, so never on the drawing path.
+    pub(crate) fn tab_ticket_at(&self, tab: TabId, dir: &std::path::Path) -> Option<Ticket> {
+        // One chosen of a service turned off since stands aside, so it never
+        // keeps the branch's issue from opening, and comes last, so the keys
+        // say its service is off rather than that there is none.
+        let chosen = self.chosen_ticket(tab);
+        if let Some(on) = chosen.clone().filter(|c| settings::is_on(c.service())) {
+            return Some(on);
+        }
+        let provider = crate::repos::tickets_known(dir);
+        self.tab_ticket_by(tab, dir, provider.as_deref()).or(chosen)
+    }
+
+    /// The ticket or project chosen for a tab, kept as `@tab_ticket`.
+    fn chosen_ticket(&self, tab: TabId) -> Option<Ticket> {
+        Ticket::parse(self.chosen_ticket_kept(tab)?)
+    }
+
+    /// `@tab_ticket` as kept, read or not.
+    fn chosen_ticket_kept(&self, tab: TabId) -> Option<&String> {
+        self.tabs.get(&tab)?.opts.get(TAB_TICKET)
+    }
+
+    /// `tab_ticket_at` from the branch and names alone, by the provider
+    /// given.
+    fn tab_ticket_by(
+        &self,
+        tab: TabId,
+        dir: &std::path::Path,
+        provider: Option<&str>,
+    ) -> Option<Ticket> {
+        let t = self.tabs.get(&tab)?;
+        let mut found = ticket::of_dir_all(dir, provider);
+        found.extend(
+            t.opts
+                .get("@tab_name")
+                .and_then(|n| ticket::in_name(n))
+                .or_else(|| ticket::in_name(&t.name)),
+        );
+        // The label shown names the branch's Linear ticket too, which a
+        // repository whose tickets are GitHub's never takes; any other it
+        // names counts.
+        let from_branch: Vec<Ticket> = ticket::id_for_dir(dir)
+            .map(Ticket::Linear)
+            .into_iter()
+            .chain(crate::tabs::git::locate(dir).and_then(|p| ticket::linear_in_branch(&p.branch)))
+            .collect();
+        found.extend(
+            ticket::in_name(&self.tab_label(tab))
+                .filter(|t| provider != Some("github") || !from_branch.contains(t)),
+        );
+        ticket::first_on(found)
+    }
+
+    /// The Linear ticket a tab's work is on, for what reads Linear's
+    /// tickets alone (the branch's ticket copied, its image): the one the
+    /// branch names, whatever repos.json's `tickets` says, so a branch
+    /// started for an issue still gives it; else one chosen for the tab;
+    /// else one its names or label give.
     pub(crate) fn ticket_here(&self, tab: TabId, dir: &std::path::Path) -> Option<String> {
-        ticket::id_for_dir(dir).or_else(|| {
+        let linear = |t: Ticket| match t {
+            Ticket::Linear(id) => Some(id),
+            _ => None,
+        };
+        let names = || {
             let t = self.tabs.get(&tab)?;
             t.opts
                 .get("@tab_name")
                 .and_then(|n| ticket::id_in_name(n))
                 .or_else(|| ticket::id_in_name(&t.name))
                 .or_else(|| ticket::id_in_name(&self.tab_label(tab)))
-        })
+        };
+        ticket::id_for_dir(dir)
+            .or_else(|| self.chosen_ticket(tab).and_then(linear))
+            .or_else(names)
     }
 
-    /// Whether M-i has a ticket to open, as `ticket_here` finds one, from
-    /// what the server holds alone: the branch tab naming last read, else
-    /// the tab's names. For the drawing path, which reads no file.
+    /// Whether M-i has a ticket to open whose service is on, as
+    /// `tab_ticket_at` finds one, from what the server holds alone: the
+    /// branch tab naming last read and the tab's options and names. For
+    /// the drawing path, which reads no file.
     pub(crate) fn ticket_known(&self, tab: TabId) -> bool {
+        let Some(t) = self.tabs.get(&tab) else {
+            return false;
+        };
+        // One chosen of a service turned off stands aside, as it does for M-i.
+        if let Some(chosen) = t.opts.get(TAB_TICKET).and_then(|v| Ticket::parse(v))
+            && settings::is_on(chosen.service())
+        {
+            return true;
+        }
         let branch = self
             .tab_path(tab)
-            .and_then(|d| self.tab_names.names.branch(d))
-            .and_then(linear::ticket_in);
-        branch.is_some()
-            || self.tabs.get(&tab).is_some_and(|t| {
-                t.opts
+            .and_then(|d| self.tab_names.names.branch(d));
+        if branch.and_then(ticket::issue_number_of_branch).is_some() && settings::is_on("github") {
+            return true;
+        }
+        settings::is_on("linear")
+            && (branch.and_then(ticket::linear_in_branch).is_some()
+                || t.opts
                     .get("@tab_name")
-                    .and_then(|n| ticket::id_in_name(n))
-                    .or_else(|| ticket::id_in_name(&t.name))
-                    .or_else(|| ticket::id_in_name(&self.tab_label(tab)))
-                    .is_some()
-            })
+                    .and_then(|n| ticket::in_name(n))
+                    .or_else(|| ticket::in_name(&t.name))
+                    .or_else(|| ticket::in_name(&self.tab_label(tab)))
+                    .is_some())
     }
 
-    /// M-i: the ticket view to the right, or closed.
+    /// M-i: the tab's ticket in a view to the right, or closed; with none
+    /// found, yours to choose one from.
     fn toggle_ticket_view(&mut self, client: ClientId) {
         let Some((pane, tab, dir)) = self.here(client) else {
             return;
         };
+        let dir = self.work_dir(tab, pane, dir);
+        // Closed as M-w closes a pane: a shell in its place when it is the
+        // tab's last, so the tab and the ticket chosen for it stay.
         if let Some(open) = self.marked_in(tab, TICKET_VIEW) {
-            self.kill_pane(open);
+            self.close_ticket_view(open);
             return;
         }
-        let Some(id) = self.ticket_here(tab, &dir) else {
-            self.say(Some(client), "No Linear ticket in this branch or tab name");
+        // One of a service turned off counts as none when Linear can offer
+        // a choice.
+        let picks = settings::is_on("linear") && settings::is_on("ticket_picker");
+        let found = self
+            .tab_ticket_at(tab, &dir)
+            .filter(|f| settings::is_on(f.service()) || !picks);
+        let Some(found) = found else {
+            if settings::is_on("linear") && settings::is_on("ticket_picker") {
+                self.choose_ticket(client, tab, true);
+            } else {
+                self.say(Some(client), "No ticket or GitHub issue for this tab");
+            }
             return;
         };
+        if !settings::is_on(found.service()) {
+            self.service_off(client, found.service());
+            return;
+        }
+        // Beside the work, never in Notes' place.
+        let anchor = self.work_pane(tab, pane);
+        self.open_ticket_view(anchor, found);
+    }
+
+    /// The ticket view for `found` beside `pane`.
+    fn open_ticket_view(&mut self, pane: PaneId, found: Ticket) {
+        let arg = found.arg();
         if let Some(view) = self.open_beside(
             pane,
             TICKET_VIEW,
-            vec!["ticket-view".into(), id.clone()],
+            vec!["ticket-view".into(), "--ticket".into(), arg.clone()],
             VIEW_PERCENT,
         ) && let Some(slot) = self.panes.get_mut(&view)
         {
-            slot.opts.insert(TICKET_ID.into(), id);
+            slot.opts.insert(TICKET_ID.into(), arg);
         }
         self.views_follow(None);
+    }
+
+    /// "Choose this tab's ticket or project…": your Linear tickets and
+    /// projects, most recently created first, read off the task while it
+    /// says so; the one chosen kept on the tab (`@tab_ticket`, saved with
+    /// the layout), and with `open` its view opened. Esc changes nothing.
+    pub(crate) fn choose_ticket(&mut self, client: ClientId, tab: TabId, open: bool) {
+        if !self.tabs.contains_key(&tab) {
+            return;
+        }
+        // The work the tab is on as it is asked: a tab handed to other work
+        // meanwhile (its directory changed) takes no ticket chosen for the old.
+        let work = self.tab_path(tab).map(std::path::Path::to_path_buf);
+        let moved_on = move |server: &mut Server, client: ClientId| {
+            let now = server.tab_path(tab).map(std::path::Path::to_path_buf);
+            let moved = now != work;
+            if moved {
+                let n = server.tab_number(tab);
+                server.say(
+                    Some(client),
+                    &format!("Tab {n} moved on to other work, so no ticket was chosen for it"),
+                );
+            }
+            moved
+        };
+        let moved_on_again = moved_on.clone();
+        // With Linear off, Linear isn't asked: only a choice made before
+        // can be let go.
+        let ask_linear = settings::is_on("linear");
+        if ask_linear {
+            self.say(Some(client), "Getting your tickets…");
+        } else if self.chosen_ticket_kept(tab).is_none() {
+            self.service_off(client, "linear");
+            return;
+        }
+        self.off_task(
+            client,
+            move || {
+                if ask_linear {
+                    util::block_on(ticket::yours())
+                } else {
+                    Ok(ticket::Lists::default())
+                }
+            },
+            move |server, client, found| {
+                server.unsay(client);
+                if moved_on(server, client) {
+                    return;
+                }
+                // One chosen before can be let go, the branch and the names
+                // deciding again, whatever Linear answered.
+                let chosen_before = server
+                    .tabs
+                    .get(&tab)
+                    .is_some_and(|t| t.opts.contains_key(TAB_TICKET));
+                let mut why_empty = None;
+                let rows = match found {
+                    Ok(lists) if !lists.found.is_empty() || chosen_before => {
+                        if !lists.missing.is_empty() {
+                            why_empty = Some(lists.missing.join(" "));
+                        }
+                        lists.found
+                    }
+                    Ok(_) => {
+                        server.say(Some(client), "Linear has no tickets or projects of yours.");
+                        return;
+                    }
+                    // Said at the top of the picker, which still lets the
+                    // chosen ticket go.
+                    Err(e) if chosen_before => {
+                        why_empty = Some(e);
+                        Vec::new()
+                    }
+                    Err(e) => {
+                        server.say(Some(client), &format!("Couldn't get your tickets.\n\n{e}"));
+                        return;
+                    }
+                };
+                let automatic = chosen_before
+                    .then(|| PickItem::new("Automatic: from its branch or its name", AUTOMATIC));
+                let items = automatic
+                    .into_iter()
+                    .chain(
+                        rows.into_iter()
+                            .map(|r| PickItem::new(r.row, r.ticket.arg())),
+                    )
+                    .collect();
+                // Named by the tab's number, since Linear may answer after
+                // you've gone to another tab.
+                let title = format!("Tab {}'s ticket or project", server.tab_number(tab));
+                let mut picker = Picker::new(title, items).keep_order();
+                if let Some(why) = why_empty {
+                    picker = picker.header(why);
+                }
+                // A box about the tab: beside a narrow lone pane where it fits.
+                server.about_tab(client, tab, move |s| {
+                    s.pick(client, picker, move |server, client, picked| {
+                        let Some(picked) = picked else {
+                            return;
+                        };
+                        if moved_on_again(server, client) {
+                            return;
+                        }
+                        let chosen = Ticket::parse(&picked.value);
+                        let automatic = picked.value == AUTOMATIC;
+                        if chosen.is_none() && !automatic {
+                            return;
+                        }
+                        // Its service turned off while the picker was open
+                        // takes nothing from it.
+                        if let Some(c) = chosen.as_ref().filter(|c| !settings::is_on(c.service())) {
+                            server.service_off(client, c.service());
+                            return;
+                        }
+                        // A view showing the ticket before closes, so none shows
+                        // one M-l no longer opens; the tab's last pane is read
+                        // again in place rather than closing the tab.
+                        // A view parked under another tool counts too, so
+                        // none comes back showing the old ticket.
+                        let shown = server.ticket_views_shown(tab);
+                        let was_open = shown.first().copied();
+                        let parked: Vec<PaneId> = server
+                            .panes
+                            .iter()
+                            .filter(|(p, s)| {
+                                s.tab == tab
+                                    && !shown.contains(p)
+                                    && s.opts.get(TICKET_VIEW).is_some_and(|v| v == "1")
+                            })
+                            .map(|(p, _)| *p)
+                            .collect();
+                        for view in shown {
+                            match &chosen {
+                                Some(c) => server.read_view_again(view, Some(c.clone())),
+                                // Let go, the view closes as M-w closes a pane,
+                                // a shell in its place when it is the tab's last.
+                                None => {
+                                    server.close_ticket_view(view);
+                                    if let Some(slot) = server.panes.get_mut(&view) {
+                                        slot.opts.remove(TICKET_VIEW);
+                                    }
+                                }
+                            }
+                        }
+                        if !parked.is_empty() {
+                            let again = chosen.clone().or_else(|| {
+                                let dir = server.tab_path(tab)?.to_path_buf();
+                                let t = server.tabs.get_mut(&tab)?;
+                                t.opts.remove(TAB_TICKET);
+                                server
+                                    .tab_ticket_at(tab, &dir)
+                                    .filter(|t| settings::is_on(t.service()))
+                            });
+                            // With nothing to show, a parked view is left to
+                            // its tool, never a shell standing in its marks.
+                            if again.is_some() {
+                                for view in parked {
+                                    server.read_view_again(view, again.clone());
+                                }
+                            }
+                        }
+                        if automatic {
+                            if let Some(t) = server.tabs.get_mut(&tab) {
+                                t.opts.remove(TAB_TICKET);
+                            }
+                            server.dirty_tab(tab);
+                            let n = server.tab_number(tab);
+                            server.say(
+                                Some(client),
+                                &format!(
+                                    "Tab {n}'s ticket comes from its branch or its name again"
+                                ),
+                            );
+                            return;
+                        }
+                        let Some(chosen) = chosen else {
+                            return;
+                        };
+                        let Some(t) = server.tabs.get_mut(&tab) else {
+                            return;
+                        };
+                        t.opts.insert(TAB_TICKET.into(), chosen.arg());
+                        server.dirty_tab(tab);
+                        let pane = server
+                            .tabs
+                            .get(&tab)
+                            .map(|t| server.work_pane(tab, t.active));
+                        let replaced = was_open.is_some_and(|v| server.panes.contains_key(&v));
+                        match pane {
+                            Some(pane) if !replaced && (open || was_open.is_some()) => {
+                                server.open_ticket_view(pane, chosen)
+                            }
+                            _ => server.say(
+                                Some(client),
+                                &format!(
+                                    "Tab {}'s ticket is {}",
+                                    server.tab_number(tab),
+                                    chosen.shown()
+                                ),
+                            ),
+                        }
+                    })
+                });
+            },
+        );
     }
 
     /// Says something on `client` from off the task.
@@ -507,16 +911,76 @@ impl Server {
         });
     }
 
-    /// M-l: the branch's Linear ticket in the browser.
+    /// M-l: the tab's ticket in the browser: its GitHub issue at once, its
+    /// Linear ticket or project where Linear says it is.
     fn open_ticket(&mut self, client: ClientId) {
-        let Some((_, tab, dir)) = self.here(client) else {
+        let Some((pane, tab, dir)) = self.here(client) else {
             return;
         };
-        let Some(id) = self.ticket_here(tab, &dir) else {
-            self.say(Some(client), "No Linear ticket in this branch or tab name");
+        let dir = self.work_dir(tab, pane, dir);
+        // The ticket a view shows, so M-l opens what is on the screen: the
+        // focused pane's (a ticket view, or a link view reading a ticket),
+        // else the tab's ticket view.
+        let shown_in = |view: PaneId| {
+            let arg = self.panes.get(&view)?.opts.get(TICKET_ID)?;
+            Ticket::parse(arg).filter(|t| settings::is_on(t.service()))
+        };
+        // A link view reading a ticket opens the link it reads, in the
+        // workspace it names.
+        let link_view = self
+            .panes
+            .get(&pane)
+            .is_some_and(|s| s.opts.get(LINK_VIEW).is_some_and(|v| v == "1"));
+        if link_view
+            && shown_in(pane).is_some()
+            && let Some(url) = self
+                .panes
+                .get(&pane)
+                .and_then(|s| s.opts.get(LINK_URL))
+                .cloned()
+        {
+            self.open_link(client, url);
+            return;
+        }
+        // The tab's ticket view counts only while it is on screen: a
+        // zoomed tab shows its pane in front alone.
+        let zoomed = self.tabs.get(&tab).is_some_and(|t| t.zoomed);
+        let shown = shown_in(pane).or_else(|| {
+            self.ticket_views_shown(tab)
+                .into_iter()
+                .filter(|_| !zoomed)
+                .find_map(shown_in)
+        });
+        let Some(found) = shown.or_else(|| self.tab_ticket_at(tab, &dir)) else {
+            self.say(Some(client), "No ticket or GitHub issue for this tab");
             return;
         };
-        self.open_ticket_id(client, id);
+        if !settings::is_on(found.service()) {
+            self.service_off(client, found.service());
+            return;
+        }
+        match found {
+            Ticket::Linear(id) => self.open_ticket_id(client, id),
+            Ticket::Issue { .. } => {
+                if let Some(url) = found.url() {
+                    self.open_link(client, url);
+                }
+            }
+            Ticket::Project(id) => {
+                let tx = self.tx.clone();
+                tokio::spawn(async move {
+                    match super::project::url(&id).await {
+                        Ok(Some(url)) => Server::open_link_later(&tx, client, url),
+                        Ok(None) => {
+                            Server::say_later(&tx, client, format!("Linear has no link for {id}."))
+                        }
+                        Err(e) => {
+                            Server::say_later(&tx, client, format!("Can't open {id}.\n\n{e}"))
+                        }
+                    }
+                });
+            }
+        }
     }
 
     /// A Linear ticket by its ID in the browser: at the workspace's link

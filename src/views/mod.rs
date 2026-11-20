@@ -24,7 +24,11 @@
 //!   and a panel beside it.
 //! - `follow`: how the PR and ticket views read again what they show.
 //! - `pr`: the branch's PR (pr-view.sh, pr-view.js's `prepare`).
-//! - `ticket`: a Linear ticket (ticket-view.sh, pr-view.js's `ticket`).
+//! - `ticket`: a Linear ticket (ticket-view.sh, pr-view.js's `ticket`),
+//!   and what a tab's ticket is (`Ticket`): a Linear ticket or project,
+//!   or the GitHub issue its branch was started for.
+//! - `issue`: a GitHub issue, as the ticket view shows it.
+//! - `project`: a Linear project, as the ticket view shows it.
 //! - `image`: the PR or ticket as GitHub draws it, as pictures in a pane's
 //!   place (pr-image.js).
 //! - `page`: what a link holds (link-view.sh's `show`, lib/link-view.js).
@@ -48,16 +52,18 @@ pub mod conversation;
 pub mod follow;
 pub mod given;
 pub mod image;
+pub mod issue;
 pub mod page;
 pub mod pager;
 pub mod pictures;
 pub mod pr;
+pub mod project;
 pub mod ready;
 pub mod search;
 pub mod search_box;
 pub mod seen;
 mod serve;
-pub(crate) use serve::{PR_VIEW, TICKET_ID, TICKET_VIEW};
+pub(crate) use serve::{LINK_URL, LINK_VIEW, PR_VIEW, TAB_TICKET, TICKET_ID, TICKET_VIEW};
 pub mod shown;
 pub mod ticket;
 
@@ -71,14 +77,17 @@ use crate::mux::server::ClientId;
 pub enum Command {
     /// M-v: the branch's PR description in a pane to the right, or closed.
     PrView,
-    /// M-i: the branch's Linear ticket in a pane to the right, or closed.
+    /// M-i: the tab's ticket (its Linear ticket or project, or its GitHub
+    /// issue) in a pane to the right, or closed.
     TicketView,
     /// M-r: the branch's PR in the browser.
     OpenPr,
     /// The repository on GitHub in the browser.
     OpenRepo,
-    /// M-l: the branch's Linear ticket in the browser.
+    /// M-l: the tab's ticket in the browser, Linear's or GitHub's.
     OpenTicket,
+    /// The tab's ticket or project chosen from yours, kept on the tab.
+    ChooseTicket,
     /// M-m: whether the branch's PR is ready to merge.
     PrReady,
     /// M-S-f: the open tabs, notes, Linear, GitHub and Slack searched at once.
@@ -124,12 +133,13 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 26] = [
+    pub const ALL: [Command; 27] = [
         Command::PrView,
         Command::TicketView,
         Command::OpenPr,
         Command::OpenRepo,
         Command::OpenTicket,
+        Command::ChooseTicket,
         Command::PrReady,
         Command::Search,
         Command::SearchTabs,
@@ -161,6 +171,7 @@ impl Command {
             Command::OpenPr => "open-pr",
             Command::OpenRepo => "open-repo",
             Command::OpenTicket => "open-ticket",
+            Command::ChooseTicket => "choose-ticket",
             Command::PrReady => "pr-ready",
             Command::Search => "search-everything",
             Command::SearchTabs => "search-tabs",
@@ -196,11 +207,14 @@ impl Command {
                 "View the branch's PR description in a pane to the right, or close it"
             }
             Command::TicketView => {
-                "View the branch's Linear ticket, with its comments, in a pane to the right, or close it"
+                "View the tab's ticket (its Linear ticket or project, or its GitHub issue), with its comments, in a pane to the right, or close it"
             }
             Command::OpenPr => "Open the branch's PR in the browser",
             Command::OpenRepo => "Open the repository in the browser",
-            Command::OpenTicket => "Open the branch's Linear ticket in the browser",
+            Command::OpenTicket => {
+                "Open the tab's ticket in the browser: its Linear ticket or project, or its GitHub issue"
+            }
+            Command::ChooseTicket => "Choose this tab's ticket or project…",
             Command::PrReady => "Check whether the branch's PR is ready to merge",
             Command::Search => {
                 "Search the open tabs, notes, Linear, GitHub and Slack at once, and read a result beside the pane or go to the tab"
@@ -244,7 +258,7 @@ impl Command {
                 "The PR is found from the pane's branch, in a fork's upstream too, the copy last read showing while GitHub is asked again. With UX 2.0 on, it opens in this pane's place. With no PR, the view says why."
             }
             Command::TicketView => {
-                "The ticket ID comes from the branch's name, else the tab's. The copy last read shows while Linear is asked again; with UX 2.0 on, it opens in this pane's place. With no ID found, a box says so."
+                "The ticket is one chosen for the tab, else the GitHub issue its branch was started for or the Linear ticket its branch names (repos.json's tickets saying which), else a ticket or project in a name you gave the tab. The copy last read shows while it is asked again; with UX 2.0 on, it opens in this pane's place. With none found, you choose one of your Linear tickets and projects."
             }
             Command::OpenPr => {
                 "A branch with no PR yet opens its repository instead, and a box says why. The link opens in the Chrome profile browser.json gives GitHub, and what went wrong is said in a box."
@@ -253,7 +267,10 @@ impl Command {
                 "The repository is the one origin names, whatever the branch, opened in the Chrome profile browser.json gives GitHub. When it can't open, a box says why: no git repository, no remote on GitHub or no token."
             }
             Command::OpenTicket => {
-                "The ticket ID comes from the branch's name, else the tab's. With a workspace written in linear.json the link is made at once; without, Linear is asked where the ticket is."
+                "The ticket is found as M-i finds it. A GitHub issue opens at once; with a workspace written in linear.json a Linear ticket's link is made at once, and without, Linear is asked where it is."
+            }
+            Command::ChooseTicket => {
+                "Lists your Linear tickets and projects, most recently created first, and keeps the one chosen as the tab's ticket, which M-i and M-l then open, through a restart too. Esc changes nothing."
             }
             Command::PrReady => {
                 "The verdict is GitHub's own, so it agrees with the merge button, with the required checks, review, conflicts and auto-merge under it. The box offers to show the failing checks or have the tab's Claude resolve conflicts. A branch with no PR gets its own CI on GitHub instead."
@@ -318,10 +335,11 @@ impl Command {
     pub fn tags(self) -> &'static [&'static str] {
         match self {
             Command::PrView => &["github", "pr", "panes"],
-            Command::TicketView => &["linear", "ticket", "panes"],
+            Command::TicketView => &["linear", "github", "ticket", "panes"],
             Command::OpenPr => &["github", "pr", "browser"],
             Command::OpenRepo => &["github", "repo", "browser"],
-            Command::OpenTicket => &["linear", "ticket", "browser"],
+            Command::OpenTicket => &["linear", "github", "ticket", "browser"],
+            Command::ChooseTicket => &["linear", "github", "tabs", "ticket"],
             Command::PrReady => &["github", "pr", "merge", "checks"],
             Command::Search => &["search", "find", "notes"],
             Command::SearchTabs => &["search", "find", "tabs"],
@@ -368,6 +386,7 @@ impl Command {
             | Command::OpenMedia
             | Command::OpenMergeQueue
             | Command::OpenProject
+            | Command::ChooseTicket
             | Command::CopyTicketId
             | Command::CopyTicketUrl
             | Command::CopyPrNumber
@@ -501,15 +520,35 @@ pub fn pr_view_main(args: Vec<String>) -> ExitCode {
     pr::main(dir_arg(args.first()))
 }
 
-/// `switchboard ticket-view [dir|ID]`.
+/// `switchboard ticket-view [dir|ID|project:<id>|owner/repo#n]`, or
+/// `--ticket <ID|project:<id>|owner/repo#n>`: a Linear
+/// ticket, a Linear project or a GitHub issue; a directory's ticket as its
+/// branch and repos.json's `tickets` give it.
 pub fn ticket_view_main(args: Vec<String>) -> ExitCode {
+    // `--ticket <arg>` (what the server passes): that ticket, never a
+    // directory of the same name.
+    if let [flag, arg] = args.as_slice()
+        && flag == "--ticket"
+    {
+        return match ticket::Ticket::parse(arg) {
+            Some(ticket::Ticket::Issue { repo, number }) => issue::main(repo, number),
+            Some(ticket::Ticket::Project(id)) => project::main(id),
+            Some(ticket::Ticket::Linear(id)) => ticket::main(Some(id)),
+            None => ticket::main(None),
+        };
+    }
     let arg = args.first().cloned().unwrap_or_default();
-    let id = ticket::id_of(&arg).filter(|_| !std::path::Path::new(&arg).is_dir());
-    let id = match id {
-        Some(id) => Some(id),
-        None => ticket::id_for_dir(&dir_arg(args.first())),
-    };
-    ticket::main(id)
+    let given = ticket::Ticket::parse(&arg).filter(|_| !std::path::Path::new(&arg).is_dir());
+    let found = given.or_else(|| {
+        let dir = dir_arg(args.first());
+        ticket::of_dir(&dir, crate::repos::tickets_known(&dir).as_deref())
+    });
+    match found {
+        Some(ticket::Ticket::Issue { repo, number }) => issue::main(repo, number),
+        Some(ticket::Ticket::Project(id)) => project::main(id),
+        Some(ticket::Ticket::Linear(id)) => ticket::main(Some(id)),
+        None => ticket::main(None),
+    }
 }
 
 /// `switchboard link-view <url>`.

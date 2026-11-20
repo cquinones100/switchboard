@@ -333,7 +333,7 @@ impl Names {
         // harmless: Linear has no such ticket, and the name is used as usual.
         let ticket = place
             .filter(|_| switches.tickets())
-            .and_then(|p| linear::ticket_in(&p.branch));
+            .and_then(|p| crate::views::ticket::id_in_branch(&p.branch));
         let title = ticket.as_ref().and_then(|id| {
             let known = self.titles.entry(id.clone()).or_insert(Known {
                 value: None,

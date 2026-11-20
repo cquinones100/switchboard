@@ -502,7 +502,8 @@ mod tests {
             &HashMap::new(),
         );
         assert!(easy.iter().any(|i| key_of(i) == Some("⌘S")));
-        // The workspace's GitHub keys go with GitHub.
+        // The workspace's GitHub keys go with GitHub, but those that work
+        // with Linear too (M-i, the tab's ticket).
         let off = items(
             &Bindings::default(),
             Shown {
@@ -511,7 +512,11 @@ mod tests {
             },
             &HashMap::new(),
         );
-        assert!(!off.iter().any(|i| i.detail.contains("#github")));
+        assert!(
+            !off.iter()
+                .any(|i| i.detail.contains("#github") && !i.detail.contains("#linear"))
+        );
+        assert!(off.iter().any(|i| i.detail.contains("#github")));
     }
 
     #[test]

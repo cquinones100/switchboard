@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 use super::board::{self, Board, Part, Piece};
 use super::follow;
 use super::pager::{self, Content};
-use crate::integrations::linear;
+use crate::integrations::{github, linear};
 use crate::photos::{Service, Who};
 use crate::ui::kit::{self, Mark, Tone};
 use crate::{paths, settings, util};
@@ -47,6 +47,21 @@ const QUERY: &str = "query($id: String!) { issue(id: $id) { \
 static ID: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[A-Za-z][A-Za-z0-9]*-[0-9]+$").unwrap());
 static IN_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[A-Z][A-Z0-9]*-[0-9]+").unwrap());
+/// A Linear project's ID in a branch, in any case.
+static PROJECT_IN_BRANCH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(?:^|[^A-Za-z0-9])(P-[A-Z][A-Z0-9]*-[0-9]+)(?:$|[^A-Za-z0-9])").unwrap()
+});
+/// A ticket's ID in a branch, in any case, as `linear::ticket_in` finds it.
+static TICKET_IN_BRANCH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)[a-z][a-z0-9]*-[0-9]+").unwrap());
+/// A Linear project's ID, `P-<TEAM>-<n>`.
+static PROJECT_ID: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(?i)P-[A-Z][A-Z0-9]*-[0-9]+$").unwrap());
+static PROJECT_IN_NAME: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?:^|[^A-Za-z0-9])([Pp]-[A-Z][A-Z0-9]*-[0-9]+)(?:$|[^A-Za-z0-9])").unwrap()
+});
+static ISSUE_BRANCH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^issue/([0-9]+)(?:-|$)").unwrap());
 static LINEAR_URL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(^|[^(<])<?(https://linear\.app/[^/\s]+/issue/([A-Z][A-Z0-9]*-\d+)[^\s)>]*)>?")
         .unwrap()
@@ -61,13 +76,244 @@ pub fn id_of(text: &str) -> Option<String> {
 /// The ticket a directory's branch names (linear-ticket.sh's match).
 pub fn id_for_dir(dir: &Path) -> Option<String> {
     let place = crate::tabs::git::locate(dir).filter(|p| p.on_branch())?;
-    linear::ticket_in(&place.branch)
+    id_in_branch(&place.branch)
+}
+
+/// The Linear ticket a branch names, in capitals, never the end of a
+/// project's ID: what the tab's name and M-i read from a branch alike.
+pub fn id_in_branch(branch: &str) -> Option<String> {
+    branch_ticket(branch).map(|(_, id)| id)
+}
+
+/// The first ticket ID a branch names, in capitals, and where: as
+/// `linear::ticket_in` finds one, but never the end of a project's ID
+/// (`p-abc-4-eng-7` gives ENG-7).
+fn branch_ticket(branch: &str) -> Option<(usize, String)> {
+    TICKET_IN_BRANCH
+        .find_iter(branch)
+        .find(|m| {
+            let before = &branch[..m.start()];
+            let alnum = |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric());
+            let whole = !alnum(before.chars().last()) && !alnum(branch[m.end()..].chars().next());
+            let project_end = (before.ends_with("p-") || before.ends_with("P-"))
+                && !before[..before.len() - 2]
+                    .chars()
+                    .last()
+                    .is_some_and(|c| c.is_ascii_alphanumeric());
+            whole && !project_end
+        })
+        .map(|m| (m.start(), m.as_str().to_ascii_uppercase()))
 }
 
 /// The ticket a tab's name gives, in capitals as Linear writes them
-/// ("Shaping ABC-123: ...").
+/// ("Shaping ABC-123: ..."): a whole word, never the end of a project's ID
+/// (`P-ABC-4` names no ticket `ABC-4`).
 pub fn id_in_name(name: &str) -> Option<String> {
-    IN_NAME.find(name).map(|m| m.as_str().to_string())
+    ticket_word(name).map(|(_, id)| id)
+}
+
+/// Where the first ticket ID in `name` is, and the ID: a word of its own
+/// (`feat-ABC-42-fix` gives ABC-42), never part of a longer word or the
+/// end of a project's ID (`P-ABC-4`).
+fn ticket_word(name: &str) -> Option<(usize, String)> {
+    let alnum = |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric());
+    IN_NAME
+        .find_iter(name)
+        .find(|m| {
+            let before = &name[..m.start()];
+            let project_end = before
+                .strip_suffix("P-")
+                .or_else(|| before.strip_suffix("p-"))
+                .is_some_and(|b| !alnum(b.chars().last()));
+            !alnum(before.chars().last()) && !alnum(name[m.end()..].chars().next()) && !project_end
+        })
+        .map(|m| (m.start(), m.as_str().to_string()))
+}
+
+/// What a branch names in Linear: a project's ID (`p-abc-4-review`) or a
+/// ticket's, whichever comes first.
+pub fn linear_in_branch(branch: &str) -> Option<Ticket> {
+    let project = PROJECT_IN_BRANCH
+        .captures(branch)
+        .and_then(|c| c.get(1))
+        .map(|m| (m.start(), Ticket::Project(m.as_str().to_ascii_uppercase())));
+    let ticket = branch_ticket(branch).map(|(at, id)| (at, Ticket::Linear(id)));
+    match (project, ticket) {
+        (Some(p), Some(t)) => Some(if p.0 <= t.0 { p.1 } else { t.1 }),
+        (p, t) => p.or(t).map(|(_, found)| found),
+    }
+}
+
+/// The Linear project a name gives (`Shaping P-ABC-4: ...`), in capitals.
+pub fn project_in_name(name: &str) -> Option<String> {
+    PROJECT_IN_NAME
+        .captures(name)
+        .map(|c| c[1].to_ascii_uppercase())
+}
+
+/// What a tab's work is on, by the service that keeps it: a Linear ticket,
+/// a Linear project, or one of the repository's GitHub issues.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Ticket {
+    Linear(String),
+    /// A project, by what Linear's `project(id:)` takes: its `P-<TEAM>-<n>`
+    /// identifier, or its slug.
+    Project(String),
+    Issue {
+        repo: github::Repo,
+        number: u64,
+    },
+}
+
+impl Ticket {
+    /// What `switchboard ticket-view` and `@tab_ticket` take:
+    /// `ENG-42`, `project:P-ENG-4`, `owner/repo#12`.
+    pub fn arg(&self) -> String {
+        match self {
+            Ticket::Linear(id) => id.clone(),
+            Ticket::Project(id) => format!("project:{id}"),
+            Ticket::Issue { repo, number } => format!("{repo}#{number}"),
+        }
+    }
+
+    /// `arg`'s inverse; a bare `P-<TEAM>-<n>` is a project too.
+    pub fn parse(text: &str) -> Option<Ticket> {
+        Ticket::parse_any(text).filter(Ticket::plain)
+    }
+
+    /// Whether an issue's repository is names alone, never `.` or `..`,
+    /// which would reach past its cache folder or GitHub path.
+    fn plain(&self) -> bool {
+        match self {
+            Ticket::Issue { repo, .. } => [&repo.owner, &repo.name]
+                .iter()
+                .all(|part| !part.is_empty() && part.chars().any(|c| c != '.')),
+            _ => true,
+        }
+    }
+
+    fn parse_any(text: &str) -> Option<Ticket> {
+        let text = text.trim();
+        if let Some(id) = text.strip_prefix("project:").filter(|id| !id.is_empty()) {
+            return Some(Ticket::Project(id.to_string()));
+        }
+        if PROJECT_ID.is_match(text) {
+            return Some(Ticket::Project(text.to_ascii_uppercase()));
+        }
+        if let Some((repo, number)) = crate::autopilot::issues::parse_reference(text) {
+            return Some(Ticket::Issue { repo, number });
+        }
+        id_of(text).map(Ticket::Linear)
+    }
+
+    /// How it is named to you: `ENG-42`, `P-ENG-4`, `owner/repo#12`.
+    pub fn shown(&self) -> String {
+        match self {
+            Ticket::Project(id) => id.clone(),
+            other => other.arg(),
+        }
+    }
+
+    /// The setting of the service that keeps it.
+    pub fn service(&self) -> &'static str {
+        match self {
+            Ticket::Issue { .. } => "github",
+            _ => "linear",
+        }
+    }
+
+    /// Its link, when it is known without asking: an issue's.
+    pub fn url(&self) -> Option<String> {
+        match self {
+            Ticket::Issue { repo, number } => {
+                Some(format!("https://github.com/{repo}/issues/{number}"))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// The GitHub issue a branch was started for (`wtn --issue`), from the
+/// text of its repository's git config and its origin: its
+/// `branch.<branch>.wtnIssue`, else an `issue/<number>-<slug>` branch's
+/// number in origin's repository.
+pub fn issue_of_branch(
+    config: &str,
+    branch: &str,
+    origin: Option<&github::Repo>,
+) -> Option<Ticket> {
+    if let Some(issue) = crate::tabs::title::branch_value(config, branch, "wtnIssue")
+        .and_then(|r| Ticket::parse(&r))
+        .filter(|t| matches!(t, Ticket::Issue { .. }))
+    {
+        return Some(issue);
+    }
+    let number = issue_number_of_branch(branch)?;
+    Some(Ticket::Issue {
+        repo: origin?.clone(),
+        number,
+    })
+    .filter(Ticket::plain)
+}
+
+/// The number an `issue/<number>-<slug>` branch was named for.
+pub fn issue_number_of_branch(branch: &str) -> Option<u64> {
+    ISSUE_BRANCH.captures(branch)?[1].parse().ok()
+}
+
+/// The ticket a directory's branch is for, from git's own files, by the
+/// repository's ticket provider (repos.json's `tickets`): its GitHub issue
+/// with `github`, its Linear ticket with `linear`, and with none set the
+/// issue, else the Linear ticket; of these, the first whose service is on.
+pub fn of_dir(dir: &Path, provider: Option<&str>) -> Option<Ticket> {
+    first_on(of_dir_all(dir, provider))
+}
+
+/// Every ticket `of_dir` chooses from, in its order.
+pub fn of_dir_all(dir: &Path, provider: Option<&str>) -> Vec<Ticket> {
+    let Some(place) = crate::tabs::git::locate(dir).filter(|p| p.on_branch()) else {
+        return Vec::new();
+    };
+    let issue = || {
+        let config = std::fs::read_to_string(place.common_dir.join("config")).unwrap_or_default();
+        let origin = crate::sources::repo::origin_of(dir);
+        issue_of_branch(&config, &place.branch, origin.as_ref())
+    };
+    let linear = || linear_in_branch(&place.branch);
+    match provider {
+        Some("github") => issue().into_iter().collect(),
+        Some("linear") => linear().into_iter().collect(),
+        _ => issue().into_iter().chain(linear()).collect(),
+    }
+}
+
+/// The first of `found` whose service is on in Settings, else the first,
+/// so one of a service turned off gives way to the next and is said to be
+/// off only when nothing else is found.
+pub fn first_on(found: Vec<Ticket>) -> Option<Ticket> {
+    let on = found
+        .iter()
+        .position(|t| crate::settings::is_on(t.service()));
+    let mut found = found;
+    match on {
+        Some(at) => Some(found.swap_remove(at)),
+        None => found.into_iter().next(),
+    }
+}
+
+/// The ticket or project a name you gave a tab names, whatever the
+/// repository's provider, since you named it.
+pub fn in_name(name: &str) -> Option<Ticket> {
+    // Whichever the name gives first.
+    let project = PROJECT_IN_NAME
+        .captures(name)
+        .and_then(|c| c.get(1))
+        .map(|m| (m.start(), Ticket::Project(m.as_str().to_ascii_uppercase())));
+    let ticket = ticket_word(name).map(|(at, id)| (at, Ticket::Linear(id)));
+    match (project, ticket) {
+        (Some(p), Some(t)) => Some(if p.0 < t.0 { p.1 } else { t.1 }),
+        (p, t) => p.or(t).map(|(_, found)| found),
+    }
 }
 
 /// Every ticket ID `text` names, each once, in order.
@@ -572,6 +818,139 @@ pub async fn fetch(id: &str) -> Result<Value, String> {
         .ok_or_else(|| format!("Linear has no ticket {id}."))
 }
 
+/// A ticket or project of yours, for the picker that chooses a tab's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Yours {
+    pub ticket: Ticket,
+    /// Its ID, title and state, as the picker lists it.
+    pub row: String,
+    created: String,
+}
+
+const YOUR_TICKETS: &str = "query($after: String) { viewer { \
+    assignedIssues(first: 50, after: $after, orderBy: createdAt) { \
+    nodes { identifier title createdAt state { name } } pageInfo { hasNextPage endCursor } } } }";
+const YOUR_PROJECTS: &str = "query($after: String) { projects(first: 50, after: $after, orderBy: createdAt, \
+    filter: { members: { some: { isMe: { eq: true } } } }) { \
+    nodes { id name createdAt status { name } } pageInfo { hasNextPage endCursor } } }";
+
+/// Every page of a list `query` asks for, its connection at `at`, as one
+/// answer of the first page's shape: up to twenty pages (a thousand), the
+/// picker filtering them on the server's task. A page after the first
+/// that fails, or one past the twentieth, ends the list there, and says so.
+async fn every_page(
+    query: &str,
+    at: &str,
+    source: &str,
+) -> anyhow::Result<(Value, Option<String>)> {
+    let mut whole = linear::graphql(query, json!({}), source).await?;
+    let mut all: Vec<Value> = nodes(&whole, &format!("{at}/nodes"))
+        .into_iter()
+        .cloned()
+        .collect();
+    let mut info = whole.pointer(&format!("{at}/pageInfo")).cloned();
+    let mut stopped = None;
+    for _ in 1..20 {
+        let more = info.as_ref().and_then(|i| {
+            (i.get("hasNextPage") == Some(&json!(true)))
+                .then(|| i.get("endCursor").cloned())
+                .flatten()
+        });
+        let Some(after) = more else {
+            break;
+        };
+        match linear::graphql(query, json!({ "after": after }), source).await {
+            Ok(page) => {
+                all.extend(nodes(&page, &format!("{at}/nodes")).into_iter().cloned());
+                info = page.pointer(&format!("{at}/pageInfo")).cloned();
+            }
+            Err(e) => {
+                stopped = Some(e.to_string());
+                break;
+            }
+        }
+    }
+    let more = info
+        .as_ref()
+        .is_some_and(|i| i.get("hasNextPage") == Some(&json!(true)));
+    if stopped.is_none() && more {
+        stopped = Some(format!("the first {} are listed", all.len()));
+    }
+    if let Some(list) = whole.pointer_mut(&format!("{at}/nodes")) {
+        *list = Value::Array(all);
+    }
+    Ok((whole, stopped))
+}
+
+/// What the picker lists, and what of it Linear couldn't give.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Lists {
+    pub found: Vec<Yours>,
+    /// A line for each list not read, or read only in part.
+    pub missing: Vec<String>,
+}
+
+/// The tickets assigned to you and the projects you're a member of, most
+/// recently created first, with what couldn't be read; an error when
+/// nothing could.
+pub async fn yours() -> Result<Lists, String> {
+    const SOURCE: &str = "choose a tab's ticket";
+    let tickets = every_page(YOUR_TICKETS, "/viewer/assignedIssues", SOURCE).await;
+    let projects = every_page(YOUR_PROJECTS, "/projects", SOURCE).await;
+    let found = yours_in(
+        tickets.as_ref().map(|(v, _)| v).unwrap_or(&Value::Null),
+        projects.as_ref().map(|(v, _)| v).unwrap_or(&Value::Null),
+    );
+    let missing: Vec<String> = [("tickets", &tickets), ("projects", &projects)]
+        .into_iter()
+        .filter_map(|(what, read)| match read {
+            Err(e) => Some(format!("Couldn't list your {what}: {e}")),
+            Ok((_, Some(e))) => Some(format!("Only some of your {what} are listed: {e}")),
+            Ok((_, None)) => None,
+        })
+        .collect();
+    if found.is_empty() && !missing.is_empty() {
+        return Err(missing.join("\n"));
+    }
+    Ok(Lists { found, missing })
+}
+
+/// `yours` from Linear's answers.
+pub fn yours_in(tickets: &Value, projects: &Value) -> Vec<Yours> {
+    let text = |v: &Value, path: &str| name_at(v, path).unwrap_or_default();
+    let mut out: Vec<Yours> = nodes(tickets, "/viewer/assignedIssues/nodes")
+        .into_iter()
+        .filter_map(|t| {
+            let id = name_at(t, "/identifier")?;
+            Some(Yours {
+                row: format!("{id}  {} · {}", text(t, "/title"), text(t, "/state/name")),
+                ticket: Ticket::Linear(id),
+                created: text(t, "/createdAt"),
+            })
+        })
+        .collect();
+    let projects = nodes(projects, "/projects/nodes");
+    // Two projects of one name are told apart by the day each was created.
+    let shared_name = |name: &str| projects.iter().filter(|p| text(p, "/name") == name).count() > 1;
+    out.extend(projects.iter().filter_map(|p| {
+        let id = name_at(p, "/id")?;
+        let name = text(p, "/name");
+        let created = text(p, "/createdAt");
+        let day = if shared_name(&name) {
+            format!(" · created {}", created.get(..10).unwrap_or(&created))
+        } else {
+            String::new()
+        };
+        Some(Yours {
+            row: format!("Project  {name} · {}{day}", text(p, "/status/name")),
+            ticket: Ticket::Project(id),
+            created,
+        })
+    }));
+    out.sort_by(|a, b| b.created.cmp(&a.created));
+    out
+}
+
 pub(crate) fn cache_file(id: &str) -> std::path::PathBuf {
     paths::cache_dir()
         .join("ticket-view")
@@ -729,6 +1108,154 @@ mod tests {
             tidy("[x](https://linear.app/t/issue/AB-1)"),
             "[x](https://linear.app/t/issue/AB-1)",
             "a link already named stays"
+        );
+    }
+
+    #[test]
+    fn a_name_gives_a_ticket_as_a_whole_word_and_a_project_by_its_id() {
+        assert_eq!(id_in_name("Shaping P-ABC-4: x"), None);
+        assert_eq!(
+            in_name("Shaping P-ABC-4: x"),
+            Some(Ticket::Project("P-ABC-4".into()))
+        );
+        assert_eq!(in_name("ABC-12: x"), Some(Ticket::Linear("ABC-12".into())));
+        assert_eq!(
+            in_name("P-ABC-4-follow-up"),
+            Some(Ticket::Project("P-ABC-4".into()))
+        );
+        assert_eq!(
+            in_name("Shaping ABC-42: follow up on P-ABC-4"),
+            Some(Ticket::Linear("ABC-42".into())),
+            "the first the name gives"
+        );
+        assert_eq!(id_in_name("XABC-12x"), None);
+        assert_eq!(id_in_name("ABC-42-fix-login"), Some("ABC-42".into()));
+        assert_eq!(id_in_name("feat-ABC-42-fix-login"), Some("ABC-42".into()));
+        assert_eq!(id_in_name("plan-P-ABC-4-review"), None);
+        assert_eq!(
+            in_name("Shaping p-ENG-4"),
+            Some(Ticket::Project("P-ENG-4".into()))
+        );
+        assert_eq!(
+            in_name("plan-P-ABC-4-review"),
+            Some(Ticket::Project("P-ABC-4".into()))
+        );
+        assert_eq!(
+            branch_ticket("p-abc-4-eng-7-fix"),
+            Some((8, "ENG-7".into()))
+        );
+        assert_eq!(branch_ticket("eng-42x-fix"), None);
+        assert_eq!(branch_ticket("feature/123eng-42-fix"), None);
+        assert_eq!(branch_ticket("me/eng-42"), Some((3, "ENG-42".into())));
+        assert_eq!(
+            linear_in_branch("p-abc-4-review-cost"),
+            Some(Ticket::Project("P-ABC-4".into()))
+        );
+        assert_eq!(
+            linear_in_branch("eng-42-p-abc-4"),
+            Some(Ticket::Linear("ENG-42".into()))
+        );
+    }
+
+    #[test]
+    fn a_ticket_reads_back_from_what_it_is_written_as() {
+        let issue = Ticket::Issue {
+            repo: github::Repo {
+                owner: "acme".into(),
+                name: "widgets".into(),
+            },
+            number: 12,
+        };
+        for t in [
+            Ticket::Linear("ENG-4".into()),
+            Ticket::Project("P-ENG-4".into()),
+            Ticket::Project("1f2e-uuid".into()),
+            issue.clone(),
+        ] {
+            assert_eq!(Ticket::parse(&t.arg()), Some(t));
+        }
+        assert_eq!(
+            Ticket::parse("p-eng-4"),
+            Some(Ticket::Project("P-ENG-4".into()))
+        );
+        assert_eq!(issue.service(), "github");
+        assert_eq!(
+            issue.url().as_deref(),
+            Some("https://github.com/acme/widgets/issues/12")
+        );
+    }
+
+    /// A checkout made of git's files alone, on `branch`, its config `config`.
+    fn checkout(branch: &str, config: &str) -> crate::tabs::git::tests::Scratch {
+        let dir =
+            crate::tabs::git::tests::Scratch::new(&format!("ticket-{}", branch.replace('/', "-")));
+        let git = dir.0.join(".git");
+        let head = git.join("refs/heads").join(branch);
+        std::fs::create_dir_all(head.parent().unwrap()).unwrap();
+        std::fs::write(&head, "0123456789012345678901234567890123456789\n").unwrap();
+        std::fs::write(git.join("HEAD"), format!("ref: refs/heads/{branch}\n")).unwrap();
+        std::fs::write(git.join("config"), config).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_branch_s_ticket_is_its_issue_or_its_linear_ticket_as_the_provider_says() {
+        let origin = "[remote \"origin\"]\n\turl = git@github.com:acme/widgets.git\n";
+        let dir = checkout("issue/12-eng-7-fix", origin);
+        let issue = Ticket::Issue {
+            repo: github::Repo {
+                owner: "acme".into(),
+                name: "widgets".into(),
+            },
+            number: 12,
+        };
+        assert_eq!(of_dir(&dir.0, Some("github")), Some(issue.clone()));
+        assert_eq!(of_dir(&dir.0, None), Some(issue));
+        assert_eq!(
+            of_dir(&dir.0, Some("linear")),
+            Some(Ticket::Linear("ENG-7".into()))
+        );
+
+        // The issue its config names, whatever the branch is called.
+        let named = format!("{origin}[branch \"fix-it\"]\n\twtnIssue = acme/other#40\n");
+        let dir = checkout("fix-it", &named);
+        assert_eq!(
+            of_dir(&dir.0, None),
+            Some(Ticket::Issue {
+                repo: github::Repo {
+                    owner: "acme".into(),
+                    name: "other".into(),
+                },
+                number: 40,
+            })
+        );
+        let dir = checkout("eng-9-thing", origin);
+        assert_eq!(of_dir(&dir.0, Some("github")), None);
+        assert_eq!(of_dir(&dir.0, None), Some(Ticket::Linear("ENG-9".into())));
+    }
+
+    #[test]
+    fn your_tickets_and_projects_list_newest_first() {
+        let tickets = json!({ "viewer": { "assignedIssues": { "nodes": [
+            { "identifier": "AB-1", "title": "Old", "createdAt": "2026-01-01T00:00:00Z", "state": { "name": "Todo" } },
+            { "identifier": "AB-2", "title": "New", "createdAt": "2026-03-01T00:00:00Z", "state": { "name": "Done" } }
+        ] } } });
+        let projects = json!({ "projects": { "nodes": [
+            { "id": "p1", "name": "Speed", "createdAt": "2026-02-01T00:00:00Z", "status": { "name": "Backlog" } },
+            { "id": "p2", "name": "Speed", "createdAt": "2025-12-01T00:00:00Z", "status": { "name": "Done" } }
+        ] } });
+        let rows: Vec<String> = yours_in(&tickets, &projects)
+            .into_iter()
+            .map(|y| format!("{} = {}", y.row, y.ticket.arg()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                "AB-2  New · Done = AB-2",
+                "Project  Speed · Backlog · created 2026-02-01 = project:p1",
+                "AB-1  Old · Todo = AB-1",
+                "Project  Speed · Done · created 2025-12-01 = project:p2"
+            ]
         );
     }
 }

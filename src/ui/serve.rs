@@ -1276,7 +1276,7 @@ impl Server {
     /// in a pane's place gives the place back, and Notes' own tab closes
     /// with its last pane, as before. With `keep_tab` off (Settings'
     /// close_tab_from_claude), the last pane closes its tab.
-    fn close_only_pane(&mut self, pane: PaneId, keep_tab: bool) {
+    pub(crate) fn close_only_pane(&mut self, pane: PaneId, keep_tab: bool) {
         let Some(slot) = self.panes.get(&pane) else {
             return;
         };

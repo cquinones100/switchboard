@@ -178,9 +178,16 @@ pub fn entries(
             keys: Vec::new(),
         }
     }));
-    let off = |tags: &str, tag: &str| tags.split(' ').any(|t| t == tag);
-    by_action
-        .retain(|e| (github || !off(&e.tags, "#github")) && (linear || !off(&e.tags, "#linear")));
+    // Left out while every service it is tagged with is off, as
+    // `integrations::tagged_off` refuses it.
+    let tagged = |tags: &str, tag: &str| tags.split(' ').any(|t| t == tag);
+    by_action.retain(|e| {
+        let services = [("#github", github), ("#linear", linear)]
+            .into_iter()
+            .filter(|(tag, _)| tagged(&e.tags, tag));
+        let mut services = services.peekable();
+        services.peek().is_none() || services.any(|(_, on)| on)
+    });
     by_action.sort_by(|a, b| {
         (&a.words, &a.tags)
             .cmp(&(&b.words, &b.tags))
