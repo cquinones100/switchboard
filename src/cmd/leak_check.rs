@@ -38,6 +38,12 @@
 //! landing without asking (autopilot's "Land without asking")
 //! asks after all when it finds anything.
 //!
+//! `leak-check --file <path>` reads one file's text instead, outside any
+//! git range (an issue's body, written out before `/shape` posts it): every
+//! line by the same rules, none taken for a test's and nothing left out,
+//! each hit printed as `<path>:<line>: <kind>: <text>`, with the same exit
+//! codes.
+//!
 //! JavaScript's look-arounds, which Rust's regex hasn't, are the boundary
 //! checks of `bounded`, tried again one character on wherever one fails,
 //! as a backtracking search would.
@@ -475,11 +481,57 @@ pub fn look(dir: Option<&Path>, range: &str) -> Result<Looked, String> {
     Ok(Looked { kept, left, base })
 }
 
+/// Every hit in `text`, a file's whole text outside any range, shown as
+/// `<name>:<line>: <kind>: <text>`, each once, in the order found.
+pub fn file_hits(name: &str, text: &str, words: &[String]) -> Vec<Hit> {
+    let mut found: Vec<Hit> = Vec::new();
+    for (i, row) in text.lines().enumerate() {
+        for (kind, shown, whole) in found_in(row, false, words) {
+            found.push(Hit {
+                shown: format!("{name}:{}: {kind}: {shown}", i + 1),
+                file: Some(name.to_string()),
+                kind,
+                whole,
+            });
+        }
+    }
+    let mut seen = HashSet::new();
+    found.retain(|hit| seen.insert((hit.shown.clone(), hit.whole.clone())));
+    found
+}
+
+/// `leak-check --file <path>`: the file's hits, or why it can't look.
+fn look_file(path: &str) -> Result<Vec<Hit>, String> {
+    let words = read_words(&words_file())?;
+    let text = std::fs::read_to_string(path).map_err(|e| format!("can't read {path}: {e}"))?;
+    Ok(file_hits(path, &text, &words))
+}
+
+const USAGE: &str = "usage: leak-check [--all] <range>\n       leak-check --file <path>";
+
 pub fn main(args: Vec<String>) -> ExitCode {
+    if args.first().is_some_and(|a| a == "--file") {
+        let [_, path] = args.as_slice() else {
+            eprintln!("{USAGE}");
+            return ExitCode::from(2);
+        };
+        return match look_file(path) {
+            Ok(kept) => {
+                for hit in &kept {
+                    println!("{}", hit.shown);
+                }
+                ExitCode::from(if kept.is_empty() { 0 } else { 1 })
+            }
+            Err(e) => {
+                eprintln!("leak-check: {e}");
+                ExitCode::from(2)
+            }
+        };
+    }
     let all = args.iter().any(|a| a == "--all");
     let rest: Vec<&String> = args.iter().filter(|a| *a != "--all").collect();
     let [range] = rest.as_slice() else {
-        eprintln!("usage: leak-check [--all] <range>");
+        eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
     let Looked { kept, left, base } = match look(None, range) {

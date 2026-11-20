@@ -41,6 +41,7 @@ pub mod slack_updates_save;
 pub mod slot;
 pub mod statusline;
 pub mod tabs;
+pub mod tickets;
 pub mod today_save;
 pub mod try_;
 pub mod try_sealed;
@@ -293,9 +294,14 @@ pub const COMMANDS: &[Command] = &[
         about: "How the repository here lands its work: through a PR or straight on its default branch, and a direct landing's steps",
     },
     Command {
+        name: "tickets",
+        run: tickets::main,
+        about: "Where the repository here keeps its work (github, linear or notes), which /shape files new work in, and the label autopilot takes its issues by",
+    },
+    Command {
         name: "leak-check",
         run: leak_check::main,
-        about: "What a range of commits adds that may identify you or your employer, before a push to a public repository",
+        about: "What a range of commits adds, or a file holds (--file), that may identify you or your employer, before it goes to a public repository",
     },
     Command {
         name: "apply-actions",

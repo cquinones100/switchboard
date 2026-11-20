@@ -5,6 +5,7 @@
 //! shape <what the ticket is about>
 //! shape <linear-ticket-id-or-url> [what to do with it]
 //! shape --continue <linear-ticket-id-or-url> [what to do with it]
+//! shape --linear | --github | --notes <what the work is about>
 //! ```
 //!
 //! Claude reads the code, checks Linear for tickets that already cover it,
@@ -13,7 +14,10 @@
 //! session you already have; this only gets the session started in the
 //! right place. `--continue` (before the ticket or right after it) carries
 //! straight on refining a ticket, without /shape first asking whether to
-//! review it.
+//! review it. A source (`--linear`, `--github` or `--notes`, before the
+//! rest) is passed on to /shape, which files the work there rather than
+//! where the repository keeps it; M-p's note actions and shape-batch pass
+//! `--linear`, the Linear flows they are named for.
 //!
 //! It runs in the repository's main checkout, even when called from a
 //! worktree, since a ticket being shaped has no branch yet. It fetches first
@@ -36,7 +40,7 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(20);
 
 fn usage() -> ExitCode {
     eprintln!(
-        "Usage: shape <what the ticket is about>\n       shape [--continue] <linear-ticket-id-or-url> [what to do with it]\n\nExamples:\n  shape \"people can't tell which phase is active\"\n  shape ABC-123\n  shape ABC-123 split out the API part"
+        "Usage: shape [--linear | --github | --notes] <what the work is about>\n       shape [--continue] <linear-ticket-id-or-url> [what to do with it]\n\nExamples:\n  shape \"people can't tell which phase is active\"\n  shape ABC-123\n  shape ABC-123 split out the API part"
     );
     ExitCode::from(1)
 }
@@ -54,10 +58,14 @@ pub struct Asked {
     pub tab_name: String,
 }
 
-/// Reads the arguments (with `--continue` taken out) into the prompt and
-/// the tab's name: a ticket alone, or a ticket first and then what to do
-/// with it, or an idea in words.
-pub fn asked(args: &[String], carry_on: bool) -> Asked {
+/// The sources /shape takes over the repository's.
+pub const SOURCES: [&str; 3] = ["--linear", "--github", "--notes"];
+
+/// Reads the arguments (with `--continue` and a source taken out) into the
+/// prompt and the tab's name: a ticket alone, or a ticket first and then
+/// what to do with it, or an idea in words; `source` goes first in the
+/// prompt.
+pub fn asked(args: &[String], carry_on: bool, source: Option<&str>) -> Asked {
     let input = args.join(" ").trim().to_string();
     let words: Vec<&str> = input.split_whitespace().collect();
     let first = words.first().copied().unwrap_or("");
@@ -74,9 +82,13 @@ pub fn asked(args: &[String], carry_on: bool) -> Asked {
             if words.len() > 4 { "..." } else { "" }
         ),
     };
+    let shape = match source {
+        Some(s) => format!("/shape {s}"),
+        None => "/shape".to_string(),
+    };
     let prompt = match ticket {
         Some(t) => format!(
-            "/shape {t}{}{}",
+            "{shape} {t}{}{}",
             if carry_on { " --continue" } else { "" },
             if direction.is_empty() {
                 String::new()
@@ -84,9 +96,27 @@ pub fn asked(args: &[String], carry_on: bool) -> Asked {
                 format!(" {direction}")
             }
         ),
-        None => format!("/shape {input}"),
+        None => format!("{shape} {input}"),
     };
     Asked { prompt, tab_name }
+}
+
+/// The source (only as the first argument), whether to carry on, and the
+/// rest. `--continue` counts only before the ticket or right after it:
+/// further on it is part of your direction and passes through as written.
+pub fn flags(args: &[String]) -> (Option<String>, bool, Vec<String>) {
+    let (source, args) = match args.split_first() {
+        Some((first, rest)) if SOURCES.contains(&first.as_str()) => (Some(first.clone()), rest),
+        _ => (None, args),
+    };
+    let flag_at = args.iter().take(2).position(|a| a == "--continue");
+    let rest = args
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| Some(*i) != flag_at)
+        .map(|(_, a)| a.clone())
+        .collect();
+    (source, flag_at.is_some(), rest)
 }
 
 pub fn main(args: Vec<String>) -> ExitCode {
@@ -96,19 +126,11 @@ pub fn main(args: Vec<String>) -> ExitCode {
     {
         return usage();
     }
-    // Only before the ticket or right after it: further on, `--continue` is
-    // part of your direction and passes through as written.
-    let flag_at = args.iter().take(2).position(|a| a == "--continue");
-    let rest: Vec<String> = args
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| Some(*i) != flag_at)
-        .map(|(_, a)| a.clone())
-        .collect();
+    let (source, carry_on, rest) = flags(&args);
     if rest.is_empty() {
         return usage();
     }
-    let asked = asked(&rest, flag_at.is_some());
+    let asked = asked(&rest, carry_on, source.as_deref());
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let Some(root) = main_checkout(&cwd) else {
         return fail("not inside a git repository");
@@ -210,29 +232,71 @@ mod tests {
     #[test]
     fn a_ticket_is_shaped_by_its_identifier_with_the_direction_after_it() {
         assert_eq!(
-            asked(&args(&["abc-12", "split", "out", "the", "API"]), true),
+            asked(&args(&["abc-12", "split", "out", "the", "API"]), true, None),
             Asked {
                 prompt: "/shape ABC-12 --continue split out the API".into(),
                 tab_name: "Shaping: ABC-12".into(),
             }
         );
         assert_eq!(
-            asked(&args(&["https://linear.app/w/issue/ENG-5/title"]), false).prompt,
+            asked(
+                &args(&["https://linear.app/w/issue/ENG-5/title"]),
+                false,
+                None
+            )
+            .prompt,
             "/shape ENG-5"
         );
     }
 
     #[test]
     fn an_idea_is_passed_as_written_and_the_tab_named_by_its_first_words() {
-        let idea = asked(&args(&["people can't tell which phase is active"]), true);
+        let idea = asked(
+            &args(&["people can't tell which phase is active"]),
+            true,
+            None,
+        );
         assert_eq!(
             idea.prompt,
             "/shape people can't tell which phase is active"
         );
         assert_eq!(idea.tab_name, "Shaping: people can't tell which...");
         assert_eq!(
-            asked(&args(&["slow results"]), false).tab_name,
+            asked(&args(&["slow results"]), false, None).tab_name,
             "Shaping: slow results"
+        );
+    }
+
+    #[test]
+    fn a_source_goes_first_in_the_prompt_and_stays_out_of_the_tabs_name() {
+        let idea = asked(&args(&["slow results"]), false, Some("--linear"));
+        assert_eq!(idea.prompt, "/shape --linear slow results");
+        assert_eq!(idea.tab_name, "Shaping: slow results");
+        assert_eq!(
+            asked(&args(&["ABC-7"]), true, Some("--linear")).prompt,
+            "/shape --linear ABC-7 --continue"
+        );
+    }
+
+    #[test]
+    fn a_source_counts_only_first_and_continue_only_before_or_after_the_ticket() {
+        let f = |list: &[&str]| flags(&args(list));
+        assert_eq!(
+            f(&["--linear", "--continue", "ABC-7"]),
+            (Some("--linear".into()), true, args(&["ABC-7"]))
+        );
+        assert_eq!(
+            f(&["ABC-123", "add", "--continue", "support"]),
+            (
+                None,
+                false,
+                args(&["ABC-123", "add", "--continue", "support"])
+            ),
+            "further on, it is direction"
+        );
+        assert_eq!(
+            f(&["ABC-1", "--github"]),
+            (None, false, args(&["ABC-1", "--github"]))
         );
     }
 }

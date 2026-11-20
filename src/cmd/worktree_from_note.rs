@@ -145,7 +145,8 @@ fn usage() -> ExitCode {
          autopilot opened, only one assigned to you and carrying its label.\n\
          A number alone (or #number, or a link) starts the repository's work from where\n\
          repos.json's tickets keeps it: github, the issue as --issue does; linear, the\n\
-         ticket as wt does, a bare number in linear.json's linearTeam.",
+         ticket as wt does, a bare number in linear.json's linearTeam; notes, none:\n\
+         its work is a note's items.",
         worktree::DEFAULT_WORKTREE_DIR
     );
     ExitCode::from(1)
@@ -740,7 +741,7 @@ static BOARD: LazyLock<Regex> = LazyLock::new(|| {
 // reviewed them", "until the design is reviewed", "once you review it",
 // "after your review"; never a mention of a review alone ("when a review
 // comment arrives"). The boards named by number (`BOARD`) are what
-// plan-item writes; this catches the plans worded without them.
+// /shape writes; this catches the plans worded without them.
 static REVIEWED: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)\b(?:once|until|after)\b[^.]*\b(?:reviewed|approved|reviews|approves|(?:review|approve)\s+(?:it|them|this|that|the)\b|(?:your|their|his|her|\w+'s)\s+(?:review|approval)\b)").unwrap()
 });
@@ -1258,8 +1259,8 @@ impl Asked {
 /// `wtn <number>` (or `#<number>`, or a link): the repository's work from
 /// where its `tickets` in repos.json keeps it, a GitHub issue as `--issue`
 /// starts one, a Linear ticket as `wt` does (a bare number in
-/// linear.json's `linearTeam`); refused where `tickets` isn't set, and for
-/// a link to the other provider.
+/// linear.json's `linearTeam`); refused where `tickets` isn't set or is `notes`,
+/// whose items have no numbers, and for a link to the other provider.
 fn by_provider(given: &Given, asked: Asked, made: &mut bool) -> Result<ExitCode, String> {
     let root = worktree::repo_root().map_err(|e| e.to_string())?;
     let tickets = crate::repos::tickets_at(&root)?;
@@ -1272,6 +1273,9 @@ fn by_provider(given: &Given, asked: Asked, made: &mut bool) -> Result<ExitCode,
         (None, _) => Err(format!(
             "{name} has no ticket provider: set its Tickets in Settings (\"tickets\": \"github\" or \"linear\" in {}), or start a GitHub issue with switchboard worktree-from-note --issue <number>",
             crate::files::shown("repos.json")
+        )),
+        (Some("notes"), _) => Err(format!(
+            "{name} keeps its work in a note's checklist, which has no numbers: start an item with switchboard worktree-from-note, or a GitHub issue with --issue <number>"
         )),
         (Some("github"), Asked::Ticket(t)) => Err(format!(
             "{t} is a Linear ticket, and {name} keeps its work in GitHub issues: start it with switchboard worktree-from-ticket {t}"

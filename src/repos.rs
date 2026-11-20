@@ -20,9 +20,11 @@
 //! conflict and the default branch's CI isn't failing (empty or not set, the
 //! tests run again), since a clean rebase changes nothing the tests haven't
 //! seen pass on each side. `tickets` is where the repository's work is
-//! kept, `github` (its issues) or `linear`, unset by default, which `wtn
-//! <number>` starts its work from (`tickets_at`) and M-i
-//! opens a tab's ticket from (`tickets_known`). `apply` is what a change
+//! kept, `github` (its issues), `linear` or `notes` (a note's checklist
+//! and its plans), unset by default, which `wtn <number>` starts its work
+//! from (`tickets_at`), M-i opens a tab's ticket from (`tickets_known`)
+//! and `/shape` files new work in (`switchboard tickets`, Linear when
+//! unset). `apply` is what a change
 //! landed there needs to take effect, which `switchboard apply-actions`
 //! lists in place of what it would work out by itself. The file is yours
 //! and never in this repository; Settings changes it (`set_repo`), never
@@ -145,7 +147,7 @@ pub const REVIEWS: [&str; 2] = ["review-loop", "none"];
 /// repository's CI.
 pub const TEST_IN: [&str; 2] = ["here", "ci"];
 /// Where a repository's work can be kept, its `tickets`.
-pub const TICKETS: [&str; 2] = ["github", "linear"];
+pub const TICKETS: [&str; 3] = ["github", "linear", "notes"];
 /// An answer worked out is kept this long, in ms.
 pub const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 

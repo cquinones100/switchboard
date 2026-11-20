@@ -634,7 +634,7 @@ pub fn key_groups(easy: bool) -> Vec<(&'static str, Vec<(String, String)>)> {
     ]
 }
 
-/// An item M-Enter handed to a new tab's `/plan-item`: the note it is for,
+/// An item M-Enter handed to a new tab's `/shape --notes`: the note it is for,
 /// its words, and how many checklist lines named it then. The note is
 /// known by its stable ID, as autopilot knows one, so it is found however
 /// it was renamed or moved, and a copy, given an ID of its own as it
@@ -759,7 +759,7 @@ pub struct App {
     /// UX 2.0's "Add an item" input while it is typed into (`ga`, or a
     /// click on it): what is typed so far.
     pub adding: Option<String>,
-    /// The items handed to a new tab's `/plan-item` (M-Enter), each kept
+    /// The items handed to a new tab's `/shape --notes` (M-Enter), each kept
     /// until it shows in its note: the repository's picker closed, or the
     /// tab not opened, the last of a note's is back in the input the next
     /// time it opens there.
@@ -2750,7 +2750,7 @@ impl App {
 
     /// A key while "Add an item" is typed into: Enter adds it to the top
     /// list, M-Enter has a new tab's Claude add it and write its plan
-    /// (`/plan-item`, which puts the item in the note itself), Esc leaves
+    /// (`/shape --notes`, which puts the item in the note itself), Esc leaves
     /// it.
     fn adding_key(&mut self, key: Key) {
         let Some(text) = self.adding.as_mut() else {
@@ -2785,7 +2785,7 @@ impl App {
             };
             let rel = self.store.relative(&path);
             // Kept to try again when the workspace didn't take it.
-            if self.press(&[crate::PLAN_ITEM, &rel, &text]) {
+            if self.press(&[crate::SHAPE_ITEM, &rel, &text]) {
                 let lines = self.editor.doc.text.lines();
                 self.planning.push(Planning {
                     items: items_naming(&lines, &text),

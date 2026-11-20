@@ -6,7 +6,7 @@
 //! autopilot read a plan's open choices by too).
 //! New with UX 2.0; the tmux version opened a plan as any other note.
 //!
-//! A plan is the shape `plan-item` writes: `# Plan - <name>`, then `## `
+//! A plan is the shape `/shape` writes for a note's item: `# Plan - <name>`, then `## `
 //! sections (`Today`, `Decision needed` or `Decision`, `Steps`). An option
 //! is a top-level checklist line under `## Decision needed`, `- [ ] A: …`,
 //! "(recommended)" anywhere in it marking that one, the lines indented under

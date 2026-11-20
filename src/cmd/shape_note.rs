@@ -193,9 +193,10 @@ fn notes_offered(notes: &Path) -> Vec<String> {
     names
 }
 
-/// The tab command that runs `shape` with one item, as shape-batch makes it.
+/// The tab command that runs `shape` with one item, as shape-batch makes it,
+/// as a Linear ticket whatever the repository keeps its work in.
 fn shape_tab(item: &str) -> Vec<String> {
-    let script = format!("{} \"$@\"", worktree::self_command("shape"));
+    let script = format!("{} --linear \"$@\"", worktree::self_command("shape"));
     worktree::tab_command(&script, "shape", &[item.to_string()])
 }
 

@@ -9,7 +9,7 @@ use crate::common;
 use std::process::{Command, Output, Stdio};
 
 use common::{BIN, TempDir};
-use switchboard::cmd::leak_check::{Hit, hits, hits_in, is_test, leave_out};
+use switchboard::cmd::leak_check::{Hit, file_hits, hits, hits_in, is_test, leave_out};
 
 struct World {
     dir: TempDir,
@@ -580,4 +580,56 @@ fn a_single_revision_leaves_nothing_out() {
     let run = w.leak_check(&["HEAD"]);
     assert_eq!(run.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&run.stderr).is_empty());
+}
+
+#[test]
+fn a_files_text_is_read_whole_with_its_ticket_ids_and_home_paths_however_named() {
+    let text = format!(
+        "# Ticket\n\nBuilds on FOO-9.\n\nSeen in {}/Desktop/log.txt\n",
+        home_path()
+    );
+    let shown: Vec<String> = file_hits("issue.md", &text, &[])
+        .into_iter()
+        .map(|h| h.shown)
+        .collect();
+    assert_eq!(
+        shown,
+        vec![
+            "issue.md:3: ticket ID: FOO-9".to_string(),
+            format!("issue.md:5: home path: {}", home_path()),
+        ],
+        "a file's IDs count, even one whose name reads as a test's"
+    );
+    assert!(
+        file_hits("tests/issue.md", "Builds on FOO-9.", &[])
+            .iter()
+            .any(|h| h.kind == "ticket ID"),
+        "a file is never taken for a test's"
+    );
+}
+
+#[test]
+fn leak_check_file_exits_1_on_a_hit_0_on_a_clean_file_and_2_when_it_cant_read() {
+    let w = World::new();
+    let dirty = w.dir.path().join("dirty.md");
+    let clean = w.dir.path().join("clean.md");
+    std::fs::write(&dirty, "Follows FOO-9.\n").unwrap();
+    std::fs::write(&clean, "# Add a view\n\nMake the list show its count.\n").unwrap();
+    let run = w.leak_check(&["--file", dirty.to_str().unwrap()]);
+    assert_eq!(run.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim(),
+        format!("{}:1: ticket ID: FOO-9", dirty.display())
+    );
+    let run = w.leak_check(&["--file", clean.to_str().unwrap()]);
+    assert_eq!(run.status.code(), Some(0));
+    assert!(run.stdout.is_empty());
+    let missing = w.dir.path().join("missing.md");
+    assert_eq!(
+        w.leak_check(&["--file", missing.to_str().unwrap()])
+            .status
+            .code(),
+        Some(2)
+    );
+    assert_eq!(w.leak_check(&["--file"]).status.code(), Some(2));
 }

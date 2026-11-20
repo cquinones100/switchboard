@@ -2680,7 +2680,7 @@ fn m_enter_outside_the_workspace_keeps_the_draft() {
 }
 
 #[test]
-fn an_item_handed_to_plan_item_comes_back_until_it_reaches_the_note() {
+fn an_item_handed_to_shape_comes_back_until_it_reaches_the_note() {
     let (_dir, mut app) = started_ux2("plan handed");
     let path = app.store.create("", Some("Design"));
     write(&path, "# Design\n\n- [ ] one\n");
@@ -2716,7 +2716,7 @@ fn an_item_handed_to_plan_item_comes_back_until_it_reaches_the_note() {
     keys(&mut app, "ga");
     assert_eq!(app.adding.as_deref(), Some("kept"));
     app.key(Key::new(KeyCode::Esc, Mods::NONE));
-    // Handed on again, and /plan-item put it in the note: ga starts empty.
+    // Handed on again, and /shape put it in the note: ga starts empty.
     app.planning = handed();
     write(&path, "# Design\n\n- [ ] kept\n- [ ] one\n");
     app.check();
@@ -2950,7 +2950,7 @@ fn a_note_deleted_outside_beside_a_copy_holding_its_id_stays_unsaved() {
 }
 
 #[test]
-fn an_item_handed_to_plan_item_follows_its_note_renamed_outside() {
+fn an_item_handed_to_shape_follows_its_note_renamed_outside() {
     let (dir, mut app) = started_ux2("plan renamed");
     let path = app.store.create("", Some("Design"));
     write(&path, "# Design\n\n- [ ] one\n");
@@ -2970,7 +2970,7 @@ fn an_item_handed_to_plan_item_follows_its_note_renamed_outside() {
 }
 
 #[test]
-fn an_item_handed_to_plan_item_finds_its_note_renamed_outside_while_closed() {
+fn an_item_handed_to_shape_finds_its_note_renamed_outside_while_closed() {
     let (dir, mut app) = started_ux2("plan renamed closed");
     let path = app.store.create("", Some("Design"));
     write(&path, "# Design\n\n- [ ] one\n");
@@ -3034,7 +3034,7 @@ fn a_note_saved_into_a_new_file_unchanged_and_then_renamed_is_followed() {
 }
 
 #[test]
-fn an_item_handed_to_plan_item_finds_its_note_saved_elsewhere_then_renamed() {
+fn an_item_handed_to_shape_finds_its_note_saved_elsewhere_then_renamed() {
     let (dir, mut app) = started_ux2("plan saved renamed");
     let path = app.store.create("", Some("Design"));
     write(&path, "# Design\n\n- [ ] one\n");
