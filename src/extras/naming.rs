@@ -7,7 +7,7 @@
 //! branch names when it names one, else asked for; the ticket's own branch
 //! with `t` clears the name instead, since the tab shows its ticket and
 //! title by itself there, kept current as Linear's title changes. A branch
-//! started for a GitHub issue (`wtn --issue`) is its ticket the same way:
+//! started for a GitHub issue (`wt --issue`) is its ticket the same way:
 //! `t` clears the name, the tab showing `#12: <title>`, and `s` names it
 //! "Shaping: #12".
 //!
@@ -32,7 +32,7 @@ impl Server {
         let mut options = vec![MenuOption::new("Type a name").key('n')];
         // An issue's branch names itself with GitHub on, as a ticket's does
         // with Linear on.
-        let issue = ticket::of_dir_all(&dir, None)
+        let issue = ticket::of_dir_all(&dir, Some("github"))
             .into_iter()
             .find(|t| matches!(t, Ticket::Issue { .. }))
             .filter(|_| settings::is_on("github"));

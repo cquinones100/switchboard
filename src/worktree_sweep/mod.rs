@@ -5,7 +5,7 @@
 //! gigabytes of build output each.
 //!
 //! A repository's worktrees under its main clone's `.claude/worktrees/`
-//! (where `wt`, `wtn` and autopilot make them) are swept: one is removed
+//! (where `wt` and autopilot make them) are swept: one is removed
 //! when it is landed and left alone. Landed means nothing uncommitted or
 //! untracked, and everything its branch changed already on the default
 //! branch as origin last had it: its `HEAD` there (as after a rebase and a

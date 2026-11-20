@@ -239,11 +239,6 @@ pub const COMMANDS: &[Command] = &[
         about: "A worktree for a branch",
     },
     Command {
-        name: "worktree-from-note",
-        run: worktree_from_note::main,
-        about: "A worktree for a note's checklist item",
-    },
-    Command {
         name: "worktree-from-pr",
         run: worktree_from_pr::main,
         about: "A worktree for a pull request",
@@ -251,7 +246,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "worktree-from-ticket",
         run: worktree_from_ticket::main,
-        about: "A worktree for a Linear ticket",
+        about: "A worktree for a Linear ticket, a GitHub issue or a note's checklist item",
     },
     Command {
         name: "worktree-resume",
@@ -422,7 +417,6 @@ const OWN_HELP: &[&str] = &[
     "autopilot-duplicate",
     "worktree-done",
     "worktree-from-branch",
-    "worktree-from-note",
     "worktree-from-pr",
     "worktree-from-ticket",
     "worktree-resume",

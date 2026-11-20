@@ -417,7 +417,7 @@ fn shape_files_where_the_repository_keeps_its_work_and_only_you_start_it() {
 }
 
 #[test]
-fn shape_writes_a_notes_item_and_its_plan_in_the_shape_wtn_reads() {
+fn shape_writes_a_notes_item_and_its_plan_in_the_shape_wt_reads() {
     let all = skills();
     let (_, text) = all.iter().find(|(name, _)| name == "shape").unwrap();
     let notes = section(text, "A note's item");
@@ -462,6 +462,44 @@ fn shape_writes_a_notes_item_and_its_plan_in_the_shape_wtn_reads() {
     assert!(step(8).contains("the item's first line quoted as written"));
 }
 
+// What /shape files it hands to the review loop's ticket mode, started the
+// way the mode's own file says it is, which the review loop reads when given
+// `ticket`.
+#[test]
+fn shape_hands_what_it_files_to_the_review_loop_s_ticket_mode() {
+    let all = skills();
+    let (_, shape) = all.iter().find(|(name, _)| name == "shape").unwrap();
+    let (_, review) = all.iter().find(|(name, _)| name == "review-loop").unwrap();
+    let mode =
+        fs::read_to_string(skills_dir().join("review-loop/references/ticket-mode.md")).unwrap();
+    assert!(
+        mode.contains("It is started as `/review-loop ticket <ticket>`"),
+        "the mode says how it is started"
+    );
+    assert!(
+        review.contains("read `references/ticket-mode.md` beside this file and follow it"),
+        "the review loop reads it when given `ticket`"
+    );
+    let linear = section(shape, "Linear");
+    assert!(linear.contains("run `/review-loop ticket <ID>` on it"));
+    assert!(linear.contains("Run `/review-loop ticket <ID>`, the review loop's ticket mode"));
+    let github = section(shape, "GitHub issues");
+    assert!(github.contains("run `/review-loop ticket <number>`"));
+    for (name, text) in [("shape", shape.as_str()), ("ticket mode", mode.as_str())] {
+        assert!(
+            !text.contains("working tree isn't clean"),
+            "{name}: a ticket's review needs no clean tree"
+        );
+    }
+    // Nothing is written to the ticket before a yes, and a public issue is
+    // checked first.
+    let leak = mode.find("switchboard leak-check --file").unwrap();
+    let asked = mode.find("**Save it to the issue**").unwrap();
+    let edited = mode.find("gh issue edit").unwrap();
+    assert!(leak < asked && asked < edited, "checked, asked, then saved");
+    assert!(mode.contains("switchboard codex-review --ticket <file> --round start"));
+}
+
 /// The retired skill's name, put together so this file doesn't hold it.
 fn retired() -> String {
     ["plan", "item"].join("-")
@@ -504,6 +542,34 @@ fn nothing_names_the_skill_shape_took_the_place_of() {
                     .display()
                     .to_string(),
             );
+        }
+    }
+    assert!(found.is_empty(), "{name} is named in {found:?}");
+    assert!(!skills_dir().join(&name).exists());
+}
+
+#[test]
+fn no_skill_names_the_skill_wt_took_the_place_of() {
+    // Put together so this file doesn't hold it.
+    let name = ["wt", "n"].concat();
+    let mut dirs = vec![skills_dir()];
+    let mut found = Vec::new();
+    while let Some(dir) = dirs.pop() {
+        for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() && entry.file_name() != "node_modules" {
+                dirs.push(path);
+            } else if fs::read_to_string(&path).is_ok_and(|t| {
+                // As a word: the git config keys it named (`wtnItem`) stay.
+                t.match_indices(&name).any(|(at, _)| {
+                    let before = t[..at].chars().next_back();
+                    let after = t[at + name.len()..].chars().next();
+                    !before.is_some_and(|c| c.is_alphanumeric())
+                        && !after.is_some_and(|c| c.is_alphanumeric())
+                })
+            }) {
+                found.push(path.display().to_string());
+            }
         }
     }
     assert!(found.is_empty(), "{name} is named in {found:?}");

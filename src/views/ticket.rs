@@ -250,7 +250,7 @@ impl Ticket {
     }
 }
 
-/// The GitHub issue a branch was started for (`wtn --issue`), from the
+/// The GitHub issue a branch was started for (`wt --issue`), from the
 /// text of its repository's git config and its origin: its
 /// `branch.<branch>.wtnIssue`, else an `issue/<number>-<slug>` branch's
 /// number in origin's repository.
@@ -280,8 +280,8 @@ pub fn issue_number_of_branch(branch: &str) -> Option<u64> {
 
 /// The ticket a directory's branch is for, from git's own files, by the
 /// repository's ticket provider (repos.json's `tickets`): its GitHub issue
-/// with `github`, its Linear ticket with `linear`, and with none set the
-/// issue, else the Linear ticket; of these, the first whose service is on.
+/// with `github`, its Linear ticket with `linear`, and none with `notes`
+/// or none set, since nothing guesses where a repository keeps its work.
 pub fn of_dir(dir: &Path, provider: Option<&str>) -> Option<Ticket> {
     first_on(of_dir_all(dir, provider))
 }
@@ -300,8 +300,25 @@ pub fn of_dir_all(dir: &Path, provider: Option<&str>) -> Vec<Ticket> {
     match provider {
         Some("github") => issue().into_iter().collect(),
         Some("linear") => linear().into_iter().collect(),
-        _ => issue().into_iter().chain(linear()).collect(),
+        _ => Vec::new(),
     }
+}
+
+/// What a reader of a tab's ticket in `dir` says finding none: that the
+/// repository's ticket source isn't set (`repos::unset_words`) when it is
+/// a repository with none set, else `otherwise`. Reads files alone.
+pub fn none_words(dir: &Path, otherwise: &str) -> String {
+    match crate::sources::repo::origin_of(dir) {
+        Some(repo) if crate::repos::tickets_known(dir).is_none() => {
+            crate::repos::unset_words(&repo.to_string())
+        }
+        _ => otherwise.to_string(),
+    }
+}
+
+/// The view with no ticket to show, saying `words`.
+pub fn none(words: String) -> ExitCode {
+    pager::run(Content::Failed(words), None, None)
 }
 
 /// The first of `found` whose service is on in Settings, else the first,
@@ -1264,8 +1281,9 @@ mod tests {
             },
             number: 12,
         };
-        assert_eq!(of_dir(&dir.0, Some("github")), Some(issue.clone()));
-        assert_eq!(of_dir(&dir.0, None), Some(issue));
+        assert_eq!(of_dir(&dir.0, Some("github")), Some(issue));
+        assert_eq!(of_dir(&dir.0, None), None, "no guess while it isn't set");
+        assert_eq!(of_dir(&dir.0, Some("notes")), None);
         assert_eq!(
             of_dir(&dir.0, Some("linear")),
             Some(Ticket::Linear("ENG-7".into()))
@@ -1275,7 +1293,7 @@ mod tests {
         let named = format!("{origin}[branch \"fix-it\"]\n\twtnIssue = acme/other#40\n");
         let dir = checkout("fix-it", &named);
         assert_eq!(
-            of_dir(&dir.0, None),
+            of_dir(&dir.0, Some("github")),
             Some(Ticket::Issue {
                 repo: github::Repo {
                     owner: "acme".into(),
@@ -1286,7 +1304,11 @@ mod tests {
         );
         let dir = checkout("eng-9-thing", origin);
         assert_eq!(of_dir(&dir.0, Some("github")), None);
-        assert_eq!(of_dir(&dir.0, None), Some(Ticket::Linear("ENG-9".into())));
+        assert_eq!(of_dir(&dir.0, None), None);
+        assert_eq!(
+            of_dir(&dir.0, Some("linear")),
+            Some(Ticket::Linear("ENG-9".into()))
+        );
     }
 
     #[test]

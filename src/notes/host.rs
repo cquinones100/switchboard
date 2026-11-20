@@ -119,7 +119,7 @@ impl Host for Core {
             Action::PictureGone { id } => Answer::Text {
                 text: graphics::take_back(id),
             },
-            Action::ItemClaim { dir } => match crate::tabs::title::wtn_claim_at(&dir) {
+            Action::ItemClaim { dir } => match crate::tabs::title::wt_claim_at(&dir) {
                 Some((note, item)) => Answer::Value {
                     value: json!({"note": note, "item": item}),
                 },
@@ -192,7 +192,7 @@ mod tests {
         let folders = host.folders().unwrap();
         assert_eq!(folders.state, crate::paths::state_dir());
         assert_eq!(folders.cache, crate::paths::cache_dir());
-        // Which line work can be started on is wtn's to say.
+        // Which line work can be started on is wt's to say.
         let note = "# Plan\n\n- [ ] one\n  under it\n- [x] done\n\n## Later\n\n- [ ] parked\n";
         assert_eq!(host.item_refused(note, 3), None);
         assert_eq!(host.item_refused(note, 5).as_deref(), Some("is ticked"));

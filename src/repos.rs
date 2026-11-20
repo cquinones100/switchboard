@@ -5,6 +5,7 @@
 //! { "owner/name": { "landing": "direct", "test": "npm test", "squash": true,
 //!                   "testIn": "here", "review": "review-loop", "beforePush": "",
 //!                   "afterRebase": "cargo clippy --all-targets", "tickets": "github",
+//!                   "issueLabel": "autopilot",
 //!                   "apply": [{ "paths": ["db/**"], "label": "Reload the dev server", "command": "make reload" }] } }
 //! ```
 //!
@@ -21,10 +22,14 @@
 //! tests run again), since a clean rebase changes nothing the tests haven't
 //! seen pass on each side. `tickets` is where the repository's work is
 //! kept, `github` (its issues), `linear` or `notes` (a note's checklist
-//! and its plans), unset by default, which `wtn <number>` starts its work
-//! from (`tickets_at`), M-i opens a tab's ticket from (`tickets_known`)
-//! and `/shape` files new work in (`switchboard tickets`, Linear when
-//! unset). `apply` is what a change
+//! and its plans), the one place a repository's tickets are decided: `wt
+//! <number>` starts its work from it (`tickets_at`), M-i opens a tab's
+//! ticket from it (`tickets_known`), `/shape` files new work in it
+//! (`switchboard tickets`) and autopilot takes its work from it. It has no
+//! default: while it isn't set, each of them refuses, naming how to set it
+//! (`unset_words`). `issueLabel`, for `github`, is the label an issue
+//! carries for autopilot to take it, with no default either, so autopilot
+//! takes no issues while it isn't set. `apply` is what a change
 //! landed there needs to take effect, which `switchboard apply-actions`
 //! lists in place of what it would work out by itself. The file is yours
 //! and never in this repository; Settings changes it (`set_repo`), never
@@ -230,9 +235,9 @@ pub fn steps_of(entry: &Map<String, Value>) -> Steps {
     }
 }
 
-/// Sets one landing key, or `tickets`, of a repository's entry, keeping the
-/// rest of it; `landing` `automatic` and `tickets` `unset` take the key
-/// out, so the default decides, and an entry left empty goes. Never over a file that can't be read as a JSON
+/// Sets one landing key, or `tickets` or `issueLabel`, of a repository's
+/// entry, keeping the rest of it; `landing` `automatic`, `tickets` `unset`
+/// and an empty `issueLabel` take the key out, so the default decides, and an entry left empty goes. Never over a file that can't be read as a JSON
 /// object, the version before kept as `repos.json.bak`.
 pub fn set_repo(repo: &str, key: &str, value: Value) -> Result<(), String> {
     set_repo_in(&file(), repo, key, value)
@@ -242,11 +247,14 @@ pub fn set_repo(repo: &str, key: &str, value: Value) -> Result<(), String> {
 pub fn set_repo_in(path: &Path, repo: &str, key: &str, value: Value) -> Result<(), String> {
     let automatic = (key == "landing" && value.as_str() == Some("automatic"))
         || (key == "tickets" && value.as_str() == Some("unset"));
-    let tickets_ok = key == "tickets" && value.as_str().is_some_and(|v| TICKETS.contains(&v));
+    let automatic = automatic || (key == "issueLabel" && value.as_str() == Some(""));
+    let tickets_ok = (key == "tickets" && value.as_str().is_some_and(|v| TICKETS.contains(&v)))
+        || (key == "issueLabel" && value.as_str().is_some_and(label_ok));
     if !automatic && !tickets_ok && !valid(key, &value) {
         return Err(
             if [
                 "tickets",
+                "issueLabel",
                 "landing",
                 "test",
                 "testIn",
@@ -440,10 +448,74 @@ pub fn tickets_at(dir: &Path) -> Result<Option<String>, String> {
 
 /// `tickets_at` from the files alone, origin read from git's config file
 /// and a repos.json that can't be read taken as empty, so no process starts:
-/// what M-i reads on the server's task (`views::ticket::of_dir`).
+/// what M-i and autopilot read on the server's task (`views::ticket::of_dir`,
+/// `autopilot::mode::source_of`).
 pub fn tickets_known(dir: &Path) -> Option<String> {
-    let repo = crate::sources::repo::origin_of(dir)?;
-    tickets_of(&entry_of(&read_safely(), &repo.to_string()))
+    let data = read_safely();
+    keys_known(dir).find_map(|k| tickets_of(&entry_of(&data, &k)))
+}
+
+/// The keys the entry of the repository at `dir` may be under, from git's
+/// files alone: origin's `owner/name`, then its shared git directory, as
+/// `repository_at` keys one with no origin.
+pub fn keys_known(dir: &Path) -> impl Iterator<Item = String> {
+    let origin = crate::sources::repo::origin_of(dir).map(|r| r.to_string());
+    let common = crate::tabs::git::locate(dir).map(|p| p.common_dir.to_string_lossy().into_owned());
+    origin.into_iter().chain(common)
+}
+
+/// The label an issue of the repository at `dir` carries for autopilot to
+/// take it, its `issueLabel`, found as `tickets_at` finds `tickets`;
+/// `None` when it isn't set. Runs git, so off the server's task.
+pub fn issue_label_at(dir: &Path) -> Result<Option<String>, String> {
+    let (_, _, key) =
+        repository_at(dir).ok_or_else(|| format!("{} isn't in a git repository", dir.display()))?;
+    let data = read()
+        .map_err(|e| format!("{} can't be read ({e}); fix it first", paths::tilde(file())))?;
+    Ok([Some(key), configured_at(dir)]
+        .into_iter()
+        .flatten()
+        .find_map(|k| issue_label_of(&entry_of(&data, &k))))
+}
+
+/// `issue_label_at` from the files alone, as `tickets_known` reads.
+pub fn issue_label_known(dir: &Path) -> Option<String> {
+    let data = read_safely();
+    keys_known(dir).find_map(|k| issue_label_of(&entry_of(&data, &k)))
+}
+
+/// An entry's `issueLabel`, trimmed, when it holds one GitHub's search can
+/// take.
+pub fn issue_label_of(entry: &Map<String, Value>) -> Option<String> {
+    entry
+        .get("issueLabel")
+        .and_then(Value::as_str)
+        .filter(|l| label_ok(l))
+        .map(|l| l.trim().to_string())
+}
+
+/// Whether `label` can be an `issueLabel`: not empty, and nothing that
+/// would break out of GitHub's search for it.
+pub fn label_ok(label: &str) -> bool {
+    let label = label.trim();
+    !label.is_empty() && !label.contains(['"', '\\', '\n'])
+}
+
+/// What a reader of a repository's tickets says while its `tickets` isn't
+/// set, `name` its `owner/name` or what stands for it.
+pub fn unset_words(name: &str) -> String {
+    format!(
+        "{name}'s ticket source isn't set: choose it in Settings' Tickets row, or set \"tickets\" to \"github\", \"linear\" or \"notes\" for it in {}",
+        crate::files::shown("repos.json")
+    )
+}
+
+/// The name a reader gives the repository at `dir` in what it says: its
+/// `owner/name`, else "This repository". Reads files alone.
+pub fn name_known(dir: &Path) -> String {
+    crate::sources::repo::origin_of(dir)
+        .map(|r| r.to_string())
+        .unwrap_or_else(|| "This repository".into())
 }
 
 /// Whether `land-lock test` in the worktree holding `dir` waits on CI
@@ -675,7 +747,7 @@ fn wait_for<T>(future: impl std::future::Future<Output = T>) -> T {
 }
 
 /// The repository's default branch, the one answer `switchboard landing
-/// --json`'s `defaultBranch` and `wtn` (its branch's start and its push
+/// --json`'s `defaultBranch` and `wt` (its branch's start and its push
 /// rule) both take: GitHub's for origin's repository with the github
 /// setting on, else origin's `HEAD` in the clone, else `main` or `master`,
 /// whichever origin has been fetched for; none when none is known. Runs git
@@ -1165,6 +1237,24 @@ mod tests {
             read_file(&path).unwrap()["acme/direct"]
                 .get("tickets")
                 .is_none()
+        );
+        set_repo_in(&path, "acme/direct", "issueLabel", json!("ready")).unwrap();
+        let written = read_file(&path).unwrap();
+        assert_eq!(
+            issue_label_of(&entry_of(&written, "acme/direct")).as_deref(),
+            Some("ready")
+        );
+        assert!(
+            set_repo_in(&path, "acme/direct", "issueLabel", json!("a\"b"))
+                .unwrap_err()
+                .contains("not a value for issueLabel")
+        );
+        set_repo_in(&path, "acme/direct", "issueLabel", json!("")).unwrap();
+        assert!(
+            read_file(&path).unwrap()["acme/direct"]
+                .get("issueLabel")
+                .is_none(),
+            "empty takes it out"
         );
         std::fs::write(&path, "{ not json").unwrap();
         assert!(

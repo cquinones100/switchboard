@@ -274,6 +274,14 @@ The relay's DM, threads and Home tab.
 
 - [157. Notes' toolbar drawn with the kit's button, on the dark and light themes: at rest, under the mouse, lit while the cursor is in that style (bold, two styles, a heading) or while what it opens is in front (⋯), and faint while read-only](https://cquinones100.github.io/switchboard/design/157.html)
 
+## Proposal: the diff as a talk, read outside in
+
+- [159. The diff's story as a talk, its opening slide at the Gist zoom: the change in a sentence, one example from its tests before and after, and the flow it takes through the change, each step it passes lit with the example's value on the way](https://cquinones100.github.io/switchboard/design/159.html)
+- [160. Zoomed in to Flow: the same flow over each step's How and Why, the example's value at each, the step to read closely flagged, and what needs no reading (a rename, formatting, generated types) folded to a line](https://cquinones100.github.io/switchboard/design/160.html)
+- [161. Zoomed in to Steps, step 2's slide: its claim, event 42 going in and coming out, where it sits in the flow, and its hunk with a note in the margin on the line that turns 10003's 3 into Other; the notes folded under it](https://cquinones100.github.io/switchboard/design/161.html)
+- [162. Zoomed in to Code on step 2: its notes open (decided, instead of what, what to watch), every hunk of the step with its margin notes, and the test the example comes from, its case lit](https://cquinones100.github.io/switchboard/design/162.html)
+- [163. The opening slide when no test in the change gives an example: it says so rather than make one up, and the flow shows its steps without values](https://cquinones100.github.io/switchboard/design/163.html)
+
 ## Proposal: a tab's status set by hand
 
 - [158. A tab's status set by hand, from Set its status… in its menu: every group a tab can be in, by the sidebar's names and in its order, the one it is in marked; Let Switchboard decide first while a status you set holds, naming where Switchboard would file it; in the sidebar the tab carries the kit's set by you chip and what Switchboard still reads, which takes it back once it changes](https://cquinones100.github.io/switchboard/design/158.html)
