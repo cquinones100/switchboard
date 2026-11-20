@@ -980,8 +980,8 @@ fn working_on_a_github_issue_lists_its_open_issues_yours_first_and_opens_the_pic
     client.send(b"\r");
     wait("the issue's tab", || tabs(&server).len() == before + 1);
     let tab = tabs(&server).last().unwrap().clone();
-    assert_eq!(tab["options"]["@tab_name"], "acme/widgets#13");
-    assert_eq!(tab["options"]["@tab_title"], "acme/widgets#13: Mine to do");
+    // No name of its own: its branch names it once wtn has made it.
+    assert_eq!(tab["options"]["@tab_name"], Value::Null);
     assert_eq!(tab["current"], true, "in front, as a tab you asked for");
 
     // A number typed that isn't listed is taken too.
@@ -996,8 +996,4 @@ fn working_on_a_github_issue_lists_its_open_issues_yours_first_and_opens_the_pic
     wait("the typed issue's tab", || {
         tabs(&server).len() == before + 2
     });
-    assert_eq!(
-        tabs(&server).last().unwrap()["options"]["@tab_name"],
-        "acme/widgets#40"
-    );
 }
