@@ -57,7 +57,7 @@
 //!                     reason
 //!   --include-low     ask Codex to report low-severity findings too
 //!   --round <step>    run the round as one of review-loop's (`start` its
-//!                     first, `next` each after it, `more` to raise its cap), as "The loop's rounds"
+//!                     first, `next` each after it, `more` to raise its cap, `stop` to end it there), as "The loop's rounds"
 //!                     below says
 //!   --no-rules        leave the rules out of the prompt (see `review_rules`);
 //!                     so does the review_rules setting turned off
@@ -106,7 +106,9 @@
 //! counted the same way. A `start` or `next` past the cap reviews nothing
 //! and answers `next` `cap` with `reviewed` false, until `--round more`
 //! raises the cap by 10 (the review-loop question's "Run 10 more rounds"),
-//! printing the new `cap`. Each round sets the tab's `@tab_review_round`, as it starts and ends, to
+//! printing the new `cap`, and `--round stop` ends the loop there ("Stop
+//! here", "Land as it is"), both taking away the tab's and the Landing
+//! view's mark of the loop waiting at its cap. Each round sets the tab's `@tab_review_round`, as it starts and ends, to
 //! `<round> <cap>`, with ` cap` once the loop waits at it, for the sidebar
 //! and mission control. The JSON then ends with `round`,
 //! `cap`, `cleanRounds` and `next`: `triage` (findings to work through),
@@ -345,8 +347,9 @@ fn parse_args(args: &[String]) -> Result<Opts, ExitCode> {
                     "start" => Step::Start,
                     "next" => Step::Next,
                     "more" => Step::More,
+                    "stop" => Step::Stop,
                     step => {
-                        eprintln!("--round must be start, next or more, got: {step}");
+                        eprintln!("--round must be start, next, more or stop, got: {step}");
                         return Err(usage());
                     }
                 });
@@ -1649,7 +1652,8 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
                 "--round counts the rounds of the checkout you are in, not one named with -C",
             );
         }
-        Some(Step::More) => return more_rounds(&branch),
+        Some(Step::More) => return answer_cap(&root_path, &branch, true),
+        Some(Step::Stop) => return answer_cap(&root_path, &branch, false),
         Some(step) => Some(loop_of(step, &branch)?),
         None => None,
     };
@@ -2146,6 +2150,7 @@ enum Step {
     Start,
     Next,
     More,
+    Stop,
 }
 
 /// Where the loop is: the round this one is, how many clean rounds came
@@ -2324,29 +2329,41 @@ fn at_cap(root: &Path, at: &Loop, hands_free: bool) -> Reviewed<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// `--round more`: raises the cap by `MORE`, the branch's and the loop's, for
-/// "Run 10 more rounds", and prints the new cap.
-fn more_rounds(branch: &str) -> Reviewed<ExitCode> {
+/// The cap question answered: `--round more` raises the cap by `MORE`, the
+/// branch's and the loop's ("Run 10 more rounds"), and `--round stop` ends
+/// the loop where it is ("Stop here", "Land as it is"). Either way the tab
+/// and the Landing view stop saying the loop waits at its cap. Prints the
+/// round and the cap.
+fn answer_cap(root: &Path, branch: &str, more: bool) -> Reviewed<ExitCode> {
+    let raise = if more { MORE } else { 0 };
     let rounds = rounds_of(branch)?;
     let raised = Rounds {
-        extra: rounds.extra + MORE,
+        extra: rounds.extra + raise,
         ..rounds
     };
     keep_rounds(branch, raised)?;
-    let (round, clean, extra) = place()?.unwrap_or((0, 0, 0));
-    if place()?.is_some() {
-        write_record(
-            &record_path("review-loop-round")?,
-            &format!("{round} {clean} {}", extra + MORE),
-        )?;
+    let place = place()?;
+    let (round, clean, extra) = place.unwrap_or((0, 0, 0));
+    let path = record_path("review-loop-round")?;
+    if !more {
+        let _ = fs::remove_file(path);
+    } else if place.is_some() {
+        write_record(&path, &format!("{round} {clean} {}", extra + raise))?;
     }
     let hands_free = socket::tab_option(crate::autopilot::HANDS_FREE).as_deref() == Some("1");
     let (shown, cap) = if hands_free {
         (raised.total, HANDS_FREE_CAP + raised.extra)
     } else {
-        (round, CAP + extra + MORE)
+        (round, CAP + extra + raise)
     };
-    show_round(shown, cap, "more");
+    show_round(shown, cap, "answered");
+    land_lock::record_at(
+        root,
+        &[
+            "review",
+            &json!({ "round": shown, "cap": cap, "clean_rounds": 0 }).to_string(),
+        ],
+    );
     println!(
         "{}",
         util::json_pretty(&json!({ "round": shown, "cap": cap }))

@@ -996,9 +996,25 @@ fn a_hands_free_branch_counts_its_rounds_across_loops() {
         server.ok(&["show", "-t", &id, "@tab_review_round"]).trim(),
         "21 20 cap"
     );
+    let landing = || -> serde_json::Value {
+        serde_json::from_str(&fs::read_to_string(work.join(".git/landing.json")).unwrap()).unwrap()
+    };
+    assert_eq!(
+        landing()["review"]["at_cap"],
+        true,
+        "the Landing view's mark"
+    );
 
     // "Run 10 more rounds" raises the branch's cap.
     assert_eq!(in_pane(&["--round", "more"])["cap"], 30);
+    assert!(
+        landing()["review"]["at_cap"].is_null(),
+        "the question answered"
+    );
+    assert_eq!(
+        server.ok(&["show", "-t", &id, "@tab_review_round"]).trim(),
+        "20 30"
+    );
     let more = round("next");
     assert_eq!(
         (
@@ -1008,6 +1024,11 @@ fn a_hands_free_branch_counts_its_rounds_across_loops() {
         ),
         (Some(21), Some(30), Some("triage"))
     );
+    assert_eq!(fs::read_to_string(&record).unwrap().trim(), "main 21 10");
+
+    // "Stop here" ends the loop where it is, the count kept.
+    assert_eq!(in_pane(&["--round", "stop"])["cap"], 30);
+    assert!(!work.join(".git/review-loop-round").exists());
     assert_eq!(fs::read_to_string(&record).unwrap().trim(), "main 21 10");
 
     // Landing the branch takes its count away.

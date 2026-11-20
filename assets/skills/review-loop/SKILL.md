@@ -124,6 +124,8 @@ Then ask whether to push. Never run `git push` without the user's explicit appro
 - **Land as it is**: offered only when queue-and-clean runs this loop and its landing is a PR (`switchboard landing` prints `pr`); queue-and-clean takes it as the yes to its own question. Leave it out otherwise.
 - **Stop here**: review no more; the push question follows as usual.
 
+On **Land as it is** or **Stop here**, run `switchboard codex-review --round stop`, which ends the loop there and takes away the tab's and the Landing view's mark of it waiting at its cap.
+
 Recommend one, first in the list with ` (Recommended)` after its label and why in a line as its description: with a finding at `high` or above still open, **Run 10 more rounds**, naming it ("#2 high is still open"); otherwise **Land as it is** where it is offered, else **Stop here** ("No finding above medium is open; the rest are listed above").
 
 ## Squashing the loop's commits
