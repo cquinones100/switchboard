@@ -648,6 +648,30 @@
     "StatusMenu.dc.html": {
       "title": "158. A tab's status set by hand, from Set its status… in its menu: every group a tab can be in, by the sidebar's names and in its order, the one it is in marked; Let Switchboard decide first while a status you set holds, naming where Switchboard would file it; in the sidebar the tab carries the kit's set by you chip and what Switchboard still reads, which takes it back once it changes",
       "page": "design"
+    },
+    "PhoneDrawer.dc.html": {
+      "title": "164. The phone app's drawer: every Claude tab in the sidebar's groups, Needs you first, swiped in from the left as Discord's channels are; a Web Push when a tab starts waiting; dimmed with the last states when the computer can't be reached",
+      "page": "design"
+    },
+    "PhoneChannel.dc.html": {
+      "title": "165. A tab's channel on the phone: its recent turns as messages, the newest at the bottom over the composer, a tool run as one dim line, what Claude is doing over the composer, a NEW rule over what you haven't seen, long turns folded",
+      "page": "design"
+    },
+    "PhonePrompt.dc.html": {
+      "title": "166. The prompt card on the phone: the question under Claude's newest turn, each option a button with its words; a permission with Claude Code's three answers; several questions at once, a chip each; folded to what you answered",
+      "page": "design"
+    },
+    "PhoneComposer.dc.html": {
+      "title": "167. The phone's composer: + kept dim for what comes later, the field naming the tab; typing, sent and marked from the phone; while a question waits, what you type goes as your own answer",
+      "page": "design"
+    },
+    "PhonePairing.dc.html": {
+      "title": "168. Pairing a phone: its first visit shows a code, the workspace asks [Y/n] naming the device and the code, and on a yes the phone opens on the drawer",
+      "page": "design"
+    },
+    "PhoneRefused.dc.html": {
+      "title": "169. The phone app's refused page: a device not listed, someone else on the tailnet, a pairing refused, a phone revoked; each says what would let it in, and is logged",
+      "page": "design"
     }
   }
 }

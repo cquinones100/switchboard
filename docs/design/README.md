@@ -287,3 +287,12 @@ The relay's DM, threads and Home tab.
 - [154. m on board 150's PR: the view's menu gains See the failing checks and, while it has conflicts, Type /resolve-conflicts into this tab's Claude; M-m is gone](https://cquinones100.github.io/switchboard/design/154.html)
 - [155. Before M-v beside a narrow lone pane: the ticket (M-i) in the spare columns, Claude's pane capped at its width](https://cquinones100.github.io/switchboard/design/155.html)
 - [156. M-v then: the PR closes the ticket and takes its columns, its verdict chip first, Claude's pane where and as wide as it was; M-v again leaves the columns empty](https://cquinones100.github.io/switchboard/design/156.html)
+
+## Proposal: the phone app
+
+- [164. The phone app's drawer: every Claude tab in the sidebar's groups, Needs you first, swiped in from the left as Discord's channels are; a Web Push when a tab starts waiting; dimmed with the last states when the computer can't be reached](https://cquinones100.github.io/switchboard/design/164.html)
+- [165. A tab's channel on the phone: its recent turns as messages, the newest at the bottom over the composer, a tool run as one dim line, what Claude is doing over the composer, a NEW rule over what you haven't seen, long turns folded](https://cquinones100.github.io/switchboard/design/165.html)
+- [166. The prompt card on the phone: the question under Claude's newest turn, each option a button with its words; a permission with Claude Code's three answers; several questions at once, a chip each; folded to what you answered](https://cquinones100.github.io/switchboard/design/166.html)
+- [167. The phone's composer: + kept dim for what comes later, the field naming the tab; typing, sent and marked from the phone; while a question waits, what you type goes as your own answer](https://cquinones100.github.io/switchboard/design/167.html)
+- [168. Pairing a phone: its first visit shows a code, the workspace asks \[Y/n\] naming the device and the code, and on a yes the phone opens on the drawer](https://cquinones100.github.io/switchboard/design/168.html)
+- [169. The phone app's refused page: a device not listed, someone else on the tailnet, a pairing refused, a phone revoked; each says what would let it in, and is logged](https://cquinones100.github.io/switchboard/design/169.html)
