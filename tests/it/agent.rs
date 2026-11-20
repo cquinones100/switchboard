@@ -1517,9 +1517,28 @@ fn a_hands_free_decision_about_the_plan_is_written_to_its_issue_once() {
         &[("GH_TOKEN", "test-token"), ("SWITCHBOARD_GITHUB_API", &api)],
         &settings(false).to_string(),
     );
+    // Autopilot works acme/widgets, whose tickets in repos.json are its
+    // GitHub issues (git's files alone say which repository it is),
+    // hands-free, so its check leaves the tab's hands-free mark alone.
+    let repo = server.home.join("widgets");
+    std::fs::create_dir_all(repo.join(".git/refs/heads")).unwrap();
+    std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::write(
+        repo.join(".git/config"),
+        "[remote \"origin\"]\n\turl = git@github.com:acme/widgets.git\n",
+    )
+    .unwrap();
+    let config = server.home.join(".config/switchboard");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("repos.json"),
+        json!({ "acme/widgets": { "tickets": "github", "issueLabel": "autopilot" } }).to_string(),
+    )
+    .unwrap();
     std::fs::write(
         server.state.join("autopilot.json"),
-        json!({ "sources": "issues" }).to_string(),
+        json!({ "repo": repo.to_str().unwrap(), "handsFree": true, "landWithoutAsking": true })
+            .to_string(),
     )
     .unwrap();
     let mut client = server.attach(100, 30);

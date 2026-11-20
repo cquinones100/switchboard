@@ -67,10 +67,17 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
         .unwrap_or(worktree::DEFAULT_WORKTREE_DIR);
     refused_by_source(Sources::Issues)?;
     let root = worktree::repo_root().map_err(|e| e.to_string())?;
-    let label = Mode::read(&paths::state_dir()).issue_label;
-    // Started by autopilot, the queue's search decides; by hand, any open
-    // issue of the repository.
+    // Started by autopilot, the queue's search decides, by the repository's
+    // issueLabel in repos.json; by hand, any open issue of the repository.
     let by_autopilot = in_autopilot_tab();
+    let label = crate::repos::issue_label_known(&root);
+    if by_autopilot && label.is_none() {
+        return Err(
+            "autopilot takes none of this repository's issues: its issueLabel in repos.json isn't set"
+                .into(),
+        );
+    }
+    let label = label.unwrap_or_default();
     // A request that fails says nothing of the issue, so it fails the start,
     // which autopilot tries again; only an answer without it refuses it.
     let (repo, found) = issues::wait_for(async {
@@ -123,7 +130,7 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
     // Started by autopilot, only while it still takes issues: turned off
     // while GitHub was being asked, nothing starts.
     if by_autopilot {
-        if !(mode.on && mode.sources.issues() && mode.issues_on()) {
+        if !(mode.on && mode.takes_issues()) {
             return Err("autopilot no longer takes GitHub issues".into());
         }
         if mode.ready_only && issue.body.trim().is_empty() {
@@ -209,7 +216,7 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
         // can take a while: nothing is written once either changed.
         crate::settings::reload_settings();
         let now = Mode::read(&paths::state_dir());
-        if !(now.on && now.sources.issues() && now.issues_on()) {
+        if !(now.on && now.takes_issues()) {
             return Err("autopilot no longer takes GitHub issues".into());
         }
         let stands = issues::wait_for(issues::still_stands(&repo, number, &label))

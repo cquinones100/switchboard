@@ -31,9 +31,9 @@ Arguments: a description of the problem or idea, or, with no source or `--linear
 Settle the source before anything else but naming the tab, and ask nothing about it:
 
 - A source in the arguments wins: `--notes`, `--github` or `--linear`, taken off before the rest is read.
-- Else run `switchboard tickets`, whose first line is where the repository keeps its work, repos.json's `tickets`: `github` (its issues), `linear` (also what it prints when the key isn't set), or `notes` (a note's checklist, with a plan note each). When the command fails (outside a repository), it is Linear.
-- For a GitHub issue, `switchboard tickets` is run whichever way the source was settled, `--github` included: a second line `autopilot-label <label>` names the label autopilot takes this repository's issues by; with no such line, autopilot doesn't take them.
-- With no source flag, a Linear ticket ID or URL leading the arguments is Linear's, whatever the repository keeps. After `--notes` or `--github`, everything is the description, a leading ticket ID included (`ABC-12 follow-up: retry the upload` is a note's item or an issue, not that ticket).
+- Else run `switchboard tickets`, whose first line is where the repository keeps its work, repos.json's `tickets`: `github` (its issues), `linear`, or `notes` (a note's checklist, with a plan note each). It has no default: when the command fails (the key isn't set, or outside a repository), stop, telling the user what it printed on stderr, which says how to set it; nothing is filed anywhere.
+- For a GitHub issue, `switchboard tickets` is run whichever way the source was settled, `--github` included: a second line `autopilot-label <label>` names the label autopilot takes this repository's issues by (repos.json's `issueLabel`); with no such line, or when the command fails after `--github`, autopilot doesn't take them.
+- With no source flag, a Linear ticket ID or URL leading the arguments is Linear's, whatever the repository keeps, so it needs no `switchboard tickets` and isn't stopped by one that fails. After `--notes` or `--github`, everything is the description, a leading ticket ID included (`ABC-12 follow-up: retry the upload` is a note's item or an issue, not that ticket).
 
 Then follow that source's section: "Linear" for `linear`, "GitHub issues" for `github`, "A note's item" for `notes`. "Ground rules" and "Name the tab" hold for all three.
 

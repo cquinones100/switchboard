@@ -1630,6 +1630,17 @@ mod tickets {
     use super::*;
     use crate::common::http::{Fake, Reply};
 
+    /// repos.json giving acme/widgets' `tickets` as `entry` says.
+    fn repos(server: &TestServer, entry: Value) {
+        let config = server.home.join(".config/switchboard");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(
+            config.join("repos.json"),
+            json!({ "acme/widgets": entry }).to_string(),
+        )
+        .unwrap();
+    }
+
     /// The first tab's id and its directory set to `dir` by a `cd`.
     fn cd(server: &TestServer, client: &mut common::TestClient, dir: &Path) -> String {
         client.type_text(&format!("cd {}\r", dir.display()));
@@ -1670,12 +1681,17 @@ mod tickets {
                 None
             }
         });
-        let server = TestServer::start_with_env(&[
-            ("GH_TOKEN", "test-token"),
-            ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
-            ("SWITCHBOARD_GITHUB_API", &github.url),
-        ]);
-        settings(&server, json!({"linear": false, "ux2": false}));
+        // Linear off from the start, so M-i offers no choice of its tickets.
+        let server = TestServer::start_with_env_and_settings(
+            &[
+                ("GH_TOKEN", "test-token"),
+                ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
+                ("SWITCHBOARD_GITHUB_API", &github.url),
+            ],
+            &json!({"notifications": false, "tips": false, "linear": false, "ux2": false})
+                .to_string(),
+        );
+        repos(&server, json!({ "landing": "pr" }));
         let work = server.dir.path().join("widgets");
         std::fs::create_dir_all(&work).unwrap();
         git(&work, &["init", "-q"]);
@@ -1696,6 +1712,14 @@ mod tickets {
         let mut client = server.attach(140, 36);
         client.wait_text("$");
         cd(&server, &mut client, &work);
+
+        // With the repository's tickets not set, nothing guesses: no
+        // ticket for the issue's branch, and M-i says how to set them.
+        client.send(b"\x1bi");
+        client.wait_text("acme/widgets's ticket source isn't set");
+        assert_eq!(panes(&server).len(), 1, "no ticket view opened");
+        close_message(&mut client, "acme/widgets's ticket source isn't set");
+        repos(&server, json!({ "tickets": "github" }));
 
         // Linear is off, and the issue still opens: it is GitHub's.
         client.send(b"\x1bi");
@@ -1731,6 +1755,7 @@ mod tickets {
             ("SWITCHBOARD_GITHUB_API", &github.url),
         ]);
         settings(&server, json!({"linear": false, "ux2": false}));
+        repos(&server, json!({ "tickets": "github" }));
         let work = server.dir.path().join("widgets");
         std::fs::create_dir_all(&work).unwrap();
         git(&work, &["init", "-q"]);

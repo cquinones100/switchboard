@@ -541,15 +541,21 @@ pub fn ticket_view_main(args: Vec<String>) -> ExitCode {
     }
     let arg = args.first().cloned().unwrap_or_default();
     let given = ticket::Ticket::parse(&arg).filter(|_| !std::path::Path::new(&arg).is_dir());
-    let found = given.or_else(|| {
-        let dir = dir_arg(args.first());
-        ticket::of_dir(&dir, crate::repos::tickets_known(&dir).as_deref())
-    });
+    let dir = dir_arg(args.first());
+    let tickets = crate::repos::tickets_known(&dir);
+    let found = given.or_else(|| ticket::of_dir(&dir, tickets.as_deref()));
     match found {
         Some(ticket::Ticket::Issue { repo, number }) => issue::main(repo, number),
         Some(ticket::Ticket::Project(id)) => project::main(id),
         Some(ticket::Ticket::Linear(id)) => ticket::main(Some(id)),
-        None => ticket::main(None),
+        None => ticket::none(ticket::none_words(
+            &dir,
+            match tickets.as_deref() {
+                Some("github") => "No GitHub issue for this branch.",
+                Some("notes") => "No ticket: this repository keeps its work in a note's checklist.",
+                _ => "No Linear ticket in this branch or tab name.",
+            },
+        )),
     }
 }
 

@@ -191,7 +191,7 @@ fn autopilot(home: &Path, state: &Path, now_ms: i64) -> Result<()> {
         "paused": true,
         "note": "Demo Notes.md",
         "noteId": super::NOTE_ID,
-        "repo": home.join("code/api").to_string_lossy(),
+        "repo": home.join("code/web").to_string_lossy(),
         "slots": 2,
         "cap": 5,
         "landed": [landing(now_ms)],

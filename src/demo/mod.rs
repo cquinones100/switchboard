@@ -234,6 +234,20 @@ pub fn lay_out(home: &Path, bin: &Path) -> Result<()> {
         home.join(".config/switchboard/settings.json"),
         format!("{}\n", util::json_pretty(&Value::Object(settings))),
     )?;
+    // Where each repository keeps its work, which nothing guesses: the web
+    // app's in the note autopilot works there, the rest in Linear, whose
+    // tickets their branches name.
+    let tickets: Map<String, Value> = fixtures::REPOS
+        .iter()
+        .map(|r| {
+            let kept = if r.name == "web" { "notes" } else { "linear" };
+            (format!("acme/{}", r.name), json!({ "tickets": kept }))
+        })
+        .collect();
+    util::write_atomic(
+        home.join(".config/switchboard/repos.json"),
+        format!("{}\n", util::json_pretty(&Value::Object(tickets))),
+    )?;
     // No starter routines: the demo's day is its services' alone, and a
     // Slack routine would open a tab of its own every 15 minutes.
     util::write_atomic(

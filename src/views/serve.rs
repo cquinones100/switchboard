@@ -414,8 +414,9 @@ impl Server {
 
     /// The ticket a tab's work is on: one chosen for it (`@tab_ticket`),
     /// else its branch's (the GitHub issue it was started for or its
-    /// Linear ticket, as repos.json's `tickets` says), else a ticket or
-    /// project in a name you gave it, else in the label it shows. Reads
+    /// Linear ticket, as repos.json's `tickets` says, none while it isn't
+    /// set), else a ticket or project in a name you gave it, else one of
+    /// the repository's kind in the label it shows. Reads
     /// git's and repos.json's files, so never on the drawing path.
     pub(crate) fn tab_ticket_at(&self, tab: TabId, dir: &std::path::Path) -> Option<Ticket> {
         // One chosen of a service turned off since stands aside, so it never
@@ -455,18 +456,9 @@ impl Server {
                 .and_then(|n| ticket::in_name(n))
                 .or_else(|| ticket::in_name(&t.name)),
         );
-        // The label shown names the branch's Linear ticket too, which a
-        // repository whose tickets are GitHub's never takes; any other it
-        // names counts.
-        let from_branch: Vec<Ticket> = ticket::id_for_dir(dir)
-            .map(Ticket::Linear)
-            .into_iter()
-            .chain(crate::tabs::git::locate(dir).and_then(|p| ticket::linear_in_branch(&p.branch)))
-            .collect();
-        found.extend(
-            ticket::in_name(&self.tab_label(tab))
-                .filter(|t| provider != Some("github") || !from_branch.contains(t)),
-        );
+        // The label shown counts only for a repository keeping its work in
+        // Linear, whose kind it names; a name you gave counts whatever it is.
+        found.extend(ticket::in_name(&self.tab_label(tab)).filter(|_| provider == Some("linear")));
         ticket::first_on(found)
     }
 
@@ -546,7 +538,8 @@ impl Server {
             if settings::is_on("linear") && settings::is_on("ticket_picker") {
                 self.choose_ticket(client, tab, true);
             } else {
-                self.say(Some(client), "No ticket or GitHub issue for this tab");
+                let words = ticket::none_words(&dir, "No ticket or GitHub issue for this tab");
+                self.say(Some(client), &words);
             }
             return;
         };
@@ -952,7 +945,8 @@ impl Server {
                 .find_map(shown_in)
         });
         let Some(found) = shown.or_else(|| self.tab_ticket_at(tab, &dir)) else {
-            self.say(Some(client), "No ticket or GitHub issue for this tab");
+            let words = ticket::none_words(&dir, "No ticket or GitHub issue for this tab");
+            self.say(Some(client), &words);
             return;
         };
         if !settings::is_on(found.service()) {

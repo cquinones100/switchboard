@@ -37,7 +37,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 use serde::{Deserialize, Serialize};
 
-use super::mode::{Mode, Sources, note_title};
+use super::mode::{Mode, note_title};
 use crate::mux::input::{Key, KeyCode, Mods, Mouse};
 use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
 use crate::ui::images::{self, Tones};
@@ -84,12 +84,6 @@ pub struct Fields {
     /// The skipped items taken back in the box, the only ones saving takes
     /// back, so an item skipped meanwhile (wtn refusing it) stays skipped.
     pub taken_back: Vec<String>,
-    /// Where its work comes from, by its name in `autopilot.json`.
-    #[serde(default)]
-    pub sources: String,
-    /// The label an issue carries to be taken, as typed.
-    #[serde(default)]
-    pub issue_label: String,
 }
 
 impl Fields {
@@ -112,14 +106,7 @@ impl Fields {
             skipped: mode.skipped_here().map(str::to_string).collect(),
             skipped_of: mode.note_id.clone(),
             taken_back: Vec::new(),
-            sources: mode.sources.name().to_string(),
-            issue_label: mode.issue_label.clone(),
         }
-    }
-
-    /// Where its work comes from.
-    pub fn sources(&self) -> Sources {
-        Sources::parse(&self.sources).unwrap_or_default()
     }
 
     /// The spend limit typed, 0 for none; `None` when it isn't dollars.
@@ -167,15 +154,6 @@ impl Fields {
         mode.land_without_asking = self.land_without_asking || self.hands_free;
         mode.skipped
             .retain(|x| x.note != self.skipped_of || !self.taken_back.contains(&x.text));
-        // A client from before sources (an older Slack relay) sends none:
-        // the mode keeps what it takes from.
-        if !self.sources.is_empty() {
-            mode.sources = self.sources();
-        }
-        let label = self.issue_label.trim();
-        if super::issues::label_ok(label) {
-            mode.issue_label = label.to_string();
-        }
     }
 
     /// What changed from `was`, in words, for what the box says on saving.
@@ -221,14 +199,6 @@ impl Fields {
         }
         if self.hands_free != was.hands_free {
             out.push(format!("hands-free {}", on_off(self.hands_free)));
-        }
-        // A client sending none (an older Slack relay) changes neither.
-        if !self.sources.is_empty() && self.sources() != was.sources() {
-            out.push(format!("takes from {}", self.sources().label()));
-        }
-        if !self.issue_label.trim().is_empty() && self.issue_label.trim() != was.issue_label.trim()
-        {
-            out.push(format!("issue label {}", self.issue_label.trim()));
         }
         for gone in &self.taken_back {
             out.push(format!("back in line: {gone}"));
@@ -298,9 +268,12 @@ pub struct Context {
     pub needs_choice: Vec<String>,
     /// Whether Hands-free is offered (the autopilot_handsfree setting).
     pub offer_hands_free: bool,
-    /// Whether GitHub issues are offered as a source (the
-    /// autopilot_github_issues and github settings).
-    pub offer_issues: bool,
+    /// Where its work comes from in `landing_repo`, in words, as its
+    /// tickets in repos.json say; empty when it takes none.
+    pub source: String,
+    /// Why it takes no work in `landing_repo`, which keeps it from
+    /// starting there; empty when it takes some.
+    pub source_problem: String,
     /// Why it couldn't save, shown under the Repository field.
     pub problem: String,
 }
@@ -311,8 +284,6 @@ pub enum Part {
     Note,
     Repo,
     Target,
-    Sources,
-    Label,
     Slots,
     Cap,
     Limit,
@@ -345,7 +316,6 @@ pub enum Field {
     Slots,
     Cap,
     Weekly,
-    Sources,
 }
 
 /// A part on a line: the line's index, its first and last column, the part.
@@ -420,12 +390,6 @@ impl SettingsBox {
 
     fn stops(&self, look: &Look, wide: bool) -> Vec<Part> {
         let mut out = vec![Part::Note, Part::Repo, Part::Target];
-        if self.offers_sources() {
-            out.push(Part::Sources);
-        }
-        if self.fields.sources().issues() {
-            out.push(Part::Label);
-        }
         out.extend([
             Part::Slots,
             Part::Cap,
@@ -456,12 +420,6 @@ impl SettingsBox {
         out
     }
 
-    /// Whether its Takes from row shows: GitHub issues offered, or chosen
-    /// before the setting went off, so it can be set back.
-    fn offers_sources(&self) -> bool {
-        self.ctx.offer_issues || self.fields.sources() != Sources::Note
-    }
-
     fn folded(&self, wide: bool) -> bool {
         !wide && !self.unfolded && !self.fields.skipped.is_empty()
     }
@@ -481,23 +439,6 @@ impl SettingsBox {
     }
 
     fn step(&mut self, field: Field, by: i64) -> Step {
-        if field == Field::Sources {
-            let all = if self.ctx.offer_issues {
-                &Sources::ALL[..]
-            } else {
-                &Sources::ALL[..1]
-            };
-            let at = all
-                .iter()
-                .position(|s| *s == self.fields.sources())
-                .unwrap_or(0) as i64;
-            let next = all[(at + by).rem_euclid(all.len() as i64) as usize];
-            if next == self.fields.sources() {
-                return Step::Same;
-            }
-            self.fields.sources = next.name().to_string();
-            return Step::Redraw;
-        }
         if field == Field::Weekly {
             let next = weekly_step(self.fields.weekly, by);
             if next == self.fields.weekly {
@@ -509,7 +450,7 @@ impl SettingsBox {
         let n = match field {
             Field::Slots => &mut self.fields.slots,
             Field::Cap => &mut self.fields.cap,
-            Field::Weekly | Field::Sources => return Step::Same,
+            Field::Weekly => return Step::Same,
         };
         let next = (*n as i64 + by).clamp(1, 99) as u32;
         if next == *n {
@@ -550,14 +491,7 @@ impl SettingsBox {
     fn press(&mut self, part: Part) -> Step {
         match part {
             Part::Note => self.close(NOTE),
-            Part::Repo
-            | Part::Target
-            | Part::Label
-            | Part::Sources
-            | Part::Limit
-            | Part::Slots
-            | Part::Cap
-            | Part::Weekly => {
+            Part::Repo | Part::Target | Part::Limit | Part::Slots | Part::Cap | Part::Weekly => {
                 self.focus = part;
                 Step::Redraw
             }
@@ -631,7 +565,6 @@ impl SettingsBox {
         match self.focus {
             Part::Repo => Some(&mut self.fields.repo),
             Part::Target => Some(&mut self.fields.target),
-            Part::Label => Some(&mut self.fields.issue_label),
             Part::Limit => Some(&mut self.fields.limit),
             _ => None,
         }
@@ -714,8 +647,6 @@ impl SettingsBox {
             "Note",
             "Repository",
             "Lands on",
-            "Takes from",
-            "Issue label",
             "Tabs at once",
             "Most open",
             "Spend limit",
@@ -865,66 +796,20 @@ impl SettingsBox {
             ));
         }
 
-        // Takes from: the note, its GitHub issues, or both; ← and → choose.
-        if self.offers_sources() {
-            let x = placed(input_at).0;
-            let cap_style = |p: Part| {
-                let bg = if self.hover == Some(p) {
-                    Surface::Chosen.color(theme)
-                } else {
-                    Surface::Panel.color(theme)
-                };
-                Tone::Accent.bold(theme).bg(bg)
-            };
-            let chosen = if self.focus == Part::Sources {
-                Style::new().fg(theme.bright).add_modifier(Modifier::BOLD)
-            } else {
-                Tone::Text.bold(theme)
-            };
-            let label = f.sources().label();
-            let w = draw::width(label) as u16;
-            let chooser = vec![
-                Span::styled(" ‹ ", cap_style(Part::Less(Field::Sources))),
-                Span::styled(format!(" {label} "), chosen),
-                Span::styled(" › ", cap_style(Part::More(Field::Sources))),
-            ];
-            parts.push((lines.len(), x, x + 2, Part::Less(Field::Sources)));
-            parts.push((lines.len(), x + 3, x + 4 + w, Part::Sources));
-            parts.push((
-                lines.len(),
-                x + 5 + w,
-                x + 7 + w,
-                Part::More(Field::Sources),
-            ));
-            lines.push(
-                BoxLine::spans(row(
-                    vec![name("Takes from", Part::Sources), chooser],
-                    &field_cols,
-                ))
-                .clickable(),
-            );
-        }
-        if f.sources().issues() {
-            let label = self.input(&f.issue_label, None, input_at.1, Part::Label, None, look);
-            parts.push((
-                lines.len(),
-                placed(input_at).0,
-                placed(input_at).1,
-                Part::Label,
-            ));
-            lines.push(
-                BoxLine::spans(row(
-                    vec![name("Issue label", Part::Label), label],
-                    &field_cols,
-                ))
-                .clickable(),
-            );
-            let words = if ctx.offer_issues {
-                "open issues assigned to you with this label, opened by you or labeled by someone with write access, in place of the note's items"
-            } else {
-                "GitHub issues are off in Settings (autopilot_github_issues or github), so none are taken"
-            };
-            lines.extend(under(words, Tone::Faint.style(theme)));
+        // Takes from: what the repository's tickets in repos.json give it,
+        // which the box shows and never changes.
+        let (takes, tone) = if f.repo.trim() != ctx.landing_repo.trim() {
+            (
+                "where its work comes from is checked as it starts".to_string(),
+                Tone::Dim,
+            )
+        } else if !ctx.source_problem.is_empty() {
+            (ctx.source_problem.clone(), Tone::Failed)
+        } else {
+            (ctx.source.clone(), Tone::Dim)
+        };
+        if !takes.is_empty() {
+            lines.extend(under(&format!("Takes from: {takes}"), tone.style(theme)));
         }
 
         // The steppers.
@@ -1493,7 +1378,6 @@ impl SettingsBox {
         ];
         let placeholder = match part {
             Part::Target => "the default branch",
-            Part::Label => super::mode::ISSUE_LABEL,
             Part::Limit => "none",
             _ => "",
         };
@@ -1538,7 +1422,6 @@ fn stepper_of(part: Part) -> Field {
     match part {
         Part::Slots => Field::Slots,
         Part::Cap => Field::Cap,
-        Part::Sources => Field::Sources,
         _ => Field::Weekly,
     }
 }
@@ -1708,14 +1591,13 @@ impl Overlay for SettingsBox {
         }
         match (self.focus, k.code) {
             (
-                Part::Slots | Part::Cap | Part::Weekly | Part::Sources,
+                Part::Slots | Part::Cap | Part::Weekly,
                 KeyCode::Left | KeyCode::Char('-') | KeyCode::Char('−'),
             ) => return self.step(stepper_of(self.focus), -1),
             (
-                Part::Slots | Part::Cap | Part::Weekly | Part::Sources,
+                Part::Slots | Part::Cap | Part::Weekly,
                 KeyCode::Right | KeyCode::Char('+') | KeyCode::Char('='),
             ) => return self.step(stepper_of(self.focus), 1),
-            (Part::Sources, KeyCode::Char(' ')) => return self.step(Field::Sources, 1),
             (Part::Repo | Part::Target, KeyCode::Right) => return self.take_suggestion(),
             (Part::Planned | Part::Land | Part::HandsFree, KeyCode::Char(' ') | KeyCode::Enter) => {
                 return self.flip(self.focus);
@@ -1869,36 +1751,24 @@ mod tests {
     }
 
     #[test]
-    fn takes_from_steps_through_the_sources_and_shows_the_label_with_issues() {
-        let look = Look::default();
+    fn takes_from_shows_what_the_repositorys_tickets_give_and_never_changes() {
         let mut c = ctx();
-        c.offer_issues = true;
-        let f = Fields::from_mode(&mode());
-        let mut b = SettingsBox::new(f.clone(), f, c, Part::Sources);
-        assert!(text_of(&b, WIDTH, true).contains("Takes from"));
-        assert!(!text_of(&b, WIDTH, true).contains("Issue label"));
-        b.key(key(KeyCode::Right), &look);
-        assert_eq!(b.fields().sources(), Sources::Issues);
-        assert!(text_of(&b, WIDTH, true).contains("Issue label"));
-        assert!(b.stops(&look, true).contains(&Part::Label));
-        // One source at a time: the next step comes back to the note.
-        b.key(key(KeyCode::Right), &look);
-        assert_eq!(b.fields().sources(), Sources::Note);
-        b.key(key(KeyCode::Left), &look);
-        assert_eq!(b.fields().sources(), Sources::Issues);
-        let mut m = mode();
-        b.fields().apply(&mut m);
-        assert_eq!(m.sources, Sources::Issues);
-        assert!(
-            b.fields()
-                .changes(&Fields::from_mode(&mode()))
-                .contains(&"takes from GitHub issues".to_string())
-        );
+        c.source = "works the note, as the repository's tickets in repos.json say".into();
+        let mut f = Fields::from_mode(&mode());
+        f.repo = c.landing_repo.clone();
+        let b = SettingsBox::new(f.clone(), f.clone(), c.clone(), Part::Note);
+        assert!(text_of(&b, WIDTH, true).contains("Takes from: works the note"));
 
-        // With the setting off, the row is gone for a mode taking the note.
-        let f = Fields::from_mode(&mode());
-        let b = SettingsBox::new(f.clone(), f, ctx(), Part::Note);
-        assert!(!text_of(&b, WIDTH, true).contains("Takes from"));
+        c.source.clear();
+        c.source_problem = "acme/app keeps its work in Linear, which autopilot can't take".into();
+        let b = SettingsBox::new(f.clone(), f.clone(), c.clone(), Part::Note);
+        assert!(text_of(&b, WIDTH, true).contains("Takes from: acme/app keeps its work in Linear"));
+
+        // Another repository typed is looked at as it starts.
+        let mut other = f.clone();
+        other.repo = "/src/api".into();
+        let b = SettingsBox::new(other, f, c, Part::Note);
+        assert!(text_of(&b, WIDTH, true).contains("checked as it starts"));
     }
 
     #[test]

@@ -279,8 +279,23 @@ fn stamp_of(path: &Path) -> Option<super::Stamp> {
     ))
 }
 
+/// Where autopilot takes its work in the repository whose main clone is
+/// `repo`, in words for the settings box, as its tickets in repos.json say;
+/// why it takes none, else.
+fn source_words(repo: &Path) -> Result<String, String> {
+    let main = main_clone(repo).unwrap_or_else(|| repo.to_path_buf());
+    match mode::source_of(&main)? {
+        Sources::Note => Ok("works the note, as the repository's tickets in repos.json say".into()),
+        Sources::Issues if !settings::is_on("github") => Err(super::pilot::ISSUES_OFF.into()),
+        Sources::Issues => Ok(format!(
+            "takes its GitHub issues labeled {}, as its tickets in repos.json say",
+            crate::repos::issue_label_known(&main).unwrap_or_default()
+        )),
+    }
+}
+
 /// What the settings box shows besides its fields, read off the task: how
-/// the repository typed lands, the repositories and branches it suggests,
+/// the repository typed lands, where its work comes from, the repositories and branches it suggests,
 /// today's spend, and the note's items left out for needing a choice.
 fn box_context(mode: &Mode, fields: &Fields, notes: &Path) -> Context {
     let repo = fields.repo_path();
@@ -308,6 +323,11 @@ fn box_context(mode: &Mode, fields: &Fields, notes: &Path) -> Context {
             add(paths::tilde(top));
         }
     }
+    let source = if fields.repo.trim().is_empty() {
+        Ok(String::new())
+    } else {
+        source_words(&repo)
+    };
     let mut branches: Vec<String> = Vec::new();
     if let Some(place) = crate::tabs::git::locate(&repo) {
         let c = &place.common_dir;
@@ -355,7 +375,8 @@ fn box_context(mode: &Mode, fields: &Fields, notes: &Path) -> Context {
         branches,
         needs_choice,
         offer_hands_free: settings::is_on("autopilot_handsfree"),
-        offer_issues: settings::is_on("autopilot_github_issues") && settings::is_on("github"),
+        source: source.clone().unwrap_or_default(),
+        source_problem: source.err().unwrap_or_default(),
         problem: String::new(),
     }
 }
@@ -443,9 +464,6 @@ fn fields_problem(fields: &Fields) -> Option<(String, Part)> {
     if !target.is_empty() && mode::typed_branch(target).is_none() {
         return Some((format!("Not a branch name: {target}"), Part::Target));
     }
-    if fields.sources().issues() && !super::issues::label_ok(&fields.issue_label) {
-        return Some(("Issue label: one label, with no quotes".into(), Part::Label));
-    }
     None
 }
 
@@ -521,6 +539,10 @@ impl FieldsCheck {
                 "Its tabs work in {}: stop it to work another repository",
                 paths::tilde(&mode_repo)
             ));
+        }
+        // Its work comes from the repository's tickets, which must give it some.
+        if starting {
+            mode::source_of(&repo)?;
         }
         let common = crate::tabs::git::locate(&repo).map(|p| p.common_dir);
         // How it lands, checked as starting or picking a note did before
@@ -1168,11 +1190,11 @@ impl Server {
         (slots, cap, limit): (u32, u32, f64),
         note_id: Option<String>,
     ) {
-        let source_saved = mode::source_saved(&paths::state_dir());
+        if let Err(why) = mode::source_of(&repo) {
+            self.mission_note(client, why);
+            return;
+        }
         let written = Mode::update(&paths::state_dir(), |m| {
-            if !source_saved {
-                m.sources = Sources::of_repo(&repo);
-            }
             // Skipped items keep their note's ID, so another note's stay
             // skipped in that note alone; one from before notes had IDs,
             // of the note worked before, goes.
@@ -1248,7 +1270,6 @@ impl Server {
         focus: Part,
     ) {
         let mode = Mode::read(&paths::state_dir());
-        let source_saved = mode::source_saved(&paths::state_dir());
         let notes = worktree_from_note::notes_dir();
         self.off_task(
             client,
@@ -1258,10 +1279,6 @@ impl Server {
                     && let Some(repo) = dir.as_deref().and_then(main_clone)
                 {
                     fields.repo = paths::tilde(&repo);
-                    // None chosen yet: the repository's tickets decide.
-                    if !source_saved {
-                        fields.sources = Sources::of_repo(&repo).name().to_string();
-                    }
                 }
                 if fields.note.is_empty() {
                     let choices = mode::note_choices(&notes, &mode.note);
@@ -1415,8 +1432,14 @@ impl Server {
             Some((line::hands_free_question(), Part::HandsFree))
         } else if lands(&fields) && !lands(&was) {
             Some((line::land_question(), Part::Land))
-        } else if lands(&fields) && fields.sources().issues() && !was.sources().issues() {
-            Some((line::issues_question(), Part::Sources))
+        } else if lands(&fields)
+            && (!self.autopilot.mode.on || fields.repo.trim() != was.repo.trim())
+            && mode::source_of(&fields.repo_path()) == Ok(Sources::Issues)
+        {
+            // Starting, or moving to another repository, where the
+            // repository's tickets have it take GitHub issues: landing
+            // without asking closes them unasked, which is asked first.
+            Some((line::issues_question(), Part::Repo))
         } else {
             None
         };
@@ -1481,15 +1504,8 @@ impl Server {
             note_id,
             starting,
         } = checked;
-        // None chosen yet and Takes from left as it opened: the repository
-        // saved decides, which may not be the one the box opened on.
-        let source_from_repo =
-            !mode::source_saved(&paths::state_dir()) && fields.sources == was.sources;
         let m = Mode::update(&paths::state_dir(), |m| {
             fields.apply(m);
-            if source_from_repo {
-                m.sources = Sources::of_repo(&repo);
-            }
             let other_note = m.note != note;
             if other_note || m.repo != repo {
                 // What it said of the note or repository before no
@@ -2207,6 +2223,8 @@ impl Server {
         let counts = self.autopilot.pilot.counts;
         let close = settings::cached("autopilot_close")
             .and_then(|v| v.as_str().and_then(super::pilot::close_after));
+        self.autopilot.pilot.source = mode.source();
+        self.autopilot.pilot.label = mode.issue_label().unwrap_or_default();
         let check = self.autopilot.pilot.check(
             &mode,
             on,
@@ -2227,6 +2245,20 @@ impl Server {
         self.autopilot_marks(&check.marks, &mine);
         if (check.found_again && lost_said) || empty_said_early {
             self.autopilot_say("");
+        }
+        // Work it may take again: why it took none goes.
+        if check.source_ok
+            && super::pilot::unsay_source(&self.autopilot.mode.said) != self.autopilot.mode.said
+        {
+            match Mode::update(&paths::state_dir(), |m| {
+                m.said = super::pilot::unsay_source(&m.said);
+            }) {
+                Ok(mode) => {
+                    self.autopilot_notices(&mode);
+                    self.autopilot.mode = mode;
+                }
+                Err(e) => eprintln!("autopilot: couldn't save what it said: {e}"),
+            }
         }
         if let Some(said) = check.said {
             self.autopilot_say(&said);
@@ -2640,11 +2672,36 @@ impl Server {
         }
     }
 
-    /// Whether autopilot takes GitHub issues now: chosen, with its settings
-    /// and GitHub's on.
+    /// Whether setting `field` of `repo`'s entry in repos.json (its
+    /// `owner/name` or the key it is under) to `value` would start autopilot
+    /// taking that repository's issues while it lands without asking: on
+    /// and working there, its source not issues now, and issues after.
+    pub(crate) fn autopilot_would_close_unasked(
+        &self,
+        repo: &str,
+        field: &str,
+        value: &serde_json::Value,
+    ) -> bool {
+        let mode = &self.autopilot.mode;
+        let lands = mode.land_without_asking || mode.hands_free;
+        // Whatever Settings' autopilot and GitHub say now: turned on later,
+        // nothing would ask.
+        if !(mode.on && lands)
+            || !crate::repos::keys_known(&mode.repo).any(|k| k.eq_ignore_ascii_case(repo))
+            || mode.source() == Ok(Sources::Issues)
+        {
+            return false;
+        }
+        let mut entry = crate::repos::entry_of(&crate::repos::read_safely(), repo);
+        entry.insert(field.to_string(), value.clone());
+        crate::repos::tickets_of(&entry).as_deref() == Some("github")
+            && crate::repos::issue_label_of(&entry).is_some()
+    }
+
+    /// Whether autopilot takes GitHub issues now: its repository's tickets
+    /// in repos.json say so, with its settings and GitHub's on.
     fn autopilot_writes_issues(&self) -> bool {
-        let mode = Mode::read(&paths::state_dir());
-        mode.sources.issues() && mode.issues_on()
+        Mode::read(&paths::state_dir()).takes_issues()
     }
 
     /// A hands-free tab's decisions about the plan of the GitHub issue
@@ -2665,8 +2722,7 @@ impl Server {
         let issue = issue.to_string();
         tokio::spawn(async move {
             let done = super::issues::write_decided(&repo, number, &lines, || {
-                let mode = Mode::read(&paths::state_dir());
-                mode.sources.issues() && mode.issues_on()
+                Mode::read(&paths::state_dir()).takes_issues()
             })
             .await;
             written_back(&issue, done).await;
@@ -2709,8 +2765,7 @@ impl Server {
             }
             tokio::spawn(async move {
                 let done = super::issues::write_back(&repo, number, &comment, close, || {
-                    let mode = Mode::read(&paths::state_dir());
-                    mode.sources.issues() && mode.issues_on()
+                    Mode::read(&paths::state_dir()).takes_issues()
                 })
                 .await;
                 // Closed, the claim's label comes off. Left open, the claim
@@ -2753,17 +2808,15 @@ impl Server {
 
     /// This computer's claim on the GitHub issue `issue` names released, off
     /// the task, `why` said in a comment (none, its label alone taken off). The tab's own claim, so it is
-    /// released whatever autopilot's sources are now, while Settings allow
-    /// autopilot's issue writes (autopilot, its GitHub issues and GitHub). A
+    /// released whatever where autopilot takes its work now, while Settings allow
+    /// autopilot's issue writes (autopilot and GitHub). A
     /// failure is said in the notifications.
     fn autopilot_release(&mut self, issue: &str, why: Option<&'static str>) {
         let Some((repo, number)) = super::issues::parse_reference(issue) else {
             return;
         };
-        // The settings that allow issue writes at all, not the sources chosen.
-        let allowed = ["autopilot", "autopilot_github_issues", "github"]
-            .iter()
-            .all(|k| settings::is_on(k));
+        // The settings that allow issue writes at all, not where its work comes from.
+        let allowed = ["autopilot", "github"].iter().all(|k| settings::is_on(k));
         if !allowed || tokio::runtime::Handle::try_current().is_err() {
             return;
         }
@@ -3233,9 +3286,7 @@ impl Server {
         // the look began (its landing recorded meanwhile, say).
         if let Some((repo, number)) = super::issues::issue_of(&item) {
             let reference = format!("{repo}#{number}: ");
-            if !(mode.sources.issues() && mode.issues_on())
-                || mode.skipped_here().any(|t| t.starts_with(&reference))
-            {
+            if !mode.takes_issues() || mode.skipped_here().any(|t| t.starts_with(&reference)) {
                 return;
             }
         }
@@ -3455,7 +3506,10 @@ impl Server {
     /// next.
     pub fn autopilot_works(&self, note: &str) -> bool {
         let mode = &self.autopilot.mode;
-        settings::is_on("autopilot") && mode.on && mode.sources.note() && mode.note == note
+        settings::is_on("autopilot")
+            && mode.on
+            && mode.note == note
+            && mode.source() == Ok(Sources::Note)
     }
 
     /// `autopilot-next <note> <line>`: the unticked item on that line of

@@ -826,6 +826,15 @@ fn with_ux2_gw_opens_the_work_on_this_item_box() {
         .to_string(),
     )
     .unwrap();
+    // The repository keeps its work in notes, so autopilot works the note.
+    let config = server.home.join(".config/switchboard");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("repos.json"),
+        serde_json::json!({ repo.join(".git").to_str().unwrap(): { "tickets": "notes" } })
+            .to_string(),
+    )
+    .unwrap();
     let before = tabs(&server).len();
 
     // Autopilot read and the setting taken in, the box offers the queue;

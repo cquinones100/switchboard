@@ -32,7 +32,7 @@ impl Server {
         let mut options = vec![MenuOption::new("Type a name").key('n')];
         // An issue's branch names itself with GitHub on, as a ticket's does
         // with Linear on.
-        let issue = ticket::of_dir_all(&dir, None)
+        let issue = ticket::of_dir_all(&dir, Some("github"))
             .into_iter()
             .find(|t| matches!(t, Ticket::Issue { .. }))
             .filter(|_| settings::is_on("github"));

@@ -71,8 +71,8 @@
 //!   the note by its path and its ID, which a renamed or moved note is
 //!   followed by.
 //! - `place`: where each of its tabs is: busy, waiting on you, or landed.
-//! - `issues`: the repository's GitHub issues as its work, beside or
-//!   instead of the note's items (the mode's `sources`).
+//! - `issues`: the repository's GitHub issues as its work, in place of
+//!   the note's items while its `tickets` in repos.json are `github`.
 //! - `pilot`: what it keeps between checks, and what each check decides.
 //! - `line`: its line in mission control and the menu Enter opens on it.
 //! - `settings_box`: its settings in one box with UX 2.0 on (board 35),
