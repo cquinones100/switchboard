@@ -231,6 +231,8 @@ enum ViewAct {
     ViewsAtOnce,
     /// The Settings view, filtered by the view's name.
     Settings(String),
+    /// The sidebar's repository filter cleared, which the Tabs view follows.
+    EveryRepo,
 }
 
 /// The file the Settings view opens for the chosen row: a file of yours
@@ -1127,7 +1129,19 @@ impl Server {
             .map(|f| f.text.trim().to_lowercase())
             .unwrap_or_default();
         let all_tabs = self.sidebar_all_tabs();
-        let mut tabs = all_tabs.clone();
+        // The Tabs view follows the session's sidebar's repository filter.
+        let session = self
+            .clients
+            .get(&client)
+            .map(|c| c.session.clone())
+            .unwrap_or_default();
+        let mut tabs = self.sidebar_all_marked(&session);
+        let repo_filter = self.sidebar_repo(&session).map(|r| {
+            r.file_name()
+                .unwrap_or(r.as_os_str())
+                .to_string_lossy()
+                .into_owned()
+        });
         // With several views at once the filter is the focused view's alone.
         let focused_id = m.current().map(|v| v.id.clone());
         let gridded = m.grid.is_some();
@@ -1311,6 +1325,7 @@ impl Server {
         m.snap = Snapshot {
             tabs,
             all_tabs,
+            repo_filter,
             views,
             rules: Rules::now(),
             theme: theme_for(
@@ -2835,12 +2850,16 @@ impl Server {
             }
             KeyCode::Char('v') if none => m.jump = Some(Jump::default()),
             KeyCode::Enter if notice_history_here(m) => self.notice_enter(client, m),
-            // With UX 2.0, the shelf folded to its labels opens on one.
-            KeyCode::Enter if shelf_label_chosen(m) => {
+            // With UX 2.0, the shelf folded to its labels opens on one, and
+            // Other repos on its own.
+            KeyCode::Enter if shelf_label_chosen(m) || repos_label_chosen(m) => {
                 // The cursor stays on the label's first tab as the rest
-                // of the shelf comes out around it.
+                // of the group comes out around it.
                 let chosen = chosen_tab(m);
-                m.shelf_open = true;
+                // On a narrow screen Other repos is folded with the shelf
+                // too, so its label opens both.
+                m.other_repos_open |= repos_label_chosen(m);
+                m.shelf_open |= shelf_label_chosen(m);
                 if let Some(at) = chosen.and_then(|t| m.order().iter().position(|x| *x == t)) {
                     m.cursor = at as isize;
                 }
@@ -3916,6 +3935,9 @@ impl Server {
                 if m.snap.pilot.is_some() {
                     add(autopilot_label(), ViewAct::Autopilot);
                 }
+                if m.snap.repo_filter.is_some() {
+                    add("Every repository", ViewAct::EveryRepo);
+                }
             }
             Some(ViewId::Notifications) => {
                 use crate::sidebar::history::Kind;
@@ -4206,6 +4228,12 @@ impl Server {
             }
             ViewAct::ViewsAtOnce => {
                 self.views_at_once(client, &mut m);
+            }
+            ViewAct::EveryRepo => {
+                if let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) {
+                    self.sidebar_set_repo(&session, None);
+                }
+                m.other_repos_open = false;
             }
             ViewAct::Settings(title) => {
                 if let Some(at) = m.place_of("settings") {
@@ -7807,6 +7835,21 @@ fn shelf_label_chosen(m: &Mission) -> bool {
             .tabs
             .iter()
             .any(|t| t.id == tab && super::render::on_shelf_tab(t, &m.snap.rules))
+    })
+}
+
+/// Whether the chosen place is the label of Other repos folded while the
+/// sidebar's repository filter is on, which Enter opens.
+fn repos_label_chosen(m: &Mission) -> bool {
+    if m.view != 0 || !m.snap.rules.ux2 || !super::render::repos_folded(m) {
+        return false;
+    }
+    chosen_tab(m).is_some_and(|tab| {
+        m.snap.tabs.iter().any(|t| {
+            t.id == tab
+                && crate::sidebar::model::stage_of(t, &m.snap.rules)
+                    == crate::sidebar::model::Stage::OtherRepos
+        })
     })
 }
 
