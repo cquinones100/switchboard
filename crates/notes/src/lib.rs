@@ -103,8 +103,8 @@ pub(crate) mod stand_in;
 pub const WORK_ON_ITEM: &str = "work-on-item";
 
 /// What Notes presses for M-Enter in "Add an item": a tab whose Claude adds
-/// the item to the note and writes its plan, with `/plan-item`.
-pub const PLAN_ITEM: &str = "plan-item";
+/// the item to the note and writes its plan, with `/shape --notes`.
+pub const SHAPE_ITEM: &str = "shape-item";
 
 /// Marks the note you linked to a tab yourself (the picker, Notes' `t`,
 /// M-p's "Choose the tab's note"), set with `@tab_note`; what the workspace

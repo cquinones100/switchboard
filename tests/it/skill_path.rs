@@ -363,20 +363,70 @@ fn every_project_skill_is_named_after_its_folder_has_a_description_and_never_shi
     }
 }
 
+/// A section of a skill: from its `## ` heading to the next.
+fn section<'t>(text: &'t str, heading: &str) -> &'t str {
+    let start = text
+        .find(&format!("\n## {heading}\n"))
+        .unwrap_or_else(|| panic!("no ## {heading}"));
+    let rest = &text[start + 1..];
+    let end = rest[3..].find("\n## ").map_or(rest.len(), |e| e + 3);
+    &rest[..end]
+}
+
 #[test]
-fn plan_item_asks_where_the_item_goes_the_top_in_order_of_difficulty_or_the_bottom() {
+fn shape_files_where_the_repository_keeps_its_work_and_only_you_start_it() {
     let all = skills();
-    let (_, text) = all.iter().find(|(name, _)| name == "plan-item").unwrap();
+    let (_, text) = all.iter().find(|(name, _)| name == "shape").unwrap();
     assert!(
-        !text.lines().any(|l| l == "disable-model-invocation: true"),
-        "Claude starts it when you ask for an item in your own words"
+        text.lines().any(|l| l == "disable-model-invocation: true"),
+        "only you start it"
     );
+    for rule in [
+        "Bash(switchboard tickets)",
+        "Bash(switchboard tabs)",
+        "Bash(switchboard show *)",
+    ] {
+        assert!(
+            text.contains(&format!("  - {rule}\n")),
+            "allowed-tools: {rule}"
+        );
+    }
+    let source = section(text, "Where it goes");
+    for rule in [
+        "`--notes`, `--github` or `--linear`",
+        "run `switchboard tickets`",
+        "ask nothing about it",
+        "`autopilot-label <label>`",
+    ] {
+        assert!(source.contains(rule), "Where it goes: {rule}");
+    }
+    let github = section(text, "GitHub issues");
+    let leak = github
+        .find("switchboard leak-check --file")
+        .expect("the issue is checked as a file");
+    let asked = github
+        .find("**Create it on <owner/name>** or **Not yet**")
+        .expect("and asked about, since it is public");
+    let created = github.find("gh issue create").expect("then created");
+    assert!(
+        leak < asked && asked < created,
+        "checked, asked, then created"
+    );
+    assert!(github.contains("--assignee @me [--label '<label>']"));
+    assert!(github.contains("closed in the last 90 days"));
+}
+
+#[test]
+fn shape_writes_a_notes_item_and_its_plan_in_the_shape_wtn_reads() {
+    let all = skills();
+    let (_, text) = all.iter().find(|(name, _)| name == "shape").unwrap();
+    let notes = section(text, "A note's item");
     for option in [
         "**Top of the list**",
         "**In order of difficulty**",
         "**Bottom of the list**",
     ] {
-        assert!(text.contains(option), "{option}");
+        assert!(notes.contains(option), "{option}");
     }
     // The shape autopilot reads: an open choice is a "Decision
     // needed" heading in the plan and "(needs a choice" on the item.
@@ -384,18 +434,21 @@ fn plan_item_asks_where_the_item_goes_the_top_in_order_of_difficulty_or_the_bott
         "## Decision needed",
         "(needs a choice: ",
         "Plan: [[Plan - <name>]]",
+        "`After: <first line>`",
     ] {
-        assert!(text.contains(shape), "{shape}");
+        assert!(notes.contains(shape), "{shape}");
     }
     // The item's first line names the branch, the worktree and the tab,
     // so step 6 keeps it to the outcome, and the reply quotes it.
     let step = |number: usize| {
-        text.lines()
+        notes
+            .lines()
             .skip_while(|l| !l.starts_with(&format!("{number}. **")))
             .take_while(|l| !l.starts_with(&format!("{}. **", number + 1)))
             .collect::<Vec<_>>()
             .join("\n")
     };
+    assert!(step(2).contains("**Already there?**"));
     for rule in [
         "its first line the item's title, a bug or a feature",
         "A bug starts `BUG: ` and says what is broken now, in the present tense",
@@ -407,6 +460,54 @@ fn plan_item_asks_where_the_item_goes_the_top_in_order_of_difficulty_or_the_bott
         assert!(step(6).contains(rule), "step 6: {rule}");
     }
     assert!(step(8).contains("the item's first line quoted as written"));
+}
+
+/// The retired skill's name, put together so this file doesn't hold it.
+fn retired() -> String {
+    ["plan", "item"].join("-")
+}
+
+#[test]
+fn nothing_names_the_skill_shape_took_the_place_of() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let name = retired();
+    let mut found = Vec::new();
+    let mut dirs: Vec<PathBuf> = ["assets", "src", "crates", "tests", "docs", ".claude"]
+        .iter()
+        .map(|d| root.join(d))
+        .collect();
+    let mut files: Vec<PathBuf> = ["README.md", "CLAUDE.md", "ARCHITECTURE.md"]
+        .iter()
+        .map(|f| root.join(f))
+        .collect();
+    while let Some(dir) = dirs.pop() {
+        // The design boards change through /design-docs.
+        if dir == root.join("docs/design") {
+            continue;
+        }
+        for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            let skip = ["target", "node_modules", "worktrees"]
+                .contains(&entry.file_name().to_string_lossy().as_ref());
+            if path.is_dir() && !skip {
+                dirs.push(path);
+            } else if path.is_file() {
+                files.push(path);
+            }
+        }
+    }
+    for file in files {
+        if fs::read_to_string(&file).is_ok_and(|t| t.contains(&name)) {
+            found.push(
+                file.strip_prefix(root)
+                    .unwrap_or(&file)
+                    .display()
+                    .to_string(),
+            );
+        }
+    }
+    assert!(found.is_empty(), "{name} is named in {found:?}");
+    assert!(!skills_dir().join(&name).exists());
 }
 
 // test/skills.test.js's "a tab of autopilot lands without asking

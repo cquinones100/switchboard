@@ -103,7 +103,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
         .map(|d| d.to_string_lossy().into_owned())
         .unwrap_or_else(|_| ".".into());
     let script = format!(
-        "{}{} \"$@\"",
+        "{} --linear{} \"$@\"",
         worktree::self_command("shape"),
         if carry_on { " --continue" } else { "" }
     );

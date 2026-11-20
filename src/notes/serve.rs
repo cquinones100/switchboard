@@ -179,7 +179,7 @@ impl Command {
 }
 
 pub use switchboard_notes::store::in_notes;
-pub use switchboard_notes::{BY_YOU, LEFT, PLAN_ITEM, PLAN_NOTE, WORK_ON_ITEM};
+pub use switchboard_notes::{BY_YOU, LEFT, PLAN_NOTE, SHAPE_ITEM, WORK_ON_ITEM};
 
 /// The rest of what a key does, back on the server's task once what it read
 /// off the task (the notes, for ranking them) is in.
@@ -1116,8 +1116,8 @@ impl Server {
     /// this); `note-tab` and `attach-note` take the note as `arg`. `work-on-item <note>
     /// <line>`, Notes' `gw`, is no key's: it starts work on the item on
     /// that line of the note (src/cmd/work.rs). Nor is UX 2.0's
-    /// `plan-item <note> <text>` (M-Enter in "Add an item": a tab whose
-    /// Claude runs `/plan-item`).
+    /// `shape-item <note> <text>` (M-Enter in "Add an item": a tab whose
+    /// Claude runs `/shape --notes`).
     pub fn cmd_press(&mut self, args: &[String], caller: Option<PaneId>) -> Reply {
         let Some((name, rest)) = args.split_first() else {
             return Reply::fail("press: which action?");
@@ -1136,13 +1136,13 @@ impl Server {
             self.work_on_item(client, note, line);
             return Reply::ok("");
         }
-        if name == PLAN_ITEM {
+        if name == SHAPE_ITEM {
             let Some(note) = arg.filter(|n| in_notes(n)) else {
                 return Reply::fail(format!("press: {name} takes a note"));
             };
             let text = rest.get(1).map(|t| t.trim()).unwrap_or("").to_string();
             if text.is_empty() {
-                return Reply::fail("press: plan-item takes a note and the item");
+                return Reply::fail("press: shape-item takes a note and the item");
             }
             let Some(client) = self.press_client(caller) else {
                 return Reply::fail("press: no client is attached to press it in");

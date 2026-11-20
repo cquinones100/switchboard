@@ -1784,10 +1784,10 @@ impl Server {
         );
     }
 
-    /// Notes' M-Enter in "Add an item" (`press plan-item <note> <text>`):
+    /// Notes' M-Enter in "Add an item" (`press shape-item <note> <text>`):
     /// a tab in the note's repository, linked to the note and titled with
     /// the item's words, whose Claude
-    /// runs `/plan-item <text>`, which adds the item to the note and writes
+    /// runs `/shape --notes <text>`, which adds the item to the note and writes
     /// its plan; the text its argument, never typed.
     pub fn plan_new_item(&mut self, client: ClientId, note: String, text: String) {
         let short = crate::tabs::title::short_name(&text);
@@ -1799,15 +1799,18 @@ impl Server {
                 server.say(Some(client), &refusal);
                 return;
             }
-            let command =
-                worktree::tab_command("claude \"$@\"", "claude", &[format!("/plan-item {text}")]);
+            let command = worktree::tab_command(
+                "claude \"$@\"",
+                "claude",
+                &[format!("/shape --notes {text}")],
+            );
             let Some(tab) = server.work_tab(client, &repo, command, Opened::Front) else {
                 return;
             };
             if let Some(t) = server.tabs.get_mut(&tab) {
                 t.opts.insert("@tab_name".into(), format!("Plan: {short}"));
                 // Its full title the item's words, by which Notes' o and
-                // chips find the tab on the item once /plan-item adds it.
+                // chips find the tab on the item once /shape adds it.
                 t.opts.insert("@tab_title".into(), text.clone());
                 t.opts.insert("@tab_note".into(), name);
             }

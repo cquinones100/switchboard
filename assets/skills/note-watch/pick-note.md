@@ -1,6 +1,6 @@
 # Settling which note
 
-How `/note-watch`, `/queue-and-clean` and `/wtn` settle which of the user's notes (Switchboard's notes app) a piece of work belongs to. Each reads this file, so they find a note the same way; a change to how belongs here.
+How `/note-watch`, `/queue-and-clean`, `/shape` and `/wtn` settle which of the user's notes (Switchboard's notes app) a piece of work belongs to. Each reads this file, so they find a note the same way; a change to how belongs here.
 
 Notes are in `$NOTES_DIR` or `~/Notes`, each note's file named after its title (`~/Notes/Editor Configs Notes.md`), folders as subfolders, deleted notes in `.trash/`.
 

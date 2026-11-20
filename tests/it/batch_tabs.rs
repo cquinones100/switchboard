@@ -166,10 +166,13 @@ fn shape_batch_runs_shape_in_a_tab_per_item_which_names_it_and_starts_claude_the
     assert_eq!(
         lines,
         vec![
-            format!("{}|/shape ABC-7 --continue", at.display()),
-            format!("{}|/shape results load slowly, sometimes", at.display()),
+            format!("{}|/shape --linear ABC-7 --continue", at.display()),
+            format!(
+                "{}|/shape --linear results load slowly, sometimes",
+                at.display()
+            ),
         ],
-        "claude started in the repository with /shape for each"
+        "claude started in the repository with /shape --linear for each"
     );
     let all = tabs(&server);
     assert_eq!(all.len(), 3);

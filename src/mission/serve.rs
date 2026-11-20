@@ -6416,9 +6416,13 @@ impl Server {
                         ("direct", "Straight on the default branch"),
                     ],
                     "tickets" => vec![
-                        ("unset", "Not set: wtn takes a note's item or --issue"),
+                        (
+                            "unset",
+                            "Not set: /shape files in Linear, wtn takes a note's item or --issue",
+                        ),
                         ("github", "GitHub issues"),
                         ("linear", "Linear"),
+                        ("notes", "A note's checklist, with a plan note each"),
                     ],
                     "testIn" => vec![
                         ("here", "Here, in the worktree"),
