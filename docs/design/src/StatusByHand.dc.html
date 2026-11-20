@@ -222,7 +222,7 @@ const BASE = [
 side(0, 'As Switchboard files it', BASE.concat([['Idle', 'd', [['○', 'd', 8, 'handoff', 'idle 58m'], ['○', 'd', 9, 'oncall watch', 'idle 14m']]]]), 8);
 // MIDDLE, WITH THE STATUS YOU SET: you put tab 8 under Review loop (it waits on a teammate's review). It takes that
 // group's place and mark, "set by you" after its name; under it, what Switchboard still reads, which hands it back.
-side(35, 'With the status you set', [BASE[0], ['Review loop', 'a', [['○', 'd', 8, 'handoff', 'Switchboard reads: idle 58m', true]]], BASE[1], BASE[2], ['Idle', 'd', [['○', 'd', 9, 'oncall watch', 'idle 14m']]]], 8);
+side(35, 'With the status you set', [BASE[0], BASE[1], ['Review loop', 'a', [['○', 'd', 8, 'handoff', 'Switchboard reads: idle 58m', true]]], BASE[2], ['Idle', 'd', [['○', 'd', 9, 'oncall watch', 'idle 14m']]]], 8);
 
 // RIGHT, ITS CARD IN MISSION CONTROL'S TABS VIEW: under Review loop, the chip on the card's top edge.
 fill(70, 0, 90, 1, '3');
