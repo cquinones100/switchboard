@@ -100,6 +100,14 @@ impl Server {
         answer::options_in(&slot.pane.text(60))
     }
 
+    /// Whether a pane's Claude waits on you: marked waiting, or, in auto
+    /// mode, asked a permission its Notification hook hasn't yet marked
+    /// (`asked`), while the prompt is already on screen.
+    fn phone_asking(&self, pane: PaneId) -> bool {
+        self.agents.state(pane) == Some(crate::agent::State::Waiting)
+            || self.agents.get(pane).is_some_and(|a| a.asked.is_some())
+    }
+
     fn phone_dialog(&self, pane: PaneId) -> bool {
         self.panes
             .get(&pane)
@@ -144,7 +152,7 @@ impl Server {
         // A numbered list in a finished reply reads as options too, so a
         // message waits on a prompt only while its Claude is waiting, as
         // the drawer shows one and the relay reads one.
-        let waiting = self.agents.state(pane) == Some(crate::agent::State::Waiting);
+        let waiting = self.phone_asking(pane);
         let said = match (message, found) {
             (true, Some(_)) if waiting => {
                 return Err("its Claude is showing a prompt: answer that first".into());
@@ -349,7 +357,8 @@ impl Server {
             .iter()
             .filter_map(|t| {
                 let pane = t.claude_pane?;
-                let waiting = t.state == crate::sidebar::TabState::Waiting;
+                let waiting =
+                    t.state == crate::sidebar::TabState::Waiting || self.phone_asking(pane);
                 let prompt = waiting
                     .then(|| self.phone_prompt_of(pane))
                     .flatten()
