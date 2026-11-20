@@ -268,9 +268,9 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
 }
 
 /// What Claude is told about the issue: where it is, its title and body as
-/// data, what to decide and check first, and how it lands; what becomes of
-/// the issue on GitHub is autopilot's in a tab it opened (`in_autopilot`),
-/// and the person's in one started by hand.
+/// data, what to decide and check first, and how it lands; the landing's
+/// `item-done --close-issue` closes the issue in either tab, once its
+/// question names that or the tab lands without asking.
 pub fn prompt_of(
     issue: &Issue,
     label: &str,
