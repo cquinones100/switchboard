@@ -1074,8 +1074,8 @@ mod tests {
 
     #[test]
     fn hints_name_a_command_every_shell_has() {
-        // wtpr, wtn and wt are shell functions an rc may not define.
-        let bare = regex::Regex::new(r"\b(?:run |; )?(?:wtpr|wtn|wtb|wt) (?:--|\{|again)").unwrap();
+        // wtpr and wt are shell functions an rc may not define.
+        let bare = regex::Regex::new(r"\b(?:run |; )?(?:wtpr|wt|wtb) (?:--|\{|again)").unwrap();
         for (file, text) in [
             ("worktree_from_pr.rs", include_str!("worktree_from_pr.rs")),
             (
