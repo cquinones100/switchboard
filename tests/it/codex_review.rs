@@ -809,7 +809,11 @@ fn rounds_count_to_two_clean_ones_or_the_cap() {
     );
     assert_eq!(first["cap"], 5);
     let early = review(home, &work, &["--round", "more"]);
-    assert_eq!(early.status.code(), Some(1), "no raising the cap ahead of it");
+    assert_eq!(
+        early.status.code(),
+        Some(1),
+        "no raising the cap ahead of it"
+    );
     assert!(!sweeps());
     let actions: Vec<&str> = first["findings"]
         .as_array()

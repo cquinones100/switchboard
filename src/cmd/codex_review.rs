@@ -2345,10 +2345,12 @@ fn answer_cap(root: &Path, branch: &str, more: bool) -> Reviewed<ExitCode> {
         place()?.is_some_and(|(round, _, extra)| round >= CAP + extra)
     };
     if more && !at_cap {
-        return fail("the review loop isn't waiting at its round cap; --round more raises it only there, after the cap question");
+        return fail(
+            "the review loop isn't waiting at its round cap; --round more raises it only there, after the cap question",
+        );
     }
     let raised = Rounds {
-        extra: rounds.extra + raise,
+        extra: rounds.extra + if hands_free { raise } else { 0 },
         ..rounds
     };
     keep_rounds(branch, raised)?;
@@ -2358,7 +2360,13 @@ fn answer_cap(root: &Path, branch: &str, more: bool) -> Reviewed<ExitCode> {
     if !more {
         let _ = fs::remove_file(path);
     } else if place.is_some() {
-        write_record(&path, &format!("{round} {clean} {}", extra + raise))?;
+        write_record(
+            &path,
+            &format!(
+                "{round} {clean} {}",
+                extra + if hands_free { 0 } else { raise }
+            ),
+        )?;
     }
     let (shown, cap) = if hands_free {
         (raised.total, HANDS_FREE_CAP + raised.extra)
