@@ -275,8 +275,9 @@ pub struct Job {
     pub key: String,
     /// When the note last changed (ms).
     pub mtime: i64,
-    /// Where the work comes from.
-    pub sources: Sources,
+    /// Where the work comes from, as the repository's tickets say; `None`
+    /// while they give none (`Mode::source`), which takes nothing.
+    pub sources: Option<Sources>,
     /// Whether GitHub issues may be read now (`Mode::issues_on`); off, a
     /// source of issues gives none.
     pub issues_on: bool,
@@ -304,11 +305,11 @@ impl Job {
         state: &Path,
     ) -> Result<(Vec<Item>, Vec<Item>), String> {
         match self.sources {
-            Sources::Note => self.note_items(notes, state),
-            Sources::Issues if self.issues_on => self
+            Some(Sources::Note) => self.note_items(notes, state),
+            Some(Sources::Issues) if self.issues_on => self
                 .issue_items(state)
                 .map_err(|e| format!("GitHub issues: {e}")),
-            Sources::Issues => Ok((Vec::new(), Vec::new())),
+            Some(Sources::Issues) | None => Ok((Vec::new(), Vec::new())),
         }
     }
 
@@ -409,7 +410,7 @@ impl Job {
     /// Each issue's priority, by its item's first line, from the read the
     /// queue took (no request of its own while that read is fresh).
     pub fn priorities(&self, state: &Path) -> HashMap<String, u8> {
-        if !(self.sources.issues() && self.issues_on) {
+        if !(self.sources == Some(Sources::Issues) && self.issues_on) {
             return HashMap::new();
         }
         super::issues::issues(&self.repo, &self.label, state, util::now_ms())
@@ -423,14 +424,14 @@ impl Job {
     /// An issue's plan is its body, from the read the queue took (no
     /// request of its own while that read is fresh).
     pub fn plans(&self, notes: &Path, state: &Path) -> HashMap<String, PlanNote> {
-        let mut plans: HashMap<String, PlanNote> = if self.sources.note() {
+        let mut plans: HashMap<String, PlanNote> = if self.sources == Some(Sources::Note) {
             std::fs::read_to_string(notes.join(&self.note))
                 .map(|text| plan_notes(notes, &text))
                 .unwrap_or_default()
         } else {
             HashMap::new()
         };
-        if self.sources.issues()
+        if self.sources == Some(Sources::Issues)
             && self.issues_on
             && let Ok(issues) =
                 super::issues::issues(&self.repo, &self.label, state, util::now_ms())
@@ -593,6 +594,9 @@ pub struct Check {
     pub keep: Option<Keep>,
     /// The note, lost, is at its path again: what was said of it goes.
     pub found_again: bool,
+    /// The repository's tickets give it work it may take: what was said
+    /// of their giving none goes (`unsay_source`).
+    pub source_ok: bool,
 }
 
 /// What a look's answer leaves to do.
@@ -626,6 +630,21 @@ pub fn unsay(said: &str, what: &str) -> String {
     format!("{}{}", &said[..at], &said[end..])
         .trim_end_matches(". ")
         .to_string()
+}
+
+/// `said` without what it said of the repository's tickets giving it no
+/// work (`Mode::source` and `ISSUES_OFF`), each a sentence of its own.
+pub fn unsay_source(said: &str) -> String {
+    const OF_SOURCE: [&str; 4] = [
+        "ticket source isn't set",
+        "which autopilot can't take",
+        "its issue label isn't set",
+        ISSUES_OFF,
+    ];
+    said.split(". ")
+        .filter(|s| !OF_SOURCE.iter().any(|m| s.contains(m)))
+        .collect::<Vec<_>>()
+        .join(". ")
 }
 
 /// What it says while a read of GitHub issues fails (`e` starting
@@ -674,6 +693,13 @@ pub struct Pilot {
     weekly: Option<(i64, u32)>,
     /// The note said to be missing, said once.
     missing_said: String,
+    /// Why the repository's tickets give it no work, as last said.
+    source_said: String,
+    /// Where its work comes from, as its repository's tickets say
+    /// (`Mode::source`), and the label its issues carry, which the server
+    /// reads from repos.json before each check; why it takes none, else.
+    pub source: Result<Sources, String>,
+    pub label: String,
     /// The items of its tabs still open, never taken again while there.
     held: Vec<Key>,
     /// How many of its tabs work and how many are open, at the last check.
@@ -699,6 +725,11 @@ pub struct Pilot {
     landing: Option<bool>,
 }
 
+/// What it says taking GitHub issues while Settings' autopilot or GitHub
+/// keeps it from reading them.
+pub const ISSUES_OFF: &str =
+    "GitHub is off in Settings, so autopilot takes none of the repository's issues";
+
 impl Default for Pilot {
     fn default() -> Pilot {
         Pilot {
@@ -713,6 +744,9 @@ impl Default for Pilot {
             spent: None,
             weekly: None,
             missing_said: String::new(),
+            source_said: String::new(),
+            source: Ok(Sources::Note),
+            label: String::new(),
             held: Vec::new(),
             counts: (0, 0),
             fronts: HashMap::new(),
@@ -976,6 +1010,8 @@ impl Pilot {
         }
         let skip = self.skip(mode, now_ms);
         let retrying = self.retrying(mode, now_ms);
+        let source = self.source.clone();
+        let label = self.label.clone();
         let job = |key: String, mtime: i64| Job {
             note: mode.note.clone(),
             repo: mode.repo.clone(),
@@ -988,9 +1024,9 @@ impl Pilot {
             weekly_limit: mode.weekly_limit,
             key,
             mtime,
-            sources: mode.sources,
+            sources: source.clone().ok(),
             issues_on: mode.issues_on(),
-            label: mode.issue_label.clone(),
+            label: label.clone(),
         };
         // The item it will take next, read again for mission control.
         let mut skipped: Vec<&String> = skip.iter().collect();
@@ -1008,9 +1044,9 @@ impl Pilot {
             mode.ready_only,
             mode.hands_free,
             mode.next_here().join("\n"),
-            mode.sources.name(),
+            source.as_ref().map_or("none", |s| s.label()),
             mode.issues_on(),
-            mode.issue_label
+            label
         );
         if mtime.is_some()
             && !self.reading
@@ -1058,6 +1094,21 @@ impl Pilot {
         {
             return out;
         }
+        // Nothing taken while the repository's tickets give it no work, or
+        // give it GitHub issues while Settings keep it from reading them.
+        let taking = match &source {
+            Ok(Sources::Issues) if !mode.issues_on() => Err(ISSUES_OFF.to_string()),
+            other => other.clone(),
+        };
+        if let Err(why) = &taking {
+            if self.source_said != *why {
+                self.source_said = why.clone();
+                out.said = Some(why.clone());
+            }
+            return out;
+        }
+        self.source_said.clear();
+        out.source_ok = true;
         let Some(mtime) = mtime else {
             if self.missing_said != mode.note {
                 self.missing_said = mode.note.clone();
@@ -1383,7 +1434,7 @@ mod tests {
             weekly_limit: 0,
             key: String::new(),
             mtime: 0,
-            sources: Sources::Issues,
+            sources: Some(Sources::Issues),
             issues_on: true,
             label: "autopilot".into(),
         };
@@ -1405,7 +1456,7 @@ mod tests {
             job.first(&dir, &dir).unwrap().map(|i| i.text).as_deref(),
             Some("acme/widgets#4: Issue 4")
         );
-        job.sources = Sources::Note;
+        job.sources = Some(Sources::Note);
         assert_eq!(texts(&job), ["From the note"]);
         assert!(job.items_and_held(&dir, &dir).unwrap().1.is_empty());
         assert!(
@@ -1413,7 +1464,7 @@ mod tests {
             "no issue read for the note"
         );
         // GitHub off: issues alone take nothing, never the note's items.
-        job.sources = Sources::Issues;
+        job.sources = Some(Sources::Issues);
         job.issues_on = false;
         assert!(texts(&job).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
@@ -1433,7 +1484,7 @@ mod tests {
             weekly_limit: 0,
             key: String::new(),
             mtime: 0,
-            sources: Sources::Issues,
+            sources: Some(Sources::Issues),
             issues_on: true,
             label: "autopilot".into(),
         }
@@ -1559,7 +1610,7 @@ mod tests {
             weekly_limit: 0,
             key: String::new(),
             mtime: 0,
-            sources: Sources::Note,
+            sources: Some(Sources::Note),
             issues_on: true,
             label: String::new(),
         };
@@ -1627,7 +1678,7 @@ mod tests {
             weekly_limit: 80,
             key: String::new(),
             mtime: 0,
-            sources: Sources::Note,
+            sources: Some(Sources::Note),
             issues_on: true,
             label: String::new(),
         };
@@ -2009,6 +2060,20 @@ mod tests {
         assert!(
             !pilot.summary(&mode, false).drained,
             "with no tab open it is said in the notifications instead"
+        );
+    }
+
+    #[test]
+    fn what_it_said_of_the_source_goes_and_the_rest_stays() {
+        let said = format!("Skipped X: refused. {ISSUES_OFF}");
+        assert_eq!(unsay_source(&said), "Skipped X: refused");
+        assert_eq!(
+            unsay_source("acme/app keeps its work in Linear, which autopilot can't take"),
+            ""
+        );
+        assert_eq!(
+            unsay_source("Nothing left to take in Work"),
+            "Nothing left to take in Work"
         );
     }
 
