@@ -15,6 +15,7 @@ use crate::{paths, util};
 use super::color::{self, Rgb};
 use super::label::{self, PaneKind};
 use super::names::{Answer, Ask};
+use super::prs::{self, TabPr};
 use super::{git, title};
 use crate::integrations::github::Repo;
 use crate::mux::TabId;
@@ -272,7 +273,7 @@ impl Server {
             .map(|s| s.label.as_str())
             .or_else(|| self.tabs.get(&tab).map(|t| t.auto_name.as_str()))
             .unwrap_or("");
-        label::label(self.tab_own_name(tab), facts, shown.and_then(|s| s.pr))
+        label::label(self.tab_own_name(tab), facts, self.tab_pr(tab))
     }
 
     /// The color the tab wears: its project's, or gray with the
@@ -286,9 +287,279 @@ impl Server {
         self.tab_names.shown.get(&tab)?.path.as_deref()
     }
 
-    /// The tab's PR number, when its branch has one.
+    /// The tab's current PR's number (`tabs::prs`): the one picked, else
+    /// its branch's, else the newest its session opened.
     pub fn tab_pr(&self, tab: TabId) -> Option<u64> {
-        self.tab_names.shown.get(&tab)?.pr
+        self.tab_current_pr(tab).map(|p| p.number)
+    }
+
+    /// The PR of the tab's branch, as the tab names last found it.
+    fn tab_branch_pr(&self, tab: TabId) -> Option<TabPr> {
+        let shown = self.tab_names.shown.get(&tab)?;
+        Some(TabPr {
+            number: shown.pr?,
+            repo: shown.pr_repo.clone(),
+        })
+    }
+
+    /// Every PR the tab follows, in the order opened (`tabs::prs::joined`):
+    /// its branch's alone with Settings' `tab_prs` or `github` off.
+    pub fn tab_prs(&self, tab: TabId) -> Vec<TabPr> {
+        let branch = self.tab_branch_pr(tab);
+        let opened = self
+            .tabs
+            .get(&tab)
+            .and_then(|t| t.opts.get(prs::LIST))
+            .filter(|_| crate::settings::is_on(prs::SETTING) && crate::settings::is_on("github"))
+            .map(|v| prs::read(v))
+            .unwrap_or_default();
+        prs::joined(branch.as_ref(), &opened)
+    }
+
+    /// The tab's current PR among `tab_prs`.
+    pub fn tab_current_pr(&self, tab: TabId) -> Option<TabPr> {
+        let all = self.tab_prs(tab);
+        let picked = self
+            .tabs
+            .get(&tab)
+            .and_then(|t| t.opts.get(prs::CURRENT))
+            .and_then(|v| TabPr::parse(v));
+        let open = |pr: &TabPr| {
+            self.tab_pr_facts(pr)
+                .is_some_and(|f| f.state == crate::facts::PrState::Open)
+        };
+        prs::current(
+            &all,
+            self.tab_branch_pr(tab).as_ref(),
+            picked.as_ref(),
+            open,
+        )
+    }
+
+    /// The tab's current PR when it isn't its branch's and its repository is
+    /// known, which M-v opens by its number; `None` when the branch's PR is
+    /// current, as before.
+    pub fn tab_current_pr_elsewhere(&self, tab: TabId) -> Option<TabPr> {
+        let current = self.tab_current_pr(tab)?;
+        let branch = self.tab_branch_pr(tab);
+        (current.repo.is_some() && branch.is_none_or(|b| !b.same(&current))).then_some(current)
+    }
+
+    /// `tab_current_pr_elsewhere` when you picked it, which M-d opens where
+    /// its branch is checked out; a PR current only by being newest leaves
+    /// M-d on the tab's own work.
+    pub fn tab_picked_pr_elsewhere(&self, tab: TabId) -> Option<TabPr> {
+        let picked = self
+            .tabs
+            .get(&tab)
+            .and_then(|t| t.opts.get(prs::CURRENT))
+            .and_then(|v| TabPr::parse(v))?;
+        self.tab_current_pr_elsewhere(tab)
+            .filter(|c| c.same(&picked))
+    }
+
+    /// Where a PR's branch is checked out, for M-d on a tab's current PR
+    /// from another branch: an open tab's directory, else a worktree mission
+    /// control has listed, on the PR's head branch in a clone of its
+    /// repository (origin's or upstream's); else why not, in words. Reads
+    /// git's files, so only on a key, never on the drawing path.
+    pub fn checkout_of_pr(&self, pr: &TabPr) -> Result<PathBuf, String> {
+        let head = self
+            .tab_pr_facts(pr)
+            .map(|f| f.head.clone())
+            .filter(|h| !h.is_empty())
+            .ok_or_else(|| format!("#{}'s branch isn't known yet: M-v shows the PR", pr.number))?;
+        let repo = pr
+            .repo
+            .as_ref()
+            .ok_or_else(|| format!("#{}'s repository isn't known", pr.number))?;
+        let same = |r: &Option<crate::integrations::github::Repo>| {
+            r.as_ref().is_some_and(|r| {
+                r.owner.eq_ignore_ascii_case(&repo.owner) && r.name.eq_ignore_ascii_case(&repo.name)
+            })
+        };
+        let tabs = self
+            .sessions
+            .iter()
+            .flat_map(|s| s.tabs.clone())
+            .filter_map(|t| self.tab_path(t).map(Path::to_path_buf));
+        let trees = self
+            .mission
+            .worktrees
+            .values()
+            .flatten()
+            .map(|w| w.path.clone());
+        tabs.chain(trees)
+            .find(|dir| {
+                git::locate(dir).is_some_and(|p| p.branch == head) && {
+                    let remotes = crate::sources::repo::remotes_of(dir);
+                    same(&remotes.origin) || same(&remotes.upstream)
+                }
+            })
+            .ok_or_else(|| {
+                format!(
+                    "#{}'s branch, {head}, isn't checked out here: M-v shows the PR",
+                    pr.number
+                )
+            })
+    }
+
+    /// With several PRs, the current one's place in the order opened (from
+    /// 1), how many, and its number, as the tab's header says them.
+    pub fn tab_pr_place(&self, tab: TabId) -> Option<(usize, usize, u64)> {
+        let all = self.tab_prs(tab);
+        if all.len() < 2 {
+            return None;
+        }
+        let current = self.tab_current_pr(tab)?;
+        let at = all.iter().position(|p| p.same(&current))?;
+        Some((at + 1, all.len(), current.number))
+    }
+
+    /// Adds the PRs a tab's session opened to the ones it follows
+    /// (`@tab_prs`), with Settings' `tab_prs` and `github` on.
+    pub fn follow_tab_prs(&mut self, tab: TabId, opened: Vec<crate::agent::prs::Opened>) {
+        if opened.is_empty()
+            || !crate::settings::is_on(prs::SETTING)
+            || !crate::settings::is_on("github")
+        {
+            return;
+        }
+        let Some(t) = self.tabs.get_mut(&tab) else {
+            return;
+        };
+        let mut list = prs::read(t.opts.get(prs::LIST).map_or("", String::as_str));
+        let mut changed = false;
+        for pr in opened {
+            let pr = TabPr {
+                number: pr.number,
+                repo: Some(pr.repo),
+            };
+            if let Some(more) = prs::with(&list, pr) {
+                list = more;
+                changed = true;
+            }
+        }
+        if changed {
+            t.opts.insert(prs::LIST.into(), prs::write(&list));
+            self.dirty_tab_everywhere(tab);
+        }
+    }
+
+    /// "Show another of this tab's PRs" (board 129): a picker of the PRs the
+    /// tab follows, in the order opened, the current one chosen as it
+    /// opens, each with its repository, title and where it stands; the one
+    /// picked becomes current.
+    pub fn pick_from_tab_prs(&mut self, client: ClientId, tab: TabId) {
+        let all = self.tab_prs(tab);
+        if all.len() < 2 {
+            let said = match all.first() {
+                Some(pr) => format!("This tab follows one PR, #{}", pr.number),
+                None => "This tab follows no PR".to_string(),
+            };
+            self.say(Some(client), &said);
+            return;
+        }
+        let current = self.tab_current_pr(tab);
+        let mut items = Vec::new();
+        let mut start = 0;
+        for (i, pr) in all.iter().enumerate() {
+            let facts = self.tab_pr_facts(pr);
+            let repo = pr.repo.as_ref().map(|r| r.name.clone()).unwrap_or_default();
+            let title = facts.map(|f| f.title.as_str()).unwrap_or("");
+            let is_current = current.as_ref().is_some_and(|c| c.same(pr));
+            if is_current {
+                start = i;
+            }
+            items.push(crate::ui::PickItem {
+                text: format!("#{}  {repo}  {title}", pr.number),
+                tags: facts.map(prs::standing_long).unwrap_or_default(),
+                key: if is_current {
+                    "current".into()
+                } else {
+                    String::new()
+                },
+                value: pr.key(),
+                ..Default::default()
+            });
+        }
+        let count = items.len();
+        let picker = crate::ui::Picker::new("Show another of this tab's PRs", items)
+            .named("tab-prs")
+            .prompt(format!("{count} PRs> "))
+            .keep_order()
+            .start_on(start);
+        self.pick(client, picker, move |server, _, picked| {
+            let Some(picked) = picked else {
+                return;
+            };
+            let chosen = server
+                .tab_prs(tab)
+                .into_iter()
+                .find(|p| p.key() == picked.value);
+            if let Some(pr) = chosen {
+                server.pick_tab_pr(tab, &pr);
+            }
+        });
+    }
+
+    /// Makes `pr` the tab's current PR, for M-v, M-d and its label.
+    pub fn pick_tab_pr(&mut self, tab: TabId, pr: &TabPr) {
+        if let Some(t) = self.tabs.get_mut(&tab) {
+            t.opts.insert(prs::CURRENT.into(), pr.key());
+            self.dirty_tab_everywhere(tab);
+        }
+    }
+
+    /// Takes the merged and closed PRs (`done`) a tab's session opened off
+    /// its list once they have been seen so: a lookup's answer while the
+    /// tab is in front of someone marks each, and the next answer takes the
+    /// marked ones off. The branch's PR, never stored, shows as it always
+    /// has.
+    pub fn drop_finished_tab_prs(&mut self, done: impl Fn(&TabPr) -> bool) {
+        let ids: Vec<TabId> = self
+            .tabs
+            .iter()
+            .filter(|(_, t)| t.opts.get(prs::LIST).is_some_and(|v| !v.is_empty()))
+            .map(|(id, _)| *id)
+            .collect();
+        let mut seen = std::mem::take(&mut self.tab_names.finished_seen);
+        seen.retain(|(id, _)| ids.contains(id));
+        for id in ids {
+            let in_front = self.tab_in_front(id);
+            let t = self.tabs.get_mut(&id).expect("listed above");
+            let list = prs::read(t.opts.get(prs::LIST).map_or("", String::as_str));
+            let mut left = Vec::new();
+            for pr in list.iter().filter(|p| done(p)) {
+                let key = (id, pr.key());
+                if !seen.contains(&key) {
+                    if in_front {
+                        seen.insert(key);
+                    }
+                    left.push(pr.clone());
+                }
+            }
+            let left: Vec<TabPr> = list
+                .iter()
+                .filter(|p| !done(p) || left.contains(p))
+                .cloned()
+                .collect();
+            if left.len() != list.len() {
+                seen.retain(|(tab, key)| *tab != id || left.iter().any(|p| p.key() == *key));
+                t.opts.insert(prs::LIST.into(), prs::write(&left));
+                self.dirty_tab_everywhere(id);
+            }
+        }
+        self.tab_names.finished_seen = seen;
+    }
+
+    /// Redraws whatever shows a tab: its session's status line, the
+    /// sidebars and mission control.
+    fn dirty_tab_everywhere(&mut self, tab: TabId) {
+        if let Some(name) = self.session_of_tab(tab).map(|s| s.name.clone()) {
+            self.dirty_session(&name);
+        }
+        self.redraw_everywhere();
     }
 
     /// The ticket the tab's branch is for, its GitHub issue or Linear
@@ -299,8 +570,8 @@ impl Server {
 
     /// The repository the tab's PR is in, when its lookup said: origin's,
     /// or in a fork's clone the project upstream names.
-    pub fn tab_pr_repo(&self, tab: TabId) -> Option<&Repo> {
-        self.tab_names.shown.get(&tab)?.pr_repo.as_ref()
+    pub fn tab_pr_repo(&self, tab: TabId) -> Option<Repo> {
+        self.tab_current_pr(tab)?.repo
     }
 
     /// A tab's full title where its name is a note item cut short: its

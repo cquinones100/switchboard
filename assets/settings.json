@@ -1153,6 +1153,13 @@
     "default": true
   },
   {
+    "key": "tab_prs",
+    "category": "Tabs and status bar",
+    "label": "Follow every PR a tab's session opens",
+    "description": "A tab follows each pull request its Claude opens or looks at (gh pr create or view), from any branch or repository, as well as its branch's: its label leads with the current one, the sidebar and its Tabs card list each with where it stands, and \"Show another of this tab's PRs\" makes another current for M-v and M-d. A merged or closed one leaves the list once you have looked at the tab. Off, a tab has only its branch's PR",
+    "default": true
+  },
+  {
     "key": "accent_colors",
     "category": "Tabs and status bar",
     "label": "Project colors",

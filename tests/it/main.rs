@@ -43,6 +43,7 @@ mod slots;
 mod sources;
 mod stand_ins;
 mod status;
+mod tab_prs;
 mod tabs;
 mod try_;
 mod ui;

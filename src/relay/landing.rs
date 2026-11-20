@@ -298,6 +298,9 @@ mod tests {
         let pr = PrFacts {
             number: 57,
             repo: "o/r".into(),
+            title: String::new(),
+            head: String::new(),
+            draft: false,
             url: String::new(),
             state: PrState::Open,
             merge: None,

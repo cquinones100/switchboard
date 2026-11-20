@@ -3504,6 +3504,7 @@ impl Server {
             Action::RemindTab => self.remind_tab(id, current_tab),
             Action::TabStatus => self.tab_status_menu(id, current_tab),
             Action::TabTitle => self.show_tab_title(id, current_tab),
+            Action::TabPrs => self.pick_from_tab_prs(id, current_tab),
             Action::ReopenLastTab => self.reopen_last(id),
             Action::View(command) => self.view_command(id, command),
             Action::Diff(command) => self.diff_command(id, command),
@@ -4715,6 +4716,7 @@ impl Server {
             history_open: false,
             viewing: None,
             context: self.tab_context(tab).map(|c| c.used),
+            prs: self.tab_pr_place(tab),
             nav: None,
         }
     }

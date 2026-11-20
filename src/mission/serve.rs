@@ -4655,6 +4655,7 @@ impl Server {
                 self.mission_note(client, "The tab takes the default width again.");
             }
             Do::TabTitle(tab) => self.show_tab_title(client, tab),
+            Do::TabPrs(tab) => self.pick_from_tab_prs(client, tab),
             Do::Diff(tab) => self.tool_in_tab(client, tab, false),
             Do::Lazygit(tab) => self.tool_in_tab(client, tab, true),
             Do::ToolIn { dir, lazygit } => {

@@ -42,6 +42,8 @@ pub enum Do {
     Peek(TabId),
     /// Its whole title in a box, as M-T shows it.
     TabTitle(TabId),
+    /// The picker of the PRs it follows, the one chosen made current.
+    TabPrs(TabId),
     /// The tab, and its diff in its pane's place (M-d).
     Diff(TabId),
     /// The tab, and lazygit in its pane's place.
@@ -729,6 +731,14 @@ pub fn tab_choices(
     // Its whole title, as M-T shows it, which the cards cut to a line.
     if title {
         out.push(choice('i', "Show its full title", Do::TabTitle(tab.id)));
+    }
+    // A tab following several PRs: which one M-v and M-d show (board 129).
+    if tab.prs.len() > 1 {
+        out.push(choice(
+            'P',
+            "Show another of this tab's PRs",
+            Do::TabPrs(tab.id),
+        ));
     }
     out.push(choice('d', "Its diff (M-d)", Do::Diff(tab.id)));
     out.push(choice('L', "lazygit", Do::Lazygit(tab.id)));

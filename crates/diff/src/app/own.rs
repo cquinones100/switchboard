@@ -73,6 +73,8 @@ pub(super) enum Choice {
     InFiles,
     /// Its place copied as path:line.
     CopyPlace,
+    /// The workspace's picker of the tab's PRs (`press tab-prs`).
+    TabPrs,
 }
 
 /// The diff's menu, and what each of its options does.
@@ -870,6 +872,10 @@ impl App {
             choices.push(Choice::Keys(i));
             options.push(MenuOption::new(*label));
         }
+        if self.several {
+            choices.push(Choice::TabPrs);
+            options.push(MenuOption::new("Show another of this tab's PRs"));
+        }
         if self.offers_default_width() {
             choices.push(Choice::DefaultWidth);
             options.push(MenuOption::new("Use the file list's default width"));
@@ -995,6 +1001,14 @@ impl App {
                         .is_some_and(|(code, ..)| code == 0);
                 if !opened {
                     self.say("The diff's settings are in Switchboard's Settings, under Diff.");
+                }
+            }
+            Some(Choice::TabPrs) => {
+                let shown = host::host()
+                    .command(&["press", "tab-prs"])
+                    .is_some_and(|(code, ..)| code == 0);
+                if !shown {
+                    self.say("Couldn't ask the workspace for this tab's PRs.");
                 }
             }
             Some(Choice::Keys(i)) => {

@@ -15,6 +15,8 @@
 //! - `label`: the label's rules, with nothing in them that reads or asks.
 //! - `title`: M-T's box, a tab's whole title and what is known of it.
 //! - `names`: what is kept per directory and per lookup, and the lookups.
+//! - `prs`: every PR a tab follows, its session's and its branch's, and
+//!   which is current.
 //! - `serve`: the server's side: naming the tabs, and what later parts read
 //!   (`Server::tab_label`, `tab_color`, `tab_path`, `tab_pr`).
 
@@ -22,6 +24,7 @@ pub mod color;
 pub mod git;
 pub mod label;
 pub mod names;
+pub mod prs;
 mod serve;
 pub mod title;
 
@@ -61,4 +64,8 @@ pub struct TabNames {
     pub shown: HashMap<TabId, Shown>,
     /// Whether what the last server kept (`names.restore`) has been read.
     pub restored: bool,
+    /// The merged or closed PRs a tab's session opened that were seen so,
+    /// the tab in front of someone, by the tab and the PR's key: each is
+    /// taken off the tab's list at the lookups' next answer.
+    pub finished_seen: std::collections::HashSet<(TabId, String)>,
 }

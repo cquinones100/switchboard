@@ -968,6 +968,9 @@ pub struct App {
     opened: Option<(PathBuf, Option<String>, bool)>,
     /// Whether the terminal draws a button's rounded ends.
     round: bool,
+    /// The workspace's tab follows several PRs (`--several`), which puts
+    /// "Show another of this tab's PRs" in the menu.
+    several: bool,
     /// The repository as the header names it (`~/...`), and the settings
     /// file as the settings view does.
     top_shown: String,
@@ -1120,6 +1123,7 @@ impl App {
             installed: false,
             opened: None,
             round: false,
+            several: false,
             top_shown: String::new(),
             settings_shown: String::new(),
             settings_path: PathBuf::new(),
@@ -5865,6 +5869,7 @@ pub fn run(
     working: bool,
     session: Option<ask::Session>,
     resize_keys: Vec<ResizeKey>,
+    several: bool,
 ) -> ExitCode {
     let (cols, rows) = terminal::size().unwrap_or((80, 24));
     let (tx, rx): (Sender<Msg>, Receiver<Msg>) = channel();
@@ -5873,6 +5878,7 @@ pub fn run(
     app.session = session.filter(|_| settings::is_on("diff_ask_session"));
     app.opened = Some((dir.clone(), base.clone(), working));
     app.round = host().draws("round");
+    app.several = several && opts.server;
     app.keep_width_in(width::kept_file());
     // In a pane, only the keys the workspace named (none when keys.json
     // binds none, or for a diff typed there by hand, whose keys the

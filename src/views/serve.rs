@@ -408,7 +408,16 @@ impl Server {
         let dir = self.work_dir(tab, pane, dir);
         let pane = self.work_pane(tab, pane);
         let dir = dir.to_string_lossy().into_owned();
-        let command = vec!["pr-view".into(), dir];
+        // A tab following several PRs opens on its current one, by its
+        // number when it isn't its branch's (src/tabs/prs.rs).
+        let mut command = vec!["pr-view".to_string()];
+        if self.tab_prs(tab).len() > 1 {
+            command.push("--several".into());
+        }
+        match self.tab_current_pr_elsewhere(tab) {
+            Some(pr) => command.extend(["--pr".into(), pr.key()]),
+            None => command.push(dir),
+        }
         let replaced = crate::settings::is_on("ux2")
             .then(|| self.clear_beside(tab))
             .flatten();

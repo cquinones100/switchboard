@@ -148,6 +148,9 @@ pub enum Action {
     /// The tab's whole title in a box, which the sidebar and the status
     /// line cut (M-T; tab-title.sh; src/tabs/title.rs).
     TabTitle,
+    /// A picker of the PRs the tab follows, which makes the one chosen its
+    /// current PR, for M-v, M-d and its label (src/tabs/prs.rs).
+    TabPrs,
     /// The tab closed most recently opened again, as a browser's
     /// Cmd-Shift-T does (M-T; src/usage/serve.rs's `reopen_last`).
     ReopenLastTab,
@@ -303,6 +306,7 @@ impl Action {
             "remind-tab" => Action::RemindTab,
             "tab-status" => Action::TabStatus,
             "tab-title" => Action::TabTitle,
+            "tab-prs" => Action::TabPrs,
             "reopen-last-tab" => Action::ReopenLastTab,
             "upgrade" => Action::Upgrade,
             "hide-build-row" => Action::HideBuildRow,
@@ -385,6 +389,7 @@ impl Action {
             Action::RemindTab => "remind-tab".into(),
             Action::TabStatus => "tab-status".into(),
             Action::TabTitle => "tab-title".into(),
+            Action::TabPrs => "tab-prs".into(),
             Action::ReopenLastTab => "reopen-last-tab".into(),
             Action::View(command) => command.name().into(),
             Action::Diff(command) => command.name().into(),
@@ -495,6 +500,7 @@ impl Action {
             }
             Action::TabStatus => "Set this tab's status…".into(),
             Action::TabTitle => "Show this tab's full title".into(),
+            Action::TabPrs => "Show another of this tab's PRs".into(),
             Action::ReopenLastTab => "Reopen the most recently closed tab".into(),
             Action::View(command) => command.about().into(),
             Action::Diff(command) => command.about().into(),
@@ -666,6 +672,9 @@ impl Action {
             Action::TabStatus => {
                 "Files the tab under the sidebar's group you choose, marked set by you, until Switchboard's own reading of it changes; Let Switchboard decide gives it back at once. A pin and a reminder still win. Settings' \"Set a tab's status by hand\" (tab_status_by_hand).".into()
             }
+            Action::TabPrs => {
+                "Every PR the tab's Claude opened or looked at, and its branch's, each with its repository, title and where it stands; Enter makes the one chosen current, which its label leads with and M-v and M-d open. Settings' \"Follow every PR a tab's session opens\" (tab_prs).".into()
+            }
             Action::TabTitle => {
                 "The title wrapped, its PR number in front, then its branch, directory, PR and ticket as far as the workspace knows them; y copies the title.".into()
             }
@@ -758,6 +767,7 @@ impl Action {
             Action::RemindTab => &["tabs", "remind", "todo"],
             Action::TabStatus => &["tabs", "status", "group"],
             Action::TabTitle => &["tabs"],
+            Action::TabPrs => &["pr", "github", "tabs"],
             Action::ReopenLastTab => &["tabs", "reopen", "closed"],
             Action::View(command) => command.tags(),
             Action::Diff(command) => command.tags(),
@@ -898,6 +908,7 @@ impl Action {
             Action::RemindTab,
             Action::TabStatus,
             Action::TabTitle,
+            Action::TabPrs,
             Action::StopSlackRelay,
             Action::Upgrade,
             Action::HideBuildRow,
@@ -1184,6 +1195,7 @@ mod tests {
             Action::Settings,
             Action::RemindTab,
             Action::TabTitle,
+            Action::TabPrs,
             Action::ReopenLastTab,
             Action::Upgrade,
             Action::HideBuildRow,
