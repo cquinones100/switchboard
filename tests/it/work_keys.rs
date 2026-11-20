@@ -334,6 +334,19 @@ fn notes_gw_press_opens_a_tab_for_the_item_on_its_line_and_offers_it_the_next_ti
     client.send(b"n");
     assert_eq!(tabs(&server).len(), before + 1);
 
+    // The item's tab runs wt, which writes the repository's git config as
+    // it claims the item: done (Claude started, or wt stopped) before the
+    // config is written here, so the two never race for its lock.
+    let pane = tabs(&server)[before]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    wait("the item's wt to finish", || {
+        std::fs::read_to_string(server.home.join("claude-ran"))
+            .is_ok_and(|t| t.contains("note-speed-up-the-build"))
+            || server.ok(&["capture-pane", "-t", &pane]).contains("Error:")
+    });
+
     // A tab /wt opened sets no title: its branch's wtnItem names the item.
     let worktree = server.home.join("wt-login");
     git(
