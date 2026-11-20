@@ -214,7 +214,7 @@ pub fn land_question() -> (String, Vec<String>) {
             "Asked after all: anything leak-check finds, an unclear conflict, a failure the branch didn't cause".into(),
             "Told after each landing, in the notifications and on Slack".into(),
             "Only for landings straight on a branch; tabs open now too".into(),
-            "With GitHub issues among its sources, a landed issue is commented on and closed without asking too".into(),
+            "In a repository whose tickets are its GitHub issues, a landed issue is commented on and closed without asking too".into(),
         ],
     )
 }
@@ -230,7 +230,7 @@ pub fn hands_free_question() -> (String, Vec<String>) {
             "Turned on with it: Land without asking, and off with it: Ask before landing".into(),
             "Still asked: what your rules or a skill say must be asked, permission prompts, and a question a tab ends on a fourth time".into(),
             "Only for its own tabs; tabs open now too".into(),
-            "With GitHub issues among its sources, a landed issue is commented on and closed without asking too".into(),
+            "In a repository whose tickets are its GitHub issues, a landed issue is commented on and closed without asking too".into(),
         ],
     )
 }

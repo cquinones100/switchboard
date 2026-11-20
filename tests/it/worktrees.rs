@@ -2744,7 +2744,10 @@ fn issue_world_answering(
 
 #[test]
 fn wt_takes_an_issue_by_its_number_where_the_repository_keeps_its_work_in_github_issues() {
-    let (w, _fake, clone) = issue_world("wt-issue", json!({ "tickets": "github" }));
+    let (w, _fake, clone) = issue_world(
+        "wt-issue",
+        json!({ "tickets": "github", "issueLabel": "autopilot" }),
+    );
     let cd = w.path("cd");
     let cd_arg = cd.to_str().unwrap();
     w.ok(
@@ -2928,11 +2931,18 @@ fn wt_starts_only_work_from_the_source_autopilot_takes_this_repositorys_work_fro
     .unwrap();
     let state = w.path("state");
     std::fs::create_dir_all(&state).unwrap();
-    let mode = |sources: &str| {
+    // An older version's saved source is left unread: the repository's
+    // tickets decide.
+    std::fs::write(
+        state.join("autopilot.json"),
+        json!({ "on": true, "repo": clone.to_str().unwrap(), "note": "Work.md", "sources": "note", "issueLabel": "old" })
+            .to_string(),
+    )
+    .unwrap();
+    let tickets = |entry: Value| {
         std::fs::write(
-            state.join("autopilot.json"),
-            json!({ "on": true, "repo": clone.to_str().unwrap(), "note": "Work.md", "sources": sources })
-                .to_string(),
+            w.path(".config/switchboard/repos.json"),
+            json!({ "o/r": entry }).to_string(),
         )
         .unwrap();
     };
@@ -2945,28 +2955,67 @@ fn wt_starts_only_work_from_the_source_autopilot_takes_this_repositorys_work_fro
         "3",
     ];
 
-    mode("issues");
+    tickets(json!({ "tickets": "github", "issueLabel": "ready" }));
     let refused = w.run(&clone, &item);
     assert_eq!(refused.status.code(), Some(1));
     assert!(
-        stderr(&refused).contains("Autopilot takes this repository's work from GitHub issues; open an issue with `wt --issue <number>`, or switch the source to the note in autopilot's settings"),
+        stderr(&refused).contains("Autopilot takes this repository's work from GitHub issues, as its tickets in repos.json say; open an issue with `wt --issue <number>`"),
         "{}",
         stderr(&refused)
     );
 
-    mode("note");
-    for asked in [&["--issue", "12"][..], &["12"][..]] {
-        let mut args = vec!["worktree-from-ticket", "--no-claude"];
-        args.extend(asked);
-        let refused = w.run(&clone, &args);
-        assert_eq!(refused.status.code(), Some(1), "{asked:?}");
-        assert!(
-            stderr(&refused).contains("Autopilot takes this repository's work from the note"),
-            "{asked:?}: {}",
-            stderr(&refused)
-        );
-    }
+    tickets(json!({ "tickets": "notes" }));
+    let refused = w.run(
+        &clone,
+        &["worktree-from-ticket", "--no-claude", "--issue", "12"],
+    );
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(
+        stderr(&refused).contains("Autopilot takes this repository's work from the note"),
+        "{}",
+        stderr(&refused)
+    );
     w.ok(&clone, &item);
+}
+
+/// `switchboard tickets` reads repos.json alone, with no default: unset,
+/// it fails saying how to set it; `github` with an `issueLabel` names the
+/// label whatever autopilot.json holds.
+#[test]
+fn tickets_has_no_default_and_names_the_issue_label_whatever_autopilot_holds() {
+    let (w, fake, clone) = issue_world("tickets-unset", json!({ "landing": "pr" }));
+    let out = w.run(&clone, &["tickets"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty());
+    assert!(
+        stderr(&out).contains(
+            "o/r's ticket source isn't set: choose it in Settings' Tickets row, or set \"tickets\""
+        ),
+        "{}",
+        stderr(&out)
+    );
+    std::fs::write(
+        w.path(".config/switchboard/repos.json"),
+        json!({ "o/r": { "tickets": "github", "issueLabel": "ready" } }).to_string(),
+    )
+    .unwrap();
+    // Autopilot off, working another repository, with a source and label
+    // of its own from before: none of it counts.
+    let state = w.path("state");
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::write(
+        state.join("autopilot.json"),
+        json!({ "on": false, "repo": "/elsewhere", "sources": "note", "issueLabel": "old" })
+            .to_string(),
+    )
+    .unwrap();
+    let out = w.run(&clone, &["tickets"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "github\nautopilot-label ready\n"
+    );
+    assert!(fake.seen().is_empty(), "nothing asked of GitHub");
 }
 
 #[test]
