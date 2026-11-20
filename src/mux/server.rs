@@ -4560,9 +4560,12 @@ impl Server {
                     && crate::settings::is_on("boxes_beside_narrow_pane");
                 // So do pictures shown there (`switchboard look`).
                 let boxed = boxed
-                    || c.overlays
-                        .find::<crate::ui::pictures::Pictures>()
-                        .is_some_and(|p| p.area.is_some());
+                    || c.overlays.layers.iter().any(|l| {
+                        l.overlay
+                            .as_any()
+                            .downcast_ref::<crate::ui::pictures::Pictures>()
+                            .is_some_and(|p| p.area.is_some())
+                    });
                 if crate::settings::is_on("spare_hints")
                     && !boxed
                     && let Some(spare) = super::beside::spare_of(spread, area)

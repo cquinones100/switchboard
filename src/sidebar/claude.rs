@@ -45,6 +45,12 @@ pub struct SessionInfo {
     /// When Claude Code said the session went idle (`status` `idle`, at its
     /// `statusUpdatedAt`, ms), while it says so.
     pub idle_since: Option<i64>,
+    /// When it said the session went busy (`status` `busy`), while it
+    /// says so.
+    pub busy_since: Option<i64>,
+    /// When it said the session went to any status but busy (`idle`,
+    /// `shell` with background work, `waiting`), while it says so.
+    pub not_busy_since: Option<i64>,
     /// The socket other sessions reach it on (`messagingSocketPath`), which
     /// `SendMessage` takes as `uds:<socket>`.
     pub socket: Option<String>,
@@ -58,6 +64,12 @@ impl SessionInfo {
             Some(Value::String(s)) => s.trim().parse().ok(),
             _ => None,
         };
+        let status_since = |status: &str| {
+            (text("status").as_deref() == Some(status))
+                .then(|| v.get("statusUpdatedAt").and_then(Value::as_f64))
+                .flatten()
+                .map(|n| n as i64)
+        };
         SessionInfo {
             pid,
             session_id: text("sessionId").unwrap_or_default(),
@@ -68,9 +80,11 @@ impl SessionInfo {
             entrypoint: text("entrypoint").unwrap_or_default(),
             job_id: text("jobId").unwrap_or_default(),
             parked_job_id: text("parkedJobId").unwrap_or_default(),
-            idle_since: (text("status").as_deref() == Some("idle"))
-                .then(|| v.get("statusUpdatedAt").and_then(Value::as_f64))
-                .flatten()
+            idle_since: status_since("idle"),
+            busy_since: status_since("busy"),
+            not_busy_since: text("status")
+                .filter(|s| s != "busy")
+                .and(v.get("statusUpdatedAt").and_then(Value::as_f64))
                 .map(|n| n as i64),
             socket: text("messagingSocketPath"),
         }
@@ -95,6 +109,10 @@ pub struct SessionRef {
     /// When Claude Code said the session it is now went idle (ms), while
     /// it says so.
     pub idle_since: Option<i64>,
+    /// When it said the session went busy (ms), while it says so.
+    pub busy_since: Option<i64>,
+    /// When it said the session went to any status but busy (ms).
+    pub not_busy_since: Option<i64>,
     /// The Claude process in front: its own session (not a parked job's,
     /// which `session_id` follows), its pid, its name whether given or
     /// derived (what `ListAgents` names its row) and its messaging socket,
@@ -142,6 +160,8 @@ pub fn session_of(all: &[SessionInfo], front: &[&SessionInfo]) -> Option<Session
         name: named,
         started_at: current.started_at.or(session.started_at),
         idle_since: current.idle_since,
+        busy_since: current.busy_since,
+        not_busy_since: current.not_busy_since,
         peer_session: session.session_id.clone(),
         pid: session.pid,
         peer_name: session.name.clone(),
@@ -254,11 +274,53 @@ static MONITOR: LazyLock<Regex> = LazyLock::new(|| {
 /// on. It counts only when everything the command runs is in `LOOKS`
 /// (`only_waits`), so a loop that builds or tests between its sleeps stays
 /// background work. A wait a loop's skill runs (`land-lock wait`,
-/// `wait-deploy`, `gh pr checks --watch`) reads as that loop.
+/// `wait-deploy`, `gh pr checks --watch`) reads as that loop. Switchboard's
+/// own waits (`SWITCHBOARD_WAITS`) block as `gh run watch` does.
 static WAITS: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\b(?:while|until|for)\b[\s\S]*\bsleep\b|\bgh run watch\b|\btail -[fF]\b")
+    Regex::new(r"\b(?:while|until|for)\b[\s\S]*\bsleep\b|\bgh run watch\b|\btail -[fF]\b|\bswitchboard (?:land-lock test|wait-ci|wait-deploy)\b")
         .expect("a regex")
 });
+/// Switchboard's commands that wait on CI or a deploy, each with what its
+/// watch is named: a landing's `land-lock test` (which waits on CI only
+/// where the repository's tests run there, `Task::landing`), `wait-ci`
+/// and `wait-deploy` (which reads as the deploy loop, `LOOPS`, so its name
+/// shows only where no loop claims it). Any other `switchboard` command (a landing's push,
+/// `land-lock settle`) changes something, so it is work.
+const SWITCHBOARD_WAITS: &[(&[&str], &str)] = &[
+    (&["land-lock", "test"], "CI on the landing"),
+    (&["wait-ci"], "CI"),
+    (&["wait-deploy"], "the deploy"),
+];
+static LANDING_TEST: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bswitchboard land-lock test\b").expect("a regex"));
+
+/// The directory the last `cd` before a command's `land-lock test` moved
+/// to, as written.
+fn dir_of_landing_test(command: &str) -> Option<String> {
+    let mut dir = None;
+    for all in simple_commands(command) {
+        let words: Vec<&str> = all.iter().map(String::as_str).collect();
+        match words.as_slice() {
+            ["cd", to] => dir = Some(to.to_string()),
+            ["switchboard", "land-lock", "test", ..] => return dir,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// What a background command waits on, by the Switchboard wait it runs.
+fn switchboard_wait(command: &str) -> Option<&'static str> {
+    simple_commands(command).iter().find_map(|all| {
+        let words: Vec<&str> = all.iter().map(String::as_str).collect();
+        let at = words.iter().position(|w| *w == "switchboard")?;
+        let rest = &words[at + 1..];
+        SWITCHBOARD_WAITS
+            .iter()
+            .find(|(starts, _)| rest.starts_with(starts))
+            .map(|(_, name)| *name)
+    })
+}
 /// The commands a wait may run: a sleep, and commands that only look at
 /// something (a file, a process, a run, a branch) and say what they saw,
 /// never one whose arguments can run a program or write a file (`awk`'s
@@ -300,6 +362,8 @@ const LOOKS: &[&str] = &[
     "gh run list",
     "gh pr view",
     "gh pr checks",
+    "gh issue list",
+    "gh issue view",
     "git rev-parse",
     "git log",
     "git status",
@@ -311,6 +375,8 @@ const LOOKS: &[&str] = &[
     "switchboard tabs",
     "switchboard show",
     "switchboard land-lock wait",
+    "switchboard land-lock test",
+    "switchboard wait-ci",
     "switchboard wait-deploy",
 ];
 /// The shell's words that only steer what runs, which a simple command may
@@ -392,8 +458,18 @@ fn only_waits(command: &str) -> bool {
             "sleep" => true,
             "gh" => rest.starts_with(&["run", "watch"]),
             "tail" => rest.first().is_some_and(|w| *w == "-f" || *w == "-F"),
+            "switchboard" => SWITCHBOARD_WAITS
+                .iter()
+                .any(|(starts, _)| rest.starts_with(starts)),
             _ => false,
         };
+        // A landing's tests run here with `--here`; a `--command` is what
+        // runs here only where they don't run in CI, which `tests_in_ci`
+        // tells.
+        let runs_tests_here = rest.starts_with(&["land-lock", "test"]) && rest.contains(&"--here");
+        if first == "switchboard" && runs_tests_here {
+            return false;
+        }
         if first == "awk" {
             return awk_only_reads(&rest);
         }
@@ -879,6 +955,12 @@ struct Task {
     loop_kind: Option<&'static str>,
     monitor: Option<String>,
     until: Option<i64>,
+    /// A landing's `land-lock test`, a watch only where the tests run in
+    /// CI (`background_work`'s `tests_in_ci`).
+    landing: bool,
+    /// The directory a `cd` before it moved to, where its landing is,
+    /// when there was one.
+    landing_dir: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1103,9 +1185,13 @@ impl Seen {
                         .or_else(|| field("prompt"));
                     let command = string_of(command);
                     if name == "Bash" && only_waits(&command) {
-                        let named = field("description")
-                            .filter(|v| crate::util::truthy(v))
-                            .map(|v| string_of(Some(v)))
+                        let named = switchboard_wait(&command)
+                            .map(str::to_string)
+                            .or_else(|| {
+                                field("description")
+                                    .filter(|v| crate::util::truthy(v))
+                                    .map(|v| string_of(Some(v)))
+                            })
                             .unwrap_or_else(|| command.chars().take(WAIT_NAME_CHARS).collect());
                         self.waits.insert(id.clone(), named);
                     }
@@ -1217,6 +1303,8 @@ impl Seen {
                         loop_kind: None,
                         monitor: None,
                         until: None,
+                        landing: false,
+                        landing_dir: None,
                     },
                 );
             }
@@ -1235,6 +1323,8 @@ impl Seen {
                                 loop_kind,
                                 monitor: monitor.cloned(),
                                 until: None,
+                                landing: LANDING_TEST.is_match(command),
+                                landing_dir: dir_of_landing_test(command),
                             },
                         );
                     }
@@ -1251,6 +1341,8 @@ impl Seen {
                         loop_kind: None,
                         monitor: Some(description),
                         until: Some(at + minutes * 60_000),
+                        landing: false,
+                        landing_dir: None,
                     },
                 );
             }
@@ -1260,7 +1352,7 @@ impl Seen {
     /// What is running, for a session whose process started at `since`
     /// (ms): a task dies with its process, so one started before doesn't
     /// count.
-    fn work(&self, since: i64, now: i64) -> Work {
+    fn work(&self, since: i64, now: i64, tests_in_ci: impl Fn(Option<&str>) -> bool) -> Work {
         let running: Vec<&Task> = self
             .started
             .iter()
@@ -1269,7 +1361,11 @@ impl Seen {
             })
             .map(|(_, t)| t)
             .collect();
-        let monitors = running.iter().filter_map(|t| t.monitor.clone()).collect();
+        let monitors = running
+            .iter()
+            .filter(|t| !t.landing || t.monitor.is_none() || tests_in_ci(t.landing_dir.as_deref()))
+            .filter_map(|t| t.monitor.clone())
+            .collect();
         let running_loop = LOOPS
             .iter()
             .find(|l| running.iter().any(|t| t.loop_kind == Some(l.kind)));
@@ -1707,7 +1803,17 @@ impl Reader {
     /// API error cut short. The transcript is read only as far as it has
     /// grown since the last look; an error reading it is given back, the
     /// work then reading as none.
-    pub fn background_work(&mut self, file: &Path, since: i64, now: i64) -> std::io::Result<Work> {
+    /// `tests_in_ci` says whether the landing in a directory (the one a
+    /// `cd` before it named, else the session's) runs its tests in CI,
+    /// asked only while a `land-lock test` runs: there it waits on CI, a
+    /// watch, and elsewhere it runs the tests, work.
+    pub fn background_work(
+        &mut self,
+        file: &Path,
+        since: i64,
+        now: i64,
+        tests_in_ci: impl Fn(Option<&str>) -> bool,
+    ) -> std::io::Result<Work> {
         let meta = fs::metadata(file)?;
         if meta.is_dir() {
             return Err(std::io::ErrorKind::IsADirectory.into());
@@ -1738,7 +1844,7 @@ impl Reader {
                 seen.rest = rest;
             }
         }
-        Ok(seen.work(since, now))
+        Ok(seen.work(since, now, tests_in_ci))
     }
 
     /// A transcript's last turn, read from its end: the last `TAIL` bytes,
@@ -1854,7 +1960,11 @@ mod tests {
         let now = crate::util::now_ms();
         let since = now - 10_000;
         let mut r = Reader::default();
-        let count = |r: &mut Reader| r.background_work(&t.file, since, now).unwrap().count;
+        let count = |r: &mut Reader| {
+            r.background_work(&t.file, since, now, |_| true)
+                .unwrap()
+                .count
+        };
         t.add(&started("old1", now - 60_000));
         t.add(&started("done1", now - 5_000));
         t.add(&[ended("done1", now)]);
@@ -1950,7 +2060,7 @@ mod tests {
             json!({"type": "api-request-blob", "message": {"content": [call, start]}}),
         ]);
         let work = Reader::default()
-            .background_work(&t.file, now - 60_000, now)
+            .background_work(&t.file, now - 60_000, now, |_| true)
             .unwrap();
         assert_eq!(work.count, 1);
         assert_eq!(work.loop_run.unwrap().kind, "review");
@@ -1967,7 +2077,9 @@ mod tests {
             json!({"type": "assistant", "timestamp": at(7_000), "isApiErrorMessage": true, "error": "server_error", "message": {"content": [{"type": "text", "text": "API Error: Connection lost mid-response. The response above may be incomplete."}]}}),
         ]);
         let mut r = Reader::default();
-        let work = r.background_work(&t.file, now - 60_000, now).unwrap();
+        let work = r
+            .background_work(&t.file, now - 60_000, now, |_| true)
+            .unwrap();
         let (text, when) = work.api_error.unwrap();
         assert_eq!(
             text,
@@ -1975,7 +2087,7 @@ mod tests {
         );
         assert_eq!(when, now - 7_000);
         assert_eq!(
-            r.background_work(&t.file, now - 1_000, now)
+            r.background_work(&t.file, now - 1_000, now, |_| true)
                 .unwrap()
                 .api_error,
             None,
@@ -1990,7 +2102,7 @@ mod tests {
             json!({"type": "user", "origin": {"kind": "task-notification"}, "timestamp": at(2_300), "message": {"content": "<task-notification>done</task-notification>"}}),
         ]);
         assert!(
-            r.background_work(&t.file, now - 60_000, now)
+            r.background_work(&t.file, now - 60_000, now, |_| true)
                 .unwrap()
                 .api_error
                 .is_some()
@@ -1999,7 +2111,7 @@ mod tests {
             json!({"type": "user", "timestamp": at(1_000), "message": {"content": "try again"}}),
         ]);
         assert_eq!(
-            r.background_work(&t.file, now - 60_000, now)
+            r.background_work(&t.file, now - 60_000, now, |_| true)
                 .unwrap()
                 .api_error,
             None
@@ -2007,7 +2119,7 @@ mod tests {
         let nested = Transcript::new("nested");
         nested.add(&[json!({"type": "progress", "timestamp": at(2_000), "data": {"type": "agent_progress", "message": {"type": "assistant", "isApiErrorMessage": true}}})]);
         assert_eq!(
-            r.background_work(&nested.file, now - 60_000, now)
+            r.background_work(&nested.file, now - 60_000, now, |_| true)
                 .unwrap()
                 .api_error,
             None
@@ -2027,7 +2139,7 @@ mod tests {
         ]);
         let mut r = Reader::default();
         let interrupted = |r: &mut Reader, since: i64| {
-            r.background_work(&t.file, since, now)
+            r.background_work(&t.file, since, now, |_| true)
                 .unwrap()
                 .interrupted_at
         };
@@ -2073,7 +2185,9 @@ mod tests {
             json!({"type": "user", "timestamp": at(1_000), "origin": {"kind": "task-notification"}, "message": {"content": "<task-notification>\n<task-id>m1</task-id>\n<summary>Monitor event: \"CI\"</summary>\n<event>checks=pending</event>\n</task-notification>"}}),
         ]);
         let mut r = Reader::default();
-        let work = r.background_work(&t.file, now - 60_000, now).unwrap();
+        let work = r
+            .background_work(&t.file, now - 60_000, now, |_| true)
+            .unwrap();
         assert_eq!(
             (work.count, work.monitors.clone()),
             (1, vec!["CI on #12".to_string()])
@@ -2081,12 +2195,13 @@ mod tests {
         assert_eq!(work.loop_run, None);
         // Past its expiry it is over, whatever was said.
         let later = r
-            .background_work(&t.file, now - 60_000, now + 31 * 60_000)
+            .background_work(&t.file, now - 60_000, now + 31 * 60_000, |_| true)
             .unwrap();
         assert_eq!(later.count, 0);
         t.add(&[json!({"type": "user", "timestamp": at(0), "origin": {"kind": "task-notification"}, "message": {"content": "<task-notification>\n<task-id>m1</task-id>\n<summary>Monitor expired after 30m with no events delivered.</summary>\n</task-notification>"}})]);
         assert_eq!(
-            r.background_work(&t.file, now - 60_000, now).unwrap(),
+            r.background_work(&t.file, now - 60_000, now, |_| true)
+                .unwrap(),
             Work::default()
         );
     }
@@ -2103,7 +2218,8 @@ mod tests {
         ]);
         let mut r = Reader::default();
         assert_eq!(
-            r.background_work(&t.file, now - 60_000, now).unwrap(),
+            r.background_work(&t.file, now - 60_000, now, |_| true)
+                .unwrap(),
             Work::default()
         );
     }
@@ -2146,12 +2262,24 @@ mod tests {
             "while true; do awk -vpattern='done|failed' '$0 ~ pattern' status; sleep 30; done",
             "while true; do awk -v pattern='done|failed' '$0 ~ pattern' status; sleep 30; done",
             "until awk '$2 ~ /a|b/ && $3 != \"x|y\" { print $1 / 2 }' status | grep -q .; do sleep 30; done",
+            "cd /work/repo && switchboard land-lock test --base abc123",
+            "switchboard land-lock test",
+            "switchboard land-lock test --command 'cargo test' --base abc",
+            "switchboard wait-ci --repo o/r --sha abc",
+            "switchboard wait-deploy --repo o/r",
+            "while true; do n=$(gh issue list --state closed --json number | jq length); [ \"$n\" -ge 3 ] && break; sleep 60; done",
+            "until gh issue view 12 --json state | grep -q CLOSED; do sleep 60; done",
         ] {
             assert!(only_waits(wait), "{wait}");
         }
         for work in [
             "while true; do cargo test; sleep 30; done",
             "until cargo test; do sleep 30; done",
+            "switchboard land-lock push",
+            "switchboard land-lock settle --patch abc",
+            "switchboard land-lock test --here --base abc",
+            "switchboard wait-ci --sha abc && git push",
+            "switchboard tabs",
             "gh run watch 123 && cargo build",
             "while sleep 60; do git push; done",
             "while true; do x=$(cargo build 2>&1); sleep 5; done",
@@ -2223,7 +2351,9 @@ mod tests {
             json!({"command": "until grep -q done notes.md; do sleep 30; done; echo ok", "description": "Wait for the items to land", "run_in_background": true}),
         ));
         let mut r = Reader::default();
-        let work = r.background_work(&t.file, now - 60_000, now).unwrap();
+        let work = r
+            .background_work(&t.file, now - 60_000, now, |_| true)
+            .unwrap();
         assert_eq!(
             (work.count, work.monitors),
             (1, vec!["Wait for the items to land".to_string()])
@@ -2233,7 +2363,9 @@ mod tests {
             "b2",
             json!({"command": "gh run watch 123 --exit-status", "run_in_background": true}),
         ));
-        let work = r.background_work(&t.file, now - 60_000, now).unwrap();
+        let work = r
+            .background_work(&t.file, now - 60_000, now, |_| true)
+            .unwrap();
         assert_eq!(work.monitors[1], "gh run watch 123 --exit-status");
         // A test run is work, and a loop's wait reads as its loop.
         t.add(&call(
@@ -2244,7 +2376,9 @@ mod tests {
             "b4",
             json!({"command": "while ! switchboard land-lock wait; do sleep 5; done", "run_in_background": true}),
         ));
-        let work = r.background_work(&t.file, now - 60_000, now).unwrap();
+        let work = r
+            .background_work(&t.file, now - 60_000, now, |_| true)
+            .unwrap();
         assert_eq!((work.count, work.monitors.len()), (4, 2));
         assert_eq!(work.loop_run.map(|l| l.kind), Some("queue"));
         // A watch that reads with `awk` is a watch too.
@@ -2252,8 +2386,59 @@ mod tests {
             "b5",
             json!({"command": DRAIN_WATCH, "description": "Wait for the queue to drain", "run_in_background": true}),
         ));
-        let work = r.background_work(&t.file, now - 60_000, now).unwrap();
+        let work = r
+            .background_work(&t.file, now - 60_000, now, |_| true)
+            .unwrap();
         assert_eq!((work.count, work.monitors.len()), (5, 3));
+        // Switchboard's own waits are watches, named by what they wait on,
+        // a landing's tests only where they run in CI.
+        t.add(&call(
+            "b6",
+            json!({"command": "cd /work/repo && switchboard land-lock test --base abc", "description": "Test the landing", "run_in_background": true}),
+        ));
+        t.add(&call(
+            "b7",
+            json!({"command": "switchboard wait-ci --repo o/r --sha abc", "run_in_background": true}),
+        ));
+        let work = r
+            .background_work(&t.file, now - 60_000, now, |_| true)
+            .unwrap();
+        assert_eq!((work.count, work.monitors.len()), (7, 5));
+        assert_eq!(work.monitors[3..], ["CI on the landing", "CI"]);
+        let work = r
+            .background_work(&t.file, now - 60_000, now, |_| false)
+            .unwrap();
+        assert_eq!((work.count, work.monitors.len()), (7, 4));
+        assert_eq!(work.monitors[3], "CI");
+        // Asked about the landing the `cd` before it names.
+        let work = r
+            .background_work(&t.file, now - 60_000, now, |dir| dir == Some("/work/repo"))
+            .unwrap();
+        assert_eq!(work.monitors.len(), 5);
+        assert_eq!(dir_of_landing_test("switchboard land-lock test"), None);
+        assert_eq!(
+            dir_of_landing_test("cd a && cd ~/b && switchboard land-lock test --base c"),
+            Some("~/b".into())
+        );
+        // A landing's push is work.
+        t.add(&call(
+            "b8",
+            json!({"command": "switchboard land-lock push", "run_in_background": true}),
+        ));
+        let work = r
+            .background_work(&t.file, now - 60_000, now, |_| true)
+            .unwrap();
+        assert_eq!((work.count, work.monitors.len()), (8, 5));
+        // A deploy's wait reads as the deploy loop, as before.
+        t.add(&call(
+            "b9",
+            json!({"command": "switchboard wait-deploy --repo o/r", "run_in_background": true}),
+        ));
+        let work = r
+            .background_work(&t.file, now - 60_000, now, |_| true)
+            .unwrap();
+        assert_eq!((work.count, work.monitors.len()), (9, 5));
+        assert!(!work.monitors.contains(&"the deploy".to_string()));
     }
 
     #[test]
@@ -2276,7 +2461,10 @@ mod tests {
         t.add(&run("u3", "r2a", review, 4_000));
         t.add(&run("u4", "r2b", review, 4_000));
         let mut r = Reader::default();
-        let work = |r: &mut Reader| r.background_work(&t.file, now - 60_000, now).unwrap();
+        let work = |r: &mut Reader| {
+            r.background_work(&t.file, now - 60_000, now, |_| true)
+                .unwrap()
+        };
         let w = work(&mut r);
         assert_eq!(
             (w.count, w.loop_run),
@@ -2343,7 +2531,7 @@ mod tests {
         )]);
         let mut r = Reader::default();
         assert_eq!(
-            r.background_work(&t.file, now - 120_000, now)
+            r.background_work(&t.file, now - 120_000, now, |_| true)
                 .unwrap()
                 .scheduled,
             Some(Scheduled {
@@ -2352,7 +2540,7 @@ mod tests {
             })
         );
         assert_eq!(
-            r.background_work(&t.file, now - 30_000, now)
+            r.background_work(&t.file, now - 30_000, now, |_| true)
                 .unwrap()
                 .scheduled,
             None,
@@ -2360,7 +2548,8 @@ mod tests {
         );
         t.add(&[wakeup(20_000, json!({"stop": true}))]);
         assert_eq!(
-            r.background_work(&t.file, now - 120_000, now).unwrap(),
+            r.background_work(&t.file, now - 120_000, now, |_| true)
+                .unwrap(),
             Work::default()
         );
         fs::write(&t.file, "").unwrap();
@@ -2369,7 +2558,7 @@ mod tests {
             json!({"delaySeconds": 600, "prompt": "/loop /oncall"}),
         )]);
         assert_eq!(
-            r.background_work(&t.file, now - 60 * 60_000, now)
+            r.background_work(&t.file, now - 60 * 60_000, now, |_| true)
                 .unwrap()
                 .scheduled,
             None,
@@ -2388,7 +2577,7 @@ mod tests {
         ]);
         let mut r = Reader::default();
         let scheduled = r
-            .background_work(&t.file, now - 120_000, now)
+            .background_work(&t.file, now - 120_000, now, |_| true)
             .unwrap()
             .scheduled
             .unwrap();
@@ -2397,7 +2586,8 @@ mod tests {
         assert!(scheduled.at > now && scheduled.at <= now + 5 * 60_000);
         t.add(&[json!({"type": "assistant", "timestamp": iso(now - 1_000), "message": {"content": [{"type": "tool_use", "id": "c2", "name": "CronDelete", "input": {"id": "a03c0408"}}]}})]);
         assert_eq!(
-            r.background_work(&t.file, now - 120_000, now).unwrap(),
+            r.background_work(&t.file, now - 120_000, now, |_| true)
+                .unwrap(),
             Work::default()
         );
     }
@@ -2613,6 +2803,8 @@ mod tests {
                 name: Some("Login retry".into()),
                 started_at: Some(1_700_000_000_000),
                 idle_since: None,
+                busy_since: None,
+                not_busy_since: None,
                 peer_session: "s1".into(),
                 pid: Some(111),
                 peer_name: Some("Login retry".into()),
@@ -2640,6 +2832,10 @@ mod tests {
             Some(1_700_000_000_500)
         );
         assert_eq!(status("busy").idle_since, None);
+        assert_eq!(status("busy").busy_since, Some(1_700_000_000_500));
+        assert_eq!(status("idle").busy_since, None);
+        assert_eq!(status("shell").not_busy_since, Some(1_700_000_000_500));
+        assert_eq!(status("busy").not_busy_since, None);
         assert_eq!(status("waiting").idle_since, None);
         assert_eq!(project_dir_name("/Users/me/my.repo"), "-Users-me-my-repo");
     }
@@ -2700,7 +2896,7 @@ mod tests {
         // A transcript that can't be read is an error, not a panic.
         fs::create_dir_all(claude.join("projects/-work/broken.jsonl")).unwrap();
         assert!(
-            r.background_work(&claude.join("projects/-work/broken.jsonl"), 0, 0)
+            r.background_work(&claude.join("projects/-work/broken.jsonl"), 0, 0, |_| true)
                 .is_err()
         );
     }

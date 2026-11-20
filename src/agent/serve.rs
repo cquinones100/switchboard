@@ -859,6 +859,34 @@ impl Server {
         true
     }
 
+    /// Claude Code says the pane's session went busy at `at_ms` (ms), read
+    /// from its session file by the sidebar (`claude::SessionRef::busy_since`),
+    /// with no hook to say so: a `!` command typed to it, which works until
+    /// the session goes idle again (`Agents::went_busy`). Gives whether it
+    /// changed.
+    pub fn agent_went_busy(&mut self, pane: PaneId, at_ms: i64) -> bool {
+        if !self.agents.went_busy(pane, at_ms) {
+            return false;
+        }
+        if let Some(tab) = self.panes.get(&pane).map(|s| s.tab) {
+            self.redraw_tab(tab);
+        }
+        true
+    }
+
+    /// Claude Code says the pane's session stopped being busy at `at_ms`
+    /// (ms), whatever it says instead: a `!` command's work ends
+    /// (`Agents::shell_ended`). Gives whether it changed.
+    pub fn agent_shell_ended(&mut self, pane: PaneId, at_ms: i64) -> bool {
+        if !self.agents.shell_ended(pane, at_ms) {
+            return false;
+        }
+        if let Some(tab) = self.panes.get(&pane).map(|s| s.tab) {
+            self.redraw_tab(tab);
+        }
+        true
+    }
+
     /// A question the pane's transcript shows unanswered, asked at `at`
     /// (ms), read by the sidebar (`claude::Turn::asks`): the pane waits on
     /// it, unless the conversation's own hooks have said more since

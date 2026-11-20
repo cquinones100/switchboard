@@ -1036,3 +1036,48 @@ fn diff_artifact_tells_no_story_of_its_own_and_publishes_only_after_a_yes() {
     assert!(text.contains("never share it further"));
     assert!(text.contains("Never a link to GitHub or the PR in place of a hunk"));
 }
+
+// main requires a PR's branch to be up to date, and auto-merge waits on one
+// that is behind without updating it, so both of queue-and-clean's waits end
+// on `BEHIND` (after conflicts) and the skill merges the base in.
+#[test]
+fn queue_and_clean_brings_a_pr_behind_its_base_up_to_date() {
+    let all = skills();
+    let queue = &all
+        .iter()
+        .find(|(name, _)| name == "queue-and-clean")
+        .unwrap()
+        .1;
+    let watch = queue
+        .split("## Watching")
+        .nth(1)
+        .and_then(|rest| rest.split("```").nth(1))
+        .expect("the watch's script");
+    assert!(watch.contains("mergeStateStatus"), "{watch}");
+    let conflicts = watch.find("echo conflicts").unwrap();
+    let behind = watch.find("echo behind").expect("behind ends the watch");
+    assert!(conflicts < behind, "conflicts still go to Fixing");
+    let wait = queue
+        .split("### Waiting until the PR is ready")
+        .nth(1)
+        .and_then(|rest| rest.split("```").nth(1))
+        .expect("the wait's script");
+    assert!(
+        wait.contains("mergeStateStatus") && wait.contains("echo behind"),
+        "{wait}"
+    );
+    assert!(
+        queue.contains("- `behind`: "),
+        "behind is an exit with a step"
+    );
+    let section = queue
+        .split("## Bringing it up to date")
+        .nth(1)
+        .expect("the section behind goes to");
+    assert!(
+        section.contains("git merge --no-edit origin/<baseRefName>")
+            && section.contains("plain `git push`")
+            && !section.contains("rebase "),
+        "{section}"
+    );
+}

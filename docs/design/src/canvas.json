@@ -612,6 +612,10 @@
     "StoryHowWhy.dc.html": {
       "title": "149. How it gets there says how and why: under each step's title a How naming the code that does the work and in what order, and a Why of one clause on the problem it fixes; the pages that only test folded into one Tested line",
       "page": "design"
+    },
+    "NotesToolbar.dc.html": {
+      "title": "157. Notes' toolbar drawn with the kit's button, on the dark and light themes: at rest, under the mouse, lit while the cursor is in that style (bold, two styles, a heading) or while what it opens is in front (⋯), and faint while read-only",
+      "page": "design"
     }
   }
 }

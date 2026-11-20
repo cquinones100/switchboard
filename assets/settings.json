@@ -939,7 +939,7 @@
     "key": "images_beside_pane",
     "category": "Tabs and status bar",
     "label": "Show images beside a narrow pane",
-    "description": "With a tab's one pane narrowed by Widest a lone pane gets, a picture Claude or a skill shows you (switchboard look) is drawn as a pane in the empty columns at the pane's right, two or more stacked top to bottom with their names, the hints there hidden while they show; M-Esc or a click on them closes them, and with more than fit the wheel over them and M-PgDn and M-PgUp page through them. With too few columns spare, a split, another tab in front, more than six pictures or a terminal that draws no images, they open in the desktop's viewer, as a video or a PDF always does. Off, they always open in the desktop's viewer",
+    "description": "With a tab's one pane narrowed by Widest a lone pane gets, a picture Claude or a skill shows you (switchboard look) is drawn as a pane in the empty columns at the pane's right, two or more stacked top to bottom with their names, the hints there hidden while they show; M-Esc or a click on them closes them, and with more than fit the wheel over them and M-PgDn and M-PgUp page through them. Asked for from a tab not in front, they wait beside its pane until the tab is. With too few columns spare, a split, more than six pictures or a terminal that draws no images, they open in the desktop's viewer, as a video or a PDF always does. Off, they always open in the desktop's viewer",
     "default": true
   },
   {
