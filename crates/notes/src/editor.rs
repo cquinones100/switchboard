@@ -3469,6 +3469,11 @@ impl Editor {
                     }
                     return;
                 }
+                Some(c @ ('J' | 'K')) if linewise => {
+                    self.keys.clear();
+                    self.move_selected_lines(c == 'J', 1);
+                    return;
+                }
                 Some('J') => {
                     if let Some(
                         Range::Lines(a, b) | Range::Chars((a, _), (b, _)) | Range::Block((a, b), _),
@@ -3644,8 +3649,81 @@ impl Editor {
                     _ => {}
                 }
             }
+            Parse::Done(Command::Simple(c @ ('J' | 'K'), n)) if linewise => {
+                self.keys.clear();
+                self.move_selected_lines(c == 'J', n);
+            }
             Parse::Done(_) => self.keys.clear(),
         }
+    }
+
+    /// Linewise Visual mode's `J` and `K`: the selected lines moved
+    /// `count` lines down or up as they are, kept selected where they land,
+    /// never above the title's line and never past the note's ends (the ID
+    /// line isn't in the editor's text). Each move is a step to undo of its
+    /// own, though Visual mode goes on, so `u` takes one move back.
+    ///
+    /// A closed section counts as the one line it shows, as Vim's folds do:
+    /// one selected moves with its section, and one passed is passed whole.
+    /// A line shown before the move is shown after it, the section it now
+    /// falls in opened.
+    fn move_selected_lines(&mut self, down: bool, count: usize) {
+        let Some(Range::Lines(a, b)) = self.selected() else {
+            return;
+        };
+        let kinds = render::kinds(&self.doc.text.lines());
+        // The rows each shown line stands for: a closed section's, or its own.
+        let units: Vec<(usize, usize)> = self
+            .folds
+            .visible(&kinds)
+            .into_iter()
+            .map(|(row, hidden)| (row, row + hidden.unwrap_or(0)))
+            .collect();
+        let unit_of = |r: usize| units.iter().position(|&(s, e)| s <= r && r <= e);
+        let (Some(ia), Some(ib)) = (unit_of(a), unit_of(b)) else {
+            return;
+        };
+        let (a, b) = (units[ia].0, units[ib].1);
+        let passed = if a == 0 {
+            &units[0..0]
+        } else if down {
+            &units[ib + 1..(ib + 1 + count.max(1)).min(units.len())]
+        } else {
+            &units[ia.saturating_sub(count.max(1)).max(1)..ia]
+        };
+        let n: usize = passed.iter().map(|&(s, e)| e - s + 1).sum();
+        if n == 0 {
+            return;
+        }
+        let len = b - a + 1;
+        let to_row = |r: usize| match r {
+            r if (a..=b).contains(&r) && down => r + n,
+            r if (a..=b).contains(&r) => r - n,
+            r if down && r > b && r <= b + n => r - len,
+            r if !down && r + n >= a && r < a => r + len,
+            r => r,
+        };
+        let before = self.snap();
+        if let Some(group) = self.group.take()
+            && group.text != before.text
+        {
+            self.undo.push(group);
+        }
+        self.undo.push(before.clone());
+        self.redo.clear();
+        let moved: Vec<String> = (a..=b).map(|r| self.doc.line(r)).collect();
+        self.doc.text.set_lines(a, b + 1, &[] as &[&str]);
+        let to = if down { a + n } else { a - n };
+        self.doc.text.set_lines(to, to, &moved);
+        self.anchor.0 = to_row(self.anchor.0);
+        self.doc.row = to_row(self.doc.row);
+        self.folds.moved(to_row);
+        let kinds = render::kinds(&self.doc.text.lines());
+        for &(shown, _) in &units {
+            self.folds.reveal(&kinds, to_row(shown));
+        }
+        self.record_change();
+        self.group = Some(self.snap());
     }
 
     /// The cursor put on the block's own column, where j and k left it
@@ -4403,6 +4481,71 @@ mod tests {
         ));
         press(&mut e, "<Esc><C-v><C-v>");
         assert_eq!(e.mode, Mode::Normal, "Ctrl-V again leaves it");
+    }
+
+    #[test]
+    fn linewise_visual_j_and_k_move_the_selected_lines() {
+        let items = ["# List", "- [ ] one", "- [x] two", "  - [ ] three"];
+        let mut e = editor(&items);
+        press(&mut e, "jjVJ");
+        assert_eq!(
+            lines(&e),
+            ["# List", "- [ ] one", "  - [ ] three", "- [x] two"]
+        );
+        assert_eq!(e.selected(), Some(Range::Lines(3, 3)), "still selected");
+        press(&mut e, "K");
+        assert_eq!(lines(&e), items);
+        assert_eq!(e.selected(), Some(Range::Lines(2, 2)));
+        press(&mut e, "<Esc>kVjK");
+        assert_eq!(lines(&e), items, "nothing moves above the title");
+        press(&mut e, "<Esc>VjK");
+        assert_eq!(
+            lines(&e),
+            ["# List", "- [x] two", "  - [ ] three", "- [ ] one"]
+        );
+        assert_eq!(e.selected(), Some(Range::Lines(1, 2)), "both moved up");
+        press(&mut e, "<Esc>GVJ");
+        assert_eq!(lines(&e)[3], "- [ ] one", "the last line stays");
+        press(&mut e, "<Esc>ggVJ");
+        assert_eq!(lines(&e)[0], "# List", "the title stays");
+    }
+
+    #[test]
+    fn j_and_k_pass_and_carry_a_closed_section_whole_and_hide_no_line_shown() {
+        let mut e = editor(&["# T", "a", "## S", "x", "y", "## U", "z"]);
+        press(&mut e, "jjzcggjVJ");
+        assert_eq!(lines(&e), ["# T", "## S", "x", "y", "a", "## U", "z"]);
+        assert_eq!(e.selected(), Some(Range::Lines(4, 4)));
+        assert!(!e.folds.is_closed(1), "the section it fell in opened");
+        let mut e = editor(&["# T", "## S", "## U", "z"]);
+        press(&mut e, "jjzcVK");
+        assert_eq!(lines(&e), ["# T", "## U", "z", "## S"]);
+        assert!(e.folds.is_closed(1), "the section moved closed");
+        assert_eq!(e.selected(), Some(Range::Lines(1, 1)), "its heading chosen");
+    }
+
+    #[test]
+    fn a_count_moves_the_lines_that_far_and_undo_takes_one_move_back() {
+        let mut e = editor(&["# T", "a", "b", "c", "d", "e"]);
+        press(&mut e, "jV3J");
+        assert_eq!(lines(&e), ["# T", "b", "c", "d", "a", "e"]);
+        press(&mut e, "J");
+        assert_eq!(lines(&e), ["# T", "b", "c", "d", "e", "a"]);
+        press(&mut e, "9J");
+        assert_eq!(lines(&e), ["# T", "b", "c", "d", "e", "a"], "at the end");
+        press(&mut e, "<Esc>u");
+        assert_eq!(
+            lines(&e),
+            ["# T", "b", "c", "d", "a", "e"],
+            "one move undone"
+        );
+        press(&mut e, "Gvk$J");
+        assert_eq!(e.mode, Mode::Normal);
+        assert_eq!(
+            lines(&e),
+            ["# T", "b", "c", "d", "a e"],
+            "v's J still joins"
+        );
     }
 
     #[test]
