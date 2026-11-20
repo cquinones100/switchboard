@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Set its status… from a tab's menu</title>
+<title>A tab's status set by hand, from Set its status… in its menu</title>
 <script src="./support.js"></script>
 </head>
 <body>
@@ -217,7 +217,8 @@ const BASE = [
   ['Landing', 'm', [['▲', 'm', 5, 'benchmark harness', '2nd in the landing queue']]],
 ];
 // ─── THE BOARD ───
-// The sidebar with tab 8 under Review loop, the status you set holding, as board 158 draws it.
+// The sidebar with tab 8 under Review loop, the status you set holding: its row keeps its own mark, carries the kit's
+// set by you chip, and says under it what Switchboard still reads, which takes the tab back once it changes.
 side(0, '10 tabs', [BASE[0], BASE[1], ['Review loop', 'a', [['○', 'd', 8, 'handoff', 'Switchboard reads: idle 58m', true]]], BASE[2], ['Idle', 'd', [['○', 'd', 9, 'oncall watch', 'idle 14m']]]], 8);
 mcBar('Work', 'Tabs', '10 tabs · 2 need you');
 label(36, 3, 'Needs you', 'y', 2, 158);
