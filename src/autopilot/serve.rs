@@ -63,9 +63,9 @@ pub const NOTE: &str = "@autopilot_note";
 pub const LEFT: &str = "@autopilot_left";
 /// Seen since it landed.
 pub const SEEN: &str = "@autopilot_seen";
-/// To land on the default branch without asking to push, which
-/// queue-and-clean reads (`switchboard show @autopilot_land`).
-pub const LAND: &str = "@autopilot_land";
+/// The tab's own mark to land without asking (`@land`), which autopilot's
+/// "Land without asking" sets on its tabs as that switch changes.
+pub use crate::mux::server::LAND;
 /// Landed without asking, the commit it pushed, which queue-and-clean sets
 /// (`switchboard land-lock autolanded`).
 pub const AUTOLAND: &str = "@autopilot_autoland";
@@ -160,8 +160,9 @@ pub fn landed_at(
     }
 }
 
-/// The marks of what the mode has a tab do, taken off once it is yours.
-const WORKING: [&str; 3] = [LAND, HANDS_FREE, NUDGED];
+/// The marks of what the mode has a tab do, taken off once it is yours
+/// (`@land` then set as Settings' land_without_asking says).
+const WORKING: [&str; 2] = [HANDS_FREE, NUDGED];
 
 /// The commit `HEAD` is at in the checkout `dir` is in, read from git's
 /// files: a loose ref, `packed-refs`, or a detached `HEAD`'s own.
@@ -2531,6 +2532,11 @@ impl Server {
                     t.opts.insert(YOURS.into(), "1".into());
                 }
             }
+            // Yours, out of reach of the switch, it lands without asking as
+            // Settings' land_without_asking says.
+            if let Mark::Left(_) = mark {
+                self.land_as_set(tab);
+            }
             self.dirty_tab(tab);
             if let Mark::Landed(..) = mark
                 && let Some(m) = mine.iter().find(|m| m.tab == tab)
@@ -2925,7 +2931,7 @@ impl Server {
                 let item = t.opts.get(ITEM).filter(|v| !v.is_empty())?;
                 let issue = t.opts.get(ISSUE).filter(|v| !v.is_empty()).cloned();
                 // Lands without asking only as the tab was marked to
-                // (`@autopilot_land`, which nothing in a pane can set).
+                // (`@land`, which nothing in a pane can set).
                 let without_asking = t.opts.get(LAND).map(|v| v.trim()) == Some("1");
                 Some((
                     *id,
@@ -3262,6 +3268,12 @@ impl Server {
         if let Some(t) = self.tabs.get_mut(&tab) {
             t.opts.insert(OPENED.into(), util::now_secs().to_string());
             t.opts.insert(ITEM.into(), item.text.clone());
+            // "Land without asking" on marks it as it opens, over what the
+            // land_without_asking setting gave it, as the switch's changes
+            // mark the tabs already open.
+            if mode.land_without_asking {
+                t.opts.insert(LAND.into(), "1".into());
+            }
             // Marked at once, so its wtn and its first question find it so.
             if mode.hands_free && settings::is_on("autopilot_handsfree") {
                 t.opts.insert(HANDS_FREE.into(), "1".into());

@@ -103,7 +103,7 @@
 //! `confirm` (the first clean round: run the next), `done` (two clean rounds,
 //! the record written) or `cap` (the cap reached first), and each finding
 //! carries an `action` from its severity: `fix` (critical and high, and
-//! medium in a tab landing without asking, `@autopilot_land`), `ask`
+//! medium in a tab landing without asking, `@land`), `ask`
 //! (medium, and low in a round that reports lows), `gap` (any low in a tab
 //! landing without asking), `report` (a low no one asked for) or `left`. A
 //! confirmation round whose findings are all low counts as clean unless
@@ -1982,7 +1982,7 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
     // worktree.
     let recorded_clean = own_checkout && keep_record(clean, include_low, &reviewed)?;
     if let Some(at) = &looping {
-        let lands_alone = socket::tab_option(crate::autopilot::LAND).as_deref() == Some("1");
+        let lands_alone = socket::tab_option(crate::mux::server::LAND).as_deref() == Some("1");
         let cap = if socket::tab_option(crate::autopilot::HANDS_FREE).as_deref() == Some("1") {
             HANDS_FREE_CAP
         } else {

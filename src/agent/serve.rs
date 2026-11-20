@@ -128,21 +128,22 @@ impl Server {
                 },
             );
         }
-        // The landing's push after your yes asked in any tab but one of
-        // autopilot's that lands without asking; the wait it makes is
-        // marked as any permission's is.
+        // The landing's push after your yes asked in any tab but one that
+        // lands without asking (`@land`); the wait it makes is marked as any
+        // permission's is.
         // The git push a session started before `land-lock push` still has
         // allowed is asked as it was, in a tab of autopilot's that doesn't.
         let (opened, lands) = self.tabs.get(&tab).map_or((false, false), |t| {
-            use crate::autopilot::{LAND, OPENED};
             (
-                t.opts.contains_key(OPENED),
-                t.opts.get(LAND).is_some_and(|v| v == "1"),
+                t.opts.contains_key(crate::autopilot::OPENED),
+                t.opts
+                    .get(crate::mux::server::LAND)
+                    .is_some_and(|v| v == "1"),
             )
         });
         let asks_push = hook.event == "PreToolUse"
             && hook.tool == "Bash"
-            && !(opened && lands)
+            && !lands
             && (hands_free::is_landing_push(&payload)
                 || (opened && hands_free::is_old_landing_push(&payload)));
         let answer = if asks_push {
@@ -780,6 +781,31 @@ impl Server {
         );
     }
 
+    /// The tab marked to land without asking (`@land`) by its menu, after a
+    /// yes naming what it skips and keeps, or no longer, asking nothing.
+    pub fn toggle_land(&mut self, client: crate::mux::server::ClientId, tab: TabId) {
+        use crate::mux::server::LAND;
+        let Some(t) = self.tabs.get_mut(&tab) else {
+            return;
+        };
+        if t.opts.get(LAND).is_some_and(|v| v == "1") {
+            t.opts.remove(LAND);
+            self.redraw_tab(tab);
+            return;
+        }
+        let (question, list) = land_question();
+        self.ask(
+            client,
+            crate::ui::Confirm::new(question).list(list),
+            move |server, _, yes| {
+                if yes && let Some(t) = server.tabs.get_mut(&tab) {
+                    t.opts.insert(LAND.into(), "1".into());
+                    server.redraw_tab(tab);
+                }
+            },
+        );
+    }
+
     /// M-f: pins the tab, or unpins it. A pin of its own, not Claude's
     /// "done": visiting the tab doesn't clear it, and pinned tabs lead M-a's
     /// walk (and the sidebar's Needs you). The first pin brings its tip.
@@ -912,6 +938,19 @@ fn pinned(value: &str) -> bool {
 /// `*/.claude/worktrees/*`).
 fn in_worktree(dir: &std::path::Path) -> bool {
     dir.to_string_lossy().contains("/.claude/worktrees/")
+}
+
+/// The question before a tab's menu has it land without asking, naming
+/// what it skips and what it keeps.
+pub fn land_question() -> (String, Vec<String>) {
+    (
+        "Land this tab without asking?".into(),
+        vec![
+            "Skipped: the question before its first push or its landing's push, and medium review findings, fixed without asking".into(),
+            "Kept: two clean review rounds of the change, leak-check, and the tests of a landing straight on a branch; a repository whose landing runs no review still asks".into(),
+            "Asked after all: anything leak-check finds, an unclear conflict, a failure the branch didn't cause".into(),
+        ],
+    )
 }
 
 #[cfg(test)]

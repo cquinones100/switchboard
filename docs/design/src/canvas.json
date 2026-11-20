@@ -640,6 +640,10 @@
     "PrBesideAfter.dc.html": {
       "title": "156. M-v then: the PR closes the ticket and takes its columns, its verdict chip first, Claude's pane where and as wide as it was; M-v again leaves the columns empty",
       "page": "design"
+    },
+    "NotesToolbar.dc.html": {
+      "title": "157. Notes' toolbar drawn with the kit's button, on the dark and light themes: at rest, under the mouse, lit while the cursor is in that style (bold, two styles, a heading) or while what it opens is in front (⋯), and faint while read-only",
+      "page": "design"
     }
   }
 }

@@ -4648,6 +4648,7 @@ impl Server {
             Do::Rename(tab) => self.rename_tab(client, tab),
             Do::ChooseTicket(tab) => self.choose_ticket(client, tab, false),
             Do::Pin(tab) => self.toggle_pin(tab),
+            Do::LandAlone(tab) => self.toggle_land(client, tab),
             Do::Remind(tab) => self.remind_tab(client, tab),
             Do::Palette(tab) => {
                 self.mission_go(client, tab);

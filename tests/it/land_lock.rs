@@ -644,8 +644,8 @@ fn a_landing_without_asking_marks_its_tab_and_shows_in_the_notifications_until_a
     let notices = relay_stand_in(&server.home);
     // The mode's switch on its tab, as queue-and-clean reads it from its
     // pane.
-    server.ok(&["set", "-t", &tab, "@autopilot_land", "1"]);
-    let shown = inside(&["show", "@autopilot_land"]);
+    server.ok(&["set", "-t", &tab, "@land", "1"]);
+    let shown = inside(&["show", "@land"]);
     assert_eq!(String::from_utf8_lossy(&shown.stdout).trim(), "1");
 
     let said = inside(&["land-lock", "autolanded", "abc1234", "Make", "the", "thing"]);
@@ -1507,7 +1507,7 @@ fn the_landing_push_lands_without_asking_through_its_gate_and_does_the_bookkeepi
     assert_eq!(l.on_origin(), before, "nothing pushed");
     assert_eq!(l.holder(), l.one.to_str().unwrap(), "the lock kept");
 
-    l.server.ok(&["set", "-t", &l.tab, "@autopilot_land", "1"]);
+    l.server.ok(&["set", "-t", &l.tab, "@land", "1"]);
     l.server
         .ok(&["set", "-t", &l.tab, "@autopilot_item", "Add the feature"]);
     common::write_settings(
@@ -1600,7 +1600,7 @@ fn the_landing_push_lands_without_asking_through_its_gate_and_does_the_bookkeepi
 #[test]
 fn the_landing_push_asks_on_a_leak_or_a_changed_change_and_rebases_when_main_moved() {
     let l = Landing::new();
-    l.server.ok(&["set", "-t", &l.tab, "@autopilot_land", "1"]);
+    l.server.ok(&["set", "-t", &l.tab, "@land", "1"]);
     let before = l.on_origin();
     let words = l.server.home.join(".config/switchboard/leak-check.txt");
 
@@ -1691,12 +1691,12 @@ fn a_refused_landing_push_leaves_the_remote_and_lets_the_lock_go() {
 #[test]
 fn ask_before_landing_chosen_while_before_push_runs_asks_after_all() {
     let l = Landing::new();
-    l.server.ok(&["set", "-t", &l.tab, "@autopilot_land", "1"]);
+    l.server.ok(&["set", "-t", &l.tab, "@land", "1"]);
     let before = l.on_origin();
     // beforePush stands in for you choosing "Ask before landing" meanwhile.
     std::fs::write(
         l.server.home.join(".config/switchboard/repos.json"),
-        json!({ l.repo.join(".git").to_str().unwrap(): { "landing": "direct", "test": "true", "review": "review-loop", "beforePush": format!("env -u SWITCHBOARD_PANE '{BIN}' set -t {} @autopilot_land 0", l.tab) } })
+        json!({ l.repo.join(".git").to_str().unwrap(): { "landing": "direct", "test": "true", "review": "review-loop", "beforePush": format!("env -u SWITCHBOARD_PANE '{BIN}' set -t {} @land 0", l.tab) } })
             .to_string(),
     )
     .unwrap();

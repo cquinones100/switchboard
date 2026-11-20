@@ -320,14 +320,16 @@ impl Args {
 }
 
 /// Whether an option is one of Switchboard's own marks, which a command run
-/// by hand in a pane may not set or unset: autopilot's (`@autopilot_land`
-/// lets a landing push without asking, `@autopilot_handsfree` answers its
+/// by hand in a pane may not set or unset: a tab's `@land` (it lands
+/// without asking) and `@land_work` (it follows the setting), autopilot's (`@autopilot_handsfree` answers its
 /// questions), but `@autopilot_pushed` and `@autopilot_merged`, which
 /// queue-and-clean sets once it has pushed or its PR has merged, and what a pane's program may do (`respawn::PROGRAM_MARKS`:
 /// `@allow_passthrough` and `@notes_pane` pass its graphics commands, which
 /// can have the terminal read any file, to the terminal).
 pub fn own_mark(option: &str) -> bool {
     super::respawn::PROGRAM_MARKS.contains(&option)
+        || option == super::server::LAND
+        || option == super::server::LAND_WORK
         || (option.starts_with("@autopilot")
             && option != "@autopilot_pushed"
             && option != "@autopilot_merged")
@@ -1140,9 +1142,12 @@ impl Server {
         name: &str,
     ) -> Result<Target, String> {
         // Autopilot's marks (src/autopilot) are its tab's too, so
-        // a skill in one of its tabs reads `@autopilot_land` as the tab has
-        // it, a tool standing in for Claude's pane or not.
+        // a skill in one of its tabs reads `@autopilot_handsfree` as the tab
+        // has it, a tool standing in for Claude's pane or not; `@land` is the
+        // tab's own the same way.
         let tab_option = name.starts_with("@tab_")
+            || name == super::server::LAND
+            || name == super::server::LAND_WORK
             || name.starts_with("@autopilot")
             || (name.starts_with("@agent") && !name.starts_with("@agent_"))
             || name == super::layout::OWN_WIDTH;
@@ -1215,7 +1220,8 @@ mod tests {
     #[test]
     fn switchboards_own_marks_are_autopilots_but_the_landings_and_a_programs() {
         for mark in [
-            "@autopilot_land",
+            "@land",
+            "@land_work",
             "@autopilot_handsfree",
             "@autopilot",
             "@allow_passthrough",
