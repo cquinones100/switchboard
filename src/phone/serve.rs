@@ -141,28 +141,32 @@ impl Server {
     ) -> Result<Reply, String> {
         self.phone_claude_pane(pane)?;
         let found = self.phone_prompt_of(pane);
+        // A numbered list in a finished reply reads as options too, so a
+        // message waits on a prompt only while its Claude is waiting, as
+        // the drawer shows one and the relay reads one.
+        let waiting = self.agents.state(pane) == Some(crate::agent::State::Waiting);
         let said = match (message, found) {
-            (true, Some(_)) => {
+            (true, Some(_)) if waiting => {
                 return Err("its Claude is showing a prompt: answer that first".into());
             }
-            (true, None) if reply.trim().is_empty() => return Err("nothing to send".into()),
+            (true, _) if reply.trim().is_empty() => return Err("nothing to send".into()),
             // A dialog before its session starts (trust this folder, a new
             // MCP server), which Enter would confirm unseen, and a draft in
             // its prompt box, which would go with the words, are left for
             // the computer, as mission control's answer box leaves them.
-            (true, None) if self.phone_dialog(pane) => {
+            (true, _) if self.phone_dialog(pane) => {
                 return Err(
                     "its Claude is showing a dialog before it starts: answer it at the computer"
                         .into(),
                 );
             }
-            (true, None) if self.phone_draft(pane) => {
+            (true, _) if self.phone_draft(pane) => {
                 return Err(
                     "its Claude has a draft in its prompt box, which would go with this: send it or clear it at the computer"
                         .into(),
                 );
             }
-            (true, None) => {
+            (true, _) => {
                 self.type_into_claude(pane, answer::message_presses(reply));
                 format!("Sent \"{}\"", short(reply))
             }

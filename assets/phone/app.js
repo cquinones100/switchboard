@@ -13,6 +13,7 @@ const state = {
   open: null, // the pane's number of the tab open, or null for the drawer
   messages: [],
   answered: null, // what was answered last, for the folded card
+  draft: "", // what is typed in the composer, kept across the page's redraws
   sent: null, // { pane, key }: the prompt (and its ticks) an answer was sent for, whose buttons wait
   error: "",
 };
@@ -202,6 +203,7 @@ async function openTab(n) {
   state.messages = [];
   state.answered = null;
   state.error = "";
+  state.draft = "";
   history.replaceState(null, "", "#" + n);
   render();
   await loadTurns();
@@ -306,6 +308,7 @@ function composer(tab) {
   });
   const send = el("button", { class: "send", "aria-label": "Send" }, "➤");
   field.addEventListener("input", () => {
+    state.draft = field.value;
     send.classList.toggle("lit", field.value.trim() !== "");
     field.style.height = "auto";
     field.style.height = field.scrollHeight + "px";
@@ -314,6 +317,10 @@ function composer(tab) {
     const text = field.value.trim();
     if (!text) return;
     send.disabled = true;
+    // Taken out of the composer as it is sent, so no redraw puts it back
+    // for a second tap to send again; given back if it fails.
+    state.draft = "";
+    field.value = "";
     try {
       if (free) await answer(text);
       else {
@@ -321,9 +328,9 @@ function composer(tab) {
         state.messages.push({ who: "you", text, at: Date.now() });
         render(true);
       }
-      field.value = "";
     } catch (e) {
       state.error = String(e.message || e);
+      state.draft = text;
       render();
     } finally {
       send.disabled = false;
@@ -342,8 +349,7 @@ function channel(stick) {
   const old = app.querySelector(".channel");
   const atEnd = !old || old.scrollTop + old.clientHeight >= old.scrollHeight - 40;
   const kept = old ? old.scrollTop : 0;
-  const draft = app.querySelector(".composer textarea");
-  const typed = draft ? draft.value : "";
+  const typed = state.draft;
   const list = el(
     "div",
     { class: "channel" },

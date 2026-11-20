@@ -87,6 +87,7 @@ fn prompt_and_answer_read_and_press_a_claude_panes_prompt() {
     let (code, _, err) = server.run(&["answer", "-t", &pane, "maybe"]);
     assert_eq!(code, 1);
     assert!(err.contains("isn't one of its options"), "{err}");
+    server.ok(&["set", "-t", &pane, "@agent_state", "waiting"]);
     let (code, _, err) = server.run(&["answer", "-t", &pane, "-m", "hello"]);
     assert_eq!(code, 1, "a message waits for the prompt to be answered");
     assert!(err.contains("showing a prompt"), "{err}");
