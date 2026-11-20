@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Writes the UX 2.0 boards' sources (docs/design/src's `<Name>.dc.html` files and their canvas.json, first copied from a claude.ai
 // Design artifact, the canvas, which is now an archive) as static web pages for docs/design, which GitHub Pages serves, without the
-// Design type's runtime (`support.js`, claude.ai's own, never copied here), and pushes a change to docs/design alone to main. A board is an `<x-dc>` template whose
+// Design type's runtime (`support.js`, claude.ai's own, never copied here). A board is an `<x-dc>` template whose
 // `<sc-for list="{{...}}" as="...">` loops and `{{holes}}` are filled from its script's `renderVals()`; this file evaluates that
 // script in a `node:vm` context of its own (no require, process or file access, since the board is data read from the
 // artifact) and expands the template into plain HTML under a Content-Security-Policy that runs no script and loads nothing but
@@ -13,8 +13,6 @@
 //   render.js sync <sources dir> <docs/design dir>        check the boards' text, write every board's page and the README
 //   render.js made-up <range>                             run `switchboard leak-check <range>` and print what made-up.json
 //                                                         doesn't explain in docs/design (exit 2 when it couldn't look)
-//   render.js push                                        push the commits main lacks to main when they change docs/design
-//                                                         alone and leak-check finds nothing made-up.json doesn't explain
 //   render.js --self-test                                 draw the fixtures and check their size, that they aren't blank, and
 //                                                         that a grid board's meter sits on its text's row
 //   render.js --print-chrome-args                         print the switches Chrome draws every board with, a line each
@@ -401,40 +399,6 @@ function notMadeUp(range) {
   return kept;
 }
 
-// ─── The push ──────────────────────────────────────────────────────────────────
-// A change to docs/design alone goes to main without the review loop or a question (CLAUDE.md's "Pushing"): this checks
-// that every path any commit main lacks touches (both sides of a rename, a merge against each parent) lies under docs/design/,
-// runs leak-check on them, as `made-up` does, and only then pushes, which .githooks/pre-push lets through by the same rule.
-// It refuses, saying why, when main has moved (fetch and rebase first), when a commit reaches past docs/design (that is a
-// change to land through the review loop), or when leak-check finds anything made-up.json doesn't explain (that is asked
-// about); a leak-check that couldn't look exits 2. This repository's .claude/settings.json allows it as this exact command.
-const isDesignPath = (file) => file.startsWith('docs/design/') && !file.split('/').includes('..');
-
-function push() {
-  const git = (...args) => spawnSync('git', args, { encoding: 'utf8' });
-  const refuse = (why, code = 1) => {
-    console.error(`render.js push: ${why}`);
-    process.exit(code);
-  };
-  const top = git('rev-parse', '--show-toplevel');
-  if (top.status !== 0) refuse('not in a git repository', 2);
-  process.chdir(top.stdout.trim());
-  const fetched = git('fetch', '--quiet', 'origin', 'main');
-  if (fetched.status !== 0) refuse(`couldn't fetch origin's main: ${fetched.stderr.trim()}`, 2);
-  if (git('merge-base', '--is-ancestor', 'origin/main', 'HEAD').status !== 0) refuse("main on origin has commits this branch lacks: rebase onto origin/main, then push again");
-  const range = 'origin/main..HEAD';
-  const files = git('log', '--format=', '--name-only', '--no-renames', '-m', '-z', range);
-  if (files.status !== 0) refuse(`couldn't list what ${range} changes: ${files.stderr.trim()}`, 2);
-  const changed = [...new Set(files.stdout.split('\0').map((f) => f.trim()).filter(Boolean))];
-  if (git('rev-list', '--count', range).stdout.trim() === '0') refuse('nothing to push: main on origin already has HEAD', 0);
-  const outside = changed.filter((file) => !isDesignPath(file));
-  if (!changed.length || outside.length) refuse(`${range} changes more than docs/design/, so it lands through the review loop and the push question:\n${outside.join('\n') || '(no file at all)'}`);
-  const found = notMadeUp(range);
-  if (found.length) refuse(`leak-check found what made-up.json doesn't explain; ask about each before pushing:\n${found.join('\n')}`);
-  const pushed = spawnSync('git', ['push', 'origin', 'HEAD:main'], { stdio: 'inherit' });
-  process.exit(pushed.status ?? 1);
-}
-
 function selfTest() {
   let failed = false;
   const check = (ok, what) => {
@@ -503,9 +467,8 @@ if (require.main !== module) {
 else if (first === '--print-chrome-args') console.log(SWITCHES.join('\n'));
 else if (first === 'sync' && second && third) sync(second, third);
 else if (first === 'made-up' && second) madeUp(second);
-else if (first === 'push' && !second) push();
 else if (first && second) draw(toHtml(fs.readFileSync(first, 'utf8')), second, Number(third) || 1280, Number(fourth) || 800);
 else {
-  console.error('usage: render.js <board.dc.html> <out.png> [width height] | render.js sync <project dir> <docs dir> | render.js made-up <range> | render.js push | render.js --self-test | render.js --print-chrome-args');
+  console.error('usage: render.js <board.dc.html> <out.png> [width height] | render.js sync <project dir> <docs dir> | render.js made-up <range> | render.js --self-test | render.js --print-chrome-args');
   process.exit(64);
 }

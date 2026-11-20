@@ -6,9 +6,9 @@
 //! It needs Node, so it is skipped without it, and the drawing needs Chrome (the script exits 77
 //! when it finds none, having checked the rest). Its fixtures load nothing from the network, and
 //! Chrome runs with a profile of its own under the test's temporary home. Its sync is checked
-//! too, writing pages from the fixtures' sources. The skill's `render.js push` and
-//! .githooks/pre-push are checked in a repository of their own against a bare stand-in for
-//! origin: a change to docs/design/ alone reaches main with no review, anything else doesn't.
+//! too, writing pages from the fixtures' sources. .githooks/pre-push is checked in a repository
+//! of its own against a bare stand-in for origin: a change to docs/design/ alone reaches main
+//! with no review, anything else doesn't.
 
 use crate::common;
 
@@ -97,8 +97,8 @@ fn the_renderers_chrome_asks_macos_for_no_keychain() {
 
 /// A clone of a bare stand-in for origin, its main holding a design page and
 /// some code, with this repository's pre-push hook, run with a home of its
-/// own and the test's switchboard first on the PATH (for the hook's setting
-/// and `render.js push`'s leak-check), nothing else of the environment.
+/// own and the test's switchboard first on the PATH (for the hook's
+/// setting), nothing else of the environment.
 struct DesignRepo {
     tmp: TempDir,
     work: std::path::PathBuf,
@@ -189,14 +189,6 @@ impl DesignRepo {
         )
     }
 
-    fn origin_main(&self) -> String {
-        self.ok(&self.work, &["git", "rev-parse", "origin/main"])
-    }
-
-    fn head(&self) -> String {
-        self.ok(&self.work, &["git", "rev-parse", "HEAD"])
-    }
-
     fn back_to_origin(&self) {
         self.ok(&self.work, &["git", "fetch", "-q", "origin"]);
         self.ok(&self.work, &["git", "reset", "-q", "--hard", "origin/main"]);
@@ -255,50 +247,4 @@ fn the_pre_push_hook_lets_a_change_to_docs_design_alone_reach_main_unreviewed() 
     repo.commit("Take it back, add a board");
     let (pushed, said) = repo.push();
     assert!(!pushed, "a code commit went unreviewed: {said}");
-}
-
-#[test]
-fn render_js_push_pushes_a_design_only_change_and_refuses_anything_else() {
-    let repo = DesignRepo::new();
-    let script =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join(".claude/skills/design-docs/scripts/render.js");
-    let script = script.to_str().unwrap();
-    // The test's PATH holds none of yours, so Node is linked into its own.
-    let Some(node) = std::env::var_os("PATH").and_then(|path| {
-        std::env::split_paths(&path)
-            .map(|dir| dir.join("node"))
-            .find(|node| node.is_file())
-    }) else {
-        return eprintln!("skipped: no node");
-    };
-    std::os::unix::fs::symlink(node, repo.tmp.path().join("bin/node")).unwrap();
-    let push = || {
-        let out = repo.command(&repo.work, &["node", script, "push"]);
-        (
-            out.status.code(),
-            String::from_utf8_lossy(&out.stderr).to_string(),
-        )
-    };
-
-    repo.write("docs/design/b.html", "<p>b board</p>\n");
-    repo.commit("Add board b");
-    repo.write("src/lib.rs", "pub fn g() {}\n");
-    repo.commit("Some code");
-    let before = repo.origin_main();
-    let (code, said) = push();
-    assert_eq!(code, Some(1), "{said}");
-    assert!(
-        said.contains("changes more than docs/design/") && said.contains("src/lib.rs"),
-        "{said}"
-    );
-    repo.ok(&repo.work, &["git", "fetch", "-q", "origin"]);
-    assert_eq!(repo.origin_main(), before);
-
-    repo.back_to_origin();
-    repo.write("docs/design/b.html", "<p>b board</p>\n");
-    repo.commit("Add board b");
-    let (code, said) = push();
-    assert_eq!(code, Some(0), "{said}");
-    repo.ok(&repo.work, &["git", "fetch", "-q", "origin"]);
-    assert_eq!(repo.origin_main(), repo.head());
 }
