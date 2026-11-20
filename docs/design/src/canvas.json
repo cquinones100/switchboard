@@ -613,8 +613,40 @@
       "title": "149. How it gets there says how and why: under each step's title a How naming the code that does the work and in what order, and a Why of one clause on the problem it fixes; the pages that only test folded into one Tested line",
       "page": "design"
     },
+    "PrReadyChip.dc.html": {
+      "title": "150. M-v with M-m folded in, a PR with merge conflicts: the verdict a chip after the PR's state in its head, conflicts first, its reasons a dim line under the head; the panel's Checks split into required and optional",
+      "page": "design"
+    },
+    "PrReadyQueue.dc.html": {
+      "title": "151. A PR in the merge queue: the chip names the queue, the line under the head its place and what the queue is doing, which settles the rest; its checks passed and its review approved in the panel",
+      "page": "design"
+    },
+    "PrReadyClean.dc.html": {
+      "title": "152. A PR ready to merge: the chip in green, the line under the head no conflicts, every required check passing and its review approved",
+      "page": "design"
+    },
+    "PrReadyNoPr.dc.html": {
+      "title": "153. A branch with no PR: M-v shows its CI on the commit GitHub has for it, the verdict first, each check, and whether this tab's HEAD is ahead of it, behind it or elsewhere",
+      "page": "design"
+    },
+    "PrReadyMenu.dc.html": {
+      "title": "154. m on board 150's PR: the view's menu gains See the failing checks and, while it has conflicts, Type /resolve-conflicts into this tab's Claude; M-m is gone",
+      "page": "design"
+    },
+    "PrBesideBefore.dc.html": {
+      "title": "155. Before M-v beside a narrow lone pane: the ticket (M-i) in the spare columns, Claude's pane capped at its width",
+      "page": "design"
+    },
+    "PrBesideAfter.dc.html": {
+      "title": "156. M-v then: the PR closes the ticket and takes its columns, its verdict chip first, Claude's pane where and as wide as it was; M-v again leaves the columns empty",
+      "page": "design"
+    },
     "NotesToolbar.dc.html": {
       "title": "157. Notes' toolbar drawn with the kit's button, on the dark and light themes: at rest, under the mouse, lit while the cursor is in that style (bold, two styles, a heading) or while what it opens is in front (⋯), and faint while read-only",
+      "page": "design"
+    },
+    "StatusMenu.dc.html": {
+      "title": "158. A tab's status set by hand, from Set its status… in its menu: every group a tab can be in, by the sidebar's names and in its order, the one it is in marked; Let Switchboard decide first while a status you set holds, naming where Switchboard would file it; in the sidebar the tab carries the kit's set by you chip and what Switchboard still reads, which takes it back once it changes",
       "page": "design"
     },
     "TalkGist.dc.html": {

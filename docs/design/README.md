@@ -281,3 +281,17 @@ The relay's DM, threads and Home tab.
 - [161. Zoomed in to Steps, step 2's slide: its claim, event 42 going in and coming out, where it sits in the flow, and its hunk with a note in the margin on the line that turns 10003's 3 into Other; the notes folded under it](https://cquinones100.github.io/switchboard/design/161.html)
 - [162. Zoomed in to Code on step 2: its notes open (decided, instead of what, what to watch), every hunk of the step with its margin notes, and the test the example comes from, its case lit](https://cquinones100.github.io/switchboard/design/162.html)
 - [163. The opening slide when no test in the change gives an example: it says so rather than make one up, and the flow shows its steps without values](https://cquinones100.github.io/switchboard/design/163.html)
+
+## Proposal: a tab's status set by hand
+
+- [158. A tab's status set by hand, from Set its status… in its menu: every group a tab can be in, by the sidebar's names and in its order, the one it is in marked; Let Switchboard decide first while a status you set holds, naming where Switchboard would file it; in the sidebar the tab carries the kit's set by you chip and what Switchboard still reads, which takes it back once it changes](https://cquinones100.github.io/switchboard/design/158.html)
+
+## Proposal: can it merge, in the pr view
+
+- [150. M-v with M-m folded in, a PR with merge conflicts: the verdict a chip after the PR's state in its head, conflicts first, its reasons a dim line under the head; the panel's Checks split into required and optional](https://cquinones100.github.io/switchboard/design/150.html)
+- [151. A PR in the merge queue: the chip names the queue, the line under the head its place and what the queue is doing, which settles the rest; its checks passed and its review approved in the panel](https://cquinones100.github.io/switchboard/design/151.html)
+- [152. A PR ready to merge: the chip in green, the line under the head no conflicts, every required check passing and its review approved](https://cquinones100.github.io/switchboard/design/152.html)
+- [153. A branch with no PR: M-v shows its CI on the commit GitHub has for it, the verdict first, each check, and whether this tab's HEAD is ahead of it, behind it or elsewhere](https://cquinones100.github.io/switchboard/design/153.html)
+- [154. m on board 150's PR: the view's menu gains See the failing checks and, while it has conflicts, Type /resolve-conflicts into this tab's Claude; M-m is gone](https://cquinones100.github.io/switchboard/design/154.html)
+- [155. Before M-v beside a narrow lone pane: the ticket (M-i) in the spare columns, Claude's pane capped at its width](https://cquinones100.github.io/switchboard/design/155.html)
+- [156. M-v then: the PR closes the ticket and takes its columns, its verdict chip first, Claude's pane where and as wide as it was; M-v again leaves the columns empty](https://cquinones100.github.io/switchboard/design/156.html)

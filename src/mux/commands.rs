@@ -194,7 +194,7 @@ pub const USAGE: &[(&str, &str)] = &[
     ),
     (
         "look",
-        "look [-t pane] <file>...: pictures shown beside the tab's narrow lone pane, stacked when there are several, M-Esc or a click closing them; opened with the desktop's viewer where there is no room beside it, and a video or a PDF always",
+        "look [-t pane] [--before-after <before> <after> | <file>...]: pictures shown beside the tab's narrow lone pane, stacked when there are several, the two --before-after takes headed Before and after, M-Esc or a click closing them; opened with the desktop's viewer where there is no room beside it, and a video or a PDF always",
     ),
     (
         "seen",

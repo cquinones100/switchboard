@@ -14,8 +14,8 @@
 //! and, as those weren't held while you were away, even with no one there,
 //! so the views have something to show when a client first attaches.
 //!
-//! Something that has just asked GitHub about a PR (M-m's pr-ready.sh, a
-//! skill) appends to `github` in the state directory, and the lookups that
+//! Something that has just asked GitHub about a PR (the PR view, as
+//! pr-ready.sh did, a skill) appends to `github` in the state directory, and the lookups that
 //! show PRs are asked again, at most every `GITHUB_NOW` (`github_now`).
 //!
 //! GitHub's hour's limit slows its lookups down (`Budget`): with under
