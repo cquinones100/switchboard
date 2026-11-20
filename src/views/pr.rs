@@ -23,9 +23,10 @@ use std::process::ExitCode;
 
 use serde_json::{Value, json};
 
-use super::board::{self, Board, Part, Piece};
+use super::board::{self, Board, Do, Part, Piece};
 use super::follow;
 use super::pager::{self, Content};
+use super::ready;
 use crate::integrations::github;
 use crate::photos::{Service, Who};
 use crate::ui::kit::{Mark, Tone};
@@ -39,9 +40,12 @@ pub const PLACE: &str = "M-r on GitHub";
 const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { \
     pullRequest(number: $number) { number title url state isDraft createdAt author { login } \
     baseRefName headRefName body additions deletions changedFiles commits { totalCount } \
+    mergeable mergeStateStatus reviewDecision autoMergeRequest { enabledAt } mergeQueueEntry { state position } \
     last: commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { \
-      checkRunCountsByState { state count } statusContextCountsByState { state count } nodes { __typename \
-      ... on CheckRun { name status conclusion } ... on StatusContext { context state } } } } } } } \
+      checkRunCountsByState { state count } statusContextCountsByState { state count } \
+      pageInfo { hasNextPage endCursor } nodes { __typename \
+      ... on CheckRun { name status conclusion title isRequired(pullRequestNumber: $number) } \
+      ... on StatusContext { context state description isRequired(pullRequestNumber: $number) } } } } } } } \
     reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } ... on Team { name } } } } \
     latestReviews(first: 20) { nodes { author { login } state } } \
     reviewThreads(first: 100) { pageInfo { hasNextPage endCursor } nodes { isResolved path line \
@@ -61,8 +65,12 @@ const THREADS_QUERY: &str = "query($owner: String!, $name: String!, $number: Int
 /// The most pages of review threads read, five hundred threads.
 const THREAD_PAGES: usize = 5;
 
-/// The PR as Markdown: pr-view.js's header over its description.
+/// The PR as Markdown: pr-view.js's header over its description, and
+/// under the header whether it can merge (`ready::verdict`).
 pub fn markdown(pr: &Value) -> String {
+    if ready::is_branch(pr) {
+        return branch_markdown(pr);
+    }
     let text = |key: &str| pr.get(key).and_then(Value::as_str).unwrap_or("");
     let state = if pr.get("isDraft").and_then(Value::as_bool) == Some(true) {
         "Draft".to_string()
@@ -74,13 +82,50 @@ pub fn markdown(pr: &Value) -> String {
         .and_then(Value::as_str)
         .unwrap_or("someone");
     let number = pr.get("number").map(util::js_string).unwrap_or_default();
+    let verdict = ready::verdict(pr, rollup(pr))
+        .map(|v| match v.reasons_text() {
+            r if r.is_empty() => format!("**{}**\n\n", v.said),
+            r => format!("**{}** {r}\n\n", v.said),
+        })
+        .unwrap_or_default();
     format!(
-        "# {} #{number}\n\n_{state} · {author} wants to merge `{}` into `{}`_\n\n---\n\n{}",
+        "# {} #{number}\n\n_{state} · {author} wants to merge `{}` into `{}`_\n\n{verdict}---\n\n{}",
         text("title"),
         text("headRefName"),
         text("baseRefName"),
         text("body")
     )
+}
+
+/// A branch with no PR as Markdown: how its CI went on GitHub, each check.
+fn branch_markdown(copy: &Value) -> String {
+    let v = ready::branch_verdict(copy);
+    let branch = str_at(copy, "/branch");
+    let mut out = format!(
+        "# {branch}\n\n_No PR_\n\n**{}** {}\n\n",
+        v.said,
+        v.reasons_text()
+    );
+    for c in nodes(copy, &format!("/checks{}/nodes", ready::CONTEXTS)) {
+        out.push_str(&format!("- {} {}\n", check_mark(c).look().0, check_name(c)));
+    }
+    out
+}
+
+/// The PR's checks, the first hundred by name with every check counted.
+fn rollup(pr: &Value) -> &Value {
+    pr.pointer(ROLLUP).unwrap_or(&Value::Null)
+}
+
+/// Where the view's query puts its checks.
+const ROLLUP: &str = "/last/nodes/0/commit/statusCheckRollup/contexts";
+
+/// A check's name: a check run's, or a status's context.
+fn check_name(c: &Value) -> &str {
+    match str_at(c, "/name") {
+        "" => str_at(c, "/context"),
+        n => n,
+    }
 }
 
 /// How many of a list the panel shows before "N more".
@@ -187,17 +232,23 @@ pub fn board(pr: &Value, now: jiff::Timestamp) -> Board {
         Piece::Text(format!("+{}", count(pr, "/additions")), Tone::Done),
         Piece::Text(format!(" −{}", count(pr, "/deletions")), Tone::Failed),
     ]);
-    let mut main = vec![
-        Part::Row(vec![
-            Piece::Chip(state.into(), tone),
-            Piece::Name(format!("#{number}"), Tone::Accent),
-            Piece::Text(" ".into(), Tone::Text),
-            Piece::Name(str_at(pr, "/title").into(), Tone::Text),
-        ]),
-        Part::Row(wants),
-        Part::Rule,
-        Part::Blank,
-    ];
+    // Whether it can merge: a chip after its state, the sentence and its
+    // reasons on a line under the head (board 150).
+    let verdict = ready::verdict(pr, rollup(pr));
+    let mut head = vec![Piece::Chip(state.into(), tone)];
+    if let Some(v) = &verdict {
+        head.push(Piece::Chip(v.chip_text(), v.tone));
+    }
+    head.extend([
+        Piece::Name(format!("#{number}"), Tone::Accent),
+        Piece::Text(" ".into(), Tone::Text),
+        Piece::Name(str_at(pr, "/title").into(), Tone::Text),
+    ]);
+    let mut main = vec![Part::Row(head), Part::Row(wants)];
+    if let Some(v) = &verdict {
+        main.push(verdict_row(v));
+    }
+    main.extend([Part::Rule, Part::Blank]);
     if !login.is_empty() {
         let when = board::when(str_at(pr, "/createdAt"), now);
         main.push(said(
@@ -237,32 +288,28 @@ pub fn board(pr: &Value, now: jiff::Timestamp) -> Board {
     let mut panel = Vec::new();
     let checks = nodes(pr, "/last/nodes/0/commit/statusCheckRollup/contexts/nodes");
     if !checks.is_empty() {
-        let mut marked: Vec<(Mark, &str)> = checks
+        let mut marked: Vec<(Mark, &str, bool)> = checks
             .iter()
             .map(|c| {
-                let name = match str_at(c, "/name") {
-                    "" => str_at(c, "/context"),
-                    n => n,
-                };
-                (check_mark(c), name)
+                let required = c.get("isRequired").and_then(Value::as_bool) == Some(true);
+                (check_mark(c), check_name(c), required)
             })
             .collect();
         // What needs you first: the failures, then what is still running.
-        marked.sort_by_key(|(m, _)| match m {
+        marked.sort_by_key(|(m, _, _)| match m {
             Mark::Failed => 0,
             Mark::Pending => 1,
             _ => 2,
         });
         // The counts GitHub gives for every check, of which only the
         // first 100 come by name; those listed where the counts are missing.
-        let rollup = "/last/nodes/0/commit/statusCheckRollup/contexts";
         let mut by_state: Vec<(&str, u64)> = Vec::new();
         for kind in ["checkRunCountsByState", "statusContextCountsByState"] {
-            for n in nodes(pr, &format!("{rollup}/{kind}")) {
+            for n in nodes(pr, &format!("{ROLLUP}/{kind}")) {
                 by_state.push((str_at(n, "/state"), count(n, "/count")));
             }
         }
-        let listed = |m: Mark| marked.iter().filter(|(k, _)| *k == m).count() as u64;
+        let listed = |m: Mark| marked.iter().filter(|(k, _, _)| *k == m).count() as u64;
         let (total, passed, failed) = if by_state.is_empty() {
             (
                 marked.len() as u64,
@@ -289,12 +336,31 @@ pub fn board(pr: &Value, now: jiff::Timestamp) -> Board {
             "Checks".into(),
             Some(format!("{passed} of {total}")),
         ));
-        panel.push(Part::Flow(
-            marked
+        let flow = |label: Option<&str>, required: Option<bool>| {
+            let mut groups: Vec<Vec<Piece>> = label
+                .map(|l| vec![Piece::Text(l.into(), Tone::Dim)])
                 .into_iter()
-                .map(|(m, name)| vec![Piece::Mark(m), Piece::Text(format!(" {name}"), Tone::Text)])
-                .collect(),
-        ));
+                .collect();
+            groups.extend(
+                marked
+                    .iter()
+                    .filter(|(_, _, r)| required.is_none_or(|want| *r == want))
+                    .map(|(m, name, _)| {
+                        vec![Piece::Mark(*m), Piece::Text(format!(" {name}"), Tone::Text)]
+                    }),
+            );
+            Part::Flow(groups)
+        };
+        // The required checks apart from the rest (board 150), where GitHub
+        // said which are required and some are.
+        if ready::required(rollup(pr)).is_some_and(|(_, total)| total > 0) {
+            panel.push(flow(Some("Required"), Some(true)));
+            if marked.iter().any(|(_, _, r)| !r) {
+                panel.push(flow(Some("Optional"), Some(false)));
+            }
+        } else {
+            panel.push(flow(None, None));
+        }
         if unlisted > 0 {
             let mut row = vec![Piece::Text(format!("{unlisted} more"), Tone::Dim)];
             if unlisted_failures > 0 {
@@ -436,24 +502,157 @@ pub fn board(pr: &Value, now: jiff::Timestamp) -> Board {
             ("/", "search"),
             ("r", "read again"),
             ("M-r", "on GitHub"),
-            ("M-m", "ready?"),
+            ("m", "view actions"),
             ("M-d", "its diff"),
             ("M-c", "back to Claude"),
         ]
         .map(|(k, w)| (k.to_string(), w.to_string()))
         .to_vec(),
+        actions: actions(str_at(pr, "/url"), verdict.as_ref()),
+        title: format!("PR #{number}"),
+    }
+}
+
+/// The view's menu besides reading it again: the page on GitHub, then
+/// what can be done about the verdict, as M-m's box offered it (board 154).
+fn actions(url: &str, verdict: Option<&ready::Verdict>) -> Vec<(String, Do)> {
+    let mut out = Vec::new();
+    if !url.is_empty() {
+        out.push(("Open it on GitHub".to_string(), Do::Open(url.into())));
+    }
+    if verdict.is_some_and(|v| v.conflicts) {
+        out.push((
+            RESOLVE.to_string(),
+            Do::Press(super::Command::ResolveConflicts.name().into()),
+        ));
+    }
+    if verdict.is_some_and(|v| v.failing) {
+        out.push((
+            FAILING.to_string(),
+            Do::Press(super::Command::FailingChecks.name().into()),
+        ));
+    }
+    out
+}
+
+/// The menu's words for the two things M-m's box offered.
+pub const RESOLVE: &str = "Type /resolve-conflicts into this tab's Claude";
+pub const FAILING: &str = "See the failing checks";
+
+/// The line under the head: the verdict's sentence, then its reasons, dim.
+fn verdict_row(v: &ready::Verdict) -> Part {
+    let mut row = vec![Piece::Name(v.said.clone(), v.tone)];
+    if !v.reasons.is_empty() {
+        row.push(Piece::Text(format!("  {}", v.reasons_text()), Tone::Dim));
+    }
+    Part::Row(row)
+}
+
+/// How many checks the board of a branch with no PR lists before "N more".
+const BRANCH_CHECKS: usize = 20;
+
+/// A branch with no PR as board 153 draws it: its CI on the commit GitHub
+/// has for it, the verdict first, then each check, and how this tab
+/// stands against that commit.
+pub fn branch_board(copy: &Value) -> Board {
+    let v = ready::branch_verdict(copy);
+    let branch = str_at(copy, "/branch");
+    let mut head = vec![
+        Piece::Chip("No PR".into(), Tone::Dim),
+        Piece::Chip(v.chip_text(), v.tone),
+        Piece::Name(branch.into(), Tone::Text),
+    ];
+    if let (Some(n), Some(default)) = (
+        copy.get("aheadOfDefault").and_then(Value::as_u64),
+        copy.get("defaultBranch").and_then(Value::as_str),
+    ) {
+        head.push(Piece::Text(
+            format!(
+                "  {n} commit{} ahead of {default}",
+                if n == 1 { "" } else { "s" }
+            ),
+            Tone::Dim,
+        ));
+    }
+    let mut main = vec![Part::Row(head), Part::Blank, verdict_row(&v), Part::Blank];
+    let checks = nodes(copy, &format!("/checks{}/nodes", ready::CONTEXTS));
+    if !checks.is_empty() {
+        let passed = checks
+            .iter()
+            .filter(|c| check_mark(c) == Mark::Passed)
+            .count();
+        main.push(Part::Label(
+            "Checks".into(),
+            Some(format!("{passed} of {}", checks.len())),
+        ));
+        for c in checks.iter().take(BRANCH_CHECKS) {
+            let about = match str_at(c, "/description") {
+                "" => str_at(c, "/title"),
+                d => d,
+            };
+            main.push(Part::Ends(
+                vec![
+                    Piece::Mark(check_mark(c)),
+                    Piece::Text(format!(" {}", check_name(c)), Tone::Text),
+                ],
+                vec![Piece::Text(about.into(), Tone::Dim)],
+            ));
+        }
+        if checks.len() > BRANCH_CHECKS {
+            main.push(board::more(checks.len() - BRANCH_CHECKS));
+        }
+    }
+    let mut actions = Vec::new();
+    let (owner, name) = (str_at(copy, "/owner"), str_at(copy, "/name"));
+    let on_github = copy.get("checks").is_some_and(Value::is_object);
+    if !owner.is_empty() && !name.is_empty() && on_github {
+        actions.push((
+            "Open it on GitHub".to_string(),
+            Do::Open(format!("https://github.com/{owner}/{name}/tree/{branch}")),
+        ));
+    }
+    if v.failing {
+        actions.push((
+            FAILING.to_string(),
+            Do::Press(super::Command::FailingChecks.name().into()),
+        ));
+    }
+    Board {
+        main,
+        panel: Vec::new(),
+        place: PLACE.into(),
+        keys: [
+            ("j/k", "scroll"),
+            ("r", "read again"),
+            ("m", "view actions"),
+            ("M-c", "back to Claude"),
+        ]
+        .map(|(k, w)| (k.to_string(), w.to_string()))
+        .to_vec(),
+        actions,
+        title: branch.into(),
     }
 }
 
 /// What the view shows of a PR: board 13 with UX 2.0 on, else its
 /// Markdown, as pr-view.js laid it out.
 fn content(pr: &Value) -> Content {
-    if settings::is_on("ux2") {
+    if settings::is_on("ux2") && ready::is_branch(pr) {
+        Content::Board(branch_board(pr))
+    } else if settings::is_on("ux2") {
         Content::Board(board(pr, jiff::Timestamp::now()))
     } else {
-        Content::Markdown {
+        // The board's menu, which Markdown has too.
+        let menued = if ready::is_branch(pr) {
+            branch_board(pr)
+        } else {
+            board(pr, jiff::Timestamp::now())
+        };
+        Content::MarkdownMenu {
             text: markdown(pr),
             place: PLACE.into(),
+            title: menued.title,
+            actions: menued.actions,
         }
     }
 }
@@ -492,26 +691,34 @@ pub async fn by_number(repo: &github::Repo, number: u64, source: &str) -> anyhow
         .await?;
         pr["reviewThreads"]["nodes"] = Value::Array(paged.nodes);
     }
+    // Every check when one failed or is running, so the required ones are
+    // counted among them all, and whether it can merge once GitHub knows.
+    if let Some(first) = pr.pointer(ROLLUP).cloned() {
+        let (contexts, _) = ready::pr_checks(repo, number, first)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
+        if let Some(c) = pr.pointer_mut(ROLLUP) {
+            *c = contexts;
+        }
+    }
+    ready::settle(repo, number, &mut pr).await;
     Ok(pr)
 }
 
-/// The PR for the branch checked out in `dir`, or why there is none, in
-/// words for the person.
+/// The PR for the branch checked out in `dir`, else the branch's own CI
+/// on GitHub (`ready::branch_ci`), or why there is neither, in words for
+/// the person.
 pub async fn for_dir(dir: &Path) -> Result<Value, String> {
     let found = github::branch_pr(dir, SOURCE)
         .await
         .map_err(|e| e.to_string())?;
-    let Some((repo, pr)) = found else {
-        let branch = crate::tabs::git::locate(dir)
-            .map(|p| p.branch)
-            .unwrap_or_else(|| "no branch".into());
-        return Err(format!(
-            "No PR for this branch ({branch}). Push it and open one, then M-v again."
-        ));
+    let read = match found {
+        Some((repo, pr)) => by_number(&repo, pr.number, SOURCE)
+            .await
+            .map_err(|e| e.to_string())?,
+        None => ready::branch_ci(dir).await?,
     };
-    by_number(&repo, pr.number, SOURCE)
-        .await
-        .map_err(|e| e.to_string())
+    Ok(read)
 }
 
 /// The PR view: the last copy at once, then the PR read again, and again
@@ -529,7 +736,17 @@ pub fn main(dir: PathBuf) -> ExitCode {
         let dir = dir.clone();
         move || cache_file(&dir)
     };
-    let read = move || util::block_on(for_dir(&dir));
+    // The read as the view opens asks mission control's PR views to look
+    // again too, as M-m's answer did, so they agree with it; the reads
+    // after it don't, since the lookups' own answers ask for most of them.
+    let first = std::sync::atomic::AtomicBool::new(true);
+    let read = move || {
+        let read = util::block_on(for_dir(&dir));
+        if first.swap(false, std::sync::atomic::Ordering::Relaxed) && read.is_ok() {
+            util::append_quietly(paths::state_dir().join("github"), "\n");
+        }
+        read
+    };
     pager::run_following(initial, follow::start(cached, file, read, content))
 }
 
@@ -749,5 +966,194 @@ mod tests {
         );
         let draft = json!({ "number": 3, "title": "T", "isDraft": true, "state": "OPEN", "author": null, "body": null });
         assert!(markdown(&draft).starts_with("# T #3\n\n_Draft · someone wants"));
+    }
+
+    /// `rich` as GitHub answers whether it can merge: `merge_state`, its
+    /// checks marked required or not.
+    fn merging(merge_state: &str, mergeable: &str) -> Value {
+        let mut pr = rich();
+        pr["url"] = json!("https://github.com/acme/w/pull/41");
+        pr["mergeable"] = json!(mergeable);
+        pr["mergeStateStatus"] = json!(merge_state);
+        pr["reviewDecision"] = json!("CHANGES_REQUESTED");
+        let nodes = &mut pr["last"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["nodes"];
+        nodes[0]["isRequired"] = json!(true);
+        nodes[1]["isRequired"] = json!(false);
+        nodes[2]["isRequired"] = json!(true);
+        pr
+    }
+
+    fn screen_of(pr: &Value) -> String {
+        let now = "2026-11-08T12:00:00Z".parse().unwrap();
+        pager::Pager::new(Content::Board(board(pr, now)), 130, 40)
+            .screen()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_pr_with_conflicts_says_so_in_its_head_and_offers_resolve_conflicts() {
+        let pr = merging("DIRTY", "CONFLICTING");
+        let screen = screen_of(&pr);
+        let head = screen.lines().find(|l| l.contains("#41")).unwrap();
+        assert!(
+            head.contains("Open") && head.contains("✕ Conflicts with main"),
+            "{head}"
+        );
+        assert!(
+            screen.contains(
+                "Not ready: it has merge conflicts.  required 1 of 2 passed · changes requested"
+            ),
+            "{screen}"
+        );
+        // The panel's checks, the required ones apart.
+        let required = screen.lines().find(|l| l.contains("Required")).unwrap();
+        assert!(
+            required.contains("✕ deploy") && required.contains("✓ fmt"),
+            "{required}"
+        );
+        let optional = screen.lines().find(|l| l.contains("Optional")).unwrap();
+        assert!(optional.contains("◌ test (macos)"), "{optional}");
+        let now = "2026-11-08T12:00:00Z".parse().unwrap();
+        let labels: Vec<String> = board(&pr, now)
+            .actions
+            .into_iter()
+            .map(|(l, _)| l)
+            .collect();
+        assert_eq!(labels, ["Open it on GitHub", RESOLVE, FAILING]);
+        let footer = pager::Pager::new(Content::Board(board(&pr, now)), 130, 40).frame();
+        assert!(footer.contains("view actions"), "on the footer");
+    }
+
+    #[test]
+    fn a_pr_in_the_merge_queue_shows_its_place_and_a_clean_one_says_it_can_merge() {
+        let mut queued = merging("CLEAN", "MERGEABLE");
+        queued["mergeQueueEntry"] = json!({ "state": "AWAITING_CHECKS", "position": 2 });
+        let screen = screen_of(&queued);
+        assert!(screen.contains("▲ In the merge queue"), "{screen}");
+        assert!(
+            screen.contains("In the merge queue at position 2.  waiting on the queue's checks"),
+            "{screen}"
+        );
+        let mut clean = merging("CLEAN", "MERGEABLE");
+        clean["reviewDecision"] = json!("APPROVED");
+        let screen = screen_of(&clean);
+        assert!(screen.contains("✓ Ready to merge"), "{screen}");
+        assert!(
+            screen.contains("Ready to merge.  no conflicts · required checks passing · approved"),
+            "{screen}"
+        );
+        let now = "2026-11-08T12:00:00Z".parse().unwrap();
+        let labels: Vec<String> = board(&clean, now)
+            .actions
+            .into_iter()
+            .map(|(l, _)| l)
+            .collect();
+        assert!(!labels.iter().any(|l| l == RESOLVE), "{labels:?}");
+        // A copy kept before it was asked whether it can merge has no verdict.
+        assert!(!screen_of(&rich()).contains("Ready to merge"));
+    }
+
+    #[test]
+    fn a_branch_with_no_pr_shows_its_ci_and_how_this_tab_stands() {
+        let copy = json!({
+            "noPr": true, "owner": "acme", "name": "w", "branch": "notes-bench",
+            "complete": true, "local": { "ahead": 1 }, "defaultBranch": "main", "aheadOfDefault": 4,
+            "checks": { "commits": { "nodes": [{ "commit": { "oid": "3fa91c2aaaa", "statusCheckRollup": { "contexts": {
+                "checkRunCountsByState": [{ "state": "SUCCESS", "count": 1 }, { "state": "FAILURE", "count": 1 }],
+                "statusContextCountsByState": [],
+                "nodes": [
+                    { "__typename": "CheckRun", "name": "fmt", "status": "COMPLETED", "conclusion": "SUCCESS" },
+                    { "__typename": "CheckRun", "name": "test (macos)", "status": "COMPLETED", "conclusion": "FAILURE", "title": "tests::redraw_large failed" }
+                ]
+            } } } }] } }
+        });
+        let pager = pager::Pager::new(Content::Board(branch_board(&copy)), 130, 20);
+        let screen = pager.screen().join("\n");
+        for want in [
+            "No PR",
+            "✕ CI failing",
+            "notes-bench  4 commits ahead of main",
+            "Failing: 1 of 2.  CI on notes-bench at 3fa91c2 · this tab is 1 commit ahead of what GitHub checked",
+            "✓ fmt",
+            "✕ test (macos)",
+            "tests::redraw_large failed",
+        ] {
+            assert!(screen.contains(want), "{want:?} in:\n{screen}");
+        }
+        let labels: Vec<String> = branch_board(&copy)
+            .actions
+            .into_iter()
+            .map(|(l, _)| l)
+            .collect();
+        assert_eq!(labels, ["Open it on GitHub", FAILING]);
+        // A pushed branch with no checks is still on GitHub.
+        let mut quiet = copy.clone();
+        quiet["checks"]["commits"]["nodes"][0]["commit"]["statusCheckRollup"] = Value::Null;
+        let labels: Vec<String> = branch_board(&quiet)
+            .actions
+            .into_iter()
+            .map(|(l, _)| l)
+            .collect();
+        assert_eq!(labels, ["Open it on GitHub"]);
+        assert!(markdown(&copy).contains("**Failing: 1 of 2.**"));
+    }
+
+    #[test]
+    fn m_opens_the_menu_and_its_choices_go_to_the_workspace() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let key = |c: KeyCode| KeyEvent::new(c, KeyModifiers::NONE);
+        let now = "2026-11-08T12:00:00Z".parse().unwrap();
+        let pr = merging("DIRTY", "CONFLICTING");
+        let mut pager = pager::Pager::new(Content::Board(board(&pr, now)), 130, 40);
+        assert_eq!(pager.key(key(KeyCode::Char('m'))), pager::Act::Redraw);
+        assert!(pager.menu_open());
+        let drawn = pager.frame_with_menu();
+        assert!(
+            drawn.contains("PR #41") && drawn.contains(RESOLVE),
+            "the menu drawn"
+        );
+        // Opened on what it offers now, /resolve-conflicts first.
+        assert_eq!(
+            pager.key(key(KeyCode::Enter)),
+            pager::Act::Press(super::super::Command::ResolveConflicts.name().into())
+        );
+        assert!(!pager.menu_open());
+        pager.key(key(KeyCode::Char('m')));
+        pager.key(key(KeyCode::Down));
+        assert_eq!(
+            pager.key(key(KeyCode::Enter)),
+            pager::Act::Press(super::super::Command::FailingChecks.name().into())
+        );
+        pager.key(key(KeyCode::Char('m')));
+        assert_eq!(pager.key(key(KeyCode::Esc)), pager::Act::Redraw);
+        assert!(!pager.menu_open(), "Esc closes it");
+        // A ticket's board has no menu.
+        let mut plain = pager::Pager::new(
+            Content::Markdown {
+                text: "x".into(),
+                place: String::new(),
+            },
+            80,
+            10,
+        );
+        assert_eq!(plain.key(key(KeyCode::Char('m'))), pager::Act::Same);
+        // With UX 2.0 off, the PR's Markdown has the same menu.
+        let menued = board(&pr, now);
+        let mut md = pager::Pager::new(
+            Content::MarkdownMenu {
+                text: markdown(&pr),
+                place: String::new(),
+                title: menued.title,
+                actions: menued.actions,
+            },
+            80,
+            20,
+        );
+        assert!(md.frame().contains("view actions"), "on its prompt line");
+        md.key(key(KeyCode::Char('m')));
+        assert_eq!(
+            md.key(key(KeyCode::Enter)),
+            pager::Act::Press(super::super::Command::ResolveConflicts.name().into())
+        );
     }
 }

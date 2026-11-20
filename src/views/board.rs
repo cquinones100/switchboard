@@ -57,6 +57,21 @@ pub struct Board {
     pub place: String,
     /// The footer's keys and what each does.
     pub keys: Vec<(String, String)>,
+    /// What its menu (`m`) offers besides reading it again, each option's
+    /// words and what it does; none, no menu.
+    pub actions: Vec<(String, Do)>,
+    /// The menu's title: what the board shows ("PR #41").
+    pub title: String,
+}
+
+/// What an option of a board's menu does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Do {
+    /// Opens a link in the browser, the view staying open.
+    Open(String),
+    /// Runs one of the workspace's actions as its key would, in the view's
+    /// tab (`switchboard press <name>`).
+    Press(String),
 }
 
 /// One piece of a board's column or panel.
@@ -886,6 +901,8 @@ mod tests {
             panel: Vec::new(),
             place: String::new(),
             keys: Vec::new(),
+            actions: Vec::new(),
+            title: String::new(),
         };
         assert_eq!(board.wanted(""), vec![Wanted::Photo(who.clone())]);
         let before = lay_out(&parts, 40, "", None, &Look::default());

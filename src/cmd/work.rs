@@ -1197,7 +1197,7 @@ impl Server {
     /// untrusted first, off the server's task, then a tab running Claude
     /// with `/review-pr <number>` in the main clone `repo`, nothing of the
     /// worktree's loaded, while the tab is about the worktree (`TAB_DIR`):
-    /// named, colored and given its PR from it, and M-v, M-m and M-d there
+    /// named, colored and given its PR from it, and M-v and M-d there
     /// show the PR's. It is named "Review PR" and the PR's `title` from the
     /// list it was picked from, without control characters; a number typed
     /// that isn't in the list has no title, so just "Review PR".

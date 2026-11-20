@@ -292,6 +292,7 @@ pub enum UiEvent {
         client: ClientId,
         tab: crate::mux::TabId,
         shown: Vec<pictures::Shown>,
+        before_after: bool,
     },
 }
 
