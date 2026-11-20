@@ -839,7 +839,7 @@ impl App {
         // With a story told in chapters, its two views first, the one
         // shown chosen as the menu opens.
         if self.mapped() {
-            for (label, mode) in super::reading::MENU {
+            for (label, mode) in self.views() {
                 choices.push(Choice::Mode(mode));
                 options.push(MenuOption::new(label));
             }

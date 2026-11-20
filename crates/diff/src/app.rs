@@ -22,6 +22,12 @@
 //! beside the file view (app/reading.rs): `g m` and `g f` switch between
 //! the two, and `m` asks which.
 //!
+//! With diff_story_talk on as well, it opens on the story told as a talk,
+//! read outside in (app/talk.rs): the gist and one example from the
+//! change's tests, the flow it takes, each step on a slide, then the
+//! code, `−` and `+` zooming, `←` and `→` between the slides; `g t` shows
+//! it from the other views.
+//!
 //! `ga` asks Haiku a question about the change (ask.rs): a box to type it
 //! in, then a window on the right half with the answer streamed in.
 //!
@@ -109,6 +115,7 @@ mod own;
 mod page;
 mod reading;
 mod select;
+mod talk;
 mod trail;
 mod width;
 
@@ -199,6 +206,9 @@ pub struct Options {
     /// The story told in chapters, with a Story view beside the files
     /// (diff_story_map, with diff_story).
     pub map: bool,
+    /// The story told in chapters opens as a talk, the Talk view first in
+    /// the switch (diff_story_talk, with diff_story_map).
+    pub talk: bool,
     /// The mode used last and the pages read are kept between runs;
     /// off in the tests.
     pub keep: bool,
@@ -239,6 +249,7 @@ impl Options {
             scroll_bars: on("scroll_bars"),
             alone: crate::host::is_alone(),
             map: story && on("diff_story_map"),
+            talk: story && on("diff_story_map") && on("diff_story_talk"),
             keep: true,
             menu_mouse: on("menu_mouse"),
             resize: on("diff_list_resize"),
@@ -613,12 +624,12 @@ pub const KEYS: &[(&str, &[KeyRow])] = &[
             ),
             key_row("yS", "copy the story as Markdown"),
             key_row(
-                "gs gm gf",
-                "the story view, the story's map, and the page being read in the file view",
+                "gt gs gm gf",
+                "the talk, the story view, the story's map, and the page being read in the file view",
             ),
             key_row(
                 "m",
-                "the view's menu: the story, the map or the files, Tell it again",
+                "the view's menu: the talk, the story, the map or the files, Tell it again",
             ),
             ask_row("ga", "ask Claude about the diff"),
             key_row(
@@ -654,6 +665,25 @@ pub const KEYS: &[(&str, &[KeyRow])] = &[
                 "select lines of the column: y then copies their text",
             ),
             key_row("gf", "the page being read in the file view"),
+        ],
+    ),
+    (
+        "M-d: the talk",
+        &[
+            key_row("- +", "zoom out and in: Gist, Flow, Steps, Code"),
+            key_row(
+                "← → [ ]",
+                "the slide before, the one after (from the gist, the first step)",
+            ),
+            key_row(
+                "h l",
+                "along the flow at Gist and Flow, a slide at a time at Steps and Code",
+            ),
+            key_row("j k", "a step down Flow's list, or scroll"),
+            key_row("↵", "a step's slide, or its change in the files"),
+            key_row("n", "a slide's notes: Decided, Instead and Watch"),
+            key_row("t", "the example's test, in the files"),
+            key_row("tab", "the zoom's switch, then the slides' dots"),
         ],
     ),
     (
@@ -845,6 +875,8 @@ pub struct App {
     /// Where each thing of the Story view a click lands on was last
     /// drawn, and the one under the mouse.
     hits: Vec<(Hit, Rect)>,
+    /// The Talk view's own state (talk.rs).
+    talker: talk::Talker,
     lit: Option<Hit>,
     /// What of the Story view a press landed on that was already chosen,
     /// done once the mouse is let go with nothing dragged over, and
@@ -1058,6 +1090,7 @@ impl App {
             read: HashSet::new(),
             retelling: false,
             hits: Vec::new(),
+            talker: talk::Talker::default(),
             lit: None,
             open_on_up: None,
             up_at: (0, 0),
@@ -1874,6 +1907,7 @@ impl App {
         // The shape it is told in, from the settings read fresh above, so
         // the view showing it agrees with what is asked.
         self.opts.map = self.opts.story && settings::is_on("diff_story_map");
+        self.opts.talk = self.opts.map && settings::is_on("diff_story_talk");
         // Both ways it may be told, so a setting changed since the story
         // was told finds no other kept in its place.
         tell::forget(&key);
@@ -1924,7 +1958,8 @@ impl App {
         self.read_view();
     }
 
-    fn told_now(&mut self, story: Story) {
+    fn told_now(&mut self, mut story: Story) {
+        self.check_example(&mut story);
         if let Some(missed) = story::missed_text(&story) {
             self.say(format!("{missed}."));
         }
@@ -2096,7 +2131,7 @@ impl App {
     fn diff_area(&self) -> Rect {
         // The Story view's outline is where the list is; the map takes
         // the whole width.
-        let x = if self.on_map() {
+        let x = if self.on_map() || self.on_talk() {
             0
         } else {
             self.list_cols() + 1
@@ -2885,6 +2920,12 @@ impl App {
             return Act::Same;
         }
         let count = self.count.take().unwrap_or(1).max(1);
+        // The talk has the keys while it is on the screen.
+        if self.on_talk()
+            && let Some(act) = self.talk_key(key)
+        {
+            return act;
+        }
         // The map has the keys while it is on the screen.
         if self.on_map()
             && let Some(act) = self.map_key(key)
@@ -3017,8 +3058,11 @@ impl App {
         let count = self.count.take().unwrap_or(1);
         // The map has no file or line under a cursor: its pairs are the
         // views', the story's copy and a question.
-        if self.on_map() {
+        if self.on_map() || self.on_talk() {
             match (first, c) {
+                ('g', 't') => self.open_talk_view(),
+                ('g', 'm') if self.on_talk() => self.open_map_view(),
+                ('g', 'g') if self.on_talk() => self.talker.top = 0,
                 ('g', 'f') => self.show_files(false),
                 ('g', 's') => self.open_story_view(),
                 ('y', 'S') => self.copy_story(),
@@ -3035,6 +3079,7 @@ impl App {
             return Act::Redraw;
         }
         match (first, c) {
+            ('g', 't') => self.open_talk_view(),
             ('g', 'm') => self.open_map_view(),
             ('g', 's') => self.open_story_view(),
             ('g', 'f') => self.show_files(false),
@@ -4130,6 +4175,7 @@ impl App {
         let opts = Options {
             story: false,
             map: false,
+            talk: false,
             pages_alone: false,
             progress: false,
             notes: false,
@@ -5207,8 +5253,29 @@ impl App {
             {
                 return Act::Same;
             }
+            // Sideways, Shift with the wheel or a trackpad's own: the
+            // talk's flow, the map and What runs where they are wider
+            // than their pane.
+            MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {
+                let right = m.kind == MouseEventKind::ScrollRight;
+                return if self.scroll_sideways(right, (x, y)) {
+                    Act::Redraw
+                } else {
+                    Act::Same
+                };
+            }
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
+                if m.modifiers.contains(KeyModifiers::SHIFT)
+                    && self.scroll_sideways(m.kind == MouseEventKind::ScrollDown, (x, y)) =>
+            {
+                return Act::Redraw;
+            }
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
                 let down = m.kind == MouseEventKind::ScrollDown;
+                if self.on_talk() && self.answer.is_none() && self.ask_box.is_none() {
+                    self.talk_wheel(down);
+                    return Act::Redraw;
+                }
                 // Over the map, the wheel reads on from the goal down.
                 if self.on_map() && self.answer.is_none() && self.ask_box.is_none() {
                     self.map_step(if down { 1 } else { -1 });
@@ -5636,6 +5703,11 @@ impl App {
                         _ => {}
                     }
                     self.read_if_reading();
+                    return Act::Redraw;
+                }
+                // In the talk the page and chapter buttons turn the slides.
+                if self.on_talk() && matches!(keys, "]c" | "[c" | "]p" | "[p") {
+                    self.slide_step(if keys.starts_with(']') { 1 } else { -1 });
                     return Act::Redraw;
                 }
                 let mut act = Act::Same;
@@ -6077,6 +6149,7 @@ mod tests {
             scroll_bars: false,
             alone: false,
             map: true,
+            talk: false,
             keep: false,
             menu_mouse: true,
             pointer: false,
@@ -8075,6 +8148,8 @@ mod tests {
         match token {
             "esc" => vec![KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)],
             "tab" => vec![KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)],
+            "←" => vec![KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)],
+            "→" => vec![KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)],
             "↵" => vec![KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)],
             "⇧↵" => vec![KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT)],
             "S-F10" => vec![KeyEvent::new(KeyCode::F(10), KeyModifiers::SHIFT)],
@@ -8339,6 +8414,10 @@ mod tests {
                     press(&mut app, "gm");
                 }
                 "M-d: the story view" => app = map_app(),
+                "M-d: the talk" => {
+                    app = talk_app();
+                    press(&mut app, "++");
+                }
                 "M-d: the cover while the story is told" => {
                     app.telling = Telling::Waiting;
                     app.cover = Some(Instant::now());
@@ -8377,8 +8456,8 @@ mod tests {
             .flat_map(|(_, rows)| rows.into_iter().map(|(k, _)| k))
             .collect();
         assert!(!without.contains(&"ga".to_string()));
-        assert_eq!(key_groups(false).len(), 4);
-        assert_eq!(key_groups(true).len(), 6);
+        assert_eq!(key_groups(false).len(), 5);
+        assert_eq!(key_groups(true).len(), 7);
     }
 
     #[test]
@@ -8873,6 +8952,502 @@ mod tests {
 
     fn enter(app: &mut App) {
         app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    }
+
+    /// `MAP_ANSWER` told as a talk: its example from the change's test of
+    /// the count, which passes through the page, the count and the store
+    /// and not the topics, a margin note on the count's first line.
+    const TALK_ANSWER: &str = r#"{"before": "The event page lists signups as a table.", "after": "A map shows signups by ZIP code.",
+      "gist": "Show signups on the event page as a map, counted on the server.",
+      "example": {"file": "src/count.test.rs", "test": "counts", "name": "event 42",
+                  "input": "Event 42 has 23 signups in three ZIP codes, listed as a table.", "output": "The page shows a map of three counts."},
+      "chapters": [
+        {"chapter": "Signups map", "kind": "main", "pages": [
+            {"id": "c1", "title": "Store each outline", "claim": "Outlines are stored once.", "how": "store_outline keeps each ZIP's outline.",
+             "why": "The map needs outlines kept.", "decided": "Store each outline once.", "instead": "of fetching it on each view.", "watch": "An outline of no points.",
+             "passes": true, "value": "outline kept", "goal": false, "needs": [], "hunks": [{"id": "src/store.rs#1", "note": ""}], "files": []},
+            {"id": "c2", "title": "Count the signups", "how": "count_signups counts each ZIP's signups.", "why": "The map shows counts.",
+             "passes": true, "value": "23 rows → 3 counts", "closely": "the fold at zero", "goal": false, "needs": ["c1"],
+             "hunks": [{"id": "src/count.rs#1", "note": ""}, {"id": "src/count.test.rs#1", "note": ""}], "files": []},
+            {"id": "c3", "title": "Draw the topics", "why": "Topics get a callout.", "passes": false, "value": "", "goal": false, "needs": ["c1"],
+             "hunks": [{"id": "src/topics.rs#1", "note": ""}], "files": []},
+            {"id": "c4", "title": "Wire the page", "why": "The page shows both.", "passes": true, "value": "the map shows", "goal": true, "needs": ["c2", "c3"],
+             "hunks": [{"id": "src/page.rs#1", "note": ""}], "files": []}
+        ]},
+        {"chapter": "Side work", "kind": "side", "pages": [
+            {"id": "c5", "title": "Format the helpers", "why": "Spacing only.", "goal": true, "needs": [], "hunks": [{"id": "src/fmt.rs#1", "note": ""}], "files": []}
+        ]}
+      ],
+      "runs": [{"step": "page()", "page": "c4"}, {"step": "count_signups", "page": "c2"}, {"step": "store_outline", "page": "c1"}, {"step": "topics", "page": "c3"}],
+      "margins": [{"hunk": "src/count.rs#1", "line": "pub fn count_signups() -> usize {", "note": "the count every step after this one reads, one row per ZIP code"}],
+      "skip": ["formatting in 1 file"]}"#;
+
+    fn talk_app_told(answer: &str) -> App {
+        map_app_told(
+            Options {
+                ux2: true,
+                talk: true,
+                ..opts()
+            },
+            answer,
+        )
+    }
+
+    fn talk_app() -> App {
+        talk_app_told(TALK_ANSWER)
+    }
+
+    fn key(app: &mut App, code: KeyCode) {
+        app.key(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    /// The foreground of the cell `dx` columns from where `text` starts
+    /// on row `dy` from its own.
+    fn fg_near(app: &mut App, text: &str, dx: isize, dy: isize) -> Option<Color> {
+        let shown = screen(app);
+        let y = line_with(&shown, text);
+        let x = shown[y]
+            .chars()
+            .collect::<Vec<char>>()
+            .windows(text.chars().count())
+            .position(|w| w.iter().collect::<String>() == text)?;
+        let buf = draw(app);
+        let (x, y) = ((x as isize + dx) as u16, (y as isize + dy) as u16);
+        buf[(x, y)].style().fg
+    }
+
+    #[test]
+    fn with_the_talk_on_m_d_opens_on_its_gist_the_example_s_cards_and_its_path_lit() {
+        let mut app = talk_app();
+        assert!(app.on_talk());
+        assert_eq!(app.talker.zoom, talk::Zoom::Gist);
+        let shown = screen(&mut app);
+        let row = |text: &str| line_with(&shown, text);
+        assert!(shown[0].contains("Zoom − ") && shown[0].contains("Gist"));
+        assert!(
+            shown[0].trim_end().ends_with("slide 1 of 5"),
+            "{:?}",
+            shown[0]
+        );
+        assert!(row("THE GIST") < row("Show signups on the event page as a map"));
+        assert!(shown[row("ONE EXAMPLE")].contains("from src/count.test.rs · \"counts\""));
+        // The example's cards side by side, Before its input, After what
+        // the test expects.
+        assert!(shown[row("╭─ Before")].contains("╭─ After"));
+        assert!(shown[row("Event 42 has 23 signups")].contains("The page shows a map"));
+        assert!(shown[row("HOW IT GETS THERE")].contains("following event 42"));
+        // The path the example takes, left to right, each value over the
+        // arrow after its step; the step off it named apart.
+        let flow = row("page()");
+        assert!(shown[flow].find("page()") < shown[flow].find("count_signups"));
+        assert!(shown[flow].find("count_signups") < shown[flow].find("store_outline"));
+        assert!(shown[flow - 1].contains("23 rows → 3 counts"));
+        assert!(shown[flow + 1].contains("step 2") && shown[flow + 1].contains("new"));
+        assert!(!shown[flow].contains("topics"));
+        assert!(shown[row("Off this example's path")].contains("topics (step 3, Draw the topics)"));
+        assert!(shown[row("Folded, needing no reading")].contains("formatting in 1 file"));
+        assert!(shown[row("starts the talk at step 4")].contains("zooms in to the flow"));
+        assert!(shown[row("Slides ")].contains("Slides ● ○ ○ ○ ○"));
+        // The steps it passes lit in the accent.
+        let accent = Tone::Accent.style(&app.theme()).fg;
+        assert_eq!(fg_near(&mut app, "count_signups", 0, -1), accent);
+        assert_eq!(app.views()[0], ("Talk", Mode::Talk));
+    }
+
+    #[test]
+    fn a_talk_with_no_example_says_so_and_lights_no_step() {
+        let answer = TALK_ANSWER.replacen(
+            r#""example": {"file": "src/count.test.rs""#,
+            r#""example": null, "was": {"file": "src/count.test.rs""#,
+            1,
+        );
+        let mut app = talk_app_told(&answer);
+        assert_eq!(app.story.as_ref().unwrap().example, None);
+        let shown = screen(&mut app);
+        assert!(shown.iter().any(|l| l.contains("NO EXAMPLE")));
+        assert!(shown.iter().any(|l| l.contains("rather than make one up")));
+        assert!(!shown.iter().any(|l| l.contains("ONE EXAMPLE")));
+        assert!(!shown.iter().any(|l| l.contains("23 rows")), "no values");
+        // Every step drawn, none lit, nothing named off a path.
+        let flow = line_with(&shown, "page()");
+        assert!(shown[flow].contains("topics"));
+        assert!(!shown.iter().any(|l| l.contains("Off this example's path")));
+        let border = Some(kit::border(&app.theme()));
+        assert_eq!(fg_near(&mut app, "count_signups", 0, -1), border);
+    }
+
+    #[test]
+    fn an_example_whose_test_the_change_doesn_t_show_is_none() {
+        // A changed file that holds no such test: made up, so left out.
+        let answer = TALK_ANSWER.replacen(
+            r#""file": "src/count.test.rs", "test": "counts""#,
+            r#""file": "src/page.rs", "test": "renders the map""#,
+            1,
+        );
+        let mut app = talk_app_told(&answer);
+        assert_eq!(app.story.as_ref().unwrap().example, None);
+        assert!(screen(&mut app).iter().any(|l| l.contains("NO EXAMPLE")));
+        // A file of tests whose test's name the hunks don't show (an
+        // edited test, its name past the context): kept.
+        let edited =
+            TALK_ANSWER.replacen(r#""test": "counts""#, r#""test": "counts far above""#, 1);
+        assert!(
+            talk_app_told(&edited)
+                .story
+                .as_ref()
+                .unwrap()
+                .example
+                .is_some()
+        );
+        // Its own test, named on a line the change adds: kept.
+        assert!(talk_app().story.as_ref().unwrap().example.is_some());
+    }
+
+    #[test]
+    fn a_step_clicked_in_a_slide_s_flow_opens_its_slide() {
+        let mut app = talk_app();
+        app.resize(140, 40);
+        key(&mut app, KeyCode::Right);
+        assert_eq!(app.talk_page(), 4);
+        screen(&mut app);
+        let r = app
+            .hits
+            .iter()
+            .find(|(h, _)| *h == Hit::Talk(talk::TalkHit::Step(2)))
+            .map(|(_, r)| *r)
+            .unwrap();
+        mouse(&mut app, MouseEventKind::Down(MouseButton::Left), r.x, r.y);
+        assert_eq!((app.talker.zoom, app.talk_page()), (talk::Zoom::Steps, 2));
+    }
+
+    #[test]
+    fn the_talk_s_brackets_buttons_t_and_back_stay_in_the_talk() {
+        let mut app = talk_app();
+        // ]c from habit turns a slide and opens no commits.
+        press(&mut app, "]c");
+        assert!(app.on_talk() && app.history.is_none());
+        assert_eq!(app.talker.slide, 1);
+        // An arrow turning a slide is a jump H goes back through.
+        key(&mut app, KeyCode::Right);
+        assert_eq!(app.talker.slide, 2);
+        press(&mut app, "H");
+        assert_eq!(app.talker.slide, 1);
+        // No list edge to drag under the talk.
+        screen(&mut app);
+        assert!((0..app.cols).all(|x| !app.on_edge(x, 10)));
+        // t shows the example's test in the files.
+        press(&mut app, "t");
+        assert_eq!(app.mode, Mode::Files);
+        assert_eq!(
+            app.current().map(|e| e.path.as_str()),
+            Some("src/count.test.rs")
+        );
+    }
+
+    #[test]
+    fn what_runs_moves_sideways_only_over_itself_and_while_wider_than_its_pane() {
+        let mut app = map_app();
+        app.go_to_section(1);
+        screen(&mut app);
+        let swipe = |app: &mut App, row: u16| {
+            app.mouse(MouseEvent {
+                kind: MouseEventKind::ScrollRight,
+                column: 60,
+                row,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        // Its three steps fit: a swipe over it moves nothing.
+        assert_eq!(swipe(&mut app, 2), Act::Same);
+        assert_eq!(app.reader.runs_first, None);
+        // Narrow, they don't: over it they move, over the column or the
+        // outline not.
+        app.resize(70, 40);
+        screen(&mut app);
+        assert_eq!(swipe(&mut app, 20), Act::Same);
+        assert_eq!(
+            app.mouse(MouseEvent {
+                kind: MouseEventKind::ScrollRight,
+                column: 2,
+                row: 2,
+                modifiers: KeyModifiers::NONE,
+            }),
+            Act::Same
+        );
+        assert_eq!(swipe(&mut app, 2), Act::Redraw);
+        assert!(app.reader.runs_first.is_some());
+        screen(&mut app);
+        // Reading another page lets go of the move.
+        press(&mut app, "]");
+        screen(&mut app);
+        assert_eq!(app.reader.runs_first, None);
+    }
+
+    #[test]
+    fn plus_and_minus_zoom_through_the_talk_and_the_arrows_go_between_slides() {
+        let mut app = talk_app();
+        press(&mut app, "+");
+        assert_eq!(app.talker.zoom, talk::Zoom::Flow);
+        let shown = screen(&mut app);
+        assert!(shown[0].trim_end().ends_with("4 steps"));
+        let row = |text: &str| line_with(&shown, text);
+        assert!(row("1  Store each outline") < row("2  Count the signups"));
+        assert!(shown[row("2  Count the signups")].contains("⚑ read closely: the fold at zero"));
+        // The example's value there, beside How where the pane holds both.
+        assert!(shown[row("How  store_outline keeps")].contains("event 42  outline kept"));
+        assert!(row("Ex   event 42  23 rows → 3 counts") > row("How  count_signups counts"));
+        // The pages that only test aren't steps of their own: none here.
+        assert!(row("4  Wire the page") > row("3  Draw the topics"));
+        // In to the first slide along the example's path: the page.
+        press(&mut app, "+");
+        assert_eq!((app.talker.zoom, app.talker.slide), (talk::Zoom::Steps, 1));
+        let shown = screen(&mut app);
+        assert!(shown.iter().any(|l| l.contains("Step 4 of 4")));
+        assert!(shown.iter().any(|l| l.contains("THE FLOW")));
+        press(&mut app, "+");
+        assert_eq!(app.talker.zoom, talk::Zoom::Code);
+        press(&mut app, "+");
+        assert_eq!(app.talker.zoom, talk::Zoom::Code, "Code is the closest");
+        // → and ← between the slides, at the zoom read.
+        key(&mut app, KeyCode::Right);
+        assert_eq!((app.talker.slide, app.talk_page()), (2, 2));
+        assert_eq!(app.talker.zoom, talk::Zoom::Code);
+        let shown = screen(&mut app);
+        assert!(
+            shown
+                .iter()
+                .any(|l| l.contains("Step 2 of 4   Count the signups"))
+        );
+        // Code shows the test the example comes from, its case lit.
+        let test = line_with(&shown, "the example's test");
+        let case = test + 1 + line_with(&shown[test + 1..], "fn counts() {");
+        assert!(shown[case].contains("◀ event 42, in and out"));
+        assert!(shown[test].starts_with(" src/count.test.rs"));
+        press(&mut app, "-");
+        assert_eq!((app.talker.zoom, app.talker.slide), (talk::Zoom::Steps, 2));
+        press(&mut app, "-");
+        assert_eq!((app.talker.zoom, app.talker.slide), (talk::Zoom::Flow, 0));
+        assert_eq!(app.talker.at, 2, "the step left chosen on the flow");
+        press(&mut app, "-");
+        assert_eq!(app.talker.zoom, talk::Zoom::Gist);
+        // From the gist → starts the talk, and ← from its first slide
+        // comes back.
+        key(&mut app, KeyCode::Right);
+        assert_eq!((app.talker.zoom, app.talker.slide), (talk::Zoom::Steps, 1));
+        key(&mut app, KeyCode::Left);
+        assert_eq!((app.talker.zoom, app.talker.slide), (talk::Zoom::Gist, 0));
+        // The slides go along the example's path, then the step off it.
+        let story = app.story.clone().unwrap();
+        assert_eq!(talk::slides(&story), [4, 2, 1, 3]);
+        // A click on a dot, and on a zoom of the switch.
+        app.lit = None;
+        screen(&mut app);
+        let dot = app
+            .hits
+            .iter()
+            .find(|(h, _)| *h == Hit::Talk(talk::TalkHit::Dot(3)))
+            .map(|(_, r)| *r)
+            .unwrap();
+        mouse(
+            &mut app,
+            MouseEventKind::Down(MouseButton::Left),
+            dot.x,
+            dot.y,
+        );
+        assert_eq!((app.talker.slide, app.talk_page()), (3, 1));
+        let flow = app
+            .hits
+            .iter()
+            .find(|(h, _)| *h == Hit::Talk(talk::TalkHit::Zoom(talk::Zoom::Flow)))
+            .map(|(_, r)| *r)
+            .unwrap();
+        mouse(
+            &mut app,
+            MouseEventKind::Down(MouseButton::Left),
+            flow.x,
+            flow.y,
+        );
+        assert_eq!((app.talker.zoom, app.talker.slide), (talk::Zoom::Flow, 0));
+        // The switch clicked has Tab's focus; Tab goes on to the dots and
+        // back to what is read.
+        assert_eq!(app.talker.part, talk::Part::Zoom);
+        key(&mut app, KeyCode::Tab);
+        assert_eq!(app.talker.part, talk::Part::Slides);
+        key(&mut app, KeyCode::Tab);
+        assert_eq!(app.talker.part, talk::Part::Content);
+    }
+
+    #[test]
+    fn a_narrow_talk_stacks_the_cards_puts_a_margin_note_under_its_line_and_scrolls_its_flow() {
+        let mut app = talk_app();
+        app.resize(80, 40);
+        let shown = screen(&mut app);
+        assert!(!shown[line_with(&shown, "╭─ Before")].contains("After"));
+        assert!(line_with(&shown, "╭─ After") > line_with(&shown, "╭─ Before"));
+        // The step with the note, at 100 columns: under its line, ◀ first.
+        app.resize(100, 40);
+        app.talk_page();
+        key(&mut app, KeyCode::Right);
+        key(&mut app, KeyCode::Right);
+        assert_eq!(app.talk_page(), 2);
+        let shown = screen(&mut app);
+        let line = line_with(&shown, "pub fn count_signups() -> usize {");
+        assert!(!shown[line].contains("◀"));
+        assert!(
+            shown[line + 1]
+                .trim_start()
+                .starts_with("◀ the count every step")
+        );
+        // Wide enough, beside it.
+        app.resize(200, 40);
+        let shown = screen(&mut app);
+        let line = line_with(&shown, "pub fn count_signups() -> usize {");
+        assert!(shown[line].contains("◀ the count every step after this one reads"));
+        // The flow wider than a narrow pane: a scroll bar under it, and l
+        // onto a step out of sight brings it in.
+        app.resize(50, 40);
+        key(&mut app, KeyCode::Left);
+        key(&mut app, KeyCode::Left);
+        assert_eq!(app.talker.zoom, talk::Zoom::Gist);
+        let shown = screen(&mut app);
+        let bar = line_with(&shown, "━");
+        assert!(bar > line_with(&shown, "page()"));
+        let in_sight = |app: &mut App, n: usize| {
+            screen(app);
+            app.hits
+                .iter()
+                .any(|(h, r)| *h == Hit::Talk(talk::TalkHit::Step(n)) && r.right() <= 50)
+        };
+        assert!(!in_sight(&mut app, 1), "store_outline is out of sight");
+        press(&mut app, "lll");
+        assert_eq!(app.talker.at, 1);
+        assert!(in_sight(&mut app, 1));
+        // Shift with the wheel moves it back.
+        app.mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 10,
+            row: 20,
+            modifiers: KeyModifiers::SHIFT,
+        });
+        assert!(app.talker.left > 0 && app.talker.left < 45);
+    }
+
+    #[test]
+    fn with_the_talk_off_m_d_opens_as_before_and_has_no_talk() {
+        let mut app = map_app();
+        assert!(app.on_story() && !app.on_talk());
+        assert!(!app.views().iter().any(|(_, m)| *m == Mode::Talk));
+        press(&mut app, "gt");
+        assert!(app.on_story());
+        assert!(
+            app.message
+                .as_ref()
+                .is_some_and(|(text, _)| text.contains("diff_story_talk"))
+        );
+    }
+
+    #[test]
+    fn the_overview_keeps_its_prose_to_88_columns_and_a_narrow_column_to_its_width() {
+        let long = "The event page lists every signup as a table, one row for each person, so the browser gets each name and address while the organizers only ever wanted to know where people come from and how many came from each place.";
+        let answer = MAP_ANSWER
+            .replacen("The event page lists signups as a table.", long, 1)
+            .replacen(
+                "store_outline keeps each ZIP's outline; the page reads it back.",
+                "store_outline keeps each ZIP's outline in the store once, keyed by the ZIP, and the page reads it back from there for every map it draws, never fetching it again.",
+                1,
+            );
+        let mut app = map_app_told(
+            Options {
+                ux2: true,
+                ..opts()
+            },
+            &answer,
+        );
+        for cols in [250, 110] {
+            app.resize(cols, 60);
+            let shown = screen(&mut app);
+            let x0 = app.list_cols() as usize + 2;
+            let column = app.column_cols();
+            let room = column.min(88);
+            let from = line_with(&shown, "WHAT CHANGES");
+            let to = line_with(&shown, "Also in this change");
+            for line in &shown[from..to] {
+                let text: String = line.chars().skip(x0).take(column).collect();
+                assert!(
+                    width(text.trim_end()) <= room,
+                    "{cols}: {text:?} is wider than {room}"
+                );
+            }
+            // Wrapped, not cut: the last words are there.
+            let all = shown[from..to].join(" ");
+            assert!(all.contains("place."), "{cols}");
+            assert!(all.contains("again."), "{cols}");
+            if cols == 110 {
+                assert!(column < 88);
+            }
+        }
+    }
+
+    #[test]
+    fn a_map_wider_than_its_pane_scrolls_sideways_with_a_bar_and_follows_the_page_chosen() {
+        let title = |t: &str| format!("{t} across every page of the signups map");
+        let page = |id: &str, t: &str, hunk: &str, goal: bool, needs: &str| {
+            format!(
+                r#"{{"id": "{id}", "title": "{}", "why": "W.", "goal": {goal}, "needs": [{needs}], "hunks": [{{"id": "{hunk}", "note": ""}}], "files": []}}"#,
+                title(t)
+            )
+        };
+        let answer = format!(
+            r#"{{"before": "B.", "after": "A.", "chapters": [{{"chapter": "Wide", "kind": "main", "pages": [{}, {}, {}, {}, {}, {}]}}], "runs": []}}"#,
+            page(
+                "c1",
+                "Wire",
+                "src/page.rs#1",
+                true,
+                r#""c2", "c3", "c4", "c5", "c6""#
+            ),
+            page("c2", "Store", "src/store.rs#1", false, ""),
+            page("c3", "Count", "src/count.rs#1", false, ""),
+            page("c4", "Test", "src/count.test.rs#1", false, ""),
+            page("c5", "Topics", "src/topics.rs#1", false, ""),
+            page("c6", "Format", "src/fmt.rs#1", false, ""),
+        );
+        let mut app = map_app_told(
+            Options {
+                ux2: true,
+                ..opts()
+            },
+            &answer,
+        );
+        press(&mut app, "gm");
+        assert!(app.on_map());
+        let shown = screen(&mut app);
+        assert!(app.mapper.shown.0 > 200, "{:?}", app.mapper.shown);
+        assert!(shown.iter().skip(2).any(|l| l.contains('━')), "{shown:?}");
+        // Down to what the goal builds on, then l along it to the last:
+        // each brought into sight.
+        press(&mut app, "j");
+        for _ in 0..5 {
+            press(&mut app, "l");
+            screen(&mut app);
+            let at = app.mapper.at;
+            assert!(
+                app.hits
+                    .iter()
+                    .any(|(h, r)| *h == Hit::Page(at) && r.right() <= 120),
+                "page {at} out of sight"
+            );
+        }
+        // Shift with the wheel moves it back the other way.
+        let left = app.mapper.shown.2;
+        app.mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 50,
+            row: 10,
+            modifiers: KeyModifiers::SHIFT,
+        });
+        screen(&mut app);
+        assert!(app.mapper.shown.2 < left);
     }
 
     #[test]

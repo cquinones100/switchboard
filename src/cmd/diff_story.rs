@@ -53,6 +53,7 @@ fn page_options() -> app::Options {
         scroll_bars: false,
         alone: true,
         map: true,
+        talk: false,
         keep: false,
         menu_mouse: false,
         pointer: false,
