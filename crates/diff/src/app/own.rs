@@ -615,6 +615,7 @@ impl App {
         }
         self.telling = Telling::Off;
         self.cover = None;
+        self.covered = false;
         self.progress = None;
         self.story_key = None;
         self.smart.clear();

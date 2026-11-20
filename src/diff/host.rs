@@ -221,6 +221,22 @@ impl Host for Core {
                     _ => Answer::None,
                 }
             }
+            // The tab the diff's pane is in marked as needing you, which the
+            // server does only while that tab isn't in front
+            // (`Server::cmd_ready`).
+            Action::Ready { what } => {
+                let Some(pane) = std::env::var("SWITCHBOARD_PANE")
+                    .ok()
+                    .filter(|p| p.starts_with('%'))
+                else {
+                    return Answer::None;
+                };
+                let args = vec!["ready".to_string(), what];
+                match socket::ask_quiet(args, Some(pane), None) {
+                    Some((0, ..)) => Answer::Done,
+                    _ => Answer::None,
+                }
+            }
             // What Notes alone asks is answered where it is loaded
             // (src/notes/host.rs), which hands the rest on to here.
             Action::Settings { .. }

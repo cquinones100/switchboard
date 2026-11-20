@@ -892,3 +892,85 @@ fn which_note_is_the_tabs_lists_the_newest_first_as_you_type() {
         tabs(l)[0]["options"]["@tab_note"] == "Standup notes from the spring.md"
     });
 }
+
+/// The pane in a tab standing in for another, as `tool`.
+fn in_place(list: &Value, tab: usize, tool: &str) -> Option<String> {
+    tabs(list)[tab]["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["options"]["@in_place"] == tool)
+        .map(|p| p["id"].as_str().unwrap().to_string())
+}
+
+/// "Preview this note", which Notes' palette presses for the note it
+/// shows (`press preview-note <note>`), puts the note in Notes' place,
+/// drawn as the views draw Markdown, and q gives Notes back; M-p's
+/// "Preview a note…" asks which.
+#[test]
+fn preview_this_note_puts_the_note_in_notes_place_and_q_gives_notes_back() {
+    let rig = Rig::new();
+    std::fs::write(
+        rig.notes_dir().join("Plan.md"),
+        "# Plan\n\n- [ ] the first thing\n\n<!-- note-id: n-0123456789ab -->\n",
+    )
+    .unwrap();
+    let (mut client, _, notes) = notes_open(&rig);
+    client.type_text(&format!("{ALT}2"));
+    rig.wait("Notes in front", |l| tabs(l)[1]["current"] == true);
+
+    rig.server.ok(&["press", "preview-note", "Plan.md"]);
+    let list = rig.wait("the preview in Notes' place", |l| {
+        in_place(l, 1, "preview-note").is_some()
+    });
+    assert!(!pane_ids(&tabs(&list)[1]).contains(&notes), "Notes parked");
+    let screen = client.wait_text("Preview of Plan");
+    assert!(
+        screen.iter().any(|l| l.contains("the first thing")),
+        "{screen:#?}"
+    );
+    assert!(!screen.iter().any(|l| l.contains("note-id")), "{screen:#?}");
+
+    // A change to the note is drawn as it is made.
+    std::fs::write(
+        rig.notes_dir().join("Plan.md"),
+        "# Plan\n\n- [ ] the first thing\n- [ ] a second one\n",
+    )
+    .unwrap();
+    client.wait_text("a second one");
+
+    client.type_text("q");
+    rig.wait("Notes back in its place", |l| {
+        pane_ids(&tabs(l)[1]) == [notes.clone()]
+    });
+
+    // M-p's "Preview a note…" lists the notes and previews the one picked.
+    client.type_text(&format!("{ALT}p"));
+    client.wait_text("Actions");
+    client.type_text("preview a note");
+    client.wait_text("Preview a note…");
+    client.type_text("\r");
+    client.wait_text("Preview which note?");
+    client.type_text("\r");
+    rig.wait("the preview in Notes' place", |l| {
+        in_place(l, 1, "preview-note").is_some()
+    });
+    client.wait_text("Preview of Plan");
+}
+
+#[test]
+fn with_notes_preview_off_m_p_leaves_preview_a_note_out() {
+    let rig = Rig::with(json!({ "notes_preview": false }));
+    let mut client = rig.server.attach(140, 36);
+    client.wait_text("$");
+    client.type_text(&format!("{ALT}p"));
+    client.wait_text("Actions");
+    client.type_text("preview a note");
+    let screen = client.wait_for("the words typed", |s| {
+        s.iter().any(|l| l.contains("preview a note"))
+    });
+    assert!(
+        !screen.iter().any(|l| l.contains("Preview a note…")),
+        "{screen:#?}"
+    );
+}

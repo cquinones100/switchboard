@@ -66,6 +66,13 @@
     "default": true
   },
   {
+    "key": "diff_ready_needs_you",
+    "category": "Sidebar",
+    "label": "A tab whose diff finishes loading needs you",
+    "description": "A tab you left while its diff (M-d) was telling its story goes under Needs you, saying Diff ready, with a notification, once the story is told or has failed, until you go back to it; a tab in front is left alone. Off, nothing marks the tab",
+    "default": true
+  },
+  {
     "key": "sidebar_panel",
     "category": "Sidebar",
     "label": "Shade the sidebar",
@@ -97,7 +104,7 @@
     "key": "sidebar_repo_filter",
     "category": "Sidebar",
     "label": "Sidebar repository filter",
-    "description": "M-p's Filter the sidebar to a repository moves every other repository's tabs to an Other repos group at the bottom, whatever they are doing, until Show every repository's tabs clears it; the filter is kept across restarts. Off, the commands are gone and every tab is in its own group",
+    "description": "M-p's Filter the sidebar to a repository moves every other repository's tabs to an Other repos group at the bottom of the sidebar and mission control's Tabs view, whatever they are doing, until Show every repository's tabs clears it; the filter is kept across restarts. Off, the commands are gone and every tab is in its own group",
     "default": true
   },
   {
@@ -1024,6 +1031,13 @@
     "category": "Notes",
     "label": "Notes command palette",
     "description": "M-p with Notes in front lists every command Notes has, each with its key, ahead of the workspace's, as Ctrl-Shift-P does in Notes run alone; off, M-p leaves them out and Ctrl-Shift-P in Notes run alone says the palette is off",
+    "default": true
+  },
+  {
+    "key": "notes_preview",
+    "category": "Notes",
+    "label": "Preview a note read-only",
+    "description": "M-p's \"Preview a note…\" and Notes' \"Preview this note\" show a note read-only in the pane's place, drawn as GitHub draws Markdown and following the note as it changes, until q, Esc or the command again gives the pane back; off, both commands are gone",
     "default": true
   },
   {
