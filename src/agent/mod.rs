@@ -29,5 +29,5 @@ mod serve;
 pub mod sessions;
 mod state;
 
-pub use serve::SEEN_DELAY;
+pub use serve::{READY_SETTING, READY_SOURCE, SEEN_DELAY, TAB_READY};
 pub use state::{Agents, Context, Doing, Hook, PaneAgent, QUESTION_KINDS, State, Wait, WaitKind};

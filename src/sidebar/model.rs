@@ -195,6 +195,9 @@ pub struct TabModel {
     /// A reminder set on it (`@remind_at`, seconds, and `@remind_note`).
     pub remind_at: Option<i64>,
     pub remind_note: Option<String>,
+    /// What its pane finished loading while you were elsewhere ("Diff",
+    /// `@tab_ready`), under Needs you until you go to it.
+    pub ready: Option<String>,
     /// A routine's tab: when the routine runs next (`@routine_next`,
     /// seconds), for "routine · next 2:30 PM" while it is idle.
     pub routine_next: Option<i64>,
@@ -303,6 +306,7 @@ impl TabModel {
             opened: None,
             remind_at: None,
             remind_note: None,
+            ready: None,
             routine_next: None,
             autopilot: false,
             autopilot_landed: false,
@@ -391,10 +395,13 @@ pub fn reminder_later(tab: &TabModel, r: &Rules) -> bool {
     r.reminders && tab.remind_at.is_some_and(|at| at * 1000 > r.now_ms)
 }
 
-/// Whether a tab needs you: pinned, a reminder come due, or Claude waiting
-/// on you or finished there.
+/// Whether a tab needs you: pinned, a reminder come due, what it loaded
+/// ready, or Claude waiting on you or finished there.
 pub fn needs_tab(tab: &TabModel, r: &Rules) -> bool {
-    tab.pinned || reminder_due(tab, r) || matches!(tab.state, TabState::Waiting | TabState::Done)
+    tab.pinned
+        || reminder_due(tab, r)
+        || tab.ready.is_some()
+        || matches!(tab.state, TabState::Waiting | TabState::Done)
 }
 
 /// Most in need of you first: by state, then waiting or finished longest,
@@ -891,6 +898,8 @@ pub fn badge_state(tab: &TabModel, r: &Rules) -> Badge {
         } else {
             Badge::Done
         }
+    } else if tab.ready.is_some() {
+        Badge::Done
     } else if tab.landing.is_some() {
         Badge::Landing
     } else if testing_deploy(tab) {
@@ -993,6 +1002,7 @@ pub fn state_words(tab: &TabModel, r: &Rules) -> String {
         parts.push("pinned".to_string());
     }
     parts.extend(reminder_words(tab, r));
+    parts.extend(tab.ready.as_ref().map(|what| format!("{what} ready")));
     // Under a status you set, what Switchboard still reads, which takes the
     // tab back once it changes.
     let state = state_only(tab, r);
@@ -1945,6 +1955,25 @@ pub(crate) mod tests {
             !state_words(&t, &r).contains("routine"),
             "a run says it works"
         );
+    }
+
+    #[test]
+    fn a_tab_whose_diff_is_ready_needs_you_with_the_done_mark() {
+        let r = rules();
+        let mut t = tab(1, "x", TabState::Idle);
+        t.claude = None;
+        assert_eq!(stage_of(&t, &r), Stage::Other);
+        t.ready = Some("Diff".into());
+        assert_eq!(stage_of(&t, &r), Stage::Needs);
+        assert_eq!(badge_state(&t, &r), Badge::Done);
+        assert!(
+            state_words(&t, &r).starts_with("Diff ready"),
+            "{}",
+            state_words(&t, &r)
+        );
+        // Claude waiting there outranks it.
+        t.state = TabState::Waiting;
+        assert_eq!(badge_state(&t, &r), Badge::Waiting);
     }
 
     #[test]

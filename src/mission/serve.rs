@@ -4470,7 +4470,8 @@ impl Server {
     /// Puts a notification away, by the source that gave it: the next
     /// meeting until another, a Slack message until its thread gets more,
     /// the calendar's changes by taking the day as seen, a new note, an
-    /// Inbox item (here alone), what autopilot said.
+    /// Inbox item (here alone), what autopilot said, a tab ready by taking
+    /// its mark off.
     pub(crate) fn notice_dismiss(&mut self, source: &str, item: &Item) {
         self.notice_history_mark(source, &item.id, Sidebar::Dismissed, false);
         match source {
@@ -4481,6 +4482,8 @@ impl Server {
             "landed" => self.autopilot_dismiss_closed(Some(&item.id)),
             "autolanded" => self.autopilot_dismiss_autolanded(Some(&item.id)),
             "routines" => self.routines_dismiss(item),
+            crate::agent::READY_SOURCE => self.ready_dismiss(item),
+
             "habits" => {}
             crate::mux::behind::SOURCE => self.behind_dismiss(item),
             _ => self.day_dismiss(source, item),
