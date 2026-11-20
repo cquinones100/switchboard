@@ -135,12 +135,13 @@ const half = (y0, light) => { const bg = light ? 'L0' : '0'; fill(0, y0, W, 18, 
   state(y0 + 9, light, 'Lit: two styles', { lit: [0, 1] }, [['the cursor in ', 'tx'], ['bold italic', 'tx', 'b'], ['▏', 'a'], [': both B and I lit', 'dx']]);
   state(y0 + 11, light, 'Lit: a heading', { lit: [5] }, [['## Next', 'tx', 'b'], ['▏', 'a'], ['  the cursor on a heading: H2 lit', 'dx']]);
   state(y0 + 13, light, 'Read-only', { idle: true }, [['Faint: out of reach while another tab holds the note.', 'dx']]);
+  state(y0 + 15, light, 'Lit: its menu open', { lit: [11] }, [['⋯ lit while the Format menu it opens is in front.', 'dx']]);
   if (light) for (let y = y0; y < y0 + 18; y++) for (let x = 0; x < W; x++) { const c = g[y][x]; if (c.bg === '0') c.bg = bg; } };
 half(4, false);
 half(23, true);
 T(2, 41, ['A style\'s button lights while the cursor is in that style: ', 'd'], ['B I S </>', 'a', 'b'], [' in bold, italic, struck or code text,', 'd']);
 T(2, 42, ['H1 H2', 'a', 'b'], [' on a title or heading line, ', 'd'], ['• ☐', 'a', 'b'], [' on a bullet or checklist item.', 'd']);
-T(2, 43, ['Table', 'a', 'b'], [', ', 'd'], ['Link', 'a', 'b'], [', ', 'd'], ['Image', 'a', 'b'], [' and ', 'd'], ['⋯', 'a', 'b'], [' insert something, so they never light. A lit button pressed takes its style off.', 'd']);
+T(2, 43, ['Table', 'a', 'b'], [', ', 'd'], ['Link', 'a', 'b'], [' and ', 'd'], ['Image', 'a', 'b'], [' insert something, so they never light; ', 'd'], ['⋯', 'a', 'b'], [' lights while its Format menu is open. A lit style pressed takes it off.', 'd']);
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Lines and blocks are drawn to fill the cell, as Ghostty draws them, not taken from the font.

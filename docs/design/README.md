@@ -272,4 +272,4 @@ The relay's DM, threads and Home tab.
 
 ## Proposal: notes' toolbar from the kit
 
-- [157. Notes' toolbar drawn with the kit's button, on the dark and light themes: at rest, under the mouse, lit while the cursor is in that style (bold, two styles, a heading), and faint while read-only](https://cquinones100.github.io/switchboard/design/157.html)
+- [157. Notes' toolbar drawn with the kit's button, on the dark and light themes: at rest, under the mouse, lit while the cursor is in that style (bold, two styles, a heading) or while what it opens is in front (⋯), and faint while read-only](https://cquinones100.github.io/switchboard/design/157.html)
