@@ -666,7 +666,7 @@
       "page": "design"
     },
     "PhonePairing.dc.html": {
-      "title": "168. Pairing a phone: its first visit shows a code, the workspace asks [Y/n] naming the device and the code, and on a yes the phone opens on the drawer",
+      "title": "168. Pairing a phone: its first visit shows a code, typed in the workspace's box (or switchboard phone pair) naming the device, so a stray Enter can't pair it; once it matches, the phone opens on the drawer",
       "page": "design"
     },
     "PhoneRefused.dc.html": {

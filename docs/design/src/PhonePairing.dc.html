@@ -274,18 +274,18 @@ const composer = (sx, y, text, placeholder, live) => {
 // THE PROMPT CARD: what Claude waits on, under its newest turn, in the needs-you tone; each option a button, its words dim under it.
 const promptCard = (sx, y, h, title, right) => card(sx + 1, y, 34, h, { state: 'needs', title, right, edge: 'y', rightTone: 'y' });
 
-// 1. A NEW DEVICE'S FIRST VISIT: a listed device with no cookie yet sees a code and waits for the workspace's yes.
+// 1. A NEW DEVICE'S FIRST VISIT: a listed device with no cookie yet shows a code, to be typed in the workspace, and waits.
 { const sx = phone(P[0], '1  First visit: a code');
   T(sx + 1, 4, ['Switchboard', 't', 'b'], ['  studio', 'd']); rule(sx, 5, 36);
   put(sx + 2, 9, 'Pair this phone', 't', 'b');
-  for (const [i, l] of wrap('Switchboard on studio asks whether to let this phone answer and message your tabs. Check that it shows this code:', 32).entries()) put(sx + 2, 11 + i, l, 'd');
+  for (const [i, l] of wrap('Type this code in Switchboard on studio, where it asks to pair a phone:', 32).entries()) put(sx + 2, 11 + i, l, 'd');
   fill(sx + 6, 17, 24, 3, '3'); K(sx + 6, 17, 24, 3, 'border-radius:10px;font:700 30px JetBrains Mono,monospace;color:#5fd7ff;text-align:center;line-height:51px;letter-spacing:3px', '482 917');
-  T(sx + 2, 22, ['⠹ ', 'b'], ['Waiting for your yes on studio', 'd']);
-  put(sx + 2, 25, 'your-phone, listed in phone.json', 'f');
+  put(sx + 2, 21, 'Or run there:', 'd'); fill(sx + 2, 22, 32, 1, '2'); put(sx + 3, 22, 'switchboard phone pair 482917', 't', '', '2'); T(sx + 2, 24, ['⠹ ', 'b'], ['Waiting for the code on studio', 'd']);
+  put(sx + 2, 26, 'your-phone, listed in phone.json', 'f');
   put(sx + 2, 40, 'The code lasts 5 minutes.', 'f'); }
 
-// 2. THE WORKSPACE ASKS: a [Y/n] question in the middle of the screen, the kit's box, naming the device, its owner and the code;
-// Enter is yes, as every yes/no question here.
+// 2. THE WORKSPACE ASKS FOR THE CODE: the kit's box in the middle of the screen, naming the device and who it is signed in as;
+// you type the code the phone shows, so a stray Enter can't pair a device: Enter pairs once it matches, Esc refuses.
 { const X = 41, Wd = 78;
   put(X + 1, 0, '2  The workspace asks', 'd', 'b');
   fill(X, 1, Wd, 44, '0');
@@ -296,9 +296,9 @@ const promptCard = (sx, y, h, title, right) => card(sx + 1, y, 34, h, { state: '
   T(X + 12, 16, ['your-phone', 't', 'b', 'E'], [' (iPhone, signed in to Tailscale as you)', 'd', '', 'E']);
   put(X + 12, 17, 'wants to answer and message your tabs from the', 't', '', 'E');
   put(X + 12, 18, 'phone app.', 't', '', 'E');
-  T(X + 12, 20, ['Its code: ', 't', '', 'E'], ['482 917', 'a', 'b', 'E'], ['  Check it matches the phone\'s.', 'd', '', 'E']);
-  T(X + 12, 22, ['Allow it? ', 't', 'b', 'E'], ['[Y/n]', 'a', 'b', 'E']);
-  T(X + 12, 24, ['Enter', 'a', '', 'E'], [' allow  ', 'd', '', 'E'], ['n', 'a', '', 'E'], [' refuse  ', 'd', '', 'E'], ['Esc', 'a', '', 'E'], [' refuse', 'd', '', 'E']);
+  T(X + 12, 20, ['Type the code your phone shows:', 't', 'b', 'E']);
+  input(X + 12, 21, 30, '482 917', ''); T(X + 44, 21, ['✓ ', 'g', 'b', 'E'], ['matches', 'g', '', 'E']);
+  T(X + 12, 24, ['Enter', 'a', '', 'E'], [' pair  ', 'd', '', 'E'], ['Esc', 'a', '', 'E'], [' refuse', 'd', '', 'E']);
   for (let y = 1; y < 45; y++) for (let x = X; x < X + Wd; x++) { if (x >= X + 9 && x < X + 69 && y >= 14 && y < 27) continue; const c = g[y][x]; c.fg = 'f'; if (/^(3|4)$/.test(c.bg)) c.bg = '2'; } }
 
 // 3. PAIRED: the phone keeps a cookie of its own and opens on the drawer; Settings lists it, where it can be revoked.

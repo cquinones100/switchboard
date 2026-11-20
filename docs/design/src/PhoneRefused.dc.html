@@ -289,7 +289,7 @@ const refused = (sx, title, why, fix) => {
 { const sx = phone(P[1], '2  Someone else on the tailnet');
   refused(sx, 'This device isn\'t allowed', 'Switchboard refused it.', 'Its owner\'s Notifications view says why.'); }
 { const sx = phone(P[2], '3  Pairing refused');
-  refused(sx, 'Pairing was refused', 'The pairing question was answered no, or its 5 minutes ran out.', 'Open this page again to ask again.'); }
+  refused(sx, 'Pairing was refused', 'It was refused in Switchboard, or its code went untyped for 5 minutes.', 'Open this page again to ask again.'); }
 { const sx = phone(P[3], '4  Revoked');
   refused(sx, 'This phone was revoked', 'It was taken out of Settings\' paired devices, so its cookie no longer works.', 'Open this page again to pair it anew.'); }
 // ─────────────────────────────────────────────────────────────────────────────
