@@ -104,6 +104,28 @@ fn process_group(pid: u32) -> Option<u32> {
     u32::try_from(group).ok().filter(|g| *g > 0)
 }
 
+/// Marks the tabs of another repository than `repo` `elsewhere`, for
+/// Other repos, but one with a reminder come due, which goes under
+/// Reminders elsewhere with its repository named.
+fn mark_elsewhere(tabs: &mut [TabModel], repo: &std::path::Path) {
+    let r = Rules::now();
+    for t in tabs {
+        if t.repo_dir.as_deref() == Some(repo) {
+            continue;
+        }
+        if model::reminder_due(t, &r) {
+            t.outside_filter = true;
+            t.from_repo = t
+                .repo_dir
+                .as_deref()
+                .and_then(|d| d.file_name())
+                .map(|n| n.to_string_lossy().into_owned());
+        } else {
+            t.elsewhere = true;
+        }
+    }
+}
+
 /// A label's PR in front (`#12 name`) and the rest.
 fn split_pr(label: &str) -> (Option<u64>, String) {
     if let Some(rest) = label.strip_prefix('#')
@@ -647,22 +669,17 @@ impl Server {
     pub(crate) fn sidebar_marked(&self, session: &str) -> Vec<TabModel> {
         let mut tabs = self.sidebar_tabs(session);
         if let Some(repo) = self.sidebar_repo(session) {
-            let r = Rules::now();
-            for t in &mut tabs {
-                if t.repo_dir.as_deref() == Some(repo) {
-                    continue;
-                }
-                if model::reminder_due(t, &r) {
-                    t.outside_filter = true;
-                    t.from_repo = t
-                        .repo_dir
-                        .as_deref()
-                        .and_then(|d| d.file_name())
-                        .map(|n| n.to_string_lossy().into_owned());
-                } else {
-                    t.elsewhere = true;
-                }
-            }
+            mark_elsewhere(&mut tabs, repo);
+        }
+        tabs
+    }
+
+    /// Every session's tabs marked as `session`'s sidebar marks its own,
+    /// for mission control's Tabs view: by its repository filter.
+    pub(crate) fn sidebar_all_marked(&self, session: &str) -> Vec<TabModel> {
+        let mut tabs = self.sidebar_all_tabs();
+        if let Some(repo) = self.sidebar_repo(session) {
+            mark_elsewhere(&mut tabs, repo);
         }
         tabs
     }
@@ -2429,6 +2446,8 @@ impl Server {
         }
         self.sidebar_cursor_back(session);
         self.dirty_session(session);
+        // Mission control's Tabs view follows the filter too.
+        self.mission_changed();
     }
 
     /// M-p's "Filter the sidebar to a repository": a picker of the

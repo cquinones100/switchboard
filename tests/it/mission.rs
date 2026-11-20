@@ -4621,3 +4621,85 @@ fn a_slack_file_that_cant_be_shown_says_why() {
         "{log}"
     );
 }
+
+// With UX 2.0 the Tabs view follows the sidebar's repository filter: the
+// head names it, the other repository's tabs fold under one Other repos
+// line, closed, that Enter opens, and "Every repository" in the view's
+// menu clears the filter; M-j's picker lists every open tab all along.
+#[test]
+fn with_ux2_the_tabs_view_follows_the_sidebar_s_repository_filter() {
+    let server = TestServer::start();
+    settings(&server, json!({"ux2": true}));
+    let alpha = server.dir.path().join("alpha");
+    let beta = server.dir.path().join("beta");
+    for dir in [&alpha, &beta] {
+        std::fs::create_dir_all(dir).unwrap();
+        git(dir, &["init", "-q"]);
+        git(dir, &["commit", "-q", "--allow-empty", "-m", "start"]);
+    }
+    let alpha = alpha.canonicalize().unwrap();
+    let beta = beta.canonicalize().unwrap();
+    let mut client = server.attach(160, 40);
+    client.wait_text("$");
+    server.ok(&[
+        "new-tab",
+        "-d",
+        "-c",
+        &alpha.to_string_lossy(),
+        "-n",
+        "ant-work",
+    ]);
+    server.ok(&[
+        "new-tab",
+        "-d",
+        "-c",
+        &beta.to_string_lossy(),
+        "-n",
+        "bee-work",
+    ]);
+    wait_list(&server, "three tabs", |l| tabs(l).len() == 3);
+    server.ok(&["sidebar-repo", &alpha.to_string_lossy()]);
+    wait_list(&server, "the filter set", |l| {
+        l["sessions"][0]["sidebar"]["repo"] == json!(alpha.to_string_lossy())
+    });
+
+    open(&mut client);
+    let screen = client.wait_for("the Tabs view filtered", |s| {
+        s.iter().any(|l| l.contains("Filtered to alpha"))
+            && s.iter().any(|l| l.contains("OTHER REPOS"))
+            && s.iter().any(|l| l.contains("ant-work"))
+    });
+    assert!(
+        !screen.iter().any(|l| l.contains("bee-work")),
+        "{screen:#?}"
+    );
+
+    // Its label is the last place; Enter there opens it.
+    client.type_text("G");
+    client.type_text("\r");
+    client.wait_text("bee-work");
+
+    // M-j's picker lists every open tab, the filter on.
+    client.type_text(&format!("{ALT}j"));
+    client.wait_for("M-j's picker of every tab", |s| {
+        s.iter().any(|l| l.contains("ant-work")) && s.iter().any(|l| l.contains("bee-work"))
+    });
+    client.type_text("\x1b");
+    client.wait_for("the picker closed", |s| {
+        !s.iter().any(|l| l.contains("MISSION CONTROL"))
+    });
+
+    // "Every repository" in the view's menu clears the filter.
+    open(&mut client);
+    client.wait_text("Filtered to alpha");
+    client.type_text("m");
+    pick(&mut client, "Every repository");
+    wait_list(&server, "the filter cleared", |l| {
+        l["sessions"][0]["sidebar"]["repo"].is_null()
+    });
+    client.wait_for("every tab shown", |s| {
+        !s.iter()
+            .any(|l| l.contains("Filtered to") || l.contains("OTHER REPOS"))
+            && s.iter().any(|l| l.contains("bee-work"))
+    });
+}

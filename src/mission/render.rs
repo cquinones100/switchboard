@@ -706,7 +706,13 @@ fn tab_groups(tabs: &[TabModel], r: &Rules) -> Vec<(model::Stage, Vec<usize>)> {
 /// shelf, or the stage boxes.
 pub fn tabs_grid(m: &Mission, cols: usize) -> Grid {
     if m.snap.rules.ux2 {
-        grid_ux2(&m.snap.tabs, &m.snap.rules, cols, m.shelf_open)
+        grid_ux2(
+            &m.snap.tabs,
+            &m.snap.rules,
+            cols,
+            m.shelf_open,
+            repos_folded(m),
+        )
     } else {
         grid(
             &m.snap.tabs,
@@ -723,16 +729,30 @@ fn shelf_folded(cols: usize, open: bool) -> bool {
     across(cols) == 1 && !open
 }
 
+/// Whether Other repos, the tabs the sidebar's repository filter leaves
+/// out, shows only its label: until Enter or a click opens it, or a /
+/// search, whose matches are all reachable.
+pub fn repos_folded(m: &Mission) -> bool {
+    !m.other_repos_open && m.filter.as_ref().is_none_or(|f| f.text.trim().is_empty())
+}
+
+/// Whether a stage shows only its label, its first tab standing for it:
+/// the shelf's on a narrow screen (`shelf_folded`), and Other repos while
+/// `repos_folded`.
+fn stage_folded(stage: model::Stage, shelf: bool, repos: bool) -> bool {
+    on_shelf(stage) && shelf || stage == model::Stage::OtherRepos && repos
+}
+
 /// UX 2.0's Tabs laid out: each group of cards in rows of `across`, then
-/// each shelf line a row of its own; a folded shelf's group is one row, its
-/// first tab standing for its label.
-pub fn grid_ux2(tabs: &[TabModel], r: &Rules, cols: usize, open: bool) -> Grid {
+/// each shelf line a row of its own; a folded group is one row, its first
+/// tab standing for its label.
+pub fn grid_ux2(tabs: &[TabModel], r: &Rules, cols: usize, open: bool, repos_folded: bool) -> Grid {
     let n = across(cols);
     let folded = shelf_folded(cols, open);
     let mut order = Vec::new();
     let mut rows = Vec::new();
     for (stage, at) in tab_groups(tabs, r) {
-        let shown: &[usize] = if on_shelf(stage) && folded {
+        let shown: &[usize] = if stage_folded(stage, folded, repos_folded) {
             &at[..1]
         } else {
             &at
@@ -1490,6 +1510,11 @@ fn shelf_line(
     } else {
         what
     };
+    // A reminder come due in another repository than the filter's names it.
+    let what = match tab.from_repo.as_ref().filter(|_| tab.outside_filter) {
+        Some(repo) => format!("{repo} · {what}"),
+        None => what,
+    };
     let number = tab.index.to_string();
     let at = kit::columns(
         &[
@@ -1589,6 +1614,7 @@ fn cards_ux2(
     }
     let n = across(cols);
     let folded = shelf_folded(cols, m.shelf_open);
+    let repos = repos_folded(m);
     // A card showing its screen is as tall as the view has room for under
     // its label; any other keeps the rows a request shown whole counts on
     // (`ask_fits`), whatever the view's height, and scrolls with the rest.
@@ -1636,7 +1662,7 @@ fn cards_ux2(
             let tone = Mark::of_badge(stage.color()).look().1;
             let label_at = drawn.len();
             let mut label = kit::label(stage.title(), tone, Some(tabs_in.len()), cols, theme);
-            if on_shelf(*stage) && folded {
+            if stage_folded(*stage, folded, repos) {
                 let chosen = m.cursor == place as isize;
                 if chosen {
                     label = label
@@ -6225,6 +6251,9 @@ fn header(m: &Mission, mut bar: Bar, cols: usize, lines: &mut Vec<Line>, hits: &
     if !group.is_empty() {
         head.put(format!("   {group}"), Tone::Dim.style(theme));
     }
+    if let Some(repo) = m.snap.repo_filter.as_ref().filter(|_| m.view == 0) {
+        head.put(format!("   Filtered to {repo}"), Tone::Dim.style(theme));
+    }
     if gridded > 0 {
         head.put(
             format!(" · {gridded} views at once"),
@@ -6836,6 +6865,7 @@ mod tests {
             screens: Default::default(),
             pilot: None,
             all_tabs: Vec::new(),
+            repo_filter: None,
             caps: false,
             cell: None,
             diagrams: Default::default(),
@@ -7617,9 +7647,71 @@ mod tests {
             "{fixed:#?}"
         );
         // The keys move through them in that order.
-        let g = grid_ux2(&m.snap.tabs, &m.snap.rules, 160, false);
+        let g = grid_ux2(&m.snap.tabs, &m.snap.rules, 160, false, false);
         assert_eq!(g.order, vec![0, 1, 2, 4, 3]);
         assert_eq!(g.rows, vec![vec![0], vec![1, 2], vec![3], vec![4]]);
+    }
+
+    #[test]
+    fn with_ux2_the_tabs_follow_the_sidebar_s_repository_filter() {
+        // The server marks the tabs of another repository than the filter's
+        // (`sidebar_all_marked`): elsewhere, or with a reminder come due.
+        let mut here = tab(1, "here work");
+        here.state = TabState::Waiting;
+        let mut away = tab(2, "away work");
+        away.state = TabState::Waiting;
+        away.elsewhere = true;
+        let mut also = tab(3, "also away");
+        also.elsewhere = true;
+        let mut due = tab(4, "due elsewhere");
+        due.outside_filter = true;
+        due.from_repo = Some("api".into());
+        let mut m = mission(vec![here, away, also, due], Vec::new());
+        m.snap.rules.ux2 = true;
+        m.snap.repo_filter = Some("app".into());
+        let text = texts(&screen(&m, 160, 60).0);
+        assert!(text[0].contains("Filtered to app"), "{text:#?}");
+        assert!(text.iter().any(|l| l.contains("here work")), "{text:#?}");
+        // The other repository's tabs folded under one line with their
+        // count, a waiting one among them, at the foot.
+        let other = text
+            .iter()
+            .position(|l| l.contains("OTHER REPOS"))
+            .expect("Other repos");
+        assert!(text[other].trim_end().ends_with('2'), "{text:#?}");
+        assert!(
+            !text
+                .iter()
+                .any(|l| l.contains("away work") || l.contains("also away")),
+            "{text:#?}"
+        );
+        // The reminder come due elsewhere above it.
+        let due_at = text
+            .iter()
+            .position(|l| l.contains("due elsewhere"))
+            .expect("the reminder");
+        assert!(due_at < other, "{text:#?}");
+        assert!(text[due_at].contains("api ·"), "{text:#?}");
+        // The fold one place the keys rest on, its first tab standing for it.
+        let g = grid_ux2(&m.snap.tabs, &m.snap.rules, 160, false, true);
+        assert_eq!(g.order, vec![0, 3, 1]);
+        // Opened, its tabs are lines of their own.
+        m.other_repos_open = true;
+        let text = texts(&screen(&m, 160, 60).0);
+        assert!(
+            text.iter().any(|l| l.contains("away work"))
+                && text.iter().any(|l| l.contains("also away")),
+            "{text:#?}"
+        );
+        // With no filter, every tab is where its state puts it.
+        let mut plain = mission(vec![tab(1, "here work"), tab(2, "away work")], Vec::new());
+        plain.snap.rules.ux2 = true;
+        let text = texts(&screen(&plain, 160, 60).0);
+        assert!(
+            !text[0].contains("Filtered") && !text.iter().any(|l| l.contains("OTHER REPOS")),
+            "{text:#?}"
+        );
+        assert!(text.iter().any(|l| l.contains("away work")), "{text:#?}");
     }
 
     #[test]
@@ -7677,11 +7769,11 @@ mod tests {
             );
         }
         // Each row of cards a row the keys move through, each shelf line one.
-        let g = grid_ux2(&m.snap.tabs, &m.snap.rules, 160, false);
+        let g = grid_ux2(&m.snap.tabs, &m.snap.rules, 160, false, false);
         assert_eq!(g.rows, vec![vec![0, 1, 2], vec![3, 4], vec![5]]);
         // With room for one card, the shelf folds to its label until Enter
         // on it opens it.
-        let g = grid_ux2(&m.snap.tabs, &m.snap.rules, 60, false);
+        let g = grid_ux2(&m.snap.tabs, &m.snap.rules, 60, false, false);
         assert_eq!(g.rows.len(), 6);
         let (lines, _) = screen(&m, 60, 120);
         let text = texts(&lines);

@@ -169,12 +169,13 @@ pub struct TabModel {
     /// (`tabs::git::main_clone`), every worktree of one sharing it.
     pub repo_dir: Option<PathBuf>,
     /// In another repository than the one the sidebar is filtered to
-    /// (`Side::repo`), so under Other repos whatever it is doing; only the
-    /// sidebar's own model sets it, never mission control's.
+    /// (`Side::repo`), so under Other repos whatever it is doing; set by the
+    /// filter's marking (`sidebar_marked`, and `sidebar_all_marked` for
+    /// mission control's Tabs view).
     pub elsewhere: bool,
     /// Outside the repository the sidebar is filtered to with a reminder
     /// come due, so under Reminders elsewhere rather than folded away in
-    /// Other repos; only the sidebar's own model sets it.
+    /// Other repos; set by the same marking.
     pub outside_filter: bool,
     /// Such a tab's repository, by its folder's name, `None` outside one.
     pub from_repo: Option<String>,
