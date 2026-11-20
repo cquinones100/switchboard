@@ -413,10 +413,25 @@ impl Server {
                 && let Some(file) = reader.transcript(&claude_dir, session)
             {
                 files.insert(file.clone());
+                // Where a landing's `land-lock test` runs: the directory a `cd`
+                // before it named, from the session's, else the session's.
+                let tests_in_ci = |dir: Option<&str>| {
+                    let Some(here) = session.cwd.as_deref().map(std::path::Path::new) else {
+                        return false;
+                    };
+                    let dir = match dir {
+                        Some(d) => match d.strip_prefix("~/") {
+                            Some(rest) => paths::home_join(rest),
+                            None => here.join(d),
+                        },
+                        None => here.to_path_buf(),
+                    };
+                    crate::repos::tests_in_ci_known(&dir)
+                };
                 // A transcript that can't be read leaves the tab shown
                 // without what it would have added, never the others.
                 if let Ok(work) =
-                    reader.background_work(&file, session.started_at.unwrap_or(0), now)
+                    reader.background_work(&file, session.started_at.unwrap_or(0), now, tests_in_ci)
                 {
                     read.work = work;
                 }
@@ -439,6 +454,17 @@ impl Server {
         let idle: Vec<(PaneId, i64)> = reads
             .iter()
             .filter_map(|(p, r)| Some((*p, r.session.as_ref()?.idle_since?)))
+            .collect();
+        // When it says each pane's session went busy, for a `!` command.
+        let busy: Vec<(PaneId, i64)> = reads
+            .iter()
+            .filter_map(|(p, r)| Some((*p, r.session.as_ref()?.busy_since?)))
+            .collect();
+        // When it says each pane's session stopped being busy, which ends a
+        // `!` command's work whatever it says instead.
+        let not_busy: Vec<(PaneId, i64)> = reads
+            .iter()
+            .filter_map(|(p, r)| Some((*p, r.session.as_ref()?.not_busy_since?)))
             .collect();
         // A question asked since the session started, still unanswered.
         let asks: Vec<(PaneId, String, i64, String)> = reads
@@ -466,6 +492,16 @@ impl Server {
         self.sidebar_hand_back(&interrupted);
         for (pane, at) in idle {
             if self.agent_went_idle(pane, at) {
+                self.dirty_sidebars();
+            }
+        }
+        for (pane, at) in busy {
+            if self.agent_went_busy(pane, at) {
+                self.dirty_sidebars();
+            }
+        }
+        for (pane, at) in not_busy {
+            if self.agent_shell_ended(pane, at) {
                 self.dirty_sidebars();
             }
         }
