@@ -4483,6 +4483,7 @@ impl Server {
             "autolanded" => self.autopilot_dismiss_autolanded(Some(&item.id)),
             "routines" => self.routines_dismiss(item),
             crate::agent::READY_SOURCE => self.ready_dismiss(item),
+            crate::phone::serve::SOURCE => self.phone_dismiss(item),
 
             "habits" => {}
             crate::mux::behind::SOURCE => self.behind_dismiss(item),
