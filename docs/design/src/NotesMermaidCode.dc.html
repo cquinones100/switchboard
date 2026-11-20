@@ -113,9 +113,11 @@ const input = (x, y, w, text, placeholder, hints) => { put(x, y, '\uE0B6', '2');
 // ─────────────────────────────────────────────────────────────────────────────
 // NOTES' TOOLBAR, the kit's button (kit::button, board 118): each glyph bold in the accent on the panel surface between
 // rounded ends, one column apart; the chosen surface under the mouse; dark on the accent while lit, the cursor being in
-// that style; faint while the note is read-only. o: { hover: i, lit: [i...], idle, light }.
+// that style or what it opens being in front; faint while the note is read-only. o: { hover: i, lit: [i...], idle, light,
+// only: i, to draw that button alone, as over a backdrop }.
 const TB = ['B', 'I', 'S', '</>', 'H1', 'H2', '•', '☐', 'Table', 'Link', 'Image', '⋯'];
 const toolbar = (x, y, o) => { o = o || {}; for (let i = 0; i < TB.length; i++) {
+  if (o.only !== undefined && o.only !== i) { x += [...TB[i]].length + 3; continue; }
   const lit = (o.lit || []).includes(i), hover = o.hover === i;
   const s = lit ? 'A' : hover ? (o.light ? 'L4' : '4') : (o.light ? 'L3' : '3');
   const ink = lit ? 'k' : o.idle ? (o.light ? 'lf' : 'f') : 'a';
@@ -199,6 +201,8 @@ option(104, 8, 40, 'Show diagram code', '', true);
 put(108, 9, 'Shows every diagram in this note', 'd', '', 'E'); put(108, 10, 'as code, until Show diagrams', 'd', '', 'E');
 put(106, 11, '↑↓ move  ↵ choose  esc close', 'd', '', 'E');
 backdrop();
+// The ⋯ button that opened the menu, still lit over the backdrop.
+toolbar(63, 0, { lit: [11], only: 11 });
 // Lines and blocks are drawn to fill the cell, as Ghostty draws them, not taken from the font.
 const LINE = { '\uE0B6': ['cap', 'l'], '\uE0B4': ['cap', 'r'], '─': ['h', 1], '━': ['h', 2], '┄': ['hd'], '│': ['v'], '┆': ['vd'], '╭': ['arc', 'rb'], '┌': ['c', 'rb'], '╮': ['arc', 'lb'], '┐': ['c', 'lb'], '╰': ['arc', 'rt'], '└': ['c', 'rt'], '╯': ['arc', 'lt'], '┘': ['c', 'lt'], '█': ['f'], '▌': ['lh'], '▁': ['lo'], '┬': ['t', 'b'], '┴': ['t', 't'], '┼': ['x'] };
 const draw = (ch, col) => { const k = LINE[ch]; const lg = 'linear-gradient(' + col + ',' + col + ')'; if (k[0] === 'cap') return ['radial-gradient(100% 50% at ' + (k[1] === 'l' ? '100%' : '0%') + ' 50%, ' + col + ' 98%, transparent 100%)', '100% 100%', 'center']; if (k[0] === 'arc') { /* Ghostty draws ╭ ╮ ╰ ╯ as quarter-circle arcs from the middle of one edge to the middle of the next */ const cx = k[1][0] === 'r' ? '100%' : '0%', cy = k[1][1] === 'b' ? '100%' : '0%'; return ['radial-gradient(50% 50% at ' + cx + ' ' + cy + ', transparent calc(100% - 1.2px), ' + col + ' calc(100% - 1.2px), ' + col + ' 100%, transparent 100%)', '100% 100%', 'center']; } if (k[0] === 'h') return [lg, '100% ' + k[1] + 'px', 'center']; if (k[0] === 'hd') return ['repeating-linear-gradient(90deg,' + col + ' 0 3px,transparent 3px 5px)', '100% 1px', 'center']; if (k[0] === 'v') return [lg, '1px 100%', 'center']; if (k[0] === 'vd') return ['repeating-linear-gradient(' + col + ' 0 4px,transparent 4px 7px)', '1px 100%', 'center']; if (k[0] === 'f') return [lg, '100% 100%', 'center']; if (k[0] === 'lh') return [lg, '50% 100%', 'left center']; if (k[0] === 'lo') return [lg, '100% 3px', 'center bottom']; if (k[0] === 't') return [lg + ',' + lg, '100% 1px,1px calc(50% + 0.5px)', 'center,center ' + (k[1] === 'b' ? 'bottom' : 'top')]; if (k[0] === 'x') return [lg + ',' + lg, '100% 1px,1px 100%', 'center,center']; const hx = k[1][0] === 'r' ? 'right' : 'left', vy = k[1][1] === 'b' ? 'bottom' : 'top'; return [lg + ',' + lg, 'calc(50% + 0.5px) 1px,1px calc(50% + 0.5px)', hx + ' center,center ' + vy]; };

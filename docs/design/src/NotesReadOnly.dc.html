@@ -113,9 +113,11 @@ const input = (x, y, w, text, placeholder, hints) => { put(x, y, '\uE0B6', '2');
 // ─────────────────────────────────────────────────────────────────────────────
 // NOTES' TOOLBAR, the kit's button (kit::button, board 118): each glyph bold in the accent on the panel surface between
 // rounded ends, one column apart; the chosen surface under the mouse; dark on the accent while lit, the cursor being in
-// that style; faint while the note is read-only. o: { hover: i, lit: [i...], idle, light }.
+// that style or what it opens being in front; faint while the note is read-only. o: { hover: i, lit: [i...], idle, light,
+// only: i, to draw that button alone, as over a backdrop }.
 const TB = ['B', 'I', 'S', '</>', 'H1', 'H2', '•', '☐', 'Table', 'Link', 'Image', '⋯'];
 const toolbar = (x, y, o) => { o = o || {}; for (let i = 0; i < TB.length; i++) {
+  if (o.only !== undefined && o.only !== i) { x += [...TB[i]].length + 3; continue; }
   const lit = (o.lit || []).includes(i), hover = o.hover === i;
   const s = lit ? 'A' : hover ? (o.light ? 'L4' : '4') : (o.light ? 'L3' : '3');
   const ink = lit ? 'k' : o.idle ? (o.light ? 'lf' : 'f') : 'a';
