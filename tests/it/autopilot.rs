@@ -92,6 +92,22 @@ fn set_up_with(
     TestClient,
     std::path::PathBuf,
 ) {
+    set_up_in(more, text, others, &[])
+}
+
+/// `set_up_with`, the server started with `env` too.
+fn set_up_in(
+    more: Value,
+    text: &str,
+    others: &[(&str, &str)],
+    env: &[(&str, &str)],
+) -> (
+    TempDir,
+    std::path::PathBuf,
+    TestServer,
+    TestClient,
+    std::path::PathBuf,
+) {
     let notes = TempDir::new("sbn");
     let note = notes.path().join("Work.md");
     std::fs::write(&note, text).unwrap();
@@ -109,7 +125,9 @@ fn set_up_with(
         .unwrap()
         .set_modified(SystemTime::now() - Duration::from_secs(120))
         .unwrap();
-    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
+    let mut env = env.to_vec();
+    env.push(("NOTES_DIR", notes.path().to_str().unwrap()));
+    let server = TestServer::start_with_env(&env);
     let config = server.home.join(".config/switchboard");
     std::fs::create_dir_all(&config).unwrap();
     // Whether you're at the computer is the desktop's to say, which a test
@@ -130,6 +148,11 @@ fn set_up_with(
     git(&repo, &["commit", "-q", "--allow-empty", "-m", "start"]);
     git(&repo, &["branch", "team/next"]);
     let repo = repo.canonicalize().unwrap();
+    std::fs::write(
+        config.join("repos.json"),
+        json!({ repo.join(".git").to_str().unwrap(): { "landing": "direct" } }).to_string(),
+    )
+    .unwrap();
 
     // Wide enough for the Autopilot view's board beside the sidebar.
     let cols = if more.get("ux2").is_some() { 170 } else { 120 };
@@ -154,34 +177,12 @@ fn set_up_with(
         );
         assert!(screen.iter().any(|l| l.contains("› Work ")), "{screen:#?}");
         assert!(screen.iter().any(|l| l.contains("› ~/repo")), "{screen:#?}");
-        // A repository landing through a PR is refused, in the box.
-        client.type_text("\x1b\r");
-        client.wait_text("Autopilot lands only straight onto a branch for now");
-        std::fs::write(
-            config.join("repos.json"),
-            json!({ repo.join(".git").to_str().unwrap(): { "landing": "direct" } }).to_string(),
-        )
-        .unwrap();
         client.type_text("\x1b\r");
         client.wait_text(
             "Working Work: 3 at a time, up to 5 tabs, in ~/repo, landing on the default branch",
         );
         return (notes, note, server, client, repo);
     }
-    // A repository landing through a PR, as one with no GitHub and no
-    // repos.json does, is refused.
-    client.wait_text("Autopilot lands only straight onto a branch for now");
-    std::fs::write(
-        config.join("repos.json"),
-        json!({ repo.join(".git").to_str().unwrap(): { "landing": "direct" } }).to_string(),
-    )
-    .unwrap();
-    client.type_text("\x1b\x1b");
-    client.type_text("\x1bp");
-    client.wait_text("Actions");
-    client.type_text("autopilot");
-    client.wait_text("Autopilot: work a note");
-    client.type_text("\r");
     let screen = client.wait_text("More notes…");
     assert!(
         screen
@@ -1307,6 +1308,166 @@ fn a_push_marks_when_its_tab_landed_once() {
     // A tab the mode didn't open gets none.
     server.ok(&["set", "-t", &other, "@autopilot_pushed", "abc1234"]);
     assert_eq!(landed_at(&other), "");
+}
+
+/// A repository landing through PRs, as one with no GitHub and no
+/// repos.json does, is worked, its tabs landing through queue-and-clean's
+/// PR to the default branch, so a start naming another branch is refused.
+#[test]
+fn a_repository_landing_through_prs_is_worked_on_its_default_branch_alone() {
+    let notes = TempDir::new("sbn");
+    std::fs::write(
+        notes.path().join("Work.md"),
+        "# Work\n\n- [ ] First thing\n",
+    )
+    .unwrap();
+    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
+    common::write_settings(
+        &server.home,
+        json!({"notifications": false, "tips": false, "github": false, "linear": false, "pause_when_away": false}),
+    );
+    Claude::new().install(&server.home.join("bin"));
+    let repo = server.home.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q"]);
+    git(&repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "start"]);
+    git(&repo, &["branch", "team/next"]);
+    let repo = repo.canonicalize().unwrap();
+    let mut client = server.attach(120, 40);
+    client.wait_text("$");
+    let fields = |target: &str| {
+        json!({
+            "note": "Work.md", "repo": repo.to_str().unwrap(), "target": target,
+            "slots": 1, "cap": 1, "limit": "$5",
+            "ready_only": false, "land_without_asking": true, "hands_free": false,
+            "skipped": [], "skipped_of": "", "taken_back": [],
+        })
+        .to_string()
+    };
+    let (code, _, err) = server.run(&["autopilot-start", &fields("team/next")]);
+    assert_ne!(code, 0);
+    assert!(
+        err.contains("team/next can't be landed on: repo lands through PRs"),
+        "{err}"
+    );
+    let said = server.ok(&["autopilot-start", &fields("")]);
+    assert_eq!(
+        said.trim(),
+        "Working Work: 1 at a time, up to 1 tabs, in ~/repo, landing on the default branch"
+    );
+    // Given its ID as it started, the note is settled again by hand.
+    std::fs::File::options()
+        .write(true)
+        .open(notes.path().join("Work.md"))
+        .unwrap()
+        .set_modified(SystemTime::now() - Duration::from_secs(120))
+        .unwrap();
+    wait("its tab opened", &server, || !opened(&server).is_empty());
+}
+
+/// An autopilot tab whose PR merged (`@autopilot_merged`, which
+/// queue-and-clean sets as its watch sees the merge) counts as landed once
+/// back in the main clone, freeing its slot, and its issue's claim label
+/// comes off with no comment and no close, GitHub closing the issue by the
+/// PR's `Closes #<n>`.
+#[cfg(feature = "net")]
+#[test]
+fn a_merged_pr_s_tab_lands_and_takes_its_issue_s_claim_label_off() {
+    use common::http::{Fake, Reply};
+    use switchboard::autopilot::issues;
+    let id = "a1b2c3";
+    let mut github = Fake::github("test-token", move |request| {
+        match (request.method.as_str(), request.path()) {
+            ("POST", "/graphql") => Some(Reply::json(
+                200,
+                json!({ "data": {
+                    "viewer": { "login": "me" },
+                    "repository": { "issue": {
+                        "labels": { "nodes": [{ "name": "autopilot" }, { "name": issues::WORKING }] },
+                        "comments": { "nodes": [{
+                            "body": issues::claim_comment(id, "issue/12-x"),
+                            "createdAt": "2026-11-18T19:00:00Z",
+                            "author": { "login": "me" }
+                        }] }
+                    } }
+                } }),
+            )),
+            ("DELETE", "/repos/acme/widgets/issues/12/labels/autopilot%3A%20working") => {
+                Some(Reply::json(200, json!([])))
+            }
+            _ => None,
+        }
+    });
+    github.expect_refusals();
+    let (graphql, api) = (github.graphql_url(), github.url.clone());
+    let (_notes, _note, server, mut client, repo) = set_up_in(
+        json!({ "ux2": true, "github": true }),
+        "# Work\n\n- [ ] First thing\n- [ ] Second thing\n",
+        &[],
+        &[
+            ("GH_TOKEN", "test-token"),
+            ("SWITCHBOARD_GITHUB_GRAPHQL", &graphql),
+            ("SWITCHBOARD_GITHUB_API", &api),
+        ],
+    );
+    std::fs::write(
+        server.home.join(".config/switchboard/autopilot-claim.json"),
+        json!({ "id": id }).to_string(),
+    )
+    .unwrap();
+    client.wait_text("WAITING ON YOU");
+    let first = |server: &TestServer| {
+        opened(server)
+            .into_iter()
+            .find(|t| t["options"]["@autopilot_item"] == "First thing")
+    };
+    wait("the first item's tab in its worktree", &server, || {
+        first(&server).is_some_and(|t| t["options"]["@autopilot_in"] == "1")
+    });
+    let tab = first(&server).unwrap();
+    let tab_id = tab["id"].as_str().unwrap().to_string();
+    let pane = tab["panes"][0]["id"].as_str().unwrap().to_string();
+    server.ok(&["set", "-t", &tab_id, "@autopilot_issue", "acme/widgets#12"]);
+
+    // Its PR merged, then queue-and-clean hands the tab back to the main clone.
+    server.ok(&["set", "-t", &tab_id, "@autopilot_merged", "abc1234"]);
+    assert!(
+        !server
+            .ok(&["show", "-t", &tab_id, "@autopilot_landed_at"])
+            .trim()
+            .is_empty(),
+        "its merge marks when it landed"
+    );
+    server.ok(&[
+        "respawn-pane",
+        "-k",
+        "-t",
+        &pane,
+        "-c",
+        repo.to_str().unwrap(),
+    ]);
+    wait("the tab marked landed", &server, || {
+        first(&server).is_some_and(|t| t["options"]["@autopilot_left"].is_string())
+    });
+    let label = "/repos/acme/widgets/issues/12/labels/autopilot%3A%20working";
+    wait("the claim's label taken off", &server, || {
+        github
+            .seen()
+            .iter()
+            .any(|r| r.method == "DELETE" && r.path() == label)
+    });
+    let mode = mode(&server);
+    assert_eq!(mode["landed"][0]["item"], "First thing", "{mode}");
+    assert_eq!(mode["landed"][0]["hash"], "abc1234", "{mode}");
+    // GitHub closes it by the PR's `Closes #12`: autopilot writes nothing else.
+    let wrote: Vec<String> = github
+        .seen()
+        .iter()
+        .filter(|r| r.path().starts_with("/repos/acme/widgets/issues/12") && r.method != "DELETE")
+        .map(|r| format!("{} {}", r.method, r.path()))
+        .collect();
+    assert!(wrote.is_empty(), "{wrote:?}");
 }
 
 /// The Slack relay's Autopilot form (board 52) starts it through

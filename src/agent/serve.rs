@@ -281,17 +281,18 @@ impl Server {
         hook: &super::Hook,
         payload: &Value,
     ) -> Option<String> {
-        use crate::autopilot::{AUTOLAND, HANDS_FREE, LEFT, NUDGED, PUSHED};
+        use crate::autopilot::{AUTOLAND, HANDS_FREE, LEFT, MERGED, NUDGED, PUSHED};
         let t = self.tabs.get_mut(&tab)?;
         // The setting read at the hook too, so turning it off counts at once.
         if t.opts.get(HANDS_FREE).is_none_or(|v| v != "1") || !setting_on("autopilot_handsfree") {
             return None;
         }
         // Never once landed: pushed (`@autopilot_pushed`, or
-        // `@autopilot_autoland`, set as the landing pushes) or back in the
-        // main clone (`@autopilot_left`); what comes after, such as applying
-        // the change, is asked as usual.
-        if [LEFT, AUTOLAND, PUSHED]
+        // `@autopilot_autoland`, set as the landing pushes), its PR merged
+        // (`@autopilot_merged`) or back in the main clone
+        // (`@autopilot_left`); what comes after, such as applying the
+        // change, is asked as usual.
+        if [LEFT, AUTOLAND, PUSHED, MERGED]
             .iter()
             .any(|m| t.opts.contains_key(*m))
         {
