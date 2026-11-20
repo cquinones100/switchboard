@@ -164,12 +164,14 @@ pub const SEARCH_KEYS: &str = "↑↓ move  ↵ take  esc all";
 
 /// One option: its label, and a key that takes it at once, shown dim at the
 /// end of its row unless `unshown` (a menu that shows no letter keys, as
-/// board 54's, still taking them).
+/// board 54's, still taking them); or, in the key's place, a word about it
+/// (`aside`, board 158's "✓ set by you").
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MenuOption {
     pub label: String,
     pub key: Option<char>,
     pub unshown: bool,
+    pub aside: String,
 }
 
 impl MenuOption {
@@ -178,7 +180,14 @@ impl MenuOption {
             label: label.into(),
             key: None,
             unshown: false,
+            aside: String::new(),
         }
+    }
+
+    /// A word about it, dim at the end of its row where a key would be.
+    pub fn aside(mut self, text: impl Into<String>) -> MenuOption {
+        self.aside = text.into();
+        self
     }
 
     pub fn key(mut self, key: char) -> MenuOption {
@@ -435,7 +444,15 @@ impl Overlay for Menu {
         // A row is `   label` and, two columns past the longest label, its
         // key, inside the box's margin of a column each side.
         let keyed = self.options.iter().any(|o| o.key.is_some() && !o.unshown);
-        let label_room = if keyed {
+        let aside_w = self
+            .options
+            .iter()
+            .map(|o| draw::width(&o.aside))
+            .max()
+            .unwrap_or(0);
+        let label_room = if aside_w > 0 {
+            inner.saturating_sub(7 + aside_w)
+        } else if keyed {
             inner.saturating_sub(8)
         } else {
             inner.saturating_sub(5)
@@ -448,13 +465,27 @@ impl Overlay for Menu {
         let key_col = labels.iter().map(|l| draw::width(l)).max().unwrap_or(0) + 5;
         for (at, i) in self.shown.iter().enumerate().skip(first).take(fits) {
             let chosen = at == self.cursor;
-            let spans = super::kit::option(
+            let mut spans = super::kit::option(
                 &labels[*i],
                 self.options[*i].key.filter(|_| !self.options[*i].unshown),
                 key_col,
                 chosen,
                 &look.theme,
             );
+            let aside = &self.options[*i].aside;
+            if !aside.is_empty() {
+                let pad = key_col.saturating_sub(3 + draw::width(&labels[*i]));
+                spans.push(ratatui::text::Span::raw(" ".repeat(pad)));
+                let tone = if chosen {
+                    super::kit::Tone::Accent
+                } else {
+                    super::kit::Tone::Dim
+                };
+                spans.push(ratatui::text::Span::styled(
+                    aside.clone(),
+                    tone.style(&look.theme),
+                ));
+            }
             lines.push(
                 BoxLine::spans(spans)
                     .fill(chosen.then_some(look.theme.highlight))

@@ -94,6 +94,13 @@
     "default": true
   },
   {
+    "key": "tab_status_by_hand",
+    "category": "Sidebar",
+    "label": "Set a tab's status by hand",
+    "description": "Set its status… in a tab's menu, and M-p's Set this tab's status…, file the tab under the group you choose in the sidebar and mission control, marked set by you, until Switchboard's own reading of the tab changes, which takes it back; a pin and a reminder still win. Off, the choices are gone and any status you set is dropped",
+    "default": true
+  },
+  {
     "key": "sidebar_repo_filter",
     "category": "Sidebar",
     "label": "Sidebar repository filter",

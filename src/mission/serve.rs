@@ -4653,6 +4653,7 @@ impl Server {
             Do::Pin(tab) => self.toggle_pin(tab),
             Do::LandAlone(tab) => self.toggle_land(client, tab),
             Do::Remind(tab) => self.remind_tab(client, tab),
+            Do::TabStatus(tab) => self.tab_status_menu(client, tab),
             Do::Palette(tab) => {
                 self.mission_go(client, tab);
                 self.open_palette(client);

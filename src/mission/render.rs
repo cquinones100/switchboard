@@ -1410,17 +1410,26 @@ fn card_2(tab: &TabModel, tone: Tone, look: &CardLook, frame: usize, m: &Mission
     let number = tab.index.to_string();
     // The edge's corner and spaces, the mark and the number before the
     // name, and the state after it.
+    // A status you set: the kit's chip after its name (board 158).
+    let by_you = model::by_hand(tab, r)
+        .is_some()
+        .then(|| kit::chip(model::BY_YOU, Tone::Dim, false, theme));
+    let chip_w = by_you.as_ref().map_or(0, |c| 1 + kit::spans_width(c));
     let name_room = look
         .w
-        .saturating_sub(5 + width(&words) + 2 + 2 + width(&number) + 1);
+        .saturating_sub(5 + width(&words) + 2 + 2 + width(&number) + 1 + chip_w);
     let right = vec![Span::styled(words, mark.look().1.style(theme))];
-    let title = vec![
+    let mut title = vec![
         kit::mark(mark, frame, theme),
         Span::raw(" "),
         Span::styled(number, bold(color)),
         Span::raw(" "),
         Span::styled(text::cut(&tab.name, name_room.max(1)), bold(theme.bright)),
     ];
+    if let Some(chip) = by_you {
+        title.push(Span::raw(" "));
+        title.extend(chip);
+    }
     let inside = if look.shows_screen {
         let lines: &[Vec<Span<'static>>] = look.screen.map_or(&[], |s| &s.lines[..]);
         let shown = &lines[lines.len().saturating_sub(rows)..];

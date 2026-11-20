@@ -518,7 +518,7 @@ impl Server {
 
     /// Every status line showing this tab draws again: the badges and counts
     /// are on all of a session's clients, whichever tab they show.
-    fn redraw_tab(&mut self, tab: TabId) {
+    pub(crate) fn redraw_tab(&mut self, tab: TabId) {
         if let Some(name) = self.session_of_tab(tab).map(|s| s.name.clone()) {
             self.dirty_session(&name);
         }
