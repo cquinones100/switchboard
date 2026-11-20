@@ -611,13 +611,15 @@ fn run(given: &Given, asked: Asked, target: &str, input: &str) -> Result<ExitCod
         trust::midway_refusal(&finished)?;
         let others = trust::others_on(&finished, "HEAD", against.as_deref())?;
         if !others.is_empty() {
-            return Err(format!(
+            let command = trusted_command(&repo, pr.number, named.is_none());
+            let code = worktree::fail(&format!(
                 "{} holds commits beyond the default branch by someone else ({}), whose CLAUDE.md, settings and hooks Claude would load, so Claude isn't started there.\n\
-                 Read them, then run switchboard worktree-from-pr --trusted {} to open it as your own.",
+                 Read them, then run {command} to open it as your own.",
                 paths::tilde(&finished),
                 others.join(", "),
-                named_again(&repo, pr.number, named.is_none())
             ));
+            offer_copy_here(&command);
+            return Ok(code);
         }
     }
     crate::cmd::clone_build::start(&finished);
@@ -1018,10 +1020,8 @@ fn print_facts(pr: &PrDetails, repo: &Repo, dir: &Path, base: &str, root: &Path,
         _ => String::new(),
     };
     eprintln!("\nOpen it as your own{how}, with Claude in its worktree:");
-    eprintln!(
-        "  switchboard worktree-from-pr --trusted {}",
-        named_again(repo, pr.number, by_number)
-    );
+    let command = trusted_command(repo, pr.number, by_number);
+    eprintln!("  {command}");
     let caution = "Only for a PR whose author you trust: its hooks, settings and scripts then run.";
     if std::io::stderr().is_terminal() {
         eprintln!("  \x1b[2m{caution}\x1b[0m");
@@ -1045,6 +1045,55 @@ fn print_facts(pr: &PrDetails, repo: &Repo, dir: &Path, base: &str, root: &Path,
     );
     if switchboard {
         eprintln!("  switchboard try --sealed {at}");
+    }
+    eprintln!();
+    offer_copy_here(&command);
+}
+
+/// The command that opens PR `number` as your own.
+fn trusted_command(repo: &Repo, number: u64, by_number: bool) -> String {
+    format!(
+        "switchboard worktree-from-pr --trusted {}",
+        named_again(repo, number, by_number)
+    )
+}
+
+/// `offer_copy` on this terminal and the desktop's clipboard, asked only
+/// when stdin is a terminal, so a script or the server's own run is never
+/// asked.
+fn offer_copy_here(command: &str) {
+    let interactive = std::io::stdin().is_terminal();
+    offer_copy(
+        command,
+        interactive,
+        &mut std::io::stdin().lock(),
+        &mut crate::platform::copy,
+    );
+}
+
+/// Asks whether to copy `command` to the clipboard, No unless answered
+/// yes, since trusting a PR runs its code, and copies it as it is, with no
+/// newline, on a yes. Asks nothing when not `interactive`.
+fn offer_copy(
+    command: &str,
+    interactive: bool,
+    input: &mut dyn std::io::BufRead,
+    copy: &mut dyn FnMut(&str) -> anyhow::Result<()>,
+) {
+    if !interactive {
+        return;
+    }
+    eprint!("Copy the command to open it as your own to the clipboard? [y/N] ");
+    let mut answer = String::new();
+    if input.read_line(&mut answer).is_err() {
+        return;
+    }
+    if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+        return;
+    }
+    match copy(command) {
+        Ok(()) => eprintln!("On your clipboard."),
+        Err(e) => eprintln!("Couldn't copy it: {e}"),
     }
 }
 
@@ -1071,6 +1120,51 @@ fn slug(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What `offer_copy` put on a stand-in clipboard, answered `answer`.
+    fn copied(answer: &str, interactive: bool) -> Vec<String> {
+        let mut clipboard = Vec::new();
+        offer_copy(
+            "switchboard worktree-from-pr --trusted https://github.com/o/r/pull/12345",
+            interactive,
+            &mut answer.as_bytes(),
+            &mut |text| {
+                clipboard.push(text.to_string());
+                Ok(())
+            },
+        );
+        clipboard
+    }
+
+    #[test]
+    fn the_trusted_command_is_copied_only_on_a_yes() {
+        assert_eq!(
+            copied("y\n", true),
+            ["switchboard worktree-from-pr --trusted https://github.com/o/r/pull/12345"]
+        );
+        assert_eq!(copied("Yes\n", true).len(), 1);
+        assert!(copied("\n", true).is_empty());
+        assert!(copied("n\n", true).is_empty());
+        assert!(copied("", true).is_empty());
+        // Not a terminal: nothing is asked, so even a y waiting is unread.
+        assert!(copied("y\n", false).is_empty());
+    }
+
+    #[test]
+    fn the_trusted_command_names_the_pr_as_it_was_given() {
+        let repo = Repo {
+            owner: "o".into(),
+            name: "r".into(),
+        };
+        assert_eq!(
+            trusted_command(&repo, 12345, false),
+            "switchboard worktree-from-pr --trusted https://github.com/o/r/pull/12345"
+        );
+        assert_eq!(
+            trusted_command(&repo, 12345, true),
+            "switchboard worktree-from-pr --trusted 12345"
+        );
+    }
 
     #[test]
     fn hints_name_a_command_every_shell_has() {
