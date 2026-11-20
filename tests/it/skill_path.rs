@@ -462,6 +462,44 @@ fn shape_writes_a_notes_item_and_its_plan_in_the_shape_wtn_reads() {
     assert!(step(8).contains("the item's first line quoted as written"));
 }
 
+// What /shape files it hands to the review loop's ticket mode, started the
+// way the mode's own file says it is, which the review loop reads when given
+// `ticket`.
+#[test]
+fn shape_hands_what_it_files_to_the_review_loop_s_ticket_mode() {
+    let all = skills();
+    let (_, shape) = all.iter().find(|(name, _)| name == "shape").unwrap();
+    let (_, review) = all.iter().find(|(name, _)| name == "review-loop").unwrap();
+    let mode =
+        fs::read_to_string(skills_dir().join("review-loop/references/ticket-mode.md")).unwrap();
+    assert!(
+        mode.contains("It is started as `/review-loop ticket <ticket>`"),
+        "the mode says how it is started"
+    );
+    assert!(
+        review.contains("read `references/ticket-mode.md` beside this file and follow it"),
+        "the review loop reads it when given `ticket`"
+    );
+    let linear = section(shape, "Linear");
+    assert!(linear.contains("run `/review-loop ticket <ID>` on it"));
+    assert!(linear.contains("Run `/review-loop ticket <ID>`, the review loop's ticket mode"));
+    let github = section(shape, "GitHub issues");
+    assert!(github.contains("run `/review-loop ticket <number>`"));
+    for (name, text) in [("shape", shape.as_str()), ("ticket mode", mode.as_str())] {
+        assert!(
+            !text.contains("working tree isn't clean"),
+            "{name}: a ticket's review needs no clean tree"
+        );
+    }
+    // Nothing is written to the ticket before a yes, and a public issue is
+    // checked first.
+    let leak = mode.find("switchboard leak-check --file").unwrap();
+    let asked = mode.find("**Save it to the issue**").unwrap();
+    let edited = mode.find("gh issue edit").unwrap();
+    assert!(leak < asked && asked < edited, "checked, asked, then saved");
+    assert!(mode.contains("switchboard codex-review --ticket <file> --round start"));
+}
+
 /// The retired skill's name, put together so this file doesn't hold it.
 fn retired() -> String {
     ["plan", "item"].join("-")

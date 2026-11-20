@@ -68,6 +68,7 @@
       "Bash(git worktree list*)",
       "Bash(git branch --show-current)",
       "Bash(gh pr view*)",
+      "Bash(gh issue view *)",
       "Bash(gh pr checks *)",
       "Bash(gh pr diff*)",
       "Bash(gh run view *)",
