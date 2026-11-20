@@ -48,14 +48,15 @@ fn screen(server: &TestServer, pane: &str) -> String {
 }
 
 /// Claude Code's permission prompt, printed, then `cat` echoing what is
-/// pressed.
+/// pressed. Its ─ and ❯ go as octal escapes, the only ones POSIX printf
+/// reads: Linux's sh is dash, whose printf has no `\x`.
 fn show_prompt(server: &TestServer, pane: &str) {
     server.ok(&[
         "send-keys",
         "-t",
         pane,
         "-l",
-        "clear; printf '\\xe2\\x94\\x80\\xe2\\x94\\x80\\xe2\\x94\\x80\\nDo you want to proceed?\\n\\xe2\\x9d\\xaf 1. Yes\\n  2. No\\n'; cat",
+        "clear; printf '\\342\\224\\200\\342\\224\\200\\342\\224\\200\\nDo you want to proceed?\\n\\342\\235\\257 1. Yes\\n  2. No\\n'; cat",
     ]);
     server.ok(&["send-keys", "-t", pane, "Enter"]);
     wait_until(server, "the prompt shown", || {
