@@ -64,6 +64,8 @@ pub enum Do {
     LandAlone(TabId),
     /// A reminder set (remind.sh's times), or cleared.
     Remind(TabId),
+    /// Its status set by hand, from a menu of the sidebar's groups.
+    TabStatus(TabId),
     /// The tab, and M-p's palette in it.
     Palette(TabId),
     /// Its place in the landing queue moved (`land-lock move`).
@@ -758,6 +760,9 @@ pub fn tab_choices(
             },
             Do::Remind(tab.id),
         ));
+    }
+    if crate::settings::is_on("tab_status_by_hand") {
+        out.push(choice('s', "Set its status…", Do::TabStatus(tab.id)));
     }
     // Not `w`, which "Use the default width" takes in the same menu.
     out.push(choice(
@@ -2362,7 +2367,7 @@ mod tests {
     fn a_tabs_menu_goes_there_first_then_answers_peeks_renames_pins_and_reminds() {
         let mut t = tab(3, "fix");
         let choices = tab_choices(&t, std::slice::from_ref(&t), None, true, true);
-        assert_eq!(keys(&choices), "gavidLprkfeox");
+        assert_eq!(keys(&choices), "gavidLprkfesox");
         assert_eq!(choices[3].label, "Show its full title");
         assert_eq!(choices[3].act, Do::TabTitle(TabId(3)));
         assert_eq!(choices[0].label, "Go to tab 3");
@@ -2374,15 +2379,17 @@ mod tests {
         let choices = tab_choices(&t, std::slice::from_ref(&t), None, false, false);
         assert_eq!(
             keys(&choices),
-            "gvdLprkfox",
+            "gvdLprkfsox",
             "no answer without a Claude, no reminder or full title when off"
         );
         assert_eq!(choices[1].label, "Peek at its screen");
         assert_eq!(choices[2].act, Do::Diff(TabId(3)));
         assert_eq!(choices[3].act, Do::Lazygit(TabId(3)));
         assert_eq!(choices[7].label, "Unpin it");
-        assert_eq!(choices[8].label, "Ask before landing it");
-        assert_eq!(choices[8].act, Do::LandAlone(TabId(3)));
+        assert_eq!(choices[8].label, "Set its status…");
+        assert_eq!(choices[8].act, Do::TabStatus(TabId(3)));
+        assert_eq!(choices[9].label, "Ask before landing it");
+        assert_eq!(choices[9].act, Do::LandAlone(TabId(3)));
     }
 
     #[test]
