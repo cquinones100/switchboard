@@ -608,6 +608,10 @@
     "BuiltDiffFiles.dc.html": {
       "title": "148. As built: the Files view, its list at full strength while the diff has the keys",
       "page": "design"
+    },
+    "StoryHowWhy.dc.html": {
+      "title": "149. How it gets there says how and why: under each step's title a How naming the code that does the work and in what order, and a Why of one clause on the problem it fixes; the pages that only test folded into one Tested line",
+      "page": "design"
     }
   }
 }

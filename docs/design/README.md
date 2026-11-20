@@ -1,6 +1,6 @@
 # The design of UX 2.0
 
-The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from the kit's first board, every page beside a sidebar of them all. Drawn from the boards' sources in [`src/`](https://github.com/cquinones100/switchboard/tree/main/docs/design/src) on 2026-11-19 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again: a board is changed in its source, never in its page.
+The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from the kit's first board, every page beside a sidebar of them all. Drawn from the boards' sources in [`src/`](https://github.com/cquinones100/switchboard/tree/main/docs/design/src) on 2026-11-20 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again: a board is changed in its source, never in its page.
 
 ## The kit and the index
 
@@ -265,3 +265,7 @@ The relay's DM, threads and Home tab.
 - [146. As built (for review): the Story view, its row of buttons at the top with ← → (H L) for back and forward, the Story / Map / Files switch, What runs always over the column, side-by-side hunks; the outline not greyed while the column has the keys](https://cquinones100.github.io/switchboard/design/146.html)
 - [147. As built: the Map back as a third view, switched to from the Story view on the same chapter and page](https://cquinones100.github.io/switchboard/design/147.html)
 - [148. As built: the Files view, its list at full strength while the diff has the keys](https://cquinones100.github.io/switchboard/design/148.html)
+
+## Proposal: how it gets there, how and why
+
+- [149. How it gets there says how and why: under each step's title a How naming the code that does the work and in what order, and a Why of one clause on the problem it fixes; the pages that only test folded into one Tested line](https://cquinones100.github.io/switchboard/design/149.html)
