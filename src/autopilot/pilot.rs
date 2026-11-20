@@ -130,9 +130,28 @@ pub enum Stands {
 
 /// The held items the view shows (`QUEUE_SHOWN` of `held`, in its order),
 /// each with every open item its `After:` lines name in the note `text`
-/// and where that one stands, from the whole `queue` and the note.
+/// and where that one stands, from the whole `queue` and the note; an
+/// issue with every open issue blocking it (its item's `after`), named by
+/// its item's first line while the queue or `held` has it.
 pub fn held_shown(text: &str, queue: &[Item], held: Vec<Item>) -> Vec<Held> {
     use crate::cmd::worktree_from_note::held_by_all;
+    // An issue's item, among `items`, by its reference.
+    let issue_in = |items: &[Item], on: &str| {
+        let prefix = format!("{}: ", on.to_lowercase());
+        items
+            .iter()
+            .position(|i| i.line == 0 && i.text.to_lowercase().starts_with(&prefix))
+    };
+    let issues_held: Vec<Item> = held.iter().filter(|i| i.line == 0).cloned().collect();
+    let issue_stands = |on: &str| {
+        if let Some(at) = issue_in(queue, on) {
+            (queue[at].text.clone(), Stands::Queued(at + 1))
+        } else if let Some(at) = issue_in(&issues_held, on) {
+            (issues_held[at].text.clone(), Stands::Blocked)
+        } else {
+            (on.to_string(), Stands::Open)
+        }
+    };
     // An open item of the note, by its first line, that waits on another.
     let blocked_itself = |on: &str| {
         text.split('\n').enumerate().any(|(at, line)| {
@@ -154,13 +173,17 @@ pub fn held_shown(text: &str, queue: &[Item], held: Vec<Item>) -> Vec<Held> {
         .take(QUEUE_SHOWN)
         .filter_map(|i| {
             Some(Held {
-                after: held_by_all(text, i.line)
-                    .into_iter()
-                    .map(|on| {
-                        let stands = stands(&on);
-                        (on, stands)
-                    })
-                    .collect(),
+                after: if i.line == 0 {
+                    i.after.iter().map(|on| issue_stands(on)).collect()
+                } else {
+                    held_by_all(text, i.line)
+                        .into_iter()
+                        .map(|on| {
+                            let stands = stands(&on);
+                            (on, stands)
+                        })
+                        .collect()
+                },
                 text: i.text,
                 waits_on: i.waits_on?,
             })
@@ -185,6 +208,8 @@ pub struct Next {
     /// The plan each of the note's items links, by the item's first line,
     /// read with them for the board's side panel.
     pub plans: HashMap<String, PlanNote>,
+    /// Each issue's priority, by its item's first line, for its card.
+    pub priorities: HashMap<String, u8>,
     /// Today's spend, read with them while there is a spend limit.
     pub spent: f64,
     /// The week's use of the weekly rate limit (percent) and when it
@@ -309,12 +334,32 @@ impl Job {
         Ok((items, held))
     }
 
-    /// The repository's GitHub issues it may take, oldest first, as items:
-    /// those no worktree has, wtn didn't start lately and weren't skipped.
-    /// Apart from them, those whose body's open choice waits on your review
-    /// of a design board, which hands-free never decides.
+    /// The repository's GitHub issues it may take, by priority and then
+    /// oldest first, as items: those no worktree has, wtn didn't start
+    /// lately and weren't skipped. Apart from them, those blocked by an open
+    /// issue, each waiting on the first (its item's `after` naming every
+    /// one), and those whose body's open choice waits on your review of a
+    /// design board, which hands-free never decides.
     fn issue_items(&self, state: &Path) -> Result<(Vec<Item>, Vec<Item>), String> {
-        let issues = super::issues::issues(&self.repo, &self.label, state, util::now_ms())?;
+        let mut issues = super::issues::issues(&self.repo, &self.label, state, util::now_ms())?;
+        // Stable, so the search's oldest first holds within a priority;
+        // those put next first of all, the last put there first, by their
+        // reference, whatever their title says now.
+        issues.sort_by_key(|i| i.priority);
+        let mut front = Vec::new();
+        for text in &self.next {
+            let Some((repo, number)) = super::issues::reference_in(text) else {
+                continue;
+            };
+            let named = format!("{repo}#{number}").to_lowercase();
+            if let Some(at) = issues
+                .iter()
+                .position(|i| i.reference().to_lowercase() == named)
+            {
+                front.push(issues.remove(at));
+            }
+        }
+        issues.splice(0..0, front);
         let claims = std::fs::read_to_string(crate::cmd::worktree_from_note::claims_in(state))
             .unwrap_or_default();
         // An ID that can't be read claims nothing as this computer's, so
@@ -333,6 +378,14 @@ impl Job {
             util::now_secs(),
         ) {
             let item = super::issues::item_of(&issue);
+            if let Some(first) = issue.blocked_by.first() {
+                held.push(Item {
+                    waits_on: Some(first.clone()),
+                    after: issue.blocked_by.clone(),
+                    ..item
+                });
+                continue;
+            }
             if let Some(what) = crate::cmd::worktree_from_note::review_hold(&issue.body) {
                 held.push(Item {
                     waits_on: Some(what),
@@ -373,6 +426,19 @@ impl Job {
             });
         }
         Ok((items, held))
+    }
+
+    /// Each issue's priority, by its item's first line, from the read the
+    /// queue took (no request of its own while that read is fresh).
+    pub fn priorities(&self, state: &Path) -> HashMap<String, u8> {
+        if !(self.sources.issues() && self.issues_on) {
+            return HashMap::new();
+        }
+        super::issues::issues(&self.repo, &self.label, state, util::now_ms())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|i| (i.text(), i.priority))
+            .collect()
     }
 
     /// The plan each item of the note links, by the item's first line.
@@ -1123,6 +1189,7 @@ impl Pilot {
             queue: Vec::new(),
             held: Vec::new(),
             plans: HashMap::new(),
+            priorities: HashMap::new(),
             spent: 0.0,
             weekly: None,
             left: super::eta::Left::default(),
@@ -1359,6 +1426,124 @@ mod tests {
         job.issues_on = false;
         assert!(texts(&job).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // A job taking the issues kept in `dir` alone.
+    fn issues_job(dir: &Path) -> Job {
+        Job {
+            note: String::new(),
+            repo: dir.to_path_buf(),
+            ready_only: false,
+            with_choices: false,
+            skip: HashSet::new(),
+            retrying: HashSet::new(),
+            next: Vec::new(),
+            spend_limit: 0.0,
+            weekly_limit: 0,
+            key: String::new(),
+            mtime: 0,
+            sources: Sources::Issues,
+            issues_on: true,
+            label: "autopilot".into(),
+        }
+    }
+
+    // The issues kept in `dir` as a fresh read, so no request is made.
+    fn keep_issues(dir: &Path, issues: Vec<serde_json::Value>) {
+        std::fs::write(
+            dir.join(super::super::issues::FILE),
+            serde_json::json!({
+                "at": util::now_ms(), "dir": dir.to_string_lossy(), "label": "autopilot",
+                "issues": issues,
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_priority_1_issue_comes_before_an_older_priority_3_one() {
+        let dir = std::env::temp_dir().join(format!("sb-pilot-priority-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let issue = |n: u64, priority: Option<u8>| {
+            let mut i = serde_json::json!({ "repo": "acme/widgets", "number": n,
+                "title": format!("Issue {n}"), "body": "", "url": "" });
+            if let Some(p) = priority {
+                i["priority"] = serde_json::json!(p);
+            }
+            i
+        };
+        // Oldest first, as the search answers; one kept with no priority
+        // counts as 3.
+        keep_issues(
+            &dir,
+            vec![
+                issue(2, None),
+                issue(3, Some(3)),
+                issue(7, Some(1)),
+                issue(8, Some(4)),
+            ],
+        );
+        let texts = |job: &Job| -> Vec<String> {
+            job.items(&dir, &dir)
+                .unwrap()
+                .into_iter()
+                .map(|i| i.text)
+                .collect()
+        };
+        let mut job = issues_job(&dir);
+        assert_eq!(
+            texts(&job),
+            [
+                "acme/widgets#7: Issue 7",
+                "acme/widgets#2: Issue 2",
+                "acme/widgets#3: Issue 3",
+                "acme/widgets#8: Issue 8",
+            ]
+        );
+        // Put next: first of all the issues, by its reference whatever its
+        // title says now.
+        job.next = vec!["acme/widgets#3: An older title".to_string()];
+        let first = texts(&job);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(first[0], "acme/widgets#3: Issue 3");
+        assert_eq!(first[1], "acme/widgets#7: Issue 7");
+    }
+
+    #[test]
+    fn an_issue_blocked_by_an_open_one_waits_and_goes_once_it_closes() {
+        let dir = std::env::temp_dir().join(format!("sb-pilot-blocked-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let issue = |n: u64, blocked_by: &[&str]| {
+            serde_json::json!({ "repo": "acme/widgets", "number": n,
+                "title": format!("Issue {n}"), "body": "", "url": "", "blocked_by": blocked_by })
+        };
+        keep_issues(
+            &dir,
+            vec![issue(3, &[]), issue(4, &["acme/widgets#3", "acme/other#9"])],
+        );
+        let job = issues_job(&dir);
+        let (queue, held) = job.items_and_held(&dir, &dir).unwrap();
+        assert_eq!(queue.len(), 1);
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].waits_on.as_deref(), Some("acme/widgets#3"));
+        // The card names the one in line by its first line and its place.
+        let shown = held_shown("", &queue, held);
+        assert_eq!(
+            shown[0].after,
+            [
+                ("acme/widgets#3: Issue 3".to_string(), Stands::Queued(1)),
+                ("acme/other#9".to_string(), Stands::Open),
+            ]
+        );
+        // Both closed: the next read lists no blockers, and it goes.
+        keep_issues(&dir, vec![issue(4, &[])]);
+        let (queue, held) = job.items_and_held(&dir, &dir).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(held.is_empty());
+        assert_eq!(queue[0].text, "acme/widgets#4: Issue 4");
     }
 
     #[test]

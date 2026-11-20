@@ -190,6 +190,8 @@ pub enum AutopilotEvent {
         held: Vec<pilot::Held>,
         /// The plan each of the note's items links, by its first line.
         plans: std::collections::HashMap<String, crate::cmd::worktree_from_note::PlanNote>,
+        /// Each issue's priority, by its item's first line.
+        priorities: std::collections::HashMap<String, u8>,
         /// Today's spend, while there is a spend limit.
         spent: f64,
         /// The week's use of the weekly rate limit and when it resets,

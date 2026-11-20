@@ -605,7 +605,9 @@ pub fn blocker_act(item: &Item, n: usize, list: &[Choice]) -> Option<Choice> {
 /// A card's menu in Autopilot's view (src/autopilot/view.rs): for a
 /// blocked one (boards 113 and 114), first a choice per item it waits on
 /// (`blocker_choice`) and its own plan in Notes; then its tab, its
-/// item skipped (an item to open next too) or a skipped one taken again.
+/// item skipped (an item to open next too) or a skipped one taken again;
+/// for an issue in line or blocked, "Put next", "Move up" and "Move down",
+/// which change its priority label (`view::say_priorities`).
 /// What changes the whole mode is on the view's own menu (`m`,
 /// `Server::view_menu`), not on every card.
 fn pilot_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
@@ -657,6 +659,34 @@ fn pilot_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
             "Take this item again",
             Do::Autopilot(Act::Unskip(Some(text.to_string()))),
         ));
+    }
+    if let (Some(text), Some(p)) = (
+        item.data["next"].as_str(),
+        item.data["priority"].as_u64().map(|p| p as u8),
+    ) {
+        use crate::autopilot::issues::{HIGHEST, LOWEST};
+        let to = |n: u8| Do::Autopilot(Act::Priority(text.to_string(), n));
+        // At the highest too, since another issue there may come first.
+        out.push(choice(
+            'n',
+            format!("Put next (priority {HIGHEST})"),
+            to(HIGHEST),
+        ));
+        // One below the highest moves up by "Put next".
+        if p > HIGHEST + 1 {
+            out.push(choice(
+                'u',
+                format!("Move up (priority {})", p - 1),
+                to(p - 1),
+            ));
+        }
+        if p < LOWEST {
+            out.push(choice(
+                'd',
+                format!("Move down (priority {})", p + 1),
+                to(p + 1),
+            ));
+        }
     }
     out
 }
@@ -2266,6 +2296,48 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn an_issue_cards_menu_puts_it_next_as_priority_1_and_moves_it_a_step() {
+        use crate::autopilot::Act;
+        let repo = |_: &Path| Vec::new();
+        let menu = |p: u8| {
+            let text = "acme/widgets#4: Fix it";
+            let item = Item::new(format!("next:{text}"), text)
+                .data(json!({ "next": text, "place": 2, "priority": p }));
+            item_choices(&ViewId::Autopilot, &item, &[], &ctx(&[], &repo))
+                .into_iter()
+                .filter_map(|c| match c.act {
+                    Do::Autopilot(Act::Priority(_, to)) => Some((c.label, to)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            menu(3),
+            [
+                ("Put next (priority 1)".to_string(), 1),
+                ("Move up (priority 2)".to_string(), 2),
+                ("Move down (priority 4)".to_string(), 4),
+            ]
+        );
+        assert_eq!(
+            menu(2),
+            [
+                ("Put next (priority 1)".to_string(), 1),
+                ("Move down (priority 3)".to_string(), 3),
+            ]
+        );
+        assert_eq!(
+            menu(1),
+            [
+                ("Put next (priority 1)".to_string(), 1),
+                ("Move down (priority 2)".to_string(), 2),
+            ]
+        );
+        assert_eq!(menu(4)[1], ("Move up (priority 3)".to_string(), 3));
+        assert_eq!(menu(4).len(), 2);
     }
 
     #[test]
