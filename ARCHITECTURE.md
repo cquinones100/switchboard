@@ -149,7 +149,7 @@ Switchboard was a tmux setup until the rewrite: tmux.conf and its shell scripts,
 | tmux user options (`@agent_state`, `@tab_label`, ...) | typed fields on panes and tabs, plus a string map for the rest |
 | `display-popup`, `say.sh`, `tip.sh`, `menu.sh`, `confirm.sh` | overlays in `src/ui/` |
 | fzf (palette, pickers) | `crates/ui/src/picker.rs` with nucleo-matcher |
-| glow, mermaid-ascii, less | `src/views/` (pulldown-cmark, a Mermaid flowchart and sequence drawer, a pager, `pictures`, which draws a view's pictures and diagrams as images, the diagrams by Mermaid in Chrome, and `follow`, by which an open PR or ticket view reads again when the server's lookups see its PR or ticket change, told on its pane's socket) |
+| glow, mermaid-ascii, less | `src/views/` (pulldown-cmark, a Mermaid flowchart and sequence drawer, a pager, `pictures`, which draws a view's pictures and diagrams as images, the diagrams by Mermaid in Chrome, and `follow`, by which an open PR or ticket view reads again when the server's lookups see its PR or ticket change, told on its pane's socket, and `note`, a note's read-only preview, which reads its file again as it changes) |
 | diffview.nvim, `diffstory.lua`, `diffask.lua`, `pane-in-place.sh`, `diff-base.sh`, `diff-story-ahead.sh` | `crates/diff/` (syntect with bat's syntaxes (two-face) for highlighting, similar for the line and word diffs), and `src/diff/` for the server's side |
 | the notes app (`notes/`, Neovim), `bin/notes` | `crates/notes/`, with the server's side in `src/notes/` (ropey for the text, notify for the watch, image for pictures other than PNGs) |
 | a note's stable ID (`notes/lua/notes/id.lua`, `lib/note-id.js`) | `crates/notes/src/id.rs`, which the app, `wtn` and autopilot share |

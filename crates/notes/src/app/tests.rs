@@ -5259,3 +5259,16 @@ fn in_a_notes_with_no_room_a_narrowing_key_clears_a_kept_width() {
     app.key(resize('h'));
     assert_eq!(kept(&app), None);
 }
+
+#[test]
+fn preview_this_note_is_listed_in_a_workspace_and_left_out_alone() {
+    let (_dir, mut app) = started("preview-listed");
+    let listed = |app: &App| {
+        app.palette_commands(false)
+            .iter()
+            .any(|c| c.act == PaletteAct::Preview && c.name == "Preview this note")
+    };
+    assert!(!listed(&app), "alone, no workspace to draw it");
+    app.opts.server = true;
+    assert!(listed(&app), "in a workspace's pane");
+}
