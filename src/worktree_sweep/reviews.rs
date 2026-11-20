@@ -6,13 +6,16 @@
 //!
 //! A checkout goes when its PR is merged or closed, or when no tab has been
 //! in it for `UNSEEN`, and in either case only when no pane has it open now,
-//! no `switchboard try` runs on it, nothing in it is uncommitted or
+//! no `switchboard try` runs on it (its socket answers, or it started or
+//! changed its home within the hour, since a sealed try opens its socket
+//! only once its build is done), nothing in it is uncommitted or
 //! untracked, and its main clone lists it as a worktree on its own
-//! `pr-review/<number>` branch, unlocked. When a tab was last in one is the
-//! server's record (`pr-reviews.json` in the state folder), stamped each
-//! time the sweep finds a pane in it, else when it was checked out (its
-//! `.git` file's time), since git barely touches a checkout someone only
-//! reads. Removal is the review-pr skill's: its try ended and its home
+//! `pr-review/<number>` branch, unlocked. When one was last used is the
+//! latest of the server's record (`pr-reviews.json` in the state folder),
+//! stamped each time the sweep finds a pane in it, when it was checked out
+//! (its `.git` file's time) and when git last changed its index or `HEAD`
+//! (as `wtpr --untrusted` run again does), since a checkout reviewed from
+//! the main clone has no pane in it. Removal is the review-pr skill's: its try ended and its home
 //! removed, `git worktree remove --force` from the main clone (the checks
 //! above being what `--force` would otherwise guard), and its branch
 //! deleted. Nothing runs from the checkout but `git status`, under its own
@@ -118,16 +121,24 @@ pub fn stamp(file: &Path, checkouts: &[Checkout], open: &[PathBuf], now: SystemT
     seen
 }
 
-/// When a tab was last in `c`: the record's, else when it was checked out.
+/// When `c` was last used: the latest of the record's time, when it was
+/// checked out, and when git last changed its index or `HEAD` (as `wtpr
+/// --untrusted` run again on it does, reviewed from the main clone with no
+/// pane in it).
 fn last_seen(c: &Checkout, seen: &Seen) -> Option<u64> {
-    seen.get(c.tree.to_string_lossy().as_ref())
-        .copied()
-        .or_else(|| {
-            std::fs::symlink_metadata(c.tree.join(".git"))
-                .and_then(|m| m.modified())
-                .ok()
-                .map(ms)
-        })
+    let checked_out = std::fs::symlink_metadata(c.tree.join(".git"))
+        .and_then(|m| m.modified())
+        .ok()
+        .map(ms);
+    let git_used = super::last_used(&c.tree).map(ms);
+    [
+        seen.get(c.tree.to_string_lossy().as_ref()).copied(),
+        checked_out,
+        git_used,
+    ]
+    .into_iter()
+    .flatten()
+    .max()
 }
 
 /// Whether a PR in GitHub's `state` is finished with.
@@ -162,10 +173,23 @@ fn try_home(tree: &Path) -> PathBuf {
     crate::cmd::try_::home_of(Path::new(crate::cmd::try_::ROOT), &real)
 }
 
+/// How long after a try of a checkout was last started or changed its home
+/// it counts as running, socket or not: a sealed try's server opens its
+/// socket only once its build, which can take many minutes, is done.
+const TRY_BUSY: Duration = Duration::from_secs(60 * 60);
+
 /// Whether a `switchboard try` of `tree` runs: something listens on its
-/// home's socket. Connecting sends nothing.
+/// home's socket (connecting sends nothing), or its home or its sealed
+/// rules (written on each run) changed within `TRY_BUSY`.
 fn try_runs(tree: &Path) -> bool {
-    std::os::unix::net::UnixStream::connect(crate::cmd::try_::socket_of(&try_home(tree))).is_ok()
+    let home = try_home(tree);
+    if std::os::unix::net::UnixStream::connect(crate::cmd::try_::socket_of(&home)).is_ok() {
+        return true;
+    }
+    [home.clone(), crate::cmd::try_sealed::profile_file(&home)]
+        .iter()
+        .filter_map(|p| std::fs::symlink_metadata(p).and_then(|m| m.modified()).ok())
+        .any(|at| at.elapsed().is_ok_and(|d| d < TRY_BUSY) || at.elapsed().is_err())
 }
 
 /// Whether `c` must stay whatever its PR: a pane has it open, a try runs
@@ -410,7 +434,17 @@ mod tests {
         // A tab in it a day before then keeps it.
         let seen = stamp(&file, &found, std::slice::from_ref(&old.tree), later - DAY);
         assert!(due(&found, &[], &seen, later, &mut open_pr).is_empty());
-        assert!(due(&found, &[], &seen, later + UNSEEN, &mut open_pr) == vec![old]);
+        assert!(due(&found, &[], &seen, later + UNSEEN, &mut open_pr) == vec![old.clone()]);
+
+        // wtpr run on it again, from the main clone, keeps it too.
+        let own = crate::sources::landing::own_git_dir(&old.tree).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(own.join("HEAD"))
+            .unwrap()
+            .set_modified(later + UNSEEN - DAY)
+            .unwrap();
+        assert!(due(&found, &[], &seen, later + UNSEEN, &mut open_pr).is_empty());
     }
 
     #[test]
