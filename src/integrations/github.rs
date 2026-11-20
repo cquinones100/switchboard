@@ -1215,6 +1215,31 @@ pub async fn open_fork_prs(repo: &Repo, source: &str) -> Result<Vec<ForkPr>> {
         .collect())
 }
 
+/// An issue's title as GitHub has it now, `None` when it has no such issue
+/// (or the number is a pull request's): for the name of a tab working on
+/// it (src/tabs/names.rs).
+pub async fn issue_title(repo: &Repo, number: u64, source: &str) -> Result<Option<String>> {
+    let issue = match rest(
+        "GET",
+        &format!("/repos/{repo}/issues/{number}"),
+        None,
+        source,
+    )
+    .await
+    {
+        Ok(issue) => issue,
+        Err(e) if net::kind_of(&e) == Some(&ErrorKind::NotFound) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    if issue.get("pull_request").is_some_and(|p| !p.is_null()) {
+        return Ok(None);
+    }
+    Ok(issue
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::to_string))
+}
+
 /// One of a repository's open issues, as M-p's "Start work on a GitHub
 /// issue" lists it.
 #[derive(Clone, Debug, PartialEq, Eq)]

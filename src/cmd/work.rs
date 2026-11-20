@@ -1016,13 +1016,8 @@ impl Server {
                         return;
                     };
                     let reference = format!("{name}#{number}");
-                    let text = titles
-                        .into_iter()
-                        .find(|(n, _)| *n == number)
-                        .map(|(_, title)| format!("{reference}: {}", worktree::one_line(&title)))
-                        .unwrap_or_else(|| reference.clone());
                     if let Some(tab) =
-                        server.open_issue_tab(client, &repo, &reference, &text, "", Opened::Front)
+                        server.open_issue_tab(client, &repo, &reference, "", Opened::Front)
                     {
                         server.front(client, &[tab]);
                     }
@@ -1900,16 +1895,16 @@ impl Server {
     }
 
     /// A tab for one of the repository's GitHub issues, as `open_item_tab`
-    /// opens one for a note's item: named by its reference, its whole first
-    /// line (`<owner>/<repo>#<number>: <title>`) its full title,
-    /// running `wtn --issue <owner>/<repo>#<number>`, with `--target` as an
-    /// item's.
+    /// opens one for a note's item, running `wtn --issue
+    /// <owner>/<repo>#<number>`, with `--target` as an item's. It is given
+    /// no name: once `wtn` has made the issue's worktree, the tab is named
+    /// `<number>: <title>` from its branch, as every way of starting an issue
+    /// names it (src/tabs/names.rs), and follows the title as it changes.
     pub fn open_issue_tab(
         &mut self,
         client: ClientId,
         repo: &Path,
         reference: &str,
-        text: &str,
         target: &str,
         opened: Opened,
     ) -> Option<TabId> {
@@ -1918,16 +1913,7 @@ impl Server {
             args.extend(["--target".to_string(), target.to_string()]);
         }
         let command = worktree::tab_running("worktree-from-note", "wtn", &args);
-        let tab = self.work_tab(client, repo, command, opened)?;
-        // Named by its reference, since a tab's name goes into its Claude's
-        // starting context, and the title is someone else's words; the
-        // whole first line is its full title, for the sidebar.
-        if let Some(t) = self.tabs.get_mut(&tab) {
-            t.opts.insert("@tab_name".into(), reference.to_string());
-            t.opts.insert("@tab_title".into(), text.to_string());
-        }
-        self.dirty_tab(tab);
-        Some(tab)
+        self.work_tab(client, repo, command, opened)
     }
 
     /// The palette's "Continue shaping Linear tickets": which tickets, the

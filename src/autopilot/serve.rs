@@ -3248,7 +3248,6 @@ impl Server {
                 client,
                 &mode.repo,
                 &format!("{repo}#{number}"),
-                &item.text,
                 &mode.target,
                 crate::mux::server::Opened::Background,
             ),

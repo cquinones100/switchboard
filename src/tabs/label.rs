@@ -1,9 +1,10 @@
 //! What a tab is called, as tmux/tab-label.sh, tmux/path-facts.sh and
 //! tmux/window-names.sh put it together: the name given to the tab, else
-//! the Linear ticket its branch names and the ticket's title, once Linear
-//! has confirmed there is one, else the name its directory gives
-//! (`color::window_name`); with `#<number> ` in front when the branch has a
-//! pull request. The number goes first because it is the short, stable
+//! the GitHub issue its branch was started for and the issue's title
+//! (`issue_label`), or the Linear ticket its branch names and the ticket's
+//! title, once GitHub or Linear has confirmed there is one, else the name
+//! its directory gives (`color::window_name`); with `#<number> ` in front
+//! when the branch has a pull request. The number goes first because it is the short, stable
 //! half, so the tabs can be scanned by number.
 //!
 //! Nothing here reads a file or asks anything: the rules alone, so each can
@@ -48,6 +49,24 @@ pub fn facts_label(dir_name: &str, ticket: Option<(&str, &str)>) -> String {
     label.replace('\t', " ")
 }
 
+/// The label of a directory whose branch was started for a GitHub issue
+/// (`wtn --issue`) once its title is known: `<number>: <title>`, the title
+/// as GitHub has it with a leading `FEAT: ` or `BUG: ` left out, since the
+/// number already says it is an issue and the kind takes room the title
+/// needs.
+pub fn issue_label(number: u64, title: &str) -> String {
+    let title = ["FEAT: ", "BUG: "]
+        .iter()
+        .find_map(|kind| title.strip_prefix(kind))
+        .unwrap_or(title);
+    // Someone else wrote it, so nothing a terminal acts on is kept.
+    format!("{number}: {title}")
+        .chars()
+        .map(|c| if c.is_whitespace() { ' ' } else { c })
+        .filter(|c| !c.is_control())
+        .collect()
+}
+
 /// The tab's label: its own name when it has one, else `facts`, with the
 /// PR's number in front.
 pub fn label(own: Option<&str>, facts: &str, pr: Option<u64>) -> String {
@@ -62,6 +81,23 @@ pub fn label(own: Option<&str>, facts: &str, pr: Option<u64>) -> String {
 mod tests {
     use super::PaneKind::*;
     use super::*;
+
+    #[test]
+    fn an_issue_is_named_by_its_number_and_title_without_its_kind() {
+        assert_eq!(
+            issue_label(63, "FEAT: Make GitHub issues a ticket source"),
+            "63: Make GitHub issues a ticket source"
+        );
+        assert_eq!(
+            issue_label(7, "BUG: The tab\tis\u{7} red"),
+            "7: The tab is red"
+        );
+        assert_eq!(issue_label(8, "Plain FEAT: here"), "8: Plain FEAT: here");
+        assert_eq!(
+            label(None, &issue_label(63, "FEAT: Tabs"), Some(98)),
+            "#98 63: Tabs"
+        );
+    }
 
     #[test]
     fn a_given_name_wins_and_the_pr_goes_first() {

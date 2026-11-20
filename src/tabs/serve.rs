@@ -303,7 +303,8 @@ impl Server {
     /// `@tab_title`, else, for a tab opened before there was one, the
     /// autopilot's `@autopilot_item`, either only while the tab's
     /// name is still that item cut short (src/tabs/title.rs), or a GitHub
-    /// issue's reference it starts with (`<owner>/<repo>#<n>: <title>`).
+    /// issue's reference it starts with (`<owner>/<repo>#<n>: <title>`), as
+    /// an earlier build named an issue's tab.
     pub fn tab_full_title(&self, tab: TabId) -> Option<String> {
         let opts = &self.tabs.get(&tab)?.opts;
         let name = opts.get("@tab_name").map(String::as_str).unwrap_or("");
