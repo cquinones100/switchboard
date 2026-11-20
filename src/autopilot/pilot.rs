@@ -688,16 +688,14 @@ impl Pilot {
     /// A tab opened for the item `key` stopped before making its worktree at
     /// `now_ms`, for `why`: whether that makes `FAILS_SKIP` in the last
     /// `FAILS_MS`, which skips the item (and forgets its failures, so one
-    /// taken back gets its tries again). One that is never skipped
-    /// (`skippable` false: a GitHub issue's) keeps its failures, and so its
-    /// wait before the next try.
-    pub fn start_failed(&mut self, key: Key, why: &str, now_ms: i64, skippable: bool) -> bool {
+    /// taken back gets its tries again), a GitHub issue's as a note's.
+    pub fn start_failed(&mut self, key: Key, why: &str, now_ms: i64) -> bool {
         // Listed in Next up again at once, `retrying` holding its opening.
         self.recent.remove(&key);
         let fails = self.failed.entry(key.clone()).or_default();
         fails.retain(|(at, _)| now_ms - at < FAILS_MS);
         fails.push((now_ms, why.to_string()));
-        let skip = skippable && fails.len() >= FAILS_SKIP;
+        let skip = fails.len() >= FAILS_SKIP;
         if skip {
             self.failed.remove(&key);
         }
@@ -1255,7 +1253,7 @@ mod tests {
         let key = || ("n-1".to_string(), "Item".to_string());
         let hour = FAILS_MS;
         pilot.took("n-1", "Item", 0);
-        assert!(!pilot.start_failed(key(), "offline", 0, true));
+        assert!(!pilot.start_failed(key(), "offline", 0));
         assert!(
             !pilot.skip(&mode, 1).contains("Item"),
             "listed in Next up again at once"
@@ -1276,13 +1274,13 @@ mod tests {
             Some("offline"),
             "its card says why"
         );
-        assert!(!pilot.start_failed(key(), "offline", 1_000, true));
+        assert!(!pilot.start_failed(key(), "offline", 1_000));
         assert!(
-            !pilot.start_failed(key(), "offline", hour + 500, true),
+            !pilot.start_failed(key(), "offline", hour + 500),
             "the first is over an hour old by the third"
         );
         assert!(
-            pilot.start_failed(key(), "still offline", hour + 900, true),
+            pilot.start_failed(key(), "still offline", hour + 900),
             "the third in an hour skips it"
         );
         assert!(

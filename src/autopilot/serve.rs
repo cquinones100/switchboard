@@ -2476,39 +2476,24 @@ impl Server {
                 .map_or_else(util::now_ms, |s| s * 1000),
         };
         // Only a landing that pushed or merged counts for its issue (a tab merely
-        // back in a main clone may have landed nothing), by the commit it
-        // pushed; asked about unless it landed without asking.
+        // back in a main clone may have landed nothing). Its comment and
+        // closing are `switchboard item-done`'s, as for a tab of yours.
         let opts = self
             .tabs
             .get(&m.tab)
             .map(|t| t.opts.clone())
             .unwrap_or_default();
         let set = |k: &str| opts.get(k).map(|v| v.trim()).filter(|v| !v.is_empty());
-        // Landed without asking only as the tab was marked to (`@autopilot_land`,
-        // which nothing in a pane can set), not by its own say alone.
-        let without_asking = set(AUTOLAND).is_some() && set(LAND) == Some("1");
-        // Whole, as the landing marked it, for GitHub's check; cut short only
-        // where it is shown.
-        let hash: Option<String> = set(AUTOLAND).or(set(PUSHED)).map(str::to_string);
-        let opened_at = set(OPENED)
-            .and_then(|v| v.parse::<f64>().ok())
-            .map_or(0, |v| v as i64);
-        // Merged as a PR, GitHub closes the issue by the PR's `Closes #<n>`,
-        // so autopilot only takes its claim's label off.
-        let merged = hash.is_none() && set(MERGED).is_some();
-        let issue = set(ISSUE)
-            .map(str::to_string)
-            .zip(hash.or_else(|| set(MERGED).map(str::to_string)));
-        let mut fresh = false;
+        let issue = set(ISSUE).is_some()
+            && (set(AUTOLAND).is_some() || set(PUSHED).is_some() || set(MERGED).is_some());
         let written = Mode::update(&paths::state_dir(), |mode| {
             if mode.landed.iter().any(|l| l.id == landed.id) {
                 return;
             }
-            fresh = true;
             // A landed issue stays out of the queue whatever becomes of its
-            // comment and closing (declined, failed, nobody there to ask),
-            // kept among the skipped items, which can take it back.
-            if issue.is_some() {
+            // comment and closing (failed, GitHub off), kept among the
+            // skipped items, which can take it back.
+            if issue {
                 let done = mode::Skipped {
                     note: landed.note.clone(),
                     text: landed.item.clone(),
@@ -2526,28 +2511,6 @@ impl Server {
             Ok(mode) => self.autopilot.mode = mode,
             Err(e) => eprintln!("autopilot: couldn't keep the tab that landed: {e}"),
         }
-        if let Some((issue, hash)) = issue.filter(|_| fresh) {
-            if merged {
-                self.autopilot_release(&issue, None);
-                return;
-            }
-            let short: String = hash.chars().take(7).collect();
-            // The landing's comment names the claim it releases, so the
-            // release itself says nothing more.
-            let id = super::issues::own_claim_id()
-                .ok()
-                .flatten()
-                .unwrap_or_default();
-            let comment = super::issues::landed_comment(&short, &id);
-            let question = format!("Comment on {issue} that it landed in {short}, and close it?");
-            self.autopilot_write_back(
-                &issue,
-                comment,
-                Some((hash, opened_at)),
-                without_asking,
-                question,
-            );
-        }
     }
 
     /// Whether autopilot takes GitHub issues now: chosen, with its settings
@@ -2558,16 +2521,16 @@ impl Server {
     }
 
     /// A comment on the GitHub issue `issue` names (`<owner>/<repo>#<n>`),
-    /// closing it as done once GitHub has the commit `landed` names, off the
-    /// task, only while autopilot takes issues: at once for a tab that lands
-    /// without asking, else once `question` is answered yes in the client
-    /// used last (none attached, nothing is written, and it says so). A
-    /// failure is said in the notifications.
+    /// closing it for `close` (GitHub's `state_reason`) when given and its
+    /// claim then released, off the task, only while autopilot takes issues:
+    /// at once for a tab that lands without asking, else once `question` is
+    /// answered yes in the client used last (none attached, nothing is
+    /// written, and it says so). A failure is said in the notifications.
     fn autopilot_write_back(
         &mut self,
         issue: &str,
         comment: String,
-        landed: Option<(String, i64)>,
+        close: Option<&'static str>,
         without_asking: bool,
         question: String,
     ) {
@@ -2580,7 +2543,6 @@ impl Server {
             return;
         }
         let named = issue.to_string();
-        let close = landed.is_some();
         // Off the task, its failure written into what the mode says, which
         // the next check shows in the notifications, whoever is attached by
         // then.
@@ -2593,22 +2555,15 @@ impl Server {
                 return;
             }
             tokio::spawn(async move {
-                let done = super::issues::write_back(
-                    &repo,
-                    number,
-                    &comment,
-                    close,
-                    landed.as_ref().map(|(h, at)| (h.as_str(), *at)),
-                    || {
-                        let mode = Mode::read(&paths::state_dir());
-                        mode.sources.issues() && mode.issues_on()
-                    },
-                )
+                let done = super::issues::write_back(&repo, number, &comment, close, || {
+                    let mode = Mode::read(&paths::state_dir());
+                    mode.sources.issues() && mode.issues_on()
+                })
                 .await;
-                // Closed as landed, the claim's label comes off; the
-                // landing's comment named it. Left open, the claim holds.
+                // Closed, the claim's label comes off. Left open, the claim
+                // holds.
                 let done = match done {
-                    Ok(true) if close => match super::issues::own_claim_id() {
+                    Ok(true) if close.is_some() => match super::issues::own_claim_id() {
                         Ok(Some(id)) => super::issues::release(&repo, number, &id, None)
                             .await
                             .map(|_| ()),
@@ -2707,7 +2662,7 @@ impl Server {
 
     /// A tab about to close: one of autopilot's on a GitHub issue releases
     /// its claim there, saying so, unless autopilot's own landing pushed it,
-    /// which keeps the claim until autopilot closes the issue, so the landed
+    /// which keeps the claim until `switchboard item-done` closes the issue, so the landed
     /// work isn't taken again elsewhere while the issue stays open.
     pub fn autopilot_tab_closing(&mut self, tab: TabId) {
         let Some(t) = self.tabs.get(&tab) else {
@@ -2720,7 +2675,7 @@ impl Server {
         let Some(issue) = t.opts.get(ISSUE).filter(|v| !v.trim().is_empty()).cloned() else {
             return;
         };
-        // Pushed by autopilot's landing: kept until autopilot closes the
+        // Pushed by autopilot's landing: kept until item-done closes the
         // issue. Its PR merged: the label comes off as it lands, or now,
         // closed before, saying nothing, since GitHub closed the issue.
         // Back in its main clone with neither, it lets go.
@@ -2822,7 +2777,7 @@ impl Server {
     /// Each of its tabs whose wtn refused the item (`REFUSED`): the item
     /// skipped in its note, why said, and the tab closed.
     fn autopilot_refused(&mut self) {
-        type Refused = (TabId, String, String, Option<String>, Option<String>);
+        type Refused = (TabId, String, String, Option<String>, Option<String>, bool);
         let refused: Vec<Refused> = self
             .tabs
             .iter()
@@ -2831,16 +2786,20 @@ impl Server {
                 let why = t.opts.get(REFUSED).filter(|v| !v.is_empty())?;
                 let item = t.opts.get(ITEM).filter(|v| !v.is_empty())?;
                 let issue = t.opts.get(ISSUE).filter(|v| !v.is_empty()).cloned();
+                // Lands without asking only as the tab was marked to
+                // (`@autopilot_land`, which nothing in a pane can set).
+                let without_asking = t.opts.get(LAND).map(|v| v.trim()) == Some("1");
                 Some((
                     *id,
                     item.clone(),
                     why.clone(),
                     t.opts.get(NOTE).cloned(),
                     issue,
+                    without_asking,
                 ))
             })
             .collect();
-        for (tab, item, why, note, issue) in refused {
+        for (tab, item, why, note, issue, without_asking) in refused {
             let written = Mode::update(&paths::state_dir(), |m| {
                 let skipped = mode::Skipped {
                     note: note
@@ -2868,12 +2827,33 @@ impl Server {
                 self.autopilot_say(&format!("Skipped {item}: {REFUSED_SAID}, {why}"));
             }
             eprintln!("autopilot: closed {tab}, wtn refused its item");
-            if let Some(issue) = issue.filter(|_| duplicate) {
-                let comment = super::issues::duplicate_comment();
-                let question = format!("Comment on {issue} that autopilot left it open: {why}?");
-                // Always asked: landing without asking says nothing of posting
-                // about a duplicate, which pushes nothing.
-                self.autopilot_write_back(&issue, comment, None, false, question);
+            let Some(issue) = issue.filter(|_| duplicate) else {
+                continue;
+            };
+            let of = super::issues::parse_reference(&issue)
+                .and_then(|(repo, number)| super::issues::duplicate_of(&why, &repo, number));
+            match of {
+                // Closed as a duplicate of the issue or PR it names, asked
+                // unless the tab lands without asking.
+                Some(of) => {
+                    let comment = super::issues::duplicate_of_comment(&of);
+                    let question = format!("Close {issue} as a duplicate of {of}?");
+                    self.autopilot_write_back(
+                        &issue,
+                        comment,
+                        Some("duplicate"),
+                        without_asking,
+                        question,
+                    );
+                }
+                // Naming no issue or PR, it is left open with a comment, always
+                // asked, since what it names may be a note's words.
+                None => {
+                    let comment = super::issues::duplicate_comment();
+                    let question =
+                        format!("Comment on {issue} that autopilot left it open: {why}?");
+                    self.autopilot_write_back(&issue, comment, None, false, question);
+                }
             }
         }
     }
@@ -2883,7 +2863,7 @@ impl Server {
     /// the item is opened again on a later check, and the item skipped, why
     /// said, once it has failed `pilot::FAILS_SKIP` times in an hour.
     fn autopilot_failed(&mut self) {
-        type Failed = (TabId, String, String, String, bool);
+        type Failed = (TabId, String, String, String);
         let failed: Vec<Failed> = self
             .tabs
             .iter()
@@ -2898,22 +2878,14 @@ impl Server {
                     .filter(|n| !n.is_empty())
                     .cloned()
                     .unwrap_or_else(|| self.autopilot.mode.note_id.clone());
-                // An issue's failure counts toward its skip once wtn has
-                // claimed it, a failure of this computer's own after that.
-                let issue = t.opts.get(ISSUE).is_some_and(|v| !v.is_empty())
-                    && t.opts.get(CLAIMED).is_none_or(|v| v.is_empty());
-                Some((*id, item.clone(), why.clone(), note, issue))
+                Some((*id, item.clone(), why.clone(), note))
             })
             .collect();
-        for (tab, item, why, note, issue) in failed {
+        for (tab, item, why, note) in failed {
             let key = (note.clone(), item.clone());
-            // An issue's start fails on GitHub's say (a lookup failing, the
-            // issue not standing for a moment), which passes: it is tried
-            // again, never skipped for it.
-            let skip = self
-                .autopilot
-                .pilot
-                .start_failed(key, &why, util::now_ms(), !issue);
+            // An issue's as a note item's: skipped on this computer alone,
+            // nothing written on GitHub, since why may name its files.
+            let skip = self.autopilot.pilot.start_failed(key, &why, util::now_ms());
             self.autopilot_close_tab(tab);
             if !skip {
                 eprintln!("autopilot: closed {tab}, its start failed: {why}");

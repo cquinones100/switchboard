@@ -27,23 +27,29 @@
 //! issue with the label whose newest claim (a comment of yours) names
 //! another ID is passed over (`unclaimed`) and refused by wtn, unless the
 //! claim is older than six hours with nothing pushed on its branch
-//! (`STALE_SECS`), which wtn then releases before claiming it. The server
-//! releases this computer's claim (`release`), taking the label off, once
-//! autopilot has closed the issue its tab landed (the landing's comment
-//! names the claim), or as the tab closes before landing (saying so in a
-//! comment with the ID); a landing whose issue stays open keeps its claim,
-//! so no other computer takes the landed work again.
+//! (`STALE_SECS`), which wtn then releases before claiming it. This
+//! computer's claim is released (`release`), its label taken off, once
+//! `switchboard item-done` has closed the issue its tab landed (the
+//! landing's comment names the claim), or by the server as the tab closes
+//! before landing (saying so in a comment with the ID); a landing whose
+//! issue stays open keeps its claim, so no other computer takes the landed
+//! work again.
 //!
 //! The issues are read through `integrations::github` (so the `github`
 //! setting stops them and the request audit counts them), off the server's
 //! task, by the same look that reads the note, and kept in
 //! `autopilot-issues.json` in the state directory for `FRESH_MS`, so the
 //! checks every few seconds ask GitHub at most every two minutes; a failed
-//! read is kept as long, with why. Once a tab on an issue lands, the server
-//! comments on it with the commit and closes it, and once one finds its
-//! issue a duplicate, comments that it is one (never what the tab named,
-//! which may be a note's words) and leaves it open,
-//! each asked first unless the tab lands without asking (src/autopilot/serve.rs).
+//! read is kept as long, with why. Once any tab on an issue lands,
+//! autopilot's or yours, `switchboard item-done` comments on it as a note
+//! item's `Done:` line reads and closes it (`close_landed`). Once one of
+//! autopilot's tabs finds its issue a duplicate of an issue or PR of its
+//! own repository that it names,
+//! the server closes it as a duplicate, its comment that reference alone
+//! (`duplicate_of`; never the rest of what the tab named, which may be a
+//! note's words), asked first unless the tab lands without asking; one
+//! naming no issue or PR gets a comment that it is one and stays open,
+//! asked first (src/autopilot/serve.rs).
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -872,26 +878,54 @@ pub fn unclaimed(
         .collect()
 }
 
-/// The comment left on an issue its tab landed, naming the claim it
-/// releases (`claim`, empty for none).
-pub fn landed_comment(hash: &str, claim: &str) -> String {
-    let landed = if hash.is_empty() {
-        "Landed by Switchboard's autopilot".to_string()
-    } else {
-        format!("Landed in {hash} by Switchboard's autopilot")
-    };
+/// The comment left on an issue its tab landed: the `Done:` line a note's
+/// item gets (`item_done::done_line`), then the claim it releases
+/// (`claim`, empty for none).
+pub fn landed_comment(done: &str, claim: &str) -> String {
     if claim.is_empty() {
-        format!("{landed}.")
+        format!("{done}\n\nLanded with Switchboard.")
     } else {
-        format!("{landed} (claim {claim}).")
+        format!("{done}\n\nLanded with Switchboard (claim {claim}).")
     }
 }
 
-/// The comment left on an issue its tab found a duplicate: never what the
-/// tab named, which may be a note's words, and nothing in a note leaves the
-/// computer.
+/// The comment left on an issue its tab found a duplicate of no issue or
+/// PR it names: never what the tab named, which may be a note's words, and
+/// nothing in a note leaves the computer.
 pub fn duplicate_comment() -> String {
     "Switchboard's autopilot left this issue open: it found the same work already started or done elsewhere.".to_string()
+}
+
+/// The comment left on an issue closed as a duplicate of `of`, a reference
+/// `duplicate_of` made.
+pub fn duplicate_of_comment(of: &str) -> String {
+    format!("Duplicate of {of}. Closed by Switchboard's autopilot.")
+}
+
+static NAMED: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"https://github\.com/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)/(?:issues|pull)/(\d+)",
+        r"|(?:^|[^A-Za-z0-9._/-])([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)#(\d+)",
+    ))
+    .unwrap()
+});
+
+/// The first issue or PR of the issue's own repository (`repo`) that a
+/// duplicate's reason (`why`) names, by a link or `<owner>/<repo>#<n>`,
+/// as `#<n>`; a bare `#<n>` may be any words' (a note item's `step #2`),
+/// so it names none. None when it names none but the issue itself
+/// (`number`): one of another repository is passed over, since its name
+/// may be a private repository's, and the reason's words stay here.
+pub fn duplicate_of(why: &str, repo: &Repo, number: u64) -> Option<String> {
+    NAMED.captures_iter(why).find_map(|c| {
+        let (owner, name, n) = match c.get(1) {
+            Some(o) => (o.as_str(), &c[2], &c[3]),
+            None => (&c[4], &c[5], &c[6]),
+        };
+        let n: u64 = n.parse().ok()?;
+        let other = github::parse_name_with_owner(&format!("{owner}/{name}"))?;
+        (other.same(repo) && n != number).then(|| format!("#{n}"))
+    })
 }
 
 /// That commit `hash` is a landing's: on `repo`'s default branch on
@@ -937,22 +971,16 @@ pub async fn landed_on_default(repo: &Repo, hash: &str, since: i64) -> Result<()
     Ok(())
 }
 
-/// Comments on an issue, and closes it as done when `close`; with
-/// `landed` (a commit and when its tab opened), only once that commit is on
-/// the repository's default branch on GitHub and was made since, so a
-/// landing that never reached it closes nothing. Whether the issue is
+/// Comments on an issue, and closes it for `close` (GitHub's
+/// `state_reason`: `duplicate`) when it is given. Whether the issue is
 /// closed once it is done, so a claim is let go only from a closed issue.
 pub async fn write_back(
     repo: &Repo,
     number: u64,
     comment: &str,
-    close: bool,
-    landed: Option<(&str, i64)>,
+    close: Option<&str>,
     still: impl Fn() -> bool,
 ) -> Result<bool> {
-    if let Some((hash, since)) = landed {
-        landed_on_default(repo, hash, since).await?;
-    }
     // One closed meanwhile (by a maintainer, as not planned, say) keeps
     // what they decided: nothing is written on it.
     let now = github::rest(
@@ -976,7 +1004,76 @@ pub async fn write_back(
         SOURCE,
     )
     .await?;
-    if close && still() {
+    if let Some(reason) = close.filter(|_| still()) {
+        github::rest(
+            "PATCH",
+            &format!("/repos/{repo}/issues/{number}"),
+            Some(&json!({ "state": "closed", "state_reason": reason })),
+            SOURCE,
+        )
+        .await?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// What `close_landed` did to an issue.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Closed {
+    /// It was open: commented on and closed as done.
+    Closed,
+    /// GitHub had closed it as done (a PR's `Closes #<n>`): commented on.
+    Commented,
+    /// Closed otherwise (as not planned, say), which stays as decided.
+    LeftAlone(String),
+}
+
+/// An issue a tab landed, once commit `hash` is on the repository's default
+/// branch on GitHub (so a landing that never reached it closes nothing):
+/// the landing's comment (`landed_comment` of `done`, its `Done:` line)
+/// left on it and it closed as done, or only the comment when GitHub closed
+/// it as done already, then this computer's claim on it, which the comment
+/// names, released, its label taken off. Whoever's tab it was, so only the
+/// `github` setting stops it.
+pub async fn close_landed(repo: &Repo, number: u64, hash: &str, done: &str) -> Result<Closed> {
+    landed_on_default(repo, hash, 0).await?;
+    let now = github::rest(
+        "GET",
+        &format!("/repos/{repo}/issues/{number}"),
+        None,
+        SOURCE,
+    )
+    .await?;
+    let state = now.get("state").and_then(Value::as_str).unwrap_or_default();
+    let reason = now
+        .get("state_reason")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let closed = match (state, reason) {
+        ("open", _) => Closed::Closed,
+        ("closed", "completed") => Closed::Commented,
+        _ => Closed::LeftAlone(reason.replace('_', " ")),
+    };
+    if matches!(closed, Closed::LeftAlone(_)) {
+        return Ok(closed);
+    }
+    // Named and released only when this computer holds it: a tab of yours
+    // claimed nothing.
+    let claim = match own_claim_id()? {
+        Some(id) => current_claim(repo, number)
+            .await?
+            .is_some_and(|c| c.id == id)
+            .then_some(id),
+        None => None,
+    };
+    github::rest(
+        "POST",
+        &format!("/repos/{repo}/issues/{number}/comments"),
+        Some(&json!({ "body": landed_comment(done, claim.as_deref().unwrap_or_default()) })),
+        SOURCE,
+    )
+    .await?;
+    if closed == Closed::Closed {
         github::rest(
             "PATCH",
             &format!("/repos/{repo}/issues/{number}"),
@@ -984,9 +1081,11 @@ pub async fn write_back(
             SOURCE,
         )
         .await?;
-        return Ok(true);
     }
-    Ok(false)
+    if let Some(id) = claim {
+        release(repo, number, &id, None).await?;
+    }
+    Ok(closed)
 }
 
 #[cfg(test)]
@@ -1163,9 +1262,47 @@ mod tests {
             "Autopilot stopped working on this (claim a3f9c2): its tab closed before it landed."
         );
         assert_eq!(
-            landed_comment("abc1234", "a3f9c2"),
-            "Landed in abc1234 by Switchboard's autopilot (claim a3f9c2)."
+            landed_comment("Done: abc1234, 2h 5m. It copies the reply.", "a3f9c2"),
+            "Done: abc1234, 2h 5m. It copies the reply.\n\nLanded with Switchboard (claim a3f9c2)."
         );
-        assert_eq!(landed_comment("", ""), "Landed by Switchboard's autopilot.");
+        assert_eq!(
+            landed_comment("Done: abc1234. It copies.", ""),
+            "Done: abc1234. It copies.\n\nLanded with Switchboard."
+        );
+    }
+
+    #[test]
+    fn a_duplicate_is_of_the_first_issue_or_pr_its_reason_names_and_nothing_else() {
+        let repo = repo();
+        let of = |why: &str| duplicate_of(why, &repo, 12);
+        assert_eq!(
+            of("Duplicate of acme/widgets#7, the same fix"),
+            Some("#7".into())
+        );
+        assert_eq!(of("Duplicate of FEAT: Handle step #2 of setup"), None);
+        assert_eq!(
+            of("Duplicate of https://github.com/acme/widgets/pull/31"),
+            Some("#31".into())
+        );
+        assert_eq!(
+            of("Duplicate of other/thing#4 and acme/widgets#9"),
+            Some("#9".into()),
+            "another repository's, maybe private, is passed over"
+        );
+        assert_eq!(
+            of("Duplicate of https://github.com/Other/Thing/issues/5"),
+            None
+        );
+        assert_eq!(of("Duplicate of Acme/Widgets#6"), Some("#6".into()));
+        assert_eq!(
+            of("Duplicate of acme/widgets#12 itself, then acme/widgets#8"),
+            Some("#8".into())
+        );
+        assert_eq!(of("Duplicate of the item in tab 3"), None);
+        assert_eq!(of("Duplicate of FEAT: Copy the reply (step#2)"), None);
+        assert_eq!(
+            duplicate_of_comment("#7"),
+            "Duplicate of #7. Closed by Switchboard's autopilot."
+        );
     }
 }

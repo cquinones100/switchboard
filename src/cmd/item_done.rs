@@ -1,6 +1,6 @@
 //! `switchboard item-done --says '<what it does now>' [--hash <commit>]
 //! [--already-on <branch>] [--merged-pr-head <commit>] [--checked-in
-//! <branch>] [--without-asking] [<worktree>]`: the end of a
+//! <branch>] [--without-asking] [--close-issue] [<worktree>]`: the end of a
 //! landing, as queue-and-clean's "Closing out" and clean-worktree's steps 2
 //! to 5 had Claude do it by hand. Run from the worktree (or given its
 //! path) once its work is on the branch it lands on, it
@@ -26,10 +26,21 @@
 //!    moved under the unticked items as Notes moves one
 //!    (`format::toggle_check`), under the note's ID lock, so the app takes it
 //!    in as any change made from outside; a branch `wtn` didn't start has
-//!    no item, nor one `wtn --issue` started from a GitHub issue (closed by
-//!    autopilot once its tab lands, or by you when started by hand), and one
-//!    already ticked is left as it is;
-//! 3. removes the worktree from the main clone, deletes the branch (`-D`,
+//!    no item, nor one started from a GitHub issue, and one already ticked
+//!    is left as it is;
+//! 3. with `--close-issue` (passed once the landing's question named it, or
+//!    for a landing made without asking), closes the GitHub issue `wtn
+//!    --issue` started the branch from (its `branch.<branch>.wtnIssue`;
+//!    never one a branch's name alone suggests, which may be another
+//!    tracker's number), whoever's tab it was, autopilot's or yours: once the
+//!    commit is on the default branch on GitHub, a comment reading as the
+//!    `Done:` line above would, naming the claim it releases, and the issue
+//!    closed as done (`issues::close_landed`), or only the comment when
+//!    GitHub closed it as done by a PR's `Closes #<n>`; the note is never
+//!    ticked for it, issues and notes being two sources. Its failure (GitHub
+//!    off in Settings, the commit not there yet) is said and leaves the rest
+//!    to go on, since the work is safe either way;
+//! 4. removes the worktree from the main clone, deletes the branch (`-D`,
 //!    since a squash leaves it looking unmerged).
 //!
 //! The tick comes before the removal, so an item is never unticked with
@@ -43,23 +54,27 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use crate::autopilot::issues::{self, Closed};
 use crate::cmd::landing;
 use crate::cmd::worktree_from_note::{notes_dir, tracked};
+use crate::integrations::github::Repo;
 use crate::notes::format::{Doc, toggle_check};
 use crate::notes::render;
 use crate::notes::text::Text;
 use crate::notes::{format, id};
 use crate::{util, worktree};
 
-const USAGE: &str = "Usage: switchboard item-done --says '<what it does now>' [--hash <commit>] [--already-on <branch>] [--merged-pr-head <commit>] [--checked-in <branch>] [--without-asking] [<worktree>]\n\n\
+const USAGE: &str = "Usage: switchboard item-done --says '<what it does now>' [--hash <commit>] [--already-on <branch>] [--merged-pr-head <commit>] [--checked-in <branch>] [--without-asking] [--close-issue] [<worktree>]\n\n\
      Ticks the item the worktree's branch was started for, with its Done line,\n\
+     or closes the GitHub issue it was started from with that line as its comment,\n\
      then removes the worktree and its branch once nothing in them would be lost.\n\n  \
      --says            what the item does now, in prose, ending the Done line\n  \
      --hash            the commit that did it (the worktree's HEAD by default)\n  \
      --already-on      the item was found done on that branch\n  \
      --merged-pr-head  the merged PR's head commit, as GitHub gives it\n  \
      --checked-in      every change was found in that branch by reading it\n  \
-     --without-asking  it landed without asking (autopilot's Land without asking)\n";
+     --without-asking  it landed without asking (autopilot's Land without asking)\n  \
+     --close-issue     close the GitHub issue the branch was started from, as asked\n";
 
 /// What `--says` and the rest gave.
 struct Given {
@@ -69,6 +84,7 @@ struct Given {
     merged_pr_head: Option<String>,
     checked_in: Option<String>,
     without_asking: bool,
+    close_issue: bool,
     dir: PathBuf,
 }
 
@@ -85,10 +101,12 @@ fn given(args: &[String]) -> Result<Given, String> {
     )
     .map_err(|flag| format!("{flag} needs a value"))?;
     let mut without_asking = false;
+    let mut close_issue = false;
     let mut dir = None;
     for a in &parsed.positional {
         match a.as_str() {
             "--without-asking" => without_asking = true,
+            "--close-issue" => close_issue = true,
             other if other.starts_with('-') => return Err(format!("unknown option {other}")),
             other if dir.is_none() => dir = Some(PathBuf::from(other)),
             other => return Err(format!("one worktree only, not {other} too")),
@@ -107,6 +125,7 @@ fn given(args: &[String]) -> Result<Given, String> {
         merged_pr_head: parsed.last("--merged-pr-head").map(str::to_string),
         checked_in: parsed.last("--checked-in").map(str::to_string),
         without_asking,
+        close_issue,
         dir: dir.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into())),
     })
 }
@@ -123,7 +142,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    match run(&given, &notes_dir()) {
+    match run(&given, &notes_dir(), &close_on_github) {
         Ok(lines) => {
             for line in lines {
                 println!("{line}");
@@ -137,8 +156,16 @@ pub fn main(args: Vec<String>) -> ExitCode {
     }
 }
 
+/// Step 3 on GitHub: `issues::close_landed`, run to its end.
+fn close_on_github(repo: &Repo, number: u64, hash: &str, done: &str) -> Result<Closed, String> {
+    issues::wait_for(issues::close_landed(repo, number, hash, done)).map_err(|e| format!("{e:#}"))
+}
+
+/// What closes an issue, `close_on_github` but in tests.
+type Close<'a> = &'a dyn Fn(&Repo, u64, &str, &str) -> Result<Closed, String>;
+
 /// The steps, as the module's opening says; the lines to print.
-fn run(given: &Given, notes: &Path) -> Result<Vec<String>, String> {
+fn run(given: &Given, notes: &Path, close: Close) -> Result<Vec<String>, String> {
     let git = |dir: &Path, args: &[&str]| {
         worktree::git_at(dir, args).map_err(|e| format!("git {}: {}", args[0], first_line(&e)))
     };
@@ -229,32 +256,30 @@ fn run(given: &Given, notes: &Path) -> Result<Vec<String>, String> {
         &["config", "--get", &format!("branch.{branch}.wtnItem")],
     )
     .unwrap_or_default();
+    let hash = match &given.hash {
+        Some(h) => h.clone(),
+        None => git(&top, &["rev-parse", "--short", "HEAD"])?,
+    };
+    let took = landing::started_at(&top).map(|s| crate::sidebar::text::span(util::now_secs() - s));
+    let done = done_line(
+        &hash,
+        took.as_deref(),
+        given.already_on.as_deref(),
+        given.without_asking,
+        &given.says,
+    );
+    let issue = issue_of(&main, &branch);
     match note_and_item(&claim, notes) {
-        None => out.push(
-            match crate::cmd::worktree_from_issue::issue_of_branch(&main, &branch) {
-                Some(issue) => format!(
-                    "no item: {branch} was started from {issue}, a GitHub issue rather than a note's item"
-                ),
-                None => format!("no item: {branch} wasn't started from a note's item"),
-            },
-        ),
-        Some((file, first)) => {
-            let file = file?;
-            let hash = match &given.hash {
-                Some(h) => h.clone(),
-                None => git(&top, &["rev-parse", "--short", "HEAD"])?,
-            };
-            let took =
-                landing::started_at(&top).map(|s| crate::sidebar::text::span(util::now_secs() - s));
-            let done = done_line(
-                &hash,
-                took.as_deref(),
-                given.already_on.as_deref(),
-                given.without_asking,
-                &given.says,
-            );
-            out.push(tick_file(&file, &first, &done)?);
-        }
+        None => out.push(match &issue {
+            Some((repo, number)) => format!(
+                "no item: {branch} was started from {repo}#{number}, a GitHub issue rather than a note's item"
+            ),
+            None => format!("no item: {branch} wasn't started from a note's item"),
+        }),
+        Some((file, first)) => out.push(tick_file(&file?, &first, &done)?),
+    }
+    if let Some((repo, number)) = issue {
+        out.push(close_issue(given, &top, &hash, &done, &repo, number, close));
     }
     let top_text = top.to_string_lossy().into_owned();
     git(&main, &["worktree", "remove", &top_text])
@@ -265,6 +290,61 @@ fn run(given: &Given, notes: &Path) -> Result<Vec<String>, String> {
     out.push(format!("deleted: {branch}"));
     out.push(format!("main clone: {}", main.display()));
     Ok(out)
+}
+
+/// Step 3: the issue closed with the `Done:` line `done` as its comment, when
+/// asked to (`--close-issue`) and leak-check's scan finds nothing in it,
+/// since it is public; the line saying what became of it.
+fn close_issue(
+    given: &Given,
+    top: &Path,
+    hash: &str,
+    done: &str,
+    repo: &Repo,
+    number: u64,
+    close: Close,
+) -> String {
+    if !given.close_issue {
+        return format!(
+            "left open: {repo}#{number}: --close-issue not given, so not asked to close it"
+        );
+    }
+    use crate::cmd::leak_check;
+    let hits = match leak_check::read_words(&leak_check::words_file()) {
+        Ok(words) => leak_check::hits_in(done, false, &words),
+        Err(e) => return format!("left open: {repo}#{number}: leak-check couldn't look: {e}"),
+    };
+    if !hits.is_empty() {
+        let found: Vec<String> = hits
+            .iter()
+            .map(|(kind, shown)| format!("{kind} \"{shown}\""))
+            .collect();
+        return format!(
+            "left open: {repo}#{number}: leak-check found {} in its comment",
+            found.join(", ")
+        );
+    }
+    // Whole, for GitHub's check.
+    let whole = worktree::git_at(
+        top,
+        &["rev-parse", "--verify", &format!("{hash}^{{commit}}")],
+    )
+    .unwrap_or_else(|_| hash.to_string());
+    match close(repo, number, &whole, done) {
+        Ok(Closed::Closed) => format!("closed: {repo}#{number}"),
+        Ok(Closed::Commented) => {
+            format!("commented: {repo}#{number}, which GitHub had closed as done")
+        }
+        Ok(Closed::LeftAlone(how)) => format!("left: {repo}#{number}, closed already ({how})"),
+        Err(e) => format!("left open: {repo}#{number}: {e}"),
+    }
+}
+
+/// The GitHub issue `wtn --issue` started `branch` from, its `wtnIssue`.
+fn issue_of(main: &Path, branch: &str) -> Option<(Repo, u64)> {
+    issues::parse_reference(&crate::cmd::worktree_from_issue::issue_of_branch(
+        main, branch,
+    )?)
 }
 
 /// Fetches every branch of `remote` into its remote-tracking refs, those
@@ -638,6 +718,11 @@ mod tests {
         (dir, main, wt, notes)
     }
 
+    /// No issue is closed in a test but where one is looked for.
+    fn never(_: &Repo, _: u64, _: &str, _: &str) -> Result<Closed, String> {
+        panic!("no issue to close")
+    }
+
     fn given_for(wt: &Path) -> Given {
         Given {
             says: "It copies.".into(),
@@ -646,6 +731,7 @@ mod tests {
             merged_pr_head: None,
             checked_in: None,
             without_asking: false,
+            close_issue: false,
             dir: wt.to_path_buf(),
         }
     }
@@ -654,7 +740,7 @@ mod tests {
     fn a_landed_worktree_is_ticked_removed_and_its_branch_deleted() {
         let (dir, main, wt, notes) = landed_setup("landed");
         git(&wt, &["push", "-q", "origin", "HEAD:main"]);
-        let out = run(&given_for(&wt), &notes).unwrap();
+        let out = run(&given_for(&wt), &notes, &never).unwrap();
         assert!(out.iter().any(|l| l.starts_with("ticked:")), "{out:?}");
         assert!(!wt.exists(), "the worktree is removed");
         assert!(
@@ -669,7 +755,7 @@ mod tests {
     #[test]
     fn work_on_no_remote_is_neither_ticked_nor_removed() {
         let (dir, main, wt, notes) = landed_setup("unlanded");
-        let err = run(&given_for(&wt), &notes).unwrap_err();
+        let err = run(&given_for(&wt), &notes, &never).unwrap_err();
         assert!(err.contains("would lose them"), "{err}");
         assert!(wt.exists());
         assert!(worktree::branch_exists(&main, "note/copy"));
@@ -687,7 +773,7 @@ mod tests {
         git(&main, &["fetch", "-q", "origin"]);
         let origin = dir.join("origin.git");
         git(&origin, &["branch", "-D", "note/copy"]);
-        let err = run(&given_for(&wt), &notes).unwrap_err();
+        let err = run(&given_for(&wt), &notes, &never).unwrap_err();
         assert!(err.contains("would lose them"), "{err}");
         assert!(wt.exists());
         let _ = std::fs::remove_dir_all(&dir);
@@ -704,12 +790,12 @@ mod tests {
         );
         git(&main, &["push", "-q", "origin", "main"]);
         assert!(
-            run(&given_for(&wt), &notes).is_err(),
+            run(&given_for(&wt), &notes, &never).is_err(),
             "no proof without the PR"
         );
         let mut given = given_for(&wt);
         given.merged_pr_head = Some(git(&wt, &["rev-parse", "HEAD"]));
-        run(&given, &notes).unwrap();
+        run(&given, &notes, &never).unwrap();
         assert!(!wt.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -723,7 +809,7 @@ mod tests {
         git(&main, &["push", "-q", "origin", "main"]);
         let mut given = given_for(&wt);
         given.checked_in = Some("main".into());
-        run(&given, &notes).unwrap();
+        run(&given, &notes, &never).unwrap();
         assert!(!wt.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -738,7 +824,7 @@ mod tests {
             &["config", "branch.note/copy.wtnTarget", "integration"],
         );
         git(&wt, &["push", "-q", ".", "HEAD:integration"]);
-        run(&given_for(&wt), &notes).unwrap();
+        run(&given_for(&wt), &notes, &never).unwrap();
         assert!(!wt.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -756,7 +842,7 @@ mod tests {
             &main,
             &["remote", "set-url", "origin", "/nowhere/at/all.git"],
         );
-        run(&given_for(&wt), &notes).unwrap();
+        run(&given_for(&wt), &notes, &never).unwrap();
         assert!(!wt.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -767,7 +853,7 @@ mod tests {
         for own in ["note/copy", "HEAD", "refs/heads/note/copy"] {
             let mut given = given_for(&wt);
             given.checked_in = Some(own.into());
-            assert!(run(&given, &notes).is_err(), "{own}");
+            assert!(run(&given, &notes, &never).is_err(), "{own}");
         }
         assert!(wt.exists());
         let _ = std::fs::remove_dir_all(&dir);
@@ -780,7 +866,7 @@ mod tests {
         git(&main, &["add", "copy.txt"]);
         git(&main, &["commit", "-q", "-m", "Copy the reply, squashed"]);
         git(&main, &["push", "-q", "origin", "main"]);
-        run(&given_for(&wt), &notes).unwrap();
+        run(&given_for(&wt), &notes, &never).unwrap();
         assert!(!wt.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -794,9 +880,137 @@ mod tests {
             NOTE.replace("FEAT: Copy the reply", "FEAT: Reworded"),
         )
         .unwrap();
-        let err = run(&given_for(&wt), &notes).unwrap_err();
+        let err = run(&given_for(&wt), &notes, &never).unwrap_err();
         assert!(err.contains("no item reading"), "{err}");
         assert!(wt.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A worktree on `branch`, its work on origin's main, instead of the
+    /// note's item.
+    fn issue_setup(name: &str, branch: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+        let (dir, main, wt, notes) = landed_setup(name);
+        git(&main, &["config", "--unset", "branch.note/copy.wtnItem"]);
+        git(&wt, &["checkout", "-q", "-b", branch]);
+        git(&main, &["branch", "-q", "-D", "note/copy"]);
+        git(&wt, &["push", "-q", "origin", "HEAD:main"]);
+        (dir, main, wt, notes)
+    }
+
+    #[test]
+    fn an_issue_branch_closes_its_issue_with_the_done_line_and_ticks_nothing() {
+        let (dir, main, wt, notes) = issue_setup("issue", "issue/12-copy-the-reply");
+        git(
+            &main,
+            &[
+                "config",
+                "branch.issue/12-copy-the-reply.wtnIssue",
+                "acme/widgets#12",
+            ],
+        );
+        let asked = std::cell::RefCell::new(Vec::new());
+        let close = |repo: &Repo, n: u64, hash: &str, done: &str| {
+            asked
+                .borrow_mut()
+                .push((repo.to_string(), n, hash.to_string(), done.to_string()));
+            Ok(Closed::Closed)
+        };
+        let before = std::fs::read_to_string(notes.join("Work renamed.md")).unwrap();
+        let given = Given {
+            close_issue: true,
+            ..given_for(&wt)
+        };
+        let out = run(&given, &notes, &close).unwrap();
+        assert!(
+            out.contains(&"closed: acme/widgets#12".to_string()),
+            "{out:?}"
+        );
+        assert_eq!(
+            *asked.borrow(),
+            [(
+                "acme/widgets".to_string(),
+                12,
+                "1234abcd".to_string(),
+                "Done: 1234abcd. It copies.".to_string()
+            )]
+        );
+        assert_eq!(
+            std::fs::read_to_string(notes.join("Work renamed.md")).unwrap(),
+            before,
+            "the note is left alone"
+        );
+        assert!(!wt.exists(), "the worktree is removed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_issue_wtn_recorded_is_closed_and_one_that_fails_leaves_the_rest_to_go_on() {
+        let (dir, main, wt, notes) = issue_setup("wtn-issue", "issue/7-x");
+        git(
+            &main,
+            &["config", "branch.issue/7-x.wtnIssue", "other/thing#9"],
+        );
+        let close = |repo: &Repo, n: u64, _: &str, _: &str| {
+            assert_eq!((repo.to_string(), n), ("other/thing".to_string(), 9));
+            Err("GitHub is off in Settings".to_string())
+        };
+        let given = Given {
+            close_issue: true,
+            ..given_for(&wt)
+        };
+        let out = run(&given, &notes, &close).unwrap();
+        assert!(
+            out.contains(&"left open: other/thing#9: GitHub is off in Settings".to_string()),
+            "{out:?}"
+        );
+        assert!(!wt.exists(), "removed all the same");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_branch_named_for_an_issue_closes_nothing_and_one_not_asked_to_is_left_open() {
+        // Named like one, but no issue wtn recorded: another tracker's number.
+        let (dir, _main, wt, notes) = issue_setup("named", "issue/42-fix-login");
+        let given = Given {
+            close_issue: true,
+            ..given_for(&wt)
+        };
+        let out = run(&given, &notes, &never).unwrap();
+        assert!(out.iter().all(|l| !l.contains("#42")), "{out:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let (dir, main, wt, notes) = issue_setup("leak", "issue/12-x");
+        git(
+            &main,
+            &["config", "branch.issue/12-x.wtnIssue", "acme/widgets#12"],
+        );
+        let given = Given {
+            close_issue: true,
+            // Made here, so the repository's own leak-check finds no path.
+            says: format!("It reads /{}/marta/secret.txt now.", "Users"),
+            ..given_for(&wt)
+        };
+        let out = run(&given, &notes, &never).unwrap();
+        assert!(
+            out.iter()
+                .any(|l| l.starts_with("left open: acme/widgets#12: leak-check found")),
+            "a home path stays here: {out:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let (dir, main, wt, notes) = issue_setup("unasked", "issue/12-x");
+        git(
+            &main,
+            &["config", "branch.issue/12-x.wtnIssue", "acme/widgets#12"],
+        );
+        let out = run(&given_for(&wt), &notes, &never).unwrap();
+        assert!(
+            out.contains(
+                &"left open: acme/widgets#12: --close-issue not given, so not asked to close it"
+                    .to_string()
+            ),
+            "{out:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

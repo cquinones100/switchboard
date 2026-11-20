@@ -945,7 +945,7 @@ fn an_attendee_s_photo_is_asked_of_linear_by_their_address() {
 }
 
 #[test]
-fn autopilot_takes_issues_opened_by_you_or_labeled_by_a_writer_and_writes_back() {
+fn autopilot_takes_issues_opened_by_you_or_labeled_by_a_writer_and_closes_a_duplicate() {
     let env = Env::new("issues");
     set("GH_TOKEN", "tok-9");
     let fake = Fake::github(
@@ -969,15 +969,6 @@ fn autopilot_takes_issues_opened_by_you_or_labeled_by_a_writer_and_writes_back()
             ),
             answer(200, json!({ "permission": "write" })),
             answer(200, json!({ "permission": "read" })),
-            answer(
-                200,
-                json!({ "data": { "repository": { "defaultBranchRef": { "name": "main" } } } }),
-            ),
-            answer(200, json!({ "status": "behind" })),
-            answer(
-                200,
-                json!({ "commit": { "committer": { "date": "2026-11-18T12:00:00Z" } } }),
-            ),
             answer(200, json!({ "number": 2, "state": "open" })),
             answer(201, json!({ "id": 7 })),
             answer(200, json!({ "number": 2, "state": "closed" })),
@@ -1010,35 +1001,122 @@ fn autopilot_takes_issues_opened_by_you_or_labeled_by_a_writer_and_writes_back()
         "/repos/acme/widgets/collaborators/outsider/permission"
     );
 
+    let comment = issues::duplicate_of_comment("#1");
     let closed = util::block_on(issues::write_back(
         &repo,
         2,
-        "Landed in abc1234",
-        true,
-        Some(("abc1234", 1_700_000_000)),
+        &comment,
+        Some("duplicate"),
         || true,
     ))
     .unwrap();
-    assert!(closed, "closed as it landed");
+    assert!(closed, "closed as a duplicate");
     let seen = fake.seen();
-    assert_eq!(seen[4].path, "/repos/acme/widgets/compare/main...abc1234");
-    assert_eq!(seen[5].path, "/repos/acme/widgets/commits/abc1234");
-    assert_eq!(seen[6].path, "/repos/acme/widgets/issues/2");
-    assert_eq!(seen[7].method, "POST");
-    assert_eq!(seen[7].path, "/repos/acme/widgets/issues/2/comments");
-    assert_eq!(seen[7].body["body"], "Landed in abc1234");
-    assert_eq!(seen[8].method, "PATCH");
-    assert_eq!(seen[8].path, "/repos/acme/widgets/issues/2");
-    assert_eq!(seen[8].body["state"], "closed");
-    assert_eq!(counted("GitHub", "GraphQL"), 2);
-    assert_eq!(counted("GitHub", "REST"), 7);
+    assert_eq!(seen[3].path, "/repos/acme/widgets/issues/2");
+    assert_eq!(seen[4].method, "POST");
+    assert_eq!(seen[4].path, "/repos/acme/widgets/issues/2/comments");
+    assert_eq!(
+        seen[4].body["body"],
+        "Duplicate of #1. Closed by Switchboard's autopilot."
+    );
+    assert_eq!(seen[5].method, "PATCH");
+    assert_eq!(seen[5].path, "/repos/acme/widgets/issues/2");
+    assert_eq!(seen[5].body["state"], "closed");
+    assert_eq!(seen[5].body["state_reason"], "duplicate");
+    assert_eq!(counted("GitHub", "GraphQL"), 1);
+    assert_eq!(counted("GitHub", "REST"), 5);
 
     // GitHub turned off in Settings, none are read.
     env.settings(json!({ "github": false }));
     let err = util::block_on(issues::fetch(&repo, "autopilot")).unwrap_err();
     assert_eq!(kind(&err), ErrorKind::Off);
-    assert_eq!(fake.seen().len(), 9);
+    assert_eq!(fake.seen().len(), 6);
     env.settings(json!({}));
+}
+
+/// The answers GitHub gives `close_landed` before its writes: the default
+/// branch, the commit on it, and the issue as `issue`.
+fn landed_answers(issue: Value) -> Vec<Reply> {
+    vec![
+        answer(
+            200,
+            json!({ "data": { "repository": { "defaultBranchRef": { "name": "main" } } } }),
+        ),
+        answer(200, json!({ "status": "behind" })),
+        answer(
+            200,
+            json!({ "commit": { "committer": { "date": "2026-11-18T12:00:00Z" } } }),
+        ),
+        answer(200, issue),
+    ]
+}
+
+#[test]
+fn a_landed_issue_is_closed_with_its_done_line_once_the_commit_is_on_main() {
+    let _env = Env::new("landed-issue");
+    set("GH_TOKEN", "tok-9");
+    let mut answers = landed_answers(json!({ "number": 12, "state": "open" }));
+    answers.push(answer(201, json!({ "id": 7 })));
+    answers.push(answer(200, json!({ "number": 12, "state": "closed" })));
+    let fake = Fake::github("tok-9", answers);
+    set("SWITCHBOARD_GITHUB_API", &fake.url);
+    set(
+        "SWITCHBOARD_GITHUB_GRAPHQL",
+        format!("{}/graphql", fake.url),
+    );
+    let repo = github::Repo {
+        owner: "acme".into(),
+        name: "widgets".into(),
+    };
+    let done = "Done: abc1234, 2h. It copies the reply.";
+    let closed = util::block_on(issues::close_landed(&repo, 12, "abc1234def", done)).unwrap();
+    assert_eq!(closed, issues::Closed::Closed);
+    let seen = fake.seen();
+    assert_eq!(
+        seen[1].path,
+        "/repos/acme/widgets/compare/main...abc1234def"
+    );
+    assert_eq!(seen[2].path, "/repos/acme/widgets/commits/abc1234def");
+    assert_eq!(seen[3].path, "/repos/acme/widgets/issues/12");
+    assert_eq!(seen[4].method, "POST");
+    assert_eq!(seen[4].path, "/repos/acme/widgets/issues/12/comments");
+    assert_eq!(
+        seen[4].body["body"],
+        "Done: abc1234, 2h. It copies the reply.\n\nLanded with Switchboard."
+    );
+    assert_eq!(seen[5].method, "PATCH");
+    assert_eq!(seen[5].body["state_reason"], "completed");
+    assert_eq!(seen.len(), 6, "no claim of this computer's to release");
+}
+
+#[test]
+fn an_issue_github_closed_as_done_gets_the_comment_and_one_not_planned_nothing() {
+    let _env = Env::new("closed-issue");
+    set("GH_TOKEN", "tok-9");
+    let mut answers =
+        landed_answers(json!({ "number": 12, "state": "closed", "state_reason": "completed" }));
+    answers.push(answer(201, json!({ "id": 7 })));
+    answers.extend(landed_answers(
+        json!({ "number": 12, "state": "closed", "state_reason": "not_planned" }),
+    ));
+    let fake = Fake::github("tok-9", answers);
+    set("SWITCHBOARD_GITHUB_API", &fake.url);
+    set(
+        "SWITCHBOARD_GITHUB_GRAPHQL",
+        format!("{}/graphql", fake.url),
+    );
+    let repo = github::Repo {
+        owner: "acme".into(),
+        name: "widgets".into(),
+    };
+    let closed =
+        util::block_on(issues::close_landed(&repo, 12, "abc1234", "Done: abc1234.")).unwrap();
+    assert_eq!(closed, issues::Closed::Commented);
+    assert_eq!(fake.seen().len(), 5, "commented, not closed again");
+    let left =
+        util::block_on(issues::close_landed(&repo, 12, "abc1234", "Done: abc1234.")).unwrap();
+    assert_eq!(left, issues::Closed::LeftAlone("not planned".into()));
+    assert_eq!(fake.seen().len(), 9, "nothing written");
 }
 
 /// An issue's claim as GitHub's GraphQL answers it: labeled `autopilot:

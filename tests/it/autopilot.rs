@@ -1179,6 +1179,48 @@ fn a_tab_whose_start_failed_is_closed_its_item_left_in_line_and_the_third_failur
     );
 }
 
+/// An issue's start that fails three times in an hour is skipped as a note
+/// item's is, claimed or not, with nothing written on GitHub.
+#[test]
+fn an_issue_whose_start_failed_three_times_is_skipped_on_this_computer_alone() {
+    let notes = TempDir::new("sbn");
+    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
+    common::write_settings(
+        &server.home,
+        json!({"notifications": false, "tips": false, "github": false, "linear": false}),
+    );
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let item = "acme/widgets#12: Make the widget blue";
+    for _ in 0..3 {
+        server.ok(&["new-tab"]);
+        let tab = server.list()["sessions"][0]["tabs"][1].clone();
+        let id = tab["id"].as_str().unwrap().to_string();
+        for (option, value) in [
+            ("@autopilot", "1"),
+            ("@autopilot_item", item),
+            ("@autopilot_note", "n-ffffffffffff"),
+            ("@autopilot_issue", "acme/widgets#12"),
+            ("@autopilot_failed", "GitHub didn't answer"),
+        ] {
+            server.ok(&["set", "-t", &id, option, value]);
+        }
+        wait("the tab closed", &server, || opened(&server).is_empty());
+    }
+    let mode = mode(&server);
+    assert_eq!(
+        mode["skipped"],
+        json!([{ "note": "n-ffffffffffff", "text": item }]),
+        "the third failure in an hour skips it"
+    );
+    assert!(
+        mode["said"].as_str().unwrap().starts_with(&format!(
+            "Skipped {item}: its start failed 3 times in an hour"
+        )),
+        "{mode}"
+    );
+}
+
 #[test]
 fn its_tab_starts_claude_with_the_landings_one_push_allowed_and_no_other_tab_does() {
     let notes = TempDir::new("sbn");
@@ -1368,12 +1410,12 @@ fn a_repository_landing_through_prs_is_worked_on_its_default_branch_alone() {
 
 /// An autopilot tab whose PR merged (`@autopilot_merged`, which
 /// queue-and-clean sets as its watch sees the merge) counts as landed once
-/// back in the main clone, freeing its slot, and its issue's claim label
-/// comes off with no comment and no close, GitHub closing the issue by the
-/// PR's `Closes #<n>`.
+/// back in the main clone, freeing its slot, and its issue is kept out of
+/// the queue with nothing written on GitHub by the server: the comment and
+/// the claim's release are `switchboard item-done`'s, as for a tab of yours.
 #[cfg(feature = "net")]
 #[test]
-fn a_merged_pr_s_tab_lands_and_takes_its_issue_s_claim_label_off() {
+fn a_merged_pr_s_tab_lands_and_leaves_its_issue_to_item_done() {
     use common::http::{Fake, Reply};
     use switchboard::autopilot::issues;
     let id = "a1b2c3";
@@ -1450,21 +1492,21 @@ fn a_merged_pr_s_tab_lands_and_takes_its_issue_s_claim_label_off() {
     wait("the tab marked landed", &server, || {
         first(&server).is_some_and(|t| t["options"]["@autopilot_left"].is_string())
     });
-    let label = "/repos/acme/widgets/issues/12/labels/autopilot%3A%20working";
-    wait("the claim's label taken off", &server, || {
-        github
-            .seen()
-            .iter()
-            .any(|r| r.method == "DELETE" && r.path() == label)
+    wait("the landing kept", &server, || {
+        mode(&server)["landed"][0]["item"] == "First thing"
     });
     let mode = mode(&server);
-    assert_eq!(mode["landed"][0]["item"], "First thing", "{mode}");
     assert_eq!(mode["landed"][0]["hash"], "abc1234", "{mode}");
-    // GitHub closes it by the PR's `Closes #12`: autopilot writes nothing else.
+    assert!(
+        mode["skipped"]
+            .as_array()
+            .is_some_and(|s| s.iter().any(|x| x["text"] == "First thing")),
+        "the landed issue is kept out of the queue: {mode}"
+    );
     let wrote: Vec<String> = github
         .seen()
         .iter()
-        .filter(|r| r.path().starts_with("/repos/acme/widgets/issues/12") && r.method != "DELETE")
+        .filter(|r| r.path().starts_with("/repos/acme/widgets/issues/12"))
         .map(|r| format!("{} {}", r.method, r.path()))
         .collect();
     assert!(wrote.is_empty(), "{wrote:?}");
