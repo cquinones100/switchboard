@@ -1412,10 +1412,18 @@ fn look_shows_pictures_beside_a_narrow_pane_stacked_when_there_are_two() {
         cell_of(s, "M-Esc close").is_none() && cell_of(s, "BESIDE THIS PANE").is_some()
     });
     // Two, named by their place in the directory the command runs in:
-    // stacked, each under its name, the first above the second.
+    // stacked, each under its name, the first above the second, headed
+    // as a before and after since `--before-after` says they are one.
     picture_at(&server, "before.png");
     picture_at(&server, "after.png");
-    server.ok(&["look", "-t", &pane, "before.png", "after.png"]);
+    server.ok(&[
+        "look",
+        "-t",
+        &pane,
+        "--before-after",
+        "before.png",
+        "after.png",
+    ]);
     let screen = client.wait_text("Before and after   tab 1 · ");
     let (bx, by) = cell_of(&screen, "before.png").unwrap();
     let (ax, ay) = cell_of(&screen, "after.png").unwrap();
@@ -1483,7 +1491,15 @@ fn look_opens_the_desktops_viewer_where_no_picture_shows_beside_the_pane() {
     let (code, _, err) = server.run(&["look", "nowhere.png"]);
     assert_ne!(code, 0);
     assert!(err.contains("no file"), "{err}");
-    assert_eq!(opened(&server).len(), 1, "neither opened anything");
+    // A before and after is two files, never one or three.
+    for files in [vec![shot.as_str()], vec![&shot, &shot, &shot]] {
+        let mut args = vec!["look", "--before-after"];
+        args.extend(files);
+        let (code, _, err) = server.run(&args);
+        assert_ne!(code, 0);
+        assert!(err.contains("usage: switchboard look"), "{err}");
+    }
+    assert_eq!(opened(&server).len(), 1, "none of them opened anything");
     // With a split there are no columns beside the pane: each is opened.
     server.ok(&["split", "-R"]);
     client.wait_for("the hints gone", |s| {
