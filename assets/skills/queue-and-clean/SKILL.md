@@ -60,7 +60,7 @@ This is Switchboard's own copy, for repositories that have none. Before anything
 
 **A build behind the skill.** When `skill-path` also prints a line starting `skill-path: build behind:` (on stderr), the installed Switchboard is older than this skill and lacks commands it runs: stop before anything else, with the final line `queue-and-clean: fail: the installed Switchboard is older than this skill (lacks <the commands that line names>): build and install it from main, then land again`. The same goes for any `switchboard` command this skill runs that prints its usage line (`usage: …`) or says it has no such command (`switchboard: no command named …`): that is a build behind the skill, never a reason to do the step another way, so stop there with the same line, naming that command, releasing the landing lock first when this worktree holds it (`<lock> release`), and never run the tests here in its place.
 
-Queue this worktree's PR for merge, in the merge queue or with auto-merge, unless it is already queued. Then watch the PR without blocking the conversation. When something the branch can fix stops it merging (a required check fails, it has merge conflicts, or the merge queue drops it), fix it, push, queue it again and go back to watching, as described in "Fixing". When it merges, wait until the merge has deployed, test the feature on the deployed site in a real browser, recording a video of the test, and ask the user to approve it ("Deploy and test"). Once they approve, remove the worktree and its local branch. If it closes without merging, or stops for something you can't fix, leave everything as it is.
+Queue this worktree's PR for merge, in the merge queue or with auto-merge, unless it is already queued. Then watch the PR without blocking the conversation. When the PR falls behind a base branch that requires it to be up to date, bring it up to date and go back to watching, as "Bringing it up to date" says. When something the branch can fix stops it merging (a required check fails, it has merge conflicts, or the merge queue drops it), fix it, push, queue it again and go back to watching, as described in "Fixing". When it merges, wait until the merge has deployed, test the feature on the deployed site in a real browser, recording a video of the test, and ask the user to approve it ("Deploy and test"). Once they approve, remove the worktree and its local branch. If it closes without merging, or stops for something you can't fix, leave everything as it is.
 
 When the work is done, the final message is either `queue-and-clean: success` or `queue-and-clean: fail: <reason>` and nothing else: no summary of what was checked or what was removed. `success` means the PR merged, the user approved the test (or chose to clean up without one) and the cleanup finished; if you fixed anything on the way, say what in a few words after it, as `queue-and-clean: success (fixed: <what>)`, for example `queue-and-clean: success (fixed: lint error in api.ts; reran a flaky e2e job)`. What "Deploy and test" and "Closing out" did goes in the same brackets, after anything fixed: `queue-and-clean: success (tested: <video>; ticket ABC-123 done)`. `fail` means the PR could not be queued, closed without merging, failed to deploy, had its test turned down, stopped for something "Fixing" leaves alone or still failed after its last round, or a cleanup command errored, and the reason is one line saying which, with the error message when a command failed (for example `queue-and-clean: fail: git worktree remove: '<path>' contains modified or untracked files`), and what you tried when you tried fixing it. The questions in "Before watching", the merge method question in "Queuing", the questions in "Fixing", the questions and the approval in "Deploy and test", the questions about what the cleanup would lose and the one in "Applying the change" are still asked, because they pause the work rather than end it.
 
@@ -208,15 +208,16 @@ and if exactly one is allowed, pass its flag (`--squash`, `--merge`, or `--rebas
 
 ### Waiting until the PR is ready
 
-When the repo doesn't allow auto-merge, do its job: wait until the required checks have passed and the PR has no conflicts, judged from the checks themselves rather than `mergeStateStatus`. Start this with the Bash tool's `run_in_background`, as with the watch below, so the conversation is not blocked:
+When the repo doesn't allow auto-merge, do its job: wait until the required checks have passed and the PR has no conflicts, judged from the checks themselves rather than `mergeStateStatus`, which is read only for `BEHIND`. Start this with the Bash tool's `run_in_background`, as with the watch below, so the conversation is not blocked:
 
 ```
 settled=0
 while :; do
-  info=$(gh pr view <number> --json state,mergeable --jq '[.state, .mergeable] | @tsv') || { sleep 30; continue; }
-  IFS=$'\t' read -r state mergeable <<<"$info"
+  info=$(gh pr view <number> --json state,mergeable,mergeStateStatus --jq '[.state, .mergeable, .mergeStateStatus] | @tsv') || { sleep 30; continue; }
+  IFS=$'\t' read -r state mergeable merge_state <<<"$info"
   case "$state" in MERGED) echo merged; exit 0 ;; CLOSED) echo closed; exit 0 ;; esac
   [ "$mergeable" = CONFLICTING ] && { echo conflicts; exit 0; }
+  [ "$merge_state" = BEHIND ] && { echo behind; exit 0; }
   # Each required check's bucket. gh exits non-zero while checks fail or are
   # pending, so only no output at all is an error; a repo with no required
   # checks says so on stderr.
@@ -248,6 +249,7 @@ When it exits:
   If GitHub refuses because a required check hasn't passed after all (one that appeared late), start the wait again, up to three times in all. If it refuses because of a required review or anything else that isn't a check, reply `queue-and-clean: fail: <GitHub's error message>`. If the branch moved while you waited, the head check makes it refuse; that is the right outcome, since the new commits are not the ones that were checked: report it as any other failure.
 - `failed`: required checks failed. Go to "Fixing".
 - `conflicts`: the PR has merge conflicts. Go to "Fixing".
+- `behind`: the base branch requires the PR to be up to date, and it isn't. Go to "Bringing it up to date", then start this wait again.
 - `merged` or `closed`: someone else finished it. Go to "Deploy and test" for `merged`; reply `queue-and-clean: fail: PR closed without merging` for `closed`.
 
 ### Any other failure
@@ -261,15 +263,16 @@ Once it succeeds, start watching. Do not check the state yourself first: right a
 Start this with the Bash tool's `run_in_background`, filling in owner, repo, and number. You are re-invoked when it exits, so do not poll it yourself and do not sleep in the foreground. Tell the user that you are watching and that they can keep working in the meantime.
 
 ```
-query='query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) { pullRequest(number: $number) { state mergeable autoMergeRequest { enabledAt } mergeQueueEntry { state } } } }'
+query='query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) { pullRequest(number: $number) { state mergeable mergeStateStatus autoMergeRequest { enabledAt } mergeQueueEntry { state } } } }'
 misses=0
 while :; do
   pr_state=$(gh api graphql -F owner=<owner> -F repo=<repo> -F number=<number> -f query="$query" \
-    --jq '.data.repository.pullRequest | [.state, .mergeable, (if .autoMergeRequest or .mergeQueueEntry then "queued" else "unqueued" end)] | @tsv') || { sleep 60; continue; }
+    --jq '.data.repository.pullRequest | [.state, .mergeable, (if .mergeQueueEntry then "IN_QUEUE" else .mergeStateStatus end), (if .autoMergeRequest or .mergeQueueEntry then "queued" else "unqueued" end)] | @tsv') || { sleep 60; continue; }
   case "$pr_state" in
     MERGED*) echo merged; exit 0 ;;
     CLOSED*) echo closed; exit 0 ;;
     *CONFLICTING*) echo conflicts; exit 0 ;;
+    *BEHIND*) echo behind; exit 0 ;;
     *unqueued) misses=$((misses + 1)); [ "$misses" -ge 2 ] && { echo dequeued; exit 0; } ;;
     *) misses=0 ;;
   esac
@@ -281,7 +284,7 @@ while :; do
 done
 ```
 
-A failed request is retried rather than read as a result, so a network blip never ends the watch. A PR with merge conflicts stays queued under auto-merge while GitHub runs no checks on it, since it can't make the merge commit, so the watch ends on `mergeable` `CONFLICTING` before it reads the checks; `UNKNOWN`, GitHub still working it out, waits for the next pass. Leaving the queue has to be seen twice in a row, because GitHub briefly shows neither auto-merge nor a queue entry while it moves a PR from one to the other.
+A failed request is retried rather than read as a result, so a network blip never ends the watch. A PR with merge conflicts stays queued under auto-merge while GitHub runs no checks on it, since it can't make the merge commit, so the watch ends on `mergeable` `CONFLICTING` before it reads the checks; `UNKNOWN`, GitHub still working it out, waits for the next pass. A base branch that requires branches to be up to date leaves a PR behind it waiting under auto-merge with its checks passed and no conflicts, since GitHub doesn't update the branch itself, so the watch ends on `mergeStateStatus` `BEHIND` too, after the conflicts; a PR in the merge queue is never read as behind, since the queue tests it on the newest base and a push would take it out. Leaving the queue has to be seen twice in a row, because GitHub briefly shows neither auto-merge nor a queue entry while it moves a PR from one to the other.
 
 When it exits:
 
@@ -289,6 +292,7 @@ When it exits:
 - `closed`: leave the worktree alone and reply `queue-and-clean: fail: PR closed without merging`.
 - `failed`: a required check failed while auto-merge waited. Go to "Fixing".
 - `conflicts`: the PR has merge conflicts, which leave it queued with no checks running. Go to "Fixing".
+- `behind`: the PR waits on being up to date with its base. Go to "Bringing it up to date", then start watching again.
 - `dequeued`: find out why the PR left the queue. GitHub records it:
 
   ```
@@ -298,6 +302,10 @@ When it exits:
   ```
 
   If the reason is about checks failing or a conflict, go to "Fixing". If someone removed it by hand, or the reason is anything else, leave the worktree alone and reply `queue-and-clean: fail: PR left the queue: <reason>`.
+
+## Bringing it up to date
+
+A PR behind a base branch that requires branches to be up to date is nothing the branch did wrong, so it isn't one of "Fixing"'s hand-overs and has no limit: merge the base into the branch in this worktree, as `/ci-loop` does, never rebasing, so the push needs no force. Read the base with `gh pr view <number> --json baseRefName --jq .baseRefName`, then `git fetch origin` and `git merge --no-edit origin/<baseRefName>`. When the merge conflicts, `git merge --abort` and go to "Fixing" with the conflicts. Otherwise push with a plain `git push`, which starts the PR's CI again, and go back to the wait it came from with the same PR: the watch waits on the new run as on any other, and auto-merge stays on through the push. The merge brings in only the base's own commits, so it needs no `/review-loop` or `leak-check` before its push. Keep how many times it was brought up to date, for the final message (`brought up to date with <base> <n> times`, in the brackets with anything fixed).
 
 ## Fixing
 
@@ -336,7 +344,7 @@ It prints a line a step: `ticked: "<item>" in <note>`, `already ticked: …` or 
 - Exit 0: move the tab to the main clone, as "Back to the repository" says. From here on every command needs `git -C <main-clone>` or an absolute path, since the shell's working directory no longer exists.
 - Exit 1, `item-done: <reason>`, nothing removed (or, when the reason names `git worktree remove` or `git branch -D`, the note already ticked): when the reason is what would be lost (uncommitted changes, commits on no remote), stop and ask about it as clean-worktree's step 2 would, the question headed `[always ask]`, never reaching for `--force`; when it is an item it couldn't find, tick by hand as "Closing out" step 2 says and ask before removing anything. Otherwise reply `queue-and-clean: fail: <reason>`, with what "Closing out" did, since the work is on the default branch whatever the cleanup left.
 
-The only pushes are `/ci-loop`'s fix commits (see "Fixing"), to the PR's own branch, a branch's first push when the user chooses **Open a PR** in "No PR", and the landed commits of "Land on the default branch", once the user says to push them, none of them forced; and, in a repository whose `testIn` is `ci`, the landing's commit to its own `ci/land-<id>`, which `<lock> test` pushes forced and deletes after, as "The tests in CI" says.
+The only pushes are `/ci-loop`'s fix commits (see "Fixing"), the base merged in by "Bringing it up to date", to the PR's own branch, a branch's first push when the user chooses **Open a PR** in "No PR", and the landed commits of "Land on the default branch", once the user says to push them, none of them forced; and, in a repository whose `testIn` is `ci`, the landing's commit to its own `ci/land-<id>`, which `<lock> test` pushes forced and deletes after, as "The tests in CI" says.
 
 ## Applying the change
 
