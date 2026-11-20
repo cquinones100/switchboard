@@ -55,8 +55,12 @@ pub const ACK_AFTER: Duration = Duration::from_millis(2_200);
 #[cfg(test)]
 pub const ACK_AFTER: Duration = Duration::from_millis(100);
 
-/// How many messages' threads and buttons' values are kept.
+/// How many buttons' values are kept.
 const KEPT: usize = 4_000;
+
+/// How many messages' threads are kept at most. A thread's are forgotten
+/// once cleaning up deletes it, so this only bounds a DM never cleaned up.
+const THREADS_KEPT: usize = 50_000;
 
 /// The most pages of 100 a catch-up reads back from the newest message.
 const CATCH_UP_PAGES: usize = 50;
@@ -174,7 +178,7 @@ impl DiscordChat {
         let mut kept = self.0.kept.borrow_mut();
         kept.threads
             .insert(message.to_string(), (thread.to_string(), ours));
-        while kept.threads.len() > KEPT {
+        while kept.threads.len() > THREADS_KEPT {
             kept.threads.shift_remove_index(0);
         }
         drop(kept);
@@ -1362,6 +1366,15 @@ impl Chat for DiscordChat {
 
     fn unschedule<'a>(&'a self, _id: &'a str) -> Fut<'a, ()> {
         Box::pin(async { Ok(()) })
+    }
+
+    fn forget_thread(&self, ts: &str) {
+        self.0
+            .kept
+            .borrow_mut()
+            .threads
+            .retain(|id, (thread, _)| id != ts && thread != ts);
+        self.save();
     }
 
     fn message_url(&self, dm: &Dm, _thread: &str, at: &str) -> Option<String> {

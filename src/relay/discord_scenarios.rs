@@ -619,3 +619,24 @@ fn catching_up_reaches_what_you_sent_last_past_a_long_thread_of_the_relays() {
     assert_eq!(found[0].text, "go on");
     assert_eq!(found[0].thread_ts.as_deref(), Some(head.as_str()));
 }
+
+#[test]
+fn deleting_a_closed_thread_deletes_every_reply_and_forgets_them() {
+    let rig = Rig::discord();
+    let (tab, _) = rig.claude_tab("work");
+    let head = header(&rig, &tab);
+    let reply = rig
+        .block_on(post(&rig.cx, "🤖 a turn", Some(&head), PostOpts::default()))
+        .unwrap();
+    rig.block_on(super::homes::close_home(&rig.cx, &tab));
+    rig.block_on(super::cleanup::delete_threads(&rig.cx, std::slice::from_ref(&head)));
+    let deleted: Vec<String> = rig
+        .discord
+        .calls_to("DELETE", &format!("/channels/{DISCORD_DM}/messages/"))
+        .into_iter()
+        .map(|c| c.path.rsplit('/').next().unwrap().to_string())
+        .collect();
+    assert_eq!(deleted, [reply.clone(), head.clone()]);
+    let chat = rig.discord_chat.clone().unwrap();
+    assert_eq!(chat.thread_of(&reply), reply, "forgotten with its thread");
+}

@@ -184,6 +184,9 @@ pub trait Chat {
     /// `invalid_scheduled_message_id` means it was already sent.
     fn unschedule<'a>(&'a self, id: &'a str) -> Fut<'a, ()>;
 
+    /// A thread has been deleted: forget what the chat kept of it.
+    fn forget_thread(&self, _ts: &str) {}
+
     /// A link to the message `at` in the thread `thread`.
     fn message_url(&self, dm: &Dm, thread: &str, at: &str) -> Option<String>;
 

@@ -64,6 +64,7 @@ pub async fn delete_threads(cx: &Relay, threads: &[String]) -> Deleted {
         result.yours += yours;
         match done {
             Ok(()) => {
+                cx.chat.forget_thread(ts);
                 let mut state = cx.state.borrow_mut();
                 state.closed_homes.shift_remove(ts);
                 state.threads.shift_remove(ts);
