@@ -806,6 +806,7 @@ impl Server {
             .then(|| crate::tabs::opened(&tab.opts))
             .flatten();
         t.pinned = opt("@pinned").is_some_and(|v| v != "0");
+        t.land = opt(crate::mux::server::LAND).is_some_and(|v| v == "1");
         t.remind_at = opt("@remind_at")
             .and_then(|v| v.trim().parse::<i64>().ok())
             .filter(|n| *n != 0);

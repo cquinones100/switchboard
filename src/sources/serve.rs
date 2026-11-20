@@ -1097,7 +1097,7 @@ impl Server {
                 waiting: t.state == crate::sidebar::model::TabState::Waiting,
                 autoland: self.tabs.get(&t.id).is_some_and(|tab| {
                     tab.opts
-                        .get(crate::autopilot::LAND)
+                        .get(crate::mux::server::LAND)
                         .is_some_and(|v| v == "1")
                 }),
             })
