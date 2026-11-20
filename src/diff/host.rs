@@ -87,11 +87,12 @@ fn pr_of(dir: &Path) -> Option<Pr> {
 /// The settings the diff reads as it tells a story, which it asks again
 /// each time rather than once as it opens: Tell it again reads the
 /// story's shape among them.
-const READ_FRESH: [&str; 4] = [
+const READ_FRESH: [&str; 5] = [
     "diff_story_model",
     "diff_story",
     "diff_order",
     "diff_story_map",
+    "diff_story_talk",
 ];
 
 impl Host for Core {

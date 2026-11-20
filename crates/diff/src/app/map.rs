@@ -38,6 +38,11 @@ pub(super) struct Mapper {
     pub(super) chapter: usize,
     pub(super) at: usize,
     pub(super) strip: Option<usize>,
+    /// The map's first column, moved sideways by Shift and the wheel;
+    /// `None` while it follows the chosen page. The drawing's width, the
+    /// pane's and the first column shown as last drawn.
+    pub(super) left: Option<usize>,
+    pub(super) shown: (usize, usize, usize),
 }
 
 /// `n` of something, by its name: "1 file", "3 files".
@@ -105,10 +110,16 @@ impl Laid {
     }
 
     /// The part of the drawing shown in `w` columns and `h` rows: its first
-    /// column and row, kept round box `around` when the drawing is larger,
-    /// and the columns left of it when it is narrower, so it sits in the
-    /// middle.
-    fn window(&self, w: usize, h: usize, around: Option<usize>) -> (usize, usize, usize) {
+    /// column and row, kept round box `around` when the drawing is larger
+    /// (its first column `left` when moved sideways), and the columns left
+    /// of it when it is narrower, so it sits in the middle.
+    fn window(
+        &self,
+        w: usize,
+        h: usize,
+        around: Option<usize>,
+        left: Option<usize>,
+    ) -> (usize, usize, usize) {
         let b = around.and_then(|id| self.rect(id));
         let start = |len: usize, room: usize, at: Option<(usize, usize)>| {
             if len <= room {
@@ -118,7 +129,10 @@ impl Laid {
                 (from + size / 2).saturating_sub(room / 2).min(len - room)
             })
         };
-        let left = start(self.width, w, b.map(|r| (r.x as usize, r.width as usize)));
+        let left = match left {
+            Some(left) => left.min(self.width.saturating_sub(w)),
+            None => start(self.width, w, b.map(|r| (r.x as usize, r.width as usize))),
+        };
         let top = start(
             self.lines.len(),
             h,
@@ -140,11 +154,11 @@ impl Laid {
         &self,
         w: usize,
         h: usize,
-        around: Option<usize>,
+        (around, left): (Option<usize>, Option<usize>),
         look: &dyn Fn(usize) -> BoxLook,
         theme: &Theme,
     ) -> Vec<Vec<Span<'static>>> {
-        let (left, top, pad) = self.window(w, h, around);
+        let (left, top, pad) = self.window(w, h, around, left);
         let looks: Vec<(Rect, BoxLook)> =
             self.boxes.iter().map(|(id, r)| (*r, look(*id))).collect();
         let mut out = Vec::new();
@@ -207,9 +221,9 @@ impl Laid {
         (x0, y0): (u16, u16),
         w: usize,
         h: usize,
-        around: Option<usize>,
+        (around, left): (Option<usize>, Option<usize>),
     ) -> Vec<(usize, Rect)> {
-        let (left, top, pad) = self.window(w, h, around);
+        let (left, top, pad) = self.window(w, h, around, left);
         let h = self.height(h);
         self.boxes
             .iter()
@@ -268,6 +282,8 @@ impl App {
         } else {
             self.mapper.at = self.goal_of(self.map_chapter());
         }
+        // The page it opens on is brought into sight.
+        self.mapper.left = None;
         self.mode = Mode::Map;
         self.keep_mode();
         self.filtering = false;
@@ -319,6 +335,17 @@ impl App {
             .unwrap_or(1)
     }
 
+    /// The map moved sideways, Shift with the wheel.
+    pub(super) fn map_sideways(&mut self, right: bool) {
+        let (total, pane, left) = self.mapper.shown;
+        let last = total.saturating_sub(pane);
+        self.mapper.left = Some(if right {
+            (left + 8).min(last)
+        } else {
+            left.saturating_sub(8)
+        });
+    }
+
     /// The wheel over the map: the chapter read from the goal down, the
     /// next page or the one before, chosen on the map.
     pub(super) fn map_step(&mut self, step: i32) {
@@ -335,6 +362,7 @@ impl App {
             return;
         };
         self.mapper.at = n;
+        self.mapper.left = None;
     }
 
     /// ] and [ on the map, and ]c and [c from an open page's list: the
@@ -356,6 +384,7 @@ impl App {
         }
         self.mapper.chapter = chapter;
         self.mapper.at = self.goal_of(chapter);
+        self.mapper.left = None;
         // The strip, with the keys on a chapter, follows the one shown.
         let chapters = self.story.as_ref().map_or(0, |s| s.chapters.len());
         if self.mapper.strip.is_some_and(|s| s < chapters) {
@@ -490,6 +519,8 @@ impl App {
         };
         if let Some(to) = to {
             self.mapper.at = to;
+            // A page chosen is brought into sight.
+            self.mapper.left = None;
         }
         Some(Act::Redraw)
     }
@@ -512,7 +543,7 @@ impl App {
             }
             Hit::Chapter(t) => self.show_chapter(t),
             Hit::FilesOnly => self.open_files_only(),
-            Hit::Item(_) | Hit::Line(_) | Hit::Run(_) => {}
+            Hit::Item(_) | Hit::Line(_) | Hit::Run(_) | Hit::Talk(_) => {}
         }
         Act::Redraw
     }
@@ -560,6 +591,7 @@ impl App {
         let order = story::goal_down(&story, chapter);
         if !order.contains(&self.mapper.at) {
             self.mapper.at = self.goal_of(chapter);
+            self.mapper.left = None;
         }
         let at = self.mapper.at;
         let (x0, pane) = (area.x + 1, area.width.saturating_sub(2) as usize);
@@ -595,8 +627,11 @@ impl App {
             lit: self.lit == Some(Hit::Page(n)),
             read: self.read.contains(&n),
         };
-        let drawn = laid.rows(pane, room, Some(at), &look, &theme);
-        let hits = laid.hits((x0, top + 1), pane, room, Some(at));
+        let view = (Some(at), self.mapper.left);
+        let drawn = laid.rows(pane, room, view, &look, &theme);
+        let hits = laid.hits((x0, top + 1), pane, room, view);
+        let (left, _, _) = laid.window(pane, room, Some(at), self.mapper.left);
+        self.mapper.shown = (laid.width, pane, left);
         // Over the map: the goal named over chapter 1's top page, or that
         // none of a chapter's pages builds on another.
         let linked = order
@@ -643,6 +678,11 @@ impl App {
             self.hits.push((Hit::Page(n), r));
         }
         let mut y = top + 1 + laid.height(room) as u16 + 1;
+        // Wider than the pane: a scroll bar under it shows where.
+        if kit::scroll_bars() && laid.width > pane {
+            let bar = super::talk::sideways_bar(laid.width, left, pane, &theme);
+            put_line(buf, x0, y - 1, pane as u16, &Spans::from(bar));
+        }
         let legend = vec![
             Span::styled(" ──▼", Tone::Dim.style(&theme)),
             Span::styled(" builds on    ", Tone::Dim.style(&theme)),
