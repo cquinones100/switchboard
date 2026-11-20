@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! wt-jump ABC-123      the ticket's tab
-//! wt-jump 123          the PR's tab
+//! wt-jump 123          the PR's tab, or the tab on GitHub issue 123
 //! wt-jump theme-slot   any tab whose branch, directory or name contains that
 //! wt-jump --list       print the tabs instead of jumping
 //! ```
@@ -15,7 +15,10 @@
 //! its PR. A bare number is looked for as a `pr-<n>` worktree first, which
 //! is what `wtpr` makes and costs nothing; only when that finds nothing is
 //! GitHub asked what branch the PR is on, so a ticket's worktree that later
-//! opened a PR is still reachable by its number.
+//! opened a PR is still reachable by its number. A bare number is a GitHub
+//! issue's too: a tab on its `issue/<n>-…` branch (`wtn --issue`), or whose
+//! label names it (`#<n>: <title>`), matches as the PR's tab does, and when
+//! both a PR's tab and an issue's match, you are asked which.
 //!
 //! The tabs and panes come from the server (`switchboard list`) where tmux's
 //! `list-panes` gave them, and a jump is `select-tab` and `select-pane`, or,
@@ -177,6 +180,22 @@ fn pr_in_label(label: &str) -> Option<String> {
     (!n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).then(|| n.to_string())
 }
 
+/// Whether a pane's tab is on GitHub issue `number`: its branch is the
+/// issue's (`issue/<n>-…`), or its label names it (`#<n>: <title>`, after
+/// the PR's `#<pr> `).
+fn on_issue(p: &Pane, number: u64) -> bool {
+    let named = format!("#{number}: ");
+    let after_pr = match pr_in_label(&p.label) {
+        Some(pr) => p.label[pr.len() + 2..].to_string(),
+        None => p.label.clone(),
+    };
+    p.branch
+        .as_deref()
+        .and_then(crate::views::ticket::issue_number_of_branch)
+        == Some(number)
+        || after_pr.starts_with(&named)
+}
+
 fn contains(text: Option<&str>, needle: &str) -> bool {
     text.is_some_and(|t| t.to_lowercase().contains(&needle.to_lowercase()))
 }
@@ -223,7 +242,7 @@ fn matches_for(target: &str, described: Vec<Pane>) -> Result<Matches, String> {
             create: format!("wt {upper}"),
         });
     }
-    if let Some((number, _)) = worktree::pr_from(target) {
+    if let Some((number, url_repo)) = worktree::pr_from(target) {
         let label = format!("PR #{number}");
         let token = format!("pr-{number}");
         let front = format!("#{number} ");
@@ -236,9 +255,20 @@ fn matches_for(target: &str, described: Vec<Pane>) -> Result<Matches, String> {
             })
             .cloned()
             .collect();
-        if !local.is_empty() {
+        // A PR's link names a PR alone; a number may be an issue's too.
+        let issues: Vec<Pane> = described
+            .iter()
+            .filter(|p| url_repo.is_none() && on_issue(p, number))
+            .cloned()
+            .collect();
+        if !local.is_empty() || !issues.is_empty() {
+            let label = match (local.is_empty(), issues.is_empty()) {
+                (false, false) => format!("{label} or issue #{number}"),
+                (true, false) => format!("issue #{number}"),
+                _ => label,
+            };
             return Ok(Matches {
-                matched: local,
+                matched: local.into_iter().chain(issues).collect(),
                 label,
                 create: format!("wtpr {number}"),
             });
@@ -468,6 +498,32 @@ mod tests {
         let tabs: Vec<&str> = rows.iter().map(|p| p.tab.as_str()).collect();
         assert_eq!(tabs, vec!["@3", "@4", "@1", "@2"]);
         assert!(rows[3].matched, "the pane that matched stands for its tab");
+    }
+
+    #[test]
+    fn a_number_finds_the_issue_s_tab_and_asks_when_a_pr_s_matches_too() {
+        let mut issue = pane("@1", "", "main", 1);
+        issue.branch = Some("issue/12-fix-the-login".into());
+        let mut named = pane("@2", "", "main", 2);
+        named.label = "#40 #12: Fix the login".into();
+        let mut pr = pane("@3", "", "main", 3);
+        pr.label = "#12 Other work".into();
+        let other = pane("@4", "", "main", 4);
+        assert!(on_issue(&issue, 12) && on_issue(&named, 12));
+        assert!(!on_issue(&pr, 12) && !on_issue(&issue, 1));
+
+        let found =
+            matches_for("12", vec![issue.clone(), named.clone(), other.clone()]).expect("matches");
+        let tabs: Vec<&str> = found.matched.iter().map(|p| p.tab.as_str()).collect();
+        assert_eq!(tabs, ["@1", "@2"]);
+        assert_eq!(found.label, "issue #12");
+
+        let both = matches_for("12", vec![issue, pr.clone(), other]).expect("matches");
+        assert_eq!(both.matched.len(), 2, "both are listed, so you are asked");
+        assert_eq!(both.label, "PR #12 or issue #12");
+
+        let link = matches_for("https://github.com/o/r/pull/12", vec![pr]).expect("matches");
+        assert_eq!(link.label, "PR #12", "a PR's link names its PR alone");
     }
 
     #[test]

@@ -313,10 +313,10 @@ impl Command {
                 "Linear is asked which project the branch's ticket is in, the ID taken from the branch's name, else the tab's. A ticket in no project, or no ticket at all, is said in a box."
             }
             Command::CopyTicketId => {
-                "The ID is the first ticket-shaped part of the branch's name, else of the tab's name. A box says what was copied, or that there is no ticket."
+                "The ticket is found as M-i finds it: a GitHub issue is copied as its number (#12), a Linear ticket as its ID. A box says what was copied, or that there is no ticket."
             }
             Command::CopyTicketUrl => {
-                "The link is made from the workspace written in linear.json, else asked of Linear. A box says what was copied, or that there is no ticket in the branch or tab name."
+                "The ticket is found as M-i finds it. A GitHub issue's link is made at once; a Linear ticket's from the workspace written in linear.json, else asked of Linear. A box says what was copied, or that there is no ticket."
             }
             Command::CopyPrNumber => {
                 "The PR is asked of GitHub by the pane's branch, a fork's upstream included. A box says what was copied, or that the branch has no pull request."
@@ -356,7 +356,9 @@ impl Command {
             Command::OpenMedia => &["links", "image", "video", "media"],
             Command::OpenMergeQueue => &["github", "merge", "browser"],
             Command::OpenProject => &["linear", "project", "browser"],
-            Command::CopyTicketId | Command::CopyTicketUrl => &["linear", "ticket", "copy"],
+            Command::CopyTicketId | Command::CopyTicketUrl => {
+                &["linear", "github", "ticket", "copy"]
+            }
             Command::CopyPrNumber | Command::CopyPrUrl => &["github", "pr", "copy"],
             Command::ClearImageCache => &["pr", "ticket", "images", "cache"],
         }

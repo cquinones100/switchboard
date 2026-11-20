@@ -48,6 +48,7 @@ use super::git::{self, GitPlace};
 use super::label;
 use crate::integrations::github::{self, Repo};
 use crate::integrations::linear;
+use crate::views::ticket::{self, Ticket};
 use crate::{net, settings};
 
 /// How long a directory's answer holds once it has a PR, and before.
@@ -73,9 +74,9 @@ const FORGET: Duration = Duration::from_secs(3600);
 /// The settings the names follow, as last read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Switches {
-    /// `github`: PR numbers.
+    /// `github`: PR numbers and GitHub issues' titles.
     pub github: bool,
-    /// `linear`: ticket titles.
+    /// `linear`: Linear tickets' titles.
     pub linear: bool,
     /// `tab_lookups`: either of them in tab names.
     pub lookups: bool,
@@ -120,8 +121,13 @@ impl Switches {
         self.lookups && self.github
     }
 
-    fn tickets(self) -> bool {
-        self.lookups && self.linear
+    /// Whether a ticket of `service`'s (`Ticket::service`) is named.
+    fn tickets_of(self, service: &str) -> bool {
+        self.lookups
+            && match service {
+                "github" => self.github,
+                _ => self.linear,
+            }
     }
 }
 
@@ -140,6 +146,9 @@ pub struct Facts {
     /// a `wtpr` directory's number, or one kept by a build that didn't say,
     /// which is its directory's origin's.
     pub pr_repo: Option<Repo>,
+    /// The ticket its branch is for: the GitHub issue it was started for,
+    /// else the Linear ticket it names, while its service's lookups are on.
+    pub ticket: Option<Ticket>,
 }
 
 /// A branch's PR as its lookup found it: its number, and the repository it
@@ -188,7 +197,7 @@ pub enum Ask {
         repo: PathBuf,
         branch: String,
     },
-    /// A ticket's title.
+    /// A ticket's title, by `Ticket::arg` (`ENG-42`, `owner/repo#12`).
     Title { id: String },
 }
 
@@ -231,13 +240,28 @@ impl Ask {
                 }
             }
             Ask::Title { id } => {
-                let found = linear::ticket(&id, "tab name: ticket title")
-                    .await
-                    .map(|t| t.map(|t| t.title))
-                    .map_err(|e| e.to_string());
+                let found = match Ticket::parse(&id) {
+                    Some(Ticket::Issue { repo, number }) => issue_title(&repo, number).await,
+                    _ => linear::ticket(&id, "tab name: ticket title")
+                        .await
+                        .map(|t| t.map(|t| t.title)),
+                }
+                .map_err(|e| e.to_string());
                 Answer::Title { id, found }
             }
         }
+    }
+}
+
+/// A GitHub issue's title, `None` when GitHub has no such issue (or the
+/// number is a pull request's).
+async fn issue_title(repo: &Repo, number: u64) -> anyhow::Result<Option<String>> {
+    let path = format!("/repos/{repo}/issues/{number}");
+    match github::rest("GET", &path, None, "tab name: issue title").await {
+        Ok(issue) if issue.get("pull_request").is_some_and(|p| !p.is_null()) => Ok(None),
+        Ok(issue) => Ok(issue["title"].as_str().map(str::to_string)),
+        Err(e) if net::kind_of(&e) == Some(&net::ErrorKind::NotFound) => Ok(None),
+        Err(e) => Err(e),
     }
 }
 
@@ -329,23 +353,31 @@ impl Names {
         let color = color::tab_color(tint, switches.shade);
         let window = color::window_name(&name, place);
 
-        // Matches any team key; a branch that only looks like a ticket is
-        // harmless: Linear has no such ticket, and the name is used as usual.
+        // The issue the branch was started for, else the Linear ticket it
+        // names, any team key: a branch that only looks like a ticket is
+        // harmless, Linear having no such ticket, and the name is used as
+        // usual.
         let ticket = place
-            .filter(|_| switches.tickets())
-            .and_then(|p| crate::views::ticket::id_in_branch(&p.branch));
-        let title = ticket.as_ref().and_then(|id| {
+            .filter(|p| p.on_branch())
+            .map(|_| ticket::of_dir_all(dir, None))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|t| !matches!(t, Ticket::Project(_)))
+            .find(|t| switches.tickets_of(t.service()));
+        let title = ticket.as_ref().and_then(|t| {
+            let id = t.arg();
             let known = self.titles.entry(id.clone()).or_insert(Known {
                 value: None,
                 next: now,
                 asked: None,
             });
             if known.due(now) {
-                asks.push(Ask::Title { id: id.clone() });
+                asks.push(Ask::Title { id });
             }
             known.value.clone()
         });
-        let label = label::facts_label(&window, ticket.as_deref().zip(title.as_deref()));
+        let short = ticket.as_ref().map(Ticket::short);
+        let label = label::facts_label(&window, short.as_deref().zip(title.as_deref()));
 
         // A `wtpr` worktree carries its number in its directory's name, which
         // needs no lookup, its repository its origin. In a fork's clone it
@@ -377,6 +409,7 @@ impl Names {
             label,
             pr,
             pr_repo,
+            ticket,
         }
     }
 
@@ -772,6 +805,47 @@ mod tests {
         };
         assert!(!names.answer(failed, now));
         assert_eq!(names.facts(&dir, now).0.pr, Some(12));
+    }
+
+    #[test]
+    fn an_issue_branch_asks_for_the_issue_s_title_and_shows_its_number() {
+        let scratch = Scratch::new("issue");
+        let dir = scratch.0.join("app");
+        if !repo(&dir) {
+            eprintln!("skipped: no git");
+            return;
+        }
+        assert!(git(&dir, &["checkout", "-q", "-b", "issue/12-fix-login"]));
+        assert!(git(
+            &dir,
+            &["remote", "add", "origin", "https://github.com/acme/app.git"]
+        ));
+        let (mut on, now) = names(Switches::default());
+        let (facts, asks) = on.facts(&dir, now);
+        let issue = Ticket::parse("acme/app#12");
+        assert_eq!(facts.ticket, issue);
+        assert_eq!(
+            asks[0],
+            Ask::Title {
+                id: "acme/app#12".into()
+            }
+        );
+        let title = Answer::Title {
+            id: "acme/app#12".into(),
+            found: Ok(Some("Fix the login".into())),
+        };
+        assert!(on.answer(title, now));
+        assert_eq!(on.facts(&dir, now).0.label, "#12: Fix the login");
+
+        // With GitHub off, no issue and nothing asked of it.
+        let (mut off, now) = names(Switches {
+            github: false,
+            ..Switches::default()
+        });
+        let (facts, asks) = off.facts(&dir, now);
+        assert_eq!(facts.ticket, None);
+        assert_eq!(facts.label, "app:issue/12-fix-login");
+        assert!(asks.is_empty());
     }
 
     #[test]

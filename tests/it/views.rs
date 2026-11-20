@@ -1709,6 +1709,75 @@ mod tickets {
         );
     }
 
+    /// A tab on an issue's branch is named by the issue's number and title,
+    /// its M-T box names the issue, and the copy commands copy `#12` and
+    /// its link.
+    #[test]
+    fn a_tab_on_an_issue_is_named_by_it_and_copies_its_number_and_link() {
+        let github = Fake::github("test-token", |request| {
+            request
+                .path()
+                .starts_with("/repos/acme/widgets/issues/12")
+                .then(|| {
+                    Reply::json(
+                        200,
+                        json!({ "number": 12, "title": "Make the widget blue", "state": "open" }),
+                    )
+                })
+        });
+        let server = TestServer::start_with_env(&[
+            ("GH_TOKEN", "test-token"),
+            ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
+            ("SWITCHBOARD_GITHUB_API", &github.url),
+        ]);
+        settings(&server, json!({"linear": false, "ux2": false}));
+        let work = server.dir.path().join("widgets");
+        std::fs::create_dir_all(&work).unwrap();
+        git(&work, &["init", "-q"]);
+        git(
+            &work,
+            &["symbolic-ref", "HEAD", "refs/heads/issue/12-make-it-blue"],
+        );
+        git(&work, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        git(
+            &work,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/widgets.git",
+            ],
+        );
+        let mut client = server.attach(140, 36);
+        client.wait_text("$");
+        cd(&server, &mut client, &work);
+
+        let label = || {
+            server.list()["sessions"][0]["tabs"][0]["label"]
+                .as_str()
+                .unwrap_or("")
+                .to_string()
+        };
+        let deadline = common::deadline(Duration::from_secs(20));
+        while !label().ends_with("#12: Make the widget blue") {
+            assert!(Instant::now() < deadline, "the tab is {:?}", label());
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        server.ok(&["press", "tab-title"]);
+        client.wait_text("Ticket     #12");
+        client.send(b"\x1b");
+        client.wait_for("the box closed", |s| {
+            !s.iter().any(|l| l.contains("Ticket     #12"))
+        });
+
+        server.ok(&["press", "copy-ticket-id"]);
+        client.wait_text("Copied #12");
+        close_message(&mut client, "Copied #12");
+        server.ok(&["press", "copy-ticket-url"]);
+        client.wait_text("Copied https://github.com/acme/widgets/issues/12");
+    }
+
     /// Linear, answering your tickets and projects, a ticket and a project.
     fn fake_linear() -> Fake {
         Fake::linear("test-key", |request| {

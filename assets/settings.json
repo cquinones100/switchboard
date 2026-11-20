@@ -1128,7 +1128,7 @@
     "key": "tab_lookups",
     "category": "Tabs and status bar",
     "label": "PRs and tickets in tab names",
-    "description": "Look up each tab's PR number on GitHub and its ticket's title on Linear, in the background",
+    "description": "Look up each tab's PR number on GitHub and its ticket's title on Linear, or its GitHub issue's title, in the background",
     "default": true
   },
   {
