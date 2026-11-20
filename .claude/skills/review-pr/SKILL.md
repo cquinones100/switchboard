@@ -41,7 +41,7 @@ Only on a Mac: on Linux `switchboard try --sealed` refuses, having no sandbox, s
 
 ## 5. The review
 
-Draft the review for the user to post, in their voice (their own past PR reviews and comments on GitHub: `gh api "search/issues?q=commenter:<their login>+repo:<owner/repo>"`): what the PR does well in a line, then the findings for the author, each tied to a file and line, the ones that must change before a merge first. Show it, and post it with `gh pr review` only when they ask, with the verdict they pick.
+Draft the review for the user to post, in their voice (their own past PR reviews and comments on GitHub: `gh api "search/issues?q=commenter:<their login>+repo:<owner/repo>"`): what the PR does well in a line, then the findings for the author, each tied to a file and line, the ones that must change before a merge first. Write it to a file in your scratchpad directory and run `switchboard leak-check --file <file>` on it before showing it, since the PR is public: it exits 1 when it finds anything that may identify the user or their employer and 2 when it can't look. A hit on the repository's own issues and PRs, the one reviewed included, is no leak, since they are public already. Fix what you agree with, and show anything left beside the draft. Show it, and post it with `gh pr review --body-file <file>` only when they ask, with the verdict they pick, running the check again on any edit of it first.
 
 ## 6. Clean up
 
