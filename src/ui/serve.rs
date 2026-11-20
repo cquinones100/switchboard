@@ -469,7 +469,12 @@ impl Server {
                 }
             }
             UiEvent::Said { client, text } => self.say(client, &text),
-            UiEvent::Look { client, tab, shown } => {
+            UiEvent::Look {
+                client,
+                tab,
+                shown,
+                before_after,
+            } => {
                 if shown.is_empty() {
                     return;
                 }
@@ -485,7 +490,7 @@ impl Server {
                 // never take those beside the tab in front.
                 self.close_pictures(client, |p| p.tab == tab);
                 let about = format!("tab {} · {}", self.tab_number(tab), self.tab_label(tab));
-                let pictures = Pictures::new(tab, &about, shown);
+                let pictures = Pictures::new(tab, &about, shown, before_after);
                 // Under every box already up: they pass keys on to the tab,
                 // which would take them from a menu or a question open
                 // when Claude shows them, were they on top of it.
@@ -505,8 +510,9 @@ impl Server {
         }
     }
 
-    /// `look [-t pane] <file>...`: pictures shown to you beside the pane's
-    /// tab, in the empty columns at the right of its narrow lone pane, read
+    /// `look [-t pane] [--before-after] <file>...`: pictures shown to you
+    /// beside the pane's tab (the two `--before-after` takes, and only two,
+    /// headed "Before and after" in that order), in the empty columns at the right of its narrow lone pane, read
     /// off the server's task (Settings' `images_beside_pane`). Where there
     /// are no such columns on a terminal that draws the server's images (a
     /// split, a wide pane), with more than `pictures::MOST` of them, or with the setting
@@ -524,12 +530,26 @@ impl Server {
         cwd: &std::path::Path,
         caller: Option<PaneId>,
     ) -> Reply {
-        let (target, rest) = match args {
-            [flag, t, rest @ ..] if flag == "-t" => (Some(t.as_str()), rest),
-            rest => (None, rest),
-        };
-        if rest.is_empty() {
-            return Reply::fail("usage: switchboard look [-t pane] <file>...");
+        let mut target = None;
+        let mut before_after = false;
+        let mut rest = args;
+        loop {
+            match rest {
+                [flag, t, more @ ..] if flag == "-t" => {
+                    target = Some(t.as_str());
+                    rest = more;
+                }
+                [flag, more @ ..] if flag == "--before-after" => {
+                    before_after = true;
+                    rest = more;
+                }
+                _ => break,
+            }
+        }
+        if rest.is_empty() || (before_after && rest.len() != 2) {
+            return Reply::fail(
+                "usage: switchboard look [-t pane] [--before-after <before> <after> | <file>...]",
+            );
         }
         let pane = match target {
             Some(t) => match t.strip_prefix('%').and_then(|p| p.parse::<PaneId>().ok()) {
@@ -613,7 +633,12 @@ impl Server {
                     }
                 }
             }
-            let _ = tx.send(Event::Ui(UiEvent::Look { client, tab, shown }));
+            let _ = tx.send(Event::Ui(UiEvent::Look {
+                client,
+                tab,
+                shown,
+                before_after,
+            }));
         });
         Reply::ok("")
     }
