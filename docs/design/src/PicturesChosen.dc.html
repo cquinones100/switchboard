@@ -198,10 +198,11 @@ for (let y = 0; y < H; y++) for (let x = X0; x < X0 + PW; x++) { const c = g[y][
 fill(SX, 0, SW, H, '0');
 box(SX, 0, SW, H, '6 pictures');
 // A PICTURE: the kit's card around it, its file's name on the top edge and its place at the right; the chosen one's edge in
-// the accent, the one under the mouse lit (its edge in the text tone, its name bold), the rest on the plain rule.
+// the accent, the one under the mouse lit (on the chosen surface, the kit's hover, its edge in the text tone), the rest on the plain rule.
 const shot = (x, y, w, h, hue) => K(x, y, w, h, 'border-radius:4px;background:linear-gradient(#20243a 0 6%,transparent 6%),repeating-linear-gradient(#15161e 0 18px,#1b1e29 18px 20px),' + hue + ';background-blend-mode:normal');
 const pic = (y, name, place, state, hue) => {
   const x = SX + 20, w = SW - 40, h = 39;
+  if (state === 'lit') fill(x, y, w, h, '4');
   card(x, y, w, h, { title: name, right: place, chosen: state === 'chosen', edge: state === 'lit' ? 't' : 'L', titleTone: state === 'chosen' ? 'a' : 't' });
   if (state === 'chosen') { for (let j = 1; j < h - 1; j++) put(x - 2, y + j, '▌', 'a'); }
   shot(x + 2, y + 1.5, w - 4, h - 3, hue);
