@@ -1887,6 +1887,7 @@ mod tickets {
                 "sidebar": false, "photos": false, "lone_pane_width": "80"})
             .to_string(),
         );
+        repos(&server, json!({ "tickets": "github" }));
         let work = server.dir.path().join("widgets");
         std::fs::create_dir_all(&work).unwrap();
         git(&work, &["init", "-q"]);
