@@ -1,6 +1,6 @@
 ---
 name: design-docs
-description: Publish the UX 2.0 design's boards to this repository as web pages for GitHub Pages - render each board's source in docs/design/src as a static HTML page in docs/design after checking its text holds only made-up names, rewrite docs/design/README.md, and push the change straight to main when it touches docs/design alone. For Switchboard's own repository. Use when asked to sync, publish or update the design docs, after changing a board, or runs /design-docs.
+description: Publish the UX 2.0 design's boards to this repository as web pages for GitHub Pages - render each board's source in docs/design/src as a static HTML page in docs/design after checking its text holds only made-up names, rewrite docs/design/README.md, and land the change through a PR as any change does. For Switchboard's own repository. Use when asked to sync, publish or update the design docs, after changing a board, or runs /design-docs.
 disable-model-invocation: true
 ---
 
@@ -30,19 +30,13 @@ Then it writes each board `canvas.json` puts on its `design` page and the Index 
 
 Look at the README's diff and at a few of the changed boards before committing, drawn with `node .claude/skills/design-docs/scripts/render.js docs/design/src/<Name>.dc.html <scratchpad>/<name>.png [width height]` (the Read tool shows a PNG): a board drawn blank, cut off or with its text off its meters is a renderer problem to fix here, not to land.
 
-## 3. Push it
+## 3. Land it
 
-Commit `docs/design/` alone (the sources and the pages) with a message saying which boards changed, following CLAUDE.md, read the commits' diff by eye for anything that identifies the user or their employer, since the site is public, and then run, as this exact command:
+Commit `docs/design/` (the sources and the pages) on the worktree's branch with a message saying which boards changed, following CLAUDE.md, and read the commits' diff by eye for anything that identifies the user or their employer, since the site is public. A change to the renderer, `made-up.json` or this skill is a commit of its own beside it.
 
-```
-node .claude/skills/design-docs/scripts/render.js push
-```
+Then land the branch as any change is landed: read the file `switchboard skill-path queue-and-clean` prints and follow it, which runs the review loop, asks before pushing and lands it through a PR (CLAUDE.md's "Pushing"). In that landing `node .claude/skills/design-docs/scripts/render.js made-up <range>` stands in for `switchboard leak-check <range>`: it runs leak-check and drops what `made-up.json` explains in `docs/design/` (its ticket prefixes, PR numbers, and the colors leak-check reads as PR numbers), printing what is left; ask the user about each, and a new color it prints goes into `colors` once you have seen it is one. It exits 2 when leak-check couldn't look: ask then too.
 
-It fetches main, refuses when main on origin has commits the branch lacks (rebase onto `origin/main`, then run it again) or when any commit it would push touches a path outside `docs/design/`, and runs `switchboard leak-check` on the commits, dropping what `made-up.json` explains in `docs/design/` (its ticket prefixes, PR numbers, and the colors leak-check reads as PR numbers). With nothing left it pushes `HEAD` to main, with no review loop and no question (CLAUDE.md's "Pushing", and `.githooks/pre-push` lets such a push through by the same rule); otherwise it prints each finding and exits 1: ask the user about each, and a new color it prints goes into `colors` once you have seen it is one. It exits 2 when leak-check couldn't look or git couldn't fetch: ask then too.
-
-Once it has pushed, report a direct link to each changed board's page (`https://cquinones100.github.io/switchboard/design/<number>.html`, the kit's first board `index.html`), which the site shows once its build ends. Then remove the worktree and its branch, which have nothing left that main lacks.
-
-A change to the renderer, `made-up.json`, this skill or anything else outside `docs/design/` is an ordinary change: commit it on its own and land it as `/queue-and-clean` does (read the file `switchboard skill-path queue-and-clean` prints and follow it), which runs the review loop and asks before pushing; `render.js push` refuses it. In that landing `node .claude/skills/design-docs/scripts/render.js made-up <range>` stands in for `switchboard leak-check <range>`, answering the made-up findings in `docs/design/` the same way.
+Once the PR has merged, report a direct link to each changed board's page (`https://cquinones100.github.io/switchboard/design/<number>.html`, the kit's first board `index.html`), which the site shows once its build ends.
 
 ## GitHub Pages
 
@@ -50,4 +44,4 @@ The site is GitHub Pages serving main's `/docs` folder (Jekyll renders `docs/gui
 
 ## The renderer
 
-`scripts/render.js` evaluates each board's script (its `renderVals()`) in a `node:vm` context of its own, with no `require`, `process` or file access, and expands the board's `<sc-for>` loops and `{{holes}}` into plain HTML under a Content-Security-Policy that runs no script and loads nothing but Google Fonts. A grid board (one whose rows sit in a `white-space: pre` container) loses the whitespace between its template's tags, which there would be a blank line pushing its text a row below its meters and pictures; the Slack boards and the Index keep theirs. `node scripts/render.js <board.dc.html> <out.png> [width height]` draws one board with Chrome headless at 1×; `node scripts/render.js --self-test` checks a grid fixture's page has no line breaks between its tags and a Slack fixture's keeps its spaces, the made-up-data check, a sync of the fixtures' sources into pages and a README, and, where Chrome is, draws both fixtures, checking each picture's size, that it isn't blank, and that the grid fixture's meter is on the very rows of the text it belongs to, so a one-row shift fails; `tests/it/design_docs.rs` runs it where Node is present, and checks `render.js push` and the pre-push hook in a repository of its own. It uses no npm packages.
+`scripts/render.js` evaluates each board's script (its `renderVals()`) in a `node:vm` context of its own, with no `require`, `process` or file access, and expands the board's `<sc-for>` loops and `{{holes}}` into plain HTML under a Content-Security-Policy that runs no script and loads nothing but Google Fonts. A grid board (one whose rows sit in a `white-space: pre` container) loses the whitespace between its template's tags, which there would be a blank line pushing its text a row below its meters and pictures; the Slack boards and the Index keep theirs. `node scripts/render.js <board.dc.html> <out.png> [width height]` draws one board with Chrome headless at 1×; `node scripts/render.js --self-test` checks a grid fixture's page has no line breaks between its tags and a Slack fixture's keeps its spaces, the made-up-data check, a sync of the fixtures' sources into pages and a README, and, where Chrome is, draws both fixtures, checking each picture's size, that it isn't blank, and that the grid fixture's meter is on the very rows of the text it belongs to, so a one-row shift fails; `tests/it/design_docs.rs` runs it where Node is present, and checks the pre-push hook's exception for a push that changes `docs/design/` alone in a repository of its own. It uses no npm packages.
