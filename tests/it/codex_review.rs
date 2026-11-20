@@ -188,6 +188,50 @@ fn on_main_with_no_pr_it_reviews_the_commits_not_yet_on_origin() {
     assert!(text(&nowhere.stderr).contains("no directory no-such-dir"));
 }
 
+// A scenario the change doesn't set out to handle is rated low, so the loop
+// isn't sent round on its next variant, while a regression, data loss and a
+// security hole keep their severity: in the clone and from another directory.
+#[test]
+fn the_reviewer_rates_scenarios_the_change_does_not_set_out_to_handle_low() {
+    let tmp = TempDir::new("cr-scope");
+    let home = tmp.path();
+    let work = clone(home);
+    fs::write(work.join("a.txt"), "a\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "Pushed already"]);
+    git(home, &work, &["push", "-q", "origin", "main"]);
+    fs::write(work.join("b.txt"), "b\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "A change"]);
+
+    let here = review(home, &work, &["--dry-run", "--reviewer", "claude"]);
+    let elsewhere = review(
+        home,
+        home,
+        &[
+            "-C",
+            work.to_str().unwrap(),
+            "--dry-run",
+            "--reviewer",
+            "claude",
+        ],
+    );
+    for run in [here, elsewhere] {
+        assert!(run.status.success(), "{}", text(&run.stderr));
+        let out = text(&run.stdout);
+        for rule in [
+            "Take what the change sets out to do from its commit messages and the PR description, read against the diff: whatever the diff adds or changes is part of the change whether or not they mention it",
+            "a crash or failure that normal use of the changed code hits",
+            "Medium is a real bug on an uncommon path the change sets out to handle",
+            "A finding about a scenario the change does not set out to handle (an input, state or case its purpose does not reach) is low, however it fails.",
+            "a scenario the change breaks that worked before it, which is a regression",
+            "a scenario whose omission would ship data loss or a security hole",
+        ] {
+            assert!(out.contains(rule), "{rule}\n{out}");
+        }
+    }
+}
+
 /// A GitHub of the test's own on 127.0.0.1, as strict as GitHub about how
 /// it is asked (tests/common/http.rs, the token the tests' `env` gives),
 /// its GraphQL answering every query with `answer`.
