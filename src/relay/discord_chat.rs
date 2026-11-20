@@ -1193,13 +1193,15 @@ impl Chat for DiscordChat {
                     match replied.map(|r| self.thread_of(&r)) {
                         Some(thread) => {
                             let handled = threads.iter().find(|(t, _)| *t == thread);
-                            if handled.is_some_and(|(_, h)| number(&message.ts) > number(h)) {
+                            if handled.is_some_and(|(_, h)| newer(&message.ts, h)) {
                                 self.record(&message.ts, &thread, false);
                                 message.thread_ts = Some(thread);
                                 messages.push(message);
                             }
                         }
-                        None if number(&message.ts) > from => messages.push(message),
+                        None if cursor.is_none_or(|c| newer(&message.ts, c)) => {
+                            messages.push(message)
+                        }
                         None => {}
                     }
                 }
@@ -1354,6 +1356,20 @@ impl Chat for DiscordChat {
     fn home_url(&self, dm: &Dm) -> Option<String> {
         let home = self.0.kept.borrow().home.clone()?;
         Some(format!("{}{}/{home}", dm.url.as_deref()?, dm.channel))
+    }
+}
+
+/// Whether message `a` came after `b`: by their IDs when both are
+/// Discord's, which order messages made within the same millisecond, else
+/// by their times.
+fn newer(a: &str, b: &str) -> bool {
+    match (a.parse::<u64>(), b.parse::<u64>()) {
+        (Ok(a), Ok(b))
+            if rules::is_snowflake(&a.to_string()) && rules::is_snowflake(&b.to_string()) =>
+        {
+            a > b
+        }
+        _ => number(a) > number(b),
     }
 }
 
