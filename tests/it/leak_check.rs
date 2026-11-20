@@ -633,3 +633,40 @@ fn leak_check_file_exits_1_on_a_hit_0_on_a_clean_file_and_2_when_it_cant_read() 
     );
     assert_eq!(w.leak_check(&["--file"]).status.code(), Some(2));
 }
+
+#[test]
+fn leak_check_file_reads_standard_input_given_a_dash_with_the_same_exit_codes() {
+    let w = World::new();
+    let run = |text: &str| {
+        let mut child = w
+            .command(BIN)
+            .args(["leak-check", "--file", "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        use std::io::Write;
+        // A run that stops before reading (the word list unreadable) may
+        // have closed its end already, so a failed write is no failure.
+        let _ = child.stdin.take().unwrap().write_all(text.as_bytes());
+        child.wait_with_output().unwrap()
+    };
+    let dirty = run("# Add a view\n\nFollows FOO-9 and #4567.\n");
+    assert_eq!(dirty.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&dirty.stdout).trim(),
+        "stdin:3: ticket ID: FOO-9\nstdin:3: PR number: #4567",
+        "what a commit's added line would show, named stdin"
+    );
+    let clean = run("# Add a view\n\nMake the list show its count.\n");
+    assert_eq!(clean.status.code(), Some(0));
+    assert!(clean.stdout.is_empty());
+    let list = w.home().join(".config/switchboard/leak-check.txt");
+    std::fs::create_dir_all(&list).unwrap();
+    assert_eq!(
+        run("Make the list show its count.\n").status.code(),
+        Some(2),
+        "a word list that can't be read stops it"
+    );
+}

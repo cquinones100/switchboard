@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use super::line::{self, Act, Summary};
-use super::mode::{self, Mode, note_title};
+use super::mode::{self, Mode, Sources, note_title};
 use super::pilot::{Job, Keep, Kept, Mark};
 use super::place::{Mine, in_main_clone, in_worktree_of};
 use super::settings_box::{self, Context, Fields, Part, SettingsBox};
@@ -1168,7 +1168,11 @@ impl Server {
         (slots, cap, limit): (u32, u32, f64),
         note_id: Option<String>,
     ) {
+        let source_saved = mode::source_saved(&paths::state_dir());
         let written = Mode::update(&paths::state_dir(), |m| {
+            if !source_saved {
+                m.sources = Sources::of_repo(&repo);
+            }
             // Skipped items keep their note's ID, so another note's stay
             // skipped in that note alone; one from before notes had IDs,
             // of the note worked before, goes.
@@ -1244,6 +1248,7 @@ impl Server {
         focus: Part,
     ) {
         let mode = Mode::read(&paths::state_dir());
+        let source_saved = mode::source_saved(&paths::state_dir());
         let notes = worktree_from_note::notes_dir();
         self.off_task(
             client,
@@ -1253,6 +1258,10 @@ impl Server {
                     && let Some(repo) = dir.as_deref().and_then(main_clone)
                 {
                     fields.repo = paths::tilde(&repo);
+                    // None chosen yet: the repository's tickets decide.
+                    if !source_saved {
+                        fields.sources = Sources::of_repo(&repo).name().to_string();
+                    }
                 }
                 if fields.note.is_empty() {
                     let choices = mode::note_choices(&notes, &mode.note);
@@ -1472,8 +1481,15 @@ impl Server {
             note_id,
             starting,
         } = checked;
+        // None chosen yet and Takes from left as it opened: the repository
+        // saved decides, which may not be the one the box opened on.
+        let source_from_repo =
+            !mode::source_saved(&paths::state_dir()) && fields.sources == was.sources;
         let m = Mode::update(&paths::state_dir(), |m| {
             fields.apply(m);
+            if source_from_repo {
+                m.sources = Sources::of_repo(&repo);
+            }
             let other_note = m.note != note;
             if other_note || m.repo != repo {
                 // What it said of the note or repository before no
@@ -3228,7 +3244,6 @@ impl Server {
                 client,
                 &mode.repo,
                 &format!("{repo}#{number}"),
-                &item.text,
                 &mode.target,
                 crate::mux::server::Opened::Background,
             ),

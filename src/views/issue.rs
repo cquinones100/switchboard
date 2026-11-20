@@ -10,7 +10,8 @@
 //! background through GitHub's API (`integrations::github`), on `r` and
 //! when the view takes the focus after a while (`super::follow`). It
 //! fetches no pictures, since an image in a comment would tell its
-//! author's server when you read the issue. No tmux-version file is
+//! author's server when you read the issue; its people's photos are drawn,
+//! from Photos' cache, while Settings' `photos` is on. No tmux-version file is
 //! behind it.
 
 use std::process::ExitCode;

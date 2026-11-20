@@ -2702,8 +2702,17 @@ fn issue_answer(request: &http::Request) -> Option<Reply> {
 /// A clone whose origin reads as GitHub's o/r, with `entry` as its
 /// repos.json entry.
 fn issue_world(prefix: &str, entry: Value) -> (World, http::Fake, PathBuf) {
+    issue_world_answering(prefix, entry, issue_answer)
+}
+
+/// `issue_world` with GitHub answering as `answer` says.
+fn issue_world_answering(
+    prefix: &str,
+    entry: Value,
+    answer: impl Fn(&http::Request) -> Option<Reply> + Send + Sync + 'static,
+) -> (World, http::Fake, PathBuf) {
     let mut w = World::new(prefix);
-    let fake = http::Fake::github("test-token", issue_answer);
+    let fake = http::Fake::github("test-token", answer);
     w.set("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url());
     w.set("SWITCHBOARD_GITHUB_API", &fake.url);
     w.set("GH_TOKEN", "test-token");
@@ -2836,6 +2845,127 @@ fn wtn_takes_an_issue_by_its_number_where_the_repository_keeps_its_work_in_githu
         "{}",
         stderr(&linear)
     );
+}
+
+/// A tab working on an issue `wtn --issue` started is named
+/// `<number>: <title>` from its branch, the title's kind left out, and a
+/// name given by hand wins over it.
+#[test]
+fn an_issues_tab_is_named_by_its_number_and_title_until_renamed_by_hand() {
+    let (w, fake, clone) = issue_world_answering(
+        "wtn-issue-name",
+        json!({ "tickets": "github" }),
+        |request| {
+            if request.path() == "/repos/o/r/issues/12" {
+                return Some(Reply::json(
+                    200,
+                    json!({ "number": 12, "state": "open", "title": "FEAT: Make the widget blue", "body": "It is red.",
+                        "html_url": "https://github.com/o/r/issues/12", "assignees": [], "labels": [] }),
+                ));
+            }
+            issue_answer(request)
+        },
+    );
+    let cd = w.path("cd");
+    w.ok(
+        &clone,
+        &[
+            "worktree-from-note",
+            "--no-claude",
+            "--cd-file",
+            cd.to_str().unwrap(),
+            "--issue",
+            "12",
+        ],
+    );
+    let text = read(&cd);
+    let worktree = text.lines().next().unwrap().to_string();
+
+    let server = common::TestServer::start_with_env(&[
+        ("GH_TOKEN", "test-token"),
+        ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
+        ("SWITCHBOARD_GITHUB_API", &fake.url),
+    ]);
+    common::write_settings(
+        &server.home,
+        json!({"notifications": false, "linear": false, "pause_when_away": false}),
+    );
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    client.type_text(&format!("cd {worktree}\r"));
+    let tab = || server.list()["sessions"][0]["tabs"][0].clone();
+    let labeled = |label: &str| {
+        let until = common::deadline(std::time::Duration::from_secs(20));
+        while tab()["label"] != label {
+            assert!(
+                std::time::Instant::now() < until,
+                "timed out waiting for {label}: {}",
+                tab()["label"]
+            );
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+    };
+    labeled("#12: Make the widget blue");
+
+    let id = tab()["id"].as_str().unwrap().to_string();
+    server.ok(&["set", "-t", &id, "@tab_name", "Mine"]);
+    labeled("Mine");
+}
+
+#[test]
+fn wtn_starts_only_work_from_the_source_autopilot_takes_this_repositorys_work_from() {
+    let (w, _fake, clone) = issue_world("wtn-source", json!({ "tickets": "github" }));
+    let notes = w.path("Notes");
+    std::fs::create_dir_all(&notes).unwrap();
+    std::fs::write(
+        notes.join("Work.md"),
+        "# Work
+
+- [ ] Make it green
+",
+    )
+    .unwrap();
+    let state = w.path("state");
+    std::fs::create_dir_all(&state).unwrap();
+    let mode = |sources: &str| {
+        std::fs::write(
+            state.join("autopilot.json"),
+            json!({ "on": true, "repo": clone.to_str().unwrap(), "note": "Work.md", "sources": sources })
+                .to_string(),
+        )
+        .unwrap();
+    };
+    let item = [
+        "worktree-from-note",
+        "--no-claude",
+        "--note",
+        "Work",
+        "--item",
+        "3",
+    ];
+
+    mode("issues");
+    let refused = w.run(&clone, &item);
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(
+        stderr(&refused).contains("Autopilot takes this repository's work from GitHub issues; open an issue with `wtn --issue <number>`, or switch the source to the note in autopilot's settings"),
+        "{}",
+        stderr(&refused)
+    );
+
+    mode("note");
+    for asked in [&["--issue", "12"][..], &["12"][..]] {
+        let mut args = vec!["worktree-from-note", "--no-claude"];
+        args.extend(asked);
+        let refused = w.run(&clone, &args);
+        assert_eq!(refused.status.code(), Some(1), "{asked:?}");
+        assert!(
+            stderr(&refused).contains("Autopilot takes this repository's work from the note"),
+            "{asked:?}: {}",
+            stderr(&refused)
+        );
+    }
+    w.ok(&clone, &item);
 }
 
 #[test]

@@ -287,16 +287,6 @@ impl Job {
     /// The first item the queue gives, if any; `state` is the state
     /// directory, whose claims file says which items wtn started lately.
     pub fn first(&self, notes: &Path, state: &Path) -> Result<Option<Item>, String> {
-        // The note's items come first, so one ready there never waits on
-        // GitHub's answer.
-        if self.sources.note()
-            && self.sources.issues()
-            && self.issues_on
-            && let Ok((items, _)) = self.note_items(notes, state)
-            && let Some(item) = items.into_iter().find(|i| !self.retrying.contains(&i.text))
-        {
-            return Ok(Some(item));
-        }
         self.items(notes, state)
             .map(|items| items.into_iter().find(|i| !self.retrying.contains(&i.text)))
     }
@@ -312,26 +302,13 @@ impl Job {
         notes: &Path,
         state: &Path,
     ) -> Result<(Vec<Item>, Vec<Item>), String> {
-        let (mut items, mut held) = if self.sources.note() {
-            self.note_items(notes, state)?
-        } else {
-            (Vec::new(), Vec::new())
-        };
-        if self.sources.issues() && self.issues_on {
-            match self.issue_items(state) {
-                Ok((issues, waiting)) => {
-                    items.extend(issues);
-                    held.extend(waiting);
-                }
-                // With the note's items left, they are still worked; with
-                // none, the failure is said rather than nothing being left.
-                Err(e) if self.sources.note() && !items.is_empty() => {
-                    eprintln!("autopilot: GitHub issues: {e}")
-                }
-                Err(e) => return Err(format!("GitHub issues: {e}")),
-            }
+        match self.sources {
+            Sources::Note => self.note_items(notes, state),
+            Sources::Issues if self.issues_on => self
+                .issue_items(state)
+                .map_err(|e| format!("GitHub issues: {e}")),
+            Sources::Issues => Ok((Vec::new(), Vec::new())),
         }
-        Ok((items, held))
     }
 
     /// The repository's GitHub issues it may take, by priority and then
@@ -1361,7 +1338,7 @@ mod tests {
     }
 
     #[test]
-    fn with_both_sources_the_notes_items_come_before_the_issues() {
+    fn each_source_alone_gives_only_its_own_items() {
         let dir = std::env::temp_dir().join(format!("sb-pilot-issues-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -1397,7 +1374,7 @@ mod tests {
             weekly_limit: 0,
             key: String::new(),
             mtime: 0,
-            sources: Sources::Both,
+            sources: Sources::Issues,
             issues_on: true,
             label: "autopilot".into(),
         };
@@ -1408,17 +1385,24 @@ mod tests {
                 .map(|i| i.text)
                 .collect()
         };
-        assert_eq!(texts(&job), ["From the note", "acme/widgets#4: Issue 4"]);
+        assert_eq!(texts(&job), ["acme/widgets#4: Issue 4"]);
         let (_, held) = job.items_and_held(&dir, &dir).unwrap();
         assert_eq!(held.len(), 1, "a design review holds issue 5");
         assert_eq!(
             held[0].waits_on.as_deref(),
             Some("your review of boards 21 and 22")
         );
-        job.sources = Sources::Issues;
-        assert_eq!(texts(&job), ["acme/widgets#4: Issue 4"]);
+        assert_eq!(
+            job.first(&dir, &dir).unwrap().map(|i| i.text).as_deref(),
+            Some("acme/widgets#4: Issue 4")
+        );
         job.sources = Sources::Note;
         assert_eq!(texts(&job), ["From the note"]);
+        assert!(job.items_and_held(&dir, &dir).unwrap().1.is_empty());
+        assert!(
+            job.priorities(&dir).is_empty(),
+            "no issue read for the note"
+        );
         // GitHub off: issues alone take nothing, never the note's items.
         job.sources = Sources::Issues;
         job.issues_on = false;

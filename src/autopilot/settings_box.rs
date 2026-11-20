@@ -119,7 +119,7 @@ impl Fields {
 
     /// Where its work comes from.
     pub fn sources(&self) -> Sources {
-        Sources::parse(&self.sources)
+        Sources::parse(&self.sources).unwrap_or_default()
     }
 
     /// The spend limit typed, 0 for none; `None` when it isn't dollars.
@@ -920,7 +920,7 @@ impl SettingsBox {
                 .clickable(),
             );
             let words = if ctx.offer_issues {
-                "open issues assigned to you with this label, opened by you or labeled by someone with write access, after the note's items"
+                "open issues assigned to you with this label, opened by you or labeled by someone with write access, in place of the note's items"
             } else {
                 "GitHub issues are off in Settings (autopilot_github_issues or github), so none are taken"
             };
@@ -1881,19 +1881,18 @@ mod tests {
         assert_eq!(b.fields().sources(), Sources::Issues);
         assert!(text_of(&b, WIDTH, true).contains("Issue label"));
         assert!(b.stops(&look, true).contains(&Part::Label));
-        b.key(key(KeyCode::Right), &look);
-        assert_eq!(b.fields().sources(), Sources::Both);
+        // One source at a time: the next step comes back to the note.
         b.key(key(KeyCode::Right), &look);
         assert_eq!(b.fields().sources(), Sources::Note);
         b.key(key(KeyCode::Left), &look);
-        assert_eq!(b.fields().sources(), Sources::Both);
+        assert_eq!(b.fields().sources(), Sources::Issues);
         let mut m = mode();
         b.fields().apply(&mut m);
-        assert_eq!(m.sources, Sources::Both);
+        assert_eq!(m.sources, Sources::Issues);
         assert!(
             b.fields()
                 .changes(&Fields::from_mode(&mode()))
-                .contains(&"takes from the note, then GitHub issues".to_string())
+                .contains(&"takes from GitHub issues".to_string())
         );
 
         // With the setting off, the row is gone for a mode taking the note.

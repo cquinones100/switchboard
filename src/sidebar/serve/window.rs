@@ -24,6 +24,7 @@ use crate::items::Item;
 use crate::mux::input::{Key, KeyCode, Mods, Mouse, MouseButton, MouseKind};
 use crate::mux::server::{ClientId, Server};
 use crate::mux::{PaneId, TabId};
+use crate::ui::menu::wrap_step;
 use crate::{paths, settings};
 
 /// The pane option that marks the pane the list is drawn over.
@@ -299,15 +300,18 @@ impl Server {
         let k = key.normalized();
         let none = k.mods == Mods::NONE;
         let ctrl = k.mods == Mods::CTRL;
+        // j and k wrap, past the last notification to the first and back,
+        // as the Notifications view's do.
+        let wrapped = |down| wrap_step(at.max(0) as usize, entries.len(), down) as isize;
         match k.code {
             KeyCode::Char('j') | KeyCode::Down if none => {
-                self.notices_choose(&session, &entries, at + 1)
+                self.notices_choose(&session, &entries, wrapped(true))
             }
-            KeyCode::Char('n') if ctrl => self.notices_choose(&session, &entries, at + 1),
+            KeyCode::Char('n') if ctrl => self.notices_choose(&session, &entries, wrapped(true)),
             KeyCode::Char('k') | KeyCode::Up if none => {
-                self.notices_choose(&session, &entries, at - 1)
+                self.notices_choose(&session, &entries, wrapped(false))
             }
-            KeyCode::Char('p') if ctrl => self.notices_choose(&session, &entries, at - 1),
+            KeyCode::Char('p') if ctrl => self.notices_choose(&session, &entries, wrapped(false)),
             KeyCode::Char('g') | KeyCode::Home if none => {
                 self.notices_choose(&session, &entries, 0)
             }

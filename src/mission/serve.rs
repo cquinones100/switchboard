@@ -3865,6 +3865,15 @@ impl Server {
         if *view == ViewId::Relay {
             return self.relay_choices(item);
         }
+        // A notification's menu dismisses every one the sidebar shows, as
+        // the view's own menu does, whatever the view lists beside it.
+        let notices;
+        let shown = if *view == ViewId::Notifications {
+            notices = self.sidebar_notice_items();
+            &notices[..]
+        } else {
+            shown
+        };
         let mut list = choices::item_choices(view, item, shown, &ctx);
         // A message with a picture or video in its thread plays it, in the
         // Slack view and in its notification's menu alike, after opening it.
@@ -7074,6 +7083,13 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
             // The wheel over the list moves the list, which takes the
             // focus from another pane, as a click on it would.
             m.pane = None;
+            // The wheel stops at a list's ends, where j and k wrap (the
+            // Notifications view's), as it does in every menu.
+            let to = row_step(m, if up { -1 } else { 1 });
+            let would_wrap = m.view != 0 && if up { to > m.cursor } else { to < m.cursor };
+            if would_wrap {
+                return Then::Nothing;
+            }
             let key = match (m.view == 0, up) {
                 (true, true) => 'h',
                 (true, false) => 'l',
@@ -7831,7 +7847,8 @@ fn move_to(m: &mut Mission, to: isize, count: isize) {
 /// j and k: in the tabs a row of cards, keeping the column as far as the
 /// row reaches (a card in a shorter box spans several rows, so moving down
 /// starts from the last row it is in and moving up from the first); in a
-/// list a row.
+/// list a row. The Notifications view's list wraps, past its last row to
+/// its first and back, as every menu does (`ui::menu::wrap_step`).
 fn row_step(m: &Mission, by: isize) -> isize {
     if m.view != 0 {
         let mut to = m.cursor + by;
@@ -7846,7 +7863,16 @@ fn row_step(m: &Mission, by: isize) -> isize {
                 to += by;
             }
             if to < 0 || to as usize >= items.len() {
-                return m.cursor;
+                if view.id != ViewId::Notifications {
+                    return m.cursor;
+                }
+                let rests = |i: &usize| !m.passes_over(&items[*i]);
+                let wrapped = if by > 0 {
+                    (0..items.len()).find(rests)
+                } else {
+                    (0..items.len()).rev().find(rests)
+                };
+                return wrapped.map_or(m.cursor, |i| i as isize);
             }
         }
         return to;

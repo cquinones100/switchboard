@@ -935,6 +935,23 @@ pub fn repo_key(item: &Item) -> Option<&str> {
 
 static TICKET: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)^([a-z][a-z0-9]*-\d+)").expect("a regex"));
+/// An issue's branch's front, `issue/12`, which `wtn --issue` names.
+static ISSUE_FRONT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^issue/\d+").expect("a regex"));
+
+/// The ticket a worktree's branch leads with, as its row shows it: the
+/// GitHub issue it was started for (`#12`) while GitHub is on, else the
+/// Linear ticket it starts with while Linear is on.
+fn ticket_of_branch(branch: &str, github: bool, linear: bool) -> Option<String> {
+    let issue = github
+        .then(|| crate::views::ticket::issue_number_of_branch(branch))
+        .flatten()
+        .map(|n| format!("#{n}"));
+    issue.or_else(|| {
+        linear
+            .then(|| TICKET.captures(branch).map(|m| m[1].to_uppercase()))
+            .flatten()
+    })
+}
 
 /// Where a PR stands, in a few words: `#12 merged`, `#12 ✕ 2 failing`; none
 /// with the github setting off. Without UX 2.0, the row's PR cell.
@@ -1105,6 +1122,7 @@ fn named(tab: Option<&TabModel>, w: &Worktree, ticket: Option<&str>) -> String {
         Some(t) => t.name.clone(),
         None => {
             let base = w.branch.clone().unwrap_or_else(|| dir_name(&w.path));
+            let base = ISSUE_FRONT.replace(&base, "");
             let rest = TICKET.replace(&base, "");
             rest.trim_start_matches(['-', '_'])
                 .split(['-', '_'])
@@ -1207,7 +1225,7 @@ pub fn work_map(
             .max_by_key(|(_, w)| w.path.as_os_str().len())
             .map(|(i, _)| i)
     };
-    let linear = settings::is_on("linear");
+    let (github, linear) = (settings::is_on("github"), settings::is_on("linear"));
     let mut rows: Vec<Placed> = Vec::new();
     let mut taken: Vec<crate::mux::TabId> = Vec::new();
     for (i, w) in all.iter().enumerate() {
@@ -1218,13 +1236,7 @@ pub fn work_map(
         if let Some(t) = tab {
             taken.push(t.id);
         }
-        let ticket = linear
-            .then(|| {
-                TICKET
-                    .captures(w.branch.as_deref().unwrap_or(""))
-                    .map(|m| m[1].to_uppercase())
-            })
-            .flatten();
+        let ticket = ticket_of_branch(w.branch.as_deref().unwrap_or(""), github, linear);
         let last = tab
             .is_none()
             .then(|| revived.iter().find(|r| r.tree == w.path))
@@ -1741,6 +1753,16 @@ mod tests {
         assert_eq!(rows[2].target, Target::Tab(TabId(3)));
         assert_eq!(rows[2].state, State::Attention);
         assert_eq!(rows[2].data["ticket"], "AB-1");
+        assert_eq!(
+            ticket_of_branch("issue/12-fix-it", true, true).as_deref(),
+            Some("#12"),
+            "an issue's branch leads with its number"
+        );
+        assert_eq!(ticket_of_branch("issue/12-fix-it", false, true), None);
+        assert_eq!(
+            ticket_of_branch("ab-1-fix", true, true).as_deref(),
+            Some("AB-1")
+        );
         assert_eq!(rows[2].data["worktree"], "AB-1-fix-the-login");
         assert_eq!(
             rows[3].target,

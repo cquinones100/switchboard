@@ -39,6 +39,8 @@ pub struct Shown {
     /// clone, possibly the project upstream names); `None` when only its
     /// number is known, its directory's origin's then.
     pub pr_repo: Option<Repo>,
+    /// The ticket its branch is for (`names::Facts::ticket`).
+    pub ticket: Option<crate::views::ticket::Ticket>,
     /// The color it wears: its project's, or gray with the `accent_colors`
     /// setting off.
     pub color: Option<Rgb>,
@@ -126,6 +128,7 @@ impl Server {
             label: facts.label,
             pr: facts.pr,
             pr_repo: facts.pr_repo,
+            ticket: facts.ticket,
             color: Some(match tint {
                 _ if !switches.colors => color::GRAY,
                 Some(tint) => color::tab_color(tint, switches.shade),
@@ -288,9 +291,10 @@ impl Server {
         self.tab_names.shown.get(&tab)?.pr
     }
 
-    /// The tab's Linear ticket ID, as its name's facts say.
-    pub fn tab_ticket(&self, tab: TabId) -> Option<&str> {
-        title::ticket_of(&self.tab_names.shown.get(&tab)?.label)
+    /// The ticket the tab's branch is for, its GitHub issue or Linear
+    /// ticket, as its directory's facts last said (`tabs::names`).
+    pub fn tab_ticket(&self, tab: TabId) -> Option<&crate::views::ticket::Ticket> {
+        self.tab_names.shown.get(&tab)?.ticket.as_ref()
     }
 
     /// The repository the tab's PR is in, when its lookup said: origin's,
@@ -303,7 +307,8 @@ impl Server {
     /// `@tab_title`, else, for a tab opened before there was one, the
     /// autopilot's `@autopilot_item`, either only while the tab's
     /// name is still that item cut short (src/tabs/title.rs), or a GitHub
-    /// issue's reference it starts with (`<owner>/<repo>#<n>: <title>`).
+    /// issue's reference it starts with (`<owner>/<repo>#<n>: <title>`), as
+    /// an earlier build named an issue's tab.
     pub fn tab_full_title(&self, tab: TabId) -> Option<String> {
         let opts = &self.tabs.get(&tab)?.opts;
         let name = opts.get("@tab_name").map(String::as_str).unwrap_or("");
@@ -348,7 +353,9 @@ impl Server {
             (Some(whole), None) => whole,
             (None, _) => label,
         };
-        let ticket = self.tab_ticket(tab).map(str::to_string);
+        let ticket = self
+            .tab_ticket(tab)
+            .map(crate::views::ticket::Ticket::short);
         let facts = title::facts(
             branch.as_deref(),
             path.as_deref().map(paths::tilde).as_deref(),

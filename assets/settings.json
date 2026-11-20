@@ -617,7 +617,7 @@
     "key": "autopilot_github_issues",
     "category": "Mission control: Autopilot",
     "label": "Autopilot can take GitHub issues",
-    "description": "Lets autopilot's settings box offer GitHub issues as a source beside the note: the repository's open issues assigned to you and carrying its label, each opened by you or labeled by someone with write access, read in the background and worked after the note's items, with a duplicate closed as one, asked first unless the tab lands without asking (a landed issue is closed by the landing's item-done, autopilot's tab or yours). As each tab starts, the issue is claimed for this computer without asking (the autopilot: working label and a comment naming its claim ID and branch), so a second computer leaves it alone, and the label comes off with a comment when the tab closes before landing. A hands-free tab writes its decisions about the issue's plan to the issue without asking, under a Decided hands-free heading in its body with a comment naming them, unless leak-check finds something in them. Nothing is read until you choose the source. Off, the box offers the note alone and autopilot reads no issues",
+    "description": "Lets autopilot's settings box offer GitHub issues as a source in place of the note: the repository's open issues assigned to you and carrying its label, each opened by you or labeled by someone with write access, read in the background and worked while they are the source, with a duplicate closed as one, asked first unless the tab lands without asking (a landed issue is closed by the landing's item-done, autopilot's tab or yours). As each tab starts, the issue is claimed for this computer without asking (the autopilot: working label and a comment naming its claim ID and branch), so a second computer leaves it alone, and the label comes off with a comment when the tab closes before landing. A hands-free tab writes its decisions about the issue's plan to the issue without asking, under a Decided hands-free heading in its body with a comment naming them, unless leak-check finds something in them. Nothing is read until you choose the source. Off, the box offers the note alone and autopilot reads no issues",
     "default": true
   },
   {
@@ -764,7 +764,7 @@
     "key": "diff_story_map",
     "category": "Diff",
     "label": "Open the diff on what changes",
-    "description": "M-d tells the diff's story in chapters of pages (the goal's chapter, one for each part it can be read without, and the side work) and opens on what changes: before and after in plain words and one line for each page, an outline of the chapters and pages beside it. Enter reads down one column, each page's claim, what it decided and instead of what, and its changes, tests folded last; What runs shows the steps in the order they happen. The story's map, a box a page and an arrow to what each builds on, is a third view, and the files stay a view of their own (g s, g m and g f, or m), opening in the view used last; off, the story is one list of pages over the files. A story already told is told again the first time either way",
+    "description": "M-d tells the diff's story in chapters of pages (the goal's chapter, one for each part it can be read without, and the side work) and opens on what changes: before and after in plain words and how and why for each page, an outline of the chapters and pages beside it. Enter reads down one column, each page's claim, what it decided and instead of what, and its changes, tests folded last; What runs shows the steps in the order they happen. The story's map, a box a page and an arrow to what each builds on, is a third view, and the files stay a view of their own (g s, g m and g f, or m), opening in the view used last; off, the story is one list of pages over the files. A story already told is told again the first time either way",
     "default": true
   },
   {
@@ -1128,7 +1128,7 @@
     "key": "tab_lookups",
     "category": "Tabs and status bar",
     "label": "PRs and tickets in tab names",
-    "description": "Look up each tab's PR number on GitHub and its ticket's title on Linear, in the background",
+    "description": "Look up each tab's PR number on GitHub and its ticket's title on Linear, or its GitHub issue's title, in the background",
     "default": true
   },
   {
