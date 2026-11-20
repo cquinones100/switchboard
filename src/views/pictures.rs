@@ -448,6 +448,18 @@ pub struct Pictures {
     queue: Arc<Mutex<Queue>>,
 }
 
+/// Whether a view asks for `w`: a picture only when the view fetches its
+/// pictures (`fetch`), since its link is what someone wrote; a person's
+/// photo whenever Settings' `photos` is on, since it comes from Photos'
+/// cache, fetched only from the service's own avatars (src/photos).
+fn asked_for(w: &Wanted, fetch: bool, photos: bool) -> bool {
+    match w {
+        Wanted::Picture(_) => fetch,
+        Wanted::Photo(_) => photos,
+        Wanted::Diagram(_) => true,
+    }
+}
+
 impl Pictures {
     /// The pictures of a view; `fetch` says whether its pictures are
     /// fetched, its diagrams being drawn either way. The image cache is held
@@ -486,14 +498,9 @@ impl Pictures {
     /// another, since each is a run of Chrome.
     pub fn ask(&mut self, wanted: Vec<Wanted>) {
         let mut diagrams = Vec::new();
+        let photos = settings::is_on("photos");
         for w in wanted {
-            if matches!(w, Wanted::Picture(_) | Wanted::Photo(_)) && !self.fetch {
-                continue;
-            }
-            if matches!(w, Wanted::Photo(_)) && !settings::is_on("photos") {
-                continue;
-            }
-            if !self.asked.insert(w.key()) {
+            if !asked_for(&w, self.fetch, photos) || !self.asked.insert(w.key()) {
                 continue;
             }
             match w {
@@ -725,6 +732,24 @@ mod tests {
         assert!(p.asked.contains(&picture));
         assert!(p.failed.is_empty());
         assert!(!p.retry_failed(failed_at + PHOTO_RETRY * 2));
+    }
+
+    #[test]
+    fn a_view_fetching_no_pictures_still_asks_for_photos_while_they_are_on() {
+        let photo = Wanted::Photo(crate::photos::Who::new(
+            crate::photos::Service::GitHub,
+            "someone",
+        ));
+        let picture = Wanted::Picture("https://x/a.png".into());
+        assert!(asked_for(&photo, false, true));
+        assert!(!asked_for(&picture, false, true));
+        assert!(!asked_for(&photo, false, false) && !asked_for(&picture, false, false));
+        assert!(asked_for(&picture, true, false) && !asked_for(&photo, true, false));
+        assert!(asked_for(
+            &Wanted::Diagram("graph TD; A-->B".into()),
+            false,
+            false
+        ));
     }
 
     #[test]
