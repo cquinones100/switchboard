@@ -261,14 +261,15 @@ Once it succeeds, start watching. Do not check the state yourself first: right a
 Start this with the Bash tool's `run_in_background`, filling in owner, repo, and number. You are re-invoked when it exits, so do not poll it yourself and do not sleep in the foreground. Tell the user that you are watching and that they can keep working in the meantime.
 
 ```
-query='query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) { pullRequest(number: $number) { state autoMergeRequest { enabledAt } mergeQueueEntry { state } } } }'
+query='query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) { pullRequest(number: $number) { state mergeable autoMergeRequest { enabledAt } mergeQueueEntry { state } } } }'
 misses=0
 while :; do
   pr_state=$(gh api graphql -F owner=<owner> -F repo=<repo> -F number=<number> -f query="$query" \
-    --jq '.data.repository.pullRequest | [.state, (if .autoMergeRequest or .mergeQueueEntry then "queued" else "unqueued" end)] | @tsv') || { sleep 60; continue; }
+    --jq '.data.repository.pullRequest | [.state, .mergeable, (if .autoMergeRequest or .mergeQueueEntry then "queued" else "unqueued" end)] | @tsv') || { sleep 60; continue; }
   case "$pr_state" in
     MERGED*) echo merged; exit 0 ;;
     CLOSED*) echo closed; exit 0 ;;
+    *CONFLICTING*) echo conflicts; exit 0 ;;
     *unqueued) misses=$((misses + 1)); [ "$misses" -ge 2 ] && { echo dequeued; exit 0; } ;;
     *) misses=0 ;;
   esac
@@ -280,13 +281,14 @@ while :; do
 done
 ```
 
-A failed request is retried rather than read as a result, so a network blip never ends the watch. Leaving the queue has to be seen twice in a row, because GitHub briefly shows neither auto-merge nor a queue entry while it moves a PR from one to the other.
+A failed request is retried rather than read as a result, so a network blip never ends the watch. A PR with merge conflicts stays queued under auto-merge while GitHub runs no checks on it, since it can't make the merge commit, so the watch ends on `mergeable` `CONFLICTING` before it reads the checks; `UNKNOWN`, GitHub still working it out, waits for the next pass. Leaving the queue has to be seen twice in a row, because GitHub briefly shows neither auto-merge nor a queue entry while it moves a PR from one to the other.
 
 When it exits:
 
 - `merged`: go to "Deploy and test".
 - `closed`: leave the worktree alone and reply `queue-and-clean: fail: PR closed without merging`.
 - `failed`: a required check failed while auto-merge waited. Go to "Fixing".
+- `conflicts`: the PR has merge conflicts, which leave it queued with no checks running. Go to "Fixing".
 - `dequeued`: find out why the PR left the queue. GitHub records it:
 
   ```

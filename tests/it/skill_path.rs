@@ -832,6 +832,33 @@ fn queue_and_clean_pins_the_tabs_name_before_anything_moves() {
 }
 
 #[test]
+fn queue_and_clean_stops_watching_a_pr_with_merge_conflicts() {
+    let all = skills();
+    let (_, queue) = all
+        .iter()
+        .find(|(name, _)| name == "queue-and-clean")
+        .unwrap();
+    let watching = queue
+        .split("\n## Watching")
+        .nth(1)
+        .and_then(|rest| rest.split("\n## ").next())
+        .expect("the section");
+    let query = watching
+        .lines()
+        .find(|l| l.starts_with("query="))
+        .expect("the watch's query");
+    assert!(query.contains(" mergeable "), "{query}");
+    let exit = watching
+        .find("*CONFLICTING*) echo conflicts; exit 0 ;;")
+        .expect("the watch exits on conflicts");
+    assert!(
+        exit < watching.find("gh pr checks").unwrap(),
+        "before the checks are read"
+    );
+    assert!(watching.contains("\n- `conflicts`: "), "{watching}");
+}
+
+#[test]
 fn resolve_conflicts_force_pushes_so_only_you_start_it() {
     let all = skills();
     let (_, text) = all
