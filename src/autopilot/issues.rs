@@ -1,7 +1,7 @@
-//! GitHub issues as autopilot's work, beside or instead of the note's
-//! checklist (the mode's `sources`): the repository's open issues assigned
-//! to you and carrying the mode's label (`issueLabel`, `autopilot` by
-//! default), each taken only when you opened it or the label was added by
+//! GitHub issues as autopilot's work, in place of the note's checklist
+//! while the repository's `tickets` in repos.json are `github`
+//! (`Mode::source`): its open issues assigned to you and carrying its
+//! `issueLabel` there (none taken while it isn't set), each taken only when you opened it or the label was added by
 //! you or someone with write access to the repository, so nobody outside
 //! it can queue work for your tabs by opening an issue. No tmux-version
 //! file is behind it.
@@ -751,10 +751,7 @@ pub fn search_of(repo: &Repo, label: &str) -> String {
 }
 
 /// Whether a label can be searched for as typed.
-pub fn label_ok(label: &str) -> bool {
-    let label = label.trim();
-    !label.is_empty() && !label.contains(['"', '\\', '\n'])
-}
+pub use crate::repos::label_ok;
 
 /// The issues of `repo` autopilot may take now, asked of GitHub.
 pub async fn fetch(repo: &Repo, label: &str) -> Result<Vec<Issue>> {
