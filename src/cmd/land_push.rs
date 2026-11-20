@@ -7,7 +7,7 @@
 //! branch landed on and stops with exit 5 when that moved past the commit's
 //! base, so the landing rebases again; and, without `--asked`, goes on only
 //! when the land-without-asking gate
-//! passes, read at the moment of pushing: the tab's `@autopilot_land` is
+//! passes, read at the moment of pushing: the tab's `@land` is
 //! `1`, `leak-check` finds nothing, the landing's record holds a passing
 //! run of its tests, it ran the review loop, and the review's recorded patch is the change being pushed.
 //! Anything else exits 6, holding the lock, with the commit's subject, why
@@ -60,7 +60,7 @@ const ASK: u8 = 6;
 /// What the land-without-asking gate reads, gathered before it decides.
 #[derive(Debug, Clone, Default)]
 pub struct Gate {
-    /// The tab's `@autopilot_land` is `1`.
+    /// The tab's `@land` is `1`.
     pub land: bool,
     /// `leak-check` exited 0.
     pub leak_clean: bool,
@@ -298,7 +298,7 @@ pub(crate) fn main(
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
         let record = crate::sources::landing::read_record(here);
         let gate = Gate {
-            land: tab_option(crate::autopilot::LAND) == "1",
+            land: tab_option(crate::mux::server::LAND) == "1",
             leak_clean,
             tests_ran: tests_ran(steps.test.as_deref(), record.as_ref()),
             review_loop: steps.review == "review-loop",
@@ -362,7 +362,8 @@ pub(crate) fn main(
     }
 
     // "Ask before landing" chosen while beforePush ran asks after all.
-    if !asked && !steps.before_push.trim().is_empty() && tab_option(crate::autopilot::LAND) != "1" {
+    if !asked && !steps.before_push.trim().is_empty() && tab_option(crate::mux::server::LAND) != "1"
+    {
         land_lock::set_phase("asking to land");
         let subject = worktree::git_at(here, &["log", "-1", "--format=%s"]).unwrap_or_default();
         println!("ask: {subject}");

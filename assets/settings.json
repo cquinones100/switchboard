@@ -1487,6 +1487,13 @@
     "default": true
   },
   {
+    "key": "land_without_asking",
+    "category": "Safety",
+    "label": "Land without asking",
+    "description": "Each tab /wt, /wtn, wtb or autopilot opens is marked to land without asking (@land), and follows the setting as it changes, a tab's own menu deciding for it meanwhile: queue-and-clean opens its PR with no question once two review rounds of the change came back clean and leak-check finds nothing (the PR's CI then running its tests), or pushes its landing once its tests pass too, a push a CLAUDE.md says to ask about (a release's version bump) still asking; off, it asks before its first push",
+    "default": false
+  },
+  {
     "key": "review_before_push",
     "category": "Safety",
     "label": "Review before pushing",

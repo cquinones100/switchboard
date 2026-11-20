@@ -530,7 +530,7 @@ fn a_tab_of_the_work_a_note_mode_lands_without_asking_only_once_leak_check_finds
             .unwrap_or_else(|| panic!("no {start}"))
             .to_string()
     };
-    let check = "switchboard show @autopilot_land";
+    let check = "switchboard show @land";
     let step7 = step("7. **Ask before pushing**");
     let leak = step7
         .find("switchboard leak-check <base>..HEAD")
@@ -561,7 +561,7 @@ fn a_tab_of_the_work_a_note_mode_lands_without_asking_only_once_leak_check_finds
         .find("When step 7 took the answer without asking, run `<lock> push`")
         .expect("the push without asking goes through the command's gate");
     let again = step9
-        .find("it reads `@autopilot_land` again")
+        .find("it reads `@land` again")
         .expect("which reads the switch again");
     assert!(gated < again, "as it pushes");
     assert!(

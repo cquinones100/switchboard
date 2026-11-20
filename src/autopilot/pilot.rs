@@ -38,9 +38,10 @@
 //! repository.
 //!
 //! With "Land without asking" on (`landWithoutAsking`, with the autopilot
-//! setting on), each of its tabs not landed yet is marked `@autopilot_land`,
-//! which queue-and-clean reads to land on the default branch without asking
-//! to push, and unmarked once it goes off; queue-and-clean marks one that
+//! setting on), each of its tabs not landed yet is marked `@land` as it
+//! turns on, which queue-and-clean reads to land on the default branch
+//! without asking to push, and unmarked as it goes off; between the two a
+//! tab's own menu decides for it; queue-and-clean marks one that
 //! landed so `@autopilot_autoland`, with the commit (`switchboard land-lock
 //! autolanded`).
 //!
@@ -233,7 +234,7 @@ pub enum Mark {
     Note(TabId, String),
     /// Seen in its worktree: `@autopilot_in`.
     In(TabId),
-    /// To land without asking, or no longer: `@autopilot_land`.
+    /// To land without asking, or no longer: `@land`.
     Land(TabId, bool),
     /// To take the recommended option of what it would ask, or no longer:
     /// `@autopilot_handsfree`.
@@ -692,6 +693,10 @@ pub struct Pilot {
     migrated: HashSet<PathBuf>,
     /// The older tabs whose note was asked for its ID.
     asked: HashSet<TabId>,
+    /// "Land without asking" (with the autopilot setting on) at the last
+    /// check, so its tabs are marked only as it changes and a tab's own
+    /// menu or the land_without_asking setting decides for it meanwhile.
+    landing: Option<bool>,
 }
 
 impl Default for Pilot {
@@ -718,6 +723,7 @@ impl Default for Pilot {
             lost: false,
             migrated: HashSet::new(),
             asked: HashSet::new(),
+            landing: None,
         }
     }
 }
@@ -885,8 +891,11 @@ impl Pilot {
             });
             Some((note, m.item.clone()?))
         };
-        // Its tabs not landed yet land without asking while the switch is on.
+        // Its tabs not landed yet are set to land without asking, or not, as
+        // the switch changes (a tab opened meanwhile is set as it opens).
         let land = on && mode.land_without_asking;
+        let switched = self.landing.is_some_and(|was| was != land);
+        self.landing = Some(land);
         // And decide for you while hands-free is on (the server leaves it off
         // while the autopilot_handsfree setting is).
         let hands_free = on && mode.hands_free;
@@ -901,7 +910,7 @@ impl Pilot {
                     if m.in_worktree && !m.was_in {
                         marks.push(Mark::In(m.tab));
                     }
-                    if m.land != land {
+                    if switched && m.land != land {
                         marks.push(Mark::Land(m.tab, land));
                     }
                     if m.hands_free != hands_free {
@@ -2162,6 +2171,10 @@ mod tests {
         assert!(
             marks(&mut w, std::slice::from_ref(&marked), true).is_empty(),
             "already marked: nothing to do"
+        );
+        assert!(
+            marks(&mut w, &tabs, true).is_empty(),
+            "the switch unchanged: a tab its menu turned off stays off"
         );
         assert!(w.pilot.summary(&w.mode, false).lands_alone);
         w.mode.land_without_asking = false;

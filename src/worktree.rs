@@ -926,6 +926,30 @@ pub fn tab_running(program: &str, function: &str, args: &[String]) -> Vec<String
     tab_command(&script, function, args)
 }
 
+/// Whether a tab's command, as `tab_running` builds it, opens a worktree's
+/// work in it (`wt`, `wtn` or `wtb`, not `wtpr`'s review of someone else's
+/// PR), so the tab takes Settings' `land_without_asking` as it opens.
+/// A leading `env NAME=value...` (a note's item, `WTN_NOTE`) is passed over.
+pub fn opens_work(command: &[String]) -> bool {
+    let command = match command {
+        [env, rest @ ..] if env == "env" => {
+            let set = rest.iter().take_while(|w| w.contains('=')).count();
+            &rest[set..]
+        }
+        _ => command,
+    };
+    match command {
+        [_, i, c, line, function, ..] => {
+            i == "-i"
+                && c == "-c"
+                && ["wt", "wtn", "wtb"].contains(&function.as_str())
+                && line.contains(" init ")
+                && line.contains(&format!("; {function} \"$@\";"))
+        }
+        _ => false,
+    }
+}
+
 /// Says what went wrong as every worktree command does, `Error: ...`, and
 /// gives the exit code 1.
 pub fn fail(message: &str) -> ExitCode {
@@ -1115,6 +1139,38 @@ pub fn github_slug(url: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tab_running_a_worktree_command_opens_work_but_a_prs_review() {
+        let words = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        for (program, function) in [
+            ("worktree-from-ticket", "wt"),
+            ("worktree-from-note", "wtn"),
+            ("worktree-from-branch", "wtb"),
+        ] {
+            assert!(
+                opens_work(&tab_running(program, function, &words(&["x"]))),
+                "{function}"
+            );
+        }
+        assert!(!opens_work(&tab_running(
+            "worktree-from-pr",
+            "wtpr",
+            &words(&["x"])
+        )));
+        let mut item = words(&["env", "WTN_NOTE=Today"]);
+        item.extend(tab_running(
+            "worktree-from-note",
+            "wtn",
+            &words(&["--item", "3"]),
+        ));
+        assert!(
+            opens_work(&item),
+            "a note's item, its note in the environment"
+        );
+        assert!(!opens_work(&tab_command("echo hi", "wtn", &[])));
+        assert!(!opens_work(&words(&["claude", "--resume", "s"])));
+    }
 
     #[test]
     fn the_worktree_list_is_read_record_by_record() {

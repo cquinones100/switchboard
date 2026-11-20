@@ -1395,11 +1395,17 @@ fn the_landing_push_after_a_yes_is_asked_unless_the_tab_lands_without_asking() {
         "where a session from before still has the git push allowed"
     );
 
-    server.ok(&["set", "-t", &tab, "@autopilot_land", "1"]);
+    server.ok(&["set", "-t", &tab, "@land", "1"]);
     assert_eq!(
         hook_says(&server, &pane, "PreToolUse", push()),
         "",
         "a tab that lands without asking pushes"
+    );
+    server.ok(&["set", "-t", &tab, "-u", "@autopilot"]);
+    assert_eq!(
+        hook_says(&server, &pane, "PreToolUse", push()),
+        "",
+        "autopilot's or not"
     );
 }
 

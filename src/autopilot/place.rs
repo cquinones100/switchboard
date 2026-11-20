@@ -77,7 +77,7 @@ pub struct Mine {
     /// Whether its Claude has been prompted since it landed: a state begun
     /// after then, which makes it yours.
     pub prompted_since: bool,
-    /// Whether it is marked to land without asking (`@autopilot_land`).
+    /// Whether it is marked to land without asking (`@land`).
     pub land: bool,
     /// Whether it is marked hands-free (`@autopilot_handsfree`).
     pub hands_free: bool,

@@ -40,8 +40,9 @@
 //! One more answer holds in every tab, hands-free or not: the landing's
 //! push after your yes, `switchboard land-lock push --asked`, which no
 //! allow rule names (each names `land-lock push` exactly), is asked
-//! (`ask_push`) as well unless the tab is one of autopilot's with "Land without
-//! asking" (`@autopilot_land`) on, so Claude Code asks it as it asked the
+//! (`ask_push`) as well unless the tab lands without asking (`@land`, from
+//! Settings' land_without_asking, the tab's menu or autopilot's "Land
+//! without asking"), so Claude Code asks it as it asked the
 //! `git push` it replaced. The push without `--asked` needs no ask: the
 //! command pushes only when its own gate passes (src/cmd/land_push.rs),
 //! and exits asking otherwise. A tab that lands without asking is left to
