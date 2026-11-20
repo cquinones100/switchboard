@@ -35,7 +35,11 @@
 //! `issue` is the number of the GitHub issue `wtn --issue` started the
 //! branch for (`branch.<branch>.wtnIssue`) when it is an issue of origin's
 //! repository, for queue-and-clean's `Closes #<number>` in the PR it
-//! opens; null otherwise.
+//! opens; null otherwise. `issueWork` is whether the branch is work on a
+//! GitHub issue at all: `branch.<branch>.wtnIssue` set (whatever its
+//! repository), or the branch named `issue/<number>-<slug>` (as `wtb` may
+//! make one), for which queue-and-clean asks for no note, the issue being
+//! the work's record.
 //! The answer is src/repos.rs's. Ported from bin/landing.
 
 use std::path::{Path, PathBuf};
@@ -97,6 +101,17 @@ fn issue_of(
 ) -> Option<u64> {
     let (repo, number) = crate::autopilot::issues::parse_reference(reference?)?;
     origin.is_some_and(|o| o.same(&repo)).then_some(number)
+}
+
+/// Whether `branch` is work on a GitHub issue, as the module's opening
+/// says, `reference` its `wtnIssue`.
+fn issue_work(branch: &str, reference: Option<&str>) -> bool {
+    let named = branch.strip_prefix("issue/").is_some_and(|rest| {
+        rest.split_once('-').is_some_and(|(n, slug)| {
+            !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && !slug.is_empty()
+        })
+    });
+    named || reference.is_some()
 }
 
 /// The note and item `wtn` started the branch for, as the module's opening
@@ -181,6 +196,13 @@ pub fn main(args: Vec<String>) -> ExitCode {
                     .and_then(|b| crate::cmd::worktree_from_issue::issue_of_branch(&dir, &b));
                 let origin = crate::sources::repo::remotes_of(&dir).origin;
                 map.insert(
+                    "issueWork".into(),
+                    json!(issue_work(
+                        &branch_at(&dir).unwrap_or_default(),
+                        reference.as_deref()
+                    )),
+                );
+                map.insert(
                     "issue".into(),
                     json!(issue_of(reference.as_deref(), origin.as_ref())),
                 );
@@ -248,6 +270,16 @@ mod tests {
         assert_eq!(issue_of(Some("other/widgets#12"), origin.as_ref()), None);
         assert_eq!(issue_of(Some("acme/widgets#12"), None), None);
         assert_eq!(issue_of(None, origin.as_ref()), None);
+    }
+
+    #[test]
+    fn issue_work_is_a_branch_with_its_issue_kept_or_named_for_one() {
+        assert!(issue_work("issue/12-make-it-blue", None));
+        assert!(issue_work("feature-x", Some("acme/widgets#12")));
+        assert!(!issue_work("feature-x", None));
+        assert!(!issue_work("issue/twelve-x", None));
+        assert!(!issue_work("issue/12", None));
+        assert!(!issue_work("issues/12-x", None));
     }
 
     #[test]
