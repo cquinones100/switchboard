@@ -1,5 +1,6 @@
-//! `worktree-from-note [path] --note <note> --item <line> [--prompt <text>]`:
-//! a git worktree on a new branch named after a checklist item of one of
+//! `wt --note <note> --item <line>` (worktree_from_ticket.rs, which reads
+//! the arguments and starts the work given there): a git worktree on a new
+//! branch named after a checklist item of one of
 //! your notes (the notes app's Markdown files, in `$NOTES_DIR` or
 //! `~/Notes`), with Claude opened in it, told to work on the item and its
 //! plan and to land it with /queue-and-clean once the work is done, as
@@ -9,10 +10,8 @@
 //!
 //! `<note>` is the note's path, absolute or within the notes directory,
 //! ".md" optional; `<line>` is the item's line number in it, an unticked
-//! `- [ ]` line of the note's top level. `init zsh` prints the `wtn`
-//! function, which works as `wt` does (worktree_from_ticket.rs).
-//! `--issue <number>` starts on a GitHub issue instead
-//! (worktree_from_issue.rs), sharing the start of the tab with an item's
+//! `- [ ]` line of the note's top level. A GitHub issue's start
+//! (worktree_from_issue.rs) shares the start of the tab with an item's
 //! (`make_worktree`, `after_claim`, `hand_over`).
 //!
 //! What M-p's "Start work on a note's checklist items" listed, and what
@@ -25,7 +24,7 @@
 //! A branch's item is kept by its note's stable ID (crates/notes/src/id.rs, the
 //! note given one here when it has none), so a note renamed or moved, in
 //! Notes or outside it, keeps its items' worktrees: the picker and the mode
-//! still leave them out, and wtn on one reuses its worktree. Claims from
+//! still leave them out, and wt on one reuses its worktree. Claims from
 //! before notes had IDs, by the note's path, are brought to IDs once per
 //! repository (`id::migrate_claims`); one it can't place is listed, and
 //! still read by path.
@@ -40,7 +39,7 @@
 //! `switchboard land-lock push` (`push_rule`), since Claude Code's auto mode otherwise judges that push
 //! itself and may refuse it. It is passed on the command line
 //! (`claude --settings`), so it is in no file and no other session has it;
-//! the `wtn` function, which starts Claude itself, reads it back from
+//! the `wt` function, which starts Claude itself, reads it back from
 //! `--settings-file`.
 
 use std::collections::{HashMap, HashSet};
@@ -59,7 +58,7 @@ use crate::worktree::{self, Given, Purpose};
 /// A branch name short enough to read in a tab and a prompt.
 const SLUG_LENGTH: usize = 50;
 
-/// Each item wtn starts, kept a day, `<seconds>\t<note's ID>\t<item's
+/// Each item wt starts, kept a day, `<seconds>\t<note's ID>\t<item's
 /// first line>` (the note's path in a row from before notes had IDs): the
 /// autopilot's queue takes an item claimed in the last
 /// `CLAIMED_S` as taken even once its worktree is gone, since
@@ -70,13 +69,13 @@ pub fn claims_file() -> PathBuf {
 
 /// The claims file in a state directory.
 pub fn claims_in(state: &Path) -> PathBuf {
-    state.join("wtn-claims.tsv")
+    state.join("wt-claims.tsv")
 }
 /// An item claimed this recently is taken, whatever its worktree.
 pub const CLAIMED_S: i64 = 30 * 60;
 const DAY_S: i64 = 24 * 60 * 60;
 
-/// Appends an item's claim, as M-p's popup starts several wtn at once and
+/// Appends an item's claim, as M-p's popup starts several wt at once and
 /// a line appended is written whole; the file is written again without the
 /// rows over a day old only when its first row is that old.
 pub(crate) fn claim(note: &str, item: &str) {
@@ -110,7 +109,7 @@ pub(crate) fn claim(note: &str, item: &str) {
     let _ = crate::util::write_atomic(&file, kept);
 }
 
-/// The items of a note wtn started in the last `CLAIMED_S` before `now`
+/// The items of a note wt started in the last `CLAIMED_S` before `now`
 /// (seconds), by their first line: the note's by its ID (`None` while it
 /// has none), or, in a row from before notes had IDs, by its path within
 /// the notes directory.
@@ -124,78 +123,6 @@ pub fn claimed_lately(text: &str, note_id: Option<&str>, note: &str, now: i64) -
             (ours && now - at < CLAIMED_S).then(|| fields.next().map(str::to_string))?
         })
         .collect()
-}
-
-fn usage() -> ExitCode {
-    eprintln!(
-        "Usage: worktree-from-note [path] --note <note> --item <line> [--prompt <text>] [--target <branch>]\n       \
-         worktree-from-note [path] --issue <number> [--prompt <text>] [--target <branch>]\n       \
-         worktree-from-note [path] <number | #number | issue or ticket link | ABC-12> [--prompt <text>]\n       \
-         worktree-from-note init <zsh|bash>\n\n\
-         Examples:\n  \
-         worktree-from-note --note \"Switchboard Notes\" --item 12\n\n\
-         Path defaults to {} under the repo root.\n\
-         --prompt adds to the prompt Claude starts with. The wtn function also takes\n\
-         it from WT_PROMPT, and the note from WTN_NOTE, clearing both, so /wtn can\n\
-         hand them over.\n\
-         --target cuts the item's branch from that local branch rather than the default\n\
-         branch, and records it as branch.<branch>.wtnTarget, which queue-and-clean\n\
-         lands it on (autopilot's target, or one picked by hand). It is refused in a\n\
-         repository that lands through PRs, which go to the default branch.\n\
-         --issue starts on one of the repository's open GitHub issues instead; in a tab\n\
-         autopilot opened, only one assigned to you and carrying its label.\n\
-         A number alone (or #number, or a link) starts the repository's work from where\n\
-         repos.json's tickets keeps it: github, the issue as --issue does; linear, the\n\
-         ticket as wt does, a bare number in linear.json's linearTeam; notes, none:\n\
-         its work is a note's items.",
-        worktree::DEFAULT_WORKTREE_DIR
-    );
-    ExitCode::from(1)
-}
-
-/// The `wtn` function, as `wt`: runs the command with `--no-claude`, cd's
-/// into the worktree and starts Claude there. The prompt is every line of
-/// the cd-file after the first, since the item it carries can run to
-/// several. WT_PROMPT and WTN_NOTE, which /wtn sets on the pane it respawns,
-/// are passed on and cleared, so the note's path never has to be quoted into
-/// a command. The settings Claude starts with (`push_rule`), when the
-/// command writes any, come back in a file of their own, so a function
-/// defined by an older build, which passes no `--settings-file`, reads the
-/// cd-file as it always did.
-pub fn shell_function() -> String {
-    format!(
-        r#"wtn() {{
-  local cdfile settingsfile settings rc dir prompt
-  local -a extra
-  extra=()
-  [ -n "${{WT_PROMPT:-}}" ] && extra+=(--prompt "$WT_PROMPT")
-  [ -n "${{WTN_NOTE:-}}" ] && extra+=(--note "$WTN_NOTE")
-  unset WT_PROMPT WTN_NOTE
-  cdfile=$(mktemp) || return 1
-  settingsfile=$(mktemp) || {{ rm -f "$cdfile"; return 1; }}
-  {} --no-claude --cd-file "$cdfile" --settings-file "$settingsfile" "${{extra[@]}}" "$@"
-  rc=$?
-  if [ $rc -ne 0 ]; then
-    rm -f "$cdfile" "$settingsfile"
-    return $rc
-  fi
-  dir=$(sed -n 1p "$cdfile")
-  prompt=$(sed -n '2,$p' "$cdfile")
-  settings=$(cat "$settingsfile")
-  rm -f "$cdfile" "$settingsfile"
-  if [ ! -d "$dir" ]; then
-    echo "wtn: expected a worktree directory, got: $dir" >&2
-    return 1
-  fi
-  cd "$dir" || return 1
-  if [ -n "$settings" ]; then
-    claude --settings "$settings" "$prompt"
-  else
-    claude "$prompt"
-  fi
-}}"#,
-        worktree::self_command("worktree-from-note")
-    )
 }
 
 /// The notes directory as given: `$NOTES_DIR`, else `~/Notes`.
@@ -217,7 +144,7 @@ static PLAN_LINK: LazyLock<Regex> =
 /// The note's file: a path, absolute or within the notes directory, ".md"
 /// added when left off, and only ever a note of the notes directory, not a
 /// deleted one.
-fn note_file(dir: &Path, note: &str) -> Result<PathBuf, String> {
+pub(crate) fn note_file(dir: &Path, note: &str) -> Result<PathBuf, String> {
     let given = worktree::normalize(&dir.join(note));
     let mut candidates = vec![given.clone()];
     if !note.ends_with(".md") {
@@ -641,7 +568,7 @@ pub fn item_at(text: &str, line: usize) -> Result<Item, &'static str> {
 }
 
 /// One item whole, by its line number (1-based): its line and what is
-/// indented under it, as wtn hands it to Claude, each line ending in a
+/// indented under it, as wt hands it to Claude, each line ending in a
 /// newline; empty when the note has no such line.
 pub fn item_text(text: &str, line: usize) -> String {
     let lines: Vec<&str> = text.split('\n').collect();
@@ -659,17 +586,17 @@ pub fn slug_of(first: &str) -> String {
     slug.trim_end_matches('-').to_string()
 }
 
-/// The worktree wtn makes for an item, by its first line: `note-<slug>`,
+/// The worktree wt makes for an item, by its first line: `note-<slug>`,
 /// its branch `note/<slug>` made flat.
 pub fn worktree_name(first: &str) -> String {
     format!("note-{}", slug_of(first))
 }
 
-/// The items no worktree is working on yet. wtn keeps the item a branch is
+/// The items no worktree is working on yet. wt keeps the item a branch is
 /// for in the repository's git config, `branch.<branch>.wtnItem`, as
 /// `<note's ID>: <item's first line>`, the ID read from the note's text, so
 /// a note renamed or moved keeps its claims; a claim from before notes had
-/// IDs that wtn couldn't place still reads `<note's path within the notes
+/// IDs that wt couldn't place still reads `<note's path within the notes
 /// directory>: <item's first line>`. An item worded the same as one claimed
 /// from another note is the same item, copied there, and taken too. An item counts as taken only while its
 /// branch is checked out in a worktree, so one whose worktree was removed,
@@ -692,7 +619,7 @@ pub fn unclaimed(repo: &Path, note: &str, text: &str) -> Vec<Item> {
         })
         .collect();
     // The same first line claimed from another note is the same item, which
-    // wtn would take over (`run`), so it is taken here too.
+    // wt would take over (`run`), so it is taken here too.
     let words: HashSet<&str> = claimed
         .iter()
         .filter_map(|c| id::claim_of(c).map(|(_, text)| text))
@@ -706,6 +633,32 @@ pub fn unclaimed(repo: &Path, note: &str, text: &str) -> Vec<Item> {
             !by_id
                 && !words.contains(item.text.as_str())
                 && !claimed.contains(format!("{note}: {}", item.text).as_str())
+        })
+        .collect()
+}
+
+/// The rows M-I and `wt --note` list a note's items in: the item's text
+/// alone shown and matched, as wtn-open.zsh's `--with-nth=2`, tagged when
+/// its plan needs a choice or it waits on another item, its line what
+/// picking it gives.
+pub fn item_rows(items: &[Item]) -> Vec<crate::ui::PickItem> {
+    items
+        .iter()
+        .map(|i| crate::ui::PickItem {
+            off: false,
+            text: i.text.clone(),
+            tags: [
+                i.needs_choice.then(|| "(needs a choice)".to_string()),
+                i.waits_on
+                    .as_ref()
+                    .map(|w| format!("(waits on {})", crate::ui::draw::cut(w, WAITS_ON_SHOWN))),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" "),
+            key: String::new(),
+            value: i.line.to_string(),
         })
         .collect()
 }
@@ -839,12 +792,12 @@ pub fn plan_open(notes: &Path, item: &str) -> bool {
 /// takes the recommended option), after the settled ones and before those
 /// with no plan; never taken is one whose choice waits on the person's
 /// review of a design board (`Plan::Review`), in either mode, nor one under a parked section, nor one a
-/// worktree has or wtn started in the last half hour (its claims file),
+/// worktree has or wt started in the last half hour (its claims file),
 /// nor one held by an open item its `After:` line names, nor an empty one, nor one whose first line is in `skip` (the items
-/// skipped, and those opened a moment ago, before wtn has made their
+/// skipped, and those opened a moment ago, before wt has made their
 /// branch). `ready_only` takes only the planned kinds. `note` is the
 /// note's path within the notes directory; `repo` the note's repository;
-/// `claims` wtn's claims file (`claims_file`).
+/// `claims` wt's claims file (`claims_file`).
 pub fn queue(
     notes: &Path,
     repo: &Path,
@@ -976,7 +929,7 @@ pub fn notes_newest_first(notes: &Path) -> Vec<String> {
 
 /// The commit a new item's branch starts from: origin's default branch as it
 /// is now, fetched first (else the main clone's HEAD, with no remote), never
-/// the worktree /wtn was run in, whose own commits would then land with this
+/// the worktree /wt was run in, whose own commits would then land with this
 /// item's. A fetch that fails is tried twice more (`worktree::FETCH_RETRIES_S`), then
 /// the branch is cut from origin's default branch as last fetched, said with
 /// its age, since the landing rebases onto the newest one anyway; with none
@@ -999,7 +952,7 @@ pub(crate) fn start_point(root: &Path, target: Option<&str>) -> Result<String, S
             if let Some(default) = &default {
                 point_origin_head_at(root, default)?;
             }
-            worktree::default_start(root, "wtn: fetch the base")
+            worktree::default_start(root, "wt: fetch the base")
         },
     );
     fetched.or_else(|e| {
@@ -1025,7 +978,7 @@ fn point_origin_head_at(root: &Path, default: &str) -> Result<(), String> {
     if !names_another || !worktree::remotes(root).iter().any(|r| r == "origin") {
         return Ok(());
     }
-    if !worktree::fetch_branch(root, "origin", default, "wtn: fetch the base") {
+    if !worktree::fetch_branch(root, "origin", default, "wt: fetch the base") {
         return Err(format!(
             "couldn't fetch origin's {default}, the default branch the landing names, which the new branch starts from"
         ));
@@ -1043,7 +996,7 @@ fn fetch_target(root: &Path, remote: &str, branch: &str) -> bool {
         &worktree::fetch_waits(),
         || eprintln!("Fetching {remote}/{branch} again"),
         || {
-            worktree::fetch_branch(root, remote, branch, "wtn: fetch the target")
+            worktree::fetch_branch(root, remote, branch, "wt: fetch the target")
                 .then_some(())
                 .ok_or_else(String::new)
         },
@@ -1135,197 +1088,6 @@ pub fn tracked(root: &Path, branch: &str) -> Option<(String, String)> {
     ))
 }
 
-pub fn main(args: Vec<String>) -> ExitCode {
-    let given = match Given::parse(
-        &args,
-        &[
-            "--prompt",
-            "--note",
-            "--item",
-            "--target",
-            "--settings-file",
-            "--issue",
-        ],
-    ) {
-        Ok(g) => g,
-        Err(flag) if flag == "--cd-file" => return worktree::fail("--cd-file requires a path"),
-        Err(flag) => return worktree::fail(&format!("{flag} requires a value")),
-    };
-    match worktree::init_shell(&given.positional) {
-        Some(true) => {
-            println!("{}", shell_function());
-            return ExitCode::SUCCESS;
-        }
-        Some(false) => {
-            return worktree::fail("init requires a shell: worktree-from-note init <zsh|bash>");
-        }
-        None => {}
-    }
-    if given.help {
-        return usage();
-    }
-    if let Some(number) = given.last("--issue") {
-        if given.positional.len() > 1 {
-            return usage();
-        }
-        let mut made = false;
-        return match super::worktree_from_issue::run(&given, number, &mut made) {
-            Ok(code) => code,
-            Err(e) => {
-                if !made {
-                    failed_in_autopilot(&e);
-                }
-                worktree::fail(&e)
-            }
-        };
-    }
-    let asked = given
-        .positional
-        .last()
-        .filter(|_| given.last("--note").is_none() && given.last("--item").is_none())
-        .and_then(|p| Asked::parse(p));
-    if let Some(asked) = asked {
-        if given.positional.len() > 2 {
-            return usage();
-        }
-        let mut made = false;
-        return match by_provider(&given, asked, &mut made) {
-            Ok(code) => code,
-            Err(e) => {
-                if !made {
-                    failed_in_autopilot(&e);
-                }
-                worktree::fail(&e)
-            }
-        };
-    }
-    let (Some(note), Some(item)) = (given.last("--note"), given.last("--item")) else {
-        return usage();
-    };
-    if given.positional.len() > 1 {
-        return usage();
-    }
-    if item.is_empty() || !item.bytes().all(|b| b.is_ascii_digit()) {
-        return worktree::fail(&format!(
-            "--item takes the item's line number, not \"{item}\""
-        ));
-    }
-    let mut made = false;
-    match run(&given, note, item, &mut made) {
-        Ok(code) => code,
-        Err(e) => {
-            // Once its worktree is made the item is claimed, so a failure
-            // after it waits on you in the tab rather than closing it.
-            if !made {
-                failed_in_autopilot(&e);
-            }
-            worktree::fail(&e)
-        }
-    }
-}
-
-/// The work `wtn` is given by its number alone, or a link, rather than a
-/// note's item.
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum Asked {
-    /// `12` or `#12`, whose provider is the repository's `tickets`.
-    Number(u64),
-    /// A GitHub issue's link: `<owner>/<repo>#<number>`.
-    Issue(String),
-    /// A Linear ticket's ID or link, as written.
-    Ticket(String),
-}
-
-static ISSUE_LINK: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"^https?://github\.com/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)/issues/(\d+)/?(?:[?#].*)?$",
-    )
-    .unwrap()
-});
-
-impl Asked {
-    fn parse(text: &str) -> Option<Asked> {
-        let text = text.trim();
-        let digits = text.strip_prefix('#').unwrap_or(text);
-        if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
-            return digits.parse().ok().map(Asked::Number);
-        }
-        if let Some(m) = ISSUE_LINK.captures(text) {
-            return Some(Asked::Issue(format!("{}/{}#{}", &m[1], &m[2], &m[3])));
-        }
-        worktree::looks_like_ticket(text).then(|| Asked::Ticket(text.to_string()))
-    }
-}
-
-/// `wtn <number>` (or `#<number>`, or a link): the repository's work from
-/// where its `tickets` in repos.json keeps it, a GitHub issue as `--issue`
-/// starts one, a Linear ticket as `wt` does (a bare number in
-/// linear.json's `linearTeam`); refused where `tickets` isn't set or is `notes`,
-/// whose items have no numbers, and for a link to the other provider.
-fn by_provider(given: &Given, asked: Asked, made: &mut bool) -> Result<ExitCode, String> {
-    let root = worktree::repo_root().map_err(|e| e.to_string())?;
-    let tickets = crate::repos::tickets_at(&root)?;
-    let name = crate::repos::repo_at(&root)
-        .or_else(|| crate::repos::configured_at(&root))
-        .unwrap_or_else(|| "This repository".into());
-    let mut rest = given.clone();
-    rest.positional.pop();
-    match (tickets.as_deref(), asked) {
-        (None, _) => Err(format!(
-            "{name} has no ticket provider: set its Tickets in Settings (\"tickets\": \"github\" or \"linear\" in {}), or start a GitHub issue with switchboard worktree-from-note --issue <number>",
-            crate::files::shown("repos.json")
-        )),
-        (Some("notes"), _) => Err(format!(
-            "{name} keeps its work in a note's checklist, which has no numbers: start an item with switchboard worktree-from-note, or a GitHub issue with --issue <number>"
-        )),
-        (Some("github"), Asked::Ticket(t)) => Err(format!(
-            "{t} is a Linear ticket, and {name} keeps its work in GitHub issues: start it with switchboard worktree-from-ticket {t}"
-        )),
-        (Some("github"), Asked::Number(n)) => {
-            super::worktree_from_issue::run(&rest, &n.to_string(), made)
-        }
-        (Some("github"), Asked::Issue(reference)) => {
-            super::worktree_from_issue::run(&rest, &reference, made)
-        }
-        (Some(_), Asked::Issue(reference)) => Err(format!(
-            "{reference} is a GitHub issue, and {name} keeps its work in Linear: start it with switchboard worktree-from-note --issue {reference}"
-        )),
-        (Some(_), Asked::Number(n)) => {
-            let team = crate::util::read_json(crate::files::file("linear.json"))
-                .and_then(|v| Some(v.get("linearTeam")?.as_str()?.trim().to_string()))
-                .filter(|t| !t.is_empty())
-                .ok_or_else(|| {
-                    format!(
-                        "{name} keeps its work in Linear, and a number alone needs its team: set linearTeam in {}, or give the ticket's ID (ABC-{n})",
-                        crate::files::shown("linear.json")
-                    )
-                })?;
-            linear_ticket(given, &rest, format!("{team}-{n}"))
-        }
-        (Some(_), Asked::Ticket(t)) => linear_ticket(given, &rest, t),
-    }
-}
-
-/// A Linear ticket started as `wt` starts it, with what `wtn` was given
-/// (`rest`, its path) passed on.
-fn linear_ticket(given: &Given, rest: &Given, ticket: String) -> Result<ExitCode, String> {
-    if given.last("--target").is_some() {
-        return Err("--target takes a note's item or a GitHub issue, not a Linear ticket".into());
-    }
-    let mut args: Vec<String> = rest.positional.clone();
-    args.push(ticket);
-    for p in given.all("--prompt") {
-        args.extend(["--prompt".to_string(), p.to_string()]);
-    }
-    if let Some(cd) = &given.cd_file {
-        args.extend(["--cd-file".to_string(), cd.clone()]);
-    }
-    if given.no_claude {
-        args.push("--no-claude".into());
-    }
-    Ok(super::worktree_from_ticket::main(args))
-}
-
 /// Refuses work from `source` in this clone's repository while autopilot is
 /// on there and takes its work from the other source, so the two never
 /// both feed it.
@@ -1340,7 +1102,12 @@ pub fn refused_by_source(source: Sources) -> Result<(), String> {
 }
 
 /// `made` is set once the item's worktree is made, which claims it.
-fn run(given: &Given, note: &str, item: &str, made: &mut bool) -> Result<ExitCode, String> {
+pub(crate) fn run(
+    given: &Given,
+    note: &str,
+    item: &str,
+    made: &mut bool,
+) -> Result<ExitCode, String> {
     refused_by_source(Sources::Note)?;
     let target = given
         .positional
@@ -1611,7 +1378,7 @@ pub(crate) fn make_worktree_at(
 ) -> Result<String, String> {
     let purpose = Purpose {
         work,
-        command: "wtn",
+        command: "wt",
         start: Some(&start),
     };
     worktree::ensure_worktree(path, branch, &purpose).map_err(|e| e.to_string())?;
@@ -1667,7 +1434,7 @@ pub(crate) fn onto_words(target: Option<&str>) -> String {
 
 /// The tab handed to Claude in the worktree, told `prompt` (with
 /// `--prompt`'s words after it), its session's push rule as `push_rule`
-/// says: through the cd-file and settings-file the `wtn` function reads,
+/// says: through the cd-file and settings-file the `wt` function reads,
 /// or by starting Claude here.
 pub(crate) fn hand_over(
     given: &Given,
@@ -1682,7 +1449,7 @@ pub(crate) fn hand_over(
         prompt.push_str(&format!(" Also, from me for this item: {extra}"));
     }
     let settings = push_rule(path, root, start, target);
-    // Read by the `wtn` function: line 1 the worktree, the rest the prompt.
+    // Read by the `wt` function: line 1 the worktree, the rest the prompt.
     if let Some(cd_file) = &given.cd_file {
         worktree::write_cd_file(cd_file, &format!("{}\n{prompt}\n", path.display()))
             .map_err(|e| e.to_string())?;
@@ -1732,7 +1499,7 @@ pub(crate) fn in_hands_free_tab() -> bool {
     crate::mux::socket::tab_option(crate::autopilot::HANDS_FREE).as_deref() == Some("1")
 }
 
-/// In a tab autopilot opened (`@autopilot`), why wtn refused its item, set
+/// In a tab autopilot opened (`@autopilot`), why wt refused its item, set
 /// as the tab's `@autopilot_refused`, so autopilot skips the item with that
 /// reason and closes the tab rather than leave a slot waiting at a shell.
 pub(crate) fn refused_in_autopilot(why: &str) {
@@ -1741,7 +1508,7 @@ pub(crate) fn refused_in_autopilot(why: &str) {
     }
 }
 
-/// In a tab autopilot opened (`@autopilot`), the first line of why wtn
+/// In a tab autopilot opened (`@autopilot`), the first line of why wt
 /// stopped before making the item's worktree, set as the tab's `@autopilot_failed`, so
 /// autopilot closes the tab and opens the item again later rather than
 /// leave it holding the item at a shell; not over a refusal, which skips
@@ -1800,7 +1567,7 @@ fn push_settings() -> String {
 
 /// What Claude does before building, as `wt`'s prompt has it for a ticket:
 /// an item can sit in a note while the code moves under it. A stale one stops
-/// short of landing, so autopilot's tab, which runs `wtn` too, waits on you
+/// short of landing, so autopilot's tab, which runs `wt` too, waits on you
 /// rather than building it; in a hands-free tab, one already done on the
 /// target is ticked (`switchboard item-done --already-on`) and its tab freed instead, since nothing is left to
 /// decide, and starting it there asked for its worktree's removal once done.
@@ -1871,23 +1638,6 @@ pub fn skip_from(text: &str) -> HashSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn work_asked_by_its_number_a_github_link_or_a_linear_ticket() {
-        assert_eq!(Asked::parse("12"), Some(Asked::Number(12)));
-        assert_eq!(Asked::parse("#12"), Some(Asked::Number(12)));
-        assert_eq!(
-            Asked::parse("https://github.com/acme/widgets/issues/12"),
-            Some(Asked::Issue("acme/widgets#12".into()))
-        );
-        assert_eq!(Asked::parse("ABC-12"), Some(Asked::Ticket("ABC-12".into())));
-        assert_eq!(Asked::parse(".worktrees"), None, "a path stays a path");
-        assert_eq!(Asked::parse("#"), None);
-        assert_eq!(
-            Asked::parse("https://github.com/acme/widgets/pull/12"),
-            None
-        );
-    }
 
     #[test]
     fn a_fetch_that_fails_twice_then_works_starts_from_the_fresh_branch() {
@@ -2286,7 +2036,7 @@ mod tests {
     }
 
     #[test]
-    fn an_item_wtn_started_in_the_last_half_hour_counts_as_taken() {
+    fn an_item_wt_started_in_the_last_half_hour_counts_as_taken() {
         let now = 1_700_000_000;
         let claims = format!(
             "{}\tWork.md\tFresh\n{}\tWork.md\tStale\n{}\tOther.md\tElsewhere\nbroken row\n",
@@ -2442,7 +2192,7 @@ mod tests {
         assert_eq!(
             held_by(&parked, at).as_deref(),
             Some("FEAT: Make the tab header"),
-            "a parked item, which wtn takes by its line, held the same way"
+            "a parked item, which wt takes by its line, held the same way"
         );
         assert_eq!(
             held_by(&parked, 3),

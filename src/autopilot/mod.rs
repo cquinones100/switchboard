@@ -1,7 +1,7 @@
 //! Working a note's checklist continuously: with the mode on (M-p's "Work
 //! the note continuously"), the server keeps `slots` tabs working through a
 //! note's unticked items, each opened as the palette's "Start work on a
-//! note's checklist items" opens one (a tab running `wtn --item <line>`),
+//! note's checklist items" opens one (a tab running `wt --item <line>`),
 //! and opens the next whenever one lands, one at a time. Ported from
 //! lib/sidebar/autopilot.js, the parts of lib/sidebar/daemon.js that set it
 //! up, checked it and showed it, render.js's line above mission control's
@@ -10,7 +10,7 @@
 //!
 //! A tab waiting on you frees its slot but still counts toward `cap`, the
 //! most of the mode's tabs open at once, as does a tab that never reached
-//! its worktree, so a failed `wtn` doesn't have its item opened again and
+//! its worktree, so a failed `wt` doesn't have its item opened again and
 //! again. Only the tabs it opened count: each is marked `@autopilot` with
 //! the time it opened, `@autopilot_item` with the item's first line,
 //! `@autopilot_note` with its note's stable ID (crates/notes/src/id.rs), and
@@ -65,7 +65,7 @@
 //! their Claude's question boxes and turns that end on a question for it
 //! (src/agent/hands_free.rs), counting the turns sent back in
 //! `@autopilot_nudged`, the queue takes items whose plan needs a choice
-//! too, and wtn tells such a tab to take the recommended option, each
+//! too, and wt tells such a tab to take the recommended option, each
 //! decision written into the item's plan as a `Decided hands-free` line,
 //! which the landing's notification counts. "Ask me again" unmarks them.
 //!
@@ -149,7 +149,7 @@ impl Command {
     pub fn about(self) -> &'static str {
         match self {
             Command::WorkNote => {
-                "Autopilot: work a note: keep tabs working through a note's checklist with wtn, the next opened as each lands"
+                "Autopilot: work a note: keep tabs working through a note's checklist with wt, the next opened as each lands"
             }
         }
     }

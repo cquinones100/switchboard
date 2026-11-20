@@ -4,8 +4,8 @@
 //! again, and takes no disk space for them until a build changes one. New
 //! with the port, after ten worktrees at 7 to 26 GB each filled a disk.
 //!
-//! The worktree commands (`wt`, `wtn`, `wtb`, `wtpr`, and autopilot through
-//! `wtn`) call `start` once they have made a worktree and found its branch
+//! The worktree commands (`wt`, `wtb`, `wtpr`, and autopilot through
+//! `wt`) call `start` once they have made a worktree and found its branch
 //! yours (or `--trusted`), which runs this in the background, detached, so Claude starts without waiting
 //! on it. The clone is made beside the main clone's `.git` and renamed into
 //! place only while the worktree still has no `target/`, so a build that

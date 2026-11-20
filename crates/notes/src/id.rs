@@ -2,7 +2,7 @@
 //! the app or outside it (`mv`, Finder, git, a Claude editing the file): a
 //! last line `<!-- note-id: n-<12 hex> -->`. Ported from
 //! notes/lua/notes/id.lua, the app's side, and lib/note-id.js, the side of
-//! everything else that names a note: wtn's branch claims
+//! everything else that names a note: wt's branch claims
 //! (src/cmd/worktree_from_note.rs), and autopilot's note and the
 //! items it skips or holds (src/autopilot), which name a note by its ID
 //! rather than by its path, so a rename doesn't lose them.
@@ -15,11 +15,11 @@
 //! previews and searches leave it out (`strip`), and a squash sends none to
 //! Claude.
 //!
-//! Outside the app, wtn and the mode give a note its ID (`ensure_id`), or
+//! Outside the app, wt and the mode give a note its ID (`ensure_id`), or
 //! give it back to a note rewritten without it (`give_id`), with its
 //! modified time kept, so the note doesn't move up the list or read as just
 //! changed; the app takes the line in as it takes in any change made from
-//! outside. Several `wtn` started at once give one note its ID, or bring one
+//! outside. Several `wt` started at once give one note its ID, or bring one
 //! repository's claims to IDs, one process at a time, each reading the note
 //! again under a lock, so all of them claim by the one ID the note keeps.
 //!
@@ -28,7 +28,7 @@
 //! changed at the same moment, the one whose path sorts later) is the copy
 //! (`holding`).
 //!
-//! wtn's claims (`branch.<branch>.wtnItem` in the repository's git config)
+//! wt's claims (`branch.<branch>.wtnItem` in the repository's git config)
 //! from before notes had IDs named the note by its path; `migrate_claims`
 //! brings them to IDs once per repository.
 
@@ -392,7 +392,7 @@ pub fn locked<T>(key: &Path, f: impl FnOnce() -> T) -> T {
     out
 }
 
-/// A note's title as wtn names it: its first line that isn't blank or its
+/// A note's title as wt names it: its first line that isn't blank or its
 /// ID, without Markdown's heading marks; `None` when it has none.
 pub fn title_of(text: &str) -> Option<String> {
     text.split('\n')
@@ -401,7 +401,7 @@ pub fn title_of(text: &str) -> Option<String> {
         .find(|t| !t.is_empty())
 }
 
-/// A wtn claim by a note's ID: the ID and the item's first line.
+/// A wt claim by a note's ID: the ID and the item's first line.
 pub fn claim_of(value: &str) -> Option<(&str, &str)> {
     let m = CLAIM.captures(value)?;
     Some((m.get(1)?.as_str(), m.get(2)?.as_str()))
@@ -410,7 +410,7 @@ pub fn claim_of(value: &str) -> Option<(&str, &str)> {
 /// Marks a repository whose claims have been brought to IDs.
 const MIGRATED: &str = "switchboard.wtnClaimsById";
 
-/// wtn's claims (`branch.<branch>.wtnItem`) from before notes had IDs read
+/// wt's claims (`branch.<branch>.wtnItem`) from before notes had IDs read
 /// `<note's path in the notes directory>: <item's first line>`. Once per
 /// repository (`switchboard.wtnClaimsById` in its git config marks it
 /// done), each is rewritten as `<note's ID>: <item's first line>`, the note

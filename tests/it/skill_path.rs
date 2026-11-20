@@ -417,7 +417,7 @@ fn shape_files_where_the_repository_keeps_its_work_and_only_you_start_it() {
 }
 
 #[test]
-fn shape_writes_a_notes_item_and_its_plan_in_the_shape_wtn_reads() {
+fn shape_writes_a_notes_item_and_its_plan_in_the_shape_wt_reads() {
     let all = skills();
     let (_, text) = all.iter().find(|(name, _)| name == "shape").unwrap();
     let notes = section(text, "A note's item");
@@ -504,6 +504,34 @@ fn nothing_names_the_skill_shape_took_the_place_of() {
                     .display()
                     .to_string(),
             );
+        }
+    }
+    assert!(found.is_empty(), "{name} is named in {found:?}");
+    assert!(!skills_dir().join(&name).exists());
+}
+
+#[test]
+fn no_skill_names_the_skill_wt_took_the_place_of() {
+    // Put together so this file doesn't hold it.
+    let name = ["wt", "n"].concat();
+    let mut dirs = vec![skills_dir()];
+    let mut found = Vec::new();
+    while let Some(dir) = dirs.pop() {
+        for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() && entry.file_name() != "node_modules" {
+                dirs.push(path);
+            } else if fs::read_to_string(&path).is_ok_and(|t| {
+                // As a word: the git config keys it named (`wtnItem`) stay.
+                t.match_indices(&name).any(|(at, _)| {
+                    let before = t[..at].chars().next_back();
+                    let after = t[at + name.len()..].chars().next();
+                    !before.is_some_and(|c| c.is_alphanumeric())
+                        && !after.is_some_and(|c| c.is_alphanumeric())
+                })
+            }) {
+                found.push(path.display().to_string());
+            }
         }
     }
     assert!(found.is_empty(), "{name} is named in {found:?}");
