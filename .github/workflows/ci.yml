@@ -21,6 +21,17 @@
 # runner's cores, since most of them wait on a deadline rather than
 # compute, and `common::patience()` stretches the deadlines with the load
 # that adds.
+# A first job sorts a pull request by the files it changes against its base
+# (the merge commit's first parent): light, when every file is
+# documentation (docs/, ARCHITECTURE.md, CLAUDE.md, the READMEs) or a skill
+# (assets/skills/, .claude/skills/), which the code compiles in or the
+# tests read, so the Linux jobs run on them still; full, for anything else,
+# and every push to main, which adds the three macOS jobs. A macOS job skips
+# itself by its own `if:`, never by a path filter on `on:`, so each of the
+# six checks main requires still reports, skipped counting as passing; the
+# macOS tests are two jobs rather than a matrix, since a matrix job skipped
+# reports under its name unexpanded. The formatting job fails when the sort
+# does, so a broken sort can't skip the macOS checks into a merge.
 
 name: CI
 
@@ -42,10 +53,51 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  changes:
+    name: Sort the changes
+    runs-on: ubuntu-latest
+    outputs:
+      kind: ${{ steps.sort.outputs.kind }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 2
+      - name: Sort the run into light or full
+        id: sort
+        # A rename is listed as the file it removes and the one it adds, so a
+        # file moved out of src/ still counts as touching src/.
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            echo "kind=full" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(git diff --name-only --no-renames HEAD^1 HEAD)
+          kind=light
+          while IFS= read -r file; do
+            [ -n "$file" ] || continue
+            if ! [[ "$file" == docs/* || "$file" == ARCHITECTURE.md || "$file" == CLAUDE.md \
+              || "$file" == assets/skills/* || "$file" == .claude/skills/* \
+              || "$file" == README.md || "$file" =~ ^crates/[^/]+/README\.md$ ]]; then
+              echo "$file needs every job"
+              kind=full
+              break
+            fi
+          done <<< "$files"
+          echo "Kind: $kind"
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+
   fmt:
     name: Formatting
+    needs: changes
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
+      - name: Check that the changes were sorted
+        if: needs.changes.result != 'success'
+        run: |
+          echo "Sorting the changes failed, so the macOS jobs were skipped without a reason"
+          exit 1
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install the pinned toolchain
         run: rustup toolchain install
@@ -94,6 +146,8 @@ jobs:
 
   build-macos:
     name: Build the tests (macOS arm64)
+    needs: changes
+    if: needs.changes.outputs.kind == 'full'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -117,15 +171,14 @@ jobs:
           path: tests.tar.zst
           retention-days: 1
 
-  test-macos:
-    name: Tests (macOS arm64, ${{ matrix.partition }} of 2)
-    needs: build-macos
-    strategy:
-      fail-fast: false
-      matrix:
-        partition: [1, 2]
+  test-macos-1:
+    name: Tests (macOS arm64, 1 of 2)
+    needs: [changes, build-macos]
+    if: needs.changes.outputs.kind == 'full'
     runs-on: macos-latest
-    steps:
+    env:
+      PARTITION: 1
+    steps: &test-macos-steps
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install the pinned toolchain
         run: rustup toolchain install
@@ -142,5 +195,14 @@ jobs:
         run: >
           cargo nextest run --archive-file tests.tar.zst
           --workspace-remap . --extract-to . --extract-overwrite
-          --partition count:${{ matrix.partition }}/2
+          --partition count:${{ env.PARTITION }}/2
           --no-fail-fast --test-threads 8
+
+  test-macos-2:
+    name: Tests (macOS arm64, 2 of 2)
+    needs: [changes, build-macos]
+    if: needs.changes.outputs.kind == 'full'
+    runs-on: macos-latest
+    env:
+      PARTITION: 2
+    steps: *test-macos-steps
