@@ -260,6 +260,17 @@ const ANSWER_PREFIX_W: usize = 8;
 /// and whether to put it away after what is picked.
 type Notice = Option<(String, Item, bool)>;
 
+/// Where a tab's menu is opened from: mission control's leads with going
+/// there; the sidebar's with peeking, chosen as it opens from m, Space or a
+/// right click, or with going there chosen from Enter, so a second Enter
+/// does what Enter did alone.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TabMenuFrom {
+    Mission,
+    SidebarPeek,
+    SidebarGo,
+}
+
 /// A kept notification's `Notice`: put away after only while the sidebar
 /// still shows it.
 fn kept_notice(item: &Item) -> Notice {
@@ -3551,15 +3562,15 @@ impl Server {
     /// options of the question it waits on, answering, its reminder, its
     /// place in the landing queue. `screen` is whether the card shows its
     /// screen in its place, on the Tabs view with UX 2.0, which the menu
-    /// offers to show or hide. `peek_first` puts peeking at it first, chosen
-    /// as the menu opens, for the sidebar's right click, which peeked before
-    /// it opened a menu.
+    /// offers to show or hide. `from` the sidebar puts peeking at it first,
+    /// for the sidebar's right click, which peeked before it opened a menu,
+    /// and chooses as the menu opens what the key that opened it did alone.
     pub(crate) fn tab_menu(
         &mut self,
         client: ClientId,
         tab: &crate::sidebar::model::TabModel,
         screen: Option<bool>,
-        peek_first: bool,
+        from: TabMenuFrom,
     ) {
         let all = self.sidebar_all_tabs();
         let waiter = self.sources.landing_waiter(tab.id).cloned();
@@ -3623,7 +3634,9 @@ impl Server {
         }
         let at = 1.min(list.len());
         list.splice(at..at, after_go);
-        if peek_first && let Some(i) = list.iter().position(|c| matches!(c.act, Do::Peek(_))) {
+        if from != TabMenuFrom::Mission
+            && let Some(i) = list.iter().position(|c| matches!(c.act, Do::Peek(_)))
+        {
             let peek = list.remove(i);
             list.insert(0, peek);
         }
@@ -3649,9 +3662,16 @@ impl Server {
             list.retain(|c| !matches!(c.act, Do::AnswerWith { .. }));
             None
         };
+        let at = match from {
+            TabMenuFrom::SidebarGo => list
+                .iter()
+                .position(|c| matches!(c.act, Do::GoTo(_)))
+                .unwrap_or(0),
+            TabMenuFrom::Mission | TabMenuFrom::SidebarPeek => 0,
+        };
         let title = format!("{} {}", tab.index, tab.name);
         self.about_tab(client, tab.id, move |s| {
-            s.mission_menu(client, title, body, list, None, None, false);
+            s.mission_menu(client, title, body, list, None, None, false, at);
         });
     }
 
@@ -3739,7 +3759,7 @@ impl Server {
             // the shelf has none.
             let screen = (m.snap.rules.ux2 && !super::render::on_shelf_tab(&tab, &m.snap.rules))
                 .then(|| m.card_screen == Some((tab.id, m.cursor)));
-            self.tab_menu(client, &tab, screen, false);
+            self.tab_menu(client, &tab, screen, TabMenuFrom::Mission);
             return;
         };
         let Some(item) = m.chosen_item().cloned() else {
@@ -3750,7 +3770,7 @@ impl Server {
             && let Target::Tab(id) = item.target
             && let Some(tab) = self.sidebar_all_tabs().into_iter().find(|t| t.id == id)
         {
-            self.tab_menu(client, &tab, None, false);
+            self.tab_menu(client, &tab, None, TabMenuFrom::Mission);
             return;
         }
         // Autopilot's view's heading opens the menu its line on the Tabs
@@ -3822,6 +3842,7 @@ impl Server {
             seen.then_some(item),
             notice,
             keyed,
+            0,
         );
     }
 
@@ -4340,6 +4361,7 @@ impl Server {
             seen.then_some(item),
             notice,
             false,
+            0,
         );
     }
 
@@ -4349,7 +4371,7 @@ impl Server {
     /// unshown. `seen` is a Slack message seen whatever
     /// is picked, and `notice` the notification it is the menu of, what
     /// is picked recorded as what it led to, and dismissed after it when
-    /// its flag says so.
+    /// its flag says so; `at` the choice chosen as it opens.
     #[allow(clippy::too_many_arguments)]
     fn mission_menu(
         &mut self,
@@ -4360,6 +4382,7 @@ impl Server {
         seen: Option<Item>,
         notice: Notice,
         keyed: bool,
+        at: usize,
     ) {
         let options: Vec<MenuOption> = list
             .iter()
@@ -4374,7 +4397,7 @@ impl Server {
                 }
             })
             .collect();
-        let mut menu = Menu::new(title, options);
+        let mut menu = Menu::new(title, options).at(at);
         if let Some(body) = body {
             menu = menu.body(body);
         }

@@ -499,8 +499,8 @@ fn note_written(rig: &Rig, rel: &str, title: &str) {
 
 #[test]
 fn enter_on_a_new_notes_notification_opens_the_note_in_notes() {
-    // With the Notifications window off, Enter in the sidebar leads to
-    // mission control's Notifications view, whose menu opens it.
+    // Enter in the sidebar opens the notification's menu, whose first
+    // choice opens it.
     let rig = Rig::with(json!({ "notice_list": false }));
     note_written(&rig, "Plan.md", "Plan");
     let mut client = rig.server.attach(140, 36);
@@ -527,7 +527,15 @@ fn enter_on_a_new_notes_notification_opens_the_note_in_notes() {
     note_written(&rig, "Work/Later.md", "Later");
     client.type_text(&format!("{ALT}1"));
     client.wait_text("● New note: Later");
-    client.type_text(&format!("{ALT}s"));
+    // A choice from the sidebar's menu that opens Notes may leave the
+    // focus in the sidebar.
+    let list = rig.wait("the first tab in front", |l| tabs(l)[0]["current"] == true);
+    if list["sessions"][0]["sidebar"]["focused"] != true {
+        client.type_text(&format!("{ALT}s"));
+        rig.wait("the sidebar focused", |l| {
+            l["sessions"][0]["sidebar"]["focused"] == true
+        });
+    }
     client.type_text("n");
     open_from_the_view(&mut client);
     rig.wait_heard("open Work/Later.md");
