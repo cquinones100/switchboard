@@ -138,7 +138,7 @@ Settings, in mission control's System group (`M-Space`, or `M-p` then Settings),
 
 ## Contributing
 
-Pull requests are welcome. One from a fork is reviewed before any of its code runs on a maintainer's computer: it is checked out where no git hook, Claude session or setup of its own runs, what in it runs without being asked (git's hooks, setup, Claude's settings and skills, build scripts, crates) is read first, it is reviewed from outside its worktree, and it is tried in a sealed `switchboard try` that can't reach the maintainer's files, credentials or network. See `wtpr --untrusted`, `switchboard pr-risk` and `switchboard try --sealed` in [the guide](docs/guide.md#someone-elses-pr).
+Pull requests are welcome. Every change reaches `main` through one, merged once its CI passes (formatting, clippy, and the tests on Linux and macOS). One from a fork is reviewed before any of its code runs on a maintainer's computer: it is checked out where no git hook, Claude session or setup of its own runs, what in it runs without being asked (git's hooks, setup, Claude's settings and skills, build scripts, crates) is read first, it is reviewed from outside its worktree, and it is tried in a sealed `switchboard try` that can't reach the maintainer's files, credentials or network. See `wtpr --untrusted`, `switchboard pr-risk` and `switchboard try --sealed` in [the guide](docs/guide.md#someone-elses-pr).
 
 ## License
 
