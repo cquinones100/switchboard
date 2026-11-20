@@ -269,3 +269,7 @@ The relay's DM, threads and Home tab.
 ## Proposal: how it gets there, how and why
 
 - [149. How it gets there says how and why: under each step's title a How naming the code that does the work and in what order, and a Why of one clause on the problem it fixes; the pages that only test folded into one Tested line](https://cquinones100.github.io/switchboard/design/149.html)
+
+## Proposal: notes' toolbar from the kit
+
+- [157. Notes' toolbar drawn with the kit's button, on the dark and light themes: at rest, under the mouse, lit while the cursor is in that style (bold, two styles, a heading), and faint while read-only](https://cquinones100.github.io/switchboard/design/157.html)
