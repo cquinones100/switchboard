@@ -892,3 +892,112 @@ fn with_ux2_gw_opens_the_work_on_this_item_box() {
     client.send(b"\x1b");
     assert_eq!(tabs(&server).len(), before + 1);
 }
+
+/// The palette's "Start work on a GitHub issue": the repository, then its
+/// open issues from GitHub (a stand-in, as strict as the real one), the
+/// ones assigned to you first, each group the newest first; the one picked,
+/// or a number typed, gets a tab running `wtn --issue` on it.
+#[cfg(feature = "net")]
+#[test]
+fn working_on_a_github_issue_lists_its_open_issues_yours_first_and_opens_the_picked_ones_tab() {
+    use common::http::{Fake, Reply};
+    use serde_json::json;
+
+    let github = Fake::github("test-token", |request| {
+        (request.path() == "/graphql" && request.text().contains("issues(states: OPEN")).then(
+            || {
+                let issue = |number: u64, title: &str, assignee: Option<&str>| {
+                    json!({ "number": number, "title": title,
+                            "assignees": { "nodes": assignee.map(|a| vec![json!({ "login": a })]).unwrap_or_default() } })
+                };
+                Reply::json(
+                    200,
+                    json!({ "data": { "viewer": { "login": "me" }, "repository": { "issues": { "nodes": [
+                        issue(14, "Newest of all", None),
+                        // Its author wrote the title: a control character
+                        // in it shows nowhere.
+                        issue(13, "Mine\u{7} to do", Some("me")),
+                        issue(12, "Someone else's", Some("else")),
+                    ] } } } }),
+                )
+            },
+        )
+    });
+    let server = TestServer::start_with_env(&[
+        ("GH_TOKEN", "test-token"),
+        ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
+        ("SWITCHBOARD_GITHUB_API", &github.url),
+    ]);
+    let repo = server.home.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q"]);
+    git(&repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "start"]);
+    git(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widgets.git",
+        ],
+    );
+    let repo = repo.canonicalize().unwrap();
+    let mut client = server.attach(120, 40);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-c", repo.to_str().unwrap()]);
+    in_front_at(&server, &mut client, "▌ ○  2 repo", &repo);
+    let repo_tab = tabs(&server)
+        .into_iter()
+        .find(|t| t["current"] == true)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Listed in the palette while GitHub is on.
+    client.type_text("\x1bp");
+    client.wait_text("action>");
+    client.type_text("GitHub issue in a new tab");
+    client.wait_text("› Start work on a GitHub issue");
+    client.type_text("\x1b");
+    client.wait_for("the palette to close", |s| {
+        !s.iter().any(|l| l.contains("action>"))
+    });
+
+    let before = tabs(&server).len();
+    server.ok(&["press", "work-on-issue"]);
+    client.wait_text("Open in >");
+    client.send(b"\r");
+    let screen = client.wait_text("#12 Someone else's");
+    let row = |text: &str| screen.iter().position(|l| l.contains(text));
+    assert!(
+        row("#13 Mine to do") < row("#14 Newest of all")
+            && row("#14 Newest of all") < row("#12 Someone else's"),
+        "yours first, then the newest first: {screen:#?}"
+    );
+    // The first row, yours, picked.
+    client.send(b"\r");
+    wait("the issue's tab", || tabs(&server).len() == before + 1);
+    let tab = tabs(&server).last().unwrap().clone();
+    assert_eq!(tab["options"]["@tab_name"], "acme/widgets#13");
+    assert_eq!(tab["options"]["@tab_title"], "acme/widgets#13: Mine to do");
+    assert_eq!(tab["current"], true, "in front, as a tab you asked for");
+
+    // A number typed that isn't listed is taken too.
+    server.ok(&["select-tab", "-t", &repo_tab]);
+    in_front_at(&server, &mut client, "2 repo", &repo);
+    server.ok(&["press", "work-on-issue"]);
+    client.wait_text("Open in >");
+    client.send(b"\r");
+    client.wait_text("#12 Someone else's");
+    client.type_text("#40");
+    client.type_text("\x1b\r");
+    wait("the typed issue's tab", || {
+        tabs(&server).len() == before + 2
+    });
+    assert_eq!(
+        tabs(&server).last().unwrap()["options"]["@tab_name"],
+        "acme/widgets#40"
+    );
+}

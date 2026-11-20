@@ -3413,6 +3413,7 @@ impl Server {
             | Action::WorkOnTask
             | Action::WorkOnPr
             | Action::WorkOnNote
+            | Action::WorkOnIssue
             | Action::ContinueShaping => self.work_action(id, action, pane),
             Action::ReviewPr => self.review_pr(id, pane),
             Action::ShapeNote => self.shape_note(id, false),

@@ -2674,3 +2674,224 @@ fn an_items_branch_is_cut_from_its_target_which_landing_names_with_what_it_track
         stderr(&missing)
     );
 }
+
+// ── wtn by a ticket provider's number ───────────────────────────────────────
+
+/// GitHub as `wtn <number>` asks it for issue 12 of o/r: open, with no
+/// assignee or label, and no claim on it.
+fn issue_answer(request: &http::Request) -> Option<Reply> {
+    if request.path() == "/repos/o/r/issues/12" {
+        return Some(Reply::json(
+            200,
+            json!({ "number": 12, "state": "open", "title": "Make the widget blue", "body": "It is red.",
+                    "html_url": "https://github.com/o/r/issues/12", "assignees": [], "labels": [] }),
+        ));
+    }
+    if request.path() == "/repos/o/r/issues/13" {
+        return Some(Reply::json(404, json!({ "message": "Not Found" })));
+    }
+    (request.path() == "/graphql").then(|| {
+        Reply::json(
+            200,
+            json!({ "data": { "viewer": { "login": "me" }, "repository": { "issue": {
+                "labels": { "nodes": [] }, "comments": { "nodes": [] } } } } }),
+        )
+    })
+}
+
+/// A clone whose origin reads as GitHub's o/r, with `entry` as its
+/// repos.json entry.
+fn issue_world(prefix: &str, entry: Value) -> (World, http::Fake, PathBuf) {
+    let mut w = World::new(prefix);
+    let fake = http::Fake::github("test-token", issue_answer);
+    w.set("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url());
+    w.set("SWITCHBOARD_GITHUB_API", &fake.url);
+    w.set("GH_TOKEN", "test-token");
+    let origin = w.path("origin.git");
+    std::fs::write(
+        w.path(".gitconfig"),
+        format!(
+            "[url \"{}\"]\n\tinsteadOf = git@github.com:o/r.git\n",
+            origin.display()
+        ),
+    )
+    .unwrap();
+    let clone = w.path("clone");
+    w.init(&origin, true);
+    w.clone_into("git@github.com:o/r.git", &clone);
+    w.git(&clone, &["commit", "-q", "--allow-empty", "-m", "start"]);
+    w.git(&clone, &["push", "-q", "origin", "main"]);
+    // The repository gh names, since insteadOf rewrites what origin reads as.
+    w.git(&clone, &["config", "remote.origin.gh-resolved", "o/r"]);
+    let config = w.path(".config/switchboard");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("repos.json"),
+        json!({ "o/r": entry }).to_string(),
+    )
+    .unwrap();
+    (w, fake, clone)
+}
+
+#[test]
+fn wtn_takes_an_issue_by_its_number_where_the_repository_keeps_its_work_in_github_issues() {
+    let (w, _fake, clone) = issue_world("wtn-issue", json!({ "tickets": "github" }));
+    let cd = w.path("cd");
+    let cd_arg = cd.to_str().unwrap();
+    w.ok(
+        &clone,
+        &[
+            "worktree-from-note",
+            "--no-claude",
+            "--cd-file",
+            cd_arg,
+            "12",
+        ],
+    );
+    let text = read(&cd);
+    let (worktree, prompt) = text.trim_end().split_once('\n').unwrap();
+    let worktree = PathBuf::from(worktree);
+    assert_eq!(
+        worktree.file_name().unwrap(),
+        "issue-12-make-the-widget-blue"
+    );
+    assert_eq!(
+        w.git(&worktree, &["branch", "--show-current"]),
+        "issue/12-make-the-widget-blue"
+    );
+    assert!(
+        prompt
+            .starts_with("Work on this GitHub issue, o/r#12 (https://github.com/o/r/issues/12). "),
+        "an issue started by hand, with no assignee or label: {prompt}"
+    );
+    assert!(prompt.contains("<issue>\n# Make the widget blue\n\nIt is red.\n</issue>"));
+
+    // `#12` and the issue's link start it too, the worktree reused.
+    for asked in ["#12", "https://github.com/o/r/issues/12"] {
+        w.ok(
+            &clone,
+            &[
+                "worktree-from-note",
+                "--no-claude",
+                "--cd-file",
+                cd_arg,
+                asked,
+            ],
+        );
+        assert!(read(&cd).starts_with(worktree.to_str().unwrap()), "{asked}");
+    }
+    // `--issue` by hand takes it the same way.
+    w.ok(
+        &clone,
+        &[
+            "worktree-from-note",
+            "--no-claude",
+            "--cd-file",
+            cd_arg,
+            "--issue",
+            "12",
+        ],
+    );
+    assert!(read(&cd).starts_with(worktree.to_str().unwrap()));
+
+    // In a tab autopilot opened, the queue's search decides, and an issue
+    // assigned to no one isn't in it.
+    let server = common::TestServer::start();
+    let mut client = server.attach(80, 24);
+    client.wait_text("$");
+    let tab = &server.list()["sessions"][0]["tabs"][0];
+    let (tab_id, pane) = (
+        tab["id"].as_str().unwrap().to_string(),
+        tab["panes"][0]["id"].as_str().unwrap().to_string(),
+    );
+    server.ok(&["set", "-t", &tab_id, "@autopilot", "1"]);
+    let mut in_tab = World {
+        dir: TempDir::new("wtn-issue-tab"),
+        env: w.env.clone(),
+    };
+    in_tab.set("SWITCHBOARD", server.socket().to_str().unwrap());
+    in_tab.set("SWITCHBOARD_PANE", &pane);
+    let refused = in_tab.run(
+        &clone,
+        &["worktree-from-note", "--no-claude", "--issue", "12"],
+    );
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(
+        stderr(&refused).contains("isn't an open issue assigned to you and labeled \"autopilot\""),
+        "{}",
+        stderr(&refused)
+    );
+
+    let missing = w.run(&clone, &["worktree-from-note", "--no-claude", "13"]);
+    assert_eq!(missing.status.code(), Some(1));
+    assert!(
+        stderr(&missing).contains("o/r#13 isn't an open issue of o/r"),
+        "{}",
+        stderr(&missing)
+    );
+    let linear = w.run(&clone, &["worktree-from-note", "--no-claude", "ABC-12"]);
+    assert!(
+        stderr(&linear)
+            .contains("ABC-12 is a Linear ticket, and o/r keeps its work in GitHub issues"),
+        "{}",
+        stderr(&linear)
+    );
+}
+
+#[test]
+fn wtn_by_a_number_is_refused_where_the_repository_has_no_ticket_provider() {
+    let (w, fake, clone) = issue_world("wtn-unset", json!({ "landing": "pr" }));
+    let out = w.run(&clone, &["worktree-from-note", "--no-claude", "12"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("o/r has no ticket provider"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(fake.seen().is_empty(), "nothing asked of GitHub");
+}
+
+#[test]
+fn wtn_by_a_number_starts_a_linear_ticket_of_the_team_where_the_repository_keeps_its_work_in_linear()
+ {
+    let (mut w, _github, clone) = issue_world("wtn-linear", json!({ "tickets": "linear" }));
+    let linear = Fake::linear(ticket_answer);
+    w.set("SWITCHBOARD_LINEAR_API", &linear.graphql());
+    w.set("LINEAR_API_KEY", "lin_test");
+    let cd = w.path("cd");
+    let cd_arg = cd.to_str().unwrap();
+
+    let no_team = w.run(&clone, &["worktree-from-note", "--no-claude", "42"]);
+    assert!(
+        stderr(&no_team).contains("a number alone needs its team"),
+        "{}",
+        stderr(&no_team)
+    );
+    std::fs::write(
+        w.path(".config/switchboard/linear.json"),
+        r#"{"linearTeam": "ENG"}"#,
+    )
+    .unwrap();
+    w.ok(
+        &clone,
+        &[
+            "worktree-from-note",
+            "--no-claude",
+            "--cd-file",
+            cd_arg,
+            "42",
+        ],
+    );
+    let text = read(&cd);
+    let mut lines = text.lines();
+    let worktree = PathBuf::from(lines.next().unwrap());
+    assert_eq!(
+        w.git(&worktree, &["branch", "--show-current"]),
+        "me/eng-42-fix-the-login"
+    );
+    assert!(lines.next().unwrap().starts_with("Work on ticket ENG-42"));
+
+    let missing = w.run(&clone, &["worktree-from-note", "--no-claude", "ENG-7"]);
+    assert_eq!(missing.status.code(), Some(1));
+    assert!(stderr(&missing).contains("no Linear issue found for ENG-7"));
+}
