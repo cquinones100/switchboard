@@ -4823,7 +4823,7 @@ const PILOT_BLOCKERS_SHOWN: usize = 3;
 /// it waits on, both dim with no meter. A blocked one (board 113) is named
 /// "blocked" with the idle mark, and under a dim "after" names each item it
 /// waits on, a line each (`blocker_line`), `PILOT_BLOCKERS_SHOWN` at most
-/// and then how many more.
+/// and then how many more. An issue's card names its priority first.
 fn pilot_card(item: &Item, at: usize, chosen: bool, hovered: bool, m: &Mission) -> kit::BoardCard {
     let theme = &m.snap.theme;
     let pilot = item.data.get("pilot");
@@ -4882,10 +4882,15 @@ fn pilot_card(item: &Item, at: usize, chosen: bool, hovered: bool, m: &Mission) 
         .or_else(|| item.data["next"].as_str())
         .unwrap_or(&item.title)
         .to_string();
-    let mut facts = vec![vec![Span::styled(
+    let mut facts = Vec::new();
+    // An issue's priority (`view::say_priorities`), before what it waits on.
+    if let Some(p) = item.data["priority"].as_u64() {
+        facts.push(vec![Span::styled(format!("priority {p}"), fg(theme.dim))]);
+    }
+    facts.push(vec![Span::styled(
         where_,
         fg(if skipped { theme.faint } else { theme.dim }),
-    )]];
+    )]);
     if let Some(words) = pilot.and_then(|p| pilot_timer(p, m.snap.now_secs)) {
         facts.push(vec![Span::styled(words, fg(theme.dim))]);
     }

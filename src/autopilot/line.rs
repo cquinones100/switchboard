@@ -198,6 +198,9 @@ pub enum Act {
     HandsFree,
     /// Its tabs ask you again; landing without asking stays as it was.
     AskMe,
+    /// An issue's priority label set on GitHub, by its item's first line,
+    /// once a question says yes.
+    Priority(String, u8),
 }
 
 /// The question before landing without asking, naming what it skips and
@@ -430,7 +433,8 @@ pub fn apply(act: &Act, mode: &mut Mode) -> Option<String> {
         | Act::ChangeTarget
         | Act::ToTabs
         | Act::Dismiss
-        | Act::CycleClose => {
+        | Act::CycleClose
+        | Act::Priority(..) => {
             return None;
         }
     })

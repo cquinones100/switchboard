@@ -4,8 +4,10 @@
 //! without asking, today's spend against its limit, and whether it is
 //! paused and why; then every item it works in the column of the board
 //! where it stands (`COLUMNS`: the items it will open next, in the order
-//! it opens them, then those blocked, each held by an `After:` line on an
-//! open item its card names, a column only while any is (board 113), then
+//! it opens them, an issue's card naming its priority (`say_priorities`),
+//! then those blocked, each held by an `After:` line on an open item its
+//! card names, or an issue by an open issue blocking it, a column only
+//! while any is (board 113), then
 //! its tabs working, waiting on you, landing and
 //! landed, today's landings whose tabs are closed with them, then the ones
 //! skipped, a column only while any is), the least far along first, so
@@ -711,6 +713,18 @@ fn blockers(after: &[(String, Stands)], rows: &[Row], plans: &HashMap<String, Pl
             on
         })
         .collect()
+}
+
+/// Each issue in Next up or Blocked carries its priority (`priorities`, by
+/// its first line) as its data's `priority`, for its card and its menu's
+/// "Put next", "Move up" and "Move down".
+pub fn say_priorities(items: &mut [Item], priorities: &HashMap<String, u8>) {
+    for item in items {
+        let text = item.data["next"].as_str().unwrap_or_default();
+        if let Some(p) = priorities.get(text) {
+            item.data["priority"] = json!(p);
+        }
+    }
 }
 
 /// Each item in Next up whose last start failed (`failed`, by its first
