@@ -35,6 +35,19 @@ pub fn run_by_you() {
     RUN_BY_YOU.store(true, Ordering::Relaxed);
 }
 
+/// The service a key or command tagged `#github` or `#linear` is refused
+/// for: one it is tagged with when every service it is tagged with is off
+/// in Settings, so one that works with either (M-i, the tab's ticket) is
+/// refused only with both off and decides the rest itself; `None` to run.
+pub fn tagged_off(tags: &[&str]) -> Option<&'static str> {
+    let services: Vec<&'static str> = ["github", "linear"]
+        .into_iter()
+        .filter(|s| tags.contains(s))
+        .collect();
+    let off = !services.is_empty() && services.iter().all(|s| !settings::is_on(s));
+    off.then(|| services[0])
+}
+
 /// Fails with `ErrorKind::Off` while the on/off setting `key` is off, unless
 /// this is a program someone runs themselves (`run_by_you`).
 pub(crate) fn ensure_on(key: &str, service: &str) -> Result<()> {

@@ -1282,6 +1282,13 @@ pub fn run_local(content: Content) -> ExitCode {
     run_with(content, None, None, false, None)
 }
 
+/// `run_following` fetching no pictures: for what strangers write, whose
+/// images would tell their server when it is read (a GitHub issue's
+/// comments).
+pub fn run_following_without_pictures(content: Content, follow: Follow) -> ExitCode {
+    run_with(content, None, None, false, Some(follow))
+}
+
 fn run_with(
     content: Content,
     updates: Option<Receiver<Content>>,

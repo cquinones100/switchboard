@@ -102,6 +102,20 @@ pub fn wtn_item(config: &str, branch: &str) -> Option<String> {
 /// the ID given, or `<note's path>: <item's first line>` from before notes
 /// had IDs, no ID given.
 pub fn wtn_claim(config: &str, branch: &str) -> Option<(Option<String>, String)> {
+    let value = branch_value(config, branch, "wtnItem")?;
+    if let Some((id, item)) = crate::notes::id::claim_of(&value) {
+        return Some((Some(id.to_string()), item.to_string()));
+    }
+    let item = match value.split_once(".md: ") {
+        Some((_, item)) => item.to_string(),
+        None => value,
+    };
+    Some((None, item))
+}
+
+/// `branch.<branch>.<key>` from the text of a repository's git config, as
+/// git reads it (the key in any case), or `None` when it isn't set.
+pub fn branch_value(config: &str, branch: &str, key: &str) -> Option<String> {
     let mut in_branch = false;
     for line in config.lines() {
         let line = line.trim();
@@ -117,21 +131,12 @@ pub fn wtn_claim(config: &str, branch: &str) -> Option<(Option<String>, String)>
         if !in_branch {
             continue;
         }
-        let Some((key, value)) = line.split_once('=') else {
+        let Some((name, value)) = line.split_once('=') else {
             continue;
         };
-        if !key.trim().eq_ignore_ascii_case("wtnitem") {
-            continue;
+        if name.trim().eq_ignore_ascii_case(key) {
+            return Some(unquote(value.trim()));
         }
-        let value = unquote(value.trim());
-        if let Some((id, item)) = crate::notes::id::claim_of(&value) {
-            return Some((Some(id.to_string()), item.to_string()));
-        }
-        let item = match value.split_once(".md: ") {
-            Some((_, item)) => item.to_string(),
-            None => value,
-        };
-        return Some((None, item));
     }
     None
 }
