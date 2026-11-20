@@ -232,7 +232,7 @@ keys(38, 26, [['↑↓', 'move'], ['Enter', 'choose'], ['/', 'search']]);
 box(82, 8, 48, 22, 'Set its status');
 option(82, 9, 48, 'Let Switchboard decide', 'Idle', true);
 hl(83, 10, 46, 'L');
-const G = ['Needs you', 'Build failing', 'Working', 'Monitoring', 'Review loop', 'CI loop', 'Queue-and-clean', 'Loops', 'In merge queue', 'Landing', 'Testing Deploy', 'Merged', 'Idle', 'Reminders'];
+const G = ['Needs you', 'Build failing', 'Working', 'Monitoring', 'Review loop', 'CI loop', 'Queue-and-clean', 'Loops', 'In merge queue', 'Landing', 'Testing Deploy', 'Merged', 'Idle', 'Reminders', 'Other'];
 G.forEach((name, i) => option(82, 11 + i, 48, name, name === 'Review loop' ? '✓ set by you' : ''));
 keys(84, 28, [['↑↓', 'move'], ['Enter', 'choose'], ['/', 'search'], ['Esc', 'back']]);
 backdrop();
