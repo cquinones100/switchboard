@@ -5680,7 +5680,7 @@ impl Server {
     /// Types into the prompt of the Claude in `pane`: `i` first while its
     /// screen shows the prompt in vim's Normal mode (`answer::into_prompt`),
     /// so what is typed arrives whole. Everything that types a command or a
-    /// message into a tab's Claude goes through here (M-m's
+    /// message into a tab's Claude goes through here (the PR view's
     /// /resolve-conflicts, the Slack tab's /slack-updates, a CI loop
     /// started from mission control, a message answering a tab, a reply
     /// sent to another tab); the relay does the same through its own

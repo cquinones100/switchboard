@@ -336,7 +336,7 @@
     "key": "menu_mouse",
     "category": "Mission control",
     "label": "Click in menus",
-    "description": "A click takes an option of mission control's menus, Yes or No of a question or a numbered answer, and a click outside the box closes it; a right click on an item in mission control, the Notifications window or the sidebar opens its menu, and where no item is the view's (the sidebar's own in the sidebar); and a click picks an option of M-m's, the update box's and M-w's menus; off, they take keys alone",
+    "description": "A click takes an option of mission control's menus, Yes or No of a question or a numbered answer, and a click outside the box closes it; a right click on an item in mission control, the Notifications window or the sidebar opens its menu, and where no item is the view's (the sidebar's own in the sidebar); and a click picks an option of the PR view's, the update box's and M-w's menus; off, they take keys alone",
     "default": true
   },
   {
@@ -385,7 +385,7 @@
     "key": "hover_highlight",
     "category": "Mission control",
     "label": "Highlight on hover",
-    "description": "What a click would press lights under the mouse: in mission control the views' names, the filter, the cards and rows, a menu's options, Yes and No, an answer's options and easy mode's ×; the sidebar's tabs and notifications; the options of M-m's, the update box's and M-w's menus; and the buttons of Notes' toolbar, its boxes' × and M-d's diff. In Ghostty and kitty the mouse pointer also turns into a hand over what a click presses (the workspace's sidebar, header, status line, mission control and boxes, and in M-d's diff its buttons, its list's rows, the story map's chapters, a fold and a path:line in an answer) and a resizing arrow over a line between panes. Off, nothing follows the mouse and the pointer is never changed. Takes effect at once in mission control and the sidebar, and when a menu, Notes or the diff next opens",
+    "description": "What a click would press lights under the mouse: in mission control the views' names, the filter, the cards and rows, a menu's options, Yes and No, an answer's options and easy mode's ×; the sidebar's tabs and notifications; the options of the PR view's, the update box's and M-w's menus; and the buttons of Notes' toolbar, its boxes' × and M-d's diff. In Ghostty and kitty the mouse pointer also turns into a hand over what a click presses (the workspace's sidebar, header, status line, mission control and boxes, and in M-d's diff its buttons, its list's rows, the story map's chapters, a fold and a path:line in an answer) and a resizing arrow over a line between panes. Off, nothing follows the mouse and the pointer is never changed. Takes effect at once in mission control and the sidebar, and when a menu, Notes or the diff next opens",
     "default": true
   },
   {
@@ -907,7 +907,7 @@
     "key": "views_beside_narrow_pane",
     "category": "Tabs and status bar",
     "label": "Open views beside a narrow pane",
-    "description": "With a tab's one pane narrowed by Widest a lone pane gets and at least 80 columns spare at its right, M-d's diff, lazygit, and the PR and ticket views that open in Claude's place open in those columns instead, the pane keeping its width beside them (the diff takes Diff's share beside a narrow pane, narrowing the pane while it is open); the same key, q or M-w closes the view and the tab is one narrow pane again. With fewer columns spare, or something already beside the pane, they open in its place. Off, they always open in the pane's place",
+    "description": "With a tab's one pane narrowed by Widest a lone pane gets and at least 80 columns spare at its right, M-d's diff, lazygit, and the PR and ticket views that open in Claude's place open in those columns instead, the pane keeping its width beside them (the diff takes Diff's share beside a narrow pane, narrowing the pane while it is open); the same key, q or M-w closes the view and the tab is one narrow pane again. With something already beside the pane, they open in its place, but for the PR view (M-v), which closes what is there and takes its columns, the pane keeping the width it had. With fewer columns spare, they open in its place. Off, they always open in the pane's place",
     "default": true
   },
   {
@@ -939,7 +939,7 @@
     "key": "boxes_beside_narrow_pane",
     "category": "Tabs and status bar",
     "label": "Open boxes beside a narrow pane",
-    "description": "With a tab's one pane narrowed by Widest a lone pane gets, a box about the tab (its links, pictures and the tabs it mentions, answering its Claude, which note is its, naming or renaming it, its menu and its full title, M-m's PR readiness, sending its Claude's last reply on, Work on this item) opens as a pane in the empty columns at the pane's right, as tall as they are, the hints there hidden while it is open; every other box, a message and a notification among them, goes in the middle of the screen. With too few columns spare it goes in the middle of the screen too. Off, every box goes in the middle of the screen",
+    "description": "With a tab's one pane narrowed by Widest a lone pane gets, a box about the tab (its links, pictures and the tabs it mentions, answering its Claude, which note is its, naming or renaming it, its menu and its full title, sending its Claude's last reply on, Work on this item) opens as a pane in the empty columns at the pane's right, as tall as they are, the hints there hidden while it is open; every other box, a message and a notification among them, goes in the middle of the screen. With too few columns spare it goes in the middle of the screen too. Off, every box goes in the middle of the screen",
     "default": true
   },
   {
@@ -960,7 +960,7 @@
     "key": "one_claude_per_tab",
     "category": "Tabs and status bar",
     "label": "One Claude to a tab",
-    "description": "A Claude session started in a tab already running one moves to a tab of its own, since the sidebar, the Slack relay, M-c and M-m each take a tab's Claude to be one pane",
+    "description": "A Claude session started in a tab already running one moves to a tab of its own, since the sidebar, the Slack relay, M-c and the PR view's /resolve-conflicts each take a tab's Claude to be one pane",
     "default": true
   },
   {
@@ -1581,7 +1581,7 @@
     "key": "easy_keys",
     "category": "Help",
     "label": "Easy mode",
-    "description": "Keys for people who don't know Vim's, in Notes and M-d's diff: Shift-arrows and the mouse select, typing replaces a selection, Cmd-S saves, Cmd-Z undoes, Cmd-Shift-Z redoes and Cmd-X cuts in a note (where the terminal sends them as the guide says), and the diff gets a row of buttons for its keys; mission control's boxes, M-m's, the update box's and M-w's menus, messages, tips, and Notes' Format menu, palette and finder get a × in their top-right corner that a click or Tab and Enter closes, with Click in menus on (lists to pick from, such as M-p's, keep Esc alone); Vim's keys keep working. Takes effect when Notes or the diff next opens",
+    "description": "Keys for people who don't know Vim's, in Notes and M-d's diff: Shift-arrows and the mouse select, typing replaces a selection, Cmd-S saves, Cmd-Z undoes, Cmd-Shift-Z redoes and Cmd-X cuts in a note (where the terminal sends them as the guide says), and the diff gets a row of buttons for its keys; mission control's boxes, the update box's and M-w's menus, messages, tips, and Notes' Format menu, palette and finder get a × in their top-right corner that a click or Tab and Enter closes, with Click in menus on (lists to pick from, such as M-p's, keep Esc alone); Vim's keys keep working. Takes effect when Notes or the diff next opens",
     "default": false
   },
   {

@@ -2902,7 +2902,7 @@ impl Server {
     /// directory is there (the review tab's PR worktree, whose Claude works
     /// from the main clone), else the pane's own (`pane_own_dir`). The
     /// tab's name, color and PR, and the keys that open something for this
-    /// directory (M-v, M-m, M-d), read this one. Never a directory that no
+    /// directory (M-v, M-d), read this one. Never a directory that no
     /// longer exists (a worktree removed under it), its nearest ancestor
     /// that does taking its place.
     pub fn pane_dir(&self, pane: PaneId) -> Option<PathBuf> {
