@@ -1383,11 +1383,13 @@ fn rules_on() -> bool {
 /// absolute or home-relative paths that don't point into the checkout. A hit
 /// is not proof of anything; it is a reason to read that finding before
 /// acting on it. The diff Claude is given, in its own temporary directory,
-/// doesn't count.
+/// doesn't count, nor, for a ticket, a path the ticket's own text names
+/// (`named`), which a finding quoting the ticket repeats.
 fn outside_repository_warnings(
     findings: &[Value],
     root: &Path,
     diff_dir: Option<&Path>,
+    named: Option<&str>,
 ) -> Vec<String> {
     static PATHS: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r#"(?:~|/(?:Users|home|etc|var|private|root|opt|tmp))/[^\s"'`)\]]*"#).unwrap()
@@ -1396,6 +1398,11 @@ fn outside_repository_warnings(
     let cwd = std::env::current_dir().unwrap_or_else(|_| root.to_path_buf());
     let real_diff = diff_dir.and_then(|d| d.canonicalize().ok());
     let points_outside = |candidate: &str| {
+        // Without the punctuation a sentence puts after a path.
+        let bare = candidate.trim_end_matches(['.', ',', ';', ':']);
+        if named.is_some_and(|text| text.contains(bare)) {
+            return false;
+        }
         let expanded = match candidate.strip_prefix('~') {
             Some(rest) => home.join(rest.trim_start_matches('/')),
             None => PathBuf::from(candidate),
@@ -2021,8 +2028,12 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
     }
     let mut findings = review["findings"].as_array().cloned().unwrap_or_default();
     by_severity(&mut findings);
-    let warnings =
-        outside_repository_warnings(&findings, &root_path, claude.then_some(tmp.0.as_path()));
+    let warnings = outside_repository_warnings(
+        &findings,
+        &root_path,
+        claude.then_some(tmp.0.as_path()),
+        None,
+    );
     let patch = match patch_id(&merge_base, &head) {
         Ok(id) => id,
         Err(e) => return fail(e),
@@ -2449,7 +2460,7 @@ fn run_ticket(opts: &Opts, ticket: &str) -> Reviewed<ExitCode> {
     };
     let mut findings = review["findings"].as_array().cloned().unwrap_or_default();
     by_severity(&mut findings);
-    let warnings = outside_repository_warnings(&findings, &root_path, Some(&tmp.0));
+    let warnings = outside_repository_warnings(&findings, &root_path, Some(&tmp.0), Some(&text));
     // Each finding names the ticket's line, so `<file>:<line>` is the place
     // in the ticket's file.
     for finding in findings.iter_mut().filter_map(Value::as_object_mut) {
@@ -2996,13 +3007,28 @@ mod tests {
             json!({ "title": "t", "detail": "reads /etc/hosts and /work/repo/x", "file": "/home/x/secret" }),
             json!({ "title": "fine", "detail": "in /work/repo/src", "file": "src/a.rs" }),
         ];
-        let warnings = outside_repository_warnings(&findings, root, None);
+        let warnings = outside_repository_warnings(&findings, root, None, None);
         assert_eq!(
             warnings,
             vec![
                 "finding 1 (t) names a file outside the repository: /home/x/secret".to_string(),
                 "finding 1 (t) mentions paths outside the repository: /etc/hosts".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn a_path_the_ticket_names_is_no_warning() {
+        let root = Path::new("/work/repo");
+        let findings = vec![json!({
+            "title": "t",
+            "detail": "the ticket names ~/.config/app/settings.json, and the reviewer read /etc/hosts",
+            "file": "",
+        })];
+        let ticket = "Write the setting to `~/.config/app/settings.json`.";
+        assert_eq!(
+            outside_repository_warnings(&findings, root, None, Some(ticket)),
+            vec!["finding 1 (t) mentions paths outside the repository: /etc/hosts".to_string()]
         );
     }
 
