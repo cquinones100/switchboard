@@ -9,9 +9,8 @@
 //! An issue is ready as a planned note item is: its body is its plan. It
 //! joins the queue as an item of its own (`item_of`), whose first line is
 //! `<owner>/<repo>#<number>: <title>` and whose line is 0, a line no note
-//! item has, which is how the rest tells one apart (`issue_of`); with both
-//! sources the note's items come first, then the issues by priority, then
-//! oldest first. An issue's priority is its `priority: <n>` label, 1 the
+//! item has, which is how the rest tells one apart (`issue_of`); they are taken by
+//! priority, then oldest first. An issue's priority is its `priority: <n>` label, 1 the
 //! highest to 4, none counting as 3 (`priority_of`); the Autopilot board's
 //! "Move up" and "Move down" change that label (`set_priority`), after a
 //! yes, and "Put next" sets it to 1 and puts the issue first among the

@@ -21,9 +21,13 @@
 //! closed too; `next` the items put next in its queue, `[{ note, text }]`
 //! as `skipped`'s, the last put there first, taken before the rest of the
 //! settled ones until each lands (Notes' "Work on this item" box);
-//! `sources` where its work comes from, `"note"` (the note alone, as when
-//! it is missing), `"issues"` (the repository's GitHub issues, `issues.rs`)
-//! or `"both"`, and `issueLabel` the label an issue carries to be taken.
+//! `sources` where its work comes from, one source at a time: `"note"`
+//! (the note's checklist) or `"issues"` (the repository's GitHub issues,
+//! `issues.rs`); missing, or anything else (a `"both"` from when it took
+//! from the two at once), it follows the repository's `tickets` in
+//! repos.json, `github` the issues and anything else the note, read from
+//! the files alone (`repos::tickets_known`). `issueLabel` is the label an
+//! issue carries to be taken.
 //!
 //! The notes app writes the file too, when a note it works is renamed or
 //! moved (crates/notes/src/store.rs's `relink_mode`), so it is read again on every
@@ -93,37 +97,52 @@ pub struct Mode {
     pub issue_label: String,
 }
 
-/// Where the mode's work comes from: the note's checklist, the
-/// repository's GitHub issues, or both, the note's items first.
+/// Where the mode's work comes from: the note's checklist or the
+/// repository's GitHub issues, never both at once.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Sources {
     #[default]
     Note,
     Issues,
-    Both,
 }
 
 /// The label an issue carries for the mode to take it, by default.
 pub const ISSUE_LABEL: &str = "autopilot";
 
 impl Sources {
-    pub const ALL: [Sources; 3] = [Sources::Note, Sources::Issues, Sources::Both];
+    pub const ALL: [Sources; 2] = [Sources::Note, Sources::Issues];
 
     /// Its name in `autopilot.json`.
     pub fn name(self) -> &'static str {
         match self {
             Sources::Note => "note",
             Sources::Issues => "issues",
-            Sources::Both => "both",
         }
     }
 
-    /// From its name; the note alone for anything else.
-    pub fn parse(name: &str) -> Sources {
-        Sources::ALL
-            .into_iter()
-            .find(|s| s.name() == name)
-            .unwrap_or_default()
+    /// From its name; `None` for anything else.
+    pub fn parse(name: &str) -> Option<Sources> {
+        Sources::ALL.into_iter().find(|s| s.name() == name)
+    }
+
+    /// The source a repository's `tickets` (repos.json) gives when none
+    /// is chosen: its GitHub issues for `github`, else the note, until
+    /// there is a source for Linear.
+    pub fn of_tickets(tickets: Option<&str>) -> Sources {
+        if tickets == Some("github") {
+            Sources::Issues
+        } else {
+            Sources::Note
+        }
+    }
+
+    /// `of_tickets` for the repository whose main clone is `repo`, from
+    /// the files alone (`repos::tickets_known`); the note for none.
+    pub fn of_repo(repo: &Path) -> Sources {
+        let tickets = (!repo.as_os_str().is_empty())
+            .then(|| crate::repos::tickets_known(repo))
+            .flatten();
+        Sources::of_tickets(tickets.as_deref())
     }
 
     /// As the settings box shows it.
@@ -131,19 +150,32 @@ impl Sources {
         match self {
             Sources::Note => "the note",
             Sources::Issues => "GitHub issues",
-            Sources::Both => "the note, then GitHub issues",
         }
     }
 
     /// Whether the note's items are taken.
     pub fn note(self) -> bool {
-        self != Sources::Issues
+        self == Sources::Note
     }
 
     /// Whether GitHub issues are taken.
     pub fn issues(self) -> bool {
-        self != Sources::Note
+        self == Sources::Issues
     }
+}
+
+/// The source the file's object holds, when it holds one chosen: none for
+/// a missing key or anything else (a `"both"` from before).
+fn saved_source(map: &Map<String, Value>) -> Option<Sources> {
+    map.get("sources")
+        .and_then(Value::as_str)
+        .and_then(Sources::parse)
+}
+
+/// Whether the file in `state` holds a source chosen, so one that doesn't
+/// follows the repository it is started on (`Sources::of_repo`).
+pub fn source_saved(state: &Path) -> bool {
+    saved_source(&util::read_json_object(Mode::file(state))).is_some()
 }
 
 /// An item skipped: its note's ID and its first line.
@@ -250,10 +282,12 @@ impl Mode {
                 .map_or(or, |n| n as u32)
         };
         let note_id = text("noteId").unwrap_or_default();
+        let repo: PathBuf = text("repo").map(PathBuf::from).unwrap_or_default();
+        let sources = saved_source(map).unwrap_or_else(|| Sources::of_repo(&repo));
         Mode {
             on: flag("on", d.on),
             note: text("note").unwrap_or_default(),
-            repo: text("repo").map(PathBuf::from).unwrap_or_default(),
+            repo,
             slots: count("slots", d.slots),
             cap: count("cap", d.cap),
             paused: flag("paused", d.paused),
@@ -337,7 +371,7 @@ impl Mode {
                     .collect(),
                 _ => Vec::new(),
             },
-            sources: Sources::parse(&text("sources").unwrap_or_default()),
+            sources,
             issue_label: text("issueLabel")
                 .map(|l| l.trim().to_string())
                 .filter(|l| !l.is_empty())
@@ -440,11 +474,39 @@ impl Mode {
     }
 
     /// Whether GitHub issues may be read and written now: the autopilot,
-    /// autopilot_github_issues and github settings on. Off, issues alone take nothing, and with the
-    /// note too, the note's items alone.
+    /// autopilot_github_issues and github settings on. Off, issues take
+    /// nothing.
     pub fn issues_on(&self) -> bool {
         let on = crate::settings::is_on;
         on("autopilot") && on("autopilot_github_issues") && on("github")
+    }
+
+    /// Whether it works the repository whose main clone is `clone`.
+    pub fn works_in(&self, clone: &Path) -> bool {
+        !self.repo.as_os_str().is_empty()
+            && self
+                .repo
+                .canonicalize()
+                .ok()
+                .is_some_and(|a| Some(a) == clone.canonicalize().ok())
+    }
+
+    /// What `wtn` says refusing to start work from `source` in the
+    /// repository whose main clone is `clone`, while autopilot is on there
+    /// and takes that repository's work from the other source.
+    pub fn refusal(&self, clone: &Path, source: Sources) -> Option<&'static str> {
+        let refused = crate::settings::is_on("autopilot")
+            && self.on
+            && self.sources != source
+            && self.works_in(clone);
+        refused.then_some(match source {
+            Sources::Note => {
+                "Autopilot takes this repository's work from GitHub issues; open an issue with `wtn --issue <number>`, or switch the source to the note in autopilot's settings"
+            }
+            Sources::Issues => {
+                "Autopilot takes this repository's work from the note; add the work to its checklist, or switch the source to GitHub issues in autopilot's settings"
+            }
+        })
     }
 
     /// Whether it is set up to work a note.
@@ -704,16 +766,37 @@ mod tests {
         let dir = temp("sources");
         assert_eq!(Mode::read(&dir).sources, Sources::Note);
         assert_eq!(Mode::read(&dir).issue_label, ISSUE_LABEL);
+        assert!(!source_saved(&dir), "none chosen yet");
+        fs::write(Mode::file(&dir), r#"{"sources":"both"}"#).unwrap();
+        assert!(!source_saved(&dir), "both at once is no choice now");
         Mode::update(&dir, |m| {
-            m.sources = Sources::Both;
+            m.sources = Sources::Issues;
             m.issue_label = "ready".into();
         })
         .unwrap();
         let mode = Mode::read(&dir);
-        assert_eq!(mode.sources, Sources::Both);
+        assert_eq!(mode.sources, Sources::Issues);
+        assert!(source_saved(&dir));
         assert_eq!(mode.issue_label, "ready");
-        assert_eq!(Sources::parse("odd"), Sources::Note);
+        assert_eq!(Sources::parse("odd"), None);
+        // Both at once is no longer a source: it follows the tickets as a
+        // missing one does.
+        assert_eq!(Sources::parse("both"), None);
+        let both = serde_json::json!({ "sources": "both" });
+        assert_eq!(
+            Mode::from_map(both.as_object().unwrap()).sources,
+            Sources::Note,
+            "no repository, so no tickets"
+        );
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_repository_keeping_its_work_in_github_issues_defaults_to_them() {
+        assert_eq!(Sources::of_tickets(Some("github")), Sources::Issues);
+        assert_eq!(Sources::of_tickets(Some("linear")), Sources::Note);
+        assert_eq!(Sources::of_tickets(Some("notes")), Sources::Note);
+        assert_eq!(Sources::of_tickets(None), Sources::Note);
     }
 
     #[test]

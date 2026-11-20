@@ -51,6 +51,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
+use crate::autopilot::mode::{Mode, Sources};
 use crate::notes::id;
 use crate::paths;
 use crate::worktree::{self, Given, Purpose};
@@ -1325,8 +1326,22 @@ fn linear_ticket(given: &Given, rest: &Given, ticket: String) -> Result<ExitCode
     Ok(super::worktree_from_ticket::main(args))
 }
 
+/// Refuses work from `source` in this clone's repository while autopilot is
+/// on there and takes its work from the other source, so the two never
+/// both feed it.
+pub fn refused_by_source(source: Sources) -> Result<(), String> {
+    let root = worktree::repo_root().map_err(|e| e.to_string())?;
+    let refusal = super::work::main_clone(&root)
+        .and_then(|clone| Mode::read(&paths::state_dir()).refusal(&clone, source));
+    match refusal {
+        Some(why) => Err(why.to_string()),
+        None => Ok(()),
+    }
+}
+
 /// `made` is set once the item's worktree is made, which claims it.
 fn run(given: &Given, note: &str, item: &str, made: &mut bool) -> Result<ExitCode, String> {
+    refused_by_source(Sources::Note)?;
     let target = given
         .positional
         .first()
