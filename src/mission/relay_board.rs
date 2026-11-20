@@ -157,15 +157,23 @@ pub(crate) fn items_of(
     // more marked notified.
     let notified = sent.iter().filter(|s| s.notified).count();
     let posted = sent.iter().filter(|s| !s.notified).count();
+    let chat = crate::relay::chat::Kind::from_setting(
+        all.iter()
+            .find(|o| o.key == crate::relay::chat::SETTING)
+            .map(|o| &o.value),
+    );
     let status = match running {
         Some(r) => Item::new(STATUS, "Running")
             .detail(match &r.age {
-                Some(age) => format!("in tab {}, for {age}", r.tab),
-                None => format!("in tab {}", r.tab),
+                Some(age) => format!("in tab {}, for {age}, through {}", r.tab, chat.name()),
+                None => format!("in tab {}, through {}", r.tab, chat.name()),
             })
             .state(State::Active),
         None => Item::new(STATUS, "Not running")
-            .detail("Enter starts it in a tab of its own")
+            .detail(format!(
+                "Enter starts it in a tab of its own, through {}",
+                chat.name()
+            ))
             .state(State::Idle),
     }
     .data(json!({
@@ -222,12 +230,17 @@ pub(crate) fn items_of(
     out
 }
 
-/// With no slack-relay.json naming its owner, the relay's row says it isn't
-/// set up and how to set it up, rather than offering to start it.
-pub fn not_set_up(items: &mut [Item]) {
+/// With no slack-relay.json (or discord-relay.json) naming its owner, the
+/// relay's row says it isn't set up and how to set it up, rather than
+/// offering to start it.
+pub fn not_set_up(items: &mut [Item], chat: crate::relay::chat::Kind) {
     if let Some(status) = items.iter_mut().find(|i| i.id == STATUS) {
         status.title = "Not set up".into();
-        status.detail = "it needs a Slack app and ~/.config/switchboard/slack-relay.json naming you: the guide's \"The Slack relay\" says how".into();
+        status.detail = match chat {
+            crate::relay::chat::Kind::Slack => "it needs a Slack app and ~/.config/switchboard/slack-relay.json naming you: the guide's \"The Slack relay\" says how",
+            crate::relay::chat::Kind::Discord => "it needs a Discord bot and ~/.config/switchboard/discord-relay.json naming you: the guide's \"Through Discord\" says how",
+        }
+        .into();
         status.data["set_up"] = json!(false);
     }
 }
@@ -1011,7 +1024,7 @@ mod tests {
         assert!(all.contains("default Thread only"), "{all}");
         assert!(all.contains("Not running"));
         let mut unset = items_of(&settings::schema(), &[], None);
-        not_set_up(&mut unset);
+        not_set_up(&mut unset, crate::relay::chat::Kind::Slack);
         assert_eq!(unset[0].title, "Not set up");
         assert!(unset[0].detail.contains("slack-relay.json"));
     }

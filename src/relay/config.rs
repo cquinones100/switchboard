@@ -59,6 +59,8 @@ pub struct Paths {
     pub switchboard_state: PathBuf,
     /// The notes directory, for the Autopilot form's notes.
     pub notes: PathBuf,
+    /// The chat the relay talks through, whose state is its own.
+    pub chat: super::chat::Kind,
 }
 
 impl Paths {
@@ -75,6 +77,7 @@ impl Paths {
             ],
             switchboard_state: switchboard_state.to_path_buf(),
             notes: home.join("Notes"),
+            chat: super::chat::Kind::Slack,
         }
     }
 
@@ -82,16 +85,31 @@ impl Paths {
     pub fn current() -> Paths {
         Paths {
             notes: crate::cmd::worktree_from_note::notes_dir(),
+            chat: super::chat::Kind::current(),
             ..Paths::under(&crate::paths::home(), &crate::paths::state_dir())
         }
     }
 
+    /// Whose relay this is, for the chat it talks through.
     pub fn config_file(&self) -> PathBuf {
-        self.home.join(CONFIG_NAME)
+        match self.chat {
+            super::chat::Kind::Slack => self.home.join(CONFIG_NAME),
+            super::chat::Kind::Discord => self.home.join(super::discord::CONFIG_NAME),
+        }
     }
 
+    /// What the relay keeps between runs, each chat's apart, so switching
+    /// keeps the other's threads.
     pub fn state_file(&self) -> PathBuf {
-        self.state_dir.join("state.json")
+        match self.chat {
+            super::chat::Kind::Slack => self.state_dir.join("state.json"),
+            super::chat::Kind::Discord => self.state_dir.join("discord-state.json"),
+        }
+    }
+
+    /// Discord's own: each message's thread, and what its buttons stand for.
+    pub fn discord_file(&self) -> PathBuf {
+        self.state_dir.join("discord.json")
     }
 
     pub fn log_file(&self) -> PathBuf {

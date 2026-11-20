@@ -814,7 +814,7 @@ pub struct Press {
 }
 
 /// What the Home tab's buttons may do, and a tab screen's.
-const HOME_ACTIONS: &[&str] = &[
+pub const HOME_ACTIONS: &[&str] = &[
     "open",
     "refresh",
     "new",
@@ -825,7 +825,7 @@ const HOME_ACTIONS: &[&str] = &[
     "home-opt",
     "home-dialog",
 ];
-const SCREEN_ACTIONS: &[&str] = &[
+pub const SCREEN_ACTIONS: &[&str] = &[
     "screen-message",
     "screen-skill",
     "screen-opt",

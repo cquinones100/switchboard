@@ -121,7 +121,11 @@ pub fn start(server: &Server, paths: &Paths) -> Result<String, String> {
     }
     let dir = crate::paths::home();
     let (tab, pane) = server
-        .new_tab(&dir, Some("Slack relay"), Some(&tab_command()))
+        .new_tab(
+            &dir,
+            Some(&format!("{} relay", super::chat::Kind::current().name())),
+            Some(&tab_command()),
+        )
         .map_err(|e| e.to_string())?;
     let _ = server.set_option(&tab, "@slack_relay", Some("1"));
     let _ = server.set_option(&pane, "@slack_relay", Some("1"));

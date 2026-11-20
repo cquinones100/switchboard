@@ -17,7 +17,8 @@
 //! turns this on, which say where the rest are; what decides the code that
 //! runs here with no one asked, so a pull never does (`trusted-dirs`,
 //! `repos.json`, whose commands a landing runs, and `sidebar-plugins/`,
-//! whose programs the server runs); `slack-relay.json`, which names the one
+//! whose programs the server runs); `slack-relay.json` and
+//! `discord-relay.json`, which name the one
 //! person the relay answers to; `secrets.json`, `linear.json` (it may hold
 //! your Linear key) and `leak-check.txt`, which hold what must not be
 //! published; the files Claude's skills read by their path in
@@ -84,6 +85,7 @@ pub const LOCAL: &[&str] = &[
     "leak-check.txt",
     "repos.json",
     "slack-relay.json",
+    "discord-relay.json",
     "sidebar-plugins",
     "linear.json",
     "oncall.json",
@@ -961,6 +963,7 @@ mod tests {
             "leak-check.txt",
             "repos.json",
             "slack-relay.json",
+            "discord-relay.json",
             "sidebar-plugins",
             "linear.json",
             "oncall.json",

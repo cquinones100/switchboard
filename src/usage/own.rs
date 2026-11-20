@@ -192,6 +192,16 @@ pub const OWN_FILES: &[OwnFile] = &[
         )],
     },
     OwnFile {
+        file: "discord-relay.json",
+        category: "Slack relay (discord-relay.json)",
+        rows: &[row(
+            "owner",
+            "Your Discord user ID",
+            Kind::Text,
+            "Your Discord user ID, the one person the relay takes messages from while Settings' Relay through is Discord; read when the relay starts",
+        )],
+    },
+    OwnFile {
         file: "oncall.json",
         category: "On call (oncall.json)",
         rows: &[
@@ -315,7 +325,7 @@ pub const OWN_FILES: &[OwnFile] = &[
                 "repo",
                 "Repository",
                 Kind::Text,
-                "The git repository your files are kept in, its URL as git clone takes it, read while Settings' \"Your files from a git repository\" is on: cloned into ~/.local/share/switchboard/files, pulled every ten minutes and pushed as your files change. This file, trusted-dirs, repos.json, sidebar-plugins, slack-relay.json, linear.json, oncall.json, oncall-rules.md, slack-updates.json, autopilot-claim.json, secrets.json and leak-check.txt stay on this computer",
+                "The git repository your files are kept in, its URL as git clone takes it, read while Settings' \"Your files from a git repository\" is on: cloned into ~/.local/share/switchboard/files, pulled every ten minutes and pushed as your files change. This file, trusted-dirs, repos.json, sidebar-plugins, slack-relay.json, discord-relay.json, linear.json, oncall.json, oncall-rules.md, slack-updates.json, autopilot-claim.json, secrets.json and leak-check.txt stay on this computer",
             ),
             row(
                 "dir",
