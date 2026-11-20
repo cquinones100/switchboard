@@ -8779,7 +8779,7 @@ mod tests {
       "chapters": [
         {"chapter": "Signups map", "kind": "main", "pages": [
             {"id": "c1", "title": "Store each outline", "claim": "Outlines are stored once, not fetched on each view.",
-             "why": "The map needs outlines kept. Each is simplified.", "decided": "Store each outline once.",
+             "how": "store_outline keeps each ZIP's outline; the page reads it back.", "why": "The map needs outlines kept. Each is simplified.", "decided": "Store each outline once.",
              "instead": "of fetching it on each view: too slow.", "watch": "An outline of no points.", "goal": false, "needs": [],
              "hunks": [{"id": "src/store.rs#1", "note": "The store."}], "files": []},
             {"id": "c2", "title": "Count the signups", "why": "The map shows counts. They are folded.", "watch": "", "goal": false, "needs": ["c1"],
@@ -8895,11 +8895,22 @@ mod tests {
         assert!(shown[row("The event page lists signups")].contains("──▶"));
         assert!(shown[row("The event page lists signups")].contains("A map shows signups"));
         // How it gets there: the first chapter's pages in reading order,
-        // each with its why's first sentence.
+        // each with a How row and a Why row of its why's first sentence.
         assert!(row("WHAT CHANGES") < row("HOW IT GETS THERE"));
         assert!(row("1  Store each outline") < row("2  Count the signups"));
         assert!(row("3  Draw the topics") < row("4  Wire the page"));
-        assert!(row("The map needs outlines kept.") == row("1  Store each outline") + 1);
+        assert_eq!(
+            row("   How  store_outline keeps each ZIP's outline"),
+            row("1  Store each outline") + 1
+        );
+        assert_eq!(
+            row("   Why  The map needs outlines kept."),
+            row("1  Store each outline") + 2
+        );
+        assert!(
+            !shown.iter().any(|l| l.contains("Tested")),
+            "no page only tests"
+        );
         assert!(!shown.iter().any(|l| l.contains("Each is simplified")));
         assert!(shown[row("Also in this change: Side work")].contains("format the helpers"));
         assert!(
@@ -8945,6 +8956,10 @@ mod tests {
             shown[6]
         );
         assert!(shown[7].contains("Outlines are stored once, not fetched on each view."));
+        assert!(
+            shown[8]
+                .contains("How  store_outline keeps each ZIP's outline; the page reads it back.")
+        );
         let row = |text: &str| line_with(&shown, text);
         assert!(row("Decided  Store each outline once.") < row("Instead  of fetching it"));
         assert!(row("Instead  of fetching it") < row("Watch    An outline of no points."));
@@ -9378,7 +9393,7 @@ mod tests {
     fn a_story_told_before_what_changes_was_asked_for_still_opens() {
         let old = MAP_ANSWER
             .replace(r#""before": "The event page lists signups as a table.", "after": "A map shows signups by ZIP code.","#, "")
-            .replace(r#""claim": "Outlines are stored once, not fetched on each view.","#, "");
+            .replace(r#""how": "store_outline keeps each ZIP's outline; the page reads it back.", "#, "");
         let old = &old[..old
             .find(
                 r#",
@@ -9401,10 +9416,46 @@ mod tests {
                 .any(|l| l.contains("told before the diff said what changes"))
         );
         assert!(!shown.iter().any(|l| l.contains("WHAT RUNS")));
+        // A page told without a how shows its claim as its How.
+        let how = line_with(&shown, "   How  Outlines are stored once");
+        assert_eq!(how, line_with(&shown, "1  Store each outline") + 1);
+        assert!(!shown.iter().any(|l| l.contains("store_outline keeps")));
         // A page with no claim reads its why in its place.
-        app.go_to_section(1);
+        app.go_to_section(2);
         let shown = screen(&mut app);
-        assert!(shown[1].contains("The map needs outlines kept."));
+        assert!(shown[1].contains("The map shows counts."), "{shown:#?}");
+    }
+
+    #[test]
+    fn the_pages_that_only_test_fold_into_one_tested_row() {
+        let answer = MAP_ANSWER
+            .replace(
+                r#"{"id": "src/count.rs#1", "note": "The count."}, {"id": "src/count.test.rs#1", "note": ""}"#,
+                r#"{"id": "src/count.rs#1", "note": "The count."}"#,
+            )
+            .replace(
+                r#"{"id": "c3", "title": "Draw the topics""#,
+                r#"{"id": "c6", "title": "Test the count", "how": "counts() asserts it.", "why": "Tests check it.", "watch": "", "goal": false, "needs": ["c2"],
+             "hunks": [{"id": "src/count.test.rs#1", "note": ""}], "files": []},
+            {"id": "c3", "title": "Draw the topics""#,
+            );
+        let mut app = map_app_told(
+            Options {
+                ux2: true,
+                ..opts()
+            },
+            &answer,
+        );
+        let shown = screen(&mut app);
+        let row = |text: &str| line_with(&shown, text);
+        // No step of its own, the outline still listing it.
+        assert!(
+            !shown
+                .iter()
+                .any(|l| l.contains("3  Test the count") || l.contains("counts() asserts"))
+        );
+        assert!(row("5  Wire the page") < row("Tested  the count (3)"));
+        assert!(row("Tested  the count (3)") < row("Also in this change: Side work"));
     }
 
     #[test]

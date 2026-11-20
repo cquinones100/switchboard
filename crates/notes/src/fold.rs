@@ -110,6 +110,12 @@ impl Folds {
             .collect();
     }
 
+    /// The closed sections carried across lines moved, each heading to
+    /// the row `to` gives its own.
+    pub fn moved(&mut self, to: impl Fn(usize) -> usize) {
+        self.closed = self.closed.iter().map(|&r| to(r)).collect();
+    }
+
     /// `zR`: every section open.
     pub fn open_all(&mut self) {
         self.closed.clear();

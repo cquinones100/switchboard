@@ -1,10 +1,12 @@
 //! What the tab bar knows about each directory, and the lookups behind it:
 //! tmux/path-facts.sh's answer per directory (its color, its label with no
 //! name set, its PR), tmux/window-pr.sh's PR per repository and branch, and
-//! tmux/ticket-title.sh's title per ticket, kept in memory by the server,
-//! and the PRs and titles found in one file under `~/.cache` (`saved`,
-//! `restore`), as the scripts kept them in files there, so a restart shows
-//! them at once rather than asking GitHub and Linear again for every tab.
+//! tmux/ticket-title.sh's title per ticket (and, for a branch `wtn --issue`
+//! started, its GitHub issue's title, under the issue's reference), kept in
+//! memory by the server, and the PRs and titles found in one file under
+//! `~/.cache` (`saved`, `restore`), as the scripts kept them in files
+//! there, so a restart shows them at once rather than asking GitHub and
+//! Linear again for every tab.
 //!
 //! A branch's PR is looked for where `github::branch_pr` looks: in origin
 //! and, in a fork's clone, the project its `upstream` remote names, so a PR
@@ -29,9 +31,11 @@
 //! still says which PR is its, so the board never names one itself.
 //!
 //! How long each lookup's answer holds is the scripts' own: a PR found, or a
-//! title, for a day; no such ticket for an hour, since
-//! that is usually a branch that only looks like it names one. No PR holds
-//! five minutes, where the scripts' held one, since a branch with none was
+//! title, for a day (an issue's title ten minutes, so its tab follows it as
+//! it is edited on GitHub, within twenty once its branch has a PR, whose
+//! directory's answer itself holds ten); no such ticket for an hour,
+//! since that is usually a branch that only looks like it names one. No PR
+//! holds five minutes, where the scripts' held one, since a branch with none was
 //! asked about every minute a tab, which added up to hundreds of GitHub's
 //! requests an hour; the PR board finds a new one sooner. A lookup that
 //! fails (no network, no token, a rate limit) keeps what was known and is
@@ -61,6 +65,9 @@ const PR_MISSING: Duration = Duration::from_secs(300);
 /// (ticket-title.sh).
 const TITLE_FOUND: Duration = Duration::from_secs(24 * 3600);
 const TITLE_MISSING: Duration = Duration::from_secs(3600);
+/// How long a GitHub issue's title holds, shorter than a ticket's, since
+/// the tab working on it follows its title as it changes.
+const ISSUE_TITLE_FOUND: Duration = Duration::from_secs(600);
 /// When a lookup that failed is tried again.
 const RETRY: Duration = Duration::from_secs(60);
 /// A lookup not answered in this long is taken as lost and asked again, as
@@ -241,28 +248,20 @@ impl Ask {
                 }
             }
             Ask::Title { id } => {
-                let found = match Ticket::parse(&id) {
-                    Some(Ticket::Issue { repo, number }) => issue_title(&repo, number).await,
-                    _ => linear::ticket(&id, "tab name: ticket title")
+                let found = match crate::autopilot::issues::parse_reference(&id) {
+                    Some((repo, number)) => {
+                        github::issue_title(&repo, number, "tab name: issue title").await
+                    }
+                    None => linear::ticket(&id, "tab name: ticket title")
                         .await
                         .map(|t| t.map(|t| t.title)),
+                };
+                Answer::Title {
+                    id,
+                    found: found.map_err(|e| e.to_string()),
                 }
-                .map_err(|e| e.to_string());
-                Answer::Title { id, found }
             }
         }
-    }
-}
-
-/// A GitHub issue's title, `None` when GitHub has no such issue (or the
-/// number is a pull request's).
-async fn issue_title(repo: &Repo, number: u64) -> anyhow::Result<Option<String>> {
-    let path = format!("/repos/{repo}/issues/{number}");
-    match github::rest("GET", &path, None, "tab name: issue title").await {
-        Ok(issue) if issue.get("pull_request").is_some_and(|p| !p.is_null()) => Ok(None),
-        Ok(issue) => Ok(issue["title"].as_str().map(str::to_string)),
-        Err(e) if net::kind_of(&e) == Some(&net::ErrorKind::NotFound) => Ok(None),
-        Err(e) => Err(e),
     }
 }
 
@@ -354,10 +353,12 @@ impl Names {
         let color = color::tab_color(tint, switches.shade);
         let window = color::window_name(&name, place);
 
-        // The issue the branch was started for, else the Linear ticket it
-        // names, any team key: a branch that only looks like a ticket is
-        // harmless, Linear having no such ticket, and the name is used as
-        // usual.
+        // The issue the branch was started for (`wtn --issue`'s
+        // `branch.<branch>.wtnIssue`, else an `issue/<n>-` branch of
+        // origin's), its title asked for under its reference
+        // (`<owner>/<repo>#<n>`); else the Linear ticket it names, any team
+        // key: a branch that only looks like a ticket is harmless, Linear
+        // having no such ticket, and the name is used as usual.
         let ticket = place
             .filter(|p| p.on_branch())
             .map(|p| {
@@ -369,20 +370,16 @@ impl Names {
             .unwrap_or_default()
             .into_iter()
             .find(|t| switches.tickets_of(t.service()));
-        let title = ticket.as_ref().and_then(|t| {
-            let id = t.arg();
-            let known = self.titles.entry(id.clone()).or_insert(Known {
-                value: None,
-                next: now,
-                asked: None,
-            });
-            if known.due(now) {
-                asks.push(Ask::Title { id });
+        let title = ticket
+            .as_ref()
+            .and_then(|t| self.title_of(&t.arg(), now, asks));
+        let label = match (&ticket, &title) {
+            (Some(Ticket::Issue { number, .. }), Some(title)) => label::issue_label(*number, title),
+            (Some(t), title) => {
+                label::facts_label(&window, Some(t.short()).as_deref().zip(title.as_deref()))
             }
-            known.value.clone()
-        });
-        let short = ticket.as_ref().map(Ticket::short);
-        let label = label::facts_label(&window, short.as_deref().zip(title.as_deref()));
+            (None, _) => label::facts_label(&window, None),
+        };
 
         // A `wtpr` worktree carries its number in its directory's name, which
         // needs no lookup, its repository its origin. In a fork's clone it
@@ -418,6 +415,20 @@ impl Names {
             // that only looks like a ticket names none.
             ticket: ticket.filter(|_| title.is_some()),
         }
+    }
+
+    /// The title of a Linear ticket or a GitHub issue (`id`, its reference)
+    /// as last found, asking for it in the background when it is due.
+    fn title_of(&mut self, id: &str, now: Instant, asks: &mut Vec<Ask>) -> Option<String> {
+        let known = self.titles.entry(id.to_string()).or_insert(Known {
+            value: None,
+            next: now,
+            asked: None,
+        });
+        if known.due(now) {
+            asks.push(Ask::Title { id: id.to_string() });
+        }
+        known.value.clone()
     }
 
     /// The PR of the branch `place` is on, as last found, asking for it in
@@ -485,12 +496,19 @@ impl Names {
                 take(known, found, now, PR_FOUND, PR_MISSING)
             }
             Answer::Title { id, found } => {
+                // An issue's title is asked again sooner, so a tab follows
+                // its title as it is edited on GitHub.
+                let found_for = if crate::autopilot::issues::parse_reference(&id).is_some() {
+                    ISSUE_TITLE_FOUND
+                } else {
+                    TITLE_FOUND
+                };
                 let known = self.titles.entry(id).or_insert(Known {
                     value: None,
                     next: now,
                     asked: None,
                 });
-                take(known, found, now, TITLE_FOUND, TITLE_MISSING)
+                take(known, found, now, found_for, TITLE_MISSING)
             }
         };
         if changed {
@@ -864,6 +882,64 @@ mod tests {
         assert_eq!(facts.ticket, None);
         assert_eq!(facts.label, "app:issue/12-fix-login");
         assert!(asks.is_empty());
+    }
+
+    #[test]
+    fn an_issue_branch_is_named_for_its_issue_and_follows_its_title() {
+        let scratch = Scratch::new("issue");
+        let dir = scratch.0.join("app");
+        if !repo(&dir) {
+            eprintln!("skipped: no git");
+            return;
+        }
+        let branch = "issue/12-eng-4-make-it-blue";
+        assert!(git(&dir, &["checkout", "-q", "-b", branch]));
+        let key = format!("branch.{branch}.wtnIssue");
+        assert!(git(&dir, &["config", &key, "acme/app#12"]));
+        let (mut names, now) = names(Switches::default());
+
+        // Its title asked for under its reference, and no Linear ticket for
+        // what only looks like one.
+        let (facts, asks) = names.facts(&dir, now);
+        assert_eq!(facts.label, "app:issue/12-eng-4-make-it-blue");
+        assert_eq!(
+            asks[0],
+            Ask::Title {
+                id: "acme/app#12".into()
+            }
+        );
+        assert!(!asks.contains(&Ask::Title { id: "ENG-4".into() }));
+
+        let title = |t: &str| Answer::Title {
+            id: "acme/app#12".into(),
+            found: Ok(Some(t.into())),
+        };
+        assert!(names.answer(title("FEAT: Make it blue"), now));
+        assert_eq!(names.facts(&dir, now).0.label, "#12: Make it blue");
+
+        // Asked again within minutes, not a day, and renamed when it changed.
+        let soon = now + ISSUE_TITLE_FOUND + Duration::from_secs(1);
+        let asks = names.facts(&dir, soon + FACTS_FOUND).1;
+        assert!(asks.contains(&Ask::Title {
+            id: "acme/app#12".into()
+        }));
+        assert!(names.answer(title("BUG: Make it green"), soon));
+        assert_eq!(names.facts(&dir, soon).0.label, "#12: Make it green");
+
+        // With GitHub off, no issue is asked about.
+        let (mut off, now) = names_with_github_off();
+        let asks = off.facts(&dir, now).1;
+        assert!(
+            asks.iter()
+                .all(|a| !matches!(a, Ask::Title { id } if id.contains('#')))
+        );
+    }
+
+    fn names_with_github_off() -> (Names, Instant) {
+        names(Switches {
+            github: false,
+            ..Switches::default()
+        })
     }
 
     #[test]

@@ -25,6 +25,12 @@
 //! worktree is made (`issues::claim`), and another computer's claim that
 //! holds refuses the start, which fails as a lookup does, the queue passing
 //! over the issue while the claim holds.
+//!
+//! Nothing here names the tab: the tab bar names a directory whose branch
+//! records an issue (`wtnIssue`) `<number>: <title>`, the title as GitHub
+//! has it now with a leading `FEAT: ` or `BUG: ` left out
+//! (src/tabs/names.rs), so a tab started by any of these ways is named the
+//! same, follows the title as it changes, and a name given by hand wins.
 
 use std::path::Path;
 use std::process::ExitCode;
