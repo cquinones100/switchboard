@@ -69,6 +69,8 @@
 //! watch                                  every Claude tab's state and last
 //!                                        turn, a JSON line each time they
 //!                                        change, until it hangs up
+//! phone-pair <device>                    a box asking for the code the
+//!                                        phone shows, which pairs it
 //! tip <name> | tip seen <name> | tip reset
 //!                                        a tip, once; marked shown; all again
 //! hook <event> [--parked pids]           from `switchboard hook`, its JSON on
@@ -120,6 +122,7 @@ pub const NAMES: &[&str] = &[
     "prompt",
     "answer",
     "watch",
+    "phone-pair",
     "ready",
     "tip",
     "press",
@@ -225,6 +228,10 @@ pub const USAGE: &[(&str, &str)] = &[
     (
         "watch",
         "watch: every Claude tab's state, last turn and waiting prompt, a line of JSON now and each time they change, until the reader hangs up",
+    ),
+    (
+        "phone-pair",
+        "phone-pair <device>: from switchboard phone, a box asking you to type the code the phone app shows on <device>, which pairs it; Esc refuses it",
     ),
     (
         "ready",
@@ -514,6 +521,10 @@ impl Server {
             // Asked alone, it is answered by `Server::handle` keeping its
             // connection.
             "watch" => Err("watch takes nothing".into()),
+            "phone-pair" => match rest.first() {
+                Some(device) => self.phone_pair_ask(device),
+                None => Err("phone-pair takes the device asking".into()),
+            },
             "ready" => Args::parse(rest, "t").and_then(|a| {
                 let tab = self.tab_from(&a, caller)?;
                 let what = a.rest.join(" ");

@@ -37,6 +37,9 @@ pub enum Kind {
     /// `path`, else the local file), picked from a menu, the file or
     /// repository typed in.
     Rules,
+    /// The phones paired with the phone app (src/phone), each unpaired from
+    /// a menu.
+    Phones,
 }
 
 impl Kind {
@@ -49,6 +52,7 @@ impl Kind {
             Kind::Profile => "profile",
             Kind::File => "file",
             Kind::Rules => "rules",
+            Kind::Phones => "phones",
         }
     }
 }
@@ -192,6 +196,37 @@ pub const OWN_FILES: &[OwnFile] = &[
         )],
     },
     OwnFile {
+        file: "phone.json",
+        category: "Phone app (phone.json)",
+        rows: &[
+            row(
+                "owner",
+                "Your Tailscale login",
+                Kind::Text,
+                "The one person the phone app answers: a device signed in to Tailscale as anyone else is refused; read when the app starts",
+            ),
+            row(
+                "devices",
+                "Devices allowed",
+                Kind::List,
+                "The Tailscale names of the devices that may pair with the phone app; any other is refused",
+            ),
+            number(
+                "port",
+                "Port",
+                1,
+                "The port the phone app serves on, on your tailnet addresses alone (8443 when not set)",
+            ),
+            Row {
+                key: None,
+                label: "Paired phones",
+                kind: Kind::Phones,
+                min: None,
+                detail: "The phones paired with the phone app; Enter unpairs one, which it then has to pair again",
+            },
+        ],
+    },
+    OwnFile {
         file: "oncall.json",
         category: "On call (oncall.json)",
         rows: &[
@@ -315,7 +350,7 @@ pub const OWN_FILES: &[OwnFile] = &[
                 "repo",
                 "Repository",
                 Kind::Text,
-                "The git repository your files are kept in, its URL as git clone takes it, read while Settings' \"Your files from a git repository\" is on: cloned into ~/.local/share/switchboard/files, pulled every ten minutes and pushed as your files change. This file, trusted-dirs, repos.json, sidebar-plugins, slack-relay.json, linear.json, oncall.json, oncall-rules.md, slack-updates.json, autopilot-claim.json, secrets.json and leak-check.txt stay on this computer",
+                "The git repository your files are kept in, its URL as git clone takes it, read while Settings' \"Your files from a git repository\" is on: cloned into ~/.local/share/switchboard/files, pulled every ten minutes and pushed as your files change. This file, trusted-dirs, repos.json, sidebar-plugins, slack-relay.json, linear.json, oncall.json, oncall-rules.md, slack-updates.json, autopilot-claim.json, phone.json, secrets.json and leak-check.txt stay on this computer",
             ),
             row(
                 "dir",
@@ -856,7 +891,23 @@ fn items_with(dir: &Path, profiles: &Option<Vec<Profile>>) -> Vec<Item> {
                     short_of(r.kind, value, exists, profiles)
                 };
                 let active = !typed.is_empty() || (r.kind == Kind::File && exists);
-                let (detail, short, typed, active) = if r.kind == Kind::Rules && broken.is_none() {
+                let (detail, short, typed, active) = if r.kind == Kind::Phones {
+                    let paired: Vec<String> = crate::phone::pairing::devices()
+                        .into_iter()
+                        .map(|d| d.device)
+                        .collect();
+                    let short = match paired.len() {
+                        0 => "none".to_string(),
+                        n => format!("{n} paired"),
+                    };
+                    let words = paired.join(", ");
+                    let detail = if words.is_empty() {
+                        r.detail.to_string()
+                    } else {
+                        format!("{}: {words}", r.detail)
+                    };
+                    (detail, short, words, !paired.is_empty())
+                } else if r.kind == Kind::Rules && broken.is_none() {
                     let (kind, words) = rules_source(dir, &data);
                     (
                         format!("{}: {words}", r.detail),

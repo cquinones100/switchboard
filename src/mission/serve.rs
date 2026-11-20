@@ -6343,11 +6343,42 @@ impl Server {
             "profile" => own::Kind::Profile,
             "file" => own::Kind::File,
             "rules" => own::Kind::Rules,
+            "phones" => own::Kind::Phones,
             _ => own::Kind::Text,
         };
         let dir = own::dir_of(&file);
         match kind {
             own::Kind::Rules => self.change_rules(client, dir),
+            own::Kind::Phones => {
+                let devices: Vec<String> = crate::phone::pairing::devices()
+                    .into_iter()
+                    .map(|d| d.device)
+                    .collect();
+                if devices.is_empty() {
+                    m.note = Some("No phone is paired.".into());
+                    return;
+                }
+                let options = devices
+                    .iter()
+                    .map(|d| MenuOption::new(format!("Unpair {d}")))
+                    .collect();
+                self.choose(
+                    client,
+                    Menu::new(label, options),
+                    move |server, client, chose| {
+                        let Some(device) = chose.and_then(|i| devices.get(i)) else {
+                            return;
+                        };
+                        let said = match crate::phone::pairing::revoke(device) {
+                            Ok(true) => format!("{device} is no longer paired."),
+                            Ok(false) => format!("{device} wasn't paired."),
+                            Err(e) => format!("Couldn't unpair {device}: {e}"),
+                        };
+                        server.mission.own = None;
+                        server.mission_note(client, said);
+                    },
+                );
+            }
             own::Kind::Profile => {
                 let Some(profiles) = own::chrome_profiles() else {
                     m.note = Some(

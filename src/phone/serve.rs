@@ -176,6 +176,64 @@ impl Server {
         self.set_notices(SOURCE, items);
     }
 
+    /// `phone-pair`: a box asking you to type the code `device` shows
+    /// (board 168), over the screen of the client used last. A typed code
+    /// rather than a yes, so a stray Enter pairs nothing: Enter with the
+    /// right code pairs it, Esc refuses it.
+    pub(crate) fn phone_pair_ask(&mut self, device: &str) -> Result<Reply, String> {
+        let client = self
+            .latest_client()
+            .ok_or("no workspace is attached to ask in; run switchboard phone pair <code>")?;
+        let ask = crate::mission::ask::Ask::new(
+            "Pair a phone?",
+            format!(
+                "{device}, signed in to Tailscale as you, wants to answer and message your tabs from the phone app. Type the code it shows (Esc refuses):"
+            ),
+        );
+        self.open(
+            client,
+            Box::new(ask),
+            Some(Box::new(move |server: &mut Server, client, outcome| {
+                let said = match outcome {
+                    crate::ui::Outcome::Picked(p) => {
+                        crate::phone::pairing::approve(&p.value, util::now_ms()).words()
+                    }
+                    _ => {
+                        crate::phone::pairing::cancel();
+                        "Refused the phone.".into()
+                    }
+                };
+                server.say(Some(client), &said);
+            })),
+        );
+        Ok(Reply::ok(""))
+    }
+
+    /// M-p's "Open the phone app in its own tab" and "Stop the phone app":
+    /// `switchboard phone start` or `stop`, which say what went wrong in a
+    /// box, run off the server's task as the Slack relay's are.
+    pub fn phone_app(&mut self, start: bool) {
+        let Ok(exe) = std::env::current_exe() else {
+            return;
+        };
+        if tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        let spawned = tokio::process::Command::new(exe)
+            .args(["phone", if start { "start" } else { "stop" }, "--say"])
+            .env("SWITCHBOARD", crate::mux::socket::socket_path())
+            .env_remove("SWITCHBOARD_PANE")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        if let Ok(mut child) = spawned {
+            tokio::spawn(async move {
+                let _ = child.wait().await;
+            });
+        }
+    }
+
     /// A phone notification put away.
     pub(crate) fn phone_dismiss(&mut self, item: &Item) {
         let mut items = self.notices.get(SOURCE).cloned().unwrap_or_default();

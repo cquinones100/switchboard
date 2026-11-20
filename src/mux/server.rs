@@ -3529,6 +3529,8 @@ impl Server {
             Action::Diff(command) => self.diff_command(id, command),
             Action::SlackRelay => self.slack_relay(true),
             Action::StopSlackRelay => self.slack_relay(false),
+            Action::PhoneApp => self.phone_app(true),
+            Action::StopPhoneApp => self.phone_app(false),
             Action::Update(command) => self.update_command(id, command),
             Action::Files(command) => self.files_command(id, command),
             Action::Upgrade => self.latest_asked(id),
