@@ -1411,11 +1411,12 @@ fn a_repository_landing_through_prs_is_worked_on_its_default_branch_alone() {
 /// An autopilot tab whose PR merged (`@autopilot_merged`, which
 /// queue-and-clean sets as its watch sees the merge) counts as landed once
 /// back in the main clone, freeing its slot, and its issue is kept out of
-/// the queue with nothing written on GitHub by the server: the comment and
-/// the claim's release are `switchboard item-done`'s, as for a tab of yours.
+/// the queue, its claim label taken off with no comment and no close:
+/// GitHub closes it by the PR's `Closes #<n>` and the comment is
+/// `switchboard item-done`'s, as for a tab of yours.
 #[cfg(feature = "net")]
 #[test]
-fn a_merged_pr_s_tab_lands_and_leaves_its_issue_to_item_done() {
+fn a_merged_pr_s_tab_lands_and_takes_its_issue_s_claim_label_off() {
     use common::http::{Fake, Reply};
     use switchboard::autopilot::issues;
     let id = "a1b2c3";
@@ -1492,8 +1493,12 @@ fn a_merged_pr_s_tab_lands_and_leaves_its_issue_to_item_done() {
     wait("the tab marked landed", &server, || {
         first(&server).is_some_and(|t| t["options"]["@autopilot_left"].is_string())
     });
-    wait("the landing kept", &server, || {
-        mode(&server)["landed"][0]["item"] == "First thing"
+    let label = "/repos/acme/widgets/issues/12/labels/autopilot%3A%20working";
+    wait("the claim's label taken off", &server, || {
+        github
+            .seen()
+            .iter()
+            .any(|r| r.method == "DELETE" && r.path() == label)
     });
     let mode = mode(&server);
     assert_eq!(mode["landed"][0]["hash"], "abc1234", "{mode}");
@@ -1506,7 +1511,7 @@ fn a_merged_pr_s_tab_lands_and_leaves_its_issue_to_item_done() {
     let wrote: Vec<String> = github
         .seen()
         .iter()
-        .filter(|r| r.path().starts_with("/repos/acme/widgets/issues/12"))
+        .filter(|r| r.path().starts_with("/repos/acme/widgets/issues/12") && r.method != "DELETE")
         .map(|r| format!("{} {}", r.method, r.path()))
         .collect();
     assert!(wrote.is_empty(), "{wrote:?}");

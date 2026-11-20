@@ -2580,7 +2580,9 @@ impl Server {
         };
         // Only a landing that pushed or merged counts for its issue (a tab merely
         // back in a main clone may have landed nothing). Its comment and
-        // closing are `switchboard item-done`'s, as for a tab of yours.
+        // closing are `switchboard item-done`'s, as for a tab of yours; a
+        // merged PR's issue, which GitHub closes by its `Closes #<n>`, has
+        // its claim's label taken off here too, whatever item-done manages.
         let opts = self
             .tabs
             .get(&m.tab)
@@ -2589,10 +2591,13 @@ impl Server {
         let set = |k: &str| opts.get(k).map(|v| v.trim()).filter(|v| !v.is_empty());
         let issue = set(ISSUE).is_some()
             && (set(AUTOLAND).is_some() || set(PUSHED).is_some() || set(MERGED).is_some());
+        let merged = set(MERGED).and(set(ISSUE)).map(str::to_string);
+        let mut fresh = false;
         let written = Mode::update(&paths::state_dir(), |mode| {
             if mode.landed.iter().any(|l| l.id == landed.id) {
                 return;
             }
+            fresh = true;
             // A landed issue stays out of the queue whatever becomes of its
             // comment and closing (failed, GitHub off), kept among the
             // skipped items, which can take it back.
@@ -2613,6 +2618,9 @@ impl Server {
         match written {
             Ok(mode) => self.autopilot.mode = mode,
             Err(e) => eprintln!("autopilot: couldn't keep the tab that landed: {e}"),
+        }
+        if let Some(issue) = merged.filter(|_| fresh) {
+            self.autopilot_release(&issue, None);
         }
     }
 
