@@ -115,7 +115,12 @@ pub fn manifest() -> Manifest {
             Setting::new("diff_story_map", true)
                 .said(
                     "Open the diff on what changes",
-                    "M-d tells the diff's story in chapters of pages (the goal's chapter, one for each part it can be read without, and the side work) and opens on what changes: before and after in plain words and how and why for each page, an outline of the chapters and pages beside it. Enter reads down one column, each page's claim, what it decided and instead of what, and its changes, tests folded last; What runs shows the steps in the order they happen. The story's map, a box a page and an arrow to what each builds on, is a third view, and the files stay a view of their own (g s, g m and g f, or m), opening in the view used last; off, the story is one list of pages over the files. A story already told is told again the first time either way",
+                    "M-d tells the diff's story in chapters of pages (the goal's chapter, one for each part it can be read without, and the side work) and opens on what changes: before and after in plain words and how and why for each page, an outline of the chapters and pages beside it. Enter reads down one column, each page's claim, what it decided and instead of what, and its changes, tests folded last; What runs shows the steps in the order they happen. The story's map, a box a page and an arrow to what each builds on, is a third view, and the files stay a view of their own (g s, g m and g f, or m), opening in the view used last, or on the talk while diff_story_talk is on; off, the story is one list of pages over the files. A story already told is told again the first time either way",
+                ),
+            Setting::new("diff_story_talk", true)
+                .said(
+                    "Open the diff as a talk",
+                    "With the story in chapters (diff_story_map), M-d opens on the Talk view, first in the views' switch: the change in one sentence and one worked example taken from its own tests, then the flow that example takes, each step, and the code, a zoom at a time (Gist, Flow, Steps, Code; - and + zoom out and in, the left and right arrows go between slides), the example's value shown at every step. With no test giving one, it says so rather than make one up; off, the Talk view is gone and M-d opens as it did",
                 ),
             // A choice of three, which the diff's own settings view, of
             // on/off rows, can't take: set in the workspace's Settings,
