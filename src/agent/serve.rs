@@ -315,6 +315,15 @@ impl Server {
                 };
                 let answer = hands_free::deny_question(&chosen, record);
                 self.record_decided(place, hands_free::Change::Decide(chosen));
+                // A GitHub issue's tab records on the issue only what
+                // changes its plan, the questions marked `[plan]`.
+                if let Some(issue) = self.tab_opt(tab, crate::autopilot::ISSUE) {
+                    let lines = hands_free::plan_choices(payload)
+                        .iter()
+                        .map(|(q, c)| hands_free::decided_line(q, c))
+                        .collect();
+                    self.autopilot_write_decided(&issue, lines);
+                }
                 Some(answer)
             }
             "Stop" if hands_free::sends_back(payload) => {

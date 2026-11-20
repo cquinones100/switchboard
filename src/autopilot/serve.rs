@@ -122,6 +122,28 @@ const REFUSED_SAID: &str = "wtn refused it";
 pub const FAILED: &str = "@autopilot_failed";
 /// What its notification says of an item skipped for failing to start.
 const FAILED_SAID: &str = "its start failed";
+/// After a write on `issue`: the queue's read forgotten, and a failure
+/// added to what the mode says, which the next check shows in the
+/// notifications, whoever is attached by then.
+async fn written_back(issue: &str, done: anyhow::Result<()>) {
+    let said = done.err().map(|e| format!("{WRITE_FAILED}{issue}: {e}"));
+    let _ = tokio::task::spawn_blocking(move || {
+        let state = paths::state_dir();
+        super::issues::forget(&state);
+        if let Some(said) = said {
+            eprintln!("autopilot: {said}");
+            let _ = Mode::update(&state, |m| {
+                m.said = if m.said.is_empty() {
+                    said
+                } else {
+                    format!("{}. {said}", m.said)
+                };
+            });
+        }
+    })
+    .await;
+}
+
 /// A tab of the mode marked with when it landed as `name`, just set to
 /// `value`, is its push (`PUSHED` or `AUTOLAND`) or its PR's merge
 /// (`MERGED`), the first time only.
@@ -189,9 +211,21 @@ fn autopilot_left(
             worktree_from_note::Plan::Review(_)
         )
     };
-    // An issue is held only by a design review (line 0, no note item).
-    let (after, reviews): (Vec<&Item>, Vec<&Item>) =
-        held.iter().partition(|i| i.line != 0 && !on_review(i));
+    // An issue (line 0, no note item) is held by the open issues blocking
+    // it, its item's `after`, or else by a design review.
+    let (after, reviews): (Vec<&Item>, Vec<&Item>) = held
+        .iter()
+        .partition(|i| (i.line != 0 && !on_review(i)) || (i.line == 0 && !i.after.is_empty()));
+    // What an issue waits on, by its item's first line where the queue or
+    // the held have it, so it counts as one autopilot will take.
+    let issue_text = |on: &String| {
+        let prefix = format!("{}: ", on.to_lowercase());
+        queue
+            .iter()
+            .chain(held)
+            .find(|i| i.line == 0 && i.text.to_lowercase().starts_with(&prefix))
+            .map_or_else(|| on.clone(), |i| i.text.clone())
+    };
     let choices = if job.with_choices {
         0
     } else {
@@ -212,7 +246,11 @@ fn autopilot_left(
         after: after
             .into_iter()
             .map(|i| {
-                let on = worktree_from_note::held_by_all(&text, i.line);
+                let on = if i.line == 0 {
+                    i.after.iter().map(issue_text).collect()
+                } else {
+                    worktree_from_note::held_by_all(&text, i.line)
+                };
                 (i.text.clone(), on)
             })
             .filter(|(_, on)| !on.is_empty())
@@ -1720,6 +1758,29 @@ impl Server {
                     },
                 );
             }
+            // A write to GitHub, asked first.
+            Act::Priority(text, to) => {
+                let Some((repo, number)) = super::issues::reference_in(&text) else {
+                    return;
+                };
+                let label = super::issues::priority_label(to);
+                let question = if to == super::issues::HIGHEST {
+                    format!(
+                        "Put {repo}#{number} first among autopilot's issues, labeling it \"{label}\" on GitHub?"
+                    )
+                } else {
+                    format!("Label {repo}#{number} \"{label}\" on GitHub?")
+                };
+                self.ask(
+                    client,
+                    crate::ui::Confirm::new(question),
+                    move |server, client, yes| {
+                        if yes {
+                            server.autopilot_set_priority(client, text, repo, number, to);
+                        }
+                    },
+                );
+            }
             // Asked first too, naming what it decides and what still stops.
             Act::HandsFree => {
                 let (question, list) = line::hands_free_question();
@@ -1735,6 +1796,47 @@ impl Server {
             }
             act => self.autopilot_change(client, act),
         }
+    }
+
+    /// Issue `number` of `repo` given priority `to` on GitHub, off the
+    /// task, and the queue read again once it is: at the highest, its item
+    /// (`text`) put first among the issues, the mode's `next` holding it as
+    /// it holds a note's item put next, and at any other, taken out of it.
+    fn autopilot_set_priority(
+        &mut self,
+        client: ClientId,
+        text: String,
+        repo: crate::integrations::github::Repo,
+        number: u64,
+        to: u8,
+    ) {
+        let reference = format!("{repo}#{number}");
+        self.off_task(
+            client,
+            move || super::issues::wait_for(super::issues::set_priority(&repo, number, to)),
+            move |server, client, done| match done {
+                Ok(()) => {
+                    let named = format!("{reference}: ").to_lowercase();
+                    let written = Mode::update(&paths::state_dir(), |mode| {
+                        mode.next
+                            .retain(|x| !x.text.to_lowercase().starts_with(&named));
+                        if to == super::issues::HIGHEST {
+                            let note = mode.note_id.clone();
+                            mode.next.insert(0, mode::Skipped { note, text });
+                        }
+                    });
+                    match written {
+                        Ok(mode) => server.autopilot.mode = mode,
+                        Err(e) => eprintln!("autopilot: couldn't write its queue: {e}"),
+                    }
+                    super::issues::forget(&paths::state_dir());
+                    server.autopilot.pilot.reset();
+                    server.autopilot_tick();
+                    server.mission_note(client, format!("{reference} is priority {to}"));
+                }
+                Err(e) => server.mission_note(client, format!("Couldn't label {reference}: {e}")),
+            },
+        );
     }
 
     /// What an option of its menu changes in the mode, done and said.
@@ -1806,6 +1908,7 @@ impl Server {
         );
         let failures = self.autopilot.pilot.start_failures(mode, util::now_ms());
         super::view::say_failed_starts(&mut items, &failures);
+        super::view::say_priorities(&mut items, &self.autopilot.pilot.next.priorities);
         items
     }
 
@@ -2520,6 +2623,32 @@ impl Server {
         mode.sources.issues() && mode.issues_on()
     }
 
+    /// A hands-free tab's decisions about the plan of the GitHub issue
+    /// `issue` names (`<owner>/<repo>#<n>`), as `Decided hands-free` lines,
+    /// written to it off the task without asking (`issues::write_decided`),
+    /// only while autopilot takes issues, checked again before each write.
+    /// A failure is said in the notifications.
+    pub(crate) fn autopilot_write_decided(&mut self, issue: &str, lines: Vec<String>) {
+        let Some((repo, number)) = super::issues::parse_reference(issue) else {
+            return;
+        };
+        if lines.is_empty()
+            || !self.autopilot_writes_issues()
+            || tokio::runtime::Handle::try_current().is_err()
+        {
+            return;
+        }
+        let issue = issue.to_string();
+        tokio::spawn(async move {
+            let done = super::issues::write_decided(&repo, number, &lines, || {
+                let mode = Mode::read(&paths::state_dir());
+                mode.sources.issues() && mode.issues_on()
+            })
+            .await;
+            written_back(&issue, done).await;
+        });
+    }
+
     /// A comment on the GitHub issue `issue` names (`<owner>/<repo>#<n>`),
     /// closing it for `close` (GitHub's `state_reason`) when given and its
     /// claim then released, off the task, only while autopilot takes issues:
@@ -2572,22 +2701,7 @@ impl Server {
                     },
                     done => done.map(|_| ()),
                 };
-                let said = done.err().map(|e| format!("{WRITE_FAILED}{issue}: {e}"));
-                let _ = tokio::task::spawn_blocking(move || {
-                    let state = paths::state_dir();
-                    super::issues::forget(&state);
-                    if let Some(said) = said {
-                        eprintln!("autopilot: {said}");
-                        let _ = Mode::update(&state, |m| {
-                            m.said = if m.said.is_empty() {
-                                said
-                            } else {
-                                format!("{}. {said}", m.said)
-                            };
-                        });
-                    }
-                })
-                .await;
+                written_back(&issue, done).await;
             });
         };
         // Stopped, it writes nothing unasked: the tabs still working finish,
@@ -2941,6 +3055,7 @@ impl Server {
                 .collect();
             let text = queue.first().cloned().unwrap_or_default();
             let plans = job.plans(&notes, &state);
+            let priorities = job.priorities(&state);
             let spent = if job.spend_limit > 0.0 {
                 crate::usage::sessions::spent_today(&state, util::now_ms())
             } else {
@@ -2957,6 +3072,7 @@ impl Server {
                 queue,
                 held,
                 plans,
+                priorities,
                 spent,
                 weekly,
                 left,
@@ -3007,6 +3123,7 @@ impl Server {
                 queue,
                 held,
                 plans,
+                priorities,
                 spent,
                 weekly,
                 left,
@@ -3042,12 +3159,14 @@ impl Server {
                     || self.autopilot.pilot.next.queue != queue
                     || self.autopilot.pilot.next.held != held
                     || self.autopilot.pilot.next.plans != plans
+                    || self.autopilot.pilot.next.priorities != priorities
                     || self.autopilot.pilot.next.spent != spent
                     || self.autopilot.pilot.next.weekly != weekly;
                 self.autopilot.pilot.next_read(key, text, util::now_ms());
                 self.autopilot.pilot.next.queue = queue;
                 self.autopilot.pilot.next.held = held;
                 self.autopilot.pilot.next.plans = plans;
+                self.autopilot.pilot.next.priorities = priorities;
                 self.autopilot.pilot.next.spent = spent;
                 self.autopilot.pilot.next.weekly = weekly;
                 self.autopilot.pilot.next.left = left;

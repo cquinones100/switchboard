@@ -36,7 +36,9 @@ use super::server::Server;
 /// (`@resize_keys`, src/extras), a program allowed to pass
 /// kitty's graphics commands to the terminal (`@allow_passthrough`), and the
 /// mouse pointer's shape an app names over its pane (`@pointer`,
-/// crates/ui/src/pointer.rs). They go
+/// crates/ui/src/pointer.rs), and a ticket view's mark and the ticket it
+/// reads (`@ticket_view`, `@ticket_view_id`, which M-l opens), and a link
+/// view's mark and link (`@link_view`, `@link_url`). They go
 /// when the program does: at a respawn, and when a restart brings the pane
 /// back as a shell.
 pub const PROGRAM_MARKS: &[&str] = &[
@@ -47,12 +49,18 @@ pub const PROGRAM_MARKS: &[&str] = &[
     "@allow_passthrough",
     crate::ui::pointer::PANE_OPTION,
     "@resize_keys",
+    crate::views::TICKET_ID,
+    crate::views::TICKET_VIEW,
+    crate::views::LINK_VIEW,
+    crate::views::LINK_URL,
 ];
 
 /// The tab options about the work a tab was doing, which go when it is
-/// handed to other work: its directory and a sealed review's try.
+/// handed to other work: its directory, a sealed review's try, and the
+/// ticket chosen for it.
 pub const HANDED_OVER: &[&str] = &[
     super::server::TAB_DIR,
+    crate::views::TAB_TICKET,
     crate::usage::serve::SEALED_REVIEW,
     crate::usage::serve::SEALED_REVIEW_FETCH,
 ];
@@ -68,6 +76,24 @@ impl Server {
         cwd: Option<PathBuf>,
         command: Option<Vec<String>>,
         kill: bool,
+    ) -> Result<()> {
+        self.respawn(pane, cwd, command, kill, true)
+    }
+
+    /// `respawn_pane` for a view read again in its own place: the program
+    /// replaced, the tab not handed to other work, so what it is about and
+    /// the views beside it stay.
+    pub fn replace_program(&mut self, pane: PaneId, command: Option<Vec<String>>) -> Result<()> {
+        self.respawn(pane, None, command, true, false)
+    }
+
+    fn respawn(
+        &mut self,
+        pane: PaneId,
+        cwd: Option<PathBuf>,
+        command: Option<Vec<String>>,
+        kill: bool,
+        handed_over: bool,
     ) -> Result<()> {
         let slot = self
             .panes
@@ -91,9 +117,50 @@ impl Server {
         // The tab is handed to other work (/wt, /wtn, queue-and-clean's
         // resume): the directory it was about goes with what it was doing.
         // A sealed review's try isn't the new work's either.
-        if let Some(t) = self.tabs.get_mut(&tab) {
+        if handed_over && let Some(t) = self.tabs.get_mut(&tab) {
             for name in HANDED_OVER {
                 t.opts.remove(*name);
+            }
+        }
+        // So does a ticket view beside it, showing the old work's ticket.
+        let views: Vec<PaneId> = self
+            .ticket_views_shown(tab)
+            .into_iter()
+            .filter(|_| handed_over)
+            .filter(|v| *v != pane)
+            // A live view, not a shell a restart brought back in its place.
+            .filter(|v| {
+                self.panes
+                    .get(v)
+                    .is_some_and(|s| s.opts.contains_key(crate::views::TICKET_ID))
+            })
+            .collect();
+        for view in views {
+            // The pane in front stays in front, though closing a view in
+            // another's place gives that place, and the focus, back.
+            // Set as the tab's own pane in front, never by focus_pane, which
+            // would bring a tab in the background to the front.
+            // Its zoom and its last pane stay too, the view's place in them
+            // taken by the pane it stood in for.
+            let before = self
+                .tabs
+                .get(&tab)
+                .map(|t| (t.active, t.last_pane, t.zoomed));
+            let restored = self.parked_of(view);
+            self.kill_pane(view);
+            if let Some((active, last, zoomed)) = before
+                && let Some(t) = self.tabs.get_mut(&tab)
+            {
+                // The view in front gives the front to whichever pane took it.
+                if active != view && self.panes.contains_key(&active) {
+                    t.active = active;
+                }
+                t.last_pane = last.and_then(|l| if l == view { restored } else { Some(l) });
+                let rezoom = t.zoomed != zoomed;
+                t.zoomed = zoomed;
+                if rezoom {
+                    self.relayout(tab);
+                }
             }
         }
         self.agents.restarted(pane);

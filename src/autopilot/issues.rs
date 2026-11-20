@@ -10,7 +10,17 @@
 //! joins the queue as an item of its own (`item_of`), whose first line is
 //! `<owner>/<repo>#<number>: <title>` and whose line is 0, a line no note
 //! item has, which is how the rest tells one apart (`issue_of`); with both
-//! sources the note's items come first, then the issues oldest first.
+//! sources the note's items come first, then the issues by priority, then
+//! oldest first. An issue's priority is its `priority: <n>` label, 1 the
+//! highest to 4, none counting as 3 (`priority_of`); the Autopilot board's
+//! "Move up" and "Move down" change that label (`set_priority`), after a
+//! yes, and "Put next" sets it to 1 and puts the issue first among the
+//! issues, as the mode's `next` puts a note's item first. An issue waits, as `After:` holds a note
+//! item, while an issue its body names on a line `Blocked by #<number>` (or
+//! `Blocked by <owner>/<repo>#<number>`, `blockers_named`), or one GitHub
+//! itself lists as blocking it, is open (`Issue::blocked_by`): the search
+//! gives GitHub's own and the labels, and one more request a read
+//! (`open_of`) asks the state of every issue the bodies name.
 //! `wtn --issue <number>` (src/cmd/worktree_from_issue.rs) opens a tab on
 //! one, on a branch `issue/<number>-<slug>` recorded as the issue's
 //! (`branch.<branch>.wtnIssue`), so an issue with a worktree, or one wtn
@@ -50,6 +60,10 @@
 //! note's words), asked first unless the tab lands without asking; one
 //! naming no issue or PR gets a comment that it is one and stays open,
 //! asked first (src/autopilot/serve.rs).
+//! A hands-free tab's decision about the issue's plan (a question marked
+//! `[plan]`, src/agent/hands_free.rs) is written to it without asking: its
+//! `Decided hands-free` lines appended under the body's `## Decided
+//! hands-free` heading, and a comment naming them (`write_decided`).
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -104,6 +118,69 @@ pub struct Issue {
     /// The claim it carries on GitHub, while it is labeled `WORKING`.
     #[serde(default)]
     pub claim: Option<Claim>,
+    /// Its priority, from its `priority: <n>` label (`priority_of`).
+    #[serde(default = "default_priority")]
+    pub priority: u8,
+    /// The open issues it waits on, as `<owner>/<repo>#<number>`.
+    #[serde(default)]
+    pub blocked_by: Vec<String>,
+}
+
+/// The priority an issue with no priority label counts as, and the
+/// highest and lowest a label gives.
+pub const DEFAULT_PRIORITY: u8 = 3;
+pub const HIGHEST: u8 = 1;
+pub const LOWEST: u8 = 4;
+
+fn default_priority() -> u8 {
+    DEFAULT_PRIORITY
+}
+
+/// The label that gives an issue priority `n`.
+pub fn priority_label(n: u8) -> String {
+    format!("priority: {n}")
+}
+
+// A priority label, as `priority_label` writes it, any case and spacing.
+static PRIORITY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^priority:\s*([1-4])$").unwrap());
+
+/// The priority an issue's labels give it: the highest of its priority
+/// labels, else `DEFAULT_PRIORITY`.
+pub fn priority_of<'a>(labels: impl IntoIterator<Item = &'a str>) -> u8 {
+    labels
+        .into_iter()
+        .filter_map(|l| PRIORITY.captures(l.trim()))
+        .filter_map(|m| m[1].parse().ok())
+        .min()
+        .unwrap_or(DEFAULT_PRIORITY)
+}
+
+// A body's line naming an issue it waits on.
+static BLOCKED_BY: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^blocked by\s+([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)?#(\d+)\.?$").unwrap()
+});
+
+/// The issues a body names on its `Blocked by #<number>` lines (one a
+/// line, `Blocked by <owner>/<repo>#<number>` for another repository's),
+/// as `<owner>/<repo>#<number>`, `repo` being the issue's own; each once.
+/// A number past GitHub's (a 32-bit integer) names no issue and is passed
+/// over, so it can't fail the query that asks their state.
+pub fn blockers_named(repo: &str, body: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in body.lines() {
+        let Some(m) = BLOCKED_BY.captures(line.trim()) else {
+            continue;
+        };
+        if m[2].parse::<i32>().is_err() {
+            continue;
+        }
+        let named = format!("{}#{}", m.get(1).map_or(repo, |r| r.as_str()), &m[2]);
+        if !out.iter().any(|o| o.eq_ignore_ascii_case(&named)) {
+            out.push(named);
+        }
+    }
+    out
 }
 
 /// A computer's claim on an issue, from the newest claim comment of yours
@@ -179,6 +256,12 @@ pub fn parse_reference(text: &str) -> Option<(Repo, u64)> {
     Some((repo, m[2].parse().ok()?))
 }
 
+/// The repository and number of an issue's item, by its first line
+/// (`Issue::text`).
+pub fn reference_in(text: &str) -> Option<(Repo, u64)> {
+    parse_reference(text.split_once(": ")?.0)
+}
+
 /// An issue as GitHub's search answered it, before it is judged.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Found {
@@ -187,6 +270,9 @@ pub struct Found {
     pub author: String,
     /// Who last added the label, as its timeline says.
     pub labeler: Option<String>,
+    /// The issues its body names as blocking it, whose state the search
+    /// doesn't give (`blockers_named`).
+    pub named: Vec<String>,
 }
 
 /// The issues in a search's answer (`QUERY`'s data), oldest first as asked,
@@ -227,14 +313,43 @@ pub fn read_answer(repo: &Repo, data: &Value, label: &str) -> (String, Vec<Found
                                 .and_then(Value::as_str)
                                 .map(str::to_string)
                         });
+                    let labels = n
+                        .pointer("/labels/nodes")
+                        .and_then(Value::as_array)
+                        .map(Vec::as_slice)
+                        .unwrap_or_default();
+                    // The blockers GitHub itself lists, those still open.
+                    let blocked_by = n
+                        .pointer("/blockedBy/nodes")
+                        .and_then(Value::as_array)
+                        .map(Vec::as_slice)
+                        .unwrap_or_default()
+                        .iter()
+                        .filter(|b| b.get("state").and_then(Value::as_str) == Some("OPEN"))
+                        .filter_map(|b| {
+                            Some(format!(
+                                "{}#{}",
+                                b.pointer("/repository/nameWithOwner")?.as_str()?,
+                                b.get("number")?.as_u64()?
+                            ))
+                        })
+                        .collect();
+                    let body = text(n, "/body");
                     Some(Found {
+                        named: blockers_named(&repo.to_string(), &body),
                         issue: Issue {
                             repo: repo.to_string(),
                             number,
                             title: text(n, "/title"),
-                            body: text(n, "/body"),
+                            body,
                             url: text(n, "/url"),
                             claim: claim_of(n, &viewer),
+                            priority: priority_of(
+                                labels
+                                    .iter()
+                                    .filter_map(|l| l.get("name").and_then(Value::as_str)),
+                            ),
+                            blocked_by,
                         },
                         author: text(n, "/author/login"),
                         labeler,
@@ -296,6 +411,7 @@ const QUERY: &str = "query($q: String!, $first: Int!, $after: String) {
         }
         labels(first: 50) { nodes { name } }
         comments(last: 50) { nodes { body createdAt author { login } } }
+        blockedBy(first: 25) { nodes { number state repository { nameWithOwner } } }
       }
     }
   }
@@ -532,7 +648,13 @@ pub async fn claim(repo: &Repo, number: u64, id: &str, branch: &str, now: i64) -
             .await?;
         }
     }
-    ensure_label(repo).await?;
+    ensure_label(
+        repo,
+        WORKING,
+        "fbca04",
+        "Switchboard's autopilot is working on this",
+    )
+    .await?;
     github::rest(
         "POST",
         &format!("/repos/{repo}/issues/{number}/labels"),
@@ -556,10 +678,13 @@ fn label_path() -> String {
     WORKING.replace(':', "%3A").replace(' ', "%20")
 }
 
-/// The `WORKING` label made on `repo` when it has none yet; one another
-/// computer made meanwhile is taken as made.
-async fn ensure_label(repo: &Repo) -> Result<()> {
-    let path = format!("/repos/{repo}/labels/{}", label_path());
+/// Label `name` made on `repo` when it has none yet, in `color` with
+/// `description`; one another computer made meanwhile is taken as made.
+async fn ensure_label(repo: &Repo, name: &str, color: &str, description: &str) -> Result<()> {
+    let path = format!(
+        "/repos/{repo}/labels/{}",
+        crate::views::search::encode(name)
+    );
     match github::rest("GET", &path, None, SOURCE).await {
         Ok(_) => return Ok(()),
         Err(e) if crate::net::kind_of(&e) == Some(&crate::net::ErrorKind::NotFound) => {}
@@ -569,9 +694,9 @@ async fn ensure_label(repo: &Repo) -> Result<()> {
         "POST",
         &format!("/repos/{repo}/labels"),
         Some(&json!({
-            "name": WORKING,
-            "color": "fbca04",
-            "description": "Switchboard's autopilot is working on this",
+            "name": name,
+            "color": color,
+            "description": description,
         })),
         SOURCE,
     )
@@ -662,10 +787,23 @@ pub async fn fetch(repo: &Repo, label: &str) -> Result<Vec<Issue>> {
             writers.insert(login);
         }
     }
-    let mut taken: Vec<Issue> = found
+    let taken: Vec<Found> = found
         .into_iter()
         .filter(|f| takeable(f, &viewer, &writers))
-        .map(|f| f.issue)
+        .collect();
+    let named: Vec<String> = taken.iter().flat_map(|f| f.named.clone()).collect();
+    // Their state unread, every one named holds its issue, so the rest of
+    // the read still stands.
+    let open = match open_of(&named).await {
+        Ok(open) => open,
+        Err(e) => {
+            eprintln!("autopilot: couldn't read the state of the issues bodies block on: {e}");
+            named.iter().map(|n| n.to_lowercase()).collect()
+        }
+    };
+    let mut taken: Vec<Issue> = taken
+        .into_iter()
+        .map(|f| with_blockers(f.issue, &f.named, &open))
         .collect();
     let now = util::now_secs();
     for issue in &mut taken {
@@ -681,6 +819,122 @@ pub async fn fetch(repo: &Repo, label: &str) -> Result<Vec<Issue>> {
         }
     }
     Ok(taken)
+}
+
+/// `issue` with the issues its body names (`named`) that are `open`
+/// (lowercase) added to those blocking it, each once.
+pub fn with_blockers(mut issue: Issue, named: &[String], open: &HashSet<String>) -> Issue {
+    for n in named {
+        let known = issue.blocked_by.iter().any(|b| b.eq_ignore_ascii_case(n));
+        if !known && open.contains(&n.to_lowercase()) {
+            issue.blocked_by.push(n.clone());
+        }
+    }
+    issue
+}
+
+/// The most issues one request asks the state of.
+const STATES: usize = 50;
+
+/// Which of the issues `refs` names (`<owner>/<repo>#<number>`) are
+/// open, lowercase: one GraphQL request for up to `STATES` of them, none
+/// for none. One GitHub can't find (gone, or a repository you can't see)
+/// holds nothing.
+pub async fn open_of(refs: &[String]) -> Result<HashSet<String>> {
+    let mut unique: Vec<(String, Repo, u64)> = Vec::new();
+    for r in refs {
+        let lower = r.to_lowercase();
+        if unique.iter().any(|(l, _, _)| *l == lower) {
+            continue;
+        }
+        if let Some((repo, number)) = parse_reference(r) {
+            unique.push((lower, repo, number));
+        }
+    }
+    let mut open = HashSet::new();
+    for chunk in unique.chunks(STATES) {
+        let (data, _) = github::graphql_partial(&states_query(chunk), json!({}), SOURCE).await?;
+        for (at, (lower, _, _)) in chunk.iter().enumerate() {
+            if data
+                .pointer(&format!("/b{at}/issue/state"))
+                .and_then(Value::as_str)
+                == Some("OPEN")
+            {
+                open.insert(lower.clone());
+            }
+        }
+    }
+    Ok(open)
+}
+
+/// The query `open_of` asks, an alias `b<n>` an issue. The owner and name
+/// are `REFERENCE`'s letters alone, so they sit in it as written.
+fn states_query(refs: &[(String, Repo, u64)]) -> String {
+    let asked: Vec<String> = refs
+        .iter()
+        .enumerate()
+        .map(|(at, (_, repo, number))| {
+            format!(
+                "b{at}: repository(owner: \"{}\", name: \"{}\") {{ issue(number: {number}) {{ state }} }}",
+                repo.owner, repo.name
+            )
+        })
+        .collect();
+    format!("query {{ {} }}", asked.join(" "))
+}
+
+/// Gives issue `number` of `repo` priority `to`: its other priority
+/// labels taken off, and `priority_label(to)` put on (made on the
+/// repository the first time) unless it is there.
+pub async fn set_priority(repo: &Repo, number: u64, to: u8) -> Result<()> {
+    let issue = github::rest(
+        "GET",
+        &format!("/repos/{repo}/issues/{number}"),
+        None,
+        SOURCE,
+    )
+    .await?;
+    let names: Vec<String> = issue
+        .get("labels")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|l| l.get("name").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect();
+    let wanted = priority_label(to);
+    for name in names
+        .iter()
+        .filter(|n| PRIORITY.is_match(n.trim()) && !n.eq_ignore_ascii_case(&wanted))
+    {
+        let path = format!(
+            "/repos/{repo}/issues/{number}/labels/{}",
+            crate::views::search::encode(name)
+        );
+        match github::rest("DELETE", &path, None, SOURCE).await {
+            Ok(_) => {}
+            Err(e) if crate::net::kind_of(&e) == Some(&crate::net::ErrorKind::NotFound) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    if !names.iter().any(|n| n.eq_ignore_ascii_case(&wanted)) {
+        ensure_label(
+            repo,
+            &wanted,
+            "c5def5",
+            "The order Switchboard's autopilot takes issues in: 1 first, none as 3",
+        )
+        .await?;
+        github::rest(
+            "POST",
+            &format!("/repos/{repo}/issues/{number}/labels"),
+            Some(&json!({ "labels": [wanted] })),
+            SOURCE,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 /// Runs a request to its end from a blocking thread of the server's
@@ -813,6 +1067,8 @@ pub async fn open_issue(repo: &Repo, number: u64) -> Result<Option<Issue>> {
         body: text("body"),
         url: text("html_url"),
         claim: None,
+        priority: DEFAULT_PRIORITY,
+        blocked_by: Vec::new(),
     }))
 }
 
@@ -926,6 +1182,125 @@ pub fn duplicate_of(why: &str, repo: &Repo, number: u64) -> Option<String> {
         let other = github::parse_name_with_owner(&format!("{owner}/{name}"))?;
         (other.same(repo) && n != number).then(|| format!("#{n}"))
     })
+}
+
+/// The heading an issue's body records its hands-free decisions under.
+pub const DECIDED: &str = "## Decided hands-free";
+
+/// An issue's body with `lines` added as items under its `## Decided
+/// hands-free` heading, made at its end the first time; `None` when it
+/// holds them all already.
+pub fn with_decided(body: &str, lines: &[String]) -> Option<String> {
+    let mut all: Vec<String> = body.lines().map(str::to_string).collect();
+    let new: Vec<String> = lines
+        .iter()
+        .map(|l| format!("- {l}"))
+        .filter(|l| !all.contains(l))
+        .collect();
+    if new.is_empty() {
+        return None;
+    }
+    let at = match all.iter().position(|l| l.trim() == DECIDED) {
+        Some(heading) => {
+            // After the section's last line, before the next heading.
+            let next = all[heading + 1..]
+                .iter()
+                .position(|l| l.starts_with('#'))
+                .map_or(all.len(), |n| heading + 1 + n);
+            let mut end = next;
+            while end > heading + 1 && all[end - 1].trim().is_empty() {
+                end -= 1;
+            }
+            end
+        }
+        None => {
+            while all.last().is_some_and(|l| l.trim().is_empty()) {
+                all.pop();
+            }
+            if !all.is_empty() {
+                all.push(String::new());
+            }
+            all.push(DECIDED.to_string());
+            all.push(String::new());
+            all.len()
+        }
+    };
+    all.splice(at..at, new);
+    Some(format!(
+        "{}
+",
+        all.join(
+            "
+"
+        )
+    ))
+}
+
+/// The comment naming a hands-free tab's decisions about the plan.
+pub fn decided_comment(lines: &[String]) -> String {
+    let lines: Vec<String> = lines.iter().map(|l| format!("- {l}")).collect();
+    format!(
+        "Switchboard's autopilot decided this hands-free, which changes the plan:\n\n{}",
+        lines.join("\n")
+    )
+}
+
+/// What `switchboard leak-check` would find in a decision's lines, with the
+/// words of its list: each hit's kind and text.
+pub fn leaks_in(lines: &[String], words: &[String]) -> Vec<String> {
+    lines
+        .iter()
+        .flat_map(|l| crate::cmd::leak_check::hits_in(l, false, words))
+        .map(|(kind, text)| format!("{kind} {text}"))
+        .collect()
+}
+
+/// Records a hands-free tab's decisions about an open issue's plan: its
+/// body gets the lines under `## Decided hands-free`, and one comment names
+/// them; nothing when the body has them all already, the issue is closed,
+/// or `still` (the source turned off meanwhile) is false. Claude wrote the
+/// lines, so they are checked as a push is (`leaks_in`) and refused, nothing
+/// written, when they hold anything that may identify you.
+pub async fn write_decided(
+    repo: &Repo,
+    number: u64,
+    lines: &[String],
+    still: impl Fn() -> bool,
+) -> Result<()> {
+    let words = crate::cmd::leak_check::read_words(&crate::cmd::leak_check::words_file())
+        .map_err(|e| anyhow!(e))?;
+    let leaks = leaks_in(lines, &words);
+    if !leaks.is_empty() {
+        return Err(anyhow!(
+            "left a hands-free decision off it, since leak-check found {}",
+            leaks.join(", ")
+        ));
+    }
+    let path = format!("/repos/{repo}/issues/{number}");
+    let now = github::rest("GET", &path, None, SOURCE).await?;
+    if now.get("state").and_then(Value::as_str) != Some("open") || !still() {
+        return Ok(());
+    }
+    let body = now.get("body").and_then(Value::as_str).unwrap_or_default();
+    // Only the decisions the body lacks, so the comment names nothing it
+    // recorded before.
+    let added: Vec<String> = lines
+        .iter()
+        .filter(|l| !body.lines().any(|b| b == format!("- {l}")))
+        .cloned()
+        .collect();
+    let Some(body) = with_decided(body, &added) else {
+        return Ok(());
+    };
+    github::rest("PATCH", &path, Some(&json!({ "body": body })), SOURCE).await?;
+    github::rest(
+        "POST",
+        &format!("{path}/comments"),
+        Some(&json!({ "body": decided_comment(&added) })),
+        SOURCE,
+    )
+    .await?;
+    Ok(())
 }
 
 /// That commit `hash` is a landing's: on `repo`'s default branch on
@@ -1149,6 +1524,8 @@ mod tests {
             body: String::new(),
             url: String::new(),
             claim: None,
+            priority: DEFAULT_PRIORITY,
+            blocked_by: Vec::new(),
         };
         let item = item_of(&issue);
         assert_eq!(item.text, "acme/widgets#12: Fix the thing");
@@ -1158,6 +1535,49 @@ mod tests {
         let (r, n) = parse_reference("acme/widgets#12").unwrap();
         assert_eq!((r.to_string().as_str(), n), ("acme/widgets", 12));
         assert!(parse_reference("acme/widgets#12 and more").is_none());
+    }
+
+    #[test]
+    fn a_priority_label_and_blocked_by_lines_are_read_from_the_search() {
+        assert_eq!(priority_of(["bug", "Priority:2", "priority: 4"]), 2);
+        assert_eq!(priority_of(["priority: 9", "bug"]), DEFAULT_PRIORITY);
+        assert_eq!(priority_label(1), "priority: 1");
+        let body = "Blocked by #3\r\n  blocked by acme/other#9.\nNot blocked by #4\nBlocked by #3\nBlocked by #3000000000\n";
+        assert_eq!(
+            blockers_named("acme/widgets", body),
+            ["acme/widgets#3", "acme/other#9"]
+        );
+        let data = json!({ "viewer": { "login": "me" }, "search": { "nodes": [
+            { "number": 4, "title": "t", "body": body, "url": "", "author": { "login": "me" },
+              "labels": { "nodes": [{ "name": "priority: 1" }] },
+              "blockedBy": { "nodes": [
+                  { "number": 5, "state": "OPEN", "repository": { "nameWithOwner": "acme/widgets" } },
+                  { "number": 6, "state": "CLOSED", "repository": { "nameWithOwner": "acme/widgets" } }
+              ] } }
+        ] } });
+        let (_, found) = read_answer(&repo(), &data, "autopilot");
+        assert_eq!(found[0].issue.priority, 1);
+        assert_eq!(found[0].issue.blocked_by, ["acme/widgets#5"]);
+        assert_eq!(found[0].named, ["acme/widgets#3", "acme/other#9"]);
+        // Only those the state read finds open are added, each once.
+        let open: HashSet<String> =
+            ["acme/other#9".to_string(), "acme/widgets#5".to_string()].into();
+        let named = vec![
+            "acme/widgets#3".to_string(),
+            "acme/other#9".to_string(),
+            "acme/widgets#5".to_string(),
+        ];
+        let issue = with_blockers(found[0].issue.clone(), &named, &open);
+        assert_eq!(issue.blocked_by, ["acme/widgets#5", "acme/other#9"]);
+        let (r, n) = parse_reference("acme/other#9").unwrap();
+        assert_eq!(
+            states_query(&[(String::new(), r, n)]),
+            "query { b0: repository(owner: \"acme\", name: \"other\") { issue(number: 9) { state } } }"
+        );
+        assert_eq!(
+            reference_in("acme/widgets#4: Fix it").map(|(r, n)| (r.to_string(), n)),
+            Some(("acme/widgets".to_string(), 4))
+        );
     }
 
     #[test]
@@ -1180,6 +1600,8 @@ mod tests {
             body: String::new(),
             url: String::new(),
             claim: None,
+            priority: DEFAULT_PRIORITY,
+            blocked_by: Vec::new(),
         };
         let claimed = |n: u64, id: &str, stale: bool| Issue {
             claim: Some(Claim {
@@ -1303,6 +1725,42 @@ mod tests {
         assert_eq!(
             duplicate_of_comment("#7"),
             "Duplicate of #7. Closed by Switchboard's autopilot."
+        );
+    }
+
+    #[test]
+    fn decisions_go_under_the_body_s_decided_heading_once() {
+        let one = vec!["Decided hands-free: Widen it? → No".to_string()];
+        let body = with_decided("Build it.\n\n## Steps\n\n1. Do it.\n\n", &one).unwrap();
+        assert_eq!(
+            body,
+            "Build it.\n\n## Steps\n\n1. Do it.\n\n## Decided hands-free\n\n- Decided hands-free: Widen it? → No\n"
+        );
+        assert_eq!(with_decided(&body, &one), None, "once only");
+        let two = vec!["Decided hands-free: Which way? → A".to_string()];
+        let body = with_decided(&format!("{body}\n## Later\n\nMore.\n"), &two).unwrap();
+        assert!(
+            body.contains(
+                "- Decided hands-free: Widen it? → No\n- Decided hands-free: Which way? → A\n\n## Later"
+            ),
+            "{body}"
+        );
+        assert_eq!(
+            with_decided("", &one).unwrap(),
+            "## Decided hands-free\n\n- Decided hands-free: Widen it? → No\n"
+        );
+        assert!(decided_comment(&two).ends_with("\n\n- Decided hands-free: Which way? → A"));
+        assert!(leaks_in(&two, &[]).is_empty());
+        // Built here, so the made-up path is no hit of the repository's own.
+        let leaky = vec![format!(
+            "Decided hands-free: Keep /{}/qzx/x? → Yes",
+            "Users"
+        )];
+        assert!(!leaks_in(&leaky, &[]).is_empty(), "a home path");
+        let named = vec!["Decided hands-free: Follow Acmecorp's style? → Yes".to_string()];
+        assert!(
+            !leaks_in(&named, &["acmecorp".to_string()]).is_empty(),
+            "a listed word"
         );
     }
 }

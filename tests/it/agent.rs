@@ -1481,3 +1481,172 @@ fn a_session_ending_hands_the_tab_back_to_its_program_s_directory() {
         cwd_of(l) == before
     });
 }
+
+/// In a hands-free tab working a GitHub issue, only a decision marked
+/// `[plan]` reaches the issue: its body gets it under `## Decided
+/// hands-free` and one comment names it, once however often it is asked;
+/// an unmarked one, or any with GitHub off, writes nothing.
+#[cfg(feature = "net")]
+#[test]
+fn a_hands_free_decision_about_the_plan_is_written_to_its_issue_once() {
+    use common::http::{Fake, Reply};
+    use std::sync::{Arc, Mutex};
+    let body = Arc::new(Mutex::new("Build it.\n".to_string()));
+    let held = body.clone();
+    let github = Fake::github("test-token", move |request| {
+        let path = "/repos/acme/widgets/issues/12";
+        match (request.method.as_str(), request.path()) {
+            ("GET", p) if p == path => Some(Reply::json(
+                200,
+                json!({ "state": "open", "body": *held.lock().unwrap() }),
+            )),
+            ("PATCH", p) if p == path => {
+                let new = request.json()["body"].as_str()?.to_string();
+                *held.lock().unwrap() = new;
+                Some(Reply::json(200, json!({})))
+            }
+            ("POST", p) if p == format!("{path}/comments") => {
+                Some(Reply::json(201, json!({ "id": 1 })))
+            }
+            _ => None,
+        }
+    });
+    let api = github.url.clone();
+    let settings = |github: bool| json!({"notifications": false, "github": github});
+    let server = TestServer::start_with_env_and_settings(
+        &[("GH_TOKEN", "test-token"), ("SWITCHBOARD_GITHUB_API", &api)],
+        &settings(false).to_string(),
+    );
+    std::fs::write(
+        server.state.join("autopilot.json"),
+        json!({ "sources": "issues" }).to_string(),
+    )
+    .unwrap();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    session_file(&server.home, pid, json!({"sessionId": "s-1"}));
+    let tab = tabs(&server.list())[0]["id"].as_str().unwrap().to_string();
+    for (name, value) in [
+        ("@autopilot", "1"),
+        ("@autopilot_handsfree", "1"),
+        ("@autopilot_issue", "acme/widgets#12"),
+    ] {
+        server.ok(&["set", "-t", &tab, name, value]);
+    }
+    let ask = |header: &str, question: &str| {
+        json!({"session_id": "s-1", "tool_name": "AskUserQuestion", "tool_input": {"questions": [
+            {"header": header, "question": question, "options": [{"label": "A"}, {"label": "B (Recommended)"}]}
+        ]}})
+    };
+
+    // GitHub off: denied as usual, nothing written.
+    let denied: Value = serde_json::from_str(&hook_says(
+        &server,
+        &pane,
+        "PreToolUse",
+        ask("[plan] Off", "Wider while off?"),
+    ))
+    .unwrap();
+    let reason = denied["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .unwrap();
+    assert!(
+        reason.contains("Chose: Wider while off? → B (Recommended)."),
+        "{reason}"
+    );
+    assert!(reason.contains("`[plan]`"), "{reason}");
+
+    common::write_settings(&server.home, settings(true));
+    hook_says(
+        &server,
+        &pane,
+        "PreToolUse",
+        ask("Test", "Which test first?"),
+    );
+    let count = |method: &str| github.seen().iter().filter(|r| r.method == method).count();
+    // Asked until the server has read GitHub turned on (it reads the issue),
+    // then once more, which finds the decision there already.
+    let deadline = common::deadline(Duration::from_secs(10));
+    while count("GET") == 0 {
+        assert!(Instant::now() < deadline, "GitHub never asked");
+        hook_says(
+            &server,
+            &pane,
+            "PreToolUse",
+            ask("[plan] Scope", "Widen it?"),
+        );
+        let asked = common::deadline(Duration::from_secs(1));
+        while count("GET") == 0 && Instant::now() < asked {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    while count("POST") == 0 {
+        assert!(Instant::now() < deadline, "no comment: {:?}", github.seen());
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // A retry sent as GitHub was turned on may have written too: let it
+    // settle, then asked again, the decision is there and nothing is written.
+    std::thread::sleep(Duration::from_millis(200) * common::patience());
+    let (gets, writes) = (count("GET"), count("PATCH") + count("POST"));
+    hook_says(
+        &server,
+        &pane,
+        "PreToolUse",
+        ask("[plan] Scope", "Widen it?"),
+    );
+    while count("GET") == gets {
+        assert!(Instant::now() < deadline, "not asked again");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    std::thread::sleep(Duration::from_millis(200) * common::patience());
+    assert_eq!(
+        count("PATCH") + count("POST"),
+        writes,
+        "{:?}",
+        github.seen()
+    );
+    assert_eq!(
+        *body.lock().unwrap(),
+        "Build it.\n\n## Decided hands-free\n\n- Decided hands-free: Widen it? → B (Recommended)\n"
+    );
+    let posts = count("POST");
+    assert!(
+        github
+            .seen()
+            .iter()
+            .filter(|r| r.method == "POST")
+            .all(|r| r.text().contains("Widen it? → B (Recommended)")),
+        "{:?}",
+        github.seen()
+    );
+
+    // A box repeating that decision beside a new one: the comment names the
+    // new one alone.
+    let both = json!({"session_id": "s-1", "tool_name": "AskUserQuestion", "tool_input": {"questions": [
+        {"header": "[plan] Scope", "question": "Widen it?", "options": [{"label": "A"}, {"label": "B (Recommended)"}]},
+        {"header": "[plan] Way", "question": "Which way?", "options": [{"label": "Left"}]},
+    ]}});
+    hook_says(&server, &pane, "PreToolUse", both);
+    while count("POST") == posts {
+        assert!(
+            Instant::now() < deadline,
+            "no second comment: {:?}",
+            github.seen()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let comment = github
+        .seen()
+        .iter()
+        .rfind(|r| r.method == "POST")
+        .unwrap()
+        .text();
+    assert!(comment.contains("Which way? → Left"), "{comment}");
+    assert!(!comment.contains("Widen it?"), "{comment}");
+    assert!(
+        body.lock()
+            .unwrap()
+            .ends_with("- Decided hands-free: Widen it? → B (Recommended)\n- Decided hands-free: Which way? → Left\n")
+    );
+}

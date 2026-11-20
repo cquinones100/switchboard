@@ -1015,15 +1015,20 @@ impl Server {
 
     /// "Open a Linear ticket in the browser by ID, number or URL"
     /// (ticket-open.zsh): typed, the clipboard's when it holds one; empty is
-    /// the tab's own ticket, as M-l opens it, and a bare number takes the
+    /// the Linear ticket the branch names, else the tab's (`ticket_here`), and a bare number takes the
     /// team key of the ticket the branch names. Then the browser, or a new
     /// tab working on it (`wt`) in the pane's repository.
     fn open_ticket_id_typed(&mut self, client: ClientId, pane: Option<PaneId>) {
         let dir = self.dir_or_home(pane);
-        let branch_ticket = pane
-            .and_then(|p| self.panes.get(&p))
-            .map(|s| s.tab)
-            .and_then(|tab| self.ticket_here(tab, &dir));
+        // The tab's ticket from the directory its work is in (a review
+        // tab's checkout, `@tab_dir`), the pane's own kept for starting work.
+        let branch_ticket = pane.and_then(|p| {
+            let tab = self.panes.get(&p)?.tab;
+            let here = self.pane_dir(p).unwrap_or_else(|| dir.clone());
+            // Notes beside the work reads the work's, as M-i does.
+            let work_dir = self.work_dir(tab, p, here);
+            self.ticket_here(tab, &work_dir)
+        });
         let known = branch_ticket.clone();
         self.off_task(
             client,
@@ -1037,7 +1042,7 @@ impl Server {
             move |server, client, prefill| {
                 let ask = Ask::new(
                     "Open a ticket",
-                    "A ticket ID, number or Linear URL; empty for this tab's ticket, as M-l opens it.",
+                    "A ticket ID, number or Linear URL; empty for the Linear ticket the branch names, else the tab's.",
                 )
                 .text(prefill)
                 .empty_ok();
@@ -1062,8 +1067,17 @@ impl Server {
         dir: PathBuf,
         branch_ticket: Option<String>,
     ) {
+        // Empty is the branch's Linear ticket, this command being Linear's.
         if typed.trim().is_empty() {
-            self.view_command(client, crate::views::Command::OpenTicket);
+            // Linear turned off while the box was open opens nothing.
+            if !settings::is_on("linear") {
+                self.service_off(client, "linear");
+                return;
+            }
+            match branch_ticket {
+                Some(id) => self.open_ticket_id(client, id),
+                None => self.say(Some(client), "No Linear ticket in this branch or tab name"),
+            }
             return;
         }
         let (id, url) = match super::ticket_typed(typed, branch_ticket.as_deref()) {

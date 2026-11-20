@@ -18,7 +18,13 @@
 //!   what the landing counts as decided hands-free
 //!   (src/autopilot/landed.rs's `decided_in`), so the server, not Claude,
 //!   keeps that record; a question asked again marked `[always ask]`, one
-//!   Claude found it must ask after all, takes its line back.
+//!   Claude found it must ask after all, takes its line back. In a GitHub
+//!   issue's tab, which has no note, Claude says the lines in its reply,
+//!   and a question marked `[plan]` (`PLAN`), one about what the issue
+//!   says should be built (its steps, its options or its scope), has its
+//!   choice written to the issue by the server too (`plan_choices`,
+//!   src/autopilot/serve.rs's `autopilot_write_decided`); the rest, how
+//!   to run a test or which file to read first, writes nothing to GitHub.
 //! - Stop, on a turn whose last message asks something without saying
 //!   `[always ask]` (what Claude says of a question a rule or skill says
 //!   must reach you), is blocked, its
@@ -56,6 +62,10 @@ use crate::notes::id;
 /// What marks a question a skill says must always reach you.
 pub const ALWAYS_ASK: &str = "[always ask]";
 
+/// What marks a question about an issue's plan, whose decision the issue
+/// records.
+pub const PLAN: &str = "[plan]";
+
 /// The most turns a tab's Claude is told to carry on past a question.
 pub const NUDGES: u32 = 3;
 
@@ -72,20 +82,51 @@ const RECOMMENDED: &str = "(Recommended)";
 /// the one labeled (Recommended), else the first. A question with no
 /// options is left out.
 pub fn choose(payload: &Value) -> Vec<(String, String)> {
+    chosen(payload)
+        .into_iter()
+        .map(|(_, q, c)| (q, c))
+        .collect()
+}
+
+/// The choices of a question box's questions marked `[plan]`, the ones an
+/// issue's tab writes to its issue.
+pub fn plan_choices(payload: &Value) -> Vec<(String, String)> {
+    chosen(payload)
+        .into_iter()
+        .filter(|(plan, ..)| *plan)
+        .map(|(_, q, c)| (q, c))
+        .collect()
+}
+
+/// `choose`'s choices, each with whether its question is marked `[plan]`,
+/// the mark taken off the question.
+fn chosen(payload: &Value) -> Vec<(bool, String, String)> {
     let label = |o: &Value| o.get("label").and_then(Value::as_str).map(str::to_string);
     questions(payload)
         .iter()
         .filter_map(|q| {
+            let plan = marked(q, PLAN);
             let question = q.get("question").and_then(Value::as_str)?.trim();
+            let question = question.strip_prefix(PLAN).unwrap_or(question);
             let options = q.get("options").and_then(Value::as_array)?;
             let chosen = options
                 .iter()
                 .find(|o| label(o).is_some_and(|l| l.contains(RECOMMENDED)))
                 .or_else(|| options.first())
                 .and_then(label)?;
-            Some((one_line(question), one_line(&chosen)))
+            Some((plan, one_line(question), one_line(&chosen)))
         })
         .collect()
+}
+
+/// Whether a question starts its header or its text with `mark`.
+fn marked(question: &Value, mark: &str) -> bool {
+    ["header", "question"].iter().any(|k| {
+        question
+            .get(*k)
+            .and_then(Value::as_str)
+            .is_some_and(|t| t.trim_start().starts_with(mark))
+    })
 }
 
 /// A question box's questions, as Claude Code passes them.
@@ -128,7 +169,7 @@ impl Record {
                 "Write `Decided hands-free: <question> → <choice>` under the item in its plan note (with no plan, indented under the item in its note)."
             }
             Record::Reply => {
-                "Say each as a `Decided hands-free: <question> → <choice>` line in your reply: this tab works a GitHub issue, with no note to write it in."
+                "Say each as a `Decided hands-free: <question> → <choice>` line in your reply: this tab works a GitHub issue, with no note to write it in. Head a question about what the issue says should be built (its steps, its options or its scope) `[plan]`, and the server writes its decision to the issue; leave the rest unmarked."
             }
         }
     }
@@ -236,13 +277,7 @@ pub fn is_old_landing_push(payload: &Value) -> bool {
 
 /// Whether a question box marks one of its questions always asked.
 pub fn always_asked(payload: &Value) -> bool {
-    questions(payload).iter().any(|q| {
-        ["header", "question"].iter().any(|k| {
-            q.get(*k)
-                .and_then(Value::as_str)
-                .is_some_and(|t| t.trim_start().starts_with(ALWAYS_ASK))
-        })
-    })
+    questions(payload).iter().any(|q| marked(q, ALWAYS_ASK))
 }
 
 /// A question box's questions, the `[always ask]` mark taken off, as a
@@ -515,6 +550,20 @@ mod tests {
             ]
         );
         assert!(choose(&json!({})).is_empty());
+        assert!(plan_choices(&payload).is_empty());
+        let plan = json!({"tool_input": {"questions": [
+            {"header": "[plan] Scope", "question": "Widen it?", "options": [{"label": "No"}]},
+            {"header": "Test", "question": "Which test first?", "options": [{"label": "Unit"}]},
+            {"header": "Way", "question": "[plan] Which way?", "options": [{"label": "A"}]},
+        ]}});
+        assert_eq!(
+            plan_choices(&plan),
+            [
+                ("Widen it?".to_string(), "No".to_string()),
+                ("Which way?".to_string(), "A".to_string()),
+            ]
+        );
+        assert_eq!(choose(&plan).len(), 3);
         let asked = json!({"tool_input": {"questions": [
             {"header": "[always ask]", "question": "[always ask] Push to main?"},
         ]}});

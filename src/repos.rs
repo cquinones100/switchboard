@@ -21,7 +21,8 @@
 //! tests run again), since a clean rebase changes nothing the tests haven't
 //! seen pass on each side. `tickets` is where the repository's work is
 //! kept, `github` (its issues) or `linear`, unset by default, which `wtn
-//! <number>` starts its work from (`tickets_at`). `apply` is what a change
+//! <number>` starts its work from (`tickets_at`) and M-i
+//! opens a tab's ticket from (`tickets_known`). `apply` is what a change
 //! landed there needs to take effect, which `switchboard apply-actions`
 //! lists in place of what it would work out by itself. The file is yours
 //! and never in this repository; Settings changes it (`set_repo`), never
@@ -433,6 +434,14 @@ pub fn tickets_at(dir: &Path) -> Result<Option<String>, String> {
         .into_iter()
         .flatten()
         .find_map(|k| tickets_of(&entry_of(&data, &k))))
+}
+
+/// `tickets_at` from the files alone, origin read from git's config file
+/// and a repos.json that can't be read taken as empty, so no process starts:
+/// what M-i reads on the server's task (`views::ticket::of_dir`).
+pub fn tickets_known(dir: &Path) -> Option<String> {
+    let repo = crate::sources::repo::origin_of(dir)?;
+    tickets_of(&entry_of(&read_safely(), &repo.to_string()))
 }
 
 /// `owner/name` of origin's URL as the config of the repository at `dir`
