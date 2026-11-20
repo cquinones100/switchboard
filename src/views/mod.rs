@@ -1,7 +1,7 @@
 //! Reading things beside your work: the branch's PR description (M-v), its
 //! Linear ticket (M-i), any link (the link view), and search everything
-//! (M-S-f), with M-r and M-l opening the PR and the ticket in the browser
-//! and M-m saying whether the PR can merge; and M-p's commands for the
+//! (M-S-f), with M-r and M-l opening the PR and the ticket in the browser,
+//! the PR view saying whether the PR can merge; and M-p's commands for the
 //! branch's merge queue and Linear project in the browser (merge-queue.sh,
 //! linear-project.sh), its ticket and PR copied (branch-copy.sh), and the
 //! image views' cache cleared (image-cache-clear.sh).
@@ -23,6 +23,7 @@
 //! - `board`: the PR and the ticket as UX 2.0's boards draw them, a column
 //!   and a panel beside it.
 //! - `follow`: how the PR and ticket views read again what they show.
+//! - `menu`: a board's menu in the pager (the PR view's `m`).
 //! - `pr`: the branch's PR (pr-view.sh, pr-view.js's `prepare`).
 //! - `ticket`: a Linear ticket (ticket-view.sh, pr-view.js's `ticket`),
 //!   and what a tab's ticket is (`Ticket`): a Linear ticket or project,
@@ -41,7 +42,8 @@
 //!   each with when it was seen.
 //! - `seen`: when each of a note's links was first seen there, and the
 //!   link commands' order, newest first.
-//! - `ready`: whether the PR can merge (pr-ready.sh).
+//! - `ready`: whether the PR can merge (pr-ready.sh), which the PR view
+//!   says, and its failing checks.
 //! - `serve`: the server's side: the keys, the boxes, the panes beside.
 
 use std::path::PathBuf;
@@ -53,6 +55,7 @@ pub mod follow;
 pub mod given;
 pub mod image;
 pub mod issue;
+pub mod menu;
 pub mod note;
 pub mod page;
 pub mod pager;
@@ -89,8 +92,11 @@ pub enum Command {
     OpenTicket,
     /// The tab's ticket or project chosen from yours, kept on the tab.
     ChooseTicket,
-    /// M-m: whether the branch's PR is ready to merge.
-    PrReady,
+    /// The branch's failing checks in a pane beside, from the PR view's menu.
+    FailingChecks,
+    /// `/resolve-conflicts` typed into the tab's Claude, from the PR view's
+    /// menu.
+    ResolveConflicts,
     /// M-S-f: the open tabs, notes, Linear, GitHub and Slack searched at once.
     Search,
     /// M-S-f with one source's prefix typed (`search::scope`).
@@ -134,14 +140,15 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 27] = [
+    pub const ALL: [Command; 28] = [
         Command::PrView,
         Command::TicketView,
         Command::OpenPr,
         Command::OpenRepo,
         Command::OpenTicket,
         Command::ChooseTicket,
-        Command::PrReady,
+        Command::FailingChecks,
+        Command::ResolveConflicts,
         Command::Search,
         Command::SearchTabs,
         Command::SearchNotes,
@@ -173,7 +180,8 @@ impl Command {
             Command::OpenRepo => "open-repo",
             Command::OpenTicket => "open-ticket",
             Command::ChooseTicket => "choose-ticket",
-            Command::PrReady => "pr-ready",
+            Command::FailingChecks => "failing-checks",
+            Command::ResolveConflicts => "resolve-conflicts",
             Command::Search => "search-everything",
             Command::SearchTabs => "search-tabs",
             Command::SearchNotes => "search-notes",
@@ -216,7 +224,8 @@ impl Command {
                 "Open the tab's ticket in the browser: its Linear ticket or project, or its GitHub issue"
             }
             Command::ChooseTicket => "Choose this tab's ticket or project…",
-            Command::PrReady => "Check whether the branch's PR is ready to merge",
+            Command::FailingChecks => "See the branch's failing checks in a pane beside",
+            Command::ResolveConflicts => "Type /resolve-conflicts into this tab's Claude",
             Command::Search => {
                 "Search the open tabs, notes, Linear, GitHub and Slack at once, and read a result beside the pane or go to the tab"
             }
@@ -256,7 +265,7 @@ impl Command {
     pub fn detail(self) -> &'static str {
         match self {
             Command::PrView => {
-                "The PR is found from the pane's branch, in a fork's upstream too, the copy last read showing while GitHub is asked again. With UX 2.0 on, it opens in this pane's place. With no PR, the view says why."
+                "The PR is found from the pane's branch, in a fork's upstream too, the copy last read showing while GitHub is asked again, with whether it can merge in its head and m opening its menu. With UX 2.0 on, it opens in this pane's place, or beside a narrow lone pane in place of what is there. With no PR, it shows the branch's CI on GitHub."
             }
             Command::TicketView => {
                 "The ticket is one chosen for the tab, else the GitHub issue its branch was started for or the Linear ticket its branch names (repos.json's tickets saying which), else a ticket or project in a name you gave the tab. The copy last read shows while it is asked again; with UX 2.0 on, it opens in this pane's place. With none found, you choose one of your Linear tickets and projects."
@@ -273,8 +282,11 @@ impl Command {
             Command::ChooseTicket => {
                 "Lists your Linear tickets and projects, most recently created first, and keeps the one chosen as the tab's ticket, which M-i and M-l then open, through a restart too. Esc changes nothing."
             }
-            Command::PrReady => {
-                "The verdict is GitHub's own, so it agrees with the merge button, with the required checks, review, conflicts and auto-merge under it. The box offers to show the failing checks or have the tab's Claude resolve conflicts. A branch with no PR gets its own CI on GitHub instead."
+            Command::FailingChecks => {
+                "Each failing check of the branch's PR (or, with no PR, of the commit GitHub has for the branch) with its description and link, and a GitHub Actions job's last 25 lines of log. The PR view's menu offers it while a check fails."
+            }
+            Command::ResolveConflicts => {
+                "Types it into the tab's Claude and moves you there to press Enter. The PR view's menu offers it while the PR has merge conflicts; a tab reviewing someone else's PR says the conflicts are its author's."
             }
             Command::Search => {
                 "Each source's results show as it answers, Slack's through Claude's connector about 15 seconds after the rest; notes are read on this computer and sent nowhere. Ctrl-O opens a result in the browser instead."
@@ -341,7 +353,8 @@ impl Command {
             Command::OpenRepo => &["github", "repo", "browser"],
             Command::OpenTicket => &["linear", "github", "ticket", "browser"],
             Command::ChooseTicket => &["linear", "github", "tabs", "ticket"],
-            Command::PrReady => &["github", "pr", "merge", "checks"],
+            Command::FailingChecks => &["github", "pr", "checks"],
+            Command::ResolveConflicts => &["github", "pr", "merge"],
             Command::Search => &["search", "find", "notes"],
             Command::SearchTabs => &["search", "find", "tabs"],
             Command::SearchNotes => &["search", "find", "notes"],
@@ -372,7 +385,6 @@ impl Command {
             Command::TicketView => Some("M-i"),
             Command::OpenPr => Some("M-r"),
             Command::OpenTicket => Some("M-l"),
-            Command::PrReady => Some("M-m"),
             Command::Search => Some("M-F"),
             Command::ReadLink => Some("M-u"),
             Command::OpenRepo
@@ -394,7 +406,9 @@ impl Command {
             | Command::CopyTicketUrl
             | Command::CopyPrNumber
             | Command::CopyPrUrl
-            | Command::ClearImageCache => None,
+            | Command::ClearImageCache
+            | Command::FailingChecks
+            | Command::ResolveConflicts => None,
         }
     }
 }
@@ -418,11 +432,6 @@ pub enum ViewsEvent {
     },
     /// Something to copy to a client's clipboard, and say it was.
     Copy { client: ClientId, text: String },
-    /// M-m's answer, or why there is none.
-    Ready {
-        client: ClientId,
-        answer: Result<ready::Answer, String>,
-    },
     /// M-F's box asks sources for a query (`search_box`), the Tabs
     /// source leaving out `pane`'s tab.
     Ask {
@@ -523,7 +532,7 @@ pub fn view_main(args: Vec<String>) -> ExitCode {
 }
 
 /// `switchboard pr-view [dir]`, and `pr-view --checks [dir]` for the PR's
-/// failing checks, as M-m's "See the failing checks" showed them.
+/// failing checks, as the PR view's "See the failing checks" shows them.
 pub fn pr_view_main(args: Vec<String>) -> ExitCode {
     if args.first().is_some_and(|a| a == "--checks") {
         return ready::checks_main(dir_arg(args.get(1)));

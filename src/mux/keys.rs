@@ -4,7 +4,7 @@
 //! next idle tab, M-c to the tab's Claude, M-y to copy its latest reply,
 //! M-f to pin a tab), M-h for the tab's history (new with UX 2.0,
 //! src/history), M-s into the sidebar and the views'
-//! (M-v, M-i, M-r, M-l, M-m, M-S-f, M-u, src/views), M-d (src/diff) and Notes'
+//! (M-v, M-i, M-r, M-l, M-S-f, M-u, src/views), M-d (src/diff) and Notes'
 //! M-N and M-e (src/notes/serve.rs), M-0, C-w, M-R and M-O (src/extras), under the
 //! same keys, with the prefix `M-b` for the rest;
 //! `~/.config/switchboard/keys.json` adds to or changes them:
@@ -141,13 +141,16 @@ pub enum Action {
     Settings,
     /// A reminder on the current tab (remind.sh).
     RemindTab,
+    /// The current tab's status set by hand, until Switchboard's own
+    /// reading of it changes (`@tab_status`).
+    TabStatus,
     /// The tab's whole title in a box, which the sidebar and the status
     /// line cut (M-T; tab-title.sh; src/tabs/title.rs).
     TabTitle,
     /// The tab closed most recently opened again, as a browser's
     /// Cmd-Shift-T does (M-T; src/usage/serve.rs's `reopen_last`).
     ReopenLastTab,
-    /// What the views do: M-v, M-i, M-r, M-l, M-m, M-S-f, M-u and the
+    /// What the views do: M-v, M-i, M-r, M-l, M-S-f, M-u and the
     /// link commands (src/views).
     View(crate::views::Command),
     /// What the diff does: M-d, and the palette's commands for a tool in a
@@ -201,7 +204,8 @@ impl Action {
     /// `continue-shaping`, `shape-note`, `shape-new-ticket`, `pr-image`,
     /// `ticket-image`, `mission-control`, `find-tab`,
     /// `revive-worktree`, `settings`, `remind-tab`, `tab-title`, `reopen-last-tab`, and the views' (`pr-view`,
-    /// `ticket-view`, `open-pr`, `open-repo`, `open-ticket`, `pr-ready`,
+    /// `ticket-view`, `open-pr`, `open-repo`, `open-ticket`, `failing-checks`,
+    /// `resolve-conflicts`,
     /// `search-everything`, `search-tabs`, `search-notes`, `search-linear`,
     /// `search-github`, `search-slack`, `read-link`, `open-link-being-read`,
     /// `open-merge-queue`, `open-linear-project`, `copy-ticket-id`,
@@ -296,6 +300,7 @@ impl Action {
             "revive-worktree" => Action::ReviveWorktree,
             "settings" => Action::Settings,
             "remind-tab" => Action::RemindTab,
+            "tab-status" => Action::TabStatus,
             "tab-title" => Action::TabTitle,
             "reopen-last-tab" => Action::ReopenLastTab,
             "upgrade" => Action::Upgrade,
@@ -377,6 +382,7 @@ impl Action {
             Action::ReviveWorktree => "revive-worktree".into(),
             Action::Settings => "settings".into(),
             Action::RemindTab => "remind-tab".into(),
+            Action::TabStatus => "tab-status".into(),
             Action::TabTitle => "tab-title".into(),
             Action::ReopenLastTab => "reopen-last-tab".into(),
             Action::View(command) => command.name().into(),
@@ -486,6 +492,7 @@ impl Action {
             Action::RemindTab => {
                 "Remind me about this tab later, as Slack does: it waits under Reminders with the time left, then needs you".into()
             }
+            Action::TabStatus => "Set this tab's status…".into(),
             Action::TabTitle => "Show this tab's full title".into(),
             Action::ReopenLastTab => "Reopen the most recently closed tab".into(),
             Action::View(command) => command.about().into(),
@@ -655,6 +662,9 @@ impl Action {
             Action::RemindTab => {
                 "Asks when (20 minutes to next Monday, or a time typed like 45m or 3pm) and what for. Until then the tab waits under Reminders.".into()
             }
+            Action::TabStatus => {
+                "Files the tab under the sidebar's group you choose, marked set by you, until Switchboard's own reading of it changes; Let Switchboard decide gives it back at once. A pin and a reminder still win. Settings' \"Set a tab's status by hand\" (tab_status_by_hand).".into()
+            }
             Action::TabTitle => {
                 "The title wrapped, its PR number in front, then its branch, directory, PR and ticket as far as the workspace knows them; y copies the title.".into()
             }
@@ -745,6 +755,7 @@ impl Action {
             Action::ReviveWorktree => &["tabs", "claude", "reopen"],
             Action::Settings => &["settings", "config", "preferences"],
             Action::RemindTab => &["tabs", "remind", "todo"],
+            Action::TabStatus => &["tabs", "status", "group"],
             Action::TabTitle => &["tabs"],
             Action::ReopenLastTab => &["tabs", "reopen", "closed"],
             Action::View(command) => command.tags(),
@@ -801,6 +812,7 @@ impl Action {
         let words = match self {
             Action::SelectTab(1) => "Go to a tab by number (M-1 to M-9)".to_string(),
             Action::SelectTab(_) => return None,
+            Action::TabStatus if !crate::settings::is_on("tab_status_by_hand") => return None,
             Action::Extra(command) if !command.in_palette() => return None,
             Action::Notes(crate::notes::serve::Command::Preview)
                 if !crate::settings::is_on("notes_preview") =>
@@ -883,6 +895,7 @@ impl Action {
             Action::TicketImage,
             Action::Settings,
             Action::RemindTab,
+            Action::TabStatus,
             Action::TabTitle,
             Action::StopSlackRelay,
             Action::Upgrade,

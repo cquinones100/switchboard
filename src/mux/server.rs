@@ -2902,7 +2902,7 @@ impl Server {
     /// directory is there (the review tab's PR worktree, whose Claude works
     /// from the main clone), else the pane's own (`pane_own_dir`). The
     /// tab's name, color and PR, and the keys that open something for this
-    /// directory (M-v, M-m, M-d), read this one. Never a directory that no
+    /// directory (M-v, M-d), read this one. Never a directory that no
     /// longer exists (a worktree removed under it), its nearest ancestor
     /// that does taking its place.
     pub fn pane_dir(&self, pane: PaneId) -> Option<PathBuf> {
@@ -3499,6 +3499,7 @@ impl Server {
             ),
             Action::Settings => self.open_mission(id, crate::mission::Opening::Settings),
             Action::RemindTab => self.remind_tab(id, current_tab),
+            Action::TabStatus => self.tab_status_menu(id, current_tab),
             Action::TabTitle => self.show_tab_title(id, current_tab),
             Action::ReopenLastTab => self.reopen_last(id),
             Action::View(command) => self.view_command(id, command),

@@ -3221,3 +3221,47 @@ fn with_resizing_off_the_sidebars_edge_takes_no_drag_and_a_kept_width_is_left_al
         side_columns(&server) == 51
     });
 }
+
+// "Set its status…" in a tab's menu files the tab under the group chosen,
+// marked set by you, and the status is kept with the layout through a
+// restart.
+#[test]
+fn a_status_chosen_from_a_tabs_menu_moves_its_row_and_outlives_a_restart() {
+    let mut server = TestServer::start_with_settings(
+        r#"{"notifications": false, "tips": false, "ux2": true, "auto_restore": true}"#,
+    );
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    let stage = |l: &Value| tabs(l)[0]["stage"]["key"].clone();
+    wait_list(&server, "the shell under Other", |l| stage(l) == "other");
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("m");
+    client.wait_text("Set its status…");
+    client.type_text("/Set its");
+    client.wait_for("the search narrowed", |s| {
+        !s.iter().any(|l| l.contains("Rename it"))
+    });
+    client.type_text("\r");
+    client.wait_text("Set its status");
+    client.wait_text("Review loop");
+    client.type_text("/Review");
+    client.wait_for("the search narrowed", |s| {
+        !s.iter().any(|l| l.contains("Build failing"))
+    });
+    client.type_text("\r");
+    wait_list(&server, "the tab under Review loop", |l| {
+        stage(l) == "review"
+    });
+    client.wait_text("REVIEW LOOP");
+    client.wait_text("set by you");
+    server.ok(&["save"]);
+    drop(client);
+    server.restart();
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    wait_list(&server, "the status kept through a restart", |l| {
+        stage(l) == "review"
+    });
+    client.wait_text("set by you");
+}
