@@ -139,6 +139,8 @@ pub fn board(project: &Value) -> Board {
         ]
         .map(|(k, w)| (k.to_string(), w.to_string()))
         .to_vec(),
+        actions: Vec::new(),
+        title: String::new(),
     }
 }
 

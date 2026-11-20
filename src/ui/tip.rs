@@ -93,9 +93,8 @@ pub fn text_of(name: &str, key: Option<&str>) -> Option<Vec<String>> {
         "worktree" => vec![
             "Claude in a worktree.".into(),
             String::new(),
-            "M-v  the PR's description".into(),
+            "M-v  the PR, and whether it can merge".into(),
             "M-d  its diff, as GitHub shows it".into(),
-            "M-m  whether it can merge".into(),
         ],
         "sidebar" => vec![
             "The sidebar.".into(),

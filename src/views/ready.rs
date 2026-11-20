@@ -1,138 +1,114 @@
-//! Whether the branch's PR is ready to merge (M-m; tmux/pr-ready.sh): a
-//! verdict first, then each thing that decides it, in a box over the
-//! workspace, ending with what can be done about it (see the failing
+//! Whether the branch's PR can merge, as the PR view (M-v) says it
+//! (tmux/pr-ready.sh, which M-m's box answered until the view took it in,
+//! UX 2.0 boards 150 to 153): a verdict, a chip in the view's head with a
+//! sentence and its reasons on the line under it, conflicts first, and what
+//! can be done about it, which the view's menu offers (see the failing
 //! checks, or have the tab's Claude resolve the conflicts).
 //!
-//! Asked in the order that can end the answer soonest. A merged or closed
-//! PR says so and stops. A PR already in the merge queue reports its place
-//! there and stops too: its checks, conflicts and review were settled by
-//! getting in, and GitHub still calls it mergeable, so the rest would only
-//! say "ready" about something already on its way. For anything else the
-//! verdict is GitHub's own mergeStateStatus, so it agrees with the merge
-//! button, with the lines under it explaining it. Checks are split into
-//! required ones and all of them, since a failing optional check (a preview
+//! A merged or closed PR has no verdict, its state chip saying it all. A PR
+//! already in the merge queue reports its place there and what the queue
+//! is doing, and nothing more: its checks, conflicts and review were
+//! settled by getting in, and GitHub still calls it mergeable, so the rest
+//! would only say "ready" about something already on its way. For anything
+//! else the verdict is GitHub's own mergeStateStatus, so it agrees with the
+//! merge button, with the reasons explaining it. Required checks are
+//! counted apart from the rest, since a failing optional check (a preview
 //! deploy) doesn't block the merge and shouldn't read as if it did.
 //!
-//! Where pr-ready.sh asked gh three times (the PR, its queue entry and
-//! checks counted by outcome, and `gh pr checks --required` one by one),
-//! one GraphQL query gives it all here: the counts by state, and each of
-//! the first hundred checks with whether it is required, and the rest a
-//! hundred a query (`github::rest_of`, up to a thousand) only when a check
-//! failed or is running, since a failure can be anywhere in GitHub's list.
-//! GitHub works out mergeability lazily, so an UNKNOWN is asked again, up
-//! to three times a second apart, as pr-ready.sh did.
+//! The view's own query asks for what this reads (`mergeable`,
+//! `mergeStateStatus`, the merge queue entry, each check's `isRequired`),
+//! so the PR and whether it can merge come from one query, the checks past
+//! its first hundred read a hundred a query (`CHECKS_QUERY`,
+//! `github::rest_of`, up to a thousand) only when a check failed or is
+//! running, since a failure can be anywhere in GitHub's list. GitHub works
+//! out mergeability lazily, so an UNKNOWN is asked again (`MERGE_QUERY`),
+//! up to twice more a second apart, as pr-ready.sh did.
 //!
 //! A branch with no PR (one pushed before opening it, the default branch
 //! of a repository that lands straight on it) gets the CI of the commit
-//! GitHub has for it instead, from a second query on the branch's ref where
-//! git pushes it (`BRANCH_QUERY`), with no conflicts or review lines, which
-//! only a PR has. The commit is GitHub's, so the answer says when this tab's
-//! `HEAD` isn't it: ahead of it or behind it by some commits, or elsewhere.
+//! GitHub has for it instead, from a query on the branch's ref where git
+//! pushes it (`BRANCH_QUERY`), with no conflicts or review, which only a PR
+//! has. The commit is GitHub's, so the verdict says when this tab's `HEAD`
+//! isn't it: ahead of it or behind it by some commits, or elsewhere.
+//!
+//! `switchboard pr-view --checks` pages the failing checks, each with its
+//! description, link and a GitHub Actions job's last lines of log.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use ratatui::buffer::Buffer;
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
 use regex::Regex;
 use serde_json::{Value, json};
 
 use super::pager::{self, Content};
 use crate::integrations::github;
-use crate::mux::input::{Key, KeyCode, Mods, Mouse};
-use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
-use crate::ui::menu::{Filter, Filtered, NO_MATCH, SEARCH_KEYS, wrap_step};
-use crate::ui::{Look, Outcome, Overlay, Step};
+use crate::ui::kit::{Mark, Tone};
 use crate::util;
 
-const SOURCE: &str = "M-m PR check";
+const SOURCE: &str = "M-v PR checks";
 
-const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!, $after: String) { repository(owner: $owner, name: $name) { \
-    pullRequest(number: $number) { number title url state isDraft mergeable mergeStateStatus reviewDecision \
-    autoMergeRequest { enabledAt } mergeQueueEntry { state position } \
+/// A PR's checks a page at a time, for those past the view's first page
+/// and for `--checks`, whose list has to have every failing one.
+pub const CHECKS_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!, $after: String) { repository(owner: $owner, name: $name) { \
+    pullRequest(number: $number) { number \
     commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100, after: $after) { \
     checkRunCountsByState { state count } statusContextCountsByState { state count } \
     pageInfo { hasNextPage endCursor } \
     nodes { __typename \
-      ... on CheckRun { name status conclusion detailsUrl isRequired(pullRequestNumber: $number) } \
+      ... on CheckRun { name status conclusion detailsUrl title isRequired(pullRequestNumber: $number) } \
       ... on StatusContext { context state targetUrl description isRequired(pullRequestNumber: $number) } \
-    } } } } } } } } }";
+    } } } } } } } }";
+
+/// Whether a PR can merge, asked again while GitHub is still working it out.
+const MERGE_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { \
+    pullRequest(number: $number) { mergeable mergeStateStatus mergeQueueEntry { state position } } } }";
 
 const BRANCH_QUERY: &str = "query($owner: String!, $name: String!, $qualified: String!, $after: String) { repository(owner: $owner, name: $name) { \
+    defaultBranchRef { name } \
     ref(qualifiedName: $qualified) { target { ... on Commit { oid statusCheckRollup { contexts(first: 100, after: $after) { \
     checkRunCountsByState { state count } statusContextCountsByState { state count } \
     pageInfo { hasNextPage endCursor } \
     nodes { __typename \
-      ... on CheckRun { name status conclusion detailsUrl } \
+      ... on CheckRun { name status conclusion detailsUrl title } \
       ... on StatusContext { context state targetUrl description } \
     } } } } } } } }";
 
-/// What the answer offers to do, by the number the box gives back.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Choice {
-    SeeFailing = 0,
-    ResolveConflicts = 1,
-    Close = 2,
+/// Where a PR's checks are in `CHECKS_QUERY`'s answer, and in the shape a
+/// branch's commit is put in (`commit_checks`).
+pub const CONTEXTS: &str = "/commits/nodes/0/commit/statusCheckRollup/contexts";
+/// The most pages of checks read, a thousand checks.
+pub const CHECK_PAGES: usize = 10;
+
+/// What GitHub's answer about whether something can merge comes to, as
+/// the view draws it: a chip in its head (`mark` and `chip`, in `tone`),
+/// the sentence under it and its reasons beside that, and what the view's
+/// menu then offers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Verdict {
+    pub mark: Mark,
+    pub chip: String,
+    pub tone: Tone,
+    pub said: String,
+    pub reasons: Vec<String>,
+    /// A check is failing: "See the failing checks".
+    pub failing: bool,
+    /// It has merge conflicts: "Type /resolve-conflicts into this tab's
+    /// Claude".
+    pub conflicts: bool,
 }
 
-impl Choice {
-    pub fn from_index(i: usize) -> Choice {
-        match i {
-            0 => Choice::SeeFailing,
-            1 => Choice::ResolveConflicts,
-            _ => Choice::Close,
-        }
+impl Verdict {
+    /// The chip's words with its mark before them.
+    pub fn chip_text(&self) -> String {
+        format!("{} {}", self.mark.look().0, self.chip)
     }
 
-    fn label(self) -> &'static str {
-        match self {
-            Choice::SeeFailing => "See the failing checks",
-            Choice::ResolveConflicts => "Type /resolve-conflicts into this tab's Claude",
-            Choice::Close => "Close",
-        }
+    /// The reasons as the line under the head has them.
+    pub fn reasons_text(&self) -> String {
+        self.reasons.join(" · ")
     }
-}
-
-/// The answer, as the box shows it.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Answer {
-    pub lines: Vec<Line<'static>>,
-    pub choices: Vec<Choice>,
-}
-
-impl Answer {
-    /// Its text, for the tests.
-    pub fn text(&self) -> String {
-        self.lines
-            .iter()
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .map(|s| s.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-}
-
-fn green() -> Style {
-    Style::new().fg(Color::Green)
-}
-fn red() -> Style {
-    Style::new().fg(Color::Red)
-}
-fn yellow() -> Style {
-    Style::new().fg(Color::Yellow)
-}
-fn dim() -> Style {
-    Style::new().add_modifier(Modifier::DIM)
-}
-fn bold(style: Style) -> Style {
-    style.add_modifier(Modifier::BOLD)
 }
 
 /// A check's state in gh's buckets, as `gh pr checks` says them.
@@ -148,7 +124,7 @@ fn bucket(state: &str) -> &'static str {
 
 /// One check's bucket: a check run by its conclusion once it has
 /// completed, a status by its state.
-fn check_bucket(node: &Value) -> &'static str {
+pub fn check_bucket(node: &Value) -> &'static str {
     let text = |k: &str| node.get(k).and_then(Value::as_str).unwrap_or("");
     if node.get("__typename").and_then(Value::as_str) == Some("CheckRun") {
         if text("status") != "COMPLETED" {
@@ -157,251 +133,6 @@ fn check_bucket(node: &Value) -> &'static str {
         return bucket(text("conclusion"));
     }
     bucket(text("state"))
-}
-
-/// Counts by bucket, `3 pass, 1 fail`, in gh's order; "none" for none.
-fn counts(pairs: impl Iterator<Item = (&'static str, u64)>) -> String {
-    let mut by: Vec<(&str, u64)> = Vec::new();
-    for (b, n) in pairs.filter(|(_, n)| *n > 0) {
-        match by.iter_mut().find(|(k, _)| *k == b) {
-            Some((_, total)) => *total += n,
-            None => by.push((b, n)),
-        }
-    }
-    let order = ["pass", "fail", "pending", "cancel", "skipping"];
-    by.sort_by_key(|(b, _)| order.iter().position(|o| o == b).unwrap_or(9));
-    if by.is_empty() {
-        return "none".into();
-    }
-    by.iter()
-        .map(|(b, n)| format!("{n} {b}"))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// The answer from what GitHub said of the PR.
-pub fn answer_from(pr: &Value) -> Answer {
-    let text = |k: &str| pr.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-    let mut lines = vec![
-        Line::from(Span::styled(
-            format!(
-                "#{} {}",
-                pr.get("number").map(util::js_string).unwrap_or_default(),
-                text("title")
-            ),
-            bold(Style::new()),
-        )),
-        Line::from(Span::styled(text("url"), dim())),
-        Line::default(),
-    ];
-    let said = |lines: &mut Vec<Line<'static>>, parts: Vec<(String, Style)>| {
-        lines.push(Line::from(
-            parts
-                .into_iter()
-                .map(|(t, s)| Span::styled(t, s))
-                .collect::<Vec<_>>(),
-        ));
-    };
-    match text("state").as_str() {
-        "MERGED" => {
-            said(&mut lines, vec![("Already merged.".into(), bold(green()))]);
-            return Answer {
-                lines,
-                choices: Vec::new(),
-            };
-        }
-        "CLOSED" => {
-            said(
-                &mut lines,
-                vec![("Closed without merging.".into(), bold(red()))],
-            );
-            return Answer {
-                lines,
-                choices: Vec::new(),
-            };
-        }
-        _ => {}
-    }
-    if let Some(entry) = pr.get("mergeQueueEntry").filter(|e| e.is_object()) {
-        let state = entry.get("state").and_then(Value::as_str).unwrap_or("");
-        let position = entry
-            .get("position")
-            .map(util::js_string)
-            .unwrap_or_default();
-        let at = format!(" at position {position}");
-        let verdict = match state {
-            "AWAITING_CHECKS" => vec![
-                ("In the merge queue".into(), bold(green())),
-                (format!("{at}, waiting on the queue's checks."), green()),
-            ],
-            "MERGEABLE" => vec![
-                ("In the merge queue".into(), bold(green())),
-                (format!("{at}, passed and waiting its turn."), green()),
-            ],
-            "LOCKED" => vec![
-                ("In the merge queue".into(), bold(green())),
-                (format!("{at}, merging now."), green()),
-            ],
-            "UNMERGEABLE" => vec![
-                (
-                    format!("In the merge queue{at}, but it cannot merge"),
-                    bold(red()),
-                ),
-                (": it will be removed unless that changes.".into(), red()),
-            ],
-            other => vec![
-                ("In the merge queue".into(), bold(green())),
-                (
-                    format!("{at} ({}).", other.to_lowercase().replace('_', " ")),
-                    green(),
-                ),
-            ],
-        };
-        said(&mut lines, verdict);
-        return Answer {
-            lines,
-            choices: Vec::new(),
-        };
-    }
-    let merge_state = text("mergeStateStatus");
-    let verdict: Vec<(String, Style)> = match merge_state.as_str() {
-        "CLEAN" => vec![("Ready to merge.".into(), bold(green()))],
-        "HAS_HOOKS" => vec![
-            ("Ready to merge".into(), bold(green())),
-            (" (the repo runs merge hooks).".into(), green()),
-        ],
-        "UNSTABLE" => vec![
-            ("Ready to merge".into(), bold(green())),
-            (
-                ", though some optional checks are not passing.".into(),
-                yellow(),
-            ),
-        ],
-        "BEHIND" => vec![
-            ("Not ready:".into(), bold(yellow())),
-            (
-                " the branch is behind its base and must be updated.".into(),
-                yellow(),
-            ),
-        ],
-        "BLOCKED" => vec![
-            ("Not ready:".into(), bold(red())),
-            (" blocked by a required review or check.".into(), red()),
-        ],
-        "DIRTY" => vec![
-            ("Not ready:".into(), bold(red())),
-            (" it has merge conflicts.".into(), red()),
-        ],
-        "DRAFT" => vec![
-            ("Not ready:".into(), bold(yellow())),
-            (" it is still a draft.".into(), yellow()),
-        ],
-        _ => vec![
-            (
-                "GitHub has not worked out whether it can merge yet.".into(),
-                bold(yellow()),
-            ),
-            (" Try again in a moment.".into(), dim()),
-        ],
-    };
-    said(&mut lines, verdict);
-    lines.push(Line::default());
-    let contexts = pr
-        .pointer("/commits/nodes/0/commit/statusCheckRollup/contexts")
-        .cloned()
-        .unwrap_or(Value::Null);
-    let state_counts = |key: &str| -> Vec<(&'static str, u64)> {
-        contexts
-            .get(key)
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .map(|c| {
-                (
-                    bucket(c.get("state").and_then(Value::as_str).unwrap_or("")),
-                    c.get("count").and_then(Value::as_u64).unwrap_or(0),
-                )
-            })
-            .collect()
-    };
-    let all = counts(
-        state_counts("checkRunCountsByState")
-            .into_iter()
-            .chain(state_counts("statusContextCountsByState")),
-    );
-    let nodes: Vec<Value> = contexts
-        .get("nodes")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let required: (String, Style) =
-        if matches!(merge_state.as_str(), "CLEAN" | "HAS_HOOKS" | "UNSTABLE") {
-            ("all passing".into(), green())
-        } else {
-            let shown = counts(
-                nodes
-                    .iter()
-                    .filter(|n| n.get("isRequired").and_then(Value::as_bool) == Some(true))
-                    .map(|n| (check_bucket(n), 1)),
-            );
-            (shown, Style::new())
-        };
-    let review = match text("reviewDecision").as_str() {
-        "APPROVED" => ("approved".to_string(), green()),
-        "CHANGES_REQUESTED" => ("changes requested".into(), red()),
-        "REVIEW_REQUIRED" => ("review required".into(), yellow()),
-        _ => ("none required".into(), dim()),
-    };
-    let mergeable = text("mergeable");
-    let conflicts = match mergeable.as_str() {
-        "MERGEABLE" => ("none".to_string(), green()),
-        "CONFLICTING" => ("conflicts with the base".into(), red()),
-        _ => ("unknown".into(), dim()),
-    };
-    let draft = if pr.get("isDraft").and_then(Value::as_bool) == Some(true) {
-        ("yes".to_string(), yellow())
-    } else {
-        ("no".into(), Style::new())
-    };
-    let auto = if pr.get("autoMergeRequest").is_some_and(|a| !a.is_null()) {
-        ("on".to_string(), green())
-    } else {
-        ("off".into(), Style::new())
-    };
-    for (label, (value, style)) in [
-        ("Required checks", required),
-        ("All checks", (all.clone(), Style::new())),
-        ("Review", review),
-        ("Conflicts", conflicts),
-        ("Draft", draft),
-        ("Auto-merge", auto),
-    ] {
-        said(
-            &mut lines,
-            vec![(format!("{label:<17} "), Style::new()), (value, style)],
-        );
-    }
-    let mut choices = Vec::new();
-    if all.contains("fail") {
-        choices.push(Choice::SeeFailing);
-    }
-    if mergeable == "CONFLICTING" || merge_state == "DIRTY" {
-        choices.push(Choice::ResolveConflicts);
-    }
-    Answer { lines, choices }
-}
-
-/// Where this tab's `HEAD` is against the commit GitHub has for the branch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Local {
-    /// The same commit.
-    Checked,
-    /// Ahead of it by this many commits.
-    Ahead(u64),
-    /// Behind it by this many commits.
-    Behind(u64),
-    /// Beside it, or nowhere git can tell.
-    Elsewhere,
 }
 
 /// The counts of `contexts` (a `statusCheckRollup`'s) by gh's bucket.
@@ -419,81 +150,227 @@ fn bucket_counts(contexts: &Value) -> Vec<(&'static str, u64)> {
         .collect()
 }
 
-/// The answer for a branch with no PR, from the commit GitHub has for it
-/// (`checks` as `commit_checks` shapes it; `None` when GitHub has no such
-/// branch) and where this tab is against it.
-pub fn answer_from_branch(branch: &str, checks: Option<&Value>, local: Local) -> Answer {
-    let Some(checks) = checks else {
-        return Answer {
-            lines: vec![Line::from(Span::styled(
-                format!("No PR, and {branch} isn't on GitHub."),
-                bold(yellow()),
-            ))],
-            choices: Vec::new(),
-        };
-    };
-    let oid = checks
-        .pointer("/commits/nodes/0/commit/oid")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let mut lines = vec![
-        Line::from(Span::styled(
-            format!("No PR · CI on {branch} at {}", short(oid)),
-            bold(Style::new()),
-        )),
-        Line::default(),
-    ];
-    let contexts = checks.pointer(CONTEXTS).cloned().unwrap_or(Value::Null);
-    let by_bucket = bucket_counts(&contexts);
-    let total: u64 = by_bucket.iter().map(|(_, n)| n).sum();
-    let of = |b: &str| -> u64 {
-        by_bucket
-            .iter()
-            .filter(|(k, _)| *k == b)
-            .map(|(_, n)| n)
-            .sum()
-    };
-    let (failing, running, canceled) = (of("fail"), of("pending"), of("cancel"));
-    let verdict = if total == 0 {
-        Span::styled("No checks.", bold(dim()))
-    } else if failing > 0 {
-        Span::styled(format!("Failing: {failing} of {total}."), bold(red()))
-    } else if running > 0 {
-        Span::styled(format!("Running: {running} of {total}."), bold(yellow()))
-    } else if canceled > 0 {
-        Span::styled(format!("Canceled: {canceled} of {total}."), bold(yellow()))
-    } else {
-        Span::styled("Passing.", bold(green()))
-    };
-    lines.push(Line::from(verdict));
-    if total > 0 {
-        lines.push(Line::from(vec![
-            Span::raw(format!("{:<17} ", "All checks")),
-            Span::raw(counts(by_bucket.into_iter())),
-        ]));
+fn of_bucket(by: &[(&str, u64)], b: &str) -> u64 {
+    by.iter().filter(|(k, _)| *k == b).map(|(_, n)| n).sum()
+}
+
+/// The required checks among `contexts`' nodes, passed and in all; `None`
+/// when GitHub said of none whether it is required (a copy kept before it
+/// was asked).
+pub fn required(contexts: &Value) -> Option<(u64, u64)> {
+    let nodes = contexts.get("nodes").and_then(Value::as_array)?;
+    if !nodes.iter().any(|n| n.get("isRequired").is_some()) {
+        return None;
     }
-    let behind = match local {
-        Local::Checked => None,
-        Local::Ahead(1) => Some("This tab is 1 commit ahead of what GitHub checked.".to_string()),
-        Local::Ahead(n) => Some(format!(
-            "This tab is {n} commits ahead of what GitHub checked."
-        )),
-        Local::Behind(1) => Some("This tab is 1 commit behind what GitHub checked.".to_string()),
-        Local::Behind(n) => Some(format!(
-            "This tab is {n} commits behind what GitHub checked."
-        )),
-        Local::Elsewhere => Some("This tab's commit isn't the one GitHub checked.".into()),
-    };
-    if let Some(behind) = behind {
-        lines.push(Line::default());
-        lines.push(Line::from(Span::styled(behind, yellow())));
+    let required: Vec<&Value> = nodes
+        .iter()
+        .filter(|n| n.get("isRequired").and_then(Value::as_bool) == Some(true))
+        .collect();
+    let passed = required
+        .iter()
+        .filter(|n| matches!(check_bucket(n), "pass" | "skipping"))
+        .count();
+    Some((passed as u64, required.len() as u64))
+}
+
+/// The PR's verdict, from the PR as the view's query gives it and its last
+/// commit's checks (`contexts`); `None` for a merged or closed PR, and for
+/// a copy kept before the view asked whether it can merge.
+pub fn verdict(pr: &Value, contexts: &Value) -> Option<Verdict> {
+    let text = |k: &str| pr.get(k).and_then(Value::as_str).unwrap_or("");
+    if matches!(text("state"), "MERGED" | "CLOSED") {
+        return None;
     }
-    let choices = if failing > 0 {
-        vec![Choice::SeeFailing]
+    if let Some(entry) = pr.get("mergeQueueEntry").filter(|e| e.is_object()) {
+        return Some(queued(entry));
+    }
+    let merge_state = pr.get("mergeStateStatus").and_then(Value::as_str)?;
+    let base = text("baseRefName");
+    let by_bucket = bucket_counts(contexts);
+    // GitHub's counts, or where they are missing the checks listed.
+    let listed_failing = contexts
+        .get("nodes")
+        .and_then(Value::as_array)
+        .is_some_and(|n| n.iter().any(|c| check_bucket(c) == "fail"));
+    let failing = of_bucket(&by_bucket, "fail") > 0 || listed_failing;
+    let conflicts = text("mergeable") == "CONFLICTING" || merge_state == "DIRTY";
+    let ready = matches!(merge_state, "CLEAN" | "HAS_HOOKS" | "UNSTABLE");
+    let (mark, chip, said) = if conflicts {
+        (
+            Mark::Failed,
+            format!("Conflicts with {base}"),
+            "Not ready: it has merge conflicts.",
+        )
     } else {
-        Vec::new()
+        match merge_state {
+            "CLEAN" => (Mark::Passed, "Ready to merge".into(), "Ready to merge."),
+            "HAS_HOOKS" => (
+                Mark::Passed,
+                "Ready to merge".into(),
+                "Ready to merge (the repo runs merge hooks).",
+            ),
+            "UNSTABLE" => (
+                Mark::Passed,
+                "Ready to merge".into(),
+                "Ready to merge, though some optional checks are not passing.",
+            ),
+            "BEHIND" => (
+                Mark::Needs,
+                format!("Behind {base}"),
+                "Not ready: the branch is behind its base and must be updated.",
+            ),
+            "BLOCKED" => (
+                Mark::Failed,
+                "Blocked".into(),
+                "Not ready: blocked by a required review or check.",
+            ),
+            "DRAFT" => (
+                Mark::Pending,
+                "Not ready".into(),
+                "Not ready: it is still a draft.",
+            ),
+            _ => (
+                Mark::Pending,
+                "Not worked out yet".into(),
+                "GitHub has not worked out whether it can merge yet.",
+            ),
+        }
     };
-    Answer { lines, choices }
+    let mut reasons = Vec::new();
+    if !conflicts && text("mergeable") == "MERGEABLE" {
+        reasons.push("no conflicts".to_string());
+    }
+    match required(contexts) {
+        _ if ready => reasons.push("required checks passing".into()),
+        Some((passed, total)) if total > 0 && passed == total => {
+            reasons.push("required checks passing".into())
+        }
+        Some((passed, total)) if total > 0 => {
+            reasons.push(format!("required {passed} of {total} passed"))
+        }
+        _ => {}
+    }
+    match text("reviewDecision") {
+        "APPROVED" => reasons.push("approved".into()),
+        "CHANGES_REQUESTED" => reasons.push("changes requested".into()),
+        "REVIEW_REQUIRED" => reasons.push("review required".into()),
+        _ => {}
+    }
+    if pr.get("autoMergeRequest").is_some_and(|a| !a.is_null()) {
+        reasons.push("auto-merge on".into());
+    }
+    if mark == Mark::Pending && merge_state != "DRAFT" {
+        reasons.push("r asks again".into());
+    }
+    Some(Verdict {
+        tone: mark.look().1,
+        mark,
+        chip,
+        said: said.into(),
+        reasons,
+        failing,
+        conflicts,
+    })
+}
+
+/// A PR in the merge queue: its place, and what the queue is doing.
+fn queued(entry: &Value) -> Verdict {
+    let state = entry.get("state").and_then(Value::as_str).unwrap_or("");
+    let position = entry
+        .get("position")
+        .map(util::js_string)
+        .unwrap_or_default();
+    let (mark, said, doing) = match state {
+        "UNMERGEABLE" => (
+            Mark::Failed,
+            format!("In the merge queue at position {position}, but it cannot merge."),
+            "it will be removed unless that changes".to_string(),
+        ),
+        "AWAITING_CHECKS" => (
+            Mark::Landing,
+            format!("In the merge queue at position {position}."),
+            "waiting on the queue's checks".into(),
+        ),
+        "MERGEABLE" => (
+            Mark::Landing,
+            format!("In the merge queue at position {position}."),
+            "passed and waiting its turn".into(),
+        ),
+        "LOCKED" => (
+            Mark::Landing,
+            format!("In the merge queue at position {position}."),
+            "merging now".into(),
+        ),
+        other => (
+            Mark::Landing,
+            format!("In the merge queue at position {position}."),
+            other.to_lowercase().replace('_', " "),
+        ),
+    };
+    Verdict {
+        tone: mark.look().1,
+        mark,
+        chip: "In the merge queue".into(),
+        said,
+        reasons: vec![doing],
+        failing: false,
+        conflicts: false,
+    }
+}
+
+/// Where this tab's `HEAD` is against the commit GitHub has for the branch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Local {
+    /// The same commit.
+    Checked,
+    /// Ahead of it by this many commits.
+    Ahead(u64),
+    /// Behind it by this many commits.
+    Behind(u64),
+    /// Beside it, or nowhere git can tell.
+    Elsewhere,
+}
+
+impl Local {
+    /// As the view's copy keeps it.
+    fn to_json(self) -> Value {
+        match self {
+            Local::Checked => json!("checked"),
+            Local::Ahead(n) => json!({ "ahead": n }),
+            Local::Behind(n) => json!({ "behind": n }),
+            Local::Elsewhere => json!("elsewhere"),
+        }
+    }
+
+    fn of_json(v: &Value) -> Local {
+        if let Some(n) = v.get("ahead").and_then(Value::as_u64) {
+            return Local::Ahead(n);
+        }
+        if let Some(n) = v.get("behind").and_then(Value::as_u64) {
+            return Local::Behind(n);
+        }
+        match v.as_str() {
+            Some("elsewhere") => Local::Elsewhere,
+            _ => Local::Checked,
+        }
+    }
+
+    /// How this tab stands against what GitHub checked, unless it is that.
+    fn words(self) -> Option<String> {
+        let commits = |n: u64| format!("{n} commit{}", if n == 1 { "" } else { "s" });
+        match self {
+            Local::Checked => None,
+            Local::Ahead(n) => Some(format!(
+                "this tab is {} ahead of what GitHub checked",
+                commits(n)
+            )),
+            Local::Behind(n) => Some(format!(
+                "this tab is {} behind what GitHub checked",
+                commits(n)
+            )),
+            Local::Elsewhere => Some("this tab's commit isn't the one GitHub checked".into()),
+        }
+    }
 }
 
 /// A commit's first seven characters, as GitHub shows it.
@@ -507,19 +384,79 @@ fn commit_checks(commit: Value) -> Value {
     json!({ "commits": { "nodes": [{ "commit": commit }] } })
 }
 
-/// Where the PR's checks are in M-m's answer, from the PR and from `data`.
-const CONTEXTS: &str = "/commits/nodes/0/commit/statusCheckRollup/contexts";
-/// The most pages of checks read, a thousand checks.
-const CHECK_PAGES: usize = 10;
+/// Whether a copy the view keeps is a branch with no PR (`branch_ci`'s).
+pub fn is_branch(copy: &Value) -> bool {
+    copy.get("noPr").and_then(Value::as_bool) == Some(true)
+}
 
-/// Whether the checks GitHub left off the first page are needed: its
-/// counts say a check failed or is still running, so the list of them has
-/// to have every check, and there are more pages. A PR whose checks all
-/// passed, or that has a hundred or fewer, costs one query.
-fn needs_rest(pr: &Value) -> bool {
-    let Some(contexts) = pr.pointer(CONTEXTS) else {
-        return false;
+/// The branch's verdict, from what `branch_ci` read: how its CI went on
+/// GitHub's commit for it, and how this tab stands against that commit.
+pub fn branch_verdict(copy: &Value) -> Verdict {
+    let branch = copy.get("branch").and_then(Value::as_str).unwrap_or("");
+    let Some(checks) = copy.get("checks").filter(|c| c.is_object()) else {
+        return Verdict {
+            mark: Mark::Idle,
+            chip: "Not on GitHub".into(),
+            tone: Tone::Dim,
+            said: format!("{branch} isn't on GitHub."),
+            reasons: vec!["push it and open a PR, then M-v again".into()],
+            failing: false,
+            conflicts: false,
+        };
     };
+    let oid = checks
+        .pointer("/commits/nodes/0/commit/oid")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let contexts = checks.pointer(CONTEXTS).cloned().unwrap_or(Value::Null);
+    let by_bucket = bucket_counts(&contexts);
+    let total: u64 = by_bucket.iter().map(|(_, n)| n).sum();
+    let of = |b: &str| of_bucket(&by_bucket, b);
+    let (failing, running, canceled) = (of("fail"), of("pending"), of("cancel"));
+    let (mark, chip, said) = if total == 0 {
+        (Mark::Idle, "No checks", "No checks.".to_string())
+    } else if failing > 0 {
+        (
+            Mark::Failed,
+            "CI failing",
+            format!("Failing: {failing} of {total}."),
+        )
+    } else if running > 0 {
+        (
+            Mark::Pending,
+            "CI running",
+            format!("Running: {running} of {total}."),
+        )
+    } else if canceled > 0 {
+        (
+            Mark::Needs,
+            "CI canceled",
+            format!("Canceled: {canceled} of {total}."),
+        )
+    } else {
+        (Mark::Passed, "CI passing", "Passing.".to_string())
+    };
+    let mut reasons = vec![format!("CI on {branch} at {}", short(oid))];
+    reasons.extend(Local::of_json(copy.get("local").unwrap_or(&Value::Null)).words());
+    if copy.get("complete").and_then(Value::as_bool) == Some(false) {
+        reasons.push("more checks than GitHub sent".into());
+    }
+    Verdict {
+        tone: mark.look().1,
+        mark,
+        chip: chip.into(),
+        said,
+        reasons,
+        failing: failing > 0,
+        conflicts: false,
+    }
+}
+
+/// Whether the checks GitHub left off the first page of `contexts` are
+/// needed: its counts say a check failed or is still running, so the list
+/// of them has to have every check, and there are more pages. A PR whose
+/// checks all passed, or that has a hundred or fewer, costs one query.
+pub fn needs_rest(contexts: &Value) -> bool {
     let unsettled = bucket_counts(contexts)
         .iter()
         .any(|(b, n)| *n > 0 && matches!(*b, "fail" | "pending"));
@@ -530,75 +467,84 @@ fn needs_rest(pr: &Value) -> bool {
     unsettled && more
 }
 
-/// The PR with every check read in place of the first page's.
-fn with_checks(mut pr: Value, paged: github::Paged) -> Value {
-    if let Some(contexts) = pr.pointer_mut(CONTEXTS) {
-        contexts["nodes"] = Value::Array(paged.nodes);
+/// `contexts` (a first page) with every check after it read too, from
+/// `query` asked again, its checks at `at` in the query's data; and whether
+/// every check is there.
+async fn every_check(
+    contexts: Value,
+    query: &str,
+    variables: &Value,
+    at: &str,
+) -> Result<(Value, bool), String> {
+    if !needs_rest(&contexts) {
+        return Ok((contexts, true));
     }
-    pr
-}
-
-/// What M-m reads for a tab: its branch's PR, else the branch's own CI.
-enum State {
-    /// The PR as `QUERY` gives it, and whether every check is there.
-    Pr {
-        repo: github::Repo,
-        pr: Value,
-        complete: bool,
-    },
-    /// The branch's commit on GitHub (`commit_checks`'s shape; `None` when
-    /// GitHub has no such branch), whether every check is there, and where
-    /// this tab is against it.
-    Branch {
-        repo: github::Repo,
-        branch: String,
-        checks: Option<Value>,
-        complete: bool,
-        local: Local,
-    },
-}
-
-/// The PR for `dir`'s branch as M-m's query gives it, asked again while
-/// GitHub hasn't worked out whether it can merge, else the branch's own
-/// checks; either with every check when any failed or is running
-/// (`needs_rest`), and whether every check is there: false when there were
-/// more than `CHECK_PAGES` pages.
-async fn state_of(dir: &Path) -> Result<State, String> {
-    let found = github::branch_pr(dir, SOURCE)
+    let paged = github::rest_of(query, variables, at, &contexts, CHECK_PAGES, SOURCE)
         .await
         .map_err(|e| e.to_string())?;
-    let Some((repo, pr)) = found else {
-        return branch_state(dir).await;
-    };
-    let variables = json!({ "owner": repo.owner, "name": repo.name, "number": pr.number });
-    let mut answer = Value::Null;
-    for attempt in 0..3 {
-        if attempt > 0 {
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
-        let data = github::graphql(QUERY, variables.clone(), SOURCE)
-            .await
-            .map_err(|e| e.to_string())?;
-        answer = data
-            .pointer("/repository/pullRequest")
-            .cloned()
-            .unwrap_or(Value::Null);
-        if answer.get("mergeable").and_then(Value::as_str) != Some("UNKNOWN") {
-            break;
-        }
-    }
-    let (pr, complete) = every_check(answer, QUERY, &variables, "/repository/pullRequest").await?;
-    Ok(State::Pr { repo, pr, complete })
+    let mut contexts = contexts;
+    contexts["nodes"] = Value::Array(paged.nodes);
+    Ok((contexts, paged.complete))
 }
 
-/// `state_of` for a branch with no PR: the checks of the commit GitHub has
-/// for it, in the repository it is pushed to.
-async fn branch_state(dir: &Path) -> Result<State, String> {
+/// The PR's checks (`contexts`, the view's first page) with every one read
+/// when any failed or is running; and whether every check is there.
+pub async fn pr_checks(
+    repo: &github::Repo,
+    number: u64,
+    contexts: Value,
+) -> Result<(Value, bool), String> {
+    let variables = json!({ "owner": repo.owner, "name": repo.name, "number": number });
+    every_check(
+        contexts,
+        CHECKS_QUERY,
+        &variables,
+        &format!("/repository/pullRequest{CONTEXTS}"),
+    )
+    .await
+}
+
+/// Whether the PR can merge, asked again up to twice a second apart while
+/// GitHub answers UNKNOWN, as `pr` carries it: its fields replaced by the
+/// last answer.
+pub async fn settle(repo: &github::Repo, number: u64, pr: &mut Value) {
+    let variables = json!({ "owner": repo.owner, "name": repo.name, "number": number });
+    // A merged or closed PR, or one the queue holds, shows no verdict of
+    // GitHub's mergeability, so it isn't waited on.
+    let settled = matches!(
+        pr.get("state").and_then(Value::as_str),
+        Some("MERGED" | "CLOSED")
+    ) || pr.get("mergeQueueEntry").is_some_and(Value::is_object);
+    if settled {
+        return;
+    }
+    for _ in 0..2 {
+        if pr.get("mergeable").and_then(Value::as_str) != Some("UNKNOWN") {
+            return;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let Ok(data) = github::graphql(MERGE_QUERY, variables.clone(), SOURCE).await else {
+            return;
+        };
+        let Some(answer) = data.pointer("/repository/pullRequest") else {
+            return;
+        };
+        for key in ["mergeable", "mergeStateStatus", "mergeQueueEntry"] {
+            pr[key] = answer.get(key).cloned().unwrap_or(Value::Null);
+        }
+    }
+}
+
+/// What the PR view keeps for a branch with no PR: the checks of the
+/// commit GitHub has for it (`commit_checks`'s shape, null when GitHub has
+/// no such branch), whether every check is there, how this tab stands
+/// against that commit, and how far the branch is ahead of the default one.
+pub async fn branch_ci(dir: &Path) -> Result<Value, String> {
     let pushed = github::pushed_branch(dir)
         .await
         .map_err(|e| e.to_string())?;
     let Some((repo, branch)) = pushed else {
-        return Err("No pull request for this branch.".into());
+        return Err("No PR, and this checkout isn't on a branch.".into());
     };
     let variables = json!({
         "owner": repo.owner, "name": repo.name,
@@ -607,66 +553,64 @@ async fn branch_state(dir: &Path) -> Result<State, String> {
     let data = github::graphql(BRANCH_QUERY, variables.clone(), SOURCE)
         .await
         .map_err(|e| e.to_string())?;
+    let default = data
+        .pointer("/repository/defaultBranchRef/name")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let ahead = match &default {
+        Some(d) if *d != branch => ahead_of(dir, d).await,
+        _ => None,
+    };
+    let mut copy = json!({
+        "noPr": true, "owner": repo.owner, "name": repo.name, "branch": branch, "checks": null, "complete": true,
+        "local": Local::Checked.to_json(), "defaultBranch": default, "aheadOfDefault": ahead,
+    });
     let Some(commit) = data
         .pointer("/repository/ref/target")
         .filter(|t| t.get("oid").is_some())
         .cloned()
     else {
-        return Ok(State::Branch {
-            repo,
-            branch,
-            checks: None,
-            complete: true,
-            local: Local::Checked,
-        });
+        return Ok(copy);
     };
     let oid = commit
         .get("oid")
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    let (checks, complete) = every_check(
-        commit_checks(commit),
-        BRANCH_QUERY,
-        &variables,
-        "/repository/ref/target",
-    )
-    .await?;
-    let local = local_against(dir, &oid).await;
-    Ok(State::Branch {
-        repo,
-        branch,
-        checks: Some(checks),
-        complete,
-        local,
-    })
+    let mut checks = commit_checks(commit);
+    if let Some(first) = checks.pointer(CONTEXTS).cloned() {
+        let (contexts, complete) = every_check(
+            first,
+            BRANCH_QUERY,
+            &variables,
+            "/repository/ref/target/statusCheckRollup/contexts",
+        )
+        .await?;
+        if let Some(c) = checks.pointer_mut(CONTEXTS) {
+            *c = contexts;
+        }
+        copy["complete"] = json!(complete);
+    }
+    copy["checks"] = checks;
+    copy["local"] = local_against(dir, &oid).await.to_json();
+    Ok(copy)
 }
 
-/// `answer` (in a PR's shape) with every check read when `needs_rest` says
-/// they are needed, `query` asked again for the pages after the first, its
-/// checks at `at` in the query's data; and whether every check is there.
-async fn every_check(
-    answer: Value,
-    query: &str,
-    variables: &Value,
-    at: &str,
-) -> Result<(Value, bool), String> {
-    if !needs_rest(&answer) {
-        return Ok((answer, true));
-    }
-    let first = answer.pointer(CONTEXTS).cloned().unwrap_or(Value::Null);
-    // A branch's commit is at the query's `target`, its checks right under
-    // it, where a PR's are under its last commit.
-    let contexts = if at.ends_with("/target") {
-        format!("{at}/statusCheckRollup/contexts")
-    } else {
-        format!("{at}{CONTEXTS}")
-    };
-    let paged = github::rest_of(query, variables, &contexts, &first, CHECK_PAGES, SOURCE)
+/// How many commits `HEAD` has that the default branch, as origin last
+/// had it, doesn't; none when git can't tell.
+async fn ahead_of(dir: &Path, default: &str) -> Option<u64> {
+    let mut cmd = tokio::process::Command::new("git");
+    cmd.arg("-C")
+        .arg(dir)
+        .args(["--no-optional-locks", "rev-list", "--count"])
+        .arg(format!("refs/remotes/origin/{default}..HEAD"));
+    let output = util::run_async(&mut cmd, Some(Duration::from_secs(10)))
         .await
-        .map_err(|e| e.to_string())?;
-    let complete = paged.complete;
-    Ok((with_checks(answer, paged), complete))
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout).trim().parse().ok()
 }
 
 /// Where this tab's `HEAD` is against `oid`, the commit GitHub has for the
@@ -699,72 +643,67 @@ async fn local_against(dir: &Path, oid: &str) -> Local {
     }
 }
 
-/// M-m's answer for `dir`, or why there is none.
-pub async fn check(dir: PathBuf) -> Result<Answer, String> {
-    let (pr, complete) = match state_of(&dir).await? {
-        State::Pr { pr, complete, .. } => (pr, complete),
-        // GitHub's counts are whole, and a branch has no required checks to
-        // count from the list.
-        State::Branch {
-            branch,
-            checks,
-            local,
-            ..
-        } => return Ok(answer_from_branch(&branch, checks.as_ref(), local)),
-    };
-    let mut answer = answer_from(&pr);
-    if !complete {
-        answer.lines.push(Line::from(Span::styled(
-            "The counts of required checks leave out the ones GitHub didn't send.",
-            dim(),
-        )));
-    }
-    Ok(answer)
-}
-
 static JOB: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"/actions/runs/\d+/job/(\d+)").unwrap());
 static STAMP: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\d{4}-\d\d-\d\dT[0-9:.]+Z ").unwrap());
 
 /// The failing checks as Markdown: each with its description and link, and
 /// a GitHub Actions job's last 25 lines of log, as pr-ready.sh's
-/// `failing` showed them in less.
+/// `failing` showed them in less. The branch's PR's, else the branch's
+/// own commit's.
 pub async fn failing_markdown(dir: &Path) -> Result<String, String> {
-    Ok(match state_of(dir).await? {
-        State::Pr { repo, pr, complete } => {
-            let of = format!(
-                "#{}",
-                pr.get("number").map(util::js_string).unwrap_or_default()
-            );
-            failing_text(&repo, &of, &pr, complete).await
-        }
-        State::Branch {
-            repo,
-            branch,
-            checks: Some(checks),
-            complete,
-            ..
-        } => {
-            let oid = checks
-                .pointer("/commits/nodes/0/commit/oid")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            let of = format!("`{branch}` at `{}`", short(oid));
-            failing_text(&repo, &of, &checks, complete).await
-        }
-        State::Branch { branch, .. } => {
+    let found = github::branch_pr(dir, SOURCE)
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some((repo, pr)) = found else {
+        let copy = branch_ci(dir).await?;
+        let branch = copy.get("branch").and_then(Value::as_str).unwrap_or("");
+        let Some(checks) = copy.get("checks").filter(|c| c.is_object()) else {
             return Err(format!("No PR, and {branch} isn't on GitHub."));
-        }
-    })
+        };
+        let oid = checks
+            .pointer("/commits/nodes/0/commit/oid")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let text = |k: &str| {
+            copy.get(k)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        };
+        let repo = github::Repo {
+            owner: text("owner"),
+            name: text("name"),
+        };
+        let complete = copy.get("complete").and_then(Value::as_bool) != Some(false);
+        let of = format!("`{branch}` at `{}`", short(oid));
+        let contexts = checks.pointer(CONTEXTS).cloned().unwrap_or(Value::Null);
+        return Ok(failing_text(&repo, &of, &contexts, complete).await);
+    };
+    let variables = json!({ "owner": repo.owner, "name": repo.name, "number": pr.number });
+    let data = github::graphql(CHECKS_QUERY, variables.clone(), SOURCE)
+        .await
+        .map_err(|e| e.to_string())?;
+    let first = data
+        .pointer(&format!("/repository/pullRequest{CONTEXTS}"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let (contexts, complete) = every_check(
+        first,
+        CHECKS_QUERY,
+        &variables,
+        &format!("/repository/pullRequest{CONTEXTS}"),
+    )
+    .await?;
+    Ok(failing_text(&repo, &format!("#{}", pr.number), &contexts, complete).await)
 }
 
-/// `failing_markdown`'s text for the checks as `state_of` read them (a PR's,
-/// or a branch's commit in its shape), headed with what they are `of`: when
-/// GitHub had more checks than were read, it ends saying so rather than
-/// that nothing is failing.
-async fn failing_text(repo: &github::Repo, of: &str, pr: &Value, complete: bool) -> String {
-    let nodes: Vec<Value> = pr
-        .pointer(&format!("{CONTEXTS}/nodes"))
+/// `failing_markdown`'s text for `contexts` (a PR's or a branch's
+/// commit's), headed with what they are `of`: when GitHub had more checks
+/// than were read, it ends saying so rather than that nothing is failing.
+async fn failing_text(repo: &github::Repo, of: &str, contexts: &Value, complete: bool) -> String {
+    let nodes: Vec<Value> = contexts
+        .get("nodes")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
@@ -789,8 +728,13 @@ async fn failing_text(repo: &github::Repo, of: &str, pr: &Value, complete: bool)
             text("detailsUrl")
         };
         out.push_str(&format!("## {name}\n\n"));
-        if !text("description").is_empty() {
-            out.push_str(&format!("{}\n\n", text("description")));
+        let about = if text("description").is_empty() {
+            text("title")
+        } else {
+            text("description")
+        };
+        if !about.is_empty() {
+            out.push_str(&format!("{about}\n\n"));
         }
         if !link.is_empty() {
             out.push_str(&format!("{link}\n\n"));
@@ -800,7 +744,7 @@ async fn failing_text(repo: &github::Repo, of: &str, pr: &Value, complete: bool)
                 "GET",
                 &format!("/repos/{repo}/actions/jobs/{job}/logs"),
                 None,
-                "M-m failing log",
+                "M-v failing log",
             )
             .await;
             if let Ok(Value::String(log)) = log {
@@ -840,465 +784,95 @@ pub fn checks_main(dir: PathBuf) -> ExitCode {
     )
 }
 
-// ── The box ─────────────────────────────────────────────────────────────────
-
-/// M-m's box: "Reaching out to GitHub..." until the answer comes, then the
-/// answer and what can be done about it, moved through with j and k (or
-/// the arrows, Tab, the wheel) and taken with Enter or a click; with
-/// nothing to do, any key closes it, as pr-ready.sh's popup did.
-pub struct ReadyBox {
-    answer: Option<Result<Answer, String>>,
-    /// The search `/` opens over its choices (crates/ui/src/menu.rs).
-    filter: Filter,
-    cursor: usize,
-    /// The first choice drawn, past those scrolled off while searching,
-    /// and the line it is drawn on.
-    first_shown: usize,
-    first_line: usize,
-    /// The line the search was last drawn on, while it is open.
-    search_line: Option<usize>,
-    hover: Option<usize>,
-    drawn: Option<Drawn>,
-}
-
-impl Default for ReadyBox {
-    fn default() -> ReadyBox {
-        ReadyBox::new()
-    }
-}
-
-impl ReadyBox {
-    pub fn new() -> ReadyBox {
-        ReadyBox {
-            answer: None,
-            filter: Filter::default(),
-            cursor: 0,
-            first_shown: 0,
-            first_line: 0,
-            search_line: None,
-            hover: None,
-            drawn: None,
-        }
-    }
-
-    /// The answer has come.
-    pub fn answered(&mut self, answer: Result<Answer, String>) {
-        self.answer = Some(answer);
-        self.cursor = 0;
-        self.filter = Filter::default();
-    }
-
-    fn choices(&self) -> Vec<Choice> {
-        match &self.answer {
-            Some(Ok(a)) if !a.choices.is_empty() => {
-                let mut c = a.choices.clone();
-                c.push(Choice::Close);
-                c
-            }
-            _ => Vec::new(),
-        }
-    }
-
-    /// The choices the search shows: every one while it is closed.
-    fn shown(&self) -> Vec<Choice> {
-        let all = self.choices();
-        let labels: Vec<&str> = all.iter().map(|c| c.label()).collect();
-        self.filter
-            .shown(&labels)
-            .into_iter()
-            .map(|i| all[i])
-            .collect()
-    }
-}
-
-impl Overlay for ReadyBox {
-    fn drawn(&self) -> Option<&crate::ui::draw::Drawn> {
-        self.drawn.as_ref()
-    }
-
-    fn kind(&self) -> &'static str {
-        "ready"
-    }
-
-    fn stands_out(&self) -> Option<ratatui::layout::Rect> {
-        self.drawn.as_ref().map(|d| d.outer)
-    }
-
-    fn draw(&mut self, buf: &mut Buffer, look: &Look) {
-        let mut lines: Vec<BoxLine> = Vec::new();
-        match &self.answer {
-            None => lines.push(BoxLine::text("Reaching out to GitHub...", look.dim())),
-            Some(Err(why)) => {
-                for l in draw::wrap(why, 70) {
-                    lines.push(BoxLine::text(l, look.text()));
-                }
-            }
-            Some(Ok(answer)) => {
-                // While searching, a verdict too long for the screen gives
-                // up its last rows, so the search and a match still fit in
-                // the box (four rows of its own and two of keys).
-                let most = (buf.area.height as usize).saturating_sub(10).max(1);
-                let cut = self.filter.is_open() && answer.lines.len() > most;
-                let keep = if cut { most - 1 } else { answer.lines.len() };
-                for l in &answer.lines[..keep] {
-                    lines.push(BoxLine::spans(l.spans.clone()));
-                }
-                if cut {
-                    lines.push(BoxLine::text("…", look.dim()));
-                }
-            }
-        }
-        let choices = self.shown();
-        let searching = self.filter.is_open();
-        if !choices.is_empty() || searching {
-            lines.push(BoxLine::blank());
-            self.search_line = searching.then_some(lines.len());
-            if searching {
-                lines.push(
-                    self.filter
-                        .line(58, choices.len(), self.choices().len(), look),
-                );
-                lines.push(BoxLine::blank());
-                if choices.is_empty() {
-                    lines.push(BoxLine::text(NO_MATCH, look.dim()));
-                }
-            }
-            // While searching, as many matches as the screen has rows for
-            // under the verdict and the search, the chosen one among them.
-            let (first, fits) = if searching {
-                let room = (buf.area.height as usize)
-                    .saturating_sub(6 + lines.len())
-                    .max(1);
-                (self.cursor.saturating_sub(room - 1), room)
-            } else {
-                (0, choices.len())
-            };
-            self.first_shown = first;
-            self.first_line = lines.len();
-            for (i, c) in choices.iter().enumerate().skip(first).take(fits) {
-                let chosen = i == self.cursor;
-                let mut spans = if chosen {
-                    vec![Span::raw(" "), look.pointer(), Span::raw(" ")]
-                } else {
-                    vec![Span::raw("   ")]
-                };
-                spans.push(Span::styled(
-                    c.label(),
-                    if chosen {
-                        look.bold_bright()
-                    } else {
-                        look.text()
-                    },
-                ));
-                let fill = if chosen {
-                    Some(look.theme.highlight)
-                } else if self.hover == Some(i) {
-                    Some(look.theme.panel)
-                } else {
-                    None
-                };
-                lines.push(BoxLine::spans(spans).fill(fill).clickable());
-            }
-        }
-        let keys = if searching {
-            SEARCH_KEYS
-        } else if choices.is_empty() {
-            if self.answer.is_none() {
-                "esc close"
-            } else {
-                "any key closes"
-            }
-        } else {
-            "j k move  ↵ choose  esc close"
-        };
-        let mut spec = BoxSpec::new("Ready to merge?", &lines);
-        spec.keys = Some(keys);
-        spec.width = 60;
-        self.drawn = Some(draw::draw_box(buf, &spec, look));
-    }
-
-    fn key(&mut self, key: Key, _look: &Look) -> Step {
-        if !self.choices().is_empty() {
-            match self.filter.key(key) {
-                Filtered::Moved => return Step::Redraw,
-                Filtered::Changed | Filtered::Closed => {
-                    self.cursor = 0;
-                    return Step::Redraw;
-                }
-                Filtered::Not => {}
-            }
-        }
-        let choices = self.shown();
-        if self.filter.is_open() {
-            return match key.code {
-                KeyCode::Down => {
-                    self.cursor = wrap_step(self.cursor, choices.len(), true);
-                    Step::Redraw
-                }
-                KeyCode::Char('n') if key.mods == Mods::CTRL => {
-                    self.cursor = wrap_step(self.cursor, choices.len(), true);
-                    Step::Redraw
-                }
-                KeyCode::Up => {
-                    self.cursor = wrap_step(self.cursor, choices.len(), false);
-                    Step::Redraw
-                }
-                KeyCode::Char('p') if key.mods == Mods::CTRL => {
-                    self.cursor = wrap_step(self.cursor, choices.len(), false);
-                    Step::Redraw
-                }
-                KeyCode::Tab if !choices.is_empty() => {
-                    self.cursor = (self.cursor + 1).min(choices.len() - 1);
-                    Step::Redraw
-                }
-                KeyCode::BackTab => {
-                    self.cursor = self.cursor.saturating_sub(1);
-                    Step::Redraw
-                }
-                KeyCode::Enter => match choices.get(self.cursor) {
-                    Some(c) => Step::Close(Outcome::Chose(*c as usize)),
-                    None => Step::Same,
-                },
-                KeyCode::Char('c') if key.mods == Mods::CTRL => Step::Close(Outcome::Dismissed),
-                _ => Step::Same,
-            };
-        }
-        if self.answer.is_none() {
-            return match key.code {
-                KeyCode::Esc | KeyCode::Char('q') => Step::Close(Outcome::Dismissed),
-                KeyCode::Char('c') if key.mods == Mods::CTRL => Step::Close(Outcome::Dismissed),
-                _ => Step::Same,
-            };
-        }
-        if choices.is_empty() {
-            return Step::Close(Outcome::Dismissed);
-        }
-        let last = choices.len() - 1;
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => Step::Close(Outcome::Dismissed),
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.cursor = wrap_step(self.cursor, choices.len(), true);
-                Step::Redraw
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.cursor = wrap_step(self.cursor, choices.len(), false);
-                Step::Redraw
-            }
-            KeyCode::Char('n') if key.mods == Mods::CTRL => {
-                self.cursor = wrap_step(self.cursor, choices.len(), true);
-                Step::Redraw
-            }
-            KeyCode::Char('p') if key.mods == Mods::CTRL => {
-                self.cursor = wrap_step(self.cursor, choices.len(), false);
-                Step::Redraw
-            }
-            // Tab and Shift-Tab go round, as menu.sh's stops did.
-            KeyCode::Tab => {
-                self.cursor = if self.cursor >= last {
-                    0
-                } else {
-                    self.cursor + 1
-                };
-                Step::Redraw
-            }
-            KeyCode::BackTab => {
-                self.cursor = if self.cursor == 0 {
-                    last
-                } else {
-                    self.cursor - 1
-                };
-                Step::Redraw
-            }
-            KeyCode::Enter | KeyCode::Char(' ') => {
-                Step::Close(Outcome::Chose(choices[self.cursor] as usize))
-            }
-            _ => Step::Same,
-        }
-    }
-
-    fn paste(&mut self, text: &str, _look: &Look) -> Step {
-        if self.filter.paste(text) {
-            self.cursor = 0;
-            Step::Redraw
-        } else {
-            Step::Same
-        }
-    }
-
-    fn mouse(&mut self, mouse: Mouse, look: &Look) -> Step {
-        let Some(drawn) = &self.drawn else {
-            return Step::Same;
-        };
-        let hit = drawn.hit(mouse.col, mouse.row);
-        let choices = self.shown();
-        let first = self.first_line;
-        let option = match hit {
-            Hit::Line(i, _) if i >= first => {
-                Some(i - first + self.first_shown).filter(|o| *o < choices.len())
-            }
-            _ => None,
-        };
-        match draw::gesture(&mouse) {
-            Gesture::Click if look.mouse => {
-                if hit == Hit::Outside || hit == Hit::Close {
-                    return Step::Close(Outcome::Dismissed);
-                }
-                if let Hit::Line(i, col) = hit
-                    && Some(i) == self.search_line
-                {
-                    self.filter.click(col as usize);
-                    return Step::Redraw;
-                }
-                match option {
-                    Some(i) => Step::Close(Outcome::Chose(choices[i] as usize)),
-                    None if self.choices().is_empty() && self.answer.is_some() => {
-                        Step::Close(Outcome::Dismissed)
-                    }
-                    None => Step::Same,
-                }
-            }
-            Gesture::WheelDown if !choices.is_empty() => {
-                self.cursor = (self.cursor + 1).min(choices.len() - 1);
-                Step::Redraw
-            }
-            Gesture::WheelUp if !choices.is_empty() => {
-                self.cursor = self.cursor.saturating_sub(1);
-                Step::Redraw
-            }
-            Gesture::Move if look.hover => {
-                if option == self.hover {
-                    Step::Same
-                } else {
-                    self.hover = option;
-                    if let Some(i) = option {
-                        self.cursor = i;
-                    }
-                    Step::Redraw
-                }
-            }
-            _ => Step::Same,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn contexts() -> Value {
+        json!({
+            "checkRunCountsByState": [{ "state": "SUCCESS", "count": 3 }, { "state": "FAILURE", "count": 1 }, { "state": "QUEUED", "count": 0 }],
+            "statusContextCountsByState": [{ "state": "PENDING", "count": 1 }],
+            "nodes": [
+                { "__typename": "CheckRun", "name": "test", "status": "COMPLETED", "conclusion": "FAILURE", "isRequired": true },
+                { "__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "SUCCESS", "isRequired": true },
+                { "__typename": "StatusContext", "context": "preview", "state": "PENDING", "isRequired": false }
+            ]
+        })
+    }
+
     fn pr(state: &str, merge_state: &str, mergeable: &str) -> Value {
         json!({
-            "number": 12, "title": "Fix the login", "url": "https://github.com/acme/w/pull/12",
-            "state": state, "isDraft": false, "mergeable": mergeable, "mergeStateStatus": merge_state,
-            "reviewDecision": "REVIEW_REQUIRED", "autoMergeRequest": null, "mergeQueueEntry": null,
-            "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "contexts": {
-                "checkRunCountsByState": [{ "state": "SUCCESS", "count": 3 }, { "state": "FAILURE", "count": 1 }, { "state": "QUEUED", "count": 0 }],
-                "statusContextCountsByState": [{ "state": "PENDING", "count": 1 }],
-                "nodes": [
-                    { "__typename": "CheckRun", "name": "test", "status": "COMPLETED", "conclusion": "FAILURE", "isRequired": true },
-                    { "__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "SUCCESS", "isRequired": true },
-                    { "__typename": "StatusContext", "context": "preview", "state": "PENDING", "isRequired": false }
-                ]
-            } } } }] }
+            "number": 12, "title": "Fix the login", "state": state, "isDraft": false,
+            "baseRefName": "main", "mergeable": mergeable, "mergeStateStatus": merge_state,
+            "reviewDecision": "CHANGES_REQUESTED", "autoMergeRequest": null, "mergeQueueEntry": null,
         })
     }
 
     #[test]
-    fn a_blocked_pr_says_why_and_offers_what_can_be_done() {
-        let answer = answer_from(&pr("OPEN", "DIRTY", "CONFLICTING"));
-        let text = answer.text();
-        assert!(text.starts_with("#12 Fix the login\nhttps://github.com/acme/w/pull/12\n\nNot ready: it has merge conflicts."), "{text}");
-        assert!(text.contains("Required checks   1 pass, 1 fail"), "{text}");
-        assert!(
-            text.contains("All checks        3 pass, 1 fail, 1 pending"),
-            "{text}"
-        );
-        assert!(text.contains("Review            review required"), "{text}");
-        assert!(
-            text.contains("Conflicts         conflicts with the base"),
-            "{text}"
-        );
+    fn a_pr_with_conflicts_says_so_first_with_its_reasons() {
+        let v = verdict(&pr("OPEN", "DIRTY", "CONFLICTING"), &contexts()).unwrap();
+        assert_eq!(v.chip_text(), "✕ Conflicts with main");
+        assert_eq!(v.said, "Not ready: it has merge conflicts.");
         assert_eq!(
-            answer.choices,
-            vec![Choice::SeeFailing, Choice::ResolveConflicts]
+            v.reasons_text(),
+            "required 1 of 2 passed · changes requested"
         );
+        assert!(v.failing && v.conflicts);
     }
 
     #[test]
-    fn a_ready_pr_needs_no_required_count_and_merged_or_queued_ones_stop_early() {
-        let answer = answer_from(&pr("OPEN", "CLEAN", "MERGEABLE"));
-        assert!(answer.text().contains("Ready to merge.\n"));
-        assert!(answer.text().contains("Required checks   all passing"));
-        let merged = answer_from(&pr("MERGED", "CLEAN", "MERGEABLE"));
-        assert!(merged.text().ends_with("Already merged."));
-        assert!(merged.choices.is_empty());
+    fn a_ready_pr_needs_no_required_count() {
+        let mut clean = pr("OPEN", "CLEAN", "MERGEABLE");
+        clean["reviewDecision"] = json!("APPROVED");
+        let v = verdict(&clean, &json!({})).unwrap();
+        assert_eq!(v.chip_text(), "✓ Ready to merge");
+        assert_eq!(v.said, "Ready to merge.");
+        assert_eq!(
+            v.reasons_text(),
+            "no conflicts · required checks passing · approved"
+        );
+        assert!(!v.failing && !v.conflicts);
+    }
+
+    #[test]
+    fn merged_closed_and_unasked_prs_have_no_verdict_and_queued_ones_stop_early() {
+        assert!(verdict(&pr("MERGED", "CLEAN", "MERGEABLE"), &contexts()).is_none());
+        assert!(verdict(&pr("CLOSED", "CLEAN", "MERGEABLE"), &contexts()).is_none());
+        let kept = json!({ "number": 3, "state": "OPEN" });
+        assert!(verdict(&kept, &contexts()).is_none(), "a copy from before");
         let mut queued = pr("OPEN", "CLEAN", "MERGEABLE");
         queued["mergeQueueEntry"] = json!({ "state": "AWAITING_CHECKS", "position": 2 });
-        assert!(
-            answer_from(&queued)
-                .text()
-                .ends_with("In the merge queue at position 2, waiting on the queue's checks.")
-        );
+        let v = verdict(&queued, &contexts()).unwrap();
+        assert_eq!(v.chip_text(), "▲ In the merge queue");
+        assert_eq!(v.said, "In the merge queue at position 2.");
+        assert_eq!(v.reasons_text(), "waiting on the queue's checks");
+        assert!(!v.failing, "the queue settled the checks");
     }
 
     #[test]
-    fn a_check_failing_past_the_first_page_is_read_and_listed() {
-        let passing: Vec<Value> = (0..100)
-            .map(|i| json!({ "__typename": "CheckRun", "name": format!("job {i}"), "status": "COMPLETED", "conclusion": "SUCCESS", "isRequired": true }))
-            .collect();
-        let mut first = pr("OPEN", "BLOCKED", "MERGEABLE");
-        first["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"] = json!({
+    fn unknown_says_github_is_still_working_it_out() {
+        let v = verdict(&pr("OPEN", "UNKNOWN", "UNKNOWN"), &json!({})).unwrap();
+        assert_eq!(
+            v.said,
+            "GitHub has not worked out whether it can merge yet."
+        );
+        assert!(v.reasons.contains(&"r asks again".to_string()));
+    }
+
+    #[test]
+    fn a_failing_check_past_the_first_page_is_needed() {
+        let mut first = json!({
             "checkRunCountsByState": [{ "state": "SUCCESS", "count": 100 }, { "state": "FAILURE", "count": 1 }],
             "statusContextCountsByState": [],
             "pageInfo": { "hasNextPage": true, "endCursor": "c1" },
-            "nodes": passing,
+            "nodes": [],
         });
         assert!(needs_rest(&first));
-        let mut all_passed = first.clone();
-        all_passed["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["checkRunCountsByState"] =
-            json!([{ "state": "SUCCESS", "count": 101 }]);
-        assert!(
-            !needs_rest(&all_passed),
-            "nothing past the first page to find"
-        );
-
-        let mut nodes = passing_nodes(&first);
-        nodes.push(json!({ "__typename": "CheckRun", "name": "e2e", "status": "COMPLETED", "conclusion": "FAILURE", "isRequired": true }));
-        let pr = with_checks(
-            first,
-            github::Paged {
-                nodes,
-                complete: true,
-            },
-        );
-        let answer = answer_from(&pr);
-        assert!(
-            answer.text().contains("Required checks   100 pass, 1 fail"),
-            "{}",
-            answer.text()
-        );
-        assert_eq!(answer.choices, vec![Choice::SeeFailing]);
-        let repo = github::Repo {
-            owner: "acme".into(),
-            name: "w".into(),
-        };
-        let text = util::block_on(failing_text(&repo, "#12", &pr, true));
-        assert!(text.contains("## e2e"), "{text}");
-        assert!(!text.contains("No check is failing"), "{text}");
-        let text = util::block_on(failing_text(&repo, "#12", &pr, false));
-        assert!(
-            text.ends_with("## e2e\n\n_And more checks GitHub didn't send._\n"),
-            "{text}"
-        );
+        first["checkRunCountsByState"] = json!([{ "state": "SUCCESS", "count": 101 }]);
+        assert!(!needs_rest(&first), "nothing past the first page to find");
     }
 
-    fn passing_nodes(pr: &Value) -> Vec<Value> {
-        pr.pointer(&format!("{CONTEXTS}/nodes"))
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap()
-    }
-
-    fn branch(runs: &[(&str, &str)]) -> Value {
+    fn branch(runs: &[(&str, &str)], local: Local) -> Value {
         let nodes: Vec<Value> = runs
             .iter()
             .map(|(name, conclusion)| match *conclusion {
@@ -1308,187 +882,81 @@ mod tests {
             .collect();
         let by: Vec<Value> = nodes
             .iter()
-            .map(|n| {
-                let state = n["conclusion"].as_str().unwrap_or("IN_PROGRESS");
-                json!({ "state": state, "count": 1 })
-            })
+            .map(|n| json!({ "state": n["conclusion"].as_str().unwrap_or("IN_PROGRESS"), "count": 1 }))
             .collect();
-        commit_checks(json!({
-            "oid": "abcdef1234567890",
-            "statusCheckRollup": { "contexts": {
-                "checkRunCountsByState": by, "statusContextCountsByState": [], "nodes": nodes,
-            } },
-        }))
+        json!({
+            "noPr": true, "branch": "main", "complete": true, "local": local.to_json(),
+            "checks": commit_checks(json!({
+                "oid": "abcdef1234567890",
+                "statusCheckRollup": { "contexts": {
+                    "checkRunCountsByState": by, "statusContextCountsByState": [], "nodes": nodes,
+                } },
+            })),
+        })
     }
 
     #[test]
     fn a_branch_with_no_pr_says_how_its_ci_went() {
-        let failing = branch(&[("test", "FAILURE"), ("lint", "SUCCESS"), ("e2e", "RUNNING")]);
-        let answer = answer_from_branch("main", Some(&failing), Local::Checked);
-        let text = answer.text();
-        assert!(
-            text.starts_with("No PR · CI on main at abcdef1\n\nFailing: 1 of 3."),
-            "{text}"
+        let failing = branch(
+            &[("test", "FAILURE"), ("lint", "SUCCESS"), ("e2e", "RUNNING")],
+            Local::Checked,
         );
-        assert!(
-            text.contains("All checks        1 pass, 1 fail, 1 pending"),
-            "{text}"
-        );
-        assert!(!text.contains("GitHub checked"), "{text}");
-        assert_eq!(answer.choices, vec![Choice::SeeFailing]);
+        let v = branch_verdict(&failing);
+        assert_eq!(v.chip_text(), "✕ CI failing");
+        assert_eq!(v.said, "Failing: 1 of 3.");
+        assert_eq!(v.reasons_text(), "CI on main at abcdef1");
+        assert!(v.failing);
 
-        let running = branch(&[("lint", "SUCCESS"), ("e2e", "RUNNING")]);
-        let answer = answer_from_branch("main", Some(&running), Local::Ahead(2));
-        assert!(
-            answer.text().contains("Running: 1 of 2."),
-            "{}",
-            answer.text()
+        let running = branch(&[("lint", "SUCCESS"), ("e2e", "RUNNING")], Local::Ahead(2));
+        let v = branch_verdict(&running);
+        assert_eq!(v.said, "Running: 1 of 2.");
+        assert_eq!(
+            v.reasons_text(),
+            "CI on main at abcdef1 · this tab is 2 commits ahead of what GitHub checked"
         );
-        assert!(
-            answer
-                .text()
-                .ends_with("This tab is 2 commits ahead of what GitHub checked.")
-        );
-        assert!(answer.choices.is_empty());
+        assert!(!v.failing);
 
-        let canceled = branch(&[("lint", "SUCCESS"), ("e2e", "CANCELLED")]);
-        let answer = answer_from_branch("main", Some(&canceled), Local::Checked);
+        let canceled = branch(
+            &[("lint", "SUCCESS"), ("e2e", "CANCELLED")],
+            Local::Behind(1),
+        );
+        let v = branch_verdict(&canceled);
+        assert_eq!(v.said, "Canceled: 1 of 2.");
         assert!(
-            answer.text().contains("Canceled: 1 of 2."),
-            "{}",
-            answer.text()
+            v.reasons_text()
+                .ends_with("this tab is 1 commit behind what GitHub checked")
         );
 
-        let passing = branch(&[("lint", "SUCCESS")]);
-        let answer = answer_from_branch("main", Some(&passing), Local::Elsewhere);
-        assert!(answer.text().contains("Passing."), "{}", answer.text());
+        let passing = branch(&[("lint", "SUCCESS")], Local::Elsewhere);
+        let v = branch_verdict(&passing);
+        assert_eq!(v.said, "Passing.");
         assert!(
-            answer
-                .text()
-                .ends_with("This tab's commit isn't the one GitHub checked.")
+            v.reasons_text()
+                .ends_with("this tab's commit isn't the one GitHub checked")
         );
 
-        let none = commit_checks(json!({ "oid": "abcdef1", "statusCheckRollup": null }));
-        let answer = answer_from_branch("main", Some(&none), Local::Checked);
-        assert!(answer.text().ends_with("No checks."), "{}", answer.text());
-
-        let missing = answer_from_branch("topic", None, Local::Checked);
-        assert_eq!(missing.text(), "No PR, and topic isn't on GitHub.");
-        assert!(missing.choices.is_empty());
+        let missing = json!({ "noPr": true, "branch": "topic", "checks": null });
+        assert_eq!(branch_verdict(&missing).said, "topic isn't on GitHub.");
     }
 
     #[test]
-    fn a_branch_s_failing_checks_are_headed_with_its_commit() {
+    fn the_failing_checks_are_headed_with_what_they_are_of() {
         let repo = github::Repo {
             owner: "acme".into(),
             name: "w".into(),
         };
-        let checks = branch(&[("test", "FAILURE"), ("lint", "SUCCESS")]);
-        let text = util::block_on(failing_text(&repo, "`main` at `abcdef1`", &checks, true));
+        let copy = branch(&[("test", "FAILURE"), ("lint", "SUCCESS")], Local::Checked);
+        let contexts = copy["checks"].pointer(CONTEXTS).cloned().unwrap();
+        let text = util::block_on(failing_text(&repo, "`main` at `abcdef1`", &contexts, true));
         assert!(
             text.starts_with("# Failing checks of `main` at `abcdef1`\n\n## test\n"),
             "{text}"
         );
         assert!(!text.contains("lint"), "{text}");
-    }
-
-    #[test]
-    fn the_box_takes_a_choice_and_closes_on_any_key_with_none() {
-        let mut b = ReadyBox::new();
-        let look = Look::default();
-        assert_eq!(
-            b.key(Key::new(KeyCode::Char('x'), Mods::NONE), &look),
-            Step::Same,
-            "still asking"
-        );
-        b.answered(Ok(answer_from(&pr("OPEN", "DIRTY", "CONFLICTING"))));
-        assert_eq!(
-            b.key(Key::new(KeyCode::Char('j'), Mods::NONE), &look),
-            Step::Redraw
-        );
-        assert_eq!(
-            b.key(Key::new(KeyCode::Enter, Mods::NONE), &look),
-            Step::Close(Outcome::Chose(Choice::ResolveConflicts as usize))
-        );
-        let mut done = ReadyBox::new();
-        done.answered(Err("No pull request for this branch.".into()));
-        assert_eq!(
-            done.key(Key::new(KeyCode::Char('x'), Mods::NONE), &look),
-            Step::Close(Outcome::Dismissed)
-        );
-    }
-
-    #[test]
-    fn the_boxs_choices_wrap_round() {
-        let look = Look::default();
-        let mut b = ReadyBox::new();
-        b.answered(Ok(answer_from(&pr("OPEN", "DIRTY", "CONFLICTING"))));
-        let last = b.choices().len() - 1;
-        b.key(Key::new(KeyCode::Char('p'), Mods::CTRL), &look);
-        assert_eq!(b.cursor, last, "C-p on the first chooses the last");
-        b.key(Key::new(KeyCode::Down, Mods::NONE), &look);
-        assert_eq!(b.cursor, 0, "Down on the last chooses the first");
-        b.key(Key::new(KeyCode::Up, Mods::NONE), &look);
-        b.key(Key::new(KeyCode::Char('n'), Mods::CTRL), &look);
-        assert_eq!(b.cursor, 0);
-    }
-
-    #[test]
-    fn slash_searches_the_boxs_choices() {
-        let look = Look::default();
-        let mut b = ReadyBox::new();
-        b.answered(Ok(answer_from(&pr("OPEN", "DIRTY", "CONFLICTING"))));
-        let all = b.choices().len();
-        for c in "/confl".chars() {
-            b.key(Key::new(KeyCode::Char(c), Mods::NONE), &look);
-        }
-        assert_eq!(b.shown(), vec![Choice::ResolveConflicts], "of {all}");
-        let mut pasted = ReadyBox::new();
-        pasted.answered(Ok(answer_from(&pr("OPEN", "DIRTY", "CONFLICTING"))));
-        pasted.key(Key::new(KeyCode::Char('/'), Mods::NONE), &look);
-        assert_eq!(pasted.paste("confl", &look), Step::Redraw);
-        assert_eq!(
-            pasted.shown(),
-            vec![Choice::ResolveConflicts],
-            "a paste types too"
-        );
-        let mut short = ReadyBox::new();
-        short.answered(Ok(answer_from(&pr("OPEN", "DIRTY", "CONFLICTING"))));
-        short.key(Key::new(KeyCode::Char('/'), Mods::NONE), &look);
-        let last = short.shown().len() - 1;
-        for _ in 0..last {
-            short.key(Key::new(KeyCode::Down, Mods::NONE), &look);
-        }
-        let lines = answer_from(&pr("OPEN", "DIRTY", "CONFLICTING")).lines.len() as u16;
-        let mut buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, 80, lines + 10));
-        short.draw(&mut buf, &look);
-        let s = crate::ui::draw::tests::screen(&buf);
+        let text = util::block_on(failing_text(&repo, "#12", &contexts, false));
         assert!(
-            s.iter().any(|l| l.contains("› Close")),
-            "the chosen match in view: {s:#?}"
-        );
-        let mut tabbed = ReadyBox::new();
-        tabbed.answered(Ok(answer_from(&pr("OPEN", "DIRTY", "CONFLICTING"))));
-        tabbed.key(Key::new(KeyCode::Char('/'), Mods::NONE), &look);
-        tabbed.key(Key::new(KeyCode::Tab, Mods::NONE), &look);
-        assert_eq!(tabbed.cursor, 1, "Tab moves among the matches");
-        tabbed.key(Key::new(KeyCode::BackTab, Mods::NONE), &look);
-        assert_eq!(tabbed.cursor, 0);
-        let mut tiny = Buffer::empty(ratatui::layout::Rect::new(0, 0, 80, 14));
-        tabbed.draw(&mut tiny, &look);
-        let s = crate::ui::draw::tests::screen(&tiny);
-        assert!(
-            s.iter()
-                .any(|l| l.contains('›') && l.contains("See the failing")),
-            "a long verdict leaves a match: {s:#?}"
-        );
-        let mut buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, 80, 30));
-        b.draw(&mut buf, &look);
-        let s = crate::ui::draw::tests::screen(&buf);
-        assert!(s.iter().any(|l| l.contains("› confl▏")), "{s:#?}");
-        assert_eq!(
-            b.key(Key::new(KeyCode::Enter, Mods::NONE), &look),
-            Step::Close(Outcome::Chose(Choice::ResolveConflicts as usize))
+            text.ends_with("_And more checks GitHub didn't send._\n"),
+            "{text}"
         );
     }
 }

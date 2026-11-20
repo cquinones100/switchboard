@@ -172,8 +172,7 @@ impl Server {
 
     /// Opens a box about a tab with `open` (its links, renaming it,
     /// answering its Claude, which note is its, its menu and full title,
-    /// M-m's PR readiness, sending its Claude's last reply on, Work on this
-    /// item), marked so that it goes beside a narrow lone pane as a pane
+    /// sending its Claude's last reply on, Work on this item), marked so that it goes beside a narrow lone pane as a pane
     /// when the tab is the one in front of the client (UX 2.0 board 111);
     /// every other box goes in the middle.
     pub fn about_tab(&mut self, client: ClientId, tab: TabId, open: impl FnOnce(&mut Server)) {
