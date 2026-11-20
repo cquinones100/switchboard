@@ -914,7 +914,9 @@ impl Server {
     /// start any program but those `respawn::allowed` names, or in another
     /// tab. Switchboard's own programs (Notes, the worktree commands, the
     /// landing lock, the Slack relay) ask without `by_hand` and keep doing
-    /// what they need.
+    /// what they need. Arguments it can't read, or a target it can't find,
+    /// are left to the command, which fails with the same error and no box,
+    /// since a mistyped command is no refusal.
     fn refuse_by_hand(
         &self,
         name: &str,
@@ -925,7 +927,9 @@ impl Server {
         let tab_of = |pane: PaneId| self.panes.get(&pane).map(|slot| slot.tab);
         match name {
             "set" => {
-                let a = Args::parse(rest, "t")?;
+                let Ok(a) = Args::parse(rest, "t") else {
+                    return Ok(());
+                };
                 let Some(option) = a.rest.first() else {
                     return Ok(());
                 };
@@ -934,9 +938,10 @@ impl Server {
                         "switchboard set: {option} is Switchboard's own to set, not a command's typed in a pane"
                     ));
                 }
-                let tab = match self.option_target(&a, caller, option)? {
-                    Target::Pane(p) => tab_of(p),
-                    Target::Tab(t) => Some(t),
+                let tab = match self.option_target(&a, caller, option) {
+                    Ok(Target::Pane(p)) => tab_of(p),
+                    Ok(Target::Tab(t)) => Some(t),
+                    Err(_) => return Ok(()),
                 };
                 if tab != own_tab && option != "@tab_name" {
                     return Err(format!(
@@ -946,8 +951,13 @@ impl Server {
                 Ok(())
             }
             "respawn-pane" | "respawn-program" => {
-                let a = Args::parse(rest, "tc")?;
-                if tab_of(self.pane_from(&a, caller)?) != own_tab {
+                let Ok(a) = Args::parse(rest, "tc") else {
+                    return Ok(());
+                };
+                let Ok(pane) = self.pane_from(&a, caller) else {
+                    return Ok(());
+                };
+                if tab_of(pane) != own_tab {
                     return Err(
                         "switchboard respawn: a command typed in a pane respawns a pane of its own tab only"
                             .into(),
