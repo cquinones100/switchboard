@@ -504,11 +504,11 @@ pub fn dead_links() -> Vec<PathBuf> {
 /// `None` when it has none. A line is one when it evals a worktree script's
 /// `init` by the script's name or a path to it, as setup.sh wrote them;
 /// nothing needs them now, since every tab, menu and skill that runs `wt`,
-/// `wtn` and the rest defines the function itself, so they go whether or
+/// `wtb` and the rest defines the function itself, so they go whether or
 /// not the script still runs. The comment lines right above one go too when
-/// they name the function it defined (`wt`, `wtpr`, `wtr`, `wtb`, `wtn`),
+/// they name the function it defined (`wt`, `wtpr`, `wtr`, `wtb`),
 /// as setup.sh's words said what each was for. A line running the binary's
-/// own `init` (`switchboard worktree-from-note init zsh`) is yours, added to
+/// own `init` (`switchboard worktree-from-ticket init zsh`) is yours, added to
 /// type the functions, and left alone.
 pub fn rc_cleared(text: &str) -> Option<String> {
     let line = Regex::new(&format!(
@@ -516,7 +516,7 @@ pub fn rc_cleared(text: &str) -> Option<String> {
         WORKTREE_SCRIPTS.join("|")
     ))
     .expect("a valid pattern");
-    let names = Regex::new(r"`(?:wt|wtpr|wtr|wtb|wtn)`").expect("a valid pattern");
+    let names = Regex::new(r"`(?:wt|wtpr|wtr|wtb)`").expect("a valid pattern");
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
     let mut keep = vec![true; lines.len()];
     for (i, l) in lines.iter().enumerate() {
@@ -764,7 +764,7 @@ mod tests {
              export Y=2\n"
         );
         assert_eq!(
-            rc_cleared("eval \"$(switchboard worktree-from-note init zsh)\"\n"),
+            rc_cleared("eval \"$(switchboard worktree-from-ticket init zsh)\"\n"),
             None
         );
         assert_eq!(rc_cleared("# nothing here\n"), None);

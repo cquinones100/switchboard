@@ -5636,7 +5636,7 @@ impl Server {
                         return;
                     };
                     // The tab's `@tab_name`, as tmux's rename set it, so `/wt`,
-                    // `/wtn` and `/shape`, which set and clear that option, still
+                    // `/wt` and `/shape`, which set and clear that option, still
                     // name the tab after a rename here.
                     if let Some(t) = server.tabs.get_mut(&tab) {
                         t.name.clear();
@@ -6460,7 +6460,7 @@ impl Server {
                     "tickets" => vec![
                         (
                             "unset",
-                            "Not set: /shape files in Linear, wtn takes a note's item or --issue",
+                            "Not set: /shape files in Linear, wt takes a note's item or --issue",
                         ),
                         ("github", "GitHub issues"),
                         ("linear", "Linear"),

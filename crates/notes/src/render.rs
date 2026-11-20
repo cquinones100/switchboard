@@ -971,7 +971,7 @@ impl Chip {
     }
 }
 
-/// A checklist item's first line, its marker taken off: what wtn records
+/// A checklist item's first line, its marker taken off: what wt records
 /// as the item a branch is for, and a tab's `@tab_title`.
 pub fn item_text(line: &str, kind: Kind) -> &str {
     match kind {
@@ -1090,7 +1090,7 @@ fn said_after<'a>(text: &'a str, words: &str) -> Option<&'a str> {
 
 /// The end (exclusive) of the item on `row` at `indent`: the lines
 /// indented under it, blank lines between included, trailing blank lines
-/// left off, as wtn reads an item whole (`worktree_from_note::item_block`).
+/// left off, as wt reads an item whole (`worktree_from_note::item_block`).
 fn item_end<S: AsRef<str>>(lines: &[S], row: usize, indent: usize) -> usize {
     let mut end = row + 1;
     let mut last = row + 1;
@@ -1182,7 +1182,7 @@ pub fn plan_line_of<S: AsRef<str>>(
 }
 
 /// Whether a heading under the title names parked work, which UX 2.0
-/// shows folded to one line with its count of items: the sections wtn and
+/// shows folded to one line with its count of items: the sections wt and
 /// autopilot leave out (`parked_heading`: Defered, Later, Backlog...).
 pub fn parked(line: &str, kind: Kind) -> bool {
     matches!(kind, Kind::Heading { .. } | Kind::Subheading { .. }) && parked_heading(line)
@@ -1195,7 +1195,7 @@ static PARKED: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
 });
 
 /// Whether a heading names a section of parked work (`## Defered`,
-/// `## Later`), which wtn's and autopilot's items leave out and Notes shows
+/// `## Later`), which wt's and autopilot's items leave out and Notes shows
 /// folded.
 pub fn parked_heading(line: &str) -> bool {
     PARKED.is_match(&line.to_lowercase())

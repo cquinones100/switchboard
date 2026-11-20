@@ -1,7 +1,7 @@
 //! What the work pickers last had picked, so their lists lead with it: the
-//! directories any of them was given (M-t, M-n, M-W, M-B, wtpr's, wtn's,
+//! directories any of them was given (M-t, M-n, M-W, M-B, wtpr's, wt's,
 //! shaping's), and, for each repository, the branches picked at "Land on:"
-//! (wtn's picker and autopilot's setup), and, for each note, the repository
+//! (wt's picker and autopilot's setup), and, for each note, the repository
 //! its items were last started in. New in the Rust version: the tmux
 //! version's pick-dir.zsh and autopilot's target list had no memory, so the
 //! repository items are queued in sat wherever its tabs put it, and a

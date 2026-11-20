@@ -250,7 +250,7 @@ impl Ticket {
     }
 }
 
-/// The GitHub issue a branch was started for (`wtn --issue`), from the
+/// The GitHub issue a branch was started for (`wt --issue`), from the
 /// text of its repository's git config and its origin: its
 /// `branch.<branch>.wtnIssue`, else an `issue/<number>-<slug>` branch's
 /// number in origin's repository.
