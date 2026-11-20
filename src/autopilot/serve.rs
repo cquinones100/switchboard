@@ -78,9 +78,15 @@ pub const NUDGED: &str = "@autopilot_nudged";
 /// Pushed, asked about or not, the commit it pushed, which queue-and-clean
 /// sets as soon as its push succeeds, so hands-free sends no turn back after.
 pub const PUSHED: &str = "@autopilot_pushed";
+/// Its PR merged, the merge commit, which queue-and-clean sets as its watch
+/// sees the merge in a repository landing through PRs: counted as landed,
+/// as `PUSHED` is, its issue closed by GitHub (the PR's `Closes #<n>`) and
+/// its claim's label taken off by autopilot.
+pub const MERGED: &str = "@autopilot_merged";
 /// When it landed, in seconds: the server sets it as it first sees
-/// `@autopilot_pushed` or `@autopilot_autoland` set on one of its tabs
-/// (`landed_at`), and never again, so the board's timer stops there.
+/// `@autopilot_pushed`, `@autopilot_autoland` or `@autopilot_merged` set
+/// on one of its tabs (`landed_at`), and never again, so the board's timer
+/// stops there.
 pub const LANDED_AT: &str = "@autopilot_landed_at";
 /// Landed and made yours by a prompt typed in it since: the mode lets go
 /// of it, while its item stays under the view's Landed.
@@ -117,14 +123,15 @@ pub const FAILED: &str = "@autopilot_failed";
 /// What its notification says of an item skipped for failing to start.
 const FAILED_SAID: &str = "its start failed";
 /// A tab of the mode marked with when it landed as `name`, just set to
-/// `value`, is its push (`PUSHED` or `AUTOLAND`), the first time only.
+/// `value`, is its push (`PUSHED` or `AUTOLAND`) or its PR's merge
+/// (`MERGED`), the first time only.
 pub fn landed_at(
     opts: &mut std::collections::BTreeMap<String, String>,
     name: &str,
     value: &str,
     now_secs: i64,
 ) {
-    let a_push = (name == PUSHED || name == AUTOLAND) && !value.trim().is_empty();
+    let a_push = [PUSHED, AUTOLAND, MERGED].contains(&name) && !value.trim().is_empty();
     let of_the_mode = opts.get(OPENED).is_some_and(|v| !v.is_empty() && v != "0");
     if a_push && of_the_mode && !opts.contains_key(LANDED_AT) {
         opts.insert(LANDED_AT.into(), now_secs.to_string());
@@ -234,9 +241,6 @@ fn stamp_of(path: &Path) -> Option<super::Stamp> {
     ))
 }
 
-/// What it says of a repository that lands through a PR.
-const PR_REFUSED: &str = "Autopilot lands only straight onto a branch for now, and this repository lands through a PR (repos.json)";
-
 /// What the settings box shows besides its fields, read off the task: how
 /// the repository typed lands, the repositories and branches it suggests,
 /// today's spend, and the note's items left out for needing a choice.
@@ -333,7 +337,7 @@ fn landing_words(landing: &str, source: &str) -> String {
     let how = if landing == "direct" {
         "straight on it through queue-and-clean"
     } else {
-        "through a PR, which autopilot doesn't take yet"
+        "through a PR to the default branch, opened and queued to merge by queue-and-clean"
     };
     format!("{how}{}", said_by(source))
 }
@@ -480,12 +484,19 @@ impl FieldsCheck {
                 paths::tilde(&mode_repo)
             ));
         }
+        let common = crate::tabs::git::locate(&repo).map(|p| p.common_dir);
         // How it lands, checked as starting or picking a note did before
-        // the box.
-        if starting || picked || repo != mode_repo {
-            match crate::repos::landing_for(&repo, false).map(|l| l.landing) {
-                Ok(l) if l == "direct" => {}
-                Ok(_) => return Err(PR_REFUSED.to_string()),
+        // the box: a repository landing through PRs sends them to the
+        // default branch, so it takes no other.
+        if starting || picked || repo != mode_repo || target != mode_target {
+            match crate::repos::landing_for(&repo, false) {
+                Ok(l) if l.landing == "direct" => {}
+                Ok(l) => {
+                    let default = common.as_deref().and_then(crate::tabs::git::default_branch);
+                    if !target.is_empty() && default.as_deref() != Some(target.as_str()) {
+                        return Err(target_refused(&target, &repo, &l.source));
+                    }
+                }
                 Err(e) => return Err(format!("Couldn't tell how it lands: {e}")),
             }
         }
@@ -502,7 +513,6 @@ impl FieldsCheck {
         } else {
             None
         };
-        let common = crate::tabs::git::locate(&repo).map(|p| p.common_dir);
         // A branch named must be the repository's own, or one origin has,
         // which an item starting makes a local one; one not fetched yet is
         // fetched to tell, as an item starting would fetch it, while
@@ -585,7 +595,7 @@ impl Server {
     /// Which note, which branch to land on, how many tabs at once, the most
     /// open and a spend limit, then the mode on, working the note in the
     /// main clone of `dir`'s repository. A repository that lands through a
-    /// PR is refused: autopilot lands only straight onto a branch for now.
+    /// PR lands on its default branch alone ("Land on:" refuses another).
     fn autopilot_setup(&mut self, client: ClientId, dir: &Path) {
         let Some(repo) = main_clone(dir) else {
             self.mission_note(
@@ -605,16 +615,9 @@ impl Server {
                 (mode::note_choices(&notes, &last), landing)
             },
             move |server, client, (notes, landing)| {
-                match landing.as_deref() {
-                    Ok("direct") => {}
-                    Ok(_) => {
-                        server.mission_note(client, PR_REFUSED);
-                        return;
-                    }
-                    Err(e) => {
-                        server.mission_note(client, format!("Couldn't tell how it lands: {e}"));
-                        return;
-                    }
+                if let Err(e) = landing {
+                    server.mission_note(client, format!("Couldn't tell how it lands: {e}"));
+                    return;
                 }
                 if notes.open.is_empty() && notes.rest.is_empty() {
                     server.mission_note(client, "No notes to work");
@@ -644,16 +647,9 @@ impl Server {
             client,
             move || crate::repos::landing_for(&at, false).map(|l| l.landing),
             move |server, client, landing| {
-                match landing.as_deref() {
-                    Ok("direct") => {}
-                    Ok(_) => {
-                        server.mission_note(client, PR_REFUSED);
-                        return;
-                    }
-                    Err(e) => {
-                        server.mission_note(client, format!("Couldn't tell how it lands: {e}"));
-                        return;
-                    }
+                if let Err(e) = landing {
+                    server.mission_note(client, format!("Couldn't tell how it lands: {e}"));
+                    return;
                 }
                 let at = repo.clone();
                 server.autopilot_pick_target(client, at, move |server, client, target| {
@@ -2429,10 +2425,11 @@ impl Server {
     /// else the main clone's as its Claude's pane (else any of its panes)
     /// finds it there.
     fn autopilot_hash_of(&self, tab: TabId) -> String {
-        // The commit its landing pushed, which queue-and-clean marks it with,
-        // since a target branch other than the main clone's moves no HEAD.
+        // The commit its landing pushed (or its PR merged as), which
+        // queue-and-clean marks it with, since a target branch other than the
+        // main clone's moves no HEAD.
         let pushed = self.tabs.get(&tab).and_then(|t| {
-            [PUSHED, AUTOLAND]
+            [PUSHED, AUTOLAND, MERGED]
                 .iter()
                 .find_map(|k| t.opts.get(*k).filter(|v| !v.trim().is_empty()))
         });
@@ -2478,7 +2475,7 @@ impl Server {
                 .filter(|s| *s != 0)
                 .map_or_else(util::now_ms, |s| s * 1000),
         };
-        // Only a landing that pushed counts for its issue (a tab merely
+        // Only a landing that pushed or merged counts for its issue (a tab merely
         // back in a main clone may have landed nothing), by the commit it
         // pushed; asked about unless it landed without asking.
         let opts = self
@@ -2496,7 +2493,12 @@ impl Server {
         let opened_at = set(OPENED)
             .and_then(|v| v.parse::<f64>().ok())
             .map_or(0, |v| v as i64);
-        let issue = set(ISSUE).map(str::to_string).zip(hash);
+        // Merged as a PR, GitHub closes the issue by the PR's `Closes #<n>`,
+        // so autopilot only takes its claim's label off.
+        let merged = hash.is_none() && set(MERGED).is_some();
+        let issue = set(ISSUE)
+            .map(str::to_string)
+            .zip(hash.or_else(|| set(MERGED).map(str::to_string)));
         let mut fresh = false;
         let written = Mode::update(&paths::state_dir(), |mode| {
             if mode.landed.iter().any(|l| l.id == landed.id) {
@@ -2525,6 +2527,10 @@ impl Server {
             Err(e) => eprintln!("autopilot: couldn't keep the tab that landed: {e}"),
         }
         if let Some((issue, hash)) = issue.filter(|_| fresh) {
+            if merged {
+                self.autopilot_release(&issue, None);
+                return;
+            }
             let short: String = hash.chars().take(7).collect();
             // The landing's comment names the claim it releases, so the
             // release itself says nothing more.
@@ -2653,11 +2659,11 @@ impl Server {
     }
 
     /// This computer's claim on the GitHub issue `issue` names released, off
-    /// the task, `why` said in a comment. The tab's own claim, so it is
+    /// the task, `why` said in a comment (none, its label alone taken off). The tab's own claim, so it is
     /// released whatever autopilot's sources are now, while Settings allow
     /// autopilot's issue writes (autopilot, its GitHub issues and GitHub). A
     /// failure is said in the notifications.
-    fn autopilot_release(&mut self, issue: &str, why: &'static str) {
+    fn autopilot_release(&mut self, issue: &str, why: Option<&'static str>) {
         let Some((repo, number)) = super::issues::parse_reference(issue) else {
             return;
         };
@@ -2674,7 +2680,7 @@ impl Server {
                 let Some(id) = super::issues::own_claim_id()? else {
                     return anyhow::Ok(false);
                 };
-                super::issues::release(&repo, number, &id, Some(why)).await
+                super::issues::release(&repo, number, &id, why).await
             }
             .await;
             let _ = tokio::task::spawn_blocking(move || {
@@ -2715,9 +2721,16 @@ impl Server {
             return;
         };
         // Pushed by autopilot's landing: kept until autopilot closes the
-        // issue. Back in its main clone without such a push (a PR's merge),
-        // there is nothing autopilot writes back, so it lets go.
+        // issue. Its PR merged: the label comes off as it lands, or now,
+        // closed before, saying nothing, since GitHub closed the issue.
+        // Back in its main clone with neither, it lets go.
         if set(PUSHED) || set(AUTOLAND) {
+            return;
+        }
+        if set(MERGED) {
+            if !set(LEFT) {
+                self.autopilot_release(&issue, None);
+            }
             return;
         }
         let why = if set(LEFT) {
@@ -2725,7 +2738,7 @@ impl Server {
         } else {
             "its tab closed before it landed"
         };
-        self.autopilot_release(&issue, why);
+        self.autopilot_release(&issue, Some(why));
     }
 
     /// A landed tab about to close unseen, kept in its file for the

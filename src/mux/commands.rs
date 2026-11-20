@@ -322,13 +322,15 @@ impl Args {
 /// Whether an option is one of Switchboard's own marks, which a command run
 /// by hand in a pane may not set or unset: autopilot's (`@autopilot_land`
 /// lets a landing push without asking, `@autopilot_handsfree` answers its
-/// questions), but `@autopilot_pushed`, which queue-and-clean sets once it
-/// has pushed, and what a pane's program may do (`respawn::PROGRAM_MARKS`:
+/// questions), but `@autopilot_pushed` and `@autopilot_merged`, which
+/// queue-and-clean sets once it has pushed or its PR has merged, and what a pane's program may do (`respawn::PROGRAM_MARKS`:
 /// `@allow_passthrough` and `@notes_pane` pass its graphics commands, which
 /// can have the terminal read any file, to the terminal).
 pub fn own_mark(option: &str) -> bool {
     super::respawn::PROGRAM_MARKS.contains(&option)
-        || (option.starts_with("@autopilot") && option != "@autopilot_pushed")
+        || (option.starts_with("@autopilot")
+            && option != "@autopilot_pushed"
+            && option != "@autopilot_merged")
 }
 
 /// What a `-t` names.
@@ -1223,6 +1225,7 @@ mod tests {
         }
         for option in [
             "@autopilot_pushed",
+            "@autopilot_merged",
             "@tab_name",
             "@tab_note",
             "@agent_phase",
