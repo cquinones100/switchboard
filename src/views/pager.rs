@@ -157,6 +157,8 @@ pub struct Pager {
     asked: bool,
     /// Since when the view has been without the focus.
     unfocused: Option<Instant>,
+    /// What the view shows, named on the prompt line: a note's preview.
+    name: Option<String>,
 }
 
 /// What the prompt line says while r's read is under way.
@@ -191,6 +193,7 @@ impl Pager {
             read_at: None,
             asked: false,
             unfocused: None,
+            name: None,
         };
         pager.set_content(content);
         pager
@@ -203,6 +206,12 @@ impl Pager {
         if matches!(self.content, Content::Failed(_)) {
             self.lay_out();
         }
+        self
+    }
+
+    /// Names what it shows on the prompt line, as a note's preview does.
+    pub fn with_name(mut self, name: Option<String>) -> Pager {
+        self.name = name;
         self
     }
 
@@ -1167,12 +1176,29 @@ impl Pager {
             let line = board::hints(&keys, &self.look);
             return line.ansi(&[], 0, room, &[]);
         }
+        const END: &str = "(END) ";
+        const FULL: &str = "Enter shows it full size";
+        const CLOSES: &str = " · q closes  ";
+        let at_end = self.markdown.is_some() && self.at_end();
         let mut out = String::new();
-        if self.markdown.is_some() && self.at_end() {
-            out.push_str("\x1b[7m(END)\x1b[0m ");
+        // The name gets what the rest leaves, short of the last column so
+        // the line never wraps and scrolls the page; none, it is left out.
+        let rest = usize::from(at_end) * END.len()
+            + usize::from(full) * FULL.len()
+            + crate::ui::draw::width(CLOSES)
+            + 1;
+        if let Some(name) = &self.name
+            && room > rest
+        {
+            let name: String = name.chars().filter(|c| !c.is_control()).collect();
+            let name = crate::ui::draw::cut(&name, room - rest);
+            out.push_str(&format!("\x1b[38;5;{DIM}m{name}{CLOSES}\x1b[0m"));
+        }
+        if at_end {
+            out.push_str(&format!("\x1b[7m{}\x1b[0m ", END.trim_end()));
         }
         if full {
-            out.push_str(&format!("\x1b[38;5;{DIM}mEnter shows it full size\x1b[0m"));
+            out.push_str(&format!("\x1b[38;5;{DIM}m{FULL}\x1b[0m"));
         }
         out
     }
@@ -1266,13 +1292,13 @@ impl Drop for Screen {
 /// Runs the pager on this terminal until it is closed, showing `content`
 /// and then whatever `updates` hands over; `url` is the page o opens.
 pub fn run(content: Content, updates: Option<Receiver<Content>>, url: Option<String>) -> ExitCode {
-    run_with(content, updates, url, true, None)
+    run_with(content, updates, url, true, None, None)
 }
 
 /// `run` for a view that follows what it shows: `follow`'s reads shown as
 /// they come, and asked for on r and on taking the focus again.
 pub fn run_following(content: Content, follow: Follow) -> ExitCode {
-    run_with(content, None, None, true, Some(follow))
+    run_with(content, None, None, true, Some(follow), None)
 }
 
 /// `run` for a file of yours or a note, whose picture links are never
@@ -1280,7 +1306,13 @@ pub fn run_following(content: Content, follow: Follow) -> ExitCode {
 /// computer; its diagrams are drawn here as anywhere, and a person's photo
 /// while Settings' `photos` is on.
 pub fn run_local(content: Content) -> ExitCode {
-    run_with(content, None, None, false, None)
+    run_with(content, None, None, false, None, None)
+}
+
+/// `run_local` for a note's preview, named `name` on the prompt line,
+/// showing each copy `updates` hands over where the reader was.
+pub fn run_local_named(content: Content, updates: Receiver<Content>, name: String) -> ExitCode {
+    run_with(content, Some(updates), None, false, None, Some(name))
 }
 
 /// `run_following` fetching no pictures: for what strangers write, whose
@@ -1289,7 +1321,7 @@ pub fn run_local(content: Content) -> ExitCode {
 /// Settings' `photos` is on, since they come from Photos' cache, fetched
 /// only from the service's own avatars.
 pub fn run_following_without_pictures(content: Content, follow: Follow) -> ExitCode {
-    run_with(content, None, None, false, Some(follow))
+    run_with(content, None, None, false, Some(follow), None)
 }
 
 fn run_with(
@@ -1298,10 +1330,12 @@ fn run_with(
     url: Option<String>,
     fetch_pictures: bool,
     follow: Option<Follow>,
+    name: Option<String>,
 ) -> ExitCode {
     let (cols, rows) = terminal::size().unwrap_or((80, 24));
     let mut pager = Pager::new(content, cols as usize, rows as usize)
         .with_url(url)
+        .with_name(name)
         .with_cursor(crate::settings::is_on("view_cursor"));
     if let Some(follow) = &follow {
         pager = pager.following(follow.read_at);
@@ -1535,6 +1569,35 @@ mod tests {
         let pager = Pager::new(markdown("# Short\n\nOne line."), 60, 20);
         assert!(!pager.bar);
         assert!(!pager.frame().contains('┃'));
+    }
+
+    #[test]
+    fn a_named_views_prompt_line_never_runs_past_the_pane() {
+        let plain = |s: &str| {
+            let mut out = String::new();
+            let mut esc = false;
+            for c in s.chars() {
+                match (esc, c) {
+                    (false, '\x1b') => esc = true,
+                    (true, c) if c.is_ascii_alphabetic() => esc = false,
+                    (true, _) => {}
+                    (false, c) => out.push(c),
+                }
+            }
+            out
+        };
+        for cols in [20, 40, 60] {
+            let pager = Pager::new(markdown("# Short\n"), cols, 10)
+                .with_name(Some("Preview of A rather long note name here".into()));
+            let line = plain(&pager.prompt(cols));
+            assert!(
+                crate::ui::draw::width(&line) < cols,
+                "{cols} columns: {line:?}"
+            );
+        }
+        let wide =
+            Pager::new(markdown("# Short\n"), 80, 10).with_name(Some("Preview of Plan".into()));
+        assert!(plain(&wide.prompt(80)).starts_with("Preview of Plan · q closes"));
     }
 
     #[test]

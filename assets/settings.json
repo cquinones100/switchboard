@@ -1013,6 +1013,13 @@
     "default": true
   },
   {
+    "key": "notes_preview",
+    "category": "Notes",
+    "label": "Preview a note read-only",
+    "description": "M-p's \"Preview a note…\" and Notes' \"Preview this note\" show a note read-only in the pane's place, drawn as GitHub draws Markdown and following the note as it changes, until q, Esc or the command again gives the pane back; off, both commands are gone",
+    "default": true
+  },
+  {
     "key": "notes_ctrl_v_image",
     "category": "Notes",
     "label": "Ctrl-V pastes an image",
