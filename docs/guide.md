@@ -2125,7 +2125,7 @@ Without the owner or the tokens, the relay doesn't start, and its log says what 
 
 `switchboard phone` serves a web app for answering and messaging your Claude tabs from your phone, from the `switchboard` binary itself, on your tailnet alone. It is the one part of Switchboard that needs [Tailscale](https://tailscale.com), on the computer and on the phone, and macOS: Linux waits until these steps are checked there.
 
-Its drawer lists every tab running Claude in the sidebar's groups, Needs you first, each with its mark, number and name and what it is doing, and follows the workspace within a second of a tab changing; with the computer out of reach it dims, saying when it last heard. Opening a tab shows its recent turns as a channel of messages, a tool Claude ran as one dim line and a long turn folded, with what Claude is doing over the composer. A prompt Claude waits on is a card under the newest turn, each option a button that answers it as mission control's answer box does; a question that takes several answers has Submit. The composer at the foot sends that tab's Claude a message, or, while a question takes an answer of your own, your answer. Opening a finished tab marks it seen. Installed to the home screen (Share, then Add to Home Screen, on an iPhone), it offers to notify you: a tab starting to wait sends a Web Push naming the tab alone, never what Claude asks, since a push passes through your phone's push service and shows on a locked screen; tapping it opens that tab. That is all it does for now: skills, a tab's screen, Stop, new tabs, autopilot and mission control's views are not on the phone.
+Its drawer lists every tab running Claude in the sidebar's groups, Needs you first, each with its mark, number and name and what it is doing, and follows the workspace within a second of a tab changing; with the computer out of reach it dims, saying when it last heard. Opening a tab shows its recent turns as a channel of messages, a tool Claude ran as one dim line and a long turn folded, with what Claude is doing over the composer. A prompt Claude waits on is a card under the newest turn, each option a button that answers it as mission control's answer box does, and only that question: a tap on a card Claude has moved on from is refused rather than pressed on the next one; a question that takes several answers has Submit. The composer at the foot sends that tab's Claude a message, or, while a question takes an answer of your own, your answer. Opening a finished tab marks it seen. Installed to the home screen (Share, then Add to Home Screen, on an iPhone), it offers to notify you: a tab starting to wait sends a Web Push naming the tab alone, never what Claude asks, since a push passes through your phone's push service and shows on a locked screen; tapping it opens that tab. That is all it does for now: skills, a tab's screen, Stop, new tabs, autopilot and mission control's views are not on the phone.
 
 ### Setting it up
 
@@ -2717,10 +2717,12 @@ switchboard seen [-t tab] [-s from]      mark the tab seen, as looking at it
                                          the notifications
 switchboard prompt [-t pane]             the prompt a Claude pane waits on,
                                          as JSON, null with none
-switchboard answer [-t pane] [-m] [-s from] <reply>
+switchboard answer [-t pane] [-m] [-h id] [-s from] <reply>
                                          answer the Claude pane's prompt as
-                                         mission control's answer box does,
-                                         or with -m send it a message;
+                                         mission control's answer box does
+                                         (with -h, only the prompt whose id
+                                         prompt gave), or with -m send it a
+                                         message;
                                          refused typed in a pane, and for a
                                          pane not running Claude
 switchboard watch                        every Claude tab's state, last turn

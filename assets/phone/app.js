@@ -13,6 +13,7 @@ const state = {
   open: null, // the pane's number of the tab open, or null for the drawer
   messages: [],
   answered: null, // what was answered last, for the folded card
+  sent: "", // the prompt (and its ticks) an answer was sent for, whose buttons wait
   error: "",
 };
 
@@ -248,6 +249,7 @@ function card(tab) {
     return null;
   }
   const options = p.options.filter((o) => o.n !== p.free);
+  const waiting = state.sent === promptKey(p);
   const c = el(
     "div",
     { class: "card" },
@@ -259,24 +261,36 @@ function card(tab) {
         {
           class: "option" + (i === 0 && !p.multi ? " lit" : "") + (o.checked ? " ticked" : ""),
           onclick: () => answer(String(o.n)),
+          disabled: waiting,
         },
         el("span", { class: "n" }, o.n + "."),
         o.label,
       ),
     ),
-    p.multi ? el("button", { class: "option lit", onclick: () => answer("submit") }, "Submit") : null,
+    p.multi ? el("button", { class: "option lit", onclick: () => answer("submit"), disabled: waiting }, "Submit") : null,
     state.error ? el("div", { class: "error" }, state.error) : null,
   );
   return c;
 }
 
+// A prompt as it stands: its id and which options are ticked, so a tick
+// that changes nothing else still lets the next tap through.
+const promptKey = (p) => p.id + ":" + p.options.map((o) => (o.checked ? 1 : 0)).join("");
+
 async function answer(reply) {
   state.error = "";
+  const tab = current();
+  const p = tab && tab.prompt;
+  if (!p) return;
+  // One answer for the prompt shown: its buttons wait for the next one.
+  state.sent = promptKey(p);
+  render();
   try {
-    const r = await api("/api/tabs/" + state.open + "/answer", { reply });
+    const r = await api("/api/tabs/" + state.open + "/answer", { reply, prompt: p.id });
     state.answered = r.said + " · from your phone";
   } catch (e) {
     state.error = String(e.message || e);
+    state.sent = "";
   }
   render();
 }

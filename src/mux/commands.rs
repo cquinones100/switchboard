@@ -62,7 +62,8 @@
 //!                                        names who asked (src/phone)
 //! prompt [-t pane]                       the prompt a Claude pane waits on,
 //!                                        as JSON, null with none (src/phone)
-//! answer [-t pane] [-m] [-s from] reply  the prompt answered as mission
+//! answer [-t pane] [-m] [-h id] [-s from] reply
+//!                                        the prompt (the one -h names) answered as mission
 //!                                        control answers it, or with -m a
 //!                                        message typed to its Claude; never
 //!                                        typed in a pane (src/phone)
@@ -223,7 +224,7 @@ pub const USAGE: &[(&str, &str)] = &[
     ),
     (
         "answer",
-        "answer [-t pane] [-m] [-s from] <reply>: the prompt the pane's Claude shows answered as mission control's answer box answers it (an option's number or label, submit, or your own words), or with -m a message typed to it while it shows none; -s names who asked (phone), logged and shown in the notifications; refused for a pane not running Claude, and typed in a pane",
+        "answer [-t pane] [-m] [-h id] [-s from] <reply>: the prompt the pane's Claude shows answered as mission control's answer box answers it (an option's number or label, submit, or your own words), refused with -h when it isn't the prompt that id names (prompt's id), or with -m a message typed to it while it shows none; -s names who asked (phone), logged and shown in the notifications; refused for a pane not running Claude, and typed in a pane",
     ),
     (
         "watch",
@@ -513,10 +514,10 @@ impl Server {
             "prompt" => Args::parse(rest, "t")
                 .and_then(|a| self.pane_from(&a, caller))
                 .and_then(|pane| self.phone_prompt(pane)),
-            "answer" => Args::parse(rest, "ts").and_then(|a| {
+            "answer" => Args::parse(rest, "tsh").and_then(|a| {
                 let pane = self.pane_from(&a, caller)?;
                 let reply = a.rest.join(" ");
-                self.phone_answer(pane, &reply, a.has('m'), a.value('s'))
+                self.phone_answer(pane, &reply, a.has('m'), a.value('h'), a.value('s'))
             }),
             // Asked alone, it is answered by `Server::handle` keeping its
             // connection.

@@ -203,7 +203,7 @@ pub const OWN_FILES: &[OwnFile] = &[
                 "owner",
                 "Your Tailscale login",
                 Kind::Text,
-                "The one person the phone app answers: a device signed in to Tailscale as anyone else is refused; read when the app starts",
+                "The one person the phone app answers: a device signed in to Tailscale as anyone else is refused",
             ),
             row(
                 "devices",

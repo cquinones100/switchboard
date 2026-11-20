@@ -91,7 +91,12 @@ fn prompt_and_answer_read_and_press_a_claude_panes_prompt() {
     assert_eq!(code, 1, "a message waits for the prompt to be answered");
     assert!(err.contains("showing a prompt"), "{err}");
 
-    let said = server.ok(&["answer", "-t", &pane, "-s", "phone", "2"]);
+    let id = found["id"].as_str().unwrap().to_string();
+    let (code, _, err) = server.run(&["answer", "-t", &pane, "-h", "not-this-one", "2"]);
+    assert_eq!(code, 1, "an answer meant for another prompt");
+    assert!(err.contains("prompt changed"), "{err}");
+
+    let said = server.ok(&["answer", "-t", &pane, "-h", &id, "-s", "phone", "2"]);
     assert_eq!(said.trim(), "Chose 2. No");
     wait_until(&server, "2 pressed", || {
         screen(&server, &pane).lines().any(|l| l.trim() == "2")

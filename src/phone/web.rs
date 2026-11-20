@@ -59,7 +59,8 @@ const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-
 
 /// What every request shares.
 pub struct App {
-    rules: Rules,
+    /// The app's own origin, which a write must name.
+    origin: String,
     /// The computer's name before its tailnet's, for the page's header.
     computer: String,
     whois: Mutex<WhoisCache>,
@@ -153,11 +154,7 @@ pub async fn serve(status: Status, config: super::config::Config) -> Result<()> 
     };
     tokio::spawn(follow(tx, push_key.clone()));
     let app = Arc::new(App {
-        rules: Rules {
-            owner: config.owner,
-            devices: config.devices,
-            origin: origin(&status.name, config.port),
-        },
+        origin: origin(&status.name, config.port),
         computer: status.name.split('.').next().unwrap_or("").to_string(),
         whois: Mutex::new(WhoisCache::default()),
         tabs: rx,
@@ -300,12 +297,29 @@ async fn gate(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Resp
     .await
     .ok()
     .flatten();
-    let device = match guard::admit(&app.rules, peer.as_ref()) {
+    // phone.json read again for each request, so a device taken out of it
+    // is refused at once; its port is the one served on until a restart.
+    let rules = match super::config::read() {
+        Ok(config) => Rules {
+            owner: config.owner,
+            devices: config.devices,
+            origin: app.origin.clone(),
+        },
+        Err(why) => {
+            eprintln!("phone: refused {path} from {ip}: {why}");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "The phone app isn't set up.",
+            )
+                .into_response();
+        }
+    };
+    let device = match guard::admit(&rules, peer.as_ref()) {
         Ok(device) => device,
         Err(refusal) => return refuse(refusal, Some(ip), &path),
     };
     if let Err(refusal) = guard::same_origin(
-        &app.rules,
+        &rules,
         req.method().as_str(),
         req.headers()
             .get(header::ORIGIN)
@@ -607,10 +621,21 @@ async fn answer(
     };
     let pane = pane_of(&tab);
     let reply = text_of(&body, "reply");
+    // The prompt the phone showed: an answer is pressed only on that one.
+    let id = text_of(&body, "prompt");
+    if id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(json!({"error": "which prompt it answers isn't named"})),
+        )
+            .into_response();
+    }
     ask(vec![
         "answer".into(),
         "-t".into(),
         pane,
+        "-h".into(),
+        id,
         "-s".into(),
         "phone".into(),
         "--".into(),

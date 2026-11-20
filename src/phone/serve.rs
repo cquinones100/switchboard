@@ -58,6 +58,7 @@ pub enum PhoneEvent {
 /// A prompt as the phone reads it.
 pub fn prompt_json(found: &Prompt) -> Value {
     json!({
+        "id": crate::relay::tabs::hash_of(found),
         "question": found.question,
         "options": found
             .options
@@ -113,13 +114,17 @@ impl Server {
     /// `answer`: `reply` pressed in the prompt the pane's Claude shows (an
     /// option's number or the start of its label, `submit`, or your own
     /// words where it takes them), or, with `message`, typed as a message to
-    /// a Claude that shows none. `from` names who asked, for the log and the
-    /// notifications.
+    /// a Claude that shows none. `expect`, the prompt's id as `prompt` gave
+    /// it (the relay's hash of its question and options), refuses an answer
+    /// meant for a prompt no longer showing, so a tap on a card a moment old
+    /// never answers the next question. `from` names who asked, for the log
+    /// and the notifications.
     pub(crate) fn phone_answer(
         &mut self,
         pane: PaneId,
         reply: &str,
         message: bool,
+        expect: Option<&str>,
         from: Option<&str>,
     ) -> Result<Reply, String> {
         self.phone_claude_pane(pane)?;
@@ -134,6 +139,11 @@ impl Server {
                 format!("Sent \"{}\"", short(reply))
             }
             (false, None) => return Err("its Claude isn't showing a prompt".into()),
+            (false, Some(found))
+                if expect.is_some_and(|id| id != crate::relay::tabs::hash_of(&found)) =>
+            {
+                return Err("its prompt changed since: look at it again".into());
+            }
             (false, Some(found)) => {
                 let a = answer::answer_for(&found, reply)
                     .ok_or_else(|| format!("\"{reply}\" isn't one of its options"))?;
