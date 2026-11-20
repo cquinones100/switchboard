@@ -66,6 +66,13 @@
     "default": true
   },
   {
+    "key": "diff_ready_needs_you",
+    "category": "Sidebar",
+    "label": "A tab whose diff finishes loading needs you",
+    "description": "A tab you left while its diff (M-d) was telling its story goes under Needs you, saying Diff ready, with a notification, once the story is told or has failed, until you go back to it; a tab in front is left alone. Off, nothing marks the tab",
+    "default": true
+  },
+  {
     "key": "sidebar_panel",
     "category": "Sidebar",
     "label": "Shade the sidebar",

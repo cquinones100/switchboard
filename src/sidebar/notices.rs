@@ -40,9 +40,10 @@ pub const MARK: &str = "@notices_window";
 /// Slack's new messages, what changed on today's calendar, notes written
 /// for you, the Linear inbox, your PRs' news, a default branch whose CI fails, the landings its tabs made without asking,
 /// what autopilot has to say, the landed tabs it closed
-/// without your seeing them, and suggestions. A source not named here goes
+/// without your seeing them, the tabs whose diff finished loading while
+/// you were elsewhere, and suggestions. A source not named here goes
 /// after them.
-pub const ORDER: [&str; 13] = [
+pub const ORDER: [&str; 14] = [
     "meeting",
     "slack",
     "calendar",
@@ -53,6 +54,7 @@ pub const ORDER: [&str; 13] = [
     "autolanded",
     "autopilot",
     "landed",
+    "ready",
     "routines",
     "habits",
     "behind",
@@ -82,14 +84,16 @@ pub fn view_of(source: &str) -> Option<ViewId> {
 /// (`mission::choices::notice_leads`): a change on the calendar (the
 /// Calendar lists the day's events, not what changed), a note written for
 /// you, what autopilot said and the landings it tells of (its view's rows
-/// are its tabs), a suggestion, and main ahead of the running build
+/// are its tabs), a tab whose diff finished loading, which leads to the
+/// tab, a suggestion, and main ahead of the running build
 /// (src/mux/behind.rs), which leads to the restart.
-pub const NO_VIEW: [&str; 7] = [
+pub const NO_VIEW: [&str; 8] = [
     "calendar",
     "new-notes",
     "autolanded",
     "autopilot",
     "landed",
+    "ready",
     "habits",
     "behind",
 ];
@@ -123,7 +127,7 @@ pub fn as_its_view_has_it(source: &str, item: &Item) -> Item {
 /// A kind's mark in the sidebar, by its source and its first
 /// notification's id (board 1): ◷ for the meeting about to start and what
 /// changed on the calendar, @ for what someone sent you on Slack or Linear,
-/// ✎ for a note written for you, ✓ for a landing and a PR merged or
+/// ✎ for a note written for you, ✓ for a landing, a tab ready and a PR merged or
 /// approved, ✕ for checks that failed, a failing default branch and a
 /// routine's run that failed or was skipped, and ◇ for what autopilot or a
 /// suggestion has to say.
@@ -132,7 +136,7 @@ pub fn mark_of(source: &str, id: &str) -> Mark {
         "meeting" | "calendar" => Mark::Reminder,
         "slack" | "inbox" => Mark::Mention,
         "new-notes" => Mark::Note,
-        "autolanded" | "landed" => Mark::Passed,
+        "autolanded" | "landed" | "ready" => Mark::Passed,
         "prs" if id.starts_with("failing:") => Mark::Failed,
         "prs" => Mark::Passed,
         "ci" | "routines" => Mark::Failed,
@@ -202,6 +206,8 @@ pub fn summary(source: &str, items: &[Item]) -> (String, String) {
             format!("{n} landed tabs closed"),
             items.last().map(|i| i.title.clone()).unwrap_or_default(),
         ),
+        "ready" if one => (first.title.clone(), first.detail.clone()),
+        "ready" => (format!("{n} tabs ready"), first.title.clone()),
         "habits" if one => (format!("Suggestion: {}", first.title), String::new()),
         "habits" => (format!("{n} suggestions"), first.title.clone()),
         // The next meeting and the mode's word are one each, as they are.

@@ -254,6 +254,8 @@ impl Host for Alone {
             | Action::Item { .. } => Answer::None,
             // The terminal's pointer is the diff's own to set (`App::point`).
             Action::Pointer { .. } => Answer::None,
+            // No tab to mark.
+            Action::Ready { .. } => Answer::None,
         }
     }
 }
