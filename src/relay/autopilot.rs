@@ -300,7 +300,7 @@ pub fn form(shown: &Shown) -> Value {
             switch(
                 "hands-free",
                 "Hands-free",
-                if mode.sources.issues() {
+                if mode.source() == Ok(crate::autopilot::mode::Sources::Issues) {
                     "Answers questions and lands unasked, closing landed issues."
                 } else {
                     "Answers its tabs' questions itself."
@@ -312,7 +312,7 @@ pub fn form(shown: &Shown) -> Value {
             switch(
                 "land",
                 "Land without asking",
-                if mode.sources.issues() {
+                if mode.source() == Ok(crate::autopilot::mode::Sources::Issues) {
                     // Slack's option descriptions hold 75 characters.
                     "Pushes after tests, reviews and leak-check; closes landed issues."
                 } else {
