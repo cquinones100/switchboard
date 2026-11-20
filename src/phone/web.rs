@@ -129,6 +129,16 @@ fn tls(name: &str) -> Result<TlsAcceptor> {
     Ok(TlsAcceptor::from(Arc::new(config)))
 }
 
+/// The app's origin as a browser sends it, which leaves out the default
+/// port.
+pub fn origin(name: &str, port: u16) -> String {
+    if port == 443 {
+        format!("https://{name}")
+    } else {
+        format!("https://{name}:{port}")
+    }
+}
+
 /// Serves until the process is stopped.
 pub async fn serve(status: Status, config: super::config::Config) -> Result<()> {
     let acceptor = tls(&status.name)?;
@@ -146,7 +156,7 @@ pub async fn serve(status: Status, config: super::config::Config) -> Result<()> 
         rules: Rules {
             owner: config.owner,
             devices: config.devices,
-            origin: format!("https://{}:{}", status.name, config.port),
+            origin: origin(&status.name, config.port),
         },
         computer: status.name.split('.').next().unwrap_or("").to_string(),
         whois: Mutex::new(WhoisCache::default()),
@@ -485,17 +495,44 @@ async fn tabs(State(app): State<Arc<App>>) -> Response {
 }
 
 /// The tabs, now and each time they change, as server-sent events.
-async fn events(State(app): State<Arc<App>>) -> Response {
+/// Whether the phone app is on and `device` still carries the cookie it
+/// was paired with: an open stream asks before each update, so turning the
+/// app off or unpairing a phone ends what it is sent.
+fn still_allowed(device: &str, cookie: Option<&str>) -> bool {
+    settings::setting("phone") == Some(Value::Bool(true))
+        && guard::paired(&pairing::devices(), device, cookie).is_ok()
+}
+
+async fn events(
+    State(app): State<Arc<App>>,
+    device: Option<axum::Extension<Device>>,
+    headers: HeaderMap,
+) -> Response {
     let rx = app.tabs.clone();
-    let stream = futures_util::stream::unfold((rx, true), |(mut rx, first)| async move {
-        if !first && rx.changed().await.is_err() {
-            return None;
+    let device = device_of(device);
+    let cookie = headers
+        .get(header::COOKIE)
+        .and_then(|c| c.to_str().ok())
+        .map(str::to_string);
+    let stream = futures_util::stream::unfold((rx, true), move |(mut rx, first)| {
+        let (device, cookie) = (device.clone(), cookie.clone());
+        async move {
+            if !first && rx.changed().await.is_err() {
+                return None;
+            }
+            let allowed =
+                tokio::task::spawn_blocking(move || still_allowed(&device, cookie.as_deref()))
+                    .await
+                    .unwrap_or(false);
+            if !allowed {
+                return None;
+            }
+            let data = rx.borrow_and_update().to_string();
+            Some((
+                Ok::<_, std::convert::Infallible>(SseEvent::default().data(data)),
+                (rx, false),
+            ))
         }
-        let data = rx.borrow_and_update().to_string();
-        Some((
-            Ok::<_, std::convert::Infallible>(SseEvent::default().data(data)),
-            (rx, false),
-        ))
     });
     Sse::new(stream)
         .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
@@ -705,7 +742,9 @@ async fn follow_once(
                         continue;
                     };
                     now["live"] = json!(true);
-                    if let (Some(before), Some(key)) = (last.as_ref(), push_key) {
+                    // Turned off while it runs, it pushes nothing.
+                    let pushing = settings::setting("phone") == Some(Value::Bool(true));
+                    if let (true, Some(before), Some(key)) = (pushing, last.as_ref(), push_key) {
                         for tab in started_waiting(before, &now) {
                             let title = format!(
                                 "Tab {} · {}",
@@ -770,6 +809,18 @@ mod tests {
         let bound = util::block_on(bind(&status, port));
         assert!(bound.is_err(), "nothing to listen on");
         assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err());
+    }
+
+    #[test]
+    fn the_origin_leaves_out_the_default_port() {
+        assert_eq!(
+            origin("studio.tail1.ts.net", 443),
+            "https://studio.tail1.ts.net"
+        );
+        assert_eq!(
+            origin("studio.tail1.ts.net", 8443),
+            "https://studio.tail1.ts.net:8443"
+        );
     }
 
     #[test]
