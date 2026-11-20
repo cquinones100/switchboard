@@ -191,15 +191,41 @@ const navBar = (group, current, right) => {
   hl(35, 1, 125);
 };
 
+// THE MARK A STATUS YOU SET CARRIES: the kit's chip, "set by you" dim on the neutral tint, after the tab's name in the
+// sidebar and on its card's top edge; the tab keeps its own mark, what its Claude is doing. It goes once Switchboard takes the tab back.
+const byYou = (x, y) => chip(x, y, 'set by you', 'd');
+// A SIDEBAR AT x, its groups as [label, tone, [[mark, tone, number, name, under, byYou]...]], sel the tab under the cursor.
+const side = (x0, title, groups, sel) => {
+  fill(x0, 0, 34, 45, '1');
+  T(x0 + 1, 0, [title, 'd', 'b']);
+  let y = 2;
+  for (const [lab, tone, tabs] of groups) {
+    T(x0 + 1, y, [lab.toUpperCase(), tone, 'b']); R(x0 + 32, y, String(tabs.length), tone); y++;
+    for (const [m, mt, num, name, sub, mine] of tabs) {
+      const s = num === sel; if (s) { fill(x0, y, 34, 2, '4'); put(x0, y, '▌', 'a'); put(x0, y + 1, '▌', 'a'); }
+      let nx = T(x0 + 2, y, [m, mt], ' ', [String(num), 'n' + num], ' ', [name, 't', s ? 'b' : '']);
+      if (mine) byYou(x0 + 33 - 11, y);
+      put(x0 + 6, y + 1, sub, 'd'); y += 2;
+    }
+    y++;
+  }
+  vl(x0 + 34, 0, 45);
+};
+const BASE = [
+  ['Needs you', 'y', [['●', 'y', 2, 'stable note IDs', 'Bash: git push origin main'], ['●', 'y', 6, 'review PR 41', 'asks: which fixture?']]],
+  ['Working', 'b', [['⠹', 'b', 1, 'planning', 'Monitor: fork parity'], ['⠹', 'b', 3, 'M-d uncommitted', 'Edit diffview.lua']]],
+  ['Landing', 'm', [['▲', 'm', 5, 'benchmark harness', '2nd in the landing queue']]],
+];
 // ─── THE BOARD ───
-sidebar(8);
-mcBar('Work', 'Tabs', '11 tabs · 3 need you');
-label(36, 3, 'Needs you', 'y', 3, 158);
+// The sidebar with tab 8 under Review loop, the status you set holding, as board 158 draws it.
+side(0, '10 tabs', [BASE[0], BASE[1], ['Review loop', 'a', [['○', 'd', 8, 'handoff', 'Switchboard reads: idle 58m', true]]], BASE[2], ['Idle', 'd', [['○', 'd', 9, 'oncall watch', 'idle 14m']]]], 8);
+mcBar('Work', 'Tabs', '10 tabs · 2 need you');
+label(36, 3, 'Needs you', 'y', 2, 158);
 // A RIGHT CLICK ON TAB 8'S ROW: its menu beside the click, Set its status… chosen.
-box(36, 28, 44, 13, 'Tab 8 · handoff');
+box(36, 15, 44, 13, 'Tab 8 · handoff');
 const opts = ['Go to tab 8', 'Peek at its last turn', 'Its diff (M-d)', 'Actions (M-p) in the tab', 'Rename it', 'Pin it, as needing you (M-f)', 'Remind me about it later', 'Set its status…'];
-opts.forEach((o, i) => option(36, 29 + i, 44, o, i === 7 ? '›' : '', i === 7));
-keys(38, 39, [['↑↓', 'move'], ['Enter', 'choose'], ['/', 'search']]);
+opts.forEach((o, i) => option(36, 16 + i, 44, o, i === 7 ? '›' : '', i === 7));
+keys(38, 26, [['↑↓', 'move'], ['Enter', 'choose'], ['/', 'search']]);
 // SET ITS STATUS…: every group a tab can be in, by the sidebar's names and in its order, the one it is in marked ✓ (here Review
 // loop, set by you); while a status you set holds, Let Switchboard decide leads, saying where Switchboard would file it.
 box(82, 8, 48, 22, 'Set its status');

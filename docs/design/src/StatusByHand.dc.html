@@ -193,7 +193,7 @@ const navBar = (group, current, right) => {
 
 // ─── THE BOARD ───
 // THE MARK A STATUS YOU SET CARRIES: the kit's chip, "set by you" dim on the neutral tint, after the tab's name in the
-// sidebar and on its card's top edge; the group's own mark stays the tab's. It goes once Switchboard takes the tab back.
+// sidebar and on its card's top edge; the tab keeps its own mark, what its Claude is doing. It goes once Switchboard takes the tab back.
 const byYou = (x, y) => chip(x, y, 'set by you', 'd');
 // A SIDEBAR AT x, its groups as [label, tone, [[mark, tone, number, name, under, byYou]...]], sel the tab under the cursor.
 const side = (x0, title, groups, sel) => {
@@ -221,7 +221,7 @@ const BASE = [
 // LEFT, AS SWITCHBOARD FILES IT: tab 8 is idle, so it is under Idle.
 side(0, 'As Switchboard files it', BASE.concat([['Idle', 'd', [['○', 'd', 8, 'handoff', 'idle 58m'], ['○', 'd', 9, 'oncall watch', 'idle 14m']]]]), 8);
 // MIDDLE, WITH THE STATUS YOU SET: you put tab 8 under Review loop (it waits on a teammate's review). It takes that
-// group's place and mark, "set by you" after its name; under it, what Switchboard still reads, which hands it back.
+// group's place, keeps its own mark (○, idle), "set by you" after its name; under it, what Switchboard still reads, which hands it back.
 side(35, 'With the status you set', [BASE[0], BASE[1], ['Review loop', 'a', [['○', 'd', 8, 'handoff', 'Switchboard reads: idle 58m', true]]], BASE[2], ['Idle', 'd', [['○', 'd', 9, 'oncall watch', 'idle 14m']]]], 8);
 
 // RIGHT, ITS CARD IN MISSION CONTROL'S TABS VIEW: under Review loop, the chip on the card's top edge.
