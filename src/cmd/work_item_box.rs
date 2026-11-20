@@ -9,8 +9,8 @@
 //! repositories as radio rows, the note's last one marked "the note's" and
 //! chosen first; "Lands on", a field holding the branch last picked for the
 //! repository, its suggestion dim after what is typed (→ takes it), how it
-//! lands under it; what Start opens (the tab's number, the worktree wtn
-//! names, wtn on the item and its plan), or that a worktree has the item
+//! lands under it; what Start opens (the tab's number, the worktree wt
+//! names, wt on the item and its plan), or that a worktree has the item
 //! already; then "▶ Start it", the row it opens on, and, while autopilot
 //! works the note, "Next in autopilot's queue". With a tab on the item
 //! already, it says so in place of the rows, its one row "Go to it".
@@ -86,7 +86,7 @@ pub struct Context {
     pub landing: Result<(String, String), String>,
     /// The number the tab Start opens takes.
     pub tab: usize,
-    /// The worktree wtn makes for the item.
+    /// The worktree wt makes for the item.
     pub worktree: String,
     /// A worktree of the chosen repository has the item already.
     pub claimed: bool,
@@ -455,7 +455,7 @@ impl WorkItemBox {
             )
         } else {
             format!(
-                "Opens tab {} in a new worktree, {}, running wtn on this item{}.",
+                "Opens tab {} in a new worktree, {}, running wt on this item{}.",
                 ctx.tab,
                 ctx.worktree,
                 if ctx.plan == PlanChip::None {
@@ -847,7 +847,7 @@ mod tests {
         assert!(shown.contains("straight on main through queue-and-clean, as repos.json says"));
         let flat = shown.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(flat.contains(
-            "Opens tab 10 in a new worktree, note-cycle-through-idle-tabs-with-m-a, running wtn on this item and its plan."
+            "Opens tab 10 in a new worktree, note-cycle-through-idle-tabs-with-m-a, running wt on this item and its plan."
         ), "{shown}");
         assert!(shown.contains("▶ Start it"), "{shown}");
         assert!(shown.contains("Next in autopilot's queue"), "{shown}");

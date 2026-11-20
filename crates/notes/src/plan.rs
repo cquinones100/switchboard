@@ -2,7 +2,7 @@
 //! its sections, and its open choice as options, each with its letter, its
 //! words, whether it is the recommended one and the mock drawn under it. And
 //! a choice made: the option ticked and the headings renamed, as the
-//! sessions that build a plan read it (`open_choice`, which wtn and
+//! sessions that build a plan read it (`open_choice`, which wt and
 //! autopilot read a plan's open choices by too).
 //! New with UX 2.0; the tmux version opened a plan as any other note.
 //!

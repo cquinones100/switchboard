@@ -160,7 +160,7 @@ impl Server {
     /// repository's main clone (`dir`): a landed worktree's tab goes on
     /// saying what it did, rather than taking the main clone's name. The
     /// name is its `@tab_name`, so it is saved with the layout, and `/wt`,
-    /// `wtn` and a rename replace it as they do any other.
+    /// `wt` and a rename replace it as they do any other.
     fn keep_cleaned_name(&mut self, tab_id: TabId, dir: &Path) {
         let Some(shown) = self.tab_names.shown.get(&tab_id) else {
             return;
@@ -251,7 +251,7 @@ impl Server {
     }
 
     /// The tab's own name: its `@tab_name` option (what M-p's "Rename the
-    /// tab", `/shape` and `/wtn` set, and `/wt` clears), first, as
+    /// tab", `/shape` and `/wt` for a note's item set, and `/wt` for a ticket clears), first, as
     /// tab-label.sh read it, else the one given with `rename-tab`.
     pub fn tab_own_name(&self, tab: TabId) -> Option<&str> {
         let tab = self.tabs.get(&tab)?;
@@ -344,7 +344,7 @@ impl Server {
         let whole = self.tab_full_title(tab).or_else(|| {
             let place = place.as_ref().filter(|p| p.on_branch())?;
             let config = std::fs::read_to_string(place.common_dir.join("config")).ok()?;
-            let item = title::wtn_item(&config, &place.branch)?;
+            let item = title::wt_item(&config, &place.branch)?;
             let own = self.tab_own_name(tab).unwrap_or("");
             title::cut_of(own, &item).then_some(item)
         });

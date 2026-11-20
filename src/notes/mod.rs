@@ -13,7 +13,7 @@
 //!
 //! The app's own modules are given at the paths they had (`notes::store`,
 //! `notes::id`, `notes::render` and the rest), for the parts that read a
-//! note themselves (wtn, autopilot, `item-done`, the views' pictures).
+//! note themselves (wt, autopilot, `item-done`, the views' pictures).
 
 use std::process::ExitCode;
 

@@ -373,7 +373,7 @@ fn note_of(r: &Row) -> String {
     } else if let Some(phase) = r.phase.as_deref().filter(|p| !p.is_empty()) {
         phase.to_string()
     } else if !r.was_in {
-        "wtn is making its worktree".to_string()
+        "wt is making its worktree".to_string()
     } else {
         match r.state {
             TabState::Waiting => "waiting on you".into(),
