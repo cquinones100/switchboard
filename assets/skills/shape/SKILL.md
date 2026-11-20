@@ -9,6 +9,7 @@ allowed-tools:
   - Bash(switchboard tickets)
   - Bash(switchboard tabs)
   - Bash(switchboard show *)
+  - Bash(gh issue view *)
   - mcp__claude_ai_Linear__get_issue
   - mcp__claude_ai_Linear__list_issues
   - mcp__claude_ai_Linear__list_comments
@@ -61,7 +62,7 @@ This sets the same `@tab_name` that renaming the tab in `M-p` and `switchboard s
 
 When the argument names an existing ticket, fetch it and its comments with the Linear connector before anything else. If it doesn't exist or can't be read, say so and stop. Name the tab for it (see "Name the tab"). When `--continue` follows the ticket (as `shape --continue`, `shape-batch --continue` and the palette's "Continue shaping Linear tickets" pass it), give the two-line summary below and carry straight on as "Continue shaping it", without asking. Otherwise give a two-line summary of where it stands (its title, state, and whether it already has a problem statement, an approach and acceptance criteria) and ask which of these to do, with `AskUserQuestion`:
 
-- **Run a review loop on it.** Hand the ticket to the repository's `/review-loop` skill in ticket mode, which has Codex review the ticket's text against the code as it is (see that skill and its `references/ticket-mode.md`). Use it when the ticket looks ready and you want it checked before anyone builds it. If this repository has no `review-loop` skill, say so and continue shaping instead. When the loop finishes, show its findings and ask whether to fold them into the ticket by continuing below from step 6; nothing is written to Linear without approval, as always.
+- **Run a review loop on it.** Run `/review-loop ticket <ID>`, the review loop's ticket mode, which has Codex review the ticket's text against the code as it is (see that skill's `references/ticket-mode.md`). Use it when the ticket looks ready and you want it checked before anyone builds it. If this repository has a `review-loop` of its own with no ticket mode, say so and continue shaping instead. The loop ends asking whether to save its edits to the ticket; once it has, ask whether to keep shaping it by continuing below from step 6. Nothing is written to Linear without approval, as always.
 - **Continue shaping it.** Carry on with the steps below, refining this ticket rather than drafting a new one. Use it when the ticket is still rough, or the user wants to change its scope.
 
 Put the one the ticket's state suggests first, marked as recommended: a review loop for a ticket that already reads as complete, shaping for one that doesn't.
@@ -95,7 +96,7 @@ Then run the steps for the item and for each sub-item together: step 2 checks ea
 
 8. **Write it to Linear.** Once the user approves the draft, create the ticket in the team, with `linearLabels` if set, or update the ticket being refined. For a note item with sub-items, create the project (in the team) or the parent ticket first, then each sub-item as an issue in that project or a sub-issue of that ticket, as "A checklist item from a note" says. Link the related tickets from step 5. Name the tab for a ticket just created, or again if the title changed (see "Name the tab"). Reply with the ticket ID and URL.
 
-9. **Review the ticket.** Right after writing it, run the repository's `/review-loop` in ticket mode on it, a ticket refined as much as one created, without asking: the user set this up in this skill, so it counts as asking for the loop by name. It reads the ticket from Linear and ends asking whether to save its edits there, as ticket mode always does. For a note item with sub-items, review the project or parent and each sub-item, one loop each. If the repository has no `review-loop` skill, its `review-loop` has no ticket mode, or its working tree isn't clean, say so and skip it. Then offer `/wt <ID>` to start the work in this tab.
+9. **Review the ticket.** Right after writing it, run `/review-loop ticket <ID>` on it, the review loop's ticket mode, a ticket refined as much as one created, without asking: the user set this up in this skill, so it counts as asking for the loop by name. It reads the ticket from Linear and ends asking whether to save its edits there, as ticket mode always does. For a note item with sub-items, review the project or parent and each sub-item, one loop each. If the repository has a `review-loop` of its own with no ticket mode, say so and skip it. Then offer `/wt <ID>` to start the work in this tab.
 
 ## GitHub issues
 
@@ -119,7 +120,7 @@ The issue goes on `origin`'s repository, which is public for an open-source proj
 
    Name the tab for it (see "Name the tab") and reply with its number and URL.
 
-7. **Review the issue.** As the Linear step 9 says, with the issue in place of the ticket, where the repository's `review-loop` has a ticket mode that reads it. Then offer `/wt #<number>` to start the work in this tab.
+7. **Review the issue.** As the Linear step 9 says, with the issue in place of the ticket: run `/review-loop ticket <number>`, which ends asking whether to save its edits to the issue. Then offer `/wt #<number>` to start the work in this tab.
 
 ## A note's item
 
