@@ -100,6 +100,18 @@ impl Server {
         answer::options_in(&slot.pane.text(60))
     }
 
+    fn phone_dialog(&self, pane: PaneId) -> bool {
+        self.panes
+            .get(&pane)
+            .is_some_and(|slot| crate::relay::tabs::dialog_in(&slot.pane.text(0)).is_some())
+    }
+
+    fn phone_draft(&self, pane: PaneId) -> bool {
+        self.panes.get(&pane).is_some_and(|slot| {
+            crate::relay::tabs::draft_in(&slot.pane.text(0), &slot.pane.typed_text(0)).is_some()
+        })
+    }
+
     /// `prompt`: the prompt the pane's Claude waits on as JSON, `null` with
     /// none.
     pub(crate) fn phone_prompt(&self, pane: PaneId) -> Result<Reply, String> {
@@ -134,6 +146,22 @@ impl Server {
                 return Err("its Claude is showing a prompt: answer that first".into());
             }
             (true, None) if reply.trim().is_empty() => return Err("nothing to send".into()),
+            // A dialog before its session starts (trust this folder, a new
+            // MCP server), which Enter would confirm unseen, and a draft in
+            // its prompt box, which would go with the words, are left for
+            // the computer, as mission control's answer box leaves them.
+            (true, None) if self.phone_dialog(pane) => {
+                return Err(
+                    "its Claude is showing a dialog before it starts: answer it at the computer"
+                        .into(),
+                );
+            }
+            (true, None) if self.phone_draft(pane) => {
+                return Err(
+                    "its Claude has a draft in its prompt box, which would go with this: send it or clear it at the computer"
+                        .into(),
+                );
+            }
             (true, None) => {
                 self.type_into_claude(pane, answer::message_presses(reply));
                 format!("Sent \"{}\"", short(reply))
