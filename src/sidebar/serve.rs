@@ -42,6 +42,7 @@ const FLICK: Duration = Duration::from_millis(150);
 
 mod history;
 mod menu;
+mod status;
 mod window;
 
 /// How often the spinner turns.
@@ -537,6 +538,7 @@ impl Server {
                 self.dirty_sidebars();
             }
         }
+        self.tab_status_settle();
         if changed {
             self.dirty_sidebars();
         }
@@ -859,6 +861,9 @@ impl Server {
             .then(|| crate::tabs::opened(&tab.opts))
             .flatten();
         t.pinned = opt("@pinned").is_some_and(|v| v != "0");
+        t.by_hand = opt(status::OPTION)
+            .filter(|_| settings::is_on("tab_status_by_hand"))
+            .and_then(|v| model::by_hand_of(&v));
         t.land = opt(crate::mux::server::LAND).is_some_and(|v| v == "1");
         t.remind_at = opt("@remind_at")
             .and_then(|v| v.trim().parse::<i64>().ok())
