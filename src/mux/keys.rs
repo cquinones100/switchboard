@@ -141,6 +141,9 @@ pub enum Action {
     Settings,
     /// A reminder on the current tab (remind.sh).
     RemindTab,
+    /// The current tab's status set by hand, until Switchboard's own
+    /// reading of it changes (`@tab_status`).
+    TabStatus,
     /// The tab's whole title in a box, which the sidebar and the status
     /// line cut (M-T; tab-title.sh; src/tabs/title.rs).
     TabTitle,
@@ -297,6 +300,7 @@ impl Action {
             "revive-worktree" => Action::ReviveWorktree,
             "settings" => Action::Settings,
             "remind-tab" => Action::RemindTab,
+            "tab-status" => Action::TabStatus,
             "tab-title" => Action::TabTitle,
             "reopen-last-tab" => Action::ReopenLastTab,
             "upgrade" => Action::Upgrade,
@@ -378,6 +382,7 @@ impl Action {
             Action::ReviveWorktree => "revive-worktree".into(),
             Action::Settings => "settings".into(),
             Action::RemindTab => "remind-tab".into(),
+            Action::TabStatus => "tab-status".into(),
             Action::TabTitle => "tab-title".into(),
             Action::ReopenLastTab => "reopen-last-tab".into(),
             Action::View(command) => command.name().into(),
@@ -487,6 +492,7 @@ impl Action {
             Action::RemindTab => {
                 "Remind me about this tab later, as Slack does: it waits under Reminders with the time left, then needs you".into()
             }
+            Action::TabStatus => "Set this tab's status…".into(),
             Action::TabTitle => "Show this tab's full title".into(),
             Action::ReopenLastTab => "Reopen the most recently closed tab".into(),
             Action::View(command) => command.about().into(),
@@ -656,6 +662,9 @@ impl Action {
             Action::RemindTab => {
                 "Asks when (20 minutes to next Monday, or a time typed like 45m or 3pm) and what for. Until then the tab waits under Reminders.".into()
             }
+            Action::TabStatus => {
+                "Files the tab under the sidebar's group you choose, marked set by you, until Switchboard's own reading of it changes; Let Switchboard decide gives it back at once. A pin and a reminder still win. Settings' \"Set a tab's status by hand\" (tab_status_by_hand).".into()
+            }
             Action::TabTitle => {
                 "The title wrapped, its PR number in front, then its branch, directory, PR and ticket as far as the workspace knows them; y copies the title.".into()
             }
@@ -746,6 +755,7 @@ impl Action {
             Action::ReviveWorktree => &["tabs", "claude", "reopen"],
             Action::Settings => &["settings", "config", "preferences"],
             Action::RemindTab => &["tabs", "remind", "todo"],
+            Action::TabStatus => &["tabs", "status", "group"],
             Action::TabTitle => &["tabs"],
             Action::ReopenLastTab => &["tabs", "reopen", "closed"],
             Action::View(command) => command.tags(),
@@ -796,12 +806,19 @@ impl Action {
 
     /// The words and tags the palette lists it by, or `None` to leave it
     /// out: of M-1 to M-9, only the first, for all nine, as tmux.conf gave
-    /// only M-1 a description.
+    /// only M-1 a description; a note's preview while Settings'
+    /// notes_preview is off.
     pub fn palette_note(&self) -> Option<(String, String)> {
         let words = match self {
             Action::SelectTab(1) => "Go to a tab by number (M-1 to M-9)".to_string(),
             Action::SelectTab(_) => return None,
+            Action::TabStatus if !crate::settings::is_on("tab_status_by_hand") => return None,
             Action::Extra(command) if !command.in_palette() => return None,
+            Action::Notes(crate::notes::serve::Command::Preview)
+                if !crate::settings::is_on("notes_preview") =>
+            {
+                return None;
+            }
             _ => self.about(),
         };
         let tags = self
@@ -878,6 +895,7 @@ impl Action {
             Action::TicketImage,
             Action::Settings,
             Action::RemindTab,
+            Action::TabStatus,
             Action::TabTitle,
             Action::StopSlackRelay,
             Action::Upgrade,

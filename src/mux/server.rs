@@ -2119,6 +2119,9 @@ impl Server {
         self.tab_closing(tab);
         self.autopilot_tab_closing(tab);
         self.tabs.remove(&tab);
+        if self.notices.contains_key(crate::agent::READY_SOURCE) {
+            self.ready_notices();
+        }
         // A tab closed drops out of the sidebar's select mode.
         for side in self.sidebar.sides.values_mut() {
             if let Some(picked) = side.select.as_mut() {
@@ -3499,6 +3502,7 @@ impl Server {
             ),
             Action::Settings => self.open_mission(id, crate::mission::Opening::Settings),
             Action::RemindTab => self.remind_tab(id, current_tab),
+            Action::TabStatus => self.tab_status_menu(id, current_tab),
             Action::TabTitle => self.show_tab_title(id, current_tab),
             Action::ReopenLastTab => self.reopen_last(id),
             Action::View(command) => self.view_command(id, command),

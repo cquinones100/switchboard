@@ -2871,8 +2871,23 @@ fn m_w_in_a_tabs_claude_pane_asks_to_close_the_tab() {
     client.wait_text("$");
     server.ok(&["new-tab", "-n", "second"]);
     client.wait_text("2:second");
-    wait_list(&server, "the second tab in front", |l| {
-        tabs(l)[1]["current"] == true
+    // The hook counts the pane as Claude's only with its shell in front, the
+    // process the session file names: a login shell's profile can run a
+    // command of its own (Ubuntu's runs `locale`) before the prompt, and a
+    // hook then has its state swept as soon as it is set. So the second
+    // tab's shell is waited for at its prompt, in front.
+    client.wait_for("the second tab in front, its shell at its prompt", |s| {
+        let list = server.list();
+        let tab = &tabs(&list)[1];
+        let at_its_prompt = s
+            .iter()
+            .any(|row| row.rsplit('│').next().map(str::trim) == Some("$"));
+        tab["current"] == true
+            && matches!(
+                tab["panes"][0]["command"].as_str(),
+                Some("sh" | "bash" | "dash")
+            )
+            && at_its_prompt
     });
     let pane = tabs(&server.list())[1]["panes"][0].clone();
     let claude = pane["id"].as_str().unwrap().to_string();
@@ -2882,6 +2897,9 @@ fn m_w_in_a_tabs_claude_pane_asks_to_close_the_tab() {
         json!({"sessionId": "s-1"}),
     );
     hook(&server, &claude, "UserPromptSubmit", json!({}));
+    wait_list(&server, "the second tab's pane known as Claude's", |l| {
+        !tabs(l)[1]["panes"][0]["agent"].is_null()
+    });
     // A split beside it closes alone, the tab and its Claude left. M-w
     // waits for the split in front with its shell at its prompt, on a row of
     // its own right of both borders: a login shell's profile can run a
@@ -3277,4 +3295,48 @@ fn with_resizing_off_the_sidebars_edge_takes_no_drag_and_a_kept_width_is_left_al
     wait_list(&server, "the kept width back", |_| {
         side_columns(&server) == 51
     });
+}
+
+// "Set its status…" in a tab's menu files the tab under the group chosen,
+// marked set by you, and the status is kept with the layout through a
+// restart.
+#[test]
+fn a_status_chosen_from_a_tabs_menu_moves_its_row_and_outlives_a_restart() {
+    let mut server = TestServer::start_with_settings(
+        r#"{"notifications": false, "tips": false, "ux2": true, "auto_restore": true}"#,
+    );
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    let stage = |l: &Value| tabs(l)[0]["stage"]["key"].clone();
+    wait_list(&server, "the shell under Other", |l| stage(l) == "other");
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("m");
+    client.wait_text("Set its status…");
+    client.type_text("/Set its");
+    client.wait_for("the search narrowed", |s| {
+        !s.iter().any(|l| l.contains("Rename it"))
+    });
+    client.type_text("\r");
+    client.wait_text("Set its status");
+    client.wait_text("Review loop");
+    client.type_text("/Review");
+    client.wait_for("the search narrowed", |s| {
+        !s.iter().any(|l| l.contains("Build failing"))
+    });
+    client.type_text("\r");
+    wait_list(&server, "the tab under Review loop", |l| {
+        stage(l) == "review"
+    });
+    client.wait_text("REVIEW LOOP");
+    client.wait_text("set by you");
+    server.ok(&["save"]);
+    drop(client);
+    server.restart();
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    wait_list(&server, "the status kept through a restart", |l| {
+        stage(l) == "review"
+    });
+    client.wait_text("set by you");
 }

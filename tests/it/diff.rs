@@ -101,6 +101,21 @@ fn repository(root: &Path) -> std::path::PathBuf {
 /// a page at a time, then the whole of it, after the line naming its
 /// session.
 fn stand_in_claude(home: &Path) {
+    stand_in_claude_after(home, "");
+}
+
+/// As `stand_in_claude`, answering only once `release` is there, so the
+/// diff's story cover stays up until the test lets it go.
+fn held_claude(home: &Path, release: &Path) {
+    let wait = format!(
+        "while [ ! -e {} ]; do sleep 0.1; done\n",
+        sh_quote(&release.to_string_lossy())
+    );
+    stand_in_claude_after(home, &wait);
+}
+
+/// The stand-in, running `wait` (shell) after it notes the ask.
+fn stand_in_claude_after(home: &Path, wait: &str) {
     let pieces = [
         r#"{"pages": [{"title": "Change the core", "why": "a changes.", "watch": "Old callers of a.", "hunks": [{"id": "src/a.js#1", "note": "Check a."}]}"#,
         r#", {"title": "Follow it", "why": "b follows.", "hunks": ["src/b.js#1"]}]}"#,
@@ -119,7 +134,7 @@ fn stand_in_claude(home: &Path) {
     lines.push(json!({"type": "result", "result": pieces.concat()}).to_string());
     let asked = home.join("claude-asked");
     let mut answer = format!(
-        "cat > /dev/null\necho \"asked $*\" >> {}\n",
+        "cat > /dev/null\necho \"asked $*\" >> {}\n{wait}",
         sh_quote(&asked.to_string_lossy())
     );
     for line in lines {
@@ -1239,4 +1254,178 @@ fn the_pane_resize_keys_move_the_lists_edge_and_go_back_to_the_pane_from_the_dif
             .is_empty()
     });
     assert_eq!(width(), Some(first - 5), "the list's width as it was");
+}
+
+/// Tab 1 with the diff open in it under its story's cover, the story held
+/// until `release` is written: the server, its client and `release`.
+fn diff_under_its_cover(extra: Value) -> (TestServer, common::TestClient, std::path::PathBuf) {
+    let server = TestServer::start();
+    let mut all = json!({"notifications": false, "tips": false, "github": false, "linear": false});
+    all.as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    common::write_settings(&server.home, all);
+    let release = server.home.join("release");
+    held_claude(&server.home, &release);
+    let work = repository(server.dir.path());
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    client.type_text(&format!("cd {}\r", work.display()));
+    wait_until("the shell to cd", || {
+        panes(&server)[0]["cwd"]
+            .as_str()
+            .is_some_and(|d| d.ends_with("work"))
+    });
+    client.send(b"\x1bd");
+    client.wait_text("telling the change as a story");
+    (server, client, release)
+}
+
+fn tab_ids(server: &TestServer) -> Vec<String> {
+    server.list()["sessions"][0]["tabs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// A tab's `@tab_ready`, "" when it has none.
+fn ready_of(server: &TestServer, tab: &str) -> String {
+    server
+        .run(&["show", "-t", tab, "@tab_ready"])
+        .1
+        .trim()
+        .to_string()
+}
+
+#[test]
+fn the_workspaces_keys_reach_it_while_the_diffs_story_cover_is_up_and_esc_and_t_reach_the_cover() {
+    let (server, mut client, _release) = diff_under_its_cover(json!({}));
+    server.ok(&["new-tab", "-d"]);
+    // M-2, as a terminal speaking the kitty keyboard protocol sends it, and
+    // M-1 back.
+    client.send(b"\x1b[50;3u");
+    client.wait_for("tab 2 in front", |s| {
+        !s.iter().any(|l| l.contains("telling the change"))
+    });
+    client.send(b"\x1b1");
+    client.wait_text("telling the change as a story");
+    // M-Space, mission control.
+    client.type_text("\x1b ");
+    client.wait_text("MISSION CONTROL");
+    client.type_text("\x1b");
+    client.wait_text("telling the change as a story");
+    // M-j, the open tabs to pick from.
+    client.send(b"\x1b[106;3u");
+    client.wait_text("Work map · open tabs");
+    client.type_text("\x1b");
+    client.wait_text("telling the change as a story");
+    // The cover's own keys still reach it: t shows the answer so far, and
+    // Esc the diff.
+    client.type_text("t");
+    client.wait_text("t shows the pages");
+    client.type_text("\x1b");
+    client.wait_text("export const a = 2;");
+}
+
+#[test]
+fn a_diff_that_finishes_loading_while_you_are_elsewhere_puts_its_tab_under_needs_you() {
+    let (server, mut client, release) = diff_under_its_cover(json!({}));
+    let first = tab_ids(&server)[0].clone();
+    server.ok(&["new-tab"]);
+    client.wait_for("tab 2 in front", |s| {
+        !s.iter().any(|l| l.contains("telling the change"))
+    });
+    std::fs::write(&release, "").unwrap();
+    wait_until("tab 1 marked ready", || ready_of(&server, &first) == "Diff");
+    // Its row under Needs you says so, and a notification names it.
+    client.wait_for("its row saying Diff ready", |s| {
+        s.iter()
+            .any(|l| l.contains("Diff ready") && !l.contains("in tab"))
+    });
+    client.wait_text("NEEDS YOU");
+    client.wait_text("Diff ready in tab 1");
+    // Dismissing the notification, from mission control's Notifications,
+    // takes the tab's mark with it.
+    client.type_text("\x1b ");
+    client.wait_text("MISSION CONTROL");
+    client.type_text("]");
+    client.wait_for("the notification chosen", |s| {
+        s.iter()
+            .any(|l| l.contains('›') && l.contains("Diff ready in tab 1"))
+            || s.iter().any(|l| l.contains("Diff ready in tab 1"))
+    });
+    client.type_text("\r");
+    client.wait_text("Dismiss it");
+    for _ in 0..10 {
+        let screen = client.screen();
+        if screen
+            .iter()
+            .any(|l| l.contains('›') && l.contains("Dismiss it"))
+        {
+            break;
+        }
+        let before = screen.join("\n");
+        client.type_text("j");
+        client.wait_for("the cursor to move", |s| s.join("\n") != before);
+    }
+    client.type_text("\r");
+    wait_until("the mark gone with it", || {
+        ready_of(&server, &first).is_empty()
+    });
+    client.type_text("\x1b");
+    client.wait_for("mission control closed", |s| {
+        !s.iter().any(|l| l.contains("MISSION CONTROL"))
+    });
+    client.wait_for("the sidebar without it", |s| {
+        !s.iter().any(|l| l.contains("Diff ready"))
+    });
+    // Marked again, going back clears it, mark and notification.
+    server.ok(&["ready", "-t", &first, "Diff"]);
+    client.wait_text("Diff ready in tab 1");
+    client.send(b"\x1b1");
+    client.wait_text("1/2 Change the core");
+    wait_until("the mark cleared", || ready_of(&server, &first).is_empty());
+    client.wait_for("the sidebar without it", |s| {
+        !s.iter().any(|l| l.contains("Diff ready"))
+    });
+}
+
+#[test]
+fn a_diff_that_finishes_loading_in_front_or_with_the_setting_off_marks_nothing() {
+    // In front throughout.
+    let (server, mut client, release) = diff_under_its_cover(json!({}));
+    let first = tab_ids(&server)[0].clone();
+    std::fs::write(&release, "").unwrap();
+    client.wait_text("1/2 Change the core");
+    std::thread::sleep(Duration::from_millis(500) * common::patience());
+    assert_eq!(ready_of(&server, &first), "");
+    drop(server);
+
+    // Elsewhere, with the setting off.
+    let (server, mut client, release) =
+        diff_under_its_cover(json!({"diff_ready_needs_you": false}));
+    let first = tab_ids(&server)[0].clone();
+    server.ok(&["new-tab"]);
+    client.wait_for("tab 2 in front", |s| {
+        !s.iter().any(|l| l.contains("telling the change"))
+    });
+    std::fs::write(&release, "").unwrap();
+    let kept = server.home.join(".cache/switchboard/diff-story");
+    wait_until("the story kept", || {
+        std::fs::read_dir(&kept)
+            .map(|d| {
+                d.flatten()
+                    .any(|e| e.path().extension().is_some_and(|x| x == "txt"))
+            })
+            .unwrap_or(false)
+    });
+    std::thread::sleep(Duration::from_millis(500) * common::patience());
+    assert_eq!(ready_of(&server, &first), "");
+    let screen = client.screen();
+    assert!(
+        !screen.iter().any(|l| l.contains("Diff ready")),
+        "{screen:#?}"
+    );
 }
