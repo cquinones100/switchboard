@@ -2814,8 +2814,23 @@ fn m_w_in_a_tabs_claude_pane_asks_to_close_the_tab() {
     client.wait_text("$");
     server.ok(&["new-tab", "-n", "second"]);
     client.wait_text("2:second");
-    wait_list(&server, "the second tab in front", |l| {
-        tabs(l)[1]["current"] == true
+    // The hook counts the pane as Claude's only with its shell in front, the
+    // process the session file names: a login shell's profile can run a
+    // command of its own (Ubuntu's runs `locale`) before the prompt, and a
+    // hook then has its state swept as soon as it is set. So the second
+    // tab's shell is waited for at its prompt, in front.
+    client.wait_for("the second tab in front, its shell at its prompt", |s| {
+        let list = server.list();
+        let tab = &tabs(&list)[1];
+        let at_its_prompt = s
+            .iter()
+            .any(|row| row.rsplit('│').next().map(str::trim) == Some("$"));
+        tab["current"] == true
+            && matches!(
+                tab["panes"][0]["command"].as_str(),
+                Some("sh" | "bash" | "dash")
+            )
+            && at_its_prompt
     });
     let pane = tabs(&server.list())[1]["panes"][0].clone();
     let claude = pane["id"].as_str().unwrap().to_string();
@@ -2825,6 +2840,9 @@ fn m_w_in_a_tabs_claude_pane_asks_to_close_the_tab() {
         json!({"sessionId": "s-1"}),
     );
     hook(&server, &claude, "UserPromptSubmit", json!({}));
+    wait_list(&server, "the second tab's pane known as Claude's", |l| {
+        !tabs(l)[1]["panes"][0]["agent"].is_null()
+    });
     // A split beside it closes alone, the tab and its Claude left. M-w
     // waits for the split in front with its shell at its prompt, on a row of
     // its own right of both borders: a login shell's profile can run a
