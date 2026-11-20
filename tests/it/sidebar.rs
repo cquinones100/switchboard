@@ -925,6 +925,26 @@ fn j_and_k_in_the_sidebar_step_over_the_notifications_a_kind_at_a_time() {
 }
 
 #[test]
+fn j_and_k_in_the_notifications_window_wrap_from_its_last_to_its_first_and_back() {
+    let (server, _notes) = two_kinds_of_notification(r#"{"notifications": false, "tips": false}"#);
+    let mut client = server.attach(140, 36);
+    client.wait_text("2 new on Slack");
+    client.wait_text("New note: Plan");
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("j");
+    wait_chosen(&mut client, "DM Ada");
+    client.type_text("\r");
+    wait_list(&server, "the focus in the window", |l| !focused(l));
+    client.type_text("G");
+    wait_chosen(&mut client, "Plan");
+    client.type_text("j");
+    wait_chosen(&mut client, "DM Ada");
+    client.type_text("k");
+    wait_chosen(&mut client, "Plan");
+}
+
+#[test]
 fn the_wheel_past_the_last_tab_steps_over_the_notifications_as_j_does() {
     let (server, _notes) = two_kinds_of_notification(r#"{"notifications": false, "tips": false}"#);
     let mut client = server.attach(140, 36);
