@@ -1462,6 +1462,64 @@ fn look_shows_pictures_beside_a_narrow_pane_stacked_when_there_are_two() {
 }
 
 #[test]
+fn pictures_beside_a_pane_stay_up_through_the_keys_typed_into_it() {
+    let server = TestServer::start_with_settings(r#"{"lone_pane_width": "80"}"#);
+    let mut client = server.attach_as("xterm-ghostty", 240, 40);
+    client.wait_text("BESIDE THIS PANE");
+    let pane = server.list()["sessions"][0]["tabs"][0]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // `cat -v` shows each key the pane is handed, the arrows by their bytes.
+    client.type_text("cat -v\r");
+    let shot = picture_at(&server, "shot.png");
+    server.ok(&["look", &shot]);
+    client.wait_text("shot.png   tab 1 · ");
+    // Each key's echo drawn means the key was handled and the screen drawn
+    // after it; Enter has `cat` print the line, so it shows twice.
+    let line = "abc^[[A^[[B^[[C^[[D";
+    let keys: [(&str, &[u8], &str, usize); 6] = [
+        ("letters", b"abc", "abc", 1),
+        ("Up", b"\x1b[A", "abc^[[A", 1),
+        ("Down", b"\x1b[B", "abc^[[A^[[B", 1),
+        ("Right", b"\x1b[C", "abc^[[A^[[B^[[C", 1),
+        ("Left", b"\x1b[D", line, 1),
+        ("Enter", b"\r", line, 2),
+    ];
+    for (what, bytes, echo, times) in keys {
+        client.send(bytes);
+        let screen = client.wait_for(&format!("{what} in the pane"), |s| {
+            s.iter().filter(|l| l.contains(echo)).count() >= times
+        });
+        assert!(
+            cell_of(&screen, "M-Esc close").is_some(),
+            "the pictures closed on {what}:\n{}",
+            screen.join("\n")
+        );
+    }
+    // M-Esc alone closes them, and the pane never sees it.
+    client.send(b"\x1b\x1b");
+    client.wait_for("the pictures gone", |s| {
+        cell_of(s, "M-Esc close").is_none() && cell_of(s, "BESIDE THIS PANE").is_some()
+    });
+    // A key after it, once the pane shows it, means M-Esc would have too.
+    client.type_text("after\r");
+    let deadline = common::deadline(std::time::Duration::from_secs(10));
+    let typed = loop {
+        let typed = server.ok(&["capture-pane", "-t", &pane]);
+        if typed.contains("after") {
+            break typed;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the key after M-Esc reached the pane: {typed}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    assert!(!typed.contains("^[^["), "M-Esc reached the pane: {typed}");
+}
+
+#[test]
 fn look_opens_the_desktops_viewer_where_no_picture_shows_beside_the_pane() {
     let server = TestServer::start_with_settings(r#"{"lone_pane_width": "80"}"#);
     let mut client = server.attach_as("xterm-ghostty", 240, 40);
