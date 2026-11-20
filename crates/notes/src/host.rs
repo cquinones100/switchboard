@@ -169,7 +169,8 @@ impl Host for Alone {
             | Action::ItemClaim { .. }
             | Action::Queued
             | Action::Item { .. }
-            | Action::Pointer { .. } => Answer::None,
+            | Action::Pointer { .. }
+            | Action::Ready { .. } => Answer::None,
         }
     }
 }

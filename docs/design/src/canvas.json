@@ -644,6 +644,10 @@
     "NotesToolbar.dc.html": {
       "title": "157. Notes' toolbar drawn with the kit's button, on the dark and light themes: at rest, under the mouse, lit while the cursor is in that style (bold, two styles, a heading) or while what it opens is in front (⋯), and faint while read-only",
       "page": "design"
+    },
+    "StatusMenu.dc.html": {
+      "title": "158. A tab's status set by hand, from Set its status… in its menu: every group a tab can be in, by the sidebar's names and in its order, the one it is in marked; Let Switchboard decide first while a status you set holds, naming where Switchboard would file it; in the sidebar the tab carries the kit's set by you chip and what Switchboard still reads, which takes it back once it changes",
+      "page": "design"
     }
   }
 }

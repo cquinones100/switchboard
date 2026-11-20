@@ -107,6 +107,7 @@ pub const NAMES: &[&str] = &[
     "picture",
     "look",
     "seen",
+    "ready",
     "tip",
     "press",
     "sidebar-repo",
@@ -199,6 +200,10 @@ pub const USAGE: &[(&str, &str)] = &[
     (
         "seen",
         "seen [-t tab]: the tab seen, as if looked at: its finished Claude and a reminder come due",
+    ),
+    (
+        "ready",
+        "ready [-t tab] <what>: what the tab's pane was loading is ready (\"Diff\"): the tab under Needs you, with a notification, while it isn't in front",
     ),
     (
         "tip",
@@ -471,6 +476,15 @@ impl Server {
                     self.mark_seen(tab);
                     Reply::ok("")
                 }),
+            "ready" => Args::parse(rest, "t").and_then(|a| {
+                let tab = self.tab_from(&a, caller)?;
+                let what = a.rest.join(" ");
+                if what.trim().is_empty() {
+                    return Err("ready takes what is ready (Diff)".into());
+                }
+                self.tab_ready(tab, what.trim());
+                Ok(Reply::ok(""))
+            }),
             "tip" => Ok(self.cmd_tip(rest, caller)),
             "press" => Ok(self.cmd_press(rest, caller)),
             "autopilot-next" => {

@@ -3817,6 +3817,11 @@ impl App {
         if !self.opts.server {
             commands.retain(|c| !c.act.needs_workspace());
         }
+        // Read as the palette opens, since Settings changes it while the
+        // app runs on.
+        if !settings::is_on("notes_preview") {
+            commands.retain(|c| c.act != PaletteAct::Preview);
+        }
         for c in &mut commands {
             if c.act == PaletteAct::Format(FormatAct::DiagramCode) {
                 c.name = format!("Diagram: {}", self.diagram_label());
@@ -3964,6 +3969,7 @@ impl App {
                 self.press(&[name]);
             }
             PaletteAct::NoteTab => self.note_tab(),
+            PaletteAct::Preview => self.press_for_note("preview-note"),
             PaletteAct::AttachNote => self.attach_note(),
             PaletteAct::WorkOnItem => self.work_on_item(),
             PaletteAct::OpenPlan => {

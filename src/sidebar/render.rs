@@ -896,7 +896,12 @@ pub fn sidebar_lines(
                 } else {
                     fg(theme.text)
                 };
-                let room = cols.saturating_sub(4 + width(&number) + tick_cols);
+                // A status you set: the kit's chip after its name (board 158).
+                let by_you = model::by_hand(tab, r)
+                    .is_some()
+                    .then(|| kit::chip(model::BY_YOU, Tone::Dim, false, theme));
+                let chip_w = by_you.as_ref().map_or(0, |c| 1 + kit::spans_width(c));
+                let room = cols.saturating_sub(4 + width(&number) + tick_cols + chip_w);
                 let mut first = Row::default();
                 tick(&mut first, tab.id);
                 first
@@ -907,6 +912,10 @@ pub fn sidebar_lines(
                     .put(number, fg(number_color(tab, theme)))
                     .put(" ", Style::new())
                     .put(text::cut(&tab.name, room), name_style);
+                if let Some(chip) = by_you {
+                    first.put(" ", Style::new());
+                    first.spans.extend(chip);
+                }
                 let kit_row = |row: Row| Line {
                     spans: kit::row(
                         row.fit(cols.saturating_sub(1), None).spans,
@@ -969,9 +978,14 @@ pub fn sidebar_lines(
             } else {
                 fg(theme.text)
             };
-            // The name wraps under itself, up to NAME_LINES lines.
+            // The name wraps under itself, up to NAME_LINES lines, beside
+            // the kit's chip while a status you set holds (board 158).
+            let by_you = model::by_hand(tab, r)
+                .is_some()
+                .then(|| kit::chip(model::BY_YOU, Tone::Dim, false, theme));
+            let chip_w = by_you.as_ref().map_or(0, |c| 1 + kit::spans_width(c));
             let indent = 6 + tab.index.to_string().len() + tick_cols;
-            let room = cols.saturating_sub(indent);
+            let room = cols.saturating_sub(indent + chip_w);
             let wrapped = text::wrap(&tab.name, room);
             let name: Vec<String> = if wrapped.len() > NAME_LINES {
                 let mut kept = wrapped[..NAME_LINES - 1].to_vec();
@@ -991,6 +1005,10 @@ pub fn sidebar_lines(
                 .put(tab.index.to_string(), fg(theme.faint))
                 .put(" ", Style::new())
                 .put(name[0].clone(), name_style);
+            if let Some(chip) = by_you {
+                first.put(" ", Style::new());
+                first.spans.extend(chip);
+            }
             let mut tab_lines = vec![first.fit(cols, fill)];
             for line in &name[1..] {
                 let mut row = Row::default();

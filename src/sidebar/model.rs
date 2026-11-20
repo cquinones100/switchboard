@@ -169,12 +169,13 @@ pub struct TabModel {
     /// (`tabs::git::main_clone`), every worktree of one sharing it.
     pub repo_dir: Option<PathBuf>,
     /// In another repository than the one the sidebar is filtered to
-    /// (`Side::repo`), so under Other repos whatever it is doing; only the
-    /// sidebar's own model sets it, never mission control's.
+    /// (`Side::repo`), so under Other repos whatever it is doing; set by the
+    /// filter's marking (`sidebar_marked`, and `sidebar_all_marked` for
+    /// mission control's Tabs view).
     pub elsewhere: bool,
     /// Outside the repository the sidebar is filtered to with a reminder
     /// come due, so under Reminders elsewhere rather than folded away in
-    /// Other repos; only the sidebar's own model sets it.
+    /// Other repos; set by the same marking.
     pub outside_filter: bool,
     /// Such a tab's repository, by its folder's name, `None` outside one.
     pub from_repo: Option<String>,
@@ -182,6 +183,10 @@ pub struct TabModel {
     pub state: TabState,
     /// Pinned by hand (M-f) as needing you, until unpinned.
     pub pinned: bool,
+    /// A status set by hand ("Set its status…", `@tab_status`): the stage
+    /// you chose, and the one Switchboard read as you chose it, which holds
+    /// only while Switchboard's own reading stays that (`by_hand`).
+    pub by_hand: Option<(Stage, Stage)>,
     /// Marked to land without asking (`@land`).
     pub land: bool,
     /// When it opened, in seconds (`@tab_opened`); none for a tab from a
@@ -190,6 +195,9 @@ pub struct TabModel {
     /// A reminder set on it (`@remind_at`, seconds, and `@remind_note`).
     pub remind_at: Option<i64>,
     pub remind_note: Option<String>,
+    /// What its pane finished loading while you were elsewhere ("Diff",
+    /// `@tab_ready`), under Needs you until you go to it.
+    pub ready: Option<String>,
     /// A routine's tab: when the routine runs next (`@routine_next`,
     /// seconds), for "routine · next 2:30 PM" while it is idle.
     pub routine_next: Option<i64>,
@@ -293,10 +301,12 @@ impl TabModel {
             color: None,
             state: TabState::Idle,
             pinned: false,
+            by_hand: None,
             land: false,
             opened: None,
             remind_at: None,
             remind_note: None,
+            ready: None,
             routine_next: None,
             autopilot: false,
             autopilot_landed: false,
@@ -385,10 +395,13 @@ pub fn reminder_later(tab: &TabModel, r: &Rules) -> bool {
     r.reminders && tab.remind_at.is_some_and(|at| at * 1000 > r.now_ms)
 }
 
-/// Whether a tab needs you: pinned, a reminder come due, or Claude waiting
-/// on you or finished there.
+/// Whether a tab needs you: pinned, a reminder come due, what it loaded
+/// ready, or Claude waiting on you or finished there.
 pub fn needs_tab(tab: &TabModel, r: &Rules) -> bool {
-    tab.pinned || reminder_due(tab, r) || matches!(tab.state, TabState::Waiting | TabState::Done)
+    tab.pinned
+        || reminder_due(tab, r)
+        || tab.ready.is_some()
+        || matches!(tab.state, TabState::Waiting | TabState::Done)
 }
 
 /// Most in need of you first: by state, then waiting or finished longest,
@@ -615,7 +628,8 @@ impl Stage {
 
 /// The one stage a tab is in: Other repos for one of another repository
 /// than the sidebar's filter, whatever it is doing, or Reminders elsewhere
-/// for one of those whose reminder has come due; else its own.
+/// for one of those whose reminder has come due; else the status you set,
+/// while it holds; else its own.
 pub fn stage_of(tab: &TabModel, r: &Rules) -> Stage {
     if tab.outside_filter {
         return Stage::RemindersElsewhere;
@@ -623,7 +637,60 @@ pub fn stage_of(tab: &TabModel, r: &Rules) -> Stage {
     if tab.elsewhere {
         return Stage::OtherRepos;
     }
-    own_stage(tab, r)
+    by_hand(tab, r).unwrap_or_else(|| own_stage(tab, r))
+}
+
+/// The words of the kit's chip a tab wears while a status you set holds.
+pub const BY_YOU: &str = "set by you";
+
+/// The stages a status can be set to, in the sidebar's order: every group
+/// a tab can be in by what it does (not the filter's two).
+pub const SETTABLE: [Stage; 15] = [
+    Stage::Needs,
+    Stage::Failing,
+    Stage::Working,
+    Stage::Monitoring,
+    Stage::Review,
+    Stage::Ci,
+    Stage::Queue,
+    Stage::Scheduled,
+    Stage::Queued,
+    Stage::Landing,
+    Stage::Deploy,
+    Stage::Merged,
+    Stage::Idle,
+    Stage::Later,
+    Stage::Other,
+];
+
+/// The status you set, while it holds: until Switchboard's own reading of
+/// the tab moves from the one it had as you set it. A pin keeps the tab
+/// under Needs you, and a reminder under Reminders or, come due, Needs
+/// you, whatever you set.
+pub fn by_hand(tab: &TabModel, r: &Rules) -> Option<Stage> {
+    let (chosen, read) = tab.by_hand?;
+    let reminded = reminder_due(tab, r) || reminder_later(tab, r);
+    (!tab.pinned && !reminded && own_stage(tab, r) == read).then_some(chosen)
+}
+
+/// What choosing a status keeps: `chosen` (`None` for "Let Switchboard
+/// decide") with what Switchboard reads now, or nothing when it is the
+/// group Switchboard files the tab in already.
+pub fn choose(tab: &TabModel, chosen: Option<Stage>, r: &Rules) -> Option<(Stage, Stage)> {
+    let read = own_stage(tab, r);
+    chosen.filter(|c| *c != read).map(|c| (c, read))
+}
+
+/// The value `@tab_status` keeps for a status set to `chosen` while
+/// Switchboard reads `read`.
+pub fn by_hand_value(chosen: Stage, read: Stage) -> String {
+    format!("{}:{}", chosen.key(), read.key())
+}
+
+/// `@tab_status` read back: the stage chosen and the one read then.
+pub fn by_hand_of(value: &str) -> Option<(Stage, Stage)> {
+    let (chosen, read) = value.split_once(':')?;
+    Some((Stage::from_key(chosen)?, Stage::from_key(read)?))
 }
 
 /// The stage a tab is in by what it is doing: Needs you first, then its
@@ -831,6 +898,8 @@ pub fn badge_state(tab: &TabModel, r: &Rules) -> Badge {
         } else {
             Badge::Done
         }
+    } else if tab.ready.is_some() {
+        Badge::Done
     } else if tab.landing.is_some() {
         Badge::Landing
     } else if testing_deploy(tab) {
@@ -933,7 +1002,15 @@ pub fn state_words(tab: &TabModel, r: &Rules) -> String {
         parts.push("pinned".to_string());
     }
     parts.extend(reminder_words(tab, r));
-    parts.push(state_only(tab, r));
+    parts.extend(tab.ready.as_ref().map(|what| format!("{what} ready")));
+    // Under a status you set, what Switchboard still reads, which takes the
+    // tab back once it changes.
+    let state = state_only(tab, r);
+    if by_hand(tab, r).is_some() && !state.is_empty() {
+        parts.push(format!("Switchboard reads: {state}"));
+    } else {
+        parts.push(state);
+    }
     joined(parts)
 }
 
@@ -1881,6 +1958,25 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_tab_whose_diff_is_ready_needs_you_with_the_done_mark() {
+        let r = rules();
+        let mut t = tab(1, "x", TabState::Idle);
+        t.claude = None;
+        assert_eq!(stage_of(&t, &r), Stage::Other);
+        t.ready = Some("Diff".into());
+        assert_eq!(stage_of(&t, &r), Stage::Needs);
+        assert_eq!(badge_state(&t, &r), Badge::Done);
+        assert!(
+            state_words(&t, &r).starts_with("Diff ready"),
+            "{}",
+            state_words(&t, &r)
+        );
+        // Claude waiting there outranks it.
+        t.state = TabState::Waiting;
+        assert_eq!(badge_state(&t, &r), Badge::Waiting);
+    }
+
+    #[test]
     fn a_reminder_waits_under_reminders_then_needs_you_once_due() {
         let r = rules();
         let now = r.now_secs();
@@ -2175,5 +2271,54 @@ pub(crate) mod tests {
         t.review = Some("APPROVED".into());
         t.size = Some((340, 80));
         assert_eq!(pr_facts(&t), vec!["✓12 ✕1 ⏳3", "approved", "+340 −80"]);
+    }
+
+    #[test]
+    fn a_status_set_by_hand_holds_until_switchboards_reading_changes() {
+        let r = rules();
+        let mut t = tab(8, "handoff", TabState::Idle);
+        t.by_hand = choose(&t, Some(Stage::Review), &r);
+        assert_eq!(t.by_hand, Some((Stage::Review, Stage::Idle)));
+        assert_eq!(stage_of(&t, &r), Stage::Review);
+        assert_eq!(badge_state(&t, &r), Badge::Idle, "it keeps its own mark");
+        t.since = Some(r.now_secs() - 58 * 60);
+        assert_eq!(state_words(&t, &r), "Switchboard reads: idle for 58m");
+        t.state = TabState::Working;
+        assert_eq!(stage_of(&t, &r), Stage::Working);
+        assert_eq!(by_hand(&t, &r), None);
+    }
+
+    #[test]
+    fn needs_you_set_while_working_lasts_until_it_stops() {
+        let r = rules();
+        let mut t = tab(3, "build", TabState::Working);
+        t.by_hand = choose(&t, Some(Stage::Needs), &r);
+        assert_eq!(stage_of(&t, &r), Stage::Needs);
+        t.activity = Some("Edit main.rs".into());
+        assert_eq!(stage_of(&t, &r), Stage::Needs, "still working");
+        t.state = TabState::Idle;
+        assert_eq!(stage_of(&t, &r), Stage::Idle);
+    }
+
+    #[test]
+    fn letting_switchboard_decide_or_choosing_its_group_clears_it() {
+        let r = rules();
+        let t = tab(4, "idle", TabState::Idle);
+        assert_eq!(choose(&t, None, &r), None);
+        assert_eq!(choose(&t, Some(Stage::Idle), &r), None);
+        let value = by_hand_value(Stage::Review, Stage::Idle);
+        assert_eq!(by_hand_of(&value), Some((Stage::Review, Stage::Idle)));
+    }
+
+    #[test]
+    fn a_pin_or_a_reminder_wins_over_a_status_set_by_hand() {
+        let r = rules();
+        let mut t = tab(5, "x", TabState::Idle);
+        t.by_hand = Some((Stage::Review, Stage::Idle));
+        t.pinned = true;
+        assert_eq!(stage_of(&t, &r), Stage::Needs);
+        t.pinned = false;
+        t.remind_at = Some(r.now_secs() + 3600);
+        assert_eq!(stage_of(&t, &r), Stage::Later);
     }
 }

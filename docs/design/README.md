@@ -270,6 +270,14 @@ The relay's DM, threads and Home tab.
 
 - [149. How it gets there says how and why: under each step's title a How naming the code that does the work and in what order, and a Why of one clause on the problem it fixes; the pages that only test folded into one Tested line](https://cquinones100.github.io/switchboard/design/149.html)
 
+## Proposal: notes' toolbar from the kit
+
+- [157. Notes' toolbar drawn with the kit's button, on the dark and light themes: at rest, under the mouse, lit while the cursor is in that style (bold, two styles, a heading) or while what it opens is in front (⋯), and faint while read-only](https://cquinones100.github.io/switchboard/design/157.html)
+
+## Proposal: a tab's status set by hand
+
+- [158. A tab's status set by hand, from Set its status… in its menu: every group a tab can be in, by the sidebar's names and in its order, the one it is in marked; Let Switchboard decide first while a status you set holds, naming where Switchboard would file it; in the sidebar the tab carries the kit's set by you chip and what Switchboard still reads, which takes it back once it changes](https://cquinones100.github.io/switchboard/design/158.html)
+
 ## Proposal: can it merge, in the pr view
 
 - [150. M-v with M-m folded in, a PR with merge conflicts: the verdict a chip after the PR's state in its head, conflicts first, its reasons a dim line under the head; the panel's Checks split into required and optional](https://cquinones100.github.io/switchboard/design/150.html)
@@ -279,7 +287,3 @@ The relay's DM, threads and Home tab.
 - [154. m on board 150's PR: the view's menu gains See the failing checks and, while it has conflicts, Type /resolve-conflicts into this tab's Claude; M-m is gone](https://cquinones100.github.io/switchboard/design/154.html)
 - [155. Before M-v beside a narrow lone pane: the ticket (M-i) in the spare columns, Claude's pane capped at its width](https://cquinones100.github.io/switchboard/design/155.html)
 - [156. M-v then: the PR closes the ticket and takes its columns, its verdict chip first, Claude's pane where and as wide as it was; M-v again leaves the columns empty](https://cquinones100.github.io/switchboard/design/156.html)
-
-## Proposal: notes' toolbar from the kit
-
-- [157. Notes' toolbar drawn with the kit's button, on the dark and light themes: at rest, under the mouse, lit while the cursor is in that style (bold, two styles, a heading) or while what it opens is in front (⋯), and faint while read-only](https://cquinones100.github.io/switchboard/design/157.html)
