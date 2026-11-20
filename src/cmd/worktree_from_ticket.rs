@@ -593,6 +593,21 @@ pub fn source_words(source: &str) -> &'static str {
 fn picked(rest: &Given, root: &Path, trusted: bool, made: &mut bool) -> Result<ExitCode, String> {
     can_ask()?;
     let source = match crate::repos::tickets_at(root)? {
+        // A service is offered only while its setting is on.
+        Some(source)
+            if matches!(source.as_str(), "linear" | "github")
+                && !crate::settings::is_on(&source) =>
+        {
+            let service = if source == "linear" {
+                "Linear"
+            } else {
+                "GitHub"
+            };
+            return Err(format!(
+                "{service} is off in Settings, and {} keeps its work there: name the work, or turn {service} on",
+                name_of(root)
+            ));
+        }
         Some(source) => source,
         None => {
             let offered = sources_offered(root);
