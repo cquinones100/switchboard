@@ -245,6 +245,13 @@ pub struct Sidebar {
     /// Each session's Notifications window: its cursor, the tab it came
     /// from, its focus and the mouse.
     pub windows: notices::Windows,
+    /// The tabs whose status set by hand has been seen to hold this run
+    /// (`own_stage` equal to the reading kept with it), and when the server
+    /// first looked: until then a reading can still be loading (a restored
+    /// Claude resuming, a PR not yet looked up), so a status isn't dropped
+    /// for it (src/sidebar/serve/status.rs).
+    pub status_seen: HashSet<crate::mux::TabId>,
+    pub status_since: Option<Instant>,
     /// The tips asked for once this run (merged, loop, sidebar).
     tips_asked: HashSet<&'static str>,
     /// The interruption each pane was last handed back after (ms).
