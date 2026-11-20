@@ -122,7 +122,7 @@ const toolbar = (x, y, o) => { o = o || {}; for (let i = 0; i < TB.length; i++) 
   put(x, y, '\uE0B6', s); const n = put(x + 1, y, TB[i], ink, 'b', s); put(x + 1 + n, y, '\uE0B4', s); x += n + 3; } return x; };
 // ─── THE BOARD ───────────────────────────────────────────────────────────────
 // Light-theme shades: the terminal's background, text, dim and faint, as Theme::LIGHT gives them.
-Object.assign(FG, { lt: '#303030', ld: '#6c6c6c' }); Object.assign(BG, { L0: '#fafafa' });
+Object.assign(FG, { lt: '#2f3030', ld: '#6c6c6c' }); Object.assign(BG, { L0: '#fafafa' });
 T(2, 1, ['Notes\' toolbar, drawn with the kit\'s button', 't', 'b']);
 T(2, 2, ['The same button as the diff\'s row (board 118) and every other: what changes is only its surface and its ink.', 'd']);
 const state = (y, light, name, o, aside) => { const tx = light ? 'lt' : 't', dx = light ? 'ld' : 'd', bg = light ? 'L0' : '0';
