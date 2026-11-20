@@ -64,5 +64,9 @@ accepted known gaps in a notes file it passes back to Codex, so a later round
 doesn't raise what an earlier one settled, stops after two consecutive
 clean rounds or five rounds, and asks before pushing.
 
+`/review-loop ticket <ticket>` reviews a GitHub issue's or a Linear
+ticket's text against the code instead, edits a copy of it to fix what it
+finds, and asks before saving the edits (see `references/ticket-mode.md`).
+
 `switchboard codex-review` can also be run by hand for a one-off second
 opinion. Run `switchboard codex-review --help` for the flags.
