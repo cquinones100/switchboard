@@ -44,6 +44,10 @@
 //! issue a duplicate, comments that it is one (never what the tab named,
 //! which may be a note's words) and leaves it open,
 //! each asked first unless the tab lands without asking (src/autopilot/serve.rs).
+//! A hands-free tab's decision about the issue's plan (a question marked
+//! `[plan]`, src/agent/hands_free.rs) is written to it without asking: its
+//! `Decided hands-free` lines appended under the body's `## Decided
+//! hands-free` heading, and a comment naming them (`write_decided`).
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -894,6 +898,125 @@ pub fn duplicate_comment() -> String {
     "Switchboard's autopilot left this issue open: it found the same work already started or done elsewhere.".to_string()
 }
 
+/// The heading an issue's body records its hands-free decisions under.
+pub const DECIDED: &str = "## Decided hands-free";
+
+/// An issue's body with `lines` added as items under its `## Decided
+/// hands-free` heading, made at its end the first time; `None` when it
+/// holds them all already.
+pub fn with_decided(body: &str, lines: &[String]) -> Option<String> {
+    let mut all: Vec<String> = body.lines().map(str::to_string).collect();
+    let new: Vec<String> = lines
+        .iter()
+        .map(|l| format!("- {l}"))
+        .filter(|l| !all.contains(l))
+        .collect();
+    if new.is_empty() {
+        return None;
+    }
+    let at = match all.iter().position(|l| l.trim() == DECIDED) {
+        Some(heading) => {
+            // After the section's last line, before the next heading.
+            let next = all[heading + 1..]
+                .iter()
+                .position(|l| l.starts_with('#'))
+                .map_or(all.len(), |n| heading + 1 + n);
+            let mut end = next;
+            while end > heading + 1 && all[end - 1].trim().is_empty() {
+                end -= 1;
+            }
+            end
+        }
+        None => {
+            while all.last().is_some_and(|l| l.trim().is_empty()) {
+                all.pop();
+            }
+            if !all.is_empty() {
+                all.push(String::new());
+            }
+            all.push(DECIDED.to_string());
+            all.push(String::new());
+            all.len()
+        }
+    };
+    all.splice(at..at, new);
+    Some(format!(
+        "{}
+",
+        all.join(
+            "
+"
+        )
+    ))
+}
+
+/// The comment naming a hands-free tab's decisions about the plan.
+pub fn decided_comment(lines: &[String]) -> String {
+    let lines: Vec<String> = lines.iter().map(|l| format!("- {l}")).collect();
+    format!(
+        "Switchboard's autopilot decided this hands-free, which changes the plan:\n\n{}",
+        lines.join("\n")
+    )
+}
+
+/// What `switchboard leak-check` would find in a decision's lines, with the
+/// words of its list: each hit's kind and text.
+pub fn leaks_in(lines: &[String], words: &[String]) -> Vec<String> {
+    lines
+        .iter()
+        .flat_map(|l| crate::cmd::leak_check::hits_in(l, false, words))
+        .map(|(kind, text)| format!("{kind} {text}"))
+        .collect()
+}
+
+/// Records a hands-free tab's decisions about an open issue's plan: its
+/// body gets the lines under `## Decided hands-free`, and one comment names
+/// them; nothing when the body has them all already, the issue is closed,
+/// or `still` (the source turned off meanwhile) is false. Claude wrote the
+/// lines, so they are checked as a push is (`leaks_in`) and refused, nothing
+/// written, when they hold anything that may identify you.
+pub async fn write_decided(
+    repo: &Repo,
+    number: u64,
+    lines: &[String],
+    still: impl Fn() -> bool,
+) -> Result<()> {
+    let words = crate::cmd::leak_check::read_words(&crate::cmd::leak_check::words_file())
+        .map_err(|e| anyhow!(e))?;
+    let leaks = leaks_in(lines, &words);
+    if !leaks.is_empty() {
+        return Err(anyhow!(
+            "left a hands-free decision off it, since leak-check found {}",
+            leaks.join(", ")
+        ));
+    }
+    let path = format!("/repos/{repo}/issues/{number}");
+    let now = github::rest("GET", &path, None, SOURCE).await?;
+    if now.get("state").and_then(Value::as_str) != Some("open") || !still() {
+        return Ok(());
+    }
+    let body = now.get("body").and_then(Value::as_str).unwrap_or_default();
+    // Only the decisions the body lacks, so the comment names nothing it
+    // recorded before.
+    let added: Vec<String> = lines
+        .iter()
+        .filter(|l| !body.lines().any(|b| b == format!("- {l}")))
+        .cloned()
+        .collect();
+    let Some(body) = with_decided(body, &added) else {
+        return Ok(());
+    };
+    github::rest("PATCH", &path, Some(&json!({ "body": body })), SOURCE).await?;
+    github::rest(
+        "POST",
+        &format!("{path}/comments"),
+        Some(&json!({ "body": decided_comment(&added) })),
+        SOURCE,
+    )
+    .await?;
+    Ok(())
+}
+
 /// That commit `hash` is a landing's: on `repo`'s default branch on
 /// GitHub and made since its tab opened (`since`, seconds).
 pub async fn landed_on_default(repo: &Repo, hash: &str, since: i64) -> Result<()> {
@@ -1167,5 +1290,41 @@ mod tests {
             "Landed in abc1234 by Switchboard's autopilot (claim a3f9c2)."
         );
         assert_eq!(landed_comment("", ""), "Landed by Switchboard's autopilot.");
+    }
+
+    #[test]
+    fn decisions_go_under_the_body_s_decided_heading_once() {
+        let one = vec!["Decided hands-free: Widen it? → No".to_string()];
+        let body = with_decided("Build it.\n\n## Steps\n\n1. Do it.\n\n", &one).unwrap();
+        assert_eq!(
+            body,
+            "Build it.\n\n## Steps\n\n1. Do it.\n\n## Decided hands-free\n\n- Decided hands-free: Widen it? → No\n"
+        );
+        assert_eq!(with_decided(&body, &one), None, "once only");
+        let two = vec!["Decided hands-free: Which way? → A".to_string()];
+        let body = with_decided(&format!("{body}\n## Later\n\nMore.\n"), &two).unwrap();
+        assert!(
+            body.contains(
+                "- Decided hands-free: Widen it? → No\n- Decided hands-free: Which way? → A\n\n## Later"
+            ),
+            "{body}"
+        );
+        assert_eq!(
+            with_decided("", &one).unwrap(),
+            "## Decided hands-free\n\n- Decided hands-free: Widen it? → No\n"
+        );
+        assert!(decided_comment(&two).ends_with("\n\n- Decided hands-free: Which way? → A"));
+        assert!(leaks_in(&two, &[]).is_empty());
+        // Built here, so the made-up path is no hit of the repository's own.
+        let leaky = vec![format!(
+            "Decided hands-free: Keep /{}/qzx/x? → Yes",
+            "Users"
+        )];
+        assert!(!leaks_in(&leaky, &[]).is_empty(), "a home path");
+        let named = vec!["Decided hands-free: Follow Acmecorp's style? → Yes".to_string()];
+        assert!(
+            !leaks_in(&named, &["acmecorp".to_string()]).is_empty(),
+            "a listed word"
+        );
     }
 }
