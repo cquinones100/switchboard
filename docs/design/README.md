@@ -296,6 +296,11 @@ The relay's DM, threads and Home tab.
 - [155. Before M-v beside a narrow lone pane: the ticket (M-i) in the spare columns, Claude's pane capped at its width](https://cquinones100.github.io/switchboard/design/155.html)
 - [156. M-v then: the PR closes the ticket and takes its columns, its verdict chip first, Claude's pane where and as wide as it was; M-v again leaves the columns empty](https://cquinones100.github.io/switchboard/design/156.html)
 
+## Proposal: choose a picture beside a pane
+
+- [170. Pictures beside a narrow lone pane with one chosen: a click chooses a picture in place of closing them and gives them the keys, the tab's pane greyed; the chosen one's card in the accent, the one under the mouse lit; the bottom line says the keys that work](https://cquinones100.github.io/switchboard/design/170.html)
+- [171. The chosen picture's menu, from Enter, Space or a right click: Open in Finder, Open in Preview, Copy its path, Close the pictures; Esc gives the keys back with the pictures still up](https://cquinones100.github.io/switchboard/design/171.html)
+
 ## Proposal: the phone app
 
 - [164. The phone app's drawer: every Claude tab in the sidebar's groups, Needs you first, swiped in from the left as Discord's channels are; a Web Push naming the tab alone when it starts waiting; dimmed with the last states when the computer can't be reached](https://cquinones100.github.io/switchboard/design/164.html)
