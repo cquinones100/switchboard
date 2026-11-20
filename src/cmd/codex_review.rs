@@ -2318,7 +2318,7 @@ fn at_cap(root: &Path, at: &Loop, hands_free: bool) -> Reviewed<ExitCode> {
     );
     let answer = json!({
         "reviewed": false,
-        "summary": format!("The branch is at its round cap ({cap}); nothing was reviewed. Raise it with --round more."),
+        "summary": format!("The branch is at its round cap ({cap}); nothing was reviewed. Ask the review loop's cap question before going on."),
         "findings": [],
         "round": round,
         "cap": cap,
@@ -2337,6 +2337,16 @@ fn at_cap(root: &Path, at: &Loop, hands_free: bool) -> Reviewed<ExitCode> {
 fn answer_cap(root: &Path, branch: &str, more: bool) -> Reviewed<ExitCode> {
     let raise = if more { MORE } else { 0 };
     let rounds = rounds_of(branch)?;
+    let hands_free = socket::tab_option(crate::autopilot::HANDS_FREE).as_deref() == Some("1");
+    // Raised only for a loop waiting at its cap, never ahead of it.
+    let at_cap = if hands_free {
+        rounds.total >= HANDS_FREE_CAP + rounds.extra
+    } else {
+        place()?.is_some_and(|(round, _, extra)| round >= CAP + extra)
+    };
+    if more && !at_cap {
+        return fail("the review loop isn't waiting at its round cap; --round more raises it only there, after the cap question");
+    }
     let raised = Rounds {
         extra: rounds.extra + raise,
         ..rounds
@@ -2350,7 +2360,6 @@ fn answer_cap(root: &Path, branch: &str, more: bool) -> Reviewed<ExitCode> {
     } else if place.is_some() {
         write_record(&path, &format!("{round} {clean} {}", extra + raise))?;
     }
-    let hands_free = socket::tab_option(crate::autopilot::HANDS_FREE).as_deref() == Some("1");
     let (shown, cap) = if hands_free {
         (raised.total, HANDS_FREE_CAP + raised.extra)
     } else {
