@@ -20,13 +20,7 @@ use crate::autopilot::mode::Mode;
 /// The label autopilot takes the repository's issues by, when it takes
 /// them from the repository whose main clone is `clone`.
 pub fn autopilot_label(mode: &Mode, clone: &Path) -> Option<String> {
-    let same = |a: &Path, b: &Path| {
-        a.canonicalize()
-            .ok()
-            .is_some_and(|a| Some(a) == b.canonicalize().ok())
-    };
-    (mode.sources.issues() && !mode.repo.as_os_str().is_empty() && same(&mode.repo, clone))
-        .then(|| mode.issue_label.clone())
+    (mode.sources.issues() && mode.works_in(clone)).then(|| mode.issue_label.clone())
 }
 
 pub fn main(args: Vec<String>) -> ExitCode {
@@ -69,7 +63,7 @@ mod tests {
         std::fs::create_dir_all(&other).unwrap();
         let mut mode = Mode {
             repo: here.clone(),
-            sources: Sources::Both,
+            sources: Sources::Issues,
             issue_label: "ready".into(),
             ..Mode::default()
         };

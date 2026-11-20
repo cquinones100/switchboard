@@ -36,10 +36,11 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use crate::autopilot::issues::{self, Issue};
-use crate::autopilot::mode::Mode;
+use crate::autopilot::mode::{Mode, Sources};
 use crate::cmd::worktree_from_note::{
     after_claim, claim, duplicates_first, hand_over, in_autopilot_tab, in_hands_free_tab,
-    make_worktree_at, onto_words, refused_in_autopilot, slug_of, start_point, target_of,
+    make_worktree_at, onto_words, refused_by_source, refused_in_autopilot, slug_of, start_point,
+    target_of,
 };
 use crate::integrations::github;
 use crate::paths;
@@ -64,6 +65,7 @@ pub fn run(given: &Given, number: &str, made: &mut bool) -> Result<ExitCode, Str
         .first()
         .map(String::as_str)
         .unwrap_or(worktree::DEFAULT_WORKTREE_DIR);
+    refused_by_source(Sources::Issues)?;
     let root = worktree::repo_root().map_err(|e| e.to_string())?;
     let label = Mode::read(&paths::state_dir()).issue_label;
     // Started by autopilot, the queue's search decides; by hand, any open

@@ -2913,6 +2913,62 @@ fn an_issues_tab_is_named_by_its_number_and_title_until_renamed_by_hand() {
 }
 
 #[test]
+fn wtn_starts_only_work_from_the_source_autopilot_takes_this_repositorys_work_from() {
+    let (w, _fake, clone) = issue_world("wtn-source", json!({ "tickets": "github" }));
+    let notes = w.path("Notes");
+    std::fs::create_dir_all(&notes).unwrap();
+    std::fs::write(
+        notes.join("Work.md"),
+        "# Work
+
+- [ ] Make it green
+",
+    )
+    .unwrap();
+    let state = w.path("state");
+    std::fs::create_dir_all(&state).unwrap();
+    let mode = |sources: &str| {
+        std::fs::write(
+            state.join("autopilot.json"),
+            json!({ "on": true, "repo": clone.to_str().unwrap(), "note": "Work.md", "sources": sources })
+                .to_string(),
+        )
+        .unwrap();
+    };
+    let item = [
+        "worktree-from-note",
+        "--no-claude",
+        "--note",
+        "Work",
+        "--item",
+        "3",
+    ];
+
+    mode("issues");
+    let refused = w.run(&clone, &item);
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(
+        stderr(&refused).contains("Autopilot takes this repository's work from GitHub issues; open an issue with `wtn --issue <number>`, or switch the source to the note in autopilot's settings"),
+        "{}",
+        stderr(&refused)
+    );
+
+    mode("note");
+    for asked in [&["--issue", "12"][..], &["12"][..]] {
+        let mut args = vec!["worktree-from-note", "--no-claude"];
+        args.extend(asked);
+        let refused = w.run(&clone, &args);
+        assert_eq!(refused.status.code(), Some(1), "{asked:?}");
+        assert!(
+            stderr(&refused).contains("Autopilot takes this repository's work from the note"),
+            "{asked:?}: {}",
+            stderr(&refused)
+        );
+    }
+    w.ok(&clone, &item);
+}
+
+#[test]
 fn wtn_by_a_number_is_refused_where_the_repository_has_no_ticket_provider() {
     let (w, fake, clone) = issue_world("wtn-unset", json!({ "landing": "pr" }));
     let out = w.run(&clone, &["worktree-from-note", "--no-claude", "12"]);
