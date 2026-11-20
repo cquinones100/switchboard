@@ -237,7 +237,7 @@ fn the_reviewer_rates_scenarios_the_change_does_not_set_out_to_handle_low() {
 }
 
 // The ticket the branch is work on reaches the reviewer as intent, fenced
-// as the author's text: the GitHub issue `wtn --issue` started it for, or
+// as the author's text: the GitHub issue `wt --issue` started it for, or
 // the Linear ticket its name holds.
 #[test]
 fn the_branch_s_ticket_reaches_the_prompt_as_its_intent() {

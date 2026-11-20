@@ -6,13 +6,13 @@
 //! server's task, since the queue reads git (`Job`), and come back to
 //! `opened` and `next_read`.
 //!
-//! Openings are `GAP_MS` apart and one at a time, so `wtn`'s worktrees and
+//! Openings are `GAP_MS` apart and one at a time, so `wt`'s worktrees and
 //! the new Claude sessions don't race. An item is never taken again while
 //! a tab of the mode's is open for it (`held`, from `@autopilot_item`), nor
-//! for `RECENT_MS` after it was opened (`recent`), before `wtn` has made its
+//! for `RECENT_MS` after it was opened (`recent`), before `wt` has made its
 //! branch, which is what claims it. A tab that landed and left holds
 //! nothing: `switchboard item-done` ticks its item before it removes the
-//! worktree, so the note shows it landed by then. A tab whose `wtn` stopped
+//! worktree, so the note shows it landed by then. A tab whose `wt` stopped
 //! before making its worktree (`@autopilot_failed`) is closed, its item opened
 //! again on a later check, and skipped once it has failed `FAILS_SKIP`
 //! times in `FAILS_MS` (`start_failed`); its card in Next up says why. A note changed in the last
@@ -33,7 +33,7 @@
 //! for by its ID, at most every `LOST_MS`, and its new path written back; a
 //! note at its path rewritten without its ID is given it back; and with the
 //! ID nowhere, or another note's at its path, it takes nothing and says it
-//! can't find the note. Nothing is opened while it looks. wtn's claims from
+//! can't find the note. Nothing is opened while it looks. wt's claims from
 //! before notes had IDs are brought to IDs once a run in the mode's
 //! repository.
 //!
@@ -286,7 +286,7 @@ pub struct Job {
 
 impl Job {
     /// The first item the queue gives, if any; `state` is the state
-    /// directory, whose claims file says which items wtn started lately.
+    /// directory, whose claims file says which items wt started lately.
     pub fn first(&self, notes: &Path, state: &Path) -> Result<Option<Item>, String> {
         self.items(notes, state)
             .map(|items| items.into_iter().find(|i| !self.retrying.contains(&i.text)))
@@ -313,7 +313,7 @@ impl Job {
     }
 
     /// The repository's GitHub issues it may take, by priority and then
-    /// oldest first, as items: those no worktree has, wtn didn't start
+    /// oldest first, as items: those no worktree has, wt didn't start
     /// lately and weren't skipped. Apart from them, those blocked by an open
     /// issue, each waiting on the first (its item's `after` naming every
     /// one), and those whose body's open choice waits on your review of a
@@ -485,7 +485,7 @@ fn inside(notes: &Path, rel: &str) -> Option<PathBuf> {
 /// task, since it reads and writes notes and runs git.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Keep {
-    /// A repository whose wtn claims from before notes had IDs are brought
+    /// A repository whose wt claims from before notes had IDs are brought
     /// to them, once a run.
     pub repo: Option<PathBuf>,
     /// The mode's note, by its path, and its ID as the mode keeps it.
@@ -689,7 +689,7 @@ pub struct Pilot {
     following: bool,
     kept_at: Option<i64>,
     lost: bool,
-    /// The repositories whose wtn claims were brought to IDs this run.
+    /// The repositories whose wt claims were brought to IDs this run.
     migrated: HashSet<PathBuf>,
     /// The older tabs whose note was asked for its ID.
     asked: HashSet<TabId>,
@@ -1577,10 +1577,10 @@ mod tests {
         assert_eq!(unsay(&weekly, WEEKLY), "");
         assert_eq!(
             unsay(
-                &format!("Skipped One: wtn refused it, taken. {weekly}"),
+                &format!("Skipped One: wt refused it, taken. {weekly}"),
                 WEEKLY
             ),
-            "Skipped One: wtn refused it, taken"
+            "Skipped One: wt refused it, taken"
         );
         assert_eq!(unsay(&format!("{weekly}. Later"), WEEKLY), "Later");
         assert_eq!(

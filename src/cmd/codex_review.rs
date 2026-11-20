@@ -24,7 +24,7 @@
 //! another directory (`-C`) as well. The PR description is read from GitHub
 //! and pasted into the prompt so Codex never needs GitHub access of its own,
 //! and so is the ticket the branch is work on (`branch_ticket`): the GitHub
-//! issue `wtn --issue` started it for, or one of the repository's (upstream's
+//! issue `wt --issue` started it for, or one of the repository's (upstream's
 //! in a fork's clone, as for the PR) a branch named
 //! `issue/<number>-<slug>` names, else the Linear ticket its name holds,
 //! read only with a Linear key; a ticket that can't be read is said on
@@ -686,7 +686,7 @@ struct TicketDetails {
 }
 
 /// The ticket the branch is work on, as the module's opening says: the
-/// GitHub issue `wtn --issue` started it for (`branch.<branch>.wtnIssue`),
+/// GitHub issue `wt --issue` started it for (`branch.<branch>.wtnIssue`),
 /// or one of the repository's (`github::repo_of`: upstream's in a fork's
 /// clone, where the PR is too) that a branch named `issue/<number>-<slug>` names,
 /// else the Linear ticket its name holds, read only with a Linear key. None

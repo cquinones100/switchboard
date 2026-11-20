@@ -8,21 +8,21 @@
 //! answer kept from the last day. It fails when repos.json can't be read.
 //! queue-and-clean asks it which way to land a branch with no PR, and how.
 //! `target` is the branch a direct landing goes onto when it isn't the
-//! default branch: the one autopilot cut the branch from, which `wtn
+//! default branch: the one autopilot cut the branch from, which `wt
 //! --target` recorded as `branch.<branch>.wtnTarget`, with the remote branch
 //! it tracks (`remote` and `remoteBranch`, null when it tracks none, and
 //! then the landing only moves the local branch); null for the default
-//! branch. `started` is when `wtn` started the branch's item, in seconds
+//! branch. `started` is when `wt` started the branch's item, in seconds
 //! (`branch.<branch>.wtnStarted`), and `took` how long from then until
 //! now (`1h12m`), for queue-and-clean's Done line; both null for a branch
-//! `wtn` didn't start.
+//! `wt` didn't start.
 //! `defaultBranch` is the repository's default branch as GitHub has it
 //! now, else (the github setting off, or GitHub not answering) origin's
 //! `HEAD` in the clone, else `main` or `master`, whichever origin has
 //! been fetched for; null when none is known. `note` is the path of the
-//! note holding the item `wtn` started the branch for (its ID in
+//! note holding the item `wt` started the branch for (its ID in
 //! `branch.<branch>.wtnItem`, found in the notes directory), and `item`
-//! that item's first line; both null for a branch `wtn` didn't start, and
+//! that item's first line; both null for a branch `wt` didn't start, and
 //! `note` when no note has the ID. `ciBranch` is the branch a landing
 //! whose tests run in CI pushes its commit to, `ci/land-<id>`, `<id>` the
 //! first 12 hex digits of git's blob hash of the branch's name and a
@@ -32,7 +32,7 @@
 //! local target, else `origin/<defaultBranch>`): `HEAD` an ancestor of
 //! it, or merging `HEAD` into it changing nothing, with no merge driver
 //! that could have kept its side; null when that ref isn't there.
-//! `issue` is the number of the GitHub issue `wtn --issue` started the
+//! `issue` is the number of the GitHub issue `wt --issue` started the
 //! branch for (`branch.<branch>.wtnIssue`) when it is an issue of origin's
 //! repository, for queue-and-clean's `Closes #<number>` in the PR it
 //! opens; null otherwise. `issueWork` is whether the branch is work on a
@@ -78,7 +78,7 @@ fn target_at(dir: &Path) -> Value {
     json!({ "branch": target, "remote": remote, "remoteBranch": remote_branch })
 }
 
-/// When `wtn` started the branch's item, as the module's opening says.
+/// When `wt` started the branch's item, as the module's opening says.
 pub fn started_at(dir: &Path) -> Option<i64> {
     let branch = branch_at(dir)?;
     worktree::git_at(
@@ -92,7 +92,7 @@ pub fn started_at(dir: &Path) -> Option<i64> {
     .filter(|s| *s > 0)
 }
 
-/// The issue `wtn --issue` started the branch for, as the module's opening
+/// The issue `wt --issue` started the branch for, as the module's opening
 /// says: its number, when `reference` (`<owner>/<repo>#<n>`) names an
 /// issue of `origin`.
 fn issue_of(
@@ -114,10 +114,10 @@ fn issue_work(branch: &str, reference: Option<&str>) -> bool {
     named || reference.is_some()
 }
 
-/// The note and item `wtn` started the branch for, as the module's opening
+/// The note and item `wt` started the branch for, as the module's opening
 /// says.
 fn note_and_item_at(dir: &Path) -> (Value, Value) {
-    let Some((note_id, item)) = crate::tabs::title::wtn_claim_at(dir) else {
+    let Some((note_id, item)) = crate::tabs::title::wt_claim_at(dir) else {
         return (Value::Null, Value::Null);
     };
     let note = note_id

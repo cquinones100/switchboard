@@ -20,23 +20,23 @@
 //! itself lists as blocking it, is open (`Issue::blocked_by`): the search
 //! gives GitHub's own and the labels, and one more request a read
 //! (`open_of`) asks the state of every issue the bodies name.
-//! `wtn --issue <number>` (src/cmd/worktree_from_issue.rs) opens a tab on
+//! `wt --issue <number>` (src/cmd/worktree_from_issue.rs) opens a tab on
 //! one, on a branch `issue/<number>-<slug>` recorded as the issue's
-//! (`branch.<branch>.wtnIssue`), so an issue with a worktree, or one wtn
+//! (`branch.<branch>.wtnIssue`), so an issue with a worktree, or one wt
 //! started in the last half hour (its claims file, under `github:<repo>`),
 //! isn't offered again.
 //!
 //! On GitHub too, so a second computer signed in as you leaves it alone:
-//! wtn, in a tab autopilot opened, claims the issue before it makes the
+//! wt, in a tab autopilot opened, claims the issue before it makes the
 //! worktree (`claim`), labeling it `autopilot: working` (`WORKING`, made
 //! on the repository the first time) and commenting with this
 //! computer's claim ID and the branch. The ID is six random hex digits made
 //! once and kept in `autopilot-claim.json` among your files that stay on
 //! this computer (`CLAIM_FILE`), so nothing about the computer is in it. An
 //! issue with the label whose newest claim (a comment of yours) names
-//! another ID is passed over (`unclaimed`) and refused by wtn, unless the
+//! another ID is passed over (`unclaimed`) and refused by wt, unless the
 //! claim is older than six hours with nothing pushed on its branch
-//! (`STALE_SECS`), which wtn then releases before claiming it. This
+//! (`STALE_SECS`), which wt then releases before claiming it. This
 //! computer's claim is released (`release`), its label taken off, once
 //! `switchboard item-done` has closed the issue its tab landed (the
 //! landing's comment names the claim), or by the server as the tab closes
@@ -1044,7 +1044,7 @@ pub async fn still_stands(repo: &Repo, number: u64, label: &str) -> Result<Optio
 /// closed, a pull request, or none of that number.
 pub async fn open_issue(repo: &Repo, number: u64) -> Result<Option<Issue>> {
     let path = format!("/repos/{repo}/issues/{number}");
-    let issue = match github::rest("GET", &path, None, "wtn: the issue").await {
+    let issue = match github::rest("GET", &path, None, "wt: the issue").await {
         Ok(issue) => issue,
         Err(e) if crate::net::kind_of(&e) == Some(&crate::net::ErrorKind::NotFound) => {
             return Ok(None);
@@ -1077,17 +1077,17 @@ pub fn forget(state: &Path) {
     let _ = std::fs::remove_file(state.join(FILE));
 }
 
-/// What the claims file says of an issue wtn started: its note is
+/// What the claims file says of an issue wt started: its note is
 /// `github:<owner>/<repo>`, its text `#<number>`.
 pub fn claim_note(repo: &str) -> String {
     format!("github:{repo}")
 }
 
-/// The issues no worktree is working on, nor wtn started in the last half
+/// The issues no worktree is working on, nor wt started in the last half
 /// hour, nor skipped (`skip`, by their items' first lines), nor claimed on
 /// GitHub by another computer than `own` (this one's claim ID, empty
 /// before it has one) while that claim holds. `dir` is any directory of
-/// the repository, `claims` wtn's claims file's text.
+/// the repository, `claims` wt's claims file's text.
 pub fn unclaimed(
     dir: &Path,
     issues: Vec<Issue>,

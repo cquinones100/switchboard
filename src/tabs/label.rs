@@ -50,7 +50,7 @@ pub fn facts_label(dir_name: &str, ticket: Option<(&str, &str)>) -> String {
 }
 
 /// The label of a directory whose branch was started for a GitHub issue
-/// (`wtn --issue`) once its title is known: `#<number>: <title>`, the title
+/// (`wt --issue`) once its title is known: `#<number>: <title>`, the title
 /// as GitHub has it with a leading `FEAT: ` or `BUG: ` left out, since the
 /// number already says it is an issue and the kind takes room the title
 /// needs.

@@ -551,7 +551,7 @@ pub(crate) fn say_autolanded(
         None => tab_plan(&item),
     };
     let notes = crate::notes::store::notes_dir();
-    // Both resolved, since wtn names the plan by its real path and the
+    // Both resolved, since wt names the plan by its real path and the
     // notes directory may be a link.
     let notes = notes.canonicalize().unwrap_or(notes);
     let plan = plan_file
@@ -1052,7 +1052,7 @@ impl Lock {
     }
 }
 
-/// The branch the worktree at `here` lands on, as `wtn --target` recorded
+/// The branch the worktree at `here` lands on, as `wt --target` recorded
 /// it, `None` when it named none.
 fn recorded_target(here: &Path) -> Option<String> {
     let branch = worktree::git_at(here, &["rev-parse", "--abbrev-ref", "HEAD"]).ok()?;
