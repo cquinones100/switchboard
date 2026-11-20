@@ -234,6 +234,21 @@ pub fn lay_out(home: &Path, bin: &Path) -> Result<()> {
         home.join(".config/switchboard/settings.json"),
         format!("{}\n", util::json_pretty(&Value::Object(settings))),
     )?;
+    // Where each repository keeps its work, which nothing guesses: the
+    // API's in the note autopilot works there, the rest in Linear, whose
+    // tickets their branches name. Each tab is given its branch's ticket
+    // as its own (`start_server`), so M-i shows it in the API's tabs too.
+    let tickets: Map<String, Value> = fixtures::REPOS
+        .iter()
+        .map(|r| {
+            let kept = if r.name == "api" { "notes" } else { "linear" };
+            (format!("acme/{}", r.name), json!({ "tickets": kept }))
+        })
+        .collect();
+    util::write_atomic(
+        home.join(".config/switchboard/repos.json"),
+        format!("{}\n", util::json_pretty(&Value::Object(tickets))),
+    )?;
     // No starter routines: the demo's day is its services' alone, and a
     // Slack routine would open a tab of its own every 15 minutes.
     util::write_atomic(
@@ -969,6 +984,10 @@ pub fn start_server(home: &Path, bin: &Path, env: &[(String, String)]) -> Result
         ids.push(("Shell".to_string(), first.to_string()));
     }
     for (name, dir, program) in tabs(home, bin) {
+        // The ticket its worktree's branch names, chosen for the tab.
+        let ticket = dir
+            .file_name()
+            .and_then(|b| crate::views::ticket::id_in_branch(&b.to_string_lossy()));
         let mut args = vec![
             "new-tab".to_string(),
             "-d".into(),
@@ -986,6 +1005,9 @@ pub fn start_server(home: &Path, bin: &Path, env: &[(String, String)]) -> Result
             // Notes' tab marked as M-N marks its own, so it shows as it does.
             if args[6] == "Notes" {
                 ask(home, &["set", "-t", id, "@notes", "1"])?;
+            }
+            if let Some(ticket) = &ticket {
+                ask(home, &["set", "-t", id, crate::views::TAB_TICKET, ticket])?;
             }
             ids.push((args[6].to_string(), id.to_string()));
         }

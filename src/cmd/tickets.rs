@@ -2,25 +2,28 @@
 //! current directory by default) keeps its work, which `/shape` files new
 //! work in, on the first line: `github` (its issues), `linear`, or `notes`
 //! (a note's checklist with a plan note each), repos.json's `tickets`
-//! (`repos::tickets_at`), `linear` when it isn't set, as `/shape` filed
-//! only Linear tickets before it had a key. Then, whatever the first line
-//! (`/shape --github` files an issue in any repository), a second line
-//! `autopilot-label <label>` when autopilot takes this repository's issues
-//! (autopilot.json's `repo` is its main clone, its `sources` take issues
-//! and its issues are on, `Mode::issues_on`), naming the label an issue carries for it to be taken
-//! (`issueLabel`), so an issue `/shape` files joins autopilot's queue. It
-//! reads two files and runs git once, and fails when repos.json can't be
-//! read or `<dir>` isn't in a repository. No tmux-version file is behind it.
+//! (`repos::tickets_at`), the one place it is decided. It has no default:
+//! while it isn't set, the command prints nothing, says on stderr how to set
+//! it (`repos::unset_words`) and exits 1, and `/shape` stops on it. Then,
+//! when `tickets` is `github` and its `issueLabel` is set, a second line
+//! `autopilot-label <label>`, the label an issue carries for autopilot to
+//! take it, whether or not autopilot works the repository now, so an issue
+//! `/shape` files joins autopilot's queue. It reads repos.json and runs git,
+//! and fails when repos.json can't be read or `<dir>` isn't in a
+//! repository. No tmux-version file is behind it.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
-use crate::autopilot::mode::Mode;
-
-/// The label autopilot takes the repository's issues by, when it takes
-/// them from the repository whose main clone is `clone`.
-pub fn autopilot_label(mode: &Mode, clone: &Path) -> Option<String> {
-    (mode.sources.issues() && mode.works_in(clone)).then(|| mode.issue_label.clone())
+/// What it prints for a repository whose `tickets` and `issueLabel` are
+/// these: the lines, or `None` while `tickets` isn't set.
+pub fn lines(tickets: Option<&str>, label: Option<&str>) -> Option<Vec<String>> {
+    let tickets = tickets?;
+    let mut out = vec![tickets.to_string()];
+    if let (Some(label), "github") = (label, tickets) {
+        out.push(format!("autopilot-label {label}"));
+    }
+    Some(out)
 }
 
 pub fn main(args: Vec<String>) -> ExitCode {
@@ -32,45 +35,45 @@ pub fn main(args: Vec<String>) -> ExitCode {
         .first()
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    let tickets = match crate::repos::tickets_at(&dir) {
-        Ok(t) => t.unwrap_or_else(|| "linear".into()),
+    let read =
+        crate::repos::tickets_at(&dir).and_then(|t| Ok((t, crate::repos::issue_label_at(&dir)?)));
+    let (tickets, label) = match read {
+        Ok(read) => read,
         Err(e) => {
             eprintln!("tickets: {e}");
             return ExitCode::from(1);
         }
     };
-    println!("{tickets}");
-    let mode = Mode::read(&crate::paths::state_dir());
-    let label = super::work::main_clone(&dir)
-        .filter(|_| mode.issues_on())
-        .and_then(|clone| autopilot_label(&mode, &clone));
-    if let Some(label) = label {
-        println!("autopilot-label {label}");
+    match lines(tickets.as_deref(), label.as_deref()) {
+        Some(lines) => {
+            for line in lines {
+                println!("{line}");
+            }
+            ExitCode::SUCCESS
+        }
+        None => {
+            let name = crate::repos::repo_at(&dir)
+                .or_else(|| crate::repos::configured_at(&dir))
+                .unwrap_or_else(|| "This repository".into());
+            eprintln!("tickets: {}", crate::repos::unset_words(&name));
+            ExitCode::from(1)
+        }
     }
-    ExitCode::SUCCESS
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::autopilot::mode::Sources;
 
     #[test]
-    fn the_label_is_named_only_when_autopilot_takes_issues_from_this_clone() {
-        let dir = std::env::temp_dir().join(format!("sb-tickets-{}", std::process::id()));
-        let (here, other) = (dir.join("here"), dir.join("other"));
-        std::fs::create_dir_all(&here).unwrap();
-        std::fs::create_dir_all(&other).unwrap();
-        let mut mode = Mode {
-            repo: here.clone(),
-            sources: Sources::Issues,
-            issue_label: "ready".into(),
-            ..Mode::default()
-        };
-        assert_eq!(autopilot_label(&mode, &here).as_deref(), Some("ready"));
-        assert_eq!(autopilot_label(&mode, &other), None, "another repository's");
-        mode.sources = Sources::Note;
-        assert_eq!(autopilot_label(&mode, &here), None, "the note alone");
-        std::fs::remove_dir_all(&dir).unwrap();
+    fn the_label_is_named_for_github_alone_and_nothing_while_unset() {
+        assert_eq!(lines(None, Some("ready")), None);
+        assert_eq!(
+            lines(Some("github"), Some("ready")).unwrap(),
+            ["github", "autopilot-label ready"]
+        );
+        assert_eq!(lines(Some("github"), None).unwrap(), ["github"]);
+        assert_eq!(lines(Some("notes"), Some("ready")).unwrap(), ["notes"]);
+        assert_eq!(lines(Some("linear"), None).unwrap(), ["linear"]);
     }
 }
