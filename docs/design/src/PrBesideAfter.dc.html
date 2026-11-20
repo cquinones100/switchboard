@@ -198,8 +198,8 @@ fill(SX, 0, SW, 1, '3');
 T(SX + 1, 0, ['⇡ ', 'a', 'b', '3'], ['PR #41  Benchmark fixtures for Notes\' redraw', 't', 'b', '3'], ['   tab 1 · planning', 'd', '', '3']);
 put(SX + SW - 4, 0, ' × ', 'd', '', '3');
 
-{ let x = SX + 2 + chip(SX + 2, 1, 'Open', 'g'); x += chip(x, 1, '✕ Conflicts with main', 'r'); T(x, 1, ['Not ready: it has merge conflicts.', 'r', 'b'], ['  required 2 of 3 passed · changes requested', 'd']); }
-T(SX + 2, 2, ['Priya wants to merge 4 commits into ', 'd'], ['main', 'b'], [' from ', 'd'], ['notes-bench', 'b'], [' · ', 'd'], ['+812', 'g'], [' −14', 'r']);
+{ let x = SX + 2 + chip(SX + 2, 1, 'Open', 'g'); x += chip(x, 1, '✕ Conflicts with main', 'r'); T(x, 1, ['Priya wants to merge 4 commits into ', 'd'], ['main', 'b'], [' from ', 'd'], ['notes-bench', 'b'], [' · ', 'd'], ['+812', 'g'], [' −14', 'r']); }
+T(SX + 2, 2, ['Not ready: it has merge conflicts.', 'r', 'b'], ['  required 2 of 3 passed · changes requested', 'd']);
 rule(SX, 3, SW);
 label(SX + 2, 5, 'Checks', 'd'); R(SX + SW - 3, 5, '3 of 5', 'd');
 T(SX + 2, 6, ['Required ', 'f']); [['passed', 'fmt'], ['passed', 'clippy'], ['failed', 'test (macos)']].reduce((x, [st, n]) => { mark(x, 6, st); return x + put(x + 2, 6, n) + 4; }, SX + 12);
