@@ -150,7 +150,8 @@ fn set_up_in(
     let repo = repo.canonicalize().unwrap();
     std::fs::write(
         config.join("repos.json"),
-        json!({ repo.join(".git").to_str().unwrap(): { "landing": "direct" } }).to_string(),
+        json!({ repo.join(".git").to_str().unwrap(): { "landing": "direct", "tickets": "notes" } })
+            .to_string(),
     )
     .unwrap();
 
@@ -1260,7 +1261,8 @@ fn its_tab_starts_claude_with_the_landings_one_push_allowed_and_no_other_tab_doe
     let lands = |way: &str| {
         std::fs::write(
             config.join("repos.json"),
-            json!({ repo.join(".git").to_str().unwrap(): { "landing": way } }).to_string(),
+            json!({ repo.join(".git").to_str().unwrap(): { "landing": way, "tickets": "notes" } })
+                .to_string(),
         )
         .unwrap();
     };
@@ -1385,6 +1387,29 @@ fn a_repository_landing_through_prs_is_worked_on_its_default_branch_alone() {
         })
         .to_string()
     };
+    // The repository's tickets decide where its work comes from, with no
+    // default: unset or Linear's, it doesn't start.
+    let repos = server.home.join(".config/switchboard/repos.json");
+    std::fs::create_dir_all(repos.parent().unwrap()).unwrap();
+    let key = repo.join(".git").to_str().unwrap().to_string();
+    for (entry, says) in [
+        (
+            json!({}),
+            "ticket source isn't set: choose it in Settings' Tickets row",
+        ),
+        (
+            json!({ "tickets": "linear" }),
+            "keeps its work in Linear, which autopilot can't take",
+        ),
+        (json!({ "tickets": "github" }), "its issue label isn't set"),
+    ] {
+        std::fs::write(&repos, json!({ &key: entry }).to_string()).unwrap();
+        let (code, _, err) = server.run(&["autopilot-start", &fields("")]);
+        assert_ne!(code, 0, "{entry}");
+        assert!(err.contains(says), "{entry}: {err}");
+    }
+    assert!(!server.state.join("autopilot.json").exists());
+    std::fs::write(&repos, json!({ &key: { "tickets": "notes" } }).to_string()).unwrap();
     let (code, _, err) = server.run(&["autopilot-start", &fields("team/next")]);
     assert_ne!(code, 0);
     assert!(
@@ -1543,7 +1568,8 @@ fn the_relays_commands_start_change_show_and_pause_it_and_a_start_by_hand_is_ref
     let config = server.home.join(".config/switchboard");
     std::fs::write(
         config.join("repos.json"),
-        json!({ repo.join(".git").to_str().unwrap(): { "landing": "direct" } }).to_string(),
+        json!({ repo.join(".git").to_str().unwrap(): { "landing": "direct", "tickets": "notes" } })
+            .to_string(),
     )
     .unwrap();
     let fields = json!({

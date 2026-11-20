@@ -375,7 +375,7 @@ fn alone_m_m_opens_its_settings_and_a_change_is_kept_in_the_settings_file() {
     // The file list's width, turned off: written at once, beside what the
     // file held, the version before kept.
     let settings = home.join("diff-settings.json");
-    diff.send(b"jjjjjjj\r");
+    diff.send(b"jjjjjjjj\r");
     let read = || -> serde_json::Value {
         serde_json::from_str(&std::fs::read_to_string(&settings).unwrap_or_default())
             .unwrap_or_default()
