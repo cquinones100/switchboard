@@ -11,7 +11,7 @@
 //! the PR and the ticket as the tab's name was last worked out, never the
 //! network, so it opens at once.
 //!
-//! A tab opened for a note's item (the palette's wtn list, autopilot)
+//! A tab opened for a note's item (the palette's wt list, autopilot)
 //! is named with the item's first 50 characters cut back to a word
 //! and ending in … (`short_name`), for the tab bar and the second status
 //! line, and keeps the item's whole first line as its full title
@@ -35,7 +35,7 @@ const SHORT: usize = 50;
 static TRAILING: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[\s\p{P}\p{S}]+$").expect("a regex"));
 
-/// The name wtn's tab gets for an item's first line: the line whole up to
+/// The name wt's tab gets for an item's first line: the line whole up to
 /// 50 characters, else its first 49 cut back to a word, its trailing
 /// spaces and marks taken off, ending in ….
 pub fn short_name(whole: &str) -> String {
@@ -50,7 +50,7 @@ pub fn short_name(whole: &str) -> String {
     format!("{}…", TRAILING.replace(&cut, ""))
 }
 
-/// Whether a tab's name is still the one wtn gave it for `whole`: the item
+/// Whether a tab's name is still the one wt gave it for `whole`: the item
 /// whole, its word cut (`short_name`), or its first 50 characters, as tabs
 /// were named before; a `#<PR> ` in front of the name doesn't count.
 pub fn cut_of(name: &str, whole: &str) -> bool {
@@ -79,29 +79,29 @@ fn strip_pr(name: &str) -> &str {
 /// read as a file (`branch.<branch>.wtnItem`), so no git runs: for Notes'
 /// background look and `gw`'s look for a tab on the item, off the
 /// server's task.
-pub fn wtn_item_at(dir: &std::path::Path) -> Option<String> {
-    wtn_claim_at(dir).map(|(_, item)| item)
+pub fn wt_item_at(dir: &std::path::Path) -> Option<String> {
+    wt_claim_at(dir).map(|(_, item)| item)
 }
 
-/// `wtn_claim` for a directory's branch, read as `wtn_item_at` reads it:
+/// `wt_claim` for a directory's branch, read as `wt_item_at` reads it:
 /// for Notes' chips, which show a tab only on its item's own note.
-pub fn wtn_claim_at(dir: &std::path::Path) -> Option<(Option<String>, String)> {
+pub fn wt_claim_at(dir: &std::path::Path) -> Option<(Option<String>, String)> {
     let place = crate::tabs::git::locate(dir).filter(|p| p.on_branch())?;
     let config = std::fs::read_to_string(place.common_dir.join("config")).ok()?;
-    wtn_claim(&config, &place.branch)
+    wt_claim(&config, &place.branch)
 }
 
 /// The item a branch is for, from the text of a repository's git config,
-/// the note left off: `wtn_claim`'s item.
-pub fn wtn_item(config: &str, branch: &str) -> Option<String> {
-    wtn_claim(config, branch).map(|(_, item)| item)
+/// the note left off: `wt_claim`'s item.
+pub fn wt_item(config: &str, branch: &str) -> Option<String> {
+    wt_claim(config, branch).map(|(_, item)| item)
 }
 
 /// The note and item a branch is for, from the text of a repository's git
 /// config: `branch.<branch>.wtnItem`, `<note's ID>: <item's first line>`,
 /// the ID given, or `<note's path>: <item's first line>` from before notes
 /// had IDs, no ID given.
-pub fn wtn_claim(config: &str, branch: &str) -> Option<(Option<String>, String)> {
+pub fn wt_claim(config: &str, branch: &str) -> Option<(Option<String>, String)> {
     let value = branch_value(config, branch, "wtnItem")?;
     if let Some((id, item)) = crate::notes::id::claim_of(&value) {
         return Some((Some(id.to_string()), item.to_string()));
@@ -219,25 +219,25 @@ mod tests {
         assert!(!cut_of("", whole));
         let config = "[core]\n\tbare = false\n[branch \"note/copy\"]\n\twtnItem = \"Work.md: Copy \\\"the\\\" reply\"\n";
         assert_eq!(
-            wtn_item(config, "note/copy").as_deref(),
+            wt_item(config, "note/copy").as_deref(),
             Some("Copy \"the\" reply")
         );
-        assert_eq!(wtn_item(config, "main"), None);
+        assert_eq!(wt_item(config, "main"), None);
         let by_id = "[branch \"note/copy\"]\n\twtnItem = n-0123456789ab: Copy the .md: reply\n";
         assert_eq!(
-            wtn_item(by_id, "note/copy").as_deref(),
+            wt_item(by_id, "note/copy").as_deref(),
             Some("Copy the .md: reply"),
             "a claim by the note's ID too"
         );
         assert_eq!(
-            wtn_claim(by_id, "note/copy"),
+            wt_claim(by_id, "note/copy"),
             Some((
                 Some("n-0123456789ab".to_string()),
                 "Copy the .md: reply".to_string()
             ))
         );
         assert_eq!(
-            wtn_claim(config, "note/copy"),
+            wt_claim(config, "note/copy"),
             Some((None, "Copy \"the\" reply".to_string())),
             "a claim by path names no ID"
         );

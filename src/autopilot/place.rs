@@ -18,7 +18,7 @@ use crate::sidebar::model::TabState;
 use crate::sources::landing::git_of;
 
 /// A tab not in its worktree yet counts as busy this long, in seconds,
-/// while `wtn` makes it; past it, `wtn` failed, and the tab waits on you.
+/// while `wt` makes it; past it, `wt` failed, and the tab waits on you.
 pub const OPENING_S: f64 = 10.0 * 60.0;
 /// A tab counts as busy this long after it opened whatever it shows, since
 /// Claude takes a moment to start in its worktree.
@@ -29,7 +29,7 @@ pub const STARTING_S: f64 = 2.0 * 60.0;
 pub enum Kind {
     /// Working in its worktree, or still opening: it takes a slot.
     Busy,
-    /// Waiting on you (a question, a turn ended, or `wtn` failed): it frees
+    /// Waiting on you (a question, a turn ended, or `wt` failed): it frees
     /// its slot but counts toward the cap.
     Waiting,
     /// Out of its worktree but not back in a main clone, as while
@@ -195,7 +195,7 @@ pub(crate) mod tests {
         assert_eq!(
             at(TabState::Idle, now - 900.0, false),
             Kind::Waiting,
-            "wtn failed: it never reached its worktree"
+            "wt failed: it never reached its worktree"
         );
         let mut landed = mine(1, old, TabState::Idle, false);
         landed.was_in = true;

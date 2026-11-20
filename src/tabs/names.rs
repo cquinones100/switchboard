@@ -1,7 +1,7 @@
 //! What the tab bar knows about each directory, and the lookups behind it:
 //! tmux/path-facts.sh's answer per directory (its color, its label with no
 //! name set, its PR), tmux/window-pr.sh's PR per repository and branch, and
-//! tmux/ticket-title.sh's title per ticket (and, for a branch `wtn --issue`
+//! tmux/ticket-title.sh's title per ticket (and, for a branch `wt --issue`
 //! started, its GitHub issue's title, under the issue's reference), kept in
 //! memory by the server, and the PRs and titles found in one file under
 //! `~/.cache` (`saved`, `restore`), as the scripts kept them in files
@@ -353,7 +353,7 @@ impl Names {
         let color = color::tab_color(tint, switches.shade);
         let window = color::window_name(&name, place);
 
-        // The issue the branch was started for (`wtn --issue`'s
+        // The issue the branch was started for (`wt --issue`'s
         // `branch.<branch>.wtnIssue`, else an `issue/<n>-` branch of
         // origin's), its title asked for under its reference
         // (`<owner>/<repo>#<n>`); else the Linear ticket it names, any team
