@@ -39,6 +39,8 @@ pub struct Shown {
     /// clone, possibly the project upstream names); `None` when only its
     /// number is known, its directory's origin's then.
     pub pr_repo: Option<Repo>,
+    /// Its PR's title, once its lookup has answered.
+    pub pr_title: Option<String>,
     /// The ticket its branch is for (`names::Facts::ticket`).
     pub ticket: Option<crate::views::ticket::Ticket>,
     /// The color it wears: its project's, or gray with the `accent_colors`
@@ -128,6 +130,7 @@ impl Server {
             label: facts.label,
             pr: facts.pr,
             pr_repo: facts.pr_repo,
+            pr_title: facts.pr_title,
             ticket: facts.ticket,
             color: Some(match tint {
                 _ if !switches.colors => color::GRAY,
@@ -353,13 +356,18 @@ impl Server {
             (Some(whole), None) => whole,
             (None, _) => label,
         };
+        let pr_title = self
+            .tab_names
+            .shown
+            .get(&tab)
+            .and_then(|s| s.pr_title.clone());
         let ticket = self
             .tab_ticket(tab)
             .map(crate::views::ticket::Ticket::short);
         let facts = title::facts(
             branch.as_deref(),
             path.as_deref().map(paths::tilde).as_deref(),
-            self.tab_pr(tab),
+            self.tab_pr(tab).map(|n| (n, pr_title.as_deref())),
             ticket.as_deref(),
         );
         let menu = Menu::new(

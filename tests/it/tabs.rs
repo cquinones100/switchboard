@@ -457,6 +457,84 @@ mod from_the_services {
         server.ok(&["rename-tab", "-t", &id, "Login"]);
         client.wait_for("the name after the PR", |s| s[29].ends_with("1:#12 Login"));
     }
+
+    #[test]
+    fn a_pr_with_no_ticket_names_its_tab_by_its_title_and_wt_jump_finds_it() {
+        let github = Fake::github("test-token", |request| {
+            (request.path() == "/graphql" && request.text().contains("pullRequests")).then(|| {
+                Reply::json(
+                    200,
+                    json!({"data": {"repository": {"pullRequests": {"nodes": [{
+                        "number": 12345, "url": "https://github.com/acme/widgets/pull/12345",
+                        "title": "Retry failed fetches", "state": "OPEN", "isDraft": false,
+                        "baseRefName": "main", "headRefName": "retry-failed-fetches",
+                        "headRepositoryOwner": {"login": "acme"}
+                    }]}}}}),
+                )
+            })
+        });
+        let server = TestServer::start_with_env(&[
+            ("GH_TOKEN", "test-token"),
+            ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
+            ("SWITCHBOARD_GITHUB_API", &github.url),
+        ]);
+        settings(&server, json!({}));
+        let work = server.dir.path().join("widgets");
+        repo(&work, "retry-failed-fetches");
+        git(
+            &work,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/widgets.git",
+            ],
+        );
+
+        let mut client = server.attach(100, 30);
+        client.wait_text("$");
+        client.type_text(&format!("cd {}\r", work.display()));
+        client.wait_for("the PR's title", |s| {
+            s[29].ends_with("1:#12345 Retry failed fetches")
+        });
+        let tab = first_tab(&server);
+        assert_eq!(tab["label"], "#12345 Retry failed fetches");
+
+        // wt-jump still finds it by the PR's number at the front of its
+        // label, from another tab.
+        let pr_tab = tab["id"].as_str().unwrap().to_string();
+        let out = server.ok(&["new-tab", "-c", server.dir.path().to_str().unwrap()]);
+        let other_pane = out.split_whitespace().nth(1).unwrap().to_string();
+        let current = |server: &TestServer| {
+            server.list()["sessions"][0]["tabs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["current"] == Value::Bool(true))
+                .and_then(|t| t["id"].as_str())
+                .unwrap()
+                .to_string()
+        };
+        assert_ne!(current(&server), pr_tab);
+        let out = Command::new(common::BIN)
+            .args(["wt-jump", "12345"])
+            .env("HOME", &server.home)
+            .env(
+                "PATH",
+                common::stand_in::path_with_gh(&server.home.join("bin")),
+            )
+            .env_remove("GH_TOKEN")
+            .env_remove("GITHUB_TOKEN")
+            .env("SWITCHBOARD_STATE_DIR", &server.state)
+            .env("SWITCHBOARD", server.socket())
+            .env("SWITCHBOARD_PANE", &other_pane)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(current(&server), pr_tab, "the PR's tab, by its number");
+    }
 }
 
 #[test]
