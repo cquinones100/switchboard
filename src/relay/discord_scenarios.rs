@@ -629,7 +629,10 @@ fn deleting_a_closed_thread_deletes_every_reply_and_forgets_them() {
         .block_on(post(&rig.cx, "🤖 a turn", Some(&head), PostOpts::default()))
         .unwrap();
     rig.block_on(super::homes::close_home(&rig.cx, &tab));
-    rig.block_on(super::cleanup::delete_threads(&rig.cx, std::slice::from_ref(&head)));
+    rig.block_on(super::cleanup::delete_threads(
+        &rig.cx,
+        std::slice::from_ref(&head),
+    ));
     let deleted: Vec<String> = rig
         .discord
         .calls_to("DELETE", &format!("/channels/{DISCORD_DM}/messages/"))
@@ -639,4 +642,30 @@ fn deleting_a_closed_thread_deletes_every_reply_and_forgets_them() {
     assert_eq!(deleted, [reply.clone(), head.clone()]);
     let chat = rig.discord_chat.clone().unwrap();
     assert_eq!(chat.thread_of(&reply), reply, "forgotten with its thread");
+}
+
+#[test]
+fn a_button_added_by_an_edit_still_works_after_a_restart() {
+    let rig = Rig::discord();
+    let (tab, _) = rig.claude_tab("work");
+    let head = header(&rig, &tab);
+    let reply = rig
+        .block_on(post(&rig.cx, "🤖 a turn", Some(&head), PostOpts::default()))
+        .unwrap();
+    let button = super::post::Button::new("Go on", json!({ "a": "do", "c": "status" }));
+    rig.block_on(super::post::update(&rig.cx, &reply, "🤖 a turn", &[button]))
+        .unwrap();
+    let edit = rig
+        .discord
+        .calls_to("PATCH", &format!("/channels/{DISCORD_DM}/messages/{reply}"))
+        .pop()
+        .unwrap();
+    let custom = edit.body["components"][0]["components"][0]["custom_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let key = custom.strip_prefix("v:").unwrap();
+    let kept: Value =
+        serde_json::from_str(&util::read_text(rig.cx.paths.discord_file()).unwrap()).unwrap();
+    assert_eq!(kept["values"][key]["c"], "status", "saved as it was made");
 }

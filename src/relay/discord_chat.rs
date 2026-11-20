@@ -185,17 +185,22 @@ impl DiscordChat {
         self.save();
     }
 
-    /// A key for `value`, kept so a press can give it back.
+    /// A key for `value`, kept (and saved) so a press can give it back.
     fn register(&self, value: &Value) -> String {
         let text = util::json_compact(value);
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         text.hash(&mut hasher);
         let key = format!("{:016x}", hasher.finish());
         let mut kept = self.0.kept.borrow_mut();
-        kept.values.shift_remove(&key);
+        let new = kept.values.shift_remove(&key).is_none();
         kept.values.insert(key.clone(), value.clone());
         while kept.values.len() > KEPT {
             kept.values.shift_remove_index(0);
+        }
+        drop(kept);
+        // Saved at once, so a button outlives a restart whatever posted it.
+        if new {
+            self.save();
         }
         key
     }
