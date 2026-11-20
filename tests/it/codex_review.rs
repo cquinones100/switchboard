@@ -1161,8 +1161,31 @@ fn a_ticket_s_rounds_count_to_two_clean_ones_on_the_same_text() {
         !work.join(".git/review-loop-round").exists(),
         "nor starts the branch's loop"
     );
+    let left: Vec<String> = fs::read_dir(work.join(".git"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with("ticket-review-round"))
+        .collect();
     assert!(
-        !work.join(".git/ticket-review-round").exists(),
-        "and its own place goes once it is done"
+        left.is_empty(),
+        "and its own place goes once it is done: {left:?}"
     );
+
+    // Two tickets' loops at once in one clone keep their own places.
+    let other = home.join("other.md");
+    fs::write(&other, "# FEAT: Two\n").unwrap();
+    let other_arg = other.to_string_lossy().into_owned();
+    let on = |ticket: &str, said: &str, step: &str| -> serde_json::Value {
+        fs::write(&answer, said).unwrap();
+        let out = review_answering(home, &work, &answer, &["--ticket", ticket, "--round", step]);
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    assert_eq!(on(&ticket_arg, clean, "start")["next"], "confirm");
+    assert_eq!(on(&other_arg, found, "start")["round"], 1);
+    assert_eq!(on(&ticket_arg, clean, "next")["next"], "done");
+    let second = on(&other_arg, clean, "next");
+    assert_eq!(second["round"], 2, "the other's place kept");
+    assert_eq!(second["next"], "confirm");
 }

@@ -89,9 +89,11 @@
 //! (the base's commit) and `warnings`. `--notes`, `--include-low`,
 //! `--round` and `--reviewer` work as for a branch, the loop's place and
 //! its streak of clean rounds kept apart from the branch's
-//! (`ticket-review-round`, `ticket-review-streak`, at `git rev-parse
-//! --git-path`), so a ticket reviewed in a checkout leaves its branch's loop
-//! as it was, and never in `review-loop-clean`: a clean ticket says nothing
+//! (`ticket-review-round-<key>`, `ticket-review-streak-<key>`, at `git
+//! rev-parse --git-path`, `<key>` from the ticket file's path), so a ticket
+//! reviewed in a checkout leaves its branch's loop as it was, and loops on
+//! several tickets at once in one clone (`shape-batch`'s tabs, each running
+//! `/shape` in the main clone) leave each other's, and never in `review-loop-clean`: a clean ticket says nothing
 //! of a push. A confirmation round counts only on the same ticket text and
 //! base commit as the clean round before it. It takes no `-C` or `--pr`.
 //!
@@ -2126,7 +2128,8 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
 // ── A ticket (`--ticket`) ───────────────────────────────────────────────────
 
 /// Where the ticket loop keeps its streak of clean rounds, `<base commit>
-/// <the ticket's hash>`: apart from the branch's, and never the record a
+/// <the ticket's hash>`, `-<key>` after it for each ticket: apart from the
+/// branch's, and never the record a
 /// pre-push hook reads, since a ticket's review says nothing of a branch.
 const TICKET_STREAK: &str = "ticket-review-streak";
 
@@ -2379,6 +2382,10 @@ fn run_ticket(opts: &Opts, ticket: &str) -> Reviewed<ExitCode> {
         return fail(format!("could not move to {root}: {e}"));
     }
     let root_path = PathBuf::from(&root);
+    // Each ticket file's loop is its own, so tabs reviewing several
+    // tickets in one clone at once keep their own places and streaks.
+    let key = text_hash(&ticket_path.to_string_lossy())[..12].to_string();
+    let round_file = format!("{TICKET_ROUND}-{key}");
     let (base, commit) = ticket_base(&root_path, opts.base.as_deref())?;
     let notes = match &notes_path {
         Some(path) => match fs::read_to_string(path) {
@@ -2395,7 +2402,7 @@ fn run_ticket(opts: &Opts, ticket: &str) -> Reviewed<ExitCode> {
     let reviewer = choose_reviewer(opts);
     let claude = reviewer == "claude";
     let looping = match opts.round {
-        Some(step) => Some(loop_of(step, TICKET_ROUND)?),
+        Some(step) => Some(loop_of(step, &round_file)?),
         None => None,
     };
     let include_low = opts.include_low || looping.as_ref().is_some_and(|l| l.clean_before > 0);
@@ -2456,7 +2463,7 @@ fn run_ticket(opts: &Opts, ticket: &str) -> Reviewed<ExitCode> {
     review.insert("warnings".into(), json!(warnings));
 
     let reviewed = format!("{commit} {}", text_hash(&text));
-    let streak = record_path(TICKET_STREAK)?;
+    let streak = record_path(&format!("{TICKET_STREAK}-{key}"))?;
     let previous = fs::read_to_string(&streak).unwrap_or_default();
     let same_as_before = previous.trim() == reviewed;
     let found = review["findings"].as_array().cloned().unwrap_or_default();
@@ -2487,7 +2494,7 @@ fn run_ticket(opts: &Opts, ticket: &str) -> Reviewed<ExitCode> {
                 lows_left,
                 include_low,
             },
-            TICKET_ROUND,
+            &round_file,
         )?;
     }
 
@@ -2577,8 +2584,9 @@ struct Loop {
     clean_before: u32,
 }
 
-/// Where the branch loop's place is kept, and the ticket loop's, apart so
-/// a ticket reviewed in a checkout leaves its branch's loop where it was.
+/// Where the branch loop's place is kept, and the ticket loop's (`-<key>`
+/// after it for each ticket), apart so a ticket reviewed in a checkout leaves
+/// its branch's loop where it was.
 const BRANCH_ROUND: &str = "review-loop-round";
 const TICKET_ROUND: &str = "ticket-review-round";
 
