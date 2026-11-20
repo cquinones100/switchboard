@@ -1266,6 +1266,115 @@ fn the_notifications_views_menu_dismisses_every_notification_shown() {
     assert!(!left.contains("Plan.md"), "{left}");
 }
 
+/// A server with three notes written for you, Alpha the newest and Charlie
+/// the oldest, each a notification.
+fn three_new_notes() -> (TestServer, common::TempDir) {
+    let notes = common::TempDir::new("sbtn");
+    let now = switchboard::util::now_ms();
+    let mut written = Vec::new();
+    for (n, name) in ["Alpha", "Bravo", "Charlie"].iter().enumerate() {
+        std::fs::write(
+            notes.path().join(format!("{name}.md")),
+            format!("# {name}\n"),
+        )
+        .unwrap();
+        written.push(json!({ "path": format!("{name}.md"), "title": name,
+            "source": "Fathom", "at": now - n as i64 * 1000 }));
+    }
+    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
+    std::fs::create_dir_all(&server.state).unwrap();
+    std::fs::write(
+        server.state.join("new-notes.json"),
+        Value::from(written).to_string(),
+    )
+    .unwrap();
+    settings(&server, json!({ "new_notes": true }));
+    (server, notes)
+}
+
+/// The open menu holds `text` (its title or the notification above its
+/// choices), closed again with Esc.
+fn menu_holds(client: &mut TestClient, text: &str) {
+    client.type_text("\r");
+    client.wait_for(&format!("the menu of {text}"), |s| {
+        menu_rows(s).is_some_and(|rows| rows.iter().any(|l| l.contains(text)))
+    });
+    client.type_text("\x1b");
+    client.wait_for("the menu closed", |s| menu_rows(s).is_none());
+}
+
+#[test]
+fn j_and_k_in_the_notifications_view_wrap_from_its_last_to_its_first_and_back() {
+    let (server, _notes) = three_new_notes();
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("]");
+    client.wait_text("Charlie");
+    // From the last, j goes round, past the day's heading, to the first.
+    client.type_text("G");
+    menu_holds(&mut client, "Charlie");
+    client.type_text("j");
+    menu_holds(&mut client, "Alpha");
+    // And k from the first back round to the last.
+    client.type_text("k");
+    menu_holds(&mut client, "Charlie");
+    // The wheel stops there, as in every menu.
+    let screen = client.screen();
+    let row = screen
+        .iter()
+        .position(|l| l.contains("Charlie"))
+        .unwrap_or_else(|| panic!("{}", screen.join("\n")));
+    let col = screen[row].chars().take_while(|c| *c != 'C').count();
+    client.send(format!("\x1b[<65;{};{}M", col + 1, row + 1).as_bytes());
+    std::thread::sleep(Duration::from_millis(300));
+    menu_holds(&mut client, "Charlie");
+}
+
+#[test]
+fn a_notifications_menu_dismisses_every_notification_shown() {
+    let (server, _notes) = three_new_notes();
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("]");
+    client.wait_text("Charlie");
+    client.type_text("\r");
+    pick(&mut client, "Dismiss every notification shown");
+    client.wait_text("Dismissed 3 notifications.");
+    let left = std::fs::read_to_string(server.state.join("new-notes.json")).unwrap();
+    for name in ["Alpha", "Bravo", "Charlie"] {
+        assert!(!left.contains(name), "{left}");
+    }
+}
+
+#[test]
+fn the_only_notification_shown_has_no_dismissing_of_every_one_in_its_menu() {
+    let notes = common::TempDir::new("sbon");
+    std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
+    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
+    std::fs::create_dir_all(&server.state).unwrap();
+    std::fs::write(
+        server.state.join("new-notes.json"),
+        json!([{ "path": "Plan.md", "title": "Plan", "source": "Fathom",
+            "at": switchboard::util::now_ms() }])
+        .to_string(),
+    )
+    .unwrap();
+    settings(&server, json!({ "new_notes": true }));
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("]");
+    client.wait_text("Plan");
+    client.type_text("\r");
+    let screen = client.wait_for("its menu", |s| {
+        menu_rows(s).is_some_and(|rows| rows.iter().any(|l| l.contains("Open it in Notes")))
+    });
+    let rows = menu_rows(&screen).unwrap().join("\n");
+    assert!(!rows.contains("Dismiss every notification shown"), "{rows}");
+}
+
 // "Send it to a tab" and "Paste it into a tab" on a notification: a tab
 // running Claude picked, the notification's words and link pasted into it,
 // that tab in front; a tab with no Claude isn't offered. The second tab's
