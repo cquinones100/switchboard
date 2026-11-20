@@ -26,6 +26,8 @@ fn env(cmd: &mut Command, home: &Path) {
         .env("GH_TOKEN", "not-a-token")
         .env("SWITCHBOARD_GITHUB_GRAPHQL", "http://127.0.0.1:9/graphql")
         .env("SWITCHBOARD_GITHUB_API", "http://127.0.0.1:9")
+        .env("SWITCHBOARD_LINEAR_API", "http://127.0.0.1:9/graphql")
+        .env_remove("LINEAR_API_KEY")
         .env("SWITCHBOARD_SETTINGS", home.join("settings.json"))
         .env("SWITCHBOARD_STATE_DIR", home.join("state"))
         .env_remove("SWITCHBOARD")
@@ -220,8 +222,10 @@ fn the_reviewer_rates_scenarios_the_change_does_not_set_out_to_handle_low() {
         assert!(run.status.success(), "{}", text(&run.stderr));
         let out = text(&run.stdout);
         for rule in [
-            "Take what the change sets out to do from its commit messages and the PR description, read against the diff: whatever the diff adds or changes is part of the change whether or not they mention it",
+            "Take what the change sets out to do from its commit messages, the PR description and the ticket when there is one, read against the diff: whatever the diff adds or changes is part of the change whether or not they mention it",
             "a crash or failure that normal use of the changed code hits",
+            "the implementation is always checked against that intent: where the code does not do what the commits or the PR description say it does, does something they say it does not, or does the opposite of what the ticket asks, report it with category commit-claim at high",
+            "what it asks for that no commit or the PR claims to have built is not a finding",
             "Medium is a real bug on an uncommon path the change sets out to handle",
             "A finding about a scenario the change does not set out to handle (an input, state or case its purpose does not reach) is low, however it fails.",
             "a scenario the change breaks that worked before it, which is a regression",
@@ -229,6 +233,98 @@ fn the_reviewer_rates_scenarios_the_change_does_not_set_out_to_handle_low() {
         ] {
             assert!(out.contains(rule), "{rule}\n{out}");
         }
+    }
+}
+
+// The ticket the branch is work on reaches the reviewer as intent, fenced
+// as the author's text: the GitHub issue `wtn --issue` started it for, or
+// the Linear ticket its name holds.
+#[test]
+fn the_branch_s_ticket_reaches_the_prompt_as_its_intent() {
+    let tmp = TempDir::new("cr-ticket");
+    let home = tmp.path();
+    let work = clone(home);
+    fs::write(work.join("a.txt"), "a\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "Pushed already"]);
+    git(home, &work, &["push", "-q", "origin", "main"]);
+    git(home, &work, &["checkout", "-q", "-b", "speed-up"]);
+    git(
+        home,
+        &work,
+        &["config", "branch.speed-up.wtnIssue", "o/r#7"],
+    );
+    fs::write(work.join("b.txt"), "b\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "A change"]);
+    let github = common::http::Fake::github("not-a-token", |request| {
+        (request.path() == "/repos/o/r/issues/7").then(|| {
+            common::http::Reply::json(
+                200,
+                serde_json::json!({ "title": "Make it fast", "body": "Cache the lookups",
+                    "html_url": "https://github.com/o/r/issues/7" }),
+            )
+        })
+    });
+    let mut cmd = Command::new(BIN);
+    cmd.args([
+        "codex-review",
+        "--dry-run",
+        "--reviewer",
+        "claude",
+        "--base",
+        "origin/main",
+    ])
+    .current_dir(&work)
+    .stdin(Stdio::null());
+    env(&mut cmd, home);
+    cmd.env("SWITCHBOARD_GITHUB_API", &github.url);
+    let run = cmd.output().unwrap();
+    assert!(run.status.success(), "{}", text(&run.stderr));
+    let out = text(&run.stdout);
+    for part in [
+        "## Ticket",
+        "o/r#7 (https://github.com/o/r/issues/7)",
+        "<contributor-text source=\"ticket title\">\nMake it fast\n</contributor-text>",
+        "<contributor-text source=\"ticket description\">\nCache the lookups\n</contributor-text>",
+    ] {
+        assert!(out.contains(part), "{part}\n{out}");
+    }
+
+    git(home, &work, &["checkout", "-q", "-b", "eng-42-speed-up"]);
+    let linear = common::http::Fake::linear("lin_key", |request| {
+        (request.path() == "/graphql").then(|| {
+            common::http::Reply::json(
+                200,
+                serde_json::json!({ "data": { "issue": { "identifier": "ENG-42",
+                    "title": "Speed up the board", "url": "https://linear.app/t/issue/ENG-42",
+                    "description": "Draw it once" } } }),
+            )
+        })
+    });
+    let mut cmd = Command::new(BIN);
+    cmd.args([
+        "codex-review",
+        "--dry-run",
+        "--reviewer",
+        "claude",
+        "--base",
+        "origin/main",
+    ])
+    .current_dir(&work)
+    .stdin(Stdio::null());
+    env(&mut cmd, home);
+    cmd.env("SWITCHBOARD_LINEAR_API", linear.graphql_url())
+        .env("LINEAR_API_KEY", "lin_key");
+    let run = cmd.output().unwrap();
+    assert!(run.status.success(), "{}", text(&run.stderr));
+    let out = text(&run.stdout);
+    for part in [
+        "ENG-42 (https://linear.app/t/issue/ENG-42)",
+        "Speed up the board",
+        "Draw it once",
+    ] {
+        assert!(out.contains(part), "{part}\n{out}");
     }
 }
 
