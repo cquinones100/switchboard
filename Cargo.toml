@@ -131,6 +131,9 @@ default = ["net"]
 net = ["dep:reqwest", "dep:tokio-tungstenite"]
 
 [dev-dependencies]
+# Reads src/views to check every GraphQL query closes its braces.
+syn = { version = "2.0.119", default-features = false, features = ["parsing", "full", "visit"] }
+proc-macro2 = { version = "1.0.107", default-features = false }
 
 # Debug builds keep only line tables, and the crates none: each test binary
 # (tests/it and the three apart from it) links all of them, and full debug
