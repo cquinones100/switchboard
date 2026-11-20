@@ -621,13 +621,15 @@ impl Names {
             ) else {
                 continue;
             };
-            // One kept without the repository it is in, by a build before
-            // that said, shows at once and is asked about again now.
+            // One kept without the repository it is in or its title, by a
+            // build before that kept them, shows at once and is asked about
+            // again now.
             let at = entry
                 .get("in")
                 .and_then(Value::as_str)
                 .and_then(github::parse_name_with_owner);
-            let next = if at.is_some() { next } else { now };
+            let titled = entry.get("title").and_then(Value::as_str).is_some();
+            let next = if at.is_some() && titled { next } else { now };
             self.prs
                 .entry((PathBuf::from(repo), branch.to_string()))
                 .or_insert(Known {
@@ -792,6 +794,18 @@ mod tests {
                 title: None,
             })
         );
+        assert!(pr.due(later));
+
+        // One kept with its repository but no title is asked about now too.
+        let mut untitled = saved.clone();
+        untitled["prs"][0].as_object_mut().unwrap().remove("title");
+        let mut again = Names::default();
+        again.restore(&untitled, later, 1_000 + 3600);
+        let pr = again
+            .prs
+            .get_mut(&(PathBuf::from("/r/.git"), "eng-42".to_string()))
+            .unwrap();
+        assert_eq!(pr.value, found(12, "acme/upstream").unwrap());
         assert!(pr.due(later));
     }
 
