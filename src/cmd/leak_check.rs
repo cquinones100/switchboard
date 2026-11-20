@@ -39,10 +39,12 @@
 //! asks after all when it finds anything.
 //!
 //! `leak-check --file <path>` reads one file's text instead, outside any
-//! git range (an issue's body, written out before `/shape` posts it): every
+//! git range, and `leak-check --file -` standard input's: text about to be
+//! posted to GitHub that isn't a commit (an issue's title and body, a PR's
+//! title and description, a comment, a review, a release's notes), every
 //! line by the same rules, none taken for a test's and nothing left out,
-//! each hit printed as `<path>:<line>: <kind>: <text>`, with the same exit
-//! codes.
+//! each hit printed as `<path>:<line>: <kind>: <text>` (`stdin:<line>` for
+//! standard input), with the same exit codes.
 //!
 //! JavaScript's look-arounds, which Rust's regex hasn't, are the boundary
 //! checks of `bounded`, tried again one character on wherever one fails,
@@ -500,14 +502,20 @@ pub fn file_hits(name: &str, text: &str, words: &[String]) -> Vec<Hit> {
     found
 }
 
-/// `leak-check --file <path>`: the file's hits, or why it can't look.
+/// `leak-check --file <path>` (`-` for standard input): the text's hits,
+/// or why it can't look.
 fn look_file(path: &str) -> Result<Vec<Hit>, String> {
     let words = read_words(&words_file())?;
+    if path == "-" {
+        let text = std::io::read_to_string(std::io::stdin())
+            .map_err(|e| format!("can't read standard input: {e}"))?;
+        return Ok(file_hits("stdin", &text, &words));
+    }
     let text = std::fs::read_to_string(path).map_err(|e| format!("can't read {path}: {e}"))?;
     Ok(file_hits(path, &text, &words))
 }
 
-const USAGE: &str = "usage: leak-check [--all] <range>\n       leak-check --file <path>";
+const USAGE: &str = "usage: leak-check [--all] <range>\n       leak-check --file <path | ->";
 
 pub fn main(args: Vec<String>) -> ExitCode {
     if args.first().is_some_and(|a| a == "--file") {
