@@ -122,6 +122,28 @@ const REFUSED_SAID: &str = "wtn refused it";
 pub const FAILED: &str = "@autopilot_failed";
 /// What its notification says of an item skipped for failing to start.
 const FAILED_SAID: &str = "its start failed";
+/// After a write on `issue`: the queue's read forgotten, and a failure
+/// added to what the mode says, which the next check shows in the
+/// notifications, whoever is attached by then.
+async fn written_back(issue: &str, done: anyhow::Result<()>) {
+    let said = done.err().map(|e| format!("{WRITE_FAILED}{issue}: {e}"));
+    let _ = tokio::task::spawn_blocking(move || {
+        let state = paths::state_dir();
+        super::issues::forget(&state);
+        if let Some(said) = said {
+            eprintln!("autopilot: {said}");
+            let _ = Mode::update(&state, |m| {
+                m.said = if m.said.is_empty() {
+                    said
+                } else {
+                    format!("{}. {said}", m.said)
+                };
+            });
+        }
+    })
+    .await;
+}
+
 /// A tab of the mode marked with when it landed as `name`, just set to
 /// `value`, is its push (`PUSHED` or `AUTOLAND`) or its PR's merge
 /// (`MERGED`), the first time only.
@@ -2557,6 +2579,32 @@ impl Server {
         mode.sources.issues() && mode.issues_on()
     }
 
+    /// A hands-free tab's decisions about the plan of the GitHub issue
+    /// `issue` names (`<owner>/<repo>#<n>`), as `Decided hands-free` lines,
+    /// written to it off the task without asking (`issues::write_decided`),
+    /// only while autopilot takes issues, checked again before each write.
+    /// A failure is said in the notifications.
+    pub(crate) fn autopilot_write_decided(&mut self, issue: &str, lines: Vec<String>) {
+        let Some((repo, number)) = super::issues::parse_reference(issue) else {
+            return;
+        };
+        if lines.is_empty()
+            || !self.autopilot_writes_issues()
+            || tokio::runtime::Handle::try_current().is_err()
+        {
+            return;
+        }
+        let issue = issue.to_string();
+        tokio::spawn(async move {
+            let done = super::issues::write_decided(&repo, number, &lines, || {
+                let mode = Mode::read(&paths::state_dir());
+                mode.sources.issues() && mode.issues_on()
+            })
+            .await;
+            written_back(&issue, done).await;
+        });
+    }
+
     /// A comment on the GitHub issue `issue` names (`<owner>/<repo>#<n>`),
     /// closing it as done once GitHub has the commit `landed` names, off the
     /// task, only while autopilot takes issues: at once for a tab that lands
@@ -2617,22 +2665,7 @@ impl Server {
                     },
                     done => done.map(|_| ()),
                 };
-                let said = done.err().map(|e| format!("{WRITE_FAILED}{issue}: {e}"));
-                let _ = tokio::task::spawn_blocking(move || {
-                    let state = paths::state_dir();
-                    super::issues::forget(&state);
-                    if let Some(said) = said {
-                        eprintln!("autopilot: {said}");
-                        let _ = Mode::update(&state, |m| {
-                            m.said = if m.said.is_empty() {
-                                said
-                            } else {
-                                format!("{}. {said}", m.said)
-                            };
-                        });
-                    }
-                })
-                .await;
+                written_back(&issue, done).await;
             });
         };
         // Stopped, it writes nothing unasked: the tabs still working finish,
