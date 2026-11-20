@@ -813,6 +813,7 @@ impl Server {
         // A working tab's loop counts only for its round, which its card
         // shows.
         let round = work.loop_run.as_ref().map_or(0, |r| r.round);
+        let reviewing = work.loop_run.as_ref().is_some_and(|r| r.kind == "review");
         if base == TabState::Working {
             work = claude::Work {
                 api_error: work.api_error,
@@ -904,6 +905,17 @@ impl Server {
         t.background = work.count;
         t.monitors = work.monitors.clone();
         t.round = round;
+        // The review loop's round and cap as codex-review counts them (the
+        // hands-free cap across the branch's loops), over the count of its
+        // runs, while it runs or waits on you at its cap.
+        if let Some((at, cap, waits)) =
+            opt("@tab_review_round").and_then(|v| model::review_round_of(&v))
+            && (reviewing || (waits && base == TabState::Waiting))
+        {
+            t.round = at;
+            t.round_cap = cap;
+            t.at_cap = waits && base == TabState::Waiting;
+        }
         t.tab_loop = work
             .loop_run
             .clone()

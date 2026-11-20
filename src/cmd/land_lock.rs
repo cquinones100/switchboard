@@ -436,6 +436,8 @@ pub(crate) fn landed(args: &[String]) -> ExitCode {
         eprintln!("usage: land-lock landed <short hash> <branch>");
         return ExitCode::from(2);
     }
+    // The branch landed, so its review rounds start over.
+    crate::cmd::codex_review::forget_rounds();
     if !socket::in_pane() {
         return ExitCode::SUCCESS;
     }

@@ -1313,7 +1313,7 @@ fn doing_inside(tab: &TabModel, look: &CardLook, r: &Rules, theme: &Theme) -> In
         }
         if tab.round > 0 {
             chips.extend(kit::chip(
-                &format!("round {}", tab.round),
+                &crate::sidebar::model::round_words(tab, tab.round),
                 Tone::Landing,
                 false,
                 theme,
@@ -3704,14 +3704,22 @@ fn landing_stages(landing: &serde_json::Value, now_ms: i64) -> [StageCell; 6] {
                     .map(|ms| ms / 1000),
                 now_ms / 1000,
             );
+            let at_cap = r["at_cap"].as_bool() == Some(true);
             StageCell {
-                stage: Stage::Running,
-                label: format!("round {}", number(r, "round").unwrap_or(1)),
-                note: [words(r, "reviewer"), ago]
-                    .into_iter()
-                    .filter(|w| !w.is_empty())
-                    .collect::<Vec<_>>()
-                    .join(" · "),
+                stage: if at_cap { Stage::Asks } else { Stage::Running },
+                label: round_of_cap(r),
+                note: [
+                    if at_cap {
+                        "waiting on you".to_string()
+                    } else {
+                        words(r, "reviewer")
+                    },
+                    ago,
+                ]
+                .into_iter()
+                .filter(|w| !w.is_empty())
+                .collect::<Vec<_>>()
+                .join(" · "),
             }
         }
         _ => done("clean"),
@@ -4003,10 +4011,23 @@ fn then_words(landing: &serde_json::Value) -> String {
     }
 }
 
+/// A review round with its cap, `round 21 of 20`, as codex-review recorded
+/// it (`round 3` from a build that recorded no cap).
+fn round_of_cap(review: &serde_json::Value) -> String {
+    let round = review["round"].as_u64().unwrap_or(1);
+    match review["cap"].as_u64() {
+        Some(cap) => format!("round {round} of {cap}"),
+        None => format!("round {round}"),
+    }
+}
+
 /// The chosen worktree's last review round, in a line: its round, its
 /// reviewer, how long ago, and codex-review's summary.
 fn review_line(review: &serde_json::Value, now_ms: i64) -> String {
-    let mut parts = vec![format!("round {}", review["round"].as_u64().unwrap_or(1))];
+    let mut parts = vec![round_of_cap(review)];
+    if review["at_cap"].as_bool() == Some(true) {
+        parts.push("waiting on you".to_string());
+    }
     if let Some(r) = review["reviewer"].as_str().filter(|r| !r.is_empty()) {
         parts.push(r.to_string());
     }

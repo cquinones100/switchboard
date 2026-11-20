@@ -747,7 +747,7 @@ fn review_loop_runs_twenty_rounds_hands_free_and_five_otherwise() {
         assert!(report.contains(said), "{said}");
     }
     assert!(
-        regex::Regex::new(r"cap ended the loop with findings still open.*hands-free tab, ask it with `AskUserQuestion` headed `\[always ask\]`")
+        regex::Regex::new(r"cap ended the loop with findings still open.*in every tab, with `AskUserQuestion` headed `\[always ask\]`, so hands-free mode")
             .unwrap()
             .is_match(report),
         "{report}"
@@ -1080,4 +1080,42 @@ fn queue_and_clean_brings_a_pr_behind_its_base_up_to_date() {
             && !section.contains("rebase "),
         "{section}"
     );
+}
+
+// The review loop's cap question is asked in every tab, with its options
+// and a recommendation, and queue-and-clean waits on it rather than running
+// another loop.
+#[test]
+fn the_review_loop_s_cap_question_has_its_options_and_queue_and_clean_waits_on_it() {
+    let all = skills();
+    let text = |name: &str| {
+        all.iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, t)| t.clone())
+            .unwrap()
+    };
+    let review = text("review-loop");
+    let report = review
+        .split("## Final report\n")
+        .nth(1)
+        .and_then(|rest| rest.split("\n## ").next())
+        .expect("the final report");
+    for said in [
+        "ask the cap question before the push question, in every tab, with `AskUserQuestion` headed `[always ask]`",
+        "- **Run 10 more rounds**: run `switchboard codex-review --round more`",
+        "- **Land as it is**: offered only when queue-and-clean runs this loop and its landing is a PR",
+        "- **Stop here**",
+        "with a finding at `high` or above still open, **Run 10 more rounds**",
+        "\"No finding above medium is open; the rest are listed above\"",
+    ] {
+        assert!(report.contains(said), "{said}");
+    }
+    assert!(review.contains("the cap counts the branch's rounds across every loop"));
+    let queue = text("queue-and-clean");
+    for said in [
+        "wait on that answer, never starting another loop to get past the cap",
+        "**Land as it is**, offered only for a PR landing",
+    ] {
+        assert!(queue.contains(said), "{said}");
+    }
 }

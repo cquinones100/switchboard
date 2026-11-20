@@ -13,7 +13,7 @@ use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
 use common::stand_in::{self, Claude, sh_quote};
-use common::{BIN, TempDir};
+use common::{BIN, TempDir, TestServer};
 
 fn env(cmd: &mut Command, home: &Path) {
     cmd.env("HOME", home)
@@ -882,8 +882,169 @@ fn rounds_count_to_two_clean_ones_or_the_cap() {
         .expect("the Landing view's record");
     let landing: serde_json::Value = serde_json::from_str(&landing).unwrap();
     assert_eq!(landing["review"]["round"], 5);
+    assert_eq!(landing["review"]["cap"], 5);
     assert_eq!(landing["review"]["findings"], 2);
     assert_eq!(landing["output"]["of"], "review");
+
+    // Past the cap, the next round reviews nothing until it is raised.
+    fs::remove_file(&prompt).unwrap();
+    let past = round(found, "next");
+    assert_eq!(
+        (
+            past["round"].as_u64(),
+            past["next"].as_str(),
+            past["reviewed"].as_bool()
+        ),
+        (Some(6), Some("cap"), Some(false))
+    );
+    assert!(!prompt.exists(), "no reviewer ran");
+    let more = review(home, &work, &["--round", "more"]);
+    assert!(more.status.success(), "{}", text(&more.stderr));
+    let more: serde_json::Value = serde_json::from_slice(&more.stdout).unwrap();
+    assert_eq!(more["cap"], 15);
+    let carried = round(found, "next");
+    assert_eq!(
+        (
+            carried["round"].as_u64(),
+            carried["cap"].as_u64(),
+            carried["next"].as_str()
+        ),
+        (Some(6), Some(15), Some("triage"))
+    );
+}
+
+// In a hands-free tab the cap counts the branch's rounds across loops, so a
+// tab that starts the loop again never starts its count over; "10 more"
+// raises it, and the branch landing takes the count away.
+#[test]
+fn a_hands_free_branch_counts_its_rounds_across_loops() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let tabs = server.list()["sessions"][0]["tabs"].clone();
+    let tab = tabs.as_array().unwrap().last().unwrap().clone();
+    let id = tab["id"].as_str().unwrap().to_string();
+    let pane = tab["panes"][0]["id"].as_str().unwrap().to_string();
+    server.ok(&["set", "-t", &id, "@autopilot_handsfree", "1"]);
+
+    let tmp = TempDir::new("cr-rounds");
+    let home = tmp.path();
+    let work = clone(home);
+    fs::write(work.join("a.txt"), "a\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "Pushed already"]);
+    git(home, &work, &["push", "-q", "origin", "main"]);
+    fs::write(work.join("b.txt"), "b\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "A change"]);
+    let prompt = home.join("prompt.txt");
+    let found = r#"{"structured_output":{"summary":"no","findings":[{"title":"t","severity":"high","file":"b.txt","line":1,"body":"b"}]}}"#;
+    let answer = home.join("answer.json");
+    fs::write(&answer, found).unwrap();
+    Claude::new()
+        .answer(&format!(
+            "cat >{}\ncat {}",
+            sh_quote(&prompt.to_string_lossy()),
+            sh_quote(&answer.to_string_lossy())
+        ))
+        .install(&home.join("bin"));
+    let in_pane = |args: &[&str]| -> serde_json::Value {
+        let mut cmd = Command::new(BIN);
+        cmd.arg("codex-review")
+            .args(args)
+            .current_dir(&work)
+            .stdin(Stdio::null());
+        env(&mut cmd, home);
+        cmd.env("SWITCHBOARD", server.socket())
+            .env("SWITCHBOARD_PANE", &pane);
+        let out = cmd.output().unwrap();
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    let round = |step: &str| in_pane(&["--reviewer", "claude", "--no-rules", "--round", step]);
+    let record = work.join(".git/review-loop-rounds");
+
+    let first = round("start");
+    assert_eq!(
+        (first["round"].as_u64(), first["cap"].as_u64()),
+        (Some(1), Some(20))
+    );
+    let again = round("start");
+    assert_eq!(again["round"], 2, "a second loop goes on from the first");
+    assert_eq!(fs::read_to_string(&record).unwrap().trim(), "main 2 0");
+    assert_eq!(
+        server.ok(&["show", "-t", &id, "@tab_review_round"]).trim(),
+        "2 20",
+        "the sidebar's round and cap"
+    );
+
+    // At its cap, a new loop reviews nothing and waits on you.
+    fs::write(&record, "main 20 0\n").unwrap();
+    fs::remove_file(&prompt).unwrap();
+    let capped = round("start");
+    assert_eq!(
+        (
+            capped["round"].as_u64(),
+            capped["next"].as_str(),
+            capped["reviewed"].as_bool()
+        ),
+        (Some(21), Some("cap"), Some(false))
+    );
+    assert_eq!(round("next")["next"], "cap");
+    assert!(!prompt.exists(), "no reviewer ran");
+    assert_eq!(
+        server.ok(&["show", "-t", &id, "@tab_review_round"]).trim(),
+        "21 20 cap"
+    );
+
+    // "Run 10 more rounds" raises the branch's cap.
+    assert_eq!(in_pane(&["--round", "more"])["cap"], 30);
+    let more = round("next");
+    assert_eq!(
+        (
+            more["round"].as_u64(),
+            more["cap"].as_u64(),
+            more["next"].as_str()
+        ),
+        (Some(21), Some(30), Some("triage"))
+    );
+    assert_eq!(fs::read_to_string(&record).unwrap().trim(), "main 21 10");
+
+    // Landing the branch takes its count away.
+    let mut landed = Command::new(BIN);
+    landed
+        .args(["land-lock", "landed", "abc1234", "main"])
+        .current_dir(&work)
+        .stdin(Stdio::null());
+    env(&mut landed, home);
+    assert!(landed.status().unwrap().success());
+    assert!(!record.exists(), "a landing clears the count");
+    assert_eq!(round("start")["round"], 1);
+}
+
+// A review of another checkout (-C) keeps no count of rounds there.
+#[test]
+fn a_review_from_outside_keeps_no_count_of_rounds() {
+    let tmp = TempDir::new("cr-outside");
+    let home = tmp.path();
+    let work = clone(home);
+    fs::write(work.join("b.txt"), "b\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "A change"]);
+    let out = review(
+        home,
+        home,
+        &[
+            "-C",
+            work.to_str().unwrap(),
+            "--round",
+            "start",
+            "--dry-run",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
+    assert!(!work.join(".git/review-loop-rounds").exists());
+    assert!(!work.join(".git/review-loop-round").exists());
 }
 
 // A confirmation round whose findings are all low ends the loop: its lows
