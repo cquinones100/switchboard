@@ -150,6 +150,13 @@
     "default": true
   },
   {
+    "key": "sweep_pr_reviews",
+    "category": "Sessions",
+    "label": "Remove finished PR review checkouts",
+    "description": "Removes the checkout of someone else's PR made for review (wtpr --untrusted, M-p's Review a contributor's PR, in ~/.cache/switchboard/pr-review) once its PR is merged or closed (asked of GitHub while Settings' GitHub is on) or no tab has been in it for 14 days, and only when no tab has it open, no switchboard try runs on it and nothing in it is uncommitted or untracked: hourly and when a tab in one closes, never while you're away. Its try's home and its pr-review branch go with it, and a message counts what went and its size. Off, they stay until you remove them",
+    "default": true
+  },
+  {
     "key": "worktree_clone_build",
     "category": "Sessions",
     "label": "Start a worktree's build from the main clone's",
