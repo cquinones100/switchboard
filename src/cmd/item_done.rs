@@ -18,18 +18,18 @@
 //!    `--checked-in <branch>`, every change found there by reading it, as
 //!    queue-and-clean's "No PR" does when the default branch has changed the
 //!    same files since a squash;
-//! 2. ticks the item the branch was started for, which `wtn` keeps as
+//! 2. ticks the item the branch was started for, which `wt` keeps as
 //!    `branch.<branch>.wtnItem` (`<note's ID>: <item's first line>`), in
 //!    the note found by its ID wherever it is now, with an indented
 //!    `Done: <hash>, <took>[, landed without asking]. <says>` line under it
 //!    (`Done: <hash>, already on <branch>. <says>` for an item found done),
 //!    moved under the unticked items as Notes moves one
 //!    (`format::toggle_check`), under the note's ID lock, so the app takes it
-//!    in as any change made from outside; a branch `wtn` didn't start has
+//!    in as any change made from outside; a branch `wt` didn't start has
 //!    no item, nor one started from a GitHub issue, and one already ticked
 //!    is left as it is;
 //! 3. with `--close-issue` (passed once the landing's question named it, or
-//!    for a landing made without asking), closes the GitHub issue `wtn
+//!    for a landing made without asking), closes the GitHub issue `wt
 //!    --issue` started the branch from (its `branch.<branch>.wtnIssue`;
 //!    never one a branch's name alone suggests, which may be another
 //!    tracker's number), whoever's tab it was, autopilot's or yours: once the
@@ -44,7 +44,7 @@
 //!    since a squash leaves it looking unmerged).
 //!
 //! The tick comes before the removal, so an item is never unticked with
-//! its worktree gone, which autopilot and `wtn` would take as free. It
+//! its worktree gone, which autopilot and `wt` would take as free. It
 //! stops at the first step that fails, saying why, and leaves the rest:
 //! nothing is removed when the item can't be ticked. Moving the tab back
 //! to the main clone stays queue-and-clean's last step (`switchboard
@@ -340,7 +340,7 @@ fn close_issue(
     }
 }
 
-/// The GitHub issue `wtn --issue` started `branch` from, its `wtnIssue`.
+/// The GitHub issue `wt --issue` started `branch` from, its `wtnIssue`.
 fn issue_of(main: &Path, branch: &str) -> Option<(Repo, u64)> {
     issues::parse_reference(&crate::cmd::worktree_from_issue::issue_of_branch(
         main, branch,
@@ -376,7 +376,7 @@ fn same(a: &Path, b: &Path) -> bool {
 }
 
 /// The ref of the branch the work lands on: `--already-on`'s, else the
-/// target `wtn` cut the branch from, else the default branch, each as its
+/// target `wt` cut the branch from, else the default branch, each as its
 /// remote branch when it tracks one (fetched and pruned first when it isn't
 /// `fetched`, the remote already fetched) and the local branch otherwise.
 fn lands_on(
@@ -705,7 +705,7 @@ mod tests {
         std::fs::write(wt.join("copy.txt"), "copied\n").unwrap();
         git(&wt, &["add", "copy.txt"]);
         git(&wt, &["commit", "-q", "-m", "Copy the reply"]);
-        // Renamed since wtn claimed it: found by its ID.
+        // Renamed since wt claimed it: found by its ID.
         std::fs::write(notes.join("Work renamed.md"), NOTE).unwrap();
         git(
             &main,
@@ -944,8 +944,8 @@ mod tests {
     }
 
     #[test]
-    fn an_issue_wtn_recorded_is_closed_and_one_that_fails_leaves_the_rest_to_go_on() {
-        let (dir, main, wt, notes) = issue_setup("wtn-issue", "issue/7-x");
+    fn an_issue_wt_recorded_is_closed_and_one_that_fails_leaves_the_rest_to_go_on() {
+        let (dir, main, wt, notes) = issue_setup("wt-issue", "issue/7-x");
         git(
             &main,
             &["config", "branch.issue/7-x.wtnIssue", "other/thing#9"],
@@ -969,7 +969,7 @@ mod tests {
 
     #[test]
     fn a_branch_named_for_an_issue_closes_nothing_and_one_not_asked_to_is_left_open() {
-        // Named like one, but no issue wtn recorded: another tracker's number.
+        // Named like one, but no issue wt recorded: another tracker's number.
         let (dir, _main, wt, notes) = issue_setup("named", "issue/42-fix-login");
         let given = Given {
             close_issue: true,

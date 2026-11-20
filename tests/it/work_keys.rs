@@ -2,8 +2,9 @@
 //! test server: M-t's directory list and the Claude tab it opens, M-W's
 //! tickets each in a tab of its own running `wt`, M-B's branch made in a
 //! worktree by `wtb`, and M-o's past sessions resumed. A stand-in `claude`
-//! in the test home's `bin` says where it ran, and Linear is an address
-//! nothing answers on, so nothing leaves the machine.
+//! in the test home's `bin` says where it ran, and Linear and GitHub are an
+//! address nothing answers on, so nothing leaves the machine; `wt` alone
+//! asks in its own terminal, a pane's.
 
 use crate::common;
 
@@ -39,6 +40,8 @@ fn world() -> (TestServer, PathBuf, common::TestClient) {
     let server = TestServer::start_with_env(&[
         ("LINEAR_API_KEY", "lin_test"),
         ("SWITCHBOARD_LINEAR_API", "http://127.0.0.1:9"),
+        ("SWITCHBOARD_GITHUB_API", "http://127.0.0.1:9"),
+        ("SWITCHBOARD_GITHUB_GRAPHQL", "http://127.0.0.1:9"),
     ]);
     Claude::new()
         .answer("echo \"$PWD $*\" >> \"$HOME/claude-ran\"")
@@ -199,22 +202,20 @@ fn m_o_lists_a_past_session_and_resumes_it_in_a_new_tab() {
 #[test]
 fn a_key_of_a_service_turned_off_shows_its_tip_once_and_does_nothing() {
     let (server, _repo, mut client) = world();
-    common::write_settings(&server.home, serde_json::json!({"linear": false}));
+    common::write_settings(&server.home, serde_json::json!({"github": false}));
     // The server reads the file again on its next tick.
     std::thread::sleep(Duration::from_millis(2500) * common::patience());
-    client.send(b"\x1bW");
-    client.wait_text("Linear is off in Settings.");
-    // Any key closes the tip and goes on; M-W again does nothing at all.
-    client.send(b"\x1bW");
+    client.send(b"\x1bv");
+    client.wait_text("GitHub is off in Settings.");
+    // Any key closes the tip and goes on; the key again does nothing at all.
+    client.send(b"\x1bv");
     client.wait_for("the tip to close", |s| {
-        !s.iter().any(|l| l.contains("Linear is off"))
+        !s.iter().any(|l| l.contains("GitHub is off"))
     });
     std::thread::sleep(Duration::from_millis(500));
     let screen = client.screen();
     assert!(
-        !screen
-            .iter()
-            .any(|l| l.contains("Open in >") || l.contains("Linear is off")),
+        !screen.iter().any(|l| l.contains("GitHub is off")),
         "{screen:#?}"
     );
 }
@@ -333,7 +334,7 @@ fn notes_gw_press_opens_a_tab_for_the_item_on_its_line_and_offers_it_the_next_ti
     client.send(b"n");
     assert_eq!(tabs(&server).len(), before + 1);
 
-    // A tab /wtn opened sets no title: its branch's wtnItem names the item.
+    // A tab /wt opened sets no title: its branch's wtnItem names the item.
     let worktree = server.home.join("wt-login");
     git(
         &repo,
@@ -896,7 +897,7 @@ fn with_ux2_gw_opens_the_work_on_this_item_box() {
 /// The palette's "Start work on a GitHub issue": the repository, then its
 /// open issues from GitHub (a stand-in, as strict as the real one), the
 /// ones assigned to you first, each group the newest first; the one picked,
-/// or a number typed, gets a tab running `wtn --issue` on it.
+/// or a number typed, gets a tab running `wt --issue` on it.
 #[cfg(feature = "net")]
 #[test]
 fn working_on_a_github_issue_lists_its_open_issues_yours_first_and_opens_the_picked_ones_tab() {
@@ -980,7 +981,7 @@ fn working_on_a_github_issue_lists_its_open_issues_yours_first_and_opens_the_pic
     client.send(b"\r");
     wait("the issue's tab", || tabs(&server).len() == before + 1);
     let tab = tabs(&server).last().unwrap().clone();
-    // No name of its own: its branch names it once wtn has made it.
+    // No name of its own: its branch names it once wt has made it.
     assert_eq!(tab["options"]["@tab_name"], Value::Null);
     assert_eq!(tab["current"], true, "in front, as a tab you asked for");
 
@@ -996,4 +997,95 @@ fn working_on_a_github_issue_lists_its_open_issues_yours_first_and_opens_the_pic
     wait("the typed issue's tab", || {
         tabs(&server).len() == before + 2
     });
+}
+
+/// The world's repository named `o/r` on GitHub by its origin, which git
+/// reaches as a bare repository beside it (`insteadOf`), so nothing leaves
+/// the machine, keeping its work in a note's checklist, and a note of two
+/// items.
+fn keeps_its_work_in_notes(server: &TestServer, repo: &Path) {
+    let origin = server.home.join("origin.git");
+    git(
+        &server.home,
+        &["init", "-q", "--bare", origin.to_str().unwrap()],
+    );
+    git(
+        repo,
+        &["remote", "add", "origin", "https://github.com/o/r.git"],
+    );
+    git(
+        repo,
+        &[
+            "config",
+            &format!("url.{}.insteadOf", origin.display()),
+            "https://github.com/o/r.git",
+        ],
+    );
+    git(repo, &["push", "-q", "origin", "main"]);
+    let config = server.home.join(".config/switchboard");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("repos.json"),
+        r#"{ "o/r": { "tickets": "notes", "landing": "direct" } }"#,
+    )
+    .unwrap();
+    let notes = server.home.join("Notes");
+    std::fs::create_dir_all(&notes).unwrap();
+    std::fs::write(
+        notes.join("Plan.md"),
+        "# Plan\n\n- [ ] Fix the login\n- [ ] Speed up the build\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn m_shift_w_lists_the_work_from_where_the_repository_keeps_it() {
+    let (server, repo, mut client) = world();
+    keeps_its_work_in_notes(&server, &repo);
+    client.send(b"\x1bW");
+    client.wait_text("Open in >");
+    client.send(b"\r");
+    // Its tickets are a note's items: the note first, as M-I asks.
+    client.wait_text("note>");
+    client.send(b"\r");
+    client.wait_text("Every item listed (2)");
+    client.wait_text("Speed up the build");
+}
+
+#[test]
+fn wt_alone_asks_in_its_own_terminal_for_the_work_and_starts_the_one_picked() {
+    let (server, repo, _client) = world();
+    keeps_its_work_in_notes(&server, &repo);
+    let out = server.ok(&[
+        "new-tab",
+        "-d",
+        "-c",
+        repo.to_str().unwrap(),
+        "--",
+        common::BIN,
+        "worktree-from-ticket",
+        "--no-claude",
+    ]);
+    let pane = out.split_whitespace().nth(1).unwrap().to_string();
+    let screen = |server: &TestServer| server.ok(&["capture-pane", "-t", &pane]);
+    wait("the note asked", || screen(&server).contains("Which note"));
+    server.ok(&["send-keys", "-t", &pane, "Enter"]);
+    wait("its items listed", || {
+        screen(&server).contains("Work on Plan's items")
+    });
+    server.ok(&["send-keys", "-t", &pane, "-l", "speed"]);
+    wait("the item matched", || {
+        screen(&server).contains("Speed up the build") && !screen(&server).contains("Fix the login")
+    });
+    server.ok(&["send-keys", "-t", &pane, "Enter"]);
+    let worktree = repo.join(".claude/worktrees/note-speed-up-the-build");
+    let deadline = common::deadline(Duration::from_secs(15));
+    while !worktree.is_dir() {
+        assert!(
+            Instant::now() < deadline,
+            "no worktree: {}",
+            screen(&server)
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }

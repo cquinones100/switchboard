@@ -212,7 +212,7 @@ pub fn commands(from_list: bool, in_note: bool, ux2: bool) -> Vec<Command> {
             Act::FoldHere,
         ));
         list.push(command(
-            "Start work on this item in a new tab (wtn)",
+            "Start work on this item in a new tab (wt)",
             "gw",
             "tabs",
             Act::WorkOnItem,

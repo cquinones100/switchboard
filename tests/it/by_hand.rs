@@ -87,7 +87,7 @@ fn a_respawn_typed_in_a_pane_starts_only_the_worktree_commands_or_claude_resumin
 
     let (code, _, err) = typed(program(&[&mine, "--", "sh", "-c", "echo pwned"]));
     assert_eq!(code, 1, "{err}");
-    assert!(err.contains("starts only wt, wtn, wtb or claude"), "{err}");
+    assert!(err.contains("starts only wt, wtb or claude"), "{err}");
     let (code, _, err) = typed(program(&[&other, "--", "claude", "--resume", "abc"]));
     assert_eq!(code, 1, "{err}");
     assert!(err.contains("its own tab only"), "{err}");
@@ -133,7 +133,7 @@ fn a_tab_opening_a_worktrees_work_takes_land_from_the_setting() {
     let on = TestServer::start_with_settings(r#"{ "land_without_asking": true }"#);
     let mut client = on.attach(100, 30);
     client.wait_text("$");
-    for function in ["wt", "wtn", "wtb"] {
+    for function in ["wt", "wtb"] {
         let tab = open(&on, function);
         assert_eq!(shown(&on, &tab, "@land"), "1", "{function}");
     }
@@ -141,7 +141,7 @@ fn a_tab_opening_a_worktrees_work_takes_land_from_the_setting() {
     assert_eq!(shown(&on, &review, "@land"), "", "a PR's review isn't work");
     let (plain, pane) = new_tab(&on, "plain");
     assert_eq!(shown(&on, &plain, "@land"), "", "nor a plain tab");
-    // Handed a worktree's work, as /wtn hands its tab over.
+    // Handed a worktree's work, as /wt hands its tab over.
     let mut words = vec![
         "respawn-pane".to_string(),
         "-k".into(),
@@ -149,7 +149,7 @@ fn a_tab_opening_a_worktrees_work_takes_land_from_the_setting() {
         pane.clone(),
         "--".into(),
     ];
-    words.extend(running("wtn"));
+    words.extend(running("wt"));
     let words: Vec<&str> = words.iter().map(String::as_str).collect();
     on.ok(&words);
     assert_eq!(shown(&on, &plain, "@land"), "1", "handed the work");
@@ -179,6 +179,6 @@ fn a_tab_opening_a_worktrees_work_takes_land_from_the_setting() {
     let off = TestServer::start();
     let mut client = off.attach(100, 30);
     client.wait_text("$");
-    let tab = open(&off, "wtn");
+    let tab = open(&off, "wt");
     assert_eq!(shown(&off, &tab, "@land"), "", "the setting off");
 }

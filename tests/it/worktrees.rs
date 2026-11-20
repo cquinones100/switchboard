@@ -73,7 +73,7 @@ impl World {
             "GITHUB_TOKEN",
             "LINEAR_API_KEY",
             "WT_PROMPT",
-            "WTN_NOTE",
+            "WT_NOTE",
             // Any set, cargo builds elsewhere, and a
             // worktree gets no clone of the main clone's.
             "CARGO_TARGET_DIR",
@@ -537,7 +537,7 @@ fn every_worktree_command_prints_its_shell_function() {
         ("worktree-from-ticket", "wt()"),
         ("worktree-from-pr", "wtpr()"),
         ("worktree-from-branch", "wtb()"),
-        ("worktree-from-note", "wtn()"),
+        ("worktree-from-ticket", "wt()"),
         ("worktree-resume", "wtr()"),
     ] {
         for shell in ["zsh", "bash"] {
@@ -1576,12 +1576,12 @@ fn done_lists_the_worktrees_whose_ticket_is_finished_and_removes_nothing_without
     );
 }
 
-// ── worktree-from-note ──────────────────────────────────────────────────────
+// ── worktree-from-ticket ──────────────────────────────────────────────────────
 
 #[test]
 fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and_a_second_run_reusing_it()
  {
-    let w = World::new("wtn");
+    let w = World::new("wt");
     let repo = w.path("repo");
     let notes = w.path("Notes");
     std::fs::create_dir_all(notes.join("Plans")).unwrap();
@@ -1602,7 +1602,7 @@ fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and
     w.ok(
         &repo,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--cd-file",
             cd.to_str().unwrap(),
@@ -1653,7 +1653,7 @@ fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and
     w.ok(
         &repo,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--cd-file",
             cd.to_str().unwrap(),
@@ -1694,7 +1694,7 @@ fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and
     let clash = w.run(
         &repo,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--note",
             "Work Notes",
@@ -1723,7 +1723,7 @@ fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and
     let elsewhere = w.run(
         &repo,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--cd-file",
             cd.to_str().unwrap(),
@@ -1790,7 +1790,7 @@ fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and
     let taken = w.run(
         &repo,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--note",
             "Work Notes",
@@ -1813,7 +1813,7 @@ fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and
     w.ok(
         &worktree,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--cd-file",
             cd.to_str().unwrap(),
@@ -1833,7 +1833,7 @@ fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and
     w.ok(
         &repo,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--note",
             "Work Notes",
@@ -1844,7 +1844,7 @@ fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and
     w.ok(
         &repo,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--note",
             "Work Notes",
@@ -1855,7 +1855,7 @@ fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and
     let twice = w.run(
         &repo,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--note",
             "Work Notes",
@@ -1868,7 +1868,7 @@ fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and
     let ticked = w.run(
         &repo,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--note",
             "Work Notes",
@@ -1881,7 +1881,7 @@ fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and
     let indented = w.run(
         &repo,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--note",
             "Work Notes",
@@ -1893,7 +1893,7 @@ fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and
     let outside = w.run(
         &repo,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--note",
             "../repo/x",
@@ -1911,7 +1911,7 @@ fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and
 #[test]
 fn with_an_origin_an_items_branch_starts_from_origins_default_branch_as_last_fetched_when_origin_cant_be_reached_and_with_none_stops()
  {
-    let mut w = World::new("wtn-origin");
+    let mut w = World::new("wt-origin");
     w.set("SWITCHBOARD_FETCH_RETRY_MS", "0");
     let notes = w.path("Notes");
     std::fs::create_dir_all(&notes).unwrap();
@@ -1936,7 +1936,7 @@ fn with_an_origin_an_items_branch_starts_from_origins_default_branch_as_last_fet
     w.ok(
         &repo,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--cd-file",
             cd.to_str().unwrap(),
@@ -1958,7 +1958,7 @@ fn with_an_origin_an_items_branch_starts_from_origins_default_branch_as_last_fet
     let offline = w.run(
         &repo,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--cd-file",
             cd.to_str().unwrap(),
@@ -1990,7 +1990,7 @@ fn with_an_origin_an_items_branch_starts_from_origins_default_branch_as_last_fet
     let never_fetched = w.run(
         &repo,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--note",
             "Work",
@@ -2012,7 +2012,7 @@ fn the_items_a_worktree_works_on_are_left_out_until_it_is_removed_and_the_queue_
     use std::collections::HashSet;
     use switchboard::cmd::worktree_from_note::{Item, queue, unclaimed};
 
-    let w = World::new("wtn-queue");
+    let w = World::new("wt-queue");
     let notes = w.path("Notes");
     std::fs::create_dir_all(notes.join("Work")).unwrap();
     let note = notes.join("Work/Plan's Notes.md");
@@ -2024,7 +2024,7 @@ fn the_items_a_worktree_works_on_are_left_out_until_it_is_removed_and_the_queue_
     w.ok(
         &repo,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--note",
             "Work/Plan's Notes",
@@ -2035,7 +2035,7 @@ fn the_items_a_worktree_works_on_are_left_out_until_it_is_removed_and_the_queue_
     w.ok(
         &repo,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--note",
             "Other",
@@ -2108,7 +2108,7 @@ fn the_items_a_worktree_works_on_are_left_out_until_it_is_removed_and_the_queue_
     w.ok(
         &repo,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--note",
             "Work",
@@ -2118,7 +2118,7 @@ fn the_items_a_worktree_works_on_are_left_out_until_it_is_removed_and_the_queue_
     );
     let taken = |skip: &[&str], ready| {
         let skip: HashSet<String> = skip.iter().map(|s| s.to_string()).collect();
-        let claims = w.path("state/wtn-claims.tsv");
+        let claims = w.path("state/wt-claims.tsv");
         rows(queue(&notes, &repo, "Work.md", &skip, ready, false, &claims).unwrap())
     };
     assert_eq!(
@@ -2143,13 +2143,13 @@ fn the_items_a_worktree_works_on_are_left_out_until_it_is_removed_and_the_queue_
         "the skipped ones left out"
     );
 
-    // An item wtn started is taken for half an hour, even once its worktree
+    // An item wt started is taken for half an hour, even once its worktree
     // and branch are gone, since queue-and-clean may remove them a moment
     // before it ticks the item.
     w.ok(
         &repo,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--note",
             "Work",
@@ -2157,7 +2157,7 @@ fn the_items_a_worktree_works_on_are_left_out_until_it_is_removed_and_the_queue_
             "3",
         ],
     );
-    let claims = read(&w.path("state/wtn-claims.tsv"));
+    let claims = read(&w.path("state/wt-claims.tsv"));
     let work_id = switchboard::notes::id::of_file(&notes.join("Work.md")).unwrap();
     assert!(
         claims.contains(&format!("\t{work_id}\tPlain\n")),
@@ -2173,7 +2173,7 @@ fn the_items_a_worktree_works_on_are_left_out_until_it_is_removed_and_the_queue_
 }
 
 // test/worktree-from-note.test.js's "a claim names its note by ID, so a
-// note renamed with mv keeps its item out of the picker and wtn reuses the
+// note renamed with mv keeps its item out of the picker and wt reuses the
 // claim; claims from before IDs are brought to them once, by path or by
 // title".
 #[test]
@@ -2182,7 +2182,7 @@ fn a_claim_names_its_note_by_id_so_a_renamed_notes_item_stays_taken_and_older_cl
     use switchboard::cmd::worktree_from_note::{Item, unclaimed};
     use switchboard::notes::id;
 
-    let w = World::new("wtn-ids");
+    let w = World::new("wt-ids");
     let notes = w.path("Notes");
     std::fs::create_dir_all(&notes).unwrap();
     std::fs::write(
@@ -2204,11 +2204,11 @@ fn a_claim_names_its_note_by_id_so_a_renamed_notes_item_stays_taken_and_older_cl
         .trim()
         .to_string()
     };
-    let wtn = |note: &str, item: &str| {
+    let wt = |note: &str, item: &str| {
         w.run(
             &repo,
             &[
-                "worktree-from-note",
+                "worktree-from-ticket",
                 "--no-claude",
                 "--note",
                 note,
@@ -2218,7 +2218,7 @@ fn a_claim_names_its_note_by_id_so_a_renamed_notes_item_stays_taken_and_older_cl
         )
     };
 
-    assert!(wtn("Work", "3").status.success());
+    assert!(wt("Work", "3").status.success());
     let work_id = id::of_file(&notes.join("Work.md")).unwrap();
     assert_eq!(
         config("branch.note/add-search.wtnItem"),
@@ -2246,10 +2246,10 @@ fn a_claim_names_its_note_by_id_so_a_renamed_notes_item_stays_taken_and_older_cl
         "and with spaces an editor left after its ID line"
     );
     std::fs::write(&renamed, read(&renamed).replace("-->  \n", "-->\n")).unwrap();
-    let again = wtn("Projects/Renamed", "3");
+    let again = wt("Projects/Renamed", "3");
     assert!(
         again.status.success(),
-        "wtn on it reuses the claim rather than failing: {}",
+        "wt on it reuses the claim rather than failing: {}",
         stderr(&again)
     );
     assert!(stderr(&again).contains("reusing it"), "{}", stderr(&again));
@@ -2303,7 +2303,7 @@ fn a_claim_names_its_note_by_id_so_a_renamed_notes_item_stays_taken_and_older_cl
         ],
     );
     std::fs::write(notes.join("More.md"), "# More\n\n- [ ] Something\n").unwrap();
-    let run = wtn("More", "3");
+    let run = wt("More", "3");
     assert!(run.status.success(), "{}", stderr(&run));
     let id_of = |name: &str| id::of_file(&notes.join(name)).unwrap();
     assert_eq!(
@@ -2327,12 +2327,12 @@ fn a_claim_names_its_note_by_id_so_a_renamed_notes_item_stays_taken_and_older_cl
         "not the unrelated note at its old path, but the one holding its item"
     );
     assert!(stderr(&run).contains("Lost.md: Lost item"), "and listed");
-    let later = wtn("More", "3");
+    let later = wt("More", "3");
     assert!(!stderr(&later).contains("Lost.md"), "once");
-    // The lost note back at its path: wtn takes the old claim as its item's
+    // The lost note back at its path: wt takes the old claim as its item's
     // and brings it to the ID.
     std::fs::write(notes.join("Lost.md"), "# Lost\n\n- [ ] Lost item\n").unwrap();
-    let back = wtn("Lost", "3");
+    let back = wt("Lost", "3");
     assert!(
         back.status.success(),
         "an old claim by path is still its item's: {}",
@@ -2354,7 +2354,7 @@ fn a_claim_names_its_note_by_id_so_a_renamed_notes_item_stays_taken_and_older_cl
         .position(|l| l == "- [ ] Add search!")
         .unwrap()
         + 1;
-    let clash = wtn("More", &line.to_string());
+    let clash = wt("More", &line.to_string());
     assert!(
         stderr(&clash).contains("is for another item: \"Add search\" in Work."),
         "{}",
@@ -2362,12 +2362,12 @@ fn a_claim_names_its_note_by_id_so_a_renamed_notes_item_stays_taken_and_older_cl
     );
 }
 
-// test/worktree-from-note.test.js's "several wtn started at once on old
+// test/worktree-from-note.test.js's "several wt started at once on old
 // path-form claims bring them to IDs once, none of them failing", here
 // several threads at once.
 #[test]
 fn several_bringing_old_claims_to_ids_at_once_do_it_once_and_none_fails() {
-    let w = World::new("wtn-migrate-race");
+    let w = World::new("wt-migrate-race");
     let notes = w.path("Notes");
     std::fs::create_dir_all(&notes).unwrap();
     let repo = w.path("repo");
@@ -2459,7 +2459,7 @@ fn wt_s_claude_function_takes_the_plugin_as_the_setting_says_at_each_launch() {
     common::stand_in::assert_none_refused(&bin);
 }
 
-// Autopilot's target: `wtn --target` cuts the item's branch from that
+// Autopilot's target: `wt --target` cuts the item's branch from that
 // branch rather than the default one, from the remote branch it tracks as
 // fetched (refusing a local one ahead of it, whose commits the landing would
 // never push), a branch only origin has made a local one tracking it, and
@@ -2467,7 +2467,7 @@ fn wt_s_claude_function_takes_the_plugin_as_the_setting_says_at_each_launch() {
 // tracks, or none for a local-only one.
 #[test]
 fn an_items_branch_is_cut_from_its_target_which_landing_names_with_what_it_tracks() {
-    let w = World::new("wtn-target");
+    let w = World::new("wt-target");
     let notes = w.path("Notes");
     std::fs::create_dir_all(&notes).unwrap();
     std::fs::write(
@@ -2489,12 +2489,12 @@ fn an_items_branch_is_cut_from_its_target_which_landing_names_with_what_it_track
     // A branch on origin alone.
     w.git(&dev, &["push", "-q", "origin", "local-dev:shared"]);
 
-    let wtn = |item: &str, target: &str| {
+    let wt = |item: &str, target: &str| {
         let cd = w.path("cd");
         w.ok(
             &repo,
             &[
-                "worktree-from-note",
+                "worktree-from-ticket",
                 "--no-claude",
                 "--cd-file",
                 cd.to_str().unwrap(),
@@ -2530,7 +2530,7 @@ fn an_items_branch_is_cut_from_its_target_which_landing_names_with_what_it_track
     let refused = w.run(
         &repo,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--note",
             "Work",
@@ -2552,7 +2552,7 @@ fn an_items_branch_is_cut_from_its_target_which_landing_names_with_what_it_track
     assert!(!w.git(&repo, &["worktree", "list"]).contains("first-thing"));
     // The default branch named as the target is the default branch, with
     // no target recorded.
-    let named_default = wtn("8", "main");
+    let named_default = wt("8", "main");
     assert!(w.git_fails(&repo, &["config", "branch.note/sixth-thing.wtnTarget"]));
     assert_eq!(
         w.git(&named_default, &["rev-parse", "HEAD"]),
@@ -2560,7 +2560,7 @@ fn an_items_branch_is_cut_from_its_target_which_landing_names_with_what_it_track
     );
     landing("direct");
 
-    let first = wtn("3", "local-dev");
+    let first = wt("3", "local-dev");
     assert_eq!(w.git(&first, &["rev-parse", "HEAD"]), dev_tip);
     assert_eq!(
         w.git(&repo, &["config", "branch.note/first-thing.wtnTarget"]),
@@ -2579,13 +2579,13 @@ fn an_items_branch_is_cut_from_its_target_which_landing_names_with_what_it_track
     let answer = serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap();
     assert_eq!(answer["started"], started);
     assert_eq!(answer["took"], "<1m");
-    // A branch wtn didn't start has neither.
+    // A branch wt didn't start has neither.
     let out = w.run(&repo, &["landing", "--json"]);
     let answer = serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap();
     assert_eq!(answer["started"], serde_json::Value::Null);
     assert_eq!(answer["took"], serde_json::Value::Null);
 
-    let second = wtn("4", "shared");
+    let second = wt("4", "shared");
     assert_eq!(w.git(&second, &["rev-parse", "HEAD"]), dev_tip);
     assert_eq!(
         landing_target(&second),
@@ -2600,7 +2600,7 @@ fn an_items_branch_is_cut_from_its_target_which_landing_names_with_what_it_track
     );
     w.git(&dev, &["push", "-q", "origin", "local-dev:shared"]);
     let origin_tip = w.git(&dev, &["rev-parse", "HEAD"]);
-    let moved = wtn("6", "shared");
+    let moved = wt("6", "shared");
     assert_eq!(w.git(&moved, &["rev-parse", "HEAD"]), origin_tip);
 
     // The local shared with a commit origin lacks: refused, since the
@@ -2620,7 +2620,7 @@ fn an_items_branch_is_cut_from_its_target_which_landing_names_with_what_it_track
     let ahead = w.run(
         &repo,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--note",
             "Work",
@@ -2642,7 +2642,7 @@ fn an_items_branch_is_cut_from_its_target_which_landing_names_with_what_it_track
     w.ok(
         &repo,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--cd-file",
             cd.to_str().unwrap(),
@@ -2658,7 +2658,7 @@ fn an_items_branch_is_cut_from_its_target_which_landing_names_with_what_it_track
     let missing = w.run(
         &repo,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--note",
             "Work",
@@ -2675,9 +2675,9 @@ fn an_items_branch_is_cut_from_its_target_which_landing_names_with_what_it_track
     );
 }
 
-// ── wtn by a ticket provider's number ───────────────────────────────────────
+// ── wt by a ticket provider's number ───────────────────────────────────────
 
-/// GitHub as `wtn <number>` asks it for issue 12 of o/r: open, with no
+/// GitHub as `wt <number>` asks it for issue 12 of o/r: open, with no
 /// assignee or label, and no claim on it.
 fn issue_answer(request: &http::Request) -> Option<Reply> {
     if request.path() == "/repos/o/r/issues/12" {
@@ -2743,14 +2743,14 @@ fn issue_world_answering(
 }
 
 #[test]
-fn wtn_takes_an_issue_by_its_number_where_the_repository_keeps_its_work_in_github_issues() {
-    let (w, _fake, clone) = issue_world("wtn-issue", json!({ "tickets": "github" }));
+fn wt_takes_an_issue_by_its_number_where_the_repository_keeps_its_work_in_github_issues() {
+    let (w, _fake, clone) = issue_world("wt-issue", json!({ "tickets": "github" }));
     let cd = w.path("cd");
     let cd_arg = cd.to_str().unwrap();
     w.ok(
         &clone,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--cd-file",
             cd_arg,
@@ -2780,7 +2780,7 @@ fn wtn_takes_an_issue_by_its_number_where_the_repository_keeps_its_work_in_githu
         w.ok(
             &clone,
             &[
-                "worktree-from-note",
+                "worktree-from-ticket",
                 "--no-claude",
                 "--cd-file",
                 cd_arg,
@@ -2793,7 +2793,7 @@ fn wtn_takes_an_issue_by_its_number_where_the_repository_keeps_its_work_in_githu
     w.ok(
         &clone,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--cd-file",
             cd_arg,
@@ -2815,14 +2815,14 @@ fn wtn_takes_an_issue_by_its_number_where_the_repository_keeps_its_work_in_githu
     );
     server.ok(&["set", "-t", &tab_id, "@autopilot", "1"]);
     let mut in_tab = World {
-        dir: TempDir::new("wtn-issue-tab"),
+        dir: TempDir::new("wt-issue-tab"),
         env: w.env.clone(),
     };
     in_tab.set("SWITCHBOARD", server.socket().to_str().unwrap());
     in_tab.set("SWITCHBOARD_PANE", &pane);
     let refused = in_tab.run(
         &clone,
-        &["worktree-from-note", "--no-claude", "--issue", "12"],
+        &["worktree-from-ticket", "--no-claude", "--issue", "12"],
     );
     assert_eq!(refused.status.code(), Some(1));
     assert!(
@@ -2831,29 +2831,30 @@ fn wtn_takes_an_issue_by_its_number_where_the_repository_keeps_its_work_in_githu
         stderr(&refused)
     );
 
-    let missing = w.run(&clone, &["worktree-from-note", "--no-claude", "13"]);
+    let missing = w.run(&clone, &["worktree-from-ticket", "--no-claude", "13"]);
     assert_eq!(missing.status.code(), Some(1));
     assert!(
         stderr(&missing).contains("o/r#13 isn't an open issue of o/r"),
         "{}",
         stderr(&missing)
     );
-    let linear = w.run(&clone, &["worktree-from-note", "--no-claude", "ABC-12"]);
+    // A Linear ticket is Linear's whatever the repository keeps, asked of
+    // Linear (which this test has no key for) rather than refused.
+    let linear = w.run(&clone, &["worktree-from-ticket", "--no-claude", "ABC-12"]);
     assert!(
-        stderr(&linear)
-            .contains("ABC-12 is a Linear ticket, and o/r keeps its work in GitHub issues"),
+        stderr(&linear).contains("No Linear API key"),
         "{}",
         stderr(&linear)
     );
 }
 
-/// A tab working on an issue `wtn --issue` started is named
+/// A tab working on an issue `wt --issue` started is named
 /// `<number>: <title>` from its branch, the title's kind left out, and a
 /// name given by hand wins over it.
 #[test]
 fn an_issues_tab_is_named_by_its_number_and_title_until_renamed_by_hand() {
     let (w, fake, clone) = issue_world_answering(
-        "wtn-issue-name",
+        "wt-issue-name",
         json!({ "tickets": "github" }),
         |request| {
             if request.path() == "/repos/o/r/issues/12" {
@@ -2870,7 +2871,7 @@ fn an_issues_tab_is_named_by_its_number_and_title_until_renamed_by_hand() {
     w.ok(
         &clone,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--cd-file",
             cd.to_str().unwrap(),
@@ -2913,8 +2914,8 @@ fn an_issues_tab_is_named_by_its_number_and_title_until_renamed_by_hand() {
 }
 
 #[test]
-fn wtn_starts_only_work_from_the_source_autopilot_takes_this_repositorys_work_from() {
-    let (w, _fake, clone) = issue_world("wtn-source", json!({ "tickets": "github" }));
+fn wt_starts_only_work_from_the_source_autopilot_takes_this_repositorys_work_from() {
+    let (w, _fake, clone) = issue_world("wt-source", json!({ "tickets": "github" }));
     let notes = w.path("Notes");
     std::fs::create_dir_all(&notes).unwrap();
     std::fs::write(
@@ -2936,7 +2937,7 @@ fn wtn_starts_only_work_from_the_source_autopilot_takes_this_repositorys_work_fr
         .unwrap();
     };
     let item = [
-        "worktree-from-note",
+        "worktree-from-ticket",
         "--no-claude",
         "--note",
         "Work",
@@ -2948,14 +2949,14 @@ fn wtn_starts_only_work_from_the_source_autopilot_takes_this_repositorys_work_fr
     let refused = w.run(&clone, &item);
     assert_eq!(refused.status.code(), Some(1));
     assert!(
-        stderr(&refused).contains("Autopilot takes this repository's work from GitHub issues; open an issue with `wtn --issue <number>`, or switch the source to the note in autopilot's settings"),
+        stderr(&refused).contains("Autopilot takes this repository's work from GitHub issues; open an issue with `wt --issue <number>`, or switch the source to the note in autopilot's settings"),
         "{}",
         stderr(&refused)
     );
 
     mode("note");
     for asked in [&["--issue", "12"][..], &["12"][..]] {
-        let mut args = vec!["worktree-from-note", "--no-claude"];
+        let mut args = vec!["worktree-from-ticket", "--no-claude"];
         args.extend(asked);
         let refused = w.run(&clone, &args);
         assert_eq!(refused.status.code(), Some(1), "{asked:?}");
@@ -2969,9 +2970,10 @@ fn wtn_starts_only_work_from_the_source_autopilot_takes_this_repositorys_work_fr
 }
 
 #[test]
-fn wtn_by_a_number_is_refused_where_the_repository_has_no_ticket_provider() {
-    let (w, fake, clone) = issue_world("wtn-unset", json!({ "landing": "pr" }));
-    let out = w.run(&clone, &["worktree-from-note", "--no-claude", "12"]);
+fn wt_by_a_number_is_refused_where_the_repository_has_no_ticket_provider_but_an_issues_hash_number_is_taken()
+ {
+    let (w, fake, clone) = issue_world("wt-unset", json!({ "landing": "pr" }));
+    let out = w.run(&clone, &["worktree-from-ticket", "--no-claude", "12"]);
     assert_eq!(out.status.code(), Some(1));
     assert!(
         stderr(&out).contains("o/r has no ticket provider"),
@@ -2979,19 +2981,46 @@ fn wtn_by_a_number_is_refused_where_the_repository_has_no_ticket_provider() {
         stderr(&out)
     );
     assert!(fake.seen().is_empty(), "nothing asked of GitHub");
+
+    // With no work given and no terminal to ask in, nothing is picked.
+    let alone = w.run(&clone, &["worktree-from-ticket", "--no-claude"]);
+    assert_eq!(alone.status.code(), Some(1));
+    assert!(
+        stderr(&alone).contains("no work given, and no terminal to ask in"),
+        "{}",
+        stderr(&alone)
+    );
+
+    // `#12` is a GitHub issue whatever the repository's tickets say.
+    let cd = w.path("cd");
+    w.ok(
+        &clone,
+        &[
+            "worktree-from-ticket",
+            "--no-claude",
+            "--cd-file",
+            cd.to_str().unwrap(),
+            "#12",
+        ],
+    );
+    assert!(
+        read(&cd).contains("issue-12-make-the-widget-blue"),
+        "{}",
+        read(&cd)
+    );
 }
 
 #[test]
-fn wtn_by_a_number_starts_a_linear_ticket_of_the_team_where_the_repository_keeps_its_work_in_linear()
- {
-    let (mut w, _github, clone) = issue_world("wtn-linear", json!({ "tickets": "linear" }));
+fn wt_by_a_number_starts_a_linear_ticket_of_the_team_where_the_repository_keeps_its_work_in_linear()
+{
+    let (mut w, _github, clone) = issue_world("wt-linear", json!({ "tickets": "linear" }));
     let linear = Fake::linear(ticket_answer);
     w.set("SWITCHBOARD_LINEAR_API", &linear.graphql());
     w.set("LINEAR_API_KEY", "lin_test");
     let cd = w.path("cd");
     let cd_arg = cd.to_str().unwrap();
 
-    let no_team = w.run(&clone, &["worktree-from-note", "--no-claude", "42"]);
+    let no_team = w.run(&clone, &["worktree-from-ticket", "--no-claude", "42"]);
     assert!(
         stderr(&no_team).contains("a number alone needs its team"),
         "{}",
@@ -3005,7 +3034,7 @@ fn wtn_by_a_number_starts_a_linear_ticket_of_the_team_where_the_repository_keeps
     w.ok(
         &clone,
         &[
-            "worktree-from-note",
+            "worktree-from-ticket",
             "--no-claude",
             "--cd-file",
             cd_arg,
@@ -3021,7 +3050,7 @@ fn wtn_by_a_number_starts_a_linear_ticket_of_the_team_where_the_repository_keeps
     );
     assert!(lines.next().unwrap().starts_with("Work on ticket ENG-42"));
 
-    let missing = w.run(&clone, &["worktree-from-note", "--no-claude", "ENG-7"]);
+    let missing = w.run(&clone, &["worktree-from-ticket", "--no-claude", "ENG-7"]);
     assert_eq!(missing.status.code(), Some(1));
     assert!(stderr(&missing).contains("no Linear issue found for ENG-7"));
 }

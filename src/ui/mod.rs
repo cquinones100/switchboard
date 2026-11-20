@@ -42,6 +42,8 @@
 //!   presses (`OSC 22`).
 //! - `when`: when something came, as a date and a clock time for a row's
 //!   end (the Notifications view and window).
+//! - `alone`: a picker or a menu run in a terminal of its own, with no
+//!   server, for a command typed in a shell (`wt` with no argument).
 //! - `headless`: a client with no terminal, for `switchboard headless`,
 //!   reading the whole screen through an emulator of its own.
 //! - `serve`: the server's side: opening them, input, timers, commands.
@@ -61,6 +63,7 @@ use ratatui::text::Span;
 use crate::mux::compose::Frame;
 use crate::mux::server::{ClientId, Server};
 
+pub mod alone;
 pub mod headless;
 pub mod images;
 pub mod keylist;
