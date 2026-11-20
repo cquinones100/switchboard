@@ -273,3 +273,8 @@ The relay's DM, threads and Home tab.
 ## Proposal: notes' toolbar from the kit
 
 - [157. Notes' toolbar drawn with the kit's button, on the dark and light themes: at rest, under the mouse, lit while the cursor is in that style (bold, two styles, a heading) or while what it opens is in front (⋯), and faint while read-only](https://cquinones100.github.io/switchboard/design/157.html)
+
+## Proposal: a tab's status set by hand
+
+- [158. A tab's status set by hand: tab 8, idle as Switchboard files it, put under Review loop by you, its row and its card in the Tabs view carrying the kit's set by you chip, and Switchboard taking it back once its own reading changes](https://cquinones100.github.io/switchboard/design/158.html)
+- [159. Set its status… from a tab's menu: every group a tab can be in, by the sidebar's names and in its order, the one it is in marked; Let Switchboard decide first while a status you set holds, naming where Switchboard would file it](https://cquinones100.github.io/switchboard/design/159.html)
