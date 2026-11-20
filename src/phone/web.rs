@@ -283,10 +283,6 @@ async fn gate(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Resp
     if path == "/app.css" && req.method() == Method::GET {
         return next.run(req).await;
     }
-    if settings::setting("phone") != Some(Value::Bool(true)) {
-        eprintln!("phone: refused {path} from {ip}: the phone app is off in Settings");
-        return (StatusCode::SERVICE_UNAVAILABLE, "The phone app is off.").into_response();
-    }
     let peer = tokio::task::spawn_blocking({
         let app = app.clone();
         move || {
@@ -305,19 +301,22 @@ async fn gate(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Resp
             devices: config.devices,
             origin: app.origin.clone(),
         },
+        // Unreadable, it admits no one: the plain refusal, why only in the
+        // log, so a device refused learns nothing of what runs here.
         Err(why) => {
             eprintln!("phone: refused {path} from {ip}: {why}");
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "The phone app isn't set up.",
-            )
-                .into_response();
+            return refuse(Refusal::NotListed, Some(ip), &path);
         }
     };
     let device = match guard::admit(&rules, peer.as_ref()) {
         Ok(device) => device,
         Err(refusal) => return refuse(refusal, Some(ip), &path),
     };
+    // Off, said only to a device it would answer.
+    if settings::setting("phone") != Some(Value::Bool(true)) {
+        eprintln!("phone: refused {path} from {ip}: the phone app is off in Settings");
+        return (StatusCode::SERVICE_UNAVAILABLE, "The phone app is off.").into_response();
+    }
     if let Err(refusal) = guard::same_origin(
         &rules,
         req.method().as_str(),
