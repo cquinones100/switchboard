@@ -1244,7 +1244,7 @@ fn a_box_about_the_tab_opens_beside_a_narrow_pane_as_a_pane() {
 }
 
 #[test]
-fn m_m_and_the_tabs_menu_open_beside_a_narrow_pane_as_a_pane() {
+fn the_tabs_menu_opens_beside_a_narrow_pane_as_a_pane() {
     let server = TestServer::start_with_settings(r#"{"lone_pane_width": "165"}"#);
     let mut client = server.attach(365, 40);
     client.wait_text("BESIDE THIS PANE");
@@ -1252,28 +1252,27 @@ fn m_m_and_the_tabs_menu_open_beside_a_narrow_pane_as_a_pane() {
         .as_u64()
         .unwrap_or(0) as usize;
     let rule = side + 165;
-    // M-m's readiness box and the tab's own menu: each on the first row
-    // right of the rule, under a header naming the tab, with no box edge.
-    for (press, title) in [("pr-ready", "Ready to merge?"), ("tab-title", "Tab 1")] {
-        server.ok(&["press", press]);
-        let screen = client.wait_text(title);
-        let (x, y) = cell_of(&screen, title).unwrap();
-        assert!(
-            x > rule && y == 0,
-            "{press} at {x},{y}:\n{}",
-            screen.join("\n")
-        );
-        assert!(screen[0].contains("tab 1 · "), "{}", screen[0]);
-        assert!(
-            !screen.iter().any(|l| l.contains('╭') || l.contains('▀')),
-            "{press}: no box edge or shadow:\n{}",
-            screen.join("\n")
-        );
-        client.send(b"\x1b");
-        client.wait_for("the hints back", |s| {
-            cell_of(s, title).is_none() && cell_of(s, "BESIDE THIS PANE").is_some()
-        });
-    }
+    // The tab's own menu: on the first row right of the rule, under a
+    // header naming the tab, with no box edge.
+    let (press, title) = ("tab-title", "Tab 1");
+    server.ok(&["press", press]);
+    let screen = client.wait_text(title);
+    let (x, y) = cell_of(&screen, title).unwrap();
+    assert!(
+        x > rule && y == 0,
+        "{press} at {x},{y}:\n{}",
+        screen.join("\n")
+    );
+    assert!(screen[0].contains("tab 1 · "), "{}", screen[0]);
+    assert!(
+        !screen.iter().any(|l| l.contains('╭') || l.contains('▀')),
+        "{press}: no box edge or shadow:\n{}",
+        screen.join("\n")
+    );
+    client.send(b"\x1b");
+    client.wait_for("the hints back", |s| {
+        cell_of(s, title).is_none() && cell_of(s, "BESIDE THIS PANE").is_some()
+    });
 }
 
 #[test]

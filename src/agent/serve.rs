@@ -631,8 +631,8 @@ impl Server {
 
     /// One Claude to a tab (tmux/one-claude.sh): a session starting in a tab
     /// that already runs one moves to a tab of its own, since the sidebar,
-    /// mission control, the Slack relay, M-c and M-m each take a tab's Claude
-    /// to be one pane. Claude Code's SessionStart hook can't refuse a
+    /// mission control, the Slack relay, M-c and the PR view's
+    /// /resolve-conflicts each take a tab's Claude to be one pane. Claude Code's SessionStart hook can't refuse a
     /// session, so the pane is moved instead. Only a pane running Claude
     /// moves: a `claude -p` started elsewhere may carry a pane's
     /// SWITCHBOARD_PANE too.

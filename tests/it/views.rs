@@ -423,10 +423,8 @@ mod with_github {
             });
             let in_pr = |pr: Value| json!({"data": {"repository": {"pullRequest": pr}}});
             let page = |nodes: Vec<Value>, next: Option<&str>| json!({"pageInfo": {"hasNextPage": next.is_some(), "endCursor": next}, "nodes": nodes});
-            let answer = if asked.contains("pullRequests") {
-                json!({"data": {"repository": {"pullRequests": {"nodes": [pr]}}}})
-            } else if asked.contains("mergeStateStatus") {
-                let checks = match after.as_deref() {
+            let checks_page = |after: Option<&str>| {
+                let mut checks = match after {
                     None => page(
                         (0..100)
                             .map(|i| json!({"__typename": "CheckRun", "name": format!("job {i}"), "status": "COMPLETED", "conclusion": "SUCCESS", "isRequired": true}))
@@ -439,16 +437,17 @@ mod with_github {
                     ),
                     Some(other) => panic!("asked after {other}"),
                 };
-                let mut checks = checks;
                 checks["checkRunCountsByState"] =
                     json!([{"state": "SUCCESS", "count": 100}, {"state": "FAILURE", "count": 1}]);
                 checks["statusContextCountsByState"] = json!([]);
+                json!({"nodes": [{"commit": {"statusCheckRollup": {"contexts": checks}}}]})
+            };
+            let answer = if asked.contains("pullRequests") {
+                json!({"data": {"repository": {"pullRequests": {"nodes": [pr]}}}})
+            } else if asked.contains("statusCheckRollup") && !asked.contains("files(") {
+                // The checks after the view's first page, and --checks'.
                 let mut pr = pr;
-                pr["mergeable"] = json!("MERGEABLE");
-                pr["mergeStateStatus"] = json!("BLOCKED");
-                pr["reviewDecision"] = json!("APPROVED");
-                pr["commits"] =
-                    json!({"nodes": [{"commit": {"statusCheckRollup": {"contexts": checks}}}]});
+                pr["commits"] = checks_page(after.as_deref());
                 in_pr(pr)
             } else if asked.contains("reviewThreads") {
                 let thread = |open: bool, path: &str| {
@@ -467,6 +466,11 @@ mod with_github {
                     Some(other) => panic!("asked after {other}"),
                 };
                 let mut pr = if asked.contains("files(") {
+                    let mut pr = pr;
+                    pr["mergeable"] = json!("MERGEABLE");
+                    pr["mergeStateStatus"] = json!("BLOCKED");
+                    pr["reviewDecision"] = json!("APPROVED");
+                    pr["last"] = checks_page(None);
                     pr
                 } else {
                     json!({})
@@ -511,23 +515,35 @@ mod with_github {
         }
     }
 
+    /// A server with UX 2.0 on, asking `fake` for GitHub.
+    fn ux2_server(fake: &Fake) -> TestServer {
+        TestServer::start_with_env_and_settings(
+            &[
+                ("GH_TOKEN", "test-token"),
+                ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
+                ("SWITCHBOARD_GITHUB_API", &fake.url),
+            ],
+            &json!({"notifications": false, "tips": false, "linear": false, "ux2": true, "sidebar": false, "photos": false}).to_string(),
+        )
+    }
+
     #[test]
-    fn m_m_shows_a_check_failing_past_the_first_page() {
+    fn m_v_counts_a_required_check_failing_past_the_first_page_and_shows_the_failing_ones() {
         let fake = paged_github();
-        let server = TestServer::start_with_env(&[
-            ("GH_TOKEN", "test-token"),
-            ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
-            ("SWITCHBOARD_GITHUB_API", &fake.url),
-        ]);
-        settings(&server, json!({"linear": false}));
+        let server = ux2_server(&fake);
         let work = widgets(&server);
         let mut client = server.attach(140, 36);
+        client.wait_for("the header", |s| s[2].contains("M-c Claude"));
         client.wait_text("$");
         cd(&server, &mut client, &work);
 
-        client.send(b"\x1bm");
-        client.wait_text("100 pass, 1 fail");
-        client.wait_text("See the failing checks");
+        client.send(b"\x1bv");
+        client.wait_text("✕ Blocked");
+        client.wait_text("required 100 of 101 passed · approved");
+        // m opens the view's menu, on what it offers now.
+        client.type_text("m");
+        client.wait_text("Read it again");
+        client.wait_text("› See the failing checks");
         client.send(b"\r");
         client.wait_text("Failing checks of #12");
         client.wait_text("late e2e");
@@ -576,27 +592,99 @@ mod with_github {
     }
 
     #[test]
-    fn m_m_with_no_pr_shows_the_branch_s_ci() {
+    fn m_v_with_no_pr_shows_the_branch_s_ci() {
         let fake = branch_github();
-        let server = TestServer::start_with_env(&[
-            ("GH_TOKEN", "test-token"),
-            ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
-            ("SWITCHBOARD_GITHUB_API", &fake.url),
-        ]);
-        settings(&server, json!({"linear": false}));
+        let server = ux2_server(&fake);
         let work = widgets(&server);
         let mut client = server.attach(140, 36);
+        client.wait_for("the header", |s| s[2].contains("M-c Claude"));
         client.wait_text("$");
         cd(&server, &mut client, &work);
 
-        client.send(b"\x1bm");
-        client.wait_text("No PR · CI on feature-x at 0123456");
+        client.send(b"\x1bv");
+        client.wait_text("✕ CI failing");
         client.wait_text("Failing: 1 of 3.");
-        client.wait_text("This tab's commit isn't the one GitHub checked.");
-        client.wait_text("See the failing checks");
+        client.wait_text(
+            "CI on feature-x at 0123456 · this tab's commit isn't the one GitHub checked",
+        );
+        client.wait_text("✕ tests");
+        client.type_text("m");
+        client.wait_text("› See the failing checks");
         client.send(b"\r");
         client.wait_text("Failing checks of");
         client.wait_text("FAIL login::token");
+    }
+
+    /// A stand-in for GitHub whose PR on feature-x conflicts with main.
+    fn conflicting_github() -> Fake {
+        Fake::github("test-token", |request| {
+            if request.path() != "/graphql" {
+                return None;
+            }
+            let asked = request.text();
+            let pr = json!({
+                "number": 12, "url": "https://github.com/acme/widgets/pull/12",
+                "title": "Fix the login", "state": "OPEN", "isDraft": false,
+                "baseRefName": "main", "headRefName": "feature-x",
+                "headRepositoryOwner": {"login": "acme"}, "author": {"login": "jo"},
+                "commits": {"totalCount": 2}, "changedFiles": 0, "body": "Why.",
+                "mergeable": "CONFLICTING", "mergeStateStatus": "DIRTY",
+                "reviewDecision": "REVIEW_REQUIRED", "mergeQueueEntry": null
+            });
+            let answer = if asked.contains("pullRequests") {
+                json!({"data": {"repository": {"pullRequests": {"nodes": [pr]}}}})
+            } else {
+                json!({"data": {"repository": {"pullRequest": pr}}})
+            };
+            Some(Reply::json(200, answer))
+        })
+    }
+
+    #[test]
+    fn m_v_says_a_pr_has_conflicts_and_offers_resolve_conflicts() {
+        let fake = conflicting_github();
+        let server = ux2_server(&fake);
+        let work = widgets(&server);
+        let mut client = server.attach(140, 36);
+        client.wait_for("the header", |s| s[2].contains("M-c Claude"));
+        client.wait_text("$");
+        cd(&server, &mut client, &work);
+        let pid = panes(&server)[0]["pid"].as_u64().unwrap();
+
+        client.send(b"\x1bv");
+        client.wait_text("✕ Conflicts with main");
+        client.wait_text("Not ready: it has merge conflicts.  review required");
+        client.type_text("m");
+        client.wait_text("› Type /resolve-conflicts into this tab's Claude");
+        // No Claude runs here, which the workspace says.
+        client.send(b"\r");
+        client.wait_text("No Claude in this tab to resolve them.");
+        client.type_text("x");
+        client.wait_for("the message closed", |s| {
+            !s.iter().any(|l| l.contains("No Claude in this tab"))
+        });
+
+        // With Claude in the pane the view stands in for, it comes back
+        // with the command typed into it.
+        let view = panes(&server);
+        assert_eq!(
+            view[0]["options"]["@pr_view"], "1",
+            "in Claude's place: {view:?}"
+        );
+        let sessions = server.home.join(".claude/sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(
+            sessions.join(format!("{pid}.json")),
+            json!({"pid": pid, "entrypoint": "cli", "sessionId": "s-1"}).to_string(),
+        )
+        .unwrap();
+        client.type_text("m");
+        client.wait_text("› Type /resolve-conflicts into this tab's Claude");
+        client.send(b"\r");
+        client.wait_for("Claude back with the command typed", |s| {
+            s.iter().any(|l| l.contains("$ /resolve-conflicts"))
+        });
+        assert!(panes(&server)[0]["options"].get("@pr_view").is_none());
     }
 
     #[test]
@@ -1352,6 +1440,28 @@ fn with_prompt_links_off_the_link_commands_list_only_what_the_pane_shows() {
 }
 
 /// What the image views keep, under a test's home.
+#[test]
+fn m_m_does_nothing_now_that_m_v_answers_it() {
+    let server = TestServer::start();
+    settings(&server, json!({"linear": false}));
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    let (code, _, said) = server.run(&["press", "pr-ready"]);
+    assert_ne!(code, 0, "no action is named pr-ready: {said}");
+    client.send(b"\x1bm");
+    client.type_text("echo after-m\r");
+    let screen = client.wait_for("the echo's output", |s| {
+        s.iter().any(|l| l.trim_end().ends_with("│after-m"))
+    });
+    assert!(
+        !screen
+            .iter()
+            .any(|l| l.contains("Ready to merge?") || l.contains("Reaching out to GitHub")),
+        "{}",
+        screen.join("\n")
+    );
+}
+
 fn image_cache(home: &Path) -> switchboard::views::image::cache::Cache {
     switchboard::views::image::cache::Cache::at(home.join(".cache/switchboard"))
 }
@@ -1707,6 +1817,117 @@ mod tickets {
             shown[1]["options"]["@ticket_view_id"], "acme/widgets#12",
             "{shown:?}"
         );
+    }
+
+    #[test]
+    fn m_v_takes_the_ticket_s_place_beside_a_narrow_lone_pane() {
+        let github = Fake::github("test-token", |request| {
+            let path = request.path();
+            if path.starts_with("/repos/acme/widgets/issues/12/comments") {
+                return Some(Reply::json(200, json!([])));
+            }
+            if path.starts_with("/repos/acme/widgets/issues/12") {
+                return Some(Reply::json(
+                    200,
+                    json!({ "number": 12, "title": "Make the widget blue", "state": "open",
+                        "body": "It is red.", "user": { "login": "sam" },
+                        "created_at": "2026-10-01T09:00:00Z", "updated_at": "2026-10-01T09:00:00Z",
+                        "assignees": [], "labels": [], "comments": 0 }),
+                ));
+            }
+            if path != "/graphql" {
+                return None;
+            }
+            let pr = json!({
+                "number": 41, "url": "https://github.com/acme/widgets/pull/41",
+                "title": "Blue widgets", "state": "OPEN", "isDraft": false,
+                "baseRefName": "main", "headRefName": "issue/12-make-it-blue",
+                "headRepositoryOwner": {"login": "acme"}, "author": {"login": "jo"},
+                "commits": {"totalCount": 1}, "changedFiles": 0, "body": "Why.",
+                "mergeable": "CONFLICTING", "mergeStateStatus": "DIRTY", "mergeQueueEntry": null
+            });
+            let answer = if request.text().contains("pullRequests") {
+                json!({"data": {"repository": {"pullRequests": {"nodes": [pr]}}}})
+            } else {
+                json!({"data": {"repository": {"pullRequest": pr}}})
+            };
+            Some(Reply::json(200, answer))
+        });
+        let server = TestServer::start_with_env_and_settings(
+            &[
+                ("GH_TOKEN", "test-token"),
+                ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
+                ("SWITCHBOARD_GITHUB_API", &github.url),
+            ],
+            &json!({"notifications": false, "tips": false, "linear": false, "ux2": true,
+                "sidebar": false, "photos": false, "lone_pane_width": "80"})
+            .to_string(),
+        );
+        let work = server.dir.path().join("widgets");
+        std::fs::create_dir_all(&work).unwrap();
+        git(&work, &["init", "-q"]);
+        git(
+            &work,
+            &["symbolic-ref", "HEAD", "refs/heads/issue/12-make-it-blue"],
+        );
+        git(&work, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        git(
+            &work,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/widgets.git",
+            ],
+        );
+        let mut client = server.attach(240, 36);
+        client.wait_text("$");
+        cd(&server, &mut client, &work);
+        let first = panes(&server)[0]["id"].as_str().unwrap().to_string();
+        let wait_until = |what: &str, done: &dyn Fn(&[Value]) -> bool| {
+            let deadline = common::deadline(Duration::from_secs(10));
+            loop {
+                let now = panes(&server);
+                if done(&now) {
+                    return now;
+                }
+                assert!(Instant::now() < deadline, "waiting for {what}: {now:?}");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        };
+        wait_until("the pane capped", &|p| p[0]["cols"] == 80);
+
+        // The ticket beside the pane, in its spare columns.
+        client.send(b"\x1bi");
+        client.wait_text("Make the widget blue");
+        let shown = wait_until("the ticket beside", &|p| p.len() == 2);
+        assert_eq!(shown[0]["cols"], 80, "{shown:?}");
+        let spare = shown[1]["cols"].clone();
+
+        // M-v: the PR in its place, the pane as wide as it was.
+        client.send(b"\x1bv");
+        client.wait_text("✕ Conflicts with main");
+        let shown = wait_until("the PR beside", &|p| {
+            p.len() == 2 && p[1]["options"]["@pr_view"] == "1"
+        });
+        assert_eq!(shown[0]["id"], first.as_str(), "{shown:?}");
+        assert_eq!(shown[0]["cols"], 80, "{shown:?}");
+        assert_eq!(shown[1]["cols"], spare, "{shown:?}");
+        assert!(
+            !shown
+                .iter()
+                .any(|p| p["options"].get("@ticket_view").is_some()),
+            "the ticket closed: {shown:?}"
+        );
+        client.wait_for("the ticket gone", |s| {
+            !s.iter().any(|l| l.contains("Make the widget blue"))
+        });
+
+        // M-v again: the columns left empty, the ticket not brought back.
+        client.send(b"\x1bv");
+        let shown = wait_until("one pane", &|p| p.len() == 1);
+        assert_eq!(shown[0]["id"], first.as_str());
+        assert_eq!(shown[0]["cols"], 80);
     }
 
     /// Linear, answering your tickets and projects, a ticket and a project.

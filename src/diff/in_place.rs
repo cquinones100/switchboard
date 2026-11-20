@@ -31,6 +31,11 @@
 //! by default) when the spare columns give it less, the pane narrowed while
 //! it is open and capped again once it closes. New with the lone pane's
 //! cap, with no tmux-version file behind it.
+//!
+//! The PR view (M-v) opens there even when something else is beside the
+//! pane already (the ticket, the note, a link read, the diff, lazygit,
+//! another view): `clear_beside` closes that, and the view takes its
+//! columns, the pane keeping the width it had (UX 2.0 boards 155 and 156).
 
 use anyhow::{Result, anyhow};
 use ratatui::layout::Rect;
@@ -90,6 +95,20 @@ impl Server {
         command: Vec<String>,
         client: Option<ClientId>,
     ) -> Result<PaneId> {
+        self.open_in_place_keeping(pane, tool, command, client, None)
+    }
+
+    /// `open_in_place`, a tool opening beside a narrow lone pane leaving
+    /// the pane `keep` columns wide, when given, rather than its cap: the
+    /// width it had beside what `clear_beside` closed.
+    pub fn open_in_place_keeping(
+        &mut self,
+        pane: PaneId,
+        tool: &str,
+        command: Vec<String>,
+        client: Option<ClientId>,
+        keep: Option<u16>,
+    ) -> Result<PaneId> {
         let slot = self
             .panes
             .get(&pane)
@@ -107,7 +126,13 @@ impl Server {
         {
             return Err(anyhow!("{pane} is waiting already"));
         }
-        let beside = self.spare_beside(tab_id);
+        let beside = self.spare_beside(tab_id).map(|(spread, spare)| match keep {
+            Some(keep) => {
+                let width = spread.width.saturating_sub(keep + 1);
+                (spread, Rect { width, ..spare })
+            }
+            None => (spread, spare),
+        });
         let width = beside.map_or(cols, |(spread, spare)| {
             beside_width(tool, spread.width, spare.width)
         });
@@ -177,6 +202,85 @@ impl Server {
         let spread = session.spread_for(tab);
         let spare = crate::mux::beside::spare_of(spread, session.area_for(tab))?;
         (spare.width >= BESIDE_LEAST).then_some((spread, spare))
+    }
+
+    /// Before M-v opens beside a narrow lone pane: what is beside the pane
+    /// now (a tool standing in beside it, Notes, a view, a link read, a CI
+    /// log or landing output from mission control; never a split of yours)
+    /// closed, as when the pane was alone, so the PR view takes its
+    /// columns. Gives the pane and the width it had, when the tab is one
+    /// such pane at its left, full height, with only those beside it, and at
+    /// least `BESIDE_LEAST` columns would be spare beside it alone and are
+    /// right of it now; nothing is closed otherwise.
+    pub fn clear_beside(&mut self, tab_id: TabId) -> Option<(PaneId, u16)> {
+        if !crate::settings::is_on("views_beside_narrow_pane") {
+            return None;
+        }
+        let tab = self.tabs.get(&tab_id)?;
+        if tab.zoomed || matches!(tab.layout, Layout::Pane(_)) {
+            return None;
+        }
+        let panes = tab.layout.panes();
+        let marked = |p: &PaneId| {
+            self.panes.get(p).is_some_and(|s| {
+                [
+                    "@notes_pane",
+                    crate::views::PR_VIEW,
+                    crate::views::TICKET_VIEW,
+                    crate::views::LINK_VIEW,
+                    "@checks_view",
+                    // Mission control's logs read beside the pane.
+                    "@ci_log",
+                    "@landing_output",
+                ]
+                .iter()
+                .any(|m| s.opts.get(*m).is_some_and(|v| v == "1"))
+            })
+        };
+        let beside = |p: &PaneId| {
+            marked(p)
+                || self
+                    .parked_of(*p)
+                    .is_some_and(|parked| panes.contains(&parked))
+        };
+        let (others, lone): (Vec<PaneId>, Vec<PaneId>) = panes.iter().partition(|p| beside(p));
+        let [lone] = lone.as_slice() else {
+            return None;
+        };
+        let session = self.session_of_tab(tab_id)?;
+        let spread = session.spread_for(tab);
+        let cap = crate::mux::layout::width_of(
+            tab.opts
+                .get(crate::mux::layout::OWN_WIDTH)
+                .map(String::as_str),
+        );
+        // The room `spare_beside` finds once the pane is alone again, so
+        // nothing is closed for a view that would then cover the pane.
+        let alone = crate::mux::layout::capped(spread, cap);
+        let spare = crate::mux::beside::spare_of(spread, alone);
+        if spare.is_none_or(|s| s.width < BESIDE_LEAST) {
+            return None;
+        }
+        let placed = tab.layout.place(spread).panes;
+        let (_, at) = placed.iter().find(|(p, _)| p == lone)?;
+        let at_left = at.x == spread.x && at.height == spread.height;
+        if !at_left || spread.width.saturating_sub(at.width + 1) < BESIDE_LEAST {
+            return None;
+        }
+        let (lone, width) = (*lone, at.width);
+        for pane in others {
+            let notes = self
+                .panes
+                .get(&pane)
+                .is_some_and(|s| s.opts.contains_key("@notes_pane"));
+            if !(notes && self.notes_close(pane)) {
+                self.kill_pane(pane);
+            }
+            if notes {
+                self.set_tab_opt(tab_id, "@notes_beside", None);
+            }
+        }
+        Some((lone, width))
     }
 
     /// The pane a tool's pane stands in for, while it is still there.
