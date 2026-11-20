@@ -183,8 +183,9 @@ mod with_github {
         client.send(b"\x1bv");
         let shown = wait_panes(&server, 1);
         assert!(shown[0]["options"].get("@pr_view").is_none());
+        // The view's own words, since the tab is named by the PR's title.
         client.wait_for("the view gone", |s| {
-            !s.iter().any(|l| l.contains("Fix the login"))
+            !s.iter().any(|l| l.contains("jo wants to merge"))
         });
     }
 
@@ -231,11 +232,11 @@ mod with_github {
         // The board: its head, the description, and the panel beside it
         // with the PR's files, the footer's keys under them.
         let screen = client.wait_text("FILES");
+        // The board's head, not the tab bar, which the PR's title names too.
         let head = screen
             .iter()
-            .find(|l| l.contains("#12 Fix the login"))
-            .unwrap();
-        assert!(head.contains("Open"), "{head:?}");
+            .find(|l| l.contains("#12 Fix the login") && !l.contains(" 1 #12"));
+        assert!(head.is_some_and(|h| h.contains("Open")), "{screen:#?}");
         client.wait_text("jo wants to merge 2 commits into main from feature-x");
         let file = client.wait_text("src/login.rs");
         let row = file.iter().find(|l| l.contains("src/login.rs")).unwrap();
