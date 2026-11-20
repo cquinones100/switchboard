@@ -13,7 +13,7 @@ const state = {
   open: null, // the pane's number of the tab open, or null for the drawer
   messages: [],
   answered: null, // what was answered last, for the folded card
-  sent: "", // the prompt (and its ticks) an answer was sent for, whose buttons wait
+  sent: null, // { pane, key }: the prompt (and its ticks) an answer was sent for, whose buttons wait
   error: "",
 };
 
@@ -249,7 +249,7 @@ function card(tab) {
     return null;
   }
   const options = p.options.filter((o) => o.n !== p.free);
-  const waiting = state.sent === promptKey(p);
+  const waiting = !!state.sent && state.sent.pane === tab.pane && state.sent.key === promptKey(p);
   const c = el(
     "div",
     { class: "card" },
@@ -283,14 +283,14 @@ async function answer(reply) {
   const p = tab && tab.prompt;
   if (!p) return;
   // One answer for the prompt shown: its buttons wait for the next one.
-  state.sent = promptKey(p);
+  state.sent = { pane: tab.pane, key: promptKey(p) };
   render();
   try {
     const r = await api("/api/tabs/" + state.open + "/answer", { reply, prompt: p.id });
     state.answered = r.said + " · from your phone";
   } catch (e) {
     state.error = String(e.message || e);
-    state.sent = "";
+    state.sent = null;
   }
   render();
 }
@@ -398,6 +398,11 @@ function listen() {
     state.live = !!data.live;
     if (state.live) state.lastHeard = Date.now();
     const after = current();
+    // The prompt answered gone, or another in its place: its buttons are live again.
+    if (state.sent) {
+      const answered = state.tabs.find((t) => t.pane === state.sent.pane);
+      if (!answered || !answered.prompt || promptKey(answered.prompt) !== state.sent.key) state.sent = null;
+    }
     const turned = before && after && JSON.stringify(before.turn) !== JSON.stringify(after.turn);
     if (after && after.prompt) state.answered = null;
     render();

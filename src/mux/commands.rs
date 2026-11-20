@@ -990,8 +990,10 @@ impl Server {
         let own_tab = caller.and_then(|p| self.panes.get(&p)).map(|slot| slot.tab);
         let tab_of = |pane: PaneId| self.panes.get(&pane).map(|slot| slot.tab);
         match name {
-            // A Claude answering a prompt, its own or another tab's, would
-            // approve what it asked permission for.
+            // `answer` presses a prompt's option for whoever asks, so it
+            // isn't one more way for a Claude to approve what it asked
+            // permission for; send-keys typed in a pane still reaches any
+            // pane, as before.
             "answer" => Err(
                 "switchboard answer is asked by Switchboard's own programs, not typed in a pane"
                     .into(),

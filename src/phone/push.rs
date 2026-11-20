@@ -211,7 +211,11 @@ pub fn encrypt(
 pub async fn send(key: &EcdsaKeyPair, title: &str, tab: &str) {
     let payload = serde_json::json!({"title": title, "tab": tab}).to_string();
     let mut gone = Vec::new();
-    for sub in subscriptions() {
+    // A device taken out of phone.json since it subscribed is sent nothing.
+    for sub in subscriptions()
+        .into_iter()
+        .filter(|s| super::web::listed(&s.device))
+    {
         match send_one(key, &sub, payload.as_bytes()).await {
             Ok(status) if status == 404 || status == 410 => gone.push(sub.endpoint.clone()),
             Ok(status) if !(200..300).contains(&status) => {

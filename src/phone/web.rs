@@ -508,15 +508,22 @@ async fn tabs(State(app): State<Arc<App>>) -> Response {
     axum::Json(app.tabs.borrow().clone()).into_response()
 }
 
-/// The tabs, now and each time they change, as server-sent events.
-/// Whether the phone app is on and `device` still carries the cookie it
-/// was paired with: an open stream asks before each update, so turning the
-/// app off or unpairing a phone ends what it is sent.
+/// Whether the phone app is on, phone.json still lists `device` and it
+/// carries the cookie it was paired with: an open stream asks before each
+/// update, so turning the app off, taking a device out of phone.json or
+/// unpairing a phone ends what it is sent.
 fn still_allowed(device: &str, cookie: Option<&str>) -> bool {
     settings::setting("phone") == Some(Value::Bool(true))
+        && listed(device)
         && guard::paired(&pairing::devices(), device, cookie).is_ok()
 }
 
+/// Whether phone.json, read now, still lists `device`.
+pub fn listed(device: &str) -> bool {
+    super::config::read().is_ok_and(|c| c.devices.iter().any(|d| d.eq_ignore_ascii_case(device)))
+}
+
+/// The tabs, now and each time they change, as server-sent events.
 async fn events(
     State(app): State<Arc<App>>,
     device: Option<axum::Extension<Device>>,
