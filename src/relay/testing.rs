@@ -455,7 +455,7 @@ impl Rig {
         presence.reading.set(reading.get());
         let mut relay = Relay::new(
             paths,
-            Box::new(slack.clone()),
+            Box::new(super::slack::SlackChat::new(Box::new(slack.clone()))),
             Box::new(mux.clone()),
             Box::new(haiku.clone()),
             presence,
@@ -473,8 +473,7 @@ impl Rig {
             }),
             ..super::State::default()
         };
-        *relay.slack.channel.borrow_mut() = Some("D1".into());
-        *relay.slack.owner.borrow_mut() = Some("U1".into());
+        relay.chat.set_dm(&relay.state.borrow().dm());
         let exited = Rc::new(Cell::new(false));
         let noted = exited.clone();
         relay.life.borrow_mut().on_exit = Some(Box::new(move || noted.set(true)));

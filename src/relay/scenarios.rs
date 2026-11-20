@@ -3014,7 +3014,7 @@ fn a_restart_edits_the_welcome_back_unless_it_is_old_or_the_relay_crashed() {
 fn the_welcome_offers_home_first_then_commands_answered_at_the_top_level() {
     let rig = Rig::new();
     let names = |dm: &super::state::Dm| -> Vec<String> {
-        super::buttons::welcome_buttons(dm)
+        super::buttons::welcome_buttons(rig.cx.chat.home_url(dm))
             .into_iter()
             .map(|b| b.text)
             .collect()

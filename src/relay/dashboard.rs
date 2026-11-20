@@ -607,10 +607,7 @@ pub async fn refresh_dashboard(cx: &Cx, how: Refresh) -> Result<()> {
     {
         return Ok(());
     }
-    let user = cx.state.borrow().dm().user;
-    cx.slack
-        .api("views.publish", json!({ "user_id": user, "view": view }))
-        .await?;
+    cx.chat.publish_home(&view).await?;
     cx.state.borrow_mut().home = Some(body);
     cx.save();
     Ok(())

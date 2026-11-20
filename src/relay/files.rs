@@ -25,7 +25,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use regex::Regex;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::Relay;
 use super::post::{Upload, upload_files};
@@ -89,11 +89,7 @@ pub async fn download(cx: &Relay, file: &FileRef) -> Result<Got> {
     let info = if file.url.is_some() {
         file.clone()
     } else {
-        let got = cx
-            .slack
-            .api("files.info", json!({ "file": file.id }))
-            .await?;
-        FileRef::from_json(got.get("file").unwrap_or(&Value::Null))
+        cx.chat.file_info(&file.id).await?
     };
     let mime = info.mimetype.as_deref().unwrap_or("");
     let video = VIDEO_TYPES.contains(&mime);
@@ -126,17 +122,19 @@ pub async fn download(cx: &Relay, file: &FileRef) -> Result<Got> {
     }
     let Some(url) = info.url.clone() else {
         return Ok(Got::Refused(format!(
-            "Slack gave no address for {}.",
+            "{} gave no address for {}.",
+            cx.chat.kind().name(),
             called("that")
         )));
     };
-    if https_host(&url) != Some(FILE_HOST) {
+    if !https_host(&url).is_some_and(|h| cx.chat.file_hosts().contains(&h)) {
         return Ok(Got::Refused(format!(
-            "{} isn't on Slack's file host, so I didn't fetch it.",
-            called("That")
+            "{} isn't on {}'s file host, so I didn't fetch it.",
+            called("That"),
+            cx.chat.kind().name()
         )));
     }
-    let bytes = cx.slack.get(&url).await?;
+    let bytes = cx.chat.fetch(&url).await?;
     if bytes.len() as u64 > limit {
         return Ok(too_big());
     }

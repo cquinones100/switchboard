@@ -60,6 +60,7 @@ pub mod alerts;
 pub mod autopilot;
 pub mod autopilot_home;
 pub mod buttons;
+pub mod chat;
 pub mod cleanup;
 pub mod cli;
 pub mod commands;
@@ -115,7 +116,8 @@ pub use state::State;
 pub struct Relay {
     pub paths: Paths,
     pub state: RefCell<State>,
-    pub slack: slack::Slack,
+    /// Slack or Discord, by Settings' `relay_chat`.
+    pub chat: Box<dyn chat::Chat>,
     pub mux: Box<dyn mux::Mux>,
     pub haiku: Box<dyn summaries::Haiku>,
     pub presence: presence::Presence,

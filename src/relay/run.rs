@@ -32,8 +32,8 @@ use super::dashboard::{DASHBOARD_MS, HEARTBEAT_MS, Refresh, refresh_dashboard};
 use super::lifecycle::{clock, stop_relay};
 use super::log::{DONT_RESTART, fail};
 use super::post::{PostOpts, post, update};
-use super::slack::{self, APP_TOKEN_SERVICE, BOT_TOKEN_SERVICE, Message, Slack};
-use super::state::{Dm, number};
+use super::slack::{self, APP_TOKEN_SERVICE, BOT_TOKEN_SERVICE, Message};
+use super::state::number;
 use super::{Cx, Memory, Relay, mux, presence, summaries};
 use crate::util;
 
@@ -72,7 +72,7 @@ impl Relay {
     /// Haiku through what it is given.
     pub fn new(
         paths: Paths,
-        transport: Box<dyn slack::Transport>,
+        chat: Box<dyn super::chat::Chat>,
         mux: Box<dyn mux::Mux>,
         haiku: Box<dyn summaries::Haiku>,
         presence: presence::Presence,
@@ -82,7 +82,7 @@ impl Relay {
         Relay {
             paths,
             state: RefCell::new(state),
-            slack: Slack::new(transport),
+            chat,
             mux,
             haiku,
             presence,
@@ -206,7 +206,8 @@ fn learn_app(cx: &Cx, app: Option<&str>, team: Option<&str>) {
         spawn(async move {
             let text = cx.mem.borrow().welcome.clone();
             let dm = cx.state.borrow().dm();
-            if let Err(e) = update(&cx, &welcome, &text, &welcome_buttons(&dm)).await {
+            let home = cx.chat.home_url(&dm);
+            if let Err(e) = update(&cx, &welcome, &text, &welcome_buttons(home)).await {
                 cx.log(&format!("couldn't add Home to the welcome: {e}"));
             }
         });
@@ -365,28 +366,22 @@ pub const WELCOME_REUSE_MS: i64 = 24 * 60 * 60_000;
 /// it does, the welcome goes out without Home rather than not at all.
 pub async fn say_listening(cx: &Cx, welcome: &str, restarted: &str) -> Result<String> {
     let dm = cx.state.borrow().dm();
+    let home = cx.chat.home_url(&dm);
     let last = cx.state.borrow().welcome.clone();
     if restarted.is_empty()
         && let Some(last) = last
         && util::now_ms() - ((number(&last) * 1000.0) as i64) < WELCOME_REUSE_MS
     {
-        match update(cx, &last, welcome, &welcome_buttons(&dm)).await {
+        match update(cx, &last, welcome, &welcome_buttons(home.clone())).await {
             Ok(_) => return Ok(format!("{:.6}", util::now_ms() as f64 / 1000.0)),
             Err(e) => cx.log(&format!("couldn't reuse the welcome: {e}")),
         }
     }
-    let kickoff = match post(cx, welcome, None, PostOpts::buttons(welcome_buttons(&dm))).await {
+    let kickoff = match post(cx, welcome, None, PostOpts::buttons(welcome_buttons(home))).await {
         Ok(ts) => ts,
         Err(e) => {
             cx.log(&format!("welcome refused with Home: {e}"));
-            let plain = Dm { app_id: None, ..dm };
-            post(
-                cx,
-                welcome,
-                None,
-                PostOpts::buttons(welcome_buttons(&plain)),
-            )
-            .await?
+            post(cx, welcome, None, PostOpts::buttons(welcome_buttons(None))).await?
         }
     };
     cx.state.borrow_mut().welcome = Some(kickoff.clone());
@@ -464,7 +459,7 @@ pub fn relay() -> ExitCode {
     };
     let relay = Relay::new(
         paths.clone(),
-        Box::new(https),
+        Box::new(slack::SlackChat::new(Box::new(https))),
         Box::new(server),
         Box::new(haiku),
         presence::Presence::new(),
@@ -560,22 +555,15 @@ async fn run(cx: Cx, owner: String, app_token: String) -> Result<()> {
             state.dashboard = None;
             state.cursor = None;
         }
-        *cx.slack.owner.borrow_mut() = Some(owner.clone());
-        let dm = slack::open_dm(&cx.slack, &owner).await?;
+        let dm = cx.chat.open_dm(&owner).await?;
         cx.state.borrow_mut().dm = Some(dm);
         cx.save();
     }
     let dm = cx.state.borrow().dm();
-    *cx.slack.channel.borrow_mut() = Some(dm.channel.clone());
-    *cx.slack.owner.borrow_mut() = Some(owner);
+    cx.chat.set_dm(&dm);
     // The workspace's address, for links to threads; kept with the DM.
     if dm.url.is_none() {
-        let url = cx
-            .slack
-            .api("auth.test", serde_json::json!({}))
-            .await
-            .ok()
-            .and_then(|a| a.get("url").and_then(Value::as_str).map(str::to_string));
+        let url = cx.chat.workspace_url().await.ok().flatten();
         if let Some(d) = cx.state.borrow_mut().dm.as_mut() {
             d.url = url;
         }
@@ -819,7 +807,7 @@ pub async fn say_down(paths: &Paths, why: &str) {
     };
     let relay = Relay::new(
         paths.clone(),
-        Box::new(https),
+        Box::new(slack::SlackChat::new(Box::new(https))),
         Box::new(mux::Server::current()),
         Box::new(summaries::ClaudeHaiku {
             dir: paths.state_dir.clone(),
@@ -827,8 +815,7 @@ pub async fn say_down(paths: &Paths, why: &str) {
         presence::Presence::new(),
         true,
     );
-    *relay.slack.channel.borrow_mut() = Some(dm.channel.clone());
-    *relay.slack.owner.borrow_mut() = Some(dm.user.clone());
+    relay.chat.set_dm(&dm);
     super::offline::cancel_offline_note(&relay).await;
     if let Err(e) = post(
         &relay,
