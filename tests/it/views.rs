@@ -1449,6 +1449,9 @@ fn m_m_does_nothing_now_that_m_v_answers_it() {
     let (code, _, said) = server.run(&["press", "pr-ready"]);
     assert_ne!(code, 0, "no action is named pr-ready: {said}");
     client.send(b"\x1bm");
+    // A shell without line editing (Linux's sh) takes it as text: Ctrl-C
+    // drops the line before the next command.
+    client.send(b"\x03");
     client.type_text("echo after-m\r");
     let screen = client.wait_for("the echo's output", |s| {
         s.iter().any(|l| l.trim_end().ends_with("│after-m"))
