@@ -147,7 +147,8 @@ pub struct Facts {
     /// which is its directory's origin's.
     pub pr_repo: Option<Repo>,
     /// The ticket its branch is for: the GitHub issue it was started for,
-    /// else the Linear ticket it names, while its service's lookups are on.
+    /// else the Linear ticket it names, while its service's lookups are on
+    /// and once its title is known.
     pub ticket: Option<Ticket>,
 }
 
@@ -359,10 +360,14 @@ impl Names {
         // usual.
         let ticket = place
             .filter(|p| p.on_branch())
-            .map(|_| ticket::of_dir_all(dir, None))
+            .map(|p| {
+                ticket::of_dir_all(dir, Some("github"))
+                    .into_iter()
+                    .chain(ticket::id_in_branch(&p.branch).map(Ticket::Linear))
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default()
             .into_iter()
-            .filter(|t| !matches!(t, Ticket::Project(_)))
             .find(|t| switches.tickets_of(t.service()));
         let title = ticket.as_ref().and_then(|t| {
             let id = t.arg();
@@ -409,7 +414,9 @@ impl Names {
             label,
             pr,
             pr_repo,
-            ticket,
+            // Only once its service confirms it with a title, so a branch
+            // that only looks like a ticket names none.
+            ticket: ticket.filter(|_| title.is_some()),
         }
     }
 
@@ -823,7 +830,7 @@ mod tests {
         let (mut on, now) = names(Switches::default());
         let (facts, asks) = on.facts(&dir, now);
         let issue = Ticket::parse("acme/app#12");
-        assert_eq!(facts.ticket, issue);
+        assert_eq!(facts.ticket, None, "not before GitHub confirms it");
         assert_eq!(
             asks[0],
             Ask::Title {
@@ -835,7 +842,18 @@ mod tests {
             found: Ok(Some("Fix the login".into())),
         };
         assert!(on.answer(title, now));
-        assert_eq!(on.facts(&dir, now).0.label, "#12: Fix the login");
+        let facts = on.facts(&dir, now).0;
+        assert_eq!(facts.label, "#12: Fix the login");
+        assert_eq!(facts.ticket, issue);
+
+        // A project's ID before a ticket's names the ticket, as it always did.
+        assert!(git(&dir, &["checkout", "-q", "-b", "p-abc-4-eng-7-fix"]));
+        let asks = on.facts(&dir, now + FACTS_FOUND).1;
+        assert!(
+            asks.contains(&Ask::Title { id: "ENG-7".into() }),
+            "{asks:?}"
+        );
+        assert!(git(&dir, &["checkout", "-q", "issue/12-fix-login"]));
 
         // With GitHub off, no issue and nothing asked of it.
         let (mut off, now) = names(Switches {

@@ -1027,10 +1027,15 @@ impl Server {
                 self.copy_said(client, &text);
                 return;
             }
-            _ => {
-                self.say(Some(client), "No ticket in this branch or tab name");
-                return;
-            }
+            // A project, or none of the provider's: the Linear ticket the
+            // branch or the tab's names give, as before there were issues.
+            _ => match self.ticket_here(tab, &dir) {
+                Some(id) => id,
+                None => {
+                    self.say(Some(client), "No ticket in this branch or tab name");
+                    return;
+                }
+            },
         };
         if !url {
             self.copy_said(client, &id);
