@@ -293,18 +293,19 @@ const promptCard = (sx, y, h, title, right) => card(sx + 1, y, 34, h, { state: '
   put(cx + 2, 33, 'Which fixture', 't'); put(cx + 2, 34, 'should the', 't');
   put(cx + 6, 21, '←  →', 'a', 'b'); }
 
-// 3. A TAB STARTS WAITING: a Web Push on the lock screen, from the installed app; tapping it opens that tab's channel.
+// 3. A TAB STARTS WAITING: a Web Push on the lock screen, from the installed app, naming the tab alone: nothing Claude asks
+// reaches the push service or the lock screen. Tapping it opens that tab's channel.
 { const sx = phone(P[2], '3  A tab starts waiting on you', '0');
   K(sx + 4, 6, 28, 3.2, 'font:300 54px -apple-system,system-ui,sans-serif;color:#c9cdd9;text-align:center;line-height:54px', '9:41');
   put(sx + 11, 10, 'Friday, November 20', 'd');
   fill(sx + 2, 15, 32, 4, '4');
   K(sx + 2, 15.1, 2, 0.9, 'border-radius:5px;background:#5fd7ff');
   T(sx + 5, 15, ['SWITCHBOARD', 'd', 'b', '4']); R(sx + 33, 15, 'now', 'd', '', '4');
-  T(sx + 2, 16, ['●', 'y', '', '4'], [' Tab 6 · review PR 41 needs you', 't', 'b', '4']);
-  T(sx + 2, 17, ['Which fixture should the redraw', 't', '', '4']);
-  T(sx + 2, 18, ['test time?', 't', '', '4']);
+  T(sx + 2, 16, ['●', 'y', '', '4'], [' Tab 6 · review PR 41', 't', 'b', '4']);
+  T(sx + 2, 17, ['needs you', 't', '', '4']);
+  fill(sx + 2, 18, 32, 1, '0');
   put(sx + 2, 22, 'One push a tab, as it starts to', 'd');
-  put(sx + 2, 23, 'wait, naming the tab and question.', 'd'); }
+  put(sx + 2, 23, 'wait, naming the tab alone.', 'd'); }
 
 // 4. THE COMPUTER OUT OF REACH (asleep, off the tailnet): the drawer keeps what it last heard, dimmed, and says so.
 { const sx = phone(P[3], '4  When studio can\'t be reached');

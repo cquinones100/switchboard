@@ -650,7 +650,7 @@
       "page": "design"
     },
     "PhoneDrawer.dc.html": {
-      "title": "164. The phone app's drawer: every Claude tab in the sidebar's groups, Needs you first, swiped in from the left as Discord's channels are; a Web Push when a tab starts waiting; dimmed with the last states when the computer can't be reached",
+      "title": "164. The phone app's drawer: every Claude tab in the sidebar's groups, Needs you first, swiped in from the left as Discord's channels are; a Web Push naming the tab alone when it starts waiting; dimmed with the last states when the computer can't be reached",
       "page": "design"
     },
     "PhoneChannel.dc.html": {
@@ -670,7 +670,7 @@
       "page": "design"
     },
     "PhoneRefused.dc.html": {
-      "title": "169. The phone app's refused page: a device not listed, someone else on the tailnet, a pairing refused, a phone revoked; each says what would let it in, and is logged",
+      "title": "169. The phone app's refused page: a device not listed, someone else on the tailnet, a pairing refused, a phone revoked; naming neither the computer nor what it checks, the first two alike, why kept for the log and the Notifications view",
       "page": "design"
     }
   }
