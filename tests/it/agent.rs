@@ -543,6 +543,36 @@ fn a_compact_you_typed_that_fails_hands_the_tab_back_as_idle() {
 }
 
 #[test]
+fn a_shell_command_typed_to_claude_shows_the_tab_working() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    let now_ms = || jiff::Timestamp::now().as_millisecond();
+    // A `!` command runs no hook: only the session file says it is busy.
+    session_file(
+        &server.home,
+        pid,
+        json!({"sessionId": "shell", "cwd": "/work", "status": "busy", "statusUpdatedAt": now_ms()}),
+    );
+    wait_list(&server, "the pane working on the command", |l| {
+        let agent = &pane_of(l, &pane)["agent"];
+        agent["state"] == "working" && agent["activity"] == "Running a shell command"
+    });
+    // It ends, with background work still running (`shell`): idle again,
+    // with no done mark.
+    session_file(
+        &server.home,
+        pid,
+        json!({"sessionId": "shell", "cwd": "/work", "status": "shell", "statusUpdatedAt": now_ms()}),
+    );
+    wait_list(&server, "the pane idle", |l| {
+        pane_of(l, &pane)["agent"]["state"].is_null()
+    });
+}
+
+#[test]
 fn a_pane_not_running_claude_keeps_no_state() {
     let server = TestServer::start();
     settings(&server, json!({}));

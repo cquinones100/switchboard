@@ -532,6 +532,10 @@ pub struct Agents {
 /// skipped (ms): Claude Code draws it within a moment of the answer.
 pub const STATUSLINE_GRACE_MS: i64 = 15_000;
 
+/// What a pane works on while its session is busy with no hook to say why
+/// (`Agents::went_busy`).
+pub const SHELL_COMMAND: &str = "Running a shell command";
+
 impl Agents {
     pub fn get(&self, pane: PaneId) -> Option<&PaneAgent> {
         self.panes.get(&pane)
@@ -930,6 +934,48 @@ impl Agents {
             self.panes.remove(&pane);
         }
         true
+    }
+
+    /// Claude Code says the pane's session went busy at `at_ms` (ms) with
+    /// no hook to say so: a command typed to it with `!` (its shell mode),
+    /// which runs none. A pane neither working nor waiting, whose
+    /// conversation ran no hook since, works on it ("Running a shell
+    /// command") until the session goes idle again (`went_idle`) or a hook
+    /// takes over; a hook's state always wins. Its seen and done marks are
+    /// left alone: a shell command ending finishes no turn. Gives whether it
+    /// changed.
+    pub fn went_busy(&mut self, pane: PaneId, at_ms: i64) -> bool {
+        let agent = self.panes.entry(pane).or_default();
+        let at = at_ms.div_euclid(1000);
+        let hook_since = agent.heard > at_ms;
+        let started_after = agent.since > at;
+        if matches!(agent.state, Some(State::Working | State::Waiting))
+            || hook_since
+            || started_after
+        {
+            if agent.is_empty() {
+                self.panes.remove(&pane);
+            }
+            return false;
+        }
+        agent.state = Some(State::Working);
+        agent.since = at;
+        agent.activity = Some(SHELL_COMMAND.to_string());
+        agent.doing = None;
+        agent.others.clear();
+        true
+    }
+
+    /// Claude Code says the pane's session stopped being busy at `at_ms`
+    /// (ms), in any status (`idle`, or `shell` while background work runs):
+    /// a pane still on the shell command `went_busy` marked, with no hook
+    /// since, goes idle, as `went_idle` hands back any working pane. Gives
+    /// whether it changed.
+    pub fn shell_ended(&mut self, pane: PaneId, at_ms: i64) -> bool {
+        let on_the_command = self.panes.get(&pane).is_some_and(|a| {
+            a.state == Some(State::Working) && a.activity.as_deref() == Some(SHELL_COMMAND)
+        });
+        on_the_command && self.went_idle(pane, at_ms)
     }
 
     /// A turn you interrupted at `at_ms` (ms), which runs no hook, so the
@@ -2140,6 +2186,43 @@ mod tests {
         assert!(!a.went_idle(P, 111_000));
         assert_eq!(a.state(P), Some(State::Done));
         assert!(!a.went_idle(PaneId(9), 111_000));
+    }
+
+    #[test]
+    fn a_session_busy_with_no_hook_works_on_a_shell_command() {
+        let mut a = Agents::default();
+        // An idle pane, and one never heard from.
+        assert!(a.went_busy(P, 100_000));
+        let agent = a.get(P).unwrap();
+        assert_eq!((agent.state, agent.since), (Some(State::Working), 100));
+        assert_eq!(agent.activity.as_deref(), Some(SHELL_COMMAND));
+        assert!(!a.went_busy(P, 101_000), "already working");
+        assert!(a.went_idle(P, 102_000));
+        assert_eq!(a.state(P), None);
+        // Back to `shell` (background work running) ends it too, and only
+        // a shell command's work.
+        assert!(a.went_busy(P, 103_000));
+        assert!(a.shell_ended(P, 104_000));
+        assert_eq!(a.state(P), None);
+        on(&mut a, "UserPromptSubmit", json!({}), 105);
+        assert!(!a.shell_ended(P, 106_000));
+        assert_eq!(a.state(P), Some(State::Working));
+        on(&mut a, "Stop", json!({}), 107);
+        // A finished one.
+        on(&mut a, "Stop", json!({}), 110);
+        a.heard(P, &hook("Stop", json!({})), 110_000);
+        assert!(!a.went_busy(P, 109_000), "busy from before it finished");
+        assert!(a.went_busy(P, 112_000));
+        assert_eq!(a.state(P), Some(State::Working));
+        // A waiting one is left alone.
+        on(&mut a, "PermissionRequest", json!({}), 120);
+        assert!(!a.went_busy(P, 121_000));
+        assert_eq!(a.state(P), Some(State::Waiting));
+        // A hook after it wins.
+        on(&mut a, "Stop", json!({}), 130);
+        a.heard(P, &hook("Stop", json!({})), 130_500);
+        assert!(!a.went_busy(P, 130_200));
+        assert_eq!(a.state(P), Some(State::Done));
     }
 
     #[test]

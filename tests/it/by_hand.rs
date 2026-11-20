@@ -68,6 +68,31 @@ fn a_command_typed_in_a_pane_sets_its_own_tab_and_no_marks_of_switchboards() {
 }
 
 #[test]
+fn a_mistyped_command_in_a_pane_fails_on_its_stderr_with_no_box_and_a_refusal_still_shows_one() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (_, mine) = new_tab(&server, "mine");
+    let (other_tab, _) = new_tab(&server, "other");
+
+    // The target left out, so `-t` takes the option's name.
+    let (code, _, err) = server.typed_in(&mine, &["set", "-t", "@tab_name", "x"]);
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("isn't a pane"), "{err}");
+    // Typed after the command answered, so drawn after any box it opened.
+    client.type_text("echo mark-$((40+2))\r");
+    let screen = client.wait_text("mark-42");
+    assert!(
+        !screen.iter().any(|line| line.contains("isn't a pane")),
+        "{screen:#?}"
+    );
+
+    let (code, _, err) = server.typed_in(&mine, &["set", "-t", &other_tab, "@tab_note", "N.md"]);
+    assert_eq!(code, 1, "{err}");
+    client.wait_text("sets @tab_note on its own tab");
+}
+
+#[test]
 fn a_respawn_typed_in_a_pane_starts_only_the_worktree_commands_or_claude_resuming() {
     let server = TestServer::start();
     let mut client = server.attach(100, 30);

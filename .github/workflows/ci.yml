@@ -1,7 +1,10 @@
-# Every push and pull request, in jobs that run side by side so a run takes
-# as long as its slowest: the formatting checked; on x86_64 Linux clippy with
-# its warnings as errors (with the net feature and without it, the build that
-# type-checks macOS's paths from Linux) and the tests, in jobs of their own;
+# Every pull request, merged into main, and every push to main, so a PR's
+# commit runs once (its branch's own push would run the same jobs again, on
+# the few macOS runners the account has) and main still runs after each
+# merge. The jobs run side by side so a run takes as long as its slowest:
+# the formatting checked; on x86_64 Linux clippy with its warnings as
+# errors (with the net feature and without it, the build that type-checks
+# macOS's paths from Linux) and the tests, in jobs of their own;
 # and on an Apple silicon Mac a job running the same clippy and building the
 # tests into an archive, whose tests two jobs then run half each: three
 # macOS jobs a run, since the account runs few at once, while the whole
@@ -23,6 +26,7 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
