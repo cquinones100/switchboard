@@ -1519,6 +1519,64 @@ fn look_opens_the_desktops_viewer_where_no_picture_shows_beside_the_pane() {
     assert!(cell_of(&client.screen(), "M-Esc close").is_none());
 }
 
+#[test]
+fn look_from_a_tab_behind_waits_beside_its_pane_until_the_tab_is_in_front() {
+    let server = TestServer::start_with_settings(r#"{"lone_pane_width": "80"}"#);
+    let mut client = server.attach_as("xterm-ghostty", 240, 40);
+    client.wait_text("BESIDE THIS PANE");
+    let shot = picture_at(&server, "shot.png");
+    let tab = |i: usize| {
+        server.list()["sessions"][0]["tabs"][i]["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let first = tab(0);
+    let pane = server.list()["sessions"][0]["tabs"][0]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // Asked from the first tab while another is in front: no viewer, and
+    // nothing shown over the tab in front, whose pane keeps its keys.
+    server.ok(&["new-tab", "-n", "second"]);
+    assert!(is_current(&server, 1));
+    server.ok(&["look", "-t", &pane, &shot]);
+    client.type_text("echo typed-in-second\r");
+    client.wait_text("typed-in-second");
+    assert!(cell_of(&client.screen(), "M-Esc close").is_none());
+    // Back on the first tab, it shows beside the pane.
+    server.ok(&["select-tab", "-t", &first]);
+    client.wait_text("shot.png   tab 1 · ");
+    client.send(b"\x1b\x1b");
+    client.wait_for("the pictures gone", |s| cell_of(s, "M-Esc close").is_none());
+    // Asked while mission control is up: shown once it closes.
+    client.type_text(&format!("{ALT} "));
+    client.wait_text("MISSION CONTROL");
+    server.ok(&["look", "-t", &pane, &shot]);
+    client.type_text("\x1b");
+    client.wait_for("mission control closed", |s| {
+        !s.iter().any(|l| l.contains("MISSION CONTROL"))
+    });
+    client.wait_text("shot.png   tab 1 · ");
+    // Asked for from the second tab while the first shows its own: the
+    // first keeps them, and the second shows its own once in front.
+    let second_pane = server.list()["sessions"][0]["tabs"][1]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["look", "-t", &second_pane, &shot]);
+    server.ok(&["select-tab", "-t", &tab(1)]);
+    client.wait_text("shot.png   tab 2 · ");
+    // Over the first tab's, hidden, they still take M-Esc.
+    client.send(b"\x1b\x1b");
+    client.wait_for("the second tab's pictures gone", |s| {
+        cell_of(s, "M-Esc close").is_none()
+    });
+    server.ok(&["select-tab", "-t", &first]);
+    client.wait_text("shot.png   tab 1 · ");
+    assert!(opened(&server).is_empty(), "{:?}", opened(&server));
+}
+
 /// Settings' `lone_pane_width` as the server wrote it to the test's file.
 fn lone_setting(server: &TestServer) -> Option<String> {
     let file = server.home.join(".config/switchboard/settings.json");
