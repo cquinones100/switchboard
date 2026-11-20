@@ -58,6 +58,9 @@ pub const ACK_AFTER: Duration = Duration::from_millis(100);
 /// How many messages' threads and buttons' values are kept.
 const KEPT: usize = 4_000;
 
+/// The most pages of 100 a catch-up reads back from the newest message.
+const CATCH_UP_PAGES: usize = 50;
+
 /// The pinned list's ID among views.
 pub const HOME: &str = "home";
 
@@ -1166,26 +1169,46 @@ impl Chat for DiscordChat {
                 .map(|(_, handled)| number(handled))
                 .chain([from])
                 .fold(f64::INFINITY, f64::min);
-            let mut after = rules::snowflake_at((earliest.max(0.0) * 1000.0) as u64);
-            let mut messages = Vec::new();
-            for _ in 0..10 {
-                let page = self
+            let floor: u64 = rules::snowflake_at((earliest.max(0.0) * 1000.0) as u64)
+                .parse()
+                .unwrap_or(0);
+            let id_of = |m: &Value| {
+                m.get("id")
+                    .and_then(Value::as_str)
+                    .and_then(|i| i.parse::<u64>().ok())
+                    .unwrap_or(0)
+            };
+            // Newest first, a page at a time back to the earliest mark, so
+            // what you sent last is read however much came before it.
+            let mut page: Vec<Value> = Vec::new();
+            let mut before: Option<u64> = None;
+            for _ in 0..CATCH_UP_PAGES {
+                let query = match before {
+                    Some(b) => format!("before={b}&limit=100"),
+                    None => "limit=100".to_string(),
+                };
+                let got = self
                     .0
                     .discord
                     .api(
                         "GET",
-                        &format!("/channels/{}/messages?after={after}&limit=100", dm.channel),
+                        &format!("/channels/{}/messages?{query}", dm.channel),
                         None,
                     )
                     .await?;
-                let mut page: Vec<Value> = page.as_array().cloned().unwrap_or_default();
-                page.sort_by_key(|m| {
-                    m.get("id")
-                        .and_then(Value::as_str)
-                        .and_then(|i| i.parse::<u64>().ok())
-                        .unwrap_or(0)
-                });
-                let full = page.len() >= 100;
+                let got: Vec<Value> = got.as_array().cloned().unwrap_or_default();
+                let full = got.len() >= 100;
+                let oldest = got.iter().map(id_of).min();
+                page.extend(got.into_iter().filter(|m| id_of(m) > floor));
+                match oldest {
+                    Some(o) if full && o > floor => before = Some(o),
+                    _ => break,
+                }
+            }
+            page.sort_by_key(id_of);
+            page.dedup_by_key(|m| id_of(m));
+            let mut messages = Vec::new();
+            {
                 for m in &page {
                     let Some((mut message, replied)) = rules::message_from(dm, m, log) else {
                         continue;
@@ -1204,14 +1227,6 @@ impl Chat for DiscordChat {
                         }
                         None => {}
                     }
-                }
-                match page
-                    .last()
-                    .and_then(|m| m.get("id"))
-                    .and_then(Value::as_str)
-                {
-                    Some(last) if full => after = last.to_string(),
-                    _ => break,
                 }
             }
             Ok(messages)

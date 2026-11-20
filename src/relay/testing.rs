@@ -168,7 +168,30 @@ impl FakeDiscord {
         let messages = format!("/channels/{DISCORD_DM}/messages");
         Ok(match (call.method.as_str(), call.path.as_str()) {
             ("POST", p) if p == messages => json!({ "id": self.next_id() }),
-            ("GET", p) if p.starts_with(&messages) => json!(self.history.borrow().clone()),
+            ("GET", p) if p.starts_with(&messages) => {
+                // As Discord answers: the newest 100 before `before`.
+                let id = |m: &Value| {
+                    m["id"]
+                        .as_str()
+                        .and_then(|i| i.parse::<u64>().ok())
+                        .unwrap_or(0)
+                };
+                let before = p
+                    .split(['?', '&'])
+                    .find_map(|kv| kv.strip_prefix("before="))
+                    .and_then(|b| b.parse::<u64>().ok())
+                    .unwrap_or(u64::MAX);
+                let mut page: Vec<Value> = self
+                    .history
+                    .borrow()
+                    .iter()
+                    .filter(|m| id(m) < before)
+                    .cloned()
+                    .collect();
+                page.sort_by_key(|m| std::cmp::Reverse(id(m)));
+                page.truncate(100);
+                json!(page)
+            }
             ("POST", "/users/@me/channels") => json!({ "id": DISCORD_DM, "type": 1 }),
             ("GET", "/users/@me") => json!({ "id": DISCORD_BOT }),
             _ => Value::Null,

@@ -598,3 +598,24 @@ fn discords_state_is_kept_apart_from_slacks() {
             .ends_with(".config/switchboard/discord-relay.json")
     );
 }
+
+#[test]
+fn catching_up_reaches_what_you_sent_last_past_a_long_thread_of_the_relays() {
+    let rig = Rig::discord();
+    let (tab, _) = rig.claude_tab("work");
+    let head = header(&rig, &tab);
+    rig.cx.state.borrow_mut().cursor = Some(head.clone());
+    let mut history: Vec<Value> = (0..1_200)
+        .map(|_| {
+            json!({ "id": rig.discord.next_id(), "type": 19, "channel_id": DISCORD_DM,
+                "author": { "id": DISCORD_BOT, "bot": true }, "content": "🤖 a turn",
+                "message_reference": { "message_id": head } })
+        })
+        .collect();
+    history.push(typed(&rig, "go on", Some(&head)));
+    *rig.discord.history.borrow_mut() = history;
+    let found = rig.block_on(super::read::catch_up(&rig.cx)).unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].text, "go on");
+    assert_eq!(found[0].thread_ts.as_deref(), Some(head.as_str()));
+}
