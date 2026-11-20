@@ -47,6 +47,31 @@ pub const TAB_DIR: &str = "@tab_dir";
 /// the smallest no other open tab had when it opened, kept while it is open
 /// (saved with the layout and handed over with the tab's other options).
 pub const TAB_NUMBER: &str = "@tab_number";
+/// The tab lands without asking (`1`): queue-and-clean opens its PR or
+/// pushes its landing with no question once its own checks pass, and
+/// review-loop fixes rather than asks. A tab's own, saved with its options:
+/// a worktree tab takes it from Settings' `land_without_asking` as it opens
+/// and as the setting changes (`Server::land_as_set`), its menu turns it on or off, and autopilot's
+/// "Land without asking" sets it on its tabs as that switch changes. Only
+/// the server sets it (`commands::own_mark`).
+pub const LAND: &str = "@land";
+/// What `LAND` was called while it was autopilot's alone, read from a
+/// saved layout or a handover as `LAND` (`land_renamed`).
+pub const OLD_LAND: &str = "@autopilot_land";
+/// The tab was opened for a worktree's work, or handed it (`land_as_set`),
+/// so its `LAND` follows Settings' `land_without_asking` as it changes.
+pub const LAND_WORK: &str = "@land_work";
+
+/// A tab's options as a build before `LAND` saved them: `OLD_LAND` read
+/// as `LAND`.
+pub fn land_renamed(
+    mut opts: std::collections::BTreeMap<String, String>,
+) -> std::collections::BTreeMap<String, String> {
+    if let Some(v) = opts.remove(OLD_LAND) {
+        opts.entry(LAND.into()).or_insert(v);
+    }
+    opts
+}
 /// How often tab names are read again from their panes' directories.
 const TICK: Duration = Duration::from_secs(2);
 /// Two clicks this close together are a double click.
@@ -551,6 +576,9 @@ pub struct Server {
         Option<std::time::SystemTime>,
         Option<std::time::SystemTime>,
     ),
+    /// Settings' `land_without_asking` when the settings were last read,
+    /// so the tabs opened for work (`LAND_WORK`) follow it as it changes.
+    land_setting: Option<bool>,
     /// What the desktop says of whether you're at the computer, read at
     /// most every `PRESENCE_EVERY` off the server's task (src/presence.rs).
     presence: crate::presence::Desktop,
@@ -1216,6 +1244,7 @@ impl Server {
             last_input: Instant::now(),
             typed: false,
             settings_seen: (None, None, None),
+            land_setting: None,
             presence: Default::default(),
             presence_asked: None,
             persist: Default::default(),
@@ -1434,6 +1463,22 @@ impl Server {
         let first = self.settings_seen == (None, None, None) && seen != (None, None, None);
         self.settings_seen = seen;
         crate::settings::reload_settings();
+        // The tabs opened for work follow "Land without asking" as it
+        // changes, a tab's own menu deciding for it meanwhile.
+        let land = crate::settings::is_on("land_without_asking");
+        if self.land_setting.is_some_and(|was| was != land) {
+            let work: Vec<TabId> = self
+                .tabs
+                .iter()
+                .filter(|(_, t)| t.opts.contains_key(LAND_WORK))
+                .map(|(id, _)| *id)
+                .collect();
+            for tab in work {
+                self.land_as_set(tab);
+                self.dirty_tab(tab);
+            }
+        }
+        self.land_setting = Some(land);
         // Your PRs' news follows its setting at once, and the terminals'
         // own colors theirs.
         self.pr_notices();
@@ -1780,6 +1825,23 @@ impl Server {
         Ok(())
     }
 
+    /// A tab opening a worktree's work (`worktree::opens_work`) marked to
+    /// land without asking (`LAND`) as Settings' `land_without_asking`
+    /// says, or no longer, as it opens or is handed the work, as the setting
+    /// changes, and as an autopilot tab becomes yours; marked a work tab
+    /// (`LAND_WORK`) so the setting's changes reach it.
+    pub fn land_as_set(&mut self, tab: TabId) {
+        let on = crate::settings::is_on("land_without_asking");
+        if let Some(t) = self.tabs.get_mut(&tab) {
+            t.opts.insert(LAND_WORK.into(), "1".into());
+            if on {
+                t.opts.insert(LAND.into(), "1".into());
+            } else {
+                t.opts.remove(LAND);
+            }
+        }
+    }
+
     /// A new tab in a session, after its current one, made current when
     /// `opened` is `Opened::Front`; gives the tab and its pane.
     pub fn new_tab(
@@ -1796,10 +1858,14 @@ impl Server {
         let area = super::layout::capped(s.main_area(), super::layout::lone_width());
         let tab = TabId(self.next_tab);
         self.next_tab += 1;
+        let work = command.as_deref().is_some_and(crate::worktree::opens_work);
         let pane = self.spawn_pane(tab, cwd, command, area.width, area.height)?;
         let mut t = new_tab(tab, pane);
         t.name = name.unwrap_or_default();
         self.tabs.insert(tab, t);
+        if work {
+            self.land_as_set(tab);
+        }
         let s = self
             .session_mut(session)
             .expect("the session was just found");
@@ -2053,6 +2119,9 @@ impl Server {
         self.tab_closing(tab);
         self.autopilot_tab_closing(tab);
         self.tabs.remove(&tab);
+        if self.notices.contains_key(crate::agent::READY_SOURCE) {
+            self.ready_notices();
+        }
         // A tab closed drops out of the sidebar's select mode.
         for side in self.sidebar.sides.values_mut() {
             if let Some(picked) = side.select.as_mut() {
@@ -2836,7 +2905,7 @@ impl Server {
     /// directory is there (the review tab's PR worktree, whose Claude works
     /// from the main clone), else the pane's own (`pane_own_dir`). The
     /// tab's name, color and PR, and the keys that open something for this
-    /// directory (M-v, M-m, M-d), read this one. Never a directory that no
+    /// directory (M-v, M-d), read this one. Never a directory that no
     /// longer exists (a worktree removed under it), its nearest ancestor
     /// that does taking its place.
     pub fn pane_dir(&self, pane: PaneId) -> Option<PathBuf> {
@@ -3433,6 +3502,7 @@ impl Server {
             ),
             Action::Settings => self.open_mission(id, crate::mission::Opening::Settings),
             Action::RemindTab => self.remind_tab(id, current_tab),
+            Action::TabStatus => self.tab_status_menu(id, current_tab),
             Action::TabTitle => self.show_tab_title(id, current_tab),
             Action::ReopenLastTab => self.reopen_last(id),
             Action::View(command) => self.view_command(id, command),
@@ -4494,9 +4564,12 @@ impl Server {
                     && crate::settings::is_on("boxes_beside_narrow_pane");
                 // So do pictures shown there (`switchboard look`).
                 let boxed = boxed
-                    || c.overlays
-                        .find::<crate::ui::pictures::Pictures>()
-                        .is_some_and(|p| p.area.is_some());
+                    || c.overlays.layers.iter().any(|l| {
+                        l.overlay
+                            .as_any()
+                            .downcast_ref::<crate::ui::pictures::Pictures>()
+                            .is_some_and(|p| p.area.is_some())
+                    });
                 if crate::settings::is_on("spare_hints")
                     && !boxed
                     && let Some(spare) = super::beside::spare_of(spread, area)

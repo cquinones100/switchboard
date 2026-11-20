@@ -530,7 +530,7 @@ fn a_tab_of_the_work_a_note_mode_lands_without_asking_only_once_leak_check_finds
             .unwrap_or_else(|| panic!("no {start}"))
             .to_string()
     };
-    let check = "switchboard show @autopilot_land";
+    let check = "switchboard show @land";
     let step7 = step("7. **Ask before pushing**");
     let leak = step7
         .find("switchboard leak-check <base>..HEAD")
@@ -561,7 +561,7 @@ fn a_tab_of_the_work_a_note_mode_lands_without_asking_only_once_leak_check_finds
         .find("When step 7 took the answer without asking, run `<lock> push`")
         .expect("the push without asking goes through the command's gate");
     let again = step9
-        .find("it reads `@autopilot_land` again")
+        .find("it reads `@land` again")
         .expect("which reads the switch again");
     assert!(gated < again, "as it pushes");
     assert!(
@@ -1007,4 +1007,49 @@ fn diff_artifact_tells_no_story_of_its_own_and_publishes_only_after_a_yes() {
     assert!(text.contains("Publish only after their yes"));
     assert!(text.contains("never share it further"));
     assert!(text.contains("Never a link to GitHub or the PR in place of a hunk"));
+}
+
+// main requires a PR's branch to be up to date, and auto-merge waits on one
+// that is behind without updating it, so both of queue-and-clean's waits end
+// on `BEHIND` (after conflicts) and the skill merges the base in.
+#[test]
+fn queue_and_clean_brings_a_pr_behind_its_base_up_to_date() {
+    let all = skills();
+    let queue = &all
+        .iter()
+        .find(|(name, _)| name == "queue-and-clean")
+        .unwrap()
+        .1;
+    let watch = queue
+        .split("## Watching")
+        .nth(1)
+        .and_then(|rest| rest.split("```").nth(1))
+        .expect("the watch's script");
+    assert!(watch.contains("mergeStateStatus"), "{watch}");
+    let conflicts = watch.find("echo conflicts").unwrap();
+    let behind = watch.find("echo behind").expect("behind ends the watch");
+    assert!(conflicts < behind, "conflicts still go to Fixing");
+    let wait = queue
+        .split("### Waiting until the PR is ready")
+        .nth(1)
+        .and_then(|rest| rest.split("```").nth(1))
+        .expect("the wait's script");
+    assert!(
+        wait.contains("mergeStateStatus") && wait.contains("echo behind"),
+        "{wait}"
+    );
+    assert!(
+        queue.contains("- `behind`: "),
+        "behind is an exit with a step"
+    );
+    let section = queue
+        .split("## Bringing it up to date")
+        .nth(1)
+        .expect("the section behind goes to");
+    assert!(
+        section.contains("git merge --no-edit origin/<baseRefName>")
+            && section.contains("plain `git push`")
+            && !section.contains("rebase "),
+        "{section}"
+    );
 }

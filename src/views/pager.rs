@@ -24,7 +24,9 @@
 //!
 //! A board (`super::board`, the PR and the ticket with UX 2.0) scrolls its
 //! column as any text, its panel fixed beside it in a pane wide enough, and
-//! names its keys on the prompt line.
+//! names its keys on the prompt line. One with a menu (the PR's) opens it
+//! with m, a right click or a click on the prompt line's "m view actions"
+//! (`super::menu`).
 //!
 //! Keys: j, k, Down, Up, Enter, e and y a line; Space, f, b, PageDown and
 //! PageUp a screen; d and u half of one; g and G the top and the end; Left
@@ -85,6 +87,14 @@ pub enum Content {
     /// The PR or the ticket as UX 2.0's boards draw them: a column with a
     /// panel beside it, or under it in a narrow pane (`super::board`).
     Board(Board),
+    /// Markdown with a menu (`m`), titled `title`, offering `actions`: the
+    /// PR with UX 2.0 off.
+    MarkdownMenu {
+        text: String,
+        place: String,
+        title: String,
+        actions: Vec<(String, board::Do)>,
+    },
     /// Something that can't be read here, with a link o opens (a Slack
     /// message); any other key closes it.
     Offer { text: String, url: String },
@@ -114,6 +124,9 @@ pub enum Act {
         key: String,
         title: String,
     },
+    /// One of the workspace's actions run in the view's tab, from its menu
+    /// (`switchboard press <name>`).
+    Press(String),
 }
 
 pub struct Pager {
@@ -157,7 +170,17 @@ pub struct Pager {
     asked: bool,
     /// Since when the view has been without the focus.
     unfocused: Option<Instant>,
+    /// What the view shows, named on the prompt line: a note's preview.
+    name: Option<String>,
+    /// A board's menu, while it is up.
+    menu: Option<super::menu::Open>,
+    /// Whether the terminal reports every movement of the mouse, as it
+    /// does while the menu is up.
+    any_motion: bool,
 }
+
+/// The prompt line's words for the menu, which a click opens.
+const VIEW_ACTIONS: &str = "m view actions";
 
 /// What the prompt line says while r's read is under way.
 const READING: &str = "Reading it again...";
@@ -191,6 +214,9 @@ impl Pager {
             read_at: None,
             asked: false,
             unfocused: None,
+            name: None,
+            menu: None,
+            any_motion: false,
         };
         pager.set_content(content);
         pager
@@ -203,6 +229,12 @@ impl Pager {
         if matches!(self.content, Content::Failed(_)) {
             self.lay_out();
         }
+        self
+    }
+
+    /// Names what it shows on the prompt line, as a note's preview does.
+    pub fn with_name(mut self, name: Option<String>) -> Pager {
+        self.name = name;
         self
     }
 
@@ -335,7 +367,9 @@ impl Pager {
             .map(|l| l.anchor);
         let at = self.cursor_anchor();
         self.markdown = match &content {
-            Content::Markdown { text, place } => Some(Markdown::parse(text, place)),
+            Content::Markdown { text, place } | Content::MarkdownMenu { text, place, .. } => {
+                Some(Markdown::parse(text, place))
+            }
             _ => None,
         };
         self.content = content;
@@ -468,7 +502,9 @@ impl Pager {
                     .map(|l| vec![Span::new(expand_tabs(l), Style::fg(252))])
                     .collect(),
             ),
-            (Content::Markdown { .. } | Content::Board(_), None) => Doc::default(),
+            (Content::Markdown { .. } | Content::MarkdownMenu { .. } | Content::Board(_), None) => {
+                Doc::default()
+            }
         };
     }
 
@@ -817,6 +853,10 @@ impl Pager {
         if key.kind == KeyEventKind::Release {
             return Act::Same;
         }
+        if let Some(menu) = &mut self.menu {
+            let came = menu.key(key);
+            return self.menu_came(came);
+        }
         let had_note = self.note.take().is_some();
         if self.typing.is_some() {
             return self.typing_key(key);
@@ -899,14 +939,81 @@ impl Pager {
                 Some(url) => Act::Open(url.clone()),
                 None => Act::Same,
             },
-            KeyCode::Char('r') if self.follows => {
-                self.note = Some(READING.into());
-                self.asked = true;
-                Act::Again
-            }
+            KeyCode::Char('r') if self.follows => self.read_again(),
+            KeyCode::Char('m') => self.open_menu(None),
             _ => Act::Same,
         };
         if had_note { act_or_redraw(act) } else { act }
+    }
+
+    /// r: what it shows read again, the prompt line saying so meanwhile.
+    fn read_again(&mut self) -> Act {
+        self.note = Some(READING.into());
+        self.asked = true;
+        Act::Again
+    }
+
+    /// A board's menu opened, beside `near` (a click's cell) or in the
+    /// middle; nothing for a view with no menu.
+    fn open_menu(&mut self, near: Option<(u16, u16)>) -> Act {
+        let Some((title, actions)) = self.menu_of() else {
+            return Act::Same;
+        };
+        self.menu = Some(super::menu::Open::new(title, self.follows, actions, near));
+        Act::Redraw
+    }
+
+    /// The menu what it shows has, its title and actions; none for one
+    /// with no actions that doesn't read again.
+    fn menu_of(&self) -> Option<(&str, &[(String, board::Do)])> {
+        let (title, actions) = match &self.content {
+            Content::Board(b) => (b.title.as_str(), b.actions.as_slice()),
+            Content::MarkdownMenu { title, actions, .. } => (title.as_str(), actions.as_slice()),
+            _ => return None,
+        };
+        // One with a menu (a title) that reads again has it with that alone.
+        let has = !actions.is_empty() || (self.follows && !title.is_empty());
+        has.then_some((title, actions))
+    }
+
+    /// What the menu's key or click came to.
+    fn menu_came(&mut self, came: super::menu::Came) -> Act {
+        use super::board::Do;
+        use super::menu::{Came, Choice};
+        match came {
+            Came::Up(true) => Act::Redraw,
+            Came::Up(false) => Act::Same,
+            Came::Closed(chosen) => {
+                self.menu = None;
+                match chosen {
+                    Some(Choice::Again) => self.read_again(),
+                    Some(Choice::Board(Do::Open(url))) => Act::Open(url),
+                    Some(Choice::Board(Do::Press(name))) => Act::Press(name),
+                    None => Act::Redraw,
+                }
+            }
+        }
+    }
+
+    /// Whether `col` of the prompt line is on its "m view actions".
+    fn on_view_actions(&self, col: usize) -> bool {
+        if self.menu_of().is_none() || self.typing.is_some() || self.note.is_some() {
+            return false;
+        }
+        // Markdown's prompt line starts with it.
+        let Content::Board(b) = &self.content else {
+            return col < VIEW_ACTIONS.len();
+        };
+        let mut keys = b.keys.clone();
+        if self.has_cursor() && self.full_at(self.cursor).is_some() {
+            keys.insert(0, ("Enter".to_string(), "full size".to_string()));
+        }
+        let text = board::hints(&keys, &self.look).plain();
+        let Some(at) = text.find(VIEW_ACTIONS) else {
+            return false;
+        };
+        let from = crate::ui::draw::width(&text[..at]);
+        (from..from + VIEW_ACTIONS.len()).contains(&col)
     }
 
     /// A key that moves the cursor, or Enter on a picture; None for one
@@ -945,6 +1052,22 @@ impl Pager {
     }
 
     pub fn mouse(&mut self, mouse: MouseEvent) -> Act {
+        if let Some(menu) = &mut self.menu {
+            let came = menu.mouse(mouse);
+            return self.menu_came(came);
+        }
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Right) => {
+                return self.open_menu(Some((mouse.column, mouse.row)));
+            }
+            MouseEventKind::Down(MouseButton::Left)
+                if mouse.row as usize + 1 == self.rows
+                    && self.on_view_actions(mouse.column as usize) =>
+            {
+                return self.open_menu(None);
+            }
+            _ => {}
+        }
         match mouse.kind {
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
                 let by = WHEEL as isize;
@@ -1032,6 +1155,34 @@ impl Pager {
     /// (synchronized output) so it never shows half drawn.
     pub fn frame(&self) -> String {
         self.frame_at(SystemTime::now())
+    }
+
+    /// `frame` with the menu over it while it is up, the terminal asked
+    /// for every movement of the mouse meanwhile, so its options light
+    /// under it, and only for movement with a button held again after.
+    pub fn frame_with_menu(&mut self) -> String {
+        let mut out = self.frame();
+        let end = out.len() - "\x1b[?2026l".len();
+        let mut over = String::new();
+        if self.menu.is_some() != self.any_motion {
+            self.any_motion = self.menu.is_some();
+            over.push_str(if self.any_motion {
+                "\x1b[?1003h"
+            } else {
+                "\x1b[?1003l\x1b[?1002h"
+            });
+        }
+        if let Some(menu) = &mut self.menu {
+            over.push_str("\x1b[?25l");
+            over.push_str(&menu.draw(self.cols as u16, self.rows as u16));
+        }
+        out.insert_str(end, &over);
+        out
+    }
+
+    /// Whether its menu is up.
+    pub fn menu_open(&self) -> bool {
+        self.menu.is_some()
     }
 
     /// `frame` at a time, which says how old the copy is.
@@ -1167,12 +1318,36 @@ impl Pager {
             let line = board::hints(&keys, &self.look);
             return line.ansi(&[], 0, room, &[]);
         }
+        const END: &str = "(END) ";
+        const FULL: &str = "Enter shows it full size";
+        const CLOSES: &str = " · q closes  ";
+        let at_end = self.markdown.is_some() && self.at_end();
         let mut out = String::new();
-        if self.markdown.is_some() && self.at_end() {
-            out.push_str("\x1b[7m(END)\x1b[0m ");
+        let menu = matches!(self.content, Content::MarkdownMenu { .. });
+        // The name gets what the rest leaves, short of the last column so
+        // the line never wraps and scrolls the page; none, it is left out.
+        let rest = usize::from(menu) * (VIEW_ACTIONS.len() + 2)
+            + usize::from(at_end) * END.len()
+            + usize::from(full) * FULL.len()
+            + crate::ui::draw::width(CLOSES)
+            + 1;
+        if let Some(name) = &self.name
+            && room > rest
+        {
+            let name: String = name.chars().filter(|c| !c.is_control()).collect();
+            let name = crate::ui::draw::cut(&name, room - rest);
+            out.push_str(&format!("\x1b[38;5;{DIM}m{name}{CLOSES}\x1b[0m"));
+        }
+        if menu {
+            out.push_str(&format!(
+                "\x1b[38;5;{CURSOR}mm\x1b[38;5;{DIM}m view actions\x1b[0m  "
+            ));
+        }
+        if at_end {
+            out.push_str(&format!("\x1b[7m{}\x1b[0m ", END.trim_end()));
         }
         if full {
-            out.push_str(&format!("\x1b[38;5;{DIM}mEnter shows it full size\x1b[0m"));
+            out.push_str(&format!("\x1b[38;5;{DIM}m{FULL}\x1b[0m"));
         }
         out
     }
@@ -1257,7 +1432,8 @@ impl Screen {
 impl Drop for Screen {
     fn drop(&mut self) {
         let mut out = io::stdout();
-        let _ = out.write_all(b"\x1b[?1004l\x1b[?1006l\x1b[?1002l\x1b[0m\x1b[?25h\x1b[?1049l");
+        let _ = out
+            .write_all(b"\x1b[?1004l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[0m\x1b[?25h\x1b[?1049l");
         let _ = out.flush();
         let _ = terminal::disable_raw_mode();
     }
@@ -1266,13 +1442,13 @@ impl Drop for Screen {
 /// Runs the pager on this terminal until it is closed, showing `content`
 /// and then whatever `updates` hands over; `url` is the page o opens.
 pub fn run(content: Content, updates: Option<Receiver<Content>>, url: Option<String>) -> ExitCode {
-    run_with(content, updates, url, true, None)
+    run_with(content, updates, url, true, None, None)
 }
 
 /// `run` for a view that follows what it shows: `follow`'s reads shown as
 /// they come, and asked for on r and on taking the focus again.
 pub fn run_following(content: Content, follow: Follow) -> ExitCode {
-    run_with(content, None, None, true, Some(follow))
+    run_with(content, None, None, true, Some(follow), None)
 }
 
 /// `run` for a file of yours or a note, whose picture links are never
@@ -1280,7 +1456,13 @@ pub fn run_following(content: Content, follow: Follow) -> ExitCode {
 /// computer; its diagrams are drawn here as anywhere, and a person's photo
 /// while Settings' `photos` is on.
 pub fn run_local(content: Content) -> ExitCode {
-    run_with(content, None, None, false, None)
+    run_with(content, None, None, false, None, None)
+}
+
+/// `run_local` for a note's preview, named `name` on the prompt line,
+/// showing each copy `updates` hands over where the reader was.
+pub fn run_local_named(content: Content, updates: Receiver<Content>, name: String) -> ExitCode {
+    run_with(content, Some(updates), None, false, None, Some(name))
 }
 
 /// `run_following` fetching no pictures: for what strangers write, whose
@@ -1289,7 +1471,7 @@ pub fn run_local(content: Content) -> ExitCode {
 /// Settings' `photos` is on, since they come from Photos' cache, fetched
 /// only from the service's own avatars.
 pub fn run_following_without_pictures(content: Content, follow: Follow) -> ExitCode {
-    run_with(content, None, None, false, Some(follow))
+    run_with(content, None, None, false, Some(follow), None)
 }
 
 fn run_with(
@@ -1298,10 +1480,12 @@ fn run_with(
     url: Option<String>,
     fetch_pictures: bool,
     follow: Option<Follow>,
+    name: Option<String>,
 ) -> ExitCode {
     let (cols, rows) = terminal::size().unwrap_or((80, 24));
     let mut pager = Pager::new(content, cols as usize, rows as usize)
         .with_url(url)
+        .with_name(name)
         .with_cursor(crate::settings::is_on("view_cursor"));
     if let Some(follow) = &follow {
         pager = pager.following(follow.read_at);
@@ -1335,7 +1519,7 @@ fn run_with(
         let graphics = pager.graphics();
         let mut out = io::stdout().lock();
         let _ = out.write_all(&graphics);
-        let _ = out.write_all(pager.frame().as_bytes());
+        let _ = out.write_all(pager.frame_with_menu().as_bytes());
         let _ = out.flush();
     };
     draw(&mut pager);
@@ -1451,6 +1635,16 @@ fn run_with(
                 }
                 redraw = true;
             }
+            // Asked of the server, which says itself what can't be done.
+            Act::Press(name) => {
+                let asked = crate::mux::socket::ask(&["press", &name]);
+                match asked {
+                    Ok((0, _, _)) => {}
+                    Ok((_, _, err)) => pager.note = Some(err.trim().to_string()),
+                    Err(e) => pager.note = Some(format!("Couldn't ask the workspace: {e}")),
+                }
+                redraw = true;
+            }
             Act::Redraw => redraw = true,
             Act::Same => {}
         }
@@ -1535,6 +1729,35 @@ mod tests {
         let pager = Pager::new(markdown("# Short\n\nOne line."), 60, 20);
         assert!(!pager.bar);
         assert!(!pager.frame().contains('┃'));
+    }
+
+    #[test]
+    fn a_named_views_prompt_line_never_runs_past_the_pane() {
+        let plain = |s: &str| {
+            let mut out = String::new();
+            let mut esc = false;
+            for c in s.chars() {
+                match (esc, c) {
+                    (false, '\x1b') => esc = true,
+                    (true, c) if c.is_ascii_alphabetic() => esc = false,
+                    (true, _) => {}
+                    (false, c) => out.push(c),
+                }
+            }
+            out
+        };
+        for cols in [20, 40, 60] {
+            let pager = Pager::new(markdown("# Short\n"), cols, 10)
+                .with_name(Some("Preview of A rather long note name here".into()));
+            let line = plain(&pager.prompt(cols));
+            assert!(
+                crate::ui::draw::width(&line) < cols,
+                "{cols} columns: {line:?}"
+            );
+        }
+        let wide =
+            Pager::new(markdown("# Short\n"), 80, 10).with_name(Some("Preview of Plan".into()));
+        assert!(plain(&wide.prompt(80)).starts_with("Preview of Plan · q closes"));
     }
 
     #[test]

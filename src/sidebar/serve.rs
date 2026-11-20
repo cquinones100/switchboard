@@ -42,6 +42,7 @@ const FLICK: Duration = Duration::from_millis(150);
 
 mod history;
 mod menu;
+mod status;
 mod window;
 
 /// How often the spinner turns.
@@ -102,6 +103,28 @@ fn process_group(pid: u32) -> Option<u32> {
     // isn't there is an error, not undefined.
     let group = unsafe { libc::getpgid(pid) };
     u32::try_from(group).ok().filter(|g| *g > 0)
+}
+
+/// Marks the tabs of another repository than `repo` `elsewhere`, for
+/// Other repos, but one with a reminder come due, which goes under
+/// Reminders elsewhere with its repository named.
+fn mark_elsewhere(tabs: &mut [TabModel], repo: &std::path::Path) {
+    let r = Rules::now();
+    for t in tabs {
+        if t.repo_dir.as_deref() == Some(repo) {
+            continue;
+        }
+        if model::reminder_due(t, &r) {
+            t.outside_filter = true;
+            t.from_repo = t
+                .repo_dir
+                .as_deref()
+                .and_then(|d| d.file_name())
+                .map(|n| n.to_string_lossy().into_owned());
+        } else {
+            t.elsewhere = true;
+        }
+    }
 }
 
 /// A label's PR in front (`#12 name`) and the rest.
@@ -413,10 +436,25 @@ impl Server {
                 && let Some(file) = reader.transcript(&claude_dir, session)
             {
                 files.insert(file.clone());
+                // Where a landing's `land-lock test` runs: the directory a `cd`
+                // before it named, from the session's, else the session's.
+                let tests_in_ci = |dir: Option<&str>| {
+                    let Some(here) = session.cwd.as_deref().map(std::path::Path::new) else {
+                        return false;
+                    };
+                    let dir = match dir {
+                        Some(d) => match d.strip_prefix("~/") {
+                            Some(rest) => paths::home_join(rest),
+                            None => here.join(d),
+                        },
+                        None => here.to_path_buf(),
+                    };
+                    crate::repos::tests_in_ci_known(&dir)
+                };
                 // A transcript that can't be read leaves the tab shown
                 // without what it would have added, never the others.
                 if let Ok(work) =
-                    reader.background_work(&file, session.started_at.unwrap_or(0), now)
+                    reader.background_work(&file, session.started_at.unwrap_or(0), now, tests_in_ci)
                 {
                     read.work = work;
                 }
@@ -439,6 +477,17 @@ impl Server {
         let idle: Vec<(PaneId, i64)> = reads
             .iter()
             .filter_map(|(p, r)| Some((*p, r.session.as_ref()?.idle_since?)))
+            .collect();
+        // When it says each pane's session went busy, for a `!` command.
+        let busy: Vec<(PaneId, i64)> = reads
+            .iter()
+            .filter_map(|(p, r)| Some((*p, r.session.as_ref()?.busy_since?)))
+            .collect();
+        // When it says each pane's session stopped being busy, which ends a
+        // `!` command's work whatever it says instead.
+        let not_busy: Vec<(PaneId, i64)> = reads
+            .iter()
+            .filter_map(|(p, r)| Some((*p, r.session.as_ref()?.not_busy_since?)))
             .collect();
         // A question asked since the session started, still unanswered.
         let asks: Vec<(PaneId, String, i64, String)> = reads
@@ -469,6 +518,16 @@ impl Server {
                 self.dirty_sidebars();
             }
         }
+        for (pane, at) in busy {
+            if self.agent_went_busy(pane, at) {
+                self.dirty_sidebars();
+            }
+        }
+        for (pane, at) in not_busy {
+            if self.agent_shell_ended(pane, at) {
+                self.dirty_sidebars();
+            }
+        }
         for (pane, question, at, call) in asks {
             if self.agent_asked(pane, at, &call, &question) {
                 self.dirty_sidebars();
@@ -479,6 +538,7 @@ impl Server {
                 self.dirty_sidebars();
             }
         }
+        self.tab_status_settle();
         if changed {
             self.dirty_sidebars();
         }
@@ -611,22 +671,17 @@ impl Server {
     pub(crate) fn sidebar_marked(&self, session: &str) -> Vec<TabModel> {
         let mut tabs = self.sidebar_tabs(session);
         if let Some(repo) = self.sidebar_repo(session) {
-            let r = Rules::now();
-            for t in &mut tabs {
-                if t.repo_dir.as_deref() == Some(repo) {
-                    continue;
-                }
-                if model::reminder_due(t, &r) {
-                    t.outside_filter = true;
-                    t.from_repo = t
-                        .repo_dir
-                        .as_deref()
-                        .and_then(|d| d.file_name())
-                        .map(|n| n.to_string_lossy().into_owned());
-                } else {
-                    t.elsewhere = true;
-                }
-            }
+            mark_elsewhere(&mut tabs, repo);
+        }
+        tabs
+    }
+
+    /// Every session's tabs marked as `session`'s sidebar marks its own,
+    /// for mission control's Tabs view: by its repository filter.
+    pub(crate) fn sidebar_all_marked(&self, session: &str) -> Vec<TabModel> {
+        let mut tabs = self.sidebar_all_tabs();
+        if let Some(repo) = self.sidebar_repo(session) {
+            mark_elsewhere(&mut tabs, repo);
         }
         tabs
     }
@@ -806,10 +861,16 @@ impl Server {
             .then(|| crate::tabs::opened(&tab.opts))
             .flatten();
         t.pinned = opt("@pinned").is_some_and(|v| v != "0");
+        t.by_hand = opt(status::OPTION)
+            .filter(|_| settings::is_on("tab_status_by_hand"))
+            .and_then(|v| model::by_hand_of(&v));
+        t.land = opt(crate::mux::server::LAND).is_some_and(|v| v == "1");
         t.remind_at = opt("@remind_at")
             .and_then(|v| v.trim().parse::<i64>().ok())
             .filter(|n| *n != 0);
         t.remind_note = opt("@remind_note");
+        t.ready =
+            opt(crate::agent::TAB_READY).filter(|_| settings::is_on(crate::agent::READY_SETTING));
         t.routine_next = opt(crate::routines::TAB_NEXT).and_then(|v| v.trim().parse::<i64>().ok());
         // A landed tab made yours (`@autopilot_yours`) is a plain tab here.
         t.autopilot = opt("@autopilot")
@@ -2392,6 +2453,8 @@ impl Server {
         }
         self.sidebar_cursor_back(session);
         self.dirty_session(session);
+        // Mission control's Tabs view follows the filter too.
+        self.mission_changed();
     }
 
     /// M-p's "Filter the sidebar to a repository": a picker of the

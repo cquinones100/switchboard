@@ -20,6 +20,8 @@
 //! (`PROGRAM_MARKS`), so a shell started where Notes ran isn't taken for
 //! Notes, nor allowed what Notes was. The tab's `@tab_dir` goes too: the
 //! tab is handed to other work, which is about the directory it starts in.
+//! Handed a worktree's work (`wt`, `wtn`, `wtb`), it takes `@land` from
+//! Settings' `land_without_asking` as a new tab opening one does.
 
 use std::path::PathBuf;
 
@@ -105,6 +107,7 @@ impl Server {
         let tab = slot.tab;
         let (cols, rows) = slot.pane.size();
         let cwd = cwd.or_else(|| self.pane_own_dir(pane));
+        let work = command.as_deref().is_some_and(crate::worktree::opens_work);
         let fresh = self.start_program(pane, cwd, command, cols, rows)?;
         let slot = self.panes.get_mut(&pane).expect("checked above");
         let mut old = std::mem::replace(&mut slot.pane, fresh);
@@ -162,6 +165,11 @@ impl Server {
                     self.relayout(tab);
                 }
             }
+        }
+        // Handed a worktree's work (/wt, /wtn), it lands without asking as
+        // Settings' land_without_asking says.
+        if work {
+            self.land_as_set(tab);
         }
         self.agents.restarted(pane);
         self.sidebar.panes.remove(&pane);

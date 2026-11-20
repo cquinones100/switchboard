@@ -1365,7 +1365,7 @@ fn restore_tab(
         .last_pane
         .filter(|p| panes.contains(p) && *p != tab.active);
     tab.zoomed = st.zoomed && panes.len() > 1;
-    tab.opts = st.opts;
+    tab.opts = super::server::land_renamed(st.opts);
     tab.layout = layout;
     server.tabs.insert(st.id, tab);
     server.next_tab = server.next_tab.max(st.id.0.saturating_add(1));
@@ -1511,7 +1511,7 @@ pub fn adopt_layout(server: &mut Server, saved: Saved) {
                 .last_pane
                 .filter(|p| in_layout.contains(p) && *p != tab.active);
             tab.zoomed = st.zoomed && in_layout.len() > 1;
-            tab.opts = st.opts;
+            tab.opts = super::server::land_renamed(st.opts);
             tab.layout = layout;
             for id in &ours {
                 if let Some(slot) = server.panes.get_mut(id) {

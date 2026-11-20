@@ -531,9 +531,7 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_until_none_is
             .ok()
             .and_then(|t| serde_json::from_str::<Value>(&t).ok())
             .is_some_and(|m| m["landWithoutAsking"] == true)
-            && opened(&server)
-                .iter()
-                .all(|t| t["options"]["@autopilot_land"] == "1")
+            && opened(&server).iter().all(|t| t["options"]["@land"] == "1")
     });
     client.wait_text("lands on its own");
 
@@ -726,7 +724,7 @@ fn a_landed_item_stays_under_landed_once_its_tab_is_yours_and_once_it_is_closed(
         first(&server).is_some_and(|t| t["options"]["@autopilot_yours"] == "1")
     });
     let tab = first(&server).unwrap();
-    assert!(tab["options"]["@autopilot_land"].is_null());
+    assert!(tab["options"]["@land"].is_null());
     std::thread::sleep(Duration::from_millis(500));
     let screen = client.screen();
     assert!(

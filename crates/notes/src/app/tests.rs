@@ -15,6 +15,7 @@ use ratatui::style::Color;
 use super::*;
 use crate::store::tests::{Dir, set_mtime, temp, write};
 use switchboard_ui::input::{Mods, MouseButton, MouseKind};
+use switchboard_ui::kit::{self, Press};
 
 fn options() -> Options {
     Options {
@@ -1613,6 +1614,184 @@ fn the_toolbar_has_a_button_for_its_items_and_a_click_styles_the_word() {
         !screen(&mut bare).iter().any(|l| l.contains(" H1 ")),
         "with the toolbar off, no toolbar"
     );
+}
+
+/// Whether toolbar button `index` is drawn in `buf` as the kit draws a
+/// button pressed `press`: its ends, its glyph and its surface, cell by
+/// cell.
+fn drawn_as(app: &App, buf: &Buffer, index: usize, press: Press) -> bool {
+    let (_, r) = *app
+        .geo
+        .toolbar
+        .iter()
+        .find(|(i, _)| *i == index)
+        .expect("the button is shown");
+    let mut want = Buffer::empty(r);
+    let spans = kit::button(
+        easy::BUTTONS[index].label,
+        None,
+        press,
+        app.opts.caps,
+        &app.look.theme,
+    );
+    want.set_line(r.x, r.y, &ratatui::text::Line::from(spans), r.width);
+    (r.x..r.right()).all(|x| {
+        let (got, want) = (&buf[(x, r.y)], &want[(x, r.y)]);
+        got.symbol() == want.symbol()
+            && got.fg == want.fg
+            && got.bg == want.bg
+            && got.modifier == want.modifier
+    })
+}
+
+fn buffer(app: &mut App) -> Buffer {
+    let mut buf = Buffer::empty(Rect::new(0, 0, app.cols, app.rows));
+    app.draw(&mut buf);
+    buf
+}
+
+#[test]
+fn the_toolbar_is_drawn_with_the_kits_button_lit_for_the_style_the_cursor_is_in() {
+    let (_dir, store) = temp("toolbar kit");
+    let (mut app, _) = app_in(
+        store,
+        Options {
+            caps: true,
+            ..options()
+        },
+    );
+    app.start();
+    app.editor.change(|doc| {
+        doc.text = Text::from_lines(&["# Title", "", "plain **bold** text", "## Next"])
+    });
+    app.editor.doc.row = 2;
+    app.editor.doc.col = 0;
+    let buf = buffer(&mut app);
+    for (i, _) in app.geo.toolbar.clone() {
+        assert!(
+            drawn_as(&app, &buf, i, Press::Rest),
+            "{} at rest, between the kit's ends",
+            easy::BUTTONS[i].label
+        );
+    }
+
+    let (_, italic) = app.geo.toolbar[1];
+    mouse(&mut app, MouseKind::Move, italic.x + 1, italic.y);
+    let buf = buffer(&mut app);
+    assert!(drawn_as(&app, &buf, 1, Press::Hover), "I under the mouse");
+    mouse(&mut app, MouseKind::Move, 60, 20);
+
+    app.editor.doc.col = 9;
+    let buf = buffer(&mut app);
+    assert!(drawn_as(&app, &buf, 0, Press::Lit), "B lit in bold text");
+    assert!(drawn_as(&app, &buf, 1, Press::Rest), "and I not");
+    let (_, bold) = app.geo.toolbar[0];
+    click(&mut app, bold.x + 1, bold.y);
+    assert_eq!(
+        app.editor.doc.line(2),
+        "plain bold text",
+        "a lit B takes the bold off"
+    );
+
+    app.editor.doc.row = 3;
+    app.editor.doc.col = 4;
+    let buf = buffer(&mut app);
+    assert!(drawn_as(&app, &buf, 5, Press::Lit), "H2 lit on a heading");
+    assert!(drawn_as(&app, &buf, 4, Press::Rest), "and H1 not");
+
+    let menu = easy::BUTTONS.len() - 1;
+    let (_, more) = *app.geo.toolbar.last().unwrap();
+    click(&mut app, more.x + 1, more.y);
+    assert_eq!(app.top_kind(), Some("format-menu"));
+    let buf = buffer(&mut app);
+    assert!(
+        drawn_as(&app, &buf, menu, Press::Lit),
+        "⋯ lit over its Format menu's backdrop"
+    );
+}
+
+#[test]
+fn bold_italic_lights_b_and_i_and_a_checklist_item_lights_its_button() {
+    let (_dir, mut app) = started("toolbar lit");
+    app.editor.change(|doc| {
+        doc.text = Text::from_lines(&["# Title", "", "a ***both*** b", "- [ ] item", "* dot"])
+    });
+    app.editor.doc.row = 2;
+    app.editor.doc.col = 6;
+    assert!(app.button_lit(0) && app.button_lit(1), "B and I");
+    assert!(!app.button_lit(2), "not S");
+    app.editor.doc.row = 3;
+    app.editor.doc.col = 7;
+    assert!(
+        app.button_lit(7) && !app.button_lit(6),
+        "☐ on a checklist item"
+    );
+    app.editor.doc.row = 4;
+    assert!(app.button_lit(6), "• on a bullet");
+    app.editor.doc.row = 0;
+    assert!(app.button_lit(4), "H1 on the title");
+    assert!(
+        (8..11).all(|i| !app.button_lit(i)),
+        "Table, Link and Image insert, so never light"
+    );
+}
+
+#[test]
+fn a_read_only_notes_toolbar_is_faint() {
+    let (_dir, store) = temp("toolbar held");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.held = Some(Held {
+        key: "k".into(),
+        holder: store::Holder { pid: 1, pane: None },
+        tab: None,
+        checked: Instant::now(),
+    });
+    let buf = buffer(&mut app);
+    for (i, _) in app.geo.toolbar.clone() {
+        assert!(
+            drawn_as(&app, &buf, i, Press::Idle),
+            "{}",
+            easy::BUTTONS[i].label
+        );
+    }
+}
+
+#[test]
+fn a_click_on_each_buttons_drawn_cells_runs_its_item() {
+    let expected = [
+        (0, "**hello** world"),
+        (1, "*hello* world"),
+        (2, "~~hello~~ world"),
+        (3, "`hello` world"),
+        (4, "# hello world"),
+        (5, "## hello world"),
+        (6, "* hello world"),
+        (7, "- [ ] hello world"),
+    ];
+    for (index, line) in expected {
+        let (_dir, mut app) = started("toolbar clicks");
+        app.editor
+            .change(|doc| doc.text = Text::from_lines(&["# Title", "", "hello world"]));
+        app.editor.doc.row = 2;
+        app.editor.doc.col = 1;
+        buffer(&mut app);
+        let (_, r) = app.geo.toolbar[index];
+        for x in [r.x, r.right() - 1] {
+            app.editor
+                .change(|doc| doc.text = Text::from_lines(&["# Title", "", "hello world"]));
+            keys(&mut app, "<Esc>");
+            app.editor.doc.row = 2;
+            app.editor.doc.col = 1;
+            click(&mut app, x, r.y);
+            assert_eq!(
+                app.editor.doc.line(2),
+                line,
+                "{}",
+                easy::BUTTONS[index].label
+            );
+        }
+    }
 }
 
 #[test]
@@ -5079,4 +5258,17 @@ fn in_a_notes_with_no_room_a_narrowing_key_clears_a_kept_width() {
     app.cols = 58;
     app.key(resize('h'));
     assert_eq!(kept(&app), None);
+}
+
+#[test]
+fn preview_this_note_is_listed_in_a_workspace_and_left_out_alone() {
+    let (_dir, mut app) = started("preview-listed");
+    let listed = |app: &App| {
+        app.palette_commands(false)
+            .iter()
+            .any(|c| c.act == PaletteAct::Preview && c.name == "Preview this note")
+    };
+    assert!(!listed(&app), "alone, no workspace to draw it");
+    app.opts.server = true;
+    assert!(listed(&app), "in a workspace's pane");
 }

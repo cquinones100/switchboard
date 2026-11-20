@@ -437,6 +437,26 @@ pub fn drop_empty(doc: &mut Doc) {
     }
 }
 
+/// The run of text in `style` that a cursor at `caret` is in, by its
+/// opening and closing markers' bytes, which the toolbar lights its button
+/// for and the style takes off.
+pub fn run_at(
+    line: &str,
+    caret: usize,
+    style: Character,
+) -> Option<((usize, usize), (usize, usize))> {
+    render::inline(line, 0)
+        .into_iter()
+        .filter(|span| span.hl == style.hl() && span.conceal.len() == 2)
+        .map(|span| (span.conceal[0], span.conceal[1]))
+        .find(|(open, close)| caret >= open.0 && caret < close.1)
+}
+
+/// The paragraph style a line has, which pressing it again takes off.
+pub fn paragraph_of(line: &str) -> Paragraph {
+    Paragraph::of(split(line).1)
+}
+
 /// A character style, as Notes applies one:
 /// - on a selection (charwise, or every line of a linewise one, each from
 ///   its text's start);
@@ -496,31 +516,25 @@ pub fn character(
         }
     };
     // In text that has the style: off, for the whole run.
-    for span in render::inline(&line, 0) {
-        if span.hl != style.hl() || span.conceal.len() != 2 {
-            continue;
-        }
-        let (open, close) = (span.conceal[0], span.conceal[1]);
-        if caret >= open.0 && caret < close.1 {
-            let new = format!(
-                "{}{}{}",
-                &line[..open.0],
-                &line[open.1..close.0],
-                &line[close.1..]
-            );
-            doc.set_line(row, &new);
-            // The cursor stays on the same text: the opening marker is gone
-            // from before it, and a cursor on a marker goes to the edge.
-            let opened = open.1 - open.0;
-            let at = if caret < open.1 {
-                open.0
-            } else if caret <= close.0 {
-                caret - opened
-            } else {
-                close.0 - opened
-            };
-            return carry_on(doc, at);
-        }
+    if let Some((open, close)) = run_at(&line, caret, style) {
+        let new = format!(
+            "{}{}{}",
+            &line[..open.0],
+            &line[open.1..close.0],
+            &line[close.1..]
+        );
+        doc.set_line(row, &new);
+        // The cursor stays on the same text: the opening marker is gone
+        // from before it, and a cursor on a marker goes to the edge.
+        let opened = open.1 - open.0;
+        let at = if caret < open.1 {
+            open.0
+        } else if caret <= close.0 {
+            caret - opened
+        } else {
+            close.0 - opened
+        };
+        return carry_on(doc, at);
     }
     // On a word: that word. Typing, the cursor has to be inside it, not
     // just after it, since that is where the next letter goes.

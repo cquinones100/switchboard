@@ -33,7 +33,8 @@ use crate::{paths, settings, util};
 enum Spare {
     /// Nowhere any more: no such columns, tab or client.
     Gone,
-    /// The columns are behind another tab or mission control for now.
+    /// The columns are behind another tab or mission control for now: the
+    /// tab would have them were it in front with nothing over it.
     Hidden,
     At(Rect),
 }
@@ -108,6 +109,11 @@ fn open_outside(
     });
 }
 
+/// The pictures beside a pane a layer holds, if it holds them.
+fn pictures_of(layer: &Layer) -> Option<&Pictures> {
+    layer.overlay.as_any().downcast_ref::<Pictures>()
+}
+
 /// What became of input handed to a client's overlays.
 pub enum Handed {
     /// None of them took it: it is the tab's.
@@ -166,8 +172,7 @@ impl Server {
 
     /// Opens a box about a tab with `open` (its links, renaming it,
     /// answering its Claude, which note is its, its menu and full title,
-    /// M-m's PR readiness, sending its Claude's last reply on, Work on this
-    /// item), marked so that it goes beside a narrow lone pane as a pane
+    /// sending its Claude's last reply on, Work on this item), marked so that it goes beside a narrow lone pane as a pane
     /// when the tab is the one in front of the client (UX 2.0 board 111);
     /// every other box goes in the middle.
     pub fn about_tab(&mut self, client: ClientId, tab: TabId, open: impl FnOnce(&mut Server)) {
@@ -463,19 +468,28 @@ impl Server {
                 }
             }
             UiEvent::Said { client, text } => self.say(client, &text),
-            UiEvent::Look { client, tab, shown } => {
+            UiEvent::Look {
+                client,
+                tab,
+                shown,
+                before_after,
+            } => {
                 if shown.is_empty() {
                     return;
                 }
                 // The columns may have gone while the pictures were read.
-                if !matches!(self.look_spare(client, tab), Spare::At(_)) {
+                // Ones behind another tab or mission control keep them,
+                // hidden until the tab is in front again.
+                if matches!(self.look_spare(client, tab), Spare::Gone) {
                     let files = shown.into_iter().map(|s| s.file).collect();
                     open_outside(files, self.tx.clone(), Some(client), true);
                     return;
                 }
-                self.close_overlays(client, "pictures");
+                // Each tab keeps its own: ones asked for from a tab behind
+                // never take those beside the tab in front.
+                self.close_pictures(client, |p| p.tab == tab);
                 let about = format!("tab {} · {}", self.tab_number(tab), self.tab_label(tab));
-                let pictures = Pictures::new(tab, &about, shown);
+                let pictures = Pictures::new(tab, &about, shown, before_after);
                 // Under every box already up: they pass keys on to the tab,
                 // which would take them from a menu or a question open
                 // when Claude shows them, were they on top of it.
@@ -495,30 +509,46 @@ impl Server {
         }
     }
 
-    /// `look [-t pane] <file>...`: pictures shown to you beside the pane's
-    /// tab, in the empty columns at the right of its narrow lone pane, read
+    /// `look [-t pane] [--before-after] <file>...`: pictures shown to you
+    /// beside the pane's tab (the two `--before-after` takes, and only two,
+    /// headed "Before and after" in that order), in the empty columns at the right of its narrow lone pane, read
     /// off the server's task (Settings' `images_beside_pane`). Where there
-    /// are no such columns in front of a terminal that draws the server's
-    /// images (a split, a wide pane, another tab in front, mission control
-    /// up), with more than `pictures::MOST` of them, or with the setting
+    /// are no such columns on a terminal that draws the server's images (a
+    /// split, a wide pane), with more than `pictures::MOST` of them, or with the setting
     /// off, each opens with what the desktop opens it with, as a video or
     /// a PDF always does, and a picture this can't decode. Anything else is
     /// refused, by the ending of the file a name leads to with links
     /// followed, and so is a file in a PR's untrusted worktree, since Claude
     /// may run this without asking and the desktop runs some kinds of file
-    /// it is handed.
+    /// it is handed. Asked from a tab behind another or mission control
+    /// whose pane would have the columns in front, they wait there, hidden
+    /// until the tab is in front with nothing over it.
     pub fn cmd_look(
         &mut self,
         args: &[String],
         cwd: &std::path::Path,
         caller: Option<PaneId>,
     ) -> Reply {
-        let (target, rest) = match args {
-            [flag, t, rest @ ..] if flag == "-t" => (Some(t.as_str()), rest),
-            rest => (None, rest),
-        };
-        if rest.is_empty() {
-            return Reply::fail("usage: switchboard look [-t pane] <file>...");
+        let mut target = None;
+        let mut before_after = false;
+        let mut rest = args;
+        loop {
+            match rest {
+                [flag, t, more @ ..] if flag == "-t" => {
+                    target = Some(t.as_str());
+                    rest = more;
+                }
+                [flag, more @ ..] if flag == "--before-after" => {
+                    before_after = true;
+                    rest = more;
+                }
+                _ => break,
+            }
+        }
+        if rest.is_empty() || (before_after && rest.len() != 2) {
+            return Reply::fail(
+                "usage: switchboard look [-t pane] [--before-after <before> <after> | <file>...]",
+            );
         }
         let pane = match target {
             Some(t) => match t.strip_prefix('%').and_then(|p| p.parse::<PaneId>().ok()) {
@@ -567,7 +597,7 @@ impl Server {
             (Some(client), Some(tab))
                 if (1..=pictures::MOST).contains(&pictures)
                     && settings::is_on("images_beside_pane")
-                    && matches!(self.look_spare(client, tab), Spare::At(_)) =>
+                    && !matches!(self.look_spare(client, tab), Spare::Gone) =>
             {
                 Some((client, tab))
             }
@@ -602,7 +632,12 @@ impl Server {
                     }
                 }
             }
-            let _ = tx.send(Event::Ui(UiEvent::Look { client, tab, shown }));
+            let _ = tx.send(Event::Ui(UiEvent::Look {
+                client,
+                tab,
+                shown,
+                before_after,
+            }));
         });
         Reply::ok("")
     }
@@ -610,7 +645,8 @@ impl Server {
     /// Where pictures shown beside a tab's pane go on a client: the empty
     /// columns at the right of its narrow lone pane, while the tab is the
     /// one in front, nothing fills the screen over it and the terminal
-    /// draws the server's images.
+    /// draws the server's images; hidden while another tab or something
+    /// over the screen is in front of columns the tab has.
     fn look_spare(&self, client: ClientId, tab: TabId) -> Spare {
         let Some(c) = self.clients.get(&client) else {
             return Spare::Gone;
@@ -618,45 +654,92 @@ impl Server {
         let (Some(s), Some(t)) = (self.session(&c.session), self.tabs.get(&tab)) else {
             return Spare::Gone;
         };
+        // A client of another session never brings the tab to the front.
+        if !s.tabs.contains(&tab) {
+            return Spare::Gone;
+        }
         if self.graphics_of(c).is_none() {
             return Spare::Gone;
         }
+        let Some(room) = crate::mux::beside::spare_of(s.spread_for(t), s.area_for(t))
+            .filter(|r| r.width >= pictures::LEAST_COLS && r.height >= pictures::LEAST_HEIGHT)
+        else {
+            return Spare::Gone;
+        };
         let covered = c.overlays.layers.iter().any(|l| l.overlay.covers_screen());
         if s.current != tab || covered {
             return Spare::Hidden;
         }
-        crate::mux::beside::spare_of(s.spread_for(t), s.area_for(t))
-            .filter(|r| r.width >= pictures::LEAST_COLS && r.height >= pictures::LEAST_HEIGHT)
-            .map_or(Spare::Gone, Spare::At)
+        Spare::At(room)
     }
 
-    /// Keeps the pictures shown beside a tab's pane on the spare columns
+    /// Keeps the pictures shown beside each tab's pane on its spare columns
     /// before a client is drawn: hidden while another tab or mission
     /// control is in front, closed once the columns have gone.
     pub fn looks_before_draw(&mut self, id: ClientId) {
-        let Some(tab) = self
-            .clients
-            .get(&id)
-            .and_then(|c| c.overlays.find::<Pictures>())
-            .map(|p| p.tab)
-        else {
+        let Some(c) = self.clients.get(&id) else {
             return;
         };
-        let area = match self.look_spare(id, tab) {
-            Spare::Gone => {
-                self.close_overlays(id, "pictures");
-                return;
-            }
-            Spare::Hidden => None,
-            Spare::At(area) => Some(area),
-        };
-        if let Some(p) = self
-            .clients
-            .get_mut(&id)
-            .and_then(|c| c.overlays.find_mut::<Pictures>())
-        {
-            p.area = area;
+        let tabs: Vec<TabId> = c
+            .overlays
+            .layers
+            .iter()
+            .filter_map(|l| pictures_of(l).map(|p| p.tab))
+            .collect();
+        if tabs.is_empty() {
+            return;
         }
+        let spares: Vec<(TabId, Spare)> = tabs
+            .into_iter()
+            .map(|tab| (tab, self.look_spare(id, tab)))
+            .collect();
+        let gone: Vec<TabId> = spares
+            .iter()
+            .filter(|(_, s)| matches!(s, Spare::Gone))
+            .map(|(t, _)| *t)
+            .collect();
+        if !gone.is_empty() {
+            self.close_pictures(id, |p| gone.contains(&p.tab));
+        }
+        let Some(c) = self.clients.get_mut(&id) else {
+            return;
+        };
+        for layer in &mut c.overlays.layers {
+            let Some(p) = layer.overlay.as_any_mut().downcast_mut::<Pictures>() else {
+                continue;
+            };
+            if let Some((_, spare)) = spares.iter().find(|(t, _)| *t == p.tab) {
+                p.area = match spare {
+                    Spare::At(area) => Some(*area),
+                    _ => None,
+                };
+            }
+        }
+        // Input reaches the top layer only, so hidden pictures go under
+        // the ones shown, which then take M-Esc, a click and the wheel.
+        let (hidden, rest): (Vec<Layer>, Vec<Layer>) = std::mem::take(&mut c.overlays.layers)
+            .into_iter()
+            .partition(|l| pictures_of(l).is_some_and(|p| p.area.is_none()));
+        c.overlays.layers = hidden;
+        c.overlays.layers.extend(rest);
+    }
+
+    /// Closes a client's pictures beside a pane that `which` picks.
+    fn close_pictures(&mut self, client: ClientId, which: impl Fn(&Pictures) -> bool) {
+        let Some(c) = self.clients.get_mut(&client) else {
+            return;
+        };
+        let (gone, kept): (Vec<Layer>, Vec<Layer>) = std::mem::take(&mut c.overlays.layers)
+            .into_iter()
+            .partition(|l| pictures_of(l).is_some_and(&which));
+        c.overlays.layers = kept;
+        if gone.is_empty() {
+            return;
+        }
+        for layer in gone {
+            self.finished(client, layer, Outcome::Dismissed);
+        }
+        self.overlays_changed(client);
     }
 
     /// `picture [-t pane] <file>`: the picture shown full size over the

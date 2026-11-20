@@ -13,13 +13,16 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use super::{App, Focus, NoteBar, Shown};
+use super::{App, Focus, NoteBar, Shown, Then};
 use crate::editor::Mode;
+use crate::format;
 use crate::images::Picture;
+use crate::menu::{self, Act};
 use crate::render::{self, Cell, Hl, Kind};
 use crate::sidebar::Look as RowLook;
 use crate::{diagram, easy};
 use switchboard_ui::draw::{put_line, width};
+use switchboard_ui::kit::{self, Press};
 
 /// Rows of the screen kept above and below the cursor's line (the config's
 /// `scrolloff`, in rows since a line may wrap to many).
@@ -200,11 +203,25 @@ impl App {
         if self.focus == Focus::List && self.list_shown && self.prompt.is_none() {
             cursor = None;
         }
-        for layer in &mut self.layers {
+        // ⋯ stays lit over its Format menu's backdrop, as what opened it.
+        let menu_button = self
+            .geo
+            .toolbar
+            .iter()
+            .find(|(i, _)| easy::BUTTONS[*i].item.is_none())
+            .copied();
+        for n in 0..self.layers.len() {
+            let layer = &mut self.layers[n];
             layer.overlay.draw(buf, &self.look);
-            if let Some(outer) = layer.overlay.stands_out() {
-                switchboard_ui::dim_behind(buf, outer, &self.look.theme);
-                switchboard_ui::placeholder::shadow_cells(buf, outer);
+            let Some(outer) = layer.overlay.stands_out() else {
+                continue;
+            };
+            switchboard_ui::dim_behind(buf, outer, &self.look.theme);
+            switchboard_ui::placeholder::shadow_cells(buf, outer);
+            if matches!(layer.then, Then::Format(_))
+                && let Some((i, r)) = menu_button
+            {
+                self.draw_button(buf, i, r);
             }
         }
         if let Some(layer) = self.layers.last() {
@@ -575,6 +592,48 @@ impl App {
         out
     }
 
+    /// Whether toolbar button `index` is lit: a style's while the cursor is
+    /// in it, so pressing it takes it off; ⋯ while its Format menu is open.
+    /// Table, Link and Image insert, so never light.
+    pub(super) fn button_lit(&self, index: usize) -> bool {
+        let Some(label) = easy::BUTTONS[index].item else {
+            return self
+                .layers
+                .iter()
+                .any(|l| matches!(l.then, Then::Format(_)));
+        };
+        let doc = &self.editor.doc;
+        let line = doc.line(doc.row);
+        match menu::by_label(label).map(|i| i.act) {
+            Some(Act::Character(style)) => format::run_at(&line, doc.col, style).is_some(),
+            Some(Act::Paragraph(style)) => format::paragraph_of(&line) == style,
+            _ => false,
+        }
+    }
+
+    /// Toolbar button `index` in its cells, as the kit draws a button:
+    /// faint while the note is read-only, else lit, under the mouse or at
+    /// rest.
+    fn draw_button(&self, buf: &mut Buffer, index: usize, r: Rect) {
+        let press = if self.held.is_some() {
+            Press::Idle
+        } else if self.button_lit(index) {
+            Press::Lit
+        } else if self.hover_button == Some(index) {
+            Press::Hover
+        } else {
+            Press::Rest
+        };
+        let spans = kit::button(
+            easy::BUTTONS[index].label,
+            None,
+            press,
+            self.opts.caps,
+            &self.look.theme,
+        );
+        put_line(buf, r.x, r.y, r.width, &Line::from(spans));
+    }
+
     fn draw_note(&mut self, buf: &mut Buffer) -> Option<(u16, u16)> {
         let note = self.geo.note;
         self.geo.toolbar.clear();
@@ -605,21 +664,7 @@ impl App {
             };
             self.geo.toolbar = easy::toolbar(note.x, note.y, cols);
             for (i, r) in &self.geo.toolbar {
-                let lit = self.hover_button == Some(*i);
-                let style = if lit {
-                    Style::new().bg(Color::Indexed(81)).fg(Color::Indexed(16))
-                } else {
-                    Style::new()
-                        .bg(Color::Indexed(if self.opts.light { 252 } else { 237 }))
-                        .fg(Color::Indexed(if self.opts.light { 235 } else { 252 }))
-                };
-                buf.set_stringn(
-                    r.x,
-                    r.y,
-                    format!(" {} ", easy::BUTTONS[*i].label),
-                    r.width as usize,
-                    style,
-                );
+                self.draw_button(buf, *i, *r);
             }
             top_y += 1;
         } else if corner {

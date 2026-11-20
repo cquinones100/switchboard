@@ -461,7 +461,7 @@ pub struct ViewTab {
     pub name: String,
     pub phase: Option<String>,
     pub waiting: bool,
-    /// Autopilot's "Land without asking" is on in it (`@autopilot_land`).
+    /// It lands without asking (`@land`).
     pub autoland: bool,
 }
 

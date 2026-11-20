@@ -43,7 +43,9 @@
 //! itself starts off.
 //!
 //! Its menu's "Land without asking", after a yes naming what it skips and
-//! keeps, marks its tabs not landed yet `@autopilot_land`, which
+//! keeps, marks its tabs not landed yet `@land` (as it changes, and each
+//! tab it opens while it is on; the tab's own mark, which its menu and
+//! Settings' land_without_asking set too), which
 //! queue-and-clean's landing on the default branch takes as yes to the push
 //! once `switchboard leak-check` finds nothing and the review loop ended on
 //! two clean rounds of the change, and which the review loop reads to fix

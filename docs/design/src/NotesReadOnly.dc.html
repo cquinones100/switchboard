@@ -30,8 +30,8 @@ body{margin:0}
 class Component extends DCLogic {
 renderVals() {
 const W = 160, H = 45;
-const FG = { t: '#c9cdd9', d: '#8d93a8', a: '#5fd7ff', y: '#f2c56b', g: '#7fd18b', b: '#82aaff', r: '#ff8a94', m: '#c49bff', o: '#e0896b', k: '#11131a', L: '#3a3f52', f: '#565b6e', n1: '#8bd5ca', n2: '#f5bde6', n3: '#b7bdf8', n4: '#a6da95', n5: '#f5a97f', n6: '#91d7e3', n7: '#ee99a0', n8: '#c6a0f6', n9: '#e8d5a4' };
-const BG = { 0: '#15161e', 1: '#11121a', 2: '#1b1e29', 3: '#20243a', 4: '#262b40', 5: '#2a2e3d', A: '#5fd7ff', Y: '#3a3220', G: '#1d3a2a', B: '#20304f', R: '#3a1d24', M: '#2a2440', H1: '#8bd5ca', H2: '#f5bde6', H3: '#b7bdf8', H4: '#a6da95', H5: '#f5a97f', H6: '#91d7e3', H7: '#ee99a0', H8: '#c6a0f6', H9: '#e8d5a4', D1: '#33504c', E: '#1f2232' };
+const FG = { t: '#c9cdd9', d: '#8d93a8', a: '#5fd7ff', y: '#f2c56b', g: '#7fd18b', b: '#82aaff', r: '#ff8a94', m: '#c49bff', o: '#e0896b', k: '#11131a', lf: '#a8a8a8', L: '#3a3f52', f: '#565b6e', n1: '#8bd5ca', n2: '#f5bde6', n3: '#b7bdf8', n4: '#a6da95', n5: '#f5a97f', n6: '#91d7e3', n7: '#ee99a0', n8: '#c6a0f6', n9: '#e8d5a4' };
+const BG = { 0: '#15161e', 1: '#11121a', 2: '#1b1e29', 3: '#20243a', 4: '#262b40', 5: '#2a2e3d', A: '#5fd7ff', Y: '#3a3220', G: '#1d3a2a', B: '#20304f', R: '#3a1d24', M: '#2a2440', H1: '#8bd5ca', H2: '#f5bde6', H3: '#b7bdf8', H4: '#a6da95', H5: '#f5a97f', H6: '#91d7e3', H7: '#ee99a0', H8: '#c6a0f6', H9: '#e8d5a4', D1: '#33504c', E: '#1f2232', L3: '#e4e4e4', L4: '#d0d0d0' };
 const g = [];
 for (let y = 0; y < H; y++) { const row = []; for (let x = 0; x < W; x++) row.push({ c: ' ', fg: 't', bg: '0', f: '' }); g.push(row); }
 const put = (x, y, s, fg, f, bg) => { let i = 0; for (const ch of s) { const xx = x + i; if (y >= 0 && y < H && xx >= 0 && xx < W) { const c = g[y][xx]; g[y][xx] = { c: ch, fg: fg || 't', bg: bg || c.bg, f: f || '' }; } i++; } return i; };
@@ -111,6 +111,17 @@ const series = (x, y, w, h, values, color, max, over) => { const bw = w / values
 // INPUT: a line you type into: › in the accent, what is typed (or a faint placeholder) and a cursor, its keys at the right.
 const input = (x, y, w, text, placeholder, hints) => { put(x, y, '\uE0B6', '2'); fill(x + 1, y, w - 2, 1, '2'); put(x + w - 1, y, '\uE0B4', '2'); put(x + 1, y, '›', 'a', 'b', '2'); if (text) { const n = put(x + 3, y, text, 't', '', '2'); put(x + 3 + n, y, '▏', 'a', '', '2'); } else { put(x + 3, y, '▏', 'a', '', '2'); put(x + 4, y, placeholder || '', 'f', '', '2'); } if (hints) { const len = hints.reduce((m, [k, wd]) => m + [...k].length + [...wd].length + 3, 0); keys(x + w - len, y, hints); } };
 // ─────────────────────────────────────────────────────────────────────────────
+// NOTES' TOOLBAR, the kit's button (kit::button, board 118): each glyph bold in the accent on the panel surface between
+// rounded ends, one column apart; the chosen surface under the mouse; dark on the accent while lit, the cursor being in
+// that style or what it opens being in front; faint while the note is read-only. o: { hover: i, lit: [i...], idle, light,
+// only: i, to draw that button alone, as over a backdrop }.
+const TB = ['B', 'I', 'S', '</>', 'H1', 'H2', '•', '☐', 'Table', 'Link', 'Image', '⋯'];
+const toolbar = (x, y, o) => { o = o || {}; for (let i = 0; i < TB.length; i++) {
+  if (o.only !== undefined && o.only !== i) { x += [...TB[i]].length + 3; continue; }
+  const lit = (o.lit || []).includes(i), hover = o.hover === i;
+  const s = lit ? 'A' : hover ? (o.light ? 'L4' : '4') : (o.light ? 'L3' : '3');
+  const ink = lit ? 'k' : o.idle ? (o.light ? 'lf' : 'f') : 'a';
+  put(x, y, '\uE0B6', s); const n = put(x + 1, y, TB[i], ink, 'b', s); put(x + 1 + n, y, '\uE0B4', s); x += n + 3; } return x; };
 const view = (x, y, k, label, on) => { if (!k) return put(x, y, ' ' + label + ' ', on ? 't' : 'd', on ? 'b' : '', on ? '4' : '0') + 1; let n = put(x, y, ' ' + k + ' ', on ? 'k' : 'a', 'b', on ? 'A' : '3'); n += put(x + n, y, ' ' + label + ' ', on ? 't' : 'd', on ? 'b' : '', on ? '4' : '0'); return n + 1; };
 
 // THE SIDEBAR: notifications first, gone when there are none, then every tab by state
@@ -159,8 +170,7 @@ nl(10, '▸ Todos', '41');
 
 
 // The Notes pane's top line: its toolbar, dim and out of reach while the note is read-only, with a chip saying so.
-fill(62, 0, 98, 1, '3');
-T(62, 0, [' ', 't', '', '3'], ['B', 'f', 'b', '3'], ['  ', 't', '', '3'], ['I', 'f', '', '3'], ['  ', 't', '', '3'], ['S', 'f', 's', '3'], ['  </>  H1  H2  •  ☐  Table  Link  Image  ⋯', 'f', '', '3']);
+toolbar(63, 0, { idle: true });
 chip(146, 0, '⊘ read-only', 'd');
 // The bar under it: what this is, who has it, and the way there, lit as the chosen thing so Enter or a click goes.
 fill(62, 2, 98, 1, '5');

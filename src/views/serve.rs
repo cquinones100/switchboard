@@ -1,7 +1,9 @@
-//! The server's side of the views: what M-v, M-i, M-r, M-l, M-m and M-S-f
-//! do, and the palette's link commands, as tmux.conf bound them to
-//! pr-view.sh, ticket-view.sh, gh-open.sh, linear-ticket.sh, pr-ready.sh,
-//! search.sh and link-view.sh.
+//! The server's side of the views: what M-v, M-i, M-r, M-l and M-S-f do,
+//! and the palette's link commands, as tmux.conf bound them to pr-view.sh,
+//! ticket-view.sh, gh-open.sh, linear-ticket.sh, search.sh and
+//! link-view.sh, and the PR view's menu's failing checks and
+//! /resolve-conflicts, which pr-ready.sh offered (M-m's box, until the PR
+//! view took it in).
 //!
 //! The link commands list what the pane shows (`shown`): read a link
 //! beside it, open one in the browser, copy one, or open an image or video
@@ -28,7 +30,6 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use super::ready::{self, Choice, ReadyBox};
 use super::search::{self, Found, Source};
 use super::search_box::SearchBox;
 use super::shown::{self, Shown};
@@ -130,7 +131,12 @@ impl Server {
                     self.choose_ticket(client, tab, false);
                 }
             }
-            Command::PrReady => self.pr_ready(client),
+            Command::FailingChecks => self.failing_checks(client),
+            Command::ResolveConflicts => {
+                if let Some(tab) = self.here(client).map(|(_, tab, _)| tab) {
+                    self.resolve_in_tab(client, tab);
+                }
+            }
             Command::Search => self.search_everything(client, ""),
             Command::SearchTabs => self.search_everything(client, Source::Tabs.prefix()),
             Command::SearchNotes => self.search_everything(client, Source::Notes.prefix()),
@@ -174,17 +180,6 @@ impl Server {
                 shown,
             } => self.link_opened(client, &words, shown),
             ViewsEvent::Copy { client, text } => self.copy_said(client, &text),
-            ViewsEvent::Ready { client, answer } => {
-                if let Some(c) = self.clients.get_mut(&client)
-                    && let Some(b) = c.overlays.find_mut::<ReadyBox>()
-                {
-                    b.answered(answer);
-                    c.dirty = true;
-                }
-                // As pr-ready.sh did: mission control's PR views ask GitHub
-                // again too, so they agree with this answer.
-                util::append_quietly(paths::state_dir().join("github"), "\n");
-            }
             ViewsEvent::Ask {
                 client,
                 search,
@@ -397,7 +392,10 @@ impl Server {
         }
     }
 
-    /// M-v: the PR view to the right, or closed.
+    /// M-v: the PR view to the right, or closed. With UX 2.0 beside a
+    /// narrow lone pane, it takes the place of whatever is beside the pane
+    /// (`clear_beside`), the pane keeping its width; closed, it leaves the
+    /// columns empty.
     fn toggle_pr_view(&mut self, client: ClientId) {
         let Some((pane, tab, dir)) = self.here(client) else {
             return;
@@ -406,8 +404,28 @@ impl Server {
             self.kill_pane(open);
             return;
         }
+        // The work's, never Notes' beside it, which runs in your home.
+        let dir = self.work_dir(tab, pane, dir);
+        let pane = self.work_pane(tab, pane);
         let dir = dir.to_string_lossy().into_owned();
-        self.open_beside(pane, PR_VIEW, vec!["pr-view".into(), dir], VIEW_PERCENT);
+        let command = vec!["pr-view".into(), dir];
+        let replaced = crate::settings::is_on("ux2")
+            .then(|| self.clear_beside(tab))
+            .flatten();
+        if let Some((lone, width)) = replaced {
+            let mut full = vec![exe()];
+            full.extend(command);
+            match self.open_in_place_keeping(lone, "pr-view", full, None, Some(width)) {
+                Ok(view) => {
+                    if let Some(slot) = self.panes.get_mut(&view) {
+                        slot.opts.insert(PR_VIEW.into(), "1".into());
+                    }
+                }
+                Err(e) => self.say(None, &format!("Couldn't open it beside this pane: {e}")),
+            }
+        } else {
+            self.open_beside(pane, PR_VIEW, command, VIEW_PERCENT);
+        }
         // What the lookups know now is where the view starts following.
         self.views_follow(None);
     }
@@ -1147,46 +1165,19 @@ impl Server {
         });
     }
 
-    /// M-m: whether the branch's PR can merge, in a box, and what can be
-    /// done about it.
-    fn pr_ready(&mut self, client: ClientId) {
-        let Some((pane, tab, dir)) = self.here(client) else {
+    /// The PR view's "See the failing checks": the branch's failing checks
+    /// in a pane beside the view, as pr-ready.sh opened them.
+    fn failing_checks(&mut self, client: ClientId) {
+        let Some((pane, _, dir)) = self.here(client) else {
             return;
         };
-        let checks_dir = dir.to_string_lossy().into_owned();
-        self.about_tab(client, tab, move |s| {
-            s.open(
-                client,
-                Box::new(ReadyBox::new()),
-                Some(Box::new(move |server: &mut Server, client, outcome| {
-                    let Outcome::Chose(i) = outcome else {
-                        return;
-                    };
-                    match Choice::from_index(i) {
-                        Choice::SeeFailing => {
-                            let pane = Some(pane)
-                                .filter(|p| server.panes.contains_key(p))
-                                .or_else(|| server.current_pane(client));
-                            if let Some(pane) = pane {
-                                server.open_beside(
-                                    pane,
-                                    CHECKS_VIEW,
-                                    vec!["pr-view".into(), "--checks".into(), checks_dir],
-                                    LINK_PERCENT,
-                                );
-                            }
-                        }
-                        Choice::ResolveConflicts => server.resolve_in_tab(client, tab),
-                        Choice::Close => {}
-                    }
-                })),
-            )
-        });
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let answer = ready::check(dir).await;
-            let _ = tx.send(Event::Views(ViewsEvent::Ready { client, answer }));
-        });
+        let dir = dir.to_string_lossy().into_owned();
+        self.open_beside(
+            pane,
+            CHECKS_VIEW,
+            vec!["pr-view".into(), "--checks".into(), dir],
+            LINK_PERCENT,
+        );
     }
 
     /// `/resolve-conflicts` typed into the tab's Claude, the focus put
@@ -1207,12 +1198,21 @@ impl Server {
             );
             return;
         }
-        let panes = self
-            .tabs
-            .get(&tab)
-            .map(|t| t.layout.panes())
-            .unwrap_or_default();
-        match panes.into_iter().find(|p| self.runs_claude(*p)) {
+        // Claude parked behind the PR view (in its place with UX 2.0) is
+        // given its place back first, as M-c would.
+        let claude = self
+            .panes_with_parked(tab)
+            .into_iter()
+            .find(|p| self.runs_claude(*p));
+        if let Some(pane) = claude {
+            for _ in 0..self.panes.len() {
+                match self.in_front_of(pane).filter(|_| self.parked(pane)) {
+                    Some(tool) => self.kill_pane(tool),
+                    None => break,
+                }
+            }
+        }
+        match claude {
             Some(pane) => {
                 self.type_into_claude(
                     pane,

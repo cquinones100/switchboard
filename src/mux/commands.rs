@@ -107,6 +107,7 @@ pub const NAMES: &[&str] = &[
     "picture",
     "look",
     "seen",
+    "ready",
     "tip",
     "press",
     "sidebar-repo",
@@ -194,11 +195,15 @@ pub const USAGE: &[(&str, &str)] = &[
     ),
     (
         "look",
-        "look [-t pane] <file>...: pictures shown beside the tab's narrow lone pane, stacked when there are several, M-Esc or a click closing them; opened with the desktop's viewer where there is no room beside it, and a video or a PDF always",
+        "look [-t pane] [--before-after <before> <after> | <file>...]: pictures shown beside the tab's narrow lone pane, stacked when there are several, the two --before-after takes headed Before and after, M-Esc or a click closing them; opened with the desktop's viewer where there is no room beside it, and a video or a PDF always",
     ),
     (
         "seen",
         "seen [-t tab]: the tab seen, as if looked at: its finished Claude and a reminder come due",
+    ),
+    (
+        "ready",
+        "ready [-t tab] <what>: what the tab's pane was loading is ready (\"Diff\"): the tab under Needs you, with a notification, while it isn't in front",
     ),
     (
         "tip",
@@ -320,14 +325,16 @@ impl Args {
 }
 
 /// Whether an option is one of Switchboard's own marks, which a command run
-/// by hand in a pane may not set or unset: autopilot's (`@autopilot_land`
-/// lets a landing push without asking, `@autopilot_handsfree` answers its
+/// by hand in a pane may not set or unset: a tab's `@land` (it lands
+/// without asking) and `@land_work` (it follows the setting), autopilot's (`@autopilot_handsfree` answers its
 /// questions), but `@autopilot_pushed` and `@autopilot_merged`, which
 /// queue-and-clean sets once it has pushed or its PR has merged, and what a pane's program may do (`respawn::PROGRAM_MARKS`:
 /// `@allow_passthrough` and `@notes_pane` pass its graphics commands, which
 /// can have the terminal read any file, to the terminal).
 pub fn own_mark(option: &str) -> bool {
     super::respawn::PROGRAM_MARKS.contains(&option)
+        || option == super::server::LAND
+        || option == super::server::LAND_WORK
         || (option.starts_with("@autopilot")
             && option != "@autopilot_pushed"
             && option != "@autopilot_merged")
@@ -469,6 +476,15 @@ impl Server {
                     self.mark_seen(tab);
                     Reply::ok("")
                 }),
+            "ready" => Args::parse(rest, "t").and_then(|a| {
+                let tab = self.tab_from(&a, caller)?;
+                let what = a.rest.join(" ");
+                if what.trim().is_empty() {
+                    return Err("ready takes what is ready (Diff)".into());
+                }
+                self.tab_ready(tab, what.trim());
+                Ok(Reply::ok(""))
+            }),
             "tip" => Ok(self.cmd_tip(rest, caller)),
             "press" => Ok(self.cmd_press(rest, caller)),
             "autopilot-next" => {
@@ -912,7 +928,9 @@ impl Server {
     /// start any program but those `respawn::allowed` names, or in another
     /// tab. Switchboard's own programs (Notes, the worktree commands, the
     /// landing lock, the Slack relay) ask without `by_hand` and keep doing
-    /// what they need.
+    /// what they need. Arguments it can't read, or a target it can't find,
+    /// are left to the command, which fails with the same error and no box,
+    /// since a mistyped command is no refusal.
     fn refuse_by_hand(
         &self,
         name: &str,
@@ -923,7 +941,9 @@ impl Server {
         let tab_of = |pane: PaneId| self.panes.get(&pane).map(|slot| slot.tab);
         match name {
             "set" => {
-                let a = Args::parse(rest, "t")?;
+                let Ok(a) = Args::parse(rest, "t") else {
+                    return Ok(());
+                };
                 let Some(option) = a.rest.first() else {
                     return Ok(());
                 };
@@ -932,9 +952,10 @@ impl Server {
                         "switchboard set: {option} is Switchboard's own to set, not a command's typed in a pane"
                     ));
                 }
-                let tab = match self.option_target(&a, caller, option)? {
-                    Target::Pane(p) => tab_of(p),
-                    Target::Tab(t) => Some(t),
+                let tab = match self.option_target(&a, caller, option) {
+                    Ok(Target::Pane(p)) => tab_of(p),
+                    Ok(Target::Tab(t)) => Some(t),
+                    Err(_) => return Ok(()),
                 };
                 if tab != own_tab && option != "@tab_name" {
                     return Err(format!(
@@ -944,8 +965,13 @@ impl Server {
                 Ok(())
             }
             "respawn-pane" | "respawn-program" => {
-                let a = Args::parse(rest, "tc")?;
-                if tab_of(self.pane_from(&a, caller)?) != own_tab {
+                let Ok(a) = Args::parse(rest, "tc") else {
+                    return Ok(());
+                };
+                let Ok(pane) = self.pane_from(&a, caller) else {
+                    return Ok(());
+                };
+                if tab_of(pane) != own_tab {
                     return Err(
                         "switchboard respawn: a command typed in a pane respawns a pane of its own tab only"
                             .into(),
@@ -1140,9 +1166,12 @@ impl Server {
         name: &str,
     ) -> Result<Target, String> {
         // Autopilot's marks (src/autopilot) are its tab's too, so
-        // a skill in one of its tabs reads `@autopilot_land` as the tab has
-        // it, a tool standing in for Claude's pane or not.
+        // a skill in one of its tabs reads `@autopilot_handsfree` as the tab
+        // has it, a tool standing in for Claude's pane or not; `@land` is the
+        // tab's own the same way.
         let tab_option = name.starts_with("@tab_")
+            || name == super::server::LAND
+            || name == super::server::LAND_WORK
             || name.starts_with("@autopilot")
             || (name.starts_with("@agent") && !name.starts_with("@agent_"))
             || name == super::layout::OWN_WIDTH;
@@ -1215,7 +1244,8 @@ mod tests {
     #[test]
     fn switchboards_own_marks_are_autopilots_but_the_landings_and_a_programs() {
         for mark in [
-            "@autopilot_land",
+            "@land",
+            "@land_work",
             "@autopilot_handsfree",
             "@autopilot",
             "@allow_passthrough",

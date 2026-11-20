@@ -828,6 +828,11 @@ pub struct App {
     /// up (none once it is down); `raw` shows the answer itself on it.
     progress: Option<Progress>,
     cover: Option<Instant>,
+    /// Whether the cover went up for the story being told, so the
+    /// workspace is told once it is ready (`Action::Ready`), and how many
+    /// times it has been told so.
+    covered: bool,
+    readied: usize,
     raw: bool,
     /// The page shown as a page, and the file the whole diff showed.
     alone: Option<usize>,
@@ -1049,6 +1054,8 @@ impl App {
             telling: Telling::Off,
             progress: None,
             cover: None,
+            covered: false,
+            readied: 0,
             raw: false,
             alone: None,
             whole_at: None,
@@ -1321,6 +1328,7 @@ impl App {
             Msg::Heard(_, Heard::Untold(why)) => {
                 self.telling = Telling::Untold(why);
                 self.cover = None;
+                self.ready();
                 self.show_story(None);
                 let _ = self.settle_mode();
                 self.sort();
@@ -1833,6 +1841,7 @@ impl App {
         if cover {
             self.cover = Some(Instant::now());
         }
+        self.covered = cover;
         let asked = Asked {
             key,
             input,
@@ -1895,6 +1904,16 @@ impl App {
         self.ask_story(true);
     }
 
+    /// The story told or failed under the cover: the workspace told the
+    /// diff is ready, so a tab left while it loaded can say so. A story
+    /// never covered (kept, or told ahead) tells nothing.
+    fn ready(&mut self) {
+        if std::mem::take(&mut self.covered) {
+            self.readied += 1;
+            host().ready("Diff");
+        }
+    }
+
     /// Haiku's order of the code by its paths, when no story is told.
     fn ask_order(&mut self) {
         if !self.opts.order || !self.opts.haiku {
@@ -1931,6 +1950,7 @@ impl App {
         self.show_story(Some(story));
         self.telling = Telling::Told;
         self.cover = None;
+        self.ready();
         self.enter_story();
         self.sort();
         if !self.moved {
@@ -7843,6 +7863,29 @@ mod tests {
         let out = String::from_utf8_lossy(&app.out).into_owned();
         assert!(out.starts_with("\x1b]52;c;"), "copied through the terminal");
         assert!(app.message.as_ref().unwrap().0.contains("2 pages"));
+    }
+
+    #[test]
+    fn the_workspace_is_told_the_diff_is_ready_once_when_its_covered_story_is_told_or_fails() {
+        let mut app = app();
+        // Told under the cover: once.
+        app.telling = Telling::Waiting;
+        app.cover = Some(Instant::now());
+        app.covered = true;
+        app.told(commits_story());
+        assert_eq!(app.readied, 1);
+        app.told(commits_story());
+        assert_eq!(app.readied, 1, "once a telling");
+        // Failed under the cover: once.
+        app.telling = Telling::Waiting;
+        app.covered = true;
+        let id = app.tells;
+        app.event(Msg::Heard(id, Heard::Untold("it failed".into())));
+        assert_eq!(app.readied, 2);
+        // A story never covered (kept, or told ahead) tells nothing.
+        app.telling = Telling::Waiting;
+        app.told(commits_story());
+        assert_eq!(app.readied, 2);
     }
 
     #[test]

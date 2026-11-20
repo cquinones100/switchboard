@@ -73,6 +73,8 @@ pub struct Pictures {
     /// The tab as the header names it ("tab 1 · planning").
     about: String,
     items: Vec<Item>,
+    /// Whether `look --before-after` named the two a before and after.
+    before_after: bool,
     /// The first picture shown, while more are up than fit.
     first: usize,
     /// How many fit when last drawn.
@@ -82,7 +84,7 @@ pub struct Pictures {
 }
 
 impl Pictures {
-    pub fn new(tab: TabId, about: &str, shown: Vec<Shown>) -> Pictures {
+    pub fn new(tab: TabId, about: &str, shown: Vec<Shown>, before_after: bool) -> Pictures {
         let items: Vec<Item> = shown
             .into_iter()
             .map(|s| Item {
@@ -97,6 +99,7 @@ impl Pictures {
             about: about.to_string(),
             fit: items.len(),
             items,
+            before_after,
             first: 0,
             drawn: None,
             close_lit: false,
@@ -104,11 +107,11 @@ impl Pictures {
     }
 
     /// What the header says: the one file's name, "Before and after" for
-    /// two, how many for more.
+    /// the two `look --before-after` names so, how many otherwise.
     pub fn title(&self) -> String {
         match self.items.as_slice() {
             [one] => one.title.clone(),
-            [_, _] => "Before and after".to_string(),
+            [_, _] if self.before_after => "Before and after".to_string(),
             many => format!("{} pictures", many.len()),
         }
     }
@@ -371,7 +374,7 @@ mod tests {
 
     #[test]
     fn one_picture_fills_the_columns_under_a_header_naming_it_and_the_tab() {
-        let mut p = Pictures::new(TabId(1), "tab 1 · planning", shown(&["shot.png"]));
+        let mut p = Pictures::new(TabId(1), "tab 1 · planning", shown(&["shot.png"]), false);
         let frame = drawn(&mut p, Rect::new(100, 0, 60, 30));
         let header = row(&frame, 0);
         assert!(header.contains("shot.png   tab 1 · planning"), "{header}");
@@ -392,19 +395,34 @@ mod tests {
 
     #[test]
     fn two_are_stacked_with_their_names_sharing_the_height() {
-        let mut p = Pictures::new(TabId(1), "tab 1", shown(&["before.png", "after.png"]));
+        let mut p = Pictures::new(TabId(1), "tab 1", shown(&["one.png", "two.png"]), false);
         let frame = drawn(&mut p, Rect::new(100, 0, 60, 30));
-        assert!(row(&frame, 0).contains("Before and after   tab 1"));
-        assert!(row(&frame, 2).contains("before.png"), "{}", row(&frame, 2));
-        assert!(row(&frame, 15).contains("after.png"), "{}", row(&frame, 15));
+        assert!(
+            row(&frame, 0).contains("2 pictures   tab 1"),
+            "{}",
+            row(&frame, 0)
+        );
+        assert!(row(&frame, 2).contains("one.png"), "{}", row(&frame, 2));
+        assert!(row(&frame, 15).contains("two.png"), "{}", row(&frame, 15));
         let sizes: Vec<(u16, u16)> = frame.images.iter().map(|i| (i.cols, i.rows)).collect();
         assert_eq!(sizes, [(58, 11), (58, 11)]);
     }
 
     #[test]
+    fn two_named_a_before_and_after_are_headed_so() {
+        let mut p = Pictures::new(TabId(1), "tab 1", shown(&["old.png", "new.png"]), true);
+        let frame = drawn(&mut p, Rect::new(100, 0, 60, 30));
+        assert!(
+            row(&frame, 0).contains("Before and after   tab 1"),
+            "{}",
+            row(&frame, 0)
+        );
+    }
+
+    #[test]
     fn more_than_fit_are_paged_by_the_wheel_and_the_paging_keys() {
         let names = ["a.png", "b.png", "c.png", "d.png"];
-        let mut p = Pictures::new(TabId(1), "tab 1", shown(&names));
+        let mut p = Pictures::new(TabId(1), "tab 1", shown(&names), false);
         let area = Rect::new(100, 0, 60, 24);
         let frame = drawn(&mut p, area);
         assert_eq!(frame.images.len(), 2, "two fit at their least");
@@ -440,7 +458,7 @@ mod tests {
 
     #[test]
     fn keys_reach_the_tab_but_m_esc_and_the_mouse_elsewhere_does_too() {
-        let mut p = Pictures::new(TabId(1), "tab 1", shown(&["shot.png"]));
+        let mut p = Pictures::new(TabId(1), "tab 1", shown(&["shot.png"]), false);
         drawn(&mut p, Rect::new(100, 0, 60, 30));
         let look = Look::default();
         assert_eq!(
@@ -478,7 +496,7 @@ mod tests {
     #[test]
     fn a_long_name_is_cut_so_it_stays_a_pane() {
         let long = "a-very-long-name-for-a-screenshot-of-the-settings-page-at-its-widest.png";
-        let mut p = Pictures::new(TabId(1), "tab 1", shown(&[long]));
+        let mut p = Pictures::new(TabId(1), "tab 1", shown(&[long]), false);
         let frame = drawn(&mut p, Rect::new(100, 0, 40, 20));
         assert!(row(&frame, 0)[100..].contains('…'), "{}", row(&frame, 0));
         assert_eq!(frame.images.len(), 1);

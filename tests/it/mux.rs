@@ -1244,7 +1244,7 @@ fn a_box_about_the_tab_opens_beside_a_narrow_pane_as_a_pane() {
 }
 
 #[test]
-fn m_m_and_the_tabs_menu_open_beside_a_narrow_pane_as_a_pane() {
+fn the_tabs_menu_opens_beside_a_narrow_pane_as_a_pane() {
     let server = TestServer::start_with_settings(r#"{"lone_pane_width": "165"}"#);
     let mut client = server.attach(365, 40);
     client.wait_text("BESIDE THIS PANE");
@@ -1252,28 +1252,27 @@ fn m_m_and_the_tabs_menu_open_beside_a_narrow_pane_as_a_pane() {
         .as_u64()
         .unwrap_or(0) as usize;
     let rule = side + 165;
-    // M-m's readiness box and the tab's own menu: each on the first row
-    // right of the rule, under a header naming the tab, with no box edge.
-    for (press, title) in [("pr-ready", "Ready to merge?"), ("tab-title", "Tab 1")] {
-        server.ok(&["press", press]);
-        let screen = client.wait_text(title);
-        let (x, y) = cell_of(&screen, title).unwrap();
-        assert!(
-            x > rule && y == 0,
-            "{press} at {x},{y}:\n{}",
-            screen.join("\n")
-        );
-        assert!(screen[0].contains("tab 1 · "), "{}", screen[0]);
-        assert!(
-            !screen.iter().any(|l| l.contains('╭') || l.contains('▀')),
-            "{press}: no box edge or shadow:\n{}",
-            screen.join("\n")
-        );
-        client.send(b"\x1b");
-        client.wait_for("the hints back", |s| {
-            cell_of(s, title).is_none() && cell_of(s, "BESIDE THIS PANE").is_some()
-        });
-    }
+    // The tab's own menu: on the first row right of the rule, under a
+    // header naming the tab, with no box edge.
+    let (press, title) = ("tab-title", "Tab 1");
+    server.ok(&["press", press]);
+    let screen = client.wait_text(title);
+    let (x, y) = cell_of(&screen, title).unwrap();
+    assert!(
+        x > rule && y == 0,
+        "{press} at {x},{y}:\n{}",
+        screen.join("\n")
+    );
+    assert!(screen[0].contains("tab 1 · "), "{}", screen[0]);
+    assert!(
+        !screen.iter().any(|l| l.contains('╭') || l.contains('▀')),
+        "{press}: no box edge or shadow:\n{}",
+        screen.join("\n")
+    );
+    client.send(b"\x1b");
+    client.wait_for("the hints back", |s| {
+        cell_of(s, title).is_none() && cell_of(s, "BESIDE THIS PANE").is_some()
+    });
 }
 
 #[test]
@@ -1412,10 +1411,18 @@ fn look_shows_pictures_beside_a_narrow_pane_stacked_when_there_are_two() {
         cell_of(s, "M-Esc close").is_none() && cell_of(s, "BESIDE THIS PANE").is_some()
     });
     // Two, named by their place in the directory the command runs in:
-    // stacked, each under its name, the first above the second.
+    // stacked, each under its name, the first above the second, headed
+    // as a before and after since `--before-after` says they are one.
     picture_at(&server, "before.png");
     picture_at(&server, "after.png");
-    server.ok(&["look", "-t", &pane, "before.png", "after.png"]);
+    server.ok(&[
+        "look",
+        "-t",
+        &pane,
+        "--before-after",
+        "before.png",
+        "after.png",
+    ]);
     let screen = client.wait_text("Before and after   tab 1 · ");
     let (bx, by) = cell_of(&screen, "before.png").unwrap();
     let (ax, ay) = cell_of(&screen, "after.png").unwrap();
@@ -1483,7 +1490,15 @@ fn look_opens_the_desktops_viewer_where_no_picture_shows_beside_the_pane() {
     let (code, _, err) = server.run(&["look", "nowhere.png"]);
     assert_ne!(code, 0);
     assert!(err.contains("no file"), "{err}");
-    assert_eq!(opened(&server).len(), 1, "neither opened anything");
+    // A before and after is two files, never one or three.
+    for files in [vec![shot.as_str()], vec![&shot, &shot, &shot]] {
+        let mut args = vec!["look", "--before-after"];
+        args.extend(files);
+        let (code, _, err) = server.run(&args);
+        assert_ne!(code, 0);
+        assert!(err.contains("usage: switchboard look"), "{err}");
+    }
+    assert_eq!(opened(&server).len(), 1, "none of them opened anything");
     // With a split there are no columns beside the pane: each is opened.
     server.ok(&["split", "-R"]);
     client.wait_for("the hints gone", |s| {
@@ -1517,6 +1532,64 @@ fn look_opens_the_desktops_viewer_where_no_picture_shows_beside_the_pane() {
     server.ok(&["look", &shot]);
     assert_eq!(wait_opened(&server, 1), [shot]);
     assert!(cell_of(&client.screen(), "M-Esc close").is_none());
+}
+
+#[test]
+fn look_from_a_tab_behind_waits_beside_its_pane_until_the_tab_is_in_front() {
+    let server = TestServer::start_with_settings(r#"{"lone_pane_width": "80"}"#);
+    let mut client = server.attach_as("xterm-ghostty", 240, 40);
+    client.wait_text("BESIDE THIS PANE");
+    let shot = picture_at(&server, "shot.png");
+    let tab = |i: usize| {
+        server.list()["sessions"][0]["tabs"][i]["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let first = tab(0);
+    let pane = server.list()["sessions"][0]["tabs"][0]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // Asked from the first tab while another is in front: no viewer, and
+    // nothing shown over the tab in front, whose pane keeps its keys.
+    server.ok(&["new-tab", "-n", "second"]);
+    assert!(is_current(&server, 1));
+    server.ok(&["look", "-t", &pane, &shot]);
+    client.type_text("echo typed-in-second\r");
+    client.wait_text("typed-in-second");
+    assert!(cell_of(&client.screen(), "M-Esc close").is_none());
+    // Back on the first tab, it shows beside the pane.
+    server.ok(&["select-tab", "-t", &first]);
+    client.wait_text("shot.png   tab 1 · ");
+    client.send(b"\x1b\x1b");
+    client.wait_for("the pictures gone", |s| cell_of(s, "M-Esc close").is_none());
+    // Asked while mission control is up: shown once it closes.
+    client.type_text(&format!("{ALT} "));
+    client.wait_text("MISSION CONTROL");
+    server.ok(&["look", "-t", &pane, &shot]);
+    client.type_text("\x1b");
+    client.wait_for("mission control closed", |s| {
+        !s.iter().any(|l| l.contains("MISSION CONTROL"))
+    });
+    client.wait_text("shot.png   tab 1 · ");
+    // Asked for from the second tab while the first shows its own: the
+    // first keeps them, and the second shows its own once in front.
+    let second_pane = server.list()["sessions"][0]["tabs"][1]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["look", "-t", &second_pane, &shot]);
+    server.ok(&["select-tab", "-t", &tab(1)]);
+    client.wait_text("shot.png   tab 2 · ");
+    // Over the first tab's, hidden, they still take M-Esc.
+    client.send(b"\x1b\x1b");
+    client.wait_for("the second tab's pictures gone", |s| {
+        cell_of(s, "M-Esc close").is_none()
+    });
+    server.ok(&["select-tab", "-t", &first]);
+    client.wait_text("shot.png   tab 1 · ");
+    assert!(opened(&server).is_empty(), "{:?}", opened(&server));
 }
 
 /// Settings' `lone_pane_width` as the server wrote it to the test's file.

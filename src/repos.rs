@@ -518,6 +518,24 @@ pub fn name_known(dir: &Path) -> String {
         .unwrap_or_else(|| "This repository".into())
 }
 
+/// Whether `land-lock test` in the worktree holding `dir` waits on CI
+/// rather than running the tests, as it decides: its repository's `testIn`
+/// is `ci` and the landing's record doesn't say CI answered `none`. From
+/// the files alone, as `tickets_known` reads them, so no process starts:
+/// what the sidebar asks on the server's task while one runs, to tell its
+/// wait on CI from a test run.
+pub fn tests_in_ci_known(dir: &Path) -> bool {
+    let Some(top) = dir.ancestors().find(|d| d.join(".git").exists()) else {
+        return false;
+    };
+    let in_ci = crate::sources::repo::origin_of(top).is_some_and(|repo| {
+        steps_of(&landing_entry(&read_safely(), &repo.to_string())).test_in == "ci"
+    });
+    let ci_none = crate::sources::landing::read_record(top)
+        .is_some_and(|r| r.get("ci").and_then(Value::as_str) == Some("none"));
+    in_ci && !ci_none
+}
+
 /// `owner/name` of origin's URL as the config of the repository at `dir`
 /// writes it, which an `insteadOf` may point elsewhere. Runs git.
 pub fn configured_at(dir: &Path) -> Option<String> {

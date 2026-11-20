@@ -60,7 +60,8 @@ fn tabs_panes_names_options_and_screens_come_back() {
             .is_empty()
     );
     server.ok(&["set", "-t", tab, "@tab_opened", "1700000000"]);
-    // Autopilot's marks, as tmux/window-options.sh carried them.
+    // Autopilot's marks, as tmux/window-options.sh carried them, one by
+    // the name a build before `@land` gave it.
     server.ok(&["set", "-t", tab, "@autopilot_land", "1"]);
     server.ok(&["set", "-t", tab, "@autopilot_autoland", "abc1234"]);
     server.ok(&["set", "-t", split, "@role", "logs"]);
@@ -110,7 +111,11 @@ fn tabs_panes_names_options_and_screens_come_back() {
         restored[1]["options"]["@tab_opened"], "1700000000",
         "its age goes on from when it opened"
     );
-    assert_eq!(restored[1]["options"]["@autopilot_land"], "1");
+    assert_eq!(
+        restored[1]["options"]["@land"], "1",
+        "an old @autopilot_land restores as @land"
+    );
+    assert!(restored[1]["options"]["@autopilot_land"].is_null());
     assert_eq!(restored[1]["options"]["@autopilot_autoland"], "abc1234");
     assert_eq!(restored[1]["panes"][1]["options"]["@role"], "logs");
     for p in restored[1]["panes"].as_array().unwrap() {

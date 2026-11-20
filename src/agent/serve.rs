@@ -19,6 +19,14 @@ use crate::mux::server::{ClientId, Event, Reply, Server};
 use crate::mux::{PaneId, TabId};
 use crate::{settings, util};
 
+/// A tab whose pane finished loading while you were elsewhere, by what
+/// loaded ("Diff"), under Needs you until you go to it (`tab_ready`).
+pub const TAB_READY: &str = "@tab_ready";
+/// The notifications of those tabs, by their source.
+pub const READY_SOURCE: &str = "ready";
+/// The setting that turns it off.
+pub const READY_SETTING: &str = "diff_ready_needs_you";
+
 /// How long a tab must stay in front for its finished mark to count as seen
 /// (agent-state.sh's `AGENT_SEEN_DELAY`): passing over a tab, as moving the
 /// sidebar's cursor does, leaves it.
@@ -128,21 +136,22 @@ impl Server {
                 },
             );
         }
-        // The landing's push after your yes asked in any tab but one of
-        // autopilot's that lands without asking; the wait it makes is
-        // marked as any permission's is.
+        // The landing's push after your yes asked in any tab but one that
+        // lands without asking (`@land`); the wait it makes is marked as any
+        // permission's is.
         // The git push a session started before `land-lock push` still has
         // allowed is asked as it was, in a tab of autopilot's that doesn't.
         let (opened, lands) = self.tabs.get(&tab).map_or((false, false), |t| {
-            use crate::autopilot::{LAND, OPENED};
             (
-                t.opts.contains_key(OPENED),
-                t.opts.get(LAND).is_some_and(|v| v == "1"),
+                t.opts.contains_key(crate::autopilot::OPENED),
+                t.opts
+                    .get(crate::mux::server::LAND)
+                    .is_some_and(|v| v == "1"),
             )
         });
         let asks_push = hook.event == "PreToolUse"
             && hook.tool == "Bash"
-            && !(opened && lands)
+            && !lands
             && (hands_free::is_landing_push(&payload)
                 || (opened && hands_free::is_old_landing_push(&payload)));
         let answer = if asks_push {
@@ -509,7 +518,7 @@ impl Server {
 
     /// Every status line showing this tab draws again: the badges and counts
     /// are on all of a session's clients, whichever tab they show.
-    fn redraw_tab(&mut self, tab: TabId) {
+    pub(crate) fn redraw_tab(&mut self, tab: TabId) {
         if let Some(name) = self.session_of_tab(tab).map(|s| s.name.clone()) {
             self.dirty_session(&name);
         }
@@ -557,6 +566,82 @@ impl Server {
             }
             self.redraw_tab(tab);
         }
+        // What it loaded is seen with it.
+        if let Some(t) = self.tabs.get_mut(&tab)
+            && t.opts.remove(TAB_READY).is_some()
+        {
+            self.ready_notices();
+            self.redraw_tab(tab);
+        }
+    }
+
+    /// What a tab's pane was loading is ready (`switchboard ready`, which
+    /// the diff asks once its story is told or has failed under its
+    /// cover): with Settings' `diff_ready_needs_you` on and the tab in
+    /// front nowhere, the tab is under Needs you, saying "<what> ready",
+    /// with a notification, until you go to it (`mark_seen`). A tab in
+    /// front is left alone, since you are looking at it.
+    pub fn tab_ready(&mut self, tab: TabId, what: &str) {
+        if !setting_on(READY_SETTING) || self.tab_in_front(tab) {
+            return;
+        }
+        let Some(t) = self.tabs.get_mut(&tab) else {
+            return;
+        };
+        t.opts.insert(TAB_READY.into(), what.to_string());
+        self.ready_notices();
+        self.redraw_tab(tab);
+    }
+
+    /// The notifications of the tabs marked ready, one a tab, each keeping
+    /// the time it came at.
+    pub(crate) fn ready_notices(&mut self) {
+        let before = self.notices.get(READY_SOURCE).cloned().unwrap_or_default();
+        let now = util::now_ms();
+        let mut items = Vec::new();
+        for s in &self.sessions {
+            for tab in &s.tabs {
+                let Some(what) = self.tabs.get(tab).and_then(|t| t.opts.get(TAB_READY)) else {
+                    continue;
+                };
+                let id = format!("ready:{tab}");
+                let time = before
+                    .iter()
+                    .find(|i| i.id == id)
+                    .and_then(|i| i.time)
+                    .or(Some(now));
+                let name = self
+                    .tabs
+                    .get(tab)
+                    .map(|t| t.display_name().to_string())
+                    .unwrap_or_default();
+                items.push(crate::items::Item {
+                    id,
+                    title: format!("{what} ready in tab {}", self.tab_number(*tab)),
+                    detail: name,
+                    time,
+                    target: crate::items::Target::Tab(*tab),
+                    ..Default::default()
+                });
+            }
+        }
+        if items != before {
+            self.set_notices(READY_SOURCE, items);
+        }
+    }
+
+    /// A "ready" notification dismissed: its tab's mark goes with it, so
+    /// the tab leaves Needs you as it does once seen.
+    pub(crate) fn ready_dismiss(&mut self, item: &crate::items::Item) {
+        let crate::items::Target::Tab(tab) = item.target else {
+            return;
+        };
+        if let Some(t) = self.tabs.get_mut(&tab)
+            && t.opts.remove(TAB_READY).is_some()
+        {
+            self.redraw_tab(tab);
+        }
+        self.ready_notices();
     }
 
     /// A tab was focused: a second later, if it is still in front, it has
@@ -631,8 +716,8 @@ impl Server {
 
     /// One Claude to a tab (tmux/one-claude.sh): a session starting in a tab
     /// that already runs one moves to a tab of its own, since the sidebar,
-    /// mission control, the Slack relay, M-c and M-m each take a tab's Claude
-    /// to be one pane. Claude Code's SessionStart hook can't refuse a
+    /// mission control, the Slack relay, M-c and the PR view's
+    /// /resolve-conflicts each take a tab's Claude to be one pane. Claude Code's SessionStart hook can't refuse a
     /// session, so the pane is moved instead. Only a pane running Claude
     /// moves: a `claude -p` started elsewhere may carry a pane's
     /// SWITCHBOARD_PANE too.
@@ -780,6 +865,31 @@ impl Server {
         );
     }
 
+    /// The tab marked to land without asking (`@land`) by its menu, after a
+    /// yes naming what it skips and keeps, or no longer, asking nothing.
+    pub fn toggle_land(&mut self, client: crate::mux::server::ClientId, tab: TabId) {
+        use crate::mux::server::LAND;
+        let Some(t) = self.tabs.get_mut(&tab) else {
+            return;
+        };
+        if t.opts.get(LAND).is_some_and(|v| v == "1") {
+            t.opts.remove(LAND);
+            self.redraw_tab(tab);
+            return;
+        }
+        let (question, list) = land_question();
+        self.ask(
+            client,
+            crate::ui::Confirm::new(question).list(list),
+            move |server, _, yes| {
+                if yes && let Some(t) = server.tabs.get_mut(&tab) {
+                    t.opts.insert(LAND.into(), "1".into());
+                    server.redraw_tab(tab);
+                }
+            },
+        );
+    }
+
     /// M-f: pins the tab, or unpins it. A pin of its own, not Claude's
     /// "done": visiting the tab doesn't clear it, and pinned tabs lead M-a's
     /// walk (and the sidebar's Needs you). The first pin brings its tip.
@@ -825,6 +935,34 @@ impl Server {
     /// whether it changed.
     pub fn agent_went_idle(&mut self, pane: PaneId, at_ms: i64) -> bool {
         if !self.agents.went_idle(pane, at_ms) {
+            return false;
+        }
+        if let Some(tab) = self.panes.get(&pane).map(|s| s.tab) {
+            self.redraw_tab(tab);
+        }
+        true
+    }
+
+    /// Claude Code says the pane's session went busy at `at_ms` (ms), read
+    /// from its session file by the sidebar (`claude::SessionRef::busy_since`),
+    /// with no hook to say so: a `!` command typed to it, which works until
+    /// the session goes idle again (`Agents::went_busy`). Gives whether it
+    /// changed.
+    pub fn agent_went_busy(&mut self, pane: PaneId, at_ms: i64) -> bool {
+        if !self.agents.went_busy(pane, at_ms) {
+            return false;
+        }
+        if let Some(tab) = self.panes.get(&pane).map(|s| s.tab) {
+            self.redraw_tab(tab);
+        }
+        true
+    }
+
+    /// Claude Code says the pane's session stopped being busy at `at_ms`
+    /// (ms), whatever it says instead: a `!` command's work ends
+    /// (`Agents::shell_ended`). Gives whether it changed.
+    pub fn agent_shell_ended(&mut self, pane: PaneId, at_ms: i64) -> bool {
+        if !self.agents.shell_ended(pane, at_ms) {
             return false;
         }
         if let Some(tab) = self.panes.get(&pane).map(|s| s.tab) {
@@ -912,6 +1050,19 @@ fn pinned(value: &str) -> bool {
 /// `*/.claude/worktrees/*`).
 fn in_worktree(dir: &std::path::Path) -> bool {
     dir.to_string_lossy().contains("/.claude/worktrees/")
+}
+
+/// The question before a tab's menu has it land without asking, naming
+/// what it skips and what it keeps.
+pub fn land_question() -> (String, Vec<String>) {
+    (
+        "Land this tab without asking?".into(),
+        vec![
+            "Skipped: the question before its first push or its landing's push, and medium review findings, fixed without asking".into(),
+            "Kept: two clean review rounds of the change, leak-check, and the tests of a landing straight on a branch; a repository whose landing runs no review still asks".into(),
+            "Asked after all: anything leak-check finds, an unclear conflict, a failure the branch didn't cause".into(),
+        ],
+    )
 }
 
 #[cfg(test)]
