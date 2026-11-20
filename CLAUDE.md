@@ -90,7 +90,7 @@ ARCHITECTURE.md has the whole picture; what follows is what a change has to keep
 
 **Whether you're at the computer** is `src/presence.rs`'s, from `src/platform`; the Slack relay and the server each pick how long idle counts as away. Anything else that needs to know uses it too.
 
-**macOS and Linux.** What differs goes through `src/platform/` (secrets, the clipboard, notifications, presence, opening a file or link), never a `cfg` of its own elsewhere. Crates are fine and system packages are not: pure-Rust crates (rustls, zbus), so a build needs rustup and a C compiler and a user needs nothing. No new external program but Claude Code and git, and the platform's own tools inside `src/platform/`.
+**macOS and Linux.** What differs goes through `src/platform/` (secrets, the clipboard, notifications, presence, opening a file or link), never a `cfg` of its own elsewhere. Crates are fine and system packages are not: pure-Rust crates (rustls, zbus), so a build needs rustup and a C compiler and a user needs nothing. No new external program but Claude Code and git, the platform's own tools inside `src/platform/`, and Tailscale's command line for the phone app alone (its `status`, `cert` and `whois`, in `src/platform/`).
 
 **Other apps' configs.** An app Switchboard runs gets Switchboard's settings at launch, by flags or environment, never by changing its config files: lazygit in a pane's place is given `LG_CONFIG_FILE` naming Switchboard's copy and then your config, so yours wins (`src/setup/lazygit.rs`), and a plugin follows the same rule.
 
