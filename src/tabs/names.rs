@@ -185,8 +185,6 @@ struct Known<T> {
     next: Instant,
     /// When it was last asked for, while that is unanswered.
     asked: Option<Instant>,
-    /// Whether a lookup has answered, a definite "none" included.
-    answered: bool,
 }
 
 impl<T> Known<T> {
@@ -391,11 +389,9 @@ impl Names {
             .unwrap_or_default()
             .into_iter()
             .find(|t| switches.tickets_of(t.service()));
-        let looked_up = ticket.as_ref().map(|t| self.title_of(&t.arg(), now, asks));
-        let title = looked_up.clone().flatten().flatten();
-        // A ticket not yet answered for keeps the directory's name, never
-        // the PR's title; one its service has no title for names nothing.
-        let ticket_pending = matches!(looked_up, Some(None));
+        let title = ticket
+            .as_ref()
+            .and_then(|t| self.title_of(&t.arg(), now, asks));
         // A `wtpr` worktree carries its number in its directory's name, which
         // needs no lookup, its repository its origin, or the one its review
         // folder names. In a fork's clone it may be upstream's or origin's,
@@ -432,9 +428,13 @@ impl Names {
             None => (None, None, None),
         };
 
-        // The ticket once its service confirms it, else, with no ticket
-        // waiting on its title, the PR's title once known, else the
-        // directory's name.
+        // The ticket once its service confirms it, else the PR's title once
+        // known, else the directory's name. An issue the branch was started
+        // for keeps the directory's name until its title is known, never the
+        // PR's; a Linear ID read from the branch's name may be no ticket at
+        // all (`patch-1`), so the PR's title names the tab until Linear
+        // confirms it.
+        let issue_pending = matches!(ticket, Some(Ticket::Issue { .. })) && title.is_none();
         let label = match (&ticket, &title, &pr_title) {
             (Some(Ticket::Issue { number, .. }), Some(title), _) => {
                 label::issue_label(*number, title)
@@ -442,7 +442,7 @@ impl Names {
             (Some(t), Some(title), _) => {
                 label::facts_label(&window, Some((t.short().as_str(), title.as_str())))
             }
-            (_, _, Some(pr_title)) if !ticket_pending => label::pr_label(&window, pr_title),
+            (_, _, Some(pr_title)) if !issue_pending => label::pr_label(&window, pr_title),
             _ => label::facts_label(&window, None),
         };
         Facts {
@@ -459,20 +459,17 @@ impl Names {
     }
 
     /// The title of a Linear ticket or a GitHub issue (`id`, its reference)
-    /// as last found (`None` before any lookup has answered, `Some(None)`
-    /// when there is no such ticket), asking for it in the background when
-    /// it is due.
-    fn title_of(&mut self, id: &str, now: Instant, asks: &mut Vec<Ask>) -> Option<Option<String>> {
+    /// as last found, asking for it in the background when it is due.
+    fn title_of(&mut self, id: &str, now: Instant, asks: &mut Vec<Ask>) -> Option<String> {
         let known = self.titles.entry(id.to_string()).or_insert(Known {
             value: None,
             next: now,
             asked: None,
-            answered: false,
         });
         if known.due(now) {
             asks.push(Ask::Title { id: id.to_string() });
         }
-        known.answered.then(|| known.value.clone())
+        known.value.clone()
     }
 
     /// The PR of the branch `place` is on, as last found, asking for it in
@@ -495,7 +492,6 @@ impl Names {
             value: None,
             next: now,
             asked: None,
-            answered: false,
         });
         if known.due(now) {
             asks.push(Ask::Pr {
@@ -539,7 +535,6 @@ impl Names {
                     value: None,
                     next: now,
                     asked: None,
-                    answered: false,
                 });
                 take(known, found, now, PR_FOUND, PR_MISSING)
             }
@@ -555,7 +550,6 @@ impl Names {
                     value: None,
                     next: now,
                     asked: None,
-                    answered: false,
                 });
                 take(known, found, now, found_for, TITLE_MISSING)
             }
@@ -654,7 +648,6 @@ impl Names {
                     }),
                     next,
                     asked: None,
-                    answered: true,
                 });
         }
         for entry in entries("titles").unwrap_or_default() {
@@ -669,7 +662,6 @@ impl Names {
                 value: Some(title.to_string()),
                 next,
                 asked: None,
-                answered: true,
             });
         }
     }
@@ -687,15 +679,13 @@ fn take<T: PartialEq>(
     known.asked = None;
     match found {
         Ok(value) => {
-            let first = !known.answered;
-            known.answered = true;
             known.next = now
                 + if value.is_some() {
                     found_for
                 } else {
                     missing_for
                 };
-            let changed = first || known.value != value;
+            let changed = known.value != value;
             known.value = value;
             changed
         }
@@ -1232,36 +1222,43 @@ mod tests {
     }
 
     #[test]
-    fn a_branch_that_only_looks_like_a_ticket_takes_the_pr_s_title_once_linear_says_so() {
+    fn a_branch_that_only_looks_like_a_ticket_takes_the_pr_s_title() {
         let scratch = Scratch::new("pr-lookalike");
         let dir = scratch.0.join("app");
         if !repo(&dir) {
             eprintln!("skipped: no git");
             return;
         }
-        assert!(git(&dir, &["checkout", "-q", "-b", "utf-8-names"]));
+        assert!(git(&dir, &["checkout", "-q", "-b", "patch-1"]));
         let (mut names, now) = names(Switches::default());
         names.answer(
             Answer::Pr {
                 repo: dir.join(".git"),
-                branch: "utf-8-names".into(),
-                found: titled(12345, "acme/app", "Keep UTF-8 names"),
+                branch: "patch-1".into(),
+                found: titled(12345, "acme/app", "Fix a typo"),
             },
             now,
         );
-        assert_eq!(
-            names.facts(&dir, now).0.label,
-            "app:utf-8-names",
-            "while Linear has yet to answer"
-        );
+        // Before Linear answers, while it fails, and once it has no such
+        // ticket alike.
+        assert_eq!(names.facts(&dir, now).0.label, "Fix a typo");
         names.answer(
             Answer::Title {
-                id: "UTF-8".into(),
-                found: Ok(None),
+                id: "PATCH-1".into(),
+                found: Err("Linear couldn't be reached".into()),
             },
             now,
         );
-        assert_eq!(names.facts(&dir, now).0.label, "Keep UTF-8 names");
+        assert_eq!(names.facts(&dir, now).0.label, "Fix a typo");
+        // A real ticket's form wins once Linear confirms it.
+        names.answer(
+            Answer::Title {
+                id: "PATCH-1".into(),
+                found: Ok(Some("Patch the build".into())),
+            },
+            now,
+        );
+        assert_eq!(names.facts(&dir, now).0.label, "PATCH-1: Patch the build");
     }
 
     #[test]
@@ -1321,14 +1318,11 @@ mod tests {
             value: None::<u64>,
             next: now,
             asked: None,
-            answered: false,
         };
         assert!(known.due(now));
         assert!(!known.due(now + Duration::from_secs(60)));
         assert!(known.due(now + LOST));
-        // Answered with nothing: a change the first time, since "none" is
-        // now known, and asked again a minute later.
-        assert!(take(&mut known, Ok(None), now, PR_FOUND, PR_MISSING));
+        // Answered with nothing: asked again a minute later.
         assert!(!take(&mut known, Ok(None), now, PR_FOUND, PR_MISSING));
         assert!(!known.due(now + Duration::from_secs(30)));
         assert!(known.due(now + PR_MISSING));
