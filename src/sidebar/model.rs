@@ -1000,6 +1000,10 @@ fn joined(parts: impl IntoIterator<Item = String>) -> String {
         .join(" · ")
 }
 
+/// The review loop's cap question's option that carries the loop on, by
+/// which the sidebar knows a wait is that question.
+pub const MORE_ROUNDS: &str = "Run 10 more rounds";
+
 /// A tab's `@tab_review_round`, `<round> <cap>` with ` cap` once the loop
 /// waits at it: its round, cap and whether it waits.
 pub fn review_round_of(value: &str) -> Option<(usize, usize, bool)> {

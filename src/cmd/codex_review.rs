@@ -106,7 +106,7 @@
 //! counted the same way. A `start` or `next` past the cap reviews nothing
 //! and answers `next` `cap` with `reviewed` false, until `--round more`
 //! raises the cap by 10 (the review-loop question's "Run 10 more rounds"),
-//! printing the new `cap`. Each round sets the tab's `@tab_review_round` to
+//! printing the new `cap`. Each round sets the tab's `@tab_review_round`, as it starts and ends, to
 //! `<round> <cap>`, with ` cap` once the loop waits at it, for the sidebar
 //! and mission control. The JSON then ends with `round`,
 //! `cap`, `cleanRounds` and `next`: `triage` (findings to work through),
@@ -1804,6 +1804,7 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     if let Some(at) = &looping {
+        show_round(at.shown(hands_free), at.cap(hands_free), "start");
         land_lock::record_at(
             &root_path,
             &[
@@ -2275,7 +2276,7 @@ fn keep_loop(at: &Loop, clean_rounds: u32, next: &str) -> Reviewed<()> {
     write_record(&path, &format!("{} {clean_rounds} {}", at.round, at.extra))
 }
 
-/// The tab's `@tab_review_round`, `<round> <cap>` and `cap` once the loop waits
+/// The tab's `@tab_review_round` as a round starts and ends, `<round> <cap>` and `cap` once the loop waits
 /// at it, which the sidebar and mission control show; taken away once the
 /// loop is done.
 fn show_round(round: u32, cap: u32, next: &str) {
