@@ -60,6 +60,13 @@ static PROJECT_ID: LazyLock<Regex> =
 static PROJECT_IN_NAME: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?:^|[^A-Za-z0-9])([Pp]-[A-Z][A-Z0-9]*-[0-9]+)(?:$|[^A-Za-z0-9])").unwrap()
 });
+/// A GitHub issue named in text: its link, or its `owner/repo#12`.
+static ISSUE_IN_TEXT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?:https://github\.com/([\w.-]+)/([\w.-]+)/issues/([0-9]+)\b)|(?:(?:^|[^\w./-])([\w.-]+)/([\w.-]+)#([0-9]+)\b)",
+    )
+    .unwrap()
+});
 static ISSUE_BRANCH: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^issue/([0-9]+)(?:-|$)").unwrap());
 static LINEAR_URL: LazyLock<Regex> = LazyLock::new(|| {
@@ -214,6 +221,16 @@ impl Ticket {
         }
     }
 
+    /// How a tab names it, short, in its label and boxes: `ENG-42`,
+    /// `P-ENG-4`, an issue by its number, `#12`, its repository being the
+    /// tab's own.
+    pub fn short(&self) -> String {
+        match self {
+            Ticket::Issue { number, .. } => format!("#{number}"),
+            other => other.shown(),
+        }
+    }
+
     /// The setting of the service that keeps it.
     pub fn service(&self) -> &'static str {
         match self {
@@ -322,6 +339,32 @@ pub fn ids_in(text: &str) -> Vec<String> {
     for m in IN_NAME.find_iter(text) {
         if !out.iter().any(|id| id == m.as_str()) {
             out.push(m.as_str().to_string());
+        }
+    }
+    out
+}
+
+/// Every GitHub issue `text` names by its link or `owner/repo#12`, each
+/// once, in order.
+pub fn issues_in(text: &str) -> Vec<Ticket> {
+    let mut out: Vec<Ticket> = Vec::new();
+    for c in ISSUE_IN_TEXT.captures_iter(text) {
+        let part = |at: usize| c.get(at).or_else(|| c.get(at + 3)).map(|m| m.as_str());
+        let (Some(owner), Some(name), Some(number)) = (part(1), part(2), part(3)) else {
+            continue;
+        };
+        let Ok(number) = number.parse() else {
+            continue;
+        };
+        let issue = Ticket::Issue {
+            repo: github::Repo {
+                owner: owner.to_string(),
+                name: name.to_string(),
+            },
+            number,
+        };
+        if issue.plain() && !out.contains(&issue) {
+            out.push(issue);
         }
     }
     out
@@ -1100,6 +1143,16 @@ mod tests {
             Some("ABC-123".into())
         );
         assert_eq!(id_in_name("my tab"), None);
+        assert_eq!(
+            issues_in("see https://github.com/acme/app/issues/12, acme/app#7 and acme/app#12"),
+            [
+                Ticket::parse("acme/app#12").unwrap(),
+                Ticket::parse("acme/app#7").unwrap()
+            ]
+        );
+        assert!(issues_in("a.b/c#1x and https://github.com/acme/app/pull/3").is_empty());
+        assert_eq!(Ticket::parse("acme/app#12").unwrap().short(), "#12");
+        assert_eq!(Ticket::Linear("ENG-4".into()).short(), "ENG-4");
         assert_eq!(
             tidy("<https://linear.app/t/issue/AB-1>"),
             "[AB-1](https://linear.app/t/issue/AB-1)"

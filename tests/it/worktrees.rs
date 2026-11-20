@@ -2905,7 +2905,7 @@ fn an_issues_tab_is_named_by_its_number_and_title_until_renamed_by_hand() {
             std::thread::sleep(std::time::Duration::from_millis(200));
         }
     };
-    labeled("12: Make the widget blue");
+    labeled("#12: Make the widget blue");
 
     let id = tab()["id"].as_str().unwrap().to_string();
     server.ok(&["set", "-t", &id, "@tab_name", "Mine"]);

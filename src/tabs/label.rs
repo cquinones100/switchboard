@@ -50,7 +50,7 @@ pub fn facts_label(dir_name: &str, ticket: Option<(&str, &str)>) -> String {
 }
 
 /// The label of a directory whose branch was started for a GitHub issue
-/// (`wtn --issue`) once its title is known: `<number>: <title>`, the title
+/// (`wtn --issue`) once its title is known: `#<number>: <title>`, the title
 /// as GitHub has it with a leading `FEAT: ` or `BUG: ` left out, since the
 /// number already says it is an issue and the kind takes room the title
 /// needs.
@@ -60,7 +60,7 @@ pub fn issue_label(number: u64, title: &str) -> String {
         .find_map(|kind| title.strip_prefix(kind))
         .unwrap_or(title);
     // Someone else wrote it, so nothing a terminal acts on is kept.
-    format!("{number}: {title}")
+    format!("#{number}: {title}")
         .chars()
         .map(|c| if c.is_whitespace() { ' ' } else { c })
         .filter(|c| !c.is_control())
@@ -86,16 +86,16 @@ mod tests {
     fn an_issue_is_named_by_its_number_and_title_without_its_kind() {
         assert_eq!(
             issue_label(63, "FEAT: Make GitHub issues a ticket source"),
-            "63: Make GitHub issues a ticket source"
+            "#63: Make GitHub issues a ticket source"
         );
         assert_eq!(
             issue_label(7, "BUG: The tab\tis\u{7} red"),
-            "7: The tab is red"
+            "#7: The tab is red"
         );
-        assert_eq!(issue_label(8, "Plain FEAT: here"), "8: Plain FEAT: here");
+        assert_eq!(issue_label(8, "Plain FEAT: here"), "#8: Plain FEAT: here");
         assert_eq!(
             label(None, &issue_label(63, "FEAT: Tabs"), Some(98)),
-            "#98 63: Tabs"
+            "#98 #63: Tabs"
         );
     }
 

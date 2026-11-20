@@ -52,6 +52,7 @@ use crate::sidebar::render::Line;
 use crate::sidebar::text::{cut, width, wrap};
 use crate::ui::Theme;
 use crate::ui::kit::{self, Col, Tone};
+use crate::views::ticket::Ticket;
 
 /// Under this many columns the thread pane goes behind `i`.
 pub const BESIDE_AT: usize = 120;
@@ -1820,8 +1821,10 @@ fn mark_again(run: &Run) -> Run {
 }
 
 /// Under the thread: each ticket it names with its title and state from
-/// the Tickets board and the tab on it, or "no tab yet"; then today's
-/// events it names, with how soon they start.
+/// the Tickets board and the tab on it, or "no tab yet", then each GitHub
+/// issue it links or names (`owner/repo#12`) with the tab on it and the
+/// title its tab shows; then today's events it names, with how soon they
+/// start.
 fn from_your_work(messages: &[Said], look: &Look, w: usize) -> Vec<Vec<Run>> {
     let theme = look.theme;
     let text: String = messages
@@ -1835,6 +1838,7 @@ fn from_your_work(messages: &[Said], look: &Look, w: usize) -> Vec<Vec<Run>> {
             ids.push(id.clone());
         }
     }
+    let issues = crate::views::ticket::issues_in(&text);
     let lower = text.to_lowercase();
     let now = jiff::Timestamp::from_millisecond(look.now_ms).unwrap_or(jiff::Timestamp::UNIX_EPOCH);
     // Each as when it is: "today" all day, "now" while it runs, else how
@@ -1866,7 +1870,7 @@ fn from_your_work(messages: &[Said], look: &Look, w: usize) -> Vec<Vec<Run>> {
             Some((e.title.clone(), soon))
         })
         .collect();
-    if ids.is_empty() && events.is_empty() {
+    if ids.is_empty() && issues.is_empty() && events.is_empty() {
         return Vec::new();
     }
     let states = look.cols >= NAMES_AT;
@@ -1875,6 +1879,9 @@ fn from_your_work(messages: &[Said], look: &Look, w: usize) -> Vec<Vec<Run>> {
         vec![Run::Text(kit::head_rule(w, theme))],
         texts(kit::label("From your work", Tone::Dim, None, w, theme)),
     ];
+    // Each ticket as its row shows it: what it is called, its title, its
+    // state, and the tab on it.
+    let mut rows: Vec<(String, String, String, Option<&TabModel>)> = Vec::new();
     for id in ids {
         let ticket = look
             .work
@@ -1890,10 +1897,24 @@ fn from_your_work(messages: &[Said], look: &Look, w: usize) -> Vec<Vec<Run>> {
             .and_then(|i| i.data.get("state").and_then(Value::as_str))
             .unwrap_or("")
             .to_string();
-        let tab = look
-            .tabs
-            .iter()
-            .find(|t| crate::views::ticket::id_in_name(&t.name).as_deref() == Some(id.as_str()));
+        let linear = Ticket::Linear(id.clone());
+        let tab = look.tabs.iter().find(|t| {
+            t.ticket.as_ref() == Some(&linear)
+                || crate::views::ticket::id_in_name(&t.name).as_deref() == Some(id.as_str())
+        });
+        rows.push((id, title, state, tab));
+    }
+    for issue in issues {
+        let tab = look.tabs.iter().find(|t| t.ticket.as_ref() == Some(&issue));
+        let short = issue.short();
+        // The title its tab's label gives, `#12: <title>`.
+        let title = tab
+            .and_then(|t| t.name.strip_prefix(&format!("{short}: ")))
+            .unwrap_or("")
+            .to_string();
+        rows.push((short, title, String::new(), tab));
+    }
+    for (id, title, state, tab) in rows {
         let after = match tab {
             Some(t) => format!("tab {}", t.index),
             None => "no tab yet".into(),
@@ -2070,6 +2091,17 @@ mod tests {
         open: bool,
         work: &[View],
     ) -> (Vec<String>, Vec<Image>) {
+        draw_with_tabs(view, cols, thread, open, work, &[])
+    }
+
+    fn draw_with_tabs(
+        view: &View,
+        cols: usize,
+        thread: Option<&Thread>,
+        open: bool,
+        work: &[View],
+        tabs: &[TabModel],
+    ) -> (Vec<String>, Vec<Image>) {
         let tz = TimeZone::UTC;
         let pictures = HashMap::new();
         let look = Look {
@@ -2086,7 +2118,7 @@ mod tests {
             pictures: &pictures,
             graphics: false,
             work,
-            tabs: &[],
+            tabs,
             side_top: 0,
             thread_open: open,
             failed: None,
@@ -2544,6 +2576,23 @@ mod tests {
             said.contains("Couldn't read the thread: Slack isn't connected"),
             "{said}"
         );
+    }
+
+    #[test]
+    fn a_thread_naming_a_github_issue_lists_it_with_the_tab_on_it() {
+        let mut thread = thread();
+        thread.messages[1].text =
+            "see https://github.com/acme/widgets/issues/12 and acme/widgets#7".into();
+        let mut tab = TabModel::new(crate::mux::TabId(3), 4, "#12: Make the widget blue");
+        tab.ticket = Ticket::parse("acme/widgets#12");
+        let (lines, _) = draw_with_tabs(&view(), 200, Some(&thread), false, &[], &[tab]);
+        let on = lines.iter().find(|l| l.contains("● #12")).unwrap();
+        assert!(
+            on.contains("Make the widget blue") && on.contains("tab 4"),
+            "{on}"
+        );
+        let other = lines.iter().find(|l| l.contains("● #7")).unwrap();
+        assert!(other.contains("no tab yet"), "{other}");
     }
 
     #[test]

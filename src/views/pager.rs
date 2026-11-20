@@ -1277,14 +1277,17 @@ pub fn run_following(content: Content, follow: Follow) -> ExitCode {
 
 /// `run` for a file of yours or a note, whose picture links are never
 /// fetched, since a link is your words and nothing of a note leaves the
-/// computer; its diagrams are drawn here as anywhere.
+/// computer; its diagrams are drawn here as anywhere, and a person's photo
+/// while Settings' `photos` is on.
 pub fn run_local(content: Content) -> ExitCode {
     run_with(content, None, None, false, None)
 }
 
 /// `run_following` fetching no pictures: for what strangers write, whose
 /// images would tell their server when it is read (a GitHub issue's
-/// comments).
+/// comments, a Linear project's). People's photos are still drawn while
+/// Settings' `photos` is on, since they come from Photos' cache, fetched
+/// only from the service's own avatars.
 pub fn run_following_without_pictures(content: Content, follow: Follow) -> ExitCode {
     run_with(content, None, None, false, Some(follow))
 }

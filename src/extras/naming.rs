@@ -6,7 +6,10 @@
 //! `/wt` clears when it hands the tab over. Each ticket is the one the tab's
 //! branch names when it names one, else asked for; the ticket's own branch
 //! with `t` clears the name instead, since the tab shows its ticket and
-//! title by itself there, kept current as Linear's title changes.
+//! title by itself there, kept current as Linear's title changes. A branch
+//! started for a GitHub issue (`wtn --issue`) is its ticket the same way:
+//! `t` clears the name, the tab showing `#12: <title>`, and `s` names it
+//! "Shaping: #12".
 //!
 //! The ticket and shaping names go in the tab's `@tab_name`, as tab-name.zsh
 //! saved every name, so a skill that sets or clears it (`/shape`, `/wt`)
@@ -20,15 +23,21 @@ use crate::mission::ask::Ask;
 use crate::mux::TabId;
 use crate::mux::server::{ClientId, Server};
 use crate::ui::{Menu, MenuOption, Outcome};
-use crate::views::ticket;
+use crate::views::ticket::{self, Ticket};
 use crate::{settings, util};
 
 impl Server {
     /// Asks what to call `tab`, a new tab opened in `dir`.
     pub(crate) fn ask_tab_name(&mut self, client: ClientId, tab: TabId, dir: PathBuf) {
         let mut options = vec![MenuOption::new("Type a name").key('n')];
-        let linear = settings::is_on("linear");
-        if linear {
+        // An issue's branch names itself with GitHub on, as a ticket's does
+        // with Linear on.
+        let issue = ticket::of_dir_all(&dir, None)
+            .into_iter()
+            .find(|t| matches!(t, Ticket::Issue { .. }))
+            .filter(|_| settings::is_on("github"));
+        let titled = issue.is_some() || settings::is_on("linear");
+        if titled {
             options.push(MenuOption::new("Its ticket and the ticket's title").key('t'));
         }
         options.push(MenuOption::new("Shaping a ticket").key('s'));
@@ -36,12 +45,20 @@ impl Server {
             .body("Optional: Esc leaves it named after its directory.");
         self.about_tab(client, tab, move |s| {
             s.choose(client, menu, move |server, client, chose| {
-                let shaping = match (chose, linear) {
+                let shaping = match (chose, titled) {
                     (Some(0), _) => return server.rename_tab(client, tab),
                     (Some(1), true) => false,
                     (Some(1), false) | (Some(2), true) => true,
                     _ => return,
                 };
+                if let Some(issue) = issue {
+                    let name = if shaping {
+                        format!("Shaping: {}", issue.short())
+                    } else {
+                        String::new()
+                    };
+                    return server.set_tab_name(tab, &name);
+                }
                 match ticket::id_for_dir(&dir) {
                     Some(id) => server.name_after_ticket(client, tab, id, true, shaping),
                     None => server.ask_ticket_for_name(client, tab, dir, shaping),

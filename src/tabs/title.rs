@@ -161,19 +161,6 @@ fn unquote(value: &str) -> String {
     out
 }
 
-/// The Linear ticket a tab's label names, `ABC-123: <title>`, as the label
-/// path-facts.sh gave a directory with no name set.
-pub fn ticket_of(facts_label: &str) -> Option<&str> {
-    let (id, _) = facts_label.split_once(": ")?;
-    let (team, number) = id.split_once('-')?;
-    let team_ok = team.chars().next().is_some_and(|c| c.is_ascii_uppercase())
-        && team
-            .chars()
-            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
-    let number_ok = !number.is_empty() && number.chars().all(|c| c.is_ascii_digit());
-    (team_ok && number_ok).then_some(id)
-}
-
 /// The facts under the title, a line each, as far as they are known: the
 /// branch (none when detached), the directory, the PR and the ticket.
 pub fn facts(
@@ -258,10 +245,6 @@ mod tests {
 
     #[test]
     fn the_box_says_the_title_then_what_is_known() {
-        assert_eq!(ticket_of("ENG-42: Fix the login"), Some("ENG-42"));
-        assert_eq!(ticket_of("app"), None);
-        assert_eq!(ticket_of("eng-42: lower"), None);
-        assert_eq!(ticket_of("Notes: today"), None);
         let lines = facts(Some("fix-login"), Some("~/app"), Some(12), Some("ENG-42"));
         assert_eq!(
             lines,

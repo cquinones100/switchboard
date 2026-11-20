@@ -1009,15 +1009,33 @@ impl Server {
         self.say(Some(client), &format!("Copied {text}"));
     }
 
-    /// M-p's "Copy the branch's ticket ID" and, with `url`, its link: at
-    /// the workspace written down, else where Linear says the ticket is.
+    /// M-p's "Copy the branch's ticket ID" and, with `url`, its link: the
+    /// tab's ticket as M-i finds it, a GitHub issue as `#12` and its link,
+    /// a Linear ticket's link at the workspace written down, else where
+    /// Linear says the ticket is.
     fn copy_ticket(&mut self, client: ClientId, url: bool) {
         let Some((_, tab, dir)) = self.here(client) else {
             return;
         };
-        let Some(id) = self.ticket_here(tab, &dir) else {
-            self.say(Some(client), "No Linear ticket in this branch or tab name");
-            return;
+        let id = match self.tab_ticket_at(tab, &dir) {
+            Some(Ticket::Linear(id)) => id,
+            Some(issue @ Ticket::Issue { .. }) => {
+                let text = match issue.url() {
+                    Some(link) if url => link,
+                    _ => issue.short(),
+                };
+                self.copy_said(client, &text);
+                return;
+            }
+            // A project, or none of the provider's: the Linear ticket the
+            // branch or the tab's names give, as before there were issues.
+            _ => match self.ticket_here(tab, &dir) {
+                Some(id) => id,
+                None => {
+                    self.say(Some(client), "No ticket in this branch or tab name");
+                    return;
+                }
+            },
         };
         if !url {
             self.copy_said(client, &id);

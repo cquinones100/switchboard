@@ -52,6 +52,7 @@ use super::git::{self, GitPlace};
 use super::label;
 use crate::integrations::github::{self, Repo};
 use crate::integrations::linear;
+use crate::views::ticket::{self, Ticket};
 use crate::{net, settings};
 
 /// How long a directory's answer holds once it has a PR, and before.
@@ -80,9 +81,9 @@ const FORGET: Duration = Duration::from_secs(3600);
 /// The settings the names follow, as last read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Switches {
-    /// `github`: PR numbers.
+    /// `github`: PR numbers and GitHub issues' titles.
     pub github: bool,
-    /// `linear`: ticket titles.
+    /// `linear`: Linear tickets' titles.
     pub linear: bool,
     /// `tab_lookups`: either of them in tab names.
     pub lookups: bool,
@@ -127,12 +128,13 @@ impl Switches {
         self.lookups && self.github
     }
 
-    fn tickets(self) -> bool {
-        self.lookups && self.linear
-    }
-
-    fn issues(self) -> bool {
-        self.lookups && self.github
+    /// Whether a ticket of `service`'s (`Ticket::service`) is named.
+    fn tickets_of(self, service: &str) -> bool {
+        self.lookups
+            && match service {
+                "github" => self.github,
+                _ => self.linear,
+            }
     }
 }
 
@@ -151,6 +153,10 @@ pub struct Facts {
     /// a `wtpr` directory's number, or one kept by a build that didn't say,
     /// which is its directory's origin's.
     pub pr_repo: Option<Repo>,
+    /// The ticket its branch is for: the GitHub issue it was started for,
+    /// else the Linear ticket it names, while its service's lookups are on
+    /// and once its title is known.
+    pub ticket: Option<Ticket>,
 }
 
 /// A branch's PR as its lookup found it: its number, and the repository it
@@ -199,7 +205,7 @@ pub enum Ask {
         repo: PathBuf,
         branch: String,
     },
-    /// A ticket's title.
+    /// A ticket's title, by `Ticket::arg` (`ENG-42`, `owner/repo#12`).
     Title { id: String },
 }
 
@@ -347,32 +353,32 @@ impl Names {
         let color = color::tab_color(tint, switches.shade);
         let window = color::window_name(&name, place);
 
-        // A branch started for a GitHub issue (`wtn --issue`, which
-        // records it as `branch.<branch>.wtnIssue`) is named for the issue;
-        // its title is asked for under its reference (`<owner>/<repo>#<n>`),
-        // beside Linear's IDs.
-        let issue = place
-            .filter(|p| switches.issues() && p.on_branch())
-            .and_then(|p| {
-                let config = std::fs::read_to_string(p.common_dir.join("config")).ok()?;
-                super::title::branch_value(&config, &p.branch, "wtnIssue")
-            })
-            .and_then(|r| crate::autopilot::issues::parse_reference(&r))
-            .map(|(repo, number)| (format!("{repo}#{number}"), number));
-        // Matches any team key; a branch that only looks like a ticket is
-        // harmless: Linear has no such ticket, and the name is used as usual.
+        // The issue the branch was started for (`wtn --issue`'s
+        // `branch.<branch>.wtnIssue`, else an `issue/<n>-` branch of
+        // origin's), its title asked for under its reference
+        // (`<owner>/<repo>#<n>`); else the Linear ticket it names, any team
+        // key: a branch that only looks like a ticket is harmless, Linear
+        // having no such ticket, and the name is used as usual.
         let ticket = place
-            .filter(|_| issue.is_none() && switches.tickets())
-            .and_then(|p| crate::views::ticket::id_in_branch(&p.branch));
-        let label = match &issue {
-            Some((reference, number)) => match self.title_of(reference, now, asks) {
-                Some(title) => label::issue_label(*number, &title),
-                None => label::facts_label(&window, None),
-            },
-            None => {
-                let title = ticket.as_ref().and_then(|id| self.title_of(id, now, asks));
-                label::facts_label(&window, ticket.as_deref().zip(title.as_deref()))
+            .filter(|p| p.on_branch())
+            .map(|p| {
+                ticket::of_dir_all(dir, Some("github"))
+                    .into_iter()
+                    .chain(ticket::id_in_branch(&p.branch).map(Ticket::Linear))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+            .into_iter()
+            .find(|t| switches.tickets_of(t.service()));
+        let title = ticket
+            .as_ref()
+            .and_then(|t| self.title_of(&t.arg(), now, asks));
+        let label = match (&ticket, &title) {
+            (Some(Ticket::Issue { number, .. }), Some(title)) => label::issue_label(*number, title),
+            (Some(t), title) => {
+                label::facts_label(&window, Some(t.short()).as_deref().zip(title.as_deref()))
             }
+            (None, _) => label::facts_label(&window, None),
         };
 
         // A `wtpr` worktree carries its number in its directory's name, which
@@ -405,6 +411,9 @@ impl Names {
             label,
             pr,
             pr_repo,
+            // Only once its service confirms it with a title, so a branch
+            // that only looks like a ticket names none.
+            ticket: ticket.filter(|_| title.is_some()),
         }
     }
 
@@ -824,6 +833,58 @@ mod tests {
     }
 
     #[test]
+    fn an_issue_branch_asks_for_the_issue_s_title_and_shows_its_number() {
+        let scratch = Scratch::new("issue");
+        let dir = scratch.0.join("app");
+        if !repo(&dir) {
+            eprintln!("skipped: no git");
+            return;
+        }
+        assert!(git(&dir, &["checkout", "-q", "-b", "issue/12-fix-login"]));
+        assert!(git(
+            &dir,
+            &["remote", "add", "origin", "https://github.com/acme/app.git"]
+        ));
+        let (mut on, now) = names(Switches::default());
+        let (facts, asks) = on.facts(&dir, now);
+        let issue = Ticket::parse("acme/app#12");
+        assert_eq!(facts.ticket, None, "not before GitHub confirms it");
+        assert_eq!(
+            asks[0],
+            Ask::Title {
+                id: "acme/app#12".into()
+            }
+        );
+        let title = Answer::Title {
+            id: "acme/app#12".into(),
+            found: Ok(Some("Fix the login".into())),
+        };
+        assert!(on.answer(title, now));
+        let facts = on.facts(&dir, now).0;
+        assert_eq!(facts.label, "#12: Fix the login");
+        assert_eq!(facts.ticket, issue);
+
+        // A project's ID before a ticket's names the ticket, as it always did.
+        assert!(git(&dir, &["checkout", "-q", "-b", "p-abc-4-eng-7-fix"]));
+        let asks = on.facts(&dir, now + FACTS_FOUND).1;
+        assert!(
+            asks.contains(&Ask::Title { id: "ENG-7".into() }),
+            "{asks:?}"
+        );
+        assert!(git(&dir, &["checkout", "-q", "issue/12-fix-login"]));
+
+        // With GitHub off, no issue and nothing asked of it.
+        let (mut off, now) = names(Switches {
+            github: false,
+            ..Switches::default()
+        });
+        let (facts, asks) = off.facts(&dir, now);
+        assert_eq!(facts.ticket, None);
+        assert_eq!(facts.label, "app:issue/12-fix-login");
+        assert!(asks.is_empty());
+    }
+
+    #[test]
     fn an_issue_branch_is_named_for_its_issue_and_follows_its_title() {
         let scratch = Scratch::new("issue");
         let dir = scratch.0.join("app");
@@ -854,7 +915,7 @@ mod tests {
             found: Ok(Some(t.into())),
         };
         assert!(names.answer(title("FEAT: Make it blue"), now));
-        assert_eq!(names.facts(&dir, now).0.label, "12: Make it blue");
+        assert_eq!(names.facts(&dir, now).0.label, "#12: Make it blue");
 
         // Asked again within minutes, not a day, and renamed when it changed.
         let soon = now + ISSUE_TITLE_FOUND + Duration::from_secs(1);
@@ -863,7 +924,7 @@ mod tests {
             id: "acme/app#12".into()
         }));
         assert!(names.answer(title("BUG: Make it green"), soon));
-        assert_eq!(names.facts(&dir, soon).0.label, "12: Make it green");
+        assert_eq!(names.facts(&dir, soon).0.label, "#12: Make it green");
 
         // With GitHub off, no issue is asked about.
         let (mut off, now) = names_with_github_off();
