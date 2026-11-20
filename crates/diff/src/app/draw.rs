@@ -144,7 +144,10 @@ impl App {
             return None;
         }
         let mut cursor = None;
-        if self.on_map() {
+        if self.on_talk() {
+            // The story told as a talk, one pane with the keys.
+            self.draw_talk(buf);
+        } else if self.on_map() {
             // The story's map, one pane with the keys.
             self.draw_map(buf);
         } else if self.on_story() {
@@ -198,6 +201,8 @@ impl App {
     pub(super) fn footer_keys(&self) -> Vec<(&'static str, &'static str)> {
         let mut keys = if self.filtering {
             vec![("↑↓", "move"), ("↵", "keep"), ("esc", "clear")]
+        } else if self.on_talk() {
+            self.talk_keys()
         } else if self.on_map() && self.mapper.strip.is_some() {
             vec![("←→", "chapter"), ("↵", "open"), ("esc", "the map")]
         } else if self.on_map() {
@@ -1611,8 +1616,8 @@ impl App {
         // button still fits after it; else m and a right click switch.
         let buttons: u16 = bar.iter().map(|(_, label)| width(label) as u16 + 3).sum();
         let switch = {
-            let (spans, _) =
-                kit::choice_switch(&["Story", "Map", "Files"], None, None, &[], false, &theme);
+            let parts: Vec<&str> = self.views().into_iter().map(|(label, _)| label).collect();
+            let (spans, _) = kit::choice_switch(&parts, None, None, &[], false, &theme);
             kit::spans_width(&spans) as u16 + 1
         };
         let mut x = if self.settings.is_none() && lead_x + switch + buttons < self.cols {

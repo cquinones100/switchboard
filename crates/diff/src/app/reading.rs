@@ -47,9 +47,12 @@ use switchboard_ui::Theme;
 use switchboard_ui::draw::{cut, put_line, width, wrap};
 use switchboard_ui::kit::{self, Surface, Tone};
 
-/// The two ways the diff shows a story told in chapters.
+/// The ways the diff shows a story told in chapters.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Mode {
+    /// The story told as a talk, read outside in (talk.rs), with
+    /// diff_story_talk on.
+    Talk,
     /// The file list in reading order with the file beside it, as the
     /// diff always was.
     #[default]
@@ -63,6 +66,7 @@ pub enum Mode {
 impl Mode {
     fn word(self) -> &'static str {
         match self {
+            Mode::Talk => "talk",
             Mode::Files => "files",
             Mode::Story => "story",
             Mode::Map => "map",
@@ -70,8 +74,10 @@ impl Mode {
     }
 }
 
-/// The options of `m`'s menu that switch views, in its order.
-pub(super) const MENU: [(&str, Mode); 3] = [
+/// The options of `m`'s menu that switch views, in its order; Talk only
+/// with diff_story_talk on (`App::views`).
+pub(super) const MENU: [(&str, Mode); 4] = [
+    ("Talk", Mode::Talk),
     ("Story", Mode::Story),
     ("Map", Mode::Map),
     ("Files", Mode::Files),
@@ -92,6 +98,8 @@ pub(super) enum Hit {
     Chapter(usize),
     /// The strip's chip of the files no page tells.
     FilesOnly,
+    /// Something of the Talk view (talk.rs).
+    Talk(super::talk::TalkHit),
 }
 
 /// Where Files mode was when the Story view took its place: the page, the
@@ -184,6 +192,15 @@ pub(super) struct Reader {
     pub(super) cur: usize,
     pub(super) top: usize,
     pub(super) run: Option<usize>,
+    /// What runs' first step shown, moved sideways by Shift and the
+    /// wheel; `None` while it follows the chosen step. The first shown and
+    /// how many steps there are, as last drawn.
+    pub(super) runs_first: Option<usize>,
+    /// The first step shown and the last that can be first (0 while
+    /// they all fit), and the section they were moved for: reading
+    /// another lets go of the move.
+    runs_shown: (usize, usize),
+    runs_for: usize,
     /// The outline's first row on the screen, past what a long one hides.
     outline_top: usize,
     unfolded: HashSet<(usize, String)>,
@@ -195,7 +212,7 @@ pub(super) struct Reader {
     laid: Option<(u16, Vec<Row>)>,
     /// Each hunk's colors by `hunk_key`, `None` while they are asked
     /// for or where no grammar knows the file.
-    colors: HashMap<u64, Option<HunkColors>>,
+    pub(super) colors: HashMap<u64, Option<HunkColors>>,
     /// The column to lay out again on its next draw, the rows before kept
     /// to find the cursor's section in.
     stale: bool,
@@ -209,19 +226,19 @@ type OutlineRow = (Vec<Span<'static>>, Option<usize>);
 const SIDE_BY_SIDE: usize = 121;
 /// The widest a page's prose is laid out, its changes under it taking the
 /// column's whole width.
-const PROSE: usize = 88;
+pub(super) const PROSE: usize = 88;
 
 /// How many rows What runs takes over the column: its label, a box's
 /// four rows, and a rule.
-const RUNS_ROWS: u16 = 6;
+pub(super) const RUNS_ROWS: u16 = 6;
 
 /// `n` of something, by its name: "1 file", "3 files".
-fn counted(n: usize, what: &str) -> String {
+pub(super) fn counted(n: usize, what: &str) -> String {
     format!("{n} {what}{}", if n == 1 { "" } else { "s" })
 }
 
 /// A why's first sentence, its full stop kept: the overview's line.
-fn first_sentence(text: &str) -> String {
+pub(super) fn first_sentence(text: &str) -> String {
     let text = text.trim();
     match text.find(". ") {
         Some(at) => text[..=at].to_string(),
@@ -231,7 +248,7 @@ fn first_sentence(text: &str) -> String {
 
 /// Whether a page only adds or changes tests: every file it has a hunk
 /// in is one of tests, as the column decides for folding a file.
-fn only_tests(page: &story::Page) -> bool {
+pub(super) fn only_tests(page: &story::Page) -> bool {
     let paths = if page.touches.is_empty() {
         &page.files
     } else {
@@ -242,7 +259,7 @@ fn only_tests(page: &story::Page) -> bool {
 
 /// A test page's title as the Tested row names it: "Test the count"
 /// as "the count", any other with its first letter lowered.
-fn tested_name(title: &str) -> String {
+pub(super) fn tested_name(title: &str) -> String {
     for lead in ["Tests ", "Test "] {
         if let Some(rest) = title.strip_prefix(lead) {
             return rest.to_string();
@@ -257,7 +274,11 @@ fn tested_name(title: &str) -> String {
 
 /// The Tested row: each test page named with its number, "; " between
 /// them, wrapped a page at a time under the label.
-fn tested_rows(tested: &[(String, usize)], cols: usize, theme: &Theme) -> Vec<Vec<Span<'static>>> {
+pub(super) fn tested_rows(
+    tested: &[(String, usize)],
+    cols: usize,
+    theme: &Theme,
+) -> Vec<Vec<Span<'static>>> {
     const LABEL: &str = "Tested  ";
     let mut rows: Vec<Vec<Span<'static>>> = Vec::new();
     let mut line = vec![Span::styled(LABEL, Tone::Dim.bold(theme))];
@@ -288,14 +309,14 @@ fn mode_file() -> PathBuf {
 }
 
 /// A hunk's line as `hunk_lines` gives it.
-type HunkLine = (char, String, Option<usize>, Option<usize>);
+pub(super) type HunkLine = (char, String, Option<usize>, Option<usize>);
 
 /// Each line of a hunk's colored runs, on the old side and the new
 /// (`None` on the side it isn't on).
 pub type HunkColors = Vec<(Option<Vec<Hl>>, Option<Vec<Hl>>)>;
 
 /// What a hunk's colors are kept by: its path and its lines.
-fn hunk_key(path: &str, lines: &[HunkLine]) -> u64 {
+pub(super) fn hunk_key(path: &str, lines: &[HunkLine]) -> u64 {
     let mut h = DefaultHasher::new();
     path.hash(&mut h);
     for (mark, text, _, _) in lines {
@@ -340,7 +361,10 @@ fn hunk_colors(old_path: &str, path: &str, lines: &[HunkLine]) -> Option<HunkCol
 
 /// A line of code with its tabs as four spaces, and the color of each of
 /// that text's bytes from `runs`, which are of the line as it came.
-fn with_colors(text: &str, runs: Option<&Vec<Hl>>) -> (String, Vec<Option<ratatui::style::Color>>) {
+pub(super) fn with_colors(
+    text: &str,
+    runs: Option<&Vec<Hl>>,
+) -> (String, Vec<Option<ratatui::style::Color>>) {
     let mut out = String::with_capacity(text.len());
     let mut colors = Vec::with_capacity(text.len());
     for (at, c) in text.char_indices() {
@@ -360,7 +384,7 @@ fn with_colors(text: &str, runs: Option<&Vec<Hl>>) -> (String, Vec<Option<ratatu
 
 /// `text` in spans of `base`, each run in its color from `colors` (by
 /// byte, `from` the first of `text`'s), the rest in `base`'s own.
-fn colored_spans(
+pub(super) fn colored_spans(
     text: &str,
     colors: &[Option<ratatui::style::Color>],
     from: usize,
@@ -526,7 +550,7 @@ fn side_by_side(
 
 /// A line of code in pieces of at most `cols` columns, each piece whole
 /// characters, spaces kept: at least one piece, empty for an empty line.
-fn pieces(text: &str, cols: usize) -> Vec<String> {
+pub(super) fn pieces(text: &str, cols: usize) -> Vec<String> {
     let cols = cols.max(1);
     let mut out = vec![String::new()];
     let mut used = 0;
@@ -547,7 +571,7 @@ fn pieces(text: &str, cols: usize) -> Vec<String> {
 /// Each line of a hunk, from its header's next line to the next header:
 /// its text without its mark, its kind (' ', '+' or '-'), and its line on
 /// the old side and the new.
-fn hunk_lines(lines: &[String], hunk: &story::Hunk) -> Vec<HunkLine> {
+pub(super) fn hunk_lines(lines: &[String], hunk: &story::Hunk) -> Vec<HunkLine> {
     let (mut old, mut new) = (hunk.old_start, hunk.new_start);
     // Only the lines the header counts: what follows the last hunk of a
     // patch (its closing empty line) is no line of it.
@@ -703,10 +727,16 @@ impl App {
         // A story told again while the Story view was shown (the change
         // read again) stays there; the first to come stays on the files
         // where someone is already reading them.
-        self.mode = if self.mode != Mode::Files {
+        // With diff_story_talk on, it opens on the talk's gist.
+        self.talker = super::talk::Talker::default();
+        self.mode = if self.mode == Mode::Talk && !self.opts.talk {
+            Mode::Story
+        } else if self.mode != Mode::Files {
             self.mode
         } else if self.moved || self.alone.is_some() || self.focus != Focus::List {
             Mode::Files
+        } else if self.opts.talk {
+            Mode::Talk
         } else {
             self.kept_mode()
         };
@@ -718,7 +748,7 @@ impl App {
         }
     }
 
-    fn kept_mode(&self) -> Mode {
+    pub(super) fn kept_mode(&self) -> Mode {
         let kept = self
             .opts
             .keep
@@ -727,6 +757,7 @@ impl App {
         match kept.as_deref().map(str::trim) {
             Some("files") => Mode::Files,
             Some("map") => Mode::Map,
+            Some("talk") if self.opts.talk => Mode::Talk,
             _ => Mode::Story,
         }
     }
@@ -757,7 +788,7 @@ impl App {
 
     /// Section `n` read (0 what changes, else a page), kept beside the
     /// story with what another diff open on it has read since.
-    fn mark_read(&mut self, n: usize) {
+    pub(super) fn mark_read(&mut self, n: usize) {
         let kept = self.kept_read();
         self.read.extend(kept);
         if !self.read.insert(n) || !self.opts.keep {
@@ -832,6 +863,7 @@ impl App {
         let page = match self.mode {
             Mode::Story => self.section(),
             Mode::Map => self.mapper.at,
+            Mode::Talk => self.talk_page(),
             Mode::Files => {
                 let path = self.current()?.path.clone();
                 self.home(&path)?
@@ -974,6 +1006,8 @@ impl App {
         }
         let chosen = if self.mode == Mode::Map {
             self.mapper.at.max(1)
+        } else if self.mode == Mode::Talk {
+            self.talk_page().max(1)
         } else {
             self.section().max(1)
         };
@@ -1344,6 +1378,8 @@ impl App {
             Mode::Story => self.open_story_view(),
             Mode::Map if self.mode == Mode::Map => self.keep_mode(),
             Mode::Map => self.open_map_view(),
+            Mode::Talk if self.mode == Mode::Talk => self.keep_mode(),
+            Mode::Talk => self.open_talk_view(),
             Mode::Files => self.show_files(true),
         }
     }
@@ -1439,25 +1475,34 @@ impl App {
         )
     }
 
-    /// The switch between the two views at the head of easy mode's row of
-    /// buttons, as board 125 draws it; gives the column after it.
+    /// The views a story told in chapters is shown in, in the switch's
+    /// order: Talk first while diff_story_talk is on.
+    pub(super) fn views(&self) -> Vec<(&'static str, Mode)> {
+        MENU.into_iter()
+            .filter(|(_, mode)| *mode != Mode::Talk || self.opts.talk)
+            .collect()
+    }
+
+    /// The switch between the views at the head of easy mode's row of
+    /// buttons, as boards 125 and 159 draw it; gives the column after it.
     pub(super) fn draw_switch(&mut self, buf: &mut Buffer, x: u16, y: u16) -> u16 {
         if !self.mapped() {
             return x;
         }
         let theme = self.theme();
-        let chosen = MENU.iter().position(|(_, mode)| *mode == self.mode);
-        let lit = MENU
+        let views = self.views();
+        let chosen = views.iter().position(|(_, mode)| *mode == self.mode);
+        let lit = views
             .iter()
             .position(|(_, mode)| self.hover == Some(Button::Mode(*mode)));
-        let parts: Vec<&str> = MENU.iter().map(|(label, _)| *label).collect();
+        let parts: Vec<&str> = views.iter().map(|(label, _)| *label).collect();
         let (spans, places) = kit::choice_switch(&parts, chosen, lit, &[], false, &theme);
         let w = kit::spans_width(&spans) as u16;
         if x + w >= self.cols {
             return x;
         }
         put_line(buf, x, y, w, &Spans::from(spans));
-        for ((_, mode), (at, pw)) in MENU.iter().zip(places) {
+        for ((_, mode), (at, pw)) in views.iter().zip(places) {
             self.bar.push((
                 Button::Mode(*mode),
                 Rect::new(x + at as u16, y, pw as u16, 1),
@@ -1696,6 +1741,22 @@ impl App {
         };
         self.go_to_section(page);
         self.reader.run = Some(i);
+        self.reader.runs_first = None;
+    }
+
+    /// What runs moved a step sideways, Shift with the wheel, only while
+    /// its steps are wider than the pane; whether it moved.
+    pub(super) fn runs_sideways(&mut self, right: bool) -> bool {
+        let (first, last) = self.reader.runs_shown;
+        if last == 0 {
+            return false;
+        }
+        self.reader.runs_first = Some(if right {
+            (first + 1).min(last)
+        } else {
+            first.saturating_sub(1)
+        });
+        true
     }
 
     // ── The column ──────────────────────────────────────────────────────────
@@ -1763,7 +1824,7 @@ impl App {
     /// Asks for the colors of the story's hunks not colored yet, in one
     /// thread off the screen's, as Files mode colors a file: the column
     /// shows them uncolored until then.
-    fn ask_hunk_colors(&mut self) {
+    pub(super) fn ask_hunk_colors(&mut self) {
         let Some(change) = &self.change else {
             return;
         };
@@ -1946,6 +2007,10 @@ impl App {
             ..plain(first)
         });
         rows.push(plain(vec![kit::rule(cols, theme)]));
+        // Before and After and how it gets there keep to `PROSE`
+        // columns, the rest of the line empty; a narrower column wraps
+        // at its own width.
+        let prose = cols.min(PROSE);
         rows.push(plain(Vec::new()));
         rows.push(plain(vec![Span::styled(
             "WHAT CHANGES",
@@ -1960,7 +2025,7 @@ impl App {
                 rows.push(plain(vec![Span::styled(line, Tone::Dim.style(theme))]));
             }
         } else {
-            for spans in sides_boxes(&story.before, &story.after, cols, theme) {
+            for spans in sides_boxes(&story.before, &story.after, prose, 60, theme) {
                 rows.push(plain(spans));
             }
         }
@@ -1986,7 +2051,7 @@ impl App {
                         Span::styled(number.clone(), Tone::Accent.bold(theme)),
                         Span::styled(page.title.clone(), Tone::Text.bold(theme)),
                     ],
-                    cols,
+                    prose,
                     Style::new(),
                 )));
                 // How: what does the work, or, in a story told before
@@ -2006,21 +2071,29 @@ impl App {
                     if text.is_empty() {
                         continue;
                     }
-                    rows.push(plain(kit::fit(
-                        vec![
+                    // Wrapped at `PROSE` at most, under its label.
+                    let lead = width(&indent) + width(label);
+                    for (i, line) in wrap(&text, prose.saturating_sub(lead).max(10))
+                        .into_iter()
+                        .enumerate()
+                    {
+                        let label = if i == 0 {
+                            Span::styled(label, Tone::Dim.bold(theme))
+                        } else {
+                            Span::raw(" ".repeat(width(label)))
+                        };
+                        rows.push(plain(vec![
                             Span::raw(indent.clone()),
-                            Span::styled(label, Tone::Dim.bold(theme)),
-                            Span::styled(text, tone.style(theme)),
-                        ],
-                        cols,
-                        Style::new(),
-                    )));
+                            label,
+                            Span::styled(line, tone.style(theme)),
+                        ]));
+                    }
                 }
                 rows.push(plain(Vec::new()));
             }
             // The pages that only test, in one row rather than a step each.
             if !tested.is_empty() {
-                rows.extend(tested_rows(&tested, cols, theme).into_iter().map(plain));
+                rows.extend(tested_rows(&tested, prose, theme).into_iter().map(plain));
                 rows.push(plain(Vec::new()));
             }
         }
@@ -2723,6 +2796,7 @@ impl App {
     /// The second key of a pair in the Story view.
     pub(super) fn story_pair(&mut self, first: char, c: char) {
         match (first, c) {
+            ('g', 't') => self.open_talk_view(),
             ('g', 'm') => self.open_map_view(),
             ('g', 'f') => self.show_files(false),
             ('g', 'g') if self.focus == Focus::List => self.choose_item(0),
@@ -2826,6 +2900,7 @@ impl App {
                 }
             }
             Hit::Run(i) => self.go_to_run(i),
+            Hit::Talk(t) => return self.talk_press(t),
             Hit::Page(_) | Hit::Chapter(_) | Hit::FilesOnly => return self.map_click(hit),
         }
         self.read_if_reading();
@@ -2847,6 +2922,7 @@ impl App {
             Hit::Item(_) => self.read_from_here(),
             Hit::Line(_) => self.act_on_line(Some(at)),
             Hit::Run(_) | Hit::Chapter(_) | Hit::FilesOnly => {}
+            Hit::Talk(t) => self.talk_release(t),
             Hit::Page(n) => self.read_page(n),
         }
     }
@@ -3092,6 +3168,7 @@ impl App {
         let Some(story) = self.told_map().cloned() else {
             return;
         };
+        let section = self.section();
         let area = self.diff_area();
         let (x0, cols) = (area.x + 1, area.width.saturating_sub(3) as usize);
         let note = "in the order it happens · a click goes to its page";
@@ -3133,6 +3210,18 @@ impl App {
         while first < keep && span_of(first, keep) > room {
             first += 1;
         }
+        // The last step that can be first with the rest in sight.
+        let last_first = (0..boxes.len())
+            .find(|&f| span_of(f, boxes.len() - 1) <= room)
+            .unwrap_or(boxes.len().saturating_sub(1));
+        if self.reader.runs_for != section {
+            self.reader.runs_first = None;
+            self.reader.runs_for = section;
+        }
+        if let Some(moved) = self.reader.runs_first {
+            first = moved.min(last_first);
+        }
+        self.reader.runs_shown = (first, last_first);
         let mut x = x0 as usize + 2;
         let mut shown = first;
         for (i, (step, page, w)) in boxes.iter().enumerate().skip(first) {
@@ -3217,12 +3306,36 @@ impl App {
                 self.hits.push((Hit::Run(to), Rect::new(at, by - 1, 1, 3)));
             }
         }
+        // Wider than the pane: a scroll bar at its foot shows where, in
+        // place of the rule.
+        let total = if boxes.is_empty() {
+            0
+        } else {
+            span_of(0, boxes.len() - 1)
+        };
+        let before = if first == 0 {
+            0
+        } else {
+            span_of(0, first - 1) + ARROW
+        };
+        let foot = if kit::scroll_bars() && total > room {
+            let mut bar = vec![Span::raw("  ")];
+            bar.extend(super::talk::sideways_bar(
+                total,
+                before.min(total - room),
+                room,
+                theme,
+            ));
+            bar
+        } else {
+            vec![kit::rule(area.width as usize, theme)]
+        };
         put_line(
             buf,
             area.x,
             area.y + RUNS_ROWS - 1,
             area.width,
-            &Spans::from(kit::rule(area.width as usize, theme)),
+            &Spans::from(foot),
         );
     }
 }
@@ -3230,7 +3343,13 @@ impl App {
 /// Before and After as board 140 draws them: two boxes side by side with
 /// an arrow between, After's edge in the accent, each its text wrapped;
 /// one over the other where the column is too narrow for two.
-fn sides_boxes(before: &str, after: &str, cols: usize, theme: &Theme) -> Vec<Vec<Span<'static>>> {
+pub(super) fn sides_boxes(
+    before: &str,
+    after: &str,
+    cols: usize,
+    two_from: usize,
+    theme: &Theme,
+) -> Vec<Vec<Span<'static>>> {
     let dim = Style::new().fg(kit::border(theme));
     let accent = Tone::Accent.style(theme);
     let boxed = |title: &str, text: &str, w: usize, edge: Style, tone: Tone| {
@@ -3257,7 +3376,7 @@ fn sides_boxes(before: &str, after: &str, cols: usize, theme: &Theme) -> Vec<Vec
         )]);
         out
     };
-    if cols < 60 {
+    if cols < two_from {
         let mut out = boxed("Before", before, cols, dim, Tone::Dim);
         out.push(vec![Span::styled("   ▼", Tone::Faint.style(theme))]);
         out.extend(boxed("After", after, cols, accent, Tone::Text));

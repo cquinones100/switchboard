@@ -620,7 +620,13 @@ impl App {
 
     /// Whether a cell is on the list's edge, which a drag moves.
     pub(super) fn on_edge(&self, x: u16, y: u16) -> bool {
-        self.opts.resize && self.plain() && x == self.edge() && y < self.diff_area().bottom()
+        // The talk and the map take the whole width: no list, no edge.
+        self.opts.resize
+            && self.plain()
+            && !self.on_talk()
+            && !self.on_map()
+            && x == self.edge()
+            && y < self.diff_area().bottom()
     }
 
     /// A left press on the list's edge: the drag after it sets the width.
@@ -687,7 +693,12 @@ impl App {
     /// kept at once; else the workspace's own, handed back to it.
     pub(super) fn resize_key(&mut self, by: i32) -> Act {
         // Not while the path filter is typed.
-        let lists = self.focus == Focus::List && self.plain() && !self.filtering;
+        // The talk and the map show no list: the key is the workspace's.
+        let lists = self.focus == Focus::List
+            && self.plain()
+            && !self.filtering
+            && !self.on_talk()
+            && !self.on_map();
         if !(self.opts.resize && lists) {
             self.hand_back(by);
             return Act::Same;

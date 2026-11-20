@@ -9,6 +9,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 
 use super::map::Mapper;
 use super::reading::{Mode, Place_};
+use super::talk::Talker;
 use super::{App, Focus};
 
 /// How many places back are kept.
@@ -21,6 +22,7 @@ pub(super) struct Spot {
     files: Place_,
     reader: (usize, usize, usize),
     mapper: Mapper,
+    talker: Talker,
     focus: Focus,
 }
 
@@ -37,6 +39,14 @@ impl App {
                 (Mode::Story, self.section(), None, 0, reading)
             }
             Mode::Map => (Mode::Map, self.mapper.at, None, self.mapper.chapter, false),
+            // A slide or a zoom is a jump; a step chosen on the flow isn't.
+            Mode::Talk => (
+                Mode::Talk,
+                self.talker.slide,
+                None,
+                self.talker.zoom as usize,
+                false,
+            ),
         }
     }
 
@@ -46,6 +56,7 @@ impl App {
             files: self.place(),
             reader: (self.reader.item, self.reader.cur, self.reader.top),
             mapper: self.mapper.clone(),
+            talker: self.talker.clone(),
             focus: self.focus,
         }
     }
@@ -72,7 +83,9 @@ impl App {
 
     /// Where the reader is before a key that may jump.
     pub(super) fn before_key(&mut self, key: &KeyEvent) -> Option<(Where, Spot)> {
-        (!Self::steps(key) && self.change.is_some()).then(|| (self.where_now(), self.trail_spot()))
+        // In the talk the arrows and h and l turn slides, a jump each.
+        let jumps = !Self::steps(key) || self.on_talk();
+        (jumps && self.change.is_some()).then(|| (self.where_now(), self.trail_spot()))
     }
 
     /// Where the reader is before a click, which may jump.
@@ -164,6 +177,15 @@ impl App {
                     self.reader.item = item;
                     self.reader.cur = cur;
                     self.reader.top = top;
+                    self.focus = spot.focus;
+                }
+            }
+            Mode::Talk => {
+                if self.mode != Mode::Talk {
+                    self.open_talk_view();
+                }
+                if self.mode == Mode::Talk {
+                    self.talker = spot.talker;
                     self.focus = spot.focus;
                 }
             }
