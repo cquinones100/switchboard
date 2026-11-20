@@ -3,12 +3,15 @@
 //! diff's Story view, beside the file view it had (Files mode).
 //!
 //! A story told in chapters (story.rs's `Chapter`s) opens on what changes:
-//! Before and After in plain words, then how it gets there, a line of why
-//! for each of the first chapter's pages in reading order. Down the left,
+//! Before and After in plain words, then how it gets there (board 149):
+//! each of the first chapter's pages in reading order, a How row of what
+//! does the work (its claim in a story told before hows were asked for)
+//! and a Why row of its why's first sentence, the pages that only change
+//! tests folded into one Tested row. Down the left,
 //! the outline: the chapters, What changes and each page indented under
 //! them, ✓ on each read, the files no chapter holds, and a Read meter.
 //! Enter on the outline reads from there, down one column: what changes
-//! first, then each page a section with its claim, a block of what it
+//! first, then each page a section with its claim and how, a block of what it
 //! Decided, Instead of what and what to Watch, then its changes inline,
 //! a file of tests folded last, which Enter unfolds. `]` and `[` move
 //! page to page, Tab between the outline and the column, the outline
@@ -224,6 +227,59 @@ fn first_sentence(text: &str) -> String {
         Some(at) => text[..=at].to_string(),
         None => text.to_string(),
     }
+}
+
+/// Whether a page only adds or changes tests: every file it has a hunk
+/// in is one of tests, as the column decides for folding a file.
+fn only_tests(page: &story::Page) -> bool {
+    let paths = if page.touches.is_empty() {
+        &page.files
+    } else {
+        &page.touches
+    };
+    !paths.is_empty() && paths.iter().all(|p| order::kind(p) == order::Kind::Tests)
+}
+
+/// A test page's title as the Tested row names it: "Test the count"
+/// as "the count", any other with its first letter lowered.
+fn tested_name(title: &str) -> String {
+    for lead in ["Tests ", "Test "] {
+        if let Some(rest) = title.strip_prefix(lead) {
+            return rest.to_string();
+        }
+    }
+    let mut chars = title.chars();
+    match chars.next() {
+        Some(c) => c.to_lowercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+/// The Tested row: each test page named with its number, "; " between
+/// them, wrapped a page at a time under the label.
+fn tested_rows(tested: &[(String, usize)], cols: usize, theme: &Theme) -> Vec<Vec<Span<'static>>> {
+    const LABEL: &str = "Tested  ";
+    let mut rows: Vec<Vec<Span<'static>>> = Vec::new();
+    let mut line = vec![Span::styled(LABEL, Tone::Dim.bold(theme))];
+    let mut used = width(LABEL);
+    for (i, (name, k)) in tested.iter().enumerate() {
+        let sep = if i + 1 < tested.len() { "; " } else { "" };
+        let number = format!(" ({k})");
+        let w = width(name) + width(&number) + width(sep);
+        if used > width(LABEL) && used + w > cols {
+            rows.push(std::mem::take(&mut line));
+            line.push(Span::raw(" ".repeat(width(LABEL))));
+            used = width(LABEL);
+        }
+        line.push(Span::styled(name.clone(), Tone::Text.style(theme)));
+        line.push(Span::styled(number, Tone::Accent.style(theme)));
+        line.push(Span::styled(sep, Tone::Text.style(theme)));
+        used += w;
+    }
+    rows.push(line);
+    rows.into_iter()
+        .map(|spans| kit::fit(spans, cols, Style::new()))
+        .collect()
 }
 
 /// Where the view used last is kept.
@@ -1914,11 +1970,16 @@ impl App {
             Tone::Dim.bold(theme),
         )]));
         if let Some(chapter) = story.chapters.first() {
+            let mut tested: Vec<(String, usize)> = Vec::new();
             for &n in &chapter.pages {
                 let Some(page) = story.pages.get(n - 1) else {
                     continue;
                 };
                 let (_, k, _) = story::page_number(story, n);
+                if only_tests(page) {
+                    tested.push((tested_name(&page.title), k));
+                    continue;
+                }
                 let number = format!("{k}  ");
                 rows.push(plain(kit::fit(
                     vec![
@@ -1928,18 +1989,38 @@ impl App {
                     cols,
                     Style::new(),
                 )));
-                let why = first_sentence(if page.why.is_empty() {
+                // How: what does the work, or, in a story told before
+                // it was asked for, the claim; Why: the why's first
+                // sentence. Each one line, cut past the column, as board
+                // 149 draws them.
+                let how = if page.how.is_empty() {
                     &page.claim
                 } else {
-                    &page.why
-                });
-                let indent = " ".repeat(width(&number) + 2);
-                for line in wrap(&why, cols.saturating_sub(indent.len()).max(10)) {
-                    rows.push(plain(vec![
-                        Span::raw(indent.clone()),
-                        Span::styled(line, Tone::Dim.style(theme)),
-                    ]));
+                    &page.how
+                };
+                let indent = " ".repeat(width(&number));
+                for (label, text, tone) in [
+                    ("How  ", how.clone(), Tone::Text),
+                    ("Why  ", first_sentence(&page.why), Tone::Dim),
+                ] {
+                    if text.is_empty() {
+                        continue;
+                    }
+                    rows.push(plain(kit::fit(
+                        vec![
+                            Span::raw(indent.clone()),
+                            Span::styled(label, Tone::Dim.bold(theme)),
+                            Span::styled(text, tone.style(theme)),
+                        ],
+                        cols,
+                        Style::new(),
+                    )));
                 }
+                rows.push(plain(Vec::new()));
+            }
+            // The pages that only test, in one row rather than a step each.
+            if !tested.is_empty() {
+                rows.extend(tested_rows(&tested, cols, theme).into_iter().map(plain));
                 rows.push(plain(Vec::new()));
             }
         }
@@ -2046,6 +2127,22 @@ impl App {
         };
         for line in wrap(&claim, prose) {
             rows.push(plain(vec![Span::styled(line, Tone::Text.style(theme))]));
+        }
+        // How it works, under the claim, its label dim as in the overview.
+        for (i, line) in wrap(&page.how, prose.saturating_sub(5).max(10))
+            .into_iter()
+            .enumerate()
+            .filter(|_| !page.how.is_empty())
+        {
+            let lead = if i == 0 {
+                Span::styled("How  ", Tone::Dim.bold(theme))
+            } else {
+                Span::raw("     ")
+            };
+            rows.push(plain(vec![
+                lead,
+                Span::styled(line, Tone::Text.style(theme)),
+            ]));
         }
         let block: Vec<(&str, &String, Tone)> = [
             ("Decided", &page.decided, Tone::Done),
