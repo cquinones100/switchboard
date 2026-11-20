@@ -82,7 +82,7 @@ pub struct Fields {
     /// picked in the box changes along with them.
     pub skipped_of: String,
     /// The skipped items taken back in the box, the only ones saving takes
-    /// back, so an item skipped meanwhile (wtn refusing it) stays skipped.
+    /// back, so an item skipped meanwhile (wt refusing it) stays skipped.
     pub taken_back: Vec<String>,
 }
 
@@ -1843,7 +1843,7 @@ mod tests {
         let mut m = mode();
         let mut b = opened(Part::Skipped(0));
         b.key(key(KeyCode::Char('u')), &Look::default());
-        // wtn refused another item meanwhile.
+        // wt refused another item meanwhile.
         m.skipped.push(Skipped {
             note: "id1".into(),
             text: "Refused one".into(),

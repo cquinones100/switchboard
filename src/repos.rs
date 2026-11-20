@@ -22,7 +22,7 @@
 //! tests run again), since a clean rebase changes nothing the tests haven't
 //! seen pass on each side. `tickets` is where the repository's work is
 //! kept, `github` (its issues), `linear` or `notes` (a note's checklist
-//! and its plans), the one place a repository's tickets are decided: `wtn
+//! and its plans), the one place a repository's tickets are decided: `wt
 //! <number>` starts its work from it (`tickets_at`), M-i opens a tab's
 //! ticket from it (`tickets_known`), `/shape` files new work in it
 //! (`switchboard tickets`) and autopilot takes its work from it. It has no
@@ -747,7 +747,7 @@ fn wait_for<T>(future: impl std::future::Future<Output = T>) -> T {
 }
 
 /// The repository's default branch, the one answer `switchboard landing
-/// --json`'s `defaultBranch` and `wtn` (its branch's start and its push
+/// --json`'s `defaultBranch` and `wt` (its branch's start and its push
 /// rule) both take: GitHub's for origin's repository with the github
 /// setting on, else origin's `HEAD` in the clone, else `main` or `master`,
 /// whichever origin has been fetched for; none when none is known. Runs git

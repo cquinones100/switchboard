@@ -25,7 +25,7 @@
 //! The note is followed by its stable ID (crates/notes/src/id.rs): each tick reads
 //! the ID at the note's path (its last bytes, again only once the file
 //! changes), and what following it needs, giving it an ID, looking for it
-//! by its ID, giving older tabs their note's ID, bringing wtn's claims to
+//! by its ID, giving older tabs their note's ID, bringing wt's claims to
 //! IDs, runs off the task too (`Keep`), its answer written back to the
 //! mode.
 
@@ -91,16 +91,16 @@ pub const LANDED_AT: &str = "@autopilot_landed_at";
 /// Landed and made yours by a prompt typed in it since: the mode lets go
 /// of it, while its item stays under the view's Landed.
 pub const YOURS: &str = "@autopilot_yours";
-/// Why wtn refused the tab's item (its claim check), which wtn sets as it
+/// Why wt refused the tab's item (its claim check), which wt sets as it
 /// exits: the item is skipped and the tab closed, so no slot waits at the
-/// shell wtn leaves.
+/// shell wt leaves.
 pub const REFUSED: &str = "@autopilot_refused";
-/// The GitHub issue the tab works, `<owner>/<repo>#<number>`, which wtn
+/// The GitHub issue the tab works, `<owner>/<repo>#<number>`, which wt
 /// sets as it starts one (src/cmd/worktree_from_issue.rs): commented on and
 /// closed once the tab lands, and commented on when it is a duplicate; its
 /// claim on GitHub released once it lands or closes before landing.
 pub const ISSUE: &str = "@autopilot_issue";
-/// Set by wtn once it has claimed its issue on GitHub: a start that fails
+/// Set by wt once it has claimed its issue on GitHub: a start that fails
 /// after it failed here, not on GitHub's say, so it counts toward
 /// `pilot::FAILS_SKIP` as a note item's does rather than claiming and
 /// releasing again on every retry.
@@ -114,10 +114,10 @@ const WRITE_FAILED: &str = "Couldn't write on ";
 /// dismissed as a refusal's is.
 const DUPLICATE_SAID: &str = ": Duplicate of ";
 /// What its notification says of a refused item, after the item.
-const REFUSED_SAID: &str = "wtn refused it";
-/// Why wtn stopped before making the item's worktree in the tab (a fetch of origin
+const REFUSED_SAID: &str = "wt refused it";
+/// Why wt stopped before making the item's worktree in the tab (a fetch of origin
 /// that failed, a worktree it couldn't make), the error's first line, which
-/// wtn sets as it exits: the tab is closed and the item opened again on a
+/// wt sets as it exits: the tab is closed and the item opened again on a
 /// later check, until it has failed `pilot::FAILS_SKIP` times in an hour.
 pub const FAILED: &str = "@autopilot_failed";
 /// What its notification says of an item skipped for failing to start.
@@ -2971,7 +2971,7 @@ impl Server {
         }
     }
 
-    /// Each of its tabs whose wtn refused the item (`REFUSED`): the item
+    /// Each of its tabs whose wt refused the item (`REFUSED`): the item
     /// skipped in its note, why said, and the tab closed.
     fn autopilot_refused(&mut self) {
         type Refused = (TabId, String, String, Option<String>, Option<String>, bool);
@@ -3023,7 +3023,7 @@ impl Server {
             } else {
                 self.autopilot_say(&format!("Skipped {item}: {REFUSED_SAID}, {why}"));
             }
-            eprintln!("autopilot: closed {tab}, wtn refused its item");
+            eprintln!("autopilot: closed {tab}, wt refused its item");
             let Some(issue) = issue.filter(|_| duplicate) else {
                 continue;
             };
@@ -3055,7 +3055,7 @@ impl Server {
         }
     }
 
-    /// Each of its tabs whose wtn stopped before making its worktree (`FAILED`)
+    /// Each of its tabs whose wt stopped before making its worktree (`FAILED`)
     /// and didn't refuse the item: the tab closed, so its slot is free and
     /// the item is opened again on a later check, and the item skipped, why
     /// said, once it has failed `pilot::FAILS_SKIP` times in an hour.
@@ -3325,7 +3325,7 @@ impl Server {
             if mode.land_without_asking {
                 t.opts.insert(LAND.into(), "1".into());
             }
-            // Marked at once, so its wtn and its first question find it so.
+            // Marked at once, so its wt and its first question find it so.
             if mode.hands_free && settings::is_on("autopilot_handsfree") {
                 t.opts.insert(HANDS_FREE.into(), "1".into());
             }

@@ -5636,7 +5636,7 @@ impl Server {
                         return;
                     };
                     // The tab's `@tab_name`, as tmux's rename set it, so `/wt`,
-                    // `/wtn` and `/shape`, which set and clear that option, still
+                    // `/wt` and `/shape`, which set and clear that option, still
                     // name the tab after a rename here.
                     if let Some(t) = server.tabs.get_mut(&tab) {
                         t.name.clear();
@@ -6483,7 +6483,7 @@ impl Server {
                     "tickets" => vec![
                         (
                             "unset",
-                            "Not set: /shape, wtn <number>, M-i and autopilot refuse",
+                            "Not set: /shape, wt <number>, M-i and autopilot refuse",
                         ),
                         ("github", "GitHub issues"),
                         ("linear", "Linear"),

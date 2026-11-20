@@ -1,15 +1,15 @@
-//! `worktree-from-note [path] --issue <number> [--target <branch>]` (`wtn
+//! `worktree-from-ticket [path] --issue <number> [--target <branch>]` (`wt
 //! --issue`): a git worktree on a new branch named after one of the
 //! repository's GitHub issues, with Claude opened in it, told to work on
-//! the issue and to land it with /queue-and-clean, as `wtn --item` does for
+//! the issue and to land it with /queue-and-clean, as `wt --item` does for
 //! a note's item, sharing its start (worktree_from_note.rs's
 //! `make_worktree`, `after_claim` and `hand_over`). What autopilot opens for
 //! an issue it takes (src/autopilot/issues.rs). No tmux-version file is
 //! behind it.
 //!
-//! The issue is asked of GitHub again as it starts. Started by hand (`wtn
-//! --issue`, `wtn <number>` in a repository whose `tickets` is `github`,
-//! or `M-p`'s "Start work on a GitHub issue"), any open issue of the
+//! The issue is asked of GitHub again as it starts. Started by hand (`wt
+//! #<number>`, its link, `wt --issue`, `wt <number>` in a repository whose
+//! `tickets` is `github`, or `M-p`'s "Start work on a GitHub issue"), any open issue of the
 //! repository is taken. In a tab autopilot opened, the same search autopilot
 //! takes issues from decides, which guards against anyone queuing work for
 //! your tabs: only an open issue assigned to you and carrying autopilot's

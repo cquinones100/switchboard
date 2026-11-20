@@ -480,7 +480,7 @@ impl Mode {
                 .is_some_and(|a| Some(a) == clone.canonicalize().ok())
     }
 
-    /// What `wtn` says refusing to start work from `source` in the
+    /// What `wt` says refusing to start work from `source` in the
     /// repository whose main clone is `clone`, while autopilot is on there
     /// and takes that repository's work from the other source.
     pub fn refusal(&self, clone: &Path, source: Sources) -> Option<&'static str> {
@@ -490,7 +490,7 @@ impl Mode {
             && self.source().is_ok_and(|s| s != source);
         refused.then_some(match source {
             Sources::Note => {
-                "Autopilot takes this repository's work from GitHub issues, as its tickets in repos.json say; open an issue with `wtn --issue <number>`"
+                "Autopilot takes this repository's work from GitHub issues, as its tickets in repos.json say; open an issue with `wt --issue <number>`"
             }
             Sources::Issues => {
                 "Autopilot takes this repository's work from the note, as its tickets in repos.json say; add the work to its checklist"

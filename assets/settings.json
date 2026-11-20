@@ -153,7 +153,7 @@
     "key": "worktree_clone_build",
     "category": "Sessions",
     "label": "Start a worktree's build from the main clone's",
-    "description": "A worktree wt, wtn, wtb or wtpr makes starts with its target/ as a copy-on-write clone of the main clone's (APFS on macOS, Btrfs or XFS on Linux), made in the background, so cargo reuses the dependencies the main clone compiled (a dependency with a build script, such as one compiling C, and those built on it build again, since build scripts and their output aren't cloned) and the copy takes no disk space until a build changes it; a worktree holding someone else's code, one on another volume and a filesystem that can't clone get none. Off (the default until it has been tried on real worktrees), a new worktree starts with no build output and compiles everything itself",
+    "description": "A worktree wt, wtb or wtpr makes starts with its target/ as a copy-on-write clone of the main clone's (APFS on macOS, Btrfs or XFS on Linux), made in the background, so cargo reuses the dependencies the main clone compiled (a dependency with a build script, such as one compiling C, and those built on it build again, since build scripts and their output aren't cloned) and the copy takes no disk space until a build changes it; a worktree holding someone else's code, one on another volume and a filesystem that can't clone get none. Off (the default until it has been tried on real worktrees), a new worktree starts with no build output and compiles everything itself",
     "default": false
   },
   {
@@ -592,7 +592,7 @@
     "key": "autopilot",
     "category": "Mission control: Autopilot",
     "label": "Autopilot",
-    "description": "With it on, M-p's 'Autopilot: work a note' keeps tabs working through a note's checklist, opening the next item with wtn as each lands; the mode itself starts off until you turn it on there. Off, it opens no tabs, and its line in mission control and its notification go",
+    "description": "With it on, M-p's 'Autopilot: work a note' keeps tabs working through a note's checklist, opening the next item with wt as each lands; the mode itself starts off until you turn it on there. Off, it opens no tabs, and its line in mission control and its notification go",
     "default": true
   },
   {
@@ -1104,10 +1104,10 @@
     "default": true
   },
   {
-    "key": "wtn_item_preview",
+    "key": "wt_item_preview",
     "category": "Notes",
-    "label": "Show a note's item whole in wtn's list",
-    "description": "M-p's \"Start work on a note's checklist items\" shows the item under the cursor whole in the lower half of its list, its full text and what is indented under it, since the list cuts each item to one line; off, the list has the whole box",
+    "label": "Show a note's item whole in wt's list",
+    "description": "M-p's \"Start work on a note's checklist items\" (M-I) and wt's own list of a note's items show the item under the cursor whole in the lower half of its list, its full text and what is indented under it, since each list cuts an item to one line; off, the list has the whole box",
     "default": true
   },
   {
@@ -1504,7 +1504,7 @@
     "key": "land_without_asking",
     "category": "Safety",
     "label": "Land without asking",
-    "description": "Each tab /wt, /wtn, wtb or autopilot opens is marked to land without asking (@land), and follows the setting as it changes, a tab's own menu deciding for it meanwhile: queue-and-clean opens its PR with no question once two review rounds of the change came back clean and leak-check finds nothing (the PR's CI then running its tests), or pushes its landing once its tests pass too, a push a CLAUDE.md says to ask about (a release's version bump) still asking; off, it asks before its first push",
+    "description": "Each tab /wt, wtb or autopilot opens is marked to land without asking (@land), and follows the setting as it changes, a tab's own menu deciding for it meanwhile: queue-and-clean opens its PR with no question once two review rounds of the change came back clean and leak-check finds nothing (the PR's CI then running its tests), or pushes its landing once its tests pass too, a push a CLAUDE.md says to ask about (a release's version bump) still asking; off, it asks before its first push",
     "default": false
   },
   {

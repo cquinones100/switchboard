@@ -714,10 +714,10 @@ pub fn landing_rows(
             "  Tickets".into(),
             tickets.clone().unwrap_or_else(|| "not set".into()),
             match tickets.as_deref() {
-                Some("github") => "Its work is kept in its GitHub issues: /shape files one, wtn <number> starts one, M-i opens the branch's, and autopilot takes those carrying its issue label".to_string(),
-                Some("notes") => "Its work is kept in a note's checklist: /shape adds an item and its plan, wtn starts one, and autopilot works the note chosen in its settings".to_string(),
-                Some(_) => "Its work is kept in Linear: /shape files a ticket, wtn <ticket> starts one, M-i opens the branch's; autopilot can't take it".to_string(),
-                None => "Where its work is kept, GitHub issues, Linear or a note's checklist, which /shape files new work in, wtn <number> starts it from, M-i opens a branch's ticket from and autopilot takes it from; not set, each of them refuses".to_string(),
+                Some("github") => "Its work is kept in its GitHub issues: /shape files one, wt <number> starts one, M-i opens the branch's, and autopilot takes those carrying its issue label".to_string(),
+                Some("notes") => "Its work is kept in a note's checklist: /shape adds an item and its plan, wt starts one, and autopilot works the note chosen in its settings".to_string(),
+                Some(_) => "Its work is kept in Linear: /shape files a ticket, wt <ticket> starts one, M-i opens the branch's; autopilot can't take it".to_string(),
+                None => "Where its work is kept, GitHub issues, Linear or a note's checklist, which /shape files new work in, wt <number> starts it from, M-i opens a branch's ticket from and autopilot takes it from; not set, each of them refuses".to_string(),
             },
             json!(tickets.as_deref().unwrap_or("unset")),
         ));

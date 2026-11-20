@@ -2,7 +2,7 @@
 //! against a server of the test's own: M-p's "Autopilot: work a note"
 //! asked from a pane in a throwaway repository, the note picked and the
 //! counts kept as they were, and the server opens a background tab for the
-//! note's first item running `wtn`, marked as the mode's, then one for the
+//! note's first item running `wt`, marked as the mode's, then one for the
 //! next, until the note has nothing left, which it says; its menu's "Land
 //! without asking" marks its tabs after a yes; and it follows the note by
 //! its stable ID once it is renamed outside Notes. A stand-in
@@ -930,19 +930,19 @@ fn claude_args(home: &Path) -> String {
     std::fs::read_to_string(home.join("claude-args")).unwrap_or_default()
 }
 
-/// `wtn --item <line>` on the note "Work", through its shell function as a
+/// `wt --item <line>` on the note "Work", through its shell function as a
 /// tab runs it, in `repo`, from the pane given (none, outside a pane).
-fn wtn(server: &TestServer, notes: &Path, repo: &Path, pane: Option<&str>, more: &[&str]) {
-    let out = wtn_output(server, notes, repo, pane, more);
+fn wt(server: &TestServer, notes: &Path, repo: &Path, pane: Option<&str>, more: &[&str]) {
+    let out = wt_output(server, notes, repo, pane, more);
     assert!(
         out.status.success(),
-        "wtn {more:?}: {}",
+        "wt {more:?}: {}",
         String::from_utf8_lossy(&out.stderr)
     );
 }
 
-/// What `wtn` gives, as above, succeeding or not.
-fn wtn_output(
+/// What `wt` gives, as above, succeeding or not.
+fn wt_output(
     server: &TestServer,
     notes: &Path,
     repo: &Path,
@@ -954,10 +954,10 @@ fn wtn_output(
     cmd.args([
         "-c",
         &format!(
-            "eval \"$('{}' worktree-from-note init bash)\"; wtn \"$@\"",
+            "eval \"$('{}' worktree-from-ticket init bash)\"; wt \"$@\"",
             common::BIN
         ),
-        "wtn",
+        "wt",
         "--note",
         "Work",
     ])
@@ -977,7 +977,7 @@ fn wtn_output(
     .env_remove("SWITCHBOARD_SETTINGS")
     .env_remove("CLAUDE_CODE_PLUGIN_DIRS")
     .env_remove("WT_PROMPT")
-    .env_remove("WTN_NOTE");
+    .env_remove("WT_NOTE");
     if let Some(pane) = pane {
         cmd.env("SWITCHBOARD", server.socket())
             .env("SWITCHBOARD_PANE", pane);
@@ -986,7 +986,7 @@ fn wtn_output(
 }
 
 #[test]
-fn an_item_wtn_refuses_in_its_tab_is_skipped_with_why_and_the_tab_closed() {
+fn an_item_wt_refuses_in_its_tab_is_skipped_with_why_and_the_tab_closed() {
     let notes = TempDir::new("sbn");
     std::fs::write(notes.path().join("Work.md"), "# Work\n\n- [ ] Taken\n").unwrap();
     let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
@@ -1024,7 +1024,7 @@ fn an_item_wtn_refuses_in_its_tab_is_skipped_with_why_and_the_tab_closed() {
     ] {
         server.ok(&["set", "-t", &id, option, value]);
     }
-    let out = wtn_output(&server, notes.path(), &repo, Some(&pane), &["--item", "3"]);
+    let out = wt_output(&server, notes.path(), &repo, Some(&pane), &["--item", "3"]);
     assert!(!out.status.success());
 
     wait("the tab closed", &server, || opened(&server).is_empty());
@@ -1037,7 +1037,7 @@ fn an_item_wtn_refuses_in_its_tab_is_skipped_with_why_and_the_tab_closed() {
     let said = mode["said"].as_str().unwrap();
     assert!(
         said.starts_with(
-            "Skipped Taken: wtn refused it, note/taken is for another item: \"Taken!\""
+            "Skipped Taken: wt refused it, note/taken is for another item: \"Taken!\""
         ),
         "{said}"
     );
@@ -1135,7 +1135,7 @@ fn a_tab_whose_start_failed_is_closed_its_item_left_in_line_and_the_third_failur
         (id, tab["panes"][0]["id"].as_str().unwrap().to_string())
     };
     let (_, pane) = open_tab(1);
-    let out = wtn_output(&server, notes.path(), &repo, Some(&pane), &["--item", "3"]);
+    let out = wt_output(&server, notes.path(), &repo, Some(&pane), &["--item", "3"]);
     assert!(!out.status.success());
     let said = String::from_utf8_lossy(&out.stderr);
     assert_eq!(
@@ -1151,7 +1151,7 @@ fn a_tab_whose_start_failed_is_closed_its_item_left_in_line_and_the_third_failur
         "a first failure leaves the item in line: {kept}"
     );
 
-    // Two more failures within the hour, marked as wtn marks them.
+    // Two more failures within the hour, marked as wt marks them.
     for _ in 0..2 {
         let (id, _) = open_tab(1);
         server.ok(&[
@@ -1278,22 +1278,22 @@ fn its_tab_starts_claude_with_the_landings_one_push_allowed_and_no_other_tab_doe
     };
 
     // A tab autopilot didn't open, and a run outside any pane: no rule.
-    wtn(&server, notes.path(), &repo, Some(&pane), &["--item", "3"]);
+    wt(&server, notes.path(), &repo, Some(&pane), &["--item", "3"]);
     let args = claude_args(&server.home);
     assert!(args.starts_with("Work on this checklist item"), "{args}");
-    wtn(&server, notes.path(), &repo, None, &["--item", "4"]);
+    wt(&server, notes.path(), &repo, None, &["--item", "4"]);
     assert!(!claude_args(&server.home).contains("--settings"));
 
     // Autopilot's tab: the push onto origin's default branch, and nothing
     // else, allowed for the session.
     server.ok(&["set", "-t", tab["id"].as_str().unwrap(), "@autopilot", "1"]);
-    wtn(&server, notes.path(), &repo, Some(&pane), &["--item", "5"]);
+    wt(&server, notes.path(), &repo, Some(&pane), &["--item", "5"]);
     let args = claude_args(&server.home);
     assert!(args.starts_with(&allowed("main")), "{args}");
 
     // Landing on a target: the remote branch it tracks; a target on no
     // remote lands by moving the local branch, which needs no rule.
-    wtn(
+    wt(
         &server,
         notes.path(),
         &repo,
@@ -1302,7 +1302,7 @@ fn its_tab_starts_claude_with_the_landings_one_push_allowed_and_no_other_tab_doe
     );
     let args = claude_args(&server.home);
     assert!(args.starts_with(&allowed("feature")), "{args}");
-    wtn(
+    wt(
         &server,
         notes.path(),
         &repo,
@@ -1313,13 +1313,13 @@ fn its_tab_starts_claude_with_the_landings_one_push_allowed_and_no_other_tab_doe
 
     // A repository landing through a PR, and the setting off: no rule.
     lands("pr");
-    wtn(&server, notes.path(), &repo, Some(&pane), &["--item", "8"]);
+    wt(&server, notes.path(), &repo, Some(&pane), &["--item", "8"]);
     assert!(!claude_args(&server.home).contains("--settings"));
     lands("direct");
     let mut off = quiet;
     off["autopilot_push_rule"] = json!(false);
     common::write_settings(&server.home, off);
-    wtn(&server, notes.path(), &repo, Some(&pane), &["--item", "3"]);
+    wt(&server, notes.path(), &repo, Some(&pane), &["--item", "3"]);
     let args = claude_args(&server.home);
     assert!(args.starts_with("Work on this checklist item"), "{args}");
 }

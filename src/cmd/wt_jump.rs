@@ -16,7 +16,7 @@
 //! is what `wtpr` makes and costs nothing; only when that finds nothing is
 //! GitHub asked what branch the PR is on, so a ticket's worktree that later
 //! opened a PR is still reachable by its number. A bare number is a GitHub
-//! issue's too: a tab on its `issue/<n>-…` branch (`wtn --issue`), or whose
+//! issue's too: a tab on its `issue/<n>-…` branch (`wt --issue`), or whose
 //! label names it (`#<n>: <title>`), matches as the PR's tab does, and when
 //! both a PR's tab and an issue's match, you are asked which.
 //!

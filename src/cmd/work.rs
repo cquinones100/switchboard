@@ -11,7 +11,7 @@
 //! clone has a review-pr project skill, lists a repository's open PRs from
 //! forks and starts `/review-pr <number>` in a tab in the main clone.
 //! Its "Start work on a GitHub issue" lists a repository's open issues, the
-//! ones assigned to you first, and starts `wtn --issue <number>` in a tab.
+//! ones assigned to you first, and starts `wt --issue <number>` in a tab.
 //!
 //! The directory list is pick-dir.zsh's: the one you are in first, then
 //! every open tab's, then every one a Claude session ran in, most recent
@@ -27,7 +27,7 @@
 //! What has to read the disk, the clipboard or git is done off the server's
 //! task and comes back as `Event::Work`, so a slow clipboard or a large
 //! cache never holds up drawing. Each tab's work runs as its own command, a
-//! shell of yours that defines `wt`, `wtb`, `wtpr` or `wtn` from the
+//! shell of yours that defines `wt`, `wtb` or `wtpr` from the
 //! command's `init` (`worktree::tab_running`), where the scripts typed it
 //! into the new tab's shell; the tabs go at the end, in the order asked
 //! for, and the first is brought to the front.
@@ -47,11 +47,11 @@ use crate::mux::keys::Action;
 use crate::mux::server::{ClientId, Event, Opened, Server};
 use crate::mux::{PaneId, TabId};
 use crate::ui::picker::TYPED;
-use crate::ui::{Confirm, Outcome, PickItem, Picker};
+use crate::ui::{Confirm, Menu, MenuOption, Outcome, PickItem, Picker};
 use crate::worktree;
 use crate::{paths, platform, settings, util};
 
-/// `wtn`'s arguments for a note's item: its line, and `--target` with the
+/// `wt`'s arguments for a note's item: its line, and `--target` with the
 /// branch it lands on, none for the default branch.
 fn item_args(line: usize, target: &str) -> Vec<String> {
     let mut args = vec!["--item".to_string(), line.to_string()];
@@ -176,6 +176,19 @@ fn recent_session_dirs() -> Vec<PathBuf> {
         .collect();
     found.sort_by(|a, b| b.0.total_cmp(&a.0));
     found.into_iter().map(|(_, d)| d).collect()
+}
+
+/// The repositories M-W offers, as their main clones, and `wt` outside one:
+/// `here`'s first, as for every key that makes a worktree, those whose
+/// `tickets` in repos.json is `linear` first when `linear_first`, for a
+/// Linear ticket taken before its repository. Files alone, no process.
+pub fn repositories(here: &Path, linear_first: bool) -> Vec<PathBuf> {
+    let mut repos = offered_from(here, &[], Wanted::Repo);
+    if linear_first {
+        // Stable, so each group keeps the list's order.
+        repos.sort_by_key(|r| crate::repos::tickets_known(r).as_deref() != Some("linear"));
+    }
+    repos
 }
 
 /// The directory list for a key pressed in `here`.
@@ -431,13 +444,7 @@ impl Server {
                         s.open_claude_tab(c, &dir)
                     })
                 }
-                Action::WorkOnTickets => server.ask_dir(
-                    client,
-                    "Work on tickets: the repository",
-                    found,
-                    Wanted::Repo,
-                    |s, c, dir, clipboard| s.ask_tickets(c, dir, &clipboard),
-                ),
+                Action::WorkOnTickets => server.work_on_tickets(client, found),
                 Action::WorkOnBranch => server.ask_dir(
                     client,
                     "Work on a branch: the repository",
@@ -645,10 +652,28 @@ impl Server {
         }
     }
 
-    /// M-W, once the repository is picked: which tickets, the clipboard's
-    /// when it holds only tickets. Every ticket is checked before any tab
-    /// opens, so a typo in one leaves none half-started.
-    fn ask_tickets(&mut self, client: ClientId, repo: PathBuf, clipboard: &str) {
+    /// M-W: with Linear tickets on the clipboard, those first (to change
+    /// before taking them), then the repository, those whose `tickets` is
+    /// `linear` first; else the repository first, then its open work from
+    /// where it keeps it (`ask_work`). Every ticket is checked before any
+    /// tab opens, so a typo in one leaves none half-started.
+    fn work_on_tickets(&mut self, client: ClientId, found: Found) {
+        // Linear's tickets are taken only while its setting is on.
+        let given = if settings::is_on("linear") {
+            tickets_on(&found.clipboard)
+        } else {
+            String::new()
+        };
+        if given.is_empty() {
+            self.ask_dir(
+                client,
+                "Work on tickets: the repository",
+                found,
+                Wanted::Repo,
+                |s, c, dir, _| s.ask_work(c, dir),
+            );
+            return;
+        }
         let picker = Picker::new(
             "Linear ticket IDs or URLs, separated by commas or spaces",
             Vec::new(),
@@ -656,13 +681,14 @@ impl Server {
         .named("tickets")
         .prompt("Tickets: ")
         .free()
-        .query(&tickets_on(clipboard));
+        .query(&given);
         self.pick(client, picker, move |server, client, picked| {
             let Some(picked) = picked else {
                 return;
             };
             let tickets = match parse_tickets(&picked.value) {
-                Ok(t) => t,
+                Ok(t) if !t.is_empty() => t,
+                Ok(_) => return,
                 Err(bad) => {
                     server.say(
                         Some(client),
@@ -671,19 +697,151 @@ impl Server {
                     return;
                 }
             };
-            let tabs: Vec<TabId> = tickets
-                .iter()
-                .filter_map(|t| {
-                    let command = worktree::tab_running(
-                        "worktree-from-ticket",
-                        "wt",
-                        std::slice::from_ref(t),
-                    );
-                    server.work_tab(client, &repo, command, Opened::Background)
-                })
-                .collect();
-            server.front(client, &tabs);
+            let mut found = found;
+            // Stable, so each group keeps the list's order.
+            found
+                .dirs
+                .sort_by_key(|d| crate::repos::tickets_known(d).as_deref() != Some("linear"));
+            server.ask_dir(
+                client,
+                "Work on tickets: the repository",
+                found,
+                Wanted::Repo,
+                move |s, c, dir, _| s.open_ticket_tabs(c, &dir, &tickets),
+            );
         });
+    }
+
+    /// A tab running `wt` on each ticket, in the repository `repo`.
+    fn open_ticket_tabs(&mut self, client: ClientId, repo: &Path, tickets: &[String]) {
+        let tabs: Vec<TabId> = tickets
+            .iter()
+            .filter_map(|t| {
+                let command =
+                    worktree::tab_running("worktree-from-ticket", "wt", std::slice::from_ref(t));
+                self.work_tab(client, repo, command, Opened::Background)
+            })
+            .collect();
+        self.front(client, &tabs);
+    }
+
+    /// M-W, once the repository is picked: its open work from where its
+    /// `tickets` in repos.json keeps it, as `wt` alone lists it: Linear's
+    /// tickets assigned to you, its GitHub issues, or a note's items as M-I
+    /// lists them; where `tickets` isn't set, which first when more than one
+    /// source is set up (`worktree_from_ticket::sources_offered`).
+    fn ask_work(&mut self, client: ClientId, repo: PathBuf) {
+        let source = crate::repos::tickets_known(&repo);
+        let offered = match source.as_deref() {
+            // A service is offered only while its setting is on.
+            Some(s @ ("linear" | "github")) if !settings::is_on(s) => {
+                let service = if s == "linear" { "Linear" } else { "GitHub" };
+                self.say(
+                    Some(client),
+                    &format!(
+                        "{service} is off in Settings, and this repository keeps its work there."
+                    ),
+                );
+                return;
+            }
+            Some(s) => vec![s.to_string()],
+            None => crate::cmd::worktree_from_ticket::sources_offered(&repo)
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        };
+        let go = move |server: &mut Server, client: ClientId, source: &str, repo: PathBuf| {
+            match source {
+                "github" => server.ask_issue(client, repo),
+                "notes" => server.ask_note(client, repo),
+                _ => server.ask_linear(client, repo),
+            }
+        };
+        match offered.as_slice() {
+            [] => {
+                self.say(
+                    Some(client),
+                    "Nothing to start work from: Linear and GitHub are off in Settings (or the repository isn't on GitHub), and there is no notes directory.",
+                );
+                return;
+            }
+            [one] => {
+                let source = one.clone();
+                go(self, client, &source, repo);
+                return;
+            }
+            _ => {}
+        }
+        let options = offered
+            .iter()
+            .map(|s| MenuOption::new(crate::cmd::worktree_from_ticket::source_words(s)))
+            .collect();
+        self.choose(
+            client,
+            Menu::new("Work on what?", options),
+            move |server, client, chose| {
+                if let Some(source) = chose.and_then(|at| offered.get(at)) {
+                    go(server, client, source, repo);
+                }
+            },
+        );
+    }
+
+    /// M-W in a repository whose work is in Linear: the open tickets
+    /// assigned to you, the newest first, Tab marking several, or IDs and
+    /// links typed in, separated by commas or spaces (Alt-Enter takes what is
+    /// typed when it matches a row).
+    fn ask_linear(&mut self, client: ClientId, repo: PathBuf) {
+        self.off_task(
+            client,
+            move || {
+                tokio::runtime::Handle::current().block_on(
+                    crate::cmd::worktree_from_ticket::assigned_tickets("M-W your tickets"),
+                )
+            },
+            move |server, client, found| {
+                // A list Linear couldn't give still takes tickets typed in.
+                let (tickets, title) = match found {
+                    Ok(t) if t.is_empty() => (
+                        t,
+                        "No open tickets assigned to you: ticket IDs or URLs".to_string(),
+                    ),
+                    Ok(t) => (t, "Work on Linear tickets".to_string()),
+                    Err(e) => (
+                        Vec::new(),
+                        format!("Couldn't list your tickets ({e}): ticket IDs or URLs"),
+                    ),
+                };
+                let items = tickets
+                    .iter()
+                    .map(|(id, title)| PickItem::new(format!("{id} {title}"), id.clone()))
+                    .collect();
+                let picker = Picker::new(title, items)
+                    .named("tickets")
+                    .prompt("Tickets: ")
+                    .keep_order()
+                    .free()
+                    .multi();
+                server.pick_many(client, picker, move |server, client, picked| {
+                    let mut tickets = Vec::new();
+                    for p in &picked {
+                        match parse_tickets(&p.value) {
+                            Ok(t) => tickets.extend(t),
+                            Err(bad) => {
+                                server.say(
+                                    Some(client),
+                                    &format!("Not a ticket ID or Linear issue URL: {bad}"),
+                                );
+                                return;
+                            }
+                        }
+                    }
+                    let mut seen = std::collections::HashSet::new();
+                    tickets.retain(|t| seen.insert(t.clone()));
+                    server.open_ticket_tabs(client, &repo, &tickets);
+                });
+            },
+        );
     }
 
     /// "Start work on a task", once the repository is picked: what to do,
@@ -950,7 +1108,7 @@ impl Server {
     /// The palette's "Start work on a GitHub issue", once the repository is
     /// picked: its open issues, the ones assigned to you first, each group
     /// the newest first (a number typed taken too), then a tab running
-    /// `wtn --issue <owner>/<repo>#<number>`, which asks GitHub about the
+    /// `wt --issue <owner>/<repo>#<number>`, which asks GitHub about the
     /// issue again as it starts.
     fn ask_issue(&mut self, client: ClientId, repo: PathBuf) {
         let at = repo.clone();
@@ -1144,8 +1302,8 @@ impl Server {
                 let all = worktree_from_note::items(&text);
                 let items = worktree_from_note::unclaimed(&at, &name, &text);
                 // Each item whole, for the list's lower half, with the
-                // wtn_item_preview setting (wtn-open.zsh's `item`).
-                let wholes: Vec<String> = if settings::is_on("wtn_item_preview") {
+                // wt_item_preview setting (wtn-open.zsh's `item`).
+                let wholes: Vec<String> = if settings::is_on("wt_item_preview") {
                     items
                         .iter()
                         .map(|i| worktree_from_note::item_text(&text, i.line))
@@ -1175,29 +1333,7 @@ impl Server {
                         "all",
                     ));
                 }
-                // The item's text alone shown and matched, as wtn-open.zsh's
-                // `--with-nth=2`; its line is what picking it gives.
-                rows.extend(items.iter().map(|i| {
-                    PickItem {
-                        off: false,
-                        text: i.text.clone(),
-                        tags: [
-                            i.needs_choice.then(|| "(needs a choice)".to_string()),
-                            i.waits_on.as_ref().map(|w| {
-                                format!(
-                                    "(waits on {})",
-                                    crate::ui::draw::cut(w, worktree_from_note::WAITS_ON_SHOWN)
-                                )
-                            }),
-                        ]
-                        .into_iter()
-                        .flatten()
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                        key: String::new(),
-                        value: i.line.to_string(),
-                    }
-                }));
+                rows.extend(worktree_from_note::item_rows(&items));
                 let short = Path::new(&title)
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
@@ -1276,7 +1412,7 @@ impl Server {
         let name = note.clone();
         // The tabs linked to the note, never Notes' own, with what names
         // their item: `@tab_title` (M-I's and these tabs), `@autopilot_item`,
-        // else their directory's branch, read off the task (a tab /wtn
+        // else their directory's branch, read off the task (a tab /wt
         // opened sets neither option).
         let linked: Vec<(TabId, Option<String>, Option<PathBuf>)> = self
             .sessions
@@ -1303,13 +1439,13 @@ impl Server {
                     .into_iter()
                     .filter_map(|(tab, named, dir)| {
                         let item = named
-                            .or_else(|| dir.and_then(|d| crate::tabs::title::wtn_item_at(&d)))?;
+                            .or_else(|| dir.and_then(|d| crate::tabs::title::wt_item_at(&d)))?;
                         Some((tab, item.trim().to_string()))
                     })
                     .collect();
                 let mut recent = work_recent::dirs();
                 // A note started before it had an ID was kept by its path,
-                // which wtn then gave one.
+                // which wt then gave one.
                 let last = work_recent::note_repo(&key).or_else(|| work_recent::note_repo(&name));
                 let note_repo = last.as_deref().and_then(main_clone);
                 recent.splice(0..0, last);
@@ -1860,8 +1996,8 @@ impl Server {
     /// (autopilot's behind, one you start in front), in the note's
     /// repository: named after the item, cut short, its whole first line
     /// its full title, and linked to its note (`@tab_name`, `@tab_title`,
-    /// `@tab_note`), running `wtn --item <line>` with the
-    /// note's path in WTN_NOTE, so only the line number is a word of the
+    /// `@tab_note`), running `wt --item <line>` with the
+    /// note's path in WT_NOTE, so only the line number is a word of the
     /// command. What autopilot opens for each item it
     /// takes too (wtn-open.zsh's `open_tab`), with `--target` naming the
     /// branch its worktree is cut from and lands on (autopilot's target);
@@ -1875,10 +2011,10 @@ impl Server {
         target: &str,
         opened: Opened,
     ) -> Option<TabId> {
-        let mut command = vec!["env".to_string(), format!("WTN_NOTE={note}")];
+        let mut command = vec!["env".to_string(), format!("WT_NOTE={note}")];
         command.extend(worktree::tab_running(
-            "worktree-from-note",
-            "wtn",
+            "worktree-from-ticket",
+            "wt",
             &item_args(item.line, target),
         ));
         let tab = self.work_tab(client, repo, command, opened)?;
@@ -1898,9 +2034,9 @@ impl Server {
     }
 
     /// A tab for one of the repository's GitHub issues, as `open_item_tab`
-    /// opens one for a note's item, running `wtn --issue
+    /// opens one for a note's item, running `wt --issue
     /// <owner>/<repo>#<number>`, with `--target` as an item's. It is given
-    /// no name: once `wtn` has made the issue's worktree, the tab is named
+    /// no name: once `wt` has made the issue's worktree, the tab is named
     /// `<number>: <title>` from its branch, as every way of starting an issue
     /// names it (src/tabs/names.rs), and follows the title as it changes.
     pub fn open_issue_tab(
@@ -1915,7 +2051,7 @@ impl Server {
         if !target.is_empty() {
             args.extend(["--target".to_string(), target.to_string()]);
         }
-        let command = worktree::tab_running("worktree-from-note", "wtn", &args);
+        let command = worktree::tab_running("worktree-from-ticket", "wt", &args);
         self.work_tab(client, repo, command, opened)
     }
 

@@ -258,7 +258,7 @@ pub fn is_landing_push(payload: &Value) -> bool {
     })
 }
 
-/// Whether a Bash call runs the landing push wtn's push rule allowed before
+/// Whether a Bash call runs the landing push wt's push rule allowed before
 /// `land-lock push`, `git push <remote> HEAD:<branch>`, which a session
 /// started then still has allowed after an upgrade: asked, as before, in a
 /// tab of autopilot's while it doesn't land without asking.
