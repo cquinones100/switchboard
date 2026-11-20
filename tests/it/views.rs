@@ -1448,14 +1448,11 @@ fn m_m_does_nothing_now_that_m_v_answers_it() {
     client.wait_text("$");
     let (code, _, said) = server.run(&["press", "pr-ready"]);
     assert_ne!(code, 0, "no action is named pr-ready: {said}");
+    // M-m, then M-p's palette on the same connection, so the palette shows
+    // only once M-m was handled: no box of M-m's is there with it.
     client.send(b"\x1bm");
-    // A shell without line editing (Linux's sh) takes it as text: Ctrl-C
-    // drops the line before the next command.
-    client.send(b"\x03");
-    client.type_text("echo after-m\r");
-    let screen = client.wait_for("the echo's output", |s| {
-        s.iter().any(|l| l.trim_end().ends_with("│after-m"))
-    });
+    client.send(b"\x1bp");
+    let screen = client.wait_for("the palette", |s| s.iter().any(|l| l.contains('╭')));
     assert!(
         !screen
             .iter()
