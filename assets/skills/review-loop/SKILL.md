@@ -1,7 +1,7 @@
 ---
 name: review-loop
-description: Run the branch through repeated skeptical, read-only Codex reviews (Claude reviews when Codex isn't available), fixing what each round finds, until two consecutive rounds come back clean. Use when the user says a branch or PR is ready for review, asks to "run the review loop", or asks for a Codex review of the branch.
-argument-hint: "[all] [norules] [<worktree of someone else's PR> [<base>]]"
+description: Run the branch through repeated skeptical, read-only Codex reviews (Claude reviews when Codex isn't available), fixing what each round finds, until two consecutive rounds come back clean; or, in ticket mode, a GitHub issue's or Linear ticket's text against the code. Use when the user says a branch or PR is ready for review, asks to "run the review loop", or asks for a Codex review of the branch or of a ticket.
+argument-hint: "[all] [norules] [<worktree of someone else's PR> [<base>] | ticket <#number, issue URL, Linear ID or URL>]"
 allowed-tools:
   - Bash(switchboard codex-review)
   - Bash(switchboard codex-review *)
@@ -15,6 +15,8 @@ allowed-tools:
   - Bash(git status)
   - Bash(git status *)
   - Bash(git rev-parse *)
+  - Bash(gh issue view *)
+  - mcp__claude_ai_Linear__get_issue
 ---
 
 # Review loop
@@ -33,7 +35,7 @@ The loop changes, commits and pushes only the repository it reviews: the one `gi
 
 Before editing a file, check that this repository owns it: the repository of its real path, links followed, is the one under review, `git -C "$(dirname "$(realpath <file>)")" rev-parse --show-toplevel` printing that same top level. A path under the top level isn't enough, since a submodule or a clone nested inside it is a repository of its own. When it isn't, make no change there: dispute the finding in the notes file as outside this repository, naming the file and the repository it is in, and list it in the final report under **Outside this repository** for the user to take up there. Run git only on this repository (`git -C <top level>` when in doubt), never `git -C` another.
 
-Arguments: `all` means also ask about low-severity findings from the first round on. `norules` means review without the rules (`--no-rules` on every round), so neither your CLAUDE.md nor the repository's goes to the reviewer. A directory, optionally followed by a base ref, is someone else's PR to review from outside its worktree: see the next section. Anything else is ignored.
+Arguments: `all` means also ask about low-severity findings from the first round on. `norules` means review without the rules (`--no-rules` on every round), so neither your CLAUDE.md nor the repository's goes to the reviewer. A directory, optionally followed by a base ref, is someone else's PR to review from outside its worktree: see the next section. `ticket` followed by a GitHub issue (`#<number>`, its number or its URL) or a Linear ticket (its ID or URL) is ticket mode, which reviews the ticket's text rather than the branch: read `references/ticket-mode.md` beside this file and follow it instead of the rest of this one. Anything else is ignored.
 
 ## Someone else's PR, from outside its worktree
 
