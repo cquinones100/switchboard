@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Option A for M-v with M-m folded in</title>
+<title>M-v with M-m folded in, a PR with merge conflicts</title>
 <script src="./support.js"></script>
 </head>
 <body>
@@ -177,9 +177,9 @@ views(36, 2, 'PR');
 hl(35, 3, 125);
 
 // THE PR'S HEAD, as GitHub heads its "Files changed" page
-{ let x = 37 + chip(37, 5, 'Open', 'g'); x += chip(x, 5, '✕ Conflicts with main', 'r'); T(x, 5, ['#41', 'a', 'b'], ' ', ['Benchmark fixtures for Notes\' redraw', 't', 'b']); }
+{ let x = 37 + chip(37, 5, 'Open', 'g'); x += chip(x, 5, "✕ Conflicts with main", 'r'); T(x, 5, ['#41', 'a', 'b'], ' ', ['Benchmark fixtures for Notes\' redraw', 't', 'b']); }
 avatar(37, 6, 'Priya'); T(40, 6, ['Priya wants to merge 4 commits into ', 'd'], ['main', 'b'], [' from ', 'd'], ['notes-bench', 'b'], [' · ', 'd'], ['+812', 'g'], [' −14', 'r']);
-T(37, 7, ['Not ready: it has merge conflicts.', 'r', 'b'], ['  required 2 of 3 passed · changes requested', 'd']);
+T(37, 7, ["Not ready: it has merge conflicts.", 'r', 'b'], ["  required 2 of 3 passed · changes requested", 'd']);
 rule(36, 8, 78);
 
 // THE AUTHOR, heading the description as a comment does: the kit's Large avatar.

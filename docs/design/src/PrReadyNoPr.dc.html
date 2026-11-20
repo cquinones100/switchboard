@@ -175,16 +175,13 @@ R(158, 4, 'read 1m ago', 'f');
 views(36, 2, 'PR');
 hl(35, 3, 125);
 
-// NO PR: the branch's head, then M-m's answer for a branch, in the view's own column.
-T(37 + chip(37, 5, 'No PR', 'd'), 5, ['notes-bench', 't', 'b'], ['  4 commits ahead of main', 'd']);
-rule(36, 7, 122);
-T(37, 9, ['No PR · CI on notes-bench at 3fa91c2', 't', 'b']);
-T(37, 10, ['✕ ', 'r'], ['Failing: 1 of 5.', 'r', 'b']);
-T(37, 11, ['All checks       ', 'd'], '3 passed · 1 failed · 1 running');
-T(37, 12, ['This tab is 1 commit ahead of what GitHub checked.', 'y']);
-label(37, 14, 'Checks', 'd', '3 of 5', 112);
-[['passed', 'fmt'], ['passed', 'clippy'], ['failed', 'test (macos)'], ['passed', 'test (linux)'], ['pending', 'build (intel)']].forEach(([st, n], i) => { mark(37, 15 + i, st); put(39, 15 + i, n); });
-R(112, 17, 'tests::redraw_large failed', 'r');
+// NO PR: the branch's head, its verdict a chip as a PR's is, then M-m's answer for a branch in the view's own column.
+{ let x = 37 + chip(37, 5, 'No PR', 'd'); x += chip(x, 5, '✕ CI failing', 'r'); T(x, 5, ['notes-bench', 't', 'b'], ['  4 commits ahead of main', 'd']); }
+T(37, 7, ['Failing: 1 of 5.', 'r', 'b'], ['  CI on notes-bench at 3fa91c2 · this tab is 1 commit ahead of what GitHub checked', 'd']);
+rule(36, 8, 122);
+label(37, 10, 'Checks', 'd', '3 of 5', 112);
+[['passed', 'fmt'], ['passed', 'clippy'], ['failed', 'test (macos)'], ['passed', 'test (linux)'], ['pending', 'build (intel)']].forEach(([st, n], i) => { mark(37, 11 + i, st); put(39, 11 + i, n); });
+R(112, 13, 'tests::redraw_large failed', 'r');
 keys(36, 44, [['j/k', 'scroll'], ['m', 'view actions'], ['M-c', 'back to Claude']]);
 // ─────────────────────────────────────────────────────────────────────────────
 

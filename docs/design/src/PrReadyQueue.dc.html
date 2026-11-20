@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Option B, a PR in the merge queue</title>
+<title>A PR in the merge queue</title>
 <script src="./support.js"></script>
 </head>
 <body>
@@ -177,8 +177,9 @@ views(36, 2, 'PR');
 hl(35, 3, 125);
 
 // THE PR'S HEAD, as GitHub heads its "Files changed" page
-T(37 + chip(37, 5, 'Open', 'g'), 5, ['#41', 'a', 'b'], ' ', ['Benchmark fixtures for Notes\' redraw', 't', 'b']);
+{ let x = 37 + chip(37, 5, 'Open', 'g'); x += chip(x, 5, "▲ In the merge queue", 'm'); T(x, 5, ['#41', 'a', 'b'], ' ', ['Benchmark fixtures for Notes\' redraw', 't', 'b']); }
 avatar(37, 6, 'Priya'); T(40, 6, ['Priya wants to merge 4 commits into ', 'd'], ['main', 'b'], [' from ', 'd'], ['notes-bench', 'b'], [' · ', 'd'], ['+812', 'g'], [' −14', 'r']);
+T(37, 7, ["In the merge queue at position 2,", 'm', 'b'], ["  waiting on the queue's checks", 'd']);
 rule(36, 8, 78);
 
 // THE AUTHOR, heading the description as a comment does: the kit's Large avatar.
@@ -217,28 +218,17 @@ T(37, 38, ['☐', 'd'], ' run it in CI on Linux too');
 
 // BESIDE IT: the facts GitHub keeps on the right
 ruleV(115, 4, 40);
-// CAN IT MERGE: M-m's answer, the panel's first section; its verdict GitHub's mergeStateStatus in words, then what
-// decides it, the conflicts first, each fact a dim label and its value in its tone.
-const merge = (y, tone, right, verdict, rows) => {
-  label(117, y, 'Can it merge', tone, right, 158);
-  let n = y + 1;
-  for (const [st, words, wt] of verdict) { mark(117, n, st); put(119, n++, words, wt, 'b'); }
-  for (const [l, v, t] of rows) { T(119, n, [l, 'd']); put(136, n++, v, t || 't'); }
-  return n + 1;
-};
-merge(5, 'm', '2nd in line', [['queued', 'In the merge queue at position 2,', 'm']], []);
-put(119, 7, 'waiting on the queue\'s checks.', 'm');
-label(117, 9, 'Checks', 'd', '5 of 5', 158);
-T(117, 10, ['Required ', 'f']); [["passed","fmt"],["passed","clippy"],["passed","test (macos)"]].reduce((x, [st, n]) => { mark(x, 10, st); return x + put(x + 2, 10, n) + 4; }, 127);
-T(117, 11, ['Optional ', 'f']); [["passed","test (linux)"],["passed","build (intel)"]].reduce((x, [st, n]) => { mark(x, 11, st); return x + put(x + 2, 11, n) + 4; }, 127);
-label(117, 13, 'Reviewers');
-avatar(117, 14, 'Ana'); T(120, 14, 'Ana', '  ', ['approved', 'g']);
-avatar(117, 15, 'you'); T(120, 15, 'you', '  ', ['approved', 'g']);
-label(117, 17, 'Review comments', 'd', 'none open', 158);
-label(117, 19, 'Files', 'd', 6, 158);
-T(117, 20, ['fixtures/large.json', 'd']); R(158, 20, '+640', 'g');
-T(117, 21, ['tests/notes_bench.rs', 'd']); R(158, 21, '+96', 'g');
-T(117, 22, ['3 more', 'd']);
+label(117, 5, 'Checks', 'd', '5 of 5', 158);
+T(117, 6, ['Required ', 'f']); [["passed","fmt"],["passed","clippy"],["passed","test (macos)"]].reduce((x, [st, n]) => { mark(x, 6, st); return x + put(x + 2, 6, n) + 4; }, 127);
+T(117, 7, ['Optional ', 'f']); [["passed","test (linux)"],["passed","build (intel)"]].reduce((x, [st, n]) => { mark(x, 7, st); return x + put(x + 2, 7, n) + 4; }, 127);
+label(117, 9, 'Reviewers');
+avatar(117, 10, 'Ana'); T(120, 10, 'Ana', '  ', ['approved', 'g']);
+avatar(117, 11, 'you'); T(120, 11, 'you', '  ', ['approved', 'g']);
+label(117, 13, 'Review comments', 'd', 'none open', 158);
+label(117, 15, 'Files', 'd', 6, 158);
+T(117, 16, ['fixtures/large.json', 'd']); R(158, 16, '+640', 'g');
+T(117, 17, ['tests/notes_bench.rs', 'd']); R(158, 17, '+96', 'g');
+T(117, 18, ['3 more', 'd']);
 keys(36, 44, [['j/k', 'scroll'], ['/', 'search'], ['Enter', 'picture full size'], ['m', 'view actions'], ['M-c', 'back to Claude']]);
 // ─────────────────────────────────────────────────────────────────────────────
 

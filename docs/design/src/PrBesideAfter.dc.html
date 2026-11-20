@@ -198,20 +198,17 @@ fill(SX, 0, SW, 1, '3');
 T(SX + 1, 0, ['⇡ ', 'a', 'b', '3'], ['PR #41  Benchmark fixtures for Notes\' redraw', 't', 'b', '3'], ['   tab 1 · planning', 'd', '', '3']);
 put(SX + SW - 4, 0, ' × ', 'd', '', '3');
 
-T(SX + 2 + chip(SX + 2, 2, 'Open', 'g'), 2, ['Priya wants to merge 4 commits into ', 'd'], ['main', 'b'], [' from ', 'd'], ['notes-bench', 'b'], [' · ', 'd'], ['+812', 'g'], [' −14', 'r']);
+{ let x = SX + 2 + chip(SX + 2, 1, 'Open', 'g'); x += chip(x, 1, '✕ Conflicts with main', 'r'); T(x, 1, ['Not ready: it has merge conflicts.', 'r', 'b'], ['  required 2 of 3 passed · changes requested', 'd']); }
+T(SX + 2, 2, ['Priya wants to merge 4 commits into ', 'd'], ['main', 'b'], [' from ', 'd'], ['notes-bench', 'b'], [' · ', 'd'], ['+812', 'g'], [' −14', 'r']);
 rule(SX, 3, SW);
-// Can it merge first, conflicts first, as boards 151 to 153 draw it in the panel.
-label(SX + 2, 5, 'Can it merge', 'r'); R(SX + SW - 3, 5, 'not ready', 'r');
-mark(SX + 2, 6, 'failed'); put(SX + 4, 6, 'Not ready: it has merge conflicts.', 'r', 'b');
-[['Conflicts', 'with main', 'r'], ['Required checks', '2 passed · 1 failed', 'r'], ['All checks', '1 failed · 1 running', 'r'], ['Review decision', 'changes requested', 'r'], ['Auto-merge', 'off', 'd']].forEach(([l, v, t], i) => { T(SX + 4, 7 + i, [l, 'd']); put(SX + 22, 7 + i, v, t); });
-label(SX + 2, 13, 'Checks', 'd'); R(SX + SW - 3, 13, '3 of 5', 'd');
-T(SX + 2, 14, ['Required ', 'f']); [['passed', 'fmt'], ['passed', 'clippy'], ['failed', 'test (macos)']].reduce((x, [st, n]) => { mark(x, 14, st); return x + put(x + 2, 14, n) + 4; }, SX + 12);
-T(SX + 2, 15, ['Optional ', 'f']); [['passed', 'test (linux)'], ['pending', 'build (intel)']].reduce((x, [st, n]) => { mark(x, 15, st); return x + put(x + 2, 15, n) + 4; }, SX + 12);
-rule(SX, 17, SW);
-avatar(SX + 2, 19, 'Priya', true); T(SX + 7, 19, ['Priya', 't', 'b'], ['  opened this 2 days ago', 'd']);
-label(SX + 2, 21, 'Summary');
-T(SX + 2, 22, 'Adds two fixture sets for the notes app and a test that times a full redraw,');
-T(SX + 2, 23, 'so a change to drawing can be checked against a note of 400 items.');
+label(SX + 2, 5, 'Checks', 'd'); R(SX + SW - 3, 5, '3 of 5', 'd');
+T(SX + 2, 6, ['Required ', 'f']); [['passed', 'fmt'], ['passed', 'clippy'], ['failed', 'test (macos)']].reduce((x, [st, n]) => { mark(x, 6, st); return x + put(x + 2, 6, n) + 4; }, SX + 12);
+T(SX + 2, 7, ['Optional ', 'f']); [['passed', 'test (linux)'], ['pending', 'build (intel)']].reduce((x, [st, n]) => { mark(x, 7, st); return x + put(x + 2, 7, n) + 4; }, SX + 12);
+rule(SX, 9, SW);
+avatar(SX + 2, 11, 'Priya', true); T(SX + 7, 11, ['Priya', 't', 'b'], ['  opened this 2 days ago', 'd']);
+label(SX + 2, 13, 'Summary');
+T(SX + 2, 14, 'Adds two fixture sets for the notes app and a test that times a full redraw,');
+T(SX + 2, 15, 'so a change to drawing can be checked against a note of 400 items.');
 keys(SX + 2, H - 1, [['j/k', 'scroll'], ['m', 'view actions'], ['M-v', 'close']]);
 // The rule at the pane's edge, the pane's only border, drawn last so nothing breaks it.
 vl(X0 + PW, 0, H);
