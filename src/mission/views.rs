@@ -935,7 +935,7 @@ pub fn repo_key(item: &Item) -> Option<&str> {
 
 static TICKET: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)^([a-z][a-z0-9]*-\d+)").expect("a regex"));
-/// An issue's branch's front, `issue/12`, which `wtn --issue` names.
+/// An issue's branch's front, `issue/12`, which `wt --issue` names.
 static ISSUE_FRONT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^issue/\d+").expect("a regex"));
 
 /// The ticket a worktree's branch leads with, as its row shows it: the

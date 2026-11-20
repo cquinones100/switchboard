@@ -260,6 +260,10 @@ pub struct Snapshot {
     /// Every tab, whatever the filter leaves of `tabs`, for finding the tab
     /// a PR is open in (`Mission::pr_tab`).
     pub all_tabs: Vec<TabModel>,
+    /// The repository the session's sidebar is filtered to, by its name,
+    /// which the Tabs view follows: its other repositories' tabs folded
+    /// under Other repos.
+    pub repo_filter: Option<String>,
     /// The client's terminal draws the kit's half circles (crates/ui/src/kit.rs).
     pub caps: bool,
     /// The terminal's cell in pixels where the description beside a board
@@ -328,6 +332,7 @@ impl Default for Snapshot {
             screens: HashMap::new(),
             pilot: None,
             all_tabs: Vec::new(),
+            repo_filter: None,
             caps: false,
             cell: None,
             diagrams: HashMap::new(),
@@ -523,6 +528,9 @@ pub struct Mission {
     /// With UX 2.0 on a screen with room for one column of cards, whether
     /// the shelf's groups show their tabs or only their labels.
     pub shelf_open: bool,
+    /// Whether the Tabs view's Other repos shows its tabs, opened by Enter
+    /// or a click on its label while the sidebar's repository filter is on.
+    pub other_repos_open: bool,
     /// Several views at once (from a view's `m` menu), the one with the focus being `view`.
     pub grid: Option<grid::Grid>,
     /// Each shown view's cell as last drawn, by its place in the grid: its
@@ -648,6 +656,7 @@ impl Mission {
             routines_pane: false,
             card_screen: None,
             shelf_open: false,
+            other_repos_open: false,
             grid: None,
             cells: Vec::new(),
             cell_front: None,

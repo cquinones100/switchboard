@@ -99,7 +99,8 @@ pub enum Action {
     /// A new tab running Claude, in a directory picked from the ones you
     /// work in (M-t, M-n; src/cmd/work.rs).
     NewClaudeTab,
-    /// Work on Linear tickets, each in a new tab running `wt` (M-W).
+    /// Work on a repository's tickets, issues or a note's items, each in a
+    /// new tab running `wt` (M-W).
     WorkOnTickets,
     /// Work on a branch, new or existing, in a new tab running `wtb` (M-B).
     WorkOnBranch,
@@ -112,10 +113,10 @@ pub enum Action {
     /// `/review-pr <number>`, listed only in a repository with that project
     /// skill (src/cmd/work.rs).
     ReviewPr,
-    /// Work on a note's checklist items, each in a new tab running `wtn` (M-I).
+    /// Work on a note's checklist items, each in a new tab running `wt` (M-I).
     WorkOnNote,
     /// Work on one of a repository's open GitHub issues in a new tab running
-    /// `wtn --issue` (src/cmd/work.rs).
+    /// `wt --issue` (src/cmd/work.rs).
     WorkOnIssue,
     /// Carry on shaping Linear tickets, each in a new tab running `shape`.
     ContinueShaping,
@@ -470,8 +471,8 @@ impl Action {
             }
             Action::WorkOnPr => "Start work on a PR in a new tab (wtpr)".into(),
             Action::ReviewPr => "Review a contributor's PR in a new tab (/review-pr)".into(),
-            Action::WorkOnNote => "Start work on a note's checklist items in new tabs (wtn)".into(),
-            Action::WorkOnIssue => "Start work on a GitHub issue in a new tab (wtn --issue)".into(),
+            Action::WorkOnNote => "Start work on a note's checklist items in new tabs (wt)".into(),
+            Action::WorkOnIssue => "Start work on a GitHub issue in a new tab (wt --issue)".into(),
             Action::ContinueShaping => "Continue shaping Linear tickets, each in a new tab".into(),
             Action::ShapeNote => "Shape a note's checklist items as Linear tickets".into(),
             Action::ShapeNewTicket => {
@@ -612,7 +613,7 @@ impl Action {
                 "The directories picked before come first, then the one you're in. Claude starts from your shell, which stays in the tab when it exits; then you may name the tab.".into()
             }
             Action::WorkOnTickets => {
-                "Asks for the tickets, IDs or Linear links, then the repository; each gets a worktree on its branch and a tab running Claude on it. Every ticket is checked before any tab opens.".into()
+                "With Linear tickets on the clipboard, asks for those, then the repository, the ones keeping their work in Linear first; else the repository, then lists its open work from where it keeps it: your Linear tickets, its GitHub issues, or a note's items. Each gets a worktree and a tab running wt on it.".into()
             }
             Action::WorkOnBranch => {
                 "Lists the repository's branches, the most recently committed first; a name no branch matches makes a new one. The tab runs Claude in a worktree on it.".into()
@@ -738,7 +739,7 @@ impl Action {
             Action::FocusSidebar => &["sidebar", "tabs", "navigate"],
             Action::ToggleSidebar => &["sidebar"],
             Action::NewClaudeTab => &["tabs", "claude", "new"],
-            Action::WorkOnTickets => &["linear", "ticket", "worktree", "new"],
+            Action::WorkOnTickets => &["ticket", "issue", "notes", "worktree", "new"],
             Action::WorkOnBranch => &["git", "branch", "worktree", "new"],
             Action::WorkOnTask => &["git", "branch", "worktree", "new"],
             Action::WorkOnPr => &["github", "pr", "worktree", "new"],
@@ -806,13 +807,19 @@ impl Action {
 
     /// The words and tags the palette lists it by, or `None` to leave it
     /// out: of M-1 to M-9, only the first, for all nine, as tmux.conf gave
-    /// only M-1 a description.
+    /// only M-1 a description; a note's preview while Settings'
+    /// notes_preview is off.
     pub fn palette_note(&self) -> Option<(String, String)> {
         let words = match self {
             Action::SelectTab(1) => "Go to a tab by number (M-1 to M-9)".to_string(),
             Action::SelectTab(_) => return None,
             Action::TabStatus if !crate::settings::is_on("tab_status_by_hand") => return None,
             Action::Extra(command) if !command.in_palette() => return None,
+            Action::Notes(crate::notes::serve::Command::Preview)
+                if !crate::settings::is_on("notes_preview") =>
+            {
+                return None;
+            }
             _ => self.about(),
         };
         let tags = self

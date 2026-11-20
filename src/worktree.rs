@@ -1,5 +1,5 @@
 //! What the commands that open a worktree for a piece of work share
-//! (`worktree-from-ticket`, `worktree-from-note`, `worktree-from-branch`,
+//! (`worktree-from-ticket`, `worktree-from-branch`,
 //! `worktree-from-pr`, `worktree-resume`, and those that find one again): the
 //! branch's slug, the main clone, the local settings linked in, the worktree
 //! made or reused, refused while Claude already works in it, git's list of
@@ -235,7 +235,7 @@ fn tab_holding(pid: u32) -> Option<String> {
 }
 
 /// What a worktree is for, in the refusal's words:`work` ("ticket", "item")
-/// and `command` ("wt", "wtn"); `start` is the commit a new branch is made
+/// and `command` ("wt", "wtb"); `start` is the commit a new branch is made
 /// from, with no upstream, else the current HEAD.
 pub struct Purpose<'a> {
     pub work: &'a str,
@@ -927,9 +927,9 @@ pub fn tab_running(program: &str, function: &str, args: &[String]) -> Vec<String
 }
 
 /// Whether a tab's command, as `tab_running` builds it, opens a worktree's
-/// work in it (`wt`, `wtn` or `wtb`, not `wtpr`'s review of someone else's
+/// work in it (`wt` or `wtb`, not `wtpr`'s review of someone else's
 /// PR), so the tab takes Settings' `land_without_asking` as it opens.
-/// A leading `env NAME=value...` (a note's item, `WTN_NOTE`) is passed over.
+/// A leading `env NAME=value...` (a note's item, `WT_NOTE`) is passed over.
 pub fn opens_work(command: &[String]) -> bool {
     let command = match command {
         [env, rest @ ..] if env == "env" => {
@@ -942,7 +942,7 @@ pub fn opens_work(command: &[String]) -> bool {
         [_, i, c, line, function, ..] => {
             i == "-i"
                 && c == "-c"
-                && ["wt", "wtn", "wtb"].contains(&function.as_str())
+                && ["wt", "wtb"].contains(&function.as_str())
                 && line.contains(" init ")
                 && line.contains(&format!("; {function} \"$@\";"))
         }
@@ -1145,7 +1145,6 @@ mod tests {
         let words = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         for (program, function) in [
             ("worktree-from-ticket", "wt"),
-            ("worktree-from-note", "wtn"),
             ("worktree-from-branch", "wtb"),
         ] {
             assert!(
@@ -1158,17 +1157,17 @@ mod tests {
             "wtpr",
             &words(&["x"])
         )));
-        let mut item = words(&["env", "WTN_NOTE=Today"]);
+        let mut item = words(&["env", "WT_NOTE=Today"]);
         item.extend(tab_running(
-            "worktree-from-note",
-            "wtn",
+            "worktree-from-ticket",
+            "wt",
             &words(&["--item", "3"]),
         ));
         assert!(
             opens_work(&item),
             "a note's item, its note in the environment"
         );
-        assert!(!opens_work(&tab_command("echo hi", "wtn", &[])));
+        assert!(!opens_work(&tab_command("echo hi", "wt", &[])));
         assert!(!opens_work(&words(&["claude", "--resume", "s"])));
     }
 

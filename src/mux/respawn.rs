@@ -2,7 +2,7 @@
 //! `respawn-pane` did: the pane keeps its id, its place in its tab, its size
 //! and its options, so whatever names it (a hook's `SWITCHBOARD_PANE`, a
 //! tab's `@claude_pane`, a note) still names it. The skills handed a tab
-//! over this way (/wt and /wtn to the worktree command that opens the work,
+//! over this way (/wt to the worktree command that opens the work,
 //! queue-and-clean to `claude --resume` in the main clone), and the Slack
 //! relay starts itself again in the tab it left at a shell.
 //!
@@ -20,7 +20,7 @@
 //! (`PROGRAM_MARKS`), so a shell started where Notes ran isn't taken for
 //! Notes, nor allowed what Notes was. The tab's `@tab_dir` goes too: the
 //! tab is handed to other work, which is about the directory it starts in.
-//! Handed a worktree's work (`wt`, `wtn`, `wtb`), it takes `@land` from
+//! Handed a worktree's work (`wt`, `wtb`), it takes `@land` from
 //! Settings' `land_without_asking` as a new tab opening one does.
 
 use std::path::PathBuf;
@@ -117,7 +117,7 @@ impl Server {
         slot.opts
             .retain(|name, _| !PROGRAM_MARKS.contains(&name.as_str()));
         self.forget_images(pane);
-        // The tab is handed to other work (/wt, /wtn, queue-and-clean's
+        // The tab is handed to other work (/wt, queue-and-clean's
         // resume): the directory it was about goes with what it was doing.
         // A sealed review's try isn't the new work's either.
         if handed_over && let Some(t) = self.tabs.get_mut(&tab) {
@@ -166,7 +166,7 @@ impl Server {
                 }
             }
         }
-        // Handed a worktree's work (/wt, /wtn), it lands without asking as
+        // Handed a worktree's work (/wt), it lands without asking as
         // Settings' land_without_asking says.
         if work {
             self.land_as_set(tab);

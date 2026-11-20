@@ -19,6 +19,14 @@ use crate::mux::server::{ClientId, Event, Reply, Server};
 use crate::mux::{PaneId, TabId};
 use crate::{settings, util};
 
+/// A tab whose pane finished loading while you were elsewhere, by what
+/// loaded ("Diff"), under Needs you until you go to it (`tab_ready`).
+pub const TAB_READY: &str = "@tab_ready";
+/// The notifications of those tabs, by their source.
+pub const READY_SOURCE: &str = "ready";
+/// The setting that turns it off.
+pub const READY_SETTING: &str = "diff_ready_needs_you";
+
 /// How long a tab must stay in front for its finished mark to count as seen
 /// (agent-state.sh's `AGENT_SEEN_DELAY`): passing over a tab, as moving the
 /// sidebar's cursor does, leaves it.
@@ -558,6 +566,82 @@ impl Server {
             }
             self.redraw_tab(tab);
         }
+        // What it loaded is seen with it.
+        if let Some(t) = self.tabs.get_mut(&tab)
+            && t.opts.remove(TAB_READY).is_some()
+        {
+            self.ready_notices();
+            self.redraw_tab(tab);
+        }
+    }
+
+    /// What a tab's pane was loading is ready (`switchboard ready`, which
+    /// the diff asks once its story is told or has failed under its
+    /// cover): with Settings' `diff_ready_needs_you` on and the tab in
+    /// front nowhere, the tab is under Needs you, saying "<what> ready",
+    /// with a notification, until you go to it (`mark_seen`). A tab in
+    /// front is left alone, since you are looking at it.
+    pub fn tab_ready(&mut self, tab: TabId, what: &str) {
+        if !setting_on(READY_SETTING) || self.tab_in_front(tab) {
+            return;
+        }
+        let Some(t) = self.tabs.get_mut(&tab) else {
+            return;
+        };
+        t.opts.insert(TAB_READY.into(), what.to_string());
+        self.ready_notices();
+        self.redraw_tab(tab);
+    }
+
+    /// The notifications of the tabs marked ready, one a tab, each keeping
+    /// the time it came at.
+    pub(crate) fn ready_notices(&mut self) {
+        let before = self.notices.get(READY_SOURCE).cloned().unwrap_or_default();
+        let now = util::now_ms();
+        let mut items = Vec::new();
+        for s in &self.sessions {
+            for tab in &s.tabs {
+                let Some(what) = self.tabs.get(tab).and_then(|t| t.opts.get(TAB_READY)) else {
+                    continue;
+                };
+                let id = format!("ready:{tab}");
+                let time = before
+                    .iter()
+                    .find(|i| i.id == id)
+                    .and_then(|i| i.time)
+                    .or(Some(now));
+                let name = self
+                    .tabs
+                    .get(tab)
+                    .map(|t| t.display_name().to_string())
+                    .unwrap_or_default();
+                items.push(crate::items::Item {
+                    id,
+                    title: format!("{what} ready in tab {}", self.tab_number(*tab)),
+                    detail: name,
+                    time,
+                    target: crate::items::Target::Tab(*tab),
+                    ..Default::default()
+                });
+            }
+        }
+        if items != before {
+            self.set_notices(READY_SOURCE, items);
+        }
+    }
+
+    /// A "ready" notification dismissed: its tab's mark goes with it, so
+    /// the tab leaves Needs you as it does once seen.
+    pub(crate) fn ready_dismiss(&mut self, item: &crate::items::Item) {
+        let crate::items::Target::Tab(tab) = item.target else {
+            return;
+        };
+        if let Some(t) = self.tabs.get_mut(&tab)
+            && t.opts.remove(TAB_READY).is_some()
+        {
+            self.redraw_tab(tab);
+        }
+        self.ready_notices();
     }
 
     /// A tab was focused: a second later, if it is still in front, it has

@@ -50,7 +50,7 @@
 //! opened without one, or a copy of another note's file holding the same,
 //! is given one at once, its modified time kept, so opening an old note
 //! doesn't move it up the list; a note in Recently Deleted is left as it
-//! is. Only the file given another ID outside the app (wtn or the mode
+//! is. Only the file given another ID outside the app (wt or the mode
 //! giving a copy one of its own) changes the one the note keeps.
 //!
 //! The screen is drawn into a cell buffer and only what changed is sent,
@@ -3817,6 +3817,11 @@ impl App {
         if !self.opts.server {
             commands.retain(|c| !c.act.needs_workspace());
         }
+        // Read as the palette opens, since Settings changes it while the
+        // app runs on.
+        if !settings::is_on("notes_preview") {
+            commands.retain(|c| c.act != PaletteAct::Preview);
+        }
         for c in &mut commands {
             if c.act == PaletteAct::Format(FormatAct::DiagramCode) {
                 c.name = format!("Diagram: {}", self.diagram_label());
@@ -3964,6 +3969,7 @@ impl App {
                 self.press(&[name]);
             }
             PaletteAct::NoteTab => self.note_tab(),
+            PaletteAct::Preview => self.press_for_note("preview-note"),
             PaletteAct::AttachNote => self.attach_note(),
             PaletteAct::WorkOnItem => self.work_on_item(),
             PaletteAct::OpenPlan => {
@@ -5336,13 +5342,13 @@ fn look_at_tabs(tx: Sender<Msg>) {
 
 /// The tabs working on an item or waiting on you, from `switchboard list`'s
 /// JSON: the item from the tab's `@tab_title` or `@autopilot_item`, else
-/// from `wtn_claim` on its directory, keyed by `note_item_key` under the
+/// from `wt_claim` on its directory, keyed by `note_item_key` under the
 /// note's ID (the claim's), else the note it is linked to (`@tab_note`),
 /// else by the item's first line alone; working with its
 /// Claude's phase, or waiting with what it waits on.
 fn item_tabs_of(
     list: &serde_json::Value,
-    wtn_claim: impl Fn(&str) -> Option<(Option<String>, String)>,
+    wt_claim: impl Fn(&str) -> Option<(Option<String>, String)>,
 ) -> HashMap<String, render::ItemTab> {
     let mut out = HashMap::new();
     let sessions = list["sessions"].as_array().into_iter().flatten();
@@ -5358,7 +5364,7 @@ fn item_tabs_of(
                 .filter(|v| !v.is_empty())
                 .map(str::to_string)
         };
-        let claim = tab["path"].as_str().and_then(&wtn_claim);
+        let claim = tab["path"].as_str().and_then(&wt_claim);
         let Some(item) = opt("@tab_title")
             .or_else(|| opt("@autopilot_item"))
             .or_else(|| claim.as_ref().map(|(_, item)| item.clone()))

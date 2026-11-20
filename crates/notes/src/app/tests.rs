@@ -2273,7 +2273,7 @@ fn renaming_a_new_empty_note_titles_its_first_line_and_a_pasted_id_is_never_styl
 
 // UX 2.0: the background look's tabs matched to the items they are for.
 #[test]
-fn the_server_tabs_on_items_are_matched_by_title_autopilot_item_or_wtn_item() {
+fn the_server_tabs_on_items_are_matched_by_title_autopilot_item_or_wt_item() {
     let list = serde_json::json!({ "sessions": [{ "tabs": [
         { "id": "@13", "index": 3, "agent": "working", "options": { "@tab_title": "show uncommitted changes" },
           "panes": [{ "agent": { "state": "working", "phase": "review round 1" } }] },
@@ -4883,7 +4883,7 @@ fn with_no_workspace_the_palette_leaves_out_what_only_it_does() {
         "Choose a tab's note",
         "Move Notes beside your work, or back to its own tab",
         "Search notes, Linear, GitHub and Slack",
-        "Start work on this item in a new tab (wtn)",
+        "Start work on this item in a new tab (wt)",
     ] {
         assert!(!alone.iter().any(|n| n == workspace), "{workspace}");
     }
@@ -4903,7 +4903,7 @@ fn with_no_workspace_the_palette_leaves_out_what_only_it_does() {
     assert!(
         in_pane
             .iter()
-            .any(|n| n == "Start work on this item in a new tab (wtn)")
+            .any(|n| n == "Start work on this item in a new tab (wt)")
     );
 }
 
@@ -5258,4 +5258,17 @@ fn in_a_notes_with_no_room_a_narrowing_key_clears_a_kept_width() {
     app.cols = 58;
     app.key(resize('h'));
     assert_eq!(kept(&app), None);
+}
+
+#[test]
+fn preview_this_note_is_listed_in_a_workspace_and_left_out_alone() {
+    let (_dir, mut app) = started("preview-listed");
+    let listed = |app: &App| {
+        app.palette_commands(false)
+            .iter()
+            .any(|c| c.act == PaletteAct::Preview && c.name == "Preview this note")
+    };
+    assert!(!listed(&app), "alone, no workspace to draw it");
+    app.opts.server = true;
+    assert!(listed(&app), "in a workspace's pane");
 }

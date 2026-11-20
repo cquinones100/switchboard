@@ -293,7 +293,7 @@ fn worktrees_landing_on_different_branches_hold_their_own_locks_at_once() {
     let two = worktree(home, &repo, home, "two");
     let three = worktree(home, &repo, home, "three");
     let four = worktree(home, &repo, home, "four");
-    // As wtn --target records it; naming the default branch is landing on it.
+    // As wt --target records it; naming the default branch is landing on it.
     git(&repo, &["config", "branch.two.wtnTarget", "team/next"]);
     git(&repo, &["config", "branch.four.wtnTarget", "main"]);
 
@@ -902,7 +902,7 @@ fn landing(home: &Path, dir: &Path, args: &[&str]) -> Output {
         .unwrap()
 }
 
-// A branch `wtn` opened for a note's item: `landing --json` names the
+// A branch `wt` opened for a note's item: `landing --json` names the
 // default branch, the note and the item, the landing's CI branch, and
 // whether the change is already on the default branch, which a squash of it
 // landed there by other means makes it.
@@ -984,7 +984,7 @@ fn landing_names_the_default_branch_note_item_and_ci_branch_and_whether_it_has_l
     git(&repo, &["fetch", "-q", "origin"]);
     assert_eq!(json_of()["alreadyLanded"], true);
 
-    // A branch `wtn` didn't open names no note or item.
+    // A branch `wt` didn't open names no note or item.
     let plain = landing(home, &repo, &["--json"]);
     let plain: serde_json::Value = serde_json::from_str(&stdout(&plain)).unwrap();
     assert_eq!(

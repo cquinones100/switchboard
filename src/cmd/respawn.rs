@@ -1,10 +1,10 @@
 //! `switchboard respawn [-t pane] [-c dir] <command> [args...]`: the pane's
 //! program replaced by another, in the same place, as the skills used
-//! `tmux respawn-pane -k` to hand a tab over: /wt and /wtn to the worktree
+//! `tmux respawn-pane -k` to hand a tab over: /wt to the worktree
 //! command that opens the work, and queue-and-clean to `claude --resume` in
 //! the main clone once the worktree it ran in is gone.
 //!
-//! `wt`, `wtn`, `wtb` and `wtpr` run as the worktree commands' shell
+//! `wt`, `wtb` and `wtpr` run as the worktree commands' shell
 //! functions, defined from their `init` in a shell of yours
 //! (`worktree::tab_running`), so they work whether or not your rc defines
 //! them; anything else runs as it is, in an interactive shell that reads
@@ -20,7 +20,7 @@
 //! and name, and the focus if it had it. Ending the pane's program ends the
 //! Claude session that asked for this, so it is the last thing that session
 //! runs. Since Claude may run this without asking, the server holds one run
-//! from a pane to its own tab and to the programs `allowed` names (wt, wtn,
+//! from a pane to its own tab and to the programs `allowed` names (wt,
 //! wtb, and `claude --resume <id>`), saying why it refuses anything else; a
 //! server too old to know `respawn-program` is asked `respawn-pane` with
 //! the command built here, as before.
@@ -34,13 +34,12 @@ use crate::worktree;
 /// them.
 const FUNCTIONS: &[(&str, &str)] = &[
     ("wt", "worktree-from-ticket"),
-    ("wtn", "worktree-from-note"),
     ("wtb", "worktree-from-branch"),
     ("wtpr", "worktree-from-pr"),
 ];
 
 /// What a respawn from a pane may start, as the refusal names it.
-pub const ALLOWED: &str = "wt, wtn, wtb or claude --resume <session>";
+pub const ALLOWED: &str = "wt, wtb or claude --resume <session>";
 
 /// The worktree commands' own flags, naming a file each writes for the
 /// shell function that runs it (`worktree::Given`), which their function
@@ -48,12 +47,12 @@ pub const ALLOWED: &str = "wt, wtn, wtb or claude --resume <session>";
 const WRITES_FILE: &[&str] = &["--cd-file", "--settings-file"];
 
 /// Whether a respawn from a pane may start `program` with `args`: the
-/// worktree commands that hand a tab over (/wt, /wtn, `wtb`), without the
+/// worktree commands that hand a tab over (/wt, `wtb`), without the
 /// flags that name a file they write, and Claude resuming a session
 /// (queue-and-clean, once the worktree is gone).
 pub fn allowed(program: &str, args: &[String]) -> bool {
     match program {
-        "wt" | "wtn" | "wtb" => !args.iter().any(|a| WRITES_FILE.contains(&a.as_str())),
+        "wt" | "wtb" => !args.iter().any(|a| WRITES_FILE.contains(&a.as_str())),
         "claude" => {
             matches!(args, [flag, id] if flag == "--resume" && !id.is_empty() && !id.starts_with('-'))
         }
@@ -65,7 +64,7 @@ fn usage() -> ExitCode {
     eprintln!(
         "Usage: switchboard respawn [-t pane] [-c dir] <command> [args...]\n\n\
          Replaces the pane's program (this pane's, without -t) with <command>,\n\
-         started in <dir>. wt, wtn, wtb and wtpr run as the worktree commands'\n\
+         started in <dir>. wt, wtb and wtpr run as the worktree commands'\n\
          shell functions. A shell is left in the pane when it ends."
     );
     ExitCode::from(2)
@@ -199,14 +198,14 @@ mod tests {
     #[test]
     fn a_pane_may_start_the_worktree_commands_and_resume_claude_alone() {
         let words = |w: &[&str]| w.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert!(allowed("wtn", &words(&["--item", "12", "--note", "N.md"])));
+        assert!(allowed("wt", &words(&["--item", "12", "--note", "N.md"])));
         assert!(allowed("wt", &words(&["ABC-1"])));
         assert!(allowed("wtb", &[]));
         assert!(!allowed(
             "wtb",
             &words(&["main", "--cd-file", "/home/someone/.zshrc"])
         ));
-        assert!(!allowed("wtn", &words(&["--settings-file", "/tmp/x"])));
+        assert!(!allowed("wt", &words(&["--settings-file", "/tmp/x"])));
         assert!(allowed("claude", &words(&["--resume", "abc"])));
         assert!(!allowed("claude", &[]));
         assert!(!allowed("claude", &words(&["--resume", "abc", "-p", "rm"])));
@@ -217,7 +216,7 @@ mod tests {
         assert!(!allowed("wtpr", &words(&["12"])));
         assert!(!allowed("sh", &words(&["-c", "id"])));
         assert_eq!(
-            program_args("%3", Some("/w"), "wtn", &words(&["--item", "1"])),
+            program_args("%3", Some("/w"), "wt", &words(&["--item", "1"])),
             [
                 "respawn-program",
                 "-t",
@@ -225,7 +224,7 @@ mod tests {
                 "-c",
                 "/w",
                 "--",
-                "wtn",
+                "wt",
                 "--item",
                 "1"
             ]

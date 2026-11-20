@@ -325,6 +325,11 @@ pub enum Action {
     /// its beam back. `Answer::Done`, or `Answer::None` with no workspace
     /// to show it, when the plugin sets its terminal's pointer itself.
     Pointer { shape: Option<String> },
+    /// What the plugin's pane was loading is ready, `what` naming it
+    /// ("Diff"): the workspace marks the pane's tab as needing you, and
+    /// says so in a notification, while that tab isn't in front.
+    /// `Answer::Done`, or `Answer::None` with no workspace to tell.
+    Ready { what: String },
 }
 
 /// Where a plugin keeps what it writes.
@@ -515,6 +520,11 @@ pub trait Host: Send + Sync {
     fn pointer(&self, shape: Option<&str>) -> bool {
         let shape = shape.map(str::to_string);
         self.ask(Action::Pointer { shape }) == Answer::Done
+    }
+
+    /// Says what the plugin's pane was loading (`what`) is ready.
+    fn ready(&self, what: &str) {
+        self.ask(Action::Ready { what: what.into() });
     }
 
     fn paste(&self) -> Option<String> {

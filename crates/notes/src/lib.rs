@@ -35,7 +35,7 @@
 //!
 //! One module per part, as the plugin had one Lua file per part:
 //! - `store`: the files on disk (store.lua).
-//! - `id`: a note's stable ID, its last line, which wtn's claims and the
+//! - `id`: a note's stable ID, its last line, which wt's claims and the
 //!   autopilot follow a note by (id.lua, lib/note-id.js).
 //! - `text`: a note's lines, in a rope.
 //! - `render`: a note drawn as Notes shows it (render.lua).
@@ -138,6 +138,7 @@ pub fn manifest() -> Manifest {
         settings: vec![
             Setting::new("notes_toolbar", true),
             Setting::new("notes_palette", true),
+            Setting::new("notes_preview", true),
             Setting::new("notes_ctrl_v_image", true),
             Setting::new("notes_images", true),
             Setting::new("notes_mermaid", true),
