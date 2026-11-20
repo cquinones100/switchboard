@@ -409,12 +409,7 @@ pub async fn open(cx: &Cx, trigger: &str) -> Result<()> {
         .await
         .unwrap_or_default();
     shown.offer_hands_free = hands_free_offered(cx);
-    cx.slack
-        .api(
-            "views.open",
-            json!({ "trigger_id": trigger, "view": form(&shown) }),
-        )
-        .await?;
+    cx.chat.open_view(trigger, &form(&shown)).await?;
     Ok(())
 }
 

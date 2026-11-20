@@ -120,6 +120,148 @@ impl Transport for Rc<FakeSlack> {
     }
 }
 
+/// The Discord DM, its owner and the relay's bot, in the tests.
+pub const DISCORD_DM: &str = "1100000000000000001";
+pub const DISCORD_OWNER: &str = "1200000000000000002";
+pub const DISCORD_BOT: &str = "1300000000000000003";
+
+/// A REST call Discord's stand-in got.
+#[derive(Clone, Debug)]
+pub struct RestCall {
+    pub method: String,
+    pub path: String,
+    pub body: Value,
+}
+
+type RestAnswer = Box<dyn Fn(&RestCall) -> Option<Result<Value>>>;
+
+/// Discord's stand-in: keeps every call, gives each message posted a new
+/// ID of now, answers the DM's history with `history`, and a test can
+/// answer any call its own way first.
+#[derive(Default)]
+pub struct FakeDiscord {
+    pub calls: RefCell<Vec<RestCall>>,
+    /// Each message posted with files: its payload and the files' names.
+    pub uploads: RefCell<Vec<(Value, Vec<String>)>>,
+    pub history: RefCell<Vec<Value>>,
+    pub answer: RefCell<Option<RestAnswer>>,
+    next: Cell<u64>,
+}
+
+impl FakeDiscord {
+    /// A new message's ID, made now.
+    pub fn next_id(&self) -> String {
+        let n = self.next.get() + 1;
+        self.next.set(n);
+        let base: u64 = super::discord::snowflake_at(util::now_ms() as u64)
+            .parse()
+            .unwrap_or(0);
+        (base + n).to_string()
+    }
+
+    fn reply(&self, call: &RestCall) -> Result<Value> {
+        if let Some(answer) = self.answer.borrow().as_ref()
+            && let Some(given) = answer(call)
+        {
+            return given;
+        }
+        let messages = format!("/channels/{DISCORD_DM}/messages");
+        Ok(match (call.method.as_str(), call.path.as_str()) {
+            ("POST", p) if p == messages => json!({ "id": self.next_id() }),
+            ("GET", p) if p.starts_with(&messages) => {
+                // As Discord answers: the newest 100 before `before`.
+                let id = |m: &Value| {
+                    m["id"]
+                        .as_str()
+                        .and_then(|i| i.parse::<u64>().ok())
+                        .unwrap_or(0)
+                };
+                let before = p
+                    .split(['?', '&'])
+                    .find_map(|kv| kv.strip_prefix("before="))
+                    .and_then(|b| b.parse::<u64>().ok())
+                    .unwrap_or(u64::MAX);
+                let mut page: Vec<Value> = self
+                    .history
+                    .borrow()
+                    .iter()
+                    .filter(|m| id(m) < before)
+                    .cloned()
+                    .collect();
+                page.sort_by_key(|m| std::cmp::Reverse(id(m)));
+                page.truncate(100);
+                json!(page)
+            }
+            ("POST", "/users/@me/channels") => json!({ "id": DISCORD_DM, "type": 1 }),
+            ("GET", "/users/@me") => json!({ "id": DISCORD_BOT }),
+            _ => Value::Null,
+        })
+    }
+
+    /// The bodies of the messages posted, each with the ID it was given.
+    pub fn posted(&self) -> Vec<Value> {
+        let messages = format!("/channels/{DISCORD_DM}/messages");
+        self.calls
+            .borrow()
+            .iter()
+            .filter(|c| c.method == "POST" && c.path == messages)
+            .map(|c| c.body.clone())
+            .collect()
+    }
+
+    pub fn calls_to(&self, method: &str, prefix: &str) -> Vec<RestCall> {
+        self.calls
+            .borrow()
+            .iter()
+            .filter(|c| c.method == method && c.path.starts_with(prefix))
+            .cloned()
+            .collect()
+    }
+}
+
+impl super::discord::Rest for Rc<FakeDiscord> {
+    fn call<'a>(
+        &'a self,
+        method: &'a str,
+        path: &'a str,
+        body: Option<&'a Value>,
+    ) -> LocalBoxFuture<'a, Result<Value>> {
+        let call = RestCall {
+            method: method.to_string(),
+            path: path.to_string(),
+            body: body.cloned().unwrap_or(Value::Null),
+        };
+        let reply = self.reply(&call);
+        if let (Ok(r), true) = (&reply, method == "POST") {
+            let mut kept = call.clone();
+            kept.body["id"] = r.get("id").cloned().unwrap_or(Value::Null);
+            self.calls.borrow_mut().push(kept);
+        } else {
+            self.calls.borrow_mut().push(call);
+        }
+        Box::pin(async move { reply })
+    }
+
+    fn upload<'a>(
+        &'a self,
+        _path: &'a str,
+        payload: &'a Value,
+        files: Vec<(String, Vec<u8>)>,
+    ) -> LocalBoxFuture<'a, Result<Value>> {
+        self.uploads.borrow_mut().push((
+            payload.clone(),
+            files.into_iter().map(|(name, _)| name).collect(),
+        ));
+        let id = self.next_id();
+        Box::pin(async move { Ok(json!({ "id": id })) })
+    }
+
+    fn get<'a>(&'a self, url: &'a str) -> LocalBoxFuture<'a, Result<Vec<u8>>> {
+        let url = url.to_string();
+        Box::pin(async move { Err(anyhow!("this test downloads nothing from {url}")) })
+    }
+}
+
 /// A pane of the test's own: what its screen shows, which typing adds to
 /// as `cat` echoed it. Text between ⟨ and ⟩ is drawn dimmed.
 #[derive(Clone, Debug, Default)]
@@ -414,6 +556,10 @@ pub struct Post {
 pub struct Rig {
     pub cx: Cx,
     pub slack: Rc<FakeSlack>,
+    /// Discord's stand-in, and the relay's chat as Discord, in a rig made
+    /// with `Rig::discord`.
+    pub discord: Rc<FakeDiscord>,
+    pub discord_chat: Option<super::discord_chat::DiscordChat>,
     pub mux: Rc<FakeMux>,
     pub haiku: Rc<FakeHaiku>,
     pub root: PathBuf,
@@ -430,15 +576,39 @@ impl Default for Rig {
 
 impl Rig {
     pub fn new() -> Rig {
+        Rig::through(super::chat::Kind::Slack)
+    }
+
+    /// A rig whose relay talks through a Discord bot's DM.
+    pub fn discord() -> Rig {
+        Rig::through(super::chat::Kind::Discord)
+    }
+
+    fn through(kind: super::chat::Kind) -> Rig {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!("relay-rig-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let home = root.join("home");
         std::fs::create_dir_all(home.join(".claude/sessions")).unwrap();
         std::fs::create_dir_all(home.join(".claude/projects/-work")).unwrap();
-        let paths = Paths::under(&home, &root.join("state"));
+        let mut paths = Paths::under(&home, &root.join("state"));
+        paths.chat = kind;
         let slack = Rc::new(FakeSlack::default());
         slack.next_ts.set(util::now_secs());
+        let discord = Rc::new(FakeDiscord::default());
+        let (chat, discord_chat): (Box<dyn super::chat::Chat>, _) = match kind {
+            super::chat::Kind::Slack => (
+                Box::new(super::slack::SlackChat::new(Box::new(slack.clone()))),
+                None,
+            ),
+            super::chat::Kind::Discord => {
+                let chat = super::discord_chat::DiscordChat::new(
+                    super::discord::Discord::new(Box::new(discord.clone())),
+                    paths.discord_file(),
+                );
+                (Box::new(chat.clone()), Some(chat))
+            }
+        };
         let mux = Rc::new(FakeMux::default());
         let haiku = Rc::new(FakeHaiku::default());
         // Away from the computer, so what the relay says on its own goes out
@@ -455,7 +625,7 @@ impl Rig {
         presence.reading.set(reading.get());
         let mut relay = Relay::new(
             paths,
-            Box::new(slack.clone()),
+            chat,
             Box::new(mux.clone()),
             Box::new(haiku.clone()),
             presence,
@@ -463,18 +633,28 @@ impl Rig {
         );
         relay.settings = Box::new(|_| None);
         relay.cwd = root.clone();
-        *relay.state.borrow_mut() = super::State {
-            dm: Some(Dm {
+        let dm = match kind {
+            super::chat::Kind::Slack => Dm {
                 channel: "D1".into(),
                 user: "U1".into(),
                 team: Some("T1".into()),
                 app: true,
                 ..Dm::default()
-            }),
+            },
+            super::chat::Kind::Discord => Dm {
+                channel: DISCORD_DM.into(),
+                user: DISCORD_OWNER.into(),
+                bot: Some(DISCORD_BOT.into()),
+                url: Some(super::discord::DM_URL.into()),
+                app: true,
+                ..Dm::default()
+            },
+        };
+        *relay.state.borrow_mut() = super::State {
+            dm: Some(dm),
             ..super::State::default()
         };
-        *relay.slack.channel.borrow_mut() = Some("D1".into());
-        *relay.slack.owner.borrow_mut() = Some("U1".into());
+        relay.chat.set_dm(&relay.state.borrow().dm());
         let exited = Rc::new(Cell::new(false));
         let noted = exited.clone();
         relay.life.borrow_mut().on_exit = Some(Box::new(move || noted.set(true)));
@@ -482,6 +662,8 @@ impl Rig {
         Rig {
             cx: Rc::new(relay),
             slack,
+            discord,
+            discord_chat,
             mux,
             haiku,
             root,
@@ -502,6 +684,12 @@ impl Rig {
             super::run::settle().await;
             out
         })
+    }
+
+    /// An event from Discord's Gateway, as the relay hears it.
+    pub fn dispatch(&self, name: &str, d: Value) {
+        let chat = self.discord_chat.clone().expect("a Discord rig");
+        self.block_on(async { chat.on_dispatch(&self.cx, name, d) });
     }
 
     pub fn at_computer(&self) {

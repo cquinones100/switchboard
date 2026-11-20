@@ -287,10 +287,10 @@ pub fn home_link(dm: &Dm) -> String {
 /// tab first, then the commands. The Home link needs the app's ID, which
 /// Slack only gives with an event, so it is left off until the relay has
 /// seen one.
-pub fn welcome_buttons(dm: &Dm) -> Vec<Button> {
+pub fn welcome_buttons(home: Option<String>) -> Vec<Button> {
     let mut buttons = Vec::new();
-    if dm.app_id.is_some() {
-        buttons.push(Button::link("Home", home_link(dm)).style("primary"));
+    if let Some(home) = home {
+        buttons.push(Button::link("Home", home).style("primary"));
     }
     for (text, c) in [
         ("Status", "status"),

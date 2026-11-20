@@ -200,21 +200,14 @@ pub fn home_thread(cx: &Relay, id: &str) -> Option<String> {
         .then(|| home.ts.clone())
 }
 
-/// A link that opens a thread in the DM at its newest message, built the
-/// way Slack builds a reply's link: the workspace's address, the DM, the
-/// message's ts without its dot, and the thread it is in. `None` when the
-/// workspace's address isn't known.
+/// A link that opens a thread in the DM at its newest message, as the chat
+/// builds one (`Chat::message_url`). `None` when the workspace's address
+/// isn't known.
 pub fn thread_url(cx: &Relay, ts: &str) -> Option<String> {
     let state = cx.state.borrow();
     let dm = state.dm.as_ref()?;
-    let url = dm.url.as_ref()?;
     let at = state.latest.get(ts).map(String::as_str).unwrap_or(ts);
-    Some(format!(
-        "{url}archives/{}/p{}?thread_ts={ts}&cid={}",
-        dm.channel,
-        at.replace('.', ""),
-        dm.channel
-    ))
+    cx.chat.message_url(dm, ts, at)
 }
 
 pub fn thread_link(cx: &Relay, ts: &str, text: &str) -> String {

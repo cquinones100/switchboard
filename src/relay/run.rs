@@ -26,14 +26,15 @@ use indexmap::IndexSet;
 use serde_json::Value;
 
 use super::buttons::welcome_buttons;
+use super::chat::{Chat, Kind};
 use super::commands::handle;
 use super::config::{MAX_LOG_BYTES, Paths, TAB_POLL_MS};
 use super::dashboard::{DASHBOARD_MS, HEARTBEAT_MS, Refresh, refresh_dashboard};
 use super::lifecycle::{clock, stop_relay};
 use super::log::{DONT_RESTART, fail};
 use super::post::{PostOpts, post, update};
-use super::slack::{self, APP_TOKEN_SERVICE, BOT_TOKEN_SERVICE, Message, Slack};
-use super::state::{Dm, number};
+use super::slack::{self, APP_TOKEN_SERVICE, BOT_TOKEN_SERVICE, Form, Message, Press};
+use super::state::number;
 use super::{Cx, Memory, Relay, mux, presence, summaries};
 use crate::util;
 
@@ -72,7 +73,7 @@ impl Relay {
     /// Haiku through what it is given.
     pub fn new(
         paths: Paths,
-        transport: Box<dyn slack::Transport>,
+        chat: Box<dyn super::chat::Chat>,
         mux: Box<dyn mux::Mux>,
         haiku: Box<dyn summaries::Haiku>,
         presence: presence::Presence,
@@ -82,7 +83,7 @@ impl Relay {
         Relay {
             paths,
             state: RefCell::new(state),
-            slack: Slack::new(transport),
+            chat,
             mux,
             haiku,
             presence,
@@ -206,14 +207,15 @@ fn learn_app(cx: &Cx, app: Option<&str>, team: Option<&str>) {
         spawn(async move {
             let text = cx.mem.borrow().welcome.clone();
             let dm = cx.state.borrow().dm();
-            if let Err(e) = update(&cx, &welcome, &text, &welcome_buttons(&dm)).await {
+            let home = cx.chat.home_url(&dm);
+            if let Err(e) = update(&cx, &welcome, &text, &welcome_buttons(home)).await {
                 cx.log(&format!("couldn't add Home to the welcome: {e}"));
             }
         });
     }
 }
 
-fn quiet(cx: &Relay) -> bool {
+pub fn quiet(cx: &Relay) -> bool {
     let life = cx.life.borrow();
     life.stopping || life.leaving
 }
@@ -273,21 +275,28 @@ pub fn on_interactive(cx: &Cx, payload: Value) {
     if press.is_none() && form.is_none() {
         return;
     }
+    let cx = cx.clone();
+    spawn(async move { act(&cx, press, form).await });
+}
+
+/// A button you pressed or a form you sent, from either chat once its
+/// rules have let it through: acted on, and counted as you writing.
+pub async fn act(cx: &Cx, press: Option<Press>, form: Option<Form>) {
+    if press.is_none() && form.is_none() {
+        return;
+    }
     cx.state.borrow_mut().last_activity = util::now_ms();
     let cx2 = cx.clone();
     spawn(async move { presence::from_slack(&cx2).await });
-    let cx = cx.clone();
-    spawn(async move {
-        let done = match (press, form) {
-            (Some(press), _) => super::presses::handle_press(&cx, press).await,
-            (None, Some(form)) => super::screens::handle_submission(&cx, &form).await,
-            _ => Ok(()),
-        };
-        if let Err(e) = done {
-            cx.log(&format!("press failed: {e}"));
-        }
-        cx.save();
-    });
+    let done = match (press, form) {
+        (Some(press), _) => super::presses::handle_press(cx, press).await,
+        (None, Some(form)) => super::screens::handle_submission(cx, &form).await,
+        _ => Ok(()),
+    };
+    if let Err(e) = done {
+        cx.log(&format!("press failed: {e}"));
+    }
+    cx.save();
 }
 
 /// Every (re)connection catches up on what was sent while the relay
@@ -365,28 +374,22 @@ pub const WELCOME_REUSE_MS: i64 = 24 * 60 * 60_000;
 /// it does, the welcome goes out without Home rather than not at all.
 pub async fn say_listening(cx: &Cx, welcome: &str, restarted: &str) -> Result<String> {
     let dm = cx.state.borrow().dm();
+    let home = cx.chat.home_url(&dm);
     let last = cx.state.borrow().welcome.clone();
     if restarted.is_empty()
         && let Some(last) = last
         && util::now_ms() - ((number(&last) * 1000.0) as i64) < WELCOME_REUSE_MS
     {
-        match update(cx, &last, welcome, &welcome_buttons(&dm)).await {
+        match update(cx, &last, welcome, &welcome_buttons(home.clone())).await {
             Ok(_) => return Ok(format!("{:.6}", util::now_ms() as f64 / 1000.0)),
             Err(e) => cx.log(&format!("couldn't reuse the welcome: {e}")),
         }
     }
-    let kickoff = match post(cx, welcome, None, PostOpts::buttons(welcome_buttons(&dm))).await {
+    let kickoff = match post(cx, welcome, None, PostOpts::buttons(welcome_buttons(home))).await {
         Ok(ts) => ts,
         Err(e) => {
             cx.log(&format!("welcome refused with Home: {e}"));
-            let plain = Dm { app_id: None, ..dm };
-            post(
-                cx,
-                welcome,
-                None,
-                PostOpts::buttons(welcome_buttons(&plain)),
-            )
-            .await?
+            post(cx, welcome, None, PostOpts::buttons(welcome_buttons(None))).await?
         }
     };
     cx.state.borrow_mut().welcome = Some(kickoff.clone());
@@ -431,40 +434,34 @@ pub fn relay() -> ExitCode {
     // start, and restarting won't help, so it says what to set up. The
     // owner first, from a file, so a home without one never asks the
     // keyring.
-    let Some(owner) = slack::load_owner(&paths) else {
+    let Some(owner) = load_owner(&paths) else {
         let _ = std::fs::remove_file(paths.lock_file());
         return fail(
             &paths,
             &format!(
-                "no owner in {}; it should hold {{ \"owner\": \"<your Slack member ID>\" }}",
-                paths.config_file().display()
+                "no owner in {}; it should hold {{ \"owner\": \"<your {} ID>\" }}",
+                paths.config_file().display(),
+                match paths.chat {
+                    Kind::Slack => "Slack member",
+                    Kind::Discord => "Discord user",
+                }
             ),
             DONT_RESTART,
         );
     };
-    let (Some(bot), Some(app)) = (
-        slack::token(BOT_TOKEN_SERVICE),
-        slack::token(APP_TOKEN_SERVICE),
-    ) else {
-        let _ = std::fs::remove_file(paths.lock_file());
-        return fail(
-            &paths,
-            &format!(
-                "the Slack app's tokens aren't stored; store them with: switchboard platform secret-set {BOT_TOKEN_SERVICE} -a \"$USER\" (it reads the token from stdin), and the same for {APP_TOKEN_SERVICE}"
-            ),
-            DONT_RESTART,
-        );
-    };
-    let https = match super::http::Https::new(slack::api_base(), bot) {
-        Ok(h) => h,
-        Err(e) => return fail(&paths, &e.to_string(), DONT_RESTART),
+    let (chat, listen) = match chat_for(&paths) {
+        Ok(found) => found,
+        Err(why) => {
+            let _ = std::fs::remove_file(paths.lock_file());
+            return fail(&paths, &why, DONT_RESTART);
+        }
     };
     let haiku = summaries::ClaudeHaiku {
         dir: paths.state_dir.clone(),
     };
     let relay = Relay::new(
         paths.clone(),
-        Box::new(https),
+        chat,
         Box::new(server),
         Box::new(haiku),
         presence::Presence::new(),
@@ -479,7 +476,7 @@ pub fn relay() -> ExitCode {
     };
     let local = tokio::task::LocalSet::new();
     let cx = Rc::new(relay);
-    let result = local.block_on(&runtime, run(cx.clone(), owner, app));
+    let result = local.block_on(&runtime, run(cx.clone(), owner, listen));
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => fail(&paths, &format!("crashed: {e}"), 1),
@@ -488,7 +485,60 @@ pub fn relay() -> ExitCode {
 
 /// The relay's life once it has what it needs: everything the module's
 /// comment says, until it is stopped (which ends the process).
-async fn run(cx: Cx, owner: String, app_token: String) -> Result<()> {
+/// How the relay hears its chat: Slack's Socket Mode with the app-level
+/// token, or Discord's Gateway with the bot's.
+pub enum Listen {
+    Slack(String),
+    Discord(super::discord_chat::DiscordChat, String),
+}
+
+/// Whose relay this is, from the chat's own file.
+pub fn load_owner(paths: &Paths) -> Option<String> {
+    match paths.chat {
+        Kind::Slack => slack::load_owner(paths),
+        Kind::Discord => super::discord::load_owner(paths),
+    }
+}
+
+/// The chat Settings name, with its stored token, and how to hear it; or
+/// what to set up.
+pub fn chat_for(paths: &Paths) -> std::result::Result<(Box<dyn Chat>, Listen), String> {
+    match paths.chat {
+        Kind::Slack => {
+            let (Some(bot), Some(app)) = (
+                slack::token(BOT_TOKEN_SERVICE),
+                slack::token(APP_TOKEN_SERVICE),
+            ) else {
+                return Err(format!(
+                    "the Slack app's tokens aren't stored; store them with: switchboard platform secret-set {BOT_TOKEN_SERVICE} -a \"$USER\" (it reads the token from stdin), and the same for {APP_TOKEN_SERVICE}"
+                ));
+            };
+            let https =
+                super::http::Https::new(slack::api_base(), bot).map_err(|e| e.to_string())?;
+            Ok((
+                Box::new(slack::SlackChat::new(Box::new(https))),
+                Listen::Slack(app),
+            ))
+        }
+        Kind::Discord => {
+            let service = super::discord::BOT_TOKEN_SERVICE;
+            let Some(token) = slack::token(service) else {
+                return Err(format!(
+                    "the Discord bot's token isn't stored; store it with: switchboard platform secret-set {service} -a \"$USER\" (it reads the token from stdin)"
+                ));
+            };
+            let rest = super::http::DiscordHttps::new(super::discord::api_base(), token.clone())
+                .map_err(|e| e.to_string())?;
+            let chat = super::discord_chat::DiscordChat::new(
+                super::discord::Discord::new(Box::new(rest)),
+                paths.discord_file(),
+            );
+            Ok((Box::new(chat.clone()), Listen::Discord(chat, token)))
+        }
+    }
+}
+
+async fn run(cx: Cx, owner: String, listen: Listen) -> Result<()> {
     // After a crash, why, from supervise; empty on a normal start.
     let restarted = std::env::var("SLACK_RELAY_RESTARTED").unwrap_or_default();
     // Turn the hooks on: they write events only while this file exists. One
@@ -560,22 +610,15 @@ async fn run(cx: Cx, owner: String, app_token: String) -> Result<()> {
             state.dashboard = None;
             state.cursor = None;
         }
-        *cx.slack.owner.borrow_mut() = Some(owner.clone());
-        let dm = slack::open_dm(&cx.slack, &owner).await?;
+        let dm = cx.chat.open_dm(&owner).await?;
         cx.state.borrow_mut().dm = Some(dm);
         cx.save();
     }
     let dm = cx.state.borrow().dm();
-    *cx.slack.channel.borrow_mut() = Some(dm.channel.clone());
-    *cx.slack.owner.borrow_mut() = Some(owner);
+    cx.chat.set_dm(&dm);
     // The workspace's address, for links to threads; kept with the DM.
     if dm.url.is_none() {
-        let url = cx
-            .slack
-            .api("auth.test", serde_json::json!({}))
-            .await
-            .ok()
-            .and_then(|a| a.get("url").and_then(Value::as_str).map(str::to_string));
+        let url = cx.chat.workspace_url().await.ok().flatten();
         if let Some(d) = cx.state.borrow_mut().dm.as_mut() {
             d.url = url;
         }
@@ -625,10 +668,17 @@ async fn run(cx: Cx, owner: String, app_token: String) -> Result<()> {
     cx.save();
     cx.log("listening; Ctrl-C or `stop` in the DM to end");
 
-    // Slack: each message arrives as an event the moment it is sent.
+    // Each message arrives as an event the moment it is sent.
     {
         let cx = cx.clone();
-        spawn(async move { super::http::socket_mode(cx, app_token).await });
+        match listen {
+            Listen::Slack(app_token) => {
+                spawn(async move { super::http::socket_mode(cx, app_token).await })
+            }
+            Listen::Discord(chat, token) => {
+                spawn(async move { super::http::discord_gateway(cx, chat, token).await })
+            }
+        }
     }
     // Whether you're at the computer, for alerts about the tab in front.
     every(
@@ -811,15 +861,12 @@ pub async fn say_down(paths: &Paths, why: &str) {
     let Some(dm) = state.dm.clone().filter(|d| d.app) else {
         return;
     };
-    let Some(bot) = slack::token(BOT_TOKEN_SERVICE) else {
-        return;
-    };
-    let Ok(https) = super::http::Https::new(slack::api_base(), bot) else {
+    let Ok((chat, _)) = chat_for(paths) else {
         return;
     };
     let relay = Relay::new(
         paths.clone(),
-        Box::new(https),
+        chat,
         Box::new(mux::Server::current()),
         Box::new(summaries::ClaudeHaiku {
             dir: paths.state_dir.clone(),
@@ -827,8 +874,7 @@ pub async fn say_down(paths: &Paths, why: &str) {
         presence::Presence::new(),
         true,
     );
-    *relay.slack.channel.borrow_mut() = Some(dm.channel.clone());
-    *relay.slack.owner.borrow_mut() = Some(dm.user.clone());
+    relay.chat.set_dm(&dm);
     super::offline::cancel_offline_note(&relay).await;
     if let Err(e) = post(
         &relay,

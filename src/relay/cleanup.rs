@@ -11,46 +11,13 @@
 //! Deleting is offered as a button that Slack confirms first.
 
 use anyhow::Result;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::Relay;
 use super::post::{Button, remove};
 
 pub fn closed_threads(cx: &Relay) -> Vec<String> {
     cx.state.borrow().closed_homes.keys().cloned().collect()
-}
-
-/// Every message in a thread, the header first, following Slack's pages.
-async fn thread_messages(cx: &Relay, ts: &str) -> Result<Vec<Value>> {
-    let channel = cx.state.borrow().dm().channel;
-    let mut messages = Vec::new();
-    let mut cursor: Option<String> = None;
-    loop {
-        let mut params = json!({ "channel": channel, "ts": ts, "limit": 200 });
-        if let Some(c) = &cursor {
-            params["cursor"] = json!(c);
-        }
-        let page = cx.slack.api("conversations.replies", params).await?;
-        messages.extend(
-            page.get("messages")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default(),
-        );
-        cursor = page
-            .pointer("/response_metadata/next_cursor")
-            .and_then(Value::as_str)
-            .filter(|c| !c.is_empty())
-            .map(str::to_string);
-        if cursor.is_none() {
-            return Ok(messages);
-        }
-    }
-}
-
-fn from_app(cx: &Relay, message: &Value) -> bool {
-    message.get("bot_id").is_some_and(crate::util::truthy)
-        || message.get("user").and_then(Value::as_str) == cx.state.borrow().dm().bot.as_deref()
 }
 
 /// How many threads went, and how many of your replies stayed.
@@ -71,34 +38,18 @@ pub async fn delete_threads(cx: &Relay, threads: &[String]) -> Deleted {
         // thread then goes, as cleanup.js counted them.
         let mut yours = 0;
         let done: Result<()> = async {
-            let messages = thread_messages(cx, ts).await?;
-            for message in messages
-                .iter()
-                .filter(|m| m.get("ts").and_then(Value::as_str) != Some(ts.as_str()))
-            {
-                if !from_app(cx, message) {
+            let messages = cx.chat.thread_messages(ts).await?;
+            for message in messages.iter().filter(|m| m.ts != *ts) {
+                if !message.from_app {
                     yours += 1;
                     continue;
                 }
-                for file in message
-                    .get("files")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                {
-                    let id = file
-                        .get("id")
-                        .map(crate::util::js_string)
-                        .unwrap_or_default();
-                    if let Err(e) = cx.slack.api("files.delete", json!({ "file": id })).await {
+                for id in &message.files {
+                    if let Err(e) = cx.chat.delete_file(id).await {
                         cx.log(&format!("couldn't delete a file: {e}"));
                     }
                 }
-                let reply = message
-                    .get("ts")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                if let Err(e) = remove(cx, reply).await {
+                if let Err(e) = remove(cx, &message.ts).await {
                     cx.log(&format!("couldn't delete a message: {e}"));
                 }
             }
@@ -113,6 +64,7 @@ pub async fn delete_threads(cx: &Relay, threads: &[String]) -> Deleted {
         result.yours += yours;
         match done {
             Ok(()) => {
+                cx.chat.forget_thread(ts);
                 let mut state = cx.state.borrow_mut();
                 state.closed_homes.shift_remove(ts);
                 state.threads.shift_remove(ts);

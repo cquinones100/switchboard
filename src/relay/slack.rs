@@ -159,6 +159,478 @@ pub async fn open_dm(slack: &Slack, owner: &str) -> Result<super::state::Dm> {
     })
 }
 
+// ── The relay's chat ────────────────────────────────────────────────────────
+
+/// The relay's chat as Slack: each of `Chat`'s calls as the Web API method
+/// the relay has always made, through `Slack::api` and its rules.
+pub struct SlackChat {
+    pub slack: Slack,
+    /// The app's bot user, whose posts cleaning up a thread may delete.
+    bot: RefCell<Option<String>>,
+}
+
+impl SlackChat {
+    pub fn new(transport: Box<dyn Transport>) -> SlackChat {
+        SlackChat {
+            slack: Slack::new(transport),
+            bot: RefCell::new(None),
+        }
+    }
+
+    fn channel(&self) -> String {
+        self.slack.channel.borrow().clone().unwrap_or_default()
+    }
+}
+
+/// The ts in a Web API answer.
+fn ts_of(reply: &Value) -> String {
+    reply
+        .get("ts")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+impl super::chat::Chat for SlackChat {
+    fn kind(&self) -> super::chat::Kind {
+        super::chat::Kind::Slack
+    }
+
+    fn set_dm(&self, dm: &super::state::Dm) {
+        *self.slack.channel.borrow_mut() = Some(dm.channel.clone());
+        *self.slack.owner.borrow_mut() = Some(dm.user.clone());
+        *self.bot.borrow_mut() = dm.bot.clone();
+    }
+
+    fn open_dm<'a>(&'a self, owner: &'a str) -> super::chat::Fut<'a, super::state::Dm> {
+        Box::pin(async move {
+            *self.slack.owner.borrow_mut() = Some(owner.to_string());
+            open_dm(&self.slack, owner).await
+        })
+    }
+
+    fn workspace_url(&self) -> super::chat::Fut<'_, Option<String>> {
+        Box::pin(async move {
+            Ok(self
+                .slack
+                .api("auth.test", json!({}))
+                .await
+                .ok()
+                .and_then(|a| a.get("url").and_then(Value::as_str).map(str::to_string)))
+        })
+    }
+
+    fn max_post_chars(&self) -> usize {
+        super::config::MAX_POST_CHARS
+    }
+
+    /// Links aren't expanded into previews, which would bury a short reply
+    /// under a PR's card. A thread reply that notifies starts with a
+    /// mention of the owner, which is what makes Slack notify you of a
+    /// reply in a thread you don't follow (a thread the relay started),
+    /// without also sending it to the main DM.
+    fn post<'a>(&'a self, m: super::chat::Outgoing<'a>) -> super::chat::Fut<'a, String> {
+        Box::pin(async move {
+            let mut params = json!({ "channel": self.channel() });
+            let mut md = super::post::as_markdown(m.body, m.notice, m.buttons);
+            if let Some(t) = m.thread {
+                params["thread_ts"] = json!(t);
+                let owner = self.slack.owner.borrow().clone().unwrap_or_default();
+                if m.mention && !owner.is_empty() {
+                    md = super::post::with_mention(md, &owner);
+                }
+            }
+            params["text"] = md["text"].clone();
+            params["blocks"] = md["blocks"].clone();
+            params["unfurl_links"] = json!(false);
+            params["unfurl_media"] = json!(false);
+            let sent = self.slack.api("chat.postMessage", params).await?;
+            Ok(ts_of(&sent))
+        })
+    }
+
+    fn update<'a>(
+        &'a self,
+        ts: &'a str,
+        body: &'a str,
+        notice: &'a str,
+        buttons: &'a [super::post::Button],
+    ) -> super::chat::Fut<'a, ()> {
+        Box::pin(async move {
+            let md = super::post::as_markdown(body, notice, buttons);
+            self.slack
+                .api(
+                    "chat.update",
+                    json!({ "channel": self.channel(), "ts": ts, "text": md["text"], "blocks": md["blocks"] }),
+                )
+                .await
+                .map(|_| ())
+        })
+    }
+
+    fn delete<'a>(&'a self, ts: &'a str) -> super::chat::Fut<'a, ()> {
+        Box::pin(async move {
+            self.slack
+                .api(
+                    "chat.delete",
+                    json!({ "channel": self.channel(), "ts": ts }),
+                )
+                .await
+                .map(|_| ())
+        })
+    }
+
+    fn react<'a>(&'a self, ts: &'a str, emoji: &'a str) -> super::chat::Fut<'a, ()> {
+        Box::pin(async move {
+            match self
+                .slack
+                .api(
+                    "reactions.add",
+                    json!({ "channel": self.channel(), "timestamp": ts, "name": emoji }),
+                )
+                .await
+            {
+                Err(e) if !e.to_string().contains("already_reacted") => Err(e),
+                _ => Ok(()),
+            }
+        })
+    }
+
+    fn unreact<'a>(&'a self, ts: &'a str, emoji: &'a str) -> super::chat::Fut<'a, ()> {
+        Box::pin(async move {
+            match self
+                .slack
+                .api(
+                    "reactions.remove",
+                    json!({ "channel": self.channel(), "timestamp": ts, "name": emoji }),
+                )
+                .await
+            {
+                Err(e) if !e.to_string().contains("no_reaction") => Err(e),
+                _ => Ok(()),
+            }
+        })
+    }
+
+    /// Each file's bytes go to an address Slack gives for it, then the
+    /// files are shared together, `FILES_PER_MESSAGE` to a message.
+    fn upload<'a>(
+        &'a self,
+        files: Vec<super::post::Upload>,
+        thread: Option<&'a str>,
+        failed: &'a dyn Fn(&str, &anyhow::Error),
+    ) -> super::chat::Fut<'a, Vec<String>> {
+        Box::pin(async move {
+            let mut sent: Vec<(String, String, String)> = Vec::new();
+            for super::post::Upload {
+                filename,
+                title,
+                content,
+            } in files
+            {
+                let uploaded: Result<String> = async {
+                    let target = self
+                        .slack
+                        .api(
+                            "files.getUploadURLExternal",
+                            json!({ "filename": filename, "length": content.len() }),
+                        )
+                        .await?;
+                    let url = target
+                        .get("upload_url")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    self.slack.put(url, content).await?;
+                    Ok(target
+                        .get("file_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string())
+                }
+                .await;
+                match uploaded {
+                    Ok(id) => sent.push((id, title, filename)),
+                    Err(e) => failed(&filename, &e),
+                }
+            }
+            for batch in sent.chunks(super::post::FILES_PER_MESSAGE) {
+                let files: Vec<Value> = batch
+                    .iter()
+                    .map(|(id, title, _)| json!({ "id": id, "title": title }))
+                    .collect();
+                let mut params = json!({ "files": files, "channel_id": self.channel() });
+                if let Some(t) = thread {
+                    params["thread_ts"] = json!(t);
+                }
+                self.slack
+                    .api("files.completeUploadExternal", params)
+                    .await?;
+            }
+            Ok(sent.into_iter().map(|(_, _, name)| name).collect())
+        })
+    }
+
+    fn file_info<'a>(&'a self, id: &'a str) -> super::chat::Fut<'a, FileRef> {
+        Box::pin(async move {
+            let got = self.slack.api("files.info", json!({ "file": id })).await?;
+            Ok(FileRef::from_json(got.get("file").unwrap_or(&Value::Null)))
+        })
+    }
+
+    fn file_hosts(&self) -> &'static [&'static str] {
+        &[super::files::FILE_HOST]
+    }
+
+    fn fetch<'a>(&'a self, url: &'a str) -> super::chat::Fut<'a, Vec<u8>> {
+        Box::pin(self.slack.get(url))
+    }
+
+    fn delete_file<'a>(&'a self, id: &'a str) -> super::chat::Fut<'a, ()> {
+        Box::pin(async move {
+            self.slack
+                .api("files.delete", json!({ "file": id }))
+                .await
+                .map(|_| ())
+        })
+    }
+
+    /// Following Slack's pages.
+    fn thread_messages<'a>(
+        &'a self,
+        ts: &'a str,
+    ) -> super::chat::Fut<'a, Vec<super::chat::InThread>> {
+        Box::pin(async move {
+            let mut messages = Vec::new();
+            let mut cursor: Option<String> = None;
+            let bot = self.bot.borrow().clone();
+            loop {
+                let mut params = json!({ "channel": self.channel(), "ts": ts, "limit": 200 });
+                if let Some(c) = &cursor {
+                    params["cursor"] = json!(c);
+                }
+                let page = self.slack.api("conversations.replies", params).await?;
+                for m in page
+                    .get("messages")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    messages.push(super::chat::InThread {
+                        ts: ts_of(m),
+                        from_app: m.get("bot_id").is_some_and(crate::util::truthy)
+                            || m.get("user").and_then(Value::as_str) == bot.as_deref(),
+                        files: m
+                            .get("files")
+                            .and_then(Value::as_array)
+                            .into_iter()
+                            .flatten()
+                            .map(|f| f.get("id").map(crate::util::js_string).unwrap_or_default())
+                            .collect(),
+                    });
+                }
+                cursor = page
+                    .pointer("/response_metadata/next_cursor")
+                    .and_then(Value::as_str)
+                    .filter(|c| !c.is_empty())
+                    .map(str::to_string);
+                if cursor.is_none() {
+                    return Ok(messages);
+                }
+            }
+        })
+    }
+
+    /// The DM from the cursor, and each watched thread from its last
+    /// handled reply; only your messages come back, by the same rules as
+    /// events (`message_from`).
+    fn catch_up<'a>(
+        &'a self,
+        dm: &'a super::state::Dm,
+        cursor: Option<&'a str>,
+        threads: &'a [(String, String)],
+        log: &'a dyn Fn(&str),
+    ) -> super::chat::Fut<'a, Vec<Message>> {
+        use super::state::number;
+        Box::pin(async move {
+            let mine = |messages: &Value, thread: Option<&str>| -> Vec<Message> {
+                messages
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|m| {
+                        let mut event = m.clone();
+                        event["type"] = json!("message");
+                        event["channel"] = json!(dm.channel);
+                        if event.get("thread_ts").is_none_or(Value::is_null)
+                            && let Some(t) = thread
+                        {
+                            event["thread_ts"] = json!(t);
+                        }
+                        message_from(dm, &event, None, log)
+                    })
+                    .collect()
+            };
+            let mut params = json!({ "channel": dm.channel, "limit": super::read::PAGE });
+            if let Some(c) = cursor {
+                params["oldest"] = json!(c);
+            }
+            let top = self.slack.api("conversations.history", params).await?;
+            let from = number(cursor.unwrap_or("0"));
+            let mut messages: Vec<Message> =
+                mine(top.get("messages").unwrap_or(&Value::Null), None)
+                    .into_iter()
+                    .filter(|m| m.thread_ts.is_none() && number(&m.ts) > from)
+                    .collect();
+            for (thread, handled_to) in threads {
+                let replies = self
+                    .slack
+                    .api(
+                        "conversations.replies",
+                        json!({ "channel": dm.channel, "ts": thread, "oldest": handled_to, "limit": super::read::PAGE }),
+                    )
+                    .await
+                    .unwrap_or_else(|_| json!({ "messages": [] }));
+                messages.extend(
+                    mine(
+                        replies.get("messages").unwrap_or(&Value::Null),
+                        Some(thread),
+                    )
+                    .into_iter()
+                    .filter(|m| {
+                        m.thread_ts.as_deref() == Some(thread.as_str())
+                            && number(&m.ts) > number(handled_to)
+                    }),
+                );
+            }
+            Ok(messages)
+        })
+    }
+
+    fn publish_home<'a>(&'a self, view: &'a Value) -> super::chat::Fut<'a, ()> {
+        Box::pin(async move {
+            let user = self.slack.owner.borrow().clone().unwrap_or_default();
+            self.slack
+                .api("views.publish", json!({ "user_id": user, "view": view }))
+                .await
+                .map(|_| ())
+        })
+    }
+
+    fn open_view<'a>(
+        &'a self,
+        trigger: &'a str,
+        view: &'a Value,
+    ) -> super::chat::Fut<'a, Option<String>> {
+        Box::pin(async move {
+            let opened = self
+                .slack
+                .api("views.open", json!({ "trigger_id": trigger, "view": view }))
+                .await?;
+            Ok(opened
+                .pointer("/view/id")
+                .and_then(Value::as_str)
+                .map(str::to_string))
+        })
+    }
+
+    fn push_view<'a>(&'a self, trigger: &'a str, view: &'a Value) -> super::chat::Fut<'a, ()> {
+        Box::pin(async move {
+            self.slack
+                .api("views.push", json!({ "trigger_id": trigger, "view": view }))
+                .await
+                .map(|_| ())
+        })
+    }
+
+    /// The hash makes Slack refuse it if the view has changed since.
+    fn update_view<'a>(
+        &'a self,
+        id: &'a str,
+        view: &'a Value,
+        hash: Option<&'a str>,
+    ) -> super::chat::Fut<'a, ()> {
+        Box::pin(async move {
+            let mut params = json!({ "view_id": id, "view": view });
+            if let Some(hash) = hash {
+                params["hash"] = json!(hash);
+            }
+            self.slack.api("views.update", params).await.map(|_| ())
+        })
+    }
+
+    fn schedule<'a>(&'a self, text: &'a str, post_at: i64) -> super::chat::Fut<'a, String> {
+        Box::pin(async move {
+            let md = super::post::as_markdown(text, &super::post::notice_line(text), &[]);
+            let scheduled = self
+                .slack
+                .api(
+                    "chat.scheduleMessage",
+                    json!({
+                        "channel": self.channel(),
+                        "post_at": post_at,
+                        "text": md["text"],
+                        "blocks": md["blocks"],
+                    }),
+                )
+                .await?;
+            Ok(scheduled
+                .get("scheduled_message_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string())
+        })
+    }
+
+    fn scheduled(&self) -> super::chat::Fut<'_, Vec<String>> {
+        Box::pin(async move {
+            let reply = self
+                .slack
+                .api(
+                    "chat.scheduledMessages.list",
+                    json!({ "channel": self.channel() }),
+                )
+                .await?;
+            Ok(reply
+                .get("scheduled_messages")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|m| m.get("id").and_then(Value::as_str).map(str::to_string))
+                .collect())
+        })
+    }
+
+    fn unschedule<'a>(&'a self, id: &'a str) -> super::chat::Fut<'a, ()> {
+        Box::pin(async move {
+            self.slack
+                .api(
+                    "chat.deleteScheduledMessage",
+                    json!({ "channel": self.channel(), "scheduled_message_id": id }),
+                )
+                .await
+                .map(|_| ())
+        })
+    }
+
+    /// The way Slack builds a reply's link: the workspace's address, the
+    /// DM, the message's ts without its dot, and the thread it is in.
+    fn message_url(&self, dm: &super::state::Dm, thread: &str, at: &str) -> Option<String> {
+        let url = dm.url.as_ref()?;
+        Some(format!(
+            "{url}archives/{}/p{}?thread_ts={thread}&cid={}",
+            dm.channel,
+            at.replace('.', ""),
+            dm.channel
+        ))
+    }
+
+    /// The app's Home tab, which needs the app's ID, which Slack only
+    /// gives with an event.
+    fn home_url(&self, dm: &super::state::Dm) -> Option<String> {
+        dm.app_id.is_some().then(|| super::buttons::home_link(dm))
+    }
+}
+
 // ── Hearing you ─────────────────────────────────────────────────────────────
 
 /// Whether an event is yours to act on: sent by the owner, in the app's DM
@@ -342,7 +814,7 @@ pub struct Press {
 }
 
 /// What the Home tab's buttons may do, and a tab screen's.
-const HOME_ACTIONS: &[&str] = &[
+pub const HOME_ACTIONS: &[&str] = &[
     "open",
     "refresh",
     "new",
@@ -353,7 +825,7 @@ const HOME_ACTIONS: &[&str] = &[
     "home-opt",
     "home-dialog",
 ];
-const SCREEN_ACTIONS: &[&str] = &[
+pub const SCREEN_ACTIONS: &[&str] = &[
     "screen-message",
     "screen-skill",
     "screen-opt",

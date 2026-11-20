@@ -384,8 +384,14 @@ impl State {
     }
 }
 
-/// A Slack ts as a number, as `Number(ts)`; 0 for anything else.
+/// A Slack ts as a number of seconds, as `Number(ts)`, or a Discord
+/// message's ID as the time it was made; 0 for anything else.
 pub fn number(ts: &str) -> f64 {
+    if super::discord::is_snowflake(ts)
+        && let Some(ms) = super::discord::snowflake_ms(ts)
+    {
+        return ms as f64 / 1000.0;
+    }
     ts.parse().unwrap_or(0.0)
 }
 
@@ -414,7 +420,12 @@ pub fn owner_only(paths: &Paths) {
         .mode(0o700)
         .create(&paths.state_dir);
     let _ = std::fs::set_permissions(&paths.state_dir, std::fs::Permissions::from_mode(0o700));
-    for file in [paths.state_file(), paths.log_file(), paths.events_file()] {
+    for file in [
+        paths.state_file(),
+        paths.log_file(),
+        paths.events_file(),
+        paths.discord_file(),
+    ] {
         if Path::new(&file).exists() {
             let _ = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600));
         }

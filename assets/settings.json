@@ -1686,7 +1686,7 @@
     "key": "files_from_repo",
     "category": "Updates",
     "label": "Your files from a git repository",
-    "description": "Your own files (settings.json, keys.json, sidebar.json and the rest of ~/.config/switchboard) are read from and written to a clone of the git repository files.json names (Settings' Your files' repository), in ~/.local/share/switchboard/files: pulled as Switchboard starts and every ten minutes, and each change committed and pushed at once, after leak-check has read it and asked about anything it found. files.json, trusted-dirs, repos.json, sidebar-plugins, slack-relay.json, linear.json, oncall.json, oncall-rules.md, slack-updates.json, autopilot-claim.json, secrets.json and leak-check.txt stay on this computer, as this setting does. Off, files.json is ignored and your files are the ones in ~/.config/switchboard",
+    "description": "Your own files (settings.json, keys.json, sidebar.json and the rest of ~/.config/switchboard) are read from and written to a clone of the git repository files.json names (Settings' Your files' repository), in ~/.local/share/switchboard/files: pulled as Switchboard starts and every ten minutes, and each change committed and pushed at once, after leak-check has read it and asked about anything it found. files.json, trusted-dirs, repos.json, sidebar-plugins, slack-relay.json, discord-relay.json, linear.json, oncall.json, oncall-rules.md, slack-updates.json, autopilot-claim.json, secrets.json and leak-check.txt stay on this computer, as this setting does. Off, files.json is ignored and your files are the ones in ~/.config/switchboard",
     "default": false
   },
   {
@@ -1695,6 +1695,23 @@
     "label": "Slack relay",
     "description": "Mission control's Slack relay view: whether the relay is running, what it sent today, and which kinds of message reach you and how, with presets. Off, the view is gone and the relay's settings stay in Settings",
     "default": true
+  },
+  {
+    "key": "relay_chat",
+    "category": "Slack relay",
+    "label": "Relay through",
+    "description": "Which chat the relay talks to you in, picked as it starts (M-S): a Slack app's DM, with slack-relay.json and the Slack app's tokens, or a Discord bot's DM, with discord-relay.json and the bot's token, as the guide's \"Through Discord\" says. Each keeps its own threads, so switching back finds them as they were. Only one runs at a time",
+    "choices": [
+      {
+        "value": "slack",
+        "label": "Slack"
+      },
+      {
+        "value": "discord",
+        "label": "Discord"
+      }
+    ],
+    "default": "slack"
   },
   {
     "key": "haiku_summaries",

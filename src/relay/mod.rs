@@ -7,6 +7,10 @@
 //! you open a tab's screen from it to message, answer, stop, rename or close
 //! it.
 //!
+//! Or, with Settings' "Relay through" (`relay_chat`) set to Discord, all of
+//! that happens in a Discord bot's DM instead: a tab's thread is its header
+//! message and the replies to it, and the Home tab a message pinned there.
+//!
 //! It runs as a program of its own, `switchboard slack-relay`, in a tab of
 //! its own, and reaches the tabs through the server, as the Node version
 //! reached them through tmux: `list` for the tabs and their Claude panes,
@@ -16,7 +20,7 @@
 //! it runs (src/agent/hook.rs), and from their transcripts.
 //!
 //! Who it answers to is the point of the whole thing, and `slack` holds the
-//! rules: only what the owner named in `~/.config/switchboard/slack-relay.json`
+//! rules (`discord` holds Discord's, the same in Discord's terms): only what the owner named in `~/.config/switchboard/slack-relay.json`
 //! typed, in the app's DM with them, in that workspace, is acted on; buttons
 //! and forms only from the owner, on the relay's own messages and screens;
 //! and every API call naming a conversation is refused unless it is the DM.
@@ -26,8 +30,13 @@
 //! - `config`: where its files are, and the times and limits it keeps to.
 //! - `log`: its log, which outlives its tab and explains a crash.
 //! - `state`: what it keeps between runs (threads, alerts, homes, ...).
-//! - `slack`: the Slack app: the Web API and its rules, who may be heard.
-//! - `http`: Slack over HTTPS and Socket Mode's WebSocket.
+//! - `chat`: what the relay does in its chat, whichever chat it is.
+//! - `slack`: the Slack app: the Web API and its rules, who may be heard,
+//!   and `SlackChat`.
+//! - `discord`, `discord_chat`: the Discord bot: its rules, how Block Kit
+//!   looks in Discord, and `DiscordChat`.
+//! - `http`: Slack over HTTPS and Socket Mode's WebSocket; Discord's REST
+//!   API and its Gateway.
 //! - `mux`: the tabs, through the server.
 //! - `tabs`: each tab's Claude, its transcript, its screen and prompts.
 //! - `post`: posting, editing and uploading in the DM.
@@ -60,11 +69,14 @@ pub mod alerts;
 pub mod autopilot;
 pub mod autopilot_home;
 pub mod buttons;
+pub mod chat;
 pub mod cleanup;
 pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod dashboard;
+pub mod discord;
+pub mod discord_chat;
 pub mod files;
 pub mod followups;
 pub mod homes;
@@ -95,6 +107,8 @@ pub mod summaries;
 pub mod tabs;
 
 #[cfg(test)]
+mod discord_scenarios;
+#[cfg(test)]
 mod scenarios;
 #[cfg(test)]
 pub mod testing;
@@ -115,7 +129,8 @@ pub use state::State;
 pub struct Relay {
     pub paths: Paths,
     pub state: RefCell<State>,
-    pub slack: slack::Slack,
+    /// Slack or Discord, by Settings' `relay_chat`.
+    pub chat: Box<dyn chat::Chat>,
     pub mux: Box<dyn mux::Mux>,
     pub haiku: Box<dyn summaries::Haiku>,
     pub presence: presence::Presence,

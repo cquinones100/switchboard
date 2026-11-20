@@ -67,15 +67,25 @@ pub fn all() -> Vec<Optional> {
         "your calendar's address (the Calendar view)",
         "your calendar's address, for the Calendar view without the Calendar routine: switchboard platform secret-set google-calendar-ical, then paste Google Calendar's secret address in iCal format",
     ));
-    let relay = relay::slack::token(relay::slack::BOT_TOKEN_SERVICE).is_some()
-        && relay::slack::token(relay::slack::APP_TOKEN_SERVICE).is_some()
-        && util::read_json(crate::files::file("slack-relay.json"))
-            .is_some_and(|v| v.get("owner").and_then(Value::as_str).is_some());
-    all.push(line(
-        relay,
-        "the Slack relay's tokens and owner (M-S)",
-        "the Slack relay, for reaching your tabs from Slack (M-S): its app's tokens (switchboard platform secret-set slack-relay-bot-token and slack-relay-app-token) and your member ID in ~/.config/switchboard/slack-relay.json, as the guide's \"The Slack relay\" says",
-    ));
+    let owner_in = |file: &str| {
+        util::read_json(crate::files::file(file))
+            .is_some_and(|v| v.get("owner").and_then(Value::as_str).is_some())
+    };
+    match relay::chat::Kind::current() {
+        relay::chat::Kind::Slack => all.push(line(
+            relay::slack::token(relay::slack::BOT_TOKEN_SERVICE).is_some()
+                && relay::slack::token(relay::slack::APP_TOKEN_SERVICE).is_some()
+                && owner_in("slack-relay.json"),
+            "the Slack relay's tokens and owner (M-S)",
+            "the Slack relay, for reaching your tabs from Slack (M-S): its app's tokens (switchboard platform secret-set slack-relay-bot-token and slack-relay-app-token) and your member ID in ~/.config/switchboard/slack-relay.json, as the guide's \"The Slack relay\" says",
+        )),
+        relay::chat::Kind::Discord => all.push(line(
+            relay::slack::token(relay::discord::BOT_TOKEN_SERVICE).is_some()
+                && owner_in("discord-relay.json"),
+            "the Discord relay's bot token and owner (M-S)",
+            "the relay through Discord, for reaching your tabs from Discord (M-S): its bot's token (switchboard platform secret-set discord-relay-bot-token) and your user ID in ~/.config/switchboard/discord-relay.json, as the guide's \"Through Discord\" says",
+        )),
+    }
     let chrome = views::image::render::find_chrome().is_some();
     all.push(line(
         chrome,

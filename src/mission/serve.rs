@@ -1678,7 +1678,7 @@ impl Server {
             let running = self.relay_running();
             let mut items = super::relay_board::items(&sent, running.as_ref());
             if !set_up && running.is_none() {
-                super::relay_board::not_set_up(&mut items);
+                super::relay_board::not_set_up(&mut items, crate::relay::chat::Kind::current());
             }
             let data = ViewData {
                 items,
@@ -1833,7 +1833,7 @@ impl Server {
             std::fs::read_to_string(crate::relay::sending::sent_file(&paths.state_dir, &day))
                 .unwrap_or_default();
         let sent = crate::relay::sending::read_sent(&text);
-        let set_up = crate::relay::slack::load_owner(&paths).is_some();
+        let set_up = crate::relay::run::load_owner(&paths).is_some();
         self.mission.relay_sent = Some((Instant::now(), sent.clone(), set_up));
         (sent, set_up)
     }

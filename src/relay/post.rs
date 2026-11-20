@@ -197,15 +197,20 @@ pub fn with_mention(md: Value, owner: &str) -> Value {
 /// Slack counts them and post.js did, so text full of emoji splits as soon
 /// as plain text would.
 pub fn chunks(text: &str) -> Vec<String> {
+    chunks_of(text, MAX_POST_CHARS)
+}
+
+/// `chunks`, each part under `most` units.
+pub fn chunks_of(text: &str, most: usize) -> Vec<String> {
     let units = |cs: &[char]| cs.iter().map(|c| c.len_utf16()).sum::<usize>();
     let mut parts = Vec::new();
     let mut rest: Vec<char> = text.chars().collect();
-    while units(&rest) > MAX_POST_CHARS {
+    while units(&rest) > most {
         // The most characters that fit, never half of one.
         let mut fit = 0;
         let mut used = 0;
         for c in &rest {
-            if used + c.len_utf16() > MAX_POST_CHARS {
+            if used + c.len_utf16() > most {
                 break;
             }
             used += c.len_utf16();
@@ -220,7 +225,7 @@ pub fn chunks(text: &str) -> Vec<String> {
         let cut = [last(&['\n', '\n']), last(&['\n'])]
             .into_iter()
             .flatten()
-            .find(|&i| units(&window[..i]) > MAX_POST_CHARS / 2)
+            .find(|&i| units(&window[..i]) > most / 2)
             .unwrap_or(fit);
         let mut part: String = rest[..cut].iter().collect();
         let mut after: Vec<char> = rest[cut..].to_vec();
@@ -252,15 +257,8 @@ pub struct Memory {
 
 const LAST_PARTS_KEPT: usize = 100;
 
-fn channel(cx: &Relay) -> String {
-    cx.state.borrow().dm().channel
-}
-
-/// Posts one message and gives its ts. Links aren't expanded into
-/// previews, which would bury a short reply under a PR's card.
-/// `mention` starts a thread reply with a mention of the owner, which is
-/// what makes Slack notify you of a reply in a thread you don't follow (a
-/// thread the relay started), without also sending it to the main DM.
+/// Posts one message and gives its ts. `mention` makes a thread reply
+/// notify you (see `Chat::post`).
 pub async fn post_one(
     cx: &Relay,
     body: &str,
@@ -269,25 +267,15 @@ pub async fn post_one(
     notice: &str,
     buttons: &[Button],
 ) -> Result<String> {
-    let mut params = json!({ "channel": channel(cx) });
-    let mut md = as_markdown(body, notice, buttons);
-    if let Some(t) = thread {
-        params["thread_ts"] = json!(t);
-        let owner = cx.state.borrow().dm().user;
-        if mention && !owner.is_empty() {
-            md = with_mention(md, &owner);
-        }
-    }
-    params["text"] = md["text"].clone();
-    params["blocks"] = md["blocks"].clone();
-    params["unfurl_links"] = json!(false);
-    params["unfurl_media"] = json!(false);
-    let sent = cx.slack.api("chat.postMessage", params).await?;
-    Ok(sent
-        .get("ts")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string())
+    cx.chat
+        .post(super::chat::Outgoing {
+            body,
+            notice,
+            buttons,
+            thread,
+            mention,
+        })
+        .await
 }
 
 /// Options for `post`. `notice` is the notification's line (`tab_notice`);
@@ -324,7 +312,7 @@ impl PostOpts {
 /// message at the top level is a thread you may reply under, so it is
 /// watched. Buttons go under the last part, where you finish reading.
 pub async fn post(cx: &Relay, text: &str, thread: Option<&str>, opts: PostOpts) -> Result<String> {
-    let parts = chunks(text);
+    let parts = chunks_of(text, cx.chat.max_post_chars());
     let only = parts.len() == 1;
     let notice_of = |part: &str| opts.notice.clone().unwrap_or_else(|| notice_line(part));
     let ts = post_one(
@@ -394,52 +382,25 @@ pub async fn react(cx: &Relay, ts: Option<&str>, emoji: &str) -> Result<()> {
     let Some(ts) = ts.filter(|t| !t.is_empty()) else {
         return Ok(());
     };
-    match cx
-        .slack
-        .api(
-            "reactions.add",
-            json!({ "channel": channel(cx), "timestamp": ts, "name": emoji }),
-        )
-        .await
-    {
-        Err(e) if !e.to_string().contains("already_reacted") => Err(e),
-        _ => Ok(()),
-    }
+    cx.chat.react(ts, emoji).await
 }
 
 /// Takes the relay's reaction off a message; one that isn't there is fine.
 pub async fn unreact(cx: &Relay, ts: &str, emoji: &str) -> Result<()> {
-    match cx
-        .slack
-        .api(
-            "reactions.remove",
-            json!({ "channel": channel(cx), "timestamp": ts, "name": emoji }),
-        )
-        .await
-    {
-        Err(e) if !e.to_string().contains("no_reaction") => Err(e),
-        _ => Ok(()),
-    }
+    cx.chat.unreact(ts, emoji).await
 }
 
 /// Deletes a message the relay posted.
-pub async fn remove(cx: &Relay, ts: &str) -> Result<Value> {
-    cx.slack
-        .api("chat.delete", json!({ "channel": channel(cx), "ts": ts }))
-        .await
+pub async fn remove(cx: &Relay, ts: &str) -> Result<()> {
+    cx.chat.delete(ts).await
 }
 
 /// Edits a message the relay posted, in place, keeping the notification's
 /// line it was posted with while that is remembered.
-pub async fn update(cx: &Relay, ts: &str, body: &str, buttons: &[Button]) -> Result<Value> {
+pub async fn update(cx: &Relay, ts: &str, body: &str, buttons: &[Button]) -> Result<()> {
     let kept = cx.mem.borrow().post.notices.get(ts).cloned();
-    let md = as_markdown(body, &kept.unwrap_or_else(|| notice_line(body)), buttons);
-    cx.slack
-        .api(
-            "chat.update",
-            json!({ "channel": channel(cx), "ts": ts, "text": md["text"], "blocks": md["blocks"] }),
-        )
-        .await
+    let notice = kept.unwrap_or_else(|| notice_line(body));
+    cx.chat.update(ts, body, &notice, buttons).await
 }
 
 /// Edits a message the relay posted, its notification's line now `notice`
@@ -450,7 +411,7 @@ pub async fn update_noticed(
     body: &str,
     notice: &str,
     buttons: &[Button],
-) -> Result<Value> {
+) -> Result<()> {
     {
         let mut mem = cx.mem.borrow_mut();
         let notices = &mut mem.post.notices;
@@ -473,60 +434,16 @@ pub struct Upload {
 /// As many files as Slack shows in one message.
 pub const FILES_PER_MESSAGE: usize = 10;
 
-/// Uploads files into the DM, in `thread` if given: each file's bytes go
-/// to an address Slack gives for it, then the files are shared together,
-/// `FILES_PER_MESSAGE` to a message. A file that fails to upload is left
-/// out and handed to `failed`; the rest still go. Gives the names shared.
+/// Uploads files into the DM, in `thread` if given, `FILES_PER_MESSAGE`
+/// to a message. A file that fails to upload is left out and handed to
+/// `failed`; the rest still go. Gives the names shared.
 pub async fn upload_files(
     cx: &Relay,
     files: Vec<Upload>,
     thread: Option<&str>,
     failed: &dyn Fn(&str, &anyhow::Error),
 ) -> Result<Vec<String>> {
-    let mut sent: Vec<(String, String, String)> = Vec::new();
-    for Upload {
-        filename,
-        title,
-        content,
-    } in files
-    {
-        let uploaded: Result<String> = async {
-            let target = cx
-                .slack
-                .api(
-                    "files.getUploadURLExternal",
-                    json!({ "filename": filename, "length": content.len() }),
-                )
-                .await?;
-            let url = target
-                .get("upload_url")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            cx.slack.put(url, content).await?;
-            Ok(target
-                .get("file_id")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string())
-        }
-        .await;
-        match uploaded {
-            Ok(id) => sent.push((id, title, filename)),
-            Err(e) => failed(&filename, &e),
-        }
-    }
-    for batch in sent.chunks(FILES_PER_MESSAGE) {
-        let files: Vec<Value> = batch
-            .iter()
-            .map(|(id, title, _)| json!({ "id": id, "title": title }))
-            .collect();
-        let mut params = json!({ "files": files, "channel_id": channel(cx) });
-        if let Some(t) = thread {
-            params["thread_ts"] = json!(t);
-        }
-        cx.slack.api("files.completeUploadExternal", params).await?;
-    }
-    Ok(sent.into_iter().map(|(_, _, name)| name).collect())
+    cx.chat.upload(files, thread, failed).await
 }
 
 /// Every message showing a prompt's buttons for a tab: the alert in its

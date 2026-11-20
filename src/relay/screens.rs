@@ -579,11 +579,7 @@ pub async fn redraw(cx: &Cx, view: &str, meta: &Value, note: Option<&str>) {
         Some(t) => tab_screen(cx, t, note),
         None => gone_screen("That tab has closed."),
     };
-    match cx
-        .slack
-        .api("views.update", json!({ "view_id": view, "view": screen }))
-        .await
-    {
+    match cx.chat.update_view(view, &screen, None).await {
         Ok(_) => match &tab {
             Some(t) => remember(cx, Some(view), t),
             None => forget_screen(cx, view),
@@ -644,12 +640,7 @@ pub async fn handle_screen_press(cx: &Cx, press: &Press, thread: Option<&str>) -
     let a = value.get("a").and_then(Value::as_str).unwrap_or("");
     let trigger = press.trigger_id.clone().unwrap_or_default();
     if a == "new" {
-        cx.slack
-            .api(
-                "views.open",
-                json!({ "trigger_id": trigger, "view": new_screen(cx) }),
-            )
-            .await?;
+        cx.chat.open_view(&trigger, &new_screen(cx)).await?;
         return Ok(());
     }
     let tab = same_tab(cx, value);
@@ -662,14 +653,12 @@ pub async fn handle_screen_press(cx: &Cx, press: &Press, thread: Option<&str>) -
         };
         let text = |k: &str| value.get(k).map(util::js_string).unwrap_or_default();
         let from = text("from");
-        let mut params = json!({
-            "view_id": view.id,
-            "view": skill_screen(cx, &tab, &from, Some(&text("skill")), &text("args")),
-        });
-        if let Some(hash) = &view.hash {
-            params["hash"] = json!(hash);
-        }
-        if let Err(e) = cx.slack.api("views.update", params).await {
+        let screen = skill_screen(cx, &tab, &from, Some(&text("skill")), &text("args"));
+        if let Err(e) = cx
+            .chat
+            .update_view(&view.id, &screen, view.hash.as_deref())
+            .await
+        {
             cx.log(&format!("couldn't redraw the Skill form: {e}"));
         }
         return Ok(());
@@ -711,12 +700,7 @@ pub async fn handle_screen_press(cx: &Cx, press: &Press, thread: Option<&str>) -
         } else {
             rename_screen(&tab, &tab.own_name, "thread")
         };
-        cx.slack
-            .api(
-                "views.open",
-                json!({ "trigger_id": trigger, "view": screen }),
-            )
-            .await?;
+        cx.chat.open_view(&trigger, &screen).await?;
         return Ok(());
     }
     if a == "open" {
@@ -724,13 +708,10 @@ pub async fn handle_screen_press(cx: &Cx, press: &Press, thread: Option<&str>) -
             return refresh_dashboard(cx, Refresh::opened_quick()).await;
         };
         let opened = cx
-            .slack
-            .api(
-                "views.open",
-                json!({ "trigger_id": trigger, "view": tab_screen(cx, &tab, None) }),
-            )
+            .chat
+            .open_view(&trigger, &tab_screen(cx, &tab, None))
             .await?;
-        let view = opened.pointer("/view/id").and_then(Value::as_str);
+        let view = opened.as_deref();
         remember(cx, view, &tab);
         // Opening a finished tab, or one whose reminder came due, sees it,
         // as looking at it on the computer does, so it leaves Needs you here
@@ -759,15 +740,7 @@ pub async fn handle_screen_press(cx: &Cx, press: &Press, thread: Option<&str>) -
     let meta = json!({ "w": tab.id, "p": tab.pid });
     let push = |screen: Value| {
         let trigger = trigger.clone();
-        async move {
-            cx.slack
-                .api(
-                    "views.push",
-                    json!({ "trigger_id": trigger, "view": screen }),
-                )
-                .await
-                .map(|_| ())
-        }
+        async move { cx.chat.push_view(&trigger, &screen).await }
     };
     match a {
         "screen-rename" => push(rename_screen(&tab, &tab.own_name, "screen")).await,
@@ -820,13 +793,8 @@ pub async fn handle_screen_press(cx: &Cx, press: &Press, thread: Option<&str>) -
             close_tab(cx, &tab).await?;
             cx.save();
             forget_screen(cx, &view.id);
-            let _ = cx
-                .slack
-                .api(
-                    "views.update",
-                    json!({ "view_id": view.id, "view": gone_screen(&format!("Closed {}.", label(tab.index, &tab.name))) }),
-                )
-                .await;
+            let gone = gone_screen(&format!("Closed {}.", label(tab.index, &tab.name)));
+            let _ = cx.chat.update_view(&view.id, &gone, None).await;
             refresh_dashboard(cx, Refresh::opened_quick()).await
         }
         _ => Ok(()),

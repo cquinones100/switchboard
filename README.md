@@ -15,7 +15,7 @@ It is opinionated: the defaults are how it is meant to be used, and Settings (`M
 - **From idea to merged change:** Notes is a Markdown notes app with Vim's editing; `/shape` turns an idea into a checklist item and a plan, a GitHub issue or a Linear ticket, wherever the repository keeps its work; `/wt` hands a tab the item, issue or ticket to build in a worktree of its own; the review loop has Codex or Claude review it until two rounds come back clean; and landing puts it on the default branch one change at a time.
 - **Autopilot** works through a note's checklist on its own, several items at once: each tab builds its item, reviews it, tests it and lands it.
 - **The diff** (`M-d`) shows a branch side by side with its story, and the PR and ticket views (`M-v`, `M-i`) show a branch's PR, with whether it can merge, and its Linear ticket or GitHub issue beside its tab.
-- **Away from the computer:** the Slack relay gives each tab a thread in a Slack DM, so you can answer a waiting tab from your phone; routines run a prompt of yours on a schedule as a headless Claude; and the computer stays awake while agents work.
+- **Away from the computer:** the Slack relay gives each tab a thread in a Slack DM (or a Discord bot's DM), so you can answer a waiting tab from your phone; routines run a prompt of yours on a schedule as a headless Claude; and the computer stays awake while agents work.
 
 ## Requirements
 
@@ -130,7 +130,7 @@ A release keeps itself current: each time you attach, and hourly after that, the
 
 ![Mission control's Settings view, its categories and your files beside the Integrations options](docs/images/settings.png)
 
-Settings, in mission control's System group (`M-Space`, or `M-p` then Settings), lists every option by category, each with what it does and its default, and every file of your own beside them. Enter changes one, `/` searches them all, and any part of Switchboard can be turned off there. What you change is kept in `~/.config/switchboard/`, which an update never writes over; the [guide](docs/guide.md) lists each file. To keep those files in a git repository of yours, turn on Settings' "Your files from a git repository" and name it in `files.json`: they are then read from a clone of it, pulled every ten minutes and pushed as they change, while `files.json`, `trusted-dirs`, `repos.json`, `sidebar-plugins/`, `slack-relay.json`, `linear.json`, `oncall.json`, `oncall-rules.md`, `slack-updates.json`, `autopilot-claim.json`, `secrets.json` and `leak-check.txt` stay on the computer.
+Settings, in mission control's System group (`M-Space`, or `M-p` then Settings), lists every option by category, each with what it does and its default, and every file of your own beside them. Enter changes one, `/` searches them all, and any part of Switchboard can be turned off there. What you change is kept in `~/.config/switchboard/`, which an update never writes over; the [guide](docs/guide.md) lists each file. To keep those files in a git repository of yours, turn on Settings' "Your files from a git repository" and name it in `files.json`: they are then read from a clone of it, pulled every ten minutes and pushed as they change, while `files.json`, `trusted-dirs`, `repos.json`, `sidebar-plugins/`, `slack-relay.json`, `discord-relay.json`, `linear.json`, `oncall.json`, `oncall-rules.md`, `slack-updates.json`, `autopilot-claim.json`, `secrets.json` and `leak-check.txt` stay on the computer.
 
 ## More
 
