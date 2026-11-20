@@ -1015,6 +1015,10 @@ fn a_ticket_is_read_against_the_base_and_its_findings_name_its_lines() {
     let home = tmp.path();
     let work = clone(home);
     fs::write(work.join("a.txt"), "a\n").unwrap();
+    // Left out of an archive of the repository, never out of the review.
+    fs::write(work.join(".gitattributes"), "kept/ export-ignore\n").unwrap();
+    fs::create_dir(work.join("kept")).unwrap();
+    fs::write(work.join("kept/k.txt"), "k\n").unwrap();
     git(home, &work, &["add", "."]);
     git(home, &work, &["commit", "-q", "-m", "On main"]);
     git(home, &work, &["push", "-q", "origin", "main"]);
@@ -1066,7 +1070,7 @@ fn a_ticket_is_read_against_the_base_and_its_findings_name_its_lines() {
     let bin = home.join("bin");
     Claude::new()
         .answer(&format!(
-            "cat >/dev/null\nls > {}\ncat {}",
+            "cat >/dev/null\nfind . -type f > {}\ncat {}",
             sh_quote(&listing.to_string_lossy()),
             sh_quote(&answer.to_string_lossy())
         ))
@@ -1094,7 +1098,11 @@ fn a_ticket_is_read_against_the_base_and_its_findings_name_its_lines() {
     assert_eq!(json["base"], "origin/main");
     assert_eq!(json["reviewer"], "claude");
     let files = fs::read_to_string(&listing).unwrap();
-    assert!(files.lines().any(|l| l == "a.txt"), "{files}");
+    assert!(files.lines().any(|l| l == "./a.txt"), "{files}");
+    assert!(
+        files.lines().any(|l| l == "./kept/k.txt"),
+        "export-ignore keeps nothing from the reviewer: {files}"
+    );
     assert!(
         !files.contains("b.txt") && !files.contains("dirty.txt"),
         "the base's files, not the checkout's: {files}"

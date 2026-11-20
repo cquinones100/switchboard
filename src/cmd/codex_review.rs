@@ -74,9 +74,9 @@
 //! GitHub issue's body or a Linear ticket's description, which review-loop's
 //! ticket mode saves to a file) against the repository at the base, `--base`
 //! or origin's default branch (fetched first, else the local copy), never the
-//! checkout, which may be on another branch and needn't be clean: the base's
-//! files are written into the temporary directory from `git archive`
-//! (`export_tree`) and the reviewer reads them there, read-only as for a
+//! checkout, which may be on another branch and needn't be clean: every
+//! file tracked at the base is written into the temporary directory from
+//! git's objects (`export_tree`) and the reviewer reads them there, read-only as for a
 //! branch. It checks that what the ticket says of today matches the code,
 //! that every file, function and line it names is there, that its steps are
 //! complete and consistent with each other and the code, and that it keeps
@@ -2173,35 +2173,95 @@ fn ticket_base(root: &Path, named: Option<&str>) -> Reviewed<(String, String)> {
     }
 }
 
-/// The repository's files at `commit`, written into `into` from git's own
-/// archive of it, so the reviewer reads the code as the base has it
-/// whatever the checkout holds, and runs nothing of git's to do it.
+/// The repository's files at `commit`, every tracked one, written into
+/// `into` blob by blob (`git ls-tree`, then `git cat-file --batch`), so the
+/// reviewer reads the code as the base has it whatever the checkout holds.
+/// Not `git archive`, which leaves out what `.gitattributes` marks
+/// `export-ignore`, nor a checkout, which runs the filters your config
+/// names. Links and submodules are left out, so nothing in the tree leads
+/// outside it.
 fn export_tree(commit: &str, into: &Path) -> Reviewed<()> {
     if let Err(e) = fs::create_dir(into) {
         return fail(format!("could not make {}: {e}", into.display()));
     }
-    let mut archive = match Command::new("git")
-        .args(["archive", "--format=tar", commit])
+    let listing = Command::new("git")
+        .args(["ls-tree", "-r", "-z", "--full-tree", commit])
         .stdin(Stdio::null())
+        .output()
+        .map_err(|e| ReviewError(format!("could not run git: {e}")))?;
+    if !listing.status.success() {
+        return fail(format!(
+            "git ls-tree failed: {}",
+            String::from_utf8_lossy(&listing.stderr).trim()
+        ));
+    }
+    // `<mode> <type> <object>\t<path>`, each ended by a NUL.
+    let mut files: Vec<(String, PathBuf, bool)> = Vec::new();
+    for entry in listing.stdout.split(|&b| b == 0).filter(|e| !e.is_empty()) {
+        let entry = String::from_utf8_lossy(entry);
+        let Some((meta, path)) = entry.split_once('\t') else {
+            continue;
+        };
+        let fields: Vec<&str> = meta.split(' ').collect();
+        let [mode, "blob", object] = fields[..] else {
+            continue;
+        };
+        let path = PathBuf::from(path);
+        let plain = path.components().all(|c| matches!(c, Component::Normal(_)));
+        if plain && matches!(mode, "100644" | "100755") {
+            files.push((object.to_string(), path, mode == "100755"));
+        }
+    }
+    let mut batch = match Command::new("git")
+        .args(["cat-file", "--batch"])
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::null())
         .spawn()
     {
         Ok(child) => child,
         Err(e) => return fail(format!("could not run git: {e}")),
     };
-    let stdout = archive.stdout.take().expect("stdout piped");
-    let unpacked = tar::Archive::new(stdout).unpack(into);
-    let finished = archive.wait_with_output();
-    match (unpacked, finished) {
-        (_, Err(e)) => fail(format!("could not run git: {e}")),
-        (_, Ok(out)) if !out.status.success() => fail(format!(
-            "git archive failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        )),
-        (Err(e), _) => fail(format!("could not write the base's files: {e}")),
-        (Ok(()), Ok(_)) => Ok(()),
-    }
+    let mut stdin = batch.stdin.take().expect("stdin piped");
+    let asked: String = files
+        .iter()
+        .map(|(object, ..)| format!("{object}\n"))
+        .collect();
+    let feeding = std::thread::spawn(move || {
+        let _ = stdin.write_all(asked.as_bytes());
+    });
+    let mut out = std::io::BufReader::new(batch.stdout.take().expect("stdout piped"));
+    let written = (|| -> std::io::Result<()> {
+        use std::io::{BufRead, Read};
+        use std::os::unix::fs::PermissionsExt;
+        for (_, path, executable) in &files {
+            let mut header = String::new();
+            out.read_line(&mut header)?;
+            let size: usize = header
+                .split_whitespace()
+                .nth(2)
+                .and_then(|n| n.parse().ok())
+                .ok_or_else(|| {
+                    std::io::Error::other(format!("git cat-file said: {}", header.trim()))
+                })?;
+            let mut bytes = vec![0; size + 1];
+            out.read_exact(&mut bytes)?;
+            bytes.truncate(size);
+            let at = into.join(path);
+            if let Some(parent) = at.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&at, &bytes)?;
+            if *executable {
+                fs::set_permissions(&at, fs::Permissions::from_mode(0o755))?;
+            }
+        }
+        Ok(())
+    })();
+    let _ = feeding.join();
+    drop(out);
+    let _ = batch.wait();
+    written.map_err(|e| ReviewError(format!("could not write the base's files: {e}")))
 }
 
 /// A hash of the ticket's text, so a confirmation round knows it read the
