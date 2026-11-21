@@ -155,6 +155,10 @@ pub struct Facts {
     pub pr_repo: Option<Repo>,
     /// That PR's title, once its lookup has answered.
     pub pr_title: Option<String>,
+    /// What `label` is without a PR's title, when only a PR's title can
+    /// name the tab (no ticket names it): the directory's name, which the
+    /// tab's current PR's title takes the place of once known (`Server::tab_label`).
+    pub untitled: Option<String>,
     /// The ticket its branch is for: the GitHub issue it was started for,
     /// else the Linear ticket it names, while its service's lookups are on
     /// and once its title is known.
@@ -435,6 +439,9 @@ impl Names {
         // all (`patch-1`), so the PR's title names the tab until Linear
         // confirms it.
         let issue_pending = matches!(ticket, Some(Ticket::Issue { .. })) && title.is_none();
+        let named_by_ticket = ticket.is_some() && title.is_some();
+        let untitled =
+            (!named_by_ticket && !issue_pending).then(|| label::facts_label(&window, None));
         let label = match (&ticket, &title, &pr_title) {
             (Some(Ticket::Issue { number, .. }), Some(title), _) => {
                 label::issue_label(*number, title)
@@ -452,6 +459,7 @@ impl Names {
             pr,
             pr_repo,
             pr_title,
+            untitled,
             // Only once its service confirms it with a title, so a branch
             // that only looks like a ticket names none.
             ticket: ticket.filter(|_| title.is_some()),

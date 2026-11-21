@@ -42,6 +42,9 @@ pub struct Shown {
     pub pr_repo: Option<Repo>,
     /// Its PR's title, once its lookup has answered.
     pub pr_title: Option<String>,
+    /// Its label without a PR's title when only one can name it
+    /// (`names::Facts::untitled`).
+    pub untitled: Option<String>,
     /// The ticket its branch is for (`names::Facts::ticket`).
     pub ticket: Option<crate::views::ticket::Ticket>,
     /// The color it wears: its project's, or gray with the `accent_colors`
@@ -135,6 +138,7 @@ impl Server {
             pr: facts.pr,
             pr_repo: facts.pr_repo,
             pr_title: facts.pr_title,
+            untitled: facts.untitled,
             ticket: facts.ticket,
             color: Some(match tint {
                 _ if !switches.colors => color::GRAY,
@@ -279,8 +283,15 @@ impl Server {
     /// `#` as a format, so none is doubled.
     pub fn tab_label(&self, tab: TabId) -> String {
         let shown = self.tab_names.shown.get(&tab);
-        let facts = shown
-            .map(|s| s.label.as_str())
+        let by_pr = shown.and_then(|s| s.untitled.as_deref()).map(|untitled| {
+            match self.tab_pr_title(tab) {
+                Some(title) => label::pr_label(untitled, &title),
+                None => untitled.to_string(),
+            }
+        });
+        let facts = by_pr
+            .as_deref()
+            .or_else(|| shown.map(|s| s.label.as_str()))
             .or_else(|| self.tabs.get(&tab).map(|t| t.auto_name.as_str()))
             .unwrap_or("");
         label::label(self.tab_own_name(tab), facts, self.tab_pr(tab))
@@ -301,6 +312,18 @@ impl Server {
     /// its branch's, else the newest its session opened.
     pub fn tab_pr(&self, tab: TabId) -> Option<u64> {
         self.tab_current_pr(tab).map(|p| p.number)
+    }
+
+    /// The title of the tab's current PR, once known: its branch's as the
+    /// tab names last found it, another's as the PR lookups hold it.
+    pub fn tab_pr_title(&self, tab: TabId) -> Option<String> {
+        let current = self.tab_current_pr(tab)?;
+        if self.tab_branch_pr(tab).is_some_and(|b| b.same(&current)) {
+            return self.tab_names.shown.get(&tab)?.pr_title.clone();
+        }
+        self.tab_pr_facts(&current)
+            .map(|f| f.title.clone())
+            .filter(|t| !t.trim().is_empty())
     }
 
     /// The PR of the tab's branch, as the tab names last found it.
@@ -684,11 +707,7 @@ impl Server {
             (Some(whole), None) => whole,
             (None, _) => label,
         };
-        let pr_title = self
-            .tab_names
-            .shown
-            .get(&tab)
-            .and_then(|s| s.pr_title.clone());
+        let pr_title = self.tab_pr_title(tab);
         let ticket = self
             .tab_ticket(tab)
             .map(crate::views::ticket::Ticket::short);
