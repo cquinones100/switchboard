@@ -12,9 +12,10 @@
 //! why. No response allows another origin (no CORS headers), and each
 //! carries a strict Content-Security-Policy.
 //!
-//! Three things change anything, each asked of the server over its
-//! socket, which refuses a pane not running Claude: answering a tab's
-//! prompt, sending its Claude a message, and marking it seen. A pane is
+//! Four things change anything, each asked of the server over its socket,
+//! which refuses a pane not running Claude: answering a tab's prompt,
+//! sending its Claude a message, marking it seen, and closing it (which the
+//! app asks about first). A pane is
 //! taken only when the server's own `watch` lists it as a Claude tab. An
 //! image from the phone's photo library is kept on the computer first
 //! (`images`, for that tab alone, under a name made here), and the message
@@ -251,6 +252,7 @@ fn routes(app: Arc<App>) -> Router {
         )
         .route("/api/images/{name}", get(image_of))
         .route("/api/tabs/{pane}/seen", post(seen))
+        .route("/api/tabs/{pane}/close", post(close))
         .route("/api/push/key", get(push_key))
         .route("/api/push/subscribe", post(subscribe))
         .fallback(|| async { (StatusCode::NOT_FOUND, "Not here") })
@@ -798,6 +800,20 @@ async fn seen(State(app): State<Arc<App>>, Path(pane): Path<String>) -> Response
     .await
 }
 
+async fn close(State(app): State<Arc<App>>, Path(pane): Path<String>) -> Response {
+    let Some(tab) = claude_tab(&app, &pane) else {
+        return (StatusCode::NOT_FOUND, "no such Claude tab").into_response();
+    };
+    ask(vec![
+        "kill-tab".into(),
+        "-t".into(),
+        pane_of(&tab),
+        "-s".into(),
+        "phone".into(),
+    ])
+    .await
+}
+
 async fn push_key(State(app): State<Arc<App>>) -> Response {
     match &app.push_key {
         Some(key) => axum::Json(json!({"key": push::public_key(key)})).into_response(),
@@ -1004,6 +1020,7 @@ mod tests {
         assert!(before_pairing("/api/pair", &Method::POST));
         assert!(!before_pairing("/api/tabs", &Method::GET));
         assert!(!before_pairing("/api/tabs/%1/answer", &Method::POST));
+        assert!(!before_pairing("/api/tabs/1/close", &Method::POST));
         assert!(!before_pairing("/", &Method::POST));
     }
 

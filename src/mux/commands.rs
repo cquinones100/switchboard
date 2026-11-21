@@ -173,7 +173,10 @@ pub const USAGE: &[(&str, &str)] = &[
         "switch-client -t tab: the terminal used last shown the tab, in its session",
     ),
     ("kill-pane", "kill-pane [-t pane]"),
-    ("kill-tab", "kill-tab [-t tab]"),
+    (
+        "kill-tab",
+        "kill-tab [-t tab] [-s from]: -s names who asked (phone), closing only a tab whose pane runs Claude, logged",
+    ),
     (
         "rename-tab",
         "rename-tab [-t tab] name: \"\" to name it after its directory",
@@ -460,9 +463,16 @@ impl Server {
                 self.kill_pane(p);
                 Reply::ok("")
             }),
-            "kill-tab" => self.target_tab(rest, caller).map(|t| {
-                self.kill_tab(t);
-                Reply::ok("")
+            "kill-tab" => Args::parse(rest, "ts").and_then(|a| match a.value('s') {
+                Some(from) => {
+                    let pane = self.pane_from(&a, caller)?;
+                    self.phone_close(pane, from)
+                }
+                None => {
+                    let tab = self.tab_from(&a, caller)?;
+                    self.kill_tab(tab);
+                    Ok(Reply::ok(""))
+                }
             }),
             "rename-tab" => self.cmd_rename(rest, caller),
             "set" => self.cmd_set(rest, caller),

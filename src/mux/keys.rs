@@ -705,7 +705,7 @@ impl Action {
                 "Runs switchboard slack-relay stop, which says when it has stopped; Slack hears nothing more from the tabs until it starts again.".into()
             }
             Action::PhoneApp => {
-                "Serves the phone app on your tailnet alone, for answering and messaging your Claude tabs from the phones phone.json lists; needs Tailscale and Settings' Phone app on.".into()
+                "Serves the phone app on your tailnet alone, for answering, messaging and closing your Claude tabs from the phones phone.json lists; needs Tailscale and Settings' Phone app on.".into()
             }
             Action::StopPhoneApp => {
                 "Runs switchboard phone stop: your phone reaches nothing until it starts again.".into()

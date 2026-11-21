@@ -760,3 +760,203 @@ for (const prompt of [null, { free: true }]) {
         assert_eq!(attrs["spellcheck"], "true", "{line}");
     }
 }
+
+/// What the phone's Close tab asks of the server: a Claude tab closed and
+/// logged, with no notification; another pane refused.
+#[test]
+fn the_phone_closes_a_claude_tab_and_refuses_any_other() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-d", "-n", "plain"]);
+    let plain = server.list()["sessions"][0]["tabs"][1]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (code, _, err) = server.run(&["kill-tab", "-t", &plain, "-s", "phone"]);
+    assert_eq!(code, 1, "a pane not running Claude");
+    assert!(err.contains("isn't running Claude"), "{err}");
+    assert_eq!(
+        server.list()["sessions"][0]["tabs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    // Settings' "Close tabs from the phone" off refuses every close.
+    common::write_settings(&server.home, json!({ "phone_close_tabs": false }));
+    wait_until(&server, "the close refused while off", || {
+        let (_, _, err) = server.run(&["kill-tab", "-t", &plain, "-s", "phone"]);
+        err.contains("off in Settings")
+    });
+    common::write_settings(&server.home, json!({}));
+    wait_until(&server, "the setting on again", || {
+        let (_, _, err) = server.run(&["kill-tab", "-t", &plain, "-s", "phone"]);
+        err.contains("isn't running Claude")
+    });
+
+    let pane = claude_pane(&server);
+    let said = server.ok(&["kill-tab", "-t", &pane, "-s", "phone"]);
+    assert!(said.starts_with("Closed tab 1 "), "{said}");
+    let tabs = server.list()["sessions"][0]["tabs"].clone();
+    assert_eq!(tabs.as_array().unwrap().len(), 1, "{tabs}");
+    assert_eq!(tabs[0]["panes"][0]["id"], plain.as_str());
+    assert!(
+        server.log().contains("from your phone: tab 1 (") && server.log().contains("): closed it"),
+        "logged: {}",
+        server.log()
+    );
+}
+
+/// The drawer's menu (assets/phone/app.js), run in Node over a page made
+/// of plain objects: a long press on a row opens its tab's menu rather
+/// than the tab, Close tab asks first, only Close closes it, and a tap
+/// still opens the tab; skipped without Node.
+#[test]
+fn a_long_press_opens_a_tabs_menu_and_close_tab_asks_first() {
+    let app = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/phone/app.js");
+    let script = r#"
+const vm = require("vm");
+const fs = require("fs");
+class Node {
+  constructor(tag) { this.tag = tag; this.kids = []; this.attrs = {}; this.on = {}; this.className = ""; this.style = {}; this.parent = null; this.value = ""; }
+  append(...kids) { for (const k of kids) { k.parent = this; this.kids.push(k); } }
+  replaceChildren(...kids) { this.kids = []; this.append(...kids); }
+  replaceWith(n) { const p = this.parent; if (p) { p.kids[p.kids.indexOf(this)] = n; n.parent = p; } }
+  remove() { const p = this.parent; if (p) p.kids = p.kids.filter((k) => k !== this); this.parent = null; }
+  setAttribute(k, v) { this.attrs[k] = v; }
+  addEventListener(name, f) { (this.on[name] = this.on[name] || []).push(f); }
+  removeEventListener() {}
+  fire(name, e) {
+    let stopped = false;
+    const ev = Object.assign({ target: this, clientX: 0, clientY: 0, preventDefault() {}, stopPropagation() { stopped = true; } }, e);
+    for (const f of doc.on[name] || []) f(ev);
+    if (!stopped) for (const f of this.on[name] || []) f(ev);
+  }
+  contains(n) { for (; n; n = n.parent) if (n === this) return true; return false; }
+  querySelector() { return null; }
+  get classList() { const n = this; return { toggle(c, on) { const s = new Set(n.className.split(" ").filter(Boolean)); on ? s.add(c) : s.delete(c); n.className = [...s].join(" "); } }; }
+  get text() { return this.kids.map((k) => (k instanceof Node ? k.text : k.data)).join(""); }
+  all(pred) { const out = []; const walk = (n) => { if (!(n instanceof Node)) return; if (pred(n)) out.push(n); n.kids.forEach(walk); }; walk(this); return out; }
+}
+const app = new Node("div"), body = new Node("body");
+const doc = { on: {} };
+const timers = [];
+const posted = [];
+const ctx = vm.createContext({
+  Node,
+  document: {
+    getElementById: () => app,
+    body,
+    createElement: (t) => new Node(t),
+    createTextNode: (data) => ({ data }),
+    addEventListener: (name, f) => { (doc.on[name] = doc.on[name] || []).push(f); },
+    removeEventListener() {},
+  },
+  window: { innerHeight: 800, addEventListener() {} },
+  history: { replaceState() {} },
+  setTimeout: (f) => { timers.push(f); return timers.length; },
+  clearTimeout: (id) => { timers[id - 1] = null; },
+  fetch: (path, opts) => {
+    if (opts && opts.method === "POST") { posted.push(path); return Promise.resolve({ ok: true, status: 200, json: async () => ({ said: "Closed tab 4 full titles" }) }); }
+    return new Promise(() => {});
+  },
+  console,
+});
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+vm.runInContext(`
+  state.me = { paired: true, computer: "studio" };
+  state.tabs = [
+    { index: 4, pane: "%4", name: "full titles", state: "done", needs: true },
+    { index: 3, pane: "%3", name: "M-d uncommitted", state: "working" },
+  ];
+  render();
+`, ctx);
+const row = (n) => app.all((x) => x.attrs["data-pane"] === n)[0];
+const options = () => body.all((x) => x.attrs.role === "menuitem").map((x) => x.text);
+const button = (label) => body.all((x) => x.tag === "button" && x.text === label)[0];
+const out = [];
+(async () => {
+  // A long press: the menu, and no tab opened by the click after it.
+  row("4").fire("pointerdown");
+  timers.splice(0).forEach((f) => f && f());
+  row("4").fire("pointerup");
+  row("4").fire("click");
+  out.push("menu=" + options().join(",") + " open=" + vm.runInContext("state.open", ctx));
+  // Close tab asks first; No leaves the tab.
+  button("Close tab").fire("click");
+  out.push("asks=" + body.text.includes("Close tab 4 full titles? [Y/n]") + " posted=" + posted.length);
+  const answers = body.all((x) => x.className === "answers")[0].kids.map((k) => k.text + (k.className.includes("lit") ? "*" : ""));
+  out.push("answers=" + answers.join(","));
+  button("No").fire("click");
+  out.push("no=" + posted.length + " menu=" + vm.runInContext("state.menu", ctx));
+  // Asked again, Close closes it.
+  row("4").fire("contextmenu");
+  button("Close tab").fire("click");
+  button("Close").fire("click");
+  await new Promise((r) => setImmediate(r));
+  out.push("closed=" + posted.join(",") + " tabs=" + vm.runInContext("state.tabs.map((t) => t.index).join()", ctx));
+  // On a tab still working, Close tab alone; a tap opens the tab.
+  row("3").fire("contextmenu");
+  out.push("working=" + options().join(","));
+  button("×").fire("click");
+  row("3").fire("pointerdown");
+  row("3").fire("pointerup");
+  row("3").fire("click");
+  out.push("tap=" + vm.runInContext("state.open", ctx));
+  // A redraw while a finger is down: lifting it still lets the hold go.
+  vm.runInContext("state.open = null; state.tabs.push({ index: 5, pane: \"%5\", name: \"five\", state: \"idle\" }); render();", ctx);
+  row("5").fire("pointerdown");
+  vm.runInContext("render()", ctx);
+  row("5").fire("pointerup");
+  timers.splice(0).forEach((f) => f && f());
+  out.push("redrawn=" + vm.runInContext("state.menu", ctx));
+  // A tap on the lit row, outside the menu, closes it.
+  row("5").fire("contextmenu");
+  row("5").fire("pointerdown");
+  row("5").fire("pointerup");
+  row("5").fire("click");
+  out.push("lit row=" + vm.runInContext("state.menu", ctx) + " open=" + vm.runInContext("state.open", ctx));
+  // Close tabs from the phone off: a tab still working has nothing to offer.
+  vm.runInContext("state.close = false", ctx);
+  row("3").fire("contextmenu");
+  out.push("off=" + vm.runInContext("state.menu", ctx) + " " + options().join(","));
+  console.log(out.join("\n"));
+})();
+"#;
+    let out = match std::process::Command::new("node")
+        .arg("-e")
+        .arg(script)
+        .arg(&app)
+        .output()
+    {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return eprintln!("skipped: no node");
+        }
+        result => result.unwrap(),
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "menu=Mark seen,Close tab open=null",
+            "asks=true posted=0",
+            "answers=Close*,No",
+            "no=0 menu=null",
+            "closed=/api/tabs/4/close tabs=3",
+            "working=Close tab",
+            "tap=3",
+            "redrawn=null",
+            "lit row=null open=null",
+            "off=null ",
+        ],
+        "{stdout}"
+    );
+}
