@@ -971,6 +971,19 @@ async function start() {
   offerPush().catch(() => {});
 }
 
+// The keyboard open, marked on the page so the screen leaves out the
+// home-indicator inset the keyboard covers: iOS keeps safe-area-inset-bottom
+// the same either way, so it is told by the visual viewport, which the
+// keyboard shortens, against the window, which it leaves alone.
+function followKeyboard() {
+  const keyboardOpen = Math.round(window.visualViewport.height) < window.innerHeight;
+  document.documentElement.classList.toggle("keyboard", keyboardOpen);
+}
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", followKeyboard);
+  followKeyboard();
+}
+
 // Safari pinches to zoom with these whatever the viewport says.
 for (const name of ["gesturestart", "gesturechange"]) {
   document.addEventListener(name, (event) => event.preventDefault(), { passive: false });
