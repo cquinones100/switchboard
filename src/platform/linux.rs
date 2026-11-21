@@ -19,6 +19,8 @@ pub const NAME: &str = "Linux";
 /// Where Homebrew on Linux puts rustup's `cargo`, which it leaves off the
 /// PATH.
 pub const RUSTUP_DIRS: [&str; 1] = ["/home/linuxbrew/.linuxbrew/opt/rustup/bin"];
+/// Where Tailscale's command line is when it isn't on the PATH.
+pub const TAILSCALE_PATHS: [&str; 1] = ["/usr/sbin/tailscale"];
 
 // ── Secrets ─────────────────────────────────────────────────────────────────
 

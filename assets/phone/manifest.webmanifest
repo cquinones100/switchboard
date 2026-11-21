@@ -1,0 +1,13 @@
+{
+  "name": "Switchboard",
+  "short_name": "Switchboard",
+  "description": "Your Claude tabs, answered from your phone",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#11121a",
+  "theme_color": "#11121a",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

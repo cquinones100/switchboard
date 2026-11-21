@@ -998,7 +998,7 @@ struct Seen {
     interrupted: Option<i64>,
 }
 
-fn timestamp_ms(entry: &Value) -> i64 {
+pub fn timestamp_ms(entry: &Value) -> i64 {
     entry
         .get("timestamp")
         .and_then(Value::as_str)
