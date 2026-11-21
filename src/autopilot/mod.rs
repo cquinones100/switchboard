@@ -49,8 +49,9 @@
 //! queue-and-clean's landing on the default branch takes as yes to the push
 //! once the review loop ended on two clean rounds of the change (and, in
 //! Switchboard's own clone, src/dev.rs, `switchboard leak-check` finds
-//! nothing), and which the review loop reads to fix
-//! medium findings without asking; "Ask before landing" unmarks them. After
+//! nothing), and which the review loop reads to settle
+//! medium findings without asking (as it recommends, or with
+//! `review_take_recommended` off by fixing them); "Ask before landing" unmarks them. After
 //! such a landing, `switchboard land-lock autolanded` marks the tab
 //! `@autopilot_autoland`, shown "landed without asking" in the sidebar once
 //! it has landed, and adds "Landed <hash>: <item>" to the notifications

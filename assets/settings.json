@@ -1585,6 +1585,13 @@
     "default": true
   },
   {
+    "key": "review_take_recommended",
+    "category": "Safety",
+    "label": "Review loop takes its recommended choice without asking",
+    "description": "/review-loop settles each medium finding, and each low a confirmation round finds, as it would recommend, fixing it or leaving it as a known gap, and lists each in its final report with what it did and why, so you can overturn one there; off, it asks about each with Fix it or Leave it, its recommendation first",
+    "default": true
+  },
+  {
     "key": "review_parallel",
     "category": "Safety",
     "label": "Review from three angles at once",

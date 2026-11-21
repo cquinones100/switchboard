@@ -221,7 +221,7 @@ pub fn land_question(leak_checked: bool) -> (String, Vec<String>) {
     (
         "Land its tabs on their target branch without asking to push?".into(),
         vec![
-            "Skipped: the question before each push, and medium review findings, fixed without asking".into(),
+            "Skipped: the question before each push, and medium review findings, settled as the review loop recommends (or, with its setting off, fixed) without asking".into(),
             kept.into(),
             asked.into(),
             "Told after each landing, in the notifications and on Slack".into(),
