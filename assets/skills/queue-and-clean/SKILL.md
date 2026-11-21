@@ -11,6 +11,7 @@ allowed-tools:
   - Bash(switchboard show *)
   - Bash(switchboard set *)
   - Bash(switchboard setting review_security)
+  - Bash(switchboard setting review_take_recommended)
   - Bash(switchboard setting apply_after_landing)
   - Bash(switchboard apply-actions *)
   - Bash(switchboard landing)
