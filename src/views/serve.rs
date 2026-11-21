@@ -448,7 +448,7 @@ impl Server {
                         slot.opts.insert(PR_VIEW.into(), "1".into());
                     }
                 }
-                Err(e) => self.say(None, &format!("Couldn't open it beside this pane: {e}")),
+                Err(e) => self.say(None, &format!("Couldn't open it in the side panel: {e}")),
             }
         } else {
             self.open_beside(pane, PR_VIEW, command, VIEW_PERCENT);

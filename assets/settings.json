@@ -927,22 +927,22 @@
   {
     "key": "spare_hints",
     "category": "Tabs and status bar",
-    "label": "Hints beside a narrow pane",
-    "description": "The columns right of a lone pane narrowed by Widest a lone pane gets list, centered in them, what the pane can open, each its key and a click that does what the key does: the tab's note, a split to the right, the PR and the ticket when the tab has one (in Claude's place with UX 2.0 on), and a link read beside the pane, with how to widen the pane under them; nothing shows where they don't fit. Off, those columns are the plain sunken surface",
+    "label": "Hints in the side panel",
+    "description": "The side panel, the columns right of a lone pane narrowed by Widest a lone pane gets, lists, centered in it, what the pane can open, each its key and a click that does what the key does: the tab's note, a split to the right, the PR and the ticket when the tab has one (in Claude's place with UX 2.0 on), and a link read beside the pane, with how to widen the pane under them; nothing shows where they don't fit. Off, the side panel is the plain sunken surface",
     "default": true
   },
   {
     "key": "views_beside_narrow_pane",
     "category": "Tabs and status bar",
-    "label": "Open views beside a narrow pane",
-    "description": "With a tab's one pane narrowed by Widest a lone pane gets and at least 80 columns spare at its right, M-d's diff, lazygit, and the PR and ticket views that open in Claude's place open in those columns instead, the pane keeping its width beside them (the diff takes Diff's share beside a narrow pane, narrowing the pane while it is open); the same key, q or M-w closes the view and the tab is one narrow pane again. With something already beside the pane, they open in its place, but for the PR view (M-v), which closes what is there and takes its columns, the pane keeping the width it had. With fewer columns spare, they open in its place. Off, they always open in the pane's place",
+    "label": "Open views in the side panel",
+    "description": "With a tab's one pane narrowed by Widest a lone pane gets and at least 80 columns spare at its right, M-d's diff, lazygit, and the PR and ticket views that open in Claude's place open in the side panel instead, the pane keeping its width beside it (the diff takes Diff's share in the side panel, narrowing the pane while it is open); the same key, q or M-w closes the view and the tab is one narrow pane again. With something already in the side panel, they open in its place, but for the PR view (M-v), which closes what is there and takes its columns, the pane keeping the width it had. With fewer columns spare, they open in its place. Off, they always open in the pane's place",
     "default": true
   },
   {
     "key": "diff_beside_share",
     "category": "Tabs and status bar",
-    "label": "Diff's share beside a narrow pane",
-    "description": "How much of the width beside the sidebar M-d's diff takes when it opens beside a narrow lone pane: half, two thirds or three quarters, the pane narrowed to the rest while the diff is open and given its own width back when it closes, or the spare columns alone, the pane keeping its width. Where the spare columns already give the diff more, it takes them. Dragging the line between them resizes for that diff alone",
+    "label": "Diff's share in the side panel",
+    "description": "How much of the width beside the sidebar M-d's diff takes when it opens in the side panel: half, two thirds or three quarters, the pane narrowed to the rest while the diff is open and given its own width back when it closes, or the side panel alone, the pane keeping its width. Where the side panel already gives the diff more, it takes it. Dragging the line between them resizes for that diff alone",
     "choices": [
       {
         "value": "50",
@@ -958,7 +958,7 @@
       },
       {
         "value": "spare",
-        "label": "the spare columns"
+        "label": "the side panel"
       }
     ],
     "default": "75"
@@ -966,15 +966,15 @@
   {
     "key": "boxes_beside_narrow_pane",
     "category": "Tabs and status bar",
-    "label": "Open boxes beside a narrow pane",
-    "description": "With a tab's one pane narrowed by Widest a lone pane gets, a box about the tab (its links, pictures and the tabs it mentions, answering its Claude, which note is its, naming or renaming it, its menu and its full title, sending its Claude's last reply on, Work on this item) opens as a pane in the empty columns at the pane's right, as tall as they are, the hints there hidden while it is open; every other box, a message and a notification among them, goes in the middle of the screen. With too few columns spare it goes in the middle of the screen too. Off, every box goes in the middle of the screen",
+    "label": "Open boxes in the side panel",
+    "description": "With a tab's one pane narrowed by Widest a lone pane gets, a box about the tab (its links, pictures and the tabs it mentions, answering its Claude, which note is its, naming or renaming it, its menu and its full title, sending its Claude's last reply on, Work on this item) opens as a pane in the side panel, the empty columns at the pane's right, as tall as they are, the hints there hidden while it is open; every other box, a message and a notification among them, goes in the middle of the screen. With too few columns spare it goes in the middle of the screen too. Off, every box goes in the middle of the screen",
     "default": true
   },
   {
     "key": "images_beside_pane",
     "category": "Tabs and status bar",
-    "label": "Show images beside a narrow pane",
-    "description": "With a tab's one pane narrowed by Widest a lone pane gets, a picture Claude or a skill shows you (switchboard look) is drawn as a pane in the empty columns at the pane's right, two or more stacked top to bottom with their names, the hints there hidden while they show; M-Esc or a click on them closes them, and with more than fit the wheel over them and M-PgDn and M-PgUp page through them. Asked for from a tab not in front, they wait beside its pane until the tab is. With too few columns spare, a split, more than six pictures or a terminal that draws no images, they open in the desktop's viewer, as a video or a PDF always does. Off, they always open in the desktop's viewer",
+    "label": "Show images in the side panel",
+    "description": "With a tab's one pane narrowed by Widest a lone pane gets, a picture Claude or a skill shows you (switchboard look) is drawn as a pane in the side panel, the empty columns at the pane's right, two or more stacked top to bottom with their names, the hints there hidden while they show; M-Esc or a click on them closes them, and with more than fit the wheel over them and M-PgDn and M-PgUp page through them. Asked for from a tab not in front, they wait for its side panel until the tab is. With too few columns spare, a split, more than six pictures or a terminal that draws no images, they open in the desktop's viewer, as a video or a PDF always does. Off, they always open in the desktop's viewer",
     "default": true
   },
   {
@@ -1658,7 +1658,7 @@
     "key": "ctrl_w_panes",
     "category": "Help",
     "label": "C-w then h, j, k or l moves between panes",
-    "description": "C-w followed by h, j, k or l moves to the pane on that side, as in Vim, which itself still gets C-w; C-w twice sends one to the pane. In mission control, C-w and h or l move between a view's side panel, list and the pane beside it, and C-w and j or k to the next or last section a view stacks in its list. Off, C-w reaches the pane as it is, deleting a word in a shell or Claude's prompt, and a mission control view's list keeps the keys",
+    "description": "C-w followed by h, j, k or l moves to the pane on that side, as in Vim, which itself still gets C-w; C-w twice sends one to the pane. In mission control, C-w and h or l move between a view's left panel, list and the pane beside it, and C-w and j or k to the next or last section a view stacks in its list. Off, C-w reaches the pane as it is, deleting a word in a shell or Claude's prompt, and a mission control view's list keeps the keys",
     "default": true
   },
   {

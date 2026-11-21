@@ -76,4 +76,4 @@ If something is off, fix it and render again, into a fresh folder, so old images
 switchboard look "$OUT"/*.png
 ```
 
-shows up to six of them beside the tab's pane where there is room, and otherwise opens them in the desktop's image viewer (Preview on macOS). In the final message, list every PNG with its full absolute path, in order, each with its label. Mention any files the plan skipped.
+shows up to six of them in the tab's side panel, beside its pane, where there is room, and otherwise opens them in the desktop's image viewer (Preview on macOS). In the final message, list every PNG with its full absolute path, in order, each with its label. Mention any files the plan skipped.
