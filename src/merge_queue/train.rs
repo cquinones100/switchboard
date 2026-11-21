@@ -40,6 +40,21 @@
 //! the queue until something in it changes, and so do a push of a train or
 //! a merge failing `TRIES` times in a row, tried again on each step until
 //! then. Every way a train ends deletes its branch.
+//!
+//! While a train is under test, a step also builds the train ahead, as
+//! GitHub's merge queue does: the next group (a split's other half first)
+//! merged onto the train under test's commit and pushed to a branch of its
+//! own, so its CI runs beside that one's, a CI run taking long enough that
+//! testing one train at a time held a dozen PRs for half an hour. Nothing
+//! looks at its checks until it is the train under test, so its failure on
+//! top of a train that then fails drops nothing. Once every PR of the
+//! train under test merged, with the default branch on the tree that train
+//! tested, the train ahead becomes the train under test, its CI counting as
+//! it stands. Any other end of the train under test (red, the default
+//! branch moved, a PR taken out, the queue held), or a PR of the train
+//! ahead taken out, ends the train ahead: its run cancelled, its branch
+//! deleted, its PRs back in line (a split's behind the splits there are).
+//! There is one train ahead at most.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -97,6 +112,9 @@ pub trait Forge {
     async fn run_finished(&self, run: &str) -> Result<bool>;
     /// Runs a GitHub Actions run's failed jobs again.
     async fn rerun(&self, run: &str) -> Result<()>;
+    /// Cancels the GitHub Actions runs on a commit that haven't ended,
+    /// which deleting their branch doesn't.
+    async fn cancel(&self, commit: &str) -> Result<()>;
     /// A link to a GitHub Actions run, for what is said of a red train.
     fn run_url(&self, run: &str) -> String;
 }
@@ -182,6 +200,30 @@ impl Forge for GitHub {
         Ok(())
     }
 
+    async fn cancel(&self, commit: &str) -> Result<()> {
+        use crate::integrations::github;
+        let path = format!(
+            "repos/{}/actions/runs?head_sha={commit}&per_page=100",
+            self.repo
+        );
+        let answer = github::rest("GET", &path, None, SOURCE).await?;
+        let runs = answer
+            .get("workflow_runs")
+            .and_then(|r| r.as_array())
+            .cloned()
+            .unwrap_or_default();
+        for run in runs {
+            let ended = run.get("status").and_then(|s| s.as_str()) == Some("completed");
+            let Some(id) = run.get("id").and_then(|i| i.as_u64()).filter(|_| !ended) else {
+                continue;
+            };
+            let path = format!("repos/{}/actions/runs/{id}/cancel", self.repo);
+            // One that ended meanwhile can't be cancelled, which is fine.
+            let _ = github::rest("POST", &path, None, SOURCE).await;
+        }
+        Ok(())
+    }
+
     fn run_url(&self, run: &str) -> String {
         format!("https://github.com/{}/actions/runs/{run}", self.repo)
     }
@@ -250,14 +292,78 @@ pub struct Told {
 /// One step, as the module's comment says, at `now` (ms): what it tells
 /// the PRs' tabs.
 pub async fn step(at: &Repo, forge: &impl Forge, now: i64) -> Result<Vec<Told>> {
+    super::change(&at.common, |q| q.failed = None)?;
     let queue = super::read(&at.common);
-    if let Some(train) = &queue.train {
-        return ride(at, forge, &queue, train, now).await;
+    let mut tell = match &queue.train {
+        Some(train) => ride(at, forge, &queue, train, now).await?,
+        None if queue.held.is_some() || queue.prs.is_empty() => Vec::new(),
+        None => {
+            let mut tell = Vec::new();
+            start(at, forge, &queue, None, now, &mut tell).await?;
+            tell
+        }
+    };
+    // What the train under test did is told even when the train ahead
+    // fails after it, its failure kept for the Landing view.
+    if let Err(e) = ahead_step(at, forge, now, &mut tell).await {
+        super::change(&at.common, |q| q.failed = Some(e.to_string()))?;
     }
-    if queue.held.is_some() || queue.prs.is_empty() {
-        return Ok(Vec::new());
+    Ok(tell)
+}
+
+/// The train ahead's part of a step: ended when it no longer stands,
+/// built when there is none.
+async fn ahead_step(at: &Repo, forge: &impl Forge, now: i64, tell: &mut Vec<Told>) -> Result<()> {
+    let queue = super::read(&at.common);
+    if let Some(ahead) = &queue.ahead {
+        // It stands only on the train under test it was built on, and only
+        // while every PR in it is still queued.
+        let on_its_train = queue.train.as_ref().is_some_and(|t| t.commit == ahead.base);
+        let taken_out = ahead.prs.iter().any(|t| queue.queued(t.number).is_none());
+        if !on_its_train || taken_out {
+            end_ahead(at, forge, &queue, ahead, tell).await?;
+        }
     }
-    start(at, forge, &queue, now).await
+    let queue = super::read(&at.common);
+    if let (Some(train), None, None) = (&queue.train, &queue.ahead, &queue.held) {
+        start(at, forge, &queue, Some(train), now, tell).await?;
+    }
+    Ok(())
+}
+
+/// Ends the train ahead before it was tested on its own: its run
+/// cancelled, its branch deleted, and its PRs back in line, a split's
+/// behind the splits there are.
+async fn end_ahead(
+    at: &Repo,
+    forge: &impl Forge,
+    queue: &Queue,
+    ahead: &Train,
+    tell: &mut Vec<Told>,
+) -> Result<()> {
+    // A run left going would hold a runner for nothing; one that can't be
+    // cancelled ends by itself.
+    let _ = forge.cancel(&ahead.commit).await;
+    delete(&at.common, &ahead.branch);
+    super::change(&at.common, |q| {
+        q.ahead = None;
+        let back: Vec<u64> = ahead
+            .prs
+            .iter()
+            .map(|t| t.number)
+            .filter(|n| q.queued(*n).is_some())
+            .collect();
+        if ahead.split && !back.is_empty() {
+            q.splits.push(back);
+        }
+    })?;
+    for tested in &ahead.prs {
+        if queue.queued(tested.number).is_some() {
+            let words = "back in line: the train ahead it was in ended before it was tested".into();
+            tell.push(told(queue, tested.number, words));
+        }
+    }
+    Ok(())
 }
 
 /// A PR's entry as `Told`, when it is still queued.
@@ -285,14 +391,28 @@ fn drop_pr(at: &Repo, number: u64, why: String, now: i64, tell: &mut Vec<Told>) 
     Ok(())
 }
 
-async fn start(at: &Repo, forge: &impl Forge, queue: &Queue, now: i64) -> Result<Vec<Told>> {
-    let mut tell = Vec::new();
+/// Builds the next train and pushes it: on the default branch as origin has
+/// it, or, given the train under test (`on`), on that train's commit, as
+/// the train ahead.
+async fn start(
+    at: &Repo,
+    forge: &impl Forge,
+    queue: &Queue,
+    on: Option<&Train>,
+    now: i64,
+    // Pushed to as it goes, so what was told survives an error after it.
+    tell: &mut Vec<Told>,
+) -> Result<()> {
     let split = queue.splits.first().cloned();
     let group: Vec<u64> = match &split {
         Some(split) => split.clone(),
         // Every PR in order, so one that isn't ready doesn't hold a place.
         None => queue.prs.iter().map(|p| p.number).collect(),
     };
+    let group: Vec<u64> = group.into_iter().filter(|n| !queue.testing(*n)).collect();
+    if group.is_empty() {
+        return Ok(());
+    }
     // The split is taken out of the queue only once it is tested, or found
     // to have nothing ready, so a step that fails on the way (a request, a
     // push) tries the same split again.
@@ -321,7 +441,7 @@ async fn start(at: &Repo, forge: &impl Forge, queue: &Queue, now: i64) -> Result
                 ) =>
             {
                 let why = "GitHub has no such pull request".to_string();
-                drop_pr(at, number, why, now, &mut tell)?;
+                drop_pr(at, number, why, now, tell)?;
                 continue;
             }
             // A split waits for an answer on every PR in it, so it isn't
@@ -335,14 +455,14 @@ async fn start(at: &Repo, forge: &impl Forge, queue: &Queue, now: i64) -> Result
                 continue;
             }
             PrState::Closed => {
-                drop_pr(at, number, "it was closed".into(), now, &mut tell)?;
+                drop_pr(at, number, "it was closed".into(), now, tell)?;
                 continue;
             }
             PrState::Open => {}
         }
         if pr.base != at.branch {
             let why = format!("it targets {}, not {}", pr.base, at.branch);
-            drop_pr(at, number, why, now, &mut tell)?;
+            drop_pr(at, number, why, now, tell)?;
             continue;
         }
         // A push to a branch of origin runs the workflows the pushed commit
@@ -350,7 +470,7 @@ async fn start(at: &Repo, forge: &impl Forge, queue: &Queue, now: i64) -> Result
         // commits of origin's own branches, each the head that was queued.
         if !pr.from_here {
             let why = "its head is a fork's branch, and a train runs only this repository's".into();
-            drop_pr(at, number, why, now, &mut tell)?;
+            drop_pr(at, number, why, now, tell)?;
             continue;
         }
         if queue.queued(number).map(|q| q.head.as_str()) != Some(pr.head.as_str()) {
@@ -367,7 +487,7 @@ async fn start(at: &Repo, forge: &impl Forge, queue: &Queue, now: i64) -> Result
             Seen::Passed => ready.push((number, pr.head)),
             Seen::Failed { names, .. } => {
                 let why = format!("its own checks failed: {}", names.join(", "));
-                drop_pr(at, number, why, now, &mut tell)?;
+                drop_pr(at, number, why, now, tell)?;
             }
             // A repository with no CI on its PRs (and none required): ready
             // once none has come for `NO_CHECKS`, as wait-ci answers `none`.
@@ -384,10 +504,22 @@ async fn start(at: &Repo, forge: &impl Forge, queue: &Queue, now: i64) -> Result
     }
     if ready.is_empty() {
         super::change(&at.common, consume)?;
-        return Ok(tell);
+        return Ok(());
     }
-    let base_ref = format!("{REFS}/base");
-    let mut specs = vec![format!("+refs/heads/{}:{base_ref}", at.branch)];
+    // The train ahead's base is the train under test's branch, fetched so
+    // its commit is there whatever happened to the clone since it was built.
+    let (base_ref, base_branch) = match on {
+        Some(train) => (format!("{REFS}/train"), train.branch.as_str()),
+        None => (format!("{REFS}/base"), at.branch.as_str()),
+    };
+    let mut specs = vec![format!("+refs/heads/{base_branch}:{base_ref}")];
+    // The train ahead also needs the default branch, to tell a PR that
+    // conflicts with it from one that conflicts only with the train under
+    // test, which isn't decided yet.
+    let main_ref = format!("{REFS}/base");
+    if on.is_some() {
+        specs.push(format!("+refs/heads/{}:{main_ref}", at.branch));
+    }
     specs.extend(
         ready
             .iter()
@@ -395,8 +527,14 @@ async fn start(at: &Repo, forge: &impl Forge, queue: &Queue, now: i64) -> Result
     );
     fetch(&at.common, &specs)?;
     let base = git(&at.common, &["rev-parse", &base_ref])?;
+    if on.is_some_and(|t| t.commit != base) {
+        return Err(anyhow!("{base_branch} isn't the train under test's commit"));
+    }
     let mut tip = base.clone();
     let mut prs: Vec<Tested> = Vec::new();
+    // A split's PRs that wait on the train under test stay a split, so a
+    // suspect from a red train is still tested apart from the line.
+    let mut waiting: Vec<u64> = Vec::new();
     for (number, head) in ready {
         let fetched = git(&at.common, &["rev-parse", &format!("{REFS}/pr-{number}")])?;
         if fetched != head {
@@ -404,10 +542,22 @@ async fn start(at: &Repo, forge: &impl Forge, queue: &Queue, now: i64) -> Result
             // train takes it once its checks pass.
             continue;
         }
-        match merged_onto(&at.common, &tip, &head, number)? {
+        match merged_onto(&at.common, &tip, &head, number, on.is_some())? {
             Some(commit) => {
                 tip = commit;
                 prs.push(Tested { number, head });
+            }
+            None if on.is_some() => {
+                // On top of a train not yet decided, only a conflict with
+                // the default branch itself drops it; one with the PRs
+                // ahead waits until they merge or fail.
+                let main = git(&at.common, &["rev-parse", &main_ref])?;
+                if merged_onto(&at.common, &main, &head, number, true)?.is_none() {
+                    let why = format!("it doesn't merge cleanly onto {}", at.branch);
+                    drop_pr(at, number, why, now, tell)?;
+                } else {
+                    waiting.push(number);
+                }
             }
             None => {
                 let why = match prs.as_slice() {
@@ -415,20 +565,24 @@ async fn start(at: &Repo, forge: &impl Forge, queue: &Queue, now: i64) -> Result
                     ahead => format!(
                         "it doesn't merge cleanly onto {} with {} ahead of it",
                         at.branch,
-                        ahead
-                            .iter()
-                            .map(|t| format!("#{}", t.number))
-                            .collect::<Vec<_>>()
-                            .join(", ")
+                        numbered(&ahead.iter().map(|t| t.number).collect::<Vec<_>>())
                     ),
                 };
-                drop_pr(at, number, why, now, &mut tell)?;
+                drop_pr(at, number, why, now, tell)?;
             }
         }
     }
+    let keep_waiting = |q: &mut Queue| {
+        if split.is_some() && !waiting.is_empty() {
+            q.splits.insert(0, waiting.clone());
+        }
+    };
     if prs.is_empty() {
-        super::change(&at.common, consume)?;
-        return Ok(tell);
+        super::change(&at.common, |q| {
+            consume(q);
+            keep_waiting(q);
+        })?;
+        return Ok(());
     }
     let branch = format!("ci/train-{}", &tip[..12.min(tip.len())]);
     if let Err(e) = push(&at.common, &format!("{tip}:refs/heads/{branch}")) {
@@ -440,7 +594,17 @@ async fn start(at: &Repo, forge: &impl Forge, queue: &Queue, now: i64) -> Result
                 q.push_failures = 0;
             }
         })?;
-        return Ok(tell);
+        return Ok(());
+    }
+    let words = match on {
+        Some(under) => format!(
+            "testing next on {branch}, on top of {}",
+            numbered(&under.prs.iter().map(|t| t.number).collect::<Vec<_>>())
+        ),
+        None => format!("testing on {branch}"),
+    };
+    for tested in &prs {
+        tell.push(told(queue, tested.number, words.clone()));
     }
     let train = Train {
         branch,
@@ -448,14 +612,28 @@ async fn start(at: &Repo, forge: &impl Forge, queue: &Queue, now: i64) -> Result
         commit: tip,
         prs,
         since: now,
+        split: split.is_some(),
         ..Train::default()
     };
     super::change(&at.common, |q| {
-        q.train = Some(train);
+        match on {
+            Some(_) => q.ahead = Some(train),
+            None => q.train = Some(train),
+        }
         q.push_failures = 0;
         consume(q);
+        keep_waiting(q);
     })?;
-    Ok(tell)
+    Ok(())
+}
+
+/// PR numbers as `#1, #2`.
+fn numbered(numbers: &[u64]) -> String {
+    numbers
+        .iter()
+        .map(|n| format!("#{n}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 async fn ride(
@@ -604,6 +782,7 @@ async fn ride(
                 end(None)?;
                 return Ok(tell);
             }
+            let mut all_merged = true;
             for tested in &train.prs {
                 let number = tested.number;
                 let pr = forge.pr(number).await?;
@@ -613,6 +792,7 @@ async fn ride(
                 }
                 if pr.state == PrState::Closed {
                     drop_pr(at, number, "it was closed".into(), now, &mut tell)?;
+                    all_merged = false;
                     break;
                 }
                 if pr.head != tested.head {
@@ -621,6 +801,7 @@ async fn ride(
                         number,
                         "its head moved during its train, so it waits until it is queued again at its new head".into(),
                     ));
+                    all_merged = false;
                     break;
                 }
                 let merged = forge.merge(number, &tested.head).await;
@@ -668,10 +849,57 @@ async fn ride(
                     words: format!("merged by the merge queue from {}", train.branch),
                 });
             }
-            end(None)?;
+            let promoted = match &queue.ahead {
+                // One of its PRs taken out ends it instead, in the train
+                // ahead's part of the step.
+                Some(ahead)
+                    if all_merged
+                        && ahead.base == train.commit
+                        && ahead
+                            .prs
+                            .iter()
+                            .all(|t| super::read(&at.common).queued(t.number).is_some()) =>
+                {
+                    // A check that fails (a fetch) promotes nothing: the train
+                    // ahead is built again, and what merged is still told.
+                    promote(at, train).await.unwrap_or(None)
+                }
+                _ => None,
+            };
+            if let Some(base) = promoted {
+                // The train ahead becomes the train under test, its CI
+                // counting as it stands: its base is now what the default
+                // branch holds.
+                delete(&at.common, &train.branch);
+                super::change(&at.common, |q| {
+                    q.train = q.ahead.take().map(|ahead| Train { base, ..ahead });
+                })?;
+                if let Some(ahead) = &queue.ahead {
+                    for tested in &ahead.prs {
+                        let words = format!("testing on {}", ahead.branch);
+                        tell.push(told(queue, tested.number, words));
+                    }
+                }
+            } else {
+                end(None)?;
+            }
         }
     }
     Ok(tell)
+}
+
+/// Where the default branch is once a train's PRs all merged, when it holds
+/// the tree the train tested, so the train ahead, built on that train's
+/// commit, tested what merging it will leave; `None` otherwise, which
+/// rebuilds it.
+async fn promote(at: &Repo, train: &Train) -> Result<Option<String>> {
+    fetch(
+        &at.common,
+        &[format!("+refs/heads/{}:{REFS}/base", at.branch)],
+    )?;
+    let base = git(&at.common, &["rev-parse", &format!("{REFS}/base")])?;
+    let tree = |commit: &str| git(&at.common, &["rev-parse", &format!("{commit}^{{tree}}")]);
+    Ok((tree(&base)? == tree(&train.commit)?).then_some(base))
 }
 
 fn git(common: &Path, args: &[&str]) -> Result<String> {
@@ -698,8 +926,16 @@ fn delete(common: &Path, branch: &str) {
 }
 
 /// `head` merged onto `tip`, a commit with both as parents, or `None` when
-/// they conflict.
-fn merged_onto(common: &Path, tip: &str, head: &str, number: u64) -> Result<Option<String>> {
+/// they conflict. The train ahead's say so, so the halves of a red train,
+/// the second built on the first, are never that train's commit again,
+/// whose failed runs GitHub would show on it.
+fn merged_onto(
+    common: &Path,
+    tip: &str,
+    head: &str,
+    number: u64,
+    ahead: bool,
+) -> Result<Option<String>> {
     let out = Command::new("git")
         .arg("-C")
         .arg(common)
@@ -722,7 +958,10 @@ fn merged_onto(common: &Path, tip: &str, head: &str, number: u64) -> Result<Opti
         .unwrap_or("")
         .trim()
         .to_string();
-    let message = format!("Merge #{number} into the merge queue's train");
+    let message = match ahead {
+        true => format!("Merge #{number} into the merge queue's train ahead"),
+        false => format!("Merge #{number} into the merge queue's train"),
+    };
     let mut cmd = Command::new("git");
     cmd.arg("-C")
         .arg(common)

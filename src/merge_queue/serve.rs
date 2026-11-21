@@ -107,8 +107,10 @@ impl Server {
                     }
                     Err(e) => Err(e),
                 };
-                let failed = told.as_ref().err().cloned();
-                let _ = super::change(&common, |q| q.failed = failed);
+                // A step that went through keeps what it recorded itself.
+                if let Err(e) = &told {
+                    let _ = super::change(&common, |q| q.failed = Some(e.clone()));
+                }
                 let _ = tx.send(Event::MergeQueue(MergeQueueEvent::Stepped { common, told }));
             });
         }

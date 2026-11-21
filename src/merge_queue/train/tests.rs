@@ -39,6 +39,12 @@ struct Fake {
     stale: Mutex<u32>,
     /// How many times a failed run is still running its other jobs.
     still_running: Mutex<u32>,
+    /// The commits whose runs were cancelled.
+    cancelled: Mutex<Vec<String>>,
+    /// Commits whose CI still runs.
+    running: Mutex<Vec<String>>,
+    /// Fail asking for the required checks after this many more asks.
+    required_fails_after: Mutex<Option<u32>>,
 }
 
 impl Forge for Fake {
@@ -60,12 +66,26 @@ impl Forge for Fake {
     }
 
     async fn required(&self, _branch: &str) -> Result<Option<Vec<String>>> {
+        {
+            let mut after = self.required_fails_after.lock().unwrap();
+            match *after {
+                Some(0) => {
+                    *after = None;
+                    return Err(anyhow!("GitHub answered 502"));
+                }
+                Some(n) => *after = Some(n - 1),
+                None => {}
+            }
+        }
         Ok(self.required.lock().unwrap().clone())
     }
 
     async fn checks(&self, sha: &str, _required: Option<&[String]>) -> Result<Seen> {
         if self.no_checks.lock().unwrap().iter().any(|h| h == sha) {
             return Ok(Seen::Nothing);
+        }
+        if self.running.lock().unwrap().iter().any(|h| h == sha) {
+            return Ok(Seen::Running);
         }
         let a_head = self.prs.lock().unwrap().values().any(|p| p.head == sha);
         let fails = git(
@@ -106,6 +126,11 @@ impl Forge for Fake {
             return Err(anyhow!("GitHub answered 403"));
         }
         self.reruns.lock().unwrap().push(run.to_string());
+        Ok(())
+    }
+
+    async fn cancel(&self, commit: &str) -> Result<()> {
+        self.cancelled.lock().unwrap().push(commit.to_string());
         Ok(())
     }
 
@@ -240,6 +265,9 @@ impl World {
                 rerun_refused: Mutex::new(false),
                 stale: Mutex::new(0),
                 still_running: Mutex::new(0),
+                cancelled: Mutex::new(Vec::new()),
+                running: Mutex::new(Vec::new()),
+                required_fails_after: Mutex::new(None),
             },
             work,
             _scratch: scratch,
@@ -314,6 +342,14 @@ impl World {
             .unwrap_or_default()
     }
 
+    fn in_ahead(&self) -> Vec<u64> {
+        let queue = self.queue();
+        queue
+            .ahead
+            .map(|t| t.prs.iter().map(|p| p.number).collect())
+            .unwrap_or_default()
+    }
+
     fn merged(&self) -> Vec<u64> {
         self.fake.merged.lock().unwrap().clone()
     }
@@ -323,6 +359,13 @@ impl World {
     }
 }
 
+/// What a step told the tabs of PRs it dropped.
+fn dropped(told: Vec<Told>) -> Vec<Told> {
+    told.into_iter()
+        .filter(|t| t.words.starts_with("dropped"))
+        .collect()
+}
+
 #[test]
 fn a_train_of_two_green_prs_merges_both_in_order() {
     let Some(w) = World::new("green") else {
@@ -330,10 +373,11 @@ fn a_train_of_two_green_prs_merges_both_in_order() {
     };
     w.pr(1, "one.txt", "1\n");
     w.pr(2, "two.txt", "2\n");
-    assert!(w.step().is_empty());
+    let told = w.step();
     assert_eq!(w.in_train(), [1, 2]);
     let train = w.queue().train.unwrap();
     assert!(w.branches().contains(&train.branch), "the train is pushed");
+    assert_eq!(told[1].words, format!("testing on {}", train.branch));
     assert!(w.step().is_empty());
     assert!(w.merged().is_empty(), "one green look isn't enough");
     assert!(w.queue().train.unwrap().passed);
@@ -586,7 +630,7 @@ fn only_the_head_queued_and_no_fork_s_branch_goes_in_a_train() {
     w.pr(4, "four.txt", "4\n");
     w.pr(5, "five.txt", "5\n");
     w.pr(6, "six.txt", "6\n");
-    let told = w.step();
+    let told = dropped(w.step());
     assert_eq!(
         w.in_train(),
         [2, 4, 5, 6],
@@ -642,7 +686,7 @@ fn a_pr_that_conflicts_with_one_ahead_is_dropped_from_the_train() {
     };
     w.pr(1, "shared.txt", "one\n");
     w.pr(2, "shared.txt", "two\n");
-    let told = w.step();
+    let told = dropped(w.step());
     assert_eq!(w.in_train(), [1]);
     assert_eq!(told.len(), 1);
     assert_eq!(
@@ -788,4 +832,229 @@ fn a_rerun_github_refuses_drops_as_before() {
     w.step();
     assert!(w.queue().train.is_none());
     assert!(w.queue().status(1).starts_with("dropped CI failed"));
+}
+
+#[test]
+fn eight_prs_run_as_two_trains_at_once_and_merge_in_order_with_no_third_run() {
+    let Some(w) = World::new("ahead") else {
+        return;
+    };
+    for n in 1..=8 {
+        w.pr(n, &format!("{n}.txt"), &format!("{n}\n"));
+    }
+    let told = w.step();
+    assert_eq!(w.in_train(), [1, 2, 3, 4]);
+    assert_eq!(w.in_ahead(), [5, 6, 7, 8]);
+    let queue = w.queue();
+    let (train, ahead) = (queue.train.unwrap(), queue.ahead.unwrap());
+    assert_eq!(ahead.base, train.commit, "built on the train under test");
+    assert!(
+        w.branches().contains(&ahead.branch),
+        "the train ahead is pushed"
+    );
+    assert_eq!(
+        told[7].words,
+        format!("testing next on {}, on top of #1, #2, #3, #4", ahead.branch)
+    );
+    assert_eq!(
+        queue_status(&w, 5),
+        format!("testing next {}", ahead.branch)
+    );
+    w.step();
+    let told = w.step();
+    assert_eq!(w.merged(), [1, 2, 3, 4]);
+    let now = w.queue().train.unwrap();
+    assert_eq!(now.branch, ahead.branch, "the train ahead is under test");
+    assert_eq!(
+        now.commit, ahead.commit,
+        "as it was tested, not built again"
+    );
+    assert!(w.queue().ahead.is_none());
+    assert_eq!(
+        told.last().unwrap().words,
+        format!("testing on {}", ahead.branch)
+    );
+    w.step();
+    w.step();
+    assert_eq!(w.merged(), [1, 2, 3, 4, 5, 6, 7, 8]);
+    assert!(!w.queue().busy());
+    assert_eq!(w.branches(), "");
+    let tree = |at: &str| {
+        crate::worktree::git_at(&w.fake.origin, &["rev-parse", &format!("{at}^{{tree}}")])
+    };
+    assert_eq!(tree("main").unwrap(), tree(&ahead.commit).unwrap());
+}
+
+fn queue_status(w: &World, number: u64) -> String {
+    w.queue().status(number)
+}
+
+#[test]
+fn a_red_train_cancels_the_one_ahead_and_its_halves_run_at_once() {
+    let Some(w) = World::new("ahead-red") else {
+        return;
+    };
+    w.pr(1, "one.txt", "1\n");
+    w.pr(2, "fail.txt", "2\n");
+    w.pr(3, "three.txt", "3\n");
+    w.pr(4, "four.txt", "4\n");
+    w.pr(5, "five.txt", "5\n");
+    w.pr(6, "six.txt", "6\n");
+    w.step();
+    let ahead = w.queue().ahead.unwrap();
+    assert_eq!(w.in_ahead(), [5, 6]);
+    w.step();
+    assert!(w.queue().ahead.is_some(), "kept while the train runs again");
+    let told = w.step();
+    let queue = w.queue();
+    assert!(queue.train.is_none() && queue.ahead.is_none());
+    assert_eq!(
+        *w.fake.cancelled.lock().unwrap(),
+        std::slice::from_ref(&ahead.commit)
+    );
+    assert!(!w.branches().contains(&ahead.branch));
+    assert!(
+        told.iter()
+            .any(|t| t.number == 5 && t.words.starts_with("back in line"))
+    );
+    assert_eq!(queue.splits, [vec![1, 2], vec![3, 4]]);
+    assert_eq!(queue.line(5), Some(5), "behind the split");
+    w.step();
+    assert_eq!(w.in_train(), [1, 2]);
+    assert_eq!(w.in_ahead(), [3, 4], "the other half, on top of the first");
+    let queue = w.queue();
+    assert_eq!(queue.ahead.unwrap().base, queue.train.unwrap().commit);
+    assert!(queue.splits.is_empty());
+}
+
+#[test]
+fn a_split_ahead_ended_goes_back_behind_the_splits() {
+    let Some(w) = World::new("ahead-split") else {
+        return;
+    };
+    w.pr(1, "one.txt", "1\n");
+    w.pr(2, "fail.txt", "2\n");
+    w.pr(3, "three.txt", "3\n");
+    w.pr(4, "four.txt", "4\n");
+    for _ in 0..4 {
+        w.step();
+    }
+    assert_eq!((w.in_train(), w.in_ahead()), (vec![1, 2], vec![3, 4]));
+    // [1, 2] fails twice, splitting again; [3, 4] waits behind its halves.
+    w.step();
+    w.step();
+    assert_eq!(w.queue().splits, [vec![1], vec![2], vec![3, 4]]);
+}
+
+#[test]
+fn a_train_ahead_that_fails_waits_for_the_one_under_test() {
+    let Some(w) = World::new("ahead-waits") else {
+        return;
+    };
+    for n in 1..=4 {
+        w.pr(n, &format!("{n}.txt"), &format!("{n}\n"));
+    }
+    w.pr(5, "fail.txt", "5\n");
+    w.step();
+    assert_eq!((w.in_train(), w.in_ahead()), (vec![1, 2, 3, 4], vec![5]));
+    let under = w.queue().train.unwrap().commit;
+    w.fake.running.lock().unwrap().push(under);
+    for _ in 0..3 {
+        w.step();
+    }
+    let queue = w.queue();
+    assert_eq!(
+        queue.status(5),
+        format!("testing next {}", queue.ahead.unwrap().branch)
+    );
+    assert!(queue.dropped.is_empty() && w.fake.reruns.lock().unwrap().is_empty());
+    w.fake.running.lock().unwrap().clear();
+    w.step();
+    w.step();
+    assert_eq!(w.merged(), [1, 2, 3, 4]);
+    assert_eq!(w.in_train(), [5]);
+    for _ in 0..3 {
+        w.step();
+    }
+    assert!(w.queue().status(5).starts_with("dropped CI failed"));
+}
+
+#[test]
+fn main_moving_under_both_trains_builds_both_again() {
+    let Some(w) = World::new("ahead-moved") else {
+        return;
+    };
+    for n in 1..=6 {
+        w.pr(n, &format!("{n}.txt"), &format!("{n}\n"));
+    }
+    w.step();
+    let ahead = w.queue().ahead.unwrap();
+    w.step();
+    // A merge from outside the queue.
+    assert!(git(
+        &w.work,
+        &["checkout", "-q", "-B", "outside", "origin/main"]
+    ));
+    fs::write(w.work.join("outside.txt"), "x\n").unwrap();
+    assert!(git(&w.work, &["add", "."]));
+    assert!(git(&w.work, &["commit", "-q", "-m", "outside"]));
+    assert!(git(&w.work, &["push", "-q", "origin", "HEAD:main"]));
+    w.step();
+    let queue = w.queue();
+    assert!(queue.train.is_none() && queue.ahead.is_none());
+    assert!(w.fake.cancelled.lock().unwrap().contains(&ahead.commit));
+    w.step();
+    assert_eq!((w.in_train(), w.in_ahead()), (vec![1, 2, 3, 4], vec![5, 6]));
+    let queue = w.queue();
+    assert_ne!(queue.ahead.unwrap().commit, ahead.commit, "built again");
+    for _ in 0..4 {
+        w.step();
+    }
+    assert_eq!(w.merged(), [1, 2, 3, 4, 5, 6]);
+}
+
+#[test]
+fn a_pr_that_conflicts_only_with_the_train_under_test_waits_for_it() {
+    let Some(w) = World::new("ahead-conflict") else {
+        return;
+    };
+    w.pr(1, "one.txt", "1\n");
+    w.pr(2, "shared.txt", "two\n");
+    w.pr(3, "three.txt", "3\n");
+    w.pr(4, "four.txt", "4\n");
+    w.pr(5, "shared.txt", "five\n");
+    let told = dropped(w.step());
+    assert_eq!(w.in_train(), [1, 2, 3, 4]);
+    assert!(told.is_empty() && w.queue().ahead.is_none());
+    assert_eq!(w.queue().status(5), "queued 2 of 5", "not dropped yet");
+    w.step();
+    w.step();
+    assert_eq!(w.merged(), [1, 2, 3, 4]);
+    w.step();
+    assert_eq!(
+        w.queue().status(5),
+        "dropped it doesn't merge cleanly onto main",
+        "once #2 merged, the conflict is main's"
+    );
+}
+
+#[test]
+fn a_train_ahead_that_can_t_be_built_keeps_what_the_train_under_test_told() {
+    let Some(w) = World::new("ahead-fails") else {
+        return;
+    };
+    w.pr(1, "fail.txt", "1\n");
+    w.step();
+    w.pr(2, "two.txt", "2\n");
+    *w.fake.required_fails_after.lock().unwrap() = Some(1);
+    let told = w.step();
+    assert_eq!(told.len(), 1);
+    assert!(told[0].words.contains("running its failed jobs again"));
+    let queue = w.queue();
+    assert!(queue.ahead.is_none());
+    assert_eq!(queue.failed.as_deref(), Some("GitHub answered 502"));
+    w.step();
+    assert!(w.queue().failed.is_none(), "the next step clears it");
+    w.step();
+    assert_eq!(w.in_train(), [2]);
 }

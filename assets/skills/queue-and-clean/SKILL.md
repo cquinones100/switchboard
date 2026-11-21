@@ -339,7 +339,7 @@ while :; do
 done
 ```
 
-`land-lock pr-status` says where the PR is (`queued <place> of <count>`, `testing ci/train-<id>`, `merged`, `dropped <why>`, or `held <why> · queued <place> of <count>` while something stops the whole queue), and the queue says on the tab's phase what happens to it. When it exits:
+`land-lock pr-status` says where the PR is (`queued <place> of <count>`, `testing ci/train-<id>`, `testing next ci/train-<id>` in the train ahead of the one under test, `merged`, `dropped <why>`, or `held <why> · queued <place> of <count>` while something stops the whole queue), and the queue says on the tab's phase what happens to it. When it exits:
 
 - `merged`: the queue merged it. Go to "Deploy and test".
 - `closed`: leave the worktree alone and reply `queue-and-clean: fail: PR closed without merging`.
