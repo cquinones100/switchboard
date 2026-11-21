@@ -291,7 +291,8 @@ const reminded = (sx, y, text, bg) => {
 };
 // THE SHEET Remind me opens, at the screen's foot: When, the workspace's five times each with the clock time it means (the one
 // chosen lit, its time in the accent), and a field for a time typed in, which the server reads; What for, the note, optional.
-// Set sets it (a typed time over a chosen one) and the sheet closes; Cancel, × or a tap above it leaves the tab as it is. On a
+// Set, at the right as the affirmative choice is, sets it (a typed time over a chosen one) and the sheet closes; Cancel at the
+// left, × or a tap above it leaves the tab as it is. On a
 // tab with a reminder it is titled Change the reminder, its time chosen and its note filled in. A time the server can't read
 // is answered under the field in the workspace's words, the sheet kept open with what was typed.
 const TIMES = [['In 20 minutes', '10:01'], ['In 1 hour', '10:41'], ['In 3 hours', '12:41'], ['Tomorrow at 9:00', 'Sun 9:00'], ['Next Monday at 9:00', 'Mon 9:00']];
@@ -308,7 +309,7 @@ const sheet = (sx, num, name, o) => {
   if (err.length) { err.forEach((l, i) => put(sx + 3, ny + i, l, 'r', '', 'E')); ny += err.length + 1; } else ny += 1;
   label(sx + 3, ny, 'What for', 'd'); R(sx + 32, ny, 'optional', 'f', '', 'E');
   input(sx + 3, ny + 1, 30, o.note, 'a note for when it comes due');
-  button(sx + 4, ny + 3, 13, '  Set', true); button(sx + 19, ny + 3, 13, '  Cancel');
+  button(sx + 4, ny + 3, 13, '  Cancel'); button(sx + 19, ny + 3, 13, '  Set', true);
 };
 
 // 1. REMIND ME IN THE MENU: a long press on a finished tab with no reminder; Remind me between Mark seen and Close tab.
