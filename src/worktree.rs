@@ -334,6 +334,82 @@ pub fn ensure_worktree(worktree: &Path, branch: &str, purpose: &Purpose) -> Resu
 
 pub use switchboard_plugin_api::sdk::{git_at, git_ok};
 
+/// How long a config write waits on another process's lock of the file.
+const CONFIG_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// `git config <args>` in `dir`, tried again while another process holds
+/// the config file's lock (several `wt` started at once each write the
+/// main clone's), for up to 10 seconds; whether it succeeded. Any other
+/// failure, as an `--unset` of a key that isn't there, is answered at once.
+pub fn git_config(dir: &Path, args: &[&str]) -> bool {
+    let deadline = std::time::Instant::now() + CONFIG_LOCK_WAIT;
+    loop {
+        // In English whatever the locale, so the lock's message reads alike.
+        let Ok(out) = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .arg("config")
+            .args(args)
+            .env("LC_ALL", "C")
+            .env_remove("LANGUAGE")
+            .stdin(Stdio::null())
+            .output()
+        else {
+            return false;
+        };
+        if out.status.success() {
+            return true;
+        }
+        let locked = String::from_utf8_lossy(&out.stderr).contains("could not lock config file");
+        if !locked || std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+/// What a start is about to make, so a failure before Claude starts can
+/// take back the worktree and the branch it made, leaving a second run to
+/// start clean; a worktree or branch that was there before is kept.
+pub struct Making {
+    root: PathBuf,
+    path: PathBuf,
+    branch: String,
+    new_worktree: bool,
+    new_branch: bool,
+}
+
+impl Making {
+    /// Read before the worktree is made.
+    pub fn before(root: &Path, path: &Path, branch: &str) -> Making {
+        Making {
+            root: root.to_path_buf(),
+            path: path.to_path_buf(),
+            branch: branch.to_string(),
+            new_worktree: !path.exists(),
+            new_branch: !branch_exists(root, branch),
+        }
+    }
+
+    /// Removes what this start made.
+    pub fn undo(&self) {
+        if self.new_worktree {
+            git_ok(
+                &self.root,
+                &[
+                    "worktree",
+                    "remove",
+                    "--force",
+                    &self.path.to_string_lossy(),
+                ],
+            );
+        }
+        if self.new_branch {
+            git_ok(&self.root, &["branch", "-D", &self.branch]);
+        }
+    }
+}
+
 /// Runs git in `dir` with its output on this program's stderr, so it can't
 /// pollute anything a caller parses, and its own errors shown or not;
 /// whether it succeeded.
@@ -677,14 +753,10 @@ pub fn ago_words(secs: i64) -> String {
 /// `--track` insists the start point be covered by the remote's fetch
 /// refspec, which a single-branch or partial clone's is not.
 pub fn set_upstream(root: &Path, branch: &str, remote: &str, remote_branch: &str) {
-    git_ok(
-        root,
-        &["config", &format!("branch.{branch}.remote"), remote],
-    );
-    git_ok(
+    git_config(root, &[&format!("branch.{branch}.remote"), remote]);
+    git_config(
         root,
         &[
-            "config",
             &format!("branch.{branch}.merge"),
             &format!("refs/heads/{remote_branch}"),
         ],

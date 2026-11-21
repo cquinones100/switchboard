@@ -2743,6 +2743,69 @@ fn issue_world_answering(
 }
 
 #[test]
+fn wt_waits_out_another_wts_lock_on_the_main_clones_config_and_takes_back_what_it_made_when_the_lock_outlasts_the_wait()
+ {
+    let (w, _fake, clone) = issue_world(
+        "wt-lock",
+        json!({ "tickets": "github", "issueLabel": "autopilot" }),
+    );
+    let lock = clone.join(".git/config.lock");
+    let branch = "issue/12-make-the-widget-blue";
+    let worktree = clone.join(".claude/worktrees/issue-12-make-the-widget-blue");
+    let branch_there = || {
+        !w.git_fails(
+            &clone,
+            &[
+                "show-ref",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{branch}"),
+            ],
+        )
+    };
+    let args = ["worktree-from-ticket", "--no-claude", "--issue", "12"];
+
+    // Held past the wait: it fails as before, leaving nothing it made.
+    std::fs::write(&lock, "").unwrap();
+    let held = w.run(&clone, &args);
+    assert_eq!(held.status.code(), Some(1));
+    assert!(
+        stderr(&held).contains(&format!(
+            "could not record the issue in git config (branch.{branch}.wtnIssue)"
+        )),
+        "{}",
+        stderr(&held)
+    );
+    assert!(!worktree.exists(), "its worktree taken back");
+    assert!(!branch_there(), "its branch taken back");
+
+    // Released while it waits: it records the issue and starts.
+    let child = w
+        .command(BIN)
+        .args(args)
+        .current_dir(&clone)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let until = common::deadline(std::time::Duration::from_secs(10));
+    while !worktree.exists() {
+        assert!(std::time::Instant::now() < until, "no worktree made");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // Held a moment more, so its first write finds the lock.
+    std::thread::sleep(std::time::Duration::from_millis(500) * common::patience());
+    std::fs::remove_file(&lock).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(w.git(&worktree, &["branch", "--show-current"]), branch);
+    assert_eq!(
+        w.git(&clone, &["config", &format!("branch.{branch}.wtnIssue")]),
+        "o/r#12"
+    );
+}
+
+#[test]
 fn wt_takes_an_issue_by_its_number_where_the_repository_keeps_its_work_in_github_issues() {
     let (w, _fake, clone) = issue_world(
         "wt-issue",
