@@ -1488,6 +1488,39 @@ impl Server {
         self.dirty_session(session);
     }
 
+    /// Moving right out of the sidebar: to the tab's pane along its left
+    /// edge, as moving right from beyond the window's left would, the one
+    /// last used among several there, else the top one.
+    fn sidebar_leave_right(&mut self, session: &str) {
+        let Some(s) = self.session(session) else {
+            return;
+        };
+        let target = self.tabs.get(&s.current).and_then(|tab| {
+            if tab.zoomed {
+                return None;
+            }
+            let edge = tab
+                .layout
+                .at_edge(s.spread_for(tab), crate::mux::Direction::Left);
+            if edge.contains(&tab.active) {
+                return Some(tab.active);
+            }
+            // The one that gave up the keys last; the top one of equals.
+            let left_at = |p: &PaneId| self.panes.get(p).and_then(|s| s.left_at);
+            edge.iter().copied().reduce(|best, p| {
+                if left_at(&p) > left_at(&best) {
+                    p
+                } else {
+                    best
+                }
+            })
+        });
+        self.sidebar_leave(session);
+        if let Some(pane) = target {
+            self.focus_pane(pane);
+        }
+    }
+
     /// A pane of this tab took the focus: its session's sidebar gives it up.
     pub fn sidebar_leave_tab(&mut self, tab: TabId) {
         if let Some(name) = self.session_of_tab(tab).map(|s| s.name.clone()) {
@@ -1602,7 +1635,7 @@ impl Server {
         match action {
             Action::SelectPane(dir) => {
                 if *dir == crate::mux::Direction::Right {
-                    self.sidebar_leave(&session);
+                    self.sidebar_leave_right(&session);
                 }
                 (true, true)
             }

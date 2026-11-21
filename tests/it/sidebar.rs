@@ -3283,3 +3283,123 @@ fn a_status_chosen_from_a_tabs_menu_moves_its_row_and_outlives_a_restart() {
     });
     client.wait_text("set by you");
 }
+
+/// The id of the first tab's pane with the keys.
+fn active_pane(list: &Value) -> String {
+    tabs(list)[0]["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["active"] == true)
+        .and_then(|p| p["id"].as_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// A lone pane capped at 80 columns with M-v's view beside it, the view
+/// having the keys: the pane's id and the view's.
+fn lone_pane_and_pr_view(server: &TestServer, client: &mut TestClient) -> (String, String) {
+    client.wait_text("$");
+    let (pane, _) = first_pane(server);
+    wait_list(server, "the pane capped", |l| pane_cols(l) == 80);
+    client.send(b"\x1bv");
+    let list = wait_list(server, "the PR view beside the pane", |l| {
+        let panes = tabs(l)[0]["panes"].as_array().unwrap().clone();
+        panes.len() == 2 && panes[1]["options"]["@pr_view"] == "1" && panes[1]["active"] == true
+    });
+    let view = tabs(&list)[0]["panes"][1]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    (pane, view)
+}
+
+#[test]
+fn c_w_l_goes_round_from_a_view_beside_a_lone_pane_through_the_sidebar_to_the_pane() {
+    let server = TestServer::start();
+    settings(&server, json!({"ux2": true, "lone_pane_width": "80"}));
+    let mut client = server.attach(240, 36);
+    let (pane, view) = lone_pane_and_pr_view(&server, &mut client);
+
+    client.send(b"\x17l");
+    wait_list(&server, "the sidebar with the keys", focused);
+    client.send(b"\x17l");
+    wait_list(&server, "the pane with the keys", |l| {
+        !focused(l) && active_pane(l) == pane
+    });
+    client.send(b"\x17l");
+    wait_list(&server, "the view with the keys", |l| {
+        !focused(l) && active_pane(l) == view
+    });
+}
+
+#[test]
+fn c_w_l_from_the_sidebar_goes_to_the_left_of_two_panes() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(200, 36);
+    client.wait_text("$");
+    let (left_pane, _) = first_pane(&server);
+    server.ok(&["split", "-R"]);
+    wait_list(&server, "the right pane with the keys", |l| {
+        tabs(l)[0]["panes"].as_array().unwrap().len() == 2 && active_pane(l) != left_pane
+    });
+
+    client.send(b"\x17l");
+    wait_list(&server, "the sidebar with the keys", focused);
+    client.send(b"\x17l");
+    wait_list(&server, "the left pane with the keys", |l| {
+        !focused(l) && active_pane(l) == left_pane
+    });
+}
+
+#[test]
+fn m_s_twice_from_a_view_beside_a_lone_pane_gives_the_keys_back_to_the_view() {
+    let server = TestServer::start();
+    settings(&server, json!({"ux2": true, "lone_pane_width": "80"}));
+    let mut client = server.attach(240, 36);
+    let (_, view) = lone_pane_and_pr_view(&server, &mut client);
+
+    client.send(b"\x1bs");
+    wait_list(&server, "the sidebar with the keys", focused);
+    client.send(b"\x1bs");
+    wait_list(&server, "the view with the keys again", |l| {
+        !focused(l) && active_pane(l) == view
+    });
+}
+
+#[test]
+fn c_w_l_from_the_sidebar_goes_to_the_left_edge_pane_last_used() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(200, 40);
+    client.wait_text("$");
+    // A over B on the left, C over D on the right; B had the keys before C
+    // and D did, so B, not the top one, is the left edge's last used.
+    let (a, _) = first_pane(&server);
+    let c = server
+        .ok(&["split", "-t", &a, "-R", "-d"])
+        .trim()
+        .to_string();
+    let b = server
+        .ok(&["split", "-t", &a, "-D", "-d"])
+        .trim()
+        .to_string();
+    server.ok(&["select-pane", "-t", &b]);
+    server.ok(&["select-pane", "-t", &c]);
+    let d = server
+        .ok(&["split", "-t", &c, "-D", "-d"])
+        .trim()
+        .to_string();
+    server.ok(&["select-pane", "-t", &d]);
+    wait_list(&server, "the bottom right pane with the keys", |l| {
+        active_pane(l) == d
+    });
+
+    client.send(b"\x17l");
+    wait_list(&server, "the sidebar with the keys", focused);
+    client.send(b"\x17l");
+    wait_list(&server, "the bottom left pane with the keys", |l| {
+        !focused(l) && active_pane(l) == b
+    });
+}
