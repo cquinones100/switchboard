@@ -889,7 +889,7 @@ pub struct Yours {
     created: String,
 }
 
-const YOUR_TICKETS: &str = "query($after: String) { viewer { \
+pub(super) const YOUR_TICKETS: &str = "query($after: String) { viewer { \
     assignedIssues(first: 50, after: $after, orderBy: createdAt) { \
     nodes { identifier title createdAt state { name } } pageInfo { hasNextPage endCursor } } } }";
 const YOUR_PROJECTS: &str = "query($after: String) { projects(first: 50, after: $after, orderBy: createdAt, \
