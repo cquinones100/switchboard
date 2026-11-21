@@ -1252,7 +1252,7 @@ vm.runInContext(`
   ];
   state.tabs = [
     { index: 4, pane: "%4", name: "full titles", state: "done", needs: true },
-    { index: 3, pane: "%3", name: "M-d uncommitted", state: "working", remind: { at: Math.floor(Date.now() / 1000) + 80 * 60, note: "check the deploy", due: false } },
+    { index: 3, pane: "%3", name: "M-d uncommitted", state: "working", wait: "Edit diffview.lua", remind: { at: Math.floor(Date.now() / 1000) + 80 * 60, note: "check the deploy", due: false } },
   ];
   render();
 `, ctx);
@@ -1314,7 +1314,7 @@ const out = [];
     assert_eq!(
         lines,
         [
-            "row=⠹3M-d uncommitted⏰ in 1h 20m · check the deploy",
+            "row=⠹3M-d uncommittedEdit diffview.lua⏰ in 1h 20m · check the deploy",
             "none=Mark seen,Remind me,Close tab",
             "sheet=Remind me about tab 4 full titles",
             "times=In 20 minutes10:01,In 1 hour10:41,In 3 hours12:41,Tomorrow at 9:00Sun 9:00,Next Monday at 9:00Mon 9:00",

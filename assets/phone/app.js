@@ -177,7 +177,7 @@ const wordsOf = (q) => q.toLowerCase().split(/\s+/).filter(Boolean);
 const holds = (text, words) => words.every((w) => String(text || "").toLowerCase().includes(w));
 // Whether a tab's number, name, repository, branch or what it is doing hold
 // every word typed, as the sidebar's / matches.
-const matches = (tab, words) => holds([tab.index, tab.name, tab.repo, tab.branch, reminded(tab) || doing(tab)].join(" "), words);
+const matches = (tab, words) => holds([tab.index, tab.name, tab.repo, tab.branch, doing(tab), reminded(tab) || ""].join(" "), words);
 
 function groups(words) {
   const needs = [], working = [], idle = [];
@@ -230,7 +230,7 @@ function lit(text, words) {
 // A tab matched by its repository or branch alone says which, under what
 // it is doing.
 function where(tab, words) {
-  if (!words.length || holds([tab.index, tab.name, reminded(tab) || doing(tab)].join(" "), words)) return null;
+  if (!words.length || holds([tab.index, tab.name, doing(tab), reminded(tab) || ""].join(" "), words)) return null;
   const by = [["repository ", tab.repo], ["branch ", tab.branch]].filter(([, v]) => v && words.some((w) => v.toLowerCase().includes(w)));
   return el("span", { class: "sub where-line" }, by.flatMap(([what, v], i) => [i ? " · " : "", el("span", { class: "faint" }, what), ...lit(v, words)]));
 }
@@ -286,9 +286,8 @@ function drawerList() {
             { class: "row" + (state.menu && state.menu.pane === number(t) ? " held" : ""), "aria-haspopup": "menu", "data-pane": number(t) },
             el("span", { class: "mark " + kind }, m),
             el("span", { class: "name" }, el("span", { class: "num " + hue(t) }, lit(String(t.index), words)), lit(t.name || "", words)),
-            reminded(t)
-              ? el("span", { class: "sub remind" }, el("span", { class: "clock", "aria-label": "Reminder" }, "⏰"), " ", lit(reminded(t), words))
-              : el("span", { class: "sub" }, lit(doing(t), words)),
+            el("span", { class: "sub" }, lit(doing(t), words)),
+            reminded(t) ? el("span", { class: "sub remind" }, el("span", { class: "clock", "aria-label": "Reminder" }, "⏰"), " ", lit(reminded(t), words)) : null,
             where(t, words),
           ),
           t,
