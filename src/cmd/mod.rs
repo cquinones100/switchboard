@@ -209,6 +209,11 @@ pub const COMMANDS: &[Command] = &[
         about: "The Slack relay",
     },
     Command {
+        name: "phone",
+        run: crate::phone::cli::main,
+        about: "The phone app: your Claude tabs answered from your phone, on your tailnet alone",
+    },
+    Command {
         name: "update-main",
         run: update_main::main,
         about: "Bring the main clone's default branch up to date",
@@ -395,6 +400,7 @@ pub const COMMANDS: &[Command] = &[
 /// `--help`; any other asked so says what it is (its line in `help`)
 /// rather than taking `--help` for a file, a link, a tab or a note.
 const OWN_HELP: &[&str] = &[
+    "phone",
     "demo",
     "diff-story",
     "respawn",
@@ -459,6 +465,12 @@ pub const SUBCOMMANDS: &[(&str, &[&str])] = &[
         "slack-relay",
         &[
             "start", "stop", "status", "run", "relay", "notify", "sends", "help",
+        ],
+    ),
+    (
+        "phone",
+        &[
+            "start", "stop", "status", "run", "pair", "devices", "revoke", "help",
         ],
     ),
 ];
@@ -561,6 +573,7 @@ mod tests {
         let usage_of = |name| match name {
             "land-lock" => include_str!("land_lock.rs"),
             "slack-relay" => include_str!("../relay/cli.rs"),
+            "phone" => include_str!("../phone/cli.rs"),
             other => panic!("{other} has no usage to check"),
         };
         for (name, subs) in SUBCOMMANDS {

@@ -287,3 +287,47 @@ pub fn set_option_as_alt(app: TerminalApp) -> Result<()> {
 pub fn clone_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
     os::clone_tree(from, to)
 }
+
+// ── Tailscale ───────────────────────────────────────────────────────────────
+
+/// Tailscale's command line: `SWITCHBOARD_TAILSCALE` where the tests set
+/// it, else `tailscale` on the PATH, else where the platform's app keeps it
+/// (on macOS the app's own binary, which runs as its command line). Only
+/// the phone app (src/phone) uses Tailscale.
+fn tailscale_bin() -> Result<PathBuf> {
+    if let Some(bin) = std::env::var_os("SWITCHBOARD_TAILSCALE").filter(|b| !b.is_empty()) {
+        return Ok(PathBuf::from(bin));
+    }
+    crate::util::which("tailscale")
+        .or_else(|| {
+            os::TAILSCALE_PATHS
+                .iter()
+                .map(PathBuf::from)
+                .find(|p| p.is_file())
+        })
+        .ok_or_else(|| anyhow::anyhow!("Tailscale isn't installed"))
+}
+
+fn tailscale(args: &[&str]) -> Result<String> {
+    crate::util::run(&tailscale_bin()?.to_string_lossy(), args)
+}
+
+/// `tailscale status --json`: whether it runs, this computer's addresses
+/// and name on the tailnet, and the names it may get certificates for.
+pub fn tailscale_status() -> Result<serde_json::Value> {
+    Ok(serde_json::from_str(&tailscale(&["status", "--json"])?)?)
+}
+
+/// `tailscale cert`: the certificate for `domain` (this computer's
+/// `*.ts.net` name) and its key, written to the files given.
+pub fn tailscale_cert(domain: &str, cert: &std::path::Path, key: &std::path::Path) -> Result<()> {
+    let cert = format!("--cert-file={}", cert.display());
+    let key = format!("--key-file={}", key.display());
+    tailscale(&["cert", &cert, &key, domain]).map(|_| ())
+}
+
+/// `tailscale whois --json <ip>`: the device at a tailnet address and who
+/// is signed in on it.
+pub fn tailscale_whois(ip: &str) -> Result<serde_json::Value> {
+    Ok(serde_json::from_str(&tailscale(&["whois", "--json", ip])?)?)
+}
