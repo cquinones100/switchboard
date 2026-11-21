@@ -768,7 +768,7 @@ fn review_loop_runs_twenty_rounds_hands_free_and_five_otherwise() {
         "`#<n> <severity> <file>:<line> <title>: <what triage did with it>`",
         "The question is one sentence naming the findings still open by number and severity",
         "`reported` (a low left for the report, or a finding for someone else's PR)",
-        "each finding in them one a line, numbered with `#` from 1 under each heading",
+        "carrying on from the last round's list and never starting again, so no number names two findings",
     ] {
         assert!(report.contains(said), "{said}");
     }
