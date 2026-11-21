@@ -411,20 +411,29 @@ fn with_ux2_the_boards_side_panel_shows_the_chosen_items_plan_under_its_stages()
     .unwrap();
     // Wide enough for the pane beside the board's columns.
     client.resize(230, 40);
-    // Down and up the board's cards until the pane beside it says `text`
-    // (with its stages, once the item's tab has opened: before, its card is
-    // under Next up, with none).
+    // The item's card has its stages only once its tab has opened: before,
+    // it is under Next up, with none.
+    wait("a tab for the first item", &server, || {
+        opened(&server)
+            .iter()
+            .any(|t| t["options"]["@autopilot_item"] == "First thing")
+    });
+    // Down and up the board's cards until the pane beside it says `text`,
+    // under the card's stages for the first item's plan.
     let mut seek = |text: &str| {
-        for step in 0..80 {
+        let deadline = common::deadline(Duration::from_secs(40));
+        let mut step = 0;
+        loop {
             let screen = client.screen();
             let has = |t: &str| screen.iter().any(|l| l.contains(t));
             if has(text) && (text != "Plan - First thing" || has("leak check")) {
                 return screen;
             }
+            assert!(Instant::now() < deadline, "{text} never shown: {screen:#?}");
             client.type_text(if (step / 2) % 2 == 0 { "j" } else { "k" });
+            step += 1;
             std::thread::sleep(Duration::from_millis(250));
         }
-        panic!("{text} never shown: {:#?}", client.screen());
     };
     let screen = seek("Plan - First thing");
     let line_of = |s: &str| {
