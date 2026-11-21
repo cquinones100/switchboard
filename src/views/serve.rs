@@ -503,7 +503,10 @@ impl Server {
         );
         // The label shown counts only for a repository keeping its work in
         // Linear, whose kind it names; a name you gave counts whatever it is.
-        found.extend(ticket::in_name(&self.tab_label(tab)).filter(|_| provider == Some("linear")));
+        found.extend(
+            ticket::in_name(&self.tab_label_for_tickets(tab))
+                .filter(|_| provider == Some("linear")),
+        );
         ticket::first_on(found)
     }
 
@@ -523,7 +526,7 @@ impl Server {
                 .get("@tab_name")
                 .and_then(|n| ticket::id_in_name(n))
                 .or_else(|| ticket::id_in_name(&t.name))
-                .or_else(|| ticket::id_in_name(&self.tab_label(tab)))
+                .or_else(|| ticket::id_in_name(&self.tab_label_for_tickets(tab)))
         };
         ticket::id_for_dir(dir)
             .or_else(|| self.chosen_ticket(tab).and_then(linear))
@@ -556,7 +559,7 @@ impl Server {
                     .get("@tab_name")
                     .and_then(|n| ticket::in_name(n))
                     .or_else(|| ticket::in_name(&t.name))
-                    .or_else(|| ticket::in_name(&self.tab_label(tab)))
+                    .or_else(|| ticket::in_name(&self.tab_label_for_tickets(tab)))
                     .is_some())
     }
 

@@ -288,6 +288,18 @@ impl Server {
         label::label(self.tab_own_name(tab), &facts, self.tab_pr(tab))
     }
 
+    /// The tab's label as the ticket lookups read it for a ticket's ID:
+    /// `tab_label` with its directory's name in place of a PR's title,
+    /// which is someone's words (`Fix UTF-8 paths`), never a ticket.
+    pub fn tab_label_for_tickets(&self, tab: TabId) -> String {
+        let shown = self.tab_names.shown.get(&tab);
+        let facts = shown
+            .map(|s| s.untitled.clone().unwrap_or_else(|| s.label.clone()))
+            .or_else(|| self.tabs.get(&tab).map(|t| t.auto_name.clone()))
+            .unwrap_or_default();
+        label::label(self.tab_own_name(tab), &facts, self.tab_pr(tab))
+    }
+
     /// The tab's label with no name of its own and no PR number: its
     /// ticket and title, else its current PR's title, else its directory's
     /// name.

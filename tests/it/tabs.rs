@@ -466,7 +466,7 @@ mod from_the_services {
                     200,
                     json!({"data": {"repository": {"pullRequests": {"nodes": [{
                         "number": 12345, "url": "https://github.com/acme/widgets/pull/12345",
-                        "title": "Retry failed fetches", "state": "OPEN", "isDraft": false,
+                        "title": "Retry UTF-8 fetches", "state": "OPEN", "isDraft": false,
                         "baseRefName": "main", "headRefName": "retry-failed-fetches",
                         "headRepositoryOwner": {"login": "acme"}
                     }]}}}}),
@@ -495,10 +495,10 @@ mod from_the_services {
         client.wait_text("$");
         client.type_text(&format!("cd {}\r", work.display()));
         client.wait_for("the PR's title", |s| {
-            s[29].ends_with("1:#12345 Retry failed fetches")
+            s[29].ends_with("1:#12345 Retry UTF-8 fetches")
         });
         let tab = first_tab(&server);
-        assert_eq!(tab["label"], "#12345 Retry failed fetches");
+        assert_eq!(tab["label"], "#12345 Retry UTF-8 fetches");
 
         // wt-jump still finds it by the PR's number at the front of its
         // label, from another tab.
@@ -534,6 +534,10 @@ mod from_the_services {
             .unwrap();
         assert!(out.status.success(), "{out:?}");
         assert_eq!(current(&server), pr_tab, "the PR's tab, by its number");
+
+        // The title is someone's words: its UTF-8 is no Linear ticket.
+        server.ok(&["press", "copy-ticket-id"]);
+        client.wait_text("No ticket in this branch or tab name");
     }
 }
 
