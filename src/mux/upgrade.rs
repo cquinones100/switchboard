@@ -1025,6 +1025,7 @@ pub fn adopt(server: &mut Server, handover: Handover) {
                         tab: super::TabId(0),
                         opts: opts.get(&id).cloned().unwrap_or_default(),
                         copy: None,
+                        left_at: None,
                     },
                 );
             }

@@ -397,6 +397,11 @@ pub struct PaneSlot {
     pub tab: TabId,
     pub opts: BTreeMap<String, String>,
     pub copy: Option<CopyMode>,
+    /// When it last gave up the keys to another pane of its tab, for
+    /// moving into the tab from beside it (the sidebar's `C-w l`) to the
+    /// one last used; `None` for a pane that hasn't had them since the
+    /// server started.
+    pub left_at: Option<std::time::Instant>,
 }
 
 /// A drag in progress, by what the press landed on.
@@ -1728,6 +1733,7 @@ impl Server {
                 tab,
                 opts: BTreeMap::new(),
                 copy: None,
+                left_at: None,
             },
         );
         Ok(id)
@@ -2423,6 +2429,9 @@ impl Server {
         if old != pane {
             tab.last_pane = Some(old);
             tab.active = pane;
+            if let Some(slot) = self.panes.get_mut(&old) {
+                slot.left_at = Some(std::time::Instant::now());
+            }
             if tab.zoomed {
                 tab.zoomed = false;
             }
