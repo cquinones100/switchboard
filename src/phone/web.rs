@@ -229,6 +229,7 @@ fn routes(app: Arc<App>) -> Router {
     Router::new()
         .route("/", get(page))
         .route("/app.js", get(|| file("app.js")))
+        .route("/markdown-it.min.js", get(|| file("markdown-it.min.js")))
         .route("/app.css", get(|| file("app.css")))
         .route("/sw.js", get(|| file("sw.js")))
         .route(
@@ -297,6 +298,7 @@ fn before_pairing(path: &str, method: &Method) -> bool {
     matches!(
         path,
         "/" | "/app.js"
+            | "/markdown-it.min.js"
             | "/app.css"
             | "/sw.js"
             | "/manifest.webmanifest"
@@ -433,6 +435,15 @@ async fn file(name: &'static str) -> Response {
         ),
         "app.js" => (
             assets::text("phone/app.js", include_str!("../../assets/phone/app.js")),
+            "text/javascript; charset=utf-8",
+        ),
+        // markdown-it 15.0.3's browser build, as published, for app.js's
+        // `markdown` (its license beside it).
+        "markdown-it.min.js" => (
+            assets::text(
+                "phone/markdown-it.min.js",
+                include_str!("../../assets/phone/markdown-it.min.js"),
+            ),
             "text/javascript; charset=utf-8",
         ),
         "app.css" => (
@@ -1072,6 +1083,7 @@ mod tests {
         for file in [
             "\"/\"",
             "/app.js",
+            "/markdown-it.min.js",
             "/app.css",
             "/icon-180.png",
             "/manifest.webmanifest",
