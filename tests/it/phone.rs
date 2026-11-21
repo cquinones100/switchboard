@@ -761,6 +761,73 @@ for (const prompt of [null, { free: true }]) {
     }
 }
 
+/// The composer's bar (assets/phone/app.css's `.composer`) pads its text box
+/// at the sides alone, so the bar is the text box's height, and the screen
+/// leaves out the home-indicator inset while the keyboard is open.
+#[test]
+fn the_composer_is_its_text_boxs_height() {
+    let css = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/phone/app.css"),
+    )
+    .unwrap();
+    let rule = |selector: &str| {
+        let start = css
+            .find(&format!("\n{selector} {{"))
+            .unwrap_or_else(|| panic!("no {selector} rule"));
+        let body = &css[start..];
+        body[..body.find('}').unwrap()].to_string()
+    };
+    assert!(
+        rule(".composer").contains("padding: 0 12px;"),
+        "{}",
+        rule(".composer")
+    );
+    assert!(
+        rule(".keyboard .screen").contains("padding-bottom: 0;"),
+        "{}",
+        rule(".keyboard .screen")
+    );
+}
+
+/// The keyboard's class (assets/phone/app.js's `followKeyboard`), run in
+/// Node over a stand-in window: set while the visual viewport is shorter than
+/// the window, cleared as it grows back; skipped without Node.
+#[test]
+fn the_keyboard_open_is_told_from_the_visual_viewport() {
+    let script = r#"
+const vm = require("vm");
+const fs = require("fs");
+const classes = new Set();
+const viewport = { height: 800, listeners: [], addEventListener(k, f) { if (k === "resize") this.listeners.push(f); } };
+const ctx = vm.createContext({
+  document: {
+    getElementById: () => null,
+    addEventListener: () => {},
+    documentElement: { classList: { toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)) } },
+  },
+  window: { addEventListener: () => {}, innerHeight: 800, visualViewport: viewport },
+  fetch: () => new Promise(() => {}),
+  console,
+});
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+const resize = (height) => { viewport.height = height; for (const f of viewport.listeners) f(); };
+console.log("closed=" + classes.has("keyboard"));
+resize(470.5);
+console.log("open=" + classes.has("keyboard"));
+resize(800);
+console.log("closed again=" + classes.has("keyboard"));
+"#;
+    let Some(stdout) = run_app_js(script) else {
+        return;
+    };
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        ["closed=false", "open=true", "closed again=false"],
+        "{stdout}"
+    );
+}
+
 /// What the phone's Close tab asks of the server: a Claude tab closed and
 /// logged, with no notification; another pane refused.
 #[test]
