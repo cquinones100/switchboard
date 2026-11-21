@@ -83,7 +83,8 @@ self.addEventListener("push", (event) => {
   event.waitUntil(
     self.registration.showNotification(title, {
       body: data.body || "Waiting on you",
-      tag: "tab-" + (data.tab || ""),
+      // A reminder's push beside the tab's waiting one, never in its place.
+      tag: "tab-" + (data.tab || "") + (data.body ? "-" + data.body.toLowerCase() : ""),
       data: { tab: data.tab || "" },
       icon: "/icon-192.png",
     }),

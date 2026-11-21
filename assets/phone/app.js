@@ -457,8 +457,11 @@ function remindSheet(n) {
     el("button", { class: "menu-option time", role: "radio", "aria-checked": "false", onclick: () => choose(t.label) }, el("span", {}, t.label), el("span", { class: "clock-time" }, t.clock)),
   );
   function choose(label) {
-    chosen = label;
+    light(label);
     typed.value = "";
+  }
+  function light(label) {
+    chosen = label;
     times.forEach((o, i) => {
       const on = offered[i].label === label;
       o.className = "menu-option time" + (on ? " chosen" : "");
@@ -468,6 +471,8 @@ function remindSheet(n) {
   const setIt = () => setReminder(n, (typed.value || "").trim() || chosen, note.value || "", refused);
   const set = el("button", { class: "option lit", onclick: setIt }, "Set");
   typed.addEventListener("keydown", (e) => { if (e.key === "Enter") setIt(); });
+  // A time typed takes the place of the one chosen, which goes dark.
+  typed.addEventListener("input", () => { if (chosen) light(""); });
   const box = el(
     "div",
     { class: "box sheet", role: "dialog", "aria-label": (change ? "Change the reminder for tab " : "Remind me about tab ") + tab.index + " " + (tab.name || "") },
