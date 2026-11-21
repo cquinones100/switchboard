@@ -73,7 +73,7 @@
 //!                     reason
 //!   --include-low     ask Codex to report low-severity findings too
 //!   --round <step>    run the round as one of review-loop's (`start` its
-//!                     first, `next` each after it), as "The loop's rounds"
+//!                     first, `next` each after it, `more` to raise its cap, `stop` to end it there), as "The loop's rounds"
 //!                     below says
 //!   --no-rules        leave the rules out of the prompt (see `review_rules`);
 //!                     so does the review_rules setting turned off
@@ -136,12 +136,24 @@
 //! The loop's rounds: with `--round`, this counts review-loop's rounds and
 //! applies its stop rule from the same streak the record comes from, so the
 //! skill and the record can't disagree on how many clean rounds there were.
-//! The loop's place, `<round> <clean rounds before it>`, is kept in the
-//! clone's `review-loop-round` (`start` begins it again, `next` refuses
-//! when no loop is under way). A round after a clean one is the
+//! The loop's place, `<round> <clean rounds before it> <cap raised by>`, is
+//! kept in the clone's `review-loop-round` (`start` begins it again, `next`
+//! refuses when no loop is under way), and the branch's rounds across loops,
+//! `<branch> <total> <cap raised by>`, in its `review-loop-rounds`, taken
+//! away when the branch lands (`land-lock landed`) or its worktree goes.
+//! A round after a clean one is the
 //! confirmation round, run with `--include-low` whether or not it was given.
-//! The cap is 20 rounds in a tab of autopilot's hands-free mode
-//! (`@autopilot_handsfree`), 5 otherwise. The JSON then ends with `round`,
+//! The cap is 20 rounds of the branch, across loops, in a tab of autopilot's
+//! hands-free mode (`@autopilot_handsfree`), so a tab that runs the loop
+//! again never starts over, and 5 rounds of the loop otherwise; `round` is
+//! counted the same way. A `start` or `next` past the cap reviews nothing
+//! and answers `next` `cap` with `reviewed` false, until `--round more`
+//! raises the cap by 10 (the review-loop question's "Run 10 more rounds"),
+//! printing the new `cap`, and `--round stop` ends the loop there ("Stop
+//! here", "Land as it is"), both taking away the tab's and the Landing
+//! view's mark of the loop waiting at its cap. Each round sets the tab's `@tab_review_round`, as it starts and ends, to
+//! `<round> <cap>`, with ` cap` once the loop waits at it, for the sidebar
+//! and mission control. The JSON then ends with `round`,
 //! `cap`, `cleanRounds` and `next`: `triage` (findings to work through),
 //! `confirm` (the first clean round: run the next), `done` (two clean rounds,
 //! the record written) or `cap` (the cap reached first), and each finding
@@ -398,8 +410,10 @@ fn parse_args(args: &[String]) -> Result<Opts, ExitCode> {
                 opts.round = Some(match value()?.as_str() {
                     "start" => Step::Start,
                     "next" => Step::Next,
+                    "more" => Step::More,
+                    "stop" => Step::Stop,
                     step => {
-                        eprintln!("--round must be start or next, got: {step}");
+                        eprintln!("--round must be start, next, more or stop, got: {step}");
                         return Err(usage());
                     }
                 });
@@ -1953,6 +1967,28 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
     }
     let root_path = PathBuf::from(&root);
     let branch = current_branch()?;
+    // The review's record is kept only for the checkout you are in (below),
+    // and so is the loop's count of its rounds.
+    let own_checkout = opts.dir.is_none() || own_root.as_deref() == Some(root.as_str());
+    let looping = match opts.round {
+        Some(_) if !own_checkout => {
+            return fail(
+                "--round counts the rounds of the checkout you are in, not one named with -C",
+            );
+        }
+        Some(Step::More) => return answer_cap(&root_path, &branch, true),
+        Some(Step::Stop) => return answer_cap(&root_path, &branch, false),
+        Some(step) => Some(loop_of(step, BRANCH_ROUND, Some(&branch))?),
+        None => None,
+    };
+    let hands_free = looping.is_some()
+        && socket::tab_option(crate::autopilot::HANDS_FREE).as_deref() == Some("1");
+    // A branch already at its cap reviews nothing more until you raise it.
+    if let Some(at) = &looping
+        && at.capped(hands_free)
+    {
+        return at_cap(&root_path, at, hands_free);
+    }
     if !opts.dry_run {
         ensure_clean()?;
     }
@@ -2036,18 +2072,6 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
 
     let reviewer = choose_reviewer(opts);
     let claude = reviewer == "claude";
-    // The review's record is kept only for the checkout you are in (below),
-    // and so is the loop's count of its rounds.
-    let own_checkout = opts.dir.is_none() || own_root.as_deref() == Some(root.as_str());
-    let looping = match opts.round {
-        Some(_) if !own_checkout => {
-            return fail(
-                "--round counts the rounds of the checkout you are in, not one named with -C",
-            );
-        }
-        Some(step) => Some(loop_of(step, BRANCH_ROUND)?),
-        None => None,
-    };
     // A round after a clean one confirms it, sweeping the lows too.
     let include_low = opts.include_low || looping.as_ref().is_some_and(|l| l.clean_before > 0);
 
@@ -2117,12 +2141,18 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     if let Some(at) = &looping {
+        show_round(at.shown(hands_free), at.cap(hands_free), "start");
         land_lock::record_at(
             &root_path,
             &[
                 "review",
-                &json!({ "round": at.round, "reviewer": reviewer, "clean_rounds": at.clean_before })
-                    .to_string(),
+                &json!({
+                    "round": at.shown(hands_free),
+                    "cap": at.cap(hands_free),
+                    "reviewer": reviewer,
+                    "clean_rounds": at.clean_before,
+                })
+                .to_string(),
             ],
         );
     }
@@ -2312,7 +2342,12 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
         // record: a streak left by an earlier loop counts for the record,
         // never for this loop's stop rule.
         let done = clean && at.clean_before > 0 && recorded_clean;
-        let clean_rounds = close_round(
+        let Closed {
+            clean_rounds,
+            round,
+            cap,
+            next,
+        } = close_round(
             &mut review,
             at,
             Closing {
@@ -2321,7 +2356,7 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
                 lows_left,
                 include_low,
             },
-            BRANCH_ROUND,
+            hands_free,
         )?;
         let output = tmp.0.join("round.json");
         if fs::write(&output, util::json_pretty(&Value::Object(review.clone()))).is_ok() {
@@ -2333,7 +2368,9 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
             &[
                 "review",
                 &json!({
-                    "round": at.round,
+                    "round": round,
+                    "cap": cap,
+                    "at_cap": next == "cap",
                     "reviewer": reviewer,
                     "findings": findings,
                     "summary": review.get("summary").cloned().unwrap_or(Value::Null),
@@ -2628,9 +2665,14 @@ fn run_ticket(opts: &Opts, ticket: &str) -> Reviewed<ExitCode> {
     let reviewer = choose_reviewer(opts);
     let claude = reviewer == "claude";
     let looping = match opts.round {
-        Some(step) => Some(loop_of(step, &round_file)?),
+        Some(Step::More | Step::Stop) => {
+            return fail("--round more and stop answer a branch's cap, not a ticket's");
+        }
+        Some(step) => Some(loop_of(step, &round_file, None)?),
         None => None,
     };
+    let hands_free = looping.is_some()
+        && socket::tab_option(crate::autopilot::HANDS_FREE).as_deref() == Some("1");
     let include_low = opts.include_low || looping.as_ref().is_some_and(|l| l.clean_before > 0);
 
     let tmp = match TempDir::new() {
@@ -2720,7 +2762,7 @@ fn run_ticket(opts: &Opts, ticket: &str) -> Reviewed<ExitCode> {
                 lows_left,
                 include_low,
             },
-            &round_file,
+            hands_free,
         )?;
     }
 
@@ -2793,21 +2835,20 @@ fn keep_record(clean: bool, confirming: bool, reviewed: &str) -> Reviewed<bool> 
 // ── The loop's rounds (`--round`) ─────────────────────────────────────────
 
 /// The round cap, and the one in a tab of autopilot's hands-free mode, which
-/// gets as far as it can before it has to wait for you.
+/// gets as far as it can before it has to wait for you. The hands-free one
+/// counts a branch's rounds across loops, so a tab that runs the loop again
+/// never starts its count over; the other, and a ticket's, count one loop's.
 const CAP: u32 = 5;
 const HANDS_FREE_CAP: u32 = 20;
+/// How far `--round more` raises the cap.
+const MORE: u32 = 10;
 
 #[derive(Clone, Copy)]
 enum Step {
     Start,
     Next,
-}
-
-/// Where the loop is: the round this one is, and how many clean rounds came
-/// right before it.
-struct Loop {
-    round: u32,
-    clean_before: u32,
+    More,
+    Stop,
 }
 
 /// Where the branch loop's place is kept, and the ticket loop's (`-<key>`
@@ -2816,36 +2857,250 @@ struct Loop {
 const BRANCH_ROUND: &str = "review-loop-round";
 const TICKET_ROUND: &str = "ticket-review-round";
 
-fn loop_of(step: Step, file: &str) -> Reviewed<Loop> {
-    if let Step::Start = step {
-        return Ok(Loop {
-            round: 1,
-            clean_before: 0,
-        });
+/// Where the loop is: the file its place is kept in, the round this one is,
+/// how many clean rounds came right before it and how far you raised its
+/// cap; and, for a branch's loop, the branch and its rounds across loops.
+struct Loop {
+    file: String,
+    branch: Option<String>,
+    round: u32,
+    clean_before: u32,
+    extra: u32,
+    rounds: Rounds,
+}
+
+/// The branch's rounds across loops, kept in the checkout's
+/// `review-loop-rounds` as `<branch> <total> <extra>`, the cap raised by
+/// `extra`; a record of another branch counts as none. Taken away when the
+/// branch lands (`land-lock landed`), and with the worktree's git directory
+/// when the worktree is removed.
+#[derive(Clone, Copy, Default)]
+struct Rounds {
+    total: u32,
+    extra: u32,
+}
+
+impl Loop {
+    /// Whether the cap counts the branch's rounds across loops.
+    fn across(&self, hands_free: bool) -> bool {
+        hands_free && self.branch.is_some()
     }
-    let text = fs::read_to_string(record_path(file)?).unwrap_or_default();
-    let numbers: Vec<u32> = text
-        .split_whitespace()
-        .filter_map(|w| w.parse().ok())
-        .collect();
-    match numbers[..] {
-        [round, clean] => Ok(Loop {
-            round: round + 1,
-            clean_before: clean,
-        }),
-        _ => fail("no review loop is under way here; start one with --round start"),
+
+    /// The cap this tab's loop is held to.
+    fn cap(&self, hands_free: bool) -> u32 {
+        match (self.across(hands_free), hands_free) {
+            (true, _) => HANDS_FREE_CAP + self.rounds.extra,
+            (false, true) => HANDS_FREE_CAP,
+            (false, false) => CAP + self.extra,
+        }
+    }
+
+    /// The round this review is, counted as the cap counts it.
+    fn shown(&self, hands_free: bool) -> u32 {
+        if self.across(hands_free) {
+            self.rounds.total + 1
+        } else {
+            self.round
+        }
+    }
+
+    /// Whether this round would run past the cap.
+    fn capped(&self, hands_free: bool) -> bool {
+        self.shown(hands_free) > self.cap(hands_free)
     }
 }
 
-/// Keeps the loop's place for its next round, or, once it has ended, takes
-/// it away, so a stray `--round next` starts nothing.
-fn keep_loop(round: u32, clean_rounds: u32, next: &str, file: &str) -> Reviewed<()> {
-    let path = record_path(file)?;
-    if matches!(next, "done" | "cap") {
+fn numbers(text: &str) -> Vec<u32> {
+    text.split_whitespace()
+        .filter_map(|w| w.parse().ok())
+        .collect()
+}
+
+fn rounds_of(branch: &str) -> Reviewed<Rounds> {
+    let text = fs::read_to_string(record_path("review-loop-rounds")?).unwrap_or_default();
+    let mut words = text.split_whitespace();
+    if words.next() != Some(branch) {
+        return Ok(Rounds::default());
+    }
+    Ok(match numbers(&words.collect::<Vec<_>>().join(" "))[..] {
+        [total, extra] => Rounds { total, extra },
+        _ => Rounds::default(),
+    })
+}
+
+fn keep_rounds(branch: &str, rounds: Rounds) -> Reviewed<()> {
+    write_record(
+        &record_path("review-loop-rounds")?,
+        &format!("{branch} {} {}", rounds.total, rounds.extra),
+    )
+}
+
+/// Takes the branch's count of rounds away, once it has landed.
+pub(crate) fn forget_rounds() {
+    if let Some(path) = try_run("git", &["rev-parse", "--git-path", "review-loop-rounds"]) {
+        let _ = fs::remove_file(path);
+    }
+}
+
+/// The loop's place in `file`, `<round> <clean rounds> <extra>`, as
+/// `keep_loop` wrote it; `None` with no loop under way.
+fn place(file: &str) -> Reviewed<Option<(u32, u32, u32)>> {
+    let text = fs::read_to_string(record_path(file)?).unwrap_or_default();
+    Ok(match numbers(&text)[..] {
+        [round, clean] => Some((round, clean, 0)),
+        [round, clean, extra] => Some((round, clean, extra)),
+        _ => None,
+    })
+}
+
+/// The loop a round is part of, its place kept in `file`; `branch` names a
+/// branch's loop, whose rounds count across loops.
+fn loop_of(step: Step, file: &str, branch: Option<&str>) -> Reviewed<Loop> {
+    let rounds = match branch {
+        Some(branch) => rounds_of(branch)?,
+        None => Rounds::default(),
+    };
+    let (round, clean_before, extra) = match step {
+        Step::Start => (1, 0, 0),
+        _ => match place(file)? {
+            Some((round, clean, extra)) => (round + 1, clean, extra),
+            None => return fail("no review loop is under way here; start one with --round start"),
+        },
+    };
+    Ok(Loop {
+        file: file.to_string(),
+        branch: branch.map(str::to_string),
+        round,
+        clean_before,
+        extra,
+        rounds,
+    })
+}
+
+/// Keeps the loop's place for its next round, and counts the round in the
+/// branch's total. A loop that is done takes its place away, so a stray
+/// `--round next` starts nothing; a branch's loop at its cap keeps it, so
+/// `--round more` can carry it on, while a ticket's ends there.
+fn keep_loop(at: &Loop, clean_rounds: u32, next: &str) -> Reviewed<()> {
+    if let Some(branch) = &at.branch {
+        keep_rounds(
+            branch,
+            Rounds {
+                total: at.rounds.total + 1,
+                ..at.rounds
+            },
+        )?;
+    }
+    let path = record_path(&at.file)?;
+    if next == "done" || (next == "cap" && at.branch.is_none()) {
         let _ = fs::remove_file(path);
         return Ok(());
     }
-    write_record(&path, &format!("{round} {clean_rounds}"))
+    write_record(&path, &format!("{} {clean_rounds} {}", at.round, at.extra))
+}
+
+/// The tab's `@tab_review_round` as a round starts and ends, `<round> <cap>` and `cap` once the loop waits
+/// at it, which the sidebar and mission control show; taken away once the
+/// loop is done.
+fn show_round(round: u32, cap: u32, next: &str) {
+    if !socket::in_pane() {
+        return;
+    }
+    let value = match next {
+        "done" => String::new(),
+        "cap" => format!("{round} {cap} cap"),
+        _ => format!("{round} {cap}"),
+    };
+    let _ = socket::ask(&["set", "@tab_review_round", &value]);
+}
+
+/// `--round start` or `next` on a branch already at its cap: no review, the
+/// JSON saying so with `next` `cap`, until `--round more` raises it.
+fn at_cap(root: &Path, at: &Loop, hands_free: bool) -> Reviewed<ExitCode> {
+    let (round, cap) = (at.shown(hands_free), at.cap(hands_free));
+    // A loop started at the cap gets a place, so `--round next` carries it
+    // on once the cap is raised.
+    if place(&at.file)?.is_none() || at.round == 1 {
+        write_record(&record_path(&at.file)?, &format!("0 0 {}", at.extra))?;
+    }
+    show_round(round, cap, "cap");
+    land_lock::record_at(
+        root,
+        &[
+            "review",
+            &json!({ "round": round, "cap": cap, "at_cap": true, "clean_rounds": 0 }).to_string(),
+        ],
+    );
+    let answer = json!({
+        "reviewed": false,
+        "summary": format!("The branch is at its round cap ({cap}); nothing was reviewed. Ask the review loop's cap question before going on."),
+        "findings": [],
+        "round": round,
+        "cap": cap,
+        "cleanRounds": 0,
+        "next": "cap",
+    });
+    println!("{}", util::json_pretty(&answer));
+    Ok(ExitCode::SUCCESS)
+}
+
+/// The cap question answered: `--round more` raises the cap by `MORE`, the
+/// branch's and the loop's ("Run 10 more rounds"), and `--round stop` ends
+/// the loop where it is ("Stop here", "Land as it is"). Either way the tab
+/// and the Landing view stop saying the loop waits at its cap. Prints the
+/// round and the cap.
+fn answer_cap(root: &Path, branch: &str, more: bool) -> Reviewed<ExitCode> {
+    let raise = if more { MORE } else { 0 };
+    let rounds = rounds_of(branch)?;
+    let hands_free = socket::tab_option(crate::autopilot::HANDS_FREE).as_deref() == Some("1");
+    // Raised only for a loop waiting at its cap, never ahead of it.
+    let at_cap = if hands_free {
+        rounds.total >= HANDS_FREE_CAP + rounds.extra
+    } else {
+        place(BRANCH_ROUND)?.is_some_and(|(round, _, extra)| round >= CAP + extra)
+    };
+    if more && !at_cap {
+        return fail(
+            "the review loop isn't waiting at its round cap; --round more raises it only there, after the cap question",
+        );
+    }
+    let raised = Rounds {
+        extra: rounds.extra + if hands_free { raise } else { 0 },
+        ..rounds
+    };
+    keep_rounds(branch, raised)?;
+    let place = place(BRANCH_ROUND)?;
+    let (round, clean, extra) = place.unwrap_or((0, 0, 0));
+    let path = record_path(BRANCH_ROUND)?;
+    if !more {
+        let _ = fs::remove_file(path);
+    } else if place.is_some() {
+        write_record(
+            &path,
+            &format!(
+                "{round} {clean} {}",
+                extra + if hands_free { 0 } else { raise }
+            ),
+        )?;
+    }
+    let (shown, cap) = if hands_free {
+        (raised.total, HANDS_FREE_CAP + raised.extra)
+    } else {
+        (round, CAP + extra + raise)
+    };
+    show_round(shown, cap, "answered");
+    land_lock::record_at(
+        root,
+        &[
+            "review",
+            &json!({ "round": shown, "cap": cap, "clean_rounds": 0 }).to_string(),
+        ],
+    );
+    println!(
+        "{}",
+        util::json_pretty(&json!({ "round": shown, "cap": cap }))
+    );
+    Ok(ExitCode::SUCCESS)
 }
 
 /// How a round of the loop came out.
@@ -2861,26 +3116,23 @@ struct Closing {
 
 /// Adds the round's place in the loop to its JSON (`round`, `cap`,
 /// `cleanRounds`, `next`) and each finding's `action`, and keeps the
-/// place for the next round in `file`. The clean rounds in a row it ends
-/// on.
+/// place for the next round, and a branch's count of rounds and the tab's
+/// `@tab_review_round`.
 fn close_round(
     review: &mut Map<String, Value>,
     at: &Loop,
     how: Closing,
-    file: &str,
-) -> Reviewed<u32> {
+    hands_free: bool,
+) -> Reviewed<Closed> {
     let lands_alone = socket::tab_option(crate::mux::server::LAND).as_deref() == Some("1");
-    let cap = if socket::tab_option(crate::autopilot::HANDS_FREE).as_deref() == Some("1") {
-        HANDS_FREE_CAP
-    } else {
-        CAP
-    };
+    let cap = at.cap(hands_free);
+    let round = at.shown(hands_free);
     let clean_rounds = match (how.clean, how.done) {
         (false, _) => 0,
         (true, true) => 2,
         (true, false) => 1,
     };
-    let next = next_step(how.clean, how.done, at.round, cap);
+    let next = next_step(how.clean, how.done, round, cap);
     if let Some(list) = review.get_mut("findings").and_then(Value::as_array_mut) {
         for finding in list.iter_mut().filter_map(Value::as_object_mut) {
             let severity = finding
@@ -2895,12 +3147,28 @@ fn close_round(
             finding.insert("action".into(), json!(action));
         }
     }
-    review.insert("round".into(), json!(at.round));
+    review.insert("round".into(), json!(round));
     review.insert("cap".into(), json!(cap));
     review.insert("cleanRounds".into(), json!(clean_rounds));
     review.insert("next".into(), json!(next));
-    keep_loop(at.round, clean_rounds, next, file)?;
-    Ok(clean_rounds)
+    keep_loop(at, clean_rounds, next)?;
+    if at.branch.is_some() {
+        show_round(round, cap, next);
+    }
+    Ok(Closed {
+        clean_rounds,
+        round,
+        cap,
+        next,
+    })
+}
+
+/// Where a round left the loop, for the Landing view's record.
+struct Closed {
+    clean_rounds: u32,
+    round: u32,
+    cap: u32,
+    next: &'static str,
 }
 
 /// What the loop does after this round.
