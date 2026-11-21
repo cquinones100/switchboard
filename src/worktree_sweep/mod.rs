@@ -28,6 +28,7 @@
 //!
 //! The rule is here, on plain data and git; `serve` puts it on the server.
 
+pub mod reviews;
 pub mod serve;
 
 use std::path::{Path, PathBuf};

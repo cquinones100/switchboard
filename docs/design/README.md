@@ -312,3 +312,7 @@ The relay's DM, threads and Home tab.
 ## Proposal: the phone's prompt choices explained
 
 - [172. The phone's prompt card with each choice's explainer behind an info button: an i beside every choice that has one, its own tap target; a tap shows the explainer under the choice and a second hides it, while a tap on the choice still answers](https://cquinones100.github.io/switchboard/design/172.html)
+
+## Proposal: images from the phone
+
+- [174. Images from the phone's photo library sent to a tab's Claude: + opens the library, several chosen at once; they wait as thumbnails over the field, each with an × to drop it; a message is images, words or both; in the channel a sent message shows its images as thumbnails, and a tap shows one whole](https://cquinones100.github.io/switchboard/design/174.html)

@@ -117,6 +117,7 @@ use crate::sidebar::render::Filter;
 use crate::ui::{Look, Overlay, Step, Theme};
 
 pub use serve::Opening;
+pub(crate) use serve::TabMenuFrom;
 pub use views::{Group, Revived, Scope, View, ViewId, Worktree};
 
 /// Where Tab has put the focus: a group's name (with UX 2.0) or a view's

@@ -142,7 +142,7 @@ fn name_of(home: &Path) -> String {
 
 /// The rules a try's every process runs under; their file also marks its
 /// home as sealed.
-fn profile_file(home: &Path) -> PathBuf {
+pub(crate) fn profile_file(home: &Path) -> PathBuf {
     sealed_dir().join(format!("{}.sb", name_of(home)))
 }
 

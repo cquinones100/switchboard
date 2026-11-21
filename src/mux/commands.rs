@@ -705,6 +705,13 @@ impl Server {
                             "color": self.tab_color(*id).map(|c| c.hex()),
                             "path": self.tab_path(*id).map(|p| p.to_string_lossy().into_owned()),
                             "pr": self.tab_pr(*id),
+                            // Every PR it follows, in the order opened
+                            // (src/tabs/prs.rs).
+                            "prs": self
+                                .tab_prs(*id)
+                                .iter()
+                                .map(crate::tabs::prs::TabPr::key)
+                                .collect::<Vec<_>>(),
                             "facts": self.facts.get(id),
                             // Its direct landing, for the Slack relay's
                             // thread header: with the landing queue's facts.
