@@ -497,7 +497,16 @@ async function answer(reply) {
 // field keeps its focus, what is typed and the cursor through the redraws;
 // `sync` follows the prompt the tab waits on, the images chosen and the error.
 function composer() {
-  const field = el("textarea", { rows: 1 });
+  // Message text, not a form's field: no name AutoFill could fill with a
+  // contact or address, with the keyboard's suggestions and corrections kept.
+  const field = el("textarea", {
+    rows: 1,
+    name: "message",
+    autocomplete: "off",
+    autocorrect: "on",
+    autocapitalize: "sentences",
+    spellcheck: "true",
+  });
   const send = el("button", { class: "send", "aria-label": "Send" }, "➤");
   // The photo library alone: images, several at once, no camera.
   const picker = el("input", { type: "file", accept: "image/png,image/jpeg,image/gif,image/webp", multiple: true, hidden: true });
