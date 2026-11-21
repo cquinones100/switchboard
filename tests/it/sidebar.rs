@@ -557,15 +557,26 @@ fn the_wheel_over_the_sidebar_moves_half_a_screen_once_a_flick() {
     let mut client = short_screen_of_tabs(&server);
     // One wheel-down: half a screen on, as C-d, the focus in the sidebar.
     client.send(b"\x1b[<65;6;5M");
-    let list = wait_list(&server, "half a screen down", |l| {
+    wait_list(&server, "half a screen down", |l| {
         focused(l) && in_front(l) > 1
     });
-    let half = in_front(&list);
     client.wait_for("tabs above counted", |s| left(&s[1], 34).contains("▲"));
     // One wheel-up, the other way: back to the first, as C-u.
     client.send(b"\x1b[<64;6;5M");
     wait_list(&server, "back at the first", |l| in_front(l) == 0);
     client.wait_for("back at the top", |s| !left(&s[1], 34).contains("▲"));
+    // Half a screen measured with the sidebar focused, as the flick finds
+    // it: the first wheel-down was drawn from the sidebar without the focus,
+    // whose rows can sit a line apart.
+    client.send(b"\x1b[<65;6;5M");
+    let list = wait_list(&server, "half a screen down, focused", |l| in_front(l) > 1);
+    let half = in_front(&list);
+    client.wait_for("tabs above counted again", |s| {
+        left(&s[1], 34).contains("▲")
+    });
+    client.send(b"\x1b[<64;6;5M");
+    wait_list(&server, "back at the first again", |l| in_front(l) == 0);
+    client.wait_for("back at the top again", |s| !left(&s[1], 34).contains("▲"));
     // A flick of five: half a screen once.
     client.send("\x1b[<65;6;5M".repeat(5).as_bytes());
     wait_list(&server, "half a screen down again", |l| in_front(l) > 0);
