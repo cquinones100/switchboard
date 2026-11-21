@@ -121,7 +121,8 @@ pub fn pr_line(pr: &PrFacts) -> String {
 
 /// The steps of a landing that holds the lock, each with its mark: ✓ done,
 /// 🔵 under way, 🟡 waiting on you, ✕ failed, ⚪ still to come. What the
-/// record says of the tests, the review and the leak-check, and the phase
+/// record says of the tests, the review and the leak-check (left out where
+/// none runs, outside Switchboard's clone), and the phase
 /// the step it is at; `waiting` is the tab waiting on you, which marks
 /// the push waiting only at the push (`<lock> push` asking again), since
 /// queue-and-clean also asks while holding the lock about a conflict.
@@ -162,10 +163,13 @@ pub fn cells(landing: &LandingAt, waiting: bool) -> String {
     } else {
         "✓ review".into()
     };
-    let leak = if number(&record["leak"], "found").unwrap_or(0) > 0 {
-        "✕ leak-check"
+    // None outside Switchboard's clone, where no leak-check runs.
+    let leak = if record["leak"]["skipped"] == true {
+        None
+    } else if number(&record["leak"], "found").unwrap_or(0) > 0 {
+        Some("✕ leak-check")
     } else {
-        "✓ leak-check"
+        Some("✓ leak-check")
     };
     let pushed = phase.starts_with("applying") || phase.starts_with("cleaning");
     let push = if pushed {
@@ -177,7 +181,17 @@ pub fn cells(landing: &LandingAt, waiting: bool) -> String {
     } else {
         "⚪ push"
     };
-    [rebased.as_str(), &tests, &review, leak, push].join(" · ")
+    [
+        Some(rebased.as_str()),
+        Some(&tests),
+        Some(&review),
+        leak,
+        Some(push),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" · ")
 }
 
 /// queue-and-clean's push question: its options **Push to <branch>** and
@@ -286,6 +300,15 @@ mod tests {
         assert_eq!(
             cells(&holding("tests failed: 2", clean.clone()), false),
             "✓ rebased · ✕ tests · ✓ review, 2 rounds clean · ✓ leak-check · ⚪ push"
+        );
+        let skipped = json!({
+            "review": { "round": 2, "clean_rounds": 2 },
+            "leak": { "skipped": true },
+        });
+        assert_eq!(
+            cells(&holding("pushing", skipped), false),
+            "✓ rebased · ✓ tests · ✓ review, 2 rounds clean · 🔵 push",
+            "no leak-check outside Switchboard's clone"
         );
         assert_eq!(
             cells(&holding("cleaning up", clean), false),

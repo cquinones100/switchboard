@@ -749,7 +749,7 @@ pub fn loaded(data: &ViewData) -> bool {
 /// each option with its value and default in words and whether it
 /// changed; then your own files' rows under a heading for each.
 pub fn settings_items(own: &[Item], ux2: bool) -> Vec<Item> {
-    settings_items_of(&settings::current_settings(), own, ux2)
+    settings_items_of(&settings::shown_settings(), own, ux2)
 }
 
 pub(crate) fn settings_items_of(all: &[settings::Setting], own: &[Item], ux2: bool) -> Vec<Item> {

@@ -321,7 +321,7 @@ pub const OWN_FILES: &[OwnFile] = &[
         category: "Your files",
         rows: &[whole(
             "Identifying words",
-            "Your organization's and company's names, usernames and internal hosts, one a line, which leak-check finds in what a landing would push to a public repository",
+            "Your organization's and company's names, usernames and internal hosts, one a line, which switchboard leak-check finds in what you check before it reaches a public repository (and Switchboard's own clone checks before its landings and posts)",
         )],
     },
     OwnFile {

@@ -3652,7 +3652,8 @@ fn stage_cell(stage: Stage, label: impl Into<String>) -> StageCell {
 /// passed ("✓ 412", or "✕ 2 of 401" with the failing file under it), the
 /// review's clean rounds ("✓ 2 clean", or "round 1" with its reviewer and
 /// how long ago under it while it goes on) and the leak check's ("✓ none",
-/// "✕ found"); without a record, "passed", "clean" and "none". A waiter is
+/// "✕ found", or a dim "not run" outside Switchboard's clone, where none
+/// runs); without a record, "passed", "clean" and "none". A waiter is
 /// queued for the lock at its place; the one holding it is at the step its
 /// phase names, a failure included (`tests failed …`, `review blocked …`,
 /// the words after it shown in the cell, and `merge conflict <files>`,
@@ -3718,6 +3719,7 @@ fn landing_stages(landing: &serde_json::Value, now_ms: i64) -> [StageCell; 6] {
     };
     let leak = match number(&record["leak"], "found") {
         Some(n) if n > 0 => stage_cell(Stage::Failed, "✕ found"),
+        _ if record["leak"]["skipped"] == true => stage_cell(Stage::Waiting, "not run"),
         _ => done("none"),
     };
     let mut out = [tests, review, leak, waiting(), waiting(), waiting()];
@@ -6836,6 +6838,19 @@ mod tests {
     }
 
     #[test]
+    fn a_landing_outside_switchboard_s_clone_has_its_leak_check_not_run() {
+        let landing = serde_json::json!({
+            "holding": true,
+            "phase": "pushing",
+            "record": { "leak": { "skipped": true } },
+        });
+        let cells = landing_stages(&landing, 0);
+        assert_eq!(cells[2], stage_cell(Stage::Waiting, "not run"));
+        let found = serde_json::json!({ "holding": true, "record": { "leak": { "found": 0 } } });
+        assert_eq!(landing_stages(&found, 0)[2].label, "✓ none");
+    }
+
+    #[test]
     fn a_merge_left_with_conflicts_is_a_red_lock_cell_naming_its_files() {
         let landing =
             serde_json::json!({ "holding": true, "phase": "merge conflict src/a.rs b.md" });
@@ -8862,9 +8877,9 @@ mod tests {
         );
         m.snap.rules.ux2 = true;
         m.view = 1;
-        m.size = (160, 40);
+        m.size = (160, 48);
         m.cursor = at as isize;
-        let (lines, hits, images, _) = drawn(&m, 160, 40);
+        let (lines, hits, images, _) = drawn(&m, 160, 48);
         let text = texts(&lines);
         let all_text = text.join("\n");
         // The panel: the Sidebar's chip of 1 before its count, the

@@ -204,14 +204,26 @@ pub enum Act {
 }
 
 /// The question before landing without asking, naming what it skips and
-/// what it keeps.
-pub fn land_question() -> (String, Vec<String>) {
+/// what it keeps; leak-check only for Switchboard's own repository
+/// (`leak_checked`, src/dev.rs), the one place it runs.
+pub fn land_question(leak_checked: bool) -> (String, Vec<String>) {
+    let (kept, asked) = if leak_checked {
+        (
+            "Kept: the tests, two clean review rounds, the landing lock, leak-check; a repository whose landing runs no tests or no review still asks",
+            "Asked after all: anything leak-check finds, an unclear conflict, a failure the branch didn't cause",
+        )
+    } else {
+        (
+            "Kept: the tests, two clean review rounds, the landing lock; a repository whose landing runs no tests or no review still asks",
+            "Asked after all: an unclear conflict, a failure the branch didn't cause",
+        )
+    };
     (
         "Land its tabs on their target branch without asking to push?".into(),
         vec![
             "Skipped: the question before each push, and medium review findings, fixed without asking".into(),
-            "Kept: the tests, two clean review rounds, the landing lock, leak-check; a repository whose landing runs no tests or no review still asks".into(),
-            "Asked after all: anything leak-check finds, an unclear conflict, a failure the branch didn't cause".into(),
+            kept.into(),
+            asked.into(),
             "Told after each landing, in the notifications and on Slack".into(),
             "Only for landings straight on a branch; tabs open now too".into(),
             "In a repository whose tickets are its GitHub issues, a landed issue is commented on and closed without asking too".into(),
@@ -606,11 +618,16 @@ mod tests {
         assert!(labels(&mode, "").iter().any(|l| l == "Ask before landing"));
         apply(&Act::AskBeforeLanding, &mut mode);
         assert!(!mode.land_without_asking);
-        let (question, list) = land_question();
+        let (question, list) = land_question(true);
         assert!(question.ends_with("without asking to push?"));
         assert!(list.iter().any(|l| l.starts_with(
             "Kept: the tests, two clean review rounds, the landing lock, leak-check"
         )));
+        let (_, list) = land_question(false);
+        assert!(
+            !list.iter().any(|l| l.contains("leak-check")),
+            "outside Switchboard's clone: {list:?}"
+        );
     }
 
     #[test]

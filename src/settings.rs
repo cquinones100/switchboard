@@ -388,6 +388,25 @@ pub fn current_settings() -> Vec<Setting> {
     cache.get_or_insert_with(read_settings).clone()
 }
 
+/// The category of the settings that serve developing Switchboard, shown
+/// only on a build made from its clone (`dev::build_is_from_clone`).
+pub const DEVELOPING: &str = "Developing Switchboard";
+
+/// The settings as Settings lists them: `current_settings`, without
+/// `DEVELOPING`'s unless the running build was made from Switchboard's
+/// clone, where alone they act on something. They keep their values and
+/// `switchboard setting` still reads and writes them.
+pub fn shown_settings() -> Vec<Setting> {
+    shown_of(current_settings(), crate::dev::build_is_from_clone())
+}
+
+fn shown_of(mut all: Vec<Setting>, from_clone: bool) -> Vec<Setting> {
+    if !from_clone {
+        all.retain(|o| o.category != DEVELOPING);
+    }
+    all
+}
+
 /// Reads the settings again into the cache, and gives them.
 pub fn reload_settings() -> Vec<Setting> {
     let fresh = read_settings();
@@ -559,6 +578,31 @@ pub fn migrate() -> Result<()> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn developing_switchboard_is_shown_only_on_a_build_from_its_clone() {
+        let developing = [
+            "review_before_push",
+            "assets_from_checkout",
+            "build_before_restart",
+            "build_behind_notice",
+            "worktree_clone_build",
+        ];
+        let all = schema();
+        for key in developing {
+            let listed = all.iter().find(|o| o.key == key).unwrap();
+            assert_eq!(listed.category, DEVELOPING, "{key}");
+        }
+        let has = |shown: &[Setting]| categories(shown).contains(&DEVELOPING);
+        assert!(has(&shown_of(all.clone(), true)));
+        let release = shown_of(all.clone(), false);
+        assert!(!has(&release));
+        assert_eq!(
+            release.len() + developing.len(),
+            all.len(),
+            "only its options are left out"
+        );
+    }
 
     #[test]
     fn the_drawing_crate_s_defaults_are_the_schema_s() {

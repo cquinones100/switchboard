@@ -293,7 +293,8 @@ fn run(given: &Given, notes: &Path, close: Close) -> Result<Vec<String>, String>
 }
 
 /// Step 3: the issue closed with the `Done:` line `done` as its comment, when
-/// asked to (`--close-issue`) and leak-check's scan finds nothing in it,
+/// asked to (`--close-issue`) and, in Switchboard's clone
+/// (`dev::is_switchboard_clone`), leak-check's scan finds nothing in it,
 /// since it is public; the line saying what became of it.
 fn close_issue(
     given: &Given,
@@ -310,9 +311,14 @@ fn close_issue(
         );
     }
     use crate::cmd::leak_check;
-    let hits = match leak_check::read_words(&leak_check::words_file()) {
-        Ok(words) => leak_check::hits_in(done, false, &words),
-        Err(e) => return format!("left open: {repo}#{number}: leak-check couldn't look: {e}"),
+    // A rule of Switchboard's own repository alone (src/dev.rs).
+    let hits = if !crate::dev::is_switchboard_clone(top) {
+        Vec::new()
+    } else {
+        match leak_check::read_words(&leak_check::words_file()) {
+            Ok(words) => leak_check::hits_in(done, false, &words),
+            Err(e) => return format!("left open: {repo}#{number}: leak-check couldn't look: {e}"),
+        }
     };
     if !hits.is_empty() {
         let found: Vec<String> = hits
@@ -888,6 +894,28 @@ mod tests {
 
     /// A worktree on `branch`, its work on origin's main, instead of the
     /// note's item.
+    /// Makes the worktree's repository Switchboard's clone, as
+    /// `dev::is_switchboard_clone` reads one: its sources committed and on
+    /// origin, and origin named as GitHub's, git reaching it where it is.
+    fn as_switchboard(main: &Path, wt: &Path) {
+        let origin = git(main, &["config", "remote.origin.url"]);
+        let github = "https://github.com/acme/switchboard.git";
+        git(
+            main,
+            &["config", &format!("url.{origin}.insteadOf"), github],
+        );
+        git(main, &["config", "remote.origin.url", github]);
+        std::fs::write(wt.join("Cargo.toml"), "[package]\nname = \"switchboard\"\n").unwrap();
+        for dir in ["assets/skills", "src/mux"] {
+            std::fs::create_dir_all(wt.join(dir)).unwrap();
+            std::fs::write(wt.join(dir).join(".keep"), "").unwrap();
+        }
+        git(wt, &["add", "."]);
+        git(wt, &["commit", "-q", "-m", "sources"]);
+        git(wt, &["push", "-q", "origin", "HEAD:main"]);
+        assert!(crate::dev::is_switchboard_clone(wt));
+    }
+
     fn issue_setup(name: &str, branch: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
         let (dir, main, wt, notes) = landed_setup(name);
         git(&main, &["config", "--unset", "branch.note/copy.wtnItem"]);
@@ -979,22 +1007,43 @@ mod tests {
         assert!(out.iter().all(|l| !l.contains("#42")), "{out:?}");
         let _ = std::fs::remove_dir_all(&dir);
 
+        // Made here, so the repository's own leak-check finds no path.
+        let leaky = format!("It reads /{}/marta/secret.txt now.", "Users");
         let (dir, main, wt, notes) = issue_setup("leak", "issue/12-x");
         git(
             &main,
             &["config", "branch.issue/12-x.wtnIssue", "acme/widgets#12"],
         );
+        as_switchboard(&main, &wt);
         let given = Given {
             close_issue: true,
-            // Made here, so the repository's own leak-check finds no path.
-            says: format!("It reads /{}/marta/secret.txt now.", "Users"),
+            says: leaky.clone(),
             ..given_for(&wt)
         };
         let out = run(&given, &notes, &never).unwrap();
         assert!(
             out.iter()
                 .any(|l| l.starts_with("left open: acme/widgets#12: leak-check found")),
-            "a home path stays here: {out:?}"
+            "in Switchboard's clone a home path stays here: {out:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // Anywhere else, no leak-check runs.
+        let (dir, main, wt, notes) = issue_setup("elsewhere", "issue/12-x");
+        git(
+            &main,
+            &["config", "branch.issue/12-x.wtnIssue", "acme/widgets#12"],
+        );
+        let given = Given {
+            close_issue: true,
+            says: leaky,
+            ..given_for(&wt)
+        };
+        let closed = |_: &Repo, _: u64, _: &str, _: &str| Ok(Closed::Closed);
+        let out = run(&given, &notes, &closed).unwrap();
+        assert!(
+            out.contains(&"closed: acme/widgets#12".to_string()),
+            "{out:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
 

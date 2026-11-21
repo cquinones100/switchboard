@@ -223,13 +223,13 @@ mod in_ci {
     use common::stand_in;
     use std::time::Duration;
 
-    /// The worktree's repository with `origin` at github.com/o/r, which an
+    /// The worktree's repository with `origin` at github.com/o/switchboard, which an
     /// `insteadOf` sends to a bare repository in `tmp`, `main` pushed there
     /// and the main clone trusted; the bare one.
     fn origin(tmp: &Path, dir: &Path) -> PathBuf {
         let bare = tmp.join("origin.git");
         git(tmp, &["init", "-q", "--bare", bare.to_str().unwrap()]);
-        let url = "https://github.com/o/r.git";
+        let url = "https://github.com/o/switchboard.git";
         git(dir, &["remote", "add", "origin", url]);
         git(
             dir,
@@ -239,6 +239,20 @@ mod in_ci {
         git(dir, &["fetch", "-q", "origin"]);
         trust(tmp, &tmp.join("repo"));
         bare
+    }
+
+    /// Makes the worktree Switchboard's clone, as `dev::is_switchboard_clone`
+    /// reads one with `origin`'s GitHub name: its sources beside the change,
+    /// where alone leak-check runs.
+    fn as_switchboard(dir: &Path) {
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"switchboard\"\n",
+        )
+        .unwrap();
+        for sub in ["assets/skills", "src/mux"] {
+            std::fs::create_dir_all(dir.join(sub)).unwrap();
+        }
     }
 
     /// The bare repository's `ci/land-*` branches.
@@ -258,7 +272,7 @@ mod in_ci {
             if request.method != "GET" {
                 return None;
             }
-            if request.target == "/repos/o/r/actions/jobs/5/logs" {
+            if request.target == "/repos/o/switchboard/actions/jobs/5/logs" {
                 let log =
                     "2026-11-15T10:00:00.1Z         FAIL [   1.204s] switchboard::it tabs::names";
                 return Some(Reply::json(200, Value::String(log.into())));
@@ -266,7 +280,7 @@ mod in_ci {
             if request.target.contains("/actions/runs?head_sha=") {
                 return Some(Reply::json(200, json!({ "workflow_runs": [] })));
             }
-            if !request.target.starts_with("/repos/o/r/commits/") {
+            if !request.target.starts_with("/repos/o/switchboard/commits/") {
                 return None;
             }
             let body = if request.target.contains("/check-runs") {
@@ -300,7 +314,7 @@ mod in_ci {
 
     fn check(conclusion: Value, status: &str) -> Value {
         json!({ "name": "Tests", "status": status, "conclusion": conclusion,
-            "details_url": "https://github.com/o/r/actions/runs/77/job/5" })
+            "details_url": "https://github.com/o/switchboard/actions/runs/77/job/5" })
     }
 
     #[test]
@@ -311,9 +325,10 @@ mod in_ci {
         let bare = origin(home, &dir);
         repos(
             home,
-            "o/r",
+            "o/switchboard",
             json!({ "landing": "direct", "test": "false", "testIn": "ci" }),
         );
+        as_switchboard(&dir);
 
         let head = git(&dir, &["rev-parse", "HEAD"]);
         let fake = github(json!([]), String::new(), json!([]));
@@ -395,24 +410,26 @@ mod in_ci {
             if request.method != "GET" {
                 return None;
             }
-            if request.target == "/repos/o/r/actions/jobs/5/logs" {
+            if request.target == "/repos/o/switchboard/actions/jobs/5/logs" {
                 let log =
                     "2026-11-15T10:00:00.1Z         FAIL [   1.204s] switchboard::it tabs::names";
                 return Some(Reply::json(200, Value::String(log.into())));
             }
             if request
                 .target
-                .starts_with("/repos/o/r/actions/runs?head_sha=")
+                .starts_with("/repos/o/switchboard/actions/runs?head_sha=")
             {
                 return Some(Reply::json(200, json!({ "workflow_runs": workflow_runs })));
             }
-            if request.target.starts_with("/repos/o/r/actions/runs/")
+            if request
+                .target
+                .starts_with("/repos/o/switchboard/actions/runs/")
                 && request.target.ends_with("/jobs?per_page=100")
             {
                 let jobs = json!([{ "name": "Tests", "status": "completed", "conclusion": job }]);
                 return Some(Reply::json(200, json!({ "jobs": jobs })));
             }
-            if !request.target.starts_with("/repos/o/r/commits/") {
+            if !request.target.starts_with("/repos/o/switchboard/commits/") {
                 return None;
             }
             let body = if !request.target.contains("/check-runs") {
@@ -432,7 +449,7 @@ mod in_ci {
     fn check_of(run: u64, conclusion: Value, status: &str) -> Value {
         json!({ "name": "Tests", "status": status, "conclusion": conclusion,
             "check_suite": { "id": run + 1000 },
-            "details_url": format!("https://github.com/o/r/actions/runs/{run}/job/5") })
+            "details_url": format!("https://github.com/o/switchboard/actions/runs/{run}/job/5") })
     }
 
     fn workflow_run(id: u64, conclusion: &str) -> Value {
@@ -449,7 +466,11 @@ mod in_ci {
         let home = tmp.path();
         let dir = worktree(home);
         let bare = origin(home, &dir);
-        repos(home, "o/r", json!({ "landing": "direct", "testIn": "ci" }));
+        repos(
+            home,
+            "o/switchboard",
+            json!({ "landing": "direct", "testIn": "ci" }),
+        );
         let head = git(&dir, &["rev-parse", "HEAD"]);
         let main = git(&dir, &["rev-parse", "main"]);
         // Run 77 failed and run 78 was canceled before this push, whose own
@@ -482,6 +503,10 @@ mod in_ci {
         );
         assert_eq!(passed.status.code(), Some(0));
         assert_eq!(record(&dir)["tests"]["ok"], true);
+        assert!(
+            record(&dir)["leak"].is_null(),
+            "no leak-check outside Switchboard's clone"
+        );
         assert_eq!(ci_branches(&bare), "", "deleted after the pass");
 
         let fake = github_again(
@@ -517,7 +542,11 @@ mod in_ci {
         let home = tmp.path();
         let dir = worktree(home);
         let bare = origin(home, &dir);
-        repos(home, "o/r", json!({ "landing": "direct", "testIn": "ci" }));
+        repos(
+            home,
+            "o/switchboard",
+            json!({ "landing": "direct", "testIn": "ci" }),
+        );
         let head = git(&dir, &["rev-parse", "HEAD"]);
         let main = git(&dir, &["rev-parse", "main"]);
         // Run 77's failed job was run again and passed, which GitHub gives
@@ -589,7 +618,7 @@ mod in_ci {
         let bare = origin(home, &dir);
         repos(
             home,
-            "o/r",
+            "o/switchboard",
             json!({ "landing": "direct", "test": "true", "testIn": "ci" }),
         );
         let failing = json!([check(json!("failure"), "completed")]);
@@ -621,7 +650,11 @@ mod in_ci {
         let home = tmp.path();
         let dir = worktree(home);
         let bare = origin(home, &dir);
-        repos(home, "o/r", json!({ "landing": "direct", "testIn": "ci" }));
+        repos(
+            home,
+            "o/switchboard",
+            json!({ "landing": "direct", "testIn": "ci" }),
+        );
         let fake = github(
             json!([check(Value::Null, "in_progress")]),
             git(&dir, &["rev-parse", "main"]),

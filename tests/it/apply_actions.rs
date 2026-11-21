@@ -39,6 +39,9 @@ fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
+/// Switchboard's manifest, as much of it as names the package.
+const SWITCHBOARD_TOML: &str = "[package]\nname = \"switchboard\"\n";
+
 impl Repo {
     fn new() -> Repo {
         let tmp = TempDir::new("apply");
@@ -108,6 +111,38 @@ impl Repo {
             .collect()
     }
 
+    /// Makes the repository Switchboard's clone, as
+    /// `dev::is_switchboard_clone` reads one: its sources committed, and
+    /// origin named as GitHub's, git reaching it at `~/origin.git`, where
+    /// they are pushed.
+    fn as_switchboard(&self) {
+        let github = "https://github.com/acme/switchboard.git";
+        let origin = self.home.join("origin.git");
+        git(&self.repo, &["remote", "add", "origin", github]);
+        git(
+            &self.repo,
+            &[
+                "config",
+                &format!("url.{}.insteadOf", origin.display()),
+                github,
+            ],
+        );
+        self.commit(&[
+            ("Cargo.toml", SWITCHBOARD_TOML),
+            ("assets/skills/.keep", ""),
+            ("src/mux/.keep", ""),
+        ]);
+        git(
+            &self.home,
+            &["init", "-q", "--bare", origin.to_str().unwrap()],
+        );
+        git(
+            &self.repo,
+            &["push", "-q", "origin", "HEAD:refs/heads/main"],
+        );
+        git(&self.repo, &["fetch", "-q", "origin"]);
+    }
+
     fn own_file(&self, name: &str, text: &str) {
         let dir = self.home.join(".config/switchboard");
         std::fs::create_dir_all(&dir).unwrap();
@@ -119,9 +154,10 @@ impl Repo {
 fn in_switchboard_a_change_to_the_code_is_built_and_the_workspace_restarted_once_each_and_docs_need_nothing()
  {
     let r = Repo::new();
-    // Switchboard is ~/switchboard, by its real path.
+    r.as_switchboard();
+    // Switchboard's own list only at ~/switchboard, by its real path.
     std::os::unix::fs::symlink(&r.repo, r.home.join("switchboard")).unwrap();
-    let start = r.commit(&[("Cargo.toml", "[package]\n"), ("README.md", "a")]);
+    let start = r.commit(&[("Cargo.toml", SWITCHBOARD_TOML), ("README.md", "a")]);
     r.commit(&[
         ("src/sidebar/model.rs", "1"),
         ("src/sidebar/render.rs", "2"),
@@ -266,6 +302,9 @@ fn a_repos_json_apply_list_replaces_the_defaults_listed_for_its_paths_and_run_in
 #[test]
 fn apply_builds_only_your_own_clone_or_a_trusted_one() {
     let r = Repo::new();
+    // Switchboard's clone too, but not at ~/switchboard: a fork's clone
+    // anywhere would look the same.
+    r.as_switchboard();
     let out = Command::new(BIN)
         .args(["apply", "install", r.repo.to_str().unwrap()])
         .env("HOME", &r.home)
@@ -296,8 +335,10 @@ fn apply_builds_only_your_own_clone_or_a_trusted_one() {
 #[test]
 fn apply_builds_your_switchboard_clone_only_while_its_commits_and_files_are_yours() {
     let r = Repo::new();
-    std::os::unix::fs::symlink(&r.repo, r.home.join("switchboard")).unwrap();
     git(&r.repo, &["config", "user.email", "t@e"]);
+    r.as_switchboard();
+    // Built without trusted-dirs only at ~/switchboard, by its real path.
+    std::os::unix::fs::symlink(&r.repo, r.home.join("switchboard")).unwrap();
     r.commit(&[("README.md", "mine\n")]);
     let install = || {
         let out = Command::new(BIN)
@@ -347,12 +388,6 @@ fn apply_builds_your_switchboard_clone_only_while_its_commits_and_files_are_your
 
     // Theirs on a branch of origin's, which counts origin's branches as
     // yours, is still theirs beyond the default branch.
-    let origin = r.home.join("origin.git");
-    git(&r.home, &["init", "-q", "--bare", origin.to_str().unwrap()]);
-    git(
-        &r.repo,
-        &["remote", "add", "origin", origin.to_str().unwrap()],
-    );
     git(
         &r.repo,
         &[

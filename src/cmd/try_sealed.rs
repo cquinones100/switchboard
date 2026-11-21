@@ -1188,7 +1188,7 @@ pub(crate) fn start(
     let wt = PathBuf::from(top)
         .canonicalize()
         .context("the worktree can't be read")?;
-    if !try_::is_switchboard(&wt) {
+    if !crate::dev::is_switchboard_clone(&wt) {
         bail!("{} isn't a Switchboard clone", wt.display());
     }
     if mode == Mode::Attach

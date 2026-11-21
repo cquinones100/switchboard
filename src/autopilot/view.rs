@@ -25,7 +25,8 @@
 //! every tick. A stage nothing says
 //! anything of yet is a dim "waiting" cell: the tests and the review while
 //! the tab works and no phase names them, the leak check until the lock is
-//! asked for, and closing while the tab is open. The next items are the
+//! asked for ("not run" outside Switchboard's clone, where none runs,
+//! src/dev.rs), and closing while the tab is open. The next items are the
 //! queue the mode last read for its line (`Pilot::next`), off the server's
 //! task, never read here; the plan each item links was read with them, and
 //! goes on its card for the side panel to show under its stages. Each row
@@ -276,7 +277,11 @@ fn cells(r: &Row) -> [Cell; 8] {
         let holding = l.get("holding").and_then(Value::as_bool) == Some(true);
         out[2] = done("passed");
         out[3] = done("clean");
-        out[4] = done("none");
+        out[4] = if l["record"]["leak"]["skipped"] == true {
+            ("waiting", "not run".into())
+        } else {
+            done("none")
+        };
         if !holding {
             let place = l.get("place").and_then(Value::as_u64).unwrap_or(1);
             out[5] = ("queued", format!("{place} in line"));
@@ -803,6 +808,13 @@ mod tests {
         assert_eq!(s[1], done("done"));
         assert_eq!(s[4], done("none"));
         assert_eq!(s[5], done("held"));
+        // Outside Switchboard's clone no leak-check runs.
+        r.landing = Some(json!({
+            "holding": true,
+            "phase": "pushing",
+            "record": { "leak": { "skipped": true } },
+        }));
+        assert_eq!(stages(&r)[4], ("waiting", "not run".to_string()));
         assert_eq!(s[6], ("running", "pushing…".to_string()));
         r.landing = Some(json!({ "holding": false, "place": 2 }));
         assert_eq!(stages(&r)[5], ("queued", "2 in line".to_string()));

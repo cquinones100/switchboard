@@ -1395,6 +1395,28 @@ impl Landing {
         landing
     }
 
+    /// Makes the worktree Switchboard's clone, as `dev::is_switchboard_clone`
+    /// reads one, where alone leak-check runs: its sources beside the
+    /// change (not committed, so the change stays the one reviewed), and
+    /// origin named as GitHub's, git reaching it where it is.
+    fn as_switchboard(&self) {
+        let origin = self.origin.to_str().unwrap();
+        let github = "https://github.com/acme/switchboard.git";
+        git(
+            &self.repo,
+            &["config", &format!("url.{origin}.insteadOf"), github],
+        );
+        git(&self.repo, &["config", "remote.origin.url", github]);
+        std::fs::write(
+            self.one.join("Cargo.toml"),
+            "[package]\nname = \"switchboard\"\n",
+        )
+        .unwrap();
+        for dir in ["assets/skills", "src/mux"] {
+            std::fs::create_dir_all(self.one.join(dir)).unwrap();
+        }
+    }
+
     /// This program run in the worktree from the test server's pane.
     fn run(&self, args: &[&str]) -> Output {
         Command::new(BIN)
@@ -1604,7 +1626,19 @@ fn the_landing_push_asks_on_a_leak_or_a_changed_change_and_rebases_when_main_mov
     let before = l.on_origin();
     let words = l.server.home.join(".config/switchboard/leak-check.txt");
 
+    // Outside Switchboard's clone, leak-check isn't run.
     std::fs::write(&words, "feature\n").unwrap();
+    l.server.ok(&["set", "-t", &l.tab, "@land", "0"]);
+    let elsewhere = l.run(&["land-lock", "push"]);
+    assert_eq!(code(&elsewhere), 6, "{}", stdout(&elsewhere));
+    assert!(
+        !stdout(&elsewhere).contains("leak"),
+        "{}",
+        stdout(&elsewhere)
+    );
+    l.server.ok(&["set", "-t", &l.tab, "@land", "1"]);
+
+    l.as_switchboard();
     let leak = l.run(&["land-lock", "push"]);
     assert_eq!(code(&leak), 6, "{}", stdout(&leak));
     assert!(stdout(&leak).contains("leak: "), "{}", stdout(&leak));

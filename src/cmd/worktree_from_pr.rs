@@ -1029,7 +1029,7 @@ fn print_facts(pr: &PrDetails, repo: &Repo, dir: &Path, base: &str, root: &Path,
         eprintln!("  {caution}");
     }
     let at = shell_quote(&dir.to_string_lossy());
-    let switchboard = super::try_::is_switchboard(root);
+    let switchboard = crate::dev::is_switchboard_clone(root);
     eprintln!(
         "\nReview it from your main clone{}, or by hand:",
         if switchboard {

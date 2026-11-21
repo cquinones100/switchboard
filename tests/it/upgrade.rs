@@ -1091,6 +1091,27 @@ fn a_landing_past_the_build_says_so_once_and_offers_the_restart() {
     git(&main, &["commit", "-q", "--allow-empty", "-m", "built"]);
     git(&main, &["push", "-q", "origin", "HEAD:main"]);
     let built = git(&main, &["rev-parse", "--short=12", "HEAD"]);
+    // Switchboard's clone, as src/dev.rs reads one, since only a build of
+    // it counts how far it is behind: its sources, and origin named as
+    // GitHub's, git reaching it where it is.
+    let github = "https://github.com/acme/switchboard.git";
+    git(
+        &main,
+        &[
+            "config",
+            &format!("url.{}.insteadOf", origin.display()),
+            github,
+        ],
+    );
+    git(&main, &["config", "remote.origin.url", github]);
+    std::fs::write(
+        main.join("Cargo.toml"),
+        "[package]\nname = \"switchboard\"\n",
+    )
+    .unwrap();
+    for dir in ["assets/skills", "src/mux"] {
+        std::fs::create_dir_all(main.join(dir)).unwrap();
+    }
     let server = TestServer::start_with_env(&[
         ("SWITCHBOARD_MAIN_CLONE", main.to_str().unwrap()),
         ("SWITCHBOARD_BUILT_FROM", &built),

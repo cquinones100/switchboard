@@ -8,7 +8,8 @@
 //! base, so the landing rebases again; and, without `--asked`, goes on only
 //! when the land-without-asking gate
 //! passes, read at the moment of pushing: the tab's `@land` is
-//! `1`, `leak-check` finds nothing, the landing's record holds a passing
+//! `1`, `leak-check` finds nothing (in Switchboard's clone alone,
+//! `dev::is_switchboard_clone`; elsewhere it isn't run), the landing's record holds a passing
 //! run of its tests, it ran the review loop, and the review's recorded patch is the change being pushed.
 //! Anything else exits 6, holding the lock, with the commit's subject, why
 //! and leak-check's hits printed for Claude's `[always ask]` question.
@@ -279,8 +280,15 @@ pub(crate) fn main(
     };
     let range = format!("{base}..HEAD");
     if !asked {
-        let leak = this_program(here, &["leak-check", &range]);
-        let leak_clean = leak.as_ref().is_some_and(|o| o.status.success());
+        // A rule of Switchboard's own repository alone (src/dev.rs): elsewhere
+        // nothing is scanned and the gate passes it.
+        let leak = crate::dev::is_switchboard_clone(here)
+            .then(|| this_program(here, &["leak-check", &range]));
+        let leak_clean = match &leak {
+            Some(leak) => leak.as_ref().is_some_and(|o| o.status.success()),
+            None => true,
+        };
+        let leak = leak.flatten();
         let hits = leak
             .as_ref()
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())

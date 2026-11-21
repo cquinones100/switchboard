@@ -57,7 +57,7 @@ struct Entry {
 /// group's together); a category's counts from its heading in the view
 /// where it has one, which a filter keeps whole.
 fn entries(items: &[Item], ux2: bool) -> (Vec<Entry>, Vec<Entry>) {
-    let all = settings::current_settings();
+    let all = settings::shown_settings();
     let names = settings::categories(&all);
     let mut categories: Vec<Entry> = names
         .iter()

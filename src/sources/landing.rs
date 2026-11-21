@@ -169,7 +169,8 @@ pub fn own_git_dir(root: &Path) -> Option<PathBuf> {
 }
 
 /// What a landing has done so far (`land-lock record`): its tests' counts,
-/// its review's rounds, its leak check and the tail of its last output,
+/// its review's rounds, its leak check (`{"skipped": true}` as it is read,
+/// outside Switchboard's clone, where none runs) and the tail of its last output,
 /// kept in the worktree's own git directory, where nothing commits it and
 /// it goes when the worktree does.
 pub const RECORD: &str = "landing.json";
@@ -288,6 +289,15 @@ fn repo_landing(
     let live = |e: &Entry| live_in(e, running);
     let recorded = |mut e: Entry| {
         e.record = read_record(&e.path);
+        // leak-check runs in Switchboard's clone alone (src/dev.rs), so
+        // elsewhere the views say it wasn't run rather than that it found
+        // nothing.
+        if !crate::dev::is_switchboard_clone(&e.path) {
+            let record = e.record.get_or_insert_with(|| serde_json::json!({}));
+            if record.get("leak").is_none() {
+                record["leak"] = serde_json::json!({ "skipped": true });
+            }
+        }
         e
     };
     let holder = util::read_json(common.join(named("land.lock")).join("holder"))

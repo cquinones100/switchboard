@@ -877,7 +877,13 @@ impl Server {
             self.redraw_tab(tab);
             return;
         }
-        let (question, list) = land_question();
+        let leak_checked = self
+            .tabs
+            .get(&tab)
+            .map(|t| t.active)
+            .and_then(|pane| self.pane_dir(pane))
+            .is_some_and(|dir| crate::dev::is_switchboard_clone(&dir));
+        let (question, list) = land_question(leak_checked);
         self.ask(
             client,
             crate::ui::Confirm::new(question).list(list),
@@ -1053,14 +1059,26 @@ fn in_worktree(dir: &std::path::Path) -> bool {
 }
 
 /// The question before a tab's menu has it land without asking, naming
-/// what it skips and what it keeps.
-pub fn land_question() -> (String, Vec<String>) {
+/// what it skips and what it keeps; leak-check only for Switchboard's own
+/// repository (`leak_checked`, src/dev.rs), the one place it runs.
+pub fn land_question(leak_checked: bool) -> (String, Vec<String>) {
+    let (kept, asked) = if leak_checked {
+        (
+            "Kept: two clean review rounds of the change, leak-check, and the tests of a landing straight on a branch; a repository whose landing runs no review still asks",
+            "Asked after all: anything leak-check finds, an unclear conflict, a failure the branch didn't cause",
+        )
+    } else {
+        (
+            "Kept: two clean review rounds of the change, and the tests of a landing straight on a branch; a repository whose landing runs no review still asks",
+            "Asked after all: an unclear conflict, a failure the branch didn't cause",
+        )
+    };
     (
         "Land this tab without asking?".into(),
         vec![
             "Skipped: the question before its first push or its landing's push, and medium review findings, fixed without asking".into(),
-            "Kept: two clean review rounds of the change, leak-check, and the tests of a landing straight on a branch; a repository whose landing runs no review still asks".into(),
-            "Asked after all: anything leak-check finds, an unclear conflict, a failure the branch didn't cause".into(),
+            kept.into(),
+            asked.into(),
         ],
     )
 }

@@ -23,7 +23,8 @@
 //! command the repository's `CLAUDE.md` names with `--command`, which is
 //! used for that run alone, never written into repos.json, the user's file.
 //!
-//! With `testIn` `ci`, it runs `leak-check <base>..HEAD` first (from
+//! With `testIn` `ci`, in Switchboard's clone alone (`dev::is_switchboard_clone`;
+//! elsewhere nothing is scanned), it runs `leak-check <base>..HEAD` first (from
 //! where HEAD meets `<base>`, which must be on a branch of the remote
 //! pushed to other than a `ci/` one, so nothing unpublished is left out of the scan; exit 2
 //! otherwise), since the
@@ -335,6 +336,10 @@ impl Run {
         if let Some(refused) = self.untrusted() {
             return refused;
         }
+        // leak-check is a rule of Switchboard's own repository alone
+        // (src/dev.rs): elsewhere it isn't run, and the base needn't be
+        // published.
+        let scan = !leak_ok && crate::dev::is_switchboard_clone(&self.top);
         // leak-check scans from where the change leaves what is already
         // public, so a base that isn't on a branch of the remote pushed to
         // (`--base HEAD`, or a commit only another remote has) would let
@@ -361,12 +366,13 @@ impl Run {
                 })
             })
         });
-        let Some(published) = published.filter(|_| on_a_remote) else {
+        let published = published.filter(|_| on_a_remote);
+        if scan && published.is_none() {
             println!(
                 "{base} isn't on a remote branch, so leak-check would miss what isn't published: pass the base the commit is on, as fetched"
             );
             return ExitCode::from(2);
-        };
+        }
         let sha = worktree::git_at(&self.top, &["rev-parse", "HEAD"]).unwrap_or_default();
         crate::integrations::run_by_you();
         let earlier = match super::wait_ci::earlier(
@@ -392,7 +398,7 @@ impl Run {
             println!("passed");
             return ExitCode::SUCCESS;
         }
-        if !leak_ok {
+        if let Some(published) = published.as_ref().filter(|_| scan) {
             let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("switchboard"));
             let out = Command::new(exe)
                 .args(["leak-check", &format!("{published}..HEAD")])
@@ -437,7 +443,7 @@ impl Run {
         }
         // The commit the change sits on, whose CI tells the default
         // branch's failures from the change's.
-        let same_as = Some(published);
+        let same_as = published;
         set_phase("testing in CI");
         let answer = super::wait_ci::wait(
             &ci.repo,

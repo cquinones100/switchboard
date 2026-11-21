@@ -157,13 +157,6 @@
     "default": true
   },
   {
-    "key": "worktree_clone_build",
-    "category": "Sessions",
-    "label": "Start a worktree's build from the main clone's",
-    "description": "A worktree wt, wtb or wtpr makes starts with its target/ as a copy-on-write clone of the main clone's (APFS on macOS, Btrfs or XFS on Linux), made in the background, so cargo reuses the dependencies the main clone compiled (a dependency with a build script, such as one compiling C, and those built on it build again, since build scripts and their output aren't cloned) and the copy takes no disk space until a build changes it; a worktree holding someone else's code, one on another volume and a filesystem that can't clone get none. Off (the default until it has been tried on real worktrees), a new worktree starts with no build output and compiles everything itself",
-    "default": false
-  },
-  {
     "key": "target_follows_default",
     "category": "Sessions",
     "label": "Target branches follow the default branch",
@@ -1518,15 +1511,8 @@
     "key": "land_without_asking",
     "category": "Safety",
     "label": "Land without asking",
-    "description": "Each tab /wt, wtb or autopilot opens is marked to land without asking (@land), and follows the setting as it changes, a tab's own menu deciding for it meanwhile: queue-and-clean opens its PR with no question once two review rounds of the change came back clean and leak-check finds nothing (the PR's CI then running its tests), or pushes its landing once its tests pass too, a push a CLAUDE.md says to ask about (a release's version bump) still asking; off, it asks before its first push",
+    "description": "Each tab /wt, wtb or autopilot opens is marked to land without asking (@land), and follows the setting as it changes, a tab's own menu deciding for it meanwhile: queue-and-clean opens its PR with no question once two review rounds of the change came back clean (the PR's CI then running its tests), or pushes its landing once its tests pass too, a push a CLAUDE.md says to ask about (a release's version bump) still asking; off, it asks before its first push",
     "default": false
-  },
-  {
-    "key": "review_before_push",
-    "category": "Safety",
-    "label": "Review before pushing",
-    "description": "In this repository, a push to main needs a clean /review-loop first (.githooks/pre-push); off, it pushes without one",
-    "default": true
   },
   {
     "key": "palette_learn",
@@ -1666,27 +1652,6 @@
     "category": "Updates",
     "label": "Offer to restart after an update",
     "description": "Once switchboard update has put a new release in place, ask whether to restart the workspace on it now, keeping every tab and what runs in it; off, it only says how (switchboard upgrade)",
-    "default": true
-  },
-  {
-    "key": "build_before_restart",
-    "category": "Updates",
-    "label": "Build before restarting",
-    "description": "M-p's \"Restart Switchboard on the latest main\" first brings the main clone of the checkout a build from a clone came from up to date with origin, on its default branch with nothing uncommitted, and builds it (cargo build --release --locked; a try builds its worktree) and puts it in place of the binary the server runs, restarting only when that is new (from a cargo target directory, which other worktrees write over, the build goes to ~/.local/bin/switchboard, else a copy in ~/.cache/switchboard/build, and the restart runs from there); off, it restarts on the binary on disk as it is, when that is new",
-    "default": true
-  },
-  {
-    "key": "build_behind_notice",
-    "category": "Updates",
-    "label": "Say when main is ahead of this build",
-    "description": "When Switchboard's main clone has commits on its default branch (as origin last answered) that the running build lacks, a notification says how many landings the build lacks, counted as the server starts, after each landing and every hour, and its menu restarts on the latest main; off, nothing is counted or shown",
-    "default": true
-  },
-  {
-    "key": "assets_from_checkout",
-    "category": "Updates",
-    "label": "Skills and instructions from the clone",
-    "description": "A build made from a clone reads its skills, Claude settings, instructions and settings list from that clone's assets/ folder, so a change there is live once it lands: the plugin and the parts you set up are brought up to date within seconds, with no rebuild or restart. A release build has no clone and keeps what it carries. Off, every build uses what it carries",
     "default": true
   },
   {
@@ -2154,6 +2119,41 @@
     "category": "Phone app",
     "label": "Phone app",
     "description": "switchboard phone (M-p's \"Open the phone app in its own tab\") serves a web app on your tailnet alone, for answering and messaging your Claude tabs from the phones phone.json lists: their prompts, their recent turns, and a Web Push naming the tab when one starts waiting on you, which passes through your phone's push service. Needs Tailscale. Off, it refuses to start, and one running stops answering",
+    "default": false
+  },
+  {
+    "key": "review_before_push",
+    "category": "Developing Switchboard",
+    "label": "Review before pushing",
+    "description": "In Switchboard's own repository, a push to main needs a clean /review-loop first (.githooks/pre-push); off, it pushes without one",
+    "default": true
+  },
+  {
+    "key": "assets_from_checkout",
+    "category": "Developing Switchboard",
+    "label": "Skills and instructions from the clone",
+    "description": "A build made from a clone reads its skills, Claude settings, instructions and settings list from that clone's assets/ folder, so a change there is live once it lands: the plugin and the parts you set up are brought up to date within seconds, with no rebuild or restart. A release build has no clone and keeps what it carries. Off, every build uses what it carries",
+    "default": true
+  },
+  {
+    "key": "build_before_restart",
+    "category": "Developing Switchboard",
+    "label": "Build before restarting",
+    "description": "M-p's \"Restart Switchboard on the latest main\" first brings the main clone of the checkout a build from a clone came from up to date with origin, on its default branch with nothing uncommitted, and builds it (cargo build --release --locked; a try builds its worktree) and puts it in place of the binary the server runs, restarting only when that is new (from a cargo target directory, which other worktrees write over, the build goes to ~/.local/bin/switchboard, else a copy in ~/.cache/switchboard/build, and the restart runs from there); off, it restarts on the binary on disk as it is, when that is new",
+    "default": true
+  },
+  {
+    "key": "build_behind_notice",
+    "category": "Developing Switchboard",
+    "label": "Say when main is ahead of this build",
+    "description": "When Switchboard's main clone has commits on its default branch (as origin last answered) that the running build lacks, a notification says how many landings the build lacks, counted as the server starts, after each landing and every hour, and its menu restarts on the latest main; off, nothing is counted or shown",
+    "default": true
+  },
+  {
+    "key": "worktree_clone_build",
+    "category": "Developing Switchboard",
+    "label": "Start a worktree's build from the main clone's",
+    "description": "A worktree wt, wtb or wtpr makes starts with its target/ as a copy-on-write clone of the main clone's (APFS on macOS, Btrfs or XFS on Linux), made in the background, so cargo reuses the dependencies the main clone compiled (a dependency with a build script, such as one compiling C, and those built on it build again, since build scripts and their output aren't cloned) and the copy takes no disk space until a build changes it; a worktree holding someone else's code, one on another volume and a filesystem that can't clone get none. Off (the default until it has been tried on real worktrees), a new worktree starts with no build output and compiles everything itself",
     "default": false
   }
 ]
