@@ -675,8 +675,8 @@ impl Server {
     /// its list once they have been seen so: a lookup's answer while the
     /// tab is in front of someone marks each, and the next answer takes the
     /// marked ones off. The branch's PR, never stored, shows as it always
-    /// has, and a merged one the session made stays while it is the tab's
-    /// current PR (`prs::merged_stays_current`), so a tab whose PR landed
+    /// has, and a merged one the session made stays while
+    /// `prs::merged_stays_current` holds for it, so a tab whose PR landed
     /// keeps it once the landing has moved it back to the main clone.
     pub fn drop_finished_tab_prs(&mut self, done: impl Fn(&TabPr) -> bool) {
         let ids: Vec<TabId> = self
@@ -690,12 +690,14 @@ impl Server {
         for id in ids {
             let in_front = self.tab_in_front(id);
             let all = self.tab_prs(id);
-            let landed = self
-                .tab_current_pr(id)
-                .filter(|c| self.landed_pr_stays(id, c, &all));
+            let landed: Vec<TabPr> = all
+                .iter()
+                .filter(|p| self.landed_pr_stays(id, p, &all))
+                .cloned()
+                .collect();
             let t = self.tabs.get_mut(&id).expect("listed above");
             let list = prs::read(t.opts.get(prs::LIST).map_or("", String::as_str));
-            let done = |p: &TabPr| done(p) && !landed.as_ref().is_some_and(|l| l.same(p));
+            let done = |p: &TabPr| done(p) && !landed.iter().any(|l| l.same(p));
             let mut left = Vec::new();
             for pr in list.iter().filter(|p| done(p)) {
                 let key = (id, pr.key());
