@@ -319,6 +319,33 @@ fn a_turn_that_ends_over_its_watches_is_under_needs_you_until_seen_then_monitori
     });
 }
 
+// With "Enter opens the row's menu" off, Enter in the sidebar goes into
+// the chosen tab's pane at once, as before.
+#[test]
+fn with_sidebar_enter_menu_off_enter_goes_to_the_tab() {
+    let server = TestServer::start_with_settings(
+        r#"{"notifications": false, "tips": false, "sidebar_enter_menu": false}"#,
+    );
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-n", "second"]);
+    client.wait_text("2:second");
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("k");
+    wait_list(&server, "the first tab in front", |l| {
+        tabs(l)[0]["current"] == true && focused(l)
+    });
+    client.type_text("\r");
+    wait_list(&server, "into the first tab by Enter", |l| {
+        !focused(l) && tabs(l)[0]["current"] == true
+    });
+    assert!(
+        !client.screen().iter().any(|l| l.contains("Go to tab 1")),
+        "no menu"
+    );
+}
+
 #[test]
 fn m_s_and_its_keys_move_between_tabs() {
     let server = TestServer::start();
@@ -348,7 +375,13 @@ fn m_s_and_its_keys_move_between_tabs() {
     wait_list(&server, "the first again", |l| {
         tabs(l)[0]["current"] == true
     });
-    // Enter: into its pane, where typing goes.
+    // Enter: its menu, as m opens it, with going there chosen; Enter again
+    // goes into its pane, where typing goes.
+    client.type_text("\r");
+    client.wait_for("the tab's menu, going there chosen", |s| {
+        s.iter()
+            .any(|l| l.contains("›") && l.contains("Go to tab 1"))
+    });
     client.type_text("\r");
     wait_list(&server, "the focus in the pane", |l| {
         !focused(l) && tabs(l)[0]["current"] == true
@@ -374,6 +407,22 @@ fn m_s_and_its_keys_move_between_tabs() {
     client.type_text("\x1b");
     wait_list(&server, "out, on the second", |l| {
         !focused(l) && tabs(l)[1]["current"] == true
+    });
+
+    // l goes into the chosen tab at once, with no menu.
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("k");
+    wait_list(&server, "the first in front", |l| {
+        tabs(l)[0]["current"] == true && focused(l)
+    });
+    client.type_text("l");
+    wait_list(&server, "into the first by l", |l| {
+        !focused(l) && tabs(l)[0]["current"] == true
+    });
+    client.type_text(&format!("{ALT}2"));
+    wait_list(&server, "the second in front again", |l| {
+        tabs(l)[1]["current"] == true
     });
 
     // a: the chosen tab answered, as mission control's menu does; a tab
@@ -605,8 +654,8 @@ fn a_tab_whose_claude_is_behind_a_tool_in_its_pane_s_place_keeps_its_stage() {
         screen.join("\n")
     );
 
-    // From another tab, Enter on it in the sidebar goes to it with the
-    // focus in lazygit's pane, the Claude still parked behind it.
+    // From another tab, l on it in the sidebar goes to it with the focus
+    // in lazygit's pane, the Claude still parked behind it.
     server.ok(&["new-tab", "-n", "second"]);
     client.wait_text("2:second");
     wait_list(&server, "the second tab in front", |l| {
@@ -618,7 +667,7 @@ fn a_tab_whose_claude_is_behind_a_tool_in_its_pane_s_place_keeps_its_stage() {
     wait_list(&server, "the first tab in front", |l| {
         tabs(l)[0]["current"] == true
     });
-    client.type_text("\r");
+    client.type_text("l");
     let list = wait_list(&server, "the focus in the pane", |l| {
         !focused(l) && tabs(l)[0]["current"] == true
     });
@@ -677,7 +726,7 @@ fn a_claude_behind_a_tool_opened_over_another_tool_keeps_its_tab_in_its_stage() 
     wait_list(&server, "the first tab in front", |l| {
         tabs(l)[0]["current"] == true
     });
-    client.type_text("\r");
+    client.type_text("l");
     let list = wait_list(&server, "the focus in the pane", |l| {
         !focused(l) && tabs(l)[0]["current"] == true
     });
@@ -809,13 +858,21 @@ fn the_cursor_onto_a_notification_brings_the_notifications_window_to_the_front()
     });
     assert!(screen.iter().any(|l| l.contains("● New note: Plan")));
 
-    // Enter on the notification: into the window's pane; Enter there opens
-    // its menu over it, Esc closes that, and Esc goes back to the tab.
+    // Enter on the notification: its menu, as m opens it, which Esc
+    // closes.
     client.type_text("j");
     wait_list(&server, "the window again", |l| {
         notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == true)
     });
     client.type_text("\r");
+    client.wait_text("Open it in Notes");
+    client.type_text("\x1b");
+    client.wait_for("the sidebar's menu closed", |s| {
+        !s.iter().any(|l| l.contains("Open it in Notes"))
+    });
+    // l: into the window's pane; Enter there opens its menu over it, Esc
+    // closes that, and Esc goes back to the tab.
+    client.type_text("l");
     wait_list(&server, "the focus in the window", |l| {
         !focused(l) && notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == true)
     });
@@ -918,7 +975,7 @@ fn j_and_k_in_the_sidebar_step_over_the_notifications_a_kind_at_a_time() {
     // Inside the window, j still chooses one by one.
     client.type_text("j");
     wait_chosen(&mut client, "DM Ada");
-    client.type_text("\r");
+    client.type_text("l");
     wait_list(&server, "the focus in the window", |l| !focused(l));
     client.type_text("j");
     wait_chosen(&mut client, "DM Grace");
@@ -934,7 +991,7 @@ fn j_and_k_in_the_notifications_window_wrap_from_its_last_to_its_first_and_back(
     wait_list(&server, "the sidebar focused", focused);
     client.type_text("j");
     wait_chosen(&mut client, "DM Ada");
-    client.type_text("\r");
+    client.type_text("l");
     wait_list(&server, "the focus in the window", |l| !focused(l));
     client.type_text("G");
     wait_chosen(&mut client, "Plan");
@@ -1339,7 +1396,7 @@ fn a_slack_message_s_menu_in_the_notifications_window_is_the_slack_view_s() {
     wait_list(&server, "the Notifications window in front", |l| {
         notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == true) && focused(l)
     });
-    client.type_text("\r");
+    client.type_text("l");
     wait_list(&server, "the focus in the window", |l| !focused(l));
     client.type_text("\r");
     let screen = client.wait_text("Dismiss it, until its thread gets a reply");
@@ -1447,14 +1504,14 @@ fn the_sidebar_filtered_to_one_repository_folds_the_others_under_other_repos() {
         l["sessions"][0]["sidebar"]["repo_open"] == true
     });
     // Its tab is under the cursor but stays behind the one in front, until
-    // Enter goes into it.
+    // l goes into it.
     row_of(&mut client, "bee");
     let list = server.list();
     assert!(
         tabs(&list)[0]["current"] == true && focused(&list),
         "{list}"
     );
-    client.type_text("\r");
+    client.type_text("l");
     wait_list(&server, "into the unfolded tab", |l| {
         tabs(l)[1]["current"] == true && !focused(l)
     });
@@ -1993,7 +2050,7 @@ fn z_or_a_click_on_its_heading_folds_a_group_and_enter_unfolds_it() {
     });
 
     // On the folded line, Enter unfolds it, the cursor onto its first tab
-    // and bee still in front; Enter again goes into the first tab.
+    // and bee still in front; l goes into the first tab.
     client.type_text("\r");
     wait_list(&server, "Other unfolded", |l| folded(l) == json!([]));
     row_of(&mut client, "bee");
@@ -2002,7 +2059,7 @@ fn z_or_a_click_on_its_heading_folds_a_group_and_enter_unfolds_it() {
         tabs(&list)[1]["current"] == true && focused(&list),
         "{list}"
     );
-    client.type_text("\r");
+    client.type_text("l");
     wait_list(&server, "into the first tab", |l| {
         tabs(l)[0]["current"] == true && !focused(l)
     });
@@ -2097,8 +2154,8 @@ fn half_a_page_up_passes_an_open_group_s_heading() {
     wait_list(&server, "the first tab in front", |l| {
         tabs(l)[0]["current"] == true && focused(l)
     });
-    // Enter goes into it rather than folding its group.
-    client.type_text("\r");
+    // l goes into it rather than folding its group.
+    client.type_text("l");
     wait_list(&server, "into the first tab", |l| {
         !focused(l) && l["sessions"][0]["sidebar"]["folded"] == json!([])
     });
@@ -2207,7 +2264,7 @@ fn m_and_shift_f10_in_the_sidebar_open_the_chosen_rows_menu() {
     assert!(focused(&server.list()), "still in the sidebar");
 
     // Into the Notifications window: S-F10 there opens the chosen one's.
-    client.type_text("\r");
+    client.type_text("l");
     wait_list(&server, "the focus in the window", |l| !focused(l));
     client.type_text("\x1b[21;2~");
     client.wait_text("Open it in Notes");

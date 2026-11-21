@@ -108,6 +108,13 @@
     "default": true
   },
   {
+    "key": "sidebar_enter_menu",
+    "category": "Sidebar",
+    "label": "Enter opens the row's menu",
+    "description": "Enter or Space on a row of the sidebar opens the menu m opens for it, as Enter does in mission control: a tab's with Go to tab chosen for Enter and Peek chosen for Space, so a second press does what the key did alone; a notification's its own menu. l and the right arrow still go to the tab. Off, Enter goes to the tab or into the notification, and Space peeks at the tab, as before",
+    "default": true
+  },
+  {
     "key": "sidebar_select",
     "category": "Sidebar",
     "label": "Select several tabs",

@@ -28,6 +28,7 @@ use super::walk::{Next, Place, Stop, Why};
 use super::{Drawn, PaneRead, SidebarEvent, claude, config, notices, text};
 use crate::agent::State;
 use crate::facts::{Merge, PrState};
+use crate::mission::TabMenuFrom;
 use crate::mux::compose::colors;
 use crate::mux::input::{Key, KeyCode, Mods, Mouse, MouseButton, MouseKind};
 use crate::mux::keys::Action;
@@ -59,9 +60,10 @@ pub const KEYS: &[(&str, &str)] = &[
     ),
     ("^d ^u", "half a screen down, up"),
     (
-        "↵ l",
-        "go to the tab; on a heading, ↵ folds or unfolds it, l unfolds it",
+        "↵",
+        "its menu, go to the tab chosen; on a heading, fold or unfold it",
     ),
+    ("l →", "go to the tab; on a heading, unfold it"),
     ("h esc q ^c", "back to your pane"),
     ("1-9", "go to that tab"),
     ("/", "find a tab by title (↵ go, esc clear)"),
@@ -70,7 +72,10 @@ pub const KEYS: &[(&str, &str)] = &[
         "next, last tab (with tab_focus off: mission control)",
     ),
     ("M-space", "mission control"),
-    ("space", "peek at it; on a heading, fold or unfold it"),
+    (
+        "space",
+        "its menu, peek chosen; on a heading, fold or unfold it",
+    ),
     ("m ⇧F10", "its menu, as a right click opens"),
     ("a", "answer it, or send it a message"),
     (
@@ -1597,7 +1602,7 @@ impl Server {
             return (false, false);
         }
         if *action == Action::ContextMenu && !self.mission_open(client) {
-            self.sidebar_menu_key(client, &session);
+            self.sidebar_menu_key(client, &session, TabMenuFrom::SidebarPeek);
             return (true, true);
         }
         // M-f and the reply copy act on the tab in front, which on a folded
@@ -2094,6 +2099,15 @@ impl Server {
             KeyCode::Char('d' | 'u') if ctrl => {
                 self.sidebar_half_page(client, session, k, raw, &order, on_notice.is_some())
             }
+            // Enter and Space open the row's menu, as in mission control,
+            // with what each did alone chosen as it opens: going to the tab
+            // for Enter, peeking at it for Space.
+            KeyCode::Enter if settings::is_on("sidebar_enter_menu") => {
+                self.sidebar_menu_key(client, session, TabMenuFrom::SidebarGo)
+            }
+            KeyCode::Char(' ') if none && settings::is_on("sidebar_enter_menu") => {
+                self.sidebar_menu_key(client, session, TabMenuFrom::SidebarPeek)
+            }
             KeyCode::Enter | KeyCode::Right | KeyCode::Char('l')
                 if none || k.code == KeyCode::Enter =>
             {
@@ -2179,7 +2193,9 @@ impl Server {
                 }
             }
             // m: the menu a right click on the cursor's row opens.
-            KeyCode::Char('m') if none => self.sidebar_menu_key(client, session),
+            KeyCode::Char('m') if none => {
+                self.sidebar_menu_key(client, session, TabMenuFrom::SidebarPeek)
+            }
             // Its Claude answered from here, in mission control's box, as
             // the sidebar's `a` answered the chosen tab in a popup.
             KeyCode::Char('a') if none => {
