@@ -63,7 +63,7 @@ pub fn prompt_json(found: &Prompt) -> Value {
         "options": found
             .options
             .iter()
-            .map(|o| json!({"n": o.n, "label": o.label, "checked": o.checked}))
+            .map(|o| json!({"n": o.n, "label": o.label, "checked": o.checked, "detail": o.detail}))
             .collect::<Vec<_>>(),
         "multi": found.multi,
         "free": found.free,
@@ -413,5 +413,13 @@ mod tests {
         assert_eq!(v["question"], "Do you want to proceed?");
         assert_eq!(v["options"][1]["label"], "No");
         assert_eq!(v["multi"], false);
+        assert_eq!(v["options"][1]["detail"], "", "no explainer under it");
+        let explained = answer::options_in(
+            "Which way?\n❯ 1. Fast\n     Skips the checks\n  2. Slow\n     Runs every check\n",
+        )
+        .unwrap();
+        let v = prompt_json(&explained);
+        assert_eq!(v["options"][0]["detail"], "Skips the checks");
+        assert_eq!(v["options"][1]["detail"], "Runs every check");
     }
 }
