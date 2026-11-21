@@ -283,12 +283,13 @@ const menu = (sx, y, num, name, seen) => {
   box(sx + 3, y, 31, opts.length + 2, 'Tab ' + num + ' · ' + name);
   opts.forEach((o, i) => { option(sx + 3, y + 1 + i, 31, o, '', false); if (o === 'Close tab') put(sx + 7, y + 1 + i, o, 'r', '', 'E'); });
 };
-// THE QUESTION Close tab asks first: the tab by number and name, Cancel first, Close in the failed tone; only Close closes it.
+// THE QUESTION Close tab asks first, as every yes/no question asks: [Y/n] after it, yes (Close) first and lit, then No;
+// only Close closes it, and a tap outside, × or No leaves the tab as it is.
 const ask = (sx, y, num, name) => {
-  box(sx + 2, y, 32, 7, 'Close tab');
-  put(sx + 4, y + 2, 'Close tab ' + num + ' ' + name + '?', 't', 'b', 'E');
-  put(sx + 4, y + 3, 'Its Claude and its panes end.', 'd', '', 'E');
-  button(sx + 4, y + 5, 13, '  Cancel'); button(sx + 19, y + 5, 13, '  Close', false, 'r');
+  box(sx + 1, y, 34, 7, 'Close tab');
+  T(sx + 3, y + 2, ['Close tab ' + num + ' ' + name + '? ', 't', 'b', 'E'], ['[Y/n]', 'd', '', 'E']);
+  put(sx + 3, y + 3, 'Its Claude and its panes end.', 'd', '', 'E');
+  button(sx + 4, y + 5, 13, '  Close', true); button(sx + 19, y + 5, 13, '  No');
 };
 
 // 1. A LONG PRESS ON A FINISHED TAB: its row lit, the rest dimmed, its menu under it; a tap still opens the tab.
@@ -301,7 +302,7 @@ const ask = (sx, y, num, name) => {
   drawer(sx, 36, 3); dim(sx, 19);
   menu(sx, 21, 3, 'M-d uncommitted', false); }
 
-// 3. CLOSE TAB ASKS FIRST: the question in the middle of the screen; Cancel, or a tap outside, leaves the tab as it is.
+// 3. CLOSE TAB ASKS FIRST: the question in the middle of the screen, Close first and lit as yes.
 { const sx = phone(P[2], '3  Close tab asks first');
   drawer(sx, 36, 4); dim(sx, 0);
   ask(sx, 18, 4, 'full titles'); }

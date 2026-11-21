@@ -319,4 +319,4 @@ The relay's DM, threads and Home tab.
 
 ## Proposal: a tab's menu on the phone
 
-- [175. A tab's menu in the phone's drawer, from a long press on its row: Mark seen on a finished tab and Close tab; Close tab asks Close tab <n> <name>? first, Cancel before Close, and the closed tab leaves the drawer](https://cquinones100.github.io/switchboard/design/175.html)
+- [175. A tab's menu in the phone's drawer, from a long press on its row: Mark seen on a finished tab and Close tab; Close tab asks Close tab <n> <name>? \[Y/n\] first, Close as yes before No, and the closed tab leaves the drawer](https://cquinones100.github.io/switchboard/design/175.html)

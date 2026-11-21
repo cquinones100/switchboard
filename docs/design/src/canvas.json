@@ -706,7 +706,7 @@
       "page": "design"
     },
     "PhoneTabMenu.dc.html": {
-      "title": "175. A tab's menu in the phone's drawer, from a long press on its row: Mark seen on a finished tab and Close tab; Close tab asks Close tab <n> <name>? first, Cancel before Close, and the closed tab leaves the drawer",
+      "title": "175. A tab's menu in the phone's drawer, from a long press on its row: Mark seen on a finished tab and Close tab; Close tab asks Close tab <n> <name>? [Y/n] first, Close as yes before No, and the closed tab leaves the drawer",
       "page": "design"
     }
   }
