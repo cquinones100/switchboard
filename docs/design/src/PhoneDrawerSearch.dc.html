@@ -324,7 +324,7 @@ const drawerS = (sx, q) => {
   put(sx + 1, 42, 'Searches as / does in the sidebar', 'f'); }
 
 // 2. NARROWED AS YOU TYPE: "note" keeps tab 2 and tab 7 by their names, tab 6 by its branch and tab 8 by its repository,
-// in their groups; Landing, left with none, is dropped. Every word typed must match: "note main" would keep tab 8 alone.
+// in their groups; Landing, left with none, is dropped. Every word typed must match: "note sync" would keep tab 8 alone.
 { const sx = phone(P[1], '2  Narrowed to "note"');
   drawerS(sx, 'note');
   put(sx + 1, 41, 'Kept while you open a tab and come', 'f'); put(sx + 1, 42, 'back; a reload starts empty', 'f'); }
