@@ -133,6 +133,25 @@ impl TabLoop {
     }
 }
 
+/// One of the PRs a tab follows, as the sidebar, its Tabs card and the
+/// picker of its PRs show it (boards 127 to 129).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrLine {
+    pub number: u64,
+    /// `owner/name`, empty when not known (its directory's origin's).
+    pub repo: String,
+    /// Whether it is in another repository than the tab's directory.
+    pub elsewhere: bool,
+    /// Its title, empty until looked up.
+    pub title: String,
+    pub mark: crate::ui::kit::Mark,
+    /// Where it stands in a few words (`tabs::prs::standing`), and in full
+    /// (`standing_long`); empty until looked up.
+    pub standing: String,
+    pub standing_long: String,
+    pub current: bool,
+}
+
 /// One tab, with all the sidebar and mission control show of it.
 #[derive(Clone, Debug)]
 pub struct TabModel {
@@ -159,6 +178,9 @@ pub struct TabModel {
     /// clone, possibly the project upstream names); `None` when only its
     /// number is known, its directory's origin's then.
     pub pr_repo: Option<String>,
+    /// Every PR it follows when there are several (`tabs::prs`), the
+    /// current one first; empty with one or none.
+    pub prs: Vec<PrLine>,
     /// The ticket its branch is for (`Server::tab_ticket`): its GitHub
     /// issue or Linear ticket.
     pub ticket: Option<crate::views::ticket::Ticket>,
@@ -292,6 +314,7 @@ impl TabModel {
             own_name: None,
             pr: None,
             pr_repo: None,
+            prs: Vec::new(),
             ticket: None,
             repo: None,
             repo_dir: None,

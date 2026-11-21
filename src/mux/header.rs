@@ -194,6 +194,10 @@ pub struct Header {
     /// How full its Claude's context is, in percent, once its statusline
     /// has said.
     pub context: Option<u8>,
+    /// With several PRs (`tabs::prs`), the current one's place among them
+    /// (from 1), how many, and its number: the first row says how many, and
+    /// M-v's key which it shows (board 127).
+    pub prs: Option<(usize, usize, u64)>,
     /// The workspace's own buttons, while the sidebar that otherwise
     /// holds them is hidden.
     pub nav: Option<Nav>,
@@ -409,7 +413,8 @@ pub fn draw(
         used += sep + text::width(b);
     }
     let mut extra = Vec::new();
-    for fact in [opened, context].into_iter().flatten() {
+    let prs = h.prs.map(|(_, all, _)| format!("{all} PRs"));
+    for fact in [opened, context, prs].into_iter().flatten() {
         if used + sep + text::width(&fact) <= room {
             used += sep + text::width(&fact);
             extra.push(fact);
@@ -452,7 +457,11 @@ pub fn draw(
     let row = Rect::new(area.x, area.y + 2, area.width, 1);
     let mut x = area.x + 1;
     for shown in Shown::ALL {
-        let mut cap = kit::keycap(shown.key(), shown.label(), shown == h.shown, caps, &theme);
+        let label = match (shown, h.prs) {
+            (Shown::Pr, Some((at, all, number))) => format!("PR #{number} · {at} of {all}"),
+            _ => shown.label().to_string(),
+        };
+        let mut cap = kit::keycap(shown.key(), &label, shown == h.shown, caps, &theme);
         if hover == Some(Button::Show(shown)) {
             cap[1].style = cap[1].style.add_modifier(Modifier::REVERSED);
         }
@@ -542,6 +551,7 @@ mod tests {
             history_open: false,
             viewing: None,
             context: None,
+            prs: None,
             nav: None,
         }
     }
@@ -641,6 +651,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         let h = Header {
             context: Some(62),
+            prs: None,
             ..header(Shown::Claude)
         };
         draw(&mut buf, area, &h, None, &Palette::DARK, false, false);
@@ -658,6 +669,7 @@ mod tests {
         let h = Header {
             opened: "1h12m".into(),
             context: Some(62),
+            prs: None,
             ..header(Shown::Claude)
         };
         draw(&mut buf, area, &h, None, &Palette::DARK, false, false);
@@ -728,6 +740,7 @@ mod tests {
             branch: "main".into(),
             opened: "1h12m".into(),
             context: Some(62),
+            prs: None,
             next: Some((3, "billing".into())),
             ..header(Shown::Claude)
         };
@@ -1011,6 +1024,7 @@ mod history_tests {
             history_open: true,
             viewing: Some("viewing 1:41 PM, 51 minutes ago".into()),
             context: None,
+            prs: None,
             nav: None,
         };
         let keys = draw(&mut buf, area, &h, None, &Palette::DARK, false, false);
@@ -1048,6 +1062,7 @@ mod viewing_tests {
             history_open: true,
             viewing: Some("viewing 1:41 PM, 51 minutes ago".into()),
             context: None,
+            prs: None,
             nav: None,
         };
         draw(&mut buf, area, &h, None, &Palette::DARK, false, false);
