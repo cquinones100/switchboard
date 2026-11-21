@@ -42,7 +42,7 @@
 // Writes <dir>/<name>.mp4, named by --name, a few
 // words saying what the video shows that the skill writes, so the video says
 // what it is when it opens; without it, after the Switchboard tab it runs in
-// (the tab's name, as the tab bar shows it), and outside one walkthrough.mp4. Also
+// (the tab's name, as its header shows it), and outside one walkthrough.mp4. Also
 // <dir>/contact.png, a frame every two seconds in a grid, to check the video
 // at a glance; <dir>/end.png; and <dir>/log.txt (each step, console errors,
 // responses of 500 and up, and in demo pace each expect that failed). Prints
