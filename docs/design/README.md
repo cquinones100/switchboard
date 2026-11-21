@@ -305,6 +305,10 @@ The relay's DM, threads and Home tab.
 - [168. Pairing a phone: its first visit shows a code, typed in the workspace's box (or switchboard phone pair) naming the device, so a stray Enter can't pair it; once it matches, the phone opens on the drawer](https://cquinones100.github.io/switchboard/design/168.html)
 - [169. The phone app's refused page: a device not listed, someone else on the tailnet, a pairing refused, a phone revoked; naming neither the computer nor what it checks, the first two alike, why kept for the log and the Notifications view](https://cquinones100.github.io/switchboard/design/169.html)
 
+## Proposal: searching the phone's drawer
+
+- [173. The phone's drawer searched as you type: a search box under the header keeps the tabs whose number, name, repository, branch or what they are doing hold every word, the matches lit, in their groups, an empty group dropped; × clears it, and No tab matches when none do](https://cquinones100.github.io/switchboard/design/173.html)
+
 ## Proposal: the phone's prompt choices explained
 
 - [172. The phone's prompt card with each choice's explainer behind an info button: an i beside every choice that has one, its own tap target; a tap shows the explainer under the choice and a second hides it, while a tap on the choice still answers](https://cquinones100.github.io/switchboard/design/172.html)
